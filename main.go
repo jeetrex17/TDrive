@@ -11,7 +11,7 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-func main() {
+func maain() {
 	// Create an instance of the app structure
 	app := NewApp()
 
@@ -29,7 +29,6 @@ func main() {
 			app,
 		},
 	})
-
 	if err != nil {
 		println("Error:", err.Error())
 	}
