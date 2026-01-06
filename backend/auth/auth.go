@@ -46,8 +46,11 @@ func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, err
 }
 
 func (a AuthT) Password(ctx context.Context) (string, error) {
+	var Password string
 	fmt.Print("Enter 2FA Password: ")
-	return "", nil
+
+	fmt.Scanln(&Password)
+	return Password, nil
 }
 
 func (a AuthT) AcceptTermsOfService(ctx context.Context, tos tg.HelpTermsOfService) error {
