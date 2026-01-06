@@ -1,3 +1,27 @@
 build/bin
 node_modules
 frontend/dist
+
+# --- Security ---
+.env
+.env.local
+secret.json
+
+# --- Wails / Build Artifacts ---
+build/bin/
+frontend/dist/
+wailsjs/
+
+# --- Dependencies ---
+node_modules/
+
+# --- macOS System Files ---
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# --- Editor Settings ---
+.vscode/
+.idea/
+*.swp
+*.swo
