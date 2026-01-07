@@ -3,16 +3,41 @@ package main
 import (
 	"context"
 	"fmt"
+
+	"TDrive/backend/auth"
 )
 
-// App struct
 type App struct {
-	ctx context.Context
+	ctx    context.Context
+	Codech chan string
+	Passch chan string
 }
 
-// NewApp creates a new App application struct
+func (a *App) LoginPhoneNumber(phoneNumber string) {
+	tgclient, _ := auth.Connect()
+	auth.StartLogin(a.ctx, tgclient, a)
+
+	fmt.Println("Login started")
+}
+
+func (a *App) GetCodech() chan string {
+	return a.Codech
+}
+
+func (a *App) GetPassch() chan string {
+	return a.Passch
+}
+
 func NewApp() *App {
-	return &App{}
+	return &App{
+		ctx:    nil,
+		Codech: make(chan string),
+		Passch: make(chan string),
+	}
+}
+
+func (a *App) Code(code string) {
+	a.Codech <- code
 }
 
 // startup is called when the app starts. The context is saved

@@ -3,19 +3,22 @@ package auth
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
-	"syscall"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
-	"golang.org/x/term"
 )
+
+type getchanel interface {
+	GetCodech() chan string
+	GetPassch() chan string
+}
 
 type AuthT struct {
 	Client *telegram.Client
+	app    getchanel
 }
 
 func Connect() (*telegram.Client, error) {
@@ -41,11 +44,11 @@ func (a AuthT) Phone(ctx context.Context) (string, error) {
 }
 
 func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, error) {
-	var code string
-
 	fmt.Print("Enter code: ")
 
-	fmt.Scanln(&code)
+	// fmt.Scanln(&code)
+
+	code := <-a.app.GetCodech()
 
 	return code, nil
 }
@@ -53,28 +56,22 @@ func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, err
 func (a AuthT) Password(ctx context.Context) (string, error) {
 	passObj, err := a.Client.API().AccountGetPassword(ctx)
 	if err != nil {
-		log.Fatal(err)
+		return "", err // Returna the error instead of fatal to allow graceful handling
+	}
+	if passObj.Hint != "" {
+		fmt.Println("Hint:", passObj.Hint)
 	}
 
-	fmt.Println("Hint :", passObj.Hint)
 	fmt.Print("Enter 2FA Password: ")
-
-	//_, err = fmt.Scanln(&Password)
-	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
-	if err != nil {
-		fmt.Println("\nError reading password:", err)
-		return "", err
-	}
-
+	// bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 	// if err != nil {
+	// 	fmt.Println("\nError reading password:", err)
 	// 	return "", err
 	// }
-	//
 
-	Password := string(bytePassword)
+	Password := <-a.app.GetPassch()
 
-	fmt.Println()
-	return Password, nil
+	return string(Password), nil
 }
 
 func (a AuthT) AcceptTermsOfService(ctx context.Context, tos tg.HelpTermsOfService) error {
@@ -85,8 +82,11 @@ func (a AuthT) SignUp(ctx context.Context) (auth.UserInfo, error) {
 	return auth.UserInfo{}, fmt.Errorf("sign-up not implemented: please register manually")
 }
 
-func StartLogin(ctx context.Context, client *telegram.Client) error {
-	authenticator := AuthT{Client: client}
+func StartLogin(ctx context.Context, client *telegram.Client, ch getchanel) error {
+	authenticator := AuthT{
+		Client: client,
+		app:    ch,
+	}
 
 	flow := auth.NewFlow(authenticator, auth.SendCodeOptions{})
 
