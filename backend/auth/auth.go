@@ -3,15 +3,20 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
+	"syscall"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
+	"golang.org/x/term"
 )
 
-type AuthT struct{}
+type AuthT struct {
+	Client *telegram.Client
+}
 
 func Connect() (*telegram.Client, error) {
 	Tg_app_HASH := os.Getenv("TELEGRAM_APP_HASH")
@@ -46,10 +51,29 @@ func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, err
 }
 
 func (a AuthT) Password(ctx context.Context) (string, error) {
-	var Password string
+	passObj, err := a.Client.API().AccountGetPassword(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Hint :", passObj.Hint)
 	fmt.Print("Enter 2FA Password: ")
 
-	fmt.Scanln(&Password)
+	//_, err = fmt.Scanln(&Password)
+	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		fmt.Println("\nError reading password:", err)
+		return "", err
+	}
+
+	// if err != nil {
+	// 	return "", err
+	// }
+	//
+
+	Password := string(bytePassword)
+
+	fmt.Println()
 	return Password, nil
 }
 
@@ -62,7 +86,7 @@ func (a AuthT) SignUp(ctx context.Context) (auth.UserInfo, error) {
 }
 
 func StartLogin(ctx context.Context, client *telegram.Client) error {
-	authenticator := AuthT{}
+	authenticator := AuthT{Client: client}
 
 	flow := auth.NewFlow(authenticator, auth.SendCodeOptions{})
 
