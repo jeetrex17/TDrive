@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/gotd/td/session"
@@ -15,6 +16,7 @@ import (
 type getchanel interface {
 	GetCodech() chan string
 	GetPassch() chan string
+	SendHint(hint string)
 }
 
 type AuthT struct {
@@ -31,8 +33,11 @@ func Connect() (*telegram.Client, error) {
 		return nil, err
 	}
 
+	cwd, _ := os.Getwd()
+	sessionPath := filepath.Join(cwd, "session.json")
+
 	ses := &session.FileStorage{
-		Path: "session.json",
+		Path: sessionPath,
 	}
 
 	tgclient := telegram.NewClient(Tg_app_ID, Tg_app_HASH, telegram.Options{
@@ -61,12 +66,12 @@ func (a AuthT) Password(ctx context.Context) (string, error) {
 
 	if passObj.Hint != "" {
 		fmt.Println("Hint:", passObj.Hint)
+		a.app.SendHint("Hint : " + passObj.Hint)
 	} else {
-		fmt.Println("NO HINT found")
+		a.app.SendHint("NO HINT found")
 	}
 
-	fmt.Print("Enter 2FA Password: ")
-
+	// a.app.SendHint("Hint: THIS IS A TEST HINT ")
 	Password := <-a.app.GetPassch()
 
 	return Password, nil

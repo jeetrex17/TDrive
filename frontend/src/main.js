@@ -24,12 +24,22 @@ window.sendCode = function () {
     });
 };
 
+
+window.runtime.EventsOn("gothint" , function(hint) {
+    console.log("Hint Recived : " , hint);
+let hintBox = document.getElementById("hinttext");
+    if (hintBox) {
+        hintBox.innerText = hint;
+    }
+});
+
+
 window.sendPassword = function () {
     let pass = document.getElementById("enterpassword").value;
 
     SumbitPassword(pass).then(() => {
         
         document.getElementById("passwordcontainer").style.display = "none";
-        document.getElementById("result").innerText = "Login process complete! Checking Telegram...";
+        document.getElementById("result").innerText = "Login process complete";
     });
 };

@@ -1,54 +1,139 @@
-#logo {
-    display: block;
-    width: 50%;
-    height: 50%;
-    margin: auto;
-    padding: 10% 0 0;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-size: 100% 100%;
-    background-origin: content-box;
+
+
+:root {
+    --bg-deep: #0f0f13;       
+    --glass-surface: rgba(30, 30, 46, 0.7); 
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --text-primary: #ffffff;
+    --text-secondary: #a0a0b0;
+    --accent-blue: #3b82f6;
+    --accent-glow: rgba(59, 130, 246, 0.5);
 }
 
-.result {
-    height: 20px;
-    line-height: 20px;
-    margin: 1.5rem auto;
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-.input-box .btn {
-    width: 60px;
-    height: 30px;
-    line-height: 30px;
-    border-radius: 3px;
-    border: none;
-    margin: 0 0 0 20px;
-    padding: 0 8px;
-    cursor: pointer;
+body {
+    
+    background: radial-gradient(circle at top left, #2d3452, #0f0f13);
+    color: var(--text-primary);
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
 }
 
-.input-box .btn:hover {
-    background-image: linear-gradient(to top, #cfd9df 0%, #e2ebf0 100%);
-    color: #333333;
+
+#app {
+    width: 420px;
+    padding: 50px 40px;
+    
+   
+    background: var(--glass-surface);
+    backdrop-filter: blur(20px); 
+    -webkit-backdrop-filter: blur(20px);
+    
+    border: 1px solid var(--glass-border);
+    border-radius: 24px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    
+    text-align: center;
+    position: relative;
 }
 
-.input-box .input {
-    border: none;
-    border-radius: 3px;
+
+.logo {
+    font-size: 50px;
+    margin-bottom: 20px;
+    filter: drop-shadow(0 0 15px rgba(59, 130, 246, 0.4)); /* Glowing cloud */
+}
+
+h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+    letter-spacing: -0.5px;
+}
+
+p {
+    color: var(--text-secondary);
+    font-size: 0.95rem;
+    margin-bottom: 30px;
+    line-height: 1.5;
+}
+
+
+input {
+    width: 100%;
+    padding: 16px;
+    margin-bottom: 15px;
+    
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    
+    color: white;
+    font-size: 1rem;
     outline: none;
-    height: 30px;
-    line-height: 30px;
-    padding: 0 10px;
-    background-color: rgba(240, 240, 240, 1);
-    -webkit-font-smoothing: antialiased;
+    transition: all 0.3s ease;
 }
 
-.input-box .input:hover {
-    border: none;
-    background-color: rgba(255, 255, 255, 1);
+input:focus {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 15px var(--accent-glow); 
+    background: rgba(0, 0, 0, 0.4);
 }
 
-.input-box .input:focus {
+
+button {
+    width: 100%;
+    padding: 16px;
+    margin-top: 10px;
+    
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    color: white;
+    font-weight: 600;
     border: none;
-    background-color: rgba(255, 255, 255, 1);
+    border-radius: 12px;
+    font-size: 1rem;
+    cursor: pointer;
+    
+    box-shadow: 0 4px 15px rgba(37, 99, 235, 0.3);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(37, 99, 235, 0.5);
+}
+
+button:active {
+    transform: scale(0.98);
+}
+
+
+#hinttext {
+    background: rgba(249, 115, 22, 0.15);
+    color: #fdba74;
+    border: 1px solid rgba(249, 115, 22, 0.2);
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin-bottom: 20px;
+    display: inline-block;
+}
+
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+#phonecontainer, #codecontainer, #passwordcontainer {
+    animation: fadeIn 0.4s ease-out;
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"TDrive/backend/auth"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
@@ -21,8 +23,6 @@ func (a *App) LoginPhoneNumber(phoneNumber string) {
 	}
 
 	go auth.StartLogin(a.ctx, tgclient, a, phoneNumber)
-
-	fmt.Println("Login started for:", phoneNumber)
 }
 
 func (a *App) GetCodech() chan string {
@@ -54,6 +54,10 @@ func (a *App) startup(ctx context.Context) {
 // Greet returns a greeting for the given name
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
+}
+
+func (a *App) SendHint(hint string) {
+	runtime.EventsEmit(a.ctx, "gothint", hint)
 }
 
 func (a *App) SumbitPassword(password string) {

@@ -18,6 +18,10 @@ export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }
 
+export function SendHint(arg1) {
+  return window['go']['main']['App']['SendHint'](arg1);
+}
+
 export function SumbitCode(arg1) {
   return window['go']['main']['App']['SumbitCode'](arg1);
 }

@@ -4,26 +4,41 @@
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <title>TDrive</title>
+    
+    <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
-    <div id="app">
+    <div id="app"> 
+
         <div id="phonecontainer">
-            <input id="enterphone" type="text" placeholder="Enter Phone Number">
+            <h2>Welcome to TDrive</h2>
+            <p>Enter your phone number .</p>
+            <input id="enterphone" type="text" placeholder="+1234567890">
             <button onclick="startLogin()">Send Code</button>
         </div>
 
         <div id="codecontainer" style="display: none;">
-            <input id="entercode" type="text" placeholder="Enter SMS Code">
+            <h2>Code Verification</h2>
+            <p>Check Telegram for 2FA code.</p>
+            <input id="entercode" type="text" placeholder="12345" style="letter-spacing: 3px; text-align: center;">
             <button onclick="sendCode()">Verify Code</button>
         </div>
 
         <div id="passwordcontainer" style="display: none;">
+            <h2>Two-Step Verification</h2>
+            <p>This account is protected.</p>
+            
+            <p id="hinttext" style="color: orange; font-style: italic; font-size: 0.9em;"></p>
+            
             <input id="enterpassword" type="password" placeholder="Enter 2FA Password">
-            <button onclick="sendPassword()">Login</button>
+            <button onclick="sendPassword()">Unlock TDrive</button>
         </div>
 
         <div id="result"></div>
     </div>
-        <script type="module" src="/src/main.js"></script>
-    </body>
-</html>>
+
+    <script src="/wailsjs/go/main/App.js"></script>
+    <script src="/wailsjs/runtime/runtime.js"></script>
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>>>
