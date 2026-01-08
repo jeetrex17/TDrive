@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
@@ -30,7 +31,13 @@ func Connect() (*telegram.Client, error) {
 		return nil, err
 	}
 
-	tgclient := telegram.NewClient(Tg_app_ID, Tg_app_HASH, telegram.Options{})
+	ses := &session.FileStorage{
+		Path: "session.json",
+	}
+
+	tgclient := telegram.NewClient(Tg_app_ID, Tg_app_HASH, telegram.Options{
+		SessionStorage: ses,
+	})
 
 	return tgclient, nil
 }

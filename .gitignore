@@ -6,6 +6,7 @@ frontend/dist
 .env
 .env.local
 secret.json
+*.json
 
 # --- Wails / Build Artifacts ---
 build/bin/
