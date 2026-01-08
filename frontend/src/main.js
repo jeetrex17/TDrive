@@ -1,4 +1,29 @@
-import { LoginPhoneNumber, SumbitCode, SumbitPassword } from '../wailsjs/go/main/App';
+
+import { LoginPhoneNumber, SumbitCode, SumbitPassword, CheckLoginStatus } from '../wailsjs/go/main/App';
+
+
+window.onload = async function() {
+    console.log("App loaded, checking session...");
+    
+    try {
+               let isLoggedIn = await CheckLoginStatus();
+
+        if (isLoggedIn) {
+            console.log("Auto login successfull");
+                        document.getElementById("phonecontainer").style.display = "none";
+            
+            
+            document.getElementById("success-screen").style.display = "block";
+        } else {
+            console.log("No session found. Showing login.");
+                        document.getElementById("phonecontainer").style.display = "block";
+        }
+    } catch (err) {
+        console.error("Error checking login:", err);
+        
+        document.getElementById("phonecontainer").style.display = "block";
+    }
+};
 
 window.startLogin = function () {
     

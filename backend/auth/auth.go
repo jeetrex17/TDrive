@@ -35,7 +35,6 @@ func Connect() (*telegram.Client, error) {
 
 	cwd, _ := os.Getwd()
 	sessionPath := filepath.Join(cwd, "session.json")
-
 	ses := &session.FileStorage{
 		Path: sessionPath,
 	}
@@ -45,6 +44,31 @@ func Connect() (*telegram.Client, error) {
 	})
 
 	return tgclient, nil
+}
+
+func CheckLogin(ctx context.Context) (bool, error) {
+	client, err := Connect()
+	if err != nil {
+		return false, err
+	}
+
+	var isValid bool
+
+	err = client.Run(ctx, func(ctx context.Context) error {
+		status, err := client.Auth().Status(ctx)
+		if err != nil {
+			return err
+		}
+
+		isValid = status.Authorized
+
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return isValid, nil
 }
 
 func (a AuthT) Phone(ctx context.Context) (string, error) {

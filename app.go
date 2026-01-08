@@ -15,6 +15,16 @@ type App struct {
 	Passch chan string
 }
 
+func (a *App) CheckLoginStatus() bool {
+	login, err := auth.CheckLogin(a.ctx)
+	if err != nil {
+		fmt.Println("error auto login", err)
+		return false
+	}
+
+	return login
+}
+
 func (a *App) LoginPhoneNumber(phoneNumber string) {
 	tgclient, err := auth.Connect()
 	if err != nil {
