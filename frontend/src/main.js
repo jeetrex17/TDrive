@@ -1,10 +1,35 @@
-import {LoginPhoneNumber} from '../wailsjs/go/main/App';
+import { LoginPhoneNumber, SumbitCode, SumbitPassword } from '../wailsjs/go/main/App';
 
 window.startLogin = function () {
     
-    let phone = document.getElementById("phone").value;
+    let phone = document.getElementById("enterphone").value;
 
        LoginPhoneNumber(phone).then(() => {
-        console.log("Go backend is now handling the login...");
+        document.getElementById("phonecontainer").style.display = "none";
+        document.getElementById("codecontainer").style.display = "block";
+        console.log("Go backend is now handling the login");
+    });
+};
+
+
+
+window.sendCode = function () {
+    let code = document.getElementById("entercode").value; 
+
+    SumbitCode(code).then(() => {
+        
+        document.getElementById("codecontainer").style.display = "none";
+        document.getElementById("passwordcontainer").style.display = "block";
+        console.log("Code sent, waiting for password");
+    });
+};
+
+window.sendPassword = function () {
+    let pass = document.getElementById("enterpassword").value;
+
+    SumbitPassword(pass).then(() => {
+        
+        document.getElementById("passwordcontainer").style.display = "none";
+        document.getElementById("result").innerText = "Login process complete! Checking Telegram...";
     });
 };

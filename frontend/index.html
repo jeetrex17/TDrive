@@ -6,9 +6,24 @@
     <title>TDrive</title>
 </head>
 <body>
-<div id="app"></div>
-<input id="phone" type="text" placeholder="Enter Phone Number">
-<button onclick="startLogin()">Connect to Telegram</button>
-<div id="result"></div>
-</body>
-</html>
+    <div id="app">
+        <div id="phonecontainer">
+            <input id="enterphone" type="text" placeholder="Enter Phone Number">
+            <button onclick="startLogin()">Send Code</button>
+        </div>
+
+        <div id="codecontainer" style="display: none;">
+            <input id="entercode" type="text" placeholder="Enter SMS Code">
+            <button onclick="sendCode()">Verify Code</button>
+        </div>
+
+        <div id="passwordcontainer" style="display: none;">
+            <input id="enterpassword" type="password" placeholder="Enter 2FA Password">
+            <button onclick="sendPassword()">Login</button>
+        </div>
+
+        <div id="result"></div>
+    </div>
+        <script type="module" src="/src/main.js"></script>
+    </body>
+</html>>

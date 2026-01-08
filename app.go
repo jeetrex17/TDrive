@@ -14,10 +14,15 @@ type App struct {
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) {
-	tgclient, _ := auth.Connect()
-	auth.StartLogin(a.ctx, tgclient, a)
+	tgclient, err := auth.Connect()
+	if err != nil {
+		fmt.Println("CRITICAL ERROR: Could not connect to Telegram:", err)
+		return
+	}
 
-	fmt.Println("Login started")
+	go auth.StartLogin(a.ctx, tgclient, a, phoneNumber)
+
+	fmt.Println("Login started for:", phoneNumber)
 }
 
 func (a *App) GetCodech() chan string {
@@ -36,7 +41,7 @@ func NewApp() *App {
 	}
 }
 
-func (a *App) Code(code string) {
+func (a *App) SumbitCode(code string) {
 	a.Codech <- code
 }
 
@@ -49,4 +54,8 @@ func (a *App) startup(ctx context.Context) {
 // Greet returns a greeting for the given name
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
+}
+
+func (a *App) SumbitPassword(password string) {
+	a.Passch <- password
 }

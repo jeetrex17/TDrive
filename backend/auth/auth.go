@@ -17,8 +17,9 @@ type getchanel interface {
 }
 
 type AuthT struct {
-	Client *telegram.Client
-	app    getchanel
+	Client      *telegram.Client
+	app         getchanel
+	PhoneNumber string
 }
 
 func Connect() (*telegram.Client, error) {
@@ -35,19 +36,11 @@ func Connect() (*telegram.Client, error) {
 }
 
 func (a AuthT) Phone(ctx context.Context) (string, error) {
-	var PhoneNumber string
-
-	fmt.Print("Enter Phone: ")
-	fmt.Scanln(&PhoneNumber)
-
-	return PhoneNumber, nil
+	return a.PhoneNumber, nil
 }
 
 func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, error) {
-	fmt.Print("Enter code: ")
-
 	// fmt.Scanln(&code)
-
 	code := <-a.app.GetCodech()
 
 	return code, nil
@@ -56,22 +49,20 @@ func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, err
 func (a AuthT) Password(ctx context.Context) (string, error) {
 	passObj, err := a.Client.API().AccountGetPassword(ctx)
 	if err != nil {
-		return "", err // Returna the error instead of fatal to allow graceful handling
+		return "", err
 	}
+
 	if passObj.Hint != "" {
 		fmt.Println("Hint:", passObj.Hint)
+	} else {
+		fmt.Println("NO HINT found")
 	}
 
 	fmt.Print("Enter 2FA Password: ")
-	// bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
-	// if err != nil {
-	// 	fmt.Println("\nError reading password:", err)
-	// 	return "", err
-	// }
 
 	Password := <-a.app.GetPassch()
 
-	return string(Password), nil
+	return Password, nil
 }
 
 func (a AuthT) AcceptTermsOfService(ctx context.Context, tos tg.HelpTermsOfService) error {
@@ -82,13 +73,16 @@ func (a AuthT) SignUp(ctx context.Context) (auth.UserInfo, error) {
 	return auth.UserInfo{}, fmt.Errorf("sign-up not implemented: please register manually")
 }
 
-func StartLogin(ctx context.Context, client *telegram.Client, ch getchanel) error {
+func StartLogin(ctx context.Context, client *telegram.Client, ch getchanel, phone string) error {
 	authenticator := AuthT{
-		Client: client,
-		app:    ch,
+		Client:      client,
+		app:         ch,
+		PhoneNumber: phone,
 	}
 
 	flow := auth.NewFlow(authenticator, auth.SendCodeOptions{})
 
-	return client.Auth().IfNecessary(ctx, flow)
+	return client.Run(ctx, func(ctx context.Context) error {
+		return client.Auth().IfNecessary(ctx, flow)
+	})
 }

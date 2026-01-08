@@ -4,9 +4,7 @@ go 1.24.0
 
 require (
 	github.com/gotd/td v0.136.0
-	github.com/joho/godotenv v1.5.1
 	github.com/wailsapp/wails/v2 v2.11.0
-	golang.org/x/term v0.38.0
 )
 
 require (
