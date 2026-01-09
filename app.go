@@ -6,7 +6,6 @@ import (
 
 	"TDrive/backend/auth"
 
-	"github.com/gotd/td/tg"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -24,30 +23,6 @@ func (a *App) CheckLoginStatus() bool {
 	}
 
 	return login
-}
-
-func (a *App) GetTDriveChannel() (int64, error) {
-	tgclient, err := auth.Connect()
-	if err != nil {
-		return 0, err
-	}
-
-	limit := 100
-	offsetDate := 0
-	offsetID := 0
-	offsetPeer := &tg.InputPeerEmpty{}
-
-	for {
-		dailogs, err := tgclient.API().MessagesGetDialogs(a.ctx, request*tg.MessagesGetDialogsRequest{
-			OffsetDate: offsetDate,
-			OffsetID:   offsetID,
-			OffsetPeer: offsetPeer,
-			Limit:      limit,
-		})
-		if err != nil {
-			return 0, fmt.Errorf("search failed: %w", err)
-		}
-	}
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) {
