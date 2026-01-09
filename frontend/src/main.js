@@ -66,7 +66,7 @@ window.sendPassword = function () {
         document.getElementById("passwordcontainer").style.display = "none";
         document.getElementById("result").innerText = "Login process complete";
 
-        callInitDrive();
+        
     });
 };
 

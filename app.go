@@ -40,7 +40,17 @@ func (a *App) LoginPhoneNumber(phoneNumber string) {
 		}
 	}
 
-	go auth.StartLogin(a.ctx, a.Client, a, phoneNumber)
+	go func() {
+		err := auth.StartLogin(a.ctx, a.Client, a, phoneNumber)
+		if err != nil {
+			fmt.Println("Login failed:", err)
+
+			return
+		}
+
+		fmt.Println("Login Flow Complete. Emitting Success Event.")
+		runtime.EventsEmit(a.ctx, "login-success", true)
+	}()
 }
 
 func (a *App) InitDrive() string {

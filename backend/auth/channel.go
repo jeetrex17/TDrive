@@ -34,6 +34,8 @@ func CreateTDriveChannel(ctx context.Context, Clinet *telegram.Client) (int64, e
 		return 0, err
 	}
 
+	fmt.Printf("Debug TELEGRAM SENT THIS TYPE: %T\n", updates)
+
 	var newID int64
 
 	switch u := updates.(type) {
@@ -43,7 +45,7 @@ func CreateTDriveChannel(ctx context.Context, Clinet *telegram.Client) (int64, e
 		newID = findChannelID(u.Chats)
 	}
 	if newID == 0 {
-		return 0, err
+		return 0, fmt.Errorf("id not found (newID is 0) ")
 	}
 
 	SaveConfig(newID)
