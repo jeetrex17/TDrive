@@ -9,6 +9,8 @@ export function GetPassch():Promise<any>;
 
 export function Greet(arg1:string):Promise<string>;
 
+export function InitDrive():Promise<string>;
+
 export function LoginPhoneNumber(arg1:string):Promise<void>;
 
 export function SendHint(arg1:string):Promise<void>;

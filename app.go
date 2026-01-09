@@ -6,6 +6,7 @@ import (
 
 	"TDrive/backend/auth"
 
+	"github.com/gotd/td/telegram"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -13,9 +14,13 @@ type App struct {
 	ctx    context.Context
 	Codech chan string
 	Passch chan string
+	Client *telegram.Client
 }
 
 func (a *App) CheckLoginStatus() bool {
+	if a.Client == nil {
+		return false
+	}
 	login, err := auth.CheckLogin(a.ctx)
 	if err != nil {
 		fmt.Println("error auto login", err)
@@ -26,13 +31,43 @@ func (a *App) CheckLoginStatus() bool {
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) {
-	tgclient, err := auth.Connect()
-	if err != nil {
-		fmt.Println("CRITICAL ERROR: Could not connect to Telegram:", err)
-		return
+	var err error
+	if a.Client == nil {
+		a.Client, err = auth.Connect()
+		if err != nil {
+			fmt.Println("Could not connect to Telegram:", err)
+			return
+		}
 	}
 
-	go auth.StartLogin(a.ctx, tgclient, a, phoneNumber)
+	go auth.StartLogin(a.ctx, a.Client, a, phoneNumber)
+}
+
+func (a *App) InitDrive() string {
+	if a.Client == nil {
+		var err error
+		a.Client, err = auth.Connect()
+		if err != nil {
+			return "Error: Could not connect"
+		}
+	}
+
+	var output string
+
+	err := a.Client.Run(a.ctx, func(ctx context.Context) error {
+		id, err := auth.GetTDriveChannel(ctx, a.Client)
+		if err != nil {
+			return err
+		}
+
+		output = fmt.Sprintf("Success , channel ID: %d", id)
+		return nil
+	})
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+
+	return output
 }
 
 func (a *App) GetCodech() chan string {
@@ -48,6 +83,7 @@ func NewApp() *App {
 		ctx:    nil,
 		Codech: make(chan string),
 		Passch: make(chan string),
+		Client: nil,
 	}
 }
 
@@ -55,10 +91,14 @@ func (a *App) SumbitCode(code string) {
 	a.Codech <- code
 }
 
-// startup is called when the app starts. The context is saved
-// so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	ac, err := auth.Connect()
+	if err != nil {
+		return
+	}
+
+	a.Client = ac
 }
 
 // Greet returns a greeting for the given name

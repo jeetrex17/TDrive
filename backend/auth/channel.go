@@ -8,7 +8,7 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-func GetTDriveChannel(ctx context.context, Client *telegram.Client) (int64, error) {
+func GetTDriveChannel(ctx context.Context, Client *telegram.Client) (int64, error) {
 	savedId, err := LoadConfig()
 
 	if err == nil && savedId != 0 {
@@ -23,7 +23,7 @@ func GetTDriveChannel(ctx context.context, Client *telegram.Client) (int64, erro
 }
 
 func CreateTDriveChannel(ctx context.Context, Clinet *telegram.Client) (int64, error) {
-	updates, err := Clinet.API().ChannelsCreateChannel(ctx, request*tg.ChannelsCreateChannelRequest{
+	updates, err := Clinet.API().ChannelsCreateChannel(ctx, &tg.ChannelsCreateChannelRequest{
 		Broadcast: true,
 		Megagroup: false,
 		Title:     "TDrive",
