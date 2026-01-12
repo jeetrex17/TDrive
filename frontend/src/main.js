@@ -1,5 +1,5 @@
 
-import { LoginPhoneNumber, SumbitCode, SumbitPassword,GetFileList ,  CheckLoginStatus, InitDrive , SelectFile , UploadToTelegram } from '../wailsjs/go/main/App';
+import { LoginPhoneNumber, SumbitCode, SumbitPassword,GetFileList , DownloadFile ,  CheckLoginStatus, InitDrive , SelectFile , UploadToTelegram } from '../wailsjs/go/main/App';
 
 
 window.onload = async function() {
@@ -106,10 +106,63 @@ window.selectFile = function() {
 };
 
 window.refreshFiles = function() {
-    document.getElementById("file-list").innerText = "Loading...";
+    const listContainer = document.getElementById("file-list");
+    listContainer.innerHTML = "Loading remote files... ";
 
-    GetFileList().then((result) => {
-        console.log("Files fetched:", result);
-        document.getElementById("file-list").innerText = result;
+    GetFileList().then((files) => {
+       
+        if (!files || files.length === 0) {
+            listContainer.innerHTML = "No files found in Drive.";
+            return;
+        }
+
+        
+        listContainer.innerHTML = "";
+
+        
+        files.forEach((file) => {
+           
+            const row = document.createElement("div");
+            row.className = "file-row";
+
+            
+            const kbSize = (file.size / 1024).toFixed(1);
+
+           
+            row.innerHTML = `
+                <div class="file-info">
+                    <span class="file-name">${file.name}</span>
+                    <span class="file-size">${kbSize} KB</span>
+                </div>
+                <button class="download-btn" onclick="initDownload(${file.id})"> 
+                </button>
+            `;
+
+            
+            listContainer.appendChild(row);
+        });
+    });
+};
+
+window.initDownload = function(fileId) {
+    console.log("Starting download for ID:", fileId);
+    
+    
+    if (typeof DownloadFile !== "function") {
+        alert("Error: DownloadFile function missing! Restart Wails.");
+        return;
+    }
+
+    const resultElement = document.getElementById("result");
+
+    if(resultElement) resultElement.innerText = "Initializing download... ";
+
+    DownloadFile(fileId).then((result) => {
+        console.log("Download Result:", result);
+        alert(result); 
+        if(resultElement) resultElement.innerText = result;
+    }).catch(err => {
+        console.error("Download failed:", err);
+        alert("Error: " + err);
     });
 };

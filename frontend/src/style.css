@@ -91,3 +91,43 @@ body {
 .refresh-btn:hover {
     opacity: 0.9;
 }
+
+.file-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.05); /* Slight transparent white */
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.file-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.file-name {
+    font-weight: bold;
+    color: #e2e8f0;
+}
+
+.file-size {
+    font-size: 0.8em;
+    color: #94a3b8; /* Gray text for size */
+}
+
+.download-btn {
+    background-color: #22c55e; /* Green */
+    color: white;
+    border: none;
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1.2em;
+}
+
+.download-btn:hover {
+    background-color: #16a34a;
+}

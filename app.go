@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"path/filepath"
 
 	"TDrive/backend/auth"
 
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -19,6 +21,12 @@ type App struct {
 	Codech chan string
 	Passch chan string
 	Client *telegram.Client
+}
+type TDriveFile struct {
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	Size       int64  `json:"size"`
+	AccessHash int64  `json:"access_hash"` // We need this to download it later!
 }
 
 func (a *App) CheckLoginStatus() bool {
@@ -169,18 +177,18 @@ func (a *App) InitDrive() string {
 	return output
 }
 
-func (a *App) GetFileList() string {
+func (a *App) GetFileList() []TDriveFile {
 	channelid, err := auth.LoadConfig()
 	if err != nil || channelid == 0 {
-		return "Error: Drive ID not found"
+		return nil // Return empty list on error
 	}
 
 	freshClient, err := auth.Connect()
 	if err != nil {
-		return "Connection failed: " + err.Error()
+		return nil
 	}
 
-	var outputList string = "Files found:\n"
+	var fileList []TDriveFile
 
 	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
 		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
@@ -188,14 +196,12 @@ func (a *App) GetFileList() string {
 			OffsetPeer: &tg.InputPeerEmpty{},
 		})
 		if err != nil {
-			return fmt.Errorf("failed to get dialogs: %w", err)
+			return err
 		}
 
 		var accessHash int64
-		found := false
-
-		// Extract chats safely
 		var chats []tg.ChatClass
+
 		switch d := dialogs.(type) {
 		case *tg.MessagesDialogs:
 			chats = d.Chats
@@ -204,24 +210,14 @@ func (a *App) GetFileList() string {
 		}
 
 		for _, chat := range chats {
-			if ch, ok := chat.(*tg.Channel); ok {
-				if ch.ID == channelid {
-					accessHash = ch.AccessHash
-					found = true
-					break
-				}
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
+				accessHash = ch.AccessHash
+				break
 			}
 		}
 
-		if !found {
-			return fmt.Errorf("TDrive channel not found in recent chats. Try uploading a file first!")
-		}
-
 		req := &tg.MessagesGetHistoryRequest{
-			Peer: &tg.InputPeerChannel{
-				ChannelID:  channelid,
-				AccessHash: accessHash,
-			},
+			Peer:  &tg.InputPeerChannel{ChannelID: channelid, AccessHash: accessHash},
 			Limit: 100,
 		}
 
@@ -240,7 +236,6 @@ func (a *App) GetFileList() string {
 			messages = r.Messages
 		}
 
-		count := 0
 		for _, msg := range messages {
 			fullMsg, ok := msg.(*tg.Message)
 			if !ok {
@@ -257,22 +252,150 @@ func (a *App) GetFileList() string {
 						}
 					}
 
-					count++
-					outputList += fmt.Sprintf("%d. %s (Size: %d bytes)\n", count, filename, doc.Size)
+					newFile := TDriveFile{
+						ID:         fullMsg.ID,
+						Name:       filename,
+						Size:       doc.Size,
+						AccessHash: doc.AccessHash,
+					}
+
+					fileList = append(fileList, newFile)
 				}
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return "Error fetching list: " + err.Error()
+		return nil
 	}
 
-	if outputList == "Files found:\n" {
-		return "No files found."
+	return fileList
+}
+
+func (a *App) DownloadFile(msgID int) string {
+	channelid, err := auth.LoadConfig()
+	if err != nil || channelid == 0 {
+		return "Error: Drive ID not found"
 	}
 
-	return outputList
+	freshClient, err := auth.Connect()
+	if err != nil {
+		return "Connection error: " + err.Error()
+	}
+
+	var status string = "Download Started..."
+
+	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
+		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			Limit:      20,
+			OffsetPeer: &tg.InputPeerEmpty{},
+		})
+		if err != nil {
+			return err
+		}
+
+		var accessHash int64
+		var found bool
+
+		// Extract chats
+		var chats []tg.ChatClass
+		switch d := dialogs.(type) {
+		case *tg.MessagesDialogs:
+			chats = d.Chats
+		case *tg.MessagesDialogsSlice:
+			chats = d.Chats
+		}
+
+		for _, chat := range chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
+				accessHash = ch.AccessHash
+				found = true
+				break
+			}
+		}
+		if !found {
+			status = "Error: Channel not found in recent chats"
+			return nil
+		}
+
+		targetID := []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}}
+
+		result, err := freshClient.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: channelid, AccessHash: accessHash},
+			ID:      targetID,
+		})
+		if err != nil {
+			return err
+		}
+
+		var targetMsg *tg.Message
+		switch m := result.(type) {
+		case *tg.MessagesChannelMessages:
+			if len(m.Messages) > 0 {
+				targetMsg, _ = m.Messages[0].(*tg.Message)
+			}
+		}
+
+		if targetMsg == nil {
+			status = "Error: Message deleted or not found"
+			return nil
+		}
+
+		docMedia, ok := targetMsg.Media.(*tg.MessageMediaDocument)
+		if !ok {
+			status = "Error: This is not a file"
+			return nil
+		}
+
+		doc, ok := docMedia.Document.(*tg.Document)
+		if !ok {
+			status = "Error: Empty document"
+			return nil
+		}
+
+		originalName := "tdrive_download"
+		for _, attr := range doc.Attributes {
+			if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
+				originalName = fname.FileName // Fix: Use '=' not ':='
+			}
+		}
+
+		savePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+			DefaultFilename: originalName,
+			Title:           "Save File As...",
+			Filters: []runtime.FileFilter{
+				{DisplayName: "All Files", Pattern: "*.*"},
+			},
+		})
+
+		if err != nil || savePath == "" {
+			status = "Download canceled"
+			return nil
+		}
+
+		d := downloader.NewDownloader()
+
+		f, err := os.Create(savePath)
+		if err != nil {
+			status = "Disk Error: " + err.Error()
+			return nil
+		}
+		defer f.Close()
+
+		_, err = d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, f)
+		if err != nil {
+			status = "Network Error: " + err.Error()
+			return nil
+		}
+
+		status = "Download Complete! Saved to: " + savePath
+		return nil
+	})
+	if err != nil {
+		return "System Error: " + err.Error()
+	}
+
+	return status
 }
 
 func (a *App) GetCodech() chan string {
