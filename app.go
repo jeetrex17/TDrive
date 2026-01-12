@@ -169,6 +169,112 @@ func (a *App) InitDrive() string {
 	return output
 }
 
+func (a *App) GetFileList() string {
+	channelid, err := auth.LoadConfig()
+	if err != nil || channelid == 0 {
+		return "Error: Drive ID not found"
+	}
+
+	freshClient, err := auth.Connect()
+	if err != nil {
+		return "Connection failed: " + err.Error()
+	}
+
+	var outputList string = "Files found:\n"
+
+	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
+		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			Limit:      20,
+			OffsetPeer: &tg.InputPeerEmpty{},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to get dialogs: %w", err)
+		}
+
+		var accessHash int64
+		found := false
+
+		// Extract chats safely
+		var chats []tg.ChatClass
+		switch d := dialogs.(type) {
+		case *tg.MessagesDialogs:
+			chats = d.Chats
+		case *tg.MessagesDialogsSlice:
+			chats = d.Chats
+		}
+
+		for _, chat := range chats {
+			if ch, ok := chat.(*tg.Channel); ok {
+				if ch.ID == channelid {
+					accessHash = ch.AccessHash
+					found = true
+					break
+				}
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("TDrive channel not found in recent chats. Try uploading a file first!")
+		}
+
+		req := &tg.MessagesGetHistoryRequest{
+			Peer: &tg.InputPeerChannel{
+				ChannelID:  channelid,
+				AccessHash: accessHash,
+			},
+			Limit: 100,
+		}
+
+		result, err := freshClient.API().MessagesGetHistory(ctx, req)
+		if err != nil {
+			return err
+		}
+
+		var messages []tg.MessageClass
+		switch r := result.(type) {
+		case *tg.MessagesMessages:
+			messages = r.Messages
+		case *tg.MessagesMessagesSlice:
+			messages = r.Messages
+		case *tg.MessagesChannelMessages:
+			messages = r.Messages
+		}
+
+		count := 0
+		for _, msg := range messages {
+			fullMsg, ok := msg.(*tg.Message)
+			if !ok {
+				continue
+			}
+
+			if docMedia, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
+				if doc, ok := docMedia.Document.(*tg.Document); ok {
+
+					filename := "Unknown"
+					for _, attr := range doc.Attributes {
+						if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
+							filename = fname.FileName
+						}
+					}
+
+					count++
+					outputList += fmt.Sprintf("%d. %s (Size: %d bytes)\n", count, filename, doc.Size)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return "Error fetching list: " + err.Error()
+	}
+
+	if outputList == "Files found:\n" {
+		return "No files found."
+	}
+
+	return outputList
+}
+
 func (a *App) GetCodech() chan string {
 	return a.Codech
 }

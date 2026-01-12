@@ -5,6 +5,8 @@ export function CheckLoginStatus():Promise<boolean>;
 
 export function GetCodech():Promise<any>;
 
+export function GetFileList():Promise<string>;
+
 export function GetPassch():Promise<any>;
 
 export function Greet(arg1:string):Promise<string>;

@@ -1,5 +1,5 @@
 
-import { LoginPhoneNumber, SumbitCode, SumbitPassword, CheckLoginStatus, InitDrive , SelectFile , UploadToTelegram } from '../wailsjs/go/main/App';
+import { LoginPhoneNumber, SumbitCode, SumbitPassword,GetFileList ,  CheckLoginStatus, InitDrive , SelectFile , UploadToTelegram } from '../wailsjs/go/main/App';
 
 
 window.onload = async function() {
@@ -102,5 +102,14 @@ window.selectFile = function() {
             console.log("Upload Complete:", msg);
             document.getElementById("result").innerText = msg;
         });
+    });
+};
+
+window.refreshFiles = function() {
+    document.getElementById("file-list").innerText = "Loading...";
+
+    GetFileList().then((result) => {
+        console.log("Files fetched:", result);
+        document.getElementById("file-list").innerText = result;
     });
 };

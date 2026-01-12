@@ -10,6 +10,10 @@ export function GetCodech() {
   return window['go']['main']['App']['GetCodech']();
 }
 
+export function GetFileList() {
+  return window['go']['main']['App']['GetFileList']();
+}
+
 export function GetPassch() {
   return window['go']['main']['App']['GetPassch']();
 }

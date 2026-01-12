@@ -4,7 +4,6 @@
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <title>TDrive</title>
-    
     <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
@@ -12,7 +11,7 @@
 
         <div id="phonecontainer">
             <h2>Welcome to TDrive</h2>
-            <p>Enter your phone number .</p>
+            <p>Enter your phone number.</p>
             <input id="enterphone" type="text" placeholder="+1234567890">
             <button onclick="startLogin()">Send Code</button>
         </div>
@@ -20,34 +19,45 @@
         <div id="codecontainer" style="display: none;">
             <h2>Code Verification</h2>
             <p>Check Telegram for 2FA code.</p>
-            <input id="entercode" type="text" placeholder="12345" style="letter-spacing: 3px; text-align: center;">
+            <input id="entercode" class="code-input" type="text" placeholder="12345">
             <button onclick="sendCode()">Verify Code</button>
         </div>
 
         <div id="passwordcontainer" style="display: none;">
             <h2>Two-Step Verification</h2>
             <p>This account is protected.</p>
-            
-            <p id="hinttext" style="color: orange; font-style: italic; font-size: 0.9em;"></p>
-            
+            <p id="hinttext" class="hint-text"></p>
             <input id="enterpassword" type="password" placeholder="Enter 2FA Password">
             <button onclick="sendPassword()">Unlock TDrive</button>
         </div>
 
-        <div id="success-screen" style="display: none; text-align: center;">
-            <h1 style="font-size: 3rem; color: #4ade80; text-shadow: 0 0 20px rgba(74, 222, 128, 0.5);">
+        <div id="success-screen" style="display: none;">
+            
+            <h1 class="success-title">
                 AUTO LOGIN <br> SUCCESS 
             </h1>
-            <p style="color: white; opacity: 0.8;">Your secure cloud is ready.</p>
+            <p class="success-subtitle">Your secure cloud is ready.</p>
 
             <button class="upload-btn" onclick="selectFile()">
                 Select File to Upload 
             </button>
+            <div id="result"></div>
+
+            <hr class="divider">
+
+            <h3>Your Cloud Files </h3>
+            
+            <button class="refresh-btn" onclick="refreshFiles()">
+                Refresh List 
+            </button>
+
+            <div id="file-list" class="file-list-box">
+                (Click refresh to load files...)
+            </div>
+
         </div>
-        <div id="result"></div>
     </div>
 
-    
     <script type="module" src="/src/main.js"></script>
 </body>
 </html>

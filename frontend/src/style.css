@@ -42,3 +42,52 @@ body {
 .upload-btn:active {
     transform: scale(0.95);
 }
+
+
+
+.success-title {
+    font-size: 3rem;
+    color: #4ade80;
+    text-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
+    margin-bottom: 10px;
+}
+
+.success-subtitle {
+    color: white;
+    opacity: 0.8;
+    margin-bottom: 20px;
+}
+
+
+.divider {
+    margin: 20px 0;
+    border: 0;
+    border-top: 1px solid #333;
+}
+
+.file-list-box {
+    background: #1e293b; 
+    color: #e2e8f0; 
+    padding: 15px; 
+    border-radius: 8px; 
+    margin-top: 15px; 
+    white-space: pre-wrap; 
+    text-align: left;
+    font-family: monospace;
+    min-height: 50px;
+}
+
+.refresh-btn {
+    background-color: #60a5fa;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.refresh-btn:hover {
+    opacity: 0.9;
+}
