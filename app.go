@@ -103,7 +103,7 @@ func (a *App) UploadToTelegram(fp string) string {
 			Peer:     destination,
 			Media:    pkgtosend,
 			RandomID: rand.Int63(),
-			Message:  "Uploaded via TDrive 🚀",
+			Message:  fmt.Sprintf("uploaded via Tdriv : ", filepath.Base(fp)),
 		})
 		if err != nil {
 			return fmt.Errorf("send failed: %w", err)
@@ -200,7 +200,6 @@ func (a *App) startup(ctx context.Context) {
 	a.Client = ac
 }
 
-// Greet returns a greeting for the given name
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
 }
