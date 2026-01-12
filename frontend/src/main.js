@@ -1,5 +1,5 @@
 
-import { LoginPhoneNumber, SumbitCode, SumbitPassword, CheckLoginStatus, InitDrive } from '../wailsjs/go/main/App';
+import { LoginPhoneNumber, SumbitCode, SumbitPassword, CheckLoginStatus, InitDrive , SelectFile , UploadToTelegram } from '../wailsjs/go/main/App';
 
 
 window.onload = async function() {
@@ -73,6 +73,34 @@ window.sendPassword = function () {
 function callInitDrive() {
     InitDrive().then((result) => {
         console.log("Backend Response:", result);
-        document.getElementById("result").innerText = result; // Show "ID: 12345" on screen
+        document.getElementById("result").innerText = result;
     });
 }
+
+window.selectFile = function() {
+    SelectFile().then((path) => {
+        if (path === "") {
+            console.log("User cancelled file selection");
+            return; 
+        }
+
+        console.log("User picked:", path);
+    });
+};
+
+
+window.selectFile = function() {
+    SelectFile().then((path) => {
+        if (path === "") {
+            return;         }
+        
+        console.log("User file path :", path);
+        
+        document.getElementById("result").innerText = "Uploading... Please wait.";
+
+        UploadToTelegram(path).then((msg) => {
+            console.log("Upload Complete:", msg);
+            document.getElementById("result").innerText = msg;
+        });
+    });
+};

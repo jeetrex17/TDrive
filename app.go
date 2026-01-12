@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"path/filepath"
 
 	"TDrive/backend/auth"
 
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/uploader"
+	"github.com/gotd/td/tg"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -28,6 +32,91 @@ func (a *App) CheckLoginStatus() bool {
 	}
 
 	return login
+}
+
+func (a *App) SelectFile() (string, error) {
+	uploadfilepath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select file to upload",
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return uploadfilepath, err
+}
+
+func (a *App) UploadToTelegram(fp string) string {
+	channelid, err := auth.LoadConfig()
+	if err != nil || channelid == 0 {
+		return "Error: Drive ID not found"
+	}
+
+	freshClient, err := auth.Connect()
+	if err != nil {
+		return "Connection failed: " + err.Error()
+	}
+
+	var finalOutput string
+
+	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
+		channels, err := freshClient.API().ChannelsGetChannels(ctx, []tg.InputChannelClass{
+			&tg.InputChannel{ChannelID: channelid},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to get channel: %w", err)
+		}
+
+		var accessHash int64
+		if chats, ok := channels.(*tg.MessagesChats); ok {
+			for _, chat := range chats.Chats {
+				if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
+					accessHash = ch.AccessHash
+					break
+				}
+			}
+		}
+
+		u := uploader.NewUploader(freshClient.API())
+		fmt.Println("Uploading file:", fp)
+
+		upload, err := u.FromPath(ctx, fp)
+		if err != nil {
+			return fmt.Errorf("upload failed: %w", err)
+		}
+
+		destination := &tg.InputPeerChannel{
+			ChannelID:  channelid,
+			AccessHash: accessHash,
+		}
+
+		pkgtosend := &tg.InputMediaUploadedDocument{
+			File:     upload,
+			MimeType: "application/octet-stream",
+			Attributes: []tg.DocumentAttributeClass{
+				&tg.DocumentAttributeFilename{
+					FileName: filepath.Base(fp),
+				},
+			},
+		}
+
+		_, err = freshClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			Peer:     destination,
+			Media:    pkgtosend,
+			RandomID: rand.Int63(),
+			Message:  "Uploaded via TDrive 🚀",
+		})
+		if err != nil {
+			return fmt.Errorf("send failed: %w", err)
+		}
+
+		finalOutput = fmt.Sprintf("Success! File uploaded. ID: %v", upload)
+		return nil
+	})
+	if err != nil {
+		return "Upload Error: " + err.Error()
+	}
+
+	return finalOutput
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) {

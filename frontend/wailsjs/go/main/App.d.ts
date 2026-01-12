@@ -13,8 +13,12 @@ export function InitDrive():Promise<string>;
 
 export function LoginPhoneNumber(arg1:string):Promise<void>;
 
+export function SelectFile():Promise<string>;
+
 export function SendHint(arg1:string):Promise<void>;
 
 export function SumbitCode(arg1:string):Promise<void>;
 
 export function SumbitPassword(arg1:string):Promise<void>;
+
+export function UploadToTelegram(arg1:string):Promise<string>;

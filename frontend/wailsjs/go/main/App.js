@@ -26,6 +26,10 @@ export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }
 
+export function SelectFile() {
+  return window['go']['main']['App']['SelectFile']();
+}
+
 export function SendHint(arg1) {
   return window['go']['main']['App']['SendHint'](arg1);
 }
@@ -36,4 +40,8 @@ export function SumbitCode(arg1) {
 
 export function SumbitPassword(arg1) {
   return window['go']['main']['App']['SumbitPassword'](arg1);
+}
+
+export function UploadToTelegram(arg1) {
+  return window['go']['main']['App']['UploadToTelegram'](arg1);
 }

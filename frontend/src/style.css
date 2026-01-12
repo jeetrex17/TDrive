@@ -24,3 +24,21 @@ body {
     height: 100vh;
     text-align: center;
 }
+
+
+.upload-btn {
+    background-color: #4ade80; 
+    color: #0f172a; 
+    border: none; 
+    padding: 15px 30px; 
+    font-size: 1.2rem; 
+    border-radius: 8px; 
+    cursor: pointer; 
+    margin-top: 20px; 
+    font-weight: bold;
+    transition: transform 0.1s ease;
+}
+
+.upload-btn:active {
+    transform: scale(0.95);
+}
