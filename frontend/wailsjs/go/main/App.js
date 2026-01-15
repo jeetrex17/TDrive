@@ -6,6 +6,10 @@ export function CheckLoginStatus() {
   return window['go']['main']['App']['CheckLoginStatus']();
 }
 
+export function DeleteFile(arg1) {
+  return window['go']['main']['App']['DeleteFile'](arg1);
+}
+
 export function DownloadFile(arg1) {
   return window['go']['main']['App']['DownloadFile'](arg1);
 }

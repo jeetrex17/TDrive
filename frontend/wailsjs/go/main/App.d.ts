@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function CheckLoginStatus():Promise<boolean>;
 
+export function DeleteFile(arg1:number):Promise<string>;
+
 export function DownloadFile(arg1:number):Promise<string>;
 
 export function GetCodech():Promise<any>;

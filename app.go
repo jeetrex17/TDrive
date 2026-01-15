@@ -356,7 +356,7 @@ func (a *App) DownloadFile(msgID int) string {
 		originalName := "tdrive_download"
 		for _, attr := range doc.Attributes {
 			if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
-				originalName = fname.FileName // Fix: Use '=' not ':='
+				originalName = fname.FileName
 			}
 		}
 
@@ -389,6 +389,71 @@ func (a *App) DownloadFile(msgID int) string {
 		}
 
 		status = "Download Complete! Saved to: " + savePath
+		return nil
+	})
+	if err != nil {
+		return "System Error: " + err.Error()
+	}
+
+	return status
+}
+
+func (a *App) DeleteFile(msgID int) string {
+	channelid, err := auth.LoadConfig()
+	if err != nil || channelid == 0 {
+		return "Error: Drive ID not found"
+	}
+
+	freshClient, err := auth.Connect()
+	if err != nil {
+		return "Connection error: " + err.Error()
+	}
+
+	var status string = "DeleteFile Started..."
+
+	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
+		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			Limit:      20,
+			OffsetPeer: &tg.InputPeerEmpty{},
+		})
+		if err != nil {
+			return err
+		}
+		var accessHash int64
+		var found bool
+
+		// Extract chats
+		var chats []tg.ChatClass
+		switch d := dialogs.(type) {
+		case *tg.MessagesDialogs:
+			chats = d.Chats
+		case *tg.MessagesDialogsSlice:
+			chats = d.Chats
+		}
+
+		for _, chat := range chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
+				accessHash = ch.AccessHash
+				found = true
+				break
+			}
+		}
+		if !found {
+			status = "Error: Channel not found in recent chats"
+			return err
+		}
+
+		targetID := []int{msgID}
+		_, err = freshClient.API().ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: channelid, AccessHash: accessHash},
+			ID:      targetID,
+		})
+		if err != nil {
+			status = "Error: Failed to delete"
+			return nil
+		}
+
+		status = "deleted Successfully"
 		return nil
 	})
 	if err != nil {
