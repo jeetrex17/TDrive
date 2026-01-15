@@ -61,6 +61,21 @@ window.selectFile = function() {
     });
 };
 
+
+window.runtime.EventsOn("login-success", function() {
+    console.log("EVENT RECEIVED: Login Success!");
+    
+   
+    document.getElementById("phonecontainer").style.display = "none";
+    document.getElementById("codecontainer").style.display = "none";
+    document.getElementById("passwordcontainer").style.display = "none";
+
+    
+    document.getElementById("success-screen").style.display = "block";
+
+        callInitDrive();
+    window.refreshFiles();});
+
 window.refreshFiles = function() {
     const listContainer = document.getElementById("file-list");
     listContainer.innerHTML = "Loading... 📡";

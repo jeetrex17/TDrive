@@ -131,24 +131,3 @@ body {
 .download-btn:hover {
     background-color: #16a34a;
 }
-
-.action-buttons {
-    display: flex;
-    gap: 10px; /* Space between buttons */
-    align-items: center;
-}
-
-.delete-btn {
-    background-color: #ff4444; 
-    color: white;
-    border: none;
-    padding: 8px 12px;
-    border-radius: 5px;
-    cursor: pointer;
-    font-size: 1.2rem;
-    transition: background 0.2s;
-}
-
-.delete-btn:hover {
-    background-color: #cc0000;
-}
