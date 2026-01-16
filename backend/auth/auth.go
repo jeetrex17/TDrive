@@ -2,7 +2,9 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +14,11 @@ import (
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
 )
+
+type ImpCredentials struct {
+	ApiID   int    `json:"API_ID"`
+	ApiHash string `json:"API_HASH"`
+}
 
 type getchanel interface {
 	GetCodech() chan string
@@ -23,6 +30,50 @@ type AuthT struct {
 	Client      *telegram.Client
 	app         getchanel
 	PhoneNumber string
+}
+
+func GetConfigPath() string {
+	path, err := os.UserConfigDir()
+	if err != nil {
+		return err.Error()
+	}
+	path = path + "/TDrive/imp_config.json"
+
+	return path
+}
+
+func SaveImpCredentials(id int, hash string) {
+	ic := ImpCredentials{
+		ApiID:   id,
+		ApiHash: hash,
+	}
+
+	jsonData, err := json.MarshalIndent(ic, "", " ")
+	if err != nil {
+		log.Fatal("Error marshaling imp credentials: ", err)
+	}
+	err = os.WriteFile(GetConfigPath(), jsonData, 0o644)
+	if err != nil {
+		log.Fatal("Error writing imp JSON : ", err)
+	}
+}
+
+func LoadImpCredentials() ImpCredentials {
+	impCongigPath := GetConfigPath()
+
+	creds, err := os.ReadFile(impCongigPath)
+	if err != nil {
+		log.Fatalf("Error reading file: %v", err)
+	}
+
+	var impCreds ImpCredentials
+
+	err = json.Unmarshal(creds, &impCreds)
+	if err != nil {
+		log.Fatalf("JSON decode error: %v", err)
+	}
+
+	return impCreds
 }
 
 func Connect() (*telegram.Client, error) {
