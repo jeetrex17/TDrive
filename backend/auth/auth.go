@@ -184,3 +184,29 @@ func StartLogin(ctx context.Context, client *telegram.Client, ch getchanel, phon
 		return client.Auth().IfNecessary(ctx, flow)
 	})
 }
+
+func ResolveDriveChannel(ctx context.Context, api *tg.Client, channelID int64) (*tg.InputChannel, *tg.InputPeerChannel, error) {
+	chats, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
+		&tg.InputChannel{ChannelID: channelID},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var accessHash int64
+	if cc, ok := chats.(*tg.MessagesChats); ok {
+		for _, chat := range cc.Chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelID {
+				accessHash = ch.AccessHash
+				break
+			}
+		}
+	}
+	if accessHash == 0 {
+		return nil, nil, fmt.Errorf("could not resolve access_hash for channel_id=%d", channelID)
+	}
+
+	inChan := &tg.InputChannel{ChannelID: channelID, AccessHash: accessHash}
+	inPeer := &tg.InputPeerChannel{ChannelID: channelID, AccessHash: accessHash}
+	return inChan, inPeer, nil
+}

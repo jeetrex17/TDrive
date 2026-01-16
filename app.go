@@ -192,33 +192,13 @@ func (a *App) GetFileList() []TDriveFile {
 	var fileList []TDriveFile
 
 	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-			Limit:      20,
-			OffsetPeer: &tg.InputPeerEmpty{},
-		})
+		_, peer, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
 		if err != nil {
 			return err
 		}
 
-		var accessHash int64
-		var chats []tg.ChatClass
-
-		switch d := dialogs.(type) {
-		case *tg.MessagesDialogs:
-			chats = d.Chats
-		case *tg.MessagesDialogsSlice:
-			chats = d.Chats
-		}
-
-		for _, chat := range chats {
-			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
-				accessHash = ch.AccessHash
-				break
-			}
-		}
-
 		req := &tg.MessagesGetHistoryRequest{
-			Peer:  &tg.InputPeerChannel{ChannelID: channelid, AccessHash: accessHash},
+			Peer:  peer,
 			Limit: 100,
 		}
 
@@ -288,42 +268,16 @@ func (a *App) DownloadFile(msgID int) string {
 	var status string = "Download Started..."
 
 	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-			Limit:      20,
-			OffsetPeer: &tg.InputPeerEmpty{},
-		})
+		inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
 		if err != nil {
-			return err
-		}
-
-		var accessHash int64
-		var found bool
-
-		// Extract chats
-		var chats []tg.ChatClass
-		switch d := dialogs.(type) {
-		case *tg.MessagesDialogs:
-			chats = d.Chats
-		case *tg.MessagesDialogsSlice:
-			chats = d.Chats
-		}
-
-		for _, chat := range chats {
-			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
-				accessHash = ch.AccessHash
-				found = true
-				break
-			}
-		}
-		if !found {
-			status = "Error: Channel not found in recent chats"
+			status = "Error: " + err.Error()
 			return nil
 		}
 
 		targetID := []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}}
 
 		result, err := freshClient.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-			Channel: &tg.InputChannel{ChannelID: channelid, AccessHash: accessHash},
+			Channel: inChan,
 			ID:      targetID,
 		})
 		if err != nil {
@@ -414,40 +368,15 @@ func (a *App) DeleteFile(msgID int) string {
 	var status string = "DeleteFile Started..."
 
 	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-			Limit:      20,
-			OffsetPeer: &tg.InputPeerEmpty{},
-		})
+		inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
 		if err != nil {
-			return err
-		}
-		var accessHash int64
-		var found bool
-
-		// Extract chats
-		var chats []tg.ChatClass
-		switch d := dialogs.(type) {
-		case *tg.MessagesDialogs:
-			chats = d.Chats
-		case *tg.MessagesDialogsSlice:
-			chats = d.Chats
-		}
-
-		for _, chat := range chats {
-			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
-				accessHash = ch.AccessHash
-				found = true
-				break
-			}
-		}
-		if !found {
-			status = "Error: Channel not found in recent chats"
-			return err
+			status = "Error: " + err.Error()
+			return nil
 		}
 
 		targetID := []int{msgID}
 		_, err = freshClient.API().ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
-			Channel: &tg.InputChannel{ChannelID: channelid, AccessHash: accessHash},
+			Channel: inChan,
 			ID:      targetID,
 		})
 		if err != nil {
@@ -479,40 +408,9 @@ func (a *App) GetStorageUsed() (int64, error) {
 	var totalSize int64
 
 	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-			Limit:      20,
-			OffsetPeer: &tg.InputPeerEmpty{},
-		})
+		_, ip, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
 		if err != nil {
 			return err
-		}
-
-		var accessHash int64
-		var found bool
-
-		// Extract chats
-		var chats []tg.ChatClass
-		switch d := dialogs.(type) {
-		case *tg.MessagesDialogs:
-			chats = d.Chats
-		case *tg.MessagesDialogsSlice:
-			chats = d.Chats
-		}
-
-		for _, chat := range chats {
-			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
-				accessHash = ch.AccessHash
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("channel not found in recent chats")
-		}
-
-		ip := &tg.InputPeerChannel{
-			ChannelID:  channelid,
-			AccessHash: accessHash,
 		}
 
 		LastMsgID := 0
