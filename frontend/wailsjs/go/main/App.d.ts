@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function CheckLoginStatus():Promise<boolean>;
 
+export function CheckSystemStatus():Promise<string>;
+
 export function DeleteFile(arg1:number):Promise<string>;
 
 export function DownloadFile(arg1:number):Promise<string>;
@@ -19,6 +21,8 @@ export function Greet(arg1:string):Promise<string>;
 export function InitDrive():Promise<string>;
 
 export function LoginPhoneNumber(arg1:string):Promise<void>;
+
+export function SaveSetup(arg1:number,arg2:string):Promise<string>;
 
 export function SelectFile():Promise<string>;
 

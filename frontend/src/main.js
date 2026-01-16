@@ -1,25 +1,60 @@
 
 import { 
     LoginPhoneNumber, SumbitCode, SumbitPassword, 
-    GetFileList, DownloadFile, DeleteFile, // <--- Checked this?
-    CheckLoginStatus, InitDrive, SelectFile, UploadToTelegram 
+    GetFileList, DownloadFile, DeleteFile,  CheckSystemStatus, SaveSetup ,  CheckLoginStatus, InitDrive, SelectFile, UploadToTelegram 
 } from '../wailsjs/go/main/App';
 
 
 window.onload = async function() {
-    console.log("App loaded.");
+    console.log("App loaded. Checking System Status...");
+    
     try {
+       
+        let status = await CheckSystemStatus();
+        console.log("System Status:", status);
+
+        if (status === "NEEDS_SETUP") {
+            
+            document.getElementById("setupcontainer").style.display = "block";
+            document.getElementById("phonecontainer").style.display = "none";
+            return;
+        }
+
+        
         let isLoggedIn = await CheckLoginStatus();
         if (isLoggedIn) {
             document.getElementById("phonecontainer").style.display = "none";
             document.getElementById("success-screen").style.display = "block";
             callInitDrive(); 
+            window.refreshFiles();
         } else {
             document.getElementById("phonecontainer").style.display = "block";
         }
-    } catch (err) { console.error(err); }
+
+    } catch (err) { 
+        console.error("Startup Error:", err);
+        alert("Startup Error: " + err);
+    }
 };
 
+window.submitSetup = function() {
+    const id = parseInt(document.getElementById("api_id").value);
+    const hash = document.getElementById("api_hash").value;
+
+    if (!id || !hash) {
+        alert("Enter both ID and Hash!");
+        return;
+    }
+
+    SaveSetup(id, hash).then((result) => {
+        if (result === "Success") {
+            alert("Saved! Restarting flow...");
+            location.reload();
+        } else {
+            alert("Error: " + result);
+        }
+    });
+};
 window.startLogin = function () {
     let phone = document.getElementById("enterphone").value;
     LoginPhoneNumber(phone).then(() => {

@@ -480,6 +480,22 @@ func NewApp() *App {
 	}
 }
 
+func (a *App) CheckSystemStatus() string {
+	_, err := auth.LoadImpCredentials()
+	if err != nil {
+		return "NEEDS_SETUP"
+	}
+	return "READY_FOR_LOGIN"
+}
+
+func (a *App) SaveSetup(apiId int, apiHash string) string {
+	err := auth.SaveImpCredentials(apiId, apiHash)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	return "Success"
+}
+
 func (a *App) SumbitCode(code string) {
 	a.Codech <- code
 }

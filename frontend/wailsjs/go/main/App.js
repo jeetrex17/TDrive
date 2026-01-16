@@ -6,6 +6,10 @@ export function CheckLoginStatus() {
   return window['go']['main']['App']['CheckLoginStatus']();
 }
 
+export function CheckSystemStatus() {
+  return window['go']['main']['App']['CheckSystemStatus']();
+}
+
 export function DeleteFile(arg1) {
   return window['go']['main']['App']['DeleteFile'](arg1);
 }
@@ -36,6 +40,10 @@ export function InitDrive() {
 
 export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
+}
+
+export function SaveSetup(arg1, arg2) {
+  return window['go']['main']['App']['SaveSetup'](arg1, arg2);
 }
 
 export function SelectFile() {

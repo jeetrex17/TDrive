@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
@@ -37,12 +35,17 @@ func GetConfigPath() string {
 	if err != nil {
 		return err.Error()
 	}
-	path = path + "/TDrive/imp_config.json"
-
-	return path
+	return filepath.Join(path, "TDrive", "imp_config.json")
 }
 
-func SaveImpCredentials(id int, hash string) {
+func SaveImpCredentials(id int, hash string) error {
+	path := GetConfigPath()
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("could not create config folder: %v", err)
+	}
+
 	ic := ImpCredentials{
 		ApiID:   id,
 		ApiHash: hash,
@@ -50,39 +53,47 @@ func SaveImpCredentials(id int, hash string) {
 
 	jsonData, err := json.MarshalIndent(ic, "", " ")
 	if err != nil {
-		log.Fatal("Error marshaling imp credentials: ", err)
+		return fmt.Errorf("error marshaling credentials: %v", err)
 	}
 	err = os.WriteFile(GetConfigPath(), jsonData, 0o644)
 	if err != nil {
-		log.Fatal("Error writing imp JSON : ", err)
+		return fmt.Errorf("error writing file: %v", err)
 	}
+
+	return nil
 }
 
-func LoadImpCredentials() ImpCredentials {
+func LoadImpCredentials() (ImpCredentials, error) {
 	impCongigPath := GetConfigPath()
 
 	creds, err := os.ReadFile(impCongigPath)
 	if err != nil {
-		log.Fatalf("Error reading file: %v", err)
+		return ImpCredentials{}, err
 	}
 
 	var impCreds ImpCredentials
 
 	err = json.Unmarshal(creds, &impCreds)
 	if err != nil {
-		log.Fatalf("JSON decode error: %v", err)
+		return ImpCredentials{}, fmt.Errorf("error decoding json: %v", err)
 	}
 
-	return impCreds
+	return impCreds, nil
 }
 
 func Connect() (*telegram.Client, error) {
-	Tg_app_HASH := os.Getenv("TELEGRAM_APP_HASH")
+	// Tg_app_HASH := os.Getenv("TELEGRAM_APP_HASH")
 
-	Tg_app_ID, err := strconv.Atoi(os.Getenv("TELEGRAM_APP_ID"))
+	//Tg_app_ID, err := strconv.Atoi(os.Getenv("TELEGRAM_APP_ID"))
+	//
+
+	creds, err := LoadImpCredentials()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NO API AND AHSH lOADED ")
 	}
+
+	TgApiID := creds.ApiID
+	TgApiHash := creds.ApiHash
 
 	cwd, _ := os.Getwd()
 	sessionPath := filepath.Join(cwd, "session.json")
@@ -90,7 +101,7 @@ func Connect() (*telegram.Client, error) {
 		Path: sessionPath,
 	}
 
-	tgclient := telegram.NewClient(Tg_app_ID, Tg_app_HASH, telegram.Options{
+	tgclient := telegram.NewClient(TgApiID, TgApiHash, telegram.Options{
 		SessionStorage: ses,
 	})
 

@@ -8,7 +8,13 @@
 </head>
 <body>
     <div id="app"> 
-
+            <div id="setupcontainer" style="display: none;">
+    <h2>⚠️ Setup Required</h2>
+    <p>Please enter your Telegram API Keys.</p>
+    <input id="api_id" type="text" placeholder="App ID">
+    <input id="api_hash" type="text" placeholder="App Hash">
+    <button onclick="submitSetup()">Save & Restart</button>
+</div>
         <div id="phonecontainer">
             <h2>Welcome to TDrive</h2>
             <p>Enter your phone number.</p>
