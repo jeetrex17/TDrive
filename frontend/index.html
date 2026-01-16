@@ -4,63 +4,118 @@
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
     <title>TDrive</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
     <div id="app"> 
-            <div id="setupcontainer" style="display: none;">
-    <h2>⚠️ Setup Required</h2>
-    <p>Please enter your Telegram API Keys.</p>
-    <input id="api_id" type="text" placeholder="App ID">
-    <input id="api_hash" type="text" placeholder="App Hash">
-    <button onclick="submitSetup()">Save & Restart</button>
-</div>
-        <div id="phonecontainer">
-            <h2>Welcome to TDrive</h2>
-            <p>Enter your phone number.</p>
-            <input id="enterphone" type="text" placeholder="+1234567890">
-            <button onclick="startLogin()">Send Code</button>
-        </div>
 
-        <div id="codecontainer" style="display: none;">
-            <h2>Code Verification</h2>
-            <p>Check Telegram for 2FA code.</p>
-            <input id="entercode" class="code-input" type="text" placeholder="12345">
-            <button onclick="sendCode()">Verify Code</button>
-        </div>
-
-        <div id="passwordcontainer" style="display: none;">
-            <h2>Two-Step Verification</h2>
-            <p>This account is protected.</p>
-            <p id="hinttext" class="hint-text"></p>
-            <input id="enterpassword" type="password" placeholder="Enter 2FA Password">
-            <button onclick="sendPassword()">Unlock TDrive</button>
-        </div>
-
-        <div id="success-screen" style="display: none;">
+        <div id="auth-wrapper">
             
-            <h1 class="success-title">
-                AUTO LOGIN <br> SUCCESS 
-            </h1>
-            <p class="success-subtitle">Your secure cloud is ready.</p>
-
-            <button class="upload-btn" onclick="selectFile()">
-                Select File to Upload 
-            </button>
-            <div id="result"></div>
-
-            <hr class="divider">
-
-            <h3>Your Cloud Files </h3>
-            
-            <button class="refresh-btn" onclick="refreshFiles()">
-                Refresh List 
-            </button>
-
-            <div id="file-list" class="file-list-box">
-                (Click refresh to load files...)
+            <div id="setupcontainer" class="auth-box" >
+                <div class="auth-icon-box">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                </div>
+                <h2>System Setup</h2>
+                <p>Configure API Credentials</p>
+                <input id="api_id" type="text" placeholder="App ID">
+                <input id="api_hash" type="text" placeholder="App Hash">
+                <button class="primary-btn" onclick="submitSetup()">Save Configuration</button>
             </div>
 
+            <div id="phonecontainer" class="auth-box"> <div class="auth-icon-box">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                </div>
+                <h2>Welcome Back</h2>
+                <p>Login to your secure cloud</p>
+                <input id="enterphone" type="text" placeholder="+1234567890">
+                <button class="primary-btn" onclick="startLogin()">Send Code</button>
+            </div>
+
+            <div id="codecontainer" class="auth-box" style="display: none;">
+                <div class="auth-icon-box">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                </div>
+                <h2>Verify Identity</h2>
+                <p>Enter Telegram Code</p>
+                <input id="entercode" class="code-input" type="text" placeholder="12345">
+                <button class="primary-btn" onclick="sendCode()">Verify</button>
+            </div>
+
+            <div id="passwordcontainer" class="auth-box" style="display: none;">
+                <div class="auth-icon-box">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11.536 16.464a.5.5 0 00-.496.568l.1 1.15a.5.5 0 01-.037.24l-1.352 3.863a.5.5 0 01-.47.315H7.5a.5.5 0 01-.5-.5v-2.204a.5.5 0 01.146-.354l3.298-3.297A6 6 0 0115 7z"/></svg>
+                </div>
+                <h2>Two-Factor Auth</h2>
+                <p id="hinttext" class="hint-text"></p>
+                <input id="enterpassword" type="password" placeholder="Password">
+                <button class="primary-btn" onclick="sendPassword()">Unlock</button>
+            </div>
+        </div>
+
+        <div id="success-screen" class="dashboard-container" style="display: none;">
+            
+            <aside class="sidebar">
+                <div class="logo">TDrive</div>
+                
+                <nav>
+                    <a href="#" class="nav-item active">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
+                        My Cloud
+                    </a>
+                </nav>
+
+                <div class="storage-info">
+                    <div class="storage-bar"><div class="storage-fill" style="width: 15%"></div></div>
+                    <p>Storage: <span>Unlimited</span></p>
+                </div>
+            </aside>
+
+            <main class="main-content">
+                <header>
+                    <div class="search-bar">
+                        <svg class="search-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        <input type="text" placeholder="Search files...">
+                    </div>
+
+                    <div class="header-actions">
+                         <div id="status-msg" class="status-badge">Ready</div>
+                         
+                        <button class="icon-btn" onclick="refreshFiles()" title="Refresh">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                        </button>
+                        
+                        <button class="primary-btn upload-btn" onclick="selectFile()">
+                            <svg class="btn-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                            Upload
+                        </button>
+                    </div>
+                </header>
+
+                <div class="file-table-header">
+                    <span class="col-name">Name</span>
+                    <span class="col-date">Date</span>
+                    <span class="col-size">Size</span>
+                    <span class="col-actions">Actions</span>
+                </div>
+
+                <div id="file-list" class="file-list-box">
+                    <div class="empty-state">Loading...</div>
+                </div>
+            </main>
+
+        </div>
+
+        <div id="delete-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+                <h3 id="delete-modal-title" class="modal-title">Delete file?</h3>
+                <p class="modal-subtitle">This will permanently delete the file from your Telegram channel.</p>
+
+                <div class="modal-actions">
+                    <button id="delete-cancel" class="secondary-btn" type="button">Cancel</button>
+                    <button id="delete-confirm" class="primary-btn danger-btn" type="button">Delete</button>
+                </div>
+            </div>
         </div>
     </div>
 

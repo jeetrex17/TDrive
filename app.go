@@ -26,7 +26,8 @@ type TDriveFile struct {
 	ID         int    `json:"id"`
 	Name       string `json:"name"`
 	Size       int64  `json:"size"`
-	AccessHash int64  `json:"access_hash"` // We need this to download it later!
+	AccessHash int64  `json:"access_hash"`
+	Date       int    `json:"date"`
 }
 
 func (a *App) CheckLoginStatus() bool {
@@ -256,6 +257,7 @@ func (a *App) GetFileList() []TDriveFile {
 						ID:         fullMsg.ID,
 						Name:       filename,
 						Size:       doc.Size,
+						Date:       fullMsg.Date,
 						AccessHash: doc.AccessHash,
 					}
 
