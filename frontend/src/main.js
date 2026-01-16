@@ -164,16 +164,26 @@ function showDashboard() {
 
 window.refreshFiles = function() {
     const list = document.getElementById("file-list");
+    const storageUsed = document.getElementById("storage-used");
+
     list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
+    if (storageUsed) storageUsed.innerText = "Calculating... / Unlimited";
 
     GetFileList().then((files) => {
-        if (!files || files.length === 0) {
+        const allFiles = Array.isArray(files) ? files : [];
+
+        if (storageUsed) {
+            const totalBytes = allFiles.reduce((sum, file) => sum + (file?.size || 0), 0);
+            storageUsed.innerText = `${formatBytes(totalBytes)} / Unlimited`;
+        }
+
+        if (allFiles.length === 0) {
             list.innerHTML = '<div style="padding:20px; color:#565f89;">No files found.</div>';
             return;
         }
 
         list.innerHTML = "";
-        files.forEach((file) => {
+        allFiles.forEach((file) => {
             const row = document.createElement("div");
             row.className = "file-row";
             

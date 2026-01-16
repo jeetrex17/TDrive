@@ -30,6 +30,10 @@ export function GetPassch() {
   return window['go']['main']['App']['GetPassch']();
 }
 
+export function GetStorageUsed() {
+  return window['go']['main']['App']['GetStorageUsed']();
+}
+
 export function Greet(arg1) {
   return window['go']['main']['App']['Greet'](arg1);
 }

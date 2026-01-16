@@ -465,6 +465,104 @@ func (a *App) DeleteFile(msgID int) string {
 	return status
 }
 
+func (a *App) GetStorageUsed() (int64, error) {
+	channelid, err := auth.LoadConfig()
+	if err != nil {
+		return 0, fmt.Errorf("errro getting channel id : %v", err)
+	}
+
+	freshClient, err := auth.Connect()
+	if err != nil {
+		return 0, fmt.Errorf("Error making new tg client : %v", err)
+	}
+
+	var totalSize int64
+
+	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
+		dialogs, err := freshClient.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			Limit:      20,
+			OffsetPeer: &tg.InputPeerEmpty{},
+		})
+		if err != nil {
+			return err
+		}
+
+		var accessHash int64
+		var found bool
+
+		// Extract chats
+		var chats []tg.ChatClass
+		switch d := dialogs.(type) {
+		case *tg.MessagesDialogs:
+			chats = d.Chats
+		case *tg.MessagesDialogsSlice:
+			chats = d.Chats
+		}
+
+		for _, chat := range chats {
+			if ch, ok := chat.(*tg.Channel); ok && ch.ID == channelid {
+				accessHash = ch.AccessHash
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("channel not found in recent chats")
+		}
+
+		ip := &tg.InputPeerChannel{
+			ChannelID:  channelid,
+			AccessHash: accessHash,
+		}
+
+		LastMsgID := 0
+
+		for {
+			history, err := freshClient.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+				Peer:     ip,
+				Limit:    100,
+				OffsetID: LastMsgID,
+			})
+			if err != nil {
+				return err
+			}
+
+			var messages []tg.MessageClass
+			switch h := history.(type) {
+			case *tg.MessagesMessages:
+				messages = h.Messages
+			case *tg.MessagesMessagesSlice:
+				messages = h.Messages
+			case *tg.MessagesChannelMessages:
+				messages = h.Messages
+			}
+
+			if len(messages) == 0 {
+				break
+			}
+
+			for _, msgObj := range messages {
+				if msg, ok := msgObj.(*tg.Message); ok {
+					LastMsgID = msg.ID
+
+					if media, ok := msg.Media.(*tg.MessageMediaDocument); ok {
+						if doc, ok := media.Document.(*tg.Document); ok {
+							totalSize += doc.Size // Add bytes
+						}
+					}
+				}
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return totalSize, nil
+}
+
 func (a *App) GetCodech() chan string {
 	return a.Codech
 }

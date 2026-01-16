@@ -88,8 +88,6 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 .nav-item .icon { width: 20px; height: 20px; }
 
 .storage-info { margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border); }
-.storage-bar { height: 4px; background: var(--border); border-radius: 2px; margin-bottom: 8px; overflow: hidden; }
-.storage-fill { height: 100%; background: var(--accent); border-radius: 2px; }
 .storage-info p { font-size: 0.75rem; color: var(--text-muted); display: flex; justify-content: space-between; }
 
 .main-content { flex: 1; padding: 0; display: flex; flex-direction: column; background: var(--bg-dark); }
