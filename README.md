@@ -25,8 +25,14 @@ The app stores these credentials locally after you enter them in the setup scree
   - macOS: `~/Library/Application Support/TDrive/imp_config.json`
   - Linux: `~/.config/TDrive/imp_config.json`
   - Windows: `%AppData%\\TDrive\\imp_config.json`
-- Telegram login session (in the project folder): `session.json`
-- Drive channel id (in the project folder): `config.json` (stores `channel_id`)
+- Telegram login session:
+  - macOS: `~/Library/Application Support/TDrive/session.json`
+  - Linux: `~/.config/TDrive/session.json`
+  - Windows: `%AppData%\\TDrive\\session.json`
+- Drive channel id (stores `channel_id`):
+  - macOS: `~/Library/Application Support/TDrive/config.json`
+  - Linux: `~/.config/TDrive/config.json`
+  - Windows: `%AppData%\\TDrive\\config.json`
 
 ## Run (dev)
 
