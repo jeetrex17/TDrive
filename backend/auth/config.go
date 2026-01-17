@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 type ChannelS struct {
@@ -19,7 +20,23 @@ func SaveConfig(id int64) error {
 		return err
 	}
 
-	err = os.WriteFile("config.json", jsonData, 0o644)
+	path, err := os.UserConfigDir()
+	if err != nil {
+		return fmt.Errorf("error getting config dir : %v", err)
+	}
+
+	path = filepath.Join(path, "TDrive", "config.json")
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("could not create config folder: %v", err)
+	}
+
+	if err != nil {
+		return fmt.Errorf("Error gettin use config dir : %v", err)
+	}
+
+	err = os.WriteFile(path, jsonData, 0o644)
 	if err != nil {
 		return err
 	}
@@ -30,9 +47,14 @@ func SaveConfig(id int64) error {
 }
 
 func LoadConfig() (int64, error) {
-	filepath := "config.json"
+	path, err := os.UserConfigDir()
+	if err != nil {
+		return 0, fmt.Errorf("error getting config dir : %v", err)
+	}
 
-	file, err := os.ReadFile(filepath)
+	path = filepath.Join(path, "TDrive", "config.json")
+
+	file, err := os.ReadFile(path)
 
 	if os.IsNotExist(err) {
 		return 0, nil

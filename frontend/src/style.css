@@ -127,6 +127,7 @@ header {
     font-size: 0.65rem; font-weight: 800; padding: 3px 6px; border-radius: 4px;
     margin-right: 12px; display: inline-block; width: 40px; text-align: center;
 }
+.badge-ext { background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: var(--text-main); }
 .badge-img { background: rgba(122, 162, 247, 0.2); color: var(--accent); }
 .badge-doc { background: rgba(247, 118, 142, 0.2); color: var(--danger); }
 .badge-zip { background: rgba(224, 175, 104, 0.2); color: #e0af68; }

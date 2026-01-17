@@ -95,8 +95,19 @@ func Connect() (*telegram.Client, error) {
 	TgApiID := creds.ApiID
 	TgApiHash := creds.ApiHash
 
-	cwd, _ := os.Getwd()
-	sessionPath := filepath.Join(cwd, "session.json")
+	path, err := os.UserConfigDir()
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("could not create config folder: %v", err)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("Error while getiing config dir to save sessions.json : %v", err)
+	}
+
+	// cwd, _ := os.Getwd()
+	sessionPath := filepath.Join(path, "TDrive", "session.json")
 	ses := &session.FileStorage{
 		Path: sessionPath,
 	}

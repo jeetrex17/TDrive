@@ -24,11 +24,17 @@ function formatBytes(bytes) {
 
 // NO EMOJIS HERE. ONLY TEXT BADGES.
 function getFileBadge(filename) {
-    const ext = filename.split('.').pop().toLowerCase();
-    if (['png', 'jpg', 'jpeg', 'gif'].includes(ext)) return `<span class="file-badge badge-img">IMG</span>`;
-    if (['pdf', 'doc', 'txt', 'md'].includes(ext)) return `<span class="file-badge badge-doc">DOC</span>`;
-    if (['zip', 'rar', '7z'].includes(ext)) return `<span class="file-badge badge-zip">ZIP</span>`;
-    return `<span class="file-badge badge-unk">FILE</span>`;
+    if (!filename || typeof filename !== "string" || !filename.includes(".")) {
+        return `<span class="file-badge badge-ext">FILE</span>`;
+    }
+
+    const rawExt = filename.split(".").pop();
+    const ext = (rawExt || "")
+        .replace(/[^a-z0-9]/gi, "")
+        .toUpperCase()
+        .slice(0, 4);
+
+    return `<span class="file-badge badge-ext">${ext || "FILE"}</span>`;
 }
 
 window.onload = async function() {
