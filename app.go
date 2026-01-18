@@ -9,6 +9,8 @@ import (
 
 	"TDrive/backend/auth"
 
+	"TDrive/backend"
+
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
@@ -518,4 +520,54 @@ func (a *App) SendHint(hint string) {
 
 func (a *App) SumbitPassword(password string) {
 	a.Passch <- password
+}
+
+func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, error) {
+	if backend.CurrentFS == nil {
+		return backend.Folder{}, fmt.Errorf("no cuurentFS folders")
+	}
+
+	newFolder := backend.CurrentFS.AddFolder(foldername, parentID)
+
+	err := backend.SaveTdriveFS()
+	if err != nil {
+		return backend.Folder{}, err
+	}
+
+	return newFolder, nil
+}
+
+func (a *App) startTdriveFS(ctx context.Context) {
+	a.ctx = ctx
+
+	err := backend.LoadTdriveFs()
+	if err != nil {
+		fmt.Printf("Failed to load local filesystem: %v\n", err)
+	} else {
+		fmt.Println("TDrive FileSystem Loaded!")
+	}
+}
+
+func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
+	if backend.CurrentFS == nil {
+		return backend.FileSystem{}, fmt.Errorf(" FileSystem not ready")
+	}
+
+	var result backend.FileSystem
+	result.Folders = []backend.Folder{}
+	result.Files = []backend.FileMetaData{}
+
+	for _, f := range backend.CurrentFS.Folders {
+		if f.ParentID == parentID {
+			result.Folders = append(result.Folders, f)
+		}
+	}
+
+	for _, f := range backend.CurrentFS.Files {
+		if f.ParentID == parentID {
+			result.Files = append(result.Files, f)
+		}
+	}
+
+	return result, nil
 }
