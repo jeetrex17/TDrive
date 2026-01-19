@@ -482,6 +482,10 @@ func (a *App) DownloadFile(msgID int) string {
 }
 
 func (a *App) DeleteFile(msgID int) string {
+	if backend.CurrentFS == nil {
+		return "Error: FileSystem not ready"
+	}
+
 	channelid, err := auth.LoadConfig()
 	if err != nil || channelid == 0 {
 		return "Error: Drive ID not found"
@@ -492,13 +496,10 @@ func (a *App) DeleteFile(msgID int) string {
 		return "Connection error: " + err.Error()
 	}
 
-	var status string = "DeleteFile Started..."
-
 	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
 		inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
 		if err != nil {
-			status = "Error: " + err.Error()
-			return nil
+			return err
 		}
 
 		targetID := []int{msgID}
@@ -507,18 +508,37 @@ func (a *App) DeleteFile(msgID int) string {
 			ID:      targetID,
 		})
 		if err != nil {
-			status = "Error: Failed to delete"
-			return nil
+			return err
 		}
-
-		status = "deleted Successfully"
 		return nil
 	})
 	if err != nil {
-		return "System Error: " + err.Error()
+		return "Telegram Error: " + err.Error()
 	}
 
-	return status
+	newFilesList := []backend.FileMetaData{}
+	found := false
+
+	for _, file := range backend.CurrentFS.Files {
+		if file.TgMsgID == msgID {
+			found = true
+			continue
+		}
+		newFilesList = append(newFilesList, file)
+	}
+
+	if !found {
+		return "deleted from tg, but not from local json."
+	}
+
+	backend.CurrentFS.Files = newFilesList
+
+	err = backend.SaveTdriveFS()
+	if err != nil {
+		return "Deleted, but failed to save local config: " + err.Error()
+	}
+
+	return "Success"
 }
 
 func (a *App) GetStorageUsed() (int64, error) {

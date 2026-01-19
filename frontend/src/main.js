@@ -504,7 +504,7 @@ window.refreshFiles = function() {
             row.className = "file-row drive-row";
             row.dataset.type = "file";
             row.dataset.id = String(file.id);
-            row.dataset.canDelete = String(file.source === "tg");
+            row.dataset.canDelete = "true";
 
             row.innerHTML = `
                 <div class="row-name">
@@ -515,7 +515,7 @@ window.refreshFiles = function() {
                 <div class="row-meta">${formatBytes(file.size)}</div>
                 <div class="row-actions">
                     <button class="action-icon download" type="button" title="Download">${icons.download}</button>
-                    ${file.source === "tg" ? `<button class="action-icon del delete" type="button" title="Delete">${icons.trash}</button>` : ``}
+                    <button class="action-icon del delete" type="button" title="Delete">${icons.trash}</button>
                 </div>
             `;
 
