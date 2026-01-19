@@ -1,0 +1,6 @@
+# GitHub Linguist configuration
+# The project is primarily Go (backend). The frontend is bundled UI code.
+# Exclude UI/build folders from language stats so GitHub shows Go as primary.
+
+frontend/** linguist-vendored
+build/** linguist-generated
