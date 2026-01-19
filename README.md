@@ -56,7 +56,7 @@ I used AI to help with the frontend UI/styling and planning while i focused more
 - [x] Upload, list, download, and delete files
 - [x] Stable channel access resolution (no “recent chats” dependency)
 - [ ] Add file encryption before uploads (privacy reasons ofc)
-- [ ] Folder support (maybe “virtual folders” using filename prefixes or metadata messages)
+- [x] Folder support (maybe “virtual folders” metadata)
 - [ ] Handle uploads/downloads for very large files (Telegram has per- ile limits, commonly ~2GB unless you are rich and have preimum and if you were rich you woudnt be reading this)
 - [ ] Faster downloads 
 - [ ] Maybe File sharing (Similar to Grive )
