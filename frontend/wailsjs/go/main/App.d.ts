@@ -11,6 +11,8 @@ export function CreateFolder(arg1:string,arg2:string):Promise<backend.Folder>;
 
 export function DeleteFile(arg1:number):Promise<string>;
 
+export function DeleteFolder(arg1:string):Promise<string>;
+
 export function DownloadFile(arg1:number):Promise<string>;
 
 export function GetCodech():Promise<any>;

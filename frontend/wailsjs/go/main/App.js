@@ -18,6 +18,10 @@ export function DeleteFile(arg1) {
   return window['go']['main']['App']['DeleteFile'](arg1);
 }
 
+export function DeleteFolder(arg1) {
+  return window['go']['main']['App']['DeleteFolder'](arg1);
+}
+
 export function DownloadFile(arg1) {
   return window['go']['main']['App']['DownloadFile'](arg1);
 }

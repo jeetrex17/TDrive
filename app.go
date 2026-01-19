@@ -713,3 +713,105 @@ func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
 
 	return result, nil
 }
+
+func collectDoomedIDs(targetFolderID string) (folderIDs []string, msgIDs []int) {
+	folderIDs = append(folderIDs, targetFolderID)
+
+	for _, f := range backend.CurrentFS.Files {
+		if f.ParentID == targetFolderID {
+			msgIDs = append(msgIDs, f.TgMsgID)
+		}
+	}
+
+	for _, f := range backend.CurrentFS.Folders {
+		if f.ParentID == targetFolderID {
+			subFolders, subFiles := collectDoomedIDs(f.ID)
+
+			folderIDs = append(folderIDs, subFolders...)
+			msgIDs = append(msgIDs, subFiles...)
+		}
+	}
+
+	return folderIDs, msgIDs
+}
+
+// fully written by AI
+func (a *App) DeleteFolder(folderID string) string {
+	if backend.CurrentFS == nil {
+		return "Error: System not ready"
+	}
+
+	doomedFolders, doomedMsgs := collectDoomedIDs(folderID)
+
+	fmt.Printf("Deleting Folder: Found %d sub-folders and %d files to delete.\n", len(doomedFolders), len(doomedMsgs))
+
+	if len(doomedMsgs) > 0 {
+		channelid, err := auth.LoadConfig()
+		if err != nil {
+			return "Error: No channel ID"
+		}
+
+		freshClient, err := auth.Connect()
+		if err != nil {
+			return "Connection Error"
+		}
+
+		err = freshClient.Run(a.ctx, func(ctx context.Context) error {
+			inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
+			if err != nil {
+				return err
+			}
+
+			batchSize := 100
+			for i := 0; i < len(doomedMsgs); i += batchSize {
+				end := i + batchSize
+				if end > len(doomedMsgs) {
+					end = len(doomedMsgs)
+				}
+
+				batch := doomedMsgs[i:end]
+				_, err := freshClient.API().ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+					Channel: inChan,
+					ID:      batch,
+				})
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return "Telegram Delete Failed: " + err.Error()
+		}
+	}
+
+	deadMsgMap := make(map[int]bool)
+	for _, id := range doomedMsgs {
+		deadMsgMap[id] = true
+	}
+
+	keepFiles := []backend.FileMetaData{}
+	for _, f := range backend.CurrentFS.Files {
+		if !deadMsgMap[f.TgMsgID] {
+			keepFiles = append(keepFiles, f)
+		}
+	}
+	backend.CurrentFS.Files = keepFiles
+
+	deadFolderMap := make(map[string]bool)
+	for _, id := range doomedFolders {
+		deadFolderMap[id] = true
+	}
+
+	keepFolders := []backend.Folder{}
+	for _, f := range backend.CurrentFS.Folders {
+		if !deadFolderMap[f.ID] {
+			keepFolders = append(keepFolders, f)
+		}
+	}
+	backend.CurrentFS.Folders = keepFolders
+
+	backend.SaveTdriveFS()
+
+	return "Success"
+}

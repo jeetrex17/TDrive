@@ -6,7 +6,7 @@ import {
     CheckLoginStatus, InitDrive, SelectFile
 } from '../wailsjs/go/main/App';
 
-let pendingDeleteID = null;
+let pendingDeleteTarget = null; // { type: "file" | "folder", id: number|string, name?: string }
 let currentFolderId = "";
 let folderPath = []; // [{ id, name }]
 
@@ -50,6 +50,49 @@ function formatBytes(bytes) {
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+async function deleteFolder(folderID) {
+    if (window.go?.main?.App?.DeleteFolder) {
+        return window.go.main.App.DeleteFolder(folderID);
+    }
+    throw new Error("DeleteFolder is not available. Restart `wails dev` to regenerate bindings.");
+}
+
+function ensureNotInsideDeletedFolder(deletedFolderID) {
+    if (!deletedFolderID) return;
+
+    const idx = folderPath.findIndex((f) => f.id === deletedFolderID);
+    if (idx === -1) return;
+
+    folderPath = folderPath.slice(0, idx);
+    currentFolderId = folderPath.length ? folderPath[folderPath.length - 1].id : "";
+    renderBreadcrumb();
+}
+
+function openDeleteModal(target) {
+    const modal = document.getElementById("delete-modal");
+    const title = document.getElementById("delete-modal-title");
+    const subtitle = document.getElementById("delete-modal-subtitle");
+    const confirmBtn = document.getElementById("delete-confirm");
+
+    if (!modal || !title || !subtitle || !confirmBtn) return;
+
+    pendingDeleteTarget = target;
+
+    const name = (target?.name || "").trim();
+
+    if (target?.type === "folder") {
+        title.textContent = name ? `Delete folder “${name}”?` : "Delete folder?";
+        subtitle.textContent = "This will permanently delete this folder and everything inside it from your Telegram channel.";
+        confirmBtn.textContent = "Delete folder";
+    } else {
+        title.textContent = name ? `Delete “${name}”?` : "Delete file?";
+        subtitle.textContent = "This will permanently delete the file from your Telegram channel.";
+        confirmBtn.textContent = "Delete file";
+    }
+
+    modal.style.display = "flex";
 }
 
 window.onload = async function() {
@@ -113,7 +156,7 @@ function setupDeleteModal() {
     if (!modal || !cancelBtn || !confirmBtn) return;
 
     const close = () => {
-        pendingDeleteID = null;
+        pendingDeleteTarget = null;
         modal.style.display = "none";
     };
 
@@ -123,20 +166,33 @@ function setupDeleteModal() {
     });
 
     confirmBtn.addEventListener("click", () => {
-        const id = pendingDeleteID;
+        const target = pendingDeleteTarget;
         close();
-        if (typeof id !== "number") return;
+        if (!target) return;
 
         const status = document.getElementById("status-msg");
         if (status) status.innerText = "Deleting...";
 
-        DeleteFile(id).then((res) => {
-            if (status) status.innerText = res || "Done";
-            window.refreshFiles();
-            setTimeout(() => {
-                if (status) status.innerText = "Ready";
-            }, 2000);
-        });
+        const promise = target.type === "folder"
+            ? deleteFolder(String(target.id))
+            : DeleteFile(Number(target.id));
+
+        promise
+            .then((res) => {
+                if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));
+                if (status) status.innerText = res || "Done";
+                window.refreshFiles();
+            })
+            .catch((err) => {
+                console.error("Delete failed:", err);
+                if (status) status.innerText = "Delete failed";
+                alert("Delete failed. Check console/logs.");
+            })
+            .finally(() => {
+                setTimeout(() => {
+                    if (status) status.innerText = "Ready";
+                }, 2000);
+            });
     });
 }
 
@@ -311,6 +367,7 @@ function setupContextMenu() {
             const folderName = row.dataset.name || "Folder";
             show(e.clientX, e.clientY, [
                 { label: `Open "${folderName}"`, onClick: () => navigateToFolder(folderID, folderName) },
+                { label: `Delete "${folderName}"`, danger: true, onClick: () => window.initDeleteFolder(folderID, folderName) },
                 { type: "divider" },
                 { label: "New folder", onClick: () => window.openNewFolderModal() },
                 { label: "Refresh", onClick: () => window.refreshFiles() },
@@ -320,12 +377,13 @@ function setupContextMenu() {
 
         if (type === "file") {
             const fileID = parseInt(row.dataset.id, 10);
+            const fileName = row.dataset.name || "";
             const canDelete = row.dataset.canDelete === "true";
             const items = [
                 { label: "Download", onClick: () => window.initDownload(fileID) },
             ];
             if (canDelete) {
-                items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID) });
+                items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID, fileName) });
             }
             items.push({ type: "divider" }, { label: "New folder", onClick: () => window.openNewFolderModal() }, { label: "Refresh", onClick: () => window.refreshFiles() });
             show(e.clientX, e.clientY, items);
@@ -485,6 +543,7 @@ window.refreshFiles = function() {
                 <div class="row-meta">—</div>
                 <div class="row-actions">
                     <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
+                    <button class="action-icon del delete-folder" type="button" title="Delete folder">${icons.trash}</button>
                 </div>
             `;
 
@@ -492,6 +551,9 @@ window.refreshFiles = function() {
             row.addEventListener("click", (e) => {
                 if (e.target.closest("button.open-folder")) {
                     navigateToFolder(folder.id, folder.name);
+                }
+                if (e.target.closest("button.delete-folder")) {
+                    window.initDeleteFolder(folder.id, folder.name);
                 }
             });
 
@@ -504,6 +566,7 @@ window.refreshFiles = function() {
             row.className = "file-row drive-row";
             row.dataset.type = "file";
             row.dataset.id = String(file.id);
+            row.dataset.name = String(file.name || "");
             row.dataset.canDelete = "true";
 
             row.innerHTML = `
@@ -525,7 +588,7 @@ window.refreshFiles = function() {
             }
             const deleteBtn = row.querySelector("button.delete");
             if (deleteBtn) {
-                deleteBtn.addEventListener("click", () => window.initDelete(file.id));
+                deleteBtn.addEventListener("click", () => window.initDelete(file.id, file.name));
             }
             list.appendChild(row);
         });
@@ -564,8 +627,10 @@ window.initDownload = function(id) {
     });
 };
 
-window.initDelete = function(id) {
-    pendingDeleteID = id;
-    const modal = document.getElementById("delete-modal");
-    if (modal) modal.style.display = "flex";
+window.initDeleteFolder = function(folderID, folderName) {
+    openDeleteModal({ type: "folder", id: folderID, name: folderName || "" });
+};
+
+window.initDelete = function(id, name) {
+    openDeleteModal({ type: "file", id, name: name || "" });
 };
