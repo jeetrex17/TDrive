@@ -10,6 +10,10 @@ export function CheckSystemStatus() {
   return window['go']['main']['App']['CheckSystemStatus']();
 }
 
+export function CreateFolder(arg1, arg2) {
+  return window['go']['main']['App']['CreateFolder'](arg1, arg2);
+}
+
 export function DeleteFile(arg1) {
   return window['go']['main']['App']['DeleteFile'](arg1);
 }
@@ -24,6 +28,10 @@ export function GetCodech() {
 
 export function GetFileList() {
   return window['go']['main']['App']['GetFileList']();
+}
+
+export function GetFolderContents(arg1) {
+  return window['go']['main']['App']['GetFolderContents'](arg1);
 }
 
 export function GetPassch() {
@@ -66,6 +74,6 @@ export function SumbitPassword(arg1) {
   return window['go']['main']['App']['SumbitPassword'](arg1);
 }
 
-export function UploadToTelegram(arg1) {
-  return window['go']['main']['App']['UploadToTelegram'](arg1);
+export function UploadToDriveFS(arg1, arg2) {
+  return window['go']['main']['App']['UploadToDriveFS'](arg1, arg2);
 }

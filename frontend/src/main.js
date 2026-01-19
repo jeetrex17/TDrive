@@ -3,10 +3,40 @@ import {
     CheckSystemStatus, SaveSetup,
     LoginPhoneNumber, SumbitCode, SumbitPassword, 
     GetFileList, DownloadFile, DeleteFile, 
-    CheckLoginStatus, InitDrive, SelectFile, UploadToTelegram 
+    CheckLoginStatus, InitDrive, SelectFile
 } from '../wailsjs/go/main/App';
 
 let pendingDeleteID = null;
+let currentFolderId = "";
+let folderPath = []; // [{ id, name }]
+
+const icons = {
+    download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
+    trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>`,
+    folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>`,
+    open: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2"/><path stroke-linecap="round" stroke-linejoin="round" d="M14 3h7v7"/><path stroke-linecap="round" stroke-linejoin="round" d="M10 14L21 3"/></svg>`,
+};
+
+function escapeHtml(input) {
+    return String(input ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function splitNameAndExt(filename) {
+    const name = typeof filename === "string" ? filename : "";
+    const lastDot = name.lastIndexOf(".");
+    if (lastDot <= 0 || lastDot === name.length - 1) {
+        return { base: name, ext: "FILE" };
+    }
+    const base = name.slice(0, lastDot);
+    const rawExt = name.slice(lastDot + 1);
+    const ext = rawExt.replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 6) || "FILE";
+    return { base, ext };
+}
 
 function formatDate(unixTimestamp) {
     if (!unixTimestamp) return "-";
@@ -22,24 +52,12 @@ function formatBytes(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-// NO EMOJIS HERE. ONLY TEXT BADGES.
-function getFileBadge(filename) {
-    if (!filename || typeof filename !== "string" || !filename.includes(".")) {
-        return `<span class="file-badge badge-ext">FILE</span>`;
-    }
-
-    const rawExt = filename.split(".").pop();
-    const ext = (rawExt || "")
-        .replace(/[^a-z0-9]/gi, "")
-        .toUpperCase()
-        .slice(0, 4);
-
-    return `<span class="file-badge badge-ext">${ext || "FILE"}</span>`;
-}
-
 window.onload = async function() {
     console.log("App loaded. Checking Status...");
     setupDeleteModal();
+    setupFolderModal();
+    setupBreadcrumb();
+    setupContextMenu();
 
     try {
         // Step A: Check Setup
@@ -122,6 +140,226 @@ function setupDeleteModal() {
     });
 }
 
+function setupFolderModal() {
+    const modal = document.getElementById("folder-modal");
+    const cancelBtn = document.getElementById("folder-cancel");
+    const createBtn = document.getElementById("folder-create");
+    const nameInput = document.getElementById("new-folder-name");
+
+    if (!modal || !cancelBtn || !createBtn || !nameInput) return;
+
+    const close = () => {
+        modal.style.display = "none";
+        nameInput.value = "";
+    };
+
+    cancelBtn.addEventListener("click", close);
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) close();
+    });
+
+    const submit = async () => {
+        const name = (nameInput.value || "").trim();
+        if (!name) return;
+
+        const status = document.getElementById("status-msg");
+        if (status) status.innerText = "Creating folder...";
+
+        try {
+            await createFolder(name, currentFolderId);
+            close();
+            window.refreshFiles();
+        } catch (err) {
+            alert("Failed to create folder: " + err);
+        } finally {
+            if (status) status.innerText = "Ready";
+        }
+    };
+
+    createBtn.addEventListener("click", submit);
+    nameInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") submit();
+        if (e.key === "Escape") close();
+    });
+}
+
+window.openNewFolderModal = function() {
+    const modal = document.getElementById("folder-modal");
+    const nameInput = document.getElementById("new-folder-name");
+    if (!modal || !nameInput) return;
+
+    modal.style.display = "flex";
+    setTimeout(() => nameInput.focus(), 0);
+};
+
+function setupBreadcrumb() {
+    const backBtn = document.getElementById("breadcrumb-back");
+    const path = document.getElementById("breadcrumb-path");
+    if (!backBtn || !path) return;
+
+    backBtn.addEventListener("click", () => {
+        if (folderPath.length === 0) return;
+        folderPath = folderPath.slice(0, -1);
+        currentFolderId = folderPath.length ? folderPath[folderPath.length - 1].id : "";
+        renderBreadcrumb();
+        window.refreshFiles();
+    });
+
+    path.addEventListener("click", (e) => {
+        const btn = e.target.closest("button.breadcrumb-link");
+        if (!btn) return;
+        const idx = parseInt(btn.dataset.index, 10);
+        if (Number.isNaN(idx)) return;
+
+        if (idx < 0) {
+            folderPath = [];
+            currentFolderId = "";
+        } else {
+            folderPath = folderPath.slice(0, idx + 1);
+            currentFolderId = folderPath[idx]?.id || "";
+        }
+        renderBreadcrumb();
+        window.refreshFiles();
+    });
+
+    renderBreadcrumb();
+}
+
+function renderBreadcrumb() {
+    const backBtn = document.getElementById("breadcrumb-back");
+    const path = document.getElementById("breadcrumb-path");
+    if (!backBtn || !path) return;
+
+    backBtn.disabled = folderPath.length === 0;
+    backBtn.style.opacity = folderPath.length === 0 ? "0.35" : "1";
+
+    const items = [{ name: "My Drive", index: -1 }, ...folderPath.map((f, i) => ({ name: f.name, index: i }))];
+    path.innerHTML = "";
+
+    items.forEach((item, idx) => {
+        if (idx > 0) {
+            const sep = document.createElement("span");
+            sep.className = "breadcrumb-sep";
+            sep.textContent = "/";
+            path.appendChild(sep);
+        }
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "breadcrumb-link";
+        btn.dataset.index = String(item.index);
+        btn.textContent = item.name;
+        path.appendChild(btn);
+    });
+}
+
+function setupContextMenu() {
+    const menu = document.getElementById("context-menu");
+    const list = document.getElementById("file-list");
+    if (!menu || !list) return;
+
+    const hide = () => {
+        menu.style.display = "none";
+        menu.innerHTML = "";
+    };
+
+    const show = (x, y, items) => {
+        menu.innerHTML = "";
+        items.forEach((item) => {
+            if (item.type === "divider") {
+                const div = document.createElement("div");
+                div.className = "divider";
+                menu.appendChild(div);
+                return;
+            }
+
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = item.label;
+            if (item.danger) btn.classList.add("danger");
+            btn.addEventListener("click", () => {
+                hide();
+                item.onClick();
+            });
+            menu.appendChild(btn);
+        });
+
+        // Clamp within viewport
+        menu.style.display = "block";
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+
+        const rect = menu.getBoundingClientRect();
+        const maxX = window.innerWidth - rect.width - 8;
+        const maxY = window.innerHeight - rect.height - 8;
+        menu.style.left = `${Math.max(8, Math.min(x, maxX))}px`;
+        menu.style.top = `${Math.max(8, Math.min(y, maxY))}px`;
+    };
+
+    document.addEventListener("click", hide);
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") hide();
+    });
+
+    list.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        const row = e.target.closest(".drive-row");
+        const type = row?.dataset?.type || "background";
+
+        if (type === "folder") {
+            const folderID = row.dataset.id;
+            const folderName = row.dataset.name || "Folder";
+            show(e.clientX, e.clientY, [
+                { label: `Open "${folderName}"`, onClick: () => navigateToFolder(folderID, folderName) },
+                { type: "divider" },
+                { label: "New folder", onClick: () => window.openNewFolderModal() },
+                { label: "Refresh", onClick: () => window.refreshFiles() },
+            ]);
+            return;
+        }
+
+        if (type === "file") {
+            const fileID = parseInt(row.dataset.id, 10);
+            const canDelete = row.dataset.canDelete === "true";
+            const items = [
+                { label: "Download", onClick: () => window.initDownload(fileID) },
+            ];
+            if (canDelete) {
+                items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID) });
+            }
+            items.push({ type: "divider" }, { label: "New folder", onClick: () => window.openNewFolderModal() }, { label: "Refresh", onClick: () => window.refreshFiles() });
+            show(e.clientX, e.clientY, items);
+            return;
+        }
+
+        show(e.clientX, e.clientY, [
+            { label: "New folder", onClick: () => window.openNewFolderModal() },
+            { label: "Refresh", onClick: () => window.refreshFiles() },
+        ]);
+    });
+}
+
+function navigateToFolder(folderID, folderName) {
+    folderPath = [...folderPath, { id: folderID, name: folderName }];
+    currentFolderId = folderID;
+    renderBreadcrumb();
+    window.refreshFiles();
+}
+
+async function getFolderContents(parentID) {
+    if (window.go?.main?.App?.GetFolderContents) {
+        return window.go.main.App.GetFolderContents(parentID);
+    }
+    throw new Error("GetFolderContents is not available. Restart `wails dev` to regenerate bindings.");
+}
+
+async function createFolder(name, parentID) {
+    if (window.go?.main?.App?.CreateFolder) {
+        return window.go.main.App.CreateFolder(name, parentID);
+    }
+    throw new Error("CreateFolder is not available. Restart `wails dev` to regenerate bindings.");
+}
+
 window.submitSetup = function() {
     const id = parseInt(document.getElementById("api_id").value);
     const hash = document.getElementById("api_hash").value;
@@ -165,6 +403,9 @@ function showDashboard() {
 
     hideAllScreens();
     document.getElementById("success-screen").style.display = "flex";
+    currentFolderId = "";
+    folderPath = [];
+    renderBreadcrumb();
     InitDrive().then(() => window.refreshFiles());
 }
 
@@ -175,40 +416,109 @@ window.refreshFiles = function() {
     list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
     if (storageUsed) storageUsed.innerText = "Calculating... / Unlimited";
 
-    GetFileList().then((files) => {
-        const allFiles = Array.isArray(files) ? files : [];
+    const folderPromise = getFolderContents(currentFolderId).catch((err) => {
+        console.error("GetFolderContents failed:", err);
+        return { folders: [], files: [] };
+    });
+
+    const tgPromise = currentFolderId === ""
+        ? GetFileList().catch((err) => {
+            console.error("GetFileList failed:", err);
+            return [];
+        })
+        : Promise.resolve([]);
+
+    Promise.all([folderPromise, tgPromise]).then(([fs, tgFiles]) => {
+        const folders = Array.isArray(fs?.folders) ? fs.folders : [];
+        const fsFiles = Array.isArray(fs?.files) ? fs.files : [];
+        const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
+
+        const fsFileItems = fsFiles.map((f) => ({
+            source: "fs",
+            id: f.msg_id,
+            name: f.name,
+            size: f.size,
+            date: f.upload_time,
+        }));
+        const fsIDs = new Set(fsFileItems.map((f) => f.id));
+
+        const tgFileItems = telegramFiles
+            .filter((f) => !fsIDs.has(f.id))
+            .map((f) => ({
+                source: "tg",
+                id: f.id,
+                name: f.name,
+                size: f.size,
+                date: f.date,
+            }));
+
+        const files = [...fsFileItems, ...tgFileItems];
 
         if (storageUsed) {
-            const totalBytes = allFiles.reduce((sum, file) => sum + (file?.size || 0), 0);
+            const totalBytes = files.reduce((sum, f) => sum + (f?.size || 0), 0);
             storageUsed.innerText = `${formatBytes(totalBytes)} / Unlimited`;
         }
 
-        if (allFiles.length === 0) {
-            list.innerHTML = '<div style="padding:20px; color:#565f89;">No files found.</div>';
+        folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+        files.sort((a, b) => (b.date || 0) - (a.date || 0));
+
+        if (folders.length === 0 && files.length === 0) {
+            list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
             return;
         }
 
         list.innerHTML = "";
-        allFiles.forEach((file) => {
+
+        folders.forEach((folder) => {
             const row = document.createElement("div");
-            row.className = "file-row";
-            
-            // CLEAN SVG ICONS
-            const downloadIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`;
-            const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>`;
+            row.className = "file-row drive-row folder-row";
+            row.dataset.type = "folder";
+            row.dataset.id = folder.id;
+            row.dataset.name = folder.name;
 
             row.innerHTML = `
                 <div class="row-name">
-                    ${getFileBadge(file.name)}
-                    ${file.name}
+                    <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
+                    ${escapeHtml(folder.name)}
+                </div>
+                <div class="row-meta">—</div>
+                <div class="row-meta">—</div>
+                <div class="row-actions">
+                    <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
+                </div>
+            `;
+
+            row.addEventListener("dblclick", () => navigateToFolder(folder.id, folder.name));
+            row.addEventListener("click", (e) => {
+                if (e.target.closest("button.open-folder")) {
+                    navigateToFolder(folder.id, folder.name);
+                }
+            });
+
+            list.appendChild(row);
+        });
+
+        files.forEach((file) => {
+            const { base, ext } = splitNameAndExt(file.name);
+            const row = document.createElement("div");
+            row.className = "file-row drive-row";
+            row.dataset.type = "file";
+            row.dataset.id = String(file.id);
+            row.dataset.canDelete = String(file.source === "tg");
+
+            row.innerHTML = `
+                <div class="row-name">
+                    <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
+                    ${escapeHtml(base)}
                 </div>
                 <div class="row-meta">${formatDate(file.date)}</div>
                 <div class="row-meta">${formatBytes(file.size)}</div>
                 <div class="row-actions">
-                    <button class="action-icon download" type="button" title="Download">${downloadIcon}</button>
-                    <button class="action-icon del delete" type="button" title="Delete">${trashIcon}</button>
+                    <button class="action-icon download" type="button" title="Download">${icons.download}</button>
+                    ${file.source === "tg" ? `<button class="action-icon del delete" type="button" title="Delete">${icons.trash}</button>` : ``}
                 </div>
             `;
+
             const downloadBtn = row.querySelector("button.download");
             if (downloadBtn) {
                 downloadBtn.addEventListener("click", () => window.initDownload(file.id));
@@ -226,10 +536,23 @@ window.selectFile = function() {
     SelectFile().then(path => {
         if (!path) return;
         document.getElementById("status-msg").innerText = "Uploading...";
-        UploadToTelegram(path).then(() => {
+        const upload = window?.go?.main?.App?.UploadToDriveFS;
+        if (typeof upload !== "function") {
             document.getElementById("status-msg").innerText = "Ready";
-            window.refreshFiles();
-        });
+            alert("UploadToDriveFS is missing in backend. Rebuild the app (wails dev/build) and try again.");
+            return;
+        }
+
+        upload(path, currentFolderId || "")
+            .then(() => {
+                document.getElementById("status-msg").innerText = "Ready";
+                window.refreshFiles();
+            })
+            .catch((err) => {
+                console.error("Upload failed:", err);
+                document.getElementById("status-msg").innerText = "Ready";
+                alert("Upload failed. Check console/logs.");
+            });
     });
 };
 

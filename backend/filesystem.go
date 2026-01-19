@@ -41,7 +41,7 @@ func (fs *FileSystem) AddFolder(name string, parentID string) Folder {
 	return folder1
 }
 
-func (fs *FileSystem) AddFile(name string, size int64, msgid int, pid string) {
+func (fs *FileSystem) AddFile(name string, size int64, msgid int, pid string) FileMetaData {
 	file1 := FileMetaData{
 		Name:       name,
 		Size:       size,
@@ -51,6 +51,7 @@ func (fs *FileSystem) AddFile(name string, size int64, msgid int, pid string) {
 	}
 
 	fs.Files = append(fs.Files, file1)
+	return file1
 }
 
 func (fs *FileSystem) ToJSON() (string, error) {

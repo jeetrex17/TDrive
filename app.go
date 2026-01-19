@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"time"
 
 	"TDrive/backend/auth"
 
@@ -55,6 +56,8 @@ func (a *App) SelectFile() (string, error) {
 
 	return uploadfilepath, err
 }
+
+/*
 
 func (a *App) UploadToTelegram(fp string) string {
 	channelid, err := auth.LoadConfig()
@@ -130,6 +133,128 @@ func (a *App) UploadToTelegram(fp string) string {
 	return finalOutput
 }
 
+*/
+
+// AIs Job
+func extractMsgID(updates tg.UpdatesClass) int {
+	switch u := updates.(type) {
+	case *tg.Updates:
+		for _, update := range u.Updates {
+			if msg, ok := update.(*tg.UpdateNewMessage); ok {
+				if m, ok := msg.Message.(*tg.Message); ok {
+					return m.ID
+				}
+			}
+			if msg, ok := update.(*tg.UpdateNewChannelMessage); ok {
+				if m, ok := msg.Message.(*tg.Message); ok {
+					return m.ID
+				}
+			}
+		}
+	case *tg.UpdatesCombined:
+		for _, update := range u.Updates {
+			if msg, ok := update.(*tg.UpdateNewChannelMessage); ok {
+				if m, ok := msg.Message.(*tg.Message); ok {
+					return m.ID
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// AIs Job
+func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMetaData, error) {
+	if backend.CurrentFS == nil {
+		return backend.FileMetaData{}, fmt.Errorf("filesystem not ready")
+	}
+
+	if parentID != "" {
+		found := false
+		for _, folder := range backend.CurrentFS.Folders {
+			if folder.ID == parentID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return backend.FileMetaData{}, fmt.Errorf("target folder not found")
+		}
+	}
+
+	fileInfo, err := os.Stat(filePath)
+	if err != nil {
+		return backend.FileMetaData{}, err
+	}
+	filename := filepath.Base(filePath)
+	size := fileInfo.Size()
+
+	channelid, err := auth.LoadConfig()
+	if err != nil || channelid == 0 {
+		return backend.FileMetaData{}, fmt.Errorf("drive channel id not found")
+	}
+
+	freshClient, err := auth.Connect()
+	if err != nil {
+		return backend.FileMetaData{}, err
+	}
+
+	var msgID int
+
+	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
+		_, inputPeer, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
+		if err != nil {
+			return err
+		}
+
+		u := uploader.NewUploader(freshClient.API())
+		fmt.Printf("Uploading %s...\n", filename)
+		uploadResult, err := u.FromPath(ctx, filePath)
+		if err != nil {
+			return err
+		}
+
+		req := &tg.MessagesSendMediaRequest{
+			Peer: inputPeer,
+			Media: &tg.InputMediaUploadedDocument{
+				File:     uploadResult,
+				MimeType: "application/octet-stream",
+				Attributes: []tg.DocumentAttributeClass{
+					&tg.DocumentAttributeFilename{FileName: filename},
+				},
+			},
+			RandomID: rand.Int63(),
+			Message:  fmt.Sprintf("TDrive File: %s", filename),
+		}
+
+		updates, err := freshClient.API().MessagesSendMedia(ctx, req)
+		if err != nil {
+			return err
+		}
+
+		msgID = extractMsgID(updates)
+		if msgID == 0 {
+			return fmt.Errorf("upload success, but could not find msgID")
+		}
+
+		return nil
+	})
+	if err != nil {
+		return backend.FileMetaData{}, err
+	}
+
+	backend.CurrentFS.AddFile(filename, size, msgID, parentID)
+	_ = backend.SaveTdriveFS()
+
+	return backend.FileMetaData{
+		Name:       filename,
+		Size:       size,
+		TgMsgID:    msgID,
+		ParentID:   parentID,
+		UploadTime: time.Now().Unix(),
+	}, nil
+}
+
 func (a *App) LoginPhoneNumber(phoneNumber string) {
 	var err error
 	if a.Client == nil {
@@ -183,7 +308,7 @@ func (a *App) InitDrive() string {
 func (a *App) GetFileList() []TDriveFile {
 	channelid, err := auth.LoadConfig()
 	if err != nil || channelid == 0 {
-		return nil // Return empty list on error
+		return nil
 	}
 
 	freshClient, err := auth.Connect()
@@ -500,16 +625,6 @@ func (a *App) SumbitCode(code string) {
 	a.Codech <- code
 }
 
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-	ac, err := auth.Connect()
-	if err != nil {
-		return
-	}
-
-	a.Client = ac
-}
-
 func (a *App) Greet(name string) string {
 	return fmt.Sprintf("Hello %s, It's show time!", name)
 }
@@ -537,14 +652,21 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 	return newFolder, nil
 }
 
-func (a *App) startTdriveFS(ctx context.Context) {
+func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
-	err := backend.LoadTdriveFs()
+	ac, err := auth.Connect()
 	if err != nil {
-		fmt.Printf("Failed to load local filesystem: %v\n", err)
+		fmt.Println("Warning: Telegram connect failed (offline?):", err)
 	} else {
-		fmt.Println("TDrive FileSystem Loaded!")
+		a.Client = ac
+	}
+
+	err = backend.LoadTdriveFs()
+	if err != nil {
+		fmt.Printf("Warning: Failed to load local filesystem: %v\n", err)
+	} else {
+		fmt.Println("TDrive FileSystem Loaded Successfully!")
 	}
 }
 
