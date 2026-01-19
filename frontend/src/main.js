@@ -418,6 +418,45 @@ async function createFolder(name, parentID) {
     throw new Error("CreateFolder is not available. Restart `wails dev` to regenerate bindings.");
 }
 
+async function collectAllFsMsgIDs(rootFS) {
+    const msgIDs = new Set();
+    const visitedFolders = new Set();
+    const queue = [];
+
+    const rootFiles = Array.isArray(rootFS?.files) ? rootFS.files : [];
+    rootFiles.forEach((file) => {
+        if (typeof file?.msg_id === "number") msgIDs.add(file.msg_id);
+    });
+
+    const rootFolders = Array.isArray(rootFS?.folders) ? rootFS.folders : [];
+    rootFolders.forEach((folder) => {
+        if (folder?.id) queue.push(folder.id);
+    });
+
+    while (queue.length) {
+        const folderID = queue.shift();
+        if (!folderID || visitedFolders.has(folderID)) continue;
+        visitedFolders.add(folderID);
+
+        try {
+            const contents = await getFolderContents(folderID);
+            const files = Array.isArray(contents?.files) ? contents.files : [];
+            const folders = Array.isArray(contents?.folders) ? contents.folders : [];
+
+            files.forEach((file) => {
+                if (typeof file?.msg_id === "number") msgIDs.add(file.msg_id);
+            });
+            folders.forEach((folder) => {
+                if (folder?.id) queue.push(folder.id);
+            });
+        } catch (err) {
+            console.error("collectAllFsMsgIDs: GetFolderContents failed for", folderID, err);
+        }
+    }
+
+    return msgIDs;
+}
+
 window.submitSetup = function() {
     const id = parseInt(document.getElementById("api_id").value);
     const hash = document.getElementById("api_hash").value;
@@ -470,16 +509,17 @@ function showDashboard() {
 window.refreshFiles = function() {
     const list = document.getElementById("file-list");
     const storageUsed = document.getElementById("storage-used");
+    const requestedFolderId = currentFolderId;
 
     list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
     if (storageUsed) storageUsed.innerText = "Calculating... / Unlimited";
 
-    const folderPromise = getFolderContents(currentFolderId).catch((err) => {
+    const folderPromise = getFolderContents(requestedFolderId).catch((err) => {
         console.error("GetFolderContents failed:", err);
         return { folders: [], files: [] };
     });
 
-    const tgPromise = currentFolderId === ""
+    const tgPromise = requestedFolderId === ""
         ? GetFileList().catch((err) => {
             console.error("GetFileList failed:", err);
             return [];
@@ -498,100 +538,107 @@ window.refreshFiles = function() {
             size: f.size,
             date: f.upload_time,
         }));
-        const fsIDs = new Set(fsFileItems.map((f) => f.id));
 
-        const tgFileItems = telegramFiles
-            .filter((f) => !fsIDs.has(f.id))
-            .map((f) => ({
-                source: "tg",
-                id: f.id,
-                name: f.name,
-                size: f.size,
-                date: f.date,
-            }));
+        const finalize = async () => {
+            const fsIDs = requestedFolderId === "" ? await collectAllFsMsgIDs(fs) : new Set(fsFileItems.map((f) => f.id));
 
-        const files = [...fsFileItems, ...tgFileItems];
+            const tgFileItems = telegramFiles
+                .filter((f) => !fsIDs.has(f.id))
+                .map((f) => ({
+                    source: "tg",
+                    id: f.id,
+                    name: f.name,
+                    size: f.size,
+                    date: f.date,
+                }));
 
-        if (storageUsed) {
-            const totalBytes = files.reduce((sum, f) => sum + (f?.size || 0), 0);
-            storageUsed.innerText = `${formatBytes(totalBytes)} / Unlimited`;
-        }
+            const files = [...fsFileItems, ...tgFileItems];
 
-        folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-        files.sort((a, b) => (b.date || 0) - (a.date || 0));
+            if (currentFolderId !== requestedFolderId) return;
 
-        if (folders.length === 0 && files.length === 0) {
-            list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
-            return;
-        }
+            if (storageUsed) {
+                const totalBytes = files.reduce((sum, f) => sum + (f?.size || 0), 0);
+                storageUsed.innerText = `${formatBytes(totalBytes)} / Unlimited`;
+            }
 
-        list.innerHTML = "";
+            folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+            files.sort((a, b) => (b.date || 0) - (a.date || 0));
 
-        folders.forEach((folder) => {
-            const row = document.createElement("div");
-            row.className = "file-row drive-row folder-row";
-            row.dataset.type = "folder";
-            row.dataset.id = folder.id;
-            row.dataset.name = folder.name;
+            if (folders.length === 0 && files.length === 0) {
+                list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
+                return;
+            }
 
-            row.innerHTML = `
-                <div class="row-name">
-                    <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
-                    ${escapeHtml(folder.name)}
-                </div>
-                <div class="row-meta">—</div>
-                <div class="row-meta">—</div>
-                <div class="row-actions">
-                    <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
-                    <button class="action-icon del delete-folder" type="button" title="Delete folder">${icons.trash}</button>
-                </div>
-            `;
+            list.innerHTML = "";
 
-            row.addEventListener("dblclick", () => navigateToFolder(folder.id, folder.name));
-            row.addEventListener("click", (e) => {
-                if (e.target.closest("button.open-folder")) {
-                    navigateToFolder(folder.id, folder.name);
-                }
-                if (e.target.closest("button.delete-folder")) {
-                    window.initDeleteFolder(folder.id, folder.name);
-                }
+            folders.forEach((folder) => {
+                const row = document.createElement("div");
+                row.className = "file-row drive-row folder-row";
+                row.dataset.type = "folder";
+                row.dataset.id = folder.id;
+                row.dataset.name = folder.name;
+
+                row.innerHTML = `
+                    <div class="row-name">
+                        <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
+                        ${escapeHtml(folder.name)}
+                    </div>
+                    <div class="row-meta">—</div>
+                    <div class="row-meta">—</div>
+                    <div class="row-actions">
+                        <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
+                        <button class="action-icon del delete-folder" type="button" title="Delete folder">${icons.trash}</button>
+                    </div>
+                `;
+
+                row.addEventListener("dblclick", () => navigateToFolder(folder.id, folder.name));
+                row.addEventListener("click", (e) => {
+                    if (e.target.closest("button.open-folder")) {
+                        navigateToFolder(folder.id, folder.name);
+                    }
+                    if (e.target.closest("button.delete-folder")) {
+                        window.initDeleteFolder(folder.id, folder.name);
+                    }
+                });
+
+                list.appendChild(row);
             });
 
-            list.appendChild(row);
-        });
+            files.forEach((file) => {
+                const { base, ext } = splitNameAndExt(file.name);
+                const row = document.createElement("div");
+                row.className = "file-row drive-row";
+                row.dataset.type = "file";
+                row.dataset.id = String(file.id);
+                row.dataset.name = String(file.name || "");
+                row.dataset.canDelete = "true";
 
-        files.forEach((file) => {
-            const { base, ext } = splitNameAndExt(file.name);
-            const row = document.createElement("div");
-            row.className = "file-row drive-row";
-            row.dataset.type = "file";
-            row.dataset.id = String(file.id);
-            row.dataset.name = String(file.name || "");
-            row.dataset.canDelete = "true";
+                row.innerHTML = `
+                    <div class="row-name">
+                        <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
+                        ${escapeHtml(base)}
+                    </div>
+                    <div class="row-meta">${formatDate(file.date)}</div>
+                    <div class="row-meta">${formatBytes(file.size)}</div>
+                    <div class="row-actions">
+                        <button class="action-icon download" type="button" title="Download">${icons.download}</button>
+                        <button class="action-icon del delete" type="button" title="Delete">${icons.trash}</button>
+                    </div>
+                `;
 
-            row.innerHTML = `
-                <div class="row-name">
-                    <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
-                    ${escapeHtml(base)}
-                </div>
-                <div class="row-meta">${formatDate(file.date)}</div>
-                <div class="row-meta">${formatBytes(file.size)}</div>
-                <div class="row-actions">
-                    <button class="action-icon download" type="button" title="Download">${icons.download}</button>
-                    <button class="action-icon del delete" type="button" title="Delete">${icons.trash}</button>
-                </div>
-            `;
+                const downloadBtn = row.querySelector("button.download");
+                if (downloadBtn) {
+                    downloadBtn.addEventListener("click", () => window.initDownload(file.id));
+                }
+                const deleteBtn = row.querySelector("button.delete");
+                if (deleteBtn) {
+                    deleteBtn.addEventListener("click", () => window.initDelete(file.id, file.name));
+                }
+                list.appendChild(row);
+            });
+        };
 
-            const downloadBtn = row.querySelector("button.download");
-            if (downloadBtn) {
-                downloadBtn.addEventListener("click", () => window.initDownload(file.id));
-            }
-            const deleteBtn = row.querySelector("button.delete");
-            if (deleteBtn) {
-                deleteBtn.addEventListener("click", () => window.initDelete(file.id, file.name));
-            }
-            list.appendChild(row);
-        });
+        finalize();
     });
 };
 
