@@ -21,18 +21,17 @@ The app stores these credentials locally after you enter them in the setup scree
 
 ## Where data is stored (local files)
 
-- Telegram API credentials:
-  - macOS: `~/Library/Application Support/TDrive/imp_config.json`
-  - Linux: `~/.config/TDrive/imp_config.json`
-  - Windows: `%AppData%\\TDrive\\imp_config.json`
-- Telegram login session:
-  - macOS: `~/Library/Application Support/TDrive/session.json`
-  - Linux: `~/.config/TDrive/session.json`
-  - Windows: `%AppData%\\TDrive\\session.json`
-- Drive channel id (stores `channel_id`):
-  - macOS: `~/Library/Application Support/TDrive/config.json`
-  - Linux: `~/.config/TDrive/config.json`
-  - Windows: `%AppData%\\TDrive\\config.json`
+Everything is stored inside your OS “user config” folder under a `TDrive` directory:
+
+- macOS: `~/Library/Application Support/TDrive/`
+- Linux: `~/.config/TDrive/`
+- Windows: `%AppData%\\TDrive\\`
+
+Files you’ll see there:
+- `imp_config.json` → Telegram API ID + Hash (from the setup screen)
+- `session.json` → Telegram login session
+- `config.json` → Drive channel id (`channel_id`)
+- `tdrive_system.json` → Local filesystem metadata (folders + which file is in which folder)
 
 ## Run (dev)
 
