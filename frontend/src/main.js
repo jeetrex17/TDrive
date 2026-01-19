@@ -59,6 +59,31 @@ async function deleteFolder(folderID) {
     throw new Error("DeleteFolder is not available. Restart `wails dev` to regenerate bindings.");
 }
 
+async function uploadWithParentID(parentID) {
+    const path = await SelectFile();
+    if (!path) return;
+
+    const status = document.getElementById("status-msg");
+    if (status) status.innerText = "Uploading...";
+
+    const upload = window?.go?.main?.App?.UploadToDriveFS;
+    if (typeof upload !== "function") {
+        if (status) status.innerText = "Ready";
+        alert("UploadToDriveFS is missing in backend. Rebuild the app (wails dev/build) and try again.");
+        return;
+    }
+
+    try {
+        await upload(path, parentID || "");
+        if (status) status.innerText = "Ready";
+        window.refreshFiles();
+    } catch (err) {
+        console.error("Upload failed:", err);
+        if (status) status.innerText = "Ready";
+        alert("Upload failed. Check console/logs.");
+    }
+}
+
 function ensureNotInsideDeletedFolder(deletedFolderID) {
     if (!deletedFolderID) return;
 
@@ -367,6 +392,7 @@ function setupContextMenu() {
             const folderName = row.dataset.name || "Folder";
             show(e.clientX, e.clientY, [
                 { label: `Open "${folderName}"`, onClick: () => navigateToFolder(folderID, folderName) },
+                { label: "Upload to this folder", onClick: () => uploadWithParentID(folderID) },
                 { label: `Delete "${folderName}"`, danger: true, onClick: () => window.initDeleteFolder(folderID, folderName) },
                 { type: "divider" },
                 { label: "New folder", onClick: () => window.openNewFolderModal() },
@@ -385,13 +411,19 @@ function setupContextMenu() {
             if (canDelete) {
                 items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID, fileName) });
             }
-            items.push({ type: "divider" }, { label: "New folder", onClick: () => window.openNewFolderModal() }, { label: "Refresh", onClick: () => window.refreshFiles() });
+            items.push(
+                { type: "divider" },
+                { label: "Upload", onClick: () => window.selectFile() },
+                { label: "New folder", onClick: () => window.openNewFolderModal() },
+                { label: "Refresh", onClick: () => window.refreshFiles() },
+            );
             show(e.clientX, e.clientY, items);
             return;
         }
 
         show(e.clientX, e.clientY, [
             { label: "New folder", onClick: () => window.openNewFolderModal() },
+            { label: "Upload", onClick: () => window.selectFile() },
             { label: "Refresh", onClick: () => window.refreshFiles() },
         ]);
     });
@@ -643,27 +675,7 @@ window.refreshFiles = function() {
 };
 
 window.selectFile = function() {
-    SelectFile().then(path => {
-        if (!path) return;
-        document.getElementById("status-msg").innerText = "Uploading...";
-        const upload = window?.go?.main?.App?.UploadToDriveFS;
-        if (typeof upload !== "function") {
-            document.getElementById("status-msg").innerText = "Ready";
-            alert("UploadToDriveFS is missing in backend. Rebuild the app (wails dev/build) and try again.");
-            return;
-        }
-
-        upload(path, currentFolderId || "")
-            .then(() => {
-                document.getElementById("status-msg").innerText = "Ready";
-                window.refreshFiles();
-            })
-            .catch((err) => {
-                console.error("Upload failed:", err);
-                document.getElementById("status-msg").innerText = "Ready";
-                alert("Upload failed. Check console/logs.");
-            });
-    });
+    uploadWithParentID(currentFolderId);
 };
 
 window.initDownload = function(id) {
