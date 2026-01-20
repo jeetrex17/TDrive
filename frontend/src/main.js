@@ -9,6 +9,7 @@ import {
 let pendingDeleteTarget = null; // { type: "file" | "folder", id: number|string, name?: string }
 let currentFolderId = "";
 let folderPath = []; // [{ id, name }]
+let activeTransfer = null; // "download" | "upload" | null
 let downloadProgressEl = null;
 let downloadProgressFillEl = null;
 let downloadProgressHideTimeout = null;
@@ -94,6 +95,7 @@ function setupDownloadProgress() {
     if (!window.runtime?.EventsOn) return;
 
     window.runtime.EventsOn("download_progress", (percent) => {
+        if (activeTransfer !== "download") return;
         const value = Number(percent);
         if (!Number.isFinite(value)) return;
 
@@ -102,6 +104,34 @@ function setupDownloadProgress() {
 
         const status = document.getElementById("status-msg");
         if (status) status.innerText = `Downloading… ${Math.round(clamped)}%`;
+
+        if (clamped >= 100) {
+            if (downloadProgressHideTimeout) clearTimeout(downloadProgressHideTimeout);
+            downloadProgressHideTimeout = setTimeout(() => {
+                hideDownloadProgress();
+            }, 900);
+        }
+    });
+}
+
+function setupUploadProgress() {
+    if (!downloadProgressEl || !downloadProgressFillEl) {
+        downloadProgressEl = document.getElementById("transfer-progress");
+        downloadProgressFillEl = document.getElementById("transfer-progress-fill");
+    }
+    if (!downloadProgressEl || !downloadProgressFillEl) return;
+    if (!window.runtime?.EventsOn) return;
+
+    window.runtime.EventsOn("upload_progress", (percent) => {
+        if (activeTransfer !== "upload") return;
+        const value = Number(percent);
+        if (!Number.isFinite(value)) return;
+
+        const clamped = Math.max(0, Math.min(100, value));
+        showDownloadProgress(clamped);
+
+        const status = document.getElementById("status-msg");
+        if (status) status.innerText = `Uploading… ${Math.round(clamped)}%`;
 
         if (clamped >= 100) {
             if (downloadProgressHideTimeout) clearTimeout(downloadProgressHideTimeout);
@@ -124,10 +154,14 @@ async function uploadWithParentID(parentID) {
     if (!path) return;
 
     const status = document.getElementById("status-msg");
-    if (status) status.innerText = "Uploading...";
+    activeTransfer = "upload";
+    showDownloadProgress(0);
+    if (status) status.innerText = "Uploading…";
 
     const upload = window?.go?.main?.App?.UploadToDriveFS;
     if (typeof upload !== "function") {
+        activeTransfer = null;
+        hideDownloadProgress();
         if (status) status.innerText = "Ready";
         alert("UploadToDriveFS is missing in backend. Rebuild the app (wails dev/build) and try again.");
         return;
@@ -141,6 +175,9 @@ async function uploadWithParentID(parentID) {
         console.error("Upload failed:", err);
         if (status) status.innerText = "Ready";
         alert("Upload failed. Check console/logs.");
+    } finally {
+        if (activeTransfer === "upload") activeTransfer = null;
+        hideDownloadProgress();
     }
 }
 
@@ -187,6 +224,7 @@ window.onload = async function() {
     setupBreadcrumb();
     setupContextMenu();
     setupDownloadProgress();
+    setupUploadProgress();
 
     try {
         // Step A: Check Setup
@@ -741,6 +779,7 @@ window.selectFile = function() {
 
 window.initDownload = function(id) {
     const status = document.getElementById("status-msg");
+    activeTransfer = "download";
     if (status) status.innerText = "Downloading…";
 
     showDownloadProgress(0);
@@ -754,6 +793,7 @@ window.initDownload = function(id) {
             alert("Download failed. Check console/logs.");
         })
         .finally(() => {
+            if (activeTransfer === "download") activeTransfer = null;
             hideDownloadProgress();
             if (status) status.innerText = "Ready";
         });

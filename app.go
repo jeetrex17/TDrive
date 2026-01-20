@@ -164,10 +164,65 @@ func extractMsgID(updates tg.UpdatesClass) int {
 	return 0
 }
 
+type ProgressReader struct {
+	Reader    io.Reader
+	Total     int64
+	Current   int64
+	Ctx       context.Context
+	LastPrint time.Time
+}
+
+func (pr *ProgressReader) Read(p []byte) (int, error) {
+	n, err := pr.Reader.Read(p)
+
+	if n > 0 {
+		pr.Current += int64(n)
+		if time.Since(pr.LastPrint) > 100*time.Millisecond {
+			perct := 0.0
+
+			if pr.Total > 0 {
+				perct = (float64(pr.Current) / float64(pr.Total)) * 100
+				if perct > 100 {
+					perct = 100
+				}
+			}
+
+			runtime.EventsEmit(pr.Ctx, "upload_progress", perct)
+
+			pr.LastPrint = time.Now()
+		}
+	}
+
+	if err != nil && err != io.EOF {
+		return n, err
+	}
+
+	return n, err
+}
+
 // AIs Job
 func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMetaData, error) {
 	if backend.CurrentFS == nil {
 		return backend.FileMetaData{}, fmt.Errorf("filesystem not ready")
+	}
+
+	f, err := os.Open(filePath)
+	if err != nil {
+		return backend.FileMetaData{}, fmt.Errorf("error : %v", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return backend.FileMetaData{}, fmt.Errorf("Error getting file size: %v", err)
+	}
+	totalSize := info.Size()
+
+	pu := &ProgressReader{
+		Reader:    f,
+		Total:     totalSize,
+		Ctx:       a.ctx,
+		LastPrint: time.Now(),
 	}
 
 	if parentID != "" {
@@ -210,7 +265,8 @@ func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMet
 
 		u := uploader.NewUploader(freshClient.API())
 		fmt.Printf("Uploading %s...\n", filename)
-		uploadResult, err := u.FromPath(ctx, filePath)
+		runtime.EventsEmit(a.ctx, "upload_progress", 0.0)
+		uploadResult, err := u.FromReader(ctx, filename, pu)
 		if err != nil {
 			return err
 		}
@@ -238,6 +294,7 @@ func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMet
 			return fmt.Errorf("upload success, but could not find msgID")
 		}
 
+		runtime.EventsEmit(a.ctx, "upload_progress", 100.0)
 		return nil
 	})
 	if err != nil {
