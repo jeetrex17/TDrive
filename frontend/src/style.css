@@ -103,6 +103,47 @@ input {
 }
 input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 247, 0.2); }
 
+.input-with-action {
+    position: relative;
+    margin-bottom: 15px;
+}
+.input-with-action input {
+    padding-right: 44px;
+    margin-bottom: 0;
+}
+.input-with-action .input-action-btn {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: rgba(192, 202, 245, 0.55);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.input-with-action .input-action-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--border);
+    color: rgba(192, 202, 245, 0.82);
+}
+.input-with-action .input-action-btn:active {
+    transform: translateY(-50%) scale(0.98);
+}
+.input-with-action .input-action-icon {
+    width: 18px;
+    height: 18px;
+}
+.input-with-action .icon-eye-off { display: none; }
+.input-with-action .input-action-btn[data-state="visible"] .icon-eye { display: none; }
+.input-with-action .input-action-btn[data-state="visible"] .icon-eye-off { display: block; }
+
 /* === BUTTONS === */
 .primary-btn {
     width: 100%; padding: 12px; background: var(--accent); color: #15161e; font-weight: 600;

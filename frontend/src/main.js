@@ -226,6 +226,7 @@ window.onload = async function() {
     setupContextMenu();
     setupDownloadProgress();
     setupUploadProgress();
+    setupPasswordReveal();
 
     try {
         // Step A: Check Setup
@@ -271,6 +272,28 @@ function showAuthWrapper() {
 
     const dashboard = document.getElementById("success-screen");
     if (dashboard) dashboard.style.display = "none";
+}
+
+function setupPasswordReveal() {
+    const pw = document.getElementById("enterpassword");
+    const toggle = document.getElementById("toggle-password");
+    if (!pw || !toggle) return;
+
+    const apply = (isVisible) => {
+        pw.type = isVisible ? "text" : "password";
+
+        toggle.dataset.state = isVisible ? "visible" : "hidden";
+        toggle.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
+        toggle.setAttribute("title", isVisible ? "Hide password" : "Show password");
+    };
+
+    apply(false);
+
+    toggle.addEventListener("click", () => {
+        const isVisible = pw.type === "password";
+        apply(isVisible);
+        pw.focus();
+    });
 }
 
 function setupDeleteModal() {
@@ -629,6 +652,15 @@ window.sendCode = function () {
         const hintEl = document.getElementById("hinttext");
         if (hintEl) hintEl.innerText = "";
         if (hintBox) hintBox.style.display = "none";
+
+        const pw = document.getElementById("enterpassword");
+        const toggle = document.getElementById("toggle-password");
+        if (pw) pw.type = "password";
+        if (toggle) {
+            toggle.dataset.state = "hidden";
+            toggle.setAttribute("aria-label", "Show password");
+            toggle.setAttribute("title", "Show password");
+        }
     });
 };
 
