@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -381,6 +382,47 @@ func (a *App) GetFileList() []TDriveFile {
 	return fileList
 }
 
+type ProgressWriter struct {
+	Writer    io.Writer
+	Total     int64
+	Current   int64
+	Ctx       context.Context
+	LastPrint time.Time
+}
+
+// i named it Dwrite first but then i learnt that
+// WE MUST NAME THIS "Write" coz
+// the Telegram library Stream() function demands an argument of type 'io.Writer'.
+// In Go, to satisfy 'io.Writer', a struct MUST have a method with the exact signature:
+//     Write(p []byte) (n int, err error)
+//
+// If we named this "DWrite" or anything else, this struct would not match the
+// interface, and the compiler would reject it.
+
+func (pw *ProgressWriter) Write(p []byte) (int, error) {
+	n, err := pw.Writer.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("erorr upladting downlad progress : %v", err)
+	}
+
+	pw.Current += int64(n)
+	if time.Since(pw.LastPrint) > 100*time.Millisecond {
+		var perct float64
+
+		if pw.Total > 0 {
+			perct = (float64(pw.Current) / float64(pw.Total)) * 100
+		} else {
+			perct = 100
+		}
+
+		runtime.EventsEmit(pw.Ctx, "download_progress", perct)
+
+		pw.LastPrint = time.Now()
+	}
+
+	return n, nil
+}
+
 func (a *App) DownloadFile(msgID int) string {
 	channelid, err := auth.LoadConfig()
 	if err != nil || channelid == 0 {
@@ -465,7 +507,15 @@ func (a *App) DownloadFile(msgID int) string {
 		}
 		defer f.Close()
 
-		_, err = d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, f)
+		pw := &ProgressWriter{
+			Writer:    f,
+			Total:     int64(doc.Size),
+			Ctx:       a.ctx,
+			LastPrint: time.Now(),
+		}
+
+		_, err = d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, pw)
+		runtime.EventsEmit(a.ctx, "download_progress", 100.0)
 		if err != nil {
 			status = "Network Error: " + err.Error()
 			return nil

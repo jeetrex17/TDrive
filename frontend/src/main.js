@@ -9,6 +9,9 @@ import {
 let pendingDeleteTarget = null; // { type: "file" | "folder", id: number|string, name?: string }
 let currentFolderId = "";
 let folderPath = []; // [{ id, name }]
+let downloadProgressEl = null;
+let downloadProgressFillEl = null;
+let downloadProgressHideTimeout = null;
 
 const icons = {
     download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
@@ -50,6 +53,63 @@ function formatBytes(bytes) {
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function showDownloadProgress(percent) {
+    if (!downloadProgressEl || !downloadProgressFillEl) return;
+
+    const value = Number(percent);
+    if (!Number.isFinite(value)) return;
+
+    const clamped = Math.max(0, Math.min(100, value));
+
+    if (downloadProgressHideTimeout) {
+        clearTimeout(downloadProgressHideTimeout);
+        downloadProgressHideTimeout = null;
+    }
+
+    downloadProgressEl.style.display = "block";
+    downloadProgressEl.setAttribute("aria-valuenow", String(Math.round(clamped)));
+    downloadProgressFillEl.style.width = `${clamped}%`;
+}
+
+function hideDownloadProgress() {
+    if (!downloadProgressEl || !downloadProgressFillEl) return;
+
+    if (downloadProgressHideTimeout) {
+        clearTimeout(downloadProgressHideTimeout);
+        downloadProgressHideTimeout = null;
+    }
+
+    downloadProgressEl.style.display = "none";
+    downloadProgressEl.setAttribute("aria-valuenow", "0");
+    downloadProgressFillEl.style.width = "0%";
+}
+
+function setupDownloadProgress() {
+    downloadProgressEl = document.getElementById("transfer-progress");
+    downloadProgressFillEl = document.getElementById("transfer-progress-fill");
+    if (!downloadProgressEl || !downloadProgressFillEl) return;
+
+    if (!window.runtime?.EventsOn) return;
+
+    window.runtime.EventsOn("download_progress", (percent) => {
+        const value = Number(percent);
+        if (!Number.isFinite(value)) return;
+
+        const clamped = Math.max(0, Math.min(100, value));
+        showDownloadProgress(clamped);
+
+        const status = document.getElementById("status-msg");
+        if (status) status.innerText = `Downloading… ${Math.round(clamped)}%`;
+
+        if (clamped >= 100) {
+            if (downloadProgressHideTimeout) clearTimeout(downloadProgressHideTimeout);
+            downloadProgressHideTimeout = setTimeout(() => {
+                hideDownloadProgress();
+            }, 900);
+        }
+    });
 }
 
 async function deleteFolder(folderID) {
@@ -126,6 +186,7 @@ window.onload = async function() {
     setupFolderModal();
     setupBreadcrumb();
     setupContextMenu();
+    setupDownloadProgress();
 
     try {
         // Step A: Check Setup
@@ -679,11 +740,23 @@ window.selectFile = function() {
 };
 
 window.initDownload = function(id) {
-    document.getElementById("status-msg").innerText = "Downloading...";
-    DownloadFile(id).then(res => {
-        alert(res);
-        document.getElementById("status-msg").innerText = "Ready";
-    });
+    const status = document.getElementById("status-msg");
+    if (status) status.innerText = "Downloading…";
+
+    showDownloadProgress(0);
+
+    DownloadFile(id)
+        .then((res) => {
+            alert(res);
+        })
+        .catch((err) => {
+            console.error("Download failed:", err);
+            alert("Download failed. Check console/logs.");
+        })
+        .finally(() => {
+            hideDownloadProgress();
+            if (status) status.innerText = "Ready";
+        });
 };
 
 window.initDeleteFolder = function(folderID, folderName) {
