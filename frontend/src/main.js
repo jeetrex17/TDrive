@@ -13,6 +13,7 @@ let activeTransfer = null; // "download" | "upload" | null
 let downloadProgressEl = null;
 let downloadProgressFillEl = null;
 let downloadProgressHideTimeout = null;
+let lastLoginPhoneNumber = "";
 
 const icons = {
     download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
@@ -225,6 +226,7 @@ window.onload = async function() {
     setupContextMenu();
     setupDownloadProgress();
     setupUploadProgress();
+    setupPasswordReveal();
 
     try {
         // Step A: Check Setup
@@ -270,6 +272,28 @@ function showAuthWrapper() {
 
     const dashboard = document.getElementById("success-screen");
     if (dashboard) dashboard.style.display = "none";
+}
+
+function setupPasswordReveal() {
+    const pw = document.getElementById("enterpassword");
+    const toggle = document.getElementById("toggle-password");
+    if (!pw || !toggle) return;
+
+    const apply = (isVisible) => {
+        pw.type = isVisible ? "text" : "password";
+
+        toggle.dataset.state = isVisible ? "visible" : "hidden";
+        toggle.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
+        toggle.setAttribute("title", isVisible ? "Hide password" : "Show password");
+    };
+
+    apply(false);
+
+    toggle.addEventListener("click", () => {
+        const isVisible = pw.type === "password";
+        apply(isVisible);
+        pw.focus();
+    });
 }
 
 function setupDeleteModal() {
@@ -600,13 +624,20 @@ window.submitSetup = function() {
 };
 
 window.startLogin = function () {
-    const phone = document.getElementById("enterphone").value;
+    const phone = (document.getElementById("enterphone").value || "").trim();
     if(!phone) return alert("Enter phone number");
+
+    lastLoginPhoneNumber = phone;
     
     LoginPhoneNumber(phone).then(() => {
         showAuthWrapper();
         hideAllScreens();
         document.getElementById("codecontainer").style.display = "block";
+
+        const row = document.getElementById("code-target-row");
+        const target = document.getElementById("code-target");
+        if (target) target.innerText = lastLoginPhoneNumber;
+        if (row) row.style.display = lastLoginPhoneNumber ? "flex" : "none";
     });
 };
 
@@ -616,6 +647,20 @@ window.sendCode = function () {
         showAuthWrapper();
         hideAllScreens();
         document.getElementById("passwordcontainer").style.display = "block";
+
+        const hintBox = document.getElementById("hint-box");
+        const hintEl = document.getElementById("hinttext");
+        if (hintEl) hintEl.innerText = "";
+        if (hintBox) hintBox.style.display = "none";
+
+        const pw = document.getElementById("enterpassword");
+        const toggle = document.getElementById("toggle-password");
+        if (pw) pw.type = "password";
+        if (toggle) {
+            toggle.dataset.state = "hidden";
+            toggle.setAttribute("aria-label", "Show password");
+            toggle.setAttribute("title", "Show password");
+        }
     });
 };
 
@@ -625,7 +670,69 @@ window.sendPassword = function () {
 
 window.runtime.EventsOn("login-success", () => showDashboard());
 
-function showDashboard() {
+window.runtime.EventsOn("gothint", (hint) => {
+    const hintEl = document.getElementById("hinttext");
+    const hintBox = document.getElementById("hint-box");
+    if (!hintEl || !hintBox) return;
+
+    const text = (hint ?? "").toString().trim();
+    const normalized = text.replace(/^(hint\s*:?[\s\u00A0]*)+/i, "").trim();
+
+    if (!normalized || normalized.toLowerCase().includes("no hint")) {
+        hintEl.innerText = "";
+        hintBox.style.display = "none";
+        return;
+    }
+
+    hintEl.innerText = normalized;
+    hintBox.style.display = "block";
+});
+
+window.backToPhone = function () {
+    showAuthWrapper();
+    hideAllScreens();
+
+    const phoneContainer = document.getElementById("phonecontainer");
+    if (phoneContainer) phoneContainer.style.display = "block";
+
+    const codeEl = document.getElementById("entercode");
+    if (codeEl) codeEl.value = "";
+};
+
+async function initDriveWithRetry(maxAttempts = 3) {
+    let lastError = "Error: Init failed";
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const status = document.getElementById("status-msg");
+        if (status) status.innerText = `Setting up… (${attempt}/${maxAttempts})`;
+
+        try {
+            const initRes = await InitDrive();
+
+            if (typeof initRes === "string" && initRes.startsWith("Error:")) {
+                lastError = initRes;
+                console.error("InitDrive error:", initRes);
+
+                if (initRes.includes("could not save config")) {
+                    break;
+                }
+            } else {
+                return { ok: true, message: initRes };
+            }
+        } catch (err) {
+            lastError = "Error: " + (err?.message || String(err));
+            console.error("InitDrive failed:", err);
+        }
+
+        if (attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
+        }
+    }
+
+    return { ok: false, error: lastError };
+}
+
+async function showDashboard() {
     const authWrapper = document.getElementById("auth-wrapper");
     if (authWrapper) authWrapper.style.display = "none";
 
@@ -634,7 +741,18 @@ function showDashboard() {
     currentFolderId = "";
     folderPath = [];
     renderBreadcrumb();
-    InitDrive().then(() => window.refreshFiles());
+
+    const initResult = await initDriveWithRetry(3);
+    const status = document.getElementById("status-msg");
+
+    if (!initResult.ok) {
+        if (status) status.innerText = "Init failed";
+        alert(initResult.error || "Failed to initialize your drive. Check logs/console and try again.");
+        return;
+    }
+
+    if (status) status.innerText = "Ready";
+    window.refreshFiles();
 }
 
 window.refreshFiles = function() {

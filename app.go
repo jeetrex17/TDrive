@@ -35,7 +35,7 @@ type TDriveFile struct {
 }
 
 func (a *App) CheckLoginStatus() bool {
-	if a.Client == nil {
+	if a.ctx == nil {
 		return false
 	}
 	login, err := auth.CheckLogin(a.ctx)
@@ -314,17 +314,14 @@ func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMet
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) {
-	var err error
-	if a.Client == nil {
-		a.Client, err = auth.Connect()
-		if err != nil {
-			fmt.Println("Could not connect to Telegram:", err)
-			return
-		}
+	client, err := auth.Connect()
+	if err != nil {
+		fmt.Println("Could not connect to Telegram:", err)
+		return
 	}
 
 	go func() {
-		err := auth.StartLogin(a.ctx, a.Client, a, phoneNumber)
+		err := auth.StartLogin(a.ctx, client, a, phoneNumber)
 		if err != nil {
 			fmt.Println("Login failed:", err)
 
@@ -337,18 +334,19 @@ func (a *App) LoginPhoneNumber(phoneNumber string) {
 }
 
 func (a *App) InitDrive() string {
-	if a.Client == nil {
-		var err error
-		a.Client, err = auth.Connect()
-		if err != nil {
-			return "Error: Could not connect"
-		}
+	if a.ctx == nil {
+		return "Error: App context not ready"
 	}
 
 	var output string
 
-	err := a.Client.Run(a.ctx, func(ctx context.Context) error {
-		id, err := auth.GetTDriveChannel(ctx, a.Client)
+	client, err := auth.Connect()
+	if err != nil {
+		return "Error: Could not connect: " + err.Error()
+	}
+
+	err = client.Run(a.ctx, func(ctx context.Context) error {
+		id, err := auth.GetTDriveChannel(ctx, client)
 		if err != nil {
 			return err
 		}

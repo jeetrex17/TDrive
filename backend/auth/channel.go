@@ -48,13 +48,18 @@ func CreateTDriveChannel(ctx context.Context, Clinet *telegram.Client) (int64, e
 		return 0, fmt.Errorf("id not found (newID is 0) ")
 	}
 
-	SaveConfig(newID)
+	if err := SaveConfig(newID); err != nil {
+		return 0, fmt.Errorf("could not save config: %w", err)
+	}
 	return newID, nil
 }
 
 func findChannelID(chats []tg.ChatClass) int64 {
 	for _, chat := range chats {
-		if channel, ok := chat.(*tg.Channel); ok {
+		switch channel := chat.(type) {
+		case *tg.Channel:
+			return channel.ID
+		case *tg.ChannelForbidden:
 			return channel.ID
 		}
 	}
