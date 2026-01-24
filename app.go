@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"TDrive/backend/auth"
@@ -47,15 +48,14 @@ func (a *App) CheckLoginStatus() bool {
 	return login
 }
 
-func (a *App) SelectFile() (string, error) {
-	uploadfilepath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select file to upload",
+func (a *App) SelectFiles() ([]string, error) {
+	uploadfilepaths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select files to upload",
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
-	return uploadfilepath, err
+	return uploadfilepaths, nil
 }
 
 /*
@@ -170,6 +170,7 @@ type ProgressReader struct {
 	Current   int64
 	Ctx       context.Context
 	LastPrint time.Time
+	UploadID  int
 }
 
 func (pr *ProgressReader) Read(p []byte) (int, error) {
@@ -179,7 +180,6 @@ func (pr *ProgressReader) Read(p []byte) (int, error) {
 		pr.Current += int64(n)
 		if time.Since(pr.LastPrint) > 100*time.Millisecond {
 			perct := 0.0
-
 			if pr.Total > 0 {
 				perct = (float64(pr.Current) / float64(pr.Total)) * 100
 				if perct > 100 {
@@ -187,7 +187,7 @@ func (pr *ProgressReader) Read(p []byte) (int, error) {
 				}
 			}
 
-			runtime.EventsEmit(pr.Ctx, "upload_progress", perct)
+			runtime.EventsEmit(pr.Ctx, "upload_progress", pr.UploadID, perct)
 
 			pr.LastPrint = time.Now()
 		}
@@ -196,26 +196,74 @@ func (pr *ProgressReader) Read(p []byte) (int, error) {
 	if err != nil && err != io.EOF {
 		return n, err
 	}
-
 	return n, err
 }
 
 // AIs Job
-func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMetaData, error) {
+func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend.FileMetaData, error) {
+	if len(filePaths) != len(parentIDs) {
+		return nil, fmt.Errorf("filepaths and parentIDs length mismatch")
+	}
 	if backend.CurrentFS == nil {
-		return backend.FileMetaData{}, fmt.Errorf("filesystem not ready")
+		return nil, fmt.Errorf("filesystem not ready")
 	}
 
+	sem := make(chan struct{}, 3)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	uploadedFiles := make([]backend.FileMetaData, 0, len(filePaths))
+	failed := 0
+
+	for i := 0; i < len(filePaths); i++ {
+		path := filePaths[i]
+		pid := parentIDs[i]
+		uploadID := i
+		wg.Add(1)
+		sem <- struct{}{}
+
+		go func(path string, pid string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			meta, err := a.uploadSingleFile(uploadID, path, pid)
+			if err != nil {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				runtime.EventsEmit(a.ctx, "upload_error", uploadID, filepath.Base(path), err.Error())
+				return
+			}
+
+			mu.Lock()
+			backend.CurrentFS.AddFile(meta.Name, meta.Size, meta.TgMsgID, meta.ParentID)
+			uploadedFiles = append(uploadedFiles, meta)
+			mu.Unlock()
+		}(path, pid)
+	}
+
+	wg.Wait()
+
+	_ = backend.SaveTdriveFS()
+
+	if failed > 0 {
+		return uploadedFiles, fmt.Errorf("%d uploads failed", failed)
+	}
+	return uploadedFiles, nil
+}
+
+func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (backend.FileMetaData, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return backend.FileMetaData{}, fmt.Errorf("error : %v", err)
+		return backend.FileMetaData{}, err
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		return backend.FileMetaData{}, fmt.Errorf("Error getting file size: %v", err)
+		return backend.FileMetaData{}, err
 	}
+	filename := filepath.Base(filePath)
 	totalSize := info.Size()
 
 	pu := &ProgressReader{
@@ -223,27 +271,8 @@ func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMet
 		Total:     totalSize,
 		Ctx:       a.ctx,
 		LastPrint: time.Now(),
+		UploadID:  uploadID,
 	}
-
-	if parentID != "" {
-		found := false
-		for _, folder := range backend.CurrentFS.Folders {
-			if folder.ID == parentID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return backend.FileMetaData{}, fmt.Errorf("target folder not found")
-		}
-	}
-
-	fileInfo, err := os.Stat(filePath)
-	if err != nil {
-		return backend.FileMetaData{}, err
-	}
-	filename := filepath.Base(filePath)
-	size := fileInfo.Size()
 
 	channelid, err := auth.LoadConfig()
 	if err != nil || channelid == 0 {
@@ -264,8 +293,10 @@ func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMet
 		}
 
 		u := uploader.NewUploader(freshClient.API())
-		fmt.Printf("Uploading %s...\n", filename)
-		runtime.EventsEmit(a.ctx, "upload_progress", 0.0)
+		fmt.Printf("Starting upload: %s\n", filename)
+
+		runtime.EventsEmit(a.ctx, "upload_start", uploadID, filename, totalSize, parentID)
+
 		uploadResult, err := u.FromReader(ctx, filename, pu)
 		if err != nil {
 			return err
@@ -294,19 +325,16 @@ func (a *App) UploadToDriveFS(filePath string, parentID string) (backend.FileMet
 			return fmt.Errorf("upload success, but could not find msgID")
 		}
 
-		runtime.EventsEmit(a.ctx, "upload_progress", 100.0)
+		runtime.EventsEmit(a.ctx, "upload_complete", uploadID, filename)
 		return nil
 	})
 	if err != nil {
 		return backend.FileMetaData{}, err
 	}
 
-	backend.CurrentFS.AddFile(filename, size, msgID, parentID)
-	_ = backend.SaveTdriveFS()
-
 	return backend.FileMetaData{
 		Name:       filename,
-		Size:       size,
+		Size:       totalSize,
 		TgMsgID:    msgID,
 		ParentID:   parentID,
 		UploadTime: time.Now().Unix(),
