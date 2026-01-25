@@ -1445,14 +1445,14 @@ window.refreshFiles = function() {
 
 	            files.forEach((file) => {
 	                const { base, ext } = splitNameAndExt(file.name);
-                const row = document.createElement("div");
-                row.className = "file-row drive-row";
-                row.dataset.type = "file";
-                row.dataset.id = String(file.id);
-                row.dataset.name = String(file.name || "");
-                row.dataset.source = String(file.source || "fs");
-                row.dataset.size = String(file.size || 0);
-                row.dataset.canDelete = "true";
+	                const row = document.createElement("div");
+	                row.className = "file-row drive-row";
+	                row.dataset.type = "file";
+	                row.dataset.id = String(file.id);
+	                row.dataset.name = String(file.name || "");
+	                row.dataset.source = String(file.source || "fs");
+	                row.dataset.size = String(file.size || 0);
+	                row.dataset.canDelete = "true";
 
                 row.innerHTML = `
                     <div class="row-name">
@@ -1471,13 +1471,31 @@ window.refreshFiles = function() {
                 if (downloadBtn) {
                     downloadBtn.addEventListener("click", () => window.initDownload(file.id));
                 }
-                const deleteBtn = row.querySelector("button.delete");
-                if (deleteBtn) {
-                    deleteBtn.addEventListener("click", () => window.initDelete(file.id, file.name));
-                }
-                list.appendChild(row);
-            });
-        };
+	                const deleteBtn = row.querySelector("button.delete");
+	                if (deleteBtn) {
+	                    deleteBtn.addEventListener("click", () => window.initDelete(file.id, file.name));
+	                }
+
+		                const nameEl = row.querySelector(".row-name");
+		                if (nameEl) {
+		                    nameEl.addEventListener("dblclick", (e) => {
+		                        e.preventDefault();
+		                        e.stopPropagation();
+		                        const selection = window.getSelection?.();
+		                        if (selection) selection.removeAllRanges();
+		                        openRenameModal({
+		                            type: "file",
+		                            id: file.id,
+		                            name: file.name,
+		                            size: Number(file.size || row.dataset.size || 0),
+		                            parentId: currentFolderId,
+		                            source: file.source || row.dataset.source || "fs",
+		                        });
+		                    });
+		                }
+	                list.appendChild(row);
+	            });
+	        };
 
         finalize();
     });

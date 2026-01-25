@@ -31,11 +31,11 @@ export function InitDrive():Promise<string>;
 
 export function LoginPhoneNumber(arg1:string):Promise<void>;
 
-export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:string):Promise<string>;
-
 export function MoveFile(arg1:number,arg2:string):Promise<string>;
 
 export function MoveFolder(arg1:string,arg2:string):Promise<string>;
+
+export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:string):Promise<string>;
 
 export function RenameFile(arg1:number,arg2:string):Promise<string>;
 
