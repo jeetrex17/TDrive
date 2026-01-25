@@ -302,16 +302,16 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (
 			return err
 		}
 
-			req := &tg.MessagesSendMediaRequest{
-				Peer: inputPeer,
-				Media: &tg.InputMediaUploadedDocument{
-					File:     uploadResult,
-					MimeType: "application/octet-stream",
-					ForceFile: true,
-					Attributes: []tg.DocumentAttributeClass{
-						&tg.DocumentAttributeFilename{FileName: filename},
-					},
+		req := &tg.MessagesSendMediaRequest{
+			Peer: inputPeer,
+			Media: &tg.InputMediaUploadedDocument{
+				File:      uploadResult,
+				MimeType:  "application/octet-stream",
+				ForceFile: true,
+				Attributes: []tg.DocumentAttributeClass{
+					&tg.DocumentAttributeFilename{FileName: filename},
 				},
+			},
 			RandomID: rand.Int63(),
 			Message:  fmt.Sprintf("TDrive File: %s", filename),
 		}
@@ -796,6 +796,12 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 		return backend.Folder{}, fmt.Errorf("no cuurentFS folders")
 	}
 
+	for _, f := range backend.CurrentFS.Folders {
+		if f.ParentID == parentID && f.Name == foldername {
+			return backend.Folder{}, fmt.Errorf("folder '%s' already exists here", foldername)
+		}
+	}
+
 	newFolder := backend.CurrentFS.AddFolder(foldername, parentID)
 
 	err := backend.SaveTdriveFS()
@@ -947,5 +953,91 @@ func (a *App) DeleteFolder(folderID string) string {
 
 	backend.SaveTdriveFS()
 
+	return "Success"
+}
+
+func (a *App) RenameFile(msgID int, newName string) string {
+	if backend.CurrentFS == nil {
+		return "Error: FileSystem not ready"
+	}
+
+	for i, file := range backend.CurrentFS.Files {
+		if file.TgMsgID == msgID {
+			backend.CurrentFS.Files[i].Name = newName
+			break
+		}
+	}
+
+	err := backend.SaveTdriveFS()
+	if err != nil {
+		return "Error saving: " + err.Error()
+	}
+	return "Success"
+}
+
+func (a *App) RenameFolder(folderID string, newName string) string {
+	if backend.CurrentFS == nil {
+		return "Error: FileSystem not ready"
+	}
+
+	for i, folder := range backend.CurrentFS.Folders {
+		if folder.ID == folderID {
+			backend.CurrentFS.Folders[i].Name = newName
+			break
+		}
+	}
+
+	err := backend.SaveTdriveFS()
+	if err != nil {
+		return "Error saving: " + err.Error()
+	}
+	return "Success"
+}
+
+func (a *App) MoveFile(msgID int, newParentID string) string {
+	if backend.CurrentFS == nil {
+		return "Error: FileSystem not ready"
+	}
+
+	for i, file := range backend.CurrentFS.Files {
+		if file.TgMsgID == msgID {
+			if file.ParentID == newParentID {
+				return "Error: File is already in this folder"
+			}
+			backend.CurrentFS.Files[i].ParentID = newParentID
+			break
+		}
+	}
+
+	err := backend.SaveTdriveFS()
+	if err != nil {
+		return "Error saving: " + err.Error()
+	}
+	return "Success"
+}
+
+func (a *App) MoveFolder(folderID string, newParentID string) string {
+	if backend.CurrentFS == nil {
+		return "Error: FileSystem not ready"
+	}
+
+	if folderID == newParentID {
+		return "Error: Cannot move folder into itself"
+	}
+
+	for i, folder := range backend.CurrentFS.Folders {
+		if folder.ID == folderID {
+			if folder.ParentID == newParentID {
+				return "Error: Folder is already here"
+			}
+			backend.CurrentFS.Folders[i].ParentID = newParentID
+			break
+		}
+	}
+
+	err := backend.SaveTdriveFS()
+	if err != nil {
+		return "Error saving: " + err.Error()
+	}
 	return "Success"
 }

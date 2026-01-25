@@ -3,10 +3,13 @@ import {
     CheckSystemStatus, SaveSetup,
     LoginPhoneNumber, SumbitCode, SumbitPassword, 
     GetFileList, DownloadFile, DeleteFile, 
-    CheckLoginStatus, InitDrive, SelectFiles
+    CheckLoginStatus, InitDrive, SelectFiles,
+    RenameFile, RenameFolder, MoveFile, MoveFolder
 } from '../wailsjs/go/main/App';
 
 let pendingDeleteTarget = null; // { type: "file" | "folder", id: number|string, name?: string }
+let pendingRenameTarget = null;
+let pendingMoveTarget = null;
 let currentFolderId = "";
 let folderPath = []; // [{ id, name }]
 let activeTransfer = null; // "download" | "upload" | null
@@ -26,6 +29,8 @@ const icons = {
     trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>`,
     folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>`,
     open: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2"/><path stroke-linecap="round" stroke-linejoin="round" d="M14 3h7v7"/><path stroke-linecap="round" stroke-linejoin="round" d="M10 14L21 3"/></svg>`,
+    edit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 20h9"/><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>`,
+    move: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7 7h10v10H7z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 3h12v12"/><path stroke-linecap="round" stroke-linejoin="round" d="M3 9v12h12"/></svg>`,
 };
 
 function escapeHtml(input) {
@@ -434,15 +439,351 @@ function openDeleteModal(target) {
     modal.style.display = "flex";
 }
 
+function openRenameModal(target) {
+    const modal = document.getElementById("rename-modal");
+    const title = document.getElementById("rename-modal-title");
+    const subtitle = document.getElementById("rename-modal-subtitle");
+    const input = document.getElementById("rename-input");
+    const errorEl = document.getElementById("rename-error");
+
+    if (!modal || !title || !subtitle || !input) return;
+
+    pendingRenameTarget = target;
+    if (errorEl) {
+        errorEl.innerText = "";
+        errorEl.style.display = "none";
+    }
+
+    const isFolder = target?.type === "folder";
+    title.textContent = isFolder ? "Rename folder" : "Rename file";
+    subtitle.textContent = isFolder ? "Choose a new folder name." : "Choose a new file name.";
+
+    input.value = String(target?.name || "");
+    modal.style.display = "flex";
+
+    requestAnimationFrame(() => {
+        input.focus();
+        const value = input.value || "";
+        const dot = value.lastIndexOf(".");
+        if (!isFolder && dot > 0 && dot < value.length - 1) {
+            input.setSelectionRange(0, dot);
+        } else {
+            input.select();
+        }
+    });
+}
+
+function setupRenameModal() {
+    const modal = document.getElementById("rename-modal");
+    const cancelBtn = document.getElementById("rename-cancel");
+    const confirmBtn = document.getElementById("rename-confirm");
+    const input = document.getElementById("rename-input");
+    const errorEl = document.getElementById("rename-error");
+
+    if (!modal || !cancelBtn || !confirmBtn || !input) return;
+
+    const showError = (message) => {
+        if (!errorEl) return;
+        errorEl.innerText = message || "";
+        errorEl.style.display = message ? "block" : "none";
+    };
+
+    const close = () => {
+        showError("");
+        modal.style.display = "none";
+        pendingRenameTarget = null;
+    };
+
+    cancelBtn.addEventListener("click", close);
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) close();
+    });
+
+    confirmBtn.addEventListener("click", async () => {
+        if (!pendingRenameTarget) return;
+        const nextName = (input.value || "").trim();
+        if (!nextName) {
+            showError("Name can’t be empty.");
+            return;
+        }
+        if (/[\\/]/.test(nextName)) {
+            showError("Name can’t include / or \\.");
+            return;
+        }
+
+        showError("");
+
+        try {
+            let res = "";
+            if (pendingRenameTarget.type === "folder") {
+                res = await RenameFolder(String(pendingRenameTarget.id), nextName);
+            } else {
+                res = await RenameFile(Number(pendingRenameTarget.id), nextName);
+            }
+
+            if (typeof res === "string" && res.startsWith("Error")) {
+                showError(res);
+                return;
+            }
+            close();
+            window.refreshFiles();
+        } catch (err) {
+            showError(err?.message || String(err));
+        }
+    });
+}
+
+async function buildFolderIndex() {
+    const folders = [];
+    const byId = new Map();
+    const children = new Map();
+
+    const addFolder = (folder) => {
+        if (!folder?.id || byId.has(folder.id)) return;
+        byId.set(folder.id, folder);
+        folders.push(folder);
+        const pid = folder.parent_id || "";
+        if (!children.has(pid)) children.set(pid, []);
+        children.get(pid).push(folder.id);
+    };
+
+    const queue = [""];
+    const visited = new Set();
+
+    while (queue.length) {
+        const parentID = queue.shift();
+        if (visited.has(parentID)) continue;
+        visited.add(parentID);
+
+        let contents;
+        try {
+            contents = await getFolderContents(parentID);
+        } catch {
+            contents = { folders: [] };
+        }
+
+        const sub = Array.isArray(contents?.folders) ? contents.folders : [];
+        sub.forEach((folder) => {
+            addFolder(folder);
+            if (folder?.id) queue.push(folder.id);
+        });
+    }
+
+    folders.forEach((folder) => {
+        const pid = folder.parent_id || "";
+        if (!children.has(pid)) children.set(pid, []);
+        children.get(pid).sort((a, b) => (byId.get(a)?.name || "").localeCompare(byId.get(b)?.name || ""));
+    });
+
+    return { folders, byId, children };
+}
+
+function getParentPath(folderId, byId) {
+    const parents = [];
+    let cur = byId.get(folderId);
+    let safety = 0;
+    while (cur && safety < 50) {
+        const pid = cur.parent_id || "";
+        const parent = byId.get(pid);
+        if (!parent) break;
+        parents.push(parent.name || "");
+        cur = parent;
+        safety += 1;
+    }
+    parents.reverse();
+    return ["My Cloud", ...parents].filter(Boolean).join(" / ");
+}
+
+function collectDescendants(folderId, children) {
+    const out = new Set();
+    const stack = [folderId];
+    while (stack.length) {
+        const id = stack.pop();
+        const kids = children.get(id) || [];
+        for (const k of kids) {
+            if (out.has(k)) continue;
+            out.add(k);
+            stack.push(k);
+        }
+    }
+    return out;
+}
+
+async function openMoveModal(target) {
+    const modal = document.getElementById("move-modal");
+    const title = document.getElementById("move-modal-title");
+    const subtitle = document.getElementById("move-modal-subtitle");
+    const search = document.getElementById("move-search");
+    const list = document.getElementById("move-list");
+    const errorEl = document.getElementById("move-error");
+
+    if (!modal || !title || !subtitle || !search || !list) return;
+
+    pendingMoveTarget = target;
+    if (errorEl) {
+        errorEl.innerText = "";
+        errorEl.style.display = "none";
+    }
+
+    title.textContent = "Move to";
+    subtitle.textContent = target?.type === "folder" ? "Choose where to move this folder." : "Choose where to move this file.";
+
+    search.value = "";
+    search.oninput = null;
+    list.innerHTML = `<div class="move-empty">Loading folders…</div>`;
+    modal.style.display = "flex";
+
+    let index;
+    try {
+        index = await buildFolderIndex();
+    } catch {
+        index = { folders: [], byId: new Map(), children: new Map() };
+    }
+
+    const sourceParent = String(target?.parentId || "");
+    const movingFolderId = target?.type === "folder" ? String(target?.id || "") : "";
+    const blocked = movingFolderId ? collectDescendants(movingFolderId, index.children) : new Set();
+    if (movingFolderId) blocked.add(movingFolderId);
+
+    const all = [];
+    all.push({ id: "", name: "My Cloud", path: "Root" });
+    index.folders.forEach((folder) => {
+        all.push({
+            id: folder.id,
+            name: folder.name || "Folder",
+            path: getParentPath(folder.id, index.byId),
+        });
+    });
+
+    all.sort((a, b) => {
+        if (a.id === "") return -1;
+        if (b.id === "") return 1;
+        const ap = `${a.path} / ${a.name}`.toLowerCase();
+        const bp = `${b.path} / ${b.name}`.toLowerCase();
+        return ap.localeCompare(bp);
+    });
+
+    const render = (q) => {
+        const query = (q || "").trim().toLowerCase();
+        const items = query
+            ? all.filter((item) => (item.name || "").toLowerCase().includes(query) || (item.path || "").toLowerCase().includes(query))
+            : all;
+
+        list.innerHTML = "";
+        if (!items.length) {
+            list.innerHTML = `<div class="move-empty">No folders found.</div>`;
+            return;
+        }
+
+        items.forEach((item) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "move-item";
+
+            const isSameParent = item.id === sourceParent;
+            const isBlocked = movingFolderId ? blocked.has(item.id) : false;
+            const disabled = isSameParent || isBlocked;
+            if (disabled) btn.disabled = true;
+
+            let pathText = item.path;
+            if (isSameParent) pathText = "Current";
+            if (isBlocked) pathText = "Not allowed";
+
+            btn.innerHTML = `
+                <span class="move-item-left">
+                    <span class="move-item-icon" aria-hidden="true">${icons.folder}</span>
+                    <span class="move-item-name">${escapeHtml(item.name)}</span>
+                </span>
+                <span class="move-item-path">${escapeHtml(pathText)}</span>
+            `;
+
+            btn.addEventListener("click", async () => {
+                if (!pendingMoveTarget) return;
+                if (errorEl) {
+                    errorEl.innerText = "";
+                    errorEl.style.display = "none";
+                }
+
+                try {
+                    let res = "";
+                    if (pendingMoveTarget.type === "folder") {
+                        res = await MoveFolder(String(pendingMoveTarget.id), String(item.id));
+                    } else {
+                        res = await MoveFile(Number(pendingMoveTarget.id), String(item.id));
+                    }
+
+                    if (typeof res === "string" && res.startsWith("Error")) {
+                        if (errorEl) {
+                            errorEl.innerText = res;
+                            errorEl.style.display = "block";
+                        }
+                        return;
+                    }
+
+                    const moveModal = document.getElementById("move-modal");
+                    if (moveModal) moveModal.style.display = "none";
+                    pendingMoveTarget = null;
+                    window.refreshFiles();
+                } catch (err) {
+                    if (errorEl) {
+                        errorEl.innerText = err?.message || String(err);
+                        errorEl.style.display = "block";
+                    }
+                }
+            });
+
+            list.appendChild(btn);
+        });
+    };
+
+    render("");
+    search.oninput = () => render(search.value);
+
+    requestAnimationFrame(() => {
+        search.focus();
+    });
+}
+
+function setupMoveModal() {
+    const modal = document.getElementById("move-modal");
+    const cancelBtn = document.getElementById("move-cancel");
+    const list = document.getElementById("move-list");
+    const search = document.getElementById("move-search");
+    const errorEl = document.getElementById("move-error");
+
+    if (!modal || !cancelBtn) return;
+
+    const close = () => {
+        modal.style.display = "none";
+        pendingMoveTarget = null;
+        if (list) list.innerHTML = "";
+        if (search) {
+            search.value = "";
+            search.oninput = null;
+        }
+        if (errorEl) {
+            errorEl.innerText = "";
+            errorEl.style.display = "none";
+        }
+    };
+
+    cancelBtn.addEventListener("click", close);
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) close();
+    });
+}
+
 window.onload = async function() {
     console.log("App loaded. Checking Status...");
     setupDeleteModal();
     setupFolderModal();
-    setupBreadcrumb();
-    setupContextMenu();
-    setupDownloadProgress();
-    setupUploadProgress();
-    setupPasswordReveal();
+    setupRenameModal();
+	    setupMoveModal();
+	    setupBreadcrumb();
+	    setupContextMenu();
+	    setupDownloadProgress();
+	    setupUploadProgress();
+	    setupPasswordReveal();
 
     try {
         // Step A: Check Setup
@@ -726,31 +1067,40 @@ function setupContextMenu() {
         const row = e.target.closest(".drive-row");
         const type = row?.dataset?.type || "background";
 
-        if (type === "folder") {
-            const folderID = row.dataset.id;
-            const folderName = row.dataset.name || "Folder";
-            show(e.clientX, e.clientY, [
-                { label: `Open "${folderName}"`, onClick: () => navigateToFolder(folderID, folderName) },
-                { label: "Upload to this folder", onClick: () => uploadWithParentID(folderID) },
-                { label: `Delete "${folderName}"`, danger: true, onClick: () => window.initDeleteFolder(folderID, folderName) },
-                { type: "divider" },
-                { label: "New folder", onClick: () => window.openNewFolderModal() },
-                { label: "Refresh", onClick: () => window.refreshFiles() },
+	        if (type === "folder") {
+	            const folderID = row.dataset.id;
+	            const folderName = row.dataset.name || "Folder";
+	            show(e.clientX, e.clientY, [
+	                { label: `Open "${folderName}"`, onClick: () => navigateToFolder(folderID, folderName) },
+	                { label: "Upload to this folder", onClick: () => uploadWithParentID(folderID) },
+	                { label: "Rename…", onClick: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: currentFolderId }) },
+	                { label: "Move to…", onClick: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: currentFolderId }) },
+	                { label: `Delete "${folderName}"`, danger: true, onClick: () => window.initDeleteFolder(folderID, folderName) },
+	                { type: "divider" },
+	                { label: "New folder", onClick: () => window.openNewFolderModal() },
+	                { label: "Refresh", onClick: () => window.refreshFiles() },
             ]);
             return;
         }
 
-        if (type === "file") {
-            const fileID = parseInt(row.dataset.id, 10);
-            const fileName = row.dataset.name || "";
-            const canDelete = row.dataset.canDelete === "true";
-            const items = [
-                { label: "Download", onClick: () => window.initDownload(fileID) },
-            ];
-            if (canDelete) {
-                items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID, fileName) });
-            }
-            items.push(
+	        if (type === "file") {
+	            const fileID = parseInt(row.dataset.id, 10);
+	            const fileName = row.dataset.name || "";
+	            const fileSource = row.dataset.source || "fs";
+	            const canDelete = row.dataset.canDelete === "true";
+	            const items = [
+	                { label: "Download", onClick: () => window.initDownload(fileID) },
+	            ];
+	            if (fileSource === "fs") {
+	                items.push(
+	                    { label: "Rename…", onClick: () => openRenameModal({ type: "file", id: fileID, name: fileName, parentId: currentFolderId }) },
+	                    { label: "Move to…", onClick: () => openMoveModal({ type: "file", id: fileID, name: fileName, parentId: currentFolderId }) },
+	                );
+	            }
+	            if (canDelete) {
+	                items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID, fileName) });
+	            }
+	            items.push(
                 { type: "divider" },
                 { label: "Upload", onClick: () => window.selectFile() },
                 { label: "New folder", onClick: () => window.openNewFolderModal() },
@@ -1069,14 +1419,15 @@ window.refreshFiles = function() {
                 list.appendChild(row);
             });
 
-            files.forEach((file) => {
-                const { base, ext } = splitNameAndExt(file.name);
-                const row = document.createElement("div");
-                row.className = "file-row drive-row";
-                row.dataset.type = "file";
-                row.dataset.id = String(file.id);
-                row.dataset.name = String(file.name || "");
-                row.dataset.canDelete = "true";
+	            files.forEach((file) => {
+	                const { base, ext } = splitNameAndExt(file.name);
+	                const row = document.createElement("div");
+	                row.className = "file-row drive-row";
+	                row.dataset.type = "file";
+	                row.dataset.id = String(file.id);
+	                row.dataset.name = String(file.name || "");
+	                row.dataset.source = String(file.source || "fs");
+	                row.dataset.canDelete = "true";
 
                 row.innerHTML = `
                     <div class="row-name">

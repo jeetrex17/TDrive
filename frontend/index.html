@@ -191,6 +191,32 @@
                 </div>
             </div>
         </div>
+
+        <div id="rename-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="rename-modal-title">
+                <h3 id="rename-modal-title" class="modal-title">Rename</h3>
+                <p id="rename-modal-subtitle" class="modal-subtitle">Enter a new name.</p>
+                <input id="rename-input" type="text" placeholder="Name" autocomplete="off">
+                <div id="rename-error" class="modal-error" style="display: none;"></div>
+                <div class="modal-actions">
+                    <button id="rename-cancel" class="secondary-btn" type="button">Cancel</button>
+                    <button id="rename-confirm" class="primary-btn" type="button">Rename</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="move-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card move-card" role="dialog" aria-modal="true" aria-labelledby="move-modal-title">
+                <h3 id="move-modal-title" class="modal-title">Move to</h3>
+                <p id="move-modal-subtitle" class="modal-subtitle">Choose a destination folder.</p>
+                <input id="move-search" type="text" placeholder="Search folders..." autocomplete="off">
+                <div id="move-list" class="move-list"></div>
+                <div id="move-error" class="modal-error" style="display: none;"></div>
+                <div class="modal-actions">
+                    <button id="move-cancel" class="secondary-btn" type="button">Cancel</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

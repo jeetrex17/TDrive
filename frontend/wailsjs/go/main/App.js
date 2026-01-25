@@ -58,6 +58,22 @@ export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }
 
+export function MoveFile(arg1, arg2) {
+  return window['go']['main']['App']['MoveFile'](arg1, arg2);
+}
+
+export function MoveFolder(arg1, arg2) {
+  return window['go']['main']['App']['MoveFolder'](arg1, arg2);
+}
+
+export function RenameFile(arg1, arg2) {
+  return window['go']['main']['App']['RenameFile'](arg1, arg2);
+}
+
+export function RenameFolder(arg1, arg2) {
+  return window['go']['main']['App']['RenameFolder'](arg1, arg2);
+}
+
 export function SaveSetup(arg1, arg2) {
   return window['go']['main']['App']['SaveSetup'](arg1, arg2);
 }
