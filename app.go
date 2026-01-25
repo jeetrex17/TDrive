@@ -222,7 +222,7 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 		wg.Add(1)
 		sem <- struct{}{}
 
-		go func(path string, pid string) {
+		go func(uploadID int, path string, pid string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
@@ -239,7 +239,7 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 			backend.CurrentFS.AddFile(meta.Name, meta.Size, meta.TgMsgID, meta.ParentID)
 			uploadedFiles = append(uploadedFiles, meta)
 			mu.Unlock()
-		}(path, pid)
+		}(uploadID, path, pid)
 	}
 
 	wg.Wait()
