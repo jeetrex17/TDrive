@@ -170,14 +170,23 @@ function setupUploadProgress() {
         if (!Number.isFinite(uploadId)) return;
         const filename = String(name ?? "");
 
-        uploadTransfers.set(uploadId, {
-            id: uploadId,
-            name: filename,
-            size: Number(size) || 0,
-            parentId: String(parentId ?? ""),
-            progress: 0,
-            state: "uploading",
-        });
+        const existing = uploadTransfers.get(uploadId);
+        if (existing) {
+            existing.name = existing.name || filename;
+            existing.size = Number(size) || existing.size || 0;
+            existing.parentId = String(parentId ?? existing.parentId ?? "");
+            existing.state = "uploading";
+            existing.progress = Math.max(0, Math.min(100, Number(existing.progress) || 0));
+        } else {
+            uploadTransfers.set(uploadId, {
+                id: uploadId,
+                name: filename,
+                size: Number(size) || 0,
+                parentId: String(parentId ?? ""),
+                progress: 0,
+                state: "uploading",
+            });
+        }
 
         renderTransferItem(uploadId);
         updateTransferPill();
@@ -250,6 +259,8 @@ function setupUploadProgress() {
             window.refreshFiles();
         }
     });
+
+    updateTransferPill();
 }
 
 function updateTransferPill() {
@@ -324,12 +335,14 @@ function renderTransferItem(uploadId) {
     if (nameEl) nameEl.textContent = item.name || "Untitled";
 
     let meta = `${Math.round(progress)}%`;
+    if (item.state === "queued") meta = "Queued";
     if (item.state === "done") meta = "Done";
     if (item.state === "failed") meta = "Failed";
     if (metaEl) metaEl.textContent = meta;
 
     el.classList.toggle("is-done", item.state === "done");
     el.classList.toggle("is-failed", item.state === "failed");
+    el.classList.toggle("is-queued", item.state === "queued");
 }
 
 async function deleteFolder(folderID) {
@@ -345,12 +358,32 @@ async function uploadWithParentID(parentID) {
 
     activeTransfer = "upload";
     uploadBatch = { total: paths.length, done: 0, failed: 0 };
+
+    const nextTransfers = new Map();
+    for (let i = 0; i < paths.length; i++) {
+        const p = String(paths[i] ?? "");
+        const name = p ? p.split(/[/\\\\]/).pop() : "Untitled";
+        nextTransfers.set(i, {
+            id: i,
+            name,
+            size: 0,
+            parentId: String(parentID || ""),
+            progress: 0,
+            state: "queued",
+        });
+    }
+    uploadTransfers = nextTransfers;
+    if (transferUploadListEl) transferUploadListEl.innerHTML = "";
+    for (let i = 0; i < paths.length; i++) renderTransferItem(i);
     updateTransferPill();
 
     const upload = window?.go?.main?.App?.UploadToDriveFS;
     if (typeof upload !== "function") {
         activeTransfer = null;
         uploadBatch = null;
+        uploadTransfers = new Map();
+        if (transferUploadListEl) transferUploadListEl.innerHTML = "";
+        updateTransferPill();
         alert("UploadToDriveFS is missing in backend. Rebuild the app (wails dev/build) and try again.");
         return;
     }

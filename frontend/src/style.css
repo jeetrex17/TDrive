@@ -8,7 +8,7 @@
     --text-muted: #565f89;
     --border: #292e42;
     --danger: #f7768e;
-    --success: #9ece6a;
+    --success: #34c759;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
@@ -242,6 +242,7 @@ header {
     cursor: pointer;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
     transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
     white-space: nowrap;
@@ -253,6 +254,7 @@ header {
     border: 1px solid rgba(41, 46, 66, 0.85);
     background: rgba(255, 255, 255, 0.02);
     cursor: default;
+    justify-content: center;
 }
 .transfer-pill.is-idle:hover {
     background: rgba(255, 255, 255, 0.02);
@@ -269,14 +271,15 @@ header {
     width: 8px;
     height: 8px;
     border-radius: 999px;
+    flex: 0 0 auto;
     background: rgba(122, 162, 247, 0.9);
     box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.12);
 }
 .transfer-pill.is-idle .transfer-pill-dot {
     width: 8px;
     height: 8px;
-    background: rgba(158, 206, 106, 0.95);
-    box-shadow: 0 0 0 4px rgba(158, 206, 106, 0.12);
+    background: var(--success);
+    box-shadow: 0 0 0 4px rgba(52, 199, 89, 0.18);
 }
 .transfer-pill.is-error .transfer-pill-dot {
     background: rgba(247, 118, 142, 0.9);
@@ -392,6 +395,8 @@ header {
 }
 .transfer-item.is-failed .transfer-item-meta { color: rgba(247, 118, 142, 0.95); }
 .transfer-item.is-done .transfer-item-meta { color: rgba(158, 206, 106, 0.95); }
+.transfer-item.is-queued .transfer-item-meta { color: rgba(192, 202, 245, 0.55); }
+.transfer-item.is-queued .transfer-item-fill { width: 0% !important; }
 
 .transfer-empty {
     padding: 14px 12px;
