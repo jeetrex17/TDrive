@@ -515,6 +515,17 @@ function setupRenameModal() {
         if (e.target === modal) close();
     });
 
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            confirmBtn.click();
+        }
+        if (e.key === "Escape") {
+            e.preventDefault();
+            close();
+        }
+    });
+
     confirmBtn.addEventListener("click", async () => {
         if (!pendingRenameTarget) return;
         const nextName = (input.value || "").trim();
