@@ -58,6 +58,10 @@ export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }
 
+export function MsgToTdriveSystem(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['MsgToTdriveSystem'](arg1, arg2, arg3, arg4);
+}
+
 export function MoveFile(arg1, arg2) {
   return window['go']['main']['App']['MoveFile'](arg1, arg2);
 }

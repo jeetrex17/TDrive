@@ -4,7 +4,7 @@ import {
     LoginPhoneNumber, SumbitCode, SumbitPassword, 
     GetFileList, DownloadFile, DeleteFile, 
     CheckLoginStatus, InitDrive, SelectFiles,
-    RenameFile, RenameFolder, MoveFile, MoveFolder
+    RenameFile, RenameFolder, MoveFile, MoveFolder, MsgToTdriveSystem
 } from '../wailsjs/go/main/App';
 
 let pendingDeleteTarget = null; // { type: "file" | "folder", id: number|string, name?: string }
@@ -473,6 +473,22 @@ function openRenameModal(target) {
     });
 }
 
+async function ensureFileInTdriveSystem(target) {
+    if (!target || target.type !== "file") return;
+    if (String(target.source || "fs") !== "tg") return;
+
+    const res = await MsgToTdriveSystem(
+        Number(target.id),
+        String(target.name || ""),
+        Number(target.size || 0),
+        String(target.parentId || "")
+    );
+
+    if (typeof res === "string" && res.startsWith("Error")) {
+        throw new Error(res);
+    }
+}
+
 function setupRenameModal() {
     const modal = document.getElementById("rename-modal");
     const cancelBtn = document.getElementById("rename-cancel");
@@ -518,6 +534,7 @@ function setupRenameModal() {
             if (pendingRenameTarget.type === "folder") {
                 res = await RenameFolder(String(pendingRenameTarget.id), nextName);
             } else {
+                await ensureFileInTdriveSystem(pendingRenameTarget);
                 res = await RenameFile(Number(pendingRenameTarget.id), nextName);
             }
 
@@ -709,6 +726,7 @@ async function openMoveModal(target) {
                     if (pendingMoveTarget.type === "folder") {
                         res = await MoveFolder(String(pendingMoveTarget.id), String(item.id));
                     } else {
+                        await ensureFileInTdriveSystem(pendingMoveTarget);
                         res = await MoveFile(Number(pendingMoveTarget.id), String(item.id));
                     }
 
@@ -1089,17 +1107,23 @@ function setupContextMenu() {
 	            const fileSource = row.dataset.source || "fs";
 	            const canDelete = row.dataset.canDelete === "true";
 	            const items = [
-	                { label: "Download", onClick: () => window.initDownload(fileID) },
-	            ];
-	            if (fileSource === "fs") {
-	                items.push(
-	                    { label: "Rename…", onClick: () => openRenameModal({ type: "file", id: fileID, name: fileName, parentId: currentFolderId }) },
-	                    { label: "Move to…", onClick: () => openMoveModal({ type: "file", id: fileID, name: fileName, parentId: currentFolderId }) },
-	                );
-	            }
-	            if (canDelete) {
-	                items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID, fileName) });
-	            }
+                { label: "Download", onClick: () => window.initDownload(fileID) },
+            ];
+            if (fileSource === "fs") {
+                items.push(
+                    { label: "Rename…", onClick: () => openRenameModal({ type: "file", id: fileID, name: fileName, parentId: currentFolderId }) },
+                    { label: "Move to…", onClick: () => openMoveModal({ type: "file", id: fileID, name: fileName, parentId: currentFolderId }) },
+                );
+            } else {
+                const fileSize = Number(row.dataset.size || 0);
+                items.push(
+                    { label: "Rename…", onClick: () => openRenameModal({ type: "file", id: fileID, name: fileName, size: fileSize, parentId: currentFolderId, source: "tg" }) },
+                    { label: "Move to…", onClick: () => openMoveModal({ type: "file", id: fileID, name: fileName, size: fileSize, parentId: currentFolderId, source: "tg" }) },
+                );
+            }
+            if (canDelete) {
+                items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID, fileName) });
+            }
 	            items.push(
                 { type: "divider" },
                 { label: "Upload", onClick: () => window.selectFile() },
@@ -1421,13 +1445,14 @@ window.refreshFiles = function() {
 
 	            files.forEach((file) => {
 	                const { base, ext } = splitNameAndExt(file.name);
-	                const row = document.createElement("div");
-	                row.className = "file-row drive-row";
-	                row.dataset.type = "file";
-	                row.dataset.id = String(file.id);
-	                row.dataset.name = String(file.name || "");
-	                row.dataset.source = String(file.source || "fs");
-	                row.dataset.canDelete = "true";
+                const row = document.createElement("div");
+                row.className = "file-row drive-row";
+                row.dataset.type = "file";
+                row.dataset.id = String(file.id);
+                row.dataset.name = String(file.name || "");
+                row.dataset.source = String(file.source || "fs");
+                row.dataset.size = String(file.size || 0);
+                row.dataset.canDelete = "true";
 
                 row.innerHTML = `
                     <div class="row-name">
