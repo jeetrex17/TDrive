@@ -76,6 +76,7 @@ I used AI to help with the frontend UI/styling and planning while i focused more
 - [x] Basic Telegram login (phone/code/2FA)
 - [x] Create/reuse a private `TDrive` channel as storage
 - [x] Upload, list, download, and delete files
+- [x] Rename/move files and folders
 - [x] Stable channel access resolution (no “recent chats” dependency)
 - [ ] Add file encryption before uploads (privacy reasons ofc)
 - [x] Folder support (maybe “virtual folders” metadata)
