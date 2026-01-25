@@ -23,6 +23,11 @@ let transferUploadListEl = null;
 let transferClearEl = null;
 let uploadTransfers = new Map(); // id -> { id, name, size, parentId, progress, state }
 let uploadBatch = null; // { total, done, failed }
+let dragState = null;
+let dragOverEl = null;
+let dragRootEl = null;
+let folderIndexCache = null;
+let folderIndexBuildPromise = null;
 
 const icons = {
     download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
@@ -1023,7 +1028,10 @@ function renderBreadcrumb() {
     backBtn.disabled = folderPath.length === 0;
     backBtn.style.opacity = folderPath.length === 0 ? "0.35" : "1";
 
-    const items = [{ name: "My Drive", index: -1 }, ...folderPath.map((f, i) => ({ name: f.name, index: i }))];
+    const items = [
+        { id: "", name: "My Drive", index: -1 },
+        ...folderPath.map((f, i) => ({ id: f.id, name: f.name, index: i })),
+    ];
     path.innerHTML = "";
 
     items.forEach((item, idx) => {
@@ -1039,8 +1047,134 @@ function renderBreadcrumb() {
         btn.className = "breadcrumb-link";
         btn.dataset.index = String(item.index);
         btn.textContent = item.name;
+        btn.addEventListener("dragover", (e) => {
+            if (!dragState) return;
+            const allowed = canDropOnFolder(item.id);
+            setDropHighlight(btn, allowed);
+            if (e.dataTransfer) e.dataTransfer.dropEffect = allowed ? "move" : "none";
+            if (allowed) e.preventDefault();
+        });
+        btn.addEventListener("dragleave", (e) => {
+            if (e.relatedTarget && btn.contains(e.relatedTarget)) return;
+            if (dragOverEl === btn) {
+                btn.classList.remove("drop-target");
+                btn.classList.remove("drop-denied");
+                dragOverEl = null;
+            }
+        });
+        btn.addEventListener("drop", async (e) => {
+            if (!dragState) return;
+            const allowed = canDropOnFolder(item.id);
+            if (!allowed) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (dragOverEl === btn) dragOverEl = null;
+            btn.classList.remove("drop-target");
+            btn.classList.remove("drop-denied");
+            await performDropMove(item.id);
+        });
+
+        if (item.index === -1) {
+            dragRootEl = btn;
+        }
         path.appendChild(btn);
     });
+}
+
+async function refreshFolderIndex() {
+    if (folderIndexBuildPromise) return folderIndexBuildPromise;
+    folderIndexBuildPromise = buildFolderIndex()
+        .then((idx) => {
+            folderIndexCache = idx;
+            return idx;
+        })
+        .finally(() => {
+            folderIndexBuildPromise = null;
+        });
+    return folderIndexBuildPromise;
+}
+
+function clearDropHighlights() {
+    if (dragOverEl) {
+        dragOverEl.classList.remove("drop-target");
+        dragOverEl.classList.remove("drop-denied");
+        dragOverEl = null;
+    }
+    if (dragRootEl) {
+        dragRootEl.classList.remove("drop-target");
+        dragRootEl.classList.remove("drop-denied");
+    }
+}
+
+function setDropHighlight(el, allowed) {
+    if (dragOverEl && dragOverEl !== el) {
+        dragOverEl.classList.remove("drop-target");
+        dragOverEl.classList.remove("drop-denied");
+    }
+    dragOverEl = el;
+    el.classList.toggle("drop-target", Boolean(allowed));
+    el.classList.toggle("drop-denied", !allowed);
+}
+
+function canDropOnFolder(targetFolderId) {
+    if (!dragState) return false;
+    const target = String(targetFolderId || "");
+    const currentParent = String(dragState.parentId || "");
+    if (target === currentParent) return false;
+
+    if (dragState.type === "folder") {
+        const movingId = String(dragState.id || "");
+        if (!movingId) return false;
+        if (target === movingId) return false;
+        if (dragState.blocked && dragState.blocked.has(target)) return false;
+    }
+    return true;
+}
+
+async function performDropMove(newParentId) {
+    if (!dragState) return;
+    const state = dragState;
+    const parent = String(newParentId || "");
+    const currentParent = String(state.parentId || "");
+    if (parent === currentParent) return;
+
+    try {
+        let res = "";
+        if (state.type === "folder") {
+            res = await MoveFolder(String(state.id), parent);
+        } else {
+            await ensureFileInTdriveSystem({
+                type: "file",
+                id: Number(state.id),
+                name: state.name,
+                size: state.size,
+                parentId: state.parentId,
+                source: state.source,
+            });
+            res = await MoveFile(Number(state.id), parent);
+        }
+
+        if (typeof res === "string" && res.startsWith("Error")) {
+            alert(res);
+        } else {
+            window.refreshFiles();
+        }
+    } finally {
+        clearDropHighlights();
+    }
+}
+
+function beginRowDrag(row, nextState) {
+    clearDropHighlights();
+    if (dragState?.row) dragState.row.classList.remove("is-dragging");
+    dragState = { ...nextState, row };
+    row.classList.add("is-dragging");
+}
+
+function endRowDrag() {
+    if (dragState?.row) dragState.row.classList.remove("is-dragging");
+    dragState = null;
+    clearDropHighlights();
 }
 
 function setupContextMenu() {
@@ -1427,6 +1561,7 @@ window.refreshFiles = function() {
                 row.dataset.type = "folder";
                 row.dataset.id = folder.id;
                 row.dataset.name = folder.name;
+                row.dataset.parentId = requestedFolderId;
 
                 row.innerHTML = `
                     <div class="row-name">
@@ -1451,6 +1586,71 @@ window.refreshFiles = function() {
                     }
                 });
 
+                const folderNameEl = row.querySelector(".row-name");
+                if (folderNameEl) {
+                    folderNameEl.draggable = true;
+                    folderNameEl.addEventListener("dragstart", (e) => {
+                        const selection = window.getSelection?.();
+                        if (selection) selection.removeAllRanges();
+
+                        if (e.dataTransfer) {
+                            e.dataTransfer.effectAllowed = "move";
+                            try {
+                                e.dataTransfer.setData("text/plain", "tdrive-move");
+                            } catch {}
+                        }
+
+                        const folderID = String(folder.id || row.dataset.id || "");
+                        beginRowDrag(row, {
+                            type: "folder",
+                            id: folderID,
+                            name: folder.name || row.dataset.name || "Folder",
+                            parentId: requestedFolderId,
+                            blocked: folderID ? new Set([folderID]) : new Set(),
+                        });
+
+                        if (folderID) {
+                            refreshFolderIndex()
+                                .then((index) => {
+                                    if (!dragState || dragState.type !== "folder") return;
+                                    if (String(dragState.id || "") !== folderID) return;
+                                    const blocked = collectDescendants(folderID, index.children);
+                                    blocked.add(folderID);
+                                    dragState.blocked = blocked;
+                                })
+                                .catch(() => {});
+                        }
+                    });
+                    folderNameEl.addEventListener("dragend", endRowDrag);
+                }
+
+                row.addEventListener("dragover", (e) => {
+                    if (!dragState) return;
+                    const allowed = canDropOnFolder(folder.id);
+                    setDropHighlight(row, allowed);
+                    if (e.dataTransfer) e.dataTransfer.dropEffect = allowed ? "move" : "none";
+                    if (allowed) e.preventDefault();
+                });
+                row.addEventListener("dragleave", (e) => {
+                    if (e.relatedTarget && row.contains(e.relatedTarget)) return;
+                    if (dragOverEl === row) {
+                        row.classList.remove("drop-target");
+                        row.classList.remove("drop-denied");
+                        dragOverEl = null;
+                    }
+                });
+                row.addEventListener("drop", async (e) => {
+                    if (!dragState) return;
+                    const allowed = canDropOnFolder(folder.id);
+                    if (!allowed) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (dragOverEl === row) dragOverEl = null;
+                    row.classList.remove("drop-target");
+                    row.classList.remove("drop-denied");
+                    await performDropMove(folder.id);
+                });
+
                 list.appendChild(row);
             });
 
@@ -1463,6 +1663,7 @@ window.refreshFiles = function() {
 	                row.dataset.name = String(file.name || "");
 	                row.dataset.source = String(file.source || "fs");
 	                row.dataset.size = String(file.size || 0);
+                    row.dataset.parentId = requestedFolderId;
 	                row.dataset.canDelete = "true";
 
                 row.innerHTML = `
@@ -1489,6 +1690,29 @@ window.refreshFiles = function() {
 
 		                const nameEl = row.querySelector(".row-name");
 		                if (nameEl) {
+                            nameEl.draggable = true;
+                            nameEl.addEventListener("dragstart", (e) => {
+                                const selection = window.getSelection?.();
+                                if (selection) selection.removeAllRanges();
+
+                                if (e.dataTransfer) {
+                                    e.dataTransfer.effectAllowed = "move";
+                                    try {
+                                        e.dataTransfer.setData("text/plain", "tdrive-move");
+                                    } catch {}
+                                }
+
+                                beginRowDrag(row, {
+                                    type: "file",
+                                    id: Number(file.id),
+                                    name: file.name || row.dataset.name || "File",
+                                    size: Number(file.size || row.dataset.size || 0),
+                                    parentId: requestedFolderId,
+                                    source: file.source || row.dataset.source || "fs",
+                                });
+                            });
+                            nameEl.addEventListener("dragend", endRowDrag);
+
 		                    nameEl.addEventListener("dblclick", (e) => {
 		                        e.preventDefault();
 		                        e.stopPropagation();
