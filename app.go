@@ -302,15 +302,16 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (
 			return err
 		}
 
-		req := &tg.MessagesSendMediaRequest{
-			Peer: inputPeer,
-			Media: &tg.InputMediaUploadedDocument{
-				File:     uploadResult,
-				MimeType: "application/octet-stream",
-				Attributes: []tg.DocumentAttributeClass{
-					&tg.DocumentAttributeFilename{FileName: filename},
+			req := &tg.MessagesSendMediaRequest{
+				Peer: inputPeer,
+				Media: &tg.InputMediaUploadedDocument{
+					File:     uploadResult,
+					MimeType: "application/octet-stream",
+					ForceFile: true,
+					Attributes: []tg.DocumentAttributeClass{
+						&tg.DocumentAttributeFilename{FileName: filename},
+					},
 				},
-			},
 			RandomID: rand.Int63(),
 			Message:  fmt.Sprintf("TDrive File: %s", filename),
 		}
