@@ -33,7 +33,7 @@ export function LoginPhoneNumber(arg1:string):Promise<void>;
 
 export function SaveSetup(arg1:number,arg2:string):Promise<string>;
 
-export function SelectFile():Promise<string>;
+export function SelectFiles():Promise<Array<string>>;
 
 export function SendHint(arg1:string):Promise<void>;
 
@@ -41,4 +41,4 @@ export function SumbitCode(arg1:string):Promise<void>;
 
 export function SumbitPassword(arg1:string):Promise<void>;
 
-export function UploadToDriveFS(arg1:string,arg2:string):Promise<backend.FileMetaData>;
+export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>):Promise<Array<backend.FileMetaData>>;

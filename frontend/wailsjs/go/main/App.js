@@ -62,8 +62,8 @@ export function SaveSetup(arg1, arg2) {
   return window['go']['main']['App']['SaveSetup'](arg1, arg2);
 }
 
-export function SelectFile() {
-  return window['go']['main']['App']['SelectFile']();
+export function SelectFiles() {
+  return window['go']['main']['App']['SelectFiles']();
 }
 
 export function SendHint(arg1) {

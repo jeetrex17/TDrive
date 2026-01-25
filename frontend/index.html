@@ -114,6 +114,16 @@
 
                     <div class="header-actions">
                          <div id="status-msg" class="status-badge">Ready</div>
+                         <div class="transfer-wrap">
+                            <button id="transfer-pill" class="transfer-pill" type="button" aria-haspopup="dialog" aria-expanded="false" style="display: none;"></button>
+                            <div id="transfer-sheet" class="transfer-sheet" role="dialog" aria-label="Transfers" style="display: none;">
+                                <div class="transfer-sheet-header">
+                                    <div class="transfer-sheet-title">Uploads</div>
+                                    <button id="transfer-clear" class="transfer-sheet-clear" type="button" style="display: none;">Clear</button>
+                                </div>
+                                <div id="transfer-upload-list" class="transfer-sheet-list"></div>
+                            </div>
+                        </div>
                          
                         <button class="icon-btn" onclick="refreshFiles()" title="Refresh">
                             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>

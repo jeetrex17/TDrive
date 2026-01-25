@@ -8,7 +8,7 @@
     --text-muted: #565f89;
     --border: #292e42;
     --danger: #f7768e;
-    --success: #9ece6a;
+    --success: #34c759;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
@@ -219,10 +219,194 @@ header {
 .search-icon { position: absolute; left: 10px; top: 12px; width: 16px; height: 16px; color: var(--text-muted); }
 
 .header-actions { display: flex; gap: 12px; align-items: center; }
-.status-badge { font-size: 0.8rem; color: var(--success); margin-right: 10px; font-weight: 500; }
+.status-badge { display: none; }
 .upload-btn { width: auto; padding: 8px 20px; font-size: 0.9rem; }
 .btn-icon { width: 16px; height: 16px; }
 .folder-btn { padding: 8px 14px; font-size: 0.9rem; }
+
+.transfer-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.transfer-pill {
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(192, 202, 245, 0.9);
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    white-space: nowrap;
+}
+.transfer-pill.is-idle {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid rgba(41, 46, 66, 0.85);
+    background: rgba(255, 255, 255, 0.02);
+    cursor: default;
+    justify-content: center;
+}
+.transfer-pill.is-idle:hover {
+    background: rgba(255, 255, 255, 0.02);
+    border-color: rgba(41, 46, 66, 0.85);
+}
+.transfer-pill.is-idle:active { transform: none; }
+.transfer-pill-label { line-height: 1; }
+.transfer-pill.is-idle .transfer-pill-label { display: none; }
+.transfer-pill:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(122, 162, 247, 0.35); }
+.transfer-pill:active { transform: translateY(1px); }
+.transfer-pill.is-error { border-color: rgba(247, 118, 142, 0.45); color: rgba(247, 118, 142, 0.95); }
+.transfer-pill.is-active { border-color: rgba(122, 162, 247, 0.45); }
+.transfer-pill-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    flex: 0 0 auto;
+    background: rgba(122, 162, 247, 0.9);
+    box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.12);
+}
+.transfer-pill.is-idle .transfer-pill-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--success);
+    box-shadow: 0 0 0 4px rgba(52, 199, 89, 0.18);
+}
+.transfer-pill.is-error .transfer-pill-dot {
+    background: rgba(247, 118, 142, 0.9);
+    box-shadow: 0 0 0 4px rgba(247, 118, 142, 0.12);
+}
+
+.transfer-sheet {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    width: 360px;
+    border-radius: 14px;
+    background: rgba(22, 22, 30, 0.92);
+    border: 1px solid var(--border);
+    box-shadow: 0 18px 60px rgba(0,0,0,0.6);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    overflow: hidden;
+    z-index: 10001;
+}
+
+.transfer-sheet-header {
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(41, 46, 66, 0.75);
+}
+.transfer-sheet-title {
+    font-weight: 800;
+    color: rgba(255, 255, 255, 0.92);
+    letter-spacing: -0.02em;
+}
+.transfer-sheet-clear {
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.03);
+    color: rgba(192, 202, 245, 0.85);
+    padding: 6px 10px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.transfer-sheet-clear:hover { background: rgba(255, 255, 255, 0.06); border-color: rgba(122, 162, 247, 0.35); }
+
+.transfer-sheet-list {
+    max-height: 320px;
+    overflow: auto;
+    padding: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(192, 202, 245, 0.22) rgba(255, 255, 255, 0);
+}
+.transfer-sheet-list::-webkit-scrollbar { width: 10px; }
+.transfer-sheet-list::-webkit-scrollbar-track {
+    background: transparent;
+    margin: 10px 0;
+}
+.transfer-sheet-list::-webkit-scrollbar-thumb {
+    background: rgba(192, 202, 245, 0.18);
+    border-radius: 999px;
+    border: 3px solid rgba(0, 0, 0, 0);
+    background-clip: padding-box;
+}
+.transfer-sheet-list::-webkit-scrollbar-thumb:hover { background: rgba(192, 202, 245, 0.26); background-clip: padding-box; }
+
+.transfer-item {
+    position: relative;
+    border-radius: 12px;
+    border: 1px solid rgba(41, 46, 66, 0.85);
+    background: rgba(255, 255, 255, 0.02);
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+.transfer-item:last-child { margin-bottom: 0; }
+
+.transfer-item-fill {
+    position: absolute;
+    inset: 0;
+    width: 0%;
+    background: linear-gradient(90deg, rgba(122, 162, 247, 0.12), rgba(122, 162, 247, 0.32));
+    transition: width 120ms ease;
+}
+.transfer-item.is-done .transfer-item-fill {
+    background: linear-gradient(90deg, rgba(158, 206, 106, 0.10), rgba(158, 206, 106, 0.22));
+}
+.transfer-item.is-failed .transfer-item-fill {
+    background: linear-gradient(90deg, rgba(247, 118, 142, 0.10), rgba(247, 118, 142, 0.20));
+}
+
+.transfer-item-content {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px;
+}
+.transfer-item-name {
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: rgba(255, 255, 255, 0.92);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 250px;
+}
+.transfer-item-meta {
+    font-weight: 800;
+    font-size: 0.82rem;
+    color: rgba(192, 202, 245, 0.78);
+    white-space: nowrap;
+}
+.transfer-item.is-failed .transfer-item-meta { color: rgba(247, 118, 142, 0.95); }
+.transfer-item.is-done .transfer-item-meta { color: rgba(158, 206, 106, 0.95); }
+.transfer-item.is-queued .transfer-item-meta { color: rgba(192, 202, 245, 0.55); }
+.transfer-item.is-queued .transfer-item-fill { width: 0% !important; }
+
+.transfer-empty {
+    padding: 14px 12px;
+    border-radius: 12px;
+    border: 1px dashed rgba(41, 46, 66, 0.75);
+    color: rgba(192, 202, 245, 0.55);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-align: center;
+}
 
 /* BREADCRUMB */
 .drive-breadcrumb {

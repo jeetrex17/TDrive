@@ -3,7 +3,7 @@ import {
     CheckSystemStatus, SaveSetup,
     LoginPhoneNumber, SumbitCode, SumbitPassword, 
     GetFileList, DownloadFile, DeleteFile, 
-    CheckLoginStatus, InitDrive, SelectFile
+    CheckLoginStatus, InitDrive, SelectFiles
 } from '../wailsjs/go/main/App';
 
 let pendingDeleteTarget = null; // { type: "file" | "folder", id: number|string, name?: string }
@@ -14,6 +14,12 @@ let downloadProgressEl = null;
 let downloadProgressFillEl = null;
 let downloadProgressHideTimeout = null;
 let lastLoginPhoneNumber = "";
+let transferPillEl = null;
+let transferSheetEl = null;
+let transferUploadListEl = null;
+let transferClearEl = null;
+let uploadTransfers = new Map(); // id -> { id, name, size, parentId, progress, state }
+let uploadBatch = null; // { total, done, failed }
 
 const icons = {
     download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
@@ -116,31 +122,227 @@ function setupDownloadProgress() {
 }
 
 function setupUploadProgress() {
-    if (!downloadProgressEl || !downloadProgressFillEl) {
-        downloadProgressEl = document.getElementById("transfer-progress");
-        downloadProgressFillEl = document.getElementById("transfer-progress-fill");
-    }
-    if (!downloadProgressEl || !downloadProgressFillEl) return;
     if (!window.runtime?.EventsOn) return;
 
-    window.runtime.EventsOn("upload_progress", (percent) => {
-        if (activeTransfer !== "upload") return;
+    transferPillEl = document.getElementById("transfer-pill");
+    transferSheetEl = document.getElementById("transfer-sheet");
+    transferUploadListEl = document.getElementById("transfer-upload-list");
+    transferClearEl = document.getElementById("transfer-clear");
+
+    if (transferPillEl) {
+        transferPillEl.addEventListener("click", () => {
+            if (!transferSheetEl) return;
+            if ((!uploadTransfers || uploadTransfers.size === 0) && !uploadBatch) return;
+            const isOpen = transferSheetEl.style.display !== "none";
+            transferSheetEl.style.display = isOpen ? "none" : "block";
+            transferPillEl.setAttribute("aria-expanded", isOpen ? "false" : "true");
+        });
+    }
+
+    document.addEventListener("click", (e) => {
+        if (!transferSheetEl || transferSheetEl.style.display === "none") return;
+        if (transferPillEl && transferPillEl.contains(e.target)) return;
+        if (transferSheetEl.contains(e.target)) return;
+        transferSheetEl.style.display = "none";
+        if (transferPillEl) transferPillEl.setAttribute("aria-expanded", "false");
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape") return;
+        if (!transferSheetEl || transferSheetEl.style.display === "none") return;
+        transferSheetEl.style.display = "none";
+        if (transferPillEl) transferPillEl.setAttribute("aria-expanded", "false");
+    });
+
+    if (transferClearEl) {
+        transferClearEl.addEventListener("click", () => {
+            uploadTransfers = new Map();
+            uploadBatch = null;
+            if (transferUploadListEl) transferUploadListEl.innerHTML = "";
+            updateTransferPill();
+            if (transferSheetEl) transferSheetEl.style.display = "none";
+            if (transferPillEl) transferPillEl.setAttribute("aria-expanded", "false");
+        });
+    }
+
+    window.runtime.EventsOn("upload_start", (id, name, size, parentId) => {
+        const uploadId = Number(id);
+        if (!Number.isFinite(uploadId)) return;
+        const filename = String(name ?? "");
+
+        const existing = uploadTransfers.get(uploadId);
+        if (existing) {
+            existing.name = existing.name || filename;
+            existing.size = Number(size) || existing.size || 0;
+            existing.parentId = String(parentId ?? existing.parentId ?? "");
+            existing.state = "uploading";
+            existing.progress = Math.max(0, Math.min(100, Number(existing.progress) || 0));
+        } else {
+            uploadTransfers.set(uploadId, {
+                id: uploadId,
+                name: filename,
+                size: Number(size) || 0,
+                parentId: String(parentId ?? ""),
+                progress: 0,
+                state: "uploading",
+            });
+        }
+
+        renderTransferItem(uploadId);
+        updateTransferPill();
+    });
+
+    window.runtime.EventsOn("upload_progress", (id, percent) => {
+        const uploadId = Number(id);
+        if (!Number.isFinite(uploadId)) return;
         const value = Number(percent);
         if (!Number.isFinite(value)) return;
-
         const clamped = Math.max(0, Math.min(100, value));
-        showDownloadProgress(clamped);
 
-        const status = document.getElementById("status-msg");
-        if (status) status.innerText = `Uploading… ${Math.round(clamped)}%`;
+        const item = uploadTransfers.get(uploadId);
+        if (!item) return;
+        item.progress = clamped;
+        renderTransferItem(uploadId);
+    });
 
-        if (clamped >= 100) {
-            if (downloadProgressHideTimeout) clearTimeout(downloadProgressHideTimeout);
-            downloadProgressHideTimeout = setTimeout(() => {
-                hideDownloadProgress();
-            }, 900);
+    window.runtime.EventsOn("upload_complete", (id, name) => {
+        const uploadId = Number(id);
+        if (!Number.isFinite(uploadId)) return;
+        const item = uploadTransfers.get(uploadId);
+        if (!item) {
+            uploadTransfers.set(uploadId, {
+                id: uploadId,
+                name: String(name ?? ""),
+                size: 0,
+                parentId: "",
+                progress: 100,
+                state: "done",
+            });
+        } else {
+            item.progress = 100;
+            item.state = "done";
+        }
+
+        if (uploadBatch) uploadBatch.done += 1;
+        renderTransferItem(uploadId);
+        updateTransferPill();
+
+        if (uploadBatch && uploadBatch.done + uploadBatch.failed >= uploadBatch.total) {
+            uploadBatch = null;
+            window.refreshFiles();
         }
     });
+
+    window.runtime.EventsOn("upload_error", (id, name) => {
+        const uploadId = Number(id);
+        if (!Number.isFinite(uploadId)) return;
+        const filename = String(name ?? "");
+
+        const item = uploadTransfers.get(uploadId) || {
+            id: uploadId,
+            name: filename,
+            size: 0,
+            parentId: "",
+            progress: 0,
+            state: "failed",
+        };
+        item.state = "failed";
+        item.progress = 100;
+        uploadTransfers.set(uploadId, item);
+
+        if (uploadBatch) uploadBatch.failed += 1;
+        renderTransferItem(uploadId);
+        updateTransferPill();
+
+        if (uploadBatch && uploadBatch.done + uploadBatch.failed >= uploadBatch.total) {
+            uploadBatch = null;
+            window.refreshFiles();
+        }
+    });
+
+    updateTransferPill();
+}
+
+function updateTransferPill() {
+    if (!transferPillEl) return;
+    const hasTransfers = uploadTransfers && uploadTransfers.size > 0;
+    const hasBatch = Boolean(uploadBatch);
+
+    transferPillEl.style.display = "inline-flex";
+    transferPillEl.classList.toggle("is-idle", !hasTransfers && !hasBatch);
+    transferPillEl.classList.toggle("is-active", hasBatch);
+
+    if (!hasTransfers && !hasBatch) {
+        transferPillEl.classList.remove("is-error");
+        transferPillEl.innerHTML = `<span class="transfer-pill-dot" aria-hidden="true"></span><span class="transfer-pill-label"></span>`;
+        if (transferClearEl) transferClearEl.style.display = "none";
+        if (transferUploadListEl) transferUploadListEl.innerHTML = "";
+        if (transferSheetEl) transferSheetEl.style.display = "none";
+        transferPillEl.setAttribute("aria-expanded", "false");
+        return;
+    }
+
+    let total = uploadBatch?.total ?? uploadTransfers.size;
+    let done = uploadBatch?.done ?? 0;
+    let failed = uploadBatch?.failed ?? 0;
+
+    if (!uploadBatch) {
+        done = 0;
+        failed = 0;
+        for (const item of uploadTransfers.values()) {
+            if (item.state === "done") done += 1;
+            if (item.state === "failed") failed += 1;
+        }
+        total = uploadTransfers.size;
+    }
+
+    const hasFailures = failed > 0;
+    transferPillEl.classList.toggle("is-error", hasFailures);
+
+    const label = uploadBatch ? `Uploading ${done}/${total}` : hasFailures ? `Uploads finished (${failed} failed)` : "Uploads";
+    transferPillEl.innerHTML = `<span class="transfer-pill-dot" aria-hidden="true"></span><span class="transfer-pill-label">${escapeHtml(label)}</span>`;
+
+    const allDone = done + failed >= total && total > 0;
+    if (transferClearEl) transferClearEl.style.display = allDone ? "inline-flex" : "none";
+}
+
+function renderTransferItem(uploadId) {
+    if (!transferUploadListEl) return;
+    const item = uploadTransfers.get(uploadId);
+    if (!item) return;
+
+    let el = transferUploadListEl.querySelector(`.transfer-item[data-id="${uploadId}"]`);
+    if (!el) {
+        el = document.createElement("div");
+        el.className = "transfer-item";
+        el.dataset.id = String(uploadId);
+        el.innerHTML = `
+            <div class="transfer-item-fill"></div>
+            <div class="transfer-item-content">
+                <div class="transfer-item-name"></div>
+                <div class="transfer-item-meta"></div>
+            </div>
+        `;
+        transferUploadListEl.appendChild(el);
+    }
+
+    const fill = el.querySelector(".transfer-item-fill");
+    const nameEl = el.querySelector(".transfer-item-name");
+    const metaEl = el.querySelector(".transfer-item-meta");
+
+    const progress = Math.max(0, Math.min(100, Number(item.progress) || 0));
+    if (fill) fill.style.width = `${progress}%`;
+    if (nameEl) nameEl.textContent = item.name || "Untitled";
+
+    let meta = `${Math.round(progress)}%`;
+    if (item.state === "queued") meta = "Queued";
+    if (item.state === "done") meta = "Done";
+    if (item.state === "failed") meta = "Failed";
+    if (metaEl) metaEl.textContent = meta;
+
+    el.classList.toggle("is-done", item.state === "done");
+    el.classList.toggle("is-failed", item.state === "failed");
+    el.classList.toggle("is-queued", item.state === "queued");
 }
 
 async function deleteFolder(folderID) {
@@ -151,34 +353,48 @@ async function deleteFolder(folderID) {
 }
 
 async function uploadWithParentID(parentID) {
-    const path = await SelectFile();
-    if (!path) return;
+    const paths = await SelectFiles();
+    if (!paths || !paths.length) return;
 
-    const status = document.getElementById("status-msg");
     activeTransfer = "upload";
-    showDownloadProgress(0);
-    if (status) status.innerText = "Uploading…";
+    uploadBatch = { total: paths.length, done: 0, failed: 0 };
+
+    const nextTransfers = new Map();
+    for (let i = 0; i < paths.length; i++) {
+        const p = String(paths[i] ?? "");
+        const name = p ? p.split(/[/\\\\]/).pop() : "Untitled";
+        nextTransfers.set(i, {
+            id: i,
+            name,
+            size: 0,
+            parentId: String(parentID || ""),
+            progress: 0,
+            state: "queued",
+        });
+    }
+    uploadTransfers = nextTransfers;
+    if (transferUploadListEl) transferUploadListEl.innerHTML = "";
+    for (let i = 0; i < paths.length; i++) renderTransferItem(i);
+    updateTransferPill();
 
     const upload = window?.go?.main?.App?.UploadToDriveFS;
     if (typeof upload !== "function") {
         activeTransfer = null;
-        hideDownloadProgress();
-        if (status) status.innerText = "Ready";
+        uploadBatch = null;
+        uploadTransfers = new Map();
+        if (transferUploadListEl) transferUploadListEl.innerHTML = "";
+        updateTransferPill();
         alert("UploadToDriveFS is missing in backend. Rebuild the app (wails dev/build) and try again.");
         return;
     }
 
     try {
-        await upload(path, parentID || "");
-        if (status) status.innerText = "Ready";
-        window.refreshFiles();
+        const parentIDs = paths.map(() => parentID || "");
+        await upload(paths, parentIDs);
     } catch (err) {
         console.error("Upload failed:", err);
-        if (status) status.innerText = "Ready";
-        alert("Upload failed. Check console/logs.");
     } finally {
         if (activeTransfer === "upload") activeTransfer = null;
-        hideDownloadProgress();
     }
 }
 
