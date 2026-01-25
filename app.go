@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -952,6 +953,48 @@ func (a *App) DeleteFolder(folderID string) string {
 	backend.CurrentFS.Folders = keepFolders
 
 	backend.SaveTdriveFS()
+
+	return "Success"
+}
+
+func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID string) string {
+	if backend.CurrentFS == nil {
+		return "Error: FileSystem not ready"
+	}
+
+	if msgID <= 0 {
+		return "Error: Invalid msgID"
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Untitled"
+	}
+
+	parentID = strings.TrimSpace(parentID)
+	if parentID != "" {
+		found := false
+		for _, folder := range backend.CurrentFS.Folders {
+			if folder.ID == parentID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return "Error: Target folder not found"
+		}
+	}
+
+	for _, file := range backend.CurrentFS.Files {
+		if file.TgMsgID == msgID {
+			return "Success"
+		}
+	}
+
+	backend.CurrentFS.AddFile(name, size, msgID, parentID)
+	if err := backend.SaveTdriveFS(); err != nil {
+		return "Error saving: " + err.Error()
+	}
 
 	return "Success"
 }
