@@ -4,7 +4,8 @@ import {
     LoginPhoneNumber, SumbitCode, SumbitPassword, 
     GetFileList, DownloadFile, DeleteFile, 
     CheckLoginStatus, InitDrive, SelectFiles,
-    RenameFile, RenameFolder, MoveFile, MoveFolder, MsgToTdriveSystem
+    RenameFile, RenameFolder, MoveFile, MoveFolder, MsgToTdriveSystem,
+    GetStorageUsed
 } from '../wailsjs/go/main/App';
 
 let pendingDeleteTarget = null; // { type: "file" | "folder", id: number|string, name?: string }
@@ -28,6 +29,9 @@ let dragOverEl = null;
 let dragRootEl = null;
 let folderIndexCache = null;
 let folderIndexBuildPromise = null;
+let folderSizeEpoch = 0;
+let folderSizeCache = new Map(); // folderID -> bytes
+let folderSizeInFlight = new Map(); // folderID -> Promise<number>
 
 const icons = {
     download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
@@ -1301,6 +1305,60 @@ async function getFolderContents(parentID) {
     throw new Error("GetFolderContents is not available. Restart `wails dev` to regenerate bindings.");
 }
 
+async function calculateFolderTotalBytes(folderID, epoch) {
+    const id = String(folderID || "");
+    if (!id) return 0;
+
+    const cached = folderSizeCache.get(id);
+    if (typeof cached === "number") return cached;
+
+    const inFlight = folderSizeInFlight.get(id);
+    if (inFlight) return inFlight;
+
+    const promise = (async () => {
+        let total = 0;
+        const visited = new Set();
+        const queue = [id];
+
+        while (queue.length) {
+            const cur = queue.shift();
+            if (!cur || visited.has(cur)) continue;
+            visited.add(cur);
+
+            let contents;
+            try {
+                contents = await getFolderContents(cur);
+            } catch {
+                contents = { folders: [], files: [] };
+            }
+
+            const files = Array.isArray(contents?.files) ? contents.files : [];
+            for (const file of files) {
+                const size = Number(file?.size ?? 0);
+                if (Number.isFinite(size) && size > 0) total += size;
+            }
+
+            const folders = Array.isArray(contents?.folders) ? contents.folders : [];
+            for (const folder of folders) {
+                const next = String(folder?.id || "");
+                if (next) queue.push(next);
+            }
+        }
+
+        return total;
+    })();
+
+    folderSizeInFlight.set(id, promise);
+
+    try {
+        const bytes = await promise;
+        if (folderSizeEpoch === epoch) folderSizeCache.set(id, bytes);
+        return bytes;
+    } finally {
+        if (folderSizeEpoch === epoch) folderSizeInFlight.delete(id);
+    }
+}
+
 async function createFolder(name, parentID) {
     if (window.go?.main?.App?.CreateFolder) {
         return window.go.main.App.CreateFolder(name, parentID);
@@ -1494,9 +1552,27 @@ window.refreshFiles = function() {
     const list = document.getElementById("file-list");
     const storageUsed = document.getElementById("storage-used");
     const requestedFolderId = currentFolderId;
+    folderSizeEpoch += 1;
+    const folderEpoch = folderSizeEpoch;
+    folderSizeCache = new Map();
+    folderSizeInFlight = new Map();
 
     list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
-    if (storageUsed) storageUsed.innerText = "Calculating... / Unlimited";
+    if (storageUsed) {
+        storageUsed.innerText = "Calculating... / Unlimited";
+        GetStorageUsed()
+            .then((bytes) => {
+                const value = Number(bytes);
+                if (!Number.isFinite(value) || value < 0) {
+                    storageUsed.innerText = "— / Unlimited";
+                    return;
+                }
+                storageUsed.innerText = `${formatBytes(value)} / Unlimited`;
+            })
+            .catch(() => {
+                storageUsed.innerText = "— / Unlimited";
+            });
+    }
 
     const folderPromise = getFolderContents(requestedFolderId).catch((err) => {
         console.error("GetFolderContents failed:", err);
@@ -1536,16 +1612,11 @@ window.refreshFiles = function() {
                     date: f.date,
                 }));
 
-            const files = [...fsFileItems, ...tgFileItems];
+	            const files = [...fsFileItems, ...tgFileItems];
 
-            if (currentFolderId !== requestedFolderId) return;
+	            if (currentFolderId !== requestedFolderId) return;
 
-            if (storageUsed) {
-                const totalBytes = files.reduce((sum, f) => sum + (f?.size || 0), 0);
-                storageUsed.innerText = `${formatBytes(totalBytes)} / Unlimited`;
-            }
-
-            folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+	            folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
             files.sort((a, b) => (b.date || 0) - (a.date || 0));
 
             if (folders.length === 0 && files.length === 0) {
@@ -1563,18 +1634,18 @@ window.refreshFiles = function() {
                 row.dataset.name = folder.name;
                 row.dataset.parentId = requestedFolderId;
 
-                row.innerHTML = `
-                    <div class="row-name">
-                        <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
-                        ${escapeHtml(folder.name)}
-                    </div>
-                    <div class="row-meta">—</div>
-                    <div class="row-meta">—</div>
-                    <div class="row-actions">
-                        <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
-                        <button class="action-icon del delete-folder" type="button" title="Delete folder">${icons.trash}</button>
-                    </div>
-                `;
+	                row.innerHTML = `
+	                    <div class="row-name">
+	                        <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
+	                        ${escapeHtml(folder.name)}
+	                    </div>
+	                    <div class="row-meta">—</div>
+	                    <div class="row-meta folder-size">…</div>
+	                    <div class="row-actions">
+	                        <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
+	                        <button class="action-icon del delete-folder" type="button" title="Delete folder">${icons.trash}</button>
+	                    </div>
+	                `;
 
                 row.addEventListener("dblclick", () => navigateToFolder(folder.id, folder.name));
                 row.addEventListener("click", (e) => {
@@ -1639,20 +1710,37 @@ window.refreshFiles = function() {
                         dragOverEl = null;
                     }
                 });
-                row.addEventListener("drop", async (e) => {
-                    if (!dragState) return;
-                    const allowed = canDropOnFolder(folder.id);
-                    if (!allowed) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (dragOverEl === row) dragOverEl = null;
-                    row.classList.remove("drop-target");
-                    row.classList.remove("drop-denied");
-                    await performDropMove(folder.id);
-                });
+	                row.addEventListener("drop", async (e) => {
+	                    if (!dragState) return;
+	                    const allowed = canDropOnFolder(folder.id);
+	                    if (!allowed) return;
+	                    e.preventDefault();
+	                    e.stopPropagation();
+	                    if (dragOverEl === row) dragOverEl = null;
+	                    row.classList.remove("drop-target");
+	                    row.classList.remove("drop-denied");
+	                    await performDropMove(folder.id);
+	                });
 
-                list.appendChild(row);
-            });
+	                list.appendChild(row);
+
+                    const sizeEl = row.querySelector(".folder-size");
+                    if (sizeEl) {
+                        calculateFolderTotalBytes(folder.id, folderEpoch)
+                            .then((bytes) => {
+                                if (folderSizeEpoch !== folderEpoch) return;
+                                if (currentFolderId !== requestedFolderId) return;
+                                if (!row.isConnected) return;
+                                sizeEl.textContent = formatBytes(bytes);
+                            })
+                            .catch(() => {
+                                if (folderSizeEpoch !== folderEpoch) return;
+                                if (currentFolderId !== requestedFolderId) return;
+                                if (!row.isConnected) return;
+                                sizeEl.textContent = "—";
+                            });
+                    }
+	            });
 
 	            files.forEach((file) => {
 	                const { base, ext } = splitNameAndExt(file.name);

@@ -677,67 +677,13 @@ func (a *App) DeleteFile(msgID int) string {
 }
 
 func (a *App) GetStorageUsed() (int64, error) {
-	channelid, err := auth.LoadConfig()
-	if err != nil {
-		return 0, fmt.Errorf("errro getting channel id : %v", err)
-	}
-
-	freshClient, err := auth.Connect()
-	if err != nil {
-		return 0, fmt.Errorf("Error making new tg client : %v", err)
+	if backend.CurrentFS == nil {
+		return 0, fmt.Errorf("filesystem not ready")
 	}
 
 	var totalSize int64
-
-	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		_, ip, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
-		if err != nil {
-			return err
-		}
-
-		LastMsgID := 0
-
-		for {
-			history, err := freshClient.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
-				Peer:     ip,
-				Limit:    100,
-				OffsetID: LastMsgID,
-			})
-			if err != nil {
-				return err
-			}
-
-			var messages []tg.MessageClass
-			switch h := history.(type) {
-			case *tg.MessagesMessages:
-				messages = h.Messages
-			case *tg.MessagesMessagesSlice:
-				messages = h.Messages
-			case *tg.MessagesChannelMessages:
-				messages = h.Messages
-			}
-
-			if len(messages) == 0 {
-				break
-			}
-
-			for _, msgObj := range messages {
-				if msg, ok := msgObj.(*tg.Message); ok {
-					LastMsgID = msg.ID
-
-					if media, ok := msg.Media.(*tg.MessageMediaDocument); ok {
-						if doc, ok := media.Document.(*tg.Document); ok {
-							totalSize += doc.Size // Add bytes
-						}
-					}
-				}
-			}
-		}
-
-		return nil
-	})
-	if err != nil {
-		return 0, err
+	for _, file := range backend.CurrentFS.Files {
+		totalSize += file.Size
 	}
 
 	return totalSize, nil
