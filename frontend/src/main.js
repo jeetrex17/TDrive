@@ -1919,13 +1919,13 @@ window.refreshFiles = function() {
 
             list.innerHTML = "";
 
-            folders.forEach((folder) => {
-                const row = document.createElement("div");
-                row.className = "file-row drive-row folder-row";
-                row.dataset.type = "folder";
-                row.dataset.id = folder.id;
-                row.dataset.name = folder.name;
-                row.dataset.parentId = requestedFolderId;
+	            folders.forEach((folder) => {
+	                const row = document.createElement("div");
+	                row.className = "file-row drive-row folder-row";
+	                row.dataset.type = "folder";
+	                row.dataset.id = folder.id;
+	                row.dataset.name = folder.name;
+	                row.dataset.parentId = requestedFolderId;
 
 	                row.innerHTML = `
 	                    <div class="row-name">
@@ -1936,21 +1936,14 @@ window.refreshFiles = function() {
 	                    <div class="row-meta folder-size">…</div>
 	                    <div class="row-actions">
 	                        <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
-	                        <button class="action-icon del delete-folder" type="button" title="Delete folder">${icons.trash}</button>
 	                    </div>
 	                `;
 
                 row.addEventListener("dblclick", () => navigateToFolder(folder.id, folder.name));
-                row.addEventListener("click", (e) => {
-                    if (e.target.closest("button.open-folder")) return navigateToFolder(folder.id, folder.name);
-                    if (e.target.closest("button.delete-folder")) {
-                        if (selectedItems.size > 1 && row.classList.contains("is-selected")) {
-                            return openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: currentFolderId });
-                        }
-                        return window.initDeleteFolder(folder.id, folder.name);
-                    }
-                    handleRowSelection(row, e);
-                });
+	                row.addEventListener("click", (e) => {
+	                    if (e.target.closest("button.open-folder")) return navigateToFolder(folder.id, folder.name);
+	                    handleRowSelection(row, e);
+	                });
 
                 const folderNameEl = row.querySelector(".row-name");
                 if (folderNameEl) {
@@ -2049,37 +2042,26 @@ window.refreshFiles = function() {
                     row.dataset.parentId = requestedFolderId;
 	                row.dataset.canDelete = "true";
 
-                row.innerHTML = `
-                    <div class="row-name">
-                        <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
-                        ${escapeHtml(base)}
-                    </div>
-                    <div class="row-meta">${formatDate(file.date)}</div>
-                    <div class="row-meta">${formatBytes(file.size)}</div>
-                    <div class="row-actions">
-                        <button class="action-icon download" type="button" title="Download">${icons.download}</button>
-                        <button class="action-icon del delete" type="button" title="Delete">${icons.trash}</button>
-                    </div>
-                `;
+	                row.innerHTML = `
+	                    <div class="row-name">
+	                        <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
+	                        ${escapeHtml(base)}
+	                    </div>
+	                    <div class="row-meta">${formatDate(file.date)}</div>
+	                    <div class="row-meta">${formatBytes(file.size)}</div>
+	                    <div class="row-actions">
+	                        <button class="action-icon download" type="button" title="Download">${icons.download}</button>
+	                    </div>
+	                `;
 
-                const downloadBtn = row.querySelector("button.download");
-                if (downloadBtn) {
-                    downloadBtn.addEventListener("click", () => window.initDownload(file.id));
-                }
-	                const deleteBtn = row.querySelector("button.delete");
-	                if (deleteBtn) {
-	                    deleteBtn.addEventListener("click", () => {
-	                        if (selectedItems.size > 1 && row.classList.contains("is-selected")) {
-	                            openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: currentFolderId });
-	                            return;
-	                        }
-	                        window.initDelete(file.id, file.name);
-	                    });
+	                const downloadBtn = row.querySelector("button.download");
+	                if (downloadBtn) {
+	                    downloadBtn.addEventListener("click", () => window.initDownload(file.id));
 	                }
 
-                    row.addEventListener("click", (e) => {
-                        if (e.target.closest("button")) return;
-                        handleRowSelection(row, e);
+	                row.addEventListener("click", (e) => {
+	                    if (e.target.closest("button")) return;
+	                    handleRowSelection(row, e);
                     });
 
 		                const nameEl = row.querySelector(".row-name");
