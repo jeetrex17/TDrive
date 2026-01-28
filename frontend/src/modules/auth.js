@@ -1,0 +1,221 @@
+// Authentication flows for TDrive frontend
+
+import { state } from '../state.js';
+import {
+    CheckSystemStatus, SaveSetup,
+    LoginPhoneNumber, SumbitCode, SumbitPassword,
+    CheckLoginStatus, InitDrive
+} from '../../wailsjs/go/main/App';
+import { renderBreadcrumb } from './navigation.js';
+
+export function hideAllScreens() {
+    const screens = ["setupcontainer", "phonecontainer", "codecontainer", "passwordcontainer", "success-screen"];
+    screens.forEach(id => {
+        const el = document.getElementById(id);
+        if(el) el.style.display = "none";
+    });
+}
+
+export function showAuthWrapper() {
+    const authWrapper = document.getElementById("auth-wrapper");
+    if (authWrapper) authWrapper.style.display = "flex";
+
+    const dashboard = document.getElementById("success-screen");
+    if (dashboard) dashboard.style.display = "none";
+}
+
+export function setupPasswordReveal() {
+    const pw = document.getElementById("enterpassword");
+    const toggle = document.getElementById("toggle-password");
+    if (!pw || !toggle) return;
+
+    const apply = (isVisible) => {
+        pw.type = isVisible ? "text" : "password";
+
+        toggle.dataset.state = isVisible ? "visible" : "hidden";
+        toggle.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
+        toggle.setAttribute("title", isVisible ? "Hide password" : "Show password");
+    };
+
+    apply(false);
+
+    toggle.addEventListener("click", () => {
+        const isVisible = pw.type === "password";
+        apply(isVisible);
+        pw.focus();
+    });
+}
+
+async function initDriveWithRetry(maxAttempts = 3) {
+    let lastError = "Error: Init failed";
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const status = document.getElementById("status-msg");
+        if (status) status.innerText = `Setting up… (${attempt}/${maxAttempts})`;
+
+        try {
+            const initRes = await InitDrive();
+
+            if (typeof initRes === "string" && initRes.startsWith("Error:")) {
+                lastError = initRes;
+                console.error("InitDrive error:", initRes);
+
+                if (initRes.includes("could not save config")) {
+                    break;
+                }
+            } else {
+                return { ok: true, message: initRes };
+            }
+        } catch (err) {
+            lastError = "Error: " + (err?.message || String(err));
+            console.error("InitDrive failed:", err);
+        }
+
+        if (attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
+        }
+    }
+
+    return { ok: false, error: lastError };
+}
+
+export async function showDashboard() {
+    const authWrapper = document.getElementById("auth-wrapper");
+    if (authWrapper) authWrapper.style.display = "none";
+
+    hideAllScreens();
+    document.getElementById("success-screen").style.display = "flex";
+    state.currentFolderId = "";
+    state.folderPath = [];
+    renderBreadcrumb();
+
+    const initResult = await initDriveWithRetry(3);
+    const status = document.getElementById("status-msg");
+
+    if (!initResult.ok) {
+        if (status) status.innerText = "Init failed";
+        alert(initResult.error || "Failed to initialize your drive. Check logs/console and try again.");
+        return;
+    }
+
+    if (status) status.innerText = "Ready";
+    window.refreshFiles();
+}
+
+export async function checkStatusAndShowScreen() {
+    try {
+        // Step A: Check Setup
+        let status = await CheckSystemStatus();
+
+        if (status === "NEEDS_SETUP") {
+            showAuthWrapper();
+            hideAllScreens();
+            document.getElementById("setupcontainer").style.display = "block";
+            return;
+        }
+
+        // Step B: Check Login
+        let isLoggedIn = await CheckLoginStatus();
+        if (isLoggedIn) {
+            showDashboard();
+        } else {
+            showAuthWrapper();
+            hideAllScreens();
+            document.getElementById("phonecontainer").style.display = "block";
+        }
+
+    } catch (err) {
+        console.error("Startup Crash:", err);
+        alert("Startup Error: " + err + "\n\nDid you restart 'wails dev'?");
+    }
+}
+
+// Window bindings for auth functions
+export function setupAuthWindowBindings() {
+    window.submitSetup = function() {
+        const id = parseInt(document.getElementById("api_id").value);
+        const hash = document.getElementById("api_hash").value;
+        if (!id || !hash) return alert("Enter both fields.");
+
+        SaveSetup(id, hash).then(res => {
+            if(res === "Success") location.reload();
+            else alert(res);
+        });
+    };
+
+    window.startLogin = function () {
+        const phone = (document.getElementById("enterphone").value || "").trim();
+        if(!phone) return alert("Enter phone number");
+
+        state.lastLoginPhoneNumber = phone;
+
+        LoginPhoneNumber(phone).then(() => {
+            showAuthWrapper();
+            hideAllScreens();
+            document.getElementById("codecontainer").style.display = "block";
+
+            const row = document.getElementById("code-target-row");
+            const target = document.getElementById("code-target");
+            if (target) target.innerText = state.lastLoginPhoneNumber;
+            if (row) row.style.display = state.lastLoginPhoneNumber ? "flex" : "none";
+        });
+    };
+
+    window.sendCode = function () {
+        const code = document.getElementById("entercode").value;
+        SumbitCode(code).then(() => {
+            showAuthWrapper();
+            hideAllScreens();
+            document.getElementById("passwordcontainer").style.display = "block";
+
+            const hintBox = document.getElementById("hint-box");
+            const hintEl = document.getElementById("hinttext");
+            if (hintEl) hintEl.innerText = "";
+            if (hintBox) hintBox.style.display = "none";
+
+            const pw = document.getElementById("enterpassword");
+            const toggle = document.getElementById("toggle-password");
+            if (pw) pw.type = "password";
+            if (toggle) {
+                toggle.dataset.state = "hidden";
+                toggle.setAttribute("aria-label", "Show password");
+                toggle.setAttribute("title", "Show password");
+            }
+        });
+    };
+
+    window.sendPassword = function () {
+        SumbitPassword(document.getElementById("enterpassword").value);
+    };
+
+    window.runtime.EventsOn("login-success", () => showDashboard());
+
+    window.runtime.EventsOn("gothint", (hint) => {
+        const hintEl = document.getElementById("hinttext");
+        const hintBox = document.getElementById("hint-box");
+        if (!hintEl || !hintBox) return;
+
+        const text = (hint ?? "").toString().trim();
+        const normalized = text.replace(/^(hint\s*:?[\s\u00A0]*)+/i, "").trim();
+
+        if (!normalized || normalized.toLowerCase().includes("no hint")) {
+            hintEl.innerText = "";
+            hintBox.style.display = "none";
+            return;
+        }
+
+        hintEl.innerText = normalized;
+        hintBox.style.display = "block";
+    });
+
+    window.backToPhone = function () {
+        showAuthWrapper();
+        hideAllScreens();
+
+        const phoneContainer = document.getElementById("phonecontainer");
+        if (phoneContainer) phoneContainer.style.display = "block";
+
+        const codeEl = document.getElementById("entercode");
+        if (codeEl) codeEl.value = "";
+    };
+}
