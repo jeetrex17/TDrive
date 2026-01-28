@@ -32,6 +32,13 @@ let folderIndexBuildPromise = null;
 let folderSizeEpoch = 0;
 let folderSizeCache = new Map(); // folderID -> bytes
 let folderSizeInFlight = new Map(); // folderID -> Promise<number>
+let selectedItems = new Map(); // key -> { type, id, name, size, source, parentId, row }
+let selectionAnchorIndex = -1;
+let selectionBarEl = null;
+let selectionCountEl = null;
+let selectionMoveBtnEl = null;
+let selectionDeleteBtnEl = null;
+let selectionClearBtnEl = null;
 
 const icons = {
     download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>`,
@@ -75,6 +82,158 @@ function formatBytes(bytes) {
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function getRowKey(row) {
+    if (!row) return "";
+    const type = String(row.dataset.type || "");
+    const id = String(row.dataset.id || "");
+    if (!type || !id) return "";
+    return `${type}:${id}`;
+}
+
+function rowToSelectionItem(row) {
+    const type = String(row?.dataset?.type || "");
+    if (type === "folder") {
+        return {
+            type: "folder",
+            id: String(row.dataset.id || ""),
+            name: String(row.dataset.name || "Folder"),
+            parentId: String(row.dataset.parentId || ""),
+            row,
+        };
+    }
+
+    return {
+        type: "file",
+        id: Number(row?.dataset?.id || 0),
+        name: String(row?.dataset?.name || "File"),
+        size: Number(row?.dataset?.size || 0),
+        source: String(row?.dataset?.source || "fs"),
+        parentId: String(row?.dataset?.parentId || ""),
+        row,
+    };
+}
+
+function setRowSelected(row, selected) {
+    if (!row) return;
+    row.classList.toggle("is-selected", Boolean(selected));
+    row.setAttribute("aria-selected", selected ? "true" : "false");
+}
+
+function updateSelectionBar() {
+    if (!selectionBarEl || !selectionCountEl) return;
+    const count = selectedItems.size;
+    if (!count) {
+        selectionBarEl.style.display = "none";
+        return;
+    }
+
+    selectionBarEl.style.display = "flex";
+    selectionCountEl.textContent = count === 1 ? "1 selected" : `${count} selected`;
+}
+
+function clearSelection({ keepAnchor = false } = {}) {
+    for (const item of selectedItems.values()) {
+        if (item?.row) setRowSelected(item.row, false);
+    }
+    selectedItems.clear();
+    if (!keepAnchor) selectionAnchorIndex = -1;
+    updateSelectionBar();
+}
+
+function selectRow(row, rowIndex) {
+    const key = getRowKey(row);
+    if (!key) return;
+    const item = rowToSelectionItem(row);
+    selectedItems.set(key, item);
+    setRowSelected(row, true);
+    selectionAnchorIndex = rowIndex;
+    updateSelectionBar();
+}
+
+function deselectRow(row) {
+    const key = getRowKey(row);
+    if (!key) return;
+    selectedItems.delete(key);
+    setRowSelected(row, false);
+    updateSelectionBar();
+}
+
+function handleRowSelection(row, e) {
+    if (!row) return;
+    if (e?.button === 2) return;
+
+    const list = document.getElementById("file-list");
+    const rows = list ? Array.from(list.querySelectorAll(".drive-row")) : [];
+    const idx = rows.indexOf(row);
+    if (idx === -1) return;
+
+    const isToggle = Boolean(e?.metaKey || e?.ctrlKey);
+    const isRange = Boolean(e?.shiftKey) && selectionAnchorIndex >= 0;
+
+    if (isRange) {
+        const start = Math.min(selectionAnchorIndex, idx);
+        const end = Math.max(selectionAnchorIndex, idx);
+        if (!isToggle) clearSelection({ keepAnchor: true });
+
+        for (let i = start; i <= end; i++) {
+            const r = rows[i];
+            if (!r) continue;
+            const key = getRowKey(r);
+            if (!key) continue;
+            if (selectedItems.has(key)) continue;
+            const item = rowToSelectionItem(r);
+            selectedItems.set(key, item);
+            setRowSelected(r, true);
+        }
+
+        updateSelectionBar();
+        return;
+    }
+
+    if (isToggle) {
+        if (row.classList.contains("is-selected")) {
+            deselectRow(row);
+        } else {
+            const item = rowToSelectionItem(row);
+            selectedItems.set(getRowKey(row), item);
+            setRowSelected(row, true);
+            selectionAnchorIndex = idx;
+            updateSelectionBar();
+        }
+        return;
+    }
+
+    clearSelection({ keepAnchor: true });
+    selectRow(row, idx);
+}
+
+function ensureRowSelectedForContextMenu(row) {
+    if (!row) return;
+    const list = document.getElementById("file-list");
+    const rows = list ? Array.from(list.querySelectorAll(".drive-row")) : [];
+    const idx = rows.indexOf(row);
+    if (idx === -1) return;
+
+    if (!row.classList.contains("is-selected") || !selectedItems.size) {
+        clearSelection({ keepAnchor: true });
+        selectRow(row, idx);
+        return;
+    }
+
+    selectionAnchorIndex = idx;
+}
+
+function getSelectionPayload() {
+    return Array.from(selectedItems.values()).map((item) => ({
+        type: item.type,
+        id: item.id,
+        name: item.name,
+        size: item.size,
+        source: item.source,
+        parentId: item.parentId,
+    }));
 }
 
 function showDownloadProgress(percent) {
@@ -435,7 +594,22 @@ function openDeleteModal(target) {
 
     const name = (target?.name || "").trim();
 
-    if (target?.type === "folder") {
+    if (target?.type === "bulk") {
+        const items = Array.isArray(target?.items) ? target.items : [];
+        const total = items.length;
+        const folders = items.filter((i) => i?.type === "folder").length;
+        const files = items.filter((i) => i?.type === "file").length;
+
+        title.textContent = total === 1 ? "Delete 1 item?" : `Delete ${total} items?`;
+        if (folders > 0 && files > 0) {
+            subtitle.textContent = `This will permanently delete ${folders} folder(s) and ${files} file(s) from your Telegram channel.`;
+        } else if (folders > 0) {
+            subtitle.textContent = `This will permanently delete ${folders} folder(s) and everything inside from your Telegram channel.`;
+        } else {
+            subtitle.textContent = `This will permanently delete ${files} file(s) from your Telegram channel.`;
+        }
+        confirmBtn.textContent = "Delete";
+    } else if (target?.type === "folder") {
         title.textContent = name ? `Delete folder “${name}”?` : "Delete folder?";
         subtitle.textContent = "This will permanently delete this folder and everything inside it from your Telegram channel.";
         confirmBtn.textContent = "Delete folder";
@@ -663,7 +837,12 @@ async function openMoveModal(target) {
     }
 
     title.textContent = "Move to";
-    subtitle.textContent = target?.type === "folder" ? "Choose where to move this folder." : "Choose where to move this file.";
+    if (target?.type === "bulk") {
+        const total = Array.isArray(target?.items) ? target.items.length : 0;
+        subtitle.textContent = total === 1 ? "Choose where to move this item." : `Choose where to move ${total} items.`;
+    } else {
+        subtitle.textContent = target?.type === "folder" ? "Choose where to move this folder." : "Choose where to move this file.";
+    }
 
     search.value = "";
     search.oninput = null;
@@ -678,9 +857,24 @@ async function openMoveModal(target) {
     }
 
     const sourceParent = String(target?.parentId || "");
-    const movingFolderId = target?.type === "folder" ? String(target?.id || "") : "";
-    const blocked = movingFolderId ? collectDescendants(movingFolderId, index.children) : new Set();
-    if (movingFolderId) blocked.add(movingFolderId);
+    let blocked = new Set();
+    if (target?.type === "folder") {
+        const movingFolderId = String(target?.id || "");
+        if (movingFolderId) {
+            blocked = collectDescendants(movingFolderId, index.children);
+            blocked.add(movingFolderId);
+        }
+    } else if (target?.type === "bulk") {
+        const items = Array.isArray(target?.items) ? target.items : [];
+        const folderIDs = items.filter((i) => i?.type === "folder").map((i) => String(i?.id || "")).filter(Boolean);
+        const union = new Set();
+        for (const fid of folderIDs) {
+            const desc = collectDescendants(fid, index.children);
+            desc.add(fid);
+            for (const id of desc) union.add(id);
+        }
+        blocked = union;
+    }
 
     const all = [];
     all.push({ id: "", name: "My Cloud", path: "Root" });
@@ -712,15 +906,15 @@ async function openMoveModal(target) {
             return;
         }
 
-        items.forEach((item) => {
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "move-item";
+	        items.forEach((item) => {
+	            const btn = document.createElement("button");
+	            btn.type = "button";
+	            btn.className = "move-item";
 
-            const isSameParent = item.id === sourceParent;
-            const isBlocked = movingFolderId ? blocked.has(item.id) : false;
-            const disabled = isSameParent || isBlocked;
-            if (disabled) btn.disabled = true;
+	            const isSameParent = item.id === sourceParent;
+	            const isBlocked = blocked.size ? blocked.has(item.id) : false;
+	            const disabled = isSameParent || isBlocked;
+	            if (disabled) btn.disabled = true;
 
             let pathText = item.path;
             if (isSameParent) pathText = "Current";
@@ -743,7 +937,26 @@ async function openMoveModal(target) {
 
                 try {
                     let res = "";
-                    if (pendingMoveTarget.type === "folder") {
+                    if (pendingMoveTarget.type === "bulk") {
+                        const items = Array.isArray(pendingMoveTarget.items) ? pendingMoveTarget.items : [];
+                        const folders = items.filter((i) => i?.type === "folder");
+                        const files = items.filter((i) => i?.type === "file");
+
+                        for (const folder of folders) {
+                            res = await MoveFolder(String(folder.id), String(item.id));
+                            if (typeof res === "string" && res.startsWith("Error")) {
+                                throw new Error(res);
+                            }
+                        }
+
+                        for (const file of files) {
+                            await ensureFileInTdriveSystem(file);
+                            res = await MoveFile(Number(file.id), String(item.id));
+                            if (typeof res === "string" && res.startsWith("Error")) {
+                                throw new Error(res);
+                            }
+                        }
+                    } else if (pendingMoveTarget.type === "folder") {
                         res = await MoveFolder(String(pendingMoveTarget.id), String(item.id));
                     } else {
                         await ensureFileInTdriveSystem(pendingMoveTarget);
@@ -761,6 +974,7 @@ async function openMoveModal(target) {
                     const moveModal = document.getElementById("move-modal");
                     if (moveModal) moveModal.style.display = "none";
                     pendingMoveTarget = null;
+                    clearSelection();
                     window.refreshFiles();
                 } catch (err) {
                     if (errorEl) {
@@ -811,6 +1025,45 @@ function setupMoveModal() {
     });
 }
 
+function setupSelectionBar() {
+    selectionBarEl = document.getElementById("selection-bar");
+    selectionCountEl = document.getElementById("selection-count");
+    selectionMoveBtnEl = document.getElementById("selection-move");
+    selectionDeleteBtnEl = document.getElementById("selection-delete");
+    selectionClearBtnEl = document.getElementById("selection-clear");
+    if (!selectionBarEl || !selectionCountEl) return;
+
+    if (selectionClearBtnEl) {
+        selectionClearBtnEl.addEventListener("click", () => clearSelection());
+    }
+    if (selectionDeleteBtnEl) {
+        selectionDeleteBtnEl.addEventListener("click", () => {
+            if (!selectedItems.size) return;
+            openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: currentFolderId });
+        });
+    }
+    if (selectionMoveBtnEl) {
+        selectionMoveBtnEl.addEventListener("click", () => {
+            if (!selectedItems.size) return;
+            openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: currentFolderId });
+        });
+    }
+
+    const list = document.getElementById("file-list");
+    if (list) {
+        list.addEventListener("click", (e) => {
+            if (e.target.closest(".drive-row")) return;
+            clearSelection();
+        });
+    }
+
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") clearSelection();
+    });
+
+    updateSelectionBar();
+}
+
 window.onload = async function() {
     console.log("App loaded. Checking Status...");
     setupDeleteModal();
@@ -819,6 +1072,7 @@ window.onload = async function() {
 	    setupMoveModal();
 	    setupBreadcrumb();
 	    setupContextMenu();
+	    setupSelectionBar();
 	    setupDownloadProgress();
 	    setupUploadProgress();
 	    setupPasswordReveal();
@@ -908,7 +1162,7 @@ function setupDeleteModal() {
         if (e.target === modal) close();
     });
 
-    confirmBtn.addEventListener("click", () => {
+    confirmBtn.addEventListener("click", async () => {
         const target = pendingDeleteTarget;
         close();
         if (!target) return;
@@ -916,26 +1170,50 @@ function setupDeleteModal() {
         const status = document.getElementById("status-msg");
         if (status) status.innerText = "Deleting...";
 
-        const promise = target.type === "folder"
-            ? deleteFolder(String(target.id))
-            : DeleteFile(Number(target.id));
+        try {
+            if (target.type === "bulk") {
+                const items = Array.isArray(target.items) ? target.items : [];
+                const folders = items.filter((i) => i?.type === "folder");
+                const files = items.filter((i) => i?.type === "file");
 
-        promise
-            .then((res) => {
+                for (const folder of folders) {
+                    try {
+                        await deleteFolder(String(folder.id));
+                        ensureNotInsideDeletedFolder(String(folder.id));
+                    } catch (err) {
+                        console.error("Delete folder failed:", folder, err);
+                    }
+                }
+
+                for (const file of files) {
+                    try {
+                        await DeleteFile(Number(file.id));
+                    } catch (err) {
+                        console.error("Delete file failed:", file, err);
+                    }
+                }
+
+                clearSelection();
+                if (status) status.innerText = "Done";
+                window.refreshFiles();
+            } else {
+                const res = target.type === "folder"
+                    ? await deleteFolder(String(target.id))
+                    : await DeleteFile(Number(target.id));
+
                 if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));
                 if (status) status.innerText = res || "Done";
                 window.refreshFiles();
-            })
-            .catch((err) => {
-                console.error("Delete failed:", err);
-                if (status) status.innerText = "Delete failed";
-                alert("Delete failed. Check console/logs.");
-            })
-            .finally(() => {
-                setTimeout(() => {
-                    if (status) status.innerText = "Ready";
-                }, 2000);
-            });
+            }
+        } catch (err) {
+            console.error("Delete failed:", err);
+            if (status) status.innerText = "Delete failed";
+            alert("Delete failed. Check console/logs.");
+        } finally {
+            setTimeout(() => {
+                if (status) status.innerText = "Ready";
+            }, 2000);
+        }
     });
 }
 
@@ -1233,6 +1511,20 @@ function setupContextMenu() {
         e.preventDefault();
         const row = e.target.closest(".drive-row");
         const type = row?.dataset?.type || "background";
+
+        if (row) ensureRowSelectedForContextMenu(row);
+
+        if (selectedItems.size > 1) {
+            const count = selectedItems.size;
+            show(e.clientX, e.clientY, [
+                { label: `Move ${count} items…`, onClick: () => openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: currentFolderId }) },
+                { label: `Delete ${count} items`, danger: true, onClick: () => openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: currentFolderId }) },
+                { type: "divider" },
+                { label: "Clear selection", onClick: () => clearSelection() },
+                { label: "Refresh", onClick: () => window.refreshFiles() },
+            ]);
+            return;
+        }
 
 	        if (type === "folder") {
 	            const folderID = row.dataset.id;
@@ -1556,6 +1848,7 @@ window.refreshFiles = function() {
     const folderEpoch = folderSizeEpoch;
     folderSizeCache = new Map();
     folderSizeInFlight = new Map();
+    clearSelection();
 
     list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
     if (storageUsed) {
@@ -1649,12 +1942,14 @@ window.refreshFiles = function() {
 
                 row.addEventListener("dblclick", () => navigateToFolder(folder.id, folder.name));
                 row.addEventListener("click", (e) => {
-                    if (e.target.closest("button.open-folder")) {
-                        navigateToFolder(folder.id, folder.name);
-                    }
+                    if (e.target.closest("button.open-folder")) return navigateToFolder(folder.id, folder.name);
                     if (e.target.closest("button.delete-folder")) {
-                        window.initDeleteFolder(folder.id, folder.name);
+                        if (selectedItems.size > 1 && row.classList.contains("is-selected")) {
+                            return openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: currentFolderId });
+                        }
+                        return window.initDeleteFolder(folder.id, folder.name);
                     }
+                    handleRowSelection(row, e);
                 });
 
                 const folderNameEl = row.querySelector(".row-name");
@@ -1773,8 +2068,19 @@ window.refreshFiles = function() {
                 }
 	                const deleteBtn = row.querySelector("button.delete");
 	                if (deleteBtn) {
-	                    deleteBtn.addEventListener("click", () => window.initDelete(file.id, file.name));
+	                    deleteBtn.addEventListener("click", () => {
+	                        if (selectedItems.size > 1 && row.classList.contains("is-selected")) {
+	                            openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: currentFolderId });
+	                            return;
+	                        }
+	                        window.initDelete(file.id, file.name);
+	                    });
 	                }
+
+                    row.addEventListener("click", (e) => {
+                        if (e.target.closest("button")) return;
+                        handleRowSelection(row, e);
+                    });
 
 		                const nameEl = row.querySelector(".row-name");
 		                if (nameEl) {
