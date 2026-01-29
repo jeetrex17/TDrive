@@ -15,6 +15,7 @@ export const state = {
     downloadProgressEl: null,
     downloadProgressFillEl: null,
     downloadProgressHideTimeout: null,
+    downloadTransfer: null,
 
     // Auth
     lastLoginPhoneNumber: "",

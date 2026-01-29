@@ -98,7 +98,7 @@ export function setupContextMenu() {
             const fileSource = row.dataset.source || "fs";
             const canDelete = row.dataset.canDelete === "true";
             const items = [
-                { label: "Download", onClick: () => window.initDownload(fileID) },
+                { label: "Download", onClick: () => window.initDownload(fileID, fileName) },
             ];
             if (fileSource === "fs") {
                 items.push(

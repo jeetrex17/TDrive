@@ -413,7 +413,7 @@ export function refreshFiles() {
 
                 const downloadBtn = row.querySelector("button.download");
                 if (downloadBtn) {
-                    downloadBtn.addEventListener("click", () => window.initDownload(file.id));
+                    downloadBtn.addEventListener("click", () => window.initDownload(file.id, file.name));
                 }
 
                 row.addEventListener("click", (e) => {
@@ -472,15 +472,18 @@ export function refreshFiles() {
 export function setupFileListWindowBindings() {
     window.refreshFiles = refreshFiles;
 
-    window.initDownload = function(id) {
+    window.initDownload = function(id, name) {
         const status = document.getElementById("status-msg");
         state.activeTransfer = "download";
         if (status) status.innerText = "Downloading…";
 
-        showDownloadProgress(0);
+        showDownloadProgress(0, name);
+
+        let succeeded = false;
 
         DownloadFile(id)
             .then((res) => {
+                succeeded = true;
                 alert(res);
             })
             .catch((err) => {
@@ -489,7 +492,7 @@ export function setupFileListWindowBindings() {
             })
             .finally(() => {
                 if (state.activeTransfer === "download") state.activeTransfer = null;
-                hideDownloadProgress();
+                hideDownloadProgress(succeeded ? "done" : "failed");
                 if (status) status.innerText = "Ready";
             });
     };
