@@ -8,9 +8,9 @@ import { openRenameModal } from './modals/rename.js';
 import { navigateToFolder } from './navigation.js';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop.js';
 import {
-    GetFileList, DownloadFile, DeleteFile, GetStorageUsed
+    GetFileList, DeleteFile, GetStorageUsed
 } from '../../wailsjs/go/main/App';
-import { showDownloadProgress, hideDownloadProgress } from './transfers.js';
+import { enqueueDownload } from './transfers.js';
 
 export async function getFolderContents(parentID) {
     if (window.go?.main?.App?.GetFolderContents) {
@@ -413,7 +413,7 @@ export function refreshFiles() {
 
                 const downloadBtn = row.querySelector("button.download");
                 if (downloadBtn) {
-                    downloadBtn.addEventListener("click", () => window.initDownload(file.id, file.name));
+                    downloadBtn.addEventListener("click", () => window.initDownload(file.id, file.name, file.size));
                 }
 
                 row.addEventListener("click", (e) => {
@@ -472,29 +472,8 @@ export function refreshFiles() {
 export function setupFileListWindowBindings() {
     window.refreshFiles = refreshFiles;
 
-    window.initDownload = function(id, name) {
-        const status = document.getElementById("status-msg");
-        state.activeTransfer = "download";
-        if (status) status.innerText = "Downloading…";
-
-        showDownloadProgress(0, name);
-
-        let succeeded = false;
-
-        DownloadFile(id)
-            .then((res) => {
-                succeeded = true;
-                alert(res);
-            })
-            .catch((err) => {
-                console.error("Download failed:", err);
-                alert("Download failed. Check console/logs.");
-            })
-            .finally(() => {
-                if (state.activeTransfer === "download") state.activeTransfer = null;
-                hideDownloadProgress(succeeded ? "done" : "failed");
-                if (status) status.innerText = "Ready";
-            });
+    window.initDownload = function(id, name, size) {
+        enqueueDownload(id, name, size);
     };
 
     // Note: window.initDelete and window.initDeleteFolder are set up in main.js

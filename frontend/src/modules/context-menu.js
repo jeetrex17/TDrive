@@ -95,10 +95,11 @@ export function setupContextMenu() {
         if (type === "file") {
             const fileID = parseInt(row.dataset.id, 10);
             const fileName = row.dataset.name || "";
+            const fileSize = Number(row.dataset.size || 0);
             const fileSource = row.dataset.source || "fs";
             const canDelete = row.dataset.canDelete === "true";
             const items = [
-                { label: "Download", onClick: () => window.initDownload(fileID, fileName) },
+                { label: "Download", onClick: () => window.initDownload(fileID, fileName, fileSize) },
             ];
             if (fileSource === "fs") {
                 items.push(
@@ -106,7 +107,6 @@ export function setupContextMenu() {
                     { label: "Move to…", onClick: () => openMoveModal({ type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }) },
                 );
             } else {
-                const fileSize = Number(row.dataset.size || 0);
                 items.push(
                     { label: "Rename…", onClick: () => openRenameModal({ type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" }) },
                     { label: "Move to…", onClick: () => openMoveModal({ type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" }) },

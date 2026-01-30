@@ -573,9 +573,6 @@ func (a *App) DownloadFile(msgID int) string {
 		savePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 			DefaultFilename: originalName,
 			Title:           "Save File As...",
-			Filters: []runtime.FileFilter{
-				{DisplayName: "All Files", Pattern: "*.*"},
-			},
 		})
 
 		if err != nil || savePath == "" {

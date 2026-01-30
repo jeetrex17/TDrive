@@ -2,28 +2,21 @@
 
 import { state } from '../state.js';
 import { escapeHtml } from '../utils.js';
-import { SelectFiles } from '../../wailsjs/go/main/App';
+import { SelectFiles, DownloadFile } from '../../wailsjs/go/main/App';
 
-export function showDownloadProgress(percent, name) {
+export function showDownloadProgress(percent) {
     const value = Number(percent);
     if (!Number.isFinite(value)) return;
+    const activeId = state.activeDownloadId;
+    if (activeId === null || activeId === undefined) return;
+
+    const item = (state.downloadQueue || []).find((entry) => entry.id === activeId);
+    if (!item) return;
 
     const clamped = Math.max(0, Math.min(100, value));
-    const label = String(name || "");
-
-    if (!state.downloadTransfer) {
-        state.downloadTransfer = {
-            name: label || "Download",
-            progress: 0,
-            state: "downloading",
-        };
-    }
-
-    if (label) state.downloadTransfer.name = label;
-    state.downloadTransfer.progress = clamped;
-    state.downloadTransfer.state = "downloading";
-
-    renderDownloadTransfer();
+    item.progress = clamped;
+    item.state = "downloading";
+    renderDownloadItem(item);
     updateTransferPill();
 
     if (state.downloadProgressHideTimeout) {
@@ -38,17 +31,10 @@ export function showDownloadProgress(percent, name) {
     }
 }
 
-export function hideDownloadProgress(status) {
+export function hideDownloadProgress() {
     if (state.downloadProgressHideTimeout) {
         clearTimeout(state.downloadProgressHideTimeout);
         state.downloadProgressHideTimeout = null;
-    }
-
-    if (state.downloadTransfer) {
-        state.downloadTransfer.progress = 100;
-        state.downloadTransfer.state = status === "failed" ? "failed" : "done";
-        renderDownloadTransfer();
-        updateTransferPill();
     }
 
     if (state.downloadProgressEl && state.downloadProgressFillEl) {
@@ -64,7 +50,7 @@ export function setupDownloadProgress() {
     if (!window.runtime?.EventsOn) return;
 
     window.runtime.EventsOn("download_progress", (percent) => {
-        if (state.activeTransfer !== "download") return;
+        if (!state.downloadQueue || state.activeDownloadId === null || state.activeDownloadId === undefined) return;
         const value = Number(percent);
         if (!Number.isFinite(value)) return;
 
@@ -76,18 +62,37 @@ export function setupDownloadProgress() {
     });
 }
 
+function getDownloadCounts() {
+    const items = Array.isArray(state.downloadQueue) ? state.downloadQueue : [];
+    let total = items.length;
+    let done = 0;
+    let failed = 0;
+    let queued = 0;
+    let downloading = 0;
+
+    items.forEach((item) => {
+        const status = String(item?.state || "queued");
+        if (status === "done") done += 1;
+        else if (status === "failed") failed += 1;
+        else if (status === "downloading") downloading += 1;
+        else queued += 1;
+    });
+
+    return { total, done, failed, queued, downloading };
+}
+
 export function updateTransferPill() {
     if (!state.transferPillEl) return;
     const hasUploads = state.uploadTransfers && state.uploadTransfers.size > 0;
     const hasBatch = Boolean(state.uploadBatch);
-    const hasDownload = Boolean(state.downloadTransfer);
-    const downloadState = state.downloadTransfer?.state || "";
+    const downloadCounts = getDownloadCounts();
+    const hasDownloads = downloadCounts.total > 0;
 
     state.transferPillEl.style.display = "inline-flex";
-    state.transferPillEl.classList.toggle("is-idle", !hasUploads && !hasBatch && !hasDownload);
-    state.transferPillEl.classList.toggle("is-active", hasBatch || downloadState === "downloading");
+    state.transferPillEl.classList.toggle("is-idle", !hasUploads && !hasBatch && !hasDownloads);
+    state.transferPillEl.classList.toggle("is-active", hasBatch || downloadCounts.downloading > 0);
 
-    if (!hasUploads && !hasBatch && !hasDownload) {
+    if (!hasUploads && !hasBatch && !hasDownloads) {
         state.transferPillEl.classList.remove("is-error");
         state.transferPillEl.innerHTML = `<span class="transfer-pill-dot" aria-hidden="true"></span><span class="transfer-pill-label"></span>`;
         if (state.transferClearEl) state.transferClearEl.style.display = "none";
@@ -111,33 +116,38 @@ export function updateTransferPill() {
         total = state.uploadTransfers.size;
     }
 
-    const hasFailures = failed > 0 || downloadState === "failed";
+    const uploadFailed = failed;
+    const downloadFailed = downloadCounts.failed;
+    const hasFailures = uploadFailed > 0 || downloadFailed > 0;
     state.transferPillEl.classList.toggle("is-error", hasFailures);
 
     let label = "";
-    if (hasUploads || hasBatch) {
-        const uploadLabel = state.uploadBatch ? `Uploading ${done}/${total}` : hasFailures ? `Uploads finished (${failed} failed)` : "Uploads";
-        if (downloadState === "downloading") {
-            label = `${uploadLabel} · Downloading`;
+    const uploadLabel = (hasUploads || hasBatch)
+        ? (state.uploadBatch ? `Uploading ${done}/${total}` : uploadFailed > 0 ? `Uploads finished (${uploadFailed} failed)` : "Uploads")
+        : "";
+
+    let downloadLabel = "";
+    if (hasDownloads) {
+        if (downloadCounts.downloading > 0) {
+            const current = Math.min(downloadCounts.done + downloadCounts.failed + 1, downloadCounts.total);
+            downloadLabel = `Downloading ${current}/${downloadCounts.total}`;
+        } else if (downloadCounts.queued > 0) {
+            downloadLabel = `Downloads queued (${downloadCounts.queued})`;
+        } else if (downloadFailed > 0) {
+            downloadLabel = `Downloads finished (${downloadFailed} failed)`;
         } else {
-            label = uploadLabel;
-        }
-    } else if (hasDownload) {
-        if (downloadState === "downloading") {
-            const progress = Math.round(Number(state.downloadTransfer?.progress || 0));
-            label = `Downloading ${progress}%`;
-        } else if (downloadState === "failed") {
-            label = "Download failed";
-        } else {
-            label = "Download complete";
+            downloadLabel = "Downloads finished";
         }
     }
+
+    if (uploadLabel && downloadLabel) label = `${uploadLabel} · ${downloadLabel}`;
+    else label = uploadLabel || downloadLabel || "";
 
     state.transferPillEl.innerHTML = `<span class="transfer-pill-dot" aria-hidden="true"></span><span class="transfer-pill-label">${escapeHtml(label)}</span>`;
 
     const uploadsDone = !hasUploads ? true : (done + failed >= total && total > 0);
-    const downloadDone = !hasDownload || downloadState !== "downloading";
-    const allDone = uploadsDone && downloadDone;
+    const downloadsDone = !hasDownloads || downloadCounts.downloading === 0 && downloadCounts.queued === 0;
+    const allDone = uploadsDone && downloadsDone;
     if (state.transferClearEl) state.transferClearEl.style.display = allDone ? "inline-flex" : "none";
 }
 
@@ -146,10 +156,11 @@ export function renderTransferItem(uploadId) {
     const item = state.uploadTransfers.get(uploadId);
     if (!item) return;
 
-    let el = state.transferUploadListEl.querySelector(`.transfer-item[data-id="${uploadId}"]`);
+    let el = state.transferUploadListEl.querySelector(`.transfer-item[data-type="upload"][data-id="${uploadId}"]`);
     if (!el) {
         el = document.createElement("div");
         el.className = "transfer-item";
+        el.dataset.type = "upload";
         el.dataset.id = String(uploadId);
         el.innerHTML = `
             <div class="transfer-item-fill"></div>
@@ -180,22 +191,18 @@ export function renderTransferItem(uploadId) {
     el.classList.toggle("is-queued", item.state === "queued");
 }
 
-export function renderDownloadTransfer() {
-    if (!state.transferUploadListEl) return;
+export function renderDownloadItem(item) {
+    if (!state.transferUploadListEl || !item) return;
     const list = state.transferUploadListEl;
-    const item = state.downloadTransfer;
-    const existing = list.querySelector('.transfer-item[data-type="download"]');
+    const id = Number(item.id);
+    const selector = `.transfer-item[data-type="download"][data-id="${id}"]`;
 
-    if (!item) {
-        if (existing) existing.remove();
-        return;
-    }
-
-    let el = existing;
+    let el = list.querySelector(selector);
     if (!el) {
         el = document.createElement("div");
         el.className = "transfer-item";
         el.dataset.type = "download";
+        el.dataset.id = String(id);
         el.innerHTML = `
             <div class="transfer-item-fill"></div>
             <div class="transfer-item-content">
@@ -215,12 +222,81 @@ export function renderDownloadTransfer() {
     if (nameEl) nameEl.textContent = item.name || "Download";
 
     let meta = `${Math.round(progress)}%`;
+    if (item.state === "queued") meta = "Queued";
     if (item.state === "done") meta = "Done";
     if (item.state === "failed") meta = "Failed";
     if (metaEl) metaEl.textContent = meta;
 
     el.classList.toggle("is-done", item.state === "done");
     el.classList.toggle("is-failed", item.state === "failed");
+    el.classList.toggle("is-queued", item.state === "queued");
+}
+
+async function startNextDownload() {
+    if (state.activeDownloadId !== null && state.activeDownloadId !== undefined) return;
+    const queue = Array.isArray(state.downloadQueue) ? state.downloadQueue : [];
+    const next = queue.find((entry) => String(entry?.state || "queued") === "queued");
+    if (!next) return;
+
+    state.activeDownloadId = next.id;
+    next.state = "downloading";
+    next.progress = Math.max(0, Math.min(100, Number(next.progress) || 0));
+    renderDownloadItem(next);
+    updateTransferPill();
+
+    const status = document.getElementById("status-msg");
+    if (status) status.innerText = "Downloading…";
+
+    try {
+        const res = await DownloadFile(Number(next.id));
+        alert(res);
+        next.state = "done";
+        next.progress = 100;
+    } catch (err) {
+        console.error("Download failed:", err);
+        alert("Download failed. Check console/logs.");
+        next.state = "failed";
+        next.progress = 100;
+    } finally {
+        state.activeDownloadId = null;
+        renderDownloadItem(next);
+        updateTransferPill();
+        hideDownloadProgress();
+        if (status) status.innerText = "Ready";
+        startNextDownload();
+    }
+}
+
+export function enqueueDownload(id, name, size) {
+    const downloadId = Number(id);
+    if (!Number.isFinite(downloadId)) return;
+    if (!Array.isArray(state.downloadQueue)) state.downloadQueue = [];
+
+    const label = String(name || "Download");
+    const existing = state.downloadQueue.find((entry) => entry.id === downloadId);
+    if (existing) {
+        existing.name = existing.name || label;
+        existing.size = Number(size) || existing.size || 0;
+        existing.progress = 0;
+        existing.state = "queued";
+        renderDownloadItem(existing);
+        updateTransferPill();
+        if (state.activeDownloadId === null || state.activeDownloadId === undefined) startNextDownload();
+        return;
+    }
+
+    const item = {
+        id: downloadId,
+        name: label,
+        size: Number(size) || 0,
+        progress: 0,
+        state: "queued",
+    };
+
+    state.downloadQueue.push(item);
+    renderDownloadItem(item);
+    updateTransferPill();
+    if (state.activeDownloadId === null || state.activeDownloadId === undefined) startNextDownload();
 }
 
 export function setupUploadProgress() {
@@ -234,7 +310,10 @@ export function setupUploadProgress() {
     if (state.transferPillEl) {
         state.transferPillEl.addEventListener("click", () => {
             if (!state.transferSheetEl) return;
-            if ((!state.uploadTransfers || state.uploadTransfers.size === 0) && !state.uploadBatch) return;
+            const hasUploads = state.uploadTransfers && state.uploadTransfers.size > 0;
+            const hasBatch = Boolean(state.uploadBatch);
+            const hasDownloads = Array.isArray(state.downloadQueue) && state.downloadQueue.length > 0;
+            if (!hasUploads && !hasBatch && !hasDownloads) return;
             const isOpen = state.transferSheetEl.style.display !== "none";
             state.transferSheetEl.style.display = isOpen ? "none" : "block";
             state.transferPillEl.setAttribute("aria-expanded", isOpen ? "false" : "true");
@@ -260,7 +339,8 @@ export function setupUploadProgress() {
         state.transferClearEl.addEventListener("click", () => {
             state.uploadTransfers = new Map();
             state.uploadBatch = null;
-            state.downloadTransfer = null;
+            state.downloadQueue = [];
+            state.activeDownloadId = null;
             if (state.transferUploadListEl) state.transferUploadListEl.innerHTML = "";
             updateTransferPill();
             if (state.transferSheetEl) state.transferSheetEl.style.display = "none";
@@ -387,7 +467,9 @@ export async function uploadWithParentID(parentID) {
         });
     }
     state.uploadTransfers = nextTransfers;
-    if (state.transferUploadListEl) state.transferUploadListEl.innerHTML = "";
+    if (state.transferUploadListEl) {
+        state.transferUploadListEl.querySelectorAll('.transfer-item[data-type="upload"]').forEach((el) => el.remove());
+    }
     for (let i = 0; i < paths.length; i++) renderTransferItem(i);
     updateTransferPill();
 
@@ -396,7 +478,9 @@ export async function uploadWithParentID(parentID) {
         state.activeTransfer = null;
         state.uploadBatch = null;
         state.uploadTransfers = new Map();
-        if (state.transferUploadListEl) state.transferUploadListEl.innerHTML = "";
+        if (state.transferUploadListEl) {
+            state.transferUploadListEl.querySelectorAll('.transfer-item[data-type="upload"]').forEach((el) => el.remove());
+        }
         updateTransferPill();
         alert("UploadToDriveFS is missing in backend. Rebuild the app (wails dev/build) and try again.");
         return;
