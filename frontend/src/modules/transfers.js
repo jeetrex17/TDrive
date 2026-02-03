@@ -248,7 +248,7 @@ async function startNextDownload() {
     if (status) status.innerText = "Downloading…";
 
     try {
-        const res = await DownloadFile(Number(next.id));
+        const res = await DownloadFile(Number(next.id), Number(next.id));
         alert(res);
         next.state = "done";
         next.progress = 100;

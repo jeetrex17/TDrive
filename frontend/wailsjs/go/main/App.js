@@ -22,8 +22,8 @@ export function DeleteFolder(arg1) {
   return window['go']['main']['App']['DeleteFolder'](arg1);
 }
 
-export function DownloadFile(arg1) {
-  return window['go']['main']['App']['DownloadFile'](arg1);
+export function DownloadFile(arg1, arg2) {
+  return window['go']['main']['App']['DownloadFile'](arg1, arg2);
 }
 
 export function GetCodech() {

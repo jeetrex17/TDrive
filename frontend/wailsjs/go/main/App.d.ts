@@ -13,7 +13,7 @@ export function DeleteFile(arg1:number):Promise<string>;
 
 export function DeleteFolder(arg1:string):Promise<string>;
 
-export function DownloadFile(arg1:number):Promise<string>;
+export function DownloadFile(arg1:number,arg2:number):Promise<string>;
 
 export function GetCodech():Promise<any>;
 

@@ -508,7 +508,7 @@ func (pw *ProgressWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func (a *App) DownloadFile(msgID int) string {
+func (a *App) DownloadFile(msgID int, TgMsgID int) string {
 	channelid, err := auth.LoadConfig()
 	if err != nil || channelid == 0 {
 		return "Error: Drive ID not found"
@@ -563,10 +563,22 @@ func (a *App) DownloadFile(msgID int) string {
 			return nil
 		}
 
+		/*
+			originalName := "tdrive_download"
+			for _, attr := range doc.Attributes {
+				if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
+					originalName = fname.FileName
+				}
+			}
+		*/
+
 		originalName := "tdrive_download"
-		for _, attr := range doc.Attributes {
-			if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
-				originalName = fname.FileName
+		if backend.CurrentFS != nil {
+			for _, file := range backend.CurrentFS.Files {
+				if file.TgMsgID == TgMsgID {
+					originalName = file.Name
+					break
+				}
 			}
 		}
 
