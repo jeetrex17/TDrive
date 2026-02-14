@@ -10,6 +10,7 @@ import { setupBreadcrumb } from './modules/navigation.js';
 import { setupContextMenu } from './modules/context-menu.js';
 import { setupPasswordReveal, setupAuthWindowBindings, checkStatusAndShowScreen } from './modules/auth.js';
 import { setupFileListWindowBindings, refreshFiles } from './modules/file-list.js';
+import { setupSearchBar, runGlobalSearch } from './modules/search.js';
 
 // Import modal setup functions
 import { setupDeleteModal, openDeleteModal } from './modules/modals/delete.js';
@@ -19,6 +20,13 @@ import { setupFolderModal, openNewFolderModal } from './modules/modals/folder.js
 
 // Setup window bindings that need to be available globally
 window.refreshFiles = refreshFiles;
+window.triggerRefresh = function() {
+    if (String(state.searchQuery || "").trim()) {
+        runGlobalSearch();
+        return;
+    }
+    refreshFiles();
+};
 window.openNewFolderModal = openNewFolderModal;
 window.selectFile = function() {
     uploadWithParentID(state.currentFolderId);
@@ -47,6 +55,7 @@ window.onload = async function() {
     setupDownloadProgress();
     setupUploadProgress();
     setupPasswordReveal();
+    setupSearchBar();
 
     // Setup window bindings
     setupAuthWindowBindings();

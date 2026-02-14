@@ -3,7 +3,7 @@
 import { state, resetFolderCaches } from '../state.js';
 import { icons } from '../constants.js';
 import { escapeHtml, splitNameAndExt, formatDate, formatBytes } from '../utils.js';
-import { clearSelection, handleRowSelection } from './selection.js';
+import { clearSelection, handleRowSelection, selectRow } from './selection.js';
 import { openRenameModal } from './modals/rename.js';
 import { navigateToFolder } from './navigation.js';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop.js';
@@ -33,97 +33,24 @@ export async function createFolder(name, parentID) {
     throw new Error("CreateFolder is not available. Restart `wails dev` to regenerate bindings.");
 }
 
-export async function calculateFolderTotalBytes(folderID, epoch) {
+export async function calculateFolderTotalBytes(folderID) {
     const id = String(folderID || "");
     if (!id) return 0;
 
-    const cached = state.folderSizeCache.get(id);
-    if (typeof cached === "number") return cached;
-
-    const inFlight = state.folderSizeInFlight.get(id);
-    if (inFlight) return inFlight;
-
-    const promise = (async () => {
-        let total = 0;
-        const visited = new Set();
-        const queue = [id];
-
-        while (queue.length) {
-            const cur = queue.shift();
-            if (!cur || visited.has(cur)) continue;
-            visited.add(cur);
-
-            let contents;
-            try {
-                contents = await getFolderContents(cur);
-            } catch {
-                contents = { folders: [], files: [] };
-            }
-
-            const files = Array.isArray(contents?.files) ? contents.files : [];
-            for (const file of files) {
-                const size = Number(file?.size ?? 0);
-                if (Number.isFinite(size) && size > 0) total += size;
-            }
-
-            const folders = Array.isArray(contents?.folders) ? contents.folders : [];
-            for (const folder of folders) {
-                const next = String(folder?.id || "");
-                if (next) queue.push(next);
-            }
-        }
-
-        return total;
-    })();
-
-    state.folderSizeInFlight.set(id, promise);
-
-    try {
-        const bytes = await promise;
-        if (state.folderSizeEpoch === epoch) state.folderSizeCache.set(id, bytes);
-        return bytes;
-    } finally {
-        if (state.folderSizeEpoch === epoch) state.folderSizeInFlight.delete(id);
+    if (window.go?.main?.App?.GetFolderSize) {
+        const value = await window.go.main.App.GetFolderSize(id);
+        const bytes = Number(value);
+        return Number.isFinite(bytes) && bytes >= 0 ? bytes : 0;
     }
+    throw new Error("GetFolderSize is not available. Restart `wails dev` to regenerate bindings.");
 }
 
-async function collectAllFsMsgIDs(rootFS) {
-    const msgIDs = new Set();
-    const visitedFolders = new Set();
-    const queue = [];
-
-    const rootFiles = Array.isArray(rootFS?.files) ? rootFS.files : [];
-    rootFiles.forEach((file) => {
-        if (typeof file?.msg_id === "number") msgIDs.add(file.msg_id);
-    });
-
-    const rootFolders = Array.isArray(rootFS?.folders) ? rootFS.folders : [];
-    rootFolders.forEach((folder) => {
-        if (folder?.id) queue.push(folder.id);
-    });
-
-    while (queue.length) {
-        const folderID = queue.shift();
-        if (!folderID || visitedFolders.has(folderID)) continue;
-        visitedFolders.add(folderID);
-
-        try {
-            const contents = await getFolderContents(folderID);
-            const files = Array.isArray(contents?.files) ? contents.files : [];
-            const folders = Array.isArray(contents?.folders) ? contents.folders : [];
-
-            files.forEach((file) => {
-                if (typeof file?.msg_id === "number") msgIDs.add(file.msg_id);
-            });
-            folders.forEach((folder) => {
-                if (folder?.id) queue.push(folder.id);
-            });
-        } catch (err) {
-            console.error("collectAllFsMsgIDs: GetFolderContents failed for", folderID, err);
-        }
+async function getAllFsMsgIDs() {
+    if (window.go?.main?.App?.GetAllFsMsgIDs) {
+        const ids = await window.go.main.App.GetAllFsMsgIDs();
+        return Array.isArray(ids) ? ids : [];
     }
-
-    return msgIDs;
+    throw new Error("GetAllFsMsgIDs is not available. Restart `wails dev` to regenerate bindings.");
 }
 
 export async function buildFolderIndex() {
@@ -240,6 +167,7 @@ export function refreshFiles() {
         const folders = Array.isArray(fs?.folders) ? fs.folders : [];
         const fsFiles = Array.isArray(fs?.files) ? fs.files : [];
         const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
+        if (requestedFolderId === "") state.telegramRootCache = telegramFiles;
 
         const fsFileItems = fsFiles.map((f) => ({
             source: "fs",
@@ -250,7 +178,17 @@ export function refreshFiles() {
         }));
 
         const finalize = async () => {
-            const fsIDs = requestedFolderId === "" ? await collectAllFsMsgIDs(fs) : new Set(fsFileItems.map((f) => f.id));
+            let fsIDs;
+            if (requestedFolderId === "") {
+                try {
+                    fsIDs = new Set((await getAllFsMsgIDs()).filter((id) => typeof id === "number"));
+                } catch (err) {
+                    console.error("GetAllFsMsgIDs failed:", err);
+                    fsIDs = new Set();
+                }
+            } else {
+                fsIDs = new Set(fsFileItems.map((f) => f.id));
+            }
 
             const tgFileItems = telegramFiles
                 .filter((f) => !fsIDs.has(f.id))
@@ -371,7 +309,7 @@ export function refreshFiles() {
 
                 const sizeEl = row.querySelector(".folder-size");
                 if (sizeEl) {
-                    calculateFolderTotalBytes(folder.id, folderEpoch)
+                    calculateFolderTotalBytes(folder.id)
                         .then((bytes) => {
                             if (state.folderSizeEpoch !== folderEpoch) return;
                             if (state.currentFolderId !== requestedFolderId) return;
@@ -463,6 +401,21 @@ export function refreshFiles() {
                 }
                 list.appendChild(row);
             });
+
+            if (state.pendingFocus && state.pendingFocus.type === "file") {
+                const targetID = String(state.pendingFocus.id || "");
+                const targetRow = targetID ? list.querySelector(`.drive-row[data-type="file"][data-id="${targetID}"]`) : null;
+                state.pendingFocus = null;
+                if (targetRow) {
+                    const rows = Array.from(list.querySelectorAll(".drive-row"));
+                    const idx = rows.indexOf(targetRow);
+                    clearSelection();
+                    if (idx >= 0) selectRow(targetRow, idx);
+                    try {
+                        targetRow.scrollIntoView({ block: "center" });
+                    } catch {}
+                }
+            }
         };
 
         finalize();

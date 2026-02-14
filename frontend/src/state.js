@@ -34,14 +34,16 @@ export const state = {
     dragOverEl: null,
     dragRootEl: null,
 
+    searchQuery: "",
+    telegramRootCache: null,
+    pendingFocus: null, // { type: "file", id: string }
+
     // Folder index cache
     folderIndexCache: null,
     folderIndexBuildPromise: null,
 
     // Folder size cache
     folderSizeEpoch: 0,
-    folderSizeCache: new Map(), // folderID -> bytes
-    folderSizeInFlight: new Map(), // folderID -> Promise<number>
 
     // Selection
     selectedItems: new Map(), // key -> { type, id, name, size, source, parentId, row }
@@ -56,8 +58,6 @@ export const state = {
 // Helper to reset folder caches (called on refresh)
 export function resetFolderCaches() {
     state.folderSizeEpoch += 1;
-    state.folderSizeCache = new Map();
-    state.folderSizeInFlight = new Map();
 }
 
 // Helper to reset selection

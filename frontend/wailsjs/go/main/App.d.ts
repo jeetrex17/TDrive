@@ -15,11 +15,15 @@ export function DeleteFolder(arg1:string):Promise<string>;
 
 export function DownloadFile(arg1:number,arg2:number):Promise<string>;
 
+export function GetAllFsMsgIDs():Promise<Array<number>>;
+
 export function GetCodech():Promise<any>;
 
 export function GetFileList():Promise<Array<main.TDriveFile>>;
 
 export function GetFolderContents(arg1:string):Promise<backend.FileSystem>;
+
+export function GetFolderSize(arg1:string):Promise<number>;
 
 export function GetPassch():Promise<any>;
 
@@ -42,6 +46,8 @@ export function RenameFile(arg1:number,arg2:string):Promise<string>;
 export function RenameFolder(arg1:string,arg2:string):Promise<string>;
 
 export function SaveSetup(arg1:number,arg2:string):Promise<string>;
+
+export function Search(arg1:string,arg2:number):Promise<Array<backend.SearchResult>>;
 
 export function SelectFiles():Promise<Array<string>>;
 

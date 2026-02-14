@@ -31,7 +31,7 @@ Files you’ll see there:
 - `imp_config.json` → Telegram API ID + Hash (from the setup screen)
 - `session.json` → Telegram login session
 - `config.json` → Drive channel id (`channel_id`)
-- `tdrive_system.json` → Local filesystem metadata (folders + which file is in which folder)
+- `tdrive.db` → Local filesystem metadata (folders + which file is in which folder)
 
 ## Run (dev)
 

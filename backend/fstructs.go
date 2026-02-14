@@ -18,3 +18,13 @@ type FileSystem struct {
 	Folders []Folder       `json:"folders"`
 	Files   []FileMetaData `json:"files"`
 }
+
+type SearchResult struct {
+	Type       string `json:"type"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ParentID   string `json:"parent_id"`
+	Size       int64  `json:"size"`
+	UploadTime int64  `json:"upload_time"`
+	Path       string `json:"path"`
+}

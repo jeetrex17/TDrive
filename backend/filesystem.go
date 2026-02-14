@@ -1,3 +1,6 @@
+//go:build jsonfs
+// +build jsonfs
+
 package backend
 
 import (

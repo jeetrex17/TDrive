@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"math/rand"
@@ -15,6 +16,7 @@ import (
 
 	"TDrive/backend"
 
+	"github.com/google/uuid"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
@@ -205,8 +207,8 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 	if len(filePaths) != len(parentIDs) {
 		return nil, fmt.Errorf("filepaths and parentIDs length mismatch")
 	}
-	if backend.CurrentFS == nil {
-		return nil, fmt.Errorf("filesystem not ready")
+	if backend.DB == nil {
+		return nil, fmt.Errorf("db not ready")
 	}
 
 	sem := make(chan struct{}, 3)
@@ -237,7 +239,6 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 			}
 
 			mu.Lock()
-			backend.CurrentFS.AddFile(meta.Name, meta.Size, meta.TgMsgID, meta.ParentID)
 			uploadedFiles = append(uploadedFiles, meta)
 			mu.Unlock()
 		}(uploadID, path, pid)
@@ -245,7 +246,26 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 
 	wg.Wait()
 
-	_ = backend.SaveTdriveFS()
+	tx, err := backend.DB.Begin()
+	if err != nil {
+		return uploadedFiles, err
+	}
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO files (msg_id, name, size, parent_id, upload_time) VALUES (?, ?, ?, ?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return uploadedFiles, err
+	}
+	for _, meta := range uploadedFiles {
+		if _, err := stmt.Exec(meta.TgMsgID, meta.Name, meta.Size, meta.ParentID, meta.UploadTime); err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return uploadedFiles, err
+		}
+	}
+	_ = stmt.Close()
+	if err := tx.Commit(); err != nil {
+		return uploadedFiles, err
+	}
 
 	if failed > 0 {
 		return uploadedFiles, fmt.Errorf("%d uploads failed", failed)
@@ -573,11 +593,16 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) string {
 		*/
 
 		originalName := "tdrive_download"
-		if backend.CurrentFS != nil {
-			for _, file := range backend.CurrentFS.Files {
-				if file.TgMsgID == TgMsgID {
-					originalName = file.Name
-					break
+		lookupID := msgID
+		if TgMsgID != 0 {
+			lookupID = TgMsgID
+		}
+		if backend.DB != nil {
+			var name string
+			if err := backend.DB.QueryRow(`SELECT name FROM files WHERE msg_id = ?`, lookupID).Scan(&name); err == nil {
+				name = strings.TrimSpace(name)
+				if name != "" {
+					originalName = name
 				}
 			}
 		}
@@ -626,8 +651,8 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) string {
 }
 
 func (a *App) DeleteFile(msgID int) string {
-	if backend.CurrentFS == nil {
-		return "Error: FileSystem not ready"
+	if backend.DB == nil {
+		return "Error: DB not ready"
 	}
 
 	channelid, err := auth.LoadConfig()
@@ -660,42 +685,27 @@ func (a *App) DeleteFile(msgID int) string {
 		return "Telegram Error: " + err.Error()
 	}
 
-	newFilesList := []backend.FileMetaData{}
-	found := false
-
-	for _, file := range backend.CurrentFS.Files {
-		if file.TgMsgID == msgID {
-			found = true
-			continue
-		}
-		newFilesList = append(newFilesList, file)
-	}
-
-	if !found {
-		return "deleted from tg, but not from local json."
-	}
-
-	backend.CurrentFS.Files = newFilesList
-
-	err = backend.SaveTdriveFS()
+	res, err := backend.DB.Exec(`DELETE FROM files WHERE msg_id = ?`, msgID)
 	if err != nil {
-		return "Deleted, but failed to save local config: " + err.Error()
+		return "Deleted, but failed to update local DB: " + err.Error()
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		return "Deleted from tg, but not found in local DB."
 	}
 
 	return "Success"
 }
 
 func (a *App) GetStorageUsed() (int64, error) {
-	if backend.CurrentFS == nil {
-		return 0, fmt.Errorf("filesystem not ready")
+	if backend.DB == nil {
+		return 0, fmt.Errorf("db not ready")
 	}
 
-	var totalSize int64
-	for _, file := range backend.CurrentFS.Files {
-		totalSize += file.Size
+	var total int64
+	if err := backend.DB.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM files`).Scan(&total); err != nil {
+		return 0, err
 	}
-
-	return totalSize, nil
+	return total, nil
 }
 
 func (a *App) GetCodech() chan string {
@@ -748,20 +758,41 @@ func (a *App) SumbitPassword(password string) {
 }
 
 func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, error) {
-	if backend.CurrentFS == nil {
-		return backend.Folder{}, fmt.Errorf("no cuurentFS folders")
+	if backend.DB == nil {
+		return backend.Folder{}, fmt.Errorf("db not ready")
 	}
 
-	for _, f := range backend.CurrentFS.Folders {
-		if f.ParentID == parentID && f.Name == foldername {
-			return backend.Folder{}, fmt.Errorf("folder '%s' already exists here", foldername)
+	foldername = strings.TrimSpace(foldername)
+	if foldername == "" {
+		return backend.Folder{}, fmt.Errorf("folder name can't be empty")
+	}
+
+	parentID = strings.TrimSpace(parentID)
+	if parentID != "" {
+		var tmp int
+		if err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE id = ? LIMIT 1`, parentID).Scan(&tmp); err != nil {
+			if err == sql.ErrNoRows {
+				return backend.Folder{}, fmt.Errorf("parent folder not found")
+			}
+			return backend.Folder{}, err
 		}
 	}
 
-	newFolder := backend.CurrentFS.AddFolder(foldername, parentID)
+	var tmp int
+	err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE parent_id = ? AND name = ? LIMIT 1`, parentID, foldername).Scan(&tmp)
+	if err == nil {
+		return backend.Folder{}, fmt.Errorf("folder '%s' already exists here", foldername)
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return backend.Folder{}, err
+	}
 
-	err := backend.SaveTdriveFS()
-	if err != nil {
+	newFolder := backend.Folder{
+		Name:     foldername,
+		ParentID: parentID,
+		ID:       uuid.NewString(),
+	}
+	if _, err := backend.DB.Exec(`INSERT INTO folders (id, name, parent_id) VALUES (?, ?, ?)`, newFolder.ID, newFolder.Name, newFolder.ParentID); err != nil {
 		return backend.Folder{}, err
 	}
 
@@ -771,6 +802,8 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	rand.Seed(time.Now().UnixNano())
+
 	ac, err := auth.Connect()
 	if err != nil {
 		fmt.Println("Warning: Telegram connect failed (offline?):", err)
@@ -778,66 +811,318 @@ func (a *App) startup(ctx context.Context) {
 		a.Client = ac
 	}
 
-	err = backend.LoadTdriveFs()
-	if err != nil {
-		fmt.Printf("Warning: Failed to load local filesystem: %v\n", err)
-	} else {
-		fmt.Println("TDrive FileSystem Loaded Successfully!")
+	if err := backend.InitDB(); err != nil {
+		fmt.Printf("Warning: Failed to init local db: %v\n", err)
+		return
 	}
+	if err := backend.EnsureSchema(); err != nil {
+		fmt.Printf("Warning: Failed to init db schema: %v\n", err)
+		return
+	}
+	fmt.Println("TDrive DB ready!")
 }
 
 func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
-	if backend.CurrentFS == nil {
-		return backend.FileSystem{}, fmt.Errorf(" FileSystem not ready")
+	if backend.DB == nil {
+		return backend.FileSystem{}, fmt.Errorf("db not ready")
 	}
 
-	var result backend.FileSystem
-	result.Folders = []backend.Folder{}
-	result.Files = []backend.FileMetaData{}
-
-	for _, f := range backend.CurrentFS.Folders {
-		if f.ParentID == parentID {
-			result.Folders = append(result.Folders, f)
-		}
+	result := backend.FileSystem{
+		Folders: []backend.Folder{},
+		Files:   []backend.FileMetaData{},
 	}
 
-	for _, f := range backend.CurrentFS.Files {
-		if f.ParentID == parentID {
-			result.Files = append(result.Files, f)
+	folderRows, err := backend.DB.Query(`SELECT id, name, parent_id FROM folders WHERE parent_id = ? ORDER BY name`, parentID)
+	if err != nil {
+		return backend.FileSystem{}, err
+	}
+	defer folderRows.Close()
+	for folderRows.Next() {
+		var folder backend.Folder
+		if err := folderRows.Scan(&folder.ID, &folder.Name, &folder.ParentID); err != nil {
+			return backend.FileSystem{}, err
 		}
+		result.Folders = append(result.Folders, folder)
+	}
+	if err := folderRows.Err(); err != nil {
+		return backend.FileSystem{}, err
+	}
+
+	fileRows, err := backend.DB.Query(`SELECT msg_id, name, size, parent_id, upload_time FROM files WHERE parent_id = ? ORDER BY upload_time DESC`, parentID)
+	if err != nil {
+		return backend.FileSystem{}, err
+	}
+	defer fileRows.Close()
+	for fileRows.Next() {
+		var file backend.FileMetaData
+		if err := fileRows.Scan(&file.TgMsgID, &file.Name, &file.Size, &file.ParentID, &file.UploadTime); err != nil {
+			return backend.FileSystem{}, err
+		}
+		result.Files = append(result.Files, file)
+	}
+	if err := fileRows.Err(); err != nil {
+		return backend.FileSystem{}, err
 	}
 
 	return result, nil
 }
 
-func collectDoomedIDs(targetFolderID string) (folderIDs []string, msgIDs []int) {
-	folderIDs = append(folderIDs, targetFolderID)
-
-	for _, f := range backend.CurrentFS.Files {
-		if f.ParentID == targetFolderID {
-			msgIDs = append(msgIDs, f.TgMsgID)
-		}
+func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
+	if backend.DB == nil {
+		return nil, fmt.Errorf("db not ready")
 	}
 
-	for _, f := range backend.CurrentFS.Folders {
-		if f.ParentID == targetFolderID {
-			subFolders, subFiles := collectDoomedIDs(f.ID)
-
-			folderIDs = append(folderIDs, subFolders...)
-			msgIDs = append(msgIDs, subFiles...)
-		}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []backend.SearchResult{}, nil
 	}
 
-	return folderIDs, msgIDs
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	folderMap := make(map[string]backend.Folder)
+	allFolders, err := backend.DB.Query(`SELECT id, name, parent_id FROM folders`)
+	if err != nil {
+		return nil, err
+	}
+	for allFolders.Next() {
+		var folder backend.Folder
+		if err := allFolders.Scan(&folder.ID, &folder.Name, &folder.ParentID); err != nil {
+			_ = allFolders.Close()
+			return nil, err
+		}
+		if folder.ID != "" {
+			folderMap[folder.ID] = folder
+		}
+	}
+	if err := allFolders.Err(); err != nil {
+		_ = allFolders.Close()
+		return nil, err
+	}
+	_ = allFolders.Close()
+
+	buildFolderPath := func(folderID string) string {
+		folderID = strings.TrimSpace(folderID)
+		if folderID == "" {
+			return "My Drive"
+		}
+
+		names := make([]string, 0, 8)
+		visited := make(map[string]bool)
+		cur := folderID
+
+		for cur != "" && !visited[cur] {
+			visited[cur] = true
+			folder, ok := folderMap[cur]
+			if !ok {
+				break
+			}
+			name := strings.TrimSpace(folder.Name)
+			if name != "" {
+				names = append(names, name)
+			}
+			cur = strings.TrimSpace(folder.ParentID)
+		}
+
+		if len(names) == 0 {
+			return "My Drive"
+		}
+
+		for i, j := 0, len(names)-1; i < j; i, j = i+1, j-1 {
+			names[i], names[j] = names[j], names[i]
+		}
+
+		return "My Drive / " + strings.Join(names, " / ")
+	}
+
+	pattern := "%" + query + "%"
+	results := make([]backend.SearchResult, 0, limit*2)
+
+	folderRows, err := backend.DB.Query(`SELECT id, name, parent_id FROM folders WHERE name LIKE ? COLLATE NOCASE ORDER BY name LIMIT ?`, pattern, limit)
+	if err != nil {
+		return nil, err
+	}
+	for folderRows.Next() {
+		var folder backend.Folder
+		if err := folderRows.Scan(&folder.ID, &folder.Name, &folder.ParentID); err != nil {
+			_ = folderRows.Close()
+			return nil, err
+		}
+		results = append(results, backend.SearchResult{
+			Type:     "folder",
+			ID:       folder.ID,
+			Name:     folder.Name,
+			ParentID: folder.ParentID,
+			Path:     buildFolderPath(folder.ID),
+		})
+	}
+	if err := folderRows.Err(); err != nil {
+		_ = folderRows.Close()
+		return nil, err
+	}
+	_ = folderRows.Close()
+
+	fileRows, err := backend.DB.Query(`SELECT msg_id, name, size, parent_id, upload_time FROM files WHERE name LIKE ? COLLATE NOCASE ORDER BY upload_time DESC LIMIT ?`, pattern, limit)
+	if err != nil {
+		return nil, err
+	}
+	for fileRows.Next() {
+		var file backend.FileMetaData
+		if err := fileRows.Scan(&file.TgMsgID, &file.Name, &file.Size, &file.ParentID, &file.UploadTime); err != nil {
+			_ = fileRows.Close()
+			return nil, err
+		}
+		results = append(results, backend.SearchResult{
+			Type:       "file",
+			ID:         fmt.Sprintf("%d", file.TgMsgID),
+			Name:       file.Name,
+			ParentID:   file.ParentID,
+			Size:       file.Size,
+			UploadTime: file.UploadTime,
+			Path:       buildFolderPath(file.ParentID),
+		})
+	}
+	if err := fileRows.Err(); err != nil {
+		_ = fileRows.Close()
+		return nil, err
+	}
+	_ = fileRows.Close()
+
+	return results, nil
+}
+
+func (a *App) GetAllFsMsgIDs() ([]int, error) {
+	if backend.DB == nil {
+		return nil, fmt.Errorf("db not ready")
+	}
+
+	rows, err := backend.DB.Query(`SELECT msg_id FROM files`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]int, 0, 512)
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (a *App) GetFolderSize(folderID string) (int64, error) {
+	if backend.DB == nil {
+		return 0, fmt.Errorf("db not ready")
+	}
+
+	folderID = strings.TrimSpace(folderID)
+	if folderID == "" {
+		return 0, fmt.Errorf("invalid folder id")
+	}
+
+	var tmp int
+	if err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE id = ? LIMIT 1`, folderID).Scan(&tmp); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, fmt.Errorf("folder not found")
+		}
+		return 0, err
+	}
+
+	var total int64
+	query := `
+WITH RECURSIVE descendants(id, path) AS (
+    SELECT ?, ',' || ? || ','
+    UNION ALL
+    SELECT f.id, d.path || f.id || ','
+    FROM folders f
+    JOIN descendants d ON f.parent_id = d.id
+    WHERE instr(d.path, ',' || f.id || ',') = 0
+)
+SELECT COALESCE(SUM(files.size), 0)
+FROM files
+JOIN descendants d ON files.parent_id = d.id;
+`
+	if err := backend.DB.QueryRow(query, folderID, folderID).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func collectDoomedIDsDB(targetFolderID string) (folderIDs []string, msgIDs []int, err error) {
+	visited := make(map[string]bool)
+	queue := []string{targetFolderID}
+
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if cur == "" || visited[cur] {
+			continue
+		}
+		visited[cur] = true
+		folderIDs = append(folderIDs, cur)
+
+		fileRows, err := backend.DB.Query(`SELECT msg_id FROM files WHERE parent_id = ?`, cur)
+		if err != nil {
+			return nil, nil, err
+		}
+		for fileRows.Next() {
+			var id int
+			if err := fileRows.Scan(&id); err != nil {
+				_ = fileRows.Close()
+				return nil, nil, err
+			}
+			msgIDs = append(msgIDs, id)
+		}
+		if err := fileRows.Err(); err != nil {
+			_ = fileRows.Close()
+			return nil, nil, err
+		}
+		_ = fileRows.Close()
+
+		folderRows, err := backend.DB.Query(`SELECT id FROM folders WHERE parent_id = ?`, cur)
+		if err != nil {
+			return nil, nil, err
+		}
+		for folderRows.Next() {
+			var id string
+			if err := folderRows.Scan(&id); err != nil {
+				_ = folderRows.Close()
+				return nil, nil, err
+			}
+			if id != "" && !visited[id] {
+				queue = append(queue, id)
+			}
+		}
+		if err := folderRows.Err(); err != nil {
+			_ = folderRows.Close()
+			return nil, nil, err
+		}
+		_ = folderRows.Close()
+	}
+
+	return folderIDs, msgIDs, nil
 }
 
 // fully written by AI
 func (a *App) DeleteFolder(folderID string) string {
-	if backend.CurrentFS == nil {
-		return "Error: System not ready"
+	if backend.DB == nil {
+		return "Error: DB not ready"
 	}
 
-	doomedFolders, doomedMsgs := collectDoomedIDs(folderID)
+	doomedFolders, doomedMsgs, err := collectDoomedIDsDB(folderID)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
 
 	fmt.Printf("Deleting Folder: Found %d sub-folders and %d files to delete.\n", len(doomedFolders), len(doomedMsgs))
 
@@ -881,40 +1166,34 @@ func (a *App) DeleteFolder(folderID string) string {
 		}
 	}
 
-	deadMsgMap := make(map[int]bool)
-	for _, id := range doomedMsgs {
-		deadMsgMap[id] = true
+	tx, err := backend.DB.Begin()
+	if err != nil {
+		return "Error: " + err.Error()
 	}
 
-	keepFiles := []backend.FileMetaData{}
-	for _, f := range backend.CurrentFS.Files {
-		if !deadMsgMap[f.TgMsgID] {
-			keepFiles = append(keepFiles, f)
+	for _, msgID := range doomedMsgs {
+		if _, err := tx.Exec(`DELETE FROM files WHERE msg_id = ?`, msgID); err != nil {
+			_ = tx.Rollback()
+			return "Error: " + err.Error()
 		}
 	}
-	backend.CurrentFS.Files = keepFiles
-
-	deadFolderMap := make(map[string]bool)
 	for _, id := range doomedFolders {
-		deadFolderMap[id] = true
-	}
-
-	keepFolders := []backend.Folder{}
-	for _, f := range backend.CurrentFS.Folders {
-		if !deadFolderMap[f.ID] {
-			keepFolders = append(keepFolders, f)
+		if _, err := tx.Exec(`DELETE FROM folders WHERE id = ?`, id); err != nil {
+			_ = tx.Rollback()
+			return "Error: " + err.Error()
 		}
 	}
-	backend.CurrentFS.Folders = keepFolders
 
-	backend.SaveTdriveFS()
+	if err := tx.Commit(); err != nil {
+		return "Error: " + err.Error()
+	}
 
 	return "Success"
 }
 
 func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID string) string {
-	if backend.CurrentFS == nil {
-		return "Error: FileSystem not ready"
+	if backend.DB == nil {
+		return "Error: DB not ready"
 	}
 
 	if msgID <= 0 {
@@ -928,114 +1207,137 @@ func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID str
 
 	parentID = strings.TrimSpace(parentID)
 	if parentID != "" {
-		found := false
-		for _, folder := range backend.CurrentFS.Folders {
-			if folder.ID == parentID {
-				found = true
-				break
+		var tmp int
+		if err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE id = ? LIMIT 1`, parentID).Scan(&tmp); err != nil {
+			if err == sql.ErrNoRows {
+				return "Error: Target folder not found"
 			}
-		}
-		if !found {
-			return "Error: Target folder not found"
+			return "Error: " + err.Error()
 		}
 	}
 
-	for _, file := range backend.CurrentFS.Files {
-		if file.TgMsgID == msgID {
-			return "Success"
-		}
+	var tmp int
+	if err := backend.DB.QueryRow(`SELECT 1 FROM files WHERE msg_id = ? LIMIT 1`, msgID).Scan(&tmp); err == nil {
+		return "Success"
+	} else if err != sql.ErrNoRows {
+		return "Error: " + err.Error()
 	}
 
-	backend.CurrentFS.AddFile(name, size, msgID, parentID)
-	if err := backend.SaveTdriveFS(); err != nil {
-		return "Error saving: " + err.Error()
+	if _, err := backend.DB.Exec(`INSERT OR IGNORE INTO files (msg_id, name, size, parent_id, upload_time) VALUES (?, ?, ?, ?, ?)`, msgID, name, size, parentID, time.Now().Unix()); err != nil {
+		return "Error: " + err.Error()
 	}
 
 	return "Success"
 }
 
 func (a *App) RenameFile(msgID int, newName string) string {
-	if backend.CurrentFS == nil {
-		return "Error: FileSystem not ready"
+	if backend.DB == nil {
+		return "Error: DB not ready"
 	}
 
-	for i, file := range backend.CurrentFS.Files {
-		if file.TgMsgID == msgID {
-			backend.CurrentFS.Files[i].Name = newName
-			break
-		}
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return "Error: Invalid name"
 	}
 
-	err := backend.SaveTdriveFS()
-	if err != nil {
-		return "Error saving: " + err.Error()
+	if _, err := backend.DB.Exec(`UPDATE files SET name = ? WHERE msg_id = ?`, newName, msgID); err != nil {
+		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) RenameFolder(folderID string, newName string) string {
-	if backend.CurrentFS == nil {
-		return "Error: FileSystem not ready"
+	if backend.DB == nil {
+		return "Error: DB not ready"
 	}
 
-	for i, folder := range backend.CurrentFS.Folders {
-		if folder.ID == folderID {
-			backend.CurrentFS.Folders[i].Name = newName
-			break
-		}
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return "Error: Invalid name"
 	}
 
-	err := backend.SaveTdriveFS()
-	if err != nil {
-		return "Error saving: " + err.Error()
+	if _, err := backend.DB.Exec(`UPDATE folders SET name = ? WHERE id = ?`, newName, folderID); err != nil {
+		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) MoveFile(msgID int, newParentID string) string {
-	if backend.CurrentFS == nil {
-		return "Error: FileSystem not ready"
+	if backend.DB == nil {
+		return "Error: DB not ready"
 	}
 
-	for i, file := range backend.CurrentFS.Files {
-		if file.TgMsgID == msgID {
-			if file.ParentID == newParentID {
-				return "Error: File is already in this folder"
+	newParentID = strings.TrimSpace(newParentID)
+	if newParentID != "" {
+		var tmp int
+		if err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE id = ? LIMIT 1`, newParentID).Scan(&tmp); err != nil {
+			if err == sql.ErrNoRows {
+				return "Error: Target folder not found"
 			}
-			backend.CurrentFS.Files[i].ParentID = newParentID
-			break
+			return "Error: " + err.Error()
 		}
 	}
 
-	err := backend.SaveTdriveFS()
-	if err != nil {
-		return "Error saving: " + err.Error()
+	var curParent string
+	if err := backend.DB.QueryRow(`SELECT parent_id FROM files WHERE msg_id = ?`, msgID).Scan(&curParent); err != nil {
+		if err == sql.ErrNoRows {
+			return "Error: File not found"
+		}
+		return "Error: " + err.Error()
 	}
+	if curParent == newParentID {
+		return "Error: File is already in this folder"
+	}
+
+	if _, err := backend.DB.Exec(`UPDATE files SET parent_id = ? WHERE msg_id = ?`, newParentID, msgID); err != nil {
+		return "Error: " + err.Error()
+	}
+
 	return "Success"
 }
 
 func (a *App) MoveFolder(folderID string, newParentID string) string {
-	if backend.CurrentFS == nil {
-		return "Error: FileSystem not ready"
+	if backend.DB == nil {
+		return "Error: DB not ready"
 	}
+
+	newParentID = strings.TrimSpace(newParentID)
 
 	if folderID == newParentID {
 		return "Error: Cannot move folder into itself"
 	}
 
-	for i, folder := range backend.CurrentFS.Folders {
-		if folder.ID == folderID {
-			if folder.ParentID == newParentID {
-				return "Error: Folder is already here"
+	var curParent string
+	if err := backend.DB.QueryRow(`SELECT parent_id FROM folders WHERE id = ?`, folderID).Scan(&curParent); err != nil {
+		if err == sql.ErrNoRows {
+			return "Error: Folder not found"
+		}
+		return "Error: " + err.Error()
+	}
+	if curParent == newParentID {
+		return "Error: Folder is already here"
+	}
+
+	if newParentID != "" {
+		cur := newParentID
+		for cur != "" {
+			if cur == folderID {
+				return "Error: Cannot move folder into its own subfolder"
 			}
-			backend.CurrentFS.Folders[i].ParentID = newParentID
-			break
+			var next string
+			if err := backend.DB.QueryRow(`SELECT parent_id FROM folders WHERE id = ?`, cur).Scan(&next); err != nil {
+				if err == sql.ErrNoRows {
+					return "Error: Target folder not found"
+				}
+				return "Error: " + err.Error()
+			}
+			cur = next
 		}
 	}
 
-	err := backend.SaveTdriveFS()
-	if err != nil {
-		return "Error saving: " + err.Error()
+	if _, err := backend.DB.Exec(`UPDATE folders SET parent_id = ? WHERE id = ?`, newParentID, folderID); err != nil {
+		return "Error: " + err.Error()
 	}
+
 	return "Success"
 }

@@ -233,6 +233,17 @@ header {
 .search-bar input { margin: 0; padding-left: 36px; background: var(--bg-sidebar); border: none; }
 .search-icon { position: absolute; left: 10px; top: 12px; width: 16px; height: 16px; color: var(--text-muted); }
 
+.search-empty {
+    margin: 10px 12px;
+    padding: 14px 12px;
+    border-radius: 12px;
+    border: 1px dashed rgba(41, 46, 66, 0.75);
+    color: rgba(192, 202, 245, 0.55);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-align: center;
+}
+
 .header-actions { display: flex; gap: 12px; align-items: center; }
 .status-badge { display: none; }
 .upload-btn { width: auto; padding: 8px 20px; font-size: 0.9rem; }

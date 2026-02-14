@@ -26,6 +26,10 @@ export function DownloadFile(arg1, arg2) {
   return window['go']['main']['App']['DownloadFile'](arg1, arg2);
 }
 
+export function GetAllFsMsgIDs() {
+  return window['go']['main']['App']['GetAllFsMsgIDs']();
+}
+
 export function GetCodech() {
   return window['go']['main']['App']['GetCodech']();
 }
@@ -36,6 +40,10 @@ export function GetFileList() {
 
 export function GetFolderContents(arg1) {
   return window['go']['main']['App']['GetFolderContents'](arg1);
+}
+
+export function GetFolderSize(arg1) {
+  return window['go']['main']['App']['GetFolderSize'](arg1);
 }
 
 export function GetPassch() {
@@ -80,6 +88,10 @@ export function RenameFolder(arg1, arg2) {
 
 export function SaveSetup(arg1, arg2) {
   return window['go']['main']['App']['SaveSetup'](arg1, arg2);
+}
+
+export function Search(arg1, arg2) {
+  return window['go']['main']['App']['Search'](arg1, arg2);
 }
 
 export function SelectFiles() {
