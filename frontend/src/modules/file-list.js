@@ -151,9 +151,11 @@ export function refreshFiles() {
             });
     }
 
+    let folderErr = null;
     const folderPromise = getFolderContents(requestedFolderId).catch((err) => {
+        folderErr = err;
         console.error("GetFolderContents failed:", err);
-        return { folders: [], files: [] };
+        return null;
     });
 
     const tgPromise = requestedFolderId === ""
@@ -164,6 +166,19 @@ export function refreshFiles() {
         : Promise.resolve([]);
 
     Promise.all([folderPromise, tgPromise]).then(([fs, tgFiles]) => {
+        if (folderErr || !fs) {
+            if (state.currentFolderId !== requestedFolderId) return;
+            const msg = String(folderErr?.message || folderErr || "Failed to load files");
+            list.innerHTML = `
+                <div style="padding:20px; color:#c0caf5;">
+                    <div style="font-weight:700; margin-bottom:8px;">Could not load this folder</div>
+                    <div style="color:#8b95c5; margin-bottom:12px;">${escapeHtml(msg)}</div>
+                    <button class="secondary-btn" type="button" onclick="refreshFiles()">Retry</button>
+                </div>
+            `;
+            return;
+        }
+
         const folders = Array.isArray(fs?.folders) ? fs.folders : [];
         const fsFiles = Array.isArray(fs?.files) ? fs.files : [];
         const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];

@@ -211,11 +211,16 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 		return nil, fmt.Errorf("db not ready")
 	}
 
+	type uploadedResult struct {
+		UploadID int
+		Meta     backend.FileMetaData
+	}
+
 	sem := make(chan struct{}, 3)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	uploadedFiles := make([]backend.FileMetaData, 0, len(filePaths))
+	uploaded := make([]uploadedResult, 0, len(filePaths))
 	failed := 0
 
 	for i := 0; i < len(filePaths); i++ {
@@ -239,32 +244,55 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 			}
 
 			mu.Lock()
-			uploadedFiles = append(uploadedFiles, meta)
+			uploaded = append(uploaded, uploadedResult{
+				UploadID: uploadID,
+				Meta:     meta,
+			})
 			mu.Unlock()
 		}(uploadID, path, pid)
 	}
 
 	wg.Wait()
 
+	uploadedFiles := make([]backend.FileMetaData, 0, len(uploaded))
+	for _, item := range uploaded {
+		uploadedFiles = append(uploadedFiles, item.Meta)
+	}
+
+	emitLocalIndexError := func(reason string) {
+		for _, item := range uploaded {
+			runtime.EventsEmit(a.ctx, "upload_error", item.UploadID, item.Meta.Name, reason)
+		}
+	}
+
 	tx, err := backend.DB.Begin()
 	if err != nil {
+		emitLocalIndexError("local index write failed")
 		return uploadedFiles, err
 	}
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO files (msg_id, name, size, parent_id, upload_time) VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
+		emitLocalIndexError("local index write failed")
 		return uploadedFiles, err
 	}
-	for _, meta := range uploadedFiles {
+	for _, item := range uploaded {
+		meta := item.Meta
 		if _, err := stmt.Exec(meta.TgMsgID, meta.Name, meta.Size, meta.ParentID, meta.UploadTime); err != nil {
 			_ = stmt.Close()
 			_ = tx.Rollback()
+			emitLocalIndexError("local index write failed")
 			return uploadedFiles, err
 		}
 	}
 	_ = stmt.Close()
 	if err := tx.Commit(); err != nil {
+		emitLocalIndexError("local index write failed")
 		return uploadedFiles, err
+	}
+
+	for _, item := range uploaded {
+		runtime.EventsEmit(a.ctx, "upload_complete", item.UploadID, item.Meta.Name)
 	}
 
 	if failed > 0 {
@@ -347,7 +375,7 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (
 			return fmt.Errorf("upload success, but could not find msgID")
 		}
 
-		runtime.EventsEmit(a.ctx, "upload_complete", uploadID, filename)
+		runtime.EventsEmit(a.ctx, "upload_progress", uploadID, 100.0)
 		return nil
 	})
 	if err != nil {
