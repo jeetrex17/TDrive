@@ -88,19 +88,15 @@ export function updateTransferPill() {
     const downloadCounts = getDownloadCounts();
     const hasDownloads = downloadCounts.total > 0;
 
-    state.transferPillEl.style.display = "inline-flex";
-    state.transferPillEl.classList.toggle("is-idle", !hasUploads && !hasBatch && !hasDownloads);
-    state.transferPillEl.classList.toggle("is-active", hasBatch || downloadCounts.downloading > 0);
+    const hasAnyTransfers = hasUploads || hasBatch || hasDownloads;
 
-    if (!hasUploads && !hasBatch && !hasDownloads) {
-        state.transferPillEl.classList.remove("is-error");
-        state.transferPillEl.innerHTML = `<span class="transfer-pill-dot" aria-hidden="true"></span><span class="transfer-pill-label"></span>`;
-        if (state.transferClearEl) state.transferClearEl.style.display = "none";
-        if (state.transferUploadListEl) state.transferUploadListEl.innerHTML = "";
-        if (state.transferSheetEl) state.transferSheetEl.style.display = "none";
-        state.transferPillEl.setAttribute("aria-expanded", "false");
+    if (!hasAnyTransfers) {
+        state.transferPillEl.style.display = "none";
         return;
     }
+
+    state.transferPillEl.style.display = "inline-flex";
+    state.transferPillEl.classList.toggle("is-active", hasBatch || downloadCounts.downloading > 0);
 
     let total = state.uploadBatch?.total ?? state.uploadTransfers.size;
     let done = state.uploadBatch?.done ?? 0;

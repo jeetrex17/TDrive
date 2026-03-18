@@ -294,6 +294,7 @@ header {
 .transfer-pill.is-error { border-color: rgba(247, 118, 142, 0.45); color: rgba(247, 118, 142, 0.95); }
 .transfer-pill.is-active { border-color: rgba(122, 162, 247, 0.45); }
 .transfer-pill-dot {
+    display: none;
     width: 8px;
     height: 8px;
     border-radius: 999px;
