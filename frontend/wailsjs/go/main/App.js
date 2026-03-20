@@ -78,6 +78,14 @@ export function MsgToTdriveSystem(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['MsgToTdriveSystem'](arg1, arg2, arg3, arg4);
 }
 
+export function PreviewFile(arg1) {
+  return window['go']['main']['App']['PreviewFile'](arg1);
+}
+
+export function PreviewThumbnail(arg1) {
+  return window['go']['main']['App']['PreviewThumbnail'](arg1);
+}
+
 export function RenameFile(arg1, arg2) {
   return window['go']['main']['App']['RenameFile'](arg1, arg2);
 }

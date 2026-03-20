@@ -767,6 +767,182 @@ header {
     background: var(--accent);
 }
 
+.preview-overlay {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
+    background: rgba(7, 9, 15, 0.72);
+    backdrop-filter: blur(22px);
+    -webkit-backdrop-filter: blur(22px);
+}
+
+.preview-shell {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+.preview-chrome {
+    position: absolute;
+    top: 22px;
+    left: 24px;
+    right: 24px;
+    z-index: 2;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.22s ease, transform 0.22s ease;
+    pointer-events: none;
+}
+
+.preview-overlay.is-chrome-visible .preview-chrome {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.preview-filename,
+.preview-close-btn {
+    pointer-events: auto;
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+}
+
+.preview-filename {
+    min-width: 0;
+    max-width: min(68vw, 760px);
+    padding: 11px 16px;
+    border-radius: 999px;
+    background: rgba(12, 14, 22, 0.56);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 14px 40px rgba(0,0,0,0.22);
+    color: rgba(255,255,255,0.94);
+    font-size: 0.92rem;
+    font-weight: 700;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.01em;
+}
+
+.preview-close-btn {
+    width: 46px;
+    height: 46px;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 999px;
+    background: rgba(12, 14, 22, 0.56);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 1.45rem;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.22);
+    transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.preview-close-btn:hover,
+.preview-close-btn:focus-visible {
+    background: rgba(20, 23, 34, 0.74);
+    border-color: rgba(255, 255, 255, 0.16);
+    transform: translateY(-1px);
+    outline: none;
+}
+
+.preview-content {
+    width: 100%;
+    height: 100%;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 84px 32px 40px;
+    background: transparent;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+.preview-content img {
+    display: block;
+    max-width: min(100%, 1240px);
+    max-height: calc(100vh - 136px);
+    object-fit: contain;
+    box-shadow: 0 32px 90px rgba(0,0,0,0.28);
+}
+
+.preview-loading {
+    display: none;
+}
+
+.preview-error {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    max-width: min(460px, calc(100vw - 48px));
+    padding: 14px 18px;
+    border-radius: 999px;
+    background: rgba(18, 20, 29, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 20px 48px rgba(0,0,0,0.24);
+    color: rgba(255,255,255,0.9);
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+    line-height: 1.35;
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    z-index: 3;
+}
+
+.preview-overlay.is-preview-error .preview-close-btn {
+    opacity: 1;
+}
+
+.preview-overlay.is-preview-error .preview-filename {
+    opacity: 0;
+    transform: translateY(-10px);
+    pointer-events: none;
+}
+
+@media (max-width: 720px) {
+    .preview-chrome {
+        top: 16px;
+        left: 16px;
+        right: 16px;
+        gap: 12px;
+    }
+
+    .preview-filename {
+        max-width: calc(100vw - 96px);
+        padding: 10px 14px;
+        font-size: 0.86rem;
+    }
+
+    .preview-close-btn {
+        width: 42px;
+        height: 42px;
+        font-size: 1.3rem;
+    }
+
+    .preview-content {
+        padding: 74px 16px 24px;
+    }
+
+    .preview-content img {
+        max-height: calc(100vh - 116px);
+    }
+
+    .preview-error {
+        max-width: calc(100vw - 32px);
+        border-radius: 20px;
+    }
+}
+
 /* CONTEXT MENU */
 .context-menu {
     position: fixed; z-index: 10000; min-width: 190px;

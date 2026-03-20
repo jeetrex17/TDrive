@@ -4,6 +4,10 @@ import { state } from '../state.js';
 import { openDeleteModal } from './modals/delete.js';
 import { openMoveModal } from './modals/move.js';
 
+function emitSelectionChange() {
+    window.dispatchEvent(new Event("tdrive:selectionchange"));
+}
+
 export function getRowKey(row) {
     if (!row) return "";
     const type = String(row.dataset.type || "");
@@ -42,15 +46,20 @@ export function setRowSelected(row, selected) {
 }
 
 export function updateSelectionBar() {
-    if (!state.selectionBarEl || !state.selectionCountEl) return;
+    if (!state.selectionBarEl || !state.selectionCountEl) {
+        emitSelectionChange();
+        return;
+    }
     const count = state.selectedItems.size;
     if (!count) {
         state.selectionBarEl.style.display = "none";
+        emitSelectionChange();
         return;
     }
 
     state.selectionBarEl.style.display = "flex";
     state.selectionCountEl.textContent = count === 1 ? "1 selected" : `${count} selected`;
+    emitSelectionChange();
 }
 
 export function clearSelection({ keepAnchor = false } = {}) {
