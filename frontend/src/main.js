@@ -17,6 +17,7 @@ import { setupDeleteModal, openDeleteModal } from './modules/modals/delete.js';
 import { setupRenameModal } from './modules/modals/rename.js';
 import { setupMoveModal } from './modules/modals/move.js';
 import { setupFolderModal, openNewFolderModal } from './modules/modals/folder.js';
+import { setupPreviewModal } from './modules/modals/preview.js';
 
 // Setup window bindings that need to be available globally
 window.refreshFiles = refreshFiles;
@@ -47,6 +48,7 @@ window.onload = async function() {
     setupFolderModal();
     setupRenameModal();
     setupMoveModal();
+    setupPreviewModal();
 
     // Setup UI components
     setupBreadcrumb();

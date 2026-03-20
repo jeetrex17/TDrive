@@ -41,6 +41,10 @@ export function MoveFolder(arg1:string,arg2:string):Promise<string>;
 
 export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:string):Promise<string>;
 
+export function PreviewFile(arg1:number):Promise<main.PreviewPayload>;
+
+export function PreviewThumbnail(arg1:number):Promise<main.PreviewPayload>;
+
 export function RenameFile(arg1:number,arg2:string):Promise<string>;
 
 export function RenameFolder(arg1:string,arg2:string):Promise<string>;

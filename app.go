@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,10 +29,14 @@ import (
 )
 
 type App struct {
-	ctx    context.Context
-	Codech chan string
-	Passch chan string
-	Client *telegram.Client
+	ctx              context.Context
+	Codech           chan string
+	Passch           chan string
+	Client           *telegram.Client
+	previewMu        sync.Mutex
+	previewClient    *telegram.Client
+	previewChannelID int64
+	previewChannel   *tg.InputChannel
 }
 type TDriveFile struct {
 	ID         int    `json:"id"`
@@ -36,6 +44,240 @@ type TDriveFile struct {
 	Size       int64  `json:"size"`
 	AccessHash int64  `json:"access_hash"`
 	Date       int    `json:"date"`
+}
+
+type PreviewPayload struct {
+	DataBase64 string `json:"data_base64"`
+	MimeType   string `json:"mime_type"`
+}
+
+const maxPreviewPayloadBytes int64 = 10 * 1024 * 1024
+
+var (
+	errPreviewNotFound       = errors.New("File not found")
+	errPreviewNotSupported   = errors.New("Not a supported image")
+	errPreviewTooLarge       = errors.New("File too large")
+	errPreviewDownloadFailed = errors.New("Download failed")
+	errPreviewThumbMissing   = errors.New("Preview thumbnail unavailable")
+)
+
+var previewMimeTypes = map[string]string{
+	"jpg":  "image/jpeg",
+	"jpeg": "image/jpeg",
+	"png":  "image/png",
+	"gif":  "image/gif",
+	"webp": "image/webp",
+	"bmp":  "image/bmp",
+	"svg":  "image/svg+xml",
+}
+
+func previewFilenameFromDocument(doc *tg.Document) string {
+	if doc == nil {
+		return ""
+	}
+
+	for _, attr := range doc.Attributes {
+		if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
+			return strings.TrimSpace(fname.FileName)
+		}
+	}
+
+	return ""
+}
+
+func lookupStoredFilename(msgID int, doc *tg.Document) string {
+	if backend.DB != nil {
+		var name string
+		if err := backend.DB.QueryRow(`SELECT name FROM files WHERE msg_id = ?`, msgID).Scan(&name); err == nil {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				return name
+			}
+		}
+	}
+
+	return previewFilenameFromDocument(doc)
+}
+
+func previewMimeTypeForName(name string) (string, bool) {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(strings.TrimSpace(name))), ".")
+	if ext == "" {
+		return "", false
+	}
+
+	mimeType, ok := previewMimeTypes[ext]
+	return mimeType, ok
+}
+
+func estimatedBase64Size(rawBytes int64) int64 {
+	if rawBytes <= 0 {
+		return 0
+	}
+
+	return ((rawBytes + 2) / 3) * 4
+}
+
+func exceedsPreviewPayloadBudget(rawBytes int64) bool {
+	if rawBytes < 0 {
+		return true
+	}
+
+	return estimatedBase64Size(rawBytes) > maxPreviewPayloadBytes
+}
+
+func detectedPreviewMimeType(data []byte, fallback string) string {
+	detected := strings.TrimSpace(http.DetectContentType(data))
+	if strings.HasPrefix(detected, "image/") {
+		return detected
+	}
+
+	fallback = strings.TrimSpace(fallback)
+	if fallback != "" {
+		return fallback
+	}
+
+	return detected
+}
+
+func previewPayloadFromBytes(data []byte, mimeType string) (PreviewPayload, error) {
+	if len(data) == 0 {
+		return PreviewPayload{}, errPreviewDownloadFailed
+	}
+	if exceedsPreviewPayloadBudget(int64(len(data))) {
+		return PreviewPayload{}, errPreviewTooLarge
+	}
+
+	return PreviewPayload{
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+		MimeType:   detectedPreviewMimeType(data, mimeType),
+	}, nil
+}
+
+func previewMessageFromResult(result tg.MessagesMessagesClass) *tg.Message {
+	switch m := result.(type) {
+	case *tg.MessagesChannelMessages:
+		for _, message := range m.Messages {
+			if targetMsg, ok := message.(*tg.Message); ok {
+				return targetMsg
+			}
+		}
+	case *tg.MessagesMessages:
+		for _, message := range m.Messages {
+			if targetMsg, ok := message.(*tg.Message); ok {
+				return targetMsg
+			}
+		}
+	case *tg.MessagesMessagesSlice:
+		for _, message := range m.Messages {
+			if targetMsg, ok := message.(*tg.Message); ok {
+				return targetMsg
+			}
+		}
+	}
+
+	return nil
+}
+
+func previewThumbScore(size tg.PhotoSizeClass) int {
+	switch thumb := size.(type) {
+	case *tg.PhotoCachedSize:
+		score := thumb.W * thumb.H
+		if score <= 0 {
+			score = len(thumb.Bytes)
+		}
+		return score
+	case *tg.PhotoSize:
+		score := thumb.W * thumb.H
+		if score <= 0 {
+			score = thumb.Size
+		}
+		return score
+	case *tg.PhotoSizeProgressive:
+		score := thumb.W * thumb.H
+		if n := len(thumb.Sizes); n > 0 && thumb.Sizes[n-1] > score {
+			score = thumb.Sizes[n-1]
+		}
+		return score
+	default:
+		return 0
+	}
+}
+
+func previewInlineThumbPayload(doc *tg.Document, fallbackMimeType string) (PreviewPayload, bool, error) {
+	if doc == nil {
+		return PreviewPayload{}, false, nil
+	}
+
+	var best *tg.PhotoCachedSize
+	bestScore := 0
+
+	for _, size := range doc.Thumbs {
+		thumb, ok := size.(*tg.PhotoCachedSize)
+		if !ok || len(thumb.Bytes) == 0 {
+			continue
+		}
+
+		score := previewThumbScore(thumb)
+		if best == nil || score > bestScore {
+			best = thumb
+			bestScore = score
+		}
+	}
+
+	if best == nil {
+		return PreviewPayload{}, false, nil
+	}
+
+	payload, err := previewPayloadFromBytes(best.Bytes, fallbackMimeType)
+	if err != nil {
+		return PreviewPayload{}, true, err
+	}
+	return payload, true, nil
+}
+
+func previewThumbTypeForDocument(doc *tg.Document) (string, bool) {
+	if doc == nil {
+		return "", false
+	}
+
+	bestType := ""
+	bestScore := 0
+
+	for _, size := range doc.Thumbs {
+		switch size.(type) {
+		case *tg.PhotoSize, *tg.PhotoSizeProgressive:
+		default:
+			continue
+		}
+
+		thumbType := strings.TrimSpace(size.GetType())
+		if thumbType == "" {
+			continue
+		}
+
+		score := previewThumbScore(size)
+		if bestType == "" || score > bestScore {
+			bestType = thumbType
+			bestScore = score
+		}
+	}
+
+	return bestType, bestType != ""
+}
+
+func normalizePreviewError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errPreviewNotFound):
+		return errPreviewNotFound
+	case errors.Is(err, errPreviewNotSupported):
+		return errPreviewNotSupported
+	case errors.Is(err, errPreviewTooLarge):
+		return errPreviewTooLarge
+	default:
+		return errPreviewDownloadFailed
+	}
 }
 
 func (a *App) CheckLoginStatus() bool {
@@ -406,6 +648,10 @@ func (a *App) LoginPhoneNumber(phoneNumber string) {
 			return
 		}
 
+		a.previewMu.Lock()
+		a.resetPreviewSessionLocked()
+		a.previewMu.Unlock()
+
 		fmt.Println("Login Flow Complete. Emitting Success Event.")
 		runtime.EventsEmit(a.ctx, "login-success", true)
 	}()
@@ -554,6 +800,188 @@ func (pw *ProgressWriter) Write(p []byte) (int, error) {
 	}
 
 	return n, nil
+}
+
+func (a *App) resetPreviewSessionLocked() {
+	a.Client = nil
+	a.previewClient = nil
+	a.previewChannel = nil
+	a.previewChannelID = 0
+}
+
+func (a *App) previewClientLocked() (*telegram.Client, error) {
+	if a.previewClient != nil {
+		return a.previewClient, nil
+	}
+
+	client, err := auth.Connect()
+	if err != nil {
+		return nil, err
+	}
+
+	a.previewClient = client
+	return client, nil
+}
+
+func (a *App) previewChannelLocked(ctx context.Context, api *tg.Client, channelID int64) (*tg.InputChannel, error) {
+	if a.previewChannel != nil && a.previewChannelID == channelID {
+		return a.previewChannel, nil
+	}
+
+	inChan, _, err := auth.ResolveDriveChannel(ctx, api, channelID)
+	if err != nil {
+		return nil, err
+	}
+
+	a.previewChannel = inChan
+	a.previewChannelID = channelID
+	return inChan, nil
+}
+
+func (a *App) withPreviewSession(fn func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel) error) error {
+	if a.ctx == nil {
+		return errPreviewDownloadFailed
+	}
+
+	channelID, err := auth.LoadConfig()
+	if err != nil || channelID == 0 {
+		return errPreviewDownloadFailed
+	}
+
+	a.previewMu.Lock()
+	defer a.previewMu.Unlock()
+
+	client, err := auth.Connect()
+	if err != nil {
+		return errPreviewDownloadFailed
+	}
+
+	err = client.Run(a.ctx, func(ctx context.Context) error {
+		inChan, _, err := auth.ResolveDriveChannel(ctx, client.API(), channelID)
+		if err != nil {
+			return errPreviewDownloadFailed
+		}
+
+		return fn(ctx, client.API(), inChan)
+	})
+	return err
+}
+
+func loadPreviewDocument(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, msgID int) (*tg.Document, string, string, error) {
+	result, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		Channel: inChan,
+		ID: []tg.InputMessageClass{
+			&tg.InputMessageID{ID: msgID},
+		},
+	})
+	if err != nil {
+		return nil, "", "", errPreviewDownloadFailed
+	}
+
+	targetMsg := previewMessageFromResult(result)
+	if targetMsg == nil {
+		return nil, "", "", errPreviewNotFound
+	}
+
+	docMedia, ok := targetMsg.Media.(*tg.MessageMediaDocument)
+	if !ok {
+		return nil, "", "", errPreviewNotFound
+	}
+
+	doc, ok := docMedia.Document.(*tg.Document)
+	if !ok || doc == nil {
+		return nil, "", "", errPreviewNotFound
+	}
+
+	filename := lookupStoredFilename(msgID, doc)
+	mimeType, ok := previewMimeTypeForName(filename)
+	if !ok {
+		return nil, "", "", errPreviewNotSupported
+	}
+
+	return doc, filename, mimeType, nil
+}
+
+func (a *App) PreviewThumbnail(msgID int) (PreviewPayload, error) {
+	if msgID <= 0 {
+		return PreviewPayload{}, errPreviewNotFound
+	}
+
+	var payload PreviewPayload
+
+	err := a.withPreviewSession(func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel) error {
+		doc, _, mimeType, err := loadPreviewDocument(ctx, api, inChan, msgID)
+		if err != nil {
+			return err
+		}
+
+		if inlinePayload, ok, err := previewInlineThumbPayload(doc, mimeType); ok || err != nil {
+			if err != nil {
+				return err
+			}
+			payload = inlinePayload
+			return nil
+		}
+
+		thumbType, ok := previewThumbTypeForDocument(doc)
+		if !ok {
+			return errPreviewThumbMissing
+		}
+
+		location := &tg.InputDocumentFileLocation{
+			ID:            doc.ID,
+			AccessHash:    doc.AccessHash,
+			FileReference: doc.FileReference,
+			ThumbSize:     thumbType,
+		}
+
+		var buf bytes.Buffer
+		d := downloader.NewDownloader()
+		if _, err := d.Download(api, location).Stream(ctx, &buf); err != nil {
+			return errPreviewDownloadFailed
+		}
+
+		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
+		return err
+	})
+	if err != nil {
+		return PreviewPayload{}, normalizePreviewError(err)
+	}
+
+	return payload, nil
+}
+
+func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
+	if msgID <= 0 {
+		return PreviewPayload{}, errPreviewNotFound
+	}
+
+	var payload PreviewPayload
+
+	err := a.withPreviewSession(func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel) error {
+		doc, _, mimeType, err := loadPreviewDocument(ctx, api, inChan, msgID)
+		if err != nil {
+			return err
+		}
+
+		if exceedsPreviewPayloadBudget(int64(doc.Size)) {
+			return errPreviewTooLarge
+		}
+
+		var buf bytes.Buffer
+		d := downloader.NewDownloader()
+		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, &buf); err != nil {
+			return errPreviewDownloadFailed
+		}
+
+		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
+		return err
+	})
+	if err != nil {
+		return PreviewPayload{}, normalizePreviewError(err)
+	}
+
+	return payload, nil
 }
 
 func (a *App) DownloadFile(msgID int, TgMsgID int) string {
