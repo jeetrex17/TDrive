@@ -396,6 +396,9 @@ header {
 .transfer-item.is-failed .transfer-item-fill {
     background: linear-gradient(90deg, rgba(247, 118, 142, 0.10), rgba(247, 118, 142, 0.20));
 }
+.transfer-item.is-canceled .transfer-item-fill {
+    background: linear-gradient(90deg, rgba(224, 175, 104, 0.10), rgba(224, 175, 104, 0.18));
+}
 
 .transfer-item-content {
     position: relative;
@@ -405,6 +408,10 @@ header {
     gap: 12px;
     padding: 12px;
 }
+.transfer-item-main {
+    min-width: 0;
+    flex: 1 1 auto;
+}
 .transfer-item-name {
     font-weight: 700;
     font-size: 0.9rem;
@@ -412,7 +419,6 @@ header {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 250px;
 }
 .transfer-item-meta {
     font-weight: 800;
@@ -420,8 +426,29 @@ header {
     color: rgba(192, 202, 245, 0.78);
     white-space: nowrap;
 }
+.transfer-item-action {
+    flex: 0 0 auto;
+    border: 1px solid rgba(122, 162, 247, 0.22);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(192, 202, 245, 0.92);
+    padding: 6px 10px;
+    border-radius: 9px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.transfer-item-action:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(122, 162, 247, 0.4);
+}
+.transfer-item-action:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
 .transfer-item.is-failed .transfer-item-meta { color: rgba(247, 118, 142, 0.95); }
 .transfer-item.is-done .transfer-item-meta { color: rgba(158, 206, 106, 0.95); }
+.transfer-item.is-canceled .transfer-item-meta { color: rgba(224, 175, 104, 0.95); }
 .transfer-item.is-queued .transfer-item-meta { color: rgba(192, 202, 245, 0.55); }
 .transfer-item.is-queued .transfer-item-fill { width: 0% !important; }
 

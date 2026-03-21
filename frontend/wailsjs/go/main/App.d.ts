@@ -3,6 +3,10 @@
 import {backend} from '../models';
 import {main} from '../models';
 
+export function CancelDownload(arg1:number):Promise<string>;
+
+export function CancelUpload(arg1:number):Promise<string>;
+
 export function CheckLoginStatus():Promise<boolean>;
 
 export function CheckSystemStatus():Promise<string>;

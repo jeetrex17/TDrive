@@ -17,6 +17,7 @@ export const state = {
     downloadProgressHideTimeout: null,
     downloadQueue: [],
     activeDownloadId: null,
+    pendingDownloadCancelIds: new Set(),
 
     // Auth
     lastLoginPhoneNumber: "",
@@ -27,7 +28,8 @@ export const state = {
     transferUploadListEl: null,
     transferClearEl: null,
     uploadTransfers: new Map(), // id -> { id, name, size, parentId, progress, state }
-    uploadBatch: null, // { total, done, failed }
+    uploadBatch: null, // { total, done, failed, canceled }
+    pendingUploadCancelIds: new Set(),
 
     // Drag & Drop
     dragState: null,

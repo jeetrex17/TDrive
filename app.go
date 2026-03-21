@@ -29,11 +29,16 @@ import (
 )
 
 type App struct {
-	ctx       context.Context
-	Codech    chan string
-	Passch    chan string
-	Client    *telegram.Client
-	previewMu sync.Mutex
+	ctx              context.Context
+	Codech           chan string
+	Passch           chan string
+	Client           *telegram.Client
+	previewMu        sync.Mutex
+	uploadCancelMu   sync.Mutex
+	uploadCancels    map[int]context.CancelFunc
+	uploadCanceled   map[int]bool
+	downloadCancelMu sync.Mutex
+	downloadCancels  map[int]context.CancelFunc
 }
 type TDriveFile struct {
 	ID         int    `json:"id"`
@@ -51,6 +56,101 @@ type DownloadResult struct {
 type PreviewPayload struct {
 	DataBase64 string `json:"data_base64"`
 	MimeType   string `json:"mime_type"`
+}
+
+func (a *App) registerUploadCancel(id int, cancel context.CancelFunc) {
+	if id < 0 || cancel == nil {
+		return
+	}
+
+	a.uploadCancelMu.Lock()
+	defer a.uploadCancelMu.Unlock()
+	if a.uploadCancels == nil {
+		a.uploadCancels = make(map[int]context.CancelFunc)
+	}
+	a.uploadCancels[id] = cancel
+}
+
+func (a *App) takeUploadCancel(id int) context.CancelFunc {
+	a.uploadCancelMu.Lock()
+	defer a.uploadCancelMu.Unlock()
+	if a.uploadCancels == nil {
+		return nil
+	}
+
+	cancel := a.uploadCancels[id]
+	delete(a.uploadCancels, id)
+	return cancel
+}
+
+func (a *App) clearUploadCancel(id int) {
+	a.uploadCancelMu.Lock()
+	defer a.uploadCancelMu.Unlock()
+	if a.uploadCancels == nil {
+		return
+	}
+	delete(a.uploadCancels, id)
+}
+
+func (a *App) markUploadCanceled(id int) {
+	a.uploadCancelMu.Lock()
+	defer a.uploadCancelMu.Unlock()
+	if a.uploadCanceled == nil {
+		a.uploadCanceled = make(map[int]bool)
+	}
+	a.uploadCanceled[id] = true
+}
+
+func (a *App) isUploadCanceled(id int) bool {
+	a.uploadCancelMu.Lock()
+	defer a.uploadCancelMu.Unlock()
+	if a.uploadCanceled == nil {
+		return false
+	}
+	return a.uploadCanceled[id]
+}
+
+func (a *App) clearUploadCanceled(id int) {
+	a.uploadCancelMu.Lock()
+	defer a.uploadCancelMu.Unlock()
+	if a.uploadCanceled == nil {
+		return
+	}
+	delete(a.uploadCanceled, id)
+}
+
+func (a *App) registerDownloadCancel(id int, cancel context.CancelFunc) {
+	if id <= 0 || cancel == nil {
+		return
+	}
+
+	a.downloadCancelMu.Lock()
+	defer a.downloadCancelMu.Unlock()
+	if a.downloadCancels == nil {
+		a.downloadCancels = make(map[int]context.CancelFunc)
+	}
+	a.downloadCancels[id] = cancel
+}
+
+func (a *App) takeDownloadCancel(id int) context.CancelFunc {
+	a.downloadCancelMu.Lock()
+	defer a.downloadCancelMu.Unlock()
+	if a.downloadCancels == nil {
+		return nil
+	}
+
+	cancel := a.downloadCancels[id]
+	delete(a.downloadCancels, id)
+	return cancel
+}
+
+func (a *App) clearDownloadCancel(id int) {
+	a.downloadCancelMu.Lock()
+	defer a.downloadCancelMu.Unlock()
+	if a.downloadCancels == nil {
+		return
+	}
+	delete(a.downloadCancels, id)
 }
 
 const maxPreviewPayloadBytes int64 = 10 * 1024 * 1024
@@ -472,18 +572,57 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 		pid := parentIDs[i]
 		uploadID := i
 		wg.Add(1)
-		sem <- struct{}{}
 
 		go func(uploadID int, path string, pid string) {
 			defer wg.Done()
-			defer func() { <-sem }()
+			uploadCtx, cancel := context.WithCancel(a.ctx)
+			a.registerUploadCancel(uploadID, cancel)
+			defer func() {
+				a.clearUploadCancel(uploadID)
+				a.clearUploadCanceled(uploadID)
+				cancel()
+			}()
 
-			meta, err := a.uploadSingleFile(uploadID, path, pid)
+			if a.isUploadCanceled(uploadID) {
+				runtime.EventsEmit(a.ctx, "upload_canceled", uploadID, filepath.Base(path))
+				return
+			}
+
+			acquired := false
+			select {
+			case sem <- struct{}{}:
+				acquired = true
+			case <-uploadCtx.Done():
+				runtime.EventsEmit(a.ctx, "upload_canceled", uploadID, filepath.Base(path))
+				return
+			}
+			defer func() {
+				if acquired {
+					<-sem
+				}
+			}()
+
+			if a.isUploadCanceled(uploadID) {
+				runtime.EventsEmit(a.ctx, "upload_canceled", uploadID, filepath.Base(path))
+				return
+			}
+
+			meta, err := a.uploadSingleFile(uploadCtx, uploadID, path, pid)
 			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					runtime.EventsEmit(a.ctx, "upload_canceled", uploadID, filepath.Base(path))
+					return
+				}
+
 				mu.Lock()
 				failed++
 				mu.Unlock()
 				runtime.EventsEmit(a.ctx, "upload_error", uploadID, filepath.Base(path), err.Error())
+				return
+			}
+
+			if a.isUploadCanceled(uploadID) {
+				runtime.EventsEmit(a.ctx, "upload_canceled", uploadID, meta.Name)
 				return
 			}
 
@@ -545,7 +684,7 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 	return uploadedFiles, nil
 }
 
-func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (backend.FileMetaData, error) {
+func (a *App) uploadSingleFile(ctx context.Context, uploadID int, filePath string, parentID string) (backend.FileMetaData, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return backend.FileMetaData{}, err
@@ -579,8 +718,8 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (
 
 	var msgID int
 
-	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		_, inputPeer, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
+	err = freshClient.Run(ctx, func(runCtx context.Context) error {
+		_, inputPeer, err := auth.ResolveDriveChannel(runCtx, freshClient.API(), channelid)
 		if err != nil {
 			return err
 		}
@@ -590,7 +729,7 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (
 
 		runtime.EventsEmit(a.ctx, "upload_start", uploadID, filename, totalSize, parentID)
 
-		uploadResult, err := u.FromReader(ctx, filename, pu)
+		uploadResult, err := u.FromReader(runCtx, filename, pu)
 		if err != nil {
 			return err
 		}
@@ -609,7 +748,7 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (
 			Message:  fmt.Sprintf("TDrive File: %s", filename),
 		}
 
-		updates, err := freshClient.API().MessagesSendMedia(ctx, req)
+		updates, err := freshClient.API().MessagesSendMedia(runCtx, req)
 		if err != nil {
 			return err
 		}
@@ -989,6 +1128,27 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 	return payload, nil
 }
 
+func (a *App) CancelUpload(uploadID int) string {
+	a.markUploadCanceled(uploadID)
+	cancel := a.takeUploadCancel(uploadID)
+	if cancel == nil {
+		return "Not found"
+	}
+
+	cancel()
+	return "Success"
+}
+
+func (a *App) CancelDownload(msgID int) string {
+	cancel := a.takeDownloadCancel(msgID)
+	if cancel == nil {
+		return "Not found"
+	}
+
+	cancel()
+	return "Success"
+}
+
 func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 	channelid, err := auth.LoadConfig()
 	if err != nil || channelid == 0 {
@@ -1001,8 +1161,14 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 	}
 
 	downloadResult := DownloadResult{Status: "error", Message: "Download failed"}
+	downloadCtx, cancel := context.WithCancel(a.ctx)
+	a.registerDownloadCancel(msgID, cancel)
+	defer func() {
+		a.clearDownloadCancel(msgID)
+		cancel()
+	}()
 
-	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
+	err = freshClient.Run(downloadCtx, func(ctx context.Context) error {
 		inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
 		if err != nil {
 			downloadResult = DownloadResult{Status: "error", Message: "Error: " + err.Error()}
@@ -1090,7 +1256,13 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 			downloadResult = DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 			return nil
 		}
-		defer f.Close()
+		complete := false
+		defer func() {
+			_ = f.Close()
+			if !complete {
+				_ = os.Remove(savePath)
+			}
+		}()
 
 		pw := &ProgressWriter{
 			Writer:    f,
@@ -1101,10 +1273,14 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 
 		_, err = d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, pw)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return context.Canceled
+			}
 			downloadResult = DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 			return nil
 		}
 
+		complete = true
 		runtime.EventsEmit(a.ctx, "download_progress", 100.0)
 		downloadResult = DownloadResult{
 			Status:    "success",
@@ -1114,6 +1290,9 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return DownloadResult{Status: "canceled", Message: "Download canceled"}
+		}
 		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}
 	}
 
@@ -1188,10 +1367,13 @@ func (a *App) GetPassch() chan string {
 
 func NewApp() *App {
 	return &App{
-		ctx:    nil,
-		Codech: make(chan string),
-		Passch: make(chan string),
-		Client: nil,
+		ctx:             nil,
+		Codech:          make(chan string),
+		Passch:          make(chan string),
+		Client:          nil,
+		uploadCancels:   make(map[int]context.CancelFunc),
+		uploadCanceled:  make(map[int]bool),
+		downloadCancels: make(map[int]context.CancelFunc),
 	}
 }
 
