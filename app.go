@@ -650,10 +650,6 @@ func (a *App) LoginPhoneNumber(phoneNumber string) {
 			return
 		}
 
-		a.previewMu.Lock()
-		a.resetPreviewSessionLocked()
-		a.previewMu.Unlock()
-
 		fmt.Println("Login Flow Complete. Emitting Success Event.")
 		runtime.EventsEmit(a.ctx, "login-success", true)
 	}()
