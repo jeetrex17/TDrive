@@ -4,6 +4,38 @@ import { state } from '../state.js';
 import { escapeHtml } from '../utils.js';
 import { SelectFiles, DownloadFile } from '../../wailsjs/go/main/App';
 
+const DOWNLOAD_TERMINAL_STATES = new Set(["done", "failed", "canceled"]);
+
+function isDownloadTerminalState(status) {
+    return DOWNLOAD_TERMINAL_STATES.has(String(status || ""));
+}
+
+function normalizeDownloadResult(result) {
+    if (!result || typeof result !== "object") {
+        return { status: "error", message: "Download failed", saved_path: "" };
+    }
+
+    const status = String(result.status || "error").toLowerCase();
+    return {
+        status: status === "success" || status === "canceled" || status === "error" ? status : "error",
+        message: String(result.message || "Download failed"),
+        saved_path: String(result.saved_path || ""),
+    };
+}
+
+function getDownloadSummaryLabel(counts) {
+    if (counts.failed > 0 && counts.canceled > 0) {
+        return `Downloads finished (${counts.failed} failed, ${counts.canceled} canceled)`;
+    }
+    if (counts.failed > 0) {
+        return `Downloads finished (${counts.failed} failed)`;
+    }
+    if (counts.canceled > 0) {
+        return `Downloads finished (${counts.canceled} canceled)`;
+    }
+    return "Downloads finished";
+}
+
 export function showDownloadProgress(percent) {
     const value = Number(percent);
     if (!Number.isFinite(value)) return;
@@ -15,7 +47,9 @@ export function showDownloadProgress(percent) {
 
     const clamped = Math.max(0, Math.min(100, value));
     item.progress = clamped;
-    item.state = "downloading";
+    if (!isDownloadTerminalState(item.state)) {
+        item.state = "downloading";
+    }
     renderDownloadItem(item);
     updateTransferPill();
 
@@ -67,6 +101,7 @@ function getDownloadCounts() {
     let total = items.length;
     let done = 0;
     let failed = 0;
+    let canceled = 0;
     let queued = 0;
     let downloading = 0;
 
@@ -74,17 +109,51 @@ function getDownloadCounts() {
         const status = String(item?.state || "queued");
         if (status === "done") done += 1;
         else if (status === "failed") failed += 1;
+        else if (status === "canceled") canceled += 1;
         else if (status === "downloading") downloading += 1;
         else queued += 1;
     });
 
-    return { total, done, failed, queued, downloading };
+    return { total, done, failed, canceled, queued, downloading };
+}
+
+function getUploadCounts() {
+    const items = state.uploadTransfers instanceof Map ? Array.from(state.uploadTransfers.values()) : [];
+    let total = items.length;
+    let done = 0;
+    let failed = 0;
+    let queued = 0;
+    let uploading = 0;
+
+    items.forEach((item) => {
+        const status = String(item?.state || "queued");
+        if (status === "done") done += 1;
+        else if (status === "failed") failed += 1;
+        else if (status === "uploading") uploading += 1;
+        else queued += 1;
+    });
+
+    return { total, done, failed, queued, uploading };
+}
+
+function reconcileUploadBatch() {
+    const counts = getUploadCounts();
+    const settled = counts.done + counts.failed;
+    const hasInFlightUploads = counts.uploading > 0 || counts.queued > 0;
+
+    if (state.uploadBatch && !hasInFlightUploads && counts.total > 0 && settled >= counts.total) {
+        state.uploadBatch = null;
+    }
+
+    return counts;
 }
 
 export function updateTransferPill() {
     if (!state.transferPillEl) return;
-    const hasUploads = state.uploadTransfers && state.uploadTransfers.size > 0;
+    const uploadCounts = reconcileUploadBatch();
+    const hasUploads = uploadCounts.total > 0;
     const hasBatch = Boolean(state.uploadBatch);
+    const hasActiveUploads = uploadCounts.uploading > 0 || uploadCounts.queued > 0;
     const downloadCounts = getDownloadCounts();
     const hasDownloads = downloadCounts.total > 0;
 
@@ -96,43 +165,27 @@ export function updateTransferPill() {
     }
 
     state.transferPillEl.style.display = "inline-flex";
-    state.transferPillEl.classList.toggle("is-active", hasBatch || downloadCounts.downloading > 0);
+    state.transferPillEl.classList.toggle("is-active", hasActiveUploads || downloadCounts.downloading > 0);
 
-    let total = state.uploadBatch?.total ?? state.uploadTransfers.size;
-    let done = state.uploadBatch?.done ?? 0;
-    let failed = state.uploadBatch?.failed ?? 0;
-
-    if (!state.uploadBatch) {
-        done = 0;
-        failed = 0;
-        for (const item of state.uploadTransfers.values()) {
-            if (item.state === "done") done += 1;
-            if (item.state === "failed") failed += 1;
-        }
-        total = state.uploadTransfers.size;
-    }
-
-    const uploadFailed = failed;
+    const uploadFailed = uploadCounts.failed;
     const downloadFailed = downloadCounts.failed;
     const hasFailures = uploadFailed > 0 || downloadFailed > 0;
     state.transferPillEl.classList.toggle("is-error", hasFailures);
 
     let label = "";
-    const uploadLabel = (hasUploads || hasBatch)
-        ? (state.uploadBatch ? `Uploading ${done}/${total}` : uploadFailed > 0 ? `Uploads finished (${uploadFailed} failed)` : "Uploads")
+    const uploadLabel = hasUploads
+        ? (hasActiveUploads ? `Uploading ${uploadCounts.done}/${uploadCounts.total}` : uploadFailed > 0 ? `Uploads finished (${uploadFailed} failed)` : "Uploads finished")
         : "";
 
     let downloadLabel = "";
     if (hasDownloads) {
         if (downloadCounts.downloading > 0) {
-            const current = Math.min(downloadCounts.done + downloadCounts.failed + 1, downloadCounts.total);
+            const current = Math.min(downloadCounts.done + downloadCounts.failed + downloadCounts.canceled + 1, downloadCounts.total);
             downloadLabel = `Downloading ${current}/${downloadCounts.total}`;
         } else if (downloadCounts.queued > 0) {
             downloadLabel = `Downloads queued (${downloadCounts.queued})`;
-        } else if (downloadFailed > 0) {
-            downloadLabel = `Downloads finished (${downloadFailed} failed)`;
         } else {
-            downloadLabel = "Downloads finished";
+            downloadLabel = getDownloadSummaryLabel(downloadCounts);
         }
     }
 
@@ -141,7 +194,7 @@ export function updateTransferPill() {
 
     state.transferPillEl.innerHTML = `<span class="transfer-pill-dot" aria-hidden="true"></span><span class="transfer-pill-label">${escapeHtml(label)}</span>`;
 
-    const uploadsDone = !hasUploads ? true : (done + failed >= total && total > 0);
+    const uploadsDone = !hasUploads || !hasActiveUploads;
     const downloadsDone = !hasDownloads || downloadCounts.downloading === 0 && downloadCounts.queued === 0;
     const allDone = uploadsDone && downloadsDone;
     if (state.transferClearEl) state.transferClearEl.style.display = allDone ? "inline-flex" : "none";
@@ -221,6 +274,8 @@ export function renderDownloadItem(item) {
     if (item.state === "queued") meta = "Queued";
     if (item.state === "done") meta = "Done";
     if (item.state === "failed") meta = "Failed";
+    if (item.state === "canceled") meta = "Canceled";
+    if ((item.state === "failed" || item.state === "canceled") && item.message) meta = item.message;
     if (metaEl) metaEl.textContent = meta;
 
     el.classList.toggle("is-done", item.state === "done");
@@ -244,15 +299,21 @@ async function startNextDownload() {
     if (status) status.innerText = "Downloading…";
 
     try {
-        const res = await DownloadFile(Number(next.id), Number(next.id));
-        alert(res);
-        next.state = "done";
-        next.progress = 100;
+        const result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
+        next.message = result.message;
+
+        if (result.status === "success") {
+            next.state = "done";
+            next.progress = 100;
+        } else if (result.status === "canceled") {
+            next.state = "canceled";
+        } else {
+            next.state = "failed";
+        }
     } catch (err) {
         console.error("Download failed:", err);
-        alert("Download failed. Check console/logs.");
+        next.message = "Download failed";
         next.state = "failed";
-        next.progress = 100;
     } finally {
         state.activeDownloadId = null;
         renderDownloadItem(next);
@@ -275,6 +336,7 @@ export function enqueueDownload(id, name, size) {
         existing.size = Number(size) || existing.size || 0;
         existing.progress = 0;
         existing.state = "queued";
+        existing.message = "";
         renderDownloadItem(existing);
         updateTransferPill();
         if (state.activeDownloadId === null || state.activeDownloadId === undefined) startNextDownload();
@@ -287,6 +349,7 @@ export function enqueueDownload(id, name, size) {
         size: Number(size) || 0,
         progress: 0,
         state: "queued",
+        message: "",
     };
 
     state.downloadQueue.push(item);
@@ -403,11 +466,12 @@ export function setupUploadProgress() {
         }
 
         if (state.uploadBatch) state.uploadBatch.done += 1;
+        const batchFinished = Boolean(state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total);
+        if (batchFinished) state.uploadBatch = null;
         renderTransferItem(uploadId);
         updateTransferPill();
 
-        if (state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total) {
-            state.uploadBatch = null;
+        if (batchFinished) {
             window.refreshFiles();
         }
     });
@@ -430,11 +494,12 @@ export function setupUploadProgress() {
         state.uploadTransfers.set(uploadId, item);
 
         if (state.uploadBatch) state.uploadBatch.failed += 1;
+        const batchFinished = Boolean(state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total);
+        if (batchFinished) state.uploadBatch = null;
         renderTransferItem(uploadId);
         updateTransferPill();
 
-        if (state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total) {
-            state.uploadBatch = null;
+        if (batchFinished) {
             window.refreshFiles();
         }
     });
@@ -489,5 +554,7 @@ export async function uploadWithParentID(parentID) {
         console.error("Upload failed:", err);
     } finally {
         if (state.activeTransfer === "upload") state.activeTransfer = null;
+        reconcileUploadBatch();
+        updateTransferPill();
     }
 }

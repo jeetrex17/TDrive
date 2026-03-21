@@ -2,10 +2,7 @@ import { PreviewFile, PreviewThumbnail } from '../../../wailsjs/go/main/App';
 import { state } from '../../state.js';
 
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
-const PREVIEW_CACHE_MAX_ITEMS = 3;
-const PREVIEW_CACHE_MAX_BYTES = 30 * 1024 * 1024;
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
-const PREVIEW_SELECTION_PREFETCH_DELAY_MS = 180;
 const REQUIRED_ELEMENT_IDS = [
     "preview-modal",
     "preview-shell",
@@ -13,6 +10,7 @@ const REQUIRED_ELEMENT_IDS = [
     "preview-filename",
     "preview-image",
     "preview-loading",
+    "preview-loading-fill",
     "preview-error",
     "preview-close",
 ];
@@ -23,19 +21,15 @@ let stageEl = null;
 let filenameEl = null;
 let imageEl = null;
 let loadingEl = null;
+let loadingFillEl = null;
 let errorEl = null;
 let closeBtnEl = null;
 let previewReady = false;
 let previewRequestToken = 0;
 let activePreviewKey = "";
+let activePreviewMsgID = 0;
 let statusResetTimer = null;
 let chromeHideTimer = null;
-let selectionPrefetchTimer = null;
-let selectionPrefetchKey = "";
-let previewCacheBytes = 0;
-const previewCache = new Map();
-const inflightThumbnailLoads = new Map();
-const inflightFullLoads = new Map();
 
 function isSpaceKey(event) {
     return event.code === "Space" || event.key === " " || event.key === "Spacebar";
@@ -79,6 +73,7 @@ function getPreviewKey(item) {
 
 function clearActivePreview() {
     activePreviewKey = "";
+    activePreviewMsgID = 0;
 }
 
 function isPreviewVisible() {
@@ -135,7 +130,29 @@ function resetImageSurface() {
     if (!imageEl) return;
     imageEl.hidden = true;
     imageEl.removeAttribute("src");
-    imageEl.alt = "Preview";
+    imageEl.alt = "";
+}
+
+function showPreviewLoading() {
+    if (!modalEl || !loadingEl) return;
+    modalEl.classList.add("is-preview-loading");
+    loadingEl.style.display = "flex";
+    loadingEl.setAttribute("aria-hidden", "false");
+}
+
+function setPreviewProgress(percent) {
+    if (!loadingEl || !loadingFillEl) return;
+    const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
+    showPreviewLoading();
+    loadingFillEl.style.width = `${clamped}%`;
+}
+
+function hidePreviewProgress() {
+    if (!modalEl || !loadingEl || !loadingFillEl) return;
+    modalEl.classList.remove("is-preview-loading");
+    loadingEl.style.display = "none";
+    loadingEl.setAttribute("aria-hidden", "true");
+    loadingFillEl.style.width = "0%";
 }
 
 function preparePreviewSurface(filename, { keepCurrentImage = false } = {}) {
@@ -143,19 +160,19 @@ function preparePreviewSurface(filename, { keepCurrentImage = false } = {}) {
     if (!keepCurrentImage) {
         filenameEl.textContent = filename || "Preview";
     }
-    loadingEl.style.display = "none";
+    showPreviewLoading();
     errorEl.style.display = "none";
     errorEl.textContent = "";
     modalEl.classList.remove("is-preview-error");
 
     if (!keepCurrentImage) resetImageSurface();
-    if (imageEl && !keepCurrentImage) imageEl.alt = filename || "Preview";
+    if (imageEl && !keepCurrentImage) imageEl.alt = "";
 }
 
 function showPreviewError(message, { keepCurrentImage = false } = {}) {
     if (!modalEl || !loadingEl || !errorEl) return;
 
-    loadingEl.style.display = "none";
+    hidePreviewProgress();
     if (!keepCurrentImage) resetImageSurface();
     errorEl.textContent = message || "Download failed";
     errorEl.style.display = "block";
@@ -164,15 +181,19 @@ function showPreviewError(message, { keepCurrentImage = false } = {}) {
     clearChromeHideTimer();
 }
 
-function showPreviewImage(src, alt) {
+function showPreviewImage(src, alt, { keepLoading = false } = {}) {
     if (!modalEl || !filenameEl || !imageEl || !loadingEl || !errorEl) return;
 
-    loadingEl.style.display = "none";
+    if (!keepLoading) {
+        hidePreviewProgress();
+    } else {
+        showPreviewLoading(alt || "Preview");
+    }
     errorEl.style.display = "none";
     errorEl.textContent = "";
     modalEl.classList.remove("is-preview-error");
     filenameEl.textContent = alt || "Preview";
-    imageEl.alt = alt || "Preview";
+    imageEl.alt = "";
     imageEl.src = src;
     imageEl.hidden = false;
     if (typeof imageEl.animate === "function") {
@@ -226,52 +247,6 @@ export function isPreviewableImage(filename) {
     return SUPPORTED_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
 }
 
-function estimatePreviewCacheEntryBytes(mimeType, dataBase64) {
-    return String(mimeType || "").length + String(dataBase64 || "").length + 64;
-}
-
-function getPreviewCacheEntryBytes(entry) {
-    if (!entry) return 0;
-    return Number(entry.thumbBytes || 0) + Number(entry.fullBytes || 0);
-}
-
-function deletePreviewCacheEntry(previewKey) {
-    const existing = previewCache.get(previewKey);
-    if (!existing) return;
-    previewCacheBytes = Math.max(0, previewCacheBytes - getPreviewCacheEntryBytes(existing));
-    previewCache.delete(previewKey);
-}
-
-function touchPreviewCacheEntry(previewKey, entry) {
-    previewCache.delete(previewKey);
-    previewCache.set(previewKey, entry);
-    return entry;
-}
-
-function rememberPreviewCacheEntry(previewKey, partial) {
-    const existing = previewCache.get(previewKey) || {};
-    const nextEntry = { ...existing, ...partial };
-    const previousBytes = getPreviewCacheEntryBytes(existing);
-
-    previewCache.delete(previewKey);
-    previewCache.set(previewKey, nextEntry);
-    previewCacheBytes += getPreviewCacheEntryBytes(nextEntry) - previousBytes;
-
-    while (previewCache.size > PREVIEW_CACHE_MAX_ITEMS || previewCacheBytes > PREVIEW_CACHE_MAX_BYTES) {
-        const oldestKey = previewCache.keys().next().value;
-        if (!oldestKey) break;
-        deletePreviewCacheEntry(oldestKey);
-    }
-
-    return previewCache.get(previewKey) || nextEntry;
-}
-
-function getCachedPreviewEntry(previewKey) {
-    const existing = previewCache.get(previewKey);
-    if (!existing) return null;
-    return touchPreviewCacheEntry(previewKey, existing);
-}
-
 function buildPreviewSource(mimeType, dataBase64) {
     return `data:${mimeType};base64,${dataBase64}`;
 }
@@ -286,7 +261,6 @@ function payloadToPreviewAsset(payload) {
     return {
         src: buildPreviewSource(mimeType, dataBase64),
         mimeType,
-        bytes: estimatePreviewCacheEntryBytes(mimeType, dataBase64),
     };
 }
 
@@ -313,116 +287,26 @@ async function decodePreviewSource(src) {
     });
 }
 
-function cancelSelectionPrefetch() {
-    if (selectionPrefetchTimer) {
-        clearTimeout(selectionPrefetchTimer);
-        selectionPrefetchTimer = null;
-    }
-    selectionPrefetchKey = "";
-}
-
 async function resolveThumbnailPreviewEntry(target) {
     const msgID = Number(target?.id || 0);
-    const previewKey = getPreviewKey(target);
-    if (!msgID || !previewKey) {
+    if (!msgID) {
         throw new Error("Download failed");
     }
 
-    const cached = getCachedPreviewEntry(previewKey);
-    if (cached?.thumbSrc || cached?.fullSrc) {
-        try {
-            await decodePreviewSource(cached.fullSrc || cached.thumbSrc);
-            return cached;
-        } catch {
-            deletePreviewCacheEntry(previewKey);
-        }
-    }
-
-    const pending = inflightThumbnailLoads.get(previewKey);
-    if (pending) {
-        return pending;
-    }
-
-    const promise = (async () => {
-        const asset = payloadToPreviewAsset(await PreviewThumbnail(msgID));
-        await decodePreviewSource(asset.src);
-        return rememberPreviewCacheEntry(previewKey, {
-            thumbSrc: asset.src,
-            thumbMimeType: asset.mimeType,
-            thumbBytes: asset.bytes,
-        });
-    })().finally(() => {
-        inflightThumbnailLoads.delete(previewKey);
-    });
-
-    inflightThumbnailLoads.set(previewKey, promise);
-    return promise;
+    const asset = payloadToPreviewAsset(await PreviewThumbnail(msgID));
+    await decodePreviewSource(asset.src);
+    return asset;
 }
 
 async function resolveFullPreviewEntry(target) {
     const msgID = Number(target?.id || 0);
-    const previewKey = getPreviewKey(target);
-    if (!msgID || !previewKey) {
+    if (!msgID) {
         throw new Error("Download failed");
     }
 
-    const cached = getCachedPreviewEntry(previewKey);
-    if (cached?.fullSrc) {
-        try {
-            await decodePreviewSource(cached.fullSrc);
-            return cached;
-        } catch {
-            deletePreviewCacheEntry(previewKey);
-        }
-    }
-
-    const pending = inflightFullLoads.get(previewKey);
-    if (pending) {
-        return pending;
-    }
-
-    const promise = (async () => {
-        const asset = payloadToPreviewAsset(await PreviewFile(msgID));
-        await decodePreviewSource(asset.src);
-        return rememberPreviewCacheEntry(previewKey, {
-            fullSrc: asset.src,
-            fullMimeType: asset.mimeType,
-            fullBytes: asset.bytes,
-        });
-    })().finally(() => {
-        inflightFullLoads.delete(previewKey);
-    });
-
-    inflightFullLoads.set(previewKey, promise);
-    return promise;
-}
-
-async function prefetchPreviewThumbnail(target) {
-    if (!target || !isPreviewableImage(target.name)) return null;
-
-    try {
-        return await resolveThumbnailPreviewEntry(target);
-    } catch {
-        return null;
-    }
-}
-
-function scheduleSelectionPrefetch() {
-    cancelSelectionPrefetch();
-
-    const selection = getSelectedPreviewTarget();
-    if (selection.reason !== "ok") return;
-
-    const cached = getCachedPreviewEntry(selection.key);
-    if (cached?.thumbSrc || cached?.fullSrc) return;
-
-    selectionPrefetchKey = selection.key;
-    selectionPrefetchTimer = setTimeout(() => {
-        selectionPrefetchTimer = null;
-        const current = getSelectedPreviewTarget();
-        if (current.reason !== "ok" || current.key !== selectionPrefetchKey) return;
-        void prefetchPreviewThumbnail(current.item);
-    }, PREVIEW_SELECTION_PREFETCH_DELAY_MS);
+    const asset = payloadToPreviewAsset(await PreviewFile(msgID));
+    await decodePreviewSource(asset.src);
+    return asset;
 }
 
 export async function loadPreview(target) {
@@ -434,7 +318,9 @@ export async function loadPreview(target) {
     const filename = String(target?.name || filenameEl?.textContent || "Preview");
     const token = ++previewRequestToken;
     const previousActivePreviewKey = activePreviewKey;
+    const previousActivePreviewMsgID = activePreviewMsgID;
     activePreviewKey = previewKey;
+    activePreviewMsgID = msgID;
 
     if (!msgID || !previewKey) {
         const err = new Error("Download failed");
@@ -447,55 +333,33 @@ export async function loadPreview(target) {
     let fullShown = false;
 
     try {
-        const cached = getCachedPreviewEntry(previewKey);
-        if (cached?.fullSrc) {
-            try {
-                await decodePreviewSource(cached.fullSrc);
-                if (token !== previewRequestToken || !isPreviewOpen()) return null;
-                fullShown = true;
-                showPreviewImage(cached.fullSrc, filename);
-                return cached;
-            } catch {
-                deletePreviewCacheEntry(previewKey);
-            }
-        }
+        setPreviewProgress(0);
 
-        if (cached?.thumbSrc) {
-            try {
-                await decodePreviewSource(cached.thumbSrc);
-                if (token !== previewRequestToken || !isPreviewOpen()) return null;
-                showPreviewImage(cached.thumbSrc, filename);
-            } catch {
-                deletePreviewCacheEntry(previewKey);
-            }
-        } else {
-            void resolveThumbnailPreviewEntry(target)
-                .then((entry) => {
-                    if (fullShown || token !== previewRequestToken || !isPreviewOpen()) return;
-                    const previewSrc = entry.thumbSrc || entry.fullSrc || "";
-                    if (!previewSrc) return;
-                    showPreviewImage(previewSrc, filename);
-                })
-                .catch(() => {});
-        }
+        void resolveThumbnailPreviewEntry(target)
+            .then((asset) => {
+                if (fullShown || token !== previewRequestToken || !isPreviewOpen()) return;
+                if (!asset?.src) return;
+                showPreviewImage(asset.src, filename, { keepLoading: true });
+            })
+            .catch(() => {});
 
-        const entry = await resolveFullPreviewEntry(target);
+        const asset = await resolveFullPreviewEntry(target);
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
 
-        const fullSrc = entry.fullSrc || entry.thumbSrc || "";
-        if (!fullSrc) {
+        if (!asset?.src) {
             throw new Error("Download failed");
         }
 
         fullShown = true;
-        showPreviewImage(fullSrc, filename);
-        return entry;
+        showPreviewImage(asset.src, filename);
+        return asset;
     } catch (err) {
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
         const normalized = normalizePreviewError(err);
         const keepCurrentImage = isPreviewVisible() && previousActivePreviewKey === previewKey;
         if (!keepCurrentImage) {
             activePreviewKey = previousActivePreviewKey;
+            activePreviewMsgID = previousActivePreviewMsgID;
         }
         showPreviewError(normalized.message, { keepCurrentImage });
         throw normalized;
@@ -518,6 +382,7 @@ export function closePreviewModal() {
         errorEl.style.display = "none";
         errorEl.textContent = "";
     }
+    hidePreviewProgress();
     resetImageSurface();
 }
 
@@ -606,6 +471,7 @@ export function setupPreviewModal() {
     filenameEl = document.getElementById("preview-filename");
     imageEl = document.getElementById("preview-image");
     loadingEl = document.getElementById("preview-loading");
+    loadingFillEl = document.getElementById("preview-loading-fill");
     errorEl = document.getElementById("preview-error");
     closeBtnEl = document.getElementById("preview-close");
     previewReady = true;
@@ -631,11 +497,20 @@ export function setupPreviewModal() {
         if (!isPreviewOpen() || !imageEl.getAttribute("src")) return;
         showPreviewError("Not a supported image");
     });
+    if (window.runtime?.EventsOn) {
+        window.runtime.EventsOn("preview_progress", (msgID, percent) => {
+            if (!isPreviewOpen()) return;
+
+            const targetID = Number(msgID);
+            if (!Number.isFinite(targetID) || targetID !== activePreviewMsgID) return;
+
+            setPreviewProgress(percent);
+        });
+    }
 
     window.addEventListener("keydown", (event) => {
         void handlePreviewKeydown(event);
     }, true);
-    window.addEventListener("tdrive:selectionchange", scheduleSelectionPrefetch);
 
     return true;
 }

@@ -29,14 +29,11 @@ import (
 )
 
 type App struct {
-	ctx              context.Context
-	Codech           chan string
-	Passch           chan string
-	Client           *telegram.Client
-	previewMu        sync.Mutex
-	previewClient    *telegram.Client
-	previewChannelID int64
-	previewChannel   *tg.InputChannel
+	ctx       context.Context
+	Codech    chan string
+	Passch    chan string
+	Client    *telegram.Client
+	previewMu sync.Mutex
 }
 type TDriveFile struct {
 	ID         int    `json:"id"`
@@ -46,6 +43,11 @@ type TDriveFile struct {
 	Date       int    `json:"date"`
 }
 
+type DownloadResult struct {
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+	SavedPath string `json:"saved_path,omitempty"`
+}
 type PreviewPayload struct {
 	DataBase64 string `json:"data_base64"`
 	MimeType   string `json:"mime_type"`
@@ -769,6 +771,15 @@ type ProgressWriter struct {
 	LastPrint time.Time
 }
 
+type PreviewProgressWriter struct {
+	Writer    io.Writer
+	Total     int64
+	Current   int64
+	Ctx       context.Context
+	LastPrint time.Time
+	MsgID     int
+}
+
 // i named it Dwrite first but then i learnt that
 // WE MUST NAME THIS "Write" coz
 // the Telegram library Stream() function demands an argument of type 'io.Writer'.
@@ -802,40 +813,31 @@ func (pw *ProgressWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func (a *App) resetPreviewSessionLocked() {
-	a.Client = nil
-	a.previewClient = nil
-	a.previewChannel = nil
-	a.previewChannelID = 0
-}
-
-func (a *App) previewClientLocked() (*telegram.Client, error) {
-	if a.previewClient != nil {
-		return a.previewClient, nil
-	}
-
-	client, err := auth.Connect()
+func (pw *PreviewProgressWriter) Write(p []byte) (int, error) {
+	n, err := pw.Writer.Write(p)
 	if err != nil {
-		return nil, err
+		return n, fmt.Errorf("error updating preview progress: %v", err)
 	}
 
-	a.previewClient = client
-	return client, nil
-}
+	pw.Current += int64(n)
+	if time.Since(pw.LastPrint) > 100*time.Millisecond {
+		var perct float64
 
-func (a *App) previewChannelLocked(ctx context.Context, api *tg.Client, channelID int64) (*tg.InputChannel, error) {
-	if a.previewChannel != nil && a.previewChannelID == channelID {
-		return a.previewChannel, nil
+		if pw.Total > 0 {
+			perct = (float64(pw.Current) / float64(pw.Total)) * 100
+		} else {
+			perct = 100
+		}
+
+		if perct > 100 {
+			perct = 100
+		}
+
+		runtime.EventsEmit(pw.Ctx, "preview_progress", pw.MsgID, perct)
+		pw.LastPrint = time.Now()
 	}
 
-	inChan, _, err := auth.ResolveDriveChannel(ctx, api, channelID)
-	if err != nil {
-		return nil, err
-	}
-
-	a.previewChannel = inChan
-	a.previewChannelID = channelID
-	return inChan, nil
+	return n, nil
 }
 
 func (a *App) withPreviewSession(fn func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel) error) error {
@@ -856,7 +858,7 @@ func (a *App) withPreviewSession(fn func(ctx context.Context, api *tg.Client, in
 		return errPreviewDownloadFailed
 	}
 
-	err = client.Run(a.ctx, func(ctx context.Context) error {
+	return client.Run(a.ctx, func(ctx context.Context) error {
 		inChan, _, err := auth.ResolveDriveChannel(ctx, client.API(), channelID)
 		if err != nil {
 			return errPreviewDownloadFailed
@@ -864,7 +866,6 @@ func (a *App) withPreviewSession(fn func(ctx context.Context, api *tg.Client, in
 
 		return fn(ctx, client.API(), inChan)
 	})
-	return err
 }
 
 func loadPreviewDocument(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, msgID int) (*tg.Document, string, string, error) {
@@ -969,11 +970,19 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 		}
 
 		var buf bytes.Buffer
+		pw := &PreviewProgressWriter{
+			Writer:    &buf,
+			Total:     int64(doc.Size),
+			Ctx:       a.ctx,
+			LastPrint: time.Now(),
+			MsgID:     msgID,
+		}
 		d := downloader.NewDownloader()
-		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, &buf); err != nil {
+		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, pw); err != nil {
 			return errPreviewDownloadFailed
 		}
 
+		runtime.EventsEmit(a.ctx, "preview_progress", msgID, 100.0)
 		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
 		return err
 	})
@@ -984,29 +993,29 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 	return payload, nil
 }
 
-func (a *App) DownloadFile(msgID int, TgMsgID int) string {
+func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 	channelid, err := auth.LoadConfig()
 	if err != nil || channelid == 0 {
-		return "Error: Drive ID not found"
+		return DownloadResult{Status: "error", Message: "Drive ID not found"}
 	}
 
 	freshClient, err := auth.Connect()
 	if err != nil {
-		return "Connection error: " + err.Error()
+		return DownloadResult{Status: "error", Message: "Connection error: " + err.Error()}
 	}
 
-	var status string = "Download Started..."
+	downloadResult := DownloadResult{Status: "error", Message: "Download failed"}
 
 	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
 		inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
 		if err != nil {
-			status = "Error: " + err.Error()
+			downloadResult = DownloadResult{Status: "error", Message: "Error: " + err.Error()}
 			return nil
 		}
 
 		targetID := []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}}
 
-		result, err := freshClient.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		messageResult, err := freshClient.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
 			Channel: inChan,
 			ID:      targetID,
 		})
@@ -1015,7 +1024,7 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) string {
 		}
 
 		var targetMsg *tg.Message
-		switch m := result.(type) {
+		switch m := messageResult.(type) {
 		case *tg.MessagesChannelMessages:
 			if len(m.Messages) > 0 {
 				targetMsg, _ = m.Messages[0].(*tg.Message)
@@ -1023,19 +1032,19 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) string {
 		}
 
 		if targetMsg == nil {
-			status = "Error: Message deleted or not found"
+			downloadResult = DownloadResult{Status: "error", Message: "Message deleted or not found"}
 			return nil
 		}
 
 		docMedia, ok := targetMsg.Media.(*tg.MessageMediaDocument)
 		if !ok {
-			status = "Error: This is not a file"
+			downloadResult = DownloadResult{Status: "error", Message: "This is not a file"}
 			return nil
 		}
 
 		doc, ok := docMedia.Document.(*tg.Document)
 		if !ok {
-			status = "Error: Empty document"
+			downloadResult = DownloadResult{Status: "error", Message: "Empty document"}
 			return nil
 		}
 
@@ -1068,8 +1077,13 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) string {
 			Title:           "Save File As...",
 		})
 
-		if err != nil || savePath == "" {
-			status = "Download canceled"
+		if err != nil {
+			downloadResult = DownloadResult{Status: "error", Message: "Failed to choose download location: " + err.Error()}
+			return nil
+		}
+
+		if savePath == "" {
+			downloadResult = DownloadResult{Status: "canceled", Message: "Download canceled"}
 			return nil
 		}
 
@@ -1077,7 +1091,7 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) string {
 
 		f, err := os.Create(savePath)
 		if err != nil {
-			status = "Disk Error: " + err.Error()
+			downloadResult = DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 			return nil
 		}
 		defer f.Close()
@@ -1090,20 +1104,24 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) string {
 		}
 
 		_, err = d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, pw)
-		runtime.EventsEmit(a.ctx, "download_progress", 100.0)
 		if err != nil {
-			status = "Network Error: " + err.Error()
+			downloadResult = DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 			return nil
 		}
 
-		status = "Download Complete! Saved to: " + savePath
+		runtime.EventsEmit(a.ctx, "download_progress", 100.0)
+		downloadResult = DownloadResult{
+			Status:    "success",
+			Message:   "Download complete",
+			SavedPath: savePath,
+		}
 		return nil
 	})
 	if err != nil {
-		return "System Error: " + err.Error()
+		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}
 	}
 
-	return status
+	return downloadResult
 }
 
 func (a *App) DeleteFile(msgID int) string {

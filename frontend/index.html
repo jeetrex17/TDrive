@@ -243,7 +243,11 @@
                     <button id="preview-close" class="preview-close-btn" type="button" aria-label="Close preview" title="Close preview">×</button>
                 </div>
                 <div id="preview-stage" class="preview-content">
-                    <div id="preview-loading" class="preview-loading" aria-hidden="true"></div>
+                    <div id="preview-loading" class="preview-loading" aria-hidden="true" style="display: none;">
+                        <div class="preview-loading-track" aria-hidden="true">
+                            <div id="preview-loading-fill" class="preview-loading-fill"></div>
+                        </div>
+                    </div>
                     <div id="preview-error" class="preview-error" style="display: none;" role="alert"></div>
                     <img id="preview-image" src="" alt="Preview" hidden>
                 </div>
