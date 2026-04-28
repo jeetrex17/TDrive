@@ -7,6 +7,7 @@ import {
     CheckLoginStatus, InitDrive
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation.js';
+import { loadChannels } from './channels.js';
 
 export function hideAllScreens() {
     const screens = ["setupcontainer", "phonecontainer", "codecontainer", "passwordcontainer", "success-screen"];
@@ -99,6 +100,11 @@ export async function showDashboard() {
     }
 
     if (status) status.innerText = "Ready";
+
+    // Load drive list (personal + any joined shared) before the first
+    // refreshFiles call, so the sidebar populates and folder-control
+    // gating runs based on the active drive.
+    await loadChannels();
     window.refreshFiles();
 }
 

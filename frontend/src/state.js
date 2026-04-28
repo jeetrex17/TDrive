@@ -53,6 +53,11 @@ export const state = {
     selectionMoveBtnEl: null,
     selectionDeleteBtnEl: null,
     selectionClearBtnEl: null,
+
+    // Drives (Step 4: shared drives)
+    activeChannel: null,         // { id, title, kind }
+    channels: [],                // [{ id, title, kind, isActive, inviteLink }]
+    channelSwitchInProgress: false,
 };
 
 // Helper to reset folder caches (called on refresh)

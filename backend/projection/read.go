@@ -256,6 +256,24 @@ func FileParent(db *sql.DB, channelID int64, msgID int64) (string, error) {
 	return parent, err
 }
 
+// FileUploader returns the uploader_user_id stored for the file. Used by
+// shared-drive delete gating: only the uploader (or, later, an admin) may
+// tomb a shared-drive file.
+//
+// Returns 0 with nil error if uploader is unknown (legacy rows from before
+// Step 3 don't carry this).
+func FileUploader(db *sql.DB, channelID int64, msgID int64) (int64, error) {
+	var uploader int64
+	err := db.QueryRow(`
+		SELECT uploader_user_id FROM files
+		WHERE channel_id = ? AND msg_id = ?
+	`, channelID, msgID).Scan(&uploader)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("projection: file not found")
+	}
+	return uploader, err
+}
+
 func FolderParent(db *sql.DB, channelID int64, folderID string) (string, error) {
 	var parent string
 	err := db.QueryRow(`

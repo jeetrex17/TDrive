@@ -92,12 +92,28 @@
             
             <aside class="sidebar">
                 <div class="logo">TDrive</div>
-                
-                <nav>
-                    <a href="#" class="nav-item active">
-                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
-                        My Cloud
-                    </a>
+
+                <nav id="drives-nav" class="drives-nav">
+                    <div class="drives-section">
+                        <div class="drives-section-title">My Drive</div>
+                        <div id="drives-personal" class="drives-list"></div>
+                    </div>
+
+                    <div class="drives-section">
+                        <div class="drives-section-title">Shared with me</div>
+                        <div id="drives-shared" class="drives-list"></div>
+                    </div>
+
+                    <div class="drives-actions">
+                        <button id="open-new-drive" class="drive-action-btn" type="button" title="Create a new shared drive">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                            New shared drive
+                        </button>
+                        <button id="open-join-drive" class="drive-action-btn" type="button" title="Join a shared drive via invite link">
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 14l11-11m0 0v6m0-6h-6"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h6"/></svg>
+                            Join with link
+                        </button>
+                    </div>
                 </nav>
 
                 <div class="storage-info">
@@ -129,7 +145,7 @@
 	                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
 	                        </button>
 
-                        <button class="secondary-btn folder-btn" onclick="openNewFolderModal()" title="New Folder">
+                        <button id="new-folder-btn" class="secondary-btn folder-btn" onclick="openNewFolderModal()" title="New Folder">
                             <svg class="btn-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11v6m3-3H9"/></svg>
                             Folder
                         </button>
@@ -143,6 +159,10 @@
 
                 <div id="transfer-progress" class="transfer-progress" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="display: none;">
                     <div id="transfer-progress-fill" class="transfer-progress-fill"></div>
+                </div>
+
+                <div id="shared-drive-banner" class="shared-drive-banner" style="display: none;">
+                    Folders in shared drives coming next. For now, files only — drop in whatever you want to share.
                 </div>
 
                 <div class="drive-breadcrumb">
@@ -254,6 +274,53 @@
             </div>
         </div>
     </div>
+
+        <div id="new-drive-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="new-drive-title">
+                <h3 id="new-drive-title" class="modal-title">New shared drive</h3>
+                <p class="modal-subtitle">Friends can join your drive with the invite link you'll get next.</p>
+                <input id="new-drive-name" type="text" placeholder="Drive name (e.g. Goa Trip)" autocomplete="off">
+                <div class="modal-actions">
+                    <button id="new-drive-cancel" class="secondary-btn" type="button">Cancel</button>
+                    <button id="new-drive-create" class="primary-btn" type="button">Create</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="join-drive-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="join-drive-title">
+                <h3 id="join-drive-title" class="modal-title">Join shared drive</h3>
+                <p class="modal-subtitle">Paste the t.me invite link you received from a friend.</p>
+                <input id="join-drive-link" type="text" placeholder="https://t.me/+..." autocomplete="off">
+                <div class="modal-actions">
+                    <button id="join-drive-cancel" class="secondary-btn" type="button">Cancel</button>
+                    <button id="join-drive-go" class="primary-btn" type="button">Join</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="share-drive-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="share-drive-title">
+                <h3 id="share-drive-title" class="modal-title">Invite link</h3>
+                <p class="modal-subtitle">Anyone with this link can join the drive.</p>
+                <input id="share-drive-link" type="text" readonly>
+                <div class="modal-actions">
+                    <button id="share-drive-close" class="secondary-btn" type="button">Close</button>
+                    <button id="share-drive-copy" class="primary-btn" type="button">Copy link</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="leave-drive-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="leave-drive-title">
+                <h3 id="leave-drive-title" class="modal-title">Leave drive?</h3>
+                <p id="leave-drive-subtitle" class="modal-subtitle">You can rejoin later with the invite link.</p>
+                <div class="modal-actions">
+                    <button id="leave-drive-cancel" class="secondary-btn" type="button">Cancel</button>
+                    <button id="leave-drive-confirm" class="primary-btn danger" type="button">Leave</button>
+                </div>
+            </div>
+        </div>
 
     <script type="module" src="/src/main.js"></script>
 </body>
