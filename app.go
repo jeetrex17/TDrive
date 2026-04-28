@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -14,13 +13,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"TDrive/backend/auth"
-
 	"TDrive/backend"
+	"TDrive/backend/auth"
+	"TDrive/backend/projection"
 
-	"github.com/google/uuid"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
@@ -29,11 +28,32 @@ import (
 )
 
 type App struct {
-	ctx       context.Context
-	Codech    chan string
-	Passch    chan string
-	Client    *telegram.Client
-	previewMu sync.Mutex
+	ctx              context.Context
+	Codech           chan string
+	Passch           chan string
+	Client           *telegram.Client
+	previewMu        sync.Mutex
+	activeChannelID  atomic.Int64
+}
+
+func (a *App) ActiveChannelID() int64 {
+	return a.activeChannelID.Load()
+}
+
+func (a *App) SetActiveChannel(channelID int64) error {
+	if channelID <= 0 {
+		return fmt.Errorf("invalid channel id")
+	}
+	if backend.DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	var got int64
+	err := backend.DB.QueryRow(`SELECT channel_id FROM channels WHERE channel_id = ?`, channelID).Scan(&got)
+	if err != nil {
+		return fmt.Errorf("channel not known locally")
+	}
+	a.activeChannelID.Store(channelID)
+	return nil
 }
 type TDriveFile struct {
 	ID         int    `json:"id"`
@@ -87,14 +107,10 @@ func previewFilenameFromDocument(doc *tg.Document) string {
 	return ""
 }
 
-func lookupStoredFilename(msgID int, doc *tg.Document) string {
-	if backend.DB != nil {
-		var name string
-		if err := backend.DB.QueryRow(`SELECT name FROM files WHERE msg_id = ?`, msgID).Scan(&name); err == nil {
-			name = strings.TrimSpace(name)
-			if name != "" {
-				return name
-			}
+func lookupStoredFilename(channelID int64, msgID int, doc *tg.Document) string {
+	if backend.DB != nil && channelID != 0 {
+		if name := projection.LookupFileName(backend.DB, channelID, int64(msgID)); name != "" {
+			return name
 		}
 	}
 
@@ -454,6 +470,10 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 	if backend.DB == nil {
 		return nil, fmt.Errorf("db not ready")
 	}
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return nil, fmt.Errorf("no active channel")
+	}
 
 	type uploadedResult struct {
 		UploadID int
@@ -478,7 +498,7 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			meta, err := a.uploadSingleFile(uploadID, path, pid)
+			meta, err := a.uploadSingleFile(uploadID, path, pid, channelID)
 			if err != nil {
 				mu.Lock()
 				failed++
@@ -509,28 +529,18 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 		}
 	}
 
-	tx, err := backend.DB.Begin()
-	if err != nil {
-		emitLocalIndexError("local index write failed")
-		return uploadedFiles, err
-	}
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO files (msg_id, name, size, parent_id, upload_time) VALUES (?, ?, ?, ?, ?)`)
-	if err != nil {
-		_ = tx.Rollback()
-		emitLocalIndexError("local index write failed")
-		return uploadedFiles, err
-	}
+	files := make([]projection.FileSlim, 0, len(uploaded))
 	for _, item := range uploaded {
-		meta := item.Meta
-		if _, err := stmt.Exec(meta.TgMsgID, meta.Name, meta.Size, meta.ParentID, meta.UploadTime); err != nil {
-			_ = stmt.Close()
-			_ = tx.Rollback()
-			emitLocalIndexError("local index write failed")
-			return uploadedFiles, err
-		}
+		m := item.Meta
+		files = append(files, projection.FileSlim{
+			MsgID:      int64(m.TgMsgID),
+			Name:       m.Name,
+			Size:       m.Size,
+			ParentID:   m.ParentID,
+			UploadTime: m.UploadTime,
+		})
 	}
-	_ = stmt.Close()
-	if err := tx.Commit(); err != nil {
+	if err := projection.LocalRegisterFiles(backend.DB, channelID, files, 0); err != nil {
 		emitLocalIndexError("local index write failed")
 		return uploadedFiles, err
 	}
@@ -545,7 +555,7 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 	return uploadedFiles, nil
 }
 
-func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (backend.FileMetaData, error) {
+func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, channelID int64) (backend.FileMetaData, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return backend.FileMetaData{}, err
@@ -567,8 +577,7 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (
 		UploadID:  uploadID,
 	}
 
-	channelid, err := auth.LoadConfig()
-	if err != nil || channelid == 0 {
+	if channelID == 0 {
 		return backend.FileMetaData{}, fmt.Errorf("drive channel id not found")
 	}
 
@@ -580,7 +589,7 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string) (
 	var msgID int
 
 	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		_, inputPeer, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
+		_, inputPeer, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelID)
 		if err != nil {
 			return err
 		}
@@ -660,7 +669,10 @@ func (a *App) InitDrive() string {
 		return "Error: App context not ready"
 	}
 
-	var output string
+	var (
+		output    string
+		channelID int64
+	)
 
 	client, err := auth.Connect()
 	if err != nil {
@@ -672,7 +684,7 @@ func (a *App) InitDrive() string {
 		if err != nil {
 			return err
 		}
-
+		channelID = id
 		output = fmt.Sprintf("Success , channel ID: %d", id)
 		return nil
 	})
@@ -680,12 +692,19 @@ func (a *App) InitDrive() string {
 		return "Error: " + err.Error()
 	}
 
+	if channelID != 0 && backend.DB != nil {
+		if err := backend.MigratePersonalChannel(channelID); err != nil {
+			return "Error: migration failed: " + err.Error()
+		}
+		a.activeChannelID.Store(channelID)
+	}
+
 	return output
 }
 
 func (a *App) GetFileList() []TDriveFile {
-	channelid, err := auth.LoadConfig()
-	if err != nil || channelid == 0 {
+	channelid := a.ActiveChannelID()
+	if channelid == 0 {
 		return nil
 	}
 
@@ -836,13 +855,13 @@ func (pw *PreviewProgressWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func (a *App) withPreviewSession(fn func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel) error) error {
+func (a *App) withPreviewSession(fn func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, channelID int64) error) error {
 	if a.ctx == nil {
 		return errPreviewDownloadFailed
 	}
 
-	channelID, err := auth.LoadConfig()
-	if err != nil || channelID == 0 {
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
 		return errPreviewDownloadFailed
 	}
 
@@ -860,11 +879,11 @@ func (a *App) withPreviewSession(fn func(ctx context.Context, api *tg.Client, in
 			return errPreviewDownloadFailed
 		}
 
-		return fn(ctx, client.API(), inChan)
+		return fn(ctx, client.API(), inChan, channelID)
 	})
 }
 
-func loadPreviewDocument(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, msgID int) (*tg.Document, string, string, error) {
+func loadPreviewDocument(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, channelID int64, msgID int) (*tg.Document, string, string, error) {
 	result, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
 		Channel: inChan,
 		ID: []tg.InputMessageClass{
@@ -890,7 +909,7 @@ func loadPreviewDocument(ctx context.Context, api *tg.Client, inChan *tg.InputCh
 		return nil, "", "", errPreviewNotFound
 	}
 
-	filename := lookupStoredFilename(msgID, doc)
+	filename := lookupStoredFilename(channelID, msgID, doc)
 	mimeType, ok := previewMimeTypeForName(filename)
 	if !ok {
 		return nil, "", "", errPreviewNotSupported
@@ -906,8 +925,8 @@ func (a *App) PreviewThumbnail(msgID int) (PreviewPayload, error) {
 
 	var payload PreviewPayload
 
-	err := a.withPreviewSession(func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel) error {
-		doc, _, mimeType, err := loadPreviewDocument(ctx, api, inChan, msgID)
+	err := a.withPreviewSession(func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, channelID int64) error {
+		doc, _, mimeType, err := loadPreviewDocument(ctx, api, inChan, channelID, msgID)
 		if err != nil {
 			return err
 		}
@@ -955,8 +974,8 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 
 	var payload PreviewPayload
 
-	err := a.withPreviewSession(func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel) error {
-		doc, _, mimeType, err := loadPreviewDocument(ctx, api, inChan, msgID)
+	err := a.withPreviewSession(func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, channelID int64) error {
+		doc, _, mimeType, err := loadPreviewDocument(ctx, api, inChan, channelID, msgID)
 		if err != nil {
 			return err
 		}
@@ -990,8 +1009,8 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 }
 
 func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
-	channelid, err := auth.LoadConfig()
-	if err != nil || channelid == 0 {
+	channelid := a.ActiveChannelID()
+	if channelid == 0 {
 		return DownloadResult{Status: "error", Message: "Drive ID not found"}
 	}
 
@@ -1059,12 +1078,8 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 			lookupID = TgMsgID
 		}
 		if backend.DB != nil {
-			var name string
-			if err := backend.DB.QueryRow(`SELECT name FROM files WHERE msg_id = ?`, lookupID).Scan(&name); err == nil {
-				name = strings.TrimSpace(name)
-				if name != "" {
-					originalName = name
-				}
+			if name := projection.LookupFileName(backend.DB, channelid, int64(lookupID)); name != "" {
+				originalName = name
 			}
 		}
 
@@ -1125,8 +1140,8 @@ func (a *App) DeleteFile(msgID int) string {
 		return "Error: DB not ready"
 	}
 
-	channelid, err := auth.LoadConfig()
-	if err != nil || channelid == 0 {
+	channelid := a.ActiveChannelID()
+	if channelid == 0 {
 		return "Error: Drive ID not found"
 	}
 
@@ -1155,12 +1170,11 @@ func (a *App) DeleteFile(msgID int) string {
 		return "Telegram Error: " + err.Error()
 	}
 
-	res, err := backend.DB.Exec(`DELETE FROM files WHERE msg_id = ?`, msgID)
-	if err != nil {
+	if err := projection.LocalDeleteFile(backend.DB, channelid, int64(msgID)); err != nil {
+		if errors.Is(err, projection.ErrFileNotFound) {
+			return "Deleted from tg, but not found in local DB."
+		}
 		return "Deleted, but failed to update local DB: " + err.Error()
-	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
-		return "Deleted from tg, but not found in local DB."
 	}
 
 	return "Success"
@@ -1170,12 +1184,11 @@ func (a *App) GetStorageUsed() (int64, error) {
 	if backend.DB == nil {
 		return 0, fmt.Errorf("db not ready")
 	}
-
-	var total int64
-	if err := backend.DB.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM files`).Scan(&total); err != nil {
-		return 0, err
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return 0, nil
 	}
-	return total, nil
+	return projection.StorageUsed(backend.DB, channelID)
 }
 
 func (a *App) GetCodech() chan string {
@@ -1231,48 +1244,36 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 	if backend.DB == nil {
 		return backend.Folder{}, fmt.Errorf("db not ready")
 	}
-
-	foldername = strings.TrimSpace(foldername)
-	if foldername == "" {
-		return backend.Folder{}, fmt.Errorf("folder name can't be empty")
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return backend.Folder{}, fmt.Errorf("no active channel")
 	}
 
-	parentID = strings.TrimSpace(parentID)
-	if parentID != "" {
-		var tmp int
-		if err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE id = ? LIMIT 1`, parentID).Scan(&tmp); err != nil {
-			if err == sql.ErrNoRows {
-				return backend.Folder{}, fmt.Errorf("parent folder not found")
-			}
+	created, err := projection.LocalCreateFolder(backend.DB, channelID, parentID, foldername)
+	if err != nil {
+		switch {
+		case errors.Is(err, projection.ErrInvalidName):
+			return backend.Folder{}, fmt.Errorf("folder name can't be empty")
+		case errors.Is(err, projection.ErrParentMissing):
+			return backend.Folder{}, fmt.Errorf("parent folder not found")
+		case errors.Is(err, projection.ErrNameTaken):
+			return backend.Folder{}, fmt.Errorf("folder '%s' already exists here", foldername)
+		case errors.Is(err, projection.ErrInvalidParent):
+			return backend.Folder{}, fmt.Errorf("invalid parent folder id")
+		default:
 			return backend.Folder{}, err
 		}
 	}
 
-	var tmp int
-	err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE parent_id = ? AND name = ? LIMIT 1`, parentID, foldername).Scan(&tmp)
-	if err == nil {
-		return backend.Folder{}, fmt.Errorf("folder '%s' already exists here", foldername)
-	}
-	if err != nil && err != sql.ErrNoRows {
-		return backend.Folder{}, err
-	}
-
-	newFolder := backend.Folder{
-		Name:     foldername,
-		ParentID: parentID,
-		ID:       uuid.NewString(),
-	}
-	if _, err := backend.DB.Exec(`INSERT INTO folders (id, name, parent_id) VALUES (?, ?, ?)`, newFolder.ID, newFolder.Name, newFolder.ParentID); err != nil {
-		return backend.Folder{}, err
-	}
-
-	return newFolder, nil
+	return backend.Folder{
+		ID:       created.ID,
+		Name:     created.Name,
+		ParentID: created.ParentID,
+	}, nil
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-
-	rand.Seed(time.Now().UnixNano())
 
 	ac, err := auth.Connect()
 	if err != nil {
@@ -1289,6 +1290,15 @@ func (a *App) startup(ctx context.Context) {
 		fmt.Printf("Warning: Failed to init db schema: %v\n", err)
 		return
 	}
+
+	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {
+		if err := backend.MigratePersonalChannel(savedID); err != nil {
+			fmt.Printf("Warning: migration failed: %v\n", err)
+		} else {
+			a.activeChannelID.Store(savedID)
+		}
+	}
+
 	fmt.Println("TDrive DB ready!")
 }
 
@@ -1296,44 +1306,36 @@ func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
 	if backend.DB == nil {
 		return backend.FileSystem{}, fmt.Errorf("db not ready")
 	}
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return backend.FileSystem{Folders: []backend.Folder{}, Files: []backend.FileMetaData{}}, nil
+	}
+
+	folders, files, err := projection.ListFolderContents(backend.DB, channelID, parentID)
+	if err != nil {
+		return backend.FileSystem{}, err
+	}
 
 	result := backend.FileSystem{
-		Folders: []backend.Folder{},
-		Files:   []backend.FileMetaData{},
+		Folders: make([]backend.Folder, 0, len(folders)),
+		Files:   make([]backend.FileMetaData, 0, len(files)),
 	}
-
-	folderRows, err := backend.DB.Query(`SELECT id, name, parent_id FROM folders WHERE parent_id = ? ORDER BY name`, parentID)
-	if err != nil {
-		return backend.FileSystem{}, err
+	for _, f := range folders {
+		result.Folders = append(result.Folders, backend.Folder{
+			ID:       f.ID,
+			Name:     f.Name,
+			ParentID: f.ParentID,
+		})
 	}
-	defer folderRows.Close()
-	for folderRows.Next() {
-		var folder backend.Folder
-		if err := folderRows.Scan(&folder.ID, &folder.Name, &folder.ParentID); err != nil {
-			return backend.FileSystem{}, err
-		}
-		result.Folders = append(result.Folders, folder)
+	for _, f := range files {
+		result.Files = append(result.Files, backend.FileMetaData{
+			TgMsgID:    int(f.MsgID),
+			Name:       f.Name,
+			Size:       f.Size,
+			ParentID:   f.ParentID,
+			UploadTime: f.UploadTime,
+		})
 	}
-	if err := folderRows.Err(); err != nil {
-		return backend.FileSystem{}, err
-	}
-
-	fileRows, err := backend.DB.Query(`SELECT msg_id, name, size, parent_id, upload_time FROM files WHERE parent_id = ? ORDER BY upload_time DESC`, parentID)
-	if err != nil {
-		return backend.FileSystem{}, err
-	}
-	defer fileRows.Close()
-	for fileRows.Next() {
-		var file backend.FileMetaData
-		if err := fileRows.Scan(&file.TgMsgID, &file.Name, &file.Size, &file.ParentID, &file.UploadTime); err != nil {
-			return backend.FileSystem{}, err
-		}
-		result.Files = append(result.Files, file)
-	}
-	if err := fileRows.Err(); err != nil {
-		return backend.FileSystem{}, err
-	}
-
 	return result, nil
 }
 
@@ -1341,127 +1343,83 @@ func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
 	if backend.DB == nil {
 		return nil, fmt.Errorf("db not ready")
 	}
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return []backend.SearchResult{}, nil
+	}
 
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return []backend.SearchResult{}, nil
 	}
 
-	if limit <= 0 {
-		limit = 200
-	}
-	if limit > 500 {
-		limit = 500
-	}
-
-	folderMap := make(map[string]backend.Folder)
-	allFolders, err := backend.DB.Query(`SELECT id, name, parent_id FROM folders`)
+	allFolders, err := projection.ListAllFolders(backend.DB, channelID)
 	if err != nil {
 		return nil, err
 	}
-	for allFolders.Next() {
-		var folder backend.Folder
-		if err := allFolders.Scan(&folder.ID, &folder.Name, &folder.ParentID); err != nil {
-			_ = allFolders.Close()
-			return nil, err
-		}
-		if folder.ID != "" {
-			folderMap[folder.ID] = folder
+	folderMap := make(map[string]projection.FolderSlim, len(allFolders))
+	for _, f := range allFolders {
+		if f.ID != "" {
+			folderMap[f.ID] = f
 		}
 	}
-	if err := allFolders.Err(); err != nil {
-		_ = allFolders.Close()
-		return nil, err
-	}
-	_ = allFolders.Close()
 
 	buildFolderPath := func(folderID string) string {
 		folderID = strings.TrimSpace(folderID)
-		if folderID == "" {
+		if folderID == projection.RootParent {
 			return "My Drive"
 		}
-
 		names := make([]string, 0, 8)
 		visited := make(map[string]bool)
 		cur := folderID
-
-		for cur != "" && !visited[cur] {
+		for cur != projection.RootParent && !visited[cur] {
 			visited[cur] = true
 			folder, ok := folderMap[cur]
 			if !ok {
 				break
 			}
-			name := strings.TrimSpace(folder.Name)
-			if name != "" {
+			if name := strings.TrimSpace(folder.Name); name != "" {
 				names = append(names, name)
 			}
 			cur = strings.TrimSpace(folder.ParentID)
 		}
-
 		if len(names) == 0 {
 			return "My Drive"
 		}
-
 		for i, j := 0, len(names)-1; i < j; i, j = i+1, j-1 {
 			names[i], names[j] = names[j], names[i]
 		}
-
 		return "My Drive / " + strings.Join(names, " / ")
 	}
 
-	pattern := "%" + query + "%"
-	results := make([]backend.SearchResult, 0, limit*2)
-
-	folderRows, err := backend.DB.Query(`SELECT id, name, parent_id FROM folders WHERE name LIKE ? COLLATE NOCASE ORDER BY name LIMIT ?`, pattern, limit)
+	hits, err := projection.Search(backend.DB, channelID, query, limit)
 	if err != nil {
 		return nil, err
 	}
-	for folderRows.Next() {
-		var folder backend.Folder
-		if err := folderRows.Scan(&folder.ID, &folder.Name, &folder.ParentID); err != nil {
-			_ = folderRows.Close()
-			return nil, err
-		}
-		results = append(results, backend.SearchResult{
-			Type:     "folder",
-			ID:       folder.ID,
-			Name:     folder.Name,
-			ParentID: folder.ParentID,
-			Path:     buildFolderPath(folder.ID),
-		})
-	}
-	if err := folderRows.Err(); err != nil {
-		_ = folderRows.Close()
-		return nil, err
-	}
-	_ = folderRows.Close()
 
-	fileRows, err := backend.DB.Query(`SELECT msg_id, name, size, parent_id, upload_time FROM files WHERE name LIKE ? COLLATE NOCASE ORDER BY upload_time DESC LIMIT ?`, pattern, limit)
-	if err != nil {
-		return nil, err
-	}
-	for fileRows.Next() {
-		var file backend.FileMetaData
-		if err := fileRows.Scan(&file.TgMsgID, &file.Name, &file.Size, &file.ParentID, &file.UploadTime); err != nil {
-			_ = fileRows.Close()
-			return nil, err
+	results := make([]backend.SearchResult, 0, len(hits))
+	for _, h := range hits {
+		switch h.Type {
+		case "folder":
+			results = append(results, backend.SearchResult{
+				Type:     "folder",
+				ID:       h.ID,
+				Name:     h.Name,
+				ParentID: h.ParentID,
+				Path:     buildFolderPath(h.ID),
+			})
+		case "file":
+			results = append(results, backend.SearchResult{
+				Type:       "file",
+				ID:         fmt.Sprintf("%d", h.MsgID),
+				Name:       h.Name,
+				ParentID:   h.ParentID,
+				Size:       h.Size,
+				UploadTime: h.Time,
+				Path:       buildFolderPath(h.ParentID),
+			})
 		}
-		results = append(results, backend.SearchResult{
-			Type:       "file",
-			ID:         fmt.Sprintf("%d", file.TgMsgID),
-			Name:       file.Name,
-			ParentID:   file.ParentID,
-			Size:       file.Size,
-			UploadTime: file.UploadTime,
-			Path:       buildFolderPath(file.ParentID),
-		})
 	}
-	if err := fileRows.Err(); err != nil {
-		_ = fileRows.Close()
-		return nil, err
-	}
-	_ = fileRows.Close()
-
 	return results, nil
 }
 
@@ -1469,23 +1427,17 @@ func (a *App) GetAllFsMsgIDs() ([]int, error) {
 	if backend.DB == nil {
 		return nil, fmt.Errorf("db not ready")
 	}
-
-	rows, err := backend.DB.Query(`SELECT msg_id FROM files`)
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return []int{}, nil
+	}
+	ids64, err := projection.AllFileMsgIDs(backend.DB, channelID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	out := make([]int, 0, 512)
-	for rows.Next() {
-		var id int
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	out := make([]int, 0, len(ids64))
+	for _, id := range ids64 {
+		out = append(out, int(id))
 	}
 	return out, nil
 }
@@ -1494,93 +1446,23 @@ func (a *App) GetFolderSize(folderID string) (int64, error) {
 	if backend.DB == nil {
 		return 0, fmt.Errorf("db not ready")
 	}
-
-	folderID = strings.TrimSpace(folderID)
-	if folderID == "" {
-		return 0, fmt.Errorf("invalid folder id")
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return 0, fmt.Errorf("no active channel")
 	}
-
-	var tmp int
-	if err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE id = ? LIMIT 1`, folderID).Scan(&tmp); err != nil {
-		if err == sql.ErrNoRows {
-			return 0, fmt.Errorf("folder not found")
-		}
-		return 0, err
-	}
-
-	var total int64
-	query := `
-WITH RECURSIVE descendants(id, path) AS (
-    SELECT ?, ',' || ? || ','
-    UNION ALL
-    SELECT f.id, d.path || f.id || ','
-    FROM folders f
-    JOIN descendants d ON f.parent_id = d.id
-    WHERE instr(d.path, ',' || f.id || ',') = 0
-)
-SELECT COALESCE(SUM(files.size), 0)
-FROM files
-JOIN descendants d ON files.parent_id = d.id;
-`
-	if err := backend.DB.QueryRow(query, folderID, folderID).Scan(&total); err != nil {
-		return 0, err
-	}
-	return total, nil
+	return projection.FolderSize(backend.DB, channelID, folderID)
 }
 
-func collectDoomedIDsDB(targetFolderID string) (folderIDs []string, msgIDs []int, err error) {
-	visited := make(map[string]bool)
-	queue := []string{targetFolderID}
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if cur == "" || visited[cur] {
-			continue
-		}
-		visited[cur] = true
-		folderIDs = append(folderIDs, cur)
-
-		fileRows, err := backend.DB.Query(`SELECT msg_id FROM files WHERE parent_id = ?`, cur)
-		if err != nil {
-			return nil, nil, err
-		}
-		for fileRows.Next() {
-			var id int
-			if err := fileRows.Scan(&id); err != nil {
-				_ = fileRows.Close()
-				return nil, nil, err
-			}
-			msgIDs = append(msgIDs, id)
-		}
-		if err := fileRows.Err(); err != nil {
-			_ = fileRows.Close()
-			return nil, nil, err
-		}
-		_ = fileRows.Close()
-
-		folderRows, err := backend.DB.Query(`SELECT id FROM folders WHERE parent_id = ?`, cur)
-		if err != nil {
-			return nil, nil, err
-		}
-		for folderRows.Next() {
-			var id string
-			if err := folderRows.Scan(&id); err != nil {
-				_ = folderRows.Close()
-				return nil, nil, err
-			}
-			if id != "" && !visited[id] {
-				queue = append(queue, id)
-			}
-		}
-		if err := folderRows.Err(); err != nil {
-			_ = folderRows.Close()
-			return nil, nil, err
-		}
-		_ = folderRows.Close()
+func collectDoomedIDsDB(channelID int64, targetFolderID string) (folderIDs []string, msgIDs []int, err error) {
+	folders, msgIDs64, err := projection.CollectDescendants(backend.DB, channelID, targetFolderID)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	return folderIDs, msgIDs, nil
+	msgIDs = make([]int, 0, len(msgIDs64))
+	for _, id := range msgIDs64 {
+		msgIDs = append(msgIDs, int(id))
+	}
+	return folders, msgIDs, nil
 }
 
 // fully written by AI
@@ -1588,8 +1470,12 @@ func (a *App) DeleteFolder(folderID string) string {
 	if backend.DB == nil {
 		return "Error: DB not ready"
 	}
+	channelid := a.ActiveChannelID()
+	if channelid == 0 {
+		return "Error: No active channel"
+	}
 
-	doomedFolders, doomedMsgs, err := collectDoomedIDsDB(folderID)
+	doomedFolders, doomedMsgs, err := collectDoomedIDsDB(channelid, folderID)
 	if err != nil {
 		return "Error: " + err.Error()
 	}
@@ -1597,11 +1483,6 @@ func (a *App) DeleteFolder(folderID string) string {
 	fmt.Printf("Deleting Folder: Found %d sub-folders and %d files to delete.\n", len(doomedFolders), len(doomedMsgs))
 
 	if len(doomedMsgs) > 0 {
-		channelid, err := auth.LoadConfig()
-		if err != nil {
-			return "Error: No channel ID"
-		}
-
 		freshClient, err := auth.Connect()
 		if err != nil {
 			return "Connection Error"
@@ -1636,25 +1517,11 @@ func (a *App) DeleteFolder(folderID string) string {
 		}
 	}
 
-	tx, err := backend.DB.Begin()
-	if err != nil {
-		return "Error: " + err.Error()
+	doomedMsgIDs64 := make([]int64, 0, len(doomedMsgs))
+	for _, m := range doomedMsgs {
+		doomedMsgIDs64 = append(doomedMsgIDs64, int64(m))
 	}
-
-	for _, msgID := range doomedMsgs {
-		if _, err := tx.Exec(`DELETE FROM files WHERE msg_id = ?`, msgID); err != nil {
-			_ = tx.Rollback()
-			return "Error: " + err.Error()
-		}
-	}
-	for _, id := range doomedFolders {
-		if _, err := tx.Exec(`DELETE FROM folders WHERE id = ?`, id); err != nil {
-			_ = tx.Rollback()
-			return "Error: " + err.Error()
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
+	if err := projection.LocalDeleteFolderTree(backend.DB, channelid, doomedFolders, doomedMsgIDs64); err != nil {
 		return "Error: " + err.Error()
 	}
 
@@ -1665,38 +1532,31 @@ func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID str
 	if backend.DB == nil {
 		return "Error: DB not ready"
 	}
-
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return "Error: No active channel"
+	}
 	if msgID <= 0 {
 		return "Error: Invalid msgID"
 	}
 
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "Untitled"
+	if projection.FileExists(backend.DB, channelID, int64(msgID)) {
+		return "Success"
 	}
 
-	parentID = strings.TrimSpace(parentID)
-	if parentID != "" {
-		var tmp int
-		if err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE id = ? LIMIT 1`, parentID).Scan(&tmp); err != nil {
-			if err == sql.ErrNoRows {
-				return "Error: Target folder not found"
-			}
+	if err := projection.LocalRegisterFile(
+		backend.DB, channelID, int64(msgID),
+		name, size, parentID, time.Now().Unix(), 0,
+	); err != nil {
+		switch {
+		case errors.Is(err, projection.ErrParentMissing):
+			return "Error: Target folder not found"
+		case errors.Is(err, projection.ErrInvalidParent):
+			return "Error: Invalid parent folder id"
+		default:
 			return "Error: " + err.Error()
 		}
 	}
-
-	var tmp int
-	if err := backend.DB.QueryRow(`SELECT 1 FROM files WHERE msg_id = ? LIMIT 1`, msgID).Scan(&tmp); err == nil {
-		return "Success"
-	} else if err != sql.ErrNoRows {
-		return "Error: " + err.Error()
-	}
-
-	if _, err := backend.DB.Exec(`INSERT OR IGNORE INTO files (msg_id, name, size, parent_id, upload_time) VALUES (?, ?, ?, ?, ?)`, msgID, name, size, parentID, time.Now().Unix()); err != nil {
-		return "Error: " + err.Error()
-	}
-
 	return "Success"
 }
 
@@ -1704,14 +1564,19 @@ func (a *App) RenameFile(msgID int, newName string) string {
 	if backend.DB == nil {
 		return "Error: DB not ready"
 	}
-
-	newName = strings.TrimSpace(newName)
-	if newName == "" {
-		return "Error: Invalid name"
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return "Error: No active channel"
 	}
-
-	if _, err := backend.DB.Exec(`UPDATE files SET name = ? WHERE msg_id = ?`, newName, msgID); err != nil {
-		return "Error: " + err.Error()
+	if err := projection.LocalRenameFile(backend.DB, channelID, int64(msgID), newName); err != nil {
+		switch {
+		case errors.Is(err, projection.ErrInvalidName):
+			return "Error: Invalid name"
+		case errors.Is(err, projection.ErrFileNotFound):
+			return "Error: File not found"
+		default:
+			return "Error: " + err.Error()
+		}
 	}
 	return "Success"
 }
@@ -1720,14 +1585,19 @@ func (a *App) RenameFolder(folderID string, newName string) string {
 	if backend.DB == nil {
 		return "Error: DB not ready"
 	}
-
-	newName = strings.TrimSpace(newName)
-	if newName == "" {
-		return "Error: Invalid name"
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return "Error: No active channel"
 	}
-
-	if _, err := backend.DB.Exec(`UPDATE folders SET name = ? WHERE id = ?`, newName, folderID); err != nil {
-		return "Error: " + err.Error()
+	if err := projection.LocalRenameFolder(backend.DB, channelID, folderID, newName); err != nil {
+		switch {
+		case errors.Is(err, projection.ErrInvalidName):
+			return "Error: Invalid name"
+		case errors.Is(err, projection.ErrFolderNotFound), errors.Is(err, projection.ErrInvalidParent):
+			return "Error: Folder not found"
+		default:
+			return "Error: " + err.Error()
+		}
 	}
 	return "Success"
 }
@@ -1736,33 +1606,24 @@ func (a *App) MoveFile(msgID int, newParentID string) string {
 	if backend.DB == nil {
 		return "Error: DB not ready"
 	}
-
-	newParentID = strings.TrimSpace(newParentID)
-	if newParentID != "" {
-		var tmp int
-		if err := backend.DB.QueryRow(`SELECT 1 FROM folders WHERE id = ? LIMIT 1`, newParentID).Scan(&tmp); err != nil {
-			if err == sql.ErrNoRows {
-				return "Error: Target folder not found"
-			}
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return "Error: No active channel"
+	}
+	if err := projection.LocalMoveFile(backend.DB, channelID, int64(msgID), newParentID); err != nil {
+		switch {
+		case errors.Is(err, projection.ErrFileNotFound):
+			return "Error: File not found"
+		case errors.Is(err, projection.ErrParentMissing):
+			return "Error: Target folder not found"
+		case errors.Is(err, projection.ErrInvalidParent):
+			return "Error: Invalid target folder id"
+		case errors.Is(err, projection.ErrSamePlace):
+			return "Error: File is already in this folder"
+		default:
 			return "Error: " + err.Error()
 		}
 	}
-
-	var curParent string
-	if err := backend.DB.QueryRow(`SELECT parent_id FROM files WHERE msg_id = ?`, msgID).Scan(&curParent); err != nil {
-		if err == sql.ErrNoRows {
-			return "Error: File not found"
-		}
-		return "Error: " + err.Error()
-	}
-	if curParent == newParentID {
-		return "Error: File is already in this folder"
-	}
-
-	if _, err := backend.DB.Exec(`UPDATE files SET parent_id = ? WHERE msg_id = ?`, newParentID, msgID); err != nil {
-		return "Error: " + err.Error()
-	}
-
 	return "Success"
 }
 
@@ -1770,44 +1631,25 @@ func (a *App) MoveFolder(folderID string, newParentID string) string {
 	if backend.DB == nil {
 		return "Error: DB not ready"
 	}
-
-	newParentID = strings.TrimSpace(newParentID)
-
-	if folderID == newParentID {
-		return "Error: Cannot move folder into itself"
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return "Error: No active channel"
 	}
-
-	var curParent string
-	if err := backend.DB.QueryRow(`SELECT parent_id FROM folders WHERE id = ?`, folderID).Scan(&curParent); err != nil {
-		if err == sql.ErrNoRows {
+	if err := projection.LocalMoveFolder(backend.DB, channelID, folderID, newParentID); err != nil {
+		switch {
+		case errors.Is(err, projection.ErrFolderNotFound):
 			return "Error: Folder not found"
-		}
-		return "Error: " + err.Error()
-	}
-	if curParent == newParentID {
-		return "Error: Folder is already here"
-	}
-
-	if newParentID != "" {
-		cur := newParentID
-		for cur != "" {
-			if cur == folderID {
-				return "Error: Cannot move folder into its own subfolder"
-			}
-			var next string
-			if err := backend.DB.QueryRow(`SELECT parent_id FROM folders WHERE id = ?`, cur).Scan(&next); err != nil {
-				if err == sql.ErrNoRows {
-					return "Error: Target folder not found"
-				}
-				return "Error: " + err.Error()
-			}
-			cur = next
+		case errors.Is(err, projection.ErrParentMissing):
+			return "Error: Target folder not found"
+		case errors.Is(err, projection.ErrInvalidParent):
+			return "Error: Invalid target folder id"
+		case errors.Is(err, projection.ErrCycleRejected):
+			return "Error: Cannot move folder into its own subfolder"
+		case errors.Is(err, projection.ErrSamePlace):
+			return "Error: Folder is already here"
+		default:
+			return "Error: " + err.Error()
 		}
 	}
-
-	if _, err := backend.DB.Exec(`UPDATE folders SET parent_id = ? WHERE id = ?`, newParentID, folderID); err != nil {
-		return "Error: " + err.Error()
-	}
-
 	return "Success"
 }
