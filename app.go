@@ -18,8 +18,12 @@ import (
 
 	"TDrive/backend"
 	"TDrive/backend/auth"
+	"TDrive/backend/backfill"
 	"TDrive/backend/projection"
+	tdsync "TDrive/backend/sync"
+	"TDrive/backend/tgclient"
 
+	"github.com/google/uuid"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
@@ -28,16 +32,98 @@ import (
 )
 
 type App struct {
-	ctx              context.Context
-	Codech           chan string
-	Passch           chan string
-	Client           *telegram.Client
-	previewMu        sync.Mutex
-	activeChannelID  atomic.Int64
+	ctx             context.Context
+	Codech          chan string
+	Passch          chan string
+	Client          *telegram.Client
+	tg              tgclient.Client
+	syncEngine      *tdsync.Engine
+	backfillRunner  *backfill.Runner
+	backfillMu      sync.Mutex
+	backfilling     map[int64]bool
+	previewMu       sync.Mutex
+	activeChannelID atomic.Int64
+	selfUserID      atomic.Int64
+}
+
+// ResolvePeer satisfies tdsync.PeerResolver. The sync engine resolves peers
+// through the App so we share the existing auth.Connect plumbing and don't
+// have to duplicate access-hash lookup.
+func (a *App) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+	return a.channelPeer(ctx, channelID)
+}
+
+// channelPeer resolves the active drive's tgclient.InputPeer. Used by every
+// op that needs to send into Telegram. Resolution may hit Telegram once per
+// call; callers should not hold this across long operations.
+func (a *App) channelPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+	client, err := auth.Connect()
+	if err != nil {
+		return tgclient.InputPeer{}, err
+	}
+	var peer tgclient.InputPeer
+	err = client.Run(ctx, func(rctx context.Context) error {
+		_, ip, err := auth.ResolveDriveChannel(rctx, client.API(), channelID)
+		if err != nil {
+			return err
+		}
+		peer = tgclient.InputPeer{ChannelID: ip.ChannelID, AccessHash: ip.AccessHash}
+		return nil
+	})
+	return peer, err
+}
+
+// emitAndProject sends a control op and projects it locally. Returns the
+// Telegram msg_id used as the op's identity.
+//
+// On send failure: returns the error; nothing is projected.
+// On project failure after a successful send: logs, returns the error so
+// the caller can surface it. The op IS in Telegram and will be projected on
+// the next sync.
+func (a *App) emitAndProject(channelID int64, op projection.Op) (int64, error) {
+	if a.tg == nil {
+		return 0, fmt.Errorf("tg client not ready")
+	}
+	actorID, err := a.actorID(a.ctx)
+	if err != nil {
+		return 0, err
+	}
+	peer, err := a.channelPeer(a.ctx, channelID)
+	if err != nil {
+		return 0, err
+	}
+	header := projection.Format(op)
+	msgID, err := a.tg.SendControl(a.ctx, peer, header, true)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := projection.ProjectFromOp(backend.DB, channelID, msgID, op, actorID, header); err != nil {
+		fmt.Printf("warn: projection failed after send msg=%d op=%s: %v\n", msgID, op.Type, err)
+		return msgID, err
+	}
+	return msgID, nil
 }
 
 func (a *App) ActiveChannelID() int64 {
 	return a.activeChannelID.Load()
+}
+
+func (a *App) actorID(ctx context.Context) (int64, error) {
+	if a.tg == nil {
+		return 0, fmt.Errorf("tg client not ready")
+	}
+	if id := a.selfUserID.Load(); id != 0 {
+		return id, nil
+	}
+	id, err := a.tg.SelfID(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("self user id: %w", err)
+	}
+	if id == 0 {
+		return 0, fmt.Errorf("self user id not found")
+	}
+	a.selfUserID.Store(id)
+	return id, nil
 }
 
 func (a *App) SetActiveChannel(channelID int64) error {
@@ -55,6 +141,7 @@ func (a *App) SetActiveChannel(channelID int64) error {
 	a.activeChannelID.Store(channelID)
 	return nil
 }
+
 type TDriveFile struct {
 	ID         int    `json:"id"`
 	Name       string `json:"name"`
@@ -474,10 +561,16 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 	if channelID == 0 {
 		return nil, fmt.Errorf("no active channel")
 	}
+	actorID, err := a.actorID(a.ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	type uploadedResult struct {
-		UploadID int
-		Meta     backend.FileMetaData
+		UploadID  int
+		Meta      backend.FileMetaData
+		RawHeader string
+		Op        projection.Op
 	}
 
 	sem := make(chan struct{}, 3)
@@ -498,7 +591,7 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			meta, err := a.uploadSingleFile(uploadID, path, pid, channelID)
+			meta, op, header, err := a.uploadSingleFile(uploadID, path, pid, channelID)
 			if err != nil {
 				mu.Lock()
 				failed++
@@ -509,8 +602,10 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 
 			mu.Lock()
 			uploaded = append(uploaded, uploadedResult{
-				UploadID: uploadID,
-				Meta:     meta,
+				UploadID:  uploadID,
+				Meta:      meta,
+				RawHeader: header,
+				Op:        op,
 			})
 			mu.Unlock()
 		}(uploadID, path, pid)
@@ -529,20 +624,18 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 		}
 	}
 
-	files := make([]projection.FileSlim, 0, len(uploaded))
 	for _, item := range uploaded {
-		m := item.Meta
-		files = append(files, projection.FileSlim{
-			MsgID:      int64(m.TgMsgID),
-			Name:       m.Name,
-			Size:       m.Size,
-			ParentID:   m.ParentID,
-			UploadTime: m.UploadTime,
-		})
-	}
-	if err := projection.LocalRegisterFiles(backend.DB, channelID, files, 0); err != nil {
-		emitLocalIndexError("local index write failed")
-		return uploadedFiles, err
+		if _, err := projection.ProjectFromOp(
+			backend.DB,
+			channelID,
+			int64(item.Meta.TgMsgID),
+			item.Op,
+			actorID,
+			item.RawHeader,
+		); err != nil {
+			emitLocalIndexError("local index write failed")
+			return uploadedFiles, err
+		}
 	}
 
 	for _, item := range uploaded {
@@ -555,16 +648,16 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 	return uploadedFiles, nil
 }
 
-func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, channelID int64) (backend.FileMetaData, error) {
+func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, channelID int64) (backend.FileMetaData, projection.Op, string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return backend.FileMetaData{}, err
+		return backend.FileMetaData{}, projection.Op{}, "", err
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		return backend.FileMetaData{}, err
+		return backend.FileMetaData{}, projection.Op{}, "", err
 	}
 	filename := filepath.Base(filePath)
 	totalSize := info.Size()
@@ -578,12 +671,23 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, c
 	}
 
 	if channelID == 0 {
-		return backend.FileMetaData{}, fmt.Errorf("drive channel id not found")
+		return backend.FileMetaData{}, projection.Op{}, "", fmt.Errorf("drive channel id not found")
 	}
+
+	uploadTime := time.Now().Unix()
+	op := projection.Op{
+		Type:           projection.OpFileUpload,
+		Parent:         normalizeOpParent(parentID),
+		Name:           filename,
+		FileSize:       totalSize,
+		FileUploadTime: uploadTime,
+	}
+	header := projection.Format(op)
+	caption := header + "\nTDrive: " + filename
 
 	freshClient, err := auth.Connect()
 	if err != nil {
-		return backend.FileMetaData{}, err
+		return backend.FileMetaData{}, projection.Op{}, "", err
 	}
 
 	var msgID int
@@ -615,7 +719,7 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, c
 				},
 			},
 			RandomID: rand.Int63(),
-			Message:  fmt.Sprintf("TDrive File: %s", filename),
+			Message:  caption,
 		}
 
 		updates, err := freshClient.API().MessagesSendMedia(ctx, req)
@@ -632,16 +736,24 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, c
 		return nil
 	})
 	if err != nil {
-		return backend.FileMetaData{}, err
+		return backend.FileMetaData{}, projection.Op{}, "", err
 	}
 
 	return backend.FileMetaData{
 		Name:       filename,
 		Size:       totalSize,
 		TgMsgID:    msgID,
-		ParentID:   parentID,
-		UploadTime: time.Now().Unix(),
-	}, nil
+		ParentID:   normalizeOpParent(parentID),
+		UploadTime: uploadTime,
+	}, op, header, nil
+}
+
+func normalizeOpParent(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return projection.RootParent
+	}
+	return p
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) {
@@ -697,6 +809,7 @@ func (a *App) InitDrive() string {
 			return "Error: migration failed: " + err.Error()
 		}
 		a.activeChannelID.Store(channelID)
+		a.kickoffPersonalBackfill(channelID)
 	}
 
 	return output
@@ -1139,42 +1252,34 @@ func (a *App) DeleteFile(msgID int) string {
 	if backend.DB == nil {
 		return "Error: DB not ready"
 	}
-
 	channelid := a.ActiveChannelID()
 	if channelid == 0 {
 		return "Error: Drive ID not found"
 	}
 
-	freshClient, err := auth.Connect()
-	if err != nil {
-		return "Connection error: " + err.Error()
+	if !projection.FileExists(backend.DB, channelid, int64(msgID)) {
+		return "Error: File not found"
 	}
 
-	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
-		if err != nil {
-			return err
-		}
-
-		targetID := []int{msgID}
-		_, err = freshClient.API().ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
-			Channel: inChan,
-			ID:      targetID,
-		})
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return "Telegram Error: " + err.Error()
+	// Tomb first: visibility convergence is the contract; body delete is
+	// best-effort. If we deleted the body first and then failed to publish
+	// a tomb, other clients would see "the message vanished" with no signal.
+	tombOp := projection.Op{
+		Type: projection.OpTomb,
+		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
+	}
+	if _, err := a.emitAndProject(channelid, tombOp); err != nil {
+		return "Error: " + err.Error()
 	}
 
-	if err := projection.LocalDeleteFile(backend.DB, channelid, int64(msgID)); err != nil {
-		if errors.Is(err, projection.ErrFileNotFound) {
-			return "Deleted from tg, but not found in local DB."
-		}
-		return "Deleted, but failed to update local DB: " + err.Error()
+	peer, err := a.channelPeer(a.ctx, channelid)
+	if err != nil {
+		// Tomb succeeded; body cleanup deferred. Visible state is correct.
+		fmt.Printf("warn: tomb succeeded but peer resolve failed for msg=%d: %v\n", msgID, err)
+		return "Success"
+	}
+	if err := a.tg.DeleteMessages(a.ctx, peer, []int64{int64(msgID)}); err != nil {
+		fmt.Printf("warn: tomb succeeded but body delete failed for msg=%d: %v\n", msgID, err)
 	}
 
 	return "Success"
@@ -1249,31 +1354,49 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 		return backend.Folder{}, fmt.Errorf("no active channel")
 	}
 
-	created, err := projection.LocalCreateFolder(backend.DB, channelID, parentID, foldername)
-	if err != nil {
-		switch {
-		case errors.Is(err, projection.ErrInvalidName):
-			return backend.Folder{}, fmt.Errorf("folder name can't be empty")
-		case errors.Is(err, projection.ErrParentMissing):
-			return backend.Folder{}, fmt.Errorf("parent folder not found")
-		case errors.Is(err, projection.ErrNameTaken):
-			return backend.Folder{}, fmt.Errorf("folder '%s' already exists here", foldername)
-		case errors.Is(err, projection.ErrInvalidParent):
+	foldername = strings.TrimSpace(foldername)
+	if foldername == "" {
+		return backend.Folder{}, fmt.Errorf("folder name can't be empty")
+	}
+	parent := normalizeOpParent(parentID)
+	if parent != projection.RootParent {
+		if !projection.IsFolderID(parent) {
 			return backend.Folder{}, fmt.Errorf("invalid parent folder id")
-		default:
-			return backend.Folder{}, err
 		}
+		if !projection.FolderExists(backend.DB, channelID, parent) {
+			return backend.Folder{}, fmt.Errorf("parent folder not found")
+		}
+	}
+	taken, err := projection.FolderSiblingHasName(backend.DB, channelID, parent, foldername)
+	if err != nil {
+		return backend.Folder{}, err
+	}
+	if taken {
+		return backend.Folder{}, fmt.Errorf("folder '%s' already exists here", foldername)
+	}
+
+	folderID := projection.FolderIDPrefix + uuid.NewString()
+	op := projection.Op{
+		Type:   projection.OpMkdir,
+		Obj:    folderID,
+		Parent: parent,
+		Name:   foldername,
+	}
+	if _, err := a.emitAndProject(channelID, op); err != nil {
+		return backend.Folder{}, fmt.Errorf("create folder failed: %w", err)
 	}
 
 	return backend.Folder{
-		ID:       created.ID,
-		Name:     created.Name,
-		ParentID: created.ParentID,
+		ID:       folderID,
+		Name:     foldername,
+		ParentID: parent,
 	}, nil
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	a.tg = tgclient.NewGotd(auth.Connect)
 
 	ac, err := auth.Connect()
 	if err != nil {
@@ -1291,15 +1414,79 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
+	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, a)
+	a.backfillRunner = backfill.NewRunner(backend.DB, a.tg, a)
+	a.backfilling = make(map[int64]bool)
+
 	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {
 		if err := backend.MigratePersonalChannel(savedID); err != nil {
 			fmt.Printf("Warning: migration failed: %v\n", err)
 		} else {
 			a.activeChannelID.Store(savedID)
+			a.kickoffPersonalBackfill(savedID)
 		}
 	}
 
 	fmt.Println("TDrive DB ready!")
+}
+
+// kickoffPersonalBackfill runs RunPersonal in a background goroutine if it
+// isn't already running for this channel. Safe to call repeatedly — the
+// per-channel guard prevents concurrent runs and the runner short-circuits
+// if personal_backfill_done is already set.
+func (a *App) kickoffPersonalBackfill(channelID int64) {
+	a.backfillMu.Lock()
+	if a.backfilling[channelID] {
+		a.backfillMu.Unlock()
+		return
+	}
+	a.backfilling[channelID] = true
+	a.backfillMu.Unlock()
+
+	go func() {
+		defer func() {
+			a.backfillMu.Lock()
+			delete(a.backfilling, channelID)
+			a.backfillMu.Unlock()
+		}()
+		err := a.backfillRunner.RunPersonal(a.ctx, channelID, func(ev backfill.ProgressEvent) {
+			runtime.EventsEmit(a.ctx, "backfill_progress", ev.ChannelID, ev.Done, ev.Total, ev.Phase)
+		})
+		if err != nil {
+			fmt.Printf("backfill: %v\n", err)
+			runtime.EventsEmit(a.ctx, "backfill_error", channelID, err.Error())
+		}
+	}()
+}
+
+// SyncChannel triggers an incremental sync for the given channel. Wails-bound
+// for the future "Refresh" UI button and for debug.
+func (a *App) SyncChannel(channelID int64) error {
+	if a.syncEngine == nil {
+		return fmt.Errorf("sync engine not ready")
+	}
+	if channelID == 0 {
+		channelID = a.ActiveChannelID()
+	}
+	if channelID == 0 {
+		return fmt.Errorf("no active channel")
+	}
+	return a.syncEngine.Incremental(a.ctx, channelID)
+}
+
+// RebuildProjection wipes and replays the local projection for a channel
+// from the channel's replay_log. Hidden Wails method for debug/recovery.
+func (a *App) RebuildProjection(channelID int64) error {
+	if backend.DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	if channelID == 0 {
+		channelID = a.ActiveChannelID()
+	}
+	if channelID == 0 {
+		return fmt.Errorf("no active channel")
+	}
+	return projection.RebuildProjection(backend.DB, channelID)
 }
 
 func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
@@ -1453,19 +1640,6 @@ func (a *App) GetFolderSize(folderID string) (int64, error) {
 	return projection.FolderSize(backend.DB, channelID, folderID)
 }
 
-func collectDoomedIDsDB(channelID int64, targetFolderID string) (folderIDs []string, msgIDs []int, err error) {
-	folders, msgIDs64, err := projection.CollectDescendants(backend.DB, channelID, targetFolderID)
-	if err != nil {
-		return nil, nil, err
-	}
-	msgIDs = make([]int, 0, len(msgIDs64))
-	for _, id := range msgIDs64 {
-		msgIDs = append(msgIDs, int(id))
-	}
-	return folders, msgIDs, nil
-}
-
-// fully written by AI
 func (a *App) DeleteFolder(folderID string) string {
 	if backend.DB == nil {
 		return "Error: DB not ready"
@@ -1474,54 +1648,12 @@ func (a *App) DeleteFolder(folderID string) string {
 	if channelid == 0 {
 		return "Error: No active channel"
 	}
-
-	doomedFolders, doomedMsgs, err := collectDoomedIDsDB(channelid, folderID)
-	if err != nil {
-		return "Error: " + err.Error()
+	if !projection.IsFolderID(folderID) || !projection.FolderExists(backend.DB, channelid, folderID) {
+		return "Error: Folder not found"
 	}
 
-	fmt.Printf("Deleting Folder: Found %d sub-folders and %d files to delete.\n", len(doomedFolders), len(doomedMsgs))
-
-	if len(doomedMsgs) > 0 {
-		freshClient, err := auth.Connect()
-		if err != nil {
-			return "Connection Error"
-		}
-
-		err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-			inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
-			if err != nil {
-				return err
-			}
-
-			batchSize := 100
-			for i := 0; i < len(doomedMsgs); i += batchSize {
-				end := i + batchSize
-				if end > len(doomedMsgs) {
-					end = len(doomedMsgs)
-				}
-
-				batch := doomedMsgs[i:end]
-				_, err := freshClient.API().ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
-					Channel: inChan,
-					ID:      batch,
-				})
-				if err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return "Telegram Delete Failed: " + err.Error()
-		}
-	}
-
-	doomedMsgIDs64 := make([]int64, 0, len(doomedMsgs))
-	for _, m := range doomedMsgs {
-		doomedMsgIDs64 = append(doomedMsgIDs64, int64(m))
-	}
-	if err := projection.LocalDeleteFolderTree(backend.DB, channelid, doomedFolders, doomedMsgIDs64); err != nil {
+	op := projection.Op{Type: projection.OpRmdir, Obj: folderID}
+	if _, err := a.emitAndProject(channelid, op); err != nil {
 		return "Error: " + err.Error()
 	}
 
@@ -1544,18 +1676,30 @@ func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID str
 		return "Success"
 	}
 
-	if err := projection.LocalRegisterFile(
-		backend.DB, channelID, int64(msgID),
-		name, size, parentID, time.Now().Unix(), 0,
-	); err != nil {
-		switch {
-		case errors.Is(err, projection.ErrParentMissing):
-			return "Error: Target folder not found"
-		case errors.Is(err, projection.ErrInvalidParent):
+	parent := normalizeOpParent(parentID)
+	if parent != projection.RootParent {
+		if !projection.IsFolderID(parent) {
 			return "Error: Invalid parent folder id"
-		default:
-			return "Error: " + err.Error()
 		}
+		if !projection.FolderExists(backend.DB, channelID, parent) {
+			return "Error: Target folder not found"
+		}
+	}
+	cleanName := strings.TrimSpace(name)
+	if cleanName == "" {
+		cleanName = "Untitled"
+	}
+
+	op := projection.Op{
+		Type:           projection.OpMeta,
+		Obj:            fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
+		Parent:         parent,
+		Name:           cleanName,
+		FileSize:       size,
+		FileUploadTime: time.Now().Unix(),
+	}
+	if _, err := a.emitAndProject(channelID, op); err != nil {
+		return "Error: " + err.Error()
 	}
 	return "Success"
 }
@@ -1568,15 +1712,20 @@ func (a *App) RenameFile(msgID int, newName string) string {
 	if channelID == 0 {
 		return "Error: No active channel"
 	}
-	if err := projection.LocalRenameFile(backend.DB, channelID, int64(msgID), newName); err != nil {
-		switch {
-		case errors.Is(err, projection.ErrInvalidName):
-			return "Error: Invalid name"
-		case errors.Is(err, projection.ErrFileNotFound):
-			return "Error: File not found"
-		default:
-			return "Error: " + err.Error()
-		}
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return "Error: Invalid name"
+	}
+	if !projection.FileExists(backend.DB, channelID, int64(msgID)) {
+		return "Error: File not found"
+	}
+	op := projection.Op{
+		Type: projection.OpRename,
+		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
+		Name: newName,
+	}
+	if _, err := a.emitAndProject(channelID, op); err != nil {
+		return "Error: " + err.Error()
 	}
 	return "Success"
 }
@@ -1589,15 +1738,20 @@ func (a *App) RenameFolder(folderID string, newName string) string {
 	if channelID == 0 {
 		return "Error: No active channel"
 	}
-	if err := projection.LocalRenameFolder(backend.DB, channelID, folderID, newName); err != nil {
-		switch {
-		case errors.Is(err, projection.ErrInvalidName):
-			return "Error: Invalid name"
-		case errors.Is(err, projection.ErrFolderNotFound), errors.Is(err, projection.ErrInvalidParent):
-			return "Error: Folder not found"
-		default:
-			return "Error: " + err.Error()
-		}
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return "Error: Invalid name"
+	}
+	if !projection.IsFolderID(folderID) || !projection.FolderExists(backend.DB, channelID, folderID) {
+		return "Error: Folder not found"
+	}
+	op := projection.Op{
+		Type: projection.OpRename,
+		Obj:  folderID,
+		Name: newName,
+	}
+	if _, err := a.emitAndProject(channelID, op); err != nil {
+		return "Error: " + err.Error()
 	}
 	return "Success"
 }
@@ -1610,19 +1764,29 @@ func (a *App) MoveFile(msgID int, newParentID string) string {
 	if channelID == 0 {
 		return "Error: No active channel"
 	}
-	if err := projection.LocalMoveFile(backend.DB, channelID, int64(msgID), newParentID); err != nil {
-		switch {
-		case errors.Is(err, projection.ErrFileNotFound):
-			return "Error: File not found"
-		case errors.Is(err, projection.ErrParentMissing):
-			return "Error: Target folder not found"
-		case errors.Is(err, projection.ErrInvalidParent):
+	parent := normalizeOpParent(newParentID)
+	if parent != projection.RootParent {
+		if !projection.IsFolderID(parent) {
 			return "Error: Invalid target folder id"
-		case errors.Is(err, projection.ErrSamePlace):
-			return "Error: File is already in this folder"
-		default:
-			return "Error: " + err.Error()
 		}
+		if !projection.FolderExists(backend.DB, channelID, parent) {
+			return "Error: Target folder not found"
+		}
+	}
+	cur, err := projection.FileParent(backend.DB, channelID, int64(msgID))
+	if err != nil {
+		return "Error: File not found"
+	}
+	if cur == parent {
+		return "Error: File is already in this folder"
+	}
+	op := projection.Op{
+		Type:   projection.OpMove,
+		Obj:    fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
+		Parent: parent,
+	}
+	if _, err := a.emitAndProject(channelID, op); err != nil {
+		return "Error: " + err.Error()
 	}
 	return "Success"
 }
@@ -1635,21 +1799,45 @@ func (a *App) MoveFolder(folderID string, newParentID string) string {
 	if channelID == 0 {
 		return "Error: No active channel"
 	}
-	if err := projection.LocalMoveFolder(backend.DB, channelID, folderID, newParentID); err != nil {
-		switch {
-		case errors.Is(err, projection.ErrFolderNotFound):
-			return "Error: Folder not found"
-		case errors.Is(err, projection.ErrParentMissing):
-			return "Error: Target folder not found"
-		case errors.Is(err, projection.ErrInvalidParent):
+	if !projection.IsFolderID(folderID) {
+		return "Error: Invalid folder id"
+	}
+	parent := normalizeOpParent(newParentID)
+	if folderID == parent {
+		return "Error: Cannot move folder into its own subfolder"
+	}
+	if !projection.FolderExists(backend.DB, channelID, folderID) {
+		return "Error: Folder not found"
+	}
+	cur, err := projection.FolderParent(backend.DB, channelID, folderID)
+	if err != nil {
+		return "Error: Folder not found"
+	}
+	if cur == parent {
+		return "Error: Folder is already here"
+	}
+	if parent != projection.RootParent {
+		if !projection.IsFolderID(parent) {
 			return "Error: Invalid target folder id"
-		case errors.Is(err, projection.ErrCycleRejected):
-			return "Error: Cannot move folder into its own subfolder"
-		case errors.Is(err, projection.ErrSamePlace):
-			return "Error: Folder is already here"
-		default:
+		}
+		if !projection.FolderExists(backend.DB, channelID, parent) {
+			return "Error: Target folder not found"
+		}
+		isAnc, err := projection.IsAncestor(backend.DB, channelID, folderID, parent)
+		if err != nil {
 			return "Error: " + err.Error()
 		}
+		if isAnc {
+			return "Error: Cannot move folder into its own subfolder"
+		}
+	}
+	op := projection.Op{
+		Type:   projection.OpMove,
+		Obj:    folderID,
+		Parent: parent,
+	}
+	if _, err := a.emitAndProject(channelID, op); err != nil {
+		return "Error: " + err.Error()
 	}
 	return "Success"
 }
