@@ -77,6 +77,10 @@ export const state = {
     userNames: new Map(),
     userNameFailures: new Set(),
     userNameRequests: new Map(),
+
+    // Toast notifications (the global feedback surface). Each entry:
+    // { id, level, title, body, sticky, expiresAt, paused }
+    toasts: [],
 };
 
 // Helper to reset folder caches (called on refresh)

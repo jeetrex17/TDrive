@@ -3,6 +3,7 @@
 import { state } from '../state.js';
 import { escapeHtml } from '../utils.js';
 import { SelectFiles, DownloadFile } from '../../wailsjs/go/main/App';
+import { notify } from './notifications.js';
 
 const DOWNLOAD_TERMINAL_STATES = new Set(["done", "failed", "canceled"]);
 
@@ -90,9 +91,6 @@ export function setupDownloadProgress() {
 
         const clamped = Math.max(0, Math.min(100, value));
         showDownloadProgress(clamped);
-
-        const status = document.getElementById("status-msg");
-        if (status) status.innerText = `Downloading… ${Math.round(clamped)}%`;
     });
 }
 
@@ -297,9 +295,6 @@ async function startNextDownload() {
     renderDownloadItem(next);
     updateTransferPill();
 
-    const status = document.getElementById("status-msg");
-    if (status) status.innerText = "Downloading…";
-
     try {
         const result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
         next.message = result.message;
@@ -307,21 +302,23 @@ async function startNextDownload() {
         if (result.status === "success") {
             next.state = "done";
             next.progress = 100;
+            notify({ level: 'success', title: 'Download finished', body: String(next.name || '') });
         } else if (result.status === "canceled") {
             next.state = "canceled";
         } else {
             next.state = "failed";
+            notify({ level: 'error', title: 'Download failed', body: result.message || String(next.name || '') });
         }
     } catch (err) {
         console.error("Download failed:", err);
         next.message = "Download failed";
         next.state = "failed";
+        notify({ level: 'error', title: 'Download failed', body: String(next.name || '') });
     } finally {
         state.activeDownloadId = null;
         renderDownloadItem(next);
         updateTransferPill();
         hideDownloadProgress();
-        if (status) status.innerText = "Ready";
         startNextDownload();
     }
 }
@@ -469,11 +466,27 @@ export function setupUploadProgress() {
 
         if (state.uploadBatch) state.uploadBatch.done += 1;
         const batchFinished = Boolean(state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total);
+        const batchSummary = batchFinished ? state.uploadBatch : null;
         if (batchFinished) state.uploadBatch = null;
         renderTransferItem(uploadId);
         updateTransferPill();
 
         if (batchFinished) {
+            // Single success toast for the whole batch.
+            if (batchSummary && batchSummary.total > 0) {
+                if (batchSummary.failed === 0) {
+                    notify({
+                        level: 'success',
+                        title: batchSummary.total === 1 ? 'Upload complete' : `Uploaded ${batchSummary.total} files`,
+                    });
+                } else if (batchSummary.done > 0) {
+                    notify({
+                        level: 'warning',
+                        title: `Uploaded ${batchSummary.done} of ${batchSummary.total} files`,
+                        body: `${batchSummary.failed} failed.`,
+                    });
+                }
+            }
             window.refreshFiles();
         }
     });
@@ -497,11 +510,27 @@ export function setupUploadProgress() {
 
         if (state.uploadBatch) state.uploadBatch.failed += 1;
         const batchFinished = Boolean(state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total);
+        const batchSummary = batchFinished ? state.uploadBatch : null;
         if (batchFinished) state.uploadBatch = null;
         renderTransferItem(uploadId);
         updateTransferPill();
 
         if (batchFinished) {
+            if (batchSummary && batchSummary.failed > 0) {
+                if (batchSummary.done === 0) {
+                    notify({
+                        level: 'error',
+                        title: batchSummary.total === 1 ? 'Upload failed' : `Failed to upload ${batchSummary.failed} files`,
+                        body: filename || undefined,
+                    });
+                } else {
+                    notify({
+                        level: 'warning',
+                        title: `Uploaded ${batchSummary.done} of ${batchSummary.total} files`,
+                        body: `${batchSummary.failed} failed.`,
+                    });
+                }
+            }
             window.refreshFiles();
         }
     });
@@ -545,7 +574,11 @@ export async function uploadWithParentID(parentID) {
             state.transferUploadListEl.querySelectorAll('.transfer-item[data-type="upload"]').forEach((el) => el.remove());
         }
         updateTransferPill();
-        alert("UploadToDriveFS is missing in backend. Rebuild the app (wails dev/build) and try again.");
+        notify({
+            level: 'error',
+            title: 'Upload bindings missing',
+            body: 'UploadToDriveFS is missing in the backend. Rebuild the app (wails dev/build) and try again.',
+        });
         return;
     }
 
