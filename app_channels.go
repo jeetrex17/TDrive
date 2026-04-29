@@ -161,13 +161,18 @@ func (a *App) JoinSharedDrive(inviteLink string) (ChannelInfo, error) {
 	}
 	a.activeChannelID.Store(channelID)
 
-	// Initial sync runs in the background; UI listens for sync events
-	// (or just polls when "Refresh" is clicked).
-	go func() {
-		if err := a.syncEngine.InitialSyncEmptyChannel(a.ctx, channelID); err != nil {
-			fmt.Printf("initial sync failed for joined drive %d: %v\n", channelID, err)
-		}
-	}()
+	// Run the initial sync synchronously so the caller (frontend) only
+	// returns once the drive's history is projected. Avoids the prior race
+	// where a follow-up Incremental could grab the per-channel mutex first
+	// and trigger ChannelIsEmpty=false on this path. The frontend Join
+	// modal stays in a loading state during this call.
+	if err := a.syncEngine.InitialSyncEmptyChannel(a.ctx, channelID); err != nil {
+		fmt.Printf("initial sync failed for joined drive %d: %v\n", channelID, err)
+		// Don't fail the whole join — the channel row is inserted, the user
+		// can still see / refresh later. Surface as a non-fatal warning to
+		// the UI by returning the info; frontend can decide whether to
+		// announce the partial state.
+	}
 
 	return ChannelInfo{
 		ID:       channelID,
