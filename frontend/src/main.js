@@ -18,6 +18,14 @@ import { setupRenameModal } from './modules/modals/rename.js';
 import { setupMoveModal } from './modules/modals/move.js';
 import { setupFolderModal, openNewFolderModal } from './modules/modals/folder.js';
 import { setupPreviewModal } from './modules/modals/preview.js';
+import { setupNewDriveModal } from './modules/modals/new-drive.js';
+import { setupJoinDriveModal } from './modules/modals/join-drive.js';
+import { setupShareDriveModal } from './modules/modals/share-drive.js';
+import { setupLeaveDriveModal } from './modules/modals/leave-drive.js';
+
+// Sidebar / drives
+import { setupSidebar, renderSidebar } from './modules/sidebar.js';
+import { bindChannelsRenderers, refreshActiveDrive } from './modules/channels.js';
 
 // Setup window bindings that need to be available globally
 window.refreshFiles = refreshFiles;
@@ -26,7 +34,9 @@ window.triggerRefresh = function() {
         runGlobalSearch();
         return;
     }
-    refreshFiles();
+    // Manual refresh: pull new ops from Telegram, then re-render. Awaitable
+    // for callers that want to show progress, but most click handlers don't.
+    return refreshActiveDrive();
 };
 window.openNewFolderModal = openNewFolderModal;
 window.selectFile = function() {
@@ -49,6 +59,10 @@ window.onload = async function() {
     setupRenameModal();
     setupMoveModal();
     setupPreviewModal();
+    setupNewDriveModal();
+    setupJoinDriveModal();
+    setupShareDriveModal();
+    setupLeaveDriveModal();
 
     // Setup UI components
     setupBreadcrumb();
@@ -58,6 +72,15 @@ window.onload = async function() {
     setupUploadProgress();
     setupPasswordReveal();
     setupSearchBar();
+
+    // Sidebar — wire renderers BEFORE setup so the first render finds the
+    // right callbacks. setupSidebar will trigger an initial empty render;
+    // auth.js loads channels after InitDrive succeeds.
+    bindChannelsRenderers({
+        onSidebarUpdate: () => renderSidebar(),
+        onActiveDriveChanged: () => refreshFiles(),
+    });
+    setupSidebar();
 
     // Setup window bindings
     setupAuthWindowBindings();

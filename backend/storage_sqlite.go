@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"TDrive/backend/projection"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -68,33 +70,25 @@ func InitDB() error {
 	return nil
 }
 
+// EnsureSchema creates the projection metadata tables (channels, replay_log,
+// schema_version, etc.). It is safe to run on every startup.
+//
+// The folders/files tables are NOT created here — they're created either by
+// MigratePersonalChannel for a legacy DB or by createFreshFolders/Files
+// inside the migration for a fresh install. Calling code is expected to run
+// MigratePersonalChannel as soon as the personal channel ID is known.
 func EnsureSchema() error {
 	if DB == nil {
 		return fmt.Errorf("db not initialized")
 	}
+	return projection.EnsureSchema(DB)
+}
 
-	stmts := []string{
-		`CREATE TABLE IF NOT EXISTS folders (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			parent_id TEXT NOT NULL DEFAULT ''
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);`,
-		`CREATE TABLE IF NOT EXISTS files (
-			msg_id INTEGER PRIMARY KEY,
-			name TEXT NOT NULL,
-			size INTEGER NOT NULL,
-			parent_id TEXT NOT NULL DEFAULT '',
-			upload_time INTEGER NOT NULL
-		);`,
-		`CREATE INDEX IF NOT EXISTS idx_files_parent ON files(parent_id);`,
+// MigratePersonalChannel finalizes the schema and reshapes any legacy
+// folders/files rows so they live under the personal channel. Idempotent.
+func MigratePersonalChannel(personalChannelID int64) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
 	}
-
-	for _, stmt := range stmts {
-		if _, err := DB.Exec(stmt); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return projection.MigratePersonalChannel(DB, personalChannelID)
 }

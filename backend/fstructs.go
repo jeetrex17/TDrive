@@ -12,6 +12,7 @@ type FileMetaData struct {
 	TgMsgID    int    `json:"msg_id"`
 	ParentID   string `json:"parent_id"`
 	UploadTime int64  `json:"upload_time"`
+	UploaderID int64  `json:"uploader_id"`
 }
 
 type FileSystem struct {
@@ -26,5 +27,6 @@ type SearchResult struct {
 	ParentID   string `json:"parent_id"`
 	Size       int64  `json:"size"`
 	UploadTime int64  `json:"upload_time"`
+	UploaderID int64  `json:"uploader_id"`
 	Path       string `json:"path"`
 }

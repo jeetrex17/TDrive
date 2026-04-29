@@ -192,11 +192,13 @@ export function updateTransferPill() {
     if (uploadLabel && downloadLabel) label = `${uploadLabel} · ${downloadLabel}`;
     else label = uploadLabel || downloadLabel || "";
 
-    state.transferPillEl.innerHTML = `<span class="transfer-pill-dot" aria-hidden="true"></span><span class="transfer-pill-label">${escapeHtml(label)}</span>`;
-
     const uploadsDone = !hasUploads || !hasActiveUploads;
     const downloadsDone = !hasDownloads || downloadCounts.downloading === 0 && downloadCounts.queued === 0;
     const allDone = uploadsDone && downloadsDone;
+    state.transferPillEl.classList.toggle("is-idle", allDone && !hasFailures);
+    state.transferPillEl.title = label;
+    state.transferPillEl.innerHTML = `<span class="transfer-pill-dot" aria-hidden="true"></span><span class="transfer-pill-label">${escapeHtml(label)}</span>`;
+
     if (state.transferClearEl) state.transferClearEl.style.display = allDone ? "inline-flex" : "none";
 }
 

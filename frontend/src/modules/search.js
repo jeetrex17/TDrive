@@ -3,7 +3,8 @@ import { icons } from '../constants.js';
 import { escapeHtml, splitNameAndExt, formatBytes } from '../utils.js';
 import { clearSelection, handleRowSelection } from './selection.js';
 import { renderBreadcrumb } from './navigation.js';
-import { refreshFolderIndex } from './file-list.js';
+import { fillUploaderSlot, refreshFolderIndex } from './file-list.js';
+import { populateUploaderChips } from './uploaders.js';
 
 let activeToken = 0;
 let debounceTimer = null;
@@ -96,11 +97,23 @@ function renderSearchResults(results, query) {
             row.dataset.size = String(result.size || 0);
             row.dataset.parentId = String(result.parent_id || "");
             row.dataset.source = String(result.source || "fs");
+            row.dataset.uploaderId = String(result.uploader_id || 0);
+            row.dataset.uploadTime = String(result.upload_time || 0);
+            // Search results may not be in the active drive; keep
+            // owner-only gating consistent: same canOwnerAct heuristic as
+            // file-list. We approximate by reading state.activeChannel
+            // (search is currently scoped to active drive).
+            const ownerOnly = (state.activeChannel?.kind !== "shared")
+                || (Number(result.uploader_id || 0) > 0
+                    && Number(result.uploader_id) === Number(state.myUserID || 0));
+            row.dataset.canDelete = ownerOnly ? "true" : "false";
+            row.dataset.canRename = ownerOnly ? "true" : "false";
 
             row.innerHTML = `
                 <div class="row-name">
                     <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
                     ${escapeHtml(base)}
+                    <span class="uploader-chip" data-uploader-slot></span>
                 </div>
                 <div class="row-meta">${escapeHtml(result.path || "My Drive")}</div>
                 <div class="row-meta">${formatBytes(Number(result.size || 0))}</div>
@@ -108,6 +121,10 @@ function renderSearchResults(results, query) {
                     <button class="action-icon download" type="button" title="Download">${icons.download}</button>
                 </div>
             `;
+            fillUploaderSlot(row, {
+                uploaderID: Number(result.uploader_id || 0),
+                uploadTime: Number(result.upload_time || 0),
+            });
 
             const downloadBtn = row.querySelector("button.download");
             if (downloadBtn) {
@@ -123,6 +140,8 @@ function renderSearchResults(results, query) {
             list.appendChild(row);
         }
     });
+
+    populateUploaderChips(list);
 }
 
 function clearSearch({ refresh = true } = {}) {

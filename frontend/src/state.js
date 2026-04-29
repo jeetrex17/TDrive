@@ -53,6 +53,30 @@ export const state = {
     selectionMoveBtnEl: null,
     selectionDeleteBtnEl: null,
     selectionClearBtnEl: null,
+
+    // Drives (Step 4: shared drives)
+    activeChannel: null,         // { id, title, kind }
+    channels: [],                // [{ id, title, kind, isActive, inviteLink }]
+    channelSwitchInProgress: false,
+    myUserID: 0,                 // logged-in Telegram user id; 0 = unknown
+
+    // Virtual views overlaid on the file list. null = real folder tree;
+    // "orphaned" = orphan bucket. currentFolderId stays "" so backend
+    // reads/uploads/moves never see a fake parent id.
+    virtualView: null,
+
+    // Optimistic CreateFolder overlay. Map<tempId, { parentId, name }>.
+    // Pending entries render as ghost rows in the file list so folder
+    // creation feels instant despite the Telegram round-trip. Cleared on
+    // success or error; refreshFiles re-renders without the ghost.
+    pendingFolderOps: new Map(),
+
+    // Uploader display-name cache for shared-drive chips. Lazy + ephemeral
+    // — populated on demand via ResolveUsernames, never persisted. Keyed
+    // by stringified user id (matches the backend Wails return shape).
+    userNames: new Map(),
+    userNameFailures: new Set(),
+    userNameRequests: new Map(),
 };
 
 // Helper to reset folder caches (called on refresh)

@@ -62,6 +62,9 @@ export function setupContextMenu() {
         const row = e.target.closest(".drive-row");
         const type = row?.dataset?.type || "background";
 
+        // The synthetic Orphaned entry row is navigation-only; no menu.
+        if (type === "orphan-entry") return;
+
         if (row) ensureRowSelectedForContextMenu(row);
 
         if (state.selectedItems.size > 1) {
@@ -71,7 +74,7 @@ export function setupContextMenu() {
                 { label: `Delete ${count} items`, danger: true, onClick: () => openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
                 { type: "divider" },
                 { label: "Clear selection", onClick: () => clearSelection() },
-                { label: "Refresh", onClick: () => window.refreshFiles() },
+                { label: "Refresh", onClick: () => window.triggerRefresh() },
             ]);
             return;
         }
@@ -87,7 +90,7 @@ export function setupContextMenu() {
                 { label: `Delete "${folderName}"`, danger: true, onClick: () => window.initDeleteFolder(folderID, folderName) },
                 { type: "divider" },
                 { label: "New folder", onClick: () => window.openNewFolderModal() },
-                { label: "Refresh", onClick: () => window.refreshFiles() },
+                { label: "Refresh", onClick: () => window.triggerRefresh() },
             ]);
             return;
         }
@@ -98,20 +101,20 @@ export function setupContextMenu() {
             const fileSize = Number(row.dataset.size || 0);
             const fileSource = row.dataset.source || "fs";
             const canDelete = row.dataset.canDelete === "true";
+            const canRename = row.dataset.canRename !== "false";
             const items = [
                 { label: "Download", onClick: () => window.initDownload(fileID, fileName, fileSize) },
             ];
-            if (fileSource === "fs") {
-                items.push(
-                    { label: "Rename…", onClick: () => openRenameModal({ type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }) },
-                    { label: "Move to…", onClick: () => openMoveModal({ type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }) },
-                );
-            } else {
-                items.push(
-                    { label: "Rename…", onClick: () => openRenameModal({ type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" }) },
-                    { label: "Move to…", onClick: () => openMoveModal({ type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" }) },
-                );
+            if (canRename) {
+                const renamePayload = fileSource === "fs"
+                    ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }
+                    : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
+                items.push({ label: "Rename…", onClick: () => openRenameModal(renamePayload) });
             }
+            const movePayload = fileSource === "fs"
+                ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }
+                : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
+            items.push({ label: "Move to…", onClick: () => openMoveModal(movePayload) });
             if (canDelete) {
                 items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID, fileName) });
             }
@@ -119,7 +122,7 @@ export function setupContextMenu() {
                 { type: "divider" },
                 { label: "Upload", onClick: () => window.selectFile() },
                 { label: "New folder", onClick: () => window.openNewFolderModal() },
-                { label: "Refresh", onClick: () => window.refreshFiles() },
+                { label: "Refresh", onClick: () => window.triggerRefresh() },
             );
             show(e.clientX, e.clientY, items);
             return;
@@ -128,7 +131,7 @@ export function setupContextMenu() {
         show(e.clientX, e.clientY, [
             { label: "New folder", onClick: () => window.openNewFolderModal() },
             { label: "Upload", onClick: () => window.selectFile() },
-            { label: "Refresh", onClick: () => window.refreshFiles() },
+            { label: "Refresh", onClick: () => window.triggerRefresh() },
         ]);
     });
 }

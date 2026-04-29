@@ -35,6 +35,9 @@ export function rowToSelectionItem(row) {
         size: Number(row?.dataset?.size || 0),
         source: String(row?.dataset?.source || "fs"),
         parentId: String(row?.dataset?.parentId || ""),
+        uploaderID: Number(row?.dataset?.uploaderId || 0),
+        canDelete: row?.dataset?.canDelete !== "false",
+        canRename: row?.dataset?.canRename !== "false",
         row,
     };
 }
@@ -162,6 +165,9 @@ export function getSelectionPayload() {
         size: item.size,
         source: item.source,
         parentId: item.parentId,
+        uploaderID: item.uploaderID || 0,
+        canDelete: item.canDelete !== false,
+        canRename: item.canRename !== false,
     }));
 }
 

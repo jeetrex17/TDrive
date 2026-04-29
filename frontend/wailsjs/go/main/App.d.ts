@@ -3,11 +3,15 @@
 import {backend} from '../models';
 import {main} from '../models';
 
+export function ActiveChannelID():Promise<number>;
+
 export function CheckLoginStatus():Promise<boolean>;
 
 export function CheckSystemStatus():Promise<string>;
 
 export function CreateFolder(arg1:string,arg2:string):Promise<backend.Folder>;
+
+export function CreateSharedDrive(arg1:string):Promise<main.ChannelInfo>;
 
 export function DeleteFile(arg1:number):Promise<string>;
 
@@ -25,6 +29,10 @@ export function GetFolderContents(arg1:string):Promise<backend.FileSystem>;
 
 export function GetFolderSize(arg1:string):Promise<number>;
 
+export function GetInviteLink(arg1:number):Promise<string>;
+
+export function GetOrphanedFiles():Promise<Array<backend.FileMetaData>>;
+
 export function GetPassch():Promise<any>;
 
 export function GetStorageUsed():Promise<number>;
@@ -32,6 +40,12 @@ export function GetStorageUsed():Promise<number>;
 export function Greet(arg1:string):Promise<string>;
 
 export function InitDrive():Promise<string>;
+
+export function JoinSharedDrive(arg1:string):Promise<main.ChannelInfo>;
+
+export function LeaveSharedDrive(arg1:number):Promise<void>;
+
+export function ListChannels():Promise<Array<main.ChannelInfo>>;
 
 export function LoginPhoneNumber(arg1:string):Promise<void>;
 
@@ -41,13 +55,19 @@ export function MoveFolder(arg1:string,arg2:string):Promise<string>;
 
 export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:string):Promise<string>;
 
+export function MyUserID():Promise<number>;
+
 export function PreviewFile(arg1:number):Promise<main.PreviewPayload>;
 
 export function PreviewThumbnail(arg1:number):Promise<main.PreviewPayload>;
 
+export function RebuildProjection(arg1:number):Promise<void>;
+
 export function RenameFile(arg1:number,arg2:string):Promise<string>;
 
 export function RenameFolder(arg1:string,arg2:string):Promise<string>;
+
+export function ResolveUsernames(arg1:Array<number>):Promise<Record<string, string>>;
 
 export function SaveSetup(arg1:number,arg2:string):Promise<string>;
 
@@ -57,8 +77,12 @@ export function SelectFiles():Promise<Array<string>>;
 
 export function SendHint(arg1:string):Promise<void>;
 
+export function SetActiveChannel(arg1:number):Promise<void>;
+
 export function SumbitCode(arg1:string):Promise<void>;
 
 export function SumbitPassword(arg1:string):Promise<void>;
+
+export function SyncChannel(arg1:number):Promise<void>;
 
 export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>):Promise<Array<backend.FileMetaData>>;

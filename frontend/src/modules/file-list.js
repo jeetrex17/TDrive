@@ -8,9 +8,10 @@ import { openRenameModal } from './modals/rename.js';
 import { navigateToFolder } from './navigation.js';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop.js';
 import {
-    GetFileList, DeleteFile, GetStorageUsed
+    GetFileList, DeleteFile, GetStorageUsed, GetOrphanedFiles,
 } from '../../wailsjs/go/main/App';
 import { enqueueDownload } from './transfers.js';
+import { populateUploaderChips, uploaderChipHTML } from './uploaders.js';
 
 export async function getFolderContents(parentID) {
     if (window.go?.main?.App?.GetFolderContents) {
@@ -43,6 +44,36 @@ export async function calculateFolderTotalBytes(folderID) {
         return Number.isFinite(bytes) && bytes >= 0 ? bytes : 0;
     }
     throw new Error("GetFolderSize is not available. Restart `wails dev` to regenerate bindings.");
+}
+
+// canOwnerActOnFile returns true when the current user is allowed to
+// rename/delete the given file. In personal drives it's always true (you
+// uploaded everything). In shared drives it's only true when the file's
+// recorded uploader matches the current user. Default-deny when uploader
+// or self id is unknown.
+export function canOwnerActOnFile(file) {
+    if (!file) return false;
+    if (state.activeChannel?.kind !== "shared") return true;
+    const uploader = Number(file.uploaderID ?? file.uploader_id ?? 0);
+    const me = Number(state.myUserID || 0);
+    if (!uploader || !me) return false;
+    return uploader === me;
+}
+
+// fillUploaderSlot writes the uploader chip text into the [data-uploader-slot]
+// span of the given row. No-op if the chip wouldn't apply (personal drive,
+// uploader unknown, etc.) — uploaderChipHTML returns null in those cases
+// and the slot stays empty.
+//
+// Safe to call before the user-name cache is populated; the slot stays
+// empty and a follow-up populateUploaderChips pass fills it once names
+// resolve.
+export function fillUploaderSlot(row, file) {
+    if (!row) return;
+    const slot = row.querySelector('[data-uploader-slot]');
+    if (!slot) return;
+    const html = uploaderChipHTML(file);
+    slot.innerHTML = html ?? '';
 }
 
 async function getAllFsMsgIDs() {
@@ -127,6 +158,10 @@ export function collectDescendants(folderId, children) {
 }
 
 export function refreshFiles() {
+    if (state.virtualView === "orphaned") {
+        return refreshOrphanView();
+    }
+
     const list = document.getElementById("file-list");
     const storageUsed = document.getElementById("storage-used");
     const requestedFolderId = state.currentFolderId;
@@ -173,7 +208,7 @@ export function refreshFiles() {
                 <div style="padding:20px; color:#c0caf5;">
                     <div style="font-weight:700; margin-bottom:8px;">Could not load this folder</div>
                     <div style="color:#8b95c5; margin-bottom:12px;">${escapeHtml(msg)}</div>
-                    <button class="secondary-btn" type="button" onclick="refreshFiles()">Retry</button>
+                    <button class="secondary-btn" type="button" onclick="triggerRefresh()">Retry</button>
                 </div>
             `;
             return;
@@ -190,6 +225,7 @@ export function refreshFiles() {
             name: f.name,
             size: f.size,
             date: f.upload_time,
+            uploaderID: Number(f.uploader_id || 0),
         }));
 
         const finalize = async () => {
@@ -222,12 +258,50 @@ export function refreshFiles() {
             folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
             files.sort((a, b) => (b.date || 0) - (a.date || 0));
 
-            if (folders.length === 0 && files.length === 0) {
+            // At root, surface a synthetic "Orphaned" entry if any files
+            // exist whose parent points at a tombstoned/missing folder.
+            // Real folders + files render below it. The query is cheap;
+            // running it always at root keeps the bucket honest after
+            // any folder delete.
+            let orphanCount = 0;
+            if (requestedFolderId === "") {
+                try {
+                    const orphans = await GetOrphanedFiles();
+                    orphanCount = Array.isArray(orphans) ? orphans.length : 0;
+                } catch (err) {
+                    console.warn("GetOrphanedFiles failed:", err);
+                }
+            }
+
+            // Pending optimistic-create rows scoped to the current parent.
+            // Computed up front so the empty-folder branch can include
+            // them — otherwise creating a folder inside an empty one
+            // would briefly show "This folder is empty" instead of the
+            // ghost row.
+            const pendingForParent = [];
+            for (const [tempId, op] of state.pendingFolderOps.entries()) {
+                if (op.parentId === requestedFolderId) {
+                    pendingForParent.push({ tempId, name: op.name });
+                }
+            }
+
+            if (folders.length === 0 && files.length === 0 && orphanCount === 0 && pendingForParent.length === 0) {
                 list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
                 return;
             }
 
             list.innerHTML = "";
+
+            if (orphanCount > 0) {
+                list.appendChild(buildOrphanEntryRow(orphanCount));
+            }
+
+            // Pending CreateFolder ghost rows: rendered before real folders
+            // so the just-clicked entry shows up at the top until the
+            // backend confirms it.
+            for (const op of pendingForParent) {
+                list.appendChild(buildPendingFolderRow(op.tempId, op.name));
+            }
 
             folders.forEach((folder) => {
                 const row = document.createElement("div");
@@ -350,12 +424,17 @@ export function refreshFiles() {
                 row.dataset.source = String(file.source || "fs");
                 row.dataset.size = String(file.size || 0);
                 row.dataset.parentId = requestedFolderId;
-                row.dataset.canDelete = "true";
+                row.dataset.uploaderId = String(file.uploaderID || 0);
+                row.dataset.uploadTime = String(file.date || 0);
+                const ownerOnly = canOwnerActOnFile(file);
+                row.dataset.canDelete = ownerOnly ? "true" : "false";
+                row.dataset.canRename = ownerOnly ? "true" : "false";
 
                 row.innerHTML = `
                     <div class="row-name">
                         <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
                         ${escapeHtml(base)}
+                        <span class="uploader-chip" data-uploader-slot></span>
                     </div>
                     <div class="row-meta">${formatDate(file.date)}</div>
                     <div class="row-meta">${formatBytes(file.size)}</div>
@@ -363,6 +442,10 @@ export function refreshFiles() {
                         <button class="action-icon download" type="button" title="Download">${icons.download}</button>
                     </div>
                 `;
+                fillUploaderSlot(row, {
+                    uploaderID: file.uploaderID,
+                    uploadTime: file.date,
+                });
 
                 const downloadBtn = row.querySelector("button.download");
                 if (downloadBtn) {
@@ -404,6 +487,7 @@ export function refreshFiles() {
                         e.stopPropagation();
                         const selection = window.getSelection?.();
                         if (selection) selection.removeAllRanges();
+                        if (!canOwnerActOnFile(file)) return;
                         openRenameModal({
                             type: "file",
                             id: file.id,
@@ -431,10 +515,168 @@ export function refreshFiles() {
                     } catch {}
                 }
             }
+
+            // Resolve any missing uploader names and inject chips. Fire-
+            // and-forget — rows are already shown without chips and will
+            // get them populated within ~one round-trip.
+            populateUploaderChips(list);
         };
 
         finalize();
     });
+}
+
+// buildPendingFolderRow renders an in-flight CreateFolder as a ghost row.
+// It looks like a real folder row but is dimmed and has no actions; click
+// is a no-op. Removed from the list once the Wails call resolves and
+// refreshFiles re-renders.
+function buildPendingFolderRow(tempId, name) {
+    const row = document.createElement("div");
+    row.className = "file-row drive-row folder-row pending-folder";
+    row.dataset.type = "pending-folder";
+    row.dataset.tempId = tempId;
+    row.title = "Creating…";
+    row.innerHTML = `
+        <div class="row-name">
+            <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
+            ${escapeHtml(name)}
+            <span class="pending-indicator" aria-hidden="true">·</span>
+        </div>
+        <div class="row-meta">Creating…</div>
+        <div class="row-meta">—</div>
+        <div class="row-actions"></div>
+    `;
+    return row;
+}
+
+// buildOrphanEntryRow renders the synthetic "Orphaned (N)" entry that
+// appears at the top of root listings. Click drops the user into the
+// virtual orphan view (no real folder navigation; state.currentFolderId
+// stays "").
+function buildOrphanEntryRow(count) {
+    const row = document.createElement("div");
+    row.className = "file-row drive-row folder-row orphan-entry";
+    row.dataset.type = "orphan-entry";
+    row.innerHTML = `
+        <div class="row-name">
+            <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
+            Orphaned <span style="opacity:.6;">(${count})</span>
+        </div>
+        <div class="row-meta">—</div>
+        <div class="row-meta">—</div>
+        <div class="row-actions"></div>
+    `;
+    row.title = "Files whose parent folder was deleted. Click to view.";
+    row.addEventListener("click", () => enterOrphanView());
+    row.addEventListener("dblclick", () => enterOrphanView());
+    return row;
+}
+
+export function enterOrphanView() {
+    state.virtualView = "orphaned";
+    refreshFiles();
+}
+
+export function exitOrphanView() {
+    state.virtualView = null;
+    refreshFiles();
+}
+
+async function refreshOrphanView() {
+    const list = document.getElementById("file-list");
+    const storageUsed = document.getElementById("storage-used");
+    clearSelection();
+    list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
+    if (storageUsed) {
+        // Storage usage stays consistent across virtual views.
+        GetStorageUsed()
+            .then((bytes) => {
+                const value = Number(bytes);
+                storageUsed.innerText = (Number.isFinite(value) && value >= 0)
+                    ? `${formatBytes(value)} / Unlimited`
+                    : "— / Unlimited";
+            })
+            .catch(() => { storageUsed.innerText = "— / Unlimited"; });
+    }
+
+    let orphans;
+    try {
+        orphans = await GetOrphanedFiles();
+    } catch (err) {
+        console.error("GetOrphanedFiles failed:", err);
+        list.innerHTML = '<div style="padding:20px; color:#c0caf5;">Failed to load orphan files.</div>';
+        return;
+    }
+    orphans = Array.isArray(orphans) ? orphans : [];
+
+    list.innerHTML = "";
+
+    const banner = document.createElement("div");
+    banner.className = "orphan-banner";
+    banner.innerHTML = `
+        <div>
+            <strong>Orphaned files</strong> — these files lived in folders that were deleted.
+            They aren't in any folder anymore, but they aren't deleted either.
+        </div>
+        <button id="orphan-back" class="secondary-btn" type="button">Back to root</button>
+    `;
+    list.appendChild(banner);
+    banner.querySelector("#orphan-back")?.addEventListener("click", () => exitOrphanView());
+
+    if (orphans.length === 0) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "padding:20px; color:#565f89;";
+        empty.textContent = "Nothing here. (If you've just refreshed and expected files, try Refresh again.)";
+        list.appendChild(empty);
+        return;
+    }
+
+    orphans.sort((a, b) => (Number(b.upload_time || 0)) - (Number(a.upload_time || 0)));
+
+    orphans.forEach((file) => {
+        const { base, ext } = splitNameAndExt(file.name);
+        const row = document.createElement("div");
+        row.className = "file-row drive-row";
+        row.dataset.type = "file";
+        row.dataset.id = String(file.msg_id);
+        row.dataset.name = String(file.name || "");
+        row.dataset.source = "fs";
+        row.dataset.size = String(file.size || 0);
+        row.dataset.parentId = "";
+        row.dataset.uploaderId = String(file.uploader_id || 0);
+        const fileShape = {
+            id: file.msg_id,
+            name: file.name,
+            size: file.size,
+            uploaderID: Number(file.uploader_id || 0),
+        };
+        const ownerOnly = canOwnerActOnFile(fileShape);
+        row.dataset.canDelete = ownerOnly ? "true" : "false";
+        row.dataset.canRename = ownerOnly ? "true" : "false";
+        row.dataset.uploadTime = String(file.upload_time || 0);
+
+        row.innerHTML = `
+            <div class="row-name">
+                <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
+                ${escapeHtml(base)}
+                <span class="uploader-chip" data-uploader-slot></span>
+            </div>
+            <div class="row-meta">${formatDate(file.upload_time)}</div>
+            <div class="row-meta">${formatBytes(file.size)}</div>
+            <div class="row-actions">
+                <button class="action-icon download" type="button" title="Download">${icons.download}</button>
+            </div>
+        `;
+        row.querySelector("button.download")
+            ?.addEventListener("click", () => window.initDownload(file.msg_id, file.name, file.size));
+        row.addEventListener("click", (e) => {
+            if (e.target.closest("button")) return;
+            handleRowSelection(row, e);
+        });
+        list.appendChild(row);
+    });
+
+    populateUploaderChips(list);
 }
 
 export function setupFileListWindowBindings() {

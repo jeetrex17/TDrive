@@ -4,9 +4,10 @@ import { state } from '../state.js';
 import {
     CheckSystemStatus, SaveSetup,
     LoginPhoneNumber, SumbitCode, SumbitPassword,
-    CheckLoginStatus, InitDrive
+    CheckLoginStatus, InitDrive, MyUserID,
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation.js';
+import { loadChannels } from './channels.js';
 
 export function hideAllScreens() {
     const screens = ["setupcontainer", "phonecontainer", "codecontainer", "passwordcontainer", "success-screen"];
@@ -99,7 +100,26 @@ export async function showDashboard() {
     }
 
     if (status) status.innerText = "Ready";
-    window.refreshFiles();
+
+    // Load drive list (personal + any joined shared) before the first
+    // refresh, so the sidebar populates and folder-control gating runs
+    // based on the active drive. triggerRefresh syncs from Telegram first
+    // — important for users coming back to a drive that's seen new
+    // activity since they last had the app open.
+    await loadChannels();
+
+    // Resolve self user id once. Owner-only actions on shared drives
+    // depend on this; if it fails (e.g. offline), default-deny by
+    // leaving state.myUserID = 0.
+    try {
+        const id = await MyUserID();
+        state.myUserID = Number(id) || 0;
+    } catch (err) {
+        console.warn('MyUserID failed:', err);
+        state.myUserID = 0;
+    }
+
+    window.triggerRefresh();
 }
 
 export async function checkStatusAndShowScreen() {

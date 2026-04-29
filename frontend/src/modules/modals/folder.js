@@ -11,38 +11,63 @@ export function setupFolderModal() {
 
     if (!modal || !cancelBtn || !createBtn || !nameInput) return;
 
+    let inFlight = false;
+
     const close = () => {
         modal.style.display = "none";
         nameInput.value = "";
     };
 
-    cancelBtn.addEventListener("click", close);
+    cancelBtn.addEventListener("click", () => {
+        if (inFlight) return;
+        close();
+    });
     modal.addEventListener("click", (e) => {
-        if (e.target === modal) close();
+        if (e.target === modal && !inFlight) close();
     });
 
     const submit = async () => {
+        if (inFlight) return; // guard against double-submit
         const name = (nameInput.value || "").trim();
         if (!name) return;
 
         const status = document.getElementById("status-msg");
+        const parentId = state.currentFolderId;
+        const tempId = `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+
+        // Register the pending op so refreshFiles can render a ghost row.
+        state.pendingFolderOps.set(tempId, { parentId, name });
+        inFlight = true;
+        createBtn.disabled = true;
+        cancelBtn.disabled = true;
         if (status) status.innerText = "Creating folder...";
 
+        // Render immediately so the new row appears under the cursor
+        // before the Telegram round-trip completes.
+        window.refreshFiles();
+
         try {
-            await createFolder(name, state.currentFolderId);
+            await createFolder(name, parentId);
             close();
-            window.refreshFiles();
         } catch (err) {
             alert("Failed to create folder: " + err);
         } finally {
+            // Drop the pending overlay regardless of outcome. The follow-up
+            // refreshFiles either shows the new real row (success) or
+            // shows the prior state (error).
+            state.pendingFolderOps.delete(tempId);
+            inFlight = false;
+            createBtn.disabled = false;
+            cancelBtn.disabled = false;
             if (status) status.innerText = "Ready";
+            window.refreshFiles();
         }
     };
 
     createBtn.addEventListener("click", submit);
     nameInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter") submit();
-        if (e.key === "Escape") close();
+        if (e.key === "Escape" && !inFlight) close();
     });
 }
 
