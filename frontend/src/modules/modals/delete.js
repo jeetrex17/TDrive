@@ -7,6 +7,33 @@ import { ensureNotInsideDeletedFolder } from '../navigation.js';
 import { deleteFolder } from '../file-list.js';
 import { notify, dismissNotification } from '../notifications.js';
 
+// Build the success-toast title for a bulk delete. Names the item when
+// possible — "Deleted N files" / "Deleted folder X" — instead of the
+// generic "Item deleted" that hides what was acted on.
+function bulkSuccessTitle(items) {
+    if (!Array.isArray(items) || items.length === 0) return 'Items deleted';
+    const folders = items.filter((i) => i?.type === 'folder');
+    const files = items.filter((i) => i?.type === 'file');
+
+    if (items.length === 1) {
+        const single = items[0];
+        const name = String(single?.name || '').trim();
+        if (name) {
+            return single?.type === 'folder'
+                ? `Deleted folder "${name}"`
+                : `Deleted "${name}"`;
+        }
+        return single?.type === 'folder' ? 'Folder deleted' : 'File deleted';
+    }
+    if (folders.length === items.length) {
+        return `Deleted ${folders.length} folders`;
+    }
+    if (files.length === items.length) {
+        return `Deleted ${files.length} files`;
+    }
+    return `Deleted ${items.length} items (${files.length} file${files.length === 1 ? '' : 's'}, ${folders.length} folder${folders.length === 1 ? '' : 's'})`;
+}
+
 export function openDeleteModal(target) {
     const modal = document.getElementById("delete-modal");
     const title = document.getElementById("delete-modal-title");
@@ -134,7 +161,7 @@ export function setupDeleteModal() {
                 if (failures.length === 0) {
                     notify({
                         level: 'success',
-                        title: items.length === 1 ? 'Item deleted' : `Deleted ${items.length} items`,
+                        title: bulkSuccessTitle(items),
                     });
                 } else {
                     notify({
@@ -152,10 +179,13 @@ export function setupDeleteModal() {
                     : await DeleteFile(Number(target.id));
 
                 dismissNotification(progressId);
+                const name = String(target.name || '').trim();
                 if (typeof res === "string" && res.startsWith("Error")) {
                     notify({
                         level: 'error',
-                        title: target.type === 'folder' ? 'Could not delete folder' : 'Could not delete file',
+                        title: name
+                            ? `Could not delete ${target.type === 'folder' ? 'folder ' : ''}"${name}"`
+                            : (target.type === 'folder' ? 'Could not delete folder' : 'Could not delete file'),
                         body: res.replace(/^Error:?\s*/i, ''),
                     });
                     return;
@@ -163,8 +193,9 @@ export function setupDeleteModal() {
                 if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));
                 notify({
                     level: 'success',
-                    title: target.type === 'folder' ? 'Folder deleted' : 'File deleted',
-                    body: target.name ? String(target.name) : '',
+                    title: name
+                        ? `Deleted ${target.type === 'folder' ? 'folder ' : ''}"${name}"`
+                        : (target.type === 'folder' ? 'Folder deleted' : 'File deleted'),
                 });
                 window.refreshFiles();
             }
