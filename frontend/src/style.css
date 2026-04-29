@@ -514,9 +514,12 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
     border-radius: 999px;
     transition: width 200ms ease;
 }
-.notif-row-transfer.is-done .notif-row-progress-fill { background: #6ee7a3; }
-.notif-row-transfer.is-failed .notif-row-progress-fill { background: var(--danger); }
-.notif-row-transfer.is-canceled .notif-row-progress-fill { background: var(--text-muted); opacity: 0.5; }
+/* Once a transfer terminates, the bar is just noise — the meta label
+   ("Done" / "Failed" / "Canceled") already says it. Hide it so finished
+   rows match the look of completed event rows above. */
+.notif-row-transfer.is-done .notif-row-progress,
+.notif-row-transfer.is-failed .notif-row-progress,
+.notif-row-transfer.is-canceled .notif-row-progress { display: none; }
 
 .notif-row.level-error .notif-row-title { color: #f7a8b9; }
 
