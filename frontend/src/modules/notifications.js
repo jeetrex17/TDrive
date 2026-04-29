@@ -18,6 +18,7 @@
 //   notify({ level: 'error', title: 'Could not join drive', body: String(err) });
 
 import { state } from '../state.js';
+import { pushHistoryEvent } from './notif-bell.js';
 
 const MAX_VISIBLE = 5;
 const DEFAULT_DURATION = 4000;
@@ -77,6 +78,19 @@ export function notify(opts = {}) {
         paused: false,
         spinner: opts.spinner === true,
     };
+
+    // Mirror non-spinner / non-progress toasts into the bell history. We
+    // skip in-progress sticky toasts (spinners) because their final
+    // success/failure version replaces them; the panel doesn't need both.
+    const isProgress = entry.spinner === true;
+    if (!isProgress && entry.title) {
+        pushHistoryEvent({
+            level: entry.level,
+            title: entry.title,
+            body: entry.body,
+            ts: now,
+        });
+    }
 
     const idx = state.toasts.findIndex((t) => t.id === id);
     if (idx >= 0) {

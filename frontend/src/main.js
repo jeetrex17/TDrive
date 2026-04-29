@@ -29,6 +29,7 @@ import { bindChannelsRenderers, refreshActiveDrive } from './modules/channels.js
 
 // Notifications
 import { setupNotifications } from './modules/notifications.js';
+import { setupNotifBell } from './modules/notif-bell.js';
 
 // Setup window bindings that need to be available globally
 window.refreshFiles = refreshFiles;
@@ -57,7 +58,8 @@ window.onload = async function() {
     console.log("App loaded. Checking Status...");
 
     // Notifications surface — must be set up before any other module that
-    // might emit toasts.
+    // might emit toasts. Bell is the unified history; toasts feed into it.
+    setupNotifBell();
     setupNotifications();
 
     // Setup all modals

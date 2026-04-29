@@ -81,6 +81,20 @@ export const state = {
     // Toast notifications (the global feedback surface). Each entry:
     // { id, level, title, body, sticky, expiresAt, paused }
     toasts: [],
+
+    // Notification bell — single unified surface in the top-right header.
+    // historyEvents is a chronological log of everything worth showing in
+    // the panel. Two flavors:
+    //   { kind: 'transfer', id, direction: 'up'|'down', name, progress,
+    //     status: 'active'|'done'|'failed'|'canceled', startedAt, finishedAt }
+    //   { kind: 'event',    id, level, title, body, ts }
+    // Capped at 100, ephemeral (cleared on app close).
+    historyEvents: [],
+
+    // Bell visibility / state machine.
+    notifPanelOpen: false,
+    notifHoverOpen: false,
+    notifUnreadErrors: 0,
 };
 
 // Helper to reset folder caches (called on refresh)
