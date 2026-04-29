@@ -11,7 +11,7 @@ import {
     GetFileList, DeleteFile, GetStorageUsed, GetOrphanedFiles,
 } from '../../wailsjs/go/main/App';
 import { enqueueDownload } from './transfers.js';
-import { ensureUserNames, uploaderChipHTML } from './uploaders.js';
+import { populateUploaderChips, uploaderChipHTML } from './uploaders.js';
 
 export async function getFolderContents(parentID) {
     if (window.go?.main?.App?.GetFolderContents) {
@@ -74,36 +74,6 @@ export function fillUploaderSlot(row, file) {
     if (!slot) return;
     const html = uploaderChipHTML(file);
     slot.innerHTML = html ?? '';
-}
-
-// populateUploaderChips collects all uploader IDs visible on the current
-// page, batch-resolves their names via the backend, then re-fills every
-// chip slot with the now-cached names. Called once per refreshFiles after
-// the rows are in the DOM.
-async function populateUploaderChips(list) {
-    if (!list) return;
-    if (state.activeChannel?.kind !== 'shared') return;
-
-    const slots = list.querySelectorAll('[data-uploader-slot]');
-    const ids = [];
-    slots.forEach((slot) => {
-        const row = slot.closest('.drive-row');
-        if (!row) return;
-        const uid = Number(row.dataset.uploaderId || 0);
-        if (uid > 0) ids.push(uid);
-    });
-    if (ids.length === 0) return;
-
-    await ensureUserNames(ids);
-
-    slots.forEach((slot) => {
-        const row = slot.closest('.drive-row');
-        if (!row) return;
-        const uid = Number(row.dataset.uploaderId || 0);
-        const ts = Number(row.dataset.uploadTime || 0);
-        const html = uploaderChipHTML({ uploaderID: uid, uploadTime: ts });
-        slot.innerHTML = html ?? '';
-    });
 }
 
 async function getAllFsMsgIDs() {

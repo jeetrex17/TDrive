@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
 
+	"TDrive/backend"
 	"TDrive/backend/auth"
 
 	"github.com/gotd/td/tg"
@@ -57,25 +59,54 @@ func (a *App) ResolveUsernames(userIDs []int64) (map[string]string, error) {
 		return out, nil
 	}
 
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return out, fmt.Errorf("no active channel")
+	}
+
+	messageRefs, err := uploaderMessageRefs(backend.DB, channelID, toAsk)
+	if err != nil {
+		return out, err
+	}
+	if len(messageRefs) == 0 {
+		return out, nil
+	}
+
 	client, err := auth.Connect()
 	if err != nil {
 		return out, fmt.Errorf("connect: %w", err)
 	}
 
 	err = client.Run(a.ctx, func(ctx context.Context) error {
+		_, inputPeer, err := auth.ResolveDriveChannel(ctx, client.API(), channelID)
+		if err != nil {
+			return err
+		}
+		peer := &tg.InputPeerChannel{
+			ChannelID:  inputPeer.ChannelID,
+			AccessHash: inputPeer.AccessHash,
+		}
+
 		// Telegram's users.getUsers takes up to 100 IDs per call. Batch.
 		const batchSize = 100
-		for i := 0; i < len(toAsk); i += batchSize {
+		reqs := make([]tg.InputUserClass, 0, len(messageRefs))
+		for _, id := range toAsk {
+			msgID, ok := messageRefs[id]
+			if !ok || msgID <= 0 {
+				continue
+			}
+			reqs = append(reqs, &tg.InputUserFromMessage{
+				Peer:   peer,
+				MsgID:  int(msgID),
+				UserID: id,
+			})
+		}
+		for i := 0; i < len(reqs); i += batchSize {
 			end := i + batchSize
-			if end > len(toAsk) {
-				end = len(toAsk)
+			if end > len(reqs) {
+				end = len(reqs)
 			}
-			batch := toAsk[i:end]
-			req := make([]tg.InputUserClass, 0, len(batch))
-			for _, id := range batch {
-				req = append(req, &tg.InputUser{UserID: id})
-			}
-			resolved, err := client.API().UsersGetUsers(ctx, req)
+			resolved, err := client.API().UsersGetUsers(ctx, reqs[i:end])
 			if err != nil {
 				return err
 			}
@@ -93,6 +124,34 @@ func (a *App) ResolveUsernames(userIDs []int64) (map[string]string, error) {
 		// Partial result is still useful (e.g., self + earlier batches);
 		// return what we have alongside the error.
 		return out, err
+	}
+	return out, nil
+}
+
+func uploaderMessageRefs(db *sql.DB, channelID int64, userIDs []int64) (map[int64]int64, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db not ready")
+	}
+	out := make(map[int64]int64, len(userIDs))
+	for _, id := range userIDs {
+		if id <= 0 {
+			continue
+		}
+		var msgID int64
+		err := db.QueryRow(`
+			SELECT msg_id FROM files
+			WHERE channel_id = ? AND uploader_user_id = ? AND tombstoned = 0
+			ORDER BY upload_time DESC, msg_id DESC
+			LIMIT 1
+		`, channelID, id).Scan(&msgID)
+		if err == nil {
+			out[id] = msgID
+			continue
+		}
+		if err == sql.ErrNoRows {
+			continue
+		}
+		return nil, err
 	}
 	return out, nil
 }

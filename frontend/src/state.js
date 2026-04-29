@@ -75,6 +75,8 @@ export const state = {
     // — populated on demand via ResolveUsernames, never persisted. Keyed
     // by stringified user id (matches the backend Wails return shape).
     userNames: new Map(),
+    userNameFailures: new Set(),
+    userNameRequests: new Map(),
 };
 
 // Helper to reset folder caches (called on refresh)

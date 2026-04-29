@@ -13,24 +13,75 @@ import { ResolveUsernames } from '../../wailsjs/go/main/App';
 // and the chip render path falls back to "no chip" for those rows.
 export async function ensureUserNames(userIDs) {
     const missing = [];
+    const waitFor = [];
+    const seen = new Set();
     for (const id of userIDs) {
         const n = Number(id);
         if (!Number.isFinite(n) || n <= 0) continue;
         const key = String(n);
+        if (seen.has(key)) continue;
+        seen.add(key);
         if (state.userNames.has(key)) continue;
+        if (state.userNameFailures.has(key)) continue;
+        if (state.userNameRequests.has(key)) {
+            waitFor.push(state.userNameRequests.get(key));
+            continue;
+        }
         missing.push(n);
     }
-    if (missing.length === 0) return;
-    try {
-        const resolved = await ResolveUsernames(missing);
-        if (resolved && typeof resolved === 'object') {
-            for (const [k, v] of Object.entries(resolved)) {
-                state.userNames.set(String(k), String(v));
+
+    let request = null;
+    if (missing.length > 0) {
+        request = ResolveUsernames(missing).then((resolved) => {
+            const got = new Set();
+            if (resolved && typeof resolved === 'object') {
+                for (const [k, v] of Object.entries(resolved)) {
+                    state.userNames.set(String(k), String(v));
+                    got.add(String(k));
+                }
             }
-        }
-    } catch (err) {
-        console.warn('ResolveUsernames failed:', err);
+            missing.forEach((id) => {
+                const key = String(id);
+                if (!got.has(key)) state.userNameFailures.add(key);
+            });
+        }).catch((err) => {
+            console.warn('ResolveUsernames failed:', err);
+            missing.forEach((id) => state.userNameFailures.add(String(id)));
+        }).finally(() => {
+            missing.forEach((id) => state.userNameRequests.delete(String(id)));
+        });
+        missing.forEach((id) => state.userNameRequests.set(String(id), request));
+        waitFor.push(request);
     }
+
+    if (waitFor.length === 0) return;
+    await Promise.allSettled(waitFor);
+}
+
+export async function populateUploaderChips(list) {
+    if (!list) return;
+    if (state.activeChannel?.kind !== 'shared') return;
+
+    const slots = list.querySelectorAll('[data-uploader-slot]');
+    const ids = [];
+    slots.forEach((slot) => {
+        const row = slot.closest('.drive-row');
+        if (!row) return;
+        const uid = Number(row.dataset.uploaderId || 0);
+        if (uid > 0) ids.push(uid);
+    });
+    if (ids.length === 0) return;
+
+    await ensureUserNames(ids);
+
+    slots.forEach((slot) => {
+        const row = slot.closest('.drive-row');
+        if (!row) return;
+        const uid = Number(row.dataset.uploaderId || 0);
+        const ts = Number(row.dataset.uploadTime || 0);
+        const html = uploaderChipHTML({ uploaderID: uid, uploadTime: ts });
+        slot.innerHTML = html ?? '';
+    });
 }
 
 // formatRelative produces "2h ago" / "5m ago" / "just now" strings from
