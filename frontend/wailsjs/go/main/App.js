@@ -86,6 +86,10 @@ export function ListChannels() {
   return window['go']['main']['App']['ListChannels']();
 }
 
+export function MyUserID() {
+  return window['go']['main']['App']['MyUserID']();
+}
+
 export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }

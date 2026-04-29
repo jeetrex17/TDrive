@@ -4,7 +4,7 @@ import { state } from '../state.js';
 import {
     CheckSystemStatus, SaveSetup,
     LoginPhoneNumber, SumbitCode, SumbitPassword,
-    CheckLoginStatus, InitDrive
+    CheckLoginStatus, InitDrive, MyUserID,
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation.js';
 import { loadChannels } from './channels.js';
@@ -107,6 +107,18 @@ export async function showDashboard() {
     // — important for users coming back to a drive that's seen new
     // activity since they last had the app open.
     await loadChannels();
+
+    // Resolve self user id once. Owner-only actions on shared drives
+    // depend on this; if it fails (e.g. offline), default-deny by
+    // leaving state.myUserID = 0.
+    try {
+        const id = await MyUserID();
+        state.myUserID = Number(id) || 0;
+    } catch (err) {
+        console.warn('MyUserID failed:', err);
+        state.myUserID = 0;
+    }
+
     window.triggerRefresh();
 }
 

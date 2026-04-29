@@ -45,6 +45,20 @@ export async function calculateFolderTotalBytes(folderID) {
     throw new Error("GetFolderSize is not available. Restart `wails dev` to regenerate bindings.");
 }
 
+// canOwnerActOnFile returns true when the current user is allowed to
+// rename/delete the given file. In personal drives it's always true (you
+// uploaded everything). In shared drives it's only true when the file's
+// recorded uploader matches the current user. Default-deny when uploader
+// or self id is unknown.
+export function canOwnerActOnFile(file) {
+    if (!file) return false;
+    if (state.activeChannel?.kind !== "shared") return true;
+    const uploader = Number(file.uploaderID ?? file.uploader_id ?? 0);
+    const me = Number(state.myUserID || 0);
+    if (!uploader || !me) return false;
+    return uploader === me;
+}
+
 async function getAllFsMsgIDs() {
     if (window.go?.main?.App?.GetAllFsMsgIDs) {
         const ids = await window.go.main.App.GetAllFsMsgIDs();
@@ -190,6 +204,7 @@ export function refreshFiles() {
             name: f.name,
             size: f.size,
             date: f.upload_time,
+            uploaderID: Number(f.uploader_id || 0),
         }));
 
         const finalize = async () => {
@@ -350,7 +365,10 @@ export function refreshFiles() {
                 row.dataset.source = String(file.source || "fs");
                 row.dataset.size = String(file.size || 0);
                 row.dataset.parentId = requestedFolderId;
-                row.dataset.canDelete = "true";
+                row.dataset.uploaderId = String(file.uploaderID || 0);
+                const ownerOnly = canOwnerActOnFile(file);
+                row.dataset.canDelete = ownerOnly ? "true" : "false";
+                row.dataset.canRename = ownerOnly ? "true" : "false";
 
                 row.innerHTML = `
                     <div class="row-name">
@@ -404,6 +422,7 @@ export function refreshFiles() {
                         e.stopPropagation();
                         const selection = window.getSelection?.();
                         if (selection) selection.removeAllRanges();
+                        if (!canOwnerActOnFile(file)) return;
                         openRenameModal({
                             type: "file",
                             id: file.id,

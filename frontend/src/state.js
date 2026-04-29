@@ -58,6 +58,7 @@ export const state = {
     activeChannel: null,         // { id, title, kind }
     channels: [],                // [{ id, title, kind, isActive, inviteLink }]
     channelSwitchInProgress: false,
+    myUserID: 0,                 // logged-in Telegram user id; 0 = unknown
 };
 
 // Helper to reset folder caches (called on refresh)

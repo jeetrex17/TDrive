@@ -49,6 +49,8 @@ export function ListChannels():Promise<Array<main.ChannelInfo>>;
 
 export function LoginPhoneNumber(arg1:string):Promise<void>;
 
+export function MyUserID():Promise<number>;
+
 export function MoveFile(arg1:number,arg2:string):Promise<string>;
 
 export function MoveFolder(arg1:string,arg2:string):Promise<string>;

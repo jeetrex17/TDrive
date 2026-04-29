@@ -96,6 +96,16 @@ function renderSearchResults(results, query) {
             row.dataset.size = String(result.size || 0);
             row.dataset.parentId = String(result.parent_id || "");
             row.dataset.source = String(result.source || "fs");
+            row.dataset.uploaderId = String(result.uploader_id || 0);
+            // Search results may not be in the active drive; keep
+            // owner-only gating consistent: same canOwnerAct heuristic as
+            // file-list. We approximate by reading state.activeChannel
+            // (search is currently scoped to active drive).
+            const ownerOnly = (state.activeChannel?.kind !== "shared")
+                || (Number(result.uploader_id || 0) > 0
+                    && Number(result.uploader_id) === Number(state.myUserID || 0));
+            row.dataset.canDelete = ownerOnly ? "true" : "false";
+            row.dataset.canRename = ownerOnly ? "true" : "false";
 
             row.innerHTML = `
                 <div class="row-name">

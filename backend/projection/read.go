@@ -19,16 +19,18 @@ type FileSlim struct {
 	Size       int64
 	ParentID   string
 	UploadTime int64
+	UploaderID int64
 }
 
 type SearchHit struct {
-	Type     string
-	ID       string
-	Name     string
-	ParentID string
-	Size     int64
-	Time     int64
-	MsgID    int64
+	Type       string
+	ID         string
+	Name       string
+	ParentID   string
+	Size       int64
+	Time       int64
+	MsgID      int64
+	UploaderID int64
 }
 
 func ListFolderContents(db *sql.DB, channelID int64, parentID string) ([]FolderSlim, []FileSlim, error) {
@@ -67,7 +69,7 @@ func listChildFolders(db *sql.DB, channelID int64, parentID string) ([]FolderSli
 
 func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, error) {
 	rows, err := db.Query(`
-		SELECT msg_id, name, size, parent_id, upload_time FROM files
+		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id FROM files
 		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
 		ORDER BY upload_time DESC
 	`, channelID, parentID)
@@ -79,7 +81,7 @@ func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, e
 	var out []FileSlim
 	for rows.Next() {
 		var f FileSlim
-		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime); err != nil {
+		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -143,7 +145,7 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 	_ = folderRows.Close()
 
 	fileRows, err := db.Query(`
-		SELECT msg_id, name, size, parent_id, upload_time FROM files
+		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id FROM files
 		WHERE channel_id = ? AND tombstoned = 0 AND name LIKE ? COLLATE NOCASE
 		ORDER BY upload_time DESC LIMIT ?
 	`, channelID, pattern, limit)
@@ -153,7 +155,7 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 	for fileRows.Next() {
 		var h SearchHit
 		h.Type = "file"
-		if err := fileRows.Scan(&h.MsgID, &h.Name, &h.Size, &h.ParentID, &h.Time); err != nil {
+		if err := fileRows.Scan(&h.MsgID, &h.Name, &h.Size, &h.ParentID, &h.Time, &h.UploaderID); err != nil {
 			_ = fileRows.Close()
 			return nil, err
 		}

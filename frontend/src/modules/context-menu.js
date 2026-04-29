@@ -109,13 +109,16 @@ export function setupContextMenu() {
             const fileSize = Number(row.dataset.size || 0);
             const fileSource = row.dataset.source || "fs";
             const canDelete = row.dataset.canDelete === "true";
+            const canRename = row.dataset.canRename !== "false";
             const items = [
                 { label: "Download", onClick: () => window.initDownload(fileID, fileName, fileSize) },
             ];
-            const renamePayload = fileSource === "fs"
-                ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }
-                : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
-            items.push({ label: "Rename…", onClick: () => openRenameModal(renamePayload) });
+            if (canRename) {
+                const renamePayload = fileSource === "fs"
+                    ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }
+                    : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
+                items.push({ label: "Rename…", onClick: () => openRenameModal(renamePayload) });
+            }
             if (!isShared) {
                 const movePayload = fileSource === "fs"
                     ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }

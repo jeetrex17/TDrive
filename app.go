@@ -108,6 +108,14 @@ func (a *App) ActiveChannelID() int64 {
 	return a.activeChannelID.Load()
 }
 
+// MyUserID returns the logged-in Telegram user id (cached after first
+// resolution). The frontend uses it to gate owner-only actions on shared
+// drives. Returns an error if Telegram resolution fails — caller should
+// default-deny the gated actions in that case.
+func (a *App) MyUserID() (int64, error) {
+	return a.actorID(a.ctx)
+}
+
 // rejectFolderOpsInShared is the Step 4 safety gate. Shared drives are
 // flat-file only in v1; folder mkdir/rename/move/rmdir is allowed only on
 // the personal channel. Returns nil if the active channel is personal,
@@ -1571,6 +1579,7 @@ func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
 			Size:       f.Size,
 			ParentID:   f.ParentID,
 			UploadTime: f.UploadTime,
+			UploaderID: f.UploaderID,
 		})
 	}
 	return result, nil
@@ -1653,6 +1662,7 @@ func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
 				ParentID:   h.ParentID,
 				Size:       h.Size,
 				UploadTime: h.Time,
+				UploaderID: h.UploaderID,
 				Path:       buildFolderPath(h.ParentID),
 			})
 		}
@@ -1775,6 +1785,27 @@ func (a *App) RenameFile(msgID int, newName string) string {
 	if !projection.FileExists(backend.DB, channelID, int64(msgID)) {
 		return "Error: File not found"
 	}
+
+	// Same owner-only gate as DeleteFile in shared drives. Frontend hides
+	// the action for non-owners but the backend stays authoritative.
+	ch, err := projection.GetChannel(backend.DB, channelID)
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	if ch.Kind == projection.KindShared {
+		actorID, aerr := a.actorID(a.ctx)
+		if aerr != nil {
+			return "Error: " + aerr.Error()
+		}
+		uploader, uerr := projection.FileUploader(backend.DB, channelID, int64(msgID))
+		if uerr != nil {
+			return "Error: " + uerr.Error()
+		}
+		if uploader == 0 || uploader != actorID {
+			return "Error: Only the uploader can rename this file in a shared drive"
+		}
+	}
+
 	op := projection.Op{
 		Type: projection.OpRename,
 		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
