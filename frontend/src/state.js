@@ -12,9 +12,6 @@ export const state = {
 
     // Transfer state
     activeTransfer: null, // "download" | "upload" | null
-    downloadProgressEl: null,
-    downloadProgressFillEl: null,
-    downloadProgressHideTimeout: null,
     downloadQueue: [],
     activeDownloadId: null,
 

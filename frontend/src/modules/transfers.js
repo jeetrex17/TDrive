@@ -33,62 +33,24 @@ function normalizeDownloadResult(result) {
     };
 }
 
-export function showDownloadProgress(percent) {
-    const value = Number(percent);
-    if (!Number.isFinite(value)) return;
-    const activeId = state.activeDownloadId;
-    if (activeId === null || activeId === undefined) return;
-
-    const item = (state.downloadQueue || []).find((entry) => entry.id === activeId);
-    if (!item) return;
-
-    const clamped = Math.max(0, Math.min(100, value));
-    item.progress = clamped;
-    if (!isDownloadTerminalState(item.state)) {
-        item.state = "downloading";
-    }
-    updateTransferProgress({ id: item.id, direction: 'down', progress: clamped });
-
-    if (state.downloadProgressHideTimeout) {
-        clearTimeout(state.downloadProgressHideTimeout);
-        state.downloadProgressHideTimeout = null;
-    }
-
-    if (state.downloadProgressEl && state.downloadProgressFillEl) {
-        // The thin overlay bar at the top of the file list stays as a
-        // secondary signal during active downloads. Bell handles the
-        // primary surface.
-        state.downloadProgressEl.style.display = "block";
-        state.downloadProgressEl.setAttribute("aria-valuenow", String(Math.round(clamped)));
-        state.downloadProgressFillEl.style.width = `${clamped}%`;
-    }
-}
-
-export function hideDownloadProgress() {
-    if (state.downloadProgressHideTimeout) {
-        clearTimeout(state.downloadProgressHideTimeout);
-        state.downloadProgressHideTimeout = null;
-    }
-
-    if (state.downloadProgressEl && state.downloadProgressFillEl) {
-        state.downloadProgressEl.style.display = "none";
-        state.downloadProgressEl.setAttribute("aria-valuenow", "0");
-        state.downloadProgressFillEl.style.width = "0%";
-    }
-}
-
 export function setupDownloadProgress() {
-    state.downloadProgressEl = document.getElementById("transfer-progress");
-    state.downloadProgressFillEl = document.getElementById("transfer-progress-fill");
     if (!window.runtime?.EventsOn) return;
 
     window.runtime.EventsOn("download_progress", (percent) => {
-        if (!state.downloadQueue || state.activeDownloadId === null || state.activeDownloadId === undefined) return;
+        const activeId = state.activeDownloadId;
+        if (activeId === null || activeId === undefined) return;
         const value = Number(percent);
         if (!Number.isFinite(value)) return;
 
         const clamped = Math.max(0, Math.min(100, value));
-        showDownloadProgress(clamped);
+        const item = (state.downloadQueue || []).find((entry) => entry.id === activeId);
+        if (!item) return;
+
+        item.progress = clamped;
+        if (!isDownloadTerminalState(item.state)) {
+            item.state = "downloading";
+        }
+        updateTransferProgress({ id: item.id, direction: 'down', progress: clamped });
     });
 }
 
@@ -125,7 +87,6 @@ async function startNextDownload() {
         markTransferDone({ id: next.id, direction: 'down', status: 'failed' });
     } finally {
         state.activeDownloadId = null;
-        hideDownloadProgress();
         startNextDownload();
     }
 }
