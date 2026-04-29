@@ -19,20 +19,34 @@ export function openDeleteModal(target) {
     const name = (target?.name || "").trim();
 
     if (target?.type === "bulk") {
-        const items = Array.isArray(target?.items) ? target.items : [];
-        const total = items.length;
-        const folders = items.filter((i) => i?.type === "folder").length;
-        const files = items.filter((i) => i?.type === "file").length;
+        const rawItems = Array.isArray(target?.items) ? target.items : [];
+
+        // Pre-filter for the shared-drive owner-only rule. The backend
+        // would reject these anyway, but filtering up front avoids the
+        // confusing "some items were not deleted" toast for files the
+        // user never had permission to delete in the first place.
+        const allowed = rawItems.filter((i) => i?.canDelete !== false);
+        const skipped = rawItems.length - allowed.length;
+        target.items = allowed;
+
+        const total = allowed.length;
+        const folders = allowed.filter((i) => i?.type === "folder").length;
+        const files = allowed.filter((i) => i?.type === "file").length;
 
         title.textContent = total === 1 ? "Delete 1 item?" : `Delete ${total} items?`;
+        const skippedNote = skipped > 0
+            ? ` ${skipped} item(s) you don't own will be skipped.`
+            : "";
         if (folders > 0 && files > 0) {
-            subtitle.textContent = `This will hide ${folders} folder(s). Files inside those folders are not deleted. The ${files} selected file(s) will be removed from Telegram.`;
+            subtitle.textContent = `This will hide ${folders} folder(s). Files inside those folders are not deleted. The ${files} selected file(s) will be removed from Telegram.${skippedNote}`;
         } else if (folders > 0) {
-            subtitle.textContent = `This will hide ${folders} folder(s). Files inside become orphaned and are not deleted.`;
+            subtitle.textContent = `This will hide ${folders} folder(s). Files inside become orphaned and are not deleted.${skippedNote}`;
+        } else if (files > 0) {
+            subtitle.textContent = `This will remove ${files} file(s) from your Telegram channel. The action can't be undone.${skippedNote}`;
         } else {
-            subtitle.textContent = `This will remove ${files} file(s) from your Telegram channel. The action can't be undone.`;
+            subtitle.textContent = `Nothing in your selection can be deleted. ${skipped} item(s) you don't own were skipped.`;
         }
-        confirmBtn.textContent = "Delete";
+        confirmBtn.textContent = total === 0 ? "Close" : "Delete";
     } else if (target?.type === "folder") {
         title.textContent = name ? `Delete folder "${name}"?` : "Delete folder?";
         subtitle.textContent = "This hides the folder only. Files inside become orphaned and are not deleted.";
@@ -74,6 +88,10 @@ export function setupDeleteModal() {
         try {
             if (target.type === "bulk") {
                 const items = Array.isArray(target.items) ? target.items : [];
+                if (items.length === 0) {
+                    if (status) status.innerText = "Ready";
+                    return;
+                }
                 const folders = items.filter((i) => i?.type === "folder");
                 const files = items.filter((i) => i?.type === "file");
                 const failures = [];

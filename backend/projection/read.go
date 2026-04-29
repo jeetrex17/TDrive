@@ -89,29 +89,59 @@ func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, e
 	return out, rows.Err()
 }
 
-// OrphanedFiles returns files whose parent_id refers to a folder that
-// either doesn't exist or is tombstoned. These are surfaced in a virtual
-// "Orphaned" bucket at root in the UI; they're recoverable but not part
-// of any real folder tree. Root files (parent_id == "") are NOT orphans.
+// OrphanedFiles returns files whose path back to root is broken — that
+// is, any ancestor folder is tombstoned or missing. Root files
+// (parent_id == "") are never orphans. Returned in upload-time-desc order.
 //
-// Step 4 makes DeleteFolder only emit rmdir, so files inside become
-// orphans rather than being destroyed. Step 5 will let users move them
-// out of the bucket.
+// Implemented as a recursive CTE that walks each file's parent chain. A
+// file is an orphan if any link in the chain points to a folder that's
+// tombstoned or no longer exists. This catches the case where you delete
+// folder A, and files several levels deeper inside A (e.g. A/B/C/file.txt)
+// would otherwise look "fine" — their immediate parent C is alive, but
+// the chain is broken at A.
+//
+// Step 4 makes DeleteFolder only emit rmdir, so files inside (at any depth)
+// become orphans rather than being destroyed. Step 5 will let users move
+// them out of the bucket.
 func OrphanedFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
-	rows, err := db.Query(`
-		SELECT f.msg_id, f.name, f.size, f.parent_id, f.upload_time, f.uploader_user_id
-		FROM files f
-		WHERE f.channel_id = ?
-		  AND f.tombstoned = 0
-		  AND f.parent_id != ''
-		  AND NOT EXISTS (
-		    SELECT 1 FROM folders d
-		    WHERE d.channel_id = f.channel_id
-		      AND d.id = f.parent_id
-		      AND d.tombstoned = 0
-		  )
-		ORDER BY f.upload_time DESC
-	`, channelID)
+	const q = `
+WITH RECURSIVE chain(file_msg_id, cur_id, broken) AS (
+    -- Seed: every non-root, non-tombstoned file in this channel.
+    SELECT f.msg_id, f.parent_id, 0
+    FROM files f
+    WHERE f.channel_id = ?1
+      AND f.tombstoned = 0
+      AND f.parent_id != ''
+
+    UNION ALL
+
+    -- Walk one step toward root. broken=1 if cur_id is tombstoned or
+    -- doesn't exist; once broken, stay broken until we reach root.
+    SELECT
+      c.file_msg_id,
+      COALESCE(p.parent_id, ''),
+      CASE
+        WHEN c.broken = 1 THEN 1
+        WHEN p.id IS NULL THEN 1                  -- missing folder
+        WHEN p.tombstoned = 1 THEN 1              -- tombstoned folder
+        ELSE 0
+      END
+    FROM chain c
+    LEFT JOIN folders p
+      ON p.channel_id = ?1 AND p.id = c.cur_id
+    WHERE c.cur_id != ''
+)
+SELECT f.msg_id, f.name, f.size, f.parent_id, f.upload_time, f.uploader_user_id
+FROM files f
+WHERE f.channel_id = ?1
+  AND f.tombstoned = 0
+  AND f.parent_id != ''
+  AND f.msg_id IN (
+    SELECT file_msg_id FROM chain WHERE cur_id = '' AND broken = 1
+  )
+ORDER BY f.upload_time DESC
+`
+	rows, err := db.Query(q, channelID)
 	if err != nil {
 		return nil, err
 	}

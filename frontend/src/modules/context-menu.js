@@ -62,6 +62,9 @@ export function setupContextMenu() {
         const row = e.target.closest(".drive-row");
         const type = row?.dataset?.type || "background";
 
+        // The synthetic Orphaned entry row is navigation-only; no menu.
+        if (type === "orphan-entry") return;
+
         if (row) ensureRowSelectedForContextMenu(row);
 
         // Step 4: shared drives are flat-file only. Folder ops and "Move to..."

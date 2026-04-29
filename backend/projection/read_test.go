@@ -52,6 +52,36 @@ func TestOrphanedFilesIncludesFilesWithMissingParent(t *testing.T) {
 	}
 }
 
+func TestOrphanedFilesDetectsDeepAncestorTombstone(t *testing.T) {
+	db := newTestDB(t)
+	// A / B / C / file.txt — tombstone A. C still exists, so the file's
+	// immediate parent (C) looks fine, but the chain to root is broken.
+	mustOp(t, db, 1, Op{Type: OpMkdir, Obj: "d:a", Parent: RootParent, Name: "A"})
+	mustOp(t, db, 2, Op{Type: OpMkdir, Obj: "d:b", Parent: "d:a", Name: "B"})
+	mustOp(t, db, 3, Op{Type: OpMkdir, Obj: "d:c", Parent: "d:b", Name: "C"})
+	mustOp(t, db, 4, Op{Type: OpFileUpload, Parent: "d:c", Name: "deep.txt"})
+
+	// Pre-tomb: nothing orphaned.
+	orphans, err := OrphanedFiles(db, testChan)
+	if err != nil {
+		t.Fatalf("orphans pre-tomb: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Fatalf("expected 0 orphans pre-tomb, got %d", len(orphans))
+	}
+
+	// Tombstone the root of the subtree, three levels above the file.
+	mustOp(t, db, 5, Op{Type: OpRmdir, Obj: "d:a"})
+
+	orphans, err = OrphanedFiles(db, testChan)
+	if err != nil {
+		t.Fatalf("orphans post-tomb: %v", err)
+	}
+	if len(orphans) != 1 || orphans[0].MsgID != 4 {
+		t.Fatalf("expected deep.txt (msg=4) orphaned, got %v", orphans)
+	}
+}
+
 func TestOrphanedFilesScopedByChannel(t *testing.T) {
 	db := newTestDB(t)
 	const otherChan int64 = 9999
