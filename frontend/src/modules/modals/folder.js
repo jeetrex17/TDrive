@@ -2,6 +2,7 @@
 
 import { state } from '../../state.js';
 import { createFolder } from '../file-list.js';
+import { notify, dismissNotification } from '../notifications.js';
 
 export function setupFolderModal() {
     const modal = document.getElementById("folder-modal");
@@ -31,7 +32,6 @@ export function setupFolderModal() {
         const name = (nameInput.value || "").trim();
         if (!name) return;
 
-        const status = document.getElementById("status-msg");
         const parentId = state.currentFolderId;
         const tempId = `pending:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 
@@ -40,17 +40,22 @@ export function setupFolderModal() {
         inFlight = true;
         createBtn.disabled = true;
         cancelBtn.disabled = true;
-        if (status) status.innerText = "Creating folder...";
 
         // Render immediately so the new row appears under the cursor
         // before the Telegram round-trip completes.
         window.refreshFiles();
 
+        let failed = false;
         try {
             await createFolder(name, parentId);
             close();
         } catch (err) {
-            alert("Failed to create folder: " + err);
+            failed = true;
+            notify({
+                level: 'error',
+                title: 'Could not create folder',
+                body: String(err),
+            });
         } finally {
             // Drop the pending overlay regardless of outcome. The follow-up
             // refreshFiles either shows the new real row (success) or
@@ -59,8 +64,10 @@ export function setupFolderModal() {
             inFlight = false;
             createBtn.disabled = false;
             cancelBtn.disabled = false;
-            if (status) status.innerText = "Ready";
             window.refreshFiles();
+            if (!failed) {
+                notify({ level: 'success', title: `Folder "${name}" created` });
+            }
         }
     };
 

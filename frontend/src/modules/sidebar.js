@@ -7,6 +7,7 @@ import { openShareDriveModal } from './modals/share-drive.js';
 import { openLeaveDriveModal } from './modals/leave-drive.js';
 import { openNewDriveModal } from './modals/new-drive.js';
 import { openJoinDriveModal } from './modals/join-drive.js';
+import { notify } from './notifications.js';
 
 let personalEl = null;
 let sharedEl = null;
@@ -111,7 +112,11 @@ function showSharedContextMenu(event, c) {
             const link = await getInviteLink(Number(c.id));
             openShareDriveModal(link);
         } catch (err) {
-            alert('Failed to get invite link: ' + err);
+            notify({
+                level: 'error',
+                title: 'Could not get invite link',
+                body: String(err),
+            });
         }
     });
     addItem('Leave drive', () => {

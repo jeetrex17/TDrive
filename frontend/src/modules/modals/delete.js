@@ -5,6 +5,19 @@ import { DeleteFile } from '../../../wailsjs/go/main/App';
 import { clearSelection } from '../selection.js';
 import { ensureNotInsideDeletedFolder } from '../navigation.js';
 import { deleteFolder } from '../file-list.js';
+import { notify, dismissNotification } from '../notifications.js';
+
+function successTitle(item) {
+    const name = String(item?.name || '').trim();
+    if (!name) return item?.type === 'folder' ? 'Folder deleted' : 'File deleted';
+    return item?.type === 'folder' ? `Deleted folder "${name}"` : `Deleted "${name}"`;
+}
+
+function failureTitle(item) {
+    const name = String(item?.name || '').trim();
+    if (!name) return item?.type === 'folder' ? 'Could not delete folder' : 'Could not delete file';
+    return item?.type === 'folder' ? `Could not delete folder "${name}"` : `Could not delete "${name}"`;
+}
 
 export function openDeleteModal(target) {
     const modal = document.getElementById("delete-modal");
@@ -82,31 +95,38 @@ export function setupDeleteModal() {
         close();
         if (!target) return;
 
-        const status = document.getElementById("status-msg");
-        if (status) status.innerText = "Deleting...";
+        const progressId = notify({
+            id: 'deleting',
+            level: 'info',
+            title: 'Deleting…',
+            sticky: true,
+            spinner: true,
+        });
 
         try {
             if (target.type === "bulk") {
                 const items = Array.isArray(target.items) ? target.items : [];
                 if (items.length === 0) {
-                    if (status) status.innerText = "Ready";
+                    dismissNotification(progressId);
                     return;
                 }
                 const folders = items.filter((i) => i?.type === "folder");
                 const files = items.filter((i) => i?.type === "file");
+                const succeeded = [];
                 const failures = [];
 
                 for (const folder of folders) {
                     try {
                         const res = await deleteFolder(String(folder.id));
                         if (typeof res === "string" && res.startsWith("Error")) {
-                            failures.push(`${folder.name || folder.id}: ${res}`);
+                            failures.push({ item: folder, error: res.replace(/^Error:?\s*/i, '') });
                             continue;
                         }
                         ensureNotInsideDeletedFolder(String(folder.id));
+                        succeeded.push(folder);
                     } catch (err) {
                         console.error("Delete folder failed:", folder, err);
-                        failures.push(`${folder.name || folder.id}: ${err?.message || String(err)}`);
+                        failures.push({ item: folder, error: err?.message || String(err) });
                     }
                 }
 
@@ -114,20 +134,30 @@ export function setupDeleteModal() {
                     try {
                         const res = await DeleteFile(Number(file.id));
                         if (typeof res === "string" && res.startsWith("Error")) {
-                            failures.push(`${file.name || file.id}: ${res}`);
+                            failures.push({ item: file, error: res.replace(/^Error:?\s*/i, '') });
+                            continue;
                         }
+                        succeeded.push(file);
                     } catch (err) {
                         console.error("Delete file failed:", file, err);
-                        failures.push(`${file.name || file.id}: ${err?.message || String(err)}`);
+                        failures.push({ item: file, error: err?.message || String(err) });
                     }
                 }
 
                 clearSelection();
-                if (failures.length) {
-                    if (status) status.innerText = "Delete failed";
-                    alert(`Some items were not deleted:\n\n${failures.slice(0, 5).join("\n")}${failures.length > 5 ? "\n..." : ""}`);
-                } else if (status) {
-                    status.innerText = "Done";
+                dismissNotification(progressId);
+                for (const item of succeeded) {
+                    notify({
+                        level: 'success',
+                        title: successTitle(item),
+                    });
+                }
+                for (const { item, error } of failures) {
+                    notify({
+                        level: 'error',
+                        title: failureTitle(item),
+                        body: error,
+                    });
                 }
                 window.refreshFiles();
             } else {
@@ -135,23 +165,33 @@ export function setupDeleteModal() {
                     ? await deleteFolder(String(target.id))
                     : await DeleteFile(Number(target.id));
 
+                dismissNotification(progressId);
                 if (typeof res === "string" && res.startsWith("Error")) {
-                    if (status) status.innerText = "Delete failed";
-                    alert(res);
+                    notify({
+                        level: 'error',
+                        title: failureTitle(target),
+                        body: res.replace(/^Error:?\s*/i, ''),
+                    });
                     return;
                 }
                 if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));
-                if (status) status.innerText = res || "Done";
+                notify({
+                    level: 'success',
+                    title: successTitle(target),
+                });
                 window.refreshFiles();
             }
         } catch (err) {
             console.error("Delete failed:", err);
-            if (status) status.innerText = "Delete failed";
-            alert("Delete failed. Check console/logs.");
+            dismissNotification(progressId);
+            notify({
+                level: 'error',
+                title: 'Delete failed',
+                body: 'Check the console for details.',
+            });
         } finally {
-            setTimeout(() => {
-                if (status) status.innerText = "Ready";
-            }, 2000);
+            // No-op trailer; the legacy 2-second status reset is gone with
+            // the status pill.
         }
     });
 }
