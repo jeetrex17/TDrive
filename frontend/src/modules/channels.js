@@ -35,16 +35,12 @@ function applyChannels(list) {
     renderSidebar();
 }
 
-// Show the shared-drive banner and hide folder-related controls when the
-// active drive is shared. Step 4 decision: shared drives are flat-file only.
+// Hook for per-drive-kind UI tweaks. Step 4 hid folder controls in shared
+// drives; Step 5 unlocks shared folders so the function is currently a
+// no-op. Kept as a hook because Step 6 polish (uploader chips, member
+// count, unread dots) will likely want to toggle UI based on drive kind.
 function applyDriveKindUI() {
-    const isShared = state.activeChannel?.kind === 'shared';
-    const banner = document.getElementById('shared-drive-banner');
-    if (banner) banner.style.display = isShared ? 'flex' : 'none';
-    const folderBtn = document.getElementById('new-folder-btn');
-    if (folderBtn) folderBtn.style.display = isShared ? 'none' : '';
-    const moveBtn = document.getElementById('selection-move');
-    if (moveBtn) moveBtn.style.display = isShared ? 'none' : '';
+    // Intentionally empty.
 }
 
 export async function loadChannels() {

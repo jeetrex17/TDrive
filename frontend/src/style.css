@@ -237,14 +237,6 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 .drive-action-btn:hover { color: var(--accent); border-color: var(--accent); }
 .drive-action-btn .icon { width: 16px; height: 16px; }
 
-.shared-drive-banner {
-    background: rgba(122, 162, 247, 0.08);
-    border: 1px solid rgba(122, 162, 247, 0.2);
-    color: var(--text-muted);
-    padding: 10px 14px; border-radius: 8px; margin: 12px 30px 0;
-    font-size: 0.85rem; display: flex; align-items: center; gap: 8px;
-}
-
 .orphan-banner {
     background: rgba(247, 162, 122, 0.07);
     border: 1px solid rgba(247, 162, 122, 0.22);

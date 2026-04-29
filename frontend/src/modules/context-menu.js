@@ -67,30 +67,19 @@ export function setupContextMenu() {
 
         if (row) ensureRowSelectedForContextMenu(row);
 
-        // Step 4: shared drives are flat-file only. Folder ops and "Move to..."
-        // (which targets a folder) are hidden until Step 5 lands.
-        const isShared = state.activeChannel?.kind === "shared";
-
         if (state.selectedItems.size > 1) {
             const count = state.selectedItems.size;
-            const items = [];
-            if (!isShared) {
-                items.push({ label: `Move ${count} items…`, onClick: () => openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) });
-            }
-            items.push(
+            show(e.clientX, e.clientY, [
+                { label: `Move ${count} items…`, onClick: () => openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
                 { label: `Delete ${count} items`, danger: true, onClick: () => openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
                 { type: "divider" },
                 { label: "Clear selection", onClick: () => clearSelection() },
                 { label: "Refresh", onClick: () => window.triggerRefresh() },
-            );
-            show(e.clientX, e.clientY, items);
+            ]);
             return;
         }
 
         if (type === "folder") {
-            // Folders only exist on personal; shared drives never render
-            // folder rows. But guard anyway for defense-in-depth.
-            if (isShared) return;
             const folderID = row.dataset.id;
             const folderName = row.dataset.name || "Folder";
             show(e.clientX, e.clientY, [
@@ -122,32 +111,27 @@ export function setupContextMenu() {
                     : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
                 items.push({ label: "Rename…", onClick: () => openRenameModal(renamePayload) });
             }
-            if (!isShared) {
-                const movePayload = fileSource === "fs"
-                    ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }
-                    : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
-                items.push({ label: "Move to…", onClick: () => openMoveModal(movePayload) });
-            }
+            const movePayload = fileSource === "fs"
+                ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }
+                : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
+            items.push({ label: "Move to…", onClick: () => openMoveModal(movePayload) });
             if (canDelete) {
                 items.push({ label: "Delete", danger: true, onClick: () => window.initDelete(fileID, fileName) });
             }
-            items.push({ type: "divider" }, { label: "Upload", onClick: () => window.selectFile() });
-            if (!isShared) {
-                items.push({ label: "New folder", onClick: () => window.openNewFolderModal() });
-            }
-            items.push({ label: "Refresh", onClick: () => window.triggerRefresh() });
+            items.push(
+                { type: "divider" },
+                { label: "Upload", onClick: () => window.selectFile() },
+                { label: "New folder", onClick: () => window.openNewFolderModal() },
+                { label: "Refresh", onClick: () => window.triggerRefresh() },
+            );
             show(e.clientX, e.clientY, items);
             return;
         }
 
-        const bgItems = [];
-        if (!isShared) {
-            bgItems.push({ label: "New folder", onClick: () => window.openNewFolderModal() });
-        }
-        bgItems.push(
+        show(e.clientX, e.clientY, [
+            { label: "New folder", onClick: () => window.openNewFolderModal() },
             { label: "Upload", onClick: () => window.selectFile() },
             { label: "Refresh", onClick: () => window.triggerRefresh() },
-        );
-        show(e.clientX, e.clientY, bgItems);
+        ]);
     });
 }

@@ -121,31 +121,6 @@ func (a *App) MyUserID() (int64, error) {
 	return a.actorID(a.ctx)
 }
 
-// rejectFolderOpsInShared is the Step 4 safety gate. Shared drives are
-// flat-file only in v1; folder mkdir/rename/move/rmdir is allowed only on
-// the personal channel. Returns nil if the active channel is personal,
-// an error otherwise.
-//
-// The frontend already hides the matching controls; this is the backend
-// belt for the case where a malicious or buggy client calls Wails directly.
-func (a *App) rejectFolderOpsInShared() error {
-	if backend.DB == nil {
-		return fmt.Errorf("db not ready")
-	}
-	id := a.ActiveChannelID()
-	if id == 0 {
-		return fmt.Errorf("no active channel")
-	}
-	ch, err := projection.GetChannel(backend.DB, id)
-	if err != nil {
-		return err
-	}
-	if ch.Kind == projection.KindShared {
-		return fmt.Errorf("folder operations are not yet supported on shared drives")
-	}
-	return nil
-}
-
 func (a *App) actorID(ctx context.Context) (int64, error) {
 	if a.tg == nil {
 		return 0, fmt.Errorf("tg client not ready")
@@ -1413,9 +1388,6 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 	if channelID == 0 {
 		return backend.Folder{}, fmt.Errorf("no active channel")
 	}
-	if err := a.rejectFolderOpsInShared(); err != nil {
-		return backend.Folder{}, err
-	}
 
 	foldername = strings.TrimSpace(foldername)
 	if foldername == "" {
@@ -1742,9 +1714,6 @@ func (a *App) DeleteFolder(folderID string) string {
 	if channelid == 0 {
 		return "Error: No active channel"
 	}
-	if err := a.rejectFolderOpsInShared(); err != nil {
-		return "Error: " + err.Error()
-	}
 	if !projection.IsFolderID(folderID) || !projection.FolderExists(backend.DB, channelid, folderID) {
 		return "Error: Folder not found"
 	}
@@ -1775,9 +1744,6 @@ func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID str
 
 	parent := normalizeOpParent(parentID)
 	if parent != projection.RootParent {
-		if err := a.rejectFolderOpsInShared(); err != nil {
-			return "Error: " + err.Error()
-		}
 		if !projection.IsFolderID(parent) {
 			return "Error: Invalid parent folder id"
 		}
@@ -1859,9 +1825,6 @@ func (a *App) RenameFolder(folderID string, newName string) string {
 	if channelID == 0 {
 		return "Error: No active channel"
 	}
-	if err := a.rejectFolderOpsInShared(); err != nil {
-		return "Error: " + err.Error()
-	}
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return "Error: Invalid name"
@@ -1890,9 +1853,6 @@ func (a *App) MoveFile(msgID int, newParentID string) string {
 	}
 	parent := normalizeOpParent(newParentID)
 	if parent != projection.RootParent {
-		if err := a.rejectFolderOpsInShared(); err != nil {
-			return "Error: " + err.Error()
-		}
 		if !projection.IsFolderID(parent) {
 			return "Error: Invalid target folder id"
 		}
@@ -1925,9 +1885,6 @@ func (a *App) MoveFolder(folderID string, newParentID string) string {
 	channelID := a.ActiveChannelID()
 	if channelID == 0 {
 		return "Error: No active channel"
-	}
-	if err := a.rejectFolderOpsInShared(); err != nil {
-		return "Error: " + err.Error()
 	}
 	if !projection.IsFolderID(folderID) {
 		return "Error: Invalid folder id"
