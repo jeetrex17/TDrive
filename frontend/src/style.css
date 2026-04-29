@@ -376,6 +376,7 @@ header {
     box-shadow: 0 0 0 4px rgba(122, 162, 247, 0.12);
 }
 .transfer-pill.is-idle .transfer-pill-dot {
+    display: block;
     width: 8px;
     height: 8px;
     background: var(--success);
