@@ -11,6 +11,7 @@ import {
     GetFileList, DeleteFile, GetStorageUsed, GetOrphanedFiles,
 } from '../../wailsjs/go/main/App';
 import { enqueueDownload } from './transfers.js';
+import { ensureUserNames, uploaderChipHTML } from './uploaders.js';
 
 export async function getFolderContents(parentID) {
     if (window.go?.main?.App?.GetFolderContents) {
@@ -57,6 +58,52 @@ export function canOwnerActOnFile(file) {
     const me = Number(state.myUserID || 0);
     if (!uploader || !me) return false;
     return uploader === me;
+}
+
+// fillUploaderSlot writes the uploader chip text into the [data-uploader-slot]
+// span of the given row. No-op if the chip wouldn't apply (personal drive,
+// uploader unknown, etc.) — uploaderChipHTML returns null in those cases
+// and the slot stays empty.
+//
+// Safe to call before the user-name cache is populated; the slot stays
+// empty and a follow-up populateUploaderChips pass fills it once names
+// resolve.
+export function fillUploaderSlot(row, file) {
+    if (!row) return;
+    const slot = row.querySelector('[data-uploader-slot]');
+    if (!slot) return;
+    const html = uploaderChipHTML(file);
+    slot.innerHTML = html ?? '';
+}
+
+// populateUploaderChips collects all uploader IDs visible on the current
+// page, batch-resolves their names via the backend, then re-fills every
+// chip slot with the now-cached names. Called once per refreshFiles after
+// the rows are in the DOM.
+async function populateUploaderChips(list) {
+    if (!list) return;
+    if (state.activeChannel?.kind !== 'shared') return;
+
+    const slots = list.querySelectorAll('[data-uploader-slot]');
+    const ids = [];
+    slots.forEach((slot) => {
+        const row = slot.closest('.drive-row');
+        if (!row) return;
+        const uid = Number(row.dataset.uploaderId || 0);
+        if (uid > 0) ids.push(uid);
+    });
+    if (ids.length === 0) return;
+
+    await ensureUserNames(ids);
+
+    slots.forEach((slot) => {
+        const row = slot.closest('.drive-row');
+        if (!row) return;
+        const uid = Number(row.dataset.uploaderId || 0);
+        const ts = Number(row.dataset.uploadTime || 0);
+        const html = uploaderChipHTML({ uploaderID: uid, uploadTime: ts });
+        slot.innerHTML = html ?? '';
+    });
 }
 
 async function getAllFsMsgIDs() {
@@ -408,6 +455,7 @@ export function refreshFiles() {
                 row.dataset.size = String(file.size || 0);
                 row.dataset.parentId = requestedFolderId;
                 row.dataset.uploaderId = String(file.uploaderID || 0);
+                row.dataset.uploadTime = String(file.date || 0);
                 const ownerOnly = canOwnerActOnFile(file);
                 row.dataset.canDelete = ownerOnly ? "true" : "false";
                 row.dataset.canRename = ownerOnly ? "true" : "false";
@@ -416,6 +464,7 @@ export function refreshFiles() {
                     <div class="row-name">
                         <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
                         ${escapeHtml(base)}
+                        <span class="uploader-chip" data-uploader-slot></span>
                     </div>
                     <div class="row-meta">${formatDate(file.date)}</div>
                     <div class="row-meta">${formatBytes(file.size)}</div>
@@ -423,6 +472,10 @@ export function refreshFiles() {
                         <button class="action-icon download" type="button" title="Download">${icons.download}</button>
                     </div>
                 `;
+                fillUploaderSlot(row, {
+                    uploaderID: file.uploaderID,
+                    uploadTime: file.date,
+                });
 
                 const downloadBtn = row.querySelector("button.download");
                 if (downloadBtn) {
@@ -492,6 +545,11 @@ export function refreshFiles() {
                     } catch {}
                 }
             }
+
+            // Resolve any missing uploader names and inject chips. Fire-
+            // and-forget — rows are already shown without chips and will
+            // get them populated within ~one round-trip.
+            populateUploaderChips(list);
         };
 
         finalize();
@@ -625,11 +683,13 @@ async function refreshOrphanView() {
         const ownerOnly = canOwnerActOnFile(fileShape);
         row.dataset.canDelete = ownerOnly ? "true" : "false";
         row.dataset.canRename = ownerOnly ? "true" : "false";
+        row.dataset.uploadTime = String(file.upload_time || 0);
 
         row.innerHTML = `
             <div class="row-name">
                 <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
                 ${escapeHtml(base)}
+                <span class="uploader-chip" data-uploader-slot></span>
             </div>
             <div class="row-meta">${formatDate(file.upload_time)}</div>
             <div class="row-meta">${formatBytes(file.size)}</div>
@@ -645,6 +705,8 @@ async function refreshOrphanView() {
         });
         list.appendChild(row);
     });
+
+    populateUploaderChips(list);
 }
 
 export function setupFileListWindowBindings() {

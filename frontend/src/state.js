@@ -70,6 +70,11 @@ export const state = {
     // creation feels instant despite the Telegram round-trip. Cleared on
     // success or error; refreshFiles re-renders without the ghost.
     pendingFolderOps: new Map(),
+
+    // Uploader display-name cache for shared-drive chips. Lazy + ephemeral
+    // — populated on demand via ResolveUsernames, never persisted. Keyed
+    // by stringified user id (matches the backend Wails return shape).
+    userNames: new Map(),
 };
 
 // Helper to reset folder caches (called on refresh)

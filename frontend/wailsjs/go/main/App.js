@@ -130,6 +130,10 @@ export function RenameFolder(arg1, arg2) {
   return window['go']['main']['App']['RenameFolder'](arg1, arg2);
 }
 
+export function ResolveUsernames(arg1) {
+  return window['go']['main']['App']['ResolveUsernames'](arg1);
+}
+
 export function SaveSetup(arg1, arg2) {
   return window['go']['main']['App']['SaveSetup'](arg1, arg2);
 }

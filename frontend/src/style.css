@@ -248,6 +248,21 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 .orphan-entry { opacity: 0.85; }
 .orphan-entry:hover { opacity: 1; }
 
+.uploader-chip {
+    display: inline-block;
+    margin-left: 10px;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(122, 162, 247, 0.10);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 500;
+    line-height: 1.4;
+    vertical-align: 2px;
+    white-space: nowrap;
+}
+.uploader-chip:empty { display: none; }
+
 .pending-folder {
     opacity: 0.55;
     pointer-events: none;          /* dim + non-interactive */
