@@ -130,11 +130,27 @@ export async function switchActiveChannel(channelID) {
     }
 }
 
+// refreshActiveDrive is the manual-Refresh entrypoint. It runs an
+// incremental sync against the active channel, then re-renders. Awaitable
+// — caller can show progress UI and react when done. Sync errors are
+// logged and swallowed; the UI re-render still happens so users see
+// whatever local state we have.
 export async function refreshActiveDrive() {
-    if (!state.activeChannel) return;
-    syncInBackground(state.activeChannel.id);
+    if (!state.activeChannel) {
+        await refreshFilesView();
+        return;
+    }
+    try {
+        await SyncChannel(Number(state.activeChannel.id));
+    } catch (err) {
+        console.warn('SyncChannel:', err);
+    }
+    await refreshFilesView();
 }
 
+// syncInBackground is fire-and-forget. Used by switchActiveChannel where
+// the user has already seen the local cache; we just want to fold in any
+// new ops asynchronously.
 function syncInBackground(channelID) {
     SyncChannel(Number(channelID))
         .then(() => refreshFilesView())

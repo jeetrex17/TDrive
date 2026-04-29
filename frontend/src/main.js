@@ -25,7 +25,7 @@ import { setupLeaveDriveModal } from './modules/modals/leave-drive.js';
 
 // Sidebar / drives
 import { setupSidebar, renderSidebar } from './modules/sidebar.js';
-import { bindChannelsRenderers } from './modules/channels.js';
+import { bindChannelsRenderers, refreshActiveDrive } from './modules/channels.js';
 
 // Setup window bindings that need to be available globally
 window.refreshFiles = refreshFiles;
@@ -34,7 +34,9 @@ window.triggerRefresh = function() {
         runGlobalSearch();
         return;
     }
-    refreshFiles();
+    // Manual refresh: pull new ops from Telegram, then re-render. Awaitable
+    // for callers that want to show progress, but most click handlers don't.
+    return refreshActiveDrive();
 };
 window.openNewFolderModal = openNewFolderModal;
 window.selectFile = function() {

@@ -102,10 +102,12 @@ export async function showDashboard() {
     if (status) status.innerText = "Ready";
 
     // Load drive list (personal + any joined shared) before the first
-    // refreshFiles call, so the sidebar populates and folder-control
-    // gating runs based on the active drive.
+    // refresh, so the sidebar populates and folder-control gating runs
+    // based on the active drive. triggerRefresh syncs from Telegram first
+    // — important for users coming back to a drive that's seen new
+    // activity since they last had the app open.
     await loadChannels();
-    window.refreshFiles();
+    window.triggerRefresh();
 }
 
 export async function checkStatusAndShowScreen() {

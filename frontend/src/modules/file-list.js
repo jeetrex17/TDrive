@@ -173,7 +173,7 @@ export function refreshFiles() {
                 <div style="padding:20px; color:#c0caf5;">
                     <div style="font-weight:700; margin-bottom:8px;">Could not load this folder</div>
                     <div style="color:#8b95c5; margin-bottom:12px;">${escapeHtml(msg)}</div>
-                    <button class="secondary-btn" type="button" onclick="refreshFiles()">Retry</button>
+                    <button class="secondary-btn" type="button" onclick="triggerRefresh()">Retry</button>
                 </div>
             `;
             return;

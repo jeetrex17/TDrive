@@ -78,7 +78,7 @@ export function setupContextMenu() {
                 { label: `Delete ${count} items`, danger: true, onClick: () => openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
                 { type: "divider" },
                 { label: "Clear selection", onClick: () => clearSelection() },
-                { label: "Refresh", onClick: () => window.refreshFiles() },
+                { label: "Refresh", onClick: () => window.triggerRefresh() },
             );
             show(e.clientX, e.clientY, items);
             return;
@@ -98,7 +98,7 @@ export function setupContextMenu() {
                 { label: `Delete "${folderName}"`, danger: true, onClick: () => window.initDeleteFolder(folderID, folderName) },
                 { type: "divider" },
                 { label: "New folder", onClick: () => window.openNewFolderModal() },
-                { label: "Refresh", onClick: () => window.refreshFiles() },
+                { label: "Refresh", onClick: () => window.triggerRefresh() },
             ]);
             return;
         }
@@ -129,7 +129,7 @@ export function setupContextMenu() {
             if (!isShared) {
                 items.push({ label: "New folder", onClick: () => window.openNewFolderModal() });
             }
-            items.push({ label: "Refresh", onClick: () => window.refreshFiles() });
+            items.push({ label: "Refresh", onClick: () => window.triggerRefresh() });
             show(e.clientX, e.clientY, items);
             return;
         }
@@ -140,7 +140,7 @@ export function setupContextMenu() {
         }
         bgItems.push(
             { label: "Upload", onClick: () => window.selectFile() },
-            { label: "Refresh", onClick: () => window.refreshFiles() },
+            { label: "Refresh", onClick: () => window.triggerRefresh() },
         );
         show(e.clientX, e.clientY, bgItems);
     });
