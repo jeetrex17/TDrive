@@ -8,11 +8,13 @@ export function setupNewDriveModal() {
     const cancel = document.getElementById('new-drive-cancel');
     const create = document.getElementById('new-drive-create');
     const input = document.getElementById('new-drive-name');
+    const approval = document.getElementById('new-drive-require-approval');
     if (!modal || !cancel || !create || !input) return;
 
     const close = () => {
         modal.style.display = 'none';
         input.value = '';
+        if (approval) approval.checked = false;
     };
 
     cancel.addEventListener('click', close);
@@ -25,10 +27,10 @@ export function setupNewDriveModal() {
         if (status) status.innerText = 'Creating drive...';
         create.disabled = true;
         try {
-            const info = await createSharedDrive(title);
+            const info = await createSharedDrive(title, Boolean(approval?.checked));
             close();
             if (info?.invite_link) {
-                openShareDriveModal(String(info.invite_link));
+                openShareDriveModal(String(info.invite_link), { approvalRequired: Boolean(approval?.checked) });
             }
         } catch (err) {
             alert('Failed to create drive: ' + err);

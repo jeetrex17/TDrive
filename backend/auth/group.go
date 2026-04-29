@@ -15,6 +15,23 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+type InviteInfo struct {
+	AlreadyJoined bool
+	RequestNeeded bool
+	Title         string
+	ChannelID     int64
+	AccessHash    int64
+}
+
+type JoinRequest struct {
+	UserID      int64
+	AccessHash  int64
+	DisplayName string
+	Username    string
+	RequestedAt int64
+	About       string
+}
+
 // CreateMegagroup creates a Telegram megagroup (not a broadcast channel) and
 // returns its channel ID + access hash. Megagroup so every TDrive member can
 // upload; broadcast would require admin rights to post.
@@ -38,9 +55,10 @@ func CreateMegagroup(ctx context.Context, client *telegram.Client, title, about 
 // ExportInviteLink generates a fresh `t.me/+...` invite link for the given
 // channel. Telegram returns a different link object every time; the URL
 // itself only changes when an admin explicitly revokes.
-func ExportInviteLink(ctx context.Context, api *tg.Client, peer *tg.InputPeerChannel) (string, error) {
+func ExportInviteLink(ctx context.Context, api *tg.Client, peer *tg.InputPeerChannel, requestNeeded bool) (string, error) {
 	res, err := api.MessagesExportChatInvite(ctx, &tg.MessagesExportChatInviteRequest{
-		Peer: peer,
+		Peer:          peer,
+		RequestNeeded: requestNeeded,
 	})
 	if err != nil {
 		return "", fmt.Errorf("export invite: %w", err)
@@ -53,6 +71,47 @@ func ExportInviteLink(ctx context.Context, api *tg.Client, peer *tg.InputPeerCha
 		return link, nil
 	}
 	return "", fmt.Errorf("export invite: unexpected response type %T", res)
+}
+
+func CheckInvite(ctx context.Context, api *tg.Client, hash string) (InviteInfo, error) {
+	res, err := api.MessagesCheckChatInvite(ctx, hash)
+	if err != nil {
+		return InviteInfo{}, fmt.Errorf("check invite: %w", err)
+	}
+	switch invite := res.(type) {
+	case *tg.ChatInviteAlready:
+		id, accessHash, title := channelFromChat(invite.Chat)
+		if id == 0 {
+			return InviteInfo{}, fmt.Errorf("check invite: already joined but no channel in response")
+		}
+		return InviteInfo{
+			AlreadyJoined: true,
+			Title:         title,
+			ChannelID:     id,
+			AccessHash:    accessHash,
+		}, nil
+	case *tg.ChatInvite:
+		return InviteInfo{
+			RequestNeeded: invite.RequestNeeded,
+			Title:         invite.Title,
+		}, nil
+	case *tg.ChatInvitePeek:
+		_, _, title := channelFromChat(invite.Chat)
+		return InviteInfo{Title: title}, nil
+	default:
+		return InviteInfo{}, fmt.Errorf("check invite: unexpected response type %T", res)
+	}
+}
+
+func RequestJoin(ctx context.Context, api *tg.Client, hash string) error {
+	if _, err := api.MessagesImportChatInvite(ctx, hash); err != nil {
+		msg := strings.ToUpper(err.Error())
+		if strings.Contains(msg, "INVITE_REQUEST_SENT") || strings.Contains(msg, "REQUEST_SENT") {
+			return nil
+		}
+		return fmt.Errorf("request join: %w", err)
+	}
+	return nil
 }
 
 // ParseInviteHash extracts the hash portion from a Telegram invite link.
@@ -122,6 +181,57 @@ func JoinByInvite(ctx context.Context, api *tg.Client, hash string) (channelID, 
 	return channelID, accessHash, nil
 }
 
+func ListJoinRequests(ctx context.Context, api *tg.Client, peer *tg.InputPeerChannel) ([]JoinRequest, error) {
+	res, err := api.MessagesGetChatInviteImporters(ctx, &tg.MessagesGetChatInviteImportersRequest{
+		Peer:      peer,
+		Requested: true,
+		Limit:     100,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list join requests: %w", err)
+	}
+	users := make(map[int64]*tg.User, len(res.Users))
+	for _, u := range res.Users {
+		if user, ok := u.(*tg.User); ok {
+			users[user.ID] = user
+		}
+	}
+
+	out := make([]JoinRequest, 0, len(res.Importers))
+	for _, importer := range res.Importers {
+		req := JoinRequest{
+			UserID:      importer.UserID,
+			RequestedAt: int64(importer.Date),
+			About:       importer.About,
+		}
+		if user := users[importer.UserID]; user != nil {
+			req.AccessHash = user.AccessHash
+			req.Username = user.Username
+			req.DisplayName = displayUserName(user)
+		}
+		if req.DisplayName == "" {
+			req.DisplayName = fmt.Sprintf("User %d", req.UserID)
+		}
+		out = append(out, req)
+	}
+	return out, nil
+}
+
+func HideJoinRequest(ctx context.Context, api *tg.Client, peer *tg.InputPeerChannel, userID, accessHash int64, approved bool) error {
+	if userID == 0 {
+		return fmt.Errorf("join request user id required")
+	}
+	_, err := api.MessagesHideChatJoinRequest(ctx, &tg.MessagesHideChatJoinRequestRequest{
+		Peer:     peer,
+		UserID:   &tg.InputUser{UserID: userID, AccessHash: accessHash},
+		Approved: approved,
+	})
+	if err != nil {
+		return fmt.Errorf("hide join request: %w", err)
+	}
+	return nil
+}
+
 // LeaveChannel removes the current account from the given channel/megagroup.
 func LeaveChannel(ctx context.Context, api *tg.Client, peer *tg.InputChannel) error {
 	_, err := api.ChannelsLeaveChannel(ctx, peer)
@@ -150,4 +260,29 @@ func findMegagroup(updates tg.UpdatesClass) (int64, int64) {
 		}
 	}
 	return 0, 0
+}
+
+func channelFromChat(c tg.ChatClass) (int64, int64, string) {
+	switch ch := c.(type) {
+	case *tg.Channel:
+		return ch.ID, ch.AccessHash, ch.Title
+	case *tg.ChannelForbidden:
+		return ch.ID, ch.AccessHash, ch.Title
+	default:
+		return 0, 0, ""
+	}
+}
+
+func displayUserName(u *tg.User) string {
+	if u == nil {
+		return ""
+	}
+	name := strings.TrimSpace(strings.TrimSpace(u.FirstName) + " " + strings.TrimSpace(u.LastName))
+	if name != "" {
+		return name
+	}
+	if strings.TrimSpace(u.Username) != "" {
+		return "@" + strings.TrimSpace(u.Username)
+	}
+	return ""
 }

@@ -22,6 +22,7 @@ import { setupNewDriveModal } from './modules/modals/new-drive.js';
 import { setupJoinDriveModal } from './modules/modals/join-drive.js';
 import { setupShareDriveModal } from './modules/modals/share-drive.js';
 import { setupLeaveDriveModal } from './modules/modals/leave-drive.js';
+import { setupJoinRequestsModal } from './modules/modals/join-requests.js';
 
 // Sidebar / drives
 import { setupSidebar, renderSidebar } from './modules/sidebar.js';
@@ -63,6 +64,7 @@ window.onload = async function() {
     setupJoinDriveModal();
     setupShareDriveModal();
     setupLeaveDriveModal();
+    setupJoinRequestsModal();
 
     // Setup UI components
     setupBreadcrumb();

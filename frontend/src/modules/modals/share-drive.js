@@ -31,10 +31,16 @@ export function setupShareDriveModal() {
     });
 }
 
-export function openShareDriveModal(link) {
+export function openShareDriveModal(link, options = {}) {
     const modal = document.getElementById('share-drive-modal');
     const input = document.getElementById('share-drive-link');
+    const subtitle = document.getElementById('share-drive-subtitle');
     if (!modal || !input) return;
+    if (subtitle) {
+        subtitle.textContent = options.approvalRequired
+            ? 'People with this link can request access. An admin must approve them before they join.'
+            : 'Anyone with this link can join the drive.';
+    }
     input.value = String(link || '');
     modal.style.display = 'flex';
     setTimeout(() => { input.focus(); input.select(); }, 0);

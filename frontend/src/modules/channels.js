@@ -11,7 +11,14 @@ import {
     CreateSharedDrive,
     JoinSharedDrive,
     GetInviteLink,
+    GetApprovalInviteLink,
     LeaveSharedDrive,
+    ListPendingJoins,
+    CheckPendingJoin,
+    RemovePendingJoin,
+    ListJoinRequests,
+    ApproveJoinRequest,
+    RejectJoinRequest,
     SetActiveChannel,
     SyncChannel,
 } from '../../wailsjs/go/main/App';
@@ -32,7 +39,10 @@ function applyChannels(list) {
         ? { id: Number(active.id), title: String(active.title || ''), kind: String(active.kind || '') }
         : null;
     applyDriveKindUI();
-    renderSidebar();
+}
+
+function applyPendingJoins(list) {
+    state.pendingJoins = Array.isArray(list) ? list : [];
 }
 
 // Hook for per-drive-kind UI tweaks. Step 4 hid folder controls in shared
@@ -45,20 +55,29 @@ function applyDriveKindUI() {
 
 export async function loadChannels() {
     try {
-        const list = await ListChannels();
-        applyChannels(list);
+        const [channels, pending] = await Promise.all([
+            ListChannels(),
+            ListPendingJoins().catch((err) => {
+                console.warn('ListPendingJoins failed:', err);
+                return [];
+            }),
+        ]);
+        applyChannels(channels);
+        applyPendingJoins(pending);
+        renderSidebar();
     } catch (err) {
         console.error('ListChannels failed:', err);
         state.channels = [];
         state.activeChannel = null;
+        state.pendingJoins = [];
         renderSidebar();
     }
 }
 
-export async function createSharedDrive(title) {
+export async function createSharedDrive(title, requireApproval = false) {
     const trimmed = String(title || '').trim();
     if (!trimmed) throw new Error('Title required');
-    const info = await CreateSharedDrive(trimmed);
+    const info = await CreateSharedDrive(trimmed, Boolean(requireApproval));
     await loadChannels();
     if (info && Number(info.id)) {
         await switchActiveChannel(Number(info.id));
@@ -69,16 +88,46 @@ export async function createSharedDrive(title) {
 export async function joinSharedDrive(link) {
     const trimmed = String(link || '').trim();
     if (!trimmed) throw new Error('Invite link required');
-    const info = await JoinSharedDrive(trimmed);
+    const result = await JoinSharedDrive(trimmed);
     await loadChannels();
-    if (info && Number(info.id)) {
-        await switchActiveChannel(Number(info.id));
+    if (result?.status === 'joined' && result?.channel && Number(result.channel.id)) {
+        await switchActiveChannel(Number(result.channel.id));
     }
-    return info;
+    return result;
 }
 
 export async function getInviteLink(channelID) {
     return GetInviteLink(Number(channelID || 0));
+}
+
+export async function getApprovalInviteLink(channelID) {
+    return GetApprovalInviteLink(Number(channelID || 0));
+}
+
+export async function checkPendingJoin(inviteHash) {
+    const result = await CheckPendingJoin(String(inviteHash || ''));
+    await loadChannels();
+    if (result?.status === 'joined' && result?.channel && Number(result.channel.id)) {
+        await switchActiveChannel(Number(result.channel.id));
+    }
+    return result;
+}
+
+export async function removePendingJoin(inviteHash) {
+    await RemovePendingJoin(String(inviteHash || ''));
+    await loadChannels();
+}
+
+export async function listJoinRequests(channelID) {
+    return ListJoinRequests(Number(channelID || 0));
+}
+
+export async function approveJoinRequest(channelID, userID) {
+    await ApproveJoinRequest(Number(channelID || 0), Number(userID || 0));
+}
+
+export async function rejectJoinRequest(channelID, userID) {
+    await RejectJoinRequest(Number(channelID || 0), Number(userID || 0));
 }
 
 export async function leaveSharedDrive(channelID) {

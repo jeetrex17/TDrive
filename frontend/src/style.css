@@ -248,6 +248,20 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 .drive-empty {
     padding: 6px 12px; font-size: 0.8rem; color: var(--text-muted); opacity: 0.6;
 }
+.pending-drive-item {
+    opacity: 0.82;
+}
+.pending-drive-tag {
+    flex-shrink: 0;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid rgba(122, 162, 247, 0.32);
+    border-radius: 999px;
+    padding: 2px 6px;
+}
 .drives-actions {
     display: flex;
     flex-direction: column;
@@ -701,6 +715,77 @@ header {
 .modal-subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 18px; }
 .modal-actions { display: flex; gap: 12px; justify-content: flex-end; }
 .modal-actions .primary-btn { width: auto; padding: 12px 16px; }
+.modal-empty {
+    padding: 14px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.02);
+}
+.modal-choice-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: var(--text-main);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    margin: -4px 0 18px;
+}
+.modal-choice-row input { margin-top: 3px; }
+.modal-choice-row strong {
+    display: block;
+    font-size: 0.9rem;
+}
+.modal-choice-row small {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-muted);
+    line-height: 1.35;
+}
+.join-requests-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 18px;
+}
+.join-request-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.02);
+}
+.join-request-meta { min-width: 0; }
+.join-request-name {
+    color: var(--text-main);
+    font-weight: 700;
+    font-size: 0.9rem;
+}
+.join-request-detail {
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.join-request-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.compact-btn {
+    width: auto;
+    min-width: 0;
+    padding: 8px 10px;
+    font-size: 0.78rem;
+}
+.danger-text { color: var(--danger); }
 
 .modal-error {
     margin: -8px 0 14px 0;

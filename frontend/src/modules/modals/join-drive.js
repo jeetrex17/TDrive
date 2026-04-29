@@ -24,8 +24,11 @@ export function setupJoinDriveModal() {
         if (status) status.innerText = 'Joining drive...';
         go.disabled = true;
         try {
-            await joinSharedDrive(link);
+            const result = await joinSharedDrive(link);
             close();
+            if (result?.status === 'pending') {
+                alert('Join request sent. The drive will appear after an admin approves you; use the pending row in the sidebar to check later.');
+            }
         } catch (err) {
             alert('Failed to join drive: ' + err);
         } finally {
