@@ -256,7 +256,19 @@ export function refreshFiles() {
                 }
             }
 
-            if (folders.length === 0 && files.length === 0 && orphanCount === 0) {
+            // Pending optimistic-create rows scoped to the current parent.
+            // Computed up front so the empty-folder branch can include
+            // them — otherwise creating a folder inside an empty one
+            // would briefly show "This folder is empty" instead of the
+            // ghost row.
+            const pendingForParent = [];
+            for (const [tempId, op] of state.pendingFolderOps.entries()) {
+                if (op.parentId === requestedFolderId) {
+                    pendingForParent.push({ tempId, name: op.name });
+                }
+            }
+
+            if (folders.length === 0 && files.length === 0 && orphanCount === 0 && pendingForParent.length === 0) {
                 list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
                 return;
             }
@@ -267,13 +279,11 @@ export function refreshFiles() {
                 list.appendChild(buildOrphanEntryRow(orphanCount));
             }
 
-            // Pending CreateFolder ghost rows for the current parent.
-            // Rendered before real folders so the just-clicked entry shows
-            // up at the top until the backend confirms it.
-            for (const [tempId, op] of state.pendingFolderOps.entries()) {
-                if (op.parentId === requestedFolderId) {
-                    list.appendChild(buildPendingFolderRow(tempId, op.name));
-                }
+            // Pending CreateFolder ghost rows: rendered before real folders
+            // so the just-clicked entry shows up at the top until the
+            // backend confirms it.
+            for (const op of pendingForParent) {
+                list.appendChild(buildPendingFolderRow(op.tempId, op.name));
             }
 
             folders.forEach((folder) => {
