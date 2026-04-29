@@ -149,6 +149,75 @@ func TestApplyFileUploadIdempotentOnSameMsgID(t *testing.T) {
 	}
 }
 
+func TestApplyMetaPreservesOriginalUploader(t *testing.T) {
+	db := newTestDB(t)
+
+	// f op from actor=5 records the original uploader.
+	tx, _ := db.Begin()
+	if err := ApplyOp(tx, testChan, 100, Op{Type: OpFileUpload, Parent: RootParent, Name: "x.png"}, 5); err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	// A later meta op from a different actor (typical "B promotes A's file"
+	// case via MsgToTdriveSystem). Uploader must NOT change.
+	tx, _ = db.Begin()
+	metaOp := Op{Type: OpMeta, Obj: "f:100", Parent: RootParent, Name: "x.png"}
+	if err := ApplyOp(tx, testChan, 200, metaOp, 7); err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	var uploader int64
+	if err := db.QueryRow(
+		`SELECT uploader_user_id FROM files WHERE channel_id=? AND msg_id=?`,
+		testChan, 100,
+	).Scan(&uploader); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if uploader != 5 {
+		t.Fatalf("uploader = %d, want 5 (meta must not overwrite original)", uploader)
+	}
+}
+
+func TestApplyMetaFillsMissingUploaderForLegacyRows(t *testing.T) {
+	db := newTestDB(t)
+
+	// Simulate a row migrated from before Step 3: uploader_user_id = 0.
+	// Backfill emits a meta op with the user's actor id; the upsert should
+	// promote the legacy 0 to the meta sender's id.
+	if _, err := db.Exec(`
+		INSERT INTO files (channel_id, msg_id, name, size, parent_id, upload_time, uploader_user_id, tombstoned)
+		VALUES (?, ?, ?, ?, ?, ?, 0, 0)
+	`, testChan, 100, "legacy.png", 0, RootParent, 0); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	tx, _ := db.Begin()
+	metaOp := Op{Type: OpMeta, Obj: "f:100", Parent: RootParent, Name: "legacy.png"}
+	if err := ApplyOp(tx, testChan, 200, metaOp, 5); err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	var uploader int64
+	if err := db.QueryRow(
+		`SELECT uploader_user_id FROM files WHERE channel_id=? AND msg_id=?`,
+		testChan, 100,
+	).Scan(&uploader); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if uploader != 5 {
+		t.Fatalf("uploader = %d, want 5 (legacy 0 should be filled)", uploader)
+	}
+}
+
 func TestApplyRenameFile(t *testing.T) {
 	db := newTestDB(t)
 	if err := runOp(t, db, testChan, 1, Op{Type: OpFileUpload, Parent: RootParent, Name: "old.png"}); err != nil {

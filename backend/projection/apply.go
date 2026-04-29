@@ -99,6 +99,10 @@ func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 		return fmt.Errorf("%w: file op requires msg id", ErrBadOp)
 	}
 
+	// Preserve the original uploader: once a real (>0) uploader is recorded
+	// (typically by the initial f op), later meta ops never overwrite it.
+	// Only fills it in when the row's existing uploader is 0, which is the
+	// legacy/backfill path for rows migrated before Step 3.
 	_, err := tx.Exec(`
 		INSERT INTO files (channel_id, msg_id, name, size, parent_id, upload_time, uploader_user_id, tombstoned)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 0)
@@ -107,7 +111,7 @@ func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 			parent_id = excluded.parent_id,
 			size = CASE WHEN excluded.size > 0 THEN excluded.size ELSE files.size END,
 			upload_time = CASE WHEN excluded.upload_time > 0 THEN excluded.upload_time ELSE files.upload_time END,
-			uploader_user_id = CASE WHEN excluded.uploader_user_id > 0 THEN excluded.uploader_user_id ELSE files.uploader_user_id END
+			uploader_user_id = CASE WHEN files.uploader_user_id > 0 THEN files.uploader_user_id ELSE excluded.uploader_user_id END
 	`, channelID, fileMsgID, op.Name, op.FileSize, op.Parent, op.FileUploadTime, actorID)
 	return err
 }
