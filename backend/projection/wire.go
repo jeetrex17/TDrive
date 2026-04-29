@@ -137,6 +137,7 @@ func Format(op Op) string {
 		b.WriteString(op.Parent)
 		b.WriteString("|n=")
 		b.WriteString(url.QueryEscape(op.Name))
+		appendFileAttrs(&b, op)
 	case OpMeta:
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
@@ -144,6 +145,7 @@ func Format(op Op) string {
 		b.WriteString(op.Parent)
 		b.WriteString("|n=")
 		b.WriteString(url.QueryEscape(op.Name))
+		appendFileAttrs(&b, op)
 	case OpMkdir:
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
@@ -167,6 +169,17 @@ func Format(op Op) string {
 	}
 
 	return b.String()
+}
+
+func appendFileAttrs(b *strings.Builder, op Op) {
+	if op.FileSize > 0 {
+		b.WriteString("|sz=")
+		b.WriteString(strconv.FormatInt(op.FileSize, 10))
+	}
+	if op.FileUploadTime > 0 {
+		b.WriteString("|ts=")
+		b.WriteString(strconv.FormatInt(op.FileUploadTime, 10))
+	}
 }
 
 func setObj(op *Op, raw, requiredPrefix string) error {

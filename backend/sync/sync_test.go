@@ -102,6 +102,56 @@ func TestIncrementalIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestIncrementalBackfillsMissingFileSizeFromTelegramMedia(t *testing.T) {
+	db, tg, eng := newSyncEnv(t)
+	tg.SeedHistory(tgclient.HistoryMessage{
+		MsgID:     42,
+		Date:      1234,
+		FromID:    9,
+		Text:      "TDX1|t=f|p=|n=shared.bin",
+		HasMedia:  true,
+		MediaSize: 9876,
+	})
+
+	if err := eng.Incremental(context.Background(), testChan); err != nil {
+		t.Fatalf("incremental: %v", err)
+	}
+
+	var size, uploadTime int64
+	if err := db.QueryRow(`
+		SELECT size, upload_time FROM files
+		WHERE channel_id = ? AND msg_id = ?
+	`, testChan, 42).Scan(&size, &uploadTime); err != nil {
+		t.Fatalf("file row: %v", err)
+	}
+	if size != 9876 {
+		t.Fatalf("size = %d, want 9876", size)
+	}
+	if uploadTime != 1234 {
+		t.Fatalf("upload_time = %d, want 1234", uploadTime)
+	}
+}
+
+func TestParseHistoryPagePreservesExplicitFileSizeAndTime(t *testing.T) {
+	parsed := ParseHistoryPage([]tgclient.HistoryMessage{{
+		MsgID:     42,
+		Date:      9999,
+		FromID:    9,
+		Text:      "TDX1|t=f|p=|n=shared.bin|sz=111|ts=222",
+		HasMedia:  true,
+		MediaSize: 9876,
+	}})
+	if len(parsed) != 1 {
+		t.Fatalf("parsed = %d, want 1", len(parsed))
+	}
+	if parsed[0].Op.FileSize != 111 {
+		t.Fatalf("size = %d, want explicit 111", parsed[0].Op.FileSize)
+	}
+	if parsed[0].Op.FileUploadTime != 222 {
+		t.Fatalf("upload_time = %d, want explicit 222", parsed[0].Op.FileUploadTime)
+	}
+}
+
 func TestIncrementalPaginatesAllNewMessagesNewestFirst(t *testing.T) {
 	db, tg, eng := newSyncEnv(t)
 

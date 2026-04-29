@@ -29,6 +29,14 @@ func ParseHistoryPage(msgs []tgclient.HistoryMessage) []ParsedMessage {
 		if err != nil {
 			continue
 		}
+		if op.Type == projection.OpFileUpload || op.Type == projection.OpMeta {
+			if op.FileSize == 0 && m.MediaSize > 0 {
+				op.FileSize = m.MediaSize
+			}
+			if op.FileUploadTime == 0 && m.Date > 0 {
+				op.FileUploadTime = m.Date
+			}
+		}
 		out = append(out, ParsedMessage{
 			MsgID:     m.MsgID,
 			FromID:    m.FromID,

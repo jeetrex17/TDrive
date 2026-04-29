@@ -159,11 +159,12 @@ func (f *Fake) SendControl(ctx context.Context, peer InputPeer, text string, sil
 	f.nextMsgID++
 	f.sentControls = append(f.sentControls, SentControl{Peer: peer, Text: text, Silent: silent, MsgID: id})
 	f.history = append(f.history, HistoryMessage{
-		MsgID:    id,
-		Date:     0,
-		FromID:   f.self,
-		Text:     text,
-		HasMedia: false,
+		MsgID:     id,
+		Date:      0,
+		FromID:    f.self,
+		Text:      text,
+		HasMedia:  false,
+		MediaSize: 0,
 	})
 	return id, nil
 }
@@ -209,11 +210,12 @@ func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 	f.nextMsgID++
 	f.sentFiles = append(f.sentFiles, SentFile{Peer: peer, Name: name, Caption: caption, Size: totalSize, MsgID: id})
 	f.history = append(f.history, HistoryMessage{
-		MsgID:    id,
-		Date:     0,
-		FromID:   f.self,
-		Text:     caption,
-		HasMedia: true,
+		MsgID:     id,
+		Date:      0,
+		FromID:    f.self,
+		Text:      caption,
+		HasMedia:  true,
+		MediaSize: totalSize,
 	})
 	return SendFileResult{MsgID: id}, nil
 }

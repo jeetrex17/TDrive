@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseFileUpload(t *testing.T) {
-	op, err := Parse("TDX1|t=f|p=d:abc|n=sunset.jpg\nTDrive: sunset.jpg")
+	op, err := Parse("TDX1|t=f|p=d:abc|n=sunset.jpg|sz=4321|ts=99\nTDrive: sunset.jpg")
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -19,6 +19,12 @@ func TestParseFileUpload(t *testing.T) {
 	}
 	if op.Name != "sunset.jpg" {
 		t.Fatalf("name = %q", op.Name)
+	}
+	if op.FileSize != 4321 {
+		t.Fatalf("size = %d", op.FileSize)
+	}
+	if op.FileUploadTime != 99 {
+		t.Fatalf("upload_time = %d", op.FileUploadTime)
 	}
 }
 
@@ -145,8 +151,9 @@ func TestParseEmptyHeader(t *testing.T) {
 
 func TestRoundTripFormatParse(t *testing.T) {
 	cases := []Op{
-		{Type: OpFileUpload, Parent: RootParent, Name: "alpha.png"},
-		{Type: OpFileUpload, Parent: "d:abc", Name: "spaces here.txt"},
+		{Type: OpFileUpload, Parent: RootParent, Name: "alpha.png", FileSize: 123, FileUploadTime: 456},
+		{Type: OpFileUpload, Parent: "d:abc", Name: "spaces here.txt", FileSize: 789, FileUploadTime: 1000},
+		{Type: OpMeta, Obj: "f:9", Parent: RootParent, Name: "legacy.bin", FileSize: 2048, FileUploadTime: 88},
 		{Type: OpMkdir, Obj: "d:abc", Parent: RootParent, Name: "Photos"},
 		{Type: OpRename, Obj: "f:5", Name: "new.png"},
 		{Type: OpRename, Obj: "d:abc", Name: "Renamed"},
@@ -168,9 +175,27 @@ func TestRoundTripFormatParse(t *testing.T) {
 		if got.Type != want.Type ||
 			got.Obj != want.Obj ||
 			got.Parent != want.Parent ||
-			got.Name != want.Name {
+			got.Name != want.Name ||
+			got.FileSize != want.FileSize ||
+			got.FileUploadTime != want.FileUploadTime {
 			t.Fatalf("round trip mismatch: want %+v, got %+v (raw=%q)", want, got, raw)
 		}
+	}
+}
+
+func TestFormatFileUploadIncludesSizeAndTime(t *testing.T) {
+	raw := Format(Op{
+		Type:           OpFileUpload,
+		Parent:         RootParent,
+		Name:           "x.txt",
+		FileSize:       55,
+		FileUploadTime: 66,
+	})
+	if !strings.Contains(raw, "|sz=55") {
+		t.Fatalf("formatted header missing size: %q", raw)
+	}
+	if !strings.Contains(raw, "|ts=66") {
+		t.Fatalf("formatted header missing upload time: %q", raw)
 	}
 }
 

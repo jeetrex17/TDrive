@@ -166,14 +166,24 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 			if from, ok := fullMsg.FromID.(*tg.PeerUser); ok {
 				fromID = from.UserID
 			}
-			_, hasMedia := fullMsg.Media.(*tg.MessageMediaDocument)
+			var (
+				hasMedia  bool
+				mediaSize int64
+			)
+			if media, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
+				hasMedia = true
+				if doc, ok := media.Document.(*tg.Document); ok {
+					mediaSize = doc.Size
+				}
+			}
 
 			out = append(out, HistoryMessage{
-				MsgID:    int64(fullMsg.ID),
-				Date:     int64(fullMsg.Date),
-				FromID:   fromID,
-				Text:     text,
-				HasMedia: hasMedia,
+				MsgID:     int64(fullMsg.ID),
+				Date:      int64(fullMsg.Date),
+				FromID:    fromID,
+				Text:      text,
+				HasMedia:  hasMedia,
+				MediaSize: mediaSize,
 			})
 		}
 		return nil
