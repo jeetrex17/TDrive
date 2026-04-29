@@ -254,7 +254,12 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
     color: var(--text-muted); padding: 8px 12px; border-radius: 8px; cursor: pointer;
     font-size: 0.85rem; transition: all 0.15s ease;
 }
-.drive-action-btn:hover { color: var(--accent); border-color: var(--accent); }
+.drive-action-btn:hover,
+.drive-action-btn:focus-visible {
+    color: var(--accent);
+    border-color: var(--accent);
+    border-style: solid;
+}
 .drive-action-btn .icon { width: 16px; height: 16px; }
 
 .orphan-banner {
