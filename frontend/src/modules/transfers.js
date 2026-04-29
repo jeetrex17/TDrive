@@ -302,5 +302,14 @@ export async function uploadWithParentID(parentID) {
         console.error("Upload failed:", err);
     } finally {
         if (state.activeTransfer === "upload") state.activeTransfer = null;
+        // Safety sweep: by the time UploadToDriveFS resolves, every upload
+        // in the batch has terminated on the backend. If a Wails event was
+        // dropped, an entry may still be stuck in 'active' at 100% in the
+        // bell. markTransferDone is idempotent against terminal entries,
+        // so this only flips orphaned 'active' rows.
+        for (const [uploadId] of state.uploadTransfers) {
+            markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+        }
+        state.uploadBatch = null;
     }
 }

@@ -106,9 +106,10 @@ export function pushHistoryEvent({ level = 'info', title = '', body = '', ts } =
 }
 
 // pushTransferStart begins tracking an upload or download. id should be
-// unique per transfer (msg_id, upload id, etc.).
+// unique per transfer (msg_id, upload id, etc.). id=0 is valid — upload
+// IDs are zero-based, so don't reject falsy.
 export function pushTransferStart({ id, direction, name, total = 0 }) {
-    if (!id || !direction) return;
+    if (id == null || !direction) return;
     const key = `xfer:${direction}:${id}`;
     // De-dup: if an entry with this key already exists, replace it.
     removeFromHistory(key);
@@ -142,6 +143,9 @@ export function markTransferDone({ id, direction, status = 'done' }) {
     const key = `xfer:${direction}:${id}`;
     const entry = state.historyEvents.find((e) => e.id === key);
     if (!entry) return;
+    // Idempotent: don't downgrade or rewrite an already-terminal entry
+    // (e.g. a safety sweep firing 'done' on an entry that already failed).
+    if (entry.status !== 'active') return;
     entry.status = status;
     entry.progress = status === 'done' ? 100 : entry.progress;
     entry.finishedAt = Date.now();

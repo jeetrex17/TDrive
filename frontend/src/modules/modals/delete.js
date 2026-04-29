@@ -7,31 +7,16 @@ import { ensureNotInsideDeletedFolder } from '../navigation.js';
 import { deleteFolder } from '../file-list.js';
 import { notify, dismissNotification } from '../notifications.js';
 
-// Build the success-toast title for a bulk delete. Names the item when
-// possible — "Deleted N files" / "Deleted folder X" — instead of the
-// generic "Item deleted" that hides what was acted on.
-function bulkSuccessTitle(items) {
-    if (!Array.isArray(items) || items.length === 0) return 'Items deleted';
-    const folders = items.filter((i) => i?.type === 'folder');
-    const files = items.filter((i) => i?.type === 'file');
+function successTitle(item) {
+    const name = String(item?.name || '').trim();
+    if (!name) return item?.type === 'folder' ? 'Folder deleted' : 'File deleted';
+    return item?.type === 'folder' ? `Deleted folder "${name}"` : `Deleted "${name}"`;
+}
 
-    if (items.length === 1) {
-        const single = items[0];
-        const name = String(single?.name || '').trim();
-        if (name) {
-            return single?.type === 'folder'
-                ? `Deleted folder "${name}"`
-                : `Deleted "${name}"`;
-        }
-        return single?.type === 'folder' ? 'Folder deleted' : 'File deleted';
-    }
-    if (folders.length === items.length) {
-        return `Deleted ${folders.length} folders`;
-    }
-    if (files.length === items.length) {
-        return `Deleted ${files.length} files`;
-    }
-    return `Deleted ${items.length} items (${files.length} file${files.length === 1 ? '' : 's'}, ${folders.length} folder${folders.length === 1 ? '' : 's'})`;
+function failureTitle(item) {
+    const name = String(item?.name || '').trim();
+    if (!name) return item?.type === 'folder' ? 'Could not delete folder' : 'Could not delete file';
+    return item?.type === 'folder' ? `Could not delete folder "${name}"` : `Could not delete "${name}"`;
 }
 
 export function openDeleteModal(target) {
@@ -127,19 +112,21 @@ export function setupDeleteModal() {
                 }
                 const folders = items.filter((i) => i?.type === "folder");
                 const files = items.filter((i) => i?.type === "file");
+                const succeeded = [];
                 const failures = [];
 
                 for (const folder of folders) {
                     try {
                         const res = await deleteFolder(String(folder.id));
                         if (typeof res === "string" && res.startsWith("Error")) {
-                            failures.push(`${folder.name || folder.id}: ${res}`);
+                            failures.push({ item: folder, error: res.replace(/^Error:?\s*/i, '') });
                             continue;
                         }
                         ensureNotInsideDeletedFolder(String(folder.id));
+                        succeeded.push(folder);
                     } catch (err) {
                         console.error("Delete folder failed:", folder, err);
-                        failures.push(`${folder.name || folder.id}: ${err?.message || String(err)}`);
+                        failures.push({ item: folder, error: err?.message || String(err) });
                     }
                 }
 
@@ -147,29 +134,29 @@ export function setupDeleteModal() {
                     try {
                         const res = await DeleteFile(Number(file.id));
                         if (typeof res === "string" && res.startsWith("Error")) {
-                            failures.push(`${file.name || file.id}: ${res}`);
+                            failures.push({ item: file, error: res.replace(/^Error:?\s*/i, '') });
+                            continue;
                         }
+                        succeeded.push(file);
                     } catch (err) {
                         console.error("Delete file failed:", file, err);
-                        failures.push(`${file.name || file.id}: ${err?.message || String(err)}`);
+                        failures.push({ item: file, error: err?.message || String(err) });
                     }
                 }
 
                 clearSelection();
                 dismissNotification(progressId);
-                const successCount = items.length - failures.length;
-                if (failures.length === 0) {
+                for (const item of succeeded) {
                     notify({
                         level: 'success',
-                        title: bulkSuccessTitle(items),
+                        title: successTitle(item),
                     });
-                } else {
+                }
+                for (const { item, error } of failures) {
                     notify({
                         level: 'error',
-                        title: successCount > 0
-                            ? `Deleted ${successCount} of ${items.length} items`
-                            : 'Could not delete items',
-                        body: failures.slice(0, 5).join('\n') + (failures.length > 5 ? '\n…' : ''),
+                        title: failureTitle(item),
+                        body: error,
                     });
                 }
                 window.refreshFiles();
@@ -179,13 +166,10 @@ export function setupDeleteModal() {
                     : await DeleteFile(Number(target.id));
 
                 dismissNotification(progressId);
-                const name = String(target.name || '').trim();
                 if (typeof res === "string" && res.startsWith("Error")) {
                     notify({
                         level: 'error',
-                        title: name
-                            ? `Could not delete ${target.type === 'folder' ? 'folder ' : ''}"${name}"`
-                            : (target.type === 'folder' ? 'Could not delete folder' : 'Could not delete file'),
+                        title: failureTitle(target),
                         body: res.replace(/^Error:?\s*/i, ''),
                     });
                     return;
@@ -193,9 +177,7 @@ export function setupDeleteModal() {
                 if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));
                 notify({
                     level: 'success',
-                    title: name
-                        ? `Deleted ${target.type === 'folder' ? 'folder ' : ''}"${name}"`
-                        : (target.type === 'folder' ? 'Folder deleted' : 'File deleted'),
+                    title: successTitle(target),
                 });
                 window.refreshFiles();
             }
