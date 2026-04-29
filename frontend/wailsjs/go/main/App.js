@@ -58,6 +58,10 @@ export function GetInviteLink(arg1) {
   return window['go']['main']['App']['GetInviteLink'](arg1);
 }
 
+export function GetOrphanedFiles() {
+  return window['go']['main']['App']['GetOrphanedFiles']();
+}
+
 export function GetPassch() {
   return window['go']['main']['App']['GetPassch']();
 }
@@ -86,14 +90,6 @@ export function ListChannels() {
   return window['go']['main']['App']['ListChannels']();
 }
 
-export function MyUserID() {
-  return window['go']['main']['App']['MyUserID']();
-}
-
-export function GetOrphanedFiles() {
-  return window['go']['main']['App']['GetOrphanedFiles']();
-}
-
 export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }
@@ -108,6 +104,10 @@ export function MoveFolder(arg1, arg2) {
 
 export function MsgToTdriveSystem(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['MsgToTdriveSystem'](arg1, arg2, arg3, arg4);
+}
+
+export function MyUserID() {
+  return window['go']['main']['App']['MyUserID']();
 }
 
 export function PreviewFile(arg1) {
@@ -128,10 +128,6 @@ export function RenameFile(arg1, arg2) {
 
 export function RenameFolder(arg1, arg2) {
   return window['go']['main']['App']['RenameFolder'](arg1, arg2);
-}
-
-export function ResolvePeer(arg1, arg2) {
-  return window['go']['main']['App']['ResolvePeer'](arg1, arg2);
 }
 
 export function SaveSetup(arg1, arg2) {

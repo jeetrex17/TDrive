@@ -46,10 +46,15 @@ type App struct {
 	selfUserID      atomic.Int64
 }
 
-// ResolvePeer satisfies tdsync.PeerResolver. The sync engine resolves peers
-// through the App so we share the existing auth.Connect plumbing and don't
-// have to duplicate access-hash lookup.
-func (a *App) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+type peerResolverFn func(context.Context, int64) (tgclient.InputPeer, error)
+
+func (f peerResolverFn) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+	return f(ctx, channelID)
+}
+
+// resolvePeer satisfies tdsync.PeerResolver through peerResolverFn. Keeping
+// it unexported prevents Wails from exposing this internal sync helper.
+func (a *App) resolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
 	return a.channelPeer(ctx, channelID)
 }
 
@@ -1472,8 +1477,8 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
-	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, a)
-	a.backfillRunner = backfill.NewRunner(backend.DB, a.tg, a)
+	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
+	a.backfillRunner = backfill.NewRunner(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
 	a.backfilling = make(map[int64]bool)
 
 	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {

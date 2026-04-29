@@ -12,6 +12,10 @@ This project is for **educational purposes only**. I’m not trying to harm Tele
 - Listing files = reading channel message history and extracting documents.
 - Downloading = fetching the document by message id.
 
+## Shared Drives Warning
+
+Shared drives are experimental. TDrive uses Telegram messages as its metadata database, so don't edit or delete `TDX1|...` text messages from the regular Telegram app. Those messages are silent but visible metadata; changing them can desync what different members see.
+
 ## Telegram API ID + Hash (required)
 
 You need your own Telegram API credentials:
