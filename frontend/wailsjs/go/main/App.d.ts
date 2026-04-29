@@ -67,7 +67,7 @@ export function RenameFile(arg1:number,arg2:string):Promise<string>;
 
 export function RenameFolder(arg1:string,arg2:string):Promise<string>;
 
-export function ResolveUsernames(arg1:Array<number>):Promise<{[key: string]: string}>;
+export function ResolveUsernames(arg1:Array<number>):Promise<Record<string, string>>;
 
 export function SaveSetup(arg1:number,arg2:string):Promise<string>;
 

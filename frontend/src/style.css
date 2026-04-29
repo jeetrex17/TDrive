@@ -250,7 +250,7 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
     padding: 14px 0 18px;
 }
 .drive-action-btn {
-    display: flex; align-items: center; gap: 10px; background: transparent; border: 1px dashed var(--border);
+    display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid var(--border);
     color: var(--text-muted); padding: 8px 12px; border-radius: 8px; cursor: pointer;
     font-size: 0.85rem; transition: all 0.15s ease;
 }
