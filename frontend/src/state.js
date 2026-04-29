@@ -59,6 +59,11 @@ export const state = {
     channels: [],                // [{ id, title, kind, isActive, inviteLink }]
     channelSwitchInProgress: false,
     myUserID: 0,                 // logged-in Telegram user id; 0 = unknown
+
+    // Virtual views overlaid on the file list. null = real folder tree;
+    // "orphaned" = orphan bucket. currentFolderId stays "" so backend
+    // reads/uploads/moves never see a fake parent id.
+    virtualView: null,
 };
 
 // Helper to reset folder caches (called on refresh)

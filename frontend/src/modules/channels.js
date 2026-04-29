@@ -113,6 +113,7 @@ export async function switchActiveChannel(channelID) {
         // Reset folder/file view state — different drive, different tree.
         state.currentFolderId = '';
         state.folderPath = [];
+        state.virtualView = null;
         resetFolderCaches();
         resetSelection();
 

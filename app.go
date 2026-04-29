@@ -1670,6 +1670,35 @@ func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
 	return results, nil
 }
 
+// GetOrphanedFiles returns files in the active channel whose parent is a
+// tombstoned (or non-existent) folder. The frontend renders these in a
+// virtual "Orphaned" bucket at root.
+func (a *App) GetOrphanedFiles() ([]backend.FileMetaData, error) {
+	if backend.DB == nil {
+		return nil, fmt.Errorf("db not ready")
+	}
+	channelID := a.ActiveChannelID()
+	if channelID == 0 {
+		return []backend.FileMetaData{}, nil
+	}
+	files, err := projection.OrphanedFiles(backend.DB, channelID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]backend.FileMetaData, 0, len(files))
+	for _, f := range files {
+		out = append(out, backend.FileMetaData{
+			TgMsgID:    int(f.MsgID),
+			Name:       f.Name,
+			Size:       f.Size,
+			ParentID:   f.ParentID,
+			UploadTime: f.UploadTime,
+			UploaderID: f.UploaderID,
+		})
+	}
+	return out, nil
+}
+
 func (a *App) GetAllFsMsgIDs() ([]int, error) {
 	if backend.DB == nil {
 		return nil, fmt.Errorf("db not ready")

@@ -90,6 +90,10 @@ export function MyUserID() {
   return window['go']['main']['App']['MyUserID']();
 }
 
+export function GetOrphanedFiles() {
+  return window['go']['main']['App']['GetOrphanedFiles']();
+}
+
 export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }

@@ -90,6 +90,8 @@ export function setupBreadcrumb() {
             state.folderPath = state.folderPath.slice(0, idx + 1);
             state.currentFolderId = state.folderPath[idx]?.id || "";
         }
+        // Breadcrumb navigation always exits any virtual view.
+        state.virtualView = null;
         renderBreadcrumb();
         window.refreshFiles();
     });
@@ -100,6 +102,7 @@ export function setupBreadcrumb() {
 export function navigateToFolder(folderID, folderName) {
     state.folderPath = [...state.folderPath, { id: folderID, name: folderName }];
     state.currentFolderId = folderID;
+    state.virtualView = null;
     renderBreadcrumb();
     window.refreshFiles();
 }

@@ -89,6 +89,45 @@ func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, e
 	return out, rows.Err()
 }
 
+// OrphanedFiles returns files whose parent_id refers to a folder that
+// either doesn't exist or is tombstoned. These are surfaced in a virtual
+// "Orphaned" bucket at root in the UI; they're recoverable but not part
+// of any real folder tree. Root files (parent_id == "") are NOT orphans.
+//
+// Step 4 makes DeleteFolder only emit rmdir, so files inside become
+// orphans rather than being destroyed. Step 5 will let users move them
+// out of the bucket.
+func OrphanedFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
+	rows, err := db.Query(`
+		SELECT f.msg_id, f.name, f.size, f.parent_id, f.upload_time, f.uploader_user_id
+		FROM files f
+		WHERE f.channel_id = ?
+		  AND f.tombstoned = 0
+		  AND f.parent_id != ''
+		  AND NOT EXISTS (
+		    SELECT 1 FROM folders d
+		    WHERE d.channel_id = f.channel_id
+		      AND d.id = f.parent_id
+		      AND d.tombstoned = 0
+		  )
+		ORDER BY f.upload_time DESC
+	`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []FileSlim
+	for rows.Next() {
+		var f FileSlim
+		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 func ListAllFolders(db *sql.DB, channelID int64) ([]FolderSlim, error) {
 	rows, err := db.Query(`
 		SELECT id, name, parent_id FROM folders

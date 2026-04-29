@@ -8,7 +8,7 @@ import { openRenameModal } from './modals/rename.js';
 import { navigateToFolder } from './navigation.js';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop.js';
 import {
-    GetFileList, DeleteFile, GetStorageUsed
+    GetFileList, DeleteFile, GetStorageUsed, GetOrphanedFiles,
 } from '../../wailsjs/go/main/App';
 import { enqueueDownload } from './transfers.js';
 
@@ -141,6 +141,10 @@ export function collectDescendants(folderId, children) {
 }
 
 export function refreshFiles() {
+    if (state.virtualView === "orphaned") {
+        return refreshOrphanView();
+    }
+
     const list = document.getElementById("file-list");
     const storageUsed = document.getElementById("storage-used");
     const requestedFolderId = state.currentFolderId;
@@ -237,12 +241,31 @@ export function refreshFiles() {
             folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
             files.sort((a, b) => (b.date || 0) - (a.date || 0));
 
-            if (folders.length === 0 && files.length === 0) {
+            // At root, surface a synthetic "Orphaned" entry if any files
+            // exist whose parent points at a tombstoned/missing folder.
+            // Real folders + files render below it. The query is cheap;
+            // running it always at root keeps the bucket honest after
+            // any folder delete.
+            let orphanCount = 0;
+            if (requestedFolderId === "") {
+                try {
+                    const orphans = await GetOrphanedFiles();
+                    orphanCount = Array.isArray(orphans) ? orphans.length : 0;
+                } catch (err) {
+                    console.warn("GetOrphanedFiles failed:", err);
+                }
+            }
+
+            if (folders.length === 0 && files.length === 0 && orphanCount === 0) {
                 list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
                 return;
             }
 
             list.innerHTML = "";
+
+            if (orphanCount > 0) {
+                list.appendChild(buildOrphanEntryRow(orphanCount));
+            }
 
             folders.forEach((folder) => {
                 const row = document.createElement("div");
@@ -453,6 +476,132 @@ export function refreshFiles() {
         };
 
         finalize();
+    });
+}
+
+// buildOrphanEntryRow renders the synthetic "Orphaned (N)" entry that
+// appears at the top of root listings. Click drops the user into the
+// virtual orphan view (no real folder navigation; state.currentFolderId
+// stays "").
+function buildOrphanEntryRow(count) {
+    const row = document.createElement("div");
+    row.className = "file-row drive-row folder-row orphan-entry";
+    row.dataset.type = "orphan-entry";
+    row.innerHTML = `
+        <div class="row-name">
+            <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
+            Orphaned <span style="opacity:.6;">(${count})</span>
+        </div>
+        <div class="row-meta">—</div>
+        <div class="row-meta">—</div>
+        <div class="row-actions"></div>
+    `;
+    row.title = "Files whose parent folder was deleted. Click to view.";
+    row.addEventListener("click", () => enterOrphanView());
+    row.addEventListener("dblclick", () => enterOrphanView());
+    return row;
+}
+
+export function enterOrphanView() {
+    state.virtualView = "orphaned";
+    refreshFiles();
+}
+
+export function exitOrphanView() {
+    state.virtualView = null;
+    refreshFiles();
+}
+
+async function refreshOrphanView() {
+    const list = document.getElementById("file-list");
+    const storageUsed = document.getElementById("storage-used");
+    clearSelection();
+    list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
+    if (storageUsed) {
+        // Storage usage stays consistent across virtual views.
+        GetStorageUsed()
+            .then((bytes) => {
+                const value = Number(bytes);
+                storageUsed.innerText = (Number.isFinite(value) && value >= 0)
+                    ? `${formatBytes(value)} / Unlimited`
+                    : "— / Unlimited";
+            })
+            .catch(() => { storageUsed.innerText = "— / Unlimited"; });
+    }
+
+    let orphans;
+    try {
+        orphans = await GetOrphanedFiles();
+    } catch (err) {
+        console.error("GetOrphanedFiles failed:", err);
+        list.innerHTML = '<div style="padding:20px; color:#c0caf5;">Failed to load orphan files.</div>';
+        return;
+    }
+    orphans = Array.isArray(orphans) ? orphans : [];
+
+    list.innerHTML = "";
+
+    const banner = document.createElement("div");
+    banner.className = "orphan-banner";
+    banner.innerHTML = `
+        <div>
+            <strong>Orphaned files</strong> — these files lived in folders that were deleted.
+            They aren't in any folder anymore, but they aren't deleted either.
+        </div>
+        <button id="orphan-back" class="secondary-btn" type="button">Back to root</button>
+    `;
+    list.appendChild(banner);
+    banner.querySelector("#orphan-back")?.addEventListener("click", () => exitOrphanView());
+
+    if (orphans.length === 0) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "padding:20px; color:#565f89;";
+        empty.textContent = "Nothing here. (If you've just refreshed and expected files, try Refresh again.)";
+        list.appendChild(empty);
+        return;
+    }
+
+    orphans.sort((a, b) => (Number(b.upload_time || 0)) - (Number(a.upload_time || 0)));
+
+    orphans.forEach((file) => {
+        const { base, ext } = splitNameAndExt(file.name);
+        const row = document.createElement("div");
+        row.className = "file-row drive-row";
+        row.dataset.type = "file";
+        row.dataset.id = String(file.msg_id);
+        row.dataset.name = String(file.name || "");
+        row.dataset.source = "fs";
+        row.dataset.size = String(file.size || 0);
+        row.dataset.parentId = "";
+        row.dataset.uploaderId = String(file.uploader_id || 0);
+        const fileShape = {
+            id: file.msg_id,
+            name: file.name,
+            size: file.size,
+            uploaderID: Number(file.uploader_id || 0),
+        };
+        const ownerOnly = canOwnerActOnFile(fileShape);
+        row.dataset.canDelete = ownerOnly ? "true" : "false";
+        row.dataset.canRename = ownerOnly ? "true" : "false";
+
+        row.innerHTML = `
+            <div class="row-name">
+                <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
+                ${escapeHtml(base)}
+            </div>
+            <div class="row-meta">${formatDate(file.upload_time)}</div>
+            <div class="row-meta">${formatBytes(file.size)}</div>
+            <div class="row-actions">
+                <button class="action-icon download" type="button" title="Download">${icons.download}</button>
+            </div>
+        `;
+        row.querySelector("button.download")
+            ?.addEventListener("click", () => window.initDownload(file.msg_id, file.name, file.size));
+        row.addEventListener("click", (e) => {
+            if (e.target.closest("button")) return;
+            handleRowSelection(row, e);
+        });
+        list.appendChild(row);
     });
 }
 
