@@ -238,7 +238,13 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 .drive-item:hover { background: var(--bg-panel); color: var(--text-main); }
 .drive-item.active { background: rgba(122, 162, 247, 0.12); color: var(--accent); }
 .drive-item .icon { width: 18px; height: 18px; flex-shrink: 0; }
-.drive-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drive-item-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .drive-empty {
     padding: 6px 12px; font-size: 0.8rem; color: var(--text-muted); opacity: 0.6;
 }

@@ -92,15 +92,18 @@ function showSharedContextMenu(event, c) {
     menu.style.top = `${event.clientY}px`;
     menu.style.left = `${event.clientX}px`;
 
+    // Append a <button> rather than <div>: the global .context-menu CSS
+    // styles its button children, so this matches the file-list right-click
+    // menu instead of rendering as bare text.
     const addItem = (label, fn) => {
-        const item = document.createElement('div');
-        item.className = 'context-item';
-        item.textContent = label;
-        item.addEventListener('click', () => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = label;
+        btn.addEventListener('click', () => {
             menu.style.display = 'none';
             fn();
         });
-        menu.appendChild(item);
+        menu.appendChild(btn);
     };
 
     addItem('Copy invite link', async () => {
