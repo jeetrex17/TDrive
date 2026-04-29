@@ -64,6 +64,12 @@ export const state = {
     // "orphaned" = orphan bucket. currentFolderId stays "" so backend
     // reads/uploads/moves never see a fake parent id.
     virtualView: null,
+
+    // Optimistic CreateFolder overlay. Map<tempId, { parentId, name }>.
+    // Pending entries render as ghost rows in the file list so folder
+    // creation feels instant despite the Telegram round-trip. Cleared on
+    // success or error; refreshFiles re-renders without the ghost.
+    pendingFolderOps: new Map(),
 };
 
 // Helper to reset folder caches (called on refresh)

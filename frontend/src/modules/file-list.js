@@ -267,6 +267,15 @@ export function refreshFiles() {
                 list.appendChild(buildOrphanEntryRow(orphanCount));
             }
 
+            // Pending CreateFolder ghost rows for the current parent.
+            // Rendered before real folders so the just-clicked entry shows
+            // up at the top until the backend confirms it.
+            for (const [tempId, op] of state.pendingFolderOps.entries()) {
+                if (op.parentId === requestedFolderId) {
+                    list.appendChild(buildPendingFolderRow(tempId, op.name));
+                }
+            }
+
             folders.forEach((folder) => {
                 const row = document.createElement("div");
                 row.className = "file-row drive-row folder-row";
@@ -477,6 +486,29 @@ export function refreshFiles() {
 
         finalize();
     });
+}
+
+// buildPendingFolderRow renders an in-flight CreateFolder as a ghost row.
+// It looks like a real folder row but is dimmed and has no actions; click
+// is a no-op. Removed from the list once the Wails call resolves and
+// refreshFiles re-renders.
+function buildPendingFolderRow(tempId, name) {
+    const row = document.createElement("div");
+    row.className = "file-row drive-row folder-row pending-folder";
+    row.dataset.type = "pending-folder";
+    row.dataset.tempId = tempId;
+    row.title = "Creating…";
+    row.innerHTML = `
+        <div class="row-name">
+            <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
+            ${escapeHtml(name)}
+            <span class="pending-indicator" aria-hidden="true">·</span>
+        </div>
+        <div class="row-meta">Creating…</div>
+        <div class="row-meta">—</div>
+        <div class="row-actions"></div>
+    `;
+    return row;
 }
 
 // buildOrphanEntryRow renders the synthetic "Orphaned (N)" entry that
