@@ -205,10 +205,24 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 .nav-item.active { background: rgba(122, 162, 247, 0.1); color: var(--accent); }
 .nav-item .icon { width: 20px; height: 20px; }
 
-.storage-info { margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border); }
+.storage-info { padding-top: 20px; border-top: 1px solid var(--border); }
 .storage-info p { font-size: 0.75rem; color: var(--text-muted); display: flex; justify-content: space-between; }
 
-.drives-nav { display: flex; flex-direction: column; gap: 18px; }
+.drives-nav {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+}
+.drives-scroll {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+    padding-bottom: 18px;
+}
 .drives-section { display: flex; flex-direction: column; }
 .drives-section-title {
     font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
@@ -228,7 +242,13 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 .drive-empty {
     padding: 6px 12px; font-size: 0.8rem; color: var(--text-muted); opacity: 0.6;
 }
-.drives-actions { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.drives-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: auto;
+    padding: 14px 0 18px;
+}
 .drive-action-btn {
     display: flex; align-items: center; gap: 10px; background: transparent; border: 1px dashed var(--border);
     color: var(--text-muted); padding: 8px 12px; border-radius: 8px; cursor: pointer;
