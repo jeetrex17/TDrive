@@ -913,13 +913,17 @@ header {
     margin: -4px 0 18px;
     cursor: pointer;
 }
-.modal-choice-row input[type="checkbox"] {
+.modal-choice-row input[type="checkbox"],
+.modal-choice-row input[type="radio"] {
     flex: 0 0 auto;
     width: 16px;
     height: 16px;
     margin: 2px 0 0;
     padding: 0;
     accent-color: var(--accent);
+}
+.modal-choice-row + .modal-choice-row {
+    margin-top: -10px;
 }
 .modal-choice-row span {
     display: block;
