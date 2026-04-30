@@ -33,6 +33,13 @@ type Op struct {
 
 	FileSize       int64
 	FileUploadTime int64
+
+	// Encryption metadata. Set on file uploads when the personal drive's
+	// encrypted mode is active. EncryptionVersion is reserved for future
+	// crypto-format upgrades; v1 = 1.
+	Encrypted         bool
+	PlaintextSize     int64
+	EncryptionVersion int
 }
 
 type Channel struct {
@@ -58,14 +65,17 @@ type Folder struct {
 }
 
 type File struct {
-	ChannelID      int64
-	MsgID          int64
-	Name           string
-	Size           int64
-	ParentID       string
-	UploadTime     int64
-	UploaderUserID int64
-	Tombstoned     bool
+	ChannelID         int64
+	MsgID             int64
+	Name              string
+	Size              int64
+	ParentID          string
+	UploadTime        int64
+	UploaderUserID    int64
+	Tombstoned        bool
+	Encrypted         bool
+	PlaintextSize     int64
+	EncryptionVersion int
 }
 
 type ReplayLogRow struct {

@@ -8,6 +8,10 @@
 import { state } from '../state.js';
 import { SelectFiles, DownloadFile } from '../../wailsjs/go/main/App';
 import { notify } from './notifications.js';
+import { loadEncryptionStatus } from './encryption.js';
+import { openUploadOptionsModal } from './modals/upload-options.js';
+import { openEncryptionSetupModal } from './modals/encryption-setup.js';
+import { openEncryptionUnlockModal } from './modals/encryption-unlock.js';
 import {
     pushTransferStart,
     updateTransferProgress,
@@ -66,7 +70,16 @@ async function startNextDownload() {
     pushTransferStart({ id: next.id, direction: 'down', name: next.name, total: next.size });
 
     try {
-        const result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
+        let result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
+        // If the backend signals the master key is missing, prompt the
+        // user once and retry. Avoids needing a per-file encrypted-vs-
+        // plaintext check on the frontend before download starts.
+        if (result.status === "error" && /encryption.*locked/i.test(result.message || "")) {
+            const ok = await openEncryptionUnlockModal();
+            if (ok) {
+                result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
+            }
+        }
         next.message = result.message;
 
         if (result.status === "success") {
@@ -225,6 +238,27 @@ export async function uploadWithParentID(parentID) {
     const paths = await SelectFiles();
     if (!paths || !paths.length) return;
 
+    // Decide whether to encrypt this batch.
+    const onPersonal = state.activeChannel?.kind === 'personal';
+    let encrypt = false;
+    if (onPersonal) {
+        // Refresh the snapshot so the modal's follow-up steps see truth.
+        await loadEncryptionStatus();
+
+        const choice = await openUploadOptionsModal({ count: paths.length });
+        if (!choice) return;
+        encrypt = !!choice.encrypt;
+
+        if (encrypt && !state.encryption.unlocked) {
+            const ok = state.encryption.vaultExists
+                ? await openEncryptionUnlockModal()
+                : await openEncryptionSetupModal();
+            if (!ok) return;
+        }
+    }
+    // Shared drives skip the modal entirely — encryption is personal-only
+    // and we don't want to surface a control that silently degrades.
+
     state.activeTransfer = "upload";
     state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
 
@@ -258,7 +292,7 @@ export async function uploadWithParentID(parentID) {
 
     try {
         const parentIDs = paths.map(() => parentID || "");
-        await upload(paths, parentIDs);
+        await upload(paths, parentIDs, encrypt);
     } catch (err) {
         console.error("Upload failed:", err);
     } finally {

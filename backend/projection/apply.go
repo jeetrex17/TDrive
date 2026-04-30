@@ -103,16 +103,28 @@ func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 	// (typically by the initial f op), later meta ops never overwrite it.
 	// Only fills it in when the row's existing uploader is 0, which is the
 	// legacy/backfill path for rows migrated before Step 3.
+	encryptedFlag := 0
+	if op.Encrypted {
+		encryptedFlag = 1
+	}
+	encryptionVersion := op.EncryptionVersion
+	if op.Encrypted && encryptionVersion == 0 {
+		encryptionVersion = 1
+	}
 	_, err := tx.Exec(`
-		INSERT INTO files (channel_id, msg_id, name, size, parent_id, upload_time, uploader_user_id, tombstoned)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+		INSERT INTO files (channel_id, msg_id, name, size, parent_id, upload_time, uploader_user_id, tombstoned, encrypted, plaintext_size, encryption_version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
 		ON CONFLICT(channel_id, msg_id) DO UPDATE SET
 			name = excluded.name,
 			parent_id = excluded.parent_id,
 			size = CASE WHEN excluded.size > 0 THEN excluded.size ELSE files.size END,
 			upload_time = CASE WHEN excluded.upload_time > 0 THEN excluded.upload_time ELSE files.upload_time END,
-			uploader_user_id = CASE WHEN files.uploader_user_id > 0 THEN files.uploader_user_id ELSE excluded.uploader_user_id END
-	`, channelID, fileMsgID, op.Name, op.FileSize, op.Parent, op.FileUploadTime, actorID)
+			uploader_user_id = CASE WHEN files.uploader_user_id > 0 THEN files.uploader_user_id ELSE excluded.uploader_user_id END,
+			encrypted = CASE WHEN excluded.encrypted = 1 THEN 1 ELSE files.encrypted END,
+			plaintext_size = CASE WHEN excluded.plaintext_size > 0 THEN excluded.plaintext_size ELSE files.plaintext_size END,
+			encryption_version = CASE WHEN excluded.encryption_version > 0 THEN excluded.encryption_version ELSE files.encryption_version END
+	`, channelID, fileMsgID, op.Name, op.FileSize, op.Parent, op.FileUploadTime, actorID,
+		encryptedFlag, op.PlaintextSize, encryptionVersion)
 	return err
 }
 

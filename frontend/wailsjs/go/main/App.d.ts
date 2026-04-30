@@ -23,6 +23,8 @@ export function DeleteFolder(arg1:string):Promise<string>;
 
 export function DownloadFile(arg1:number,arg2:number):Promise<main.DownloadResult>;
 
+export function EncryptionStatus():Promise<main.EncryptionStatus>;
+
 export function GetAllFsMsgIDs():Promise<Array<number>>;
 
 export function GetApprovalInviteLink(arg1:number):Promise<string>;
@@ -56,6 +58,8 @@ export function ListChannels():Promise<Array<main.ChannelInfo>>;
 export function ListJoinRequests(arg1:number):Promise<Array<main.JoinRequestInfo>>;
 
 export function ListPendingJoins():Promise<Array<main.PendingJoinInfo>>;
+
+export function LockEncryption():Promise<void>;
 
 export function LoginPhoneNumber(arg1:string):Promise<void>;
 
@@ -103,4 +107,6 @@ export function SumbitPassword(arg1:string):Promise<void>;
 
 export function SyncChannel(arg1:number):Promise<void>;
 
-export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>):Promise<Array<backend.FileMetaData>>;
+export function UnlockOrCreateVault(arg1:string):Promise<void>;
+
+export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<Array<backend.FileMetaData>>;

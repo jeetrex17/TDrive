@@ -294,7 +294,20 @@ async function resolveFullPreviewEntry(target) {
         throw new Error("Download failed");
     }
 
-    const asset = payloadToPreviewAsset(await PreviewFile(msgID));
+    let payload;
+    try {
+        payload = await PreviewFile(msgID);
+    } catch (err) {
+        if (/encryption.*locked/i.test(String(err))) {
+            const { openEncryptionUnlockModal } = await import('./encryption-unlock.js');
+            const ok = await openEncryptionUnlockModal();
+            if (!ok) throw err;
+            payload = await PreviewFile(msgID);
+        } else {
+            throw err;
+        }
+    }
+    const asset = payloadToPreviewAsset(payload);
     await decodePreviewSource(asset.src);
     return asset;
 }

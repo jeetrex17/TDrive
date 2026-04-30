@@ -8,6 +8,7 @@ import {
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation.js';
 import { loadChannels } from './channels.js';
+import { loadEncryptionStatus } from './encryption.js';
 import { loadSelfUser } from './profile-menu.js';
 import { notify, dismissNotification } from './notifications.js';
 
@@ -126,6 +127,10 @@ export async function showDashboard() {
         console.warn('MyUserID failed:', err);
         state.myUserID = 0;
     }
+
+    // Refresh the personal-drive encryption snapshot so the upload
+    // dialog's follow-up modals can decide between setup vs unlock.
+    loadEncryptionStatus();
 
     // Hydrate the profile menu (display name, photo). Failure is non-fatal —
     // the avatar falls back to a blank circle.
