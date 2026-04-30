@@ -732,8 +732,21 @@ header {
     border-radius: 12px;
     padding: 12px;
     margin: -4px 0 18px;
+    cursor: pointer;
 }
-.modal-choice-row input { margin-top: 3px; }
+.modal-choice-row input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    margin: 2px 0 0;
+    padding: 0;
+    accent-color: var(--accent);
+}
+.modal-choice-row span {
+    display: block;
+    flex: 1;
+    min-width: 0;
+}
 .modal-choice-row strong {
     display: block;
     font-size: 0.9rem;
