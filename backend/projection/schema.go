@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -56,6 +56,15 @@ func EnsureSchema(db *sql.DB) error {
 			cursor_kind   TEXT NOT NULL,
 			started_at    INTEGER NOT NULL,
 			updated_at    INTEGER NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS pending_joins (
+			invite_hash     TEXT PRIMARY KEY,
+			invite_link     TEXT NOT NULL,
+			title           TEXT NOT NULL DEFAULT '',
+			requested_at    INTEGER NOT NULL,
+			last_checked_at INTEGER NOT NULL DEFAULT 0,
+			status          TEXT NOT NULL,
+			last_error      TEXT NOT NULL DEFAULT ''
 		);`,
 	}
 
@@ -122,6 +131,9 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 		if err := repairFoldersPK(tx); err != nil {
 			return err
 		}
+	}
+	if v < 3 {
+		// pending_joins is created by EnsureSchema above. Nothing to backfill.
 	}
 
 	if _, err := tx.Exec(`DELETE FROM schema_version`); err != nil {
@@ -273,11 +285,11 @@ func reshapeFiles(tx *sql.Tx, channelID int64) error {
 	defer rows.Close()
 
 	type fRow struct {
-		msgID       int64
-		name        string
-		size        int64
-		parent      string
-		uploadTime  int64
+		msgID      int64
+		name       string
+		size       int64
+		parent     string
+		uploadTime int64
 	}
 	var legacy []fRow
 	for rows.Next() {

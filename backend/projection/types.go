@@ -79,6 +79,16 @@ type ReplayLogRow struct {
 	SeenAt        int64
 }
 
+type PendingJoin struct {
+	InviteHash    string
+	InviteLink    string
+	Title         string
+	RequestedAt   int64
+	LastCheckedAt int64
+	Status        string
+	LastError     string
+}
+
 func IsFolderID(id string) bool {
 	return len(id) > len(FolderIDPrefix) && id[:len(FolderIDPrefix)] == FolderIDPrefix
 }

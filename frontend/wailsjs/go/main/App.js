@@ -6,8 +6,16 @@ export function ActiveChannelID() {
   return window['go']['main']['App']['ActiveChannelID']();
 }
 
+export function ApproveJoinRequest(arg1, arg2) {
+  return window['go']['main']['App']['ApproveJoinRequest'](arg1, arg2);
+}
+
 export function CheckLoginStatus() {
   return window['go']['main']['App']['CheckLoginStatus']();
+}
+
+export function CheckPendingJoin(arg1) {
+  return window['go']['main']['App']['CheckPendingJoin'](arg1);
 }
 
 export function CheckSystemStatus() {
@@ -18,8 +26,8 @@ export function CreateFolder(arg1, arg2) {
   return window['go']['main']['App']['CreateFolder'](arg1, arg2);
 }
 
-export function CreateSharedDrive(arg1) {
-  return window['go']['main']['App']['CreateSharedDrive'](arg1);
+export function CreateSharedDrive(arg1, arg2) {
+  return window['go']['main']['App']['CreateSharedDrive'](arg1, arg2);
 }
 
 export function DeleteFile(arg1) {
@@ -36,6 +44,10 @@ export function DownloadFile(arg1, arg2) {
 
 export function GetAllFsMsgIDs() {
   return window['go']['main']['App']['GetAllFsMsgIDs']();
+}
+
+export function GetApprovalInviteLink(arg1) {
+  return window['go']['main']['App']['GetApprovalInviteLink'](arg1);
 }
 
 export function GetCodech() {
@@ -90,6 +102,14 @@ export function ListChannels() {
   return window['go']['main']['App']['ListChannels']();
 }
 
+export function ListJoinRequests(arg1) {
+  return window['go']['main']['App']['ListJoinRequests'](arg1);
+}
+
+export function ListPendingJoins() {
+  return window['go']['main']['App']['ListPendingJoins']();
+}
+
 export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }
@@ -120,6 +140,14 @@ export function PreviewThumbnail(arg1) {
 
 export function RebuildProjection(arg1) {
   return window['go']['main']['App']['RebuildProjection'](arg1);
+}
+
+export function RejectJoinRequest(arg1, arg2) {
+  return window['go']['main']['App']['RejectJoinRequest'](arg1, arg2);
+}
+
+export function RemovePendingJoin(arg1) {
+  return window['go']['main']['App']['RemovePendingJoin'](arg1);
 }
 
 export function RenameFile(arg1, arg2) {

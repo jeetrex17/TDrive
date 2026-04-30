@@ -31,14 +31,22 @@ export function setupJoinDriveModal() {
         });
         go.disabled = true;
         try {
-            const info = await joinSharedDrive(link);
+            const result = await joinSharedDrive(link);
             close();
             dismissNotification(progressId);
-            notify({
-                level: 'success',
-                title: 'Joined drive',
-                body: info?.title ? String(info.title) : '',
-            });
+            if (result?.status === 'pending') {
+                notify({
+                    level: 'success',
+                    title: 'Join request sent',
+                    body: 'The drive will appear after an admin approves you.',
+                });
+            } else {
+                notify({
+                    level: 'success',
+                    title: 'Joined drive',
+                    body: result?.channel?.title ? String(result.channel.title) : '',
+                });
+            }
         } catch (err) {
             dismissNotification(progressId);
             notify({

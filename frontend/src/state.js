@@ -54,6 +54,7 @@ export const state = {
     // Drives (Step 4: shared drives)
     activeChannel: null,         // { id, title, kind }
     channels: [],                // [{ id, title, kind, isActive, inviteLink }]
+    pendingJoins: [],            // approval-required joins waiting on admin approval
     channelSwitchInProgress: false,
     myUserID: 0,                 // logged-in Telegram user id; 0 = unknown
 
