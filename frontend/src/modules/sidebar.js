@@ -14,6 +14,7 @@ import { openLeaveDriveModal } from './modals/leave-drive.js';
 import { openNewDriveModal } from './modals/new-drive.js';
 import { openJoinDriveModal } from './modals/join-drive.js';
 import { openJoinRequestsModal } from './modals/join-requests.js';
+import { notify } from './notifications.js';
 
 let personalEl = null;
 let sharedEl = null;
@@ -114,12 +115,23 @@ function pendingJoinRow(p) {
         try {
             const result = await checkPendingJoin(String(p.invite_hash || ''));
             if (result?.status === 'joined') {
-                alert('Request approved. Joined the drive.');
+                notify({
+                    level: 'success',
+                    title: 'Request approved',
+                    body: 'Joined the drive.',
+                });
             } else {
-                alert('Still waiting for admin approval.');
+                notify({
+                    level: 'info',
+                    title: 'Still waiting for approval',
+                });
             }
         } catch (err) {
-            alert('Failed to check request: ' + err);
+            notify({
+                level: 'error',
+                title: 'Could not check request',
+                body: String(err),
+            });
         }
     });
 
@@ -158,7 +170,11 @@ function showSharedContextMenu(event, c) {
             const link = await getInviteLink(Number(c.id));
             openShareDriveModal(link, { approvalRequired: false });
         } catch (err) {
-            alert('Failed to get invite link: ' + err);
+            notify({
+                level: 'error',
+                title: 'Could not get invite link',
+                body: String(err),
+            });
         }
     });
     addItem('Copy approval link', async () => {
@@ -166,7 +182,11 @@ function showSharedContextMenu(event, c) {
             const link = await getApprovalInviteLink(Number(c.id));
             openShareDriveModal(link, { approvalRequired: true });
         } catch (err) {
-            alert('Failed to get approval link: ' + err);
+            notify({
+                level: 'error',
+                title: 'Could not get approval link',
+                body: String(err),
+            });
         }
     });
     addItem('Join requests', () => {
@@ -208,16 +228,32 @@ function showPendingContextMenu(event, p) {
     addItem('Check now', async () => {
         try {
             const result = await checkPendingJoin(String(p.invite_hash || ''));
-            alert(result?.status === 'joined' ? 'Request approved. Joined the drive.' : 'Still waiting for admin approval.');
+            notify({
+                level: result?.status === 'joined' ? 'success' : 'info',
+                title: result?.status === 'joined' ? 'Request approved' : 'Still waiting for approval',
+                body: result?.status === 'joined' ? 'Joined the drive.' : '',
+            });
         } catch (err) {
-            alert('Failed to check request: ' + err);
+            notify({
+                level: 'error',
+                title: 'Could not check request',
+                body: String(err),
+            });
         }
     });
     addItem('Remove request', async () => {
         try {
             await removePendingJoin(String(p.invite_hash || ''));
+            notify({
+                level: 'success',
+                title: 'Pending request removed',
+            });
         } catch (err) {
-            alert('Failed to remove request: ' + err);
+            notify({
+                level: 'error',
+                title: 'Could not remove request',
+                body: String(err),
+            });
         }
     }, 'danger');
 

@@ -2,6 +2,7 @@
 
 import { state } from '../state.js';
 import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../wailsjs/go/main/App';
+import { notify } from './notifications.js';
 
 export function clearDropHighlights() {
     if (state.dragOverEl) {
@@ -80,7 +81,11 @@ export async function performDropMove(newParentId) {
         }
 
         if (typeof res === "string" && res.startsWith("Error")) {
-            alert(res);
+            notify({
+                level: 'error',
+                title: 'Move failed',
+                body: res.replace(/^Error:?\s*/i, ''),
+            });
         } else {
             window.refreshFiles();
         }

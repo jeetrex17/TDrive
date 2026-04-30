@@ -1,6 +1,7 @@
 // "Leave drive" confirm modal.
 
 import { leaveSharedDrive } from '../channels.js';
+import { notify, dismissNotification } from '../notifications.js';
 
 let pendingTarget = null;
 
@@ -21,17 +22,33 @@ export function setupLeaveDriveModal() {
 
     confirm.addEventListener('click', async () => {
         if (!pendingTarget) { close(); return; }
-        const status = document.getElementById('status-msg');
-        if (status) status.innerText = 'Leaving drive...';
+        const progressId = notify({
+            id: 'leaving-drive',
+            level: 'info',
+            title: 'Leaving drive…',
+            sticky: true,
+            spinner: true,
+        });
         confirm.disabled = true;
         try {
-            await leaveSharedDrive(pendingTarget.id);
+            const target = pendingTarget;
+            await leaveSharedDrive(target.id);
             close();
+            dismissNotification(progressId);
+            notify({
+                level: 'success',
+                title: 'Left drive',
+                body: target.title ? String(target.title) : '',
+            });
         } catch (err) {
-            alert('Failed to leave drive: ' + err);
+            dismissNotification(progressId);
+            notify({
+                level: 'error',
+                title: 'Could not leave drive',
+                body: String(err),
+            });
         } finally {
             confirm.disabled = false;
-            if (status) status.innerText = 'Ready';
         }
     });
 

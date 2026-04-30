@@ -1,6 +1,7 @@
 // "Join shared drive" modal.
 
 import { joinSharedDrive } from '../channels.js';
+import { notify, dismissNotification } from '../notifications.js';
 
 export function setupJoinDriveModal() {
     const modal = document.getElementById('join-drive-modal');
@@ -20,20 +21,41 @@ export function setupJoinDriveModal() {
     const submit = async () => {
         const link = String(input.value || '').trim();
         if (!link) return;
-        const status = document.getElementById('status-msg');
-        if (status) status.innerText = 'Joining drive...';
+        const progressId = notify({
+            id: 'joining-drive',
+            level: 'info',
+            title: 'Joining drive…',
+            body: 'If the drive has lots of history, this can take a few seconds.',
+            sticky: true,
+            spinner: true,
+        });
         go.disabled = true;
         try {
             const result = await joinSharedDrive(link);
             close();
+            dismissNotification(progressId);
             if (result?.status === 'pending') {
-                alert('Join request sent. The drive will appear after an admin approves you; use the pending row in the sidebar to check later.');
+                notify({
+                    level: 'success',
+                    title: 'Join request sent',
+                    body: 'The drive will appear after an admin approves you.',
+                });
+            } else {
+                notify({
+                    level: 'success',
+                    title: 'Joined drive',
+                    body: result?.channel?.title ? String(result.channel.title) : '',
+                });
             }
         } catch (err) {
-            alert('Failed to join drive: ' + err);
+            dismissNotification(progressId);
+            notify({
+                level: 'error',
+                title: 'Could not join drive',
+                body: String(err),
+            });
         } finally {
             go.disabled = false;
-            if (status) status.innerText = 'Ready';
         }
     };
 

@@ -2,6 +2,7 @@
 
 import { createSharedDrive } from '../channels.js';
 import { openShareDriveModal } from './share-drive.js';
+import { notify, dismissNotification } from '../notifications.js';
 
 export function setupNewDriveModal() {
     const modal = document.getElementById('new-drive-modal');
@@ -23,20 +24,31 @@ export function setupNewDriveModal() {
     const submit = async () => {
         const title = String(input.value || '').trim();
         if (!title) return;
-        const status = document.getElementById('status-msg');
-        if (status) status.innerText = 'Creating drive...';
+        const progressId = notify({
+            id: 'creating-drive',
+            level: 'info',
+            title: 'Creating drive…',
+            sticky: true,
+            spinner: true,
+        });
         create.disabled = true;
         try {
             const info = await createSharedDrive(title, Boolean(approval?.checked));
             close();
+            dismissNotification(progressId);
+            notify({ level: 'success', title: `Drive "${title}" created` });
             if (info?.invite_link) {
                 openShareDriveModal(String(info.invite_link), { approvalRequired: Boolean(approval?.checked) });
             }
         } catch (err) {
-            alert('Failed to create drive: ' + err);
+            dismissNotification(progressId);
+            notify({
+                level: 'error',
+                title: 'Could not create drive',
+                body: String(err),
+            });
         } finally {
             create.disabled = false;
-            if (status) status.innerText = 'Ready';
         }
     };
 

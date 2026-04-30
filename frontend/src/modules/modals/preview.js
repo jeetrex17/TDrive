@@ -1,5 +1,6 @@
 import { PreviewFile, PreviewThumbnail } from '../../../wailsjs/go/main/App';
 import { state } from '../../state.js';
+import { notify } from '../notifications.js';
 
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
@@ -28,7 +29,6 @@ let previewReady = false;
 let previewRequestToken = 0;
 let activePreviewKey = "";
 let activePreviewMsgID = 0;
-let statusResetTimer = null;
 let chromeHideTimer = null;
 
 function isSpaceKey(event) {
@@ -51,19 +51,9 @@ function isBlockingOverlayOpen() {
     return Boolean(contextMenu && contextMenu.style.display !== "none");
 }
 
-function flashStatus(message, delay = 2200) {
-    const statusEl = document.getElementById("status-msg");
-    if (!statusEl || !message) return;
-
-    const previous = statusEl.textContent || "Ready";
-    statusEl.textContent = message;
-
-    if (statusResetTimer) clearTimeout(statusResetTimer);
-    statusResetTimer = setTimeout(() => {
-        if (statusEl.textContent === message) {
-            statusEl.textContent = previous === message ? "Ready" : previous;
-        }
-    }, delay);
+function flashStatus(message) {
+    if (!message) return;
+    notify({ level: 'info', title: message, durationMs: 2400 });
 }
 
 function getPreviewKey(item) {

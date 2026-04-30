@@ -8,6 +8,7 @@ import {
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation.js';
 import { loadChannels } from './channels.js';
+import { notify, dismissNotification } from './notifications.js';
 
 export function hideAllScreens() {
     const screens = ["setupcontainer", "phonecontainer", "codecontainer", "passwordcontainer", "success-screen"];
@@ -51,8 +52,13 @@ async function initDriveWithRetry(maxAttempts = 3) {
     let lastError = "Error: Init failed";
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const status = document.getElementById("status-msg");
-        if (status) status.innerText = `Setting up… (${attempt}/${maxAttempts})`;
+        notify({
+            id: 'init-drive',
+            level: 'info',
+            title: maxAttempts > 1 ? `Setting up your drive… (${attempt}/${maxAttempts})` : 'Setting up your drive…',
+            sticky: true,
+            spinner: true,
+        });
 
         try {
             const initRes = await InitDrive();
@@ -91,15 +97,16 @@ export async function showDashboard() {
     renderBreadcrumb();
 
     const initResult = await initDriveWithRetry(3);
-    const status = document.getElementById("status-msg");
+    dismissNotification('init-drive');
 
     if (!initResult.ok) {
-        if (status) status.innerText = "Init failed";
-        alert(initResult.error || "Failed to initialize your drive. Check logs/console and try again.");
+        notify({
+            level: 'error',
+            title: 'Could not initialize your drive',
+            body: initResult.error || 'Check logs/console and try again.',
+        });
         return;
     }
-
-    if (status) status.innerText = "Ready";
 
     // Load drive list (personal + any joined shared) before the first
     // refresh, so the sidebar populates and folder-control gating runs
@@ -146,7 +153,11 @@ export async function checkStatusAndShowScreen() {
 
     } catch (err) {
         console.error("Startup Crash:", err);
-        alert("Startup Error: " + err + "\n\nDid you restart 'wails dev'?");
+        notify({
+            level: 'error',
+            title: 'Startup error',
+            body: String(err) + " — did you restart `wails dev`?",
+        });
     }
 }
 
@@ -155,17 +166,23 @@ export function setupAuthWindowBindings() {
     window.submitSetup = function() {
         const id = parseInt(document.getElementById("api_id").value);
         const hash = document.getElementById("api_hash").value;
-        if (!id || !hash) return alert("Enter both fields.");
+        if (!id || !hash) {
+            notify({ level: 'warning', title: 'Enter both API ID and hash' });
+            return;
+        }
 
         SaveSetup(id, hash).then(res => {
-            if(res === "Success") location.reload();
-            else alert(res);
+            if (res === "Success") location.reload();
+            else notify({ level: 'error', title: 'Setup failed', body: String(res) });
         });
     };
 
     window.startLogin = function () {
         const phone = (document.getElementById("enterphone").value || "").trim();
-        if(!phone) return alert("Enter phone number");
+        if (!phone) {
+            notify({ level: 'warning', title: 'Enter your phone number' });
+            return;
+        }
 
         state.lastLoginPhoneNumber = phone;
 
