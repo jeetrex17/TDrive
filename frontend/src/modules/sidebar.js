@@ -121,9 +121,11 @@ function pendingJoinRow(p) {
                     body: 'Joined the drive.',
                 });
             } else {
+                const lastError = String(result?.pending?.last_error || '').trim();
                 notify({
-                    level: 'info',
-                    title: 'Still waiting for approval',
+                    level: lastError ? 'error' : 'info',
+                    title: lastError ? 'Could not check request' : 'Still waiting for approval',
+                    body: lastError,
                 });
             }
         } catch (err) {
@@ -228,10 +230,13 @@ function showPendingContextMenu(event, p) {
     addItem('Check now', async () => {
         try {
             const result = await checkPendingJoin(String(p.invite_hash || ''));
+            const lastError = String(result?.pending?.last_error || '').trim();
             notify({
-                level: result?.status === 'joined' ? 'success' : 'info',
-                title: result?.status === 'joined' ? 'Request approved' : 'Still waiting for approval',
-                body: result?.status === 'joined' ? 'Joined the drive.' : '',
+                level: result?.status === 'joined' ? 'success' : (lastError ? 'error' : 'info'),
+                title: result?.status === 'joined'
+                    ? 'Request approved'
+                    : (lastError ? 'Could not check request' : 'Still waiting for approval'),
+                body: result?.status === 'joined' ? 'Joined the drive.' : lastError,
             });
         } catch (err) {
             notify({

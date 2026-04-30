@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"TDrive/backend"
@@ -334,16 +335,14 @@ func (a *App) exportInviteLink(channelID int64, requireApproval bool) (string, e
 	}
 	var link string
 	err = client.Run(a.ctx, func(ctx context.Context) error {
-		peer, err := a.inputPeerForChannel(ctx, client.API(), channelID)
-		if err != nil {
-			return err
-		}
-		l, err := auth.ExportInviteLink(ctx, client.API(), peer, requireApproval)
-		if err != nil {
-			return err
-		}
-		link = l
-		return nil
+		return a.withInputPeerForChannel(ctx, client.API(), channelID, func(peer *tg.InputPeerChannel) error {
+			l, err := auth.ExportInviteLink(ctx, client.API(), peer, requireApproval)
+			if err != nil {
+				return err
+			}
+			link = l
+			return nil
+		})
 	})
 	if err != nil {
 		return "", err
@@ -369,16 +368,14 @@ func (a *App) ListJoinRequests(channelID int64) ([]JoinRequestInfo, error) {
 
 	var reqs []auth.JoinRequest
 	err = client.Run(a.ctx, func(ctx context.Context) error {
-		peer, err := a.inputPeerForChannel(ctx, client.API(), channelID)
-		if err != nil {
-			return err
-		}
-		rows, err := auth.ListJoinRequests(ctx, client.API(), peer)
-		if err != nil {
-			return err
-		}
-		reqs = rows
-		return nil
+		return a.withInputPeerForChannel(ctx, client.API(), channelID, func(peer *tg.InputPeerChannel) error {
+			rows, err := auth.ListJoinRequests(ctx, client.API(), peer)
+			if err != nil {
+				return err
+			}
+			reqs = rows
+			return nil
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -417,36 +414,67 @@ func (a *App) hideJoinRequest(channelID, userID int64, approved bool) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 	return client.Run(a.ctx, func(ctx context.Context) error {
-		peer, err := a.inputPeerForChannel(ctx, client.API(), channelID)
-		if err != nil {
-			return err
-		}
-		reqs, err := auth.ListJoinRequests(ctx, client.API(), peer)
-		if err != nil {
-			return err
-		}
-		var accessHash int64
-		for _, r := range reqs {
-			if r.UserID == userID {
-				accessHash = r.AccessHash
-				break
+		return a.withInputPeerForChannel(ctx, client.API(), channelID, func(peer *tg.InputPeerChannel) error {
+			reqs, err := auth.ListJoinRequests(ctx, client.API(), peer)
+			if err != nil {
+				return err
 			}
-		}
-		if accessHash == 0 {
-			return fmt.Errorf("join request for user %d not found", userID)
-		}
-		return auth.HideJoinRequest(ctx, client.API(), peer, userID, accessHash, approved)
+			var accessHash int64
+			for _, r := range reqs {
+				if r.UserID == userID {
+					accessHash = r.AccessHash
+					break
+				}
+			}
+			if accessHash == 0 {
+				return fmt.Errorf("join request for user %d not found", userID)
+			}
+			return auth.HideJoinRequest(ctx, client.API(), peer, userID, accessHash, approved)
+		})
 	})
 }
 
-func (a *App) inputPeerForChannel(ctx context.Context, api *tg.Client, channelID int64) (*tg.InputPeerChannel, error) {
+func (a *App) withInputPeerForChannel(ctx context.Context, api *tg.Client, channelID int64, fn func(*tg.InputPeerChannel) error) error {
+	peer, fromCache, err := a.inputPeerForChannel(ctx, api, channelID)
+	if err != nil {
+		return err
+	}
+	err = fn(peer)
+	if err == nil || !fromCache {
+		return err
+	}
+	if !retryWithFreshPeer(err) {
+		return err
+	}
+	// Access hashes can rotate. If a cached peer fails, resolve fresh once,
+	// update the cache, and retry the Telegram call with the exact peer.
+	_, fresh, resolveErr := auth.ResolveDriveChannel(ctx, api, channelID)
+	if resolveErr != nil {
+		return err
+	}
+	_ = projection.UpdateAccessHash(backend.DB, channelID, fresh.AccessHash)
+	return fn(fresh)
+}
+
+func (a *App) inputPeerForChannel(ctx context.Context, api *tg.Client, channelID int64) (*tg.InputPeerChannel, bool, error) {
 	if backend.DB != nil {
 		if c, err := projection.GetChannel(backend.DB, channelID); err == nil && c.AccessHash != 0 {
-			return &tg.InputPeerChannel{ChannelID: channelID, AccessHash: c.AccessHash}, nil
+			return &tg.InputPeerChannel{ChannelID: channelID, AccessHash: c.AccessHash}, true, nil
 		}
 	}
 	_, peer, err := auth.ResolveDriveChannel(ctx, api, channelID)
-	return peer, err
+	return peer, false, err
+}
+
+func retryWithFreshPeer(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToUpper(err.Error())
+	return strings.Contains(msg, "CHANNEL_INVALID") ||
+		strings.Contains(msg, "CHANNEL_PRIVATE") ||
+		strings.Contains(msg, "PEER_ID_INVALID") ||
+		strings.Contains(msg, "ACCESS_HASH")
 }
 
 // LeaveSharedDrive leaves the Telegram channel and drops every local row

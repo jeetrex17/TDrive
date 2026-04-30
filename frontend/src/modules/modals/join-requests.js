@@ -1,6 +1,7 @@
 // Admin modal for approval-required Telegram invite links.
 
 import { approveJoinRequest, listJoinRequests, rejectJoinRequest } from '../channels.js';
+import { notify } from '../notifications.js';
 
 let activeDrive = null;
 
@@ -120,7 +121,11 @@ async function handleRequest(req, approved, approveBtn, rejectBtn) {
         }
         await renderJoinRequests();
     } catch (err) {
-        alert(`Failed to ${approved ? 'approve' : 'reject'} request: ${err}`);
+        notify({
+            level: 'error',
+            title: `Could not ${approved ? 'approve' : 'reject'} request`,
+            body: String(err),
+        });
         approveBtn.disabled = false;
         rejectBtn.disabled = false;
     }
