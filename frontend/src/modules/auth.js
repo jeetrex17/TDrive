@@ -8,6 +8,7 @@ import {
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation.js';
 import { loadChannels } from './channels.js';
+import { loadEncryptionStatus } from './encryption.js';
 import { notify, dismissNotification } from './notifications.js';
 
 export function hideAllScreens() {
@@ -125,6 +126,10 @@ export async function showDashboard() {
         console.warn('MyUserID failed:', err);
         state.myUserID = 0;
     }
+
+    // Resolve personal-drive encryption state once after init so the
+    // status pill renders correctly on first paint.
+    loadEncryptionStatus();
 
     window.triggerRefresh();
 }

@@ -19,6 +19,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
+	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
 	tdsync "TDrive/backend/sync"
 	"TDrive/backend/tgclient"
@@ -176,11 +177,12 @@ type PreviewPayload struct {
 const maxPreviewPayloadBytes int64 = 10 * 1024 * 1024
 
 var (
-	errPreviewNotFound       = errors.New("File not found")
-	errPreviewNotSupported   = errors.New("Not a supported image")
-	errPreviewTooLarge       = errors.New("File too large")
-	errPreviewDownloadFailed = errors.New("Download failed")
-	errPreviewThumbMissing   = errors.New("Preview thumbnail unavailable")
+	errPreviewNotFound         = errors.New("File not found")
+	errPreviewNotSupported     = errors.New("Not a supported image")
+	errPreviewTooLarge         = errors.New("File too large")
+	errPreviewDownloadFailed   = errors.New("Download failed")
+	errPreviewThumbMissing     = errors.New("Preview thumbnail unavailable")
+	errPreviewEncryptionLocked = errors.New("encryption: locked")
 )
 
 var previewMimeTypes = map[string]string{
@@ -393,6 +395,8 @@ func normalizePreviewError(err error) error {
 		return errPreviewNotSupported
 	case errors.Is(err, errPreviewTooLarge):
 		return errPreviewTooLarge
+	case errors.Is(err, errPreviewEncryptionLocked), errors.Is(err, ErrEncryptionLocked):
+		return errPreviewEncryptionLocked
 	default:
 		return errPreviewDownloadFailed
 	}
@@ -562,8 +566,12 @@ func (pr *ProgressReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// AIs Job
-func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend.FileMetaData, error) {
+// UploadToDriveFS uploads each chosen file to the active drive. The
+// `encrypt` flag is a per-batch choice made in the upload-options modal:
+// true means encrypt-and-upload (master key must already be loaded into
+// the session by an unlock prompt before this call), false means plain
+// upload regardless of vault state.
+func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) ([]backend.FileMetaData, error) {
 	if len(filePaths) != len(parentIDs) {
 		return nil, fmt.Errorf("filepaths and parentIDs length mismatch")
 	}
@@ -604,7 +612,7 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			meta, op, header, err := a.uploadSingleFile(uploadID, path, pid, channelID)
+			meta, op, header, err := a.uploadSingleFile(uploadID, path, pid, channelID, encrypt)
 			if err != nil {
 				mu.Lock()
 				failed++
@@ -661,30 +669,59 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string) ([]backend
 	return uploadedFiles, nil
 }
 
-func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, channelID int64) (backend.FileMetaData, projection.Op, string, error) {
-	f, err := os.Open(filePath)
+func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, channelID int64, wantEncrypted bool) (backend.FileMetaData, projection.Op, string, error) {
+	if channelID == 0 {
+		return backend.FileMetaData{}, projection.Op{}, "", fmt.Errorf("drive channel id not found")
+	}
+
+	plainFile, err := os.Open(filePath)
 	if err != nil {
 		return backend.FileMetaData{}, projection.Op{}, "", err
 	}
-	defer f.Close()
+	defer plainFile.Close()
 
-	info, err := f.Stat()
+	info, err := plainFile.Stat()
 	if err != nil {
 		return backend.FileMetaData{}, projection.Op{}, "", err
 	}
 	filename := filepath.Base(filePath)
-	totalSize := info.Size()
+	plaintextSize := info.Size()
+
+	masterKey, err := masterKeyForUpload(channelID, wantEncrypted)
+	if err != nil {
+		return backend.FileMetaData{}, projection.Op{}, "", err
+	}
+	encrypted := wantEncrypted
+
+	// uploadSource is what the Telegram uploader streams. For plaintext,
+	// it's the raw file. For encrypted, we materialise a temp ciphertext
+	// file on disk and stream from there — keeps memory bounded and lets
+	// the existing ProgressReader work without changes.
+	var uploadSource *os.File = plainFile
+	uploadSize := plaintextSize
+	if encrypted {
+		tempCipher, err := writeCiphertextTemp(plainFile, plaintextSize, masterKey)
+		if err != nil {
+			return backend.FileMetaData{}, projection.Op{}, "", fmt.Errorf("encrypt: %w", err)
+		}
+		defer func() {
+			_ = tempCipher.Close()
+			_ = os.Remove(tempCipher.Name())
+		}()
+		ciphInfo, err := tempCipher.Stat()
+		if err != nil {
+			return backend.FileMetaData{}, projection.Op{}, "", err
+		}
+		uploadSource = tempCipher
+		uploadSize = ciphInfo.Size()
+	}
 
 	pu := &ProgressReader{
-		Reader:    f,
-		Total:     totalSize,
+		Reader:    uploadSource,
+		Total:     uploadSize,
 		Ctx:       a.ctx,
 		LastPrint: time.Now(),
 		UploadID:  uploadID,
-	}
-
-	if channelID == 0 {
-		return backend.FileMetaData{}, projection.Op{}, "", fmt.Errorf("drive channel id not found")
 	}
 
 	uploadTime := time.Now().Unix()
@@ -692,11 +729,17 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, c
 		Type:           projection.OpFileUpload,
 		Parent:         normalizeOpParent(parentID),
 		Name:           filename,
-		FileSize:       totalSize,
+		FileSize:       uploadSize,
 		FileUploadTime: uploadTime,
+	}
+	if encrypted {
+		op.Encrypted = true
+		op.PlaintextSize = plaintextSize
+		op.EncryptionVersion = 1
 	}
 	header := projection.Format(op)
 	caption := header + "\nTDrive: " + filename
+	totalSize := uploadSize
 
 	freshClient, err := auth.Connect()
 	if err != nil {
@@ -1106,8 +1149,26 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 			return err
 		}
 
-		if exceedsPreviewPayloadBudget(int64(doc.Size)) {
+		// For encrypted files, gate the preview budget on the plaintext
+		// size and require the master key. Telegram's `doc.Size` is the
+		// ciphertext size and doesn't reflect what the user will see.
+		encrypted := false
+		plaintextSize := int64(doc.Size)
+		if backend.DB != nil {
+			enc, psz, _, lookupErr := projection.FileEncryptionMeta(backend.DB, channelID, int64(msgID))
+			if lookupErr == nil && enc {
+				encrypted = true
+				if psz > 0 {
+					plaintextSize = psz
+				}
+			}
+		}
+		if exceedsPreviewPayloadBudget(plaintextSize) {
 			return errPreviewTooLarge
+		}
+		masterKey, err := requireMasterKeyForFile(encrypted)
+		if err != nil {
+			return err
 		}
 
 		var buf bytes.Buffer
@@ -1121,6 +1182,16 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 		d := downloader.NewDownloader()
 		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, pw); err != nil {
 			return errPreviewDownloadFailed
+		}
+
+		if encrypted {
+			var plain bytes.Buffer
+			if _, err := tdcrypto.DecryptStream(&buf, &plain, masterKey); err != nil {
+				return errPreviewDownloadFailed
+			}
+			runtime.EventsEmit(a.ctx, "preview_progress", msgID, 100.0)
+			payload, err = previewPayloadFromBytes(plain.Bytes(), mimeType)
+			return err
 		}
 
 		runtime.EventsEmit(a.ctx, "preview_progress", msgID, 100.0)
@@ -1226,6 +1297,23 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 
 		d := downloader.NewDownloader()
 
+		// Decide ahead of time whether to decrypt. The per-file flag in
+		// the projection is the source of truth — channel-wide enable
+		// alone isn't enough because mixed plaintext+ciphertext history
+		// is a normal state.
+		encrypted := false
+		if backend.DB != nil {
+			enc, _, _, err := projection.FileEncryptionMeta(backend.DB, channelid, int64(lookupID))
+			if err == nil {
+				encrypted = enc
+			}
+		}
+		masterKey, err := requireMasterKeyForFile(encrypted)
+		if err != nil {
+			downloadResult = DownloadResult{Status: "error", Message: ErrEncryptionLocked.Error()}
+			return nil
+		}
+
 		f, err := os.Create(savePath)
 		if err != nil {
 			downloadResult = DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
@@ -1240,10 +1328,45 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 			LastPrint: time.Now(),
 		}
 
-		_, err = d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, pw)
-		if err != nil {
-			downloadResult = DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
-			return nil
+		if !encrypted {
+			if _, err := d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, pw); err != nil {
+				downloadResult = DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
+				return nil
+			}
+		} else {
+			// Stream ciphertext into a temp file (with progress so the
+			// user sees something during the network step), then decrypt
+			// into the user-chosen savePath. Two-step rather than piped
+			// because the AEAD stream layer reads chunks of arbitrary
+			// length and the gotd downloader does not produce them.
+			cipher, err := os.CreateTemp("", "tdrive-dl-*")
+			if err != nil {
+				downloadResult = DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+				return nil
+			}
+			defer func() {
+				_ = cipher.Close()
+				_ = os.Remove(cipher.Name())
+			}()
+			cipherPW := &ProgressWriter{
+				Writer:    cipher,
+				Total:     int64(doc.Size),
+				Ctx:       a.ctx,
+				LastPrint: time.Now(),
+			}
+			if _, err := d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, cipherPW); err != nil {
+				downloadResult = DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
+				return nil
+			}
+			if _, err := cipher.Seek(0, io.SeekStart); err != nil {
+				downloadResult = DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+				return nil
+			}
+			if _, err := tdcrypto.DecryptStream(cipher, f, masterKey); err != nil {
+				_ = os.Remove(savePath)
+				downloadResult = DownloadResult{Status: "error", Message: "Decrypt failed: " + err.Error()}
+				return nil
+			}
 		}
 
 		runtime.EventsEmit(a.ctx, "download_progress", 100.0)
@@ -1551,12 +1674,14 @@ func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
 	}
 	for _, f := range files {
 		result.Files = append(result.Files, backend.FileMetaData{
-			TgMsgID:    int(f.MsgID),
-			Name:       f.Name,
-			Size:       f.Size,
-			ParentID:   f.ParentID,
-			UploadTime: f.UploadTime,
-			UploaderID: f.UploaderID,
+			TgMsgID:       int(f.MsgID),
+			Name:          f.Name,
+			Size:          f.Size,
+			ParentID:      f.ParentID,
+			UploadTime:    f.UploadTime,
+			UploaderID:    f.UploaderID,
+			Encrypted:     f.Encrypted,
+			PlaintextSize: f.PlaintextSize,
 		})
 	}
 	return result, nil

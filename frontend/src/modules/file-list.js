@@ -219,14 +219,22 @@ export function refreshFiles() {
         const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
         if (requestedFolderId === "") state.telegramRootCache = telegramFiles;
 
-        const fsFileItems = fsFiles.map((f) => ({
-            source: "fs",
-            id: f.msg_id,
-            name: f.name,
-            size: f.size,
-            date: f.upload_time,
-            uploaderID: Number(f.uploader_id || 0),
-        }));
+        const fsFileItems = fsFiles.map((f) => {
+            const encrypted = !!f.encrypted;
+            const plaintextSize = Number(f.plaintext_size || 0);
+            // For encrypted files, the displayed size should be the
+            // original plaintext size, not the on-wire ciphertext.
+            const displaySize = encrypted && plaintextSize > 0 ? plaintextSize : f.size;
+            return {
+                source: "fs",
+                id: f.msg_id,
+                name: f.name,
+                size: displaySize,
+                date: f.upload_time,
+                uploaderID: Number(f.uploader_id || 0),
+                encrypted,
+            };
+        });
 
         const finalize = async () => {
             let fsIDs;
@@ -430,10 +438,13 @@ export function refreshFiles() {
                 row.dataset.canDelete = ownerOnly ? "true" : "false";
                 row.dataset.canRename = ownerOnly ? "true" : "false";
 
+                const lockBadge = file.encrypted
+                    ? `<span class="file-lock-badge" title="Encrypted" aria-label="Encrypted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 11h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0v4"/></svg></span>`
+                    : '';
                 row.innerHTML = `
                     <div class="row-name">
                         <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
-                        ${escapeHtml(base)}
+                        ${lockBadge}${escapeHtml(base)}
                         <span class="uploader-chip" data-uploader-slot></span>
                     </div>
                     <div class="row-meta">${formatDate(file.date)}</div>

@@ -742,6 +742,17 @@ header {
 .back-btn { width: 32px; height: 32px; }
 .back-btn svg { width: 18px; height: 18px; }
 .breadcrumb-path { display: flex; align-items: center; gap: 8px; overflow: hidden; }
+
+/* Per-row lock badge for encrypted files. */
+.file-lock-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 6px;
+    color: var(--accent);
+    flex-shrink: 0;
+}
+.file-lock-badge svg { width: 14px; height: 14px; }
 .breadcrumb-link {
     background: transparent; border: none; padding: 6px 8px; border-radius: 8px;
     color: var(--text-main); font-weight: 600; cursor: pointer; transition: background 0.15s ease;
@@ -913,13 +924,17 @@ header {
     margin: -4px 0 18px;
     cursor: pointer;
 }
-.modal-choice-row input[type="checkbox"] {
+.modal-choice-row input[type="checkbox"],
+.modal-choice-row input[type="radio"] {
     flex: 0 0 auto;
     width: 16px;
     height: 16px;
     margin: 2px 0 0;
     padding: 0;
     accent-color: var(--accent);
+}
+.modal-choice-row + .modal-choice-row {
+    margin-top: -10px;
 }
 .modal-choice-row span {
     display: block;

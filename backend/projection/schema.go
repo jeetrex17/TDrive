@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -65,6 +65,16 @@ func EnsureSchema(db *sql.DB) error {
 			last_checked_at INTEGER NOT NULL DEFAULT 0,
 			status          TEXT NOT NULL,
 			last_error      TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS encryption (
+			channel_id          INTEGER PRIMARY KEY,
+			enabled             INTEGER NOT NULL DEFAULT 0,
+			kdf_salt            BLOB    NOT NULL,
+			kdf_params_json     TEXT    NOT NULL,
+			wrapped_master_key  BLOB    NOT NULL,
+			key_check           BLOB    NOT NULL,
+			created_at          INTEGER NOT NULL,
+			version             INTEGER NOT NULL DEFAULT 1
 		);`,
 	}
 
@@ -134,6 +144,11 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 	}
 	if v < 3 {
 		// pending_joins is created by EnsureSchema above. Nothing to backfill.
+	}
+	if v < 4 {
+		if err := addEncryptionColumnsToFiles(tx); err != nil {
+			return err
+		}
 	}
 
 	if _, err := tx.Exec(`DELETE FROM schema_version`); err != nil {
@@ -346,14 +361,17 @@ func createFreshFolders(tx *sql.Tx) error {
 func createFreshFiles(tx *sql.Tx) error {
 	stmts := []string{
 		`CREATE TABLE files (
-			channel_id        INTEGER NOT NULL,
-			msg_id            INTEGER NOT NULL,
-			name              TEXT NOT NULL,
-			size              INTEGER NOT NULL,
-			parent_id         TEXT NOT NULL DEFAULT '',
-			upload_time       INTEGER NOT NULL,
-			uploader_user_id  INTEGER NOT NULL DEFAULT 0,
-			tombstoned        INTEGER NOT NULL DEFAULT 0,
+			channel_id          INTEGER NOT NULL,
+			msg_id              INTEGER NOT NULL,
+			name                TEXT NOT NULL,
+			size                INTEGER NOT NULL,
+			parent_id           TEXT NOT NULL DEFAULT '',
+			upload_time         INTEGER NOT NULL,
+			uploader_user_id    INTEGER NOT NULL DEFAULT 0,
+			tombstoned          INTEGER NOT NULL DEFAULT 0,
+			encrypted           INTEGER NOT NULL DEFAULT 0,
+			plaintext_size      INTEGER NOT NULL DEFAULT 0,
+			encryption_version  INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (channel_id, msg_id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_channel_parent
@@ -362,6 +380,35 @@ func createFreshFiles(tx *sql.Tx) error {
 	for _, s := range stmts {
 		if _, err := tx.Exec(s); err != nil {
 			return fmt.Errorf("projection: create files: %w", err)
+		}
+	}
+	return nil
+}
+
+// addEncryptionColumnsToFiles tops up an existing files table with the
+// encryption metadata columns. SQLite ADD COLUMN is constant-time and
+// non-destructive, so this is a fast v3→v4 migration. Skips when the
+// files table doesn't exist yet — that path runs createFreshFiles
+// during the v0→v1 reshape, which already includes these columns.
+func addEncryptionColumnsToFiles(tx *sql.Tx) error {
+	if !tableExists(tx, "files") {
+		return nil
+	}
+	cols, err := tableColumnSet(tx, "files")
+	if err != nil {
+		return err
+	}
+	stmts := map[string]string{
+		"encrypted":          `ALTER TABLE files ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0`,
+		"plaintext_size":     `ALTER TABLE files ADD COLUMN plaintext_size INTEGER NOT NULL DEFAULT 0`,
+		"encryption_version": `ALTER TABLE files ADD COLUMN encryption_version INTEGER NOT NULL DEFAULT 0`,
+	}
+	for col, stmt := range stmts {
+		if _, present := cols[col]; present {
+			continue
+		}
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("projection: add files.%s: %w", col, err)
 		}
 	}
 	return nil

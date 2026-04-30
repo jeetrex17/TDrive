@@ -42,6 +42,10 @@ export function DownloadFile(arg1, arg2) {
   return window['go']['main']['App']['DownloadFile'](arg1, arg2);
 }
 
+export function EncryptionStatus() {
+  return window['go']['main']['App']['EncryptionStatus']();
+}
+
 export function GetAllFsMsgIDs() {
   return window['go']['main']['App']['GetAllFsMsgIDs']();
 }
@@ -108,6 +112,10 @@ export function ListJoinRequests(arg1) {
 
 export function ListPendingJoins() {
   return window['go']['main']['App']['ListPendingJoins']();
+}
+
+export function LockEncryption() {
+  return window['go']['main']['App']['LockEncryption']();
 }
 
 export function LoginPhoneNumber(arg1) {
@@ -194,6 +202,10 @@ export function SyncChannel(arg1) {
   return window['go']['main']['App']['SyncChannel'](arg1);
 }
 
-export function UploadToDriveFS(arg1, arg2) {
-  return window['go']['main']['App']['UploadToDriveFS'](arg1, arg2);
+export function UnlockOrCreateVault(arg1) {
+  return window['go']['main']['App']['UnlockOrCreateVault'](arg1);
+}
+
+export function UploadToDriveFS(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UploadToDriveFS'](arg1, arg2, arg3);
 }

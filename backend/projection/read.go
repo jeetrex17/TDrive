@@ -14,12 +14,14 @@ type FolderSlim struct {
 }
 
 type FileSlim struct {
-	MsgID      int64
-	Name       string
-	Size       int64
-	ParentID   string
-	UploadTime int64
-	UploaderID int64
+	MsgID         int64
+	Name          string
+	Size          int64
+	ParentID      string
+	UploadTime    int64
+	UploaderID    int64
+	Encrypted     bool
+	PlaintextSize int64
 }
 
 type SearchHit struct {
@@ -69,7 +71,7 @@ func listChildFolders(db *sql.DB, channelID int64, parentID string) ([]FolderSli
 
 func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, error) {
 	rows, err := db.Query(`
-		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id FROM files
+		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
 		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
 		ORDER BY upload_time DESC
 	`, channelID, parentID)
@@ -81,9 +83,11 @@ func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, e
 	var out []FileSlim
 	for rows.Next() {
 		var f FileSlim
-		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID); err != nil {
+		var enc int
+		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
 			return nil, err
 		}
+		f.Encrypted = enc == 1
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -333,6 +337,24 @@ func FileParent(db *sql.DB, channelID int64, msgID int64) (string, error) {
 //
 // Returns 0 with nil error if uploader is unknown (legacy rows from before
 // Step 3 don't carry this).
+// FileEncryptionMeta returns the encryption flags for a file row. Returns
+// (false, 0, 0, nil) for plaintext or unknown rows; the caller may treat
+// those identically (no decrypt path).
+func FileEncryptionMeta(db *sql.DB, channelID, msgID int64) (encrypted bool, plaintextSize int64, version int, err error) {
+	var enc int
+	row := db.QueryRow(`
+		SELECT encrypted, plaintext_size, encryption_version FROM files
+		WHERE channel_id = ? AND msg_id = ?
+	`, channelID, msgID)
+	if err = row.Scan(&enc, &plaintextSize, &version); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, 0, 0, fmt.Errorf("projection: file not found")
+		}
+		return false, 0, 0, err
+	}
+	return enc == 1, plaintextSize, version, nil
+}
+
 func FileUploader(db *sql.DB, channelID int64, msgID int64) (int64, error) {
 	var uploader int64
 	err := db.QueryRow(`

@@ -7,12 +7,14 @@ type Folder struct {
 }
 
 type FileMetaData struct {
-	Name       string `json:"name"`
-	Size       int64  `json:"size"`
-	TgMsgID    int    `json:"msg_id"`
-	ParentID   string `json:"parent_id"`
-	UploadTime int64  `json:"upload_time"`
-	UploaderID int64  `json:"uploader_id"`
+	Name          string `json:"name"`
+	Size          int64  `json:"size"`
+	TgMsgID       int    `json:"msg_id"`
+	ParentID      string `json:"parent_id"`
+	UploadTime    int64  `json:"upload_time"`
+	UploaderID    int64  `json:"uploader_id"`
+	Encrypted     bool   `json:"encrypted,omitempty"`
+	PlaintextSize int64  `json:"plaintext_size,omitempty"`
 }
 
 type FileSystem struct {

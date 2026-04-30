@@ -23,6 +23,9 @@ import { setupJoinDriveModal } from './modules/modals/join-drive.js';
 import { setupShareDriveModal } from './modules/modals/share-drive.js';
 import { setupLeaveDriveModal } from './modules/modals/leave-drive.js';
 import { setupJoinRequestsModal } from './modules/modals/join-requests.js';
+import { setupEncryptionSetupModal } from './modules/modals/encryption-setup.js';
+import { setupEncryptionUnlockModal } from './modules/modals/encryption-unlock.js';
+import { setupUploadOptionsModal } from './modules/modals/upload-options.js';
 
 // Sidebar / drives
 import { setupSidebar, renderSidebar } from './modules/sidebar.js';
@@ -74,6 +77,9 @@ window.onload = async function() {
     setupShareDriveModal();
     setupLeaveDriveModal();
     setupJoinRequestsModal();
+    setupEncryptionSetupModal();
+    setupEncryptionUnlockModal();
+    setupUploadOptionsModal();
 
     // Setup UI components
     setupBreadcrumb();

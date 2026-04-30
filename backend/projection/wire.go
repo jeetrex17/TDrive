@@ -121,6 +121,26 @@ func Parse(raw string) (Op, error) {
 		}
 		op.FileUploadTime = n
 	}
+	// Encryption metadata. Keys are additive: older clients ignore them
+	// because Parse only branches on `t`; newer clients populate Op.
+	if s, ok := kv["enc"]; ok && s == "1" {
+		op.Encrypted = true
+		op.EncryptionVersion = 1
+	}
+	if s, ok := kv["ev"]; ok {
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return Op{}, ErrWireMalformed
+		}
+		op.EncryptionVersion = n
+	}
+	if s, ok := kv["psz"]; ok {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return Op{}, ErrWireMalformed
+		}
+		op.PlaintextSize = n
+	}
 
 	return op, nil
 }
@@ -179,6 +199,21 @@ func appendFileAttrs(b *strings.Builder, op Op) {
 	if op.FileUploadTime > 0 {
 		b.WriteString("|ts=")
 		b.WriteString(strconv.FormatInt(op.FileUploadTime, 10))
+	}
+	if op.Encrypted {
+		b.WriteString("|enc=1")
+		v := op.EncryptionVersion
+		if v == 0 {
+			v = 1
+		}
+		if v != 1 {
+			b.WriteString("|ev=")
+			b.WriteString(strconv.Itoa(v))
+		}
+		if op.PlaintextSize > 0 {
+			b.WriteString("|psz=")
+			b.WriteString(strconv.FormatInt(op.PlaintextSize, 10))
+		}
 	}
 }
 

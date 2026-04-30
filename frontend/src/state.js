@@ -58,6 +58,16 @@ export const state = {
     channelSwitchInProgress: false,
     myUserID: 0,                 // logged-in Telegram user id; 0 = unknown
 
+    // Per-upload encryption. There's no drive-wide "mode" — these flags
+    // only exist so the upload-options modal knows which follow-up
+    // (setup vs unlock) to chain after the user chooses Encrypt.
+    encryption: {
+        available: false,    // a personal channel id is known
+        vaultExists: false,  // user has set a password before
+        unlocked: false,     // master key is in process memory
+        loaded: false,
+    },
+
     // Virtual views overlaid on the file list. null = real folder tree;
     // "orphaned" = orphan bucket. currentFolderId stays "" so backend
     // reads/uploads/moves never see a fake parent id.
