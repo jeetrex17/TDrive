@@ -33,6 +33,9 @@ import { bindChannelsRenderers, refreshActiveDrive } from './modules/channels.js
 import { setupNotifications } from './modules/notifications.js';
 import { setupNotifBell } from './modules/notif-bell.js';
 
+// Profile menu (top-right avatar dropdown)
+import { setupProfileMenu } from './modules/profile-menu.js';
+
 // Setup window bindings that need to be available globally
 window.refreshFiles = refreshFiles;
 window.triggerRefresh = function() {
@@ -76,6 +79,7 @@ window.onload = async function() {
     setupLeaveDriveModal();
     setupJoinRequestsModal();
     setupLogoutModal();
+    setupProfileMenu();
 
     // Setup UI components
     setupBreadcrumb();

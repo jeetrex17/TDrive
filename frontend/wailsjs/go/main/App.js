@@ -130,6 +130,10 @@ export function MsgToTdriveSystem(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['MsgToTdriveSystem'](arg1, arg2, arg3, arg4);
 }
 
+export function Me() {
+  return window['go']['main']['App']['Me']();
+}
+
 export function MyUserID() {
   return window['go']['main']['App']['MyUserID']();
 }

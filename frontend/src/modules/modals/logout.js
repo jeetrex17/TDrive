@@ -1,6 +1,8 @@
 // Logout confirmation modal. Two modes:
 //   soft — drop the local Telegram session, keep the projection cache.
 //   full — revoke server-side and wipe every TDrive file on disk.
+//
+// The modal trigger lives in the top-right profile menu, not here.
 
 import { Logout } from '../../../wailsjs/go/main/App';
 import { showAuthWrapper, hideAllScreens } from '../auth.js';
@@ -8,24 +10,12 @@ import { notify, dismissNotification } from '../notifications.js';
 
 export function setupLogoutModal() {
     const modal = document.getElementById('logout-modal');
-    const trigger = document.getElementById('logout-btn');
     const cancel = document.getElementById('logout-cancel');
     const confirm = document.getElementById('logout-confirm');
-    if (!modal || !trigger || !cancel || !confirm) return;
+    if (!modal || !cancel || !confirm) return;
 
-    const close = () => {
-        modal.style.display = 'none';
-    };
-
-    const open = () => {
-        const soft = modal.querySelector('input[name="logout-mode"][value="soft"]');
-        if (soft) soft.checked = true;
-        modal.style.display = 'flex';
-    };
-
-    trigger.addEventListener('click', open);
-    cancel.addEventListener('click', close);
-    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    cancel.addEventListener('click', () => closeLogoutModal());
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeLogoutModal(); });
 
     confirm.addEventListener('click', async () => {
         const selected = modal.querySelector('input[name="logout-mode"]:checked');
@@ -44,7 +34,7 @@ export function setupLogoutModal() {
             await Logout(mode);
             // Backend issues runtime.Quit on success, so this fallback only
             // runs if the process somehow stays alive (e.g. dev hot-reload).
-            close();
+            closeLogoutModal();
             dismissNotification(progressId);
             hideAllScreens();
             showAuthWrapper();
@@ -60,4 +50,17 @@ export function setupLogoutModal() {
             cancel.disabled = false;
         }
     });
+}
+
+export function openLogoutModal() {
+    const modal = document.getElementById('logout-modal');
+    if (!modal) return;
+    const soft = modal.querySelector('input[name="logout-mode"][value="soft"]');
+    if (soft) soft.checked = true;
+    modal.style.display = 'flex';
+}
+
+function closeLogoutModal() {
+    const modal = document.getElementById('logout-modal');
+    if (modal) modal.style.display = 'none';
 }

@@ -47,6 +47,10 @@ func (a *App) Logout(mode string) error {
 		backend.DB = nil
 	}
 
+	// Drop the cached self user so a re-login (without re-launching, in
+	// dev mode) doesn't show the previous account's avatar.
+	selfUserCache.Store(nil)
+
 	if err := auth.ClearUserData(m); err != nil {
 		return err
 	}
