@@ -1004,8 +1004,7 @@ header {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.profile-menu-handle,
-.profile-menu-phone {
+.profile-menu-handle {
     color: var(--text-muted);
     font-size: 0.78rem;
     margin-top: 2px;

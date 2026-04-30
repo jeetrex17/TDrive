@@ -23,7 +23,6 @@ type SelfUser struct {
 	UserID      int64  `json:"user_id"`
 	DisplayName string `json:"display_name"`
 	Username    string `json:"username,omitempty"`
-	Phone       string `json:"phone,omitempty"`
 	PhotoBase64 string `json:"photo_base64,omitempty"`
 }
 
@@ -43,75 +42,57 @@ func (a *App) Me() (SelfUser, error) {
 		return SelfUser{}, fmt.Errorf("connect: %w", err)
 	}
 
-	var u *tg.User
+	var out SelfUser
 	err = client.Run(a.ctx, func(ctx context.Context) error {
 		users, err := client.API().UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}})
 		if err != nil {
 			return err
 		}
+		var u *tg.User
 		for _, raw := range users {
 			if user, ok := raw.(*tg.User); ok && user.ID != 0 {
 				u = user
-				return nil
+				break
 			}
 		}
-		return fmt.Errorf("users.getUsers returned no self user")
+		if u == nil {
+			return fmt.Errorf("users.getUsers returned no self user")
+		}
+
+		out = SelfUser{
+			UserID:      u.ID,
+			DisplayName: fullDisplayName(u),
+			Username:    strings.TrimSpace(u.Username),
+		}
+
+		// Photo download stays inside this Run so the same MTProto session
+		// handles auth + file fetch. Best-effort: privacy settings, a
+		// missing photo, or transient errors all fall back to initials.
+		photo, ok := u.Photo.(*tg.UserProfilePhoto)
+		if !ok {
+			return nil
+		}
+		dlCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		var buf bytes.Buffer
+		loc := &tg.InputPeerPhotoFileLocation{
+			Big:     false,
+			Peer:    &tg.InputPeerSelf{},
+			PhotoID: photo.PhotoID,
+		}
+		if _, err := downloader.NewDownloader().Download(client.API(), loc).Stream(dlCtx, &buf); err != nil {
+			fmt.Printf("self photo download failed: %v\n", err)
+			return nil
+		}
+		out.PhotoBase64 = base64.StdEncoding.EncodeToString(buf.Bytes())
+		return nil
 	})
 	if err != nil {
 		return SelfUser{}, err
 	}
 
-	out := SelfUser{
-		UserID:      u.ID,
-		DisplayName: fullDisplayName(u),
-		Username:    strings.TrimSpace(u.Username),
-		Phone:       formatPhone(u.Phone),
-	}
-
-	// Photo download is best-effort — privacy settings, network blips, or
-	// a missing photo all mean "no photo," which the UI handles via
-	// initials.
-	if photo, ok := u.Photo.(*tg.UserProfilePhoto); ok {
-		if data, err := downloadSelfPhoto(a.ctx, client, photo.PhotoID); err == nil {
-			out.PhotoBase64 = base64.StdEncoding.EncodeToString(data)
-		} else {
-			fmt.Printf("self photo download failed: %v\n", err)
-		}
-	}
-
 	selfUserCache.Store(&out)
 	return out, nil
-}
-
-// downloadSelfPhoto fetches the small (160x160) profile photo for the
-// logged-in user. Caller has already created `client`; we run a fresh
-// session to keep this independent of any wider transaction.
-func downloadSelfPhoto(ctx context.Context, client clientRunner, photoID int64) ([]byte, error) {
-	dlCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	var buf bytes.Buffer
-	err := client.Run(dlCtx, func(ctx context.Context) error {
-		loc := &tg.InputPeerPhotoFileLocation{
-			Big:     false,
-			Peer:    &tg.InputPeerSelf{},
-			PhotoID: photoID,
-		}
-		_, err := downloader.NewDownloader().Download(client.API(), loc).Stream(ctx, &buf)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// clientRunner is the minimal slice of *telegram.Client we need. Declaring
-// it makes downloadSelfPhoto trivially testable without standing up a
-// real client.
-type clientRunner interface {
-	Run(ctx context.Context, f func(ctx context.Context) error) error
-	API() *tg.Client
 }
 
 func fullDisplayName(u *tg.User) string {
@@ -127,13 +108,3 @@ func fullDisplayName(u *tg.User) string {
 	return fmt.Sprintf("User %d", u.ID)
 }
 
-func formatPhone(raw string) string {
-	digits := strings.TrimSpace(raw)
-	if digits == "" {
-		return ""
-	}
-	if strings.HasPrefix(digits, "+") {
-		return digits
-	}
-	return "+" + digits
-}

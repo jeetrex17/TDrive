@@ -57,18 +57,12 @@ function renderProfile() {
 
     const name = document.getElementById('profile-menu-name');
     const handle = document.getElementById('profile-menu-handle');
-    const phone = document.getElementById('profile-menu-phone');
 
     if (name) name.textContent = user?.display_name || 'Signed in';
     if (handle) {
         const u = String(user?.username || '').trim();
         handle.textContent = u ? `@${u}` : '';
         handle.style.display = u ? '' : 'none';
-    }
-    if (phone) {
-        const p = String(user?.phone || '').trim();
-        phone.textContent = p;
-        phone.style.display = p ? '' : 'none';
     }
 }
 
