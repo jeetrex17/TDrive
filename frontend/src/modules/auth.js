@@ -8,6 +8,7 @@ import {
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation.js';
 import { loadChannels } from './channels.js';
+import { loadSelfUser } from './profile-menu.js';
 import { notify, dismissNotification } from './notifications.js';
 
 export function hideAllScreens() {
@@ -125,6 +126,10 @@ export async function showDashboard() {
         console.warn('MyUserID failed:', err);
         state.myUserID = 0;
     }
+
+    // Hydrate the profile menu (display name, photo). Failure is non-fatal —
+    // the avatar falls back to a blank circle.
+    loadSelfUser();
 
     window.triggerRefresh();
 }

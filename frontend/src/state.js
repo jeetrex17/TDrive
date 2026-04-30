@@ -57,6 +57,7 @@ export const state = {
     pendingJoins: [],            // approval-required joins waiting on admin approval
     channelSwitchInProgress: false,
     myUserID: 0,                 // logged-in Telegram user id; 0 = unknown
+    selfUser: null,              // { user_id, display_name, username, phone, photo_base64 }
 
     // Virtual views overlaid on the file list. null = real folder tree;
     // "orphaned" = orphan bucket. currentFolderId stays "" so backend
