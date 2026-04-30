@@ -26,6 +26,7 @@ import { setupJoinRequestsModal } from './modules/modals/join-requests.js';
 import { setupEncryptionSetupModal } from './modules/modals/encryption-setup.js';
 import { setupEncryptionUnlockModal } from './modules/modals/encryption-unlock.js';
 import { setupUploadOptionsModal } from './modules/modals/upload-options.js';
+import { setupLogoutModal } from './modules/modals/logout.js';
 
 // Sidebar / drives
 import { setupSidebar, renderSidebar } from './modules/sidebar.js';
@@ -34,6 +35,9 @@ import { bindChannelsRenderers, refreshActiveDrive } from './modules/channels.js
 // Notifications
 import { setupNotifications } from './modules/notifications.js';
 import { setupNotifBell } from './modules/notif-bell.js';
+
+// Profile menu (top-right avatar dropdown)
+import { setupProfileMenu } from './modules/profile-menu.js';
 
 // Setup window bindings that need to be available globally
 window.refreshFiles = refreshFiles;
@@ -80,6 +84,8 @@ window.onload = async function() {
     setupEncryptionSetupModal();
     setupEncryptionUnlockModal();
     setupUploadOptionsModal();
+    setupLogoutModal();
+    setupProfileMenu();
 
     // Setup UI components
     setupBreadcrumb();

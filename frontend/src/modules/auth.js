@@ -9,6 +9,7 @@ import {
 import { renderBreadcrumb } from './navigation.js';
 import { loadChannels } from './channels.js';
 import { loadEncryptionStatus } from './encryption.js';
+import { loadSelfUser } from './profile-menu.js';
 import { notify, dismissNotification } from './notifications.js';
 
 export function hideAllScreens() {
@@ -127,9 +128,13 @@ export async function showDashboard() {
         state.myUserID = 0;
     }
 
-    // Resolve personal-drive encryption state once after init so the
-    // status pill renders correctly on first paint.
+    // Refresh the personal-drive encryption snapshot so the upload
+    // dialog's follow-up modals can decide between setup vs unlock.
     loadEncryptionStatus();
+
+    // Hydrate the profile menu (display name, photo). Failure is non-fatal —
+    // the avatar falls back to a blank circle.
+    loadSelfUser();
 
     window.triggerRefresh();
 }

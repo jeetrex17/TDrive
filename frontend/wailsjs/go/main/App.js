@@ -122,6 +122,10 @@ export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }
 
+export function Logout(arg1) {
+  return window['go']['main']['App']['Logout'](arg1);
+}
+
 export function MoveFile(arg1, arg2) {
   return window['go']['main']['App']['MoveFile'](arg1, arg2);
 }
@@ -132,6 +136,10 @@ export function MoveFolder(arg1, arg2) {
 
 export function MsgToTdriveSystem(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['MsgToTdriveSystem'](arg1, arg2, arg3, arg4);
+}
+
+export function Me() {
+  return window['go']['main']['App']['Me']();
 }
 
 export function MyUserID() {

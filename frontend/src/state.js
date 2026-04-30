@@ -57,6 +57,7 @@ export const state = {
     pendingJoins: [],            // approval-required joins waiting on admin approval
     channelSwitchInProgress: false,
     myUserID: 0,                 // logged-in Telegram user id; 0 = unknown
+    selfUser: null,              // { user_id, display_name, username, phone, photo_base64 }
 
     // Per-upload encryption. There's no drive-wide "mode" — these flags
     // only exist so the upload-options modal knows which follow-up
