@@ -334,7 +334,7 @@ func (a *App) exportInviteLink(channelID int64, requireApproval bool) (string, e
 	}
 	var link string
 	err = client.Run(a.ctx, func(ctx context.Context) error {
-		_, peer, err := auth.ResolveDriveChannel(ctx, client.API(), channelID)
+		peer, err := a.inputPeerForChannel(ctx, client.API(), channelID)
 		if err != nil {
 			return err
 		}
@@ -369,7 +369,7 @@ func (a *App) ListJoinRequests(channelID int64) ([]JoinRequestInfo, error) {
 
 	var reqs []auth.JoinRequest
 	err = client.Run(a.ctx, func(ctx context.Context) error {
-		_, peer, err := auth.ResolveDriveChannel(ctx, client.API(), channelID)
+		peer, err := a.inputPeerForChannel(ctx, client.API(), channelID)
 		if err != nil {
 			return err
 		}
@@ -417,7 +417,7 @@ func (a *App) hideJoinRequest(channelID, userID int64, approved bool) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 	return client.Run(a.ctx, func(ctx context.Context) error {
-		_, peer, err := auth.ResolveDriveChannel(ctx, client.API(), channelID)
+		peer, err := a.inputPeerForChannel(ctx, client.API(), channelID)
 		if err != nil {
 			return err
 		}
@@ -437,6 +437,16 @@ func (a *App) hideJoinRequest(channelID, userID int64, approved bool) error {
 		}
 		return auth.HideJoinRequest(ctx, client.API(), peer, userID, accessHash, approved)
 	})
+}
+
+func (a *App) inputPeerForChannel(ctx context.Context, api *tg.Client, channelID int64) (*tg.InputPeerChannel, error) {
+	if backend.DB != nil {
+		if c, err := projection.GetChannel(backend.DB, channelID); err == nil && c.AccessHash != 0 {
+			return &tg.InputPeerChannel{ChannelID: channelID, AccessHash: c.AccessHash}, nil
+		}
+	}
+	_, peer, err := auth.ResolveDriveChannel(ctx, api, channelID)
+	return peer, err
 }
 
 // LeaveSharedDrive leaves the Telegram channel and drops every local row

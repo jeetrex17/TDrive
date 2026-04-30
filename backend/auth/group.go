@@ -183,9 +183,10 @@ func JoinByInvite(ctx context.Context, api *tg.Client, hash string) (channelID, 
 
 func ListJoinRequests(ctx context.Context, api *tg.Client, peer *tg.InputPeerChannel) ([]JoinRequest, error) {
 	res, err := api.MessagesGetChatInviteImporters(ctx, &tg.MessagesGetChatInviteImportersRequest{
-		Peer:      peer,
-		Requested: true,
-		Limit:     100,
+		Peer:       peer,
+		Requested:  true,
+		OffsetUser: &tg.InputUserEmpty{},
+		Limit:      100,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list join requests: %w", err)
