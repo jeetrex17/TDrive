@@ -22,6 +22,14 @@ export function CheckSystemStatus() {
   return window['go']['main']['App']['CheckSystemStatus']();
 }
 
+export function ChangeEncryptionPassword(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ChangeEncryptionPassword'](arg1, arg2, arg3);
+}
+
+export function CreateEncryptionPassword(arg1, arg2) {
+  return window['go']['main']['App']['CreateEncryptionPassword'](arg1, arg2);
+}
+
 export function CreateFolder(arg1, arg2) {
   return window['go']['main']['App']['CreateFolder'](arg1, arg2);
 }
@@ -206,10 +214,10 @@ export function SyncChannel(arg1) {
   return window['go']['main']['App']['SyncChannel'](arg1);
 }
 
-export function UploadToDriveFS(arg1, arg2, arg3) {
-  return window['go']['main']['App']['UploadToDriveFS'](arg1, arg2, arg3);
-}
-
 export function UseEncryptionPassword(arg1) {
   return window['go']['main']['App']['UseEncryptionPassword'](arg1);
+}
+
+export function UploadToDriveFS(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UploadToDriveFS'](arg1, arg2, arg3);
 }

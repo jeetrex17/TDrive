@@ -1028,6 +1028,7 @@ header {
     background: var(--border);
     margin: 4px 6px;
 }
+.profile-menu-divider[hidden] { display: none; }
 .profile-menu-item {
     display: flex;
     align-items: center;
@@ -1042,6 +1043,7 @@ header {
     cursor: pointer;
     text-align: left;
 }
+.profile-menu-item[hidden] { display: none; }
 .profile-menu-item:hover,
 .profile-menu-item:focus-visible {
     background: var(--bg-panel);

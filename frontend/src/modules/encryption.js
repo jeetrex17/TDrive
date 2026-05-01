@@ -13,11 +13,17 @@ export async function loadEncryptionStatus() {
             available: !!s?.available,
             passwordSet: !!s?.password_set,
             passwordRemembered: !!s?.password_remembered,
+            hint: String(s?.hint || ''),
             loaded: true,
         };
     } catch (err) {
         console.warn('EncryptionStatus failed:', err);
-        state.encryption = { available: false, passwordSet: false, passwordRemembered: false, loaded: true };
+        state.encryption = { available: false, passwordSet: false, passwordRemembered: false, hint: '', loaded: true };
+    }
+    try {
+        const { renderEncryptionSettingsEntry } = await import('./profile-menu.js');
+        renderEncryptionSettingsEntry();
+    } catch {
     }
 }
 

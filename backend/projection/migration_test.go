@@ -324,3 +324,90 @@ func TestMigrateOnFreshInstall(t *testing.T) {
 		t.Fatalf("version = %d, want %d", v, currentSchemaVersion)
 	}
 }
+
+func TestMigrateAddsEncryptionHintColumn(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	stmts := []string{
+		`CREATE TABLE schema_version (version INTEGER PRIMARY KEY);`,
+		`INSERT INTO schema_version (version) VALUES (4);`,
+		`CREATE TABLE channels (
+			channel_id             INTEGER PRIMARY KEY,
+			access_hash            INTEGER NOT NULL DEFAULT 0,
+			title                  TEXT NOT NULL,
+			kind                   TEXT NOT NULL,
+			invite_link            TEXT,
+			joined_at              INTEGER NOT NULL,
+			last_synced_msg        INTEGER NOT NULL DEFAULT 0,
+			last_viewed_msg        INTEGER NOT NULL DEFAULT 0,
+			has_unseen_content     INTEGER NOT NULL DEFAULT 0,
+			initial_sync_done      INTEGER NOT NULL DEFAULT 0,
+			personal_backfill_done INTEGER NOT NULL DEFAULT 0
+		);`,
+		`INSERT INTO channels (channel_id, title, kind, joined_at) VALUES (12345, 'Mine', 'personal', 0);`,
+		`CREATE TABLE encryption (
+			channel_id          INTEGER PRIMARY KEY,
+			enabled             INTEGER NOT NULL DEFAULT 0,
+			kdf_salt            BLOB    NOT NULL,
+			kdf_params_json     TEXT    NOT NULL,
+			wrapped_master_key  BLOB    NOT NULL,
+			key_check           BLOB    NOT NULL,
+			created_at          INTEGER NOT NULL,
+			version             INTEGER NOT NULL DEFAULT 1
+		);`,
+		`INSERT INTO encryption (channel_id, enabled, kdf_salt, kdf_params_json, wrapped_master_key, key_check, created_at, version)
+		 VALUES (12345, 1, X'01', '{}', X'02', X'03', 99, 1);`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	if err := MigratePersonalChannel(db, 12345); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	cols, err := topLevelColumnSet(db, "encryption")
+	if err != nil {
+		t.Fatalf("columns: %v", err)
+	}
+	if _, ok := cols["hint"]; !ok {
+		t.Fatalf("hint column missing")
+	}
+	var hint string
+	if err := db.QueryRow(`SELECT hint FROM encryption WHERE channel_id=12345`).Scan(&hint); err != nil {
+		t.Fatalf("query hint: %v", err)
+	}
+	if hint != "" {
+		t.Fatalf("hint = %q, want empty", hint)
+	}
+}
+
+func topLevelColumnSet(db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     string
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
+}

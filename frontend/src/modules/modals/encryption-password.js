@@ -4,6 +4,7 @@
 
 import { UseEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { loadEncryptionStatus } from '../encryption.js';
+import { state } from '../../state.js';
 
 let pending = null;
 
@@ -13,6 +14,8 @@ export function setupEncryptionPasswordModal() {
     const cancel = modal.querySelector('#encryption-password-cancel');
     const confirm = modal.querySelector('#encryption-password-confirm');
     const pwd = modal.querySelector('#encryption-password-input');
+    const hintRow = modal.querySelector('#encryption-password-hint');
+    const hintText = modal.querySelector('#encryption-password-hint-text');
     const errEl = modal.querySelector('#encryption-password-error');
 
     const finish = (ok) => {
@@ -72,6 +75,11 @@ export function openEncryptionPasswordModal() {
         }
         pending = resolve;
         modal.style.display = 'flex';
+        const hint = String(state.encryption?.hint || '').trim();
+        if (hintRow && hintText) {
+            hintText.textContent = hint;
+            hintRow.style.display = hint ? 'block' : 'none';
+        }
         const pwd = modal.querySelector('#encryption-password-input');
         setTimeout(() => pwd?.focus(), 0);
     });

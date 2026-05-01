@@ -146,6 +146,7 @@ export namespace main {
 	    available: boolean;
 	    password_set: boolean;
 	    password_remembered: boolean;
+	    hint: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new EncryptionStatus(source);
@@ -156,6 +157,7 @@ export namespace main {
 	        this.available = source["available"];
 	        this.password_set = source["password_set"];
 	        this.password_remembered = source["password_remembered"];
+	        this.hint = source["hint"];
 	    }
 	}
 	export class PendingJoinInfo {
@@ -291,4 +293,3 @@ export namespace main {
 	}
 
 }
-

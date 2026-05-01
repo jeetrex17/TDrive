@@ -13,6 +13,10 @@ export function CheckPendingJoin(arg1:string):Promise<main.JoinDriveResult>;
 
 export function CheckSystemStatus():Promise<string>;
 
+export function ChangeEncryptionPassword(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function CreateEncryptionPassword(arg1:string,arg2:string):Promise<void>;
+
 export function CreateFolder(arg1:string,arg2:string):Promise<backend.Folder>;
 
 export function CreateSharedDrive(arg1:string,arg2:boolean):Promise<main.ChannelInfo>;
@@ -105,6 +109,6 @@ export function SumbitPassword(arg1:string):Promise<void>;
 
 export function SyncChannel(arg1:number):Promise<void>;
 
-export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<Array<backend.FileMetaData>>;
-
 export function UseEncryptionPassword(arg1:string):Promise<void>;
+
+export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<Array<backend.FileMetaData>>;

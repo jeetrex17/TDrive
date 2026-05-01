@@ -5,6 +5,7 @@ import { state } from '../state.js';
 import { Me } from '../../wailsjs/go/main/App';
 import { renderAvatar } from './avatar.js';
 import { openLogoutModal } from './modals/logout.js';
+import { openEncryptionSettingsModal } from './modals/encryption-settings.js';
 
 let trigger = null;
 let menu = null;
@@ -14,6 +15,7 @@ export function setupProfileMenu() {
     trigger = document.getElementById('profile-trigger');
     menu = document.getElementById('profile-menu');
     const logoutItem = document.getElementById('profile-menu-logout');
+    const encryptionItem = document.getElementById('profile-menu-encryption-settings');
     if (!trigger || !menu || !logoutItem) return;
 
     renderAvatar(document.getElementById('profile-avatar'), null);
@@ -34,6 +36,14 @@ export function setupProfileMenu() {
         closeMenu();
         openLogoutModal();
     });
+    if (encryptionItem) {
+        encryptionItem.addEventListener('click', () => {
+            closeMenu();
+            openEncryptionSettingsModal();
+        });
+    }
+
+    renderEncryptionSettingsEntry();
 }
 
 // loadSelfUser fetches the logged-in user once after dashboard mount and
@@ -64,6 +74,14 @@ function renderProfile() {
         handle.textContent = u ? `@${u}` : '';
         handle.style.display = u ? '' : 'none';
     }
+}
+
+export function renderEncryptionSettingsEntry() {
+    const item = document.getElementById('profile-menu-encryption-settings');
+    const divider = document.getElementById('profile-menu-encryption-settings-divider');
+    const show = !!state.encryption?.passwordSet;
+    if (item) item.hidden = !show;
+    if (divider) divider.hidden = !show;
 }
 
 function toggleMenu() {

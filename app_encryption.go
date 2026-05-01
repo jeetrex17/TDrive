@@ -18,9 +18,10 @@ import (
 // encryption prompts. There is no drive-wide encrypted mode: the user
 // chooses whether each upload batch should be encrypted.
 type EncryptionStatus struct {
-	Available          bool `json:"available"`           // a personal channel is known
-	PasswordSet        bool `json:"password_set"`        // user has created an encryption password
-	PasswordRemembered bool `json:"password_remembered"` // master key is in process memory
+	Available          bool   `json:"available"`           // a personal channel is known
+	PasswordSet        bool   `json:"password_set"`        // user has created an encryption password
+	PasswordRemembered bool   `json:"password_remembered"` // master key is in process memory
+	Hint               string `json:"hint"`                // optional plaintext password hint
 }
 
 // ErrEncryptionPasswordRequired is returned by upload/download/preview
@@ -67,7 +68,7 @@ func (a *App) EncryptionStatus() (EncryptionStatus, error) {
 	if channelID == 0 {
 		return EncryptionStatus{Available: false}, nil
 	}
-	_, err := projection.GetEncryptionConfig(backend.DB, channelID)
+	cfg, err := projection.GetEncryptionConfig(backend.DB, channelID)
 	exists := err == nil
 	if err != nil && !errors.Is(err, projection.ErrEncryptionConfigNotFound) {
 		return EncryptionStatus{}, err
@@ -77,14 +78,37 @@ func (a *App) EncryptionStatus() (EncryptionStatus, error) {
 		Available:          true,
 		PasswordSet:        exists,
 		PasswordRemembered: exists && remembered,
+		Hint:               cfg.Hint,
 	}, nil
 }
 
-// UseEncryptionPassword is the single password method the frontend calls.
-// If the user has not created an encryption password yet, this creates
-// the master key and stores it wrapped by the supplied password. If the
-// password already exists, this verifies it and keeps the master key in
-// memory for the rest of the app session.
+// CreateEncryptionPassword creates the user's first encryption password.
+// It stores a random master key wrapped under the password and an optional
+// plaintext hint. It refuses to overwrite an existing password.
+func (a *App) CreateEncryptionPassword(password string, hint string) error {
+	if backend.DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	if err := validateNewEncryptionPassword(password); err != nil {
+		return err
+	}
+	channelID := personalChannelID()
+	if channelID == 0 {
+		return fmt.Errorf("personal drive not initialised yet")
+	}
+
+	_, err := projection.GetEncryptionConfig(backend.DB, channelID)
+	if err != nil && !errors.Is(err, projection.ErrEncryptionConfigNotFound) {
+		return err
+	}
+	if err == nil {
+		return fmt.Errorf("encryption password already exists")
+	}
+	return createEncryptionPassword(channelID, password, hint)
+}
+
+// UseEncryptionPassword verifies an existing encryption password and keeps
+// the master key in memory for the rest of the app session.
 func (a *App) UseEncryptionPassword(password string) error {
 	if backend.DB == nil {
 		return fmt.Errorf("db not ready")
@@ -98,22 +122,76 @@ func (a *App) UseEncryptionPassword(password string) error {
 	}
 
 	existing, err := projection.GetEncryptionConfig(backend.DB, channelID)
-	if err != nil && !errors.Is(err, projection.ErrEncryptionConfigNotFound) {
-		return err
-	}
 	if errors.Is(err, projection.ErrEncryptionConfigNotFound) {
-		return createEncryptionPassword(channelID, password)
+		return fmt.Errorf("encryption password is not set")
+	}
+	if err != nil {
+		return err
 	}
 	return rememberEncryptionPassword(existing, password)
 }
 
-func createEncryptionPassword(channelID int64, password string) error {
-	params := crypto.DefaultParams()
-	salt, err := crypto.NewSalt(params)
+// ChangeEncryptionPassword verifies the current password, then re-wraps
+// the same master key with the new password. Existing encrypted files stay
+// decryptable; file contents are not re-encrypted.
+func (a *App) ChangeEncryptionPassword(currentPassword string, newPassword string, hint string) error {
+	if backend.DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	if strings.TrimSpace(currentPassword) == "" {
+		return fmt.Errorf("current password required")
+	}
+	if err := validateNewEncryptionPassword(newPassword); err != nil {
+		return err
+	}
+	channelID := personalChannelID()
+	if channelID == 0 {
+		return fmt.Errorf("personal drive not initialised yet")
+	}
+
+	existing, err := projection.GetEncryptionConfig(backend.DB, channelID)
+	if errors.Is(err, projection.ErrEncryptionConfigNotFound) {
+		return fmt.Errorf("encryption password is not set")
+	}
 	if err != nil {
 		return err
 	}
+	master, err := unwrapEncryptionMasterKey(existing, currentPassword)
+	if err != nil {
+		return err
+	}
+	if err := writeEncryptionConfig(channelID, newPassword, hint, master, existing.CreatedAt); err != nil {
+		return err
+	}
+	storeMasterKey(master)
+	return nil
+}
+
+func validateNewEncryptionPassword(password string) error {
+	if strings.TrimSpace(password) == "" {
+		return fmt.Errorf("password required")
+	}
+	if len(password) < 8 {
+		return fmt.Errorf("use at least 8 characters")
+	}
+	return nil
+}
+
+func createEncryptionPassword(channelID int64, password string, hint string) error {
 	master, err := crypto.NewMasterKey()
+	if err != nil {
+		return err
+	}
+	if err := writeEncryptionConfig(channelID, password, hint, master, 0); err != nil {
+		return err
+	}
+	storeMasterKey(master)
+	return nil
+}
+
+func writeEncryptionConfig(channelID int64, password string, hint string, master []byte, createdAt int64) error {
+	params := crypto.DefaultParams()
+	salt, err := crypto.NewSalt(params)
 	if err != nil {
 		return err
 	}
@@ -137,33 +215,39 @@ func createEncryptionPassword(channelID int64, password string) error {
 		KDFParamsJSON:    paramsJSON,
 		WrappedMasterKey: wrapped,
 		KeyCheck:         check,
+		Hint:             strings.TrimSpace(hint),
+		CreatedAt:        createdAt,
 		Version:          1,
 	}
-	if err := projection.PutEncryptionConfig(backend.DB, cfg); err != nil {
+	return projection.PutEncryptionConfig(backend.DB, cfg)
+}
+
+func rememberEncryptionPassword(cfg projection.EncryptionConfig, password string) error {
+	master, err := unwrapEncryptionMasterKey(cfg, password)
+	if err != nil {
 		return err
 	}
 	storeMasterKey(master)
 	return nil
 }
 
-func rememberEncryptionPassword(cfg projection.EncryptionConfig, password string) error {
+func unwrapEncryptionMasterKey(cfg projection.EncryptionConfig, password string) ([]byte, error) {
 	params, err := crypto.UnmarshalParams(cfg.KDFParamsJSON)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	kek := crypto.DeriveKEK([]byte(password), cfg.KDFSalt, params)
 	master, err := crypto.UnwrapMasterKey(cfg.WrappedMasterKey, kek)
 	if err != nil {
 		if errors.Is(err, crypto.ErrWrongPassword) {
-			return fmt.Errorf("wrong password")
+			return nil, fmt.Errorf("wrong password")
 		}
-		return err
+		return nil, err
 	}
 	if err := crypto.VerifyKeyCheck(master, cfg.KeyCheck); err != nil {
-		return fmt.Errorf("wrong password")
+		return nil, fmt.Errorf("wrong password")
 	}
-	storeMasterKey(master)
-	return nil
+	return master, nil
 }
 
 // masterKeyForUpload returns the loaded master key when the caller has

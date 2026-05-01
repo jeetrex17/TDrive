@@ -25,6 +25,7 @@ import { setupLeaveDriveModal } from './modules/modals/leave-drive.js';
 import { setupJoinRequestsModal } from './modules/modals/join-requests.js';
 import { setupEncryptionSetupModal } from './modules/modals/encryption-setup.js';
 import { setupEncryptionPasswordModal } from './modules/modals/encryption-password.js';
+import { setupEncryptionSettingsModal } from './modules/modals/encryption-settings.js';
 import { setupUploadOptionsModal } from './modules/modals/upload-options.js';
 import { setupLogoutModal } from './modules/modals/logout.js';
 
@@ -83,6 +84,7 @@ window.onload = async function() {
     setupJoinRequestsModal();
     setupEncryptionSetupModal();
     setupEncryptionPasswordModal();
+    setupEncryptionSettingsModal();
     setupUploadOptionsModal();
     setupLogoutModal();
     setupProfileMenu();

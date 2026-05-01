@@ -16,6 +16,7 @@ type EncryptionConfig struct {
 	KDFParamsJSON    string
 	WrappedMasterKey []byte
 	KeyCheck         []byte
+	Hint             string
 	CreatedAt        int64
 	Version          int
 }
@@ -26,9 +27,9 @@ func GetEncryptionConfig(db *sql.DB, channelID int64) (EncryptionConfig, error) 
 	var c EncryptionConfig
 	var enabled int
 	err := db.QueryRow(`
-		SELECT channel_id, enabled, kdf_salt, kdf_params_json, wrapped_master_key, key_check, created_at, version
+		SELECT channel_id, enabled, kdf_salt, kdf_params_json, wrapped_master_key, key_check, hint, created_at, version
 		FROM encryption WHERE channel_id = ?
-	`, channelID).Scan(&c.ChannelID, &enabled, &c.KDFSalt, &c.KDFParamsJSON, &c.WrappedMasterKey, &c.KeyCheck, &c.CreatedAt, &c.Version)
+	`, channelID).Scan(&c.ChannelID, &enabled, &c.KDFSalt, &c.KDFParamsJSON, &c.WrappedMasterKey, &c.KeyCheck, &c.Hint, &c.CreatedAt, &c.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return EncryptionConfig{}, ErrEncryptionConfigNotFound
 	}
@@ -63,16 +64,17 @@ func PutEncryptionConfig(db *sql.DB, c EncryptionConfig) error {
 		enabled = 1
 	}
 	_, err := db.Exec(`
-		INSERT INTO encryption (channel_id, enabled, kdf_salt, kdf_params_json, wrapped_master_key, key_check, created_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO encryption (channel_id, enabled, kdf_salt, kdf_params_json, wrapped_master_key, key_check, hint, created_at, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(channel_id) DO UPDATE SET
 			enabled = excluded.enabled,
 			kdf_salt = excluded.kdf_salt,
 			kdf_params_json = excluded.kdf_params_json,
 			wrapped_master_key = excluded.wrapped_master_key,
 			key_check = excluded.key_check,
+			hint = excluded.hint,
 			version = excluded.version
-	`, c.ChannelID, enabled, c.KDFSalt, c.KDFParamsJSON, c.WrappedMasterKey, c.KeyCheck, c.CreatedAt, c.Version)
+	`, c.ChannelID, enabled, c.KDFSalt, c.KDFParamsJSON, c.WrappedMasterKey, c.KeyCheck, c.Hint, c.CreatedAt, c.Version)
 	if err != nil {
 		return fmt.Errorf("projection: put encryption: %w", err)
 	}

@@ -66,6 +66,7 @@ export const state = {
         available: false,           // a personal channel id is known
         passwordSet: false,         // user has created an encryption password
         passwordRemembered: false,  // master key is in process memory
+        hint: "",
         loaded: false,
     },
 

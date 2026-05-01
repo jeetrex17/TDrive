@@ -2,7 +2,7 @@
 // chooses "Encrypt before upload". This password protects every
 // encrypted personal file; if forgotten, those files cannot be recovered.
 
-import { UseEncryptionPassword } from '../../../wailsjs/go/main/App';
+import { CreateEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { notify } from '../notifications.js';
 import { loadEncryptionStatus } from '../encryption.js';
 
@@ -15,12 +15,14 @@ export function setupEncryptionSetupModal() {
     const confirm = modal.querySelector('#encryption-setup-confirm');
     const pwd = modal.querySelector('#encryption-setup-password');
     const pwd2 = modal.querySelector('#encryption-setup-password-confirm');
+    const hint = modal.querySelector('#encryption-setup-hint');
     const errEl = modal.querySelector('#encryption-setup-error');
 
     const finish = (ok) => {
         modal.style.display = 'none';
         if (pwd) pwd.value = '';
         if (pwd2) pwd2.value = '';
+        if (hint) hint.value = '';
         if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
         if (pending) {
             const resolve = pending;
@@ -46,7 +48,7 @@ export function setupEncryptionSetupModal() {
         confirm.disabled = true;
         cancel.disabled = true;
         try {
-            await UseEncryptionPassword(a);
+            await CreateEncryptionPassword(a, String(hint?.value || ''));
             await loadEncryptionStatus();
             finish(true);
             notify({

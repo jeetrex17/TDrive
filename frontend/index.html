@@ -163,6 +163,11 @@
                                 </div>
                             </div>
                             <div class="profile-menu-divider" role="separator"></div>
+                            <button id="profile-menu-encryption-settings" class="profile-menu-item" type="button" role="menuitem" hidden>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 7a3 3 0 11-4.243 4.243L5 17v2h2l5.757-5.757A3 3 0 0015 7z"/><path stroke-linecap="round" stroke-linejoin="round" d="M14 6l4 4"/></svg>
+                                <span>Encryption settings</span>
+                            </button>
+                            <div id="profile-menu-encryption-settings-divider" class="profile-menu-divider" role="separator" hidden></div>
                             <button id="profile-menu-logout" class="profile-menu-item danger-text" type="button" role="menuitem">
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
                                 <span>Log out</span>
@@ -366,6 +371,7 @@
                 <p class="modal-subtitle">Use one password for every encrypted file in My Drive. <strong>If you forget it, encrypted files cannot be recovered.</strong></p>
                 <input id="encryption-setup-password" type="password" placeholder="Password" autocomplete="new-password">
                 <input id="encryption-setup-password-confirm" type="password" placeholder="Confirm password" autocomplete="new-password">
+                <input id="encryption-setup-hint" type="text" placeholder="Optional hint (do not put the password here)" autocomplete="off">
                 <div id="encryption-setup-error" class="modal-error" style="display:none;"></div>
                 <div class="modal-actions">
                     <button id="encryption-setup-cancel" class="secondary-btn" type="button">Cancel</button>
@@ -378,11 +384,28 @@
             <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-password-title">
                 <h3 id="encryption-password-title" class="modal-title">Enter encryption password</h3>
                 <p class="modal-subtitle">Needed for encrypted uploads, downloads, and previews. TDrive remembers it until you close the app.</p>
+                <p id="encryption-password-hint" class="modal-subtitle" style="display:none;">Hint: <span id="encryption-password-hint-text"></span></p>
                 <input id="encryption-password-input" type="password" placeholder="Password" autocomplete="current-password">
                 <div id="encryption-password-error" class="modal-error" style="display:none;"></div>
                 <div class="modal-actions">
                     <button id="encryption-password-cancel" class="secondary-btn" type="button">Cancel</button>
                     <button id="encryption-password-confirm" class="primary-btn" type="button">Continue</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="encryption-settings-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-settings-title">
+                <h3 id="encryption-settings-title" class="modal-title">Encryption settings</h3>
+                <p class="modal-subtitle">Change your encryption password safely. There is no recovery reset without the current password.</p>
+                <input id="encryption-current-password" type="password" placeholder="Current password" autocomplete="current-password">
+                <input id="encryption-new-password" type="password" placeholder="New password" autocomplete="new-password">
+                <input id="encryption-new-password-confirm" type="password" placeholder="Confirm new password" autocomplete="new-password">
+                <input id="encryption-settings-hint" type="text" placeholder="Optional hint (do not put the password here)" autocomplete="off">
+                <div id="encryption-settings-error" class="modal-error" style="display:none;"></div>
+                <div class="modal-actions">
+                    <button id="encryption-settings-cancel" class="secondary-btn" type="button">Cancel</button>
+                    <button id="encryption-settings-confirm" class="primary-btn" type="button">Save</button>
                 </div>
             </div>
         </div>

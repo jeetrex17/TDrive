@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -73,6 +73,7 @@ func EnsureSchema(db *sql.DB) error {
 			kdf_params_json     TEXT    NOT NULL,
 			wrapped_master_key  BLOB    NOT NULL,
 			key_check           BLOB    NOT NULL,
+			hint                TEXT    NOT NULL DEFAULT '',
 			created_at          INTEGER NOT NULL,
 			version             INTEGER NOT NULL DEFAULT 1
 		);`,
@@ -147,6 +148,11 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 	}
 	if v < 4 {
 		if err := addEncryptionColumnsToFiles(tx); err != nil {
+			return err
+		}
+	}
+	if v < 5 {
+		if err := addEncryptionHintColumn(tx); err != nil {
 			return err
 		}
 	}
@@ -410,6 +416,23 @@ func addEncryptionColumnsToFiles(tx *sql.Tx) error {
 		if _, err := tx.Exec(stmt); err != nil {
 			return fmt.Errorf("projection: add files.%s: %w", col, err)
 		}
+	}
+	return nil
+}
+
+func addEncryptionHintColumn(tx *sql.Tx) error {
+	if !tableExists(tx, "encryption") {
+		return nil
+	}
+	cols, err := tableColumnSet(tx, "encryption")
+	if err != nil {
+		return err
+	}
+	if _, present := cols["hint"]; present {
+		return nil
+	}
+	if _, err := tx.Exec(`ALTER TABLE encryption ADD COLUMN hint TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("projection: add encryption.hint: %w", err)
 	}
 	return nil
 }
