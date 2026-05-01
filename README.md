@@ -1,20 +1,48 @@
 # TDrive
 
-TDrive is my first Golang project. It’s a small app that uses a **private Telegram channel as “cloud storage”** (upload files → they get posted to the channel, and you can list/download/delete them from the app).
+TDrive is my first Golang project. It uses Telegram as the storage layer: files are posted into Telegram channels/groups, and the app gives you a drive-like UI on top.
 
-This project is for **educational purposes only**. I’m not trying to harm Telegram, abuse their services, or bypass anything , it’s just a learning project to understand Go + Wails + Telegram APIs.
+This project is for **educational purposes only**. I’m not trying to harm Telegram, abuse their services, or bypass anything, it’s just a learning project to understand Go + Wails + Telegram APIs.
 
-## How it works (basic idea)
+## How it works
 
 - You login with your Telegram account (phone → code → optional 2FA password).
-- The app creates (or reuses) a private channel named `TDrive`.
-- Uploading a file = sending it as a document message to that channel.
-- Listing files = reading channel message history and extracting documents.
-- Downloading = fetching the document by message id.
+- **My Drive** is a private Telegram channel owned by you.
+- **Shared drives** are Telegram megagroups, so friends can join and upload too.
+- Uploading a file = sending it as a Telegram document message.
+- Folders, renames, moves, deletes, encryption settings, etc. are stored as small `TDX1|...` metadata messages.
+- SQLite is only a local cache. If the cache is wiped, TDrive can rebuild the view from Telegram history.
 
-## Shared Drives Warning
+## Shared drives
 
-Shared drives are experimental. TDrive uses Telegram messages as its metadata database, so don't edit or delete `TDX1|...` text messages from the regular Telegram app. Those messages are silent but visible metadata; changing them can desync what different members see.
+Shared drives are usable now, but still new. You can:
+
+- Create a shared drive and invite friends with a link.
+- Choose normal instant-join links or approval-required links.
+- Approve/reject join requests from inside TDrive.
+- Upload, download, rename, move, and delete files.
+- Create, rename, move, and delete folders.
+- See who uploaded files.
+- Recover files from deleted folders through the Orphaned view.
+
+Treat invite links like passwords. Anyone with a normal invite link can join unless you revoke it. If you need tighter control, create an approval-required link.
+
+## Encryption
+
+Personal-drive encryption is per upload. When you choose encrypted upload, TDrive encrypts the file contents before sending them to Telegram, and decrypts automatically on preview/download after you enter the correct password.
+
+Important details:
+
+- Encryption is for **My Drive only** right now, not shared drives.
+- Only file contents are encrypted. File names, folder names, sizes, and metadata are still visible.
+- One encryption password protects all encrypted personal files.
+- TDrive remembers the password only until you close the app.
+- Changing the password does not re-encrypt every file. It re-wraps the same master key, so old encrypted files still work with the new password.
+- There is no reset/recovery if you forget the password. The hint can help you remember, but it cannot decrypt anything by itself.
+
+## TDX metadata warning
+
+You will see `TDX1|...` messages in Telegram. They are silent but visible, and they are how TDrive remembers the drive structure. Don’t edit or delete them from the regular Telegram app. Changing them can desync what different members see.
 
 ## Telegram API ID + Hash (required)
 
@@ -35,7 +63,7 @@ Files you’ll see there:
 - `imp_config.json` → Telegram API ID + Hash (from the setup screen)
 - `session.json` → Telegram login session
 - `config.json` → Drive channel id (`channel_id`)
-- `tdrive.db` → Local filesystem metadata (folders + which file is in which folder)
+- `tdrive.db` → Local cache for channels, folders, files, sync log, and encryption metadata
 
 ## Run (dev)
 
@@ -82,9 +110,13 @@ I used AI to help with the frontend UI/styling and planning while i focused more
 - [x] Upload, list, download, and delete files
 - [x] Rename/move files and folders
 - [x] Stable channel access resolution (no “recent chats” dependency)
-- [ ] Add file encryption before uploads (privacy reasons ofc)
+- [x] Personal-drive file encryption before upload
 - [x] Folder support (maybe “virtual folders” metadata)
-- [x] Mulitiple files uploads in parallel 
-- [ ] Handle uploads/downloads for very large files (Telegram has per file limits, commonly ~2GB unless you are rich and have preimum and if you were rich you woudnt be reading this)
-- [ ] Faster downloads 
-- [ ] Maybe File sharing (Similar to Grive )
+- [x] Shared drives with invite links
+- [x] Approval-required shared drive links
+- [x] Multiple file uploads in parallel
+- [ ] Handle uploads/downloads for very large files (Telegram has per file limits, commonly ~2GB unless you are rich and have premium and if you were rich you wouldn't be reading this)
+- [ ] Faster downloads
+- [ ] Real-time sync instead of manual refresh
+- [ ] Better handling for files posted directly from Telegram
+- [ ] Missing-file warnings if Telegram message bodies are deleted outside TDrive
