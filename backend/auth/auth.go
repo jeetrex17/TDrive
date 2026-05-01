@@ -18,6 +18,11 @@ type ImpCredentials struct {
 	ApiHash string `json:"API_HASH"`
 }
 
+const (
+	privateDirMode  os.FileMode = 0o700
+	privateFileMode os.FileMode = 0o600
+)
+
 type getchanel interface {
 	GetCodech() chan string
 	GetPassch() chan string
@@ -42,9 +47,10 @@ func SaveImpCredentials(id int, hash string) error {
 	path := GetConfigPath()
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, privateDirMode); err != nil {
 		return fmt.Errorf("could not create config folder: %v", err)
 	}
+	_ = os.Chmod(dir, privateDirMode)
 
 	ic := ImpCredentials{
 		ApiID:   id,
@@ -55,10 +61,11 @@ func SaveImpCredentials(id int, hash string) error {
 	if err != nil {
 		return fmt.Errorf("error marshaling credentials: %v", err)
 	}
-	err = os.WriteFile(GetConfigPath(), jsonData, 0o644)
+	err = os.WriteFile(GetConfigPath(), jsonData, privateFileMode)
 	if err != nil {
 		return fmt.Errorf("error writing file: %v", err)
 	}
+	_ = os.Chmod(GetConfigPath(), privateFileMode)
 
 	return nil
 }
@@ -89,25 +96,26 @@ func Connect() (*telegram.Client, error) {
 
 	creds, err := LoadImpCredentials()
 	if err != nil {
-		return nil, fmt.Errorf("NO API AND AHSH lOADED ")
+		return nil, fmt.Errorf("API credentials are not configured")
 	}
 
 	TgApiID := creds.ApiID
 	TgApiHash := creds.ApiHash
 
 	path, err := os.UserConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("error getting config dir for session: %v", err)
+	}
 
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	dir := filepath.Join(path, "TDrive")
+	if err := os.MkdirAll(dir, privateDirMode); err != nil {
 		return nil, fmt.Errorf("could not create config folder: %v", err)
 	}
-
-	if err != nil {
-		return nil, fmt.Errorf("Error while getiing config dir to save sessions.json : %v", err)
-	}
+	_ = os.Chmod(dir, privateDirMode)
 
 	// cwd, _ := os.Getwd()
-	sessionPath := filepath.Join(path, "TDrive", "session.json")
+	sessionPath := filepath.Join(dir, "session.json")
+	_ = os.Chmod(sessionPath, privateFileMode)
 	ses := &session.FileStorage{
 		Path: sessionPath,
 	}

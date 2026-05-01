@@ -13,6 +13,11 @@ import (
 
 var DB *sql.DB
 
+const (
+	privateDirMode  os.FileMode = 0o700
+	privateFileMode os.FileMode = 0o600
+)
+
 func getDBPath() (string, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {
@@ -21,9 +26,10 @@ func getDBPath() (string, error) {
 
 	appFolder := filepath.Join(configDir, "TDrive")
 
-	if err := os.MkdirAll(appFolder, 0o755); err != nil {
+	if err := os.MkdirAll(appFolder, privateDirMode); err != nil {
 		return "", err
 	}
+	_ = os.Chmod(appFolder, privateDirMode)
 
 	return filepath.Join(appFolder, "tdrive.db"), nil
 }
@@ -43,6 +49,7 @@ func InitDB() error {
 		_ = db.Close()
 		return err
 	}
+	_ = os.Chmod(path, privateFileMode)
 
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)

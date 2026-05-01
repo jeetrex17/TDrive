@@ -28,18 +28,16 @@ func SaveConfig(id int64) error {
 	path = filepath.Join(path, "TDrive", "config.json")
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, privateDirMode); err != nil {
 		return fmt.Errorf("could not create config folder: %v", err)
 	}
+	_ = os.Chmod(dir, privateDirMode)
 
-	if err != nil {
-		return fmt.Errorf("Error gettin use config dir : %v", err)
-	}
-
-	err = os.WriteFile(path, jsonData, 0o644)
+	err = os.WriteFile(path, jsonData, privateFileMode)
 	if err != nil {
 		return err
 	}
+	_ = os.Chmod(path, privateFileMode)
 
 	fmt.Println("Config.json is saved with id : ", id)
 
