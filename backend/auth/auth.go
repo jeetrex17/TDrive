@@ -89,11 +89,6 @@ func LoadImpCredentials() (ImpCredentials, error) {
 }
 
 func Connect() (*telegram.Client, error) {
-	// Tg_app_HASH := os.Getenv("TELEGRAM_APP_HASH")
-
-	//Tg_app_ID, err := strconv.Atoi(os.Getenv("TELEGRAM_APP_ID"))
-	//
-
 	creds, err := LoadImpCredentials()
 	if err != nil {
 		return nil, fmt.Errorf("API credentials are not configured")
@@ -113,7 +108,6 @@ func Connect() (*telegram.Client, error) {
 	}
 	_ = os.Chmod(dir, privateDirMode)
 
-	// cwd, _ := os.Getwd()
 	sessionPath := filepath.Join(dir, "session.json")
 	_ = os.Chmod(sessionPath, privateFileMode)
 	ses := &session.FileStorage{
@@ -157,7 +151,6 @@ func (a AuthT) Phone(ctx context.Context) (string, error) {
 }
 
 func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, error) {
-	// fmt.Scanln(&code)
 	code := <-a.app.GetCodech()
 
 	return code, nil
@@ -170,13 +163,11 @@ func (a AuthT) Password(ctx context.Context) (string, error) {
 	}
 
 	if passObj.Hint != "" {
-		fmt.Println("Hint:", passObj.Hint)
 		a.app.SendHint("Hint : " + passObj.Hint)
 	} else {
 		a.app.SendHint("NO HINT found")
 	}
 
-	// a.app.SendHint("Hint: THIS IS A TEST HINT ")
 	Password := <-a.app.GetPassch()
 
 	return Password, nil

@@ -22,7 +22,7 @@ func SaveConfig(id int64) error {
 
 	path, err := os.UserConfigDir()
 	if err != nil {
-		return fmt.Errorf("error getting config dir : %v", err)
+		return fmt.Errorf("error getting config dir: %v", err)
 	}
 
 	path = filepath.Join(path, "TDrive", "config.json")
@@ -39,15 +39,13 @@ func SaveConfig(id int64) error {
 	}
 	_ = os.Chmod(path, privateFileMode)
 
-	fmt.Println("Config.json is saved with id : ", id)
-
 	return nil
 }
 
 func LoadConfig() (int64, error) {
 	path, err := os.UserConfigDir()
 	if err != nil {
-		return 0, fmt.Errorf("error getting config dir : %v", err)
+		return 0, fmt.Errorf("error getting config dir: %v", err)
 	}
 
 	path = filepath.Join(path, "TDrive", "config.json")

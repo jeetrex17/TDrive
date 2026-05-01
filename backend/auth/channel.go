@@ -12,11 +12,7 @@ func GetTDriveChannel(ctx context.Context, Client *telegram.Client) (int64, erro
 	savedId, err := LoadConfig()
 
 	if err == nil && savedId != 0 {
-		fmt.Println("channel TDrive found :", savedId)
-
 		return savedId, nil
-	} else {
-		fmt.Println("chneel donest exists , making new private Tdriive channel")
 	}
 
 	return CreateTDriveChannel(ctx, Client)
@@ -33,8 +29,6 @@ func CreateTDriveChannel(ctx context.Context, Clinet *telegram.Client) (int64, e
 	if err != nil {
 		return 0, err
 	}
-
-	fmt.Printf("Debug TELEGRAM SENT THIS TYPE: %T\n", updates)
 
 	var newID int64
 
