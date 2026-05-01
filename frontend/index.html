@@ -398,8 +398,18 @@
             <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-settings-title">
                 <h3 id="encryption-settings-title" class="modal-title">Encryption settings</h3>
                 <p class="modal-subtitle">Change your encryption password safely. There is no recovery reset without the current password.</p>
-                <input id="encryption-current-password" type="password" placeholder="Current password" autocomplete="current-password">
-                <input id="encryption-new-password" type="password" placeholder="New password" autocomplete="new-password">
+                <div class="input-with-action">
+                    <input id="encryption-current-password" type="password" placeholder="Current password" autocomplete="current-password">
+                    <button class="input-action-btn reveal-on-hold" type="button" data-target="encryption-current-password" aria-label="Hold to show current password" title="Hold to show password">
+                        <svg class="input-action-icon icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    </button>
+                </div>
+                <div class="input-with-action">
+                    <input id="encryption-new-password" type="password" placeholder="New password" autocomplete="new-password">
+                    <button class="input-action-btn reveal-on-hold" type="button" data-target="encryption-new-password" aria-label="Hold to show new password" title="Hold to show password">
+                        <svg class="input-action-icon icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    </button>
+                </div>
                 <input id="encryption-new-password-confirm" type="password" placeholder="Confirm new password" autocomplete="new-password">
                 <input id="encryption-settings-hint" type="text" placeholder="Optional hint (do not put the password here)" autocomplete="off">
                 <div id="encryption-settings-error" class="modal-error" style="display:none;"></div>

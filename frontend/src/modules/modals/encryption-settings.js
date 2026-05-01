@@ -17,6 +17,7 @@ export function setupEncryptionSettingsModal() {
     const next2 = modal.querySelector('#encryption-new-password-confirm');
     const hint = modal.querySelector('#encryption-settings-hint');
     const errEl = modal.querySelector('#encryption-settings-error');
+    const revealButtons = modal.querySelectorAll('.reveal-on-hold[data-target]');
 
     const showError = (msg) => {
         if (!errEl) return;
@@ -38,6 +39,28 @@ export function setupEncryptionSettingsModal() {
 
     cancel.addEventListener('click', close);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    revealButtons.forEach((btn) => {
+        const input = modal.querySelector(`#${btn.dataset.target}`);
+        if (!input) return;
+        const hide = () => {
+            input.type = 'password';
+            btn.removeAttribute('data-state');
+        };
+        const show = (e) => {
+            e.preventDefault();
+            input.type = 'text';
+            btn.dataset.state = 'visible';
+        };
+        btn.addEventListener('pointerdown', show);
+        btn.addEventListener('pointerup', hide);
+        btn.addEventListener('pointerleave', hide);
+        btn.addEventListener('pointercancel', hide);
+        btn.addEventListener('blur', hide);
+        btn.addEventListener('keydown', (e) => {
+            if (e.key === ' ' || e.key === 'Enter') show(e);
+        });
+        btn.addEventListener('keyup', hide);
+    });
 
     confirm.addEventListener('click', async () => {
         const oldPassword = String(current?.value || '');

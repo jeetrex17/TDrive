@@ -74,13 +74,27 @@ export function openEncryptionPasswordModal() {
             return;
         }
         pending = resolve;
-        modal.style.display = 'flex';
-        const hint = String(state.encryption?.hint || '').trim();
-        if (hintRow && hintText) {
-            hintText.textContent = hint;
-            hintRow.style.display = hint ? 'block' : 'none';
-        }
-        const pwd = modal.querySelector('#encryption-password-input');
-        setTimeout(() => pwd?.focus(), 0);
+        const showPrompt = async () => {
+            if (!state.encryption?.loaded || !state.encryption?.hint) {
+                await loadEncryptionStatus();
+            }
+            modal.style.display = 'flex';
+            const hint = String(state.encryption?.hint || '').trim();
+            if (hintRow && hintText) {
+                hintText.textContent = hint;
+                hintRow.style.display = hint ? 'block' : 'none';
+            }
+            const pwd = modal.querySelector('#encryption-password-input');
+            setTimeout(() => pwd?.focus(), 0);
+        };
+        showPrompt().catch(() => {
+            modal.style.display = 'flex';
+            if (hintRow && hintText) {
+                hintText.textContent = '';
+                hintRow.style.display = 'none';
+            }
+            const pwd = modal.querySelector('#encryption-password-input');
+            setTimeout(() => pwd?.focus(), 0);
+        });
     });
 }
