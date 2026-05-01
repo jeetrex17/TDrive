@@ -44,6 +44,18 @@ func GetEncryptionConfig(db *sql.DB, channelID int64) (EncryptionConfig, error) 
 // channel. Used when the user first creates an encryption password and,
 // later, password change.
 func PutEncryptionConfig(db *sql.DB, c EncryptionConfig) error {
+	return putEncryptionConfig(db, c)
+}
+
+func PutEncryptionConfigTx(tx *sql.Tx, c EncryptionConfig) error {
+	return putEncryptionConfig(tx, c)
+}
+
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func putEncryptionConfig(exec sqlExecer, c EncryptionConfig) error {
 	if c.ChannelID == 0 {
 		return fmt.Errorf("projection: encryption config requires channel id")
 	}
@@ -63,7 +75,7 @@ func PutEncryptionConfig(db *sql.DB, c EncryptionConfig) error {
 	if c.Enabled {
 		enabled = 1
 	}
-	_, err := db.Exec(`
+	_, err := exec.Exec(`
 		INSERT INTO encryption (channel_id, enabled, kdf_salt, kdf_params_json, wrapped_master_key, key_check, hint, created_at, version)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(channel_id) DO UPDATE SET

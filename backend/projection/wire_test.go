@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -104,6 +105,32 @@ func TestParseTomb(t *testing.T) {
 	}
 	if op.Type != OpTomb || op.Obj != "f:99" {
 		t.Fatalf("op = %+v", op)
+	}
+}
+
+func TestParseEncryptionConfig(t *testing.T) {
+	want := Op{
+		Type:             OpEncConfig,
+		KDFSalt:          []byte("salt"),
+		KDFParamsJSON:    `{"memory":65536,"time":3}`,
+		WrappedMasterKey: []byte("wrapped"),
+		KeyCheck:         []byte("check"),
+		Hint:             "pet name",
+		ConfigVersion:    1,
+	}
+	raw := Format(want)
+	got, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got.Type != OpEncConfig ||
+		!bytes.Equal(got.KDFSalt, want.KDFSalt) ||
+		got.KDFParamsJSON != want.KDFParamsJSON ||
+		!bytes.Equal(got.WrappedMasterKey, want.WrappedMasterKey) ||
+		!bytes.Equal(got.KeyCheck, want.KeyCheck) ||
+		got.Hint != want.Hint ||
+		got.ConfigVersion != 1 {
+		t.Fatalf("op mismatch:\nwant %+v\n got %+v\nraw=%q", want, got, raw)
 	}
 }
 

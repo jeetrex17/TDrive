@@ -26,6 +26,9 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 	if _, err := tx.Exec(`DELETE FROM folders WHERE channel_id = ?`, channelID); err != nil {
 		return fmt.Errorf("projection: rebuild clear folders: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM encryption WHERE channel_id = ?`, channelID); err != nil {
+		return fmt.Errorf("projection: rebuild clear encryption: %w", err)
+	}
 
 	rows, err := tx.Query(`
 		SELECT msg_id, op_type, op_payload_json, actor_user_id

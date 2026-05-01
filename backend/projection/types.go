@@ -22,6 +22,7 @@ const (
 	OpRmdir      OpType = "rmdir"
 	OpTomb       OpType = "tomb"
 	OpMeta       OpType = "meta"
+	OpEncConfig  OpType = "encfg"
 )
 
 type Op struct {
@@ -40,6 +41,15 @@ type Op struct {
 	Encrypted         bool
 	PlaintextSize     int64
 	EncryptionVersion int
+
+	// Personal-drive encryption password metadata. This is safe to store in
+	// Telegram because the master key stays wrapped under the user's password.
+	KDFSalt          []byte
+	KDFParamsJSON    string
+	WrappedMasterKey []byte
+	KeyCheck         []byte
+	Hint             string
+	ConfigVersion    int
 }
 
 type Channel struct {

@@ -4,7 +4,7 @@ import { state } from '../state.js';
 import {
     CheckSystemStatus, SaveSetup,
     LoginPhoneNumber, SumbitCode, SumbitPassword,
-    CheckLoginStatus, InitDrive, MyUserID,
+    CheckLoginStatus, InitDrive, MyUserID, SyncChannel,
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation.js';
 import { loadChannels } from './channels.js';
@@ -128,15 +128,26 @@ export async function showDashboard() {
         state.myUserID = 0;
     }
 
-    // Refresh the personal-drive encryption snapshot so the upload
-    // dialog can decide between first-time setup and password entry.
-    loadEncryptionStatus();
+    // Pull Telegram metadata before reading encryption state. On a fresh
+    // reinstall this is what restores the wrapped master key into SQLite.
+    await window.triggerRefresh();
+    const personal = state.channels.find((c) => c?.kind === 'personal');
+    if (personal && Number(personal.id) !== Number(state.activeChannel?.id || 0)) {
+        try {
+            await SyncChannel(Number(personal.id));
+        } catch (err) {
+            console.warn('Personal sync before encryption status failed:', err);
+        }
+    }
+
+    // Refresh the personal-drive encryption snapshot so the upload dialog
+    // can decide between first-time setup and password entry.
+    await loadEncryptionStatus();
 
     // Hydrate the profile menu (display name, photo). Failure is non-fatal —
     // the avatar falls back to a blank circle.
     loadSelfUser();
 
-    window.triggerRefresh();
 }
 
 export async function checkStatusAndShowScreen() {

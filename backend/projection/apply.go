@@ -50,6 +50,8 @@ func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) err
 		return applyRmdir(tx, channelID, op)
 	case OpTomb:
 		return applyTomb(tx, channelID, op)
+	case OpEncConfig:
+		return applyEncConfig(tx, channelID, op)
 	default:
 		return fmt.Errorf("%w: unknown type %q", ErrBadOp, op.Type)
 	}
@@ -216,6 +218,26 @@ func applyTomb(tx *sql.Tx, channelID int64, op Op) error {
 		WHERE channel_id = ? AND msg_id = ?
 	`, channelID, fileMsgID)
 	return err
+}
+
+func applyEncConfig(tx *sql.Tx, channelID int64, op Op) error {
+	if len(op.KDFSalt) == 0 || op.KDFParamsJSON == "" || len(op.WrappedMasterKey) == 0 || len(op.KeyCheck) == 0 {
+		return fmt.Errorf("%w: encryption config missing key material", ErrBadOp)
+	}
+	version := op.ConfigVersion
+	if version == 0 {
+		version = 1
+	}
+	return PutEncryptionConfigTx(tx, EncryptionConfig{
+		ChannelID:        channelID,
+		Enabled:          true,
+		KDFSalt:          op.KDFSalt,
+		KDFParamsJSON:    op.KDFParamsJSON,
+		WrappedMasterKey: op.WrappedMasterKey,
+		KeyCheck:         op.KeyCheck,
+		Hint:             strings.TrimSpace(op.Hint),
+		Version:          version,
+	})
 }
 
 func wouldCreateCycle(tx *sql.Tx, channelID int64, movingFolderID, newParentID string) (bool, error) {

@@ -104,7 +104,19 @@ func (a *App) CreateEncryptionPassword(password string, hint string) error {
 	if err == nil {
 		return fmt.Errorf("encryption password already exists")
 	}
-	return createEncryptionPassword(channelID, password, hint)
+	master, err := crypto.NewMasterKey()
+	if err != nil {
+		return err
+	}
+	cfg, err := buildEncryptionConfig(channelID, password, hint, master, 0)
+	if err != nil {
+		return err
+	}
+	if err := a.publishEncryptionConfig(channelID, cfg); err != nil {
+		return err
+	}
+	storeMasterKey(master)
+	return nil
 }
 
 // UseEncryptionPassword verifies an existing encryption password and keeps
@@ -160,7 +172,11 @@ func (a *App) ChangeEncryptionPassword(currentPassword string, newPassword strin
 	if err != nil {
 		return err
 	}
-	if err := writeEncryptionConfig(channelID, newPassword, hint, master, existing.CreatedAt); err != nil {
+	cfg, err := buildEncryptionConfig(channelID, newPassword, hint, master, existing.CreatedAt)
+	if err != nil {
+		return err
+	}
+	if err := a.publishEncryptionConfig(channelID, cfg); err != nil {
 		return err
 	}
 	storeMasterKey(master)
@@ -177,38 +193,26 @@ func validateNewEncryptionPassword(password string) error {
 	return nil
 }
 
-func createEncryptionPassword(channelID int64, password string, hint string) error {
-	master, err := crypto.NewMasterKey()
-	if err != nil {
-		return err
-	}
-	if err := writeEncryptionConfig(channelID, password, hint, master, 0); err != nil {
-		return err
-	}
-	storeMasterKey(master)
-	return nil
-}
-
-func writeEncryptionConfig(channelID int64, password string, hint string, master []byte, createdAt int64) error {
+func buildEncryptionConfig(channelID int64, password string, hint string, master []byte, createdAt int64) (projection.EncryptionConfig, error) {
 	params := crypto.DefaultParams()
 	salt, err := crypto.NewSalt(params)
 	if err != nil {
-		return err
+		return projection.EncryptionConfig{}, err
 	}
 	kek := crypto.DeriveKEK([]byte(password), salt, params)
 	wrapped, err := crypto.WrapMasterKey(master, kek)
 	if err != nil {
-		return err
+		return projection.EncryptionConfig{}, err
 	}
 	check, err := crypto.EncodeKeyCheck(master)
 	if err != nil {
-		return err
+		return projection.EncryptionConfig{}, err
 	}
 	paramsJSON, err := crypto.MarshalParams(params)
 	if err != nil {
-		return err
+		return projection.EncryptionConfig{}, err
 	}
-	cfg := projection.EncryptionConfig{
+	return projection.EncryptionConfig{
 		ChannelID:        channelID,
 		Enabled:          true,
 		KDFSalt:          salt,
@@ -218,8 +222,28 @@ func writeEncryptionConfig(channelID int64, password string, hint string, master
 		Hint:             strings.TrimSpace(hint),
 		CreatedAt:        createdAt,
 		Version:          1,
+	}, nil
+}
+
+func encryptionConfigOp(cfg projection.EncryptionConfig) projection.Op {
+	version := cfg.Version
+	if version == 0 {
+		version = 1
 	}
-	return projection.PutEncryptionConfig(backend.DB, cfg)
+	return projection.Op{
+		Type:             projection.OpEncConfig,
+		KDFSalt:          append([]byte(nil), cfg.KDFSalt...),
+		KDFParamsJSON:    cfg.KDFParamsJSON,
+		WrappedMasterKey: append([]byte(nil), cfg.WrappedMasterKey...),
+		KeyCheck:         append([]byte(nil), cfg.KeyCheck...),
+		Hint:             strings.TrimSpace(cfg.Hint),
+		ConfigVersion:    version,
+	}
+}
+
+func (a *App) publishEncryptionConfig(channelID int64, cfg projection.EncryptionConfig) error {
+	_, err := a.emitAndProject(channelID, encryptionConfigOp(cfg))
+	return err
 }
 
 func rememberEncryptionPassword(cfg projection.EncryptionConfig, password string) error {

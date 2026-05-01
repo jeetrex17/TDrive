@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"testing"
@@ -104,5 +105,36 @@ func TestRebuildHandlesTombstones(t *testing.T) {
 
 	if FileExists(db, testChan, 1) {
 		t.Fatal("tombstoned file should not be visible after rebuild")
+	}
+}
+
+func TestRebuildReplaysEncryptionConfig(t *testing.T) {
+	db := newRebuildDB(t)
+	want := Op{
+		Type:             OpEncConfig,
+		KDFSalt:          []byte("salt"),
+		KDFParamsJSON:    `{"memory":65536}`,
+		WrappedMasterKey: []byte("wrapped"),
+		KeyCheck:         []byte("check"),
+		Hint:             "pet name",
+		ConfigVersion:    1,
+	}
+	seedReplay(t, db, testChan, 7, want)
+
+	if err := RebuildProjection(db, testChan); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+
+	got, err := GetEncryptionConfig(db, testChan)
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	if !bytes.Equal(got.KDFSalt, want.KDFSalt) ||
+		!bytes.Equal(got.WrappedMasterKey, want.WrappedMasterKey) ||
+		!bytes.Equal(got.KeyCheck, want.KeyCheck) ||
+		got.KDFParamsJSON != want.KDFParamsJSON ||
+		got.Hint != want.Hint ||
+		got.Version != want.ConfigVersion {
+		t.Fatalf("config mismatch: got %+v want %+v", got, want)
 	}
 }

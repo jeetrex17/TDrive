@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/url"
 	"strconv"
@@ -103,6 +104,35 @@ func Parse(raw string) (Op, error) {
 		if err := setObj(&op, kv["obj"], FileIDPrefix); err != nil {
 			return Op{}, err
 		}
+	case OpEncConfig:
+		if err := setB64(&op.KDFSalt, kv["salt"]); err != nil {
+			return Op{}, err
+		}
+		if err := setRequiredRaw(&op.KDFParamsJSON, kv["kdf"]); err != nil {
+			return Op{}, err
+		}
+		if err := setB64(&op.WrappedMasterKey, kv["wrap"]); err != nil {
+			return Op{}, err
+		}
+		if err := setB64(&op.KeyCheck, kv["check"]); err != nil {
+			return Op{}, err
+		}
+		if raw, ok := kv["hint"]; ok {
+			hint, err := url.QueryUnescape(raw)
+			if err != nil {
+				return Op{}, ErrWireMalformed
+			}
+			op.Hint = hint
+		}
+		if s, ok := kv["cv"]; ok {
+			n, err := strconv.Atoi(s)
+			if err != nil {
+				return Op{}, ErrWireMalformed
+			}
+			op.ConfigVersion = n
+		} else {
+			op.ConfigVersion = 1
+		}
 	default:
 		return Op{}, ErrWireBadOpType
 	}
@@ -186,9 +216,50 @@ func Format(op Op) string {
 	case OpRmdir, OpTomb:
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
+	case OpEncConfig:
+		b.WriteString("|salt=")
+		b.WriteString(base64.RawURLEncoding.EncodeToString(op.KDFSalt))
+		b.WriteString("|kdf=")
+		b.WriteString(url.QueryEscape(op.KDFParamsJSON))
+		b.WriteString("|wrap=")
+		b.WriteString(base64.RawURLEncoding.EncodeToString(op.WrappedMasterKey))
+		b.WriteString("|check=")
+		b.WriteString(base64.RawURLEncoding.EncodeToString(op.KeyCheck))
+		if op.Hint != "" {
+			b.WriteString("|hint=")
+			b.WriteString(url.QueryEscape(op.Hint))
+		}
+		if op.ConfigVersion > 1 {
+			b.WriteString("|cv=")
+			b.WriteString(strconv.Itoa(op.ConfigVersion))
+		}
 	}
 
 	return b.String()
+}
+
+func setRequiredRaw(dst *string, raw string) error {
+	if raw == "" {
+		return ErrWireMalformed
+	}
+	decoded, err := url.QueryUnescape(raw)
+	if err != nil {
+		return ErrWireMalformed
+	}
+	*dst = decoded
+	return nil
+}
+
+func setB64(dst *[]byte, raw string) error {
+	if raw == "" {
+		return ErrWireMalformed
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || len(decoded) == 0 {
+		return ErrWireMalformed
+	}
+	*dst = decoded
+	return nil
 }
 
 func appendFileAttrs(b *strings.Builder, op Op) {

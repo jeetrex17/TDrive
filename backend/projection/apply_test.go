@@ -131,6 +131,29 @@ func TestApplyFileUpload(t *testing.T) {
 	}
 }
 
+func TestApplyEncryptionConfig(t *testing.T) {
+	db := newTestDB(t)
+	op := Op{
+		Type:             OpEncConfig,
+		KDFSalt:          []byte("salt"),
+		KDFParamsJSON:    `{"memory":65536}`,
+		WrappedMasterKey: []byte("wrapped"),
+		KeyCheck:         []byte("check"),
+		Hint:             "pet name",
+		ConfigVersion:    1,
+	}
+	if err := runOp(t, db, testChan, 100, op); err != nil {
+		t.Fatalf("enc config: %v", err)
+	}
+	got, err := GetEncryptionConfig(db, testChan)
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	if got.Hint != "pet name" || got.KDFParamsJSON != op.KDFParamsJSON || got.Version != 1 {
+		t.Fatalf("config = %+v", got)
+	}
+}
+
 func TestApplyFileUploadIdempotentOnSameMsgID(t *testing.T) {
 	db := newTestDB(t)
 	op := Op{Type: OpFileUpload, Parent: RootParent, Name: "x.png", FileSize: 1, FileUploadTime: 1}

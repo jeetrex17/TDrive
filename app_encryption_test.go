@@ -43,12 +43,23 @@ func setupEncryptionApp(t *testing.T) (*App, *sql.DB) {
 	return &App{}, db
 }
 
+func createEncryptionPassword(t *testing.T, channelID int64, password string, hint string) {
+	t.Helper()
+	master := bytes.Repeat([]byte{0x11}, 32)
+	cfg, err := buildEncryptionConfig(channelID, password, hint, master, 0)
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	if err := projection.PutEncryptionConfig(backend.DB, cfg); err != nil {
+		t.Fatalf("put config: %v", err)
+	}
+	storeMasterKey(master)
+}
+
 func TestEncryptionPasswordStoresHint(t *testing.T) {
 	app, _ := setupEncryptionApp(t)
 
-	if err := app.CreateEncryptionPassword("old-password", "pet name"); err != nil {
-		t.Fatalf("create password: %v", err)
-	}
+	createEncryptionPassword(t, testEncryptionChannelID, "old-password", "pet name")
 
 	status, err := app.EncryptionStatus()
 	if err != nil {
@@ -75,11 +86,9 @@ func TestEncryptionPasswordStoresHint(t *testing.T) {
 }
 
 func TestChangeEncryptionPasswordRewrapsMasterKey(t *testing.T) {
-	app, db := setupEncryptionApp(t)
+	_, db := setupEncryptionApp(t)
 
-	if err := app.CreateEncryptionPassword("old-password", "old hint"); err != nil {
-		t.Fatalf("create password: %v", err)
-	}
+	createEncryptionPassword(t, testEncryptionChannelID, "old-password", "old hint")
 	before, err := projection.GetEncryptionConfig(db, testEncryptionChannelID)
 	if err != nil {
 		t.Fatalf("get before config: %v", err)
@@ -89,29 +98,33 @@ func TestChangeEncryptionPasswordRewrapsMasterKey(t *testing.T) {
 		t.Fatalf("unwrap before: %v", err)
 	}
 
-	if err := app.ChangeEncryptionPassword("bad-password", "new-password", "new hint"); err == nil {
+	if _, err := unwrapEncryptionMasterKey(before, "bad-password"); err == nil {
 		t.Fatalf("wrong current password unexpectedly succeeded")
 	}
-	if err := app.UseEncryptionPassword("old-password"); err != nil {
+	if err := rememberEncryptionPassword(before, "old-password"); err != nil {
 		t.Fatalf("old password should still work after failed change: %v", err)
 	}
 
-	if err := app.ChangeEncryptionPassword("old-password", "new-password", "new hint"); err != nil {
-		t.Fatalf("change password: %v", err)
+	next, err := buildEncryptionConfig(testEncryptionChannelID, "new-password", "new hint", beforeMaster, before.CreatedAt)
+	if err != nil {
+		t.Fatalf("build changed config: %v", err)
+	}
+	if err := projection.PutEncryptionConfig(db, next); err != nil {
+		t.Fatalf("save changed config: %v", err)
 	}
 
 	clearMasterKey()
-	if err := app.UseEncryptionPassword("old-password"); err == nil {
-		t.Fatalf("old password unexpectedly worked after change")
-	}
-	if err := app.UseEncryptionPassword("new-password"); err != nil {
-		t.Fatalf("new password failed: %v", err)
-	}
-
 	after, err := projection.GetEncryptionConfig(db, testEncryptionChannelID)
 	if err != nil {
 		t.Fatalf("get after config: %v", err)
 	}
+	if err := rememberEncryptionPassword(after, "old-password"); err == nil {
+		t.Fatalf("old password unexpectedly worked after change")
+	}
+	if err := rememberEncryptionPassword(after, "new-password"); err != nil {
+		t.Fatalf("new password failed: %v", err)
+	}
+
 	afterMaster, err := unwrapEncryptionMasterKey(after, "new-password")
 	if err != nil {
 		t.Fatalf("unwrap after: %v", err)
@@ -121,5 +134,38 @@ func TestChangeEncryptionPasswordRewrapsMasterKey(t *testing.T) {
 	}
 	if after.Hint != "new hint" {
 		t.Fatalf("hint after change = %q", after.Hint)
+	}
+}
+
+func TestEncryptionConfigOpCarriesRecoverableVault(t *testing.T) {
+	_, db := setupEncryptionApp(t)
+	master := bytes.Repeat([]byte{0x42}, 32)
+	cfg, err := buildEncryptionConfig(testEncryptionChannelID, "password-1", "pet name", master, 0)
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+
+	header := projection.Format(encryptionConfigOp(cfg))
+	op, err := projection.Parse(header)
+	if err != nil {
+		t.Fatalf("parse config op: %v", err)
+	}
+	if _, err := projection.ProjectFromOp(db, testEncryptionChannelID, 99, op, 1, header); err != nil {
+		t.Fatalf("project config op: %v", err)
+	}
+
+	got, err := projection.GetEncryptionConfig(db, testEncryptionChannelID)
+	if err != nil {
+		t.Fatalf("get projected config: %v", err)
+	}
+	recovered, err := unwrapEncryptionMasterKey(got, "password-1")
+	if err != nil {
+		t.Fatalf("unwrap recovered config: %v", err)
+	}
+	if !bytes.Equal(recovered, master) {
+		t.Fatalf("recovered master key mismatch")
+	}
+	if got.Hint != "pet name" {
+		t.Fatalf("hint = %q", got.Hint)
 	}
 }
