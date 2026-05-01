@@ -7,13 +7,13 @@ export function ActiveChannelID():Promise<number>;
 
 export function ApproveJoinRequest(arg1:number,arg2:number):Promise<void>;
 
+export function ChangeEncryptionPassword(arg1:string,arg2:string,arg3:string):Promise<void>;
+
 export function CheckLoginStatus():Promise<boolean>;
 
 export function CheckPendingJoin(arg1:string):Promise<main.JoinDriveResult>;
 
 export function CheckSystemStatus():Promise<string>;
-
-export function ChangeEncryptionPassword(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function CreateEncryptionPassword(arg1:string,arg2:string):Promise<void>;
 
@@ -109,6 +109,6 @@ export function SumbitPassword(arg1:string):Promise<void>;
 
 export function SyncChannel(arg1:number):Promise<void>;
 
-export function UseEncryptionPassword(arg1:string):Promise<void>;
-
 export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<Array<backend.FileMetaData>>;
+
+export function UseEncryptionPassword(arg1:string):Promise<void>;

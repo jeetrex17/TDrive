@@ -10,6 +10,7 @@ import { openEncryptionSettingsModal } from './modals/encryption-settings.js';
 let trigger = null;
 let menu = null;
 let outsideClickBound = false;
+let selfUserPromise = null;
 
 export function setupProfileMenu() {
     trigger = document.getElementById('profile-trigger');
@@ -18,7 +19,7 @@ export function setupProfileMenu() {
     const encryptionItem = document.getElementById('profile-menu-encryption-settings');
     if (!trigger || !menu || !logoutItem) return;
 
-    renderAvatar(document.getElementById('profile-avatar'), null);
+    renderProfileLoading();
 
     trigger.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -50,14 +51,40 @@ export function setupProfileMenu() {
 // hydrates both avatars + the menu header. Called from auth.js after
 // InitDrive succeeds. Failures fall back silently to initials/blank.
 export async function loadSelfUser() {
-    try {
-        const user = await Me();
-        state.selfUser = user || null;
-    } catch (err) {
-        console.warn('Me failed:', err);
-        state.selfUser = null;
+    if (selfUserPromise) return selfUserPromise;
+    selfUserPromise = (async () => {
+        try {
+            const user = await Me();
+            state.selfUser = user || null;
+        } catch (err) {
+            console.warn('Me failed:', err);
+            state.selfUser = null;
+        }
+        renderProfile();
+        selfUserPromise = null;
+        return state.selfUser;
+    })();
+    return selfUserPromise;
+}
+
+function renderProfileLoading() {
+    renderAvatar(document.getElementById('profile-avatar'), null);
+    renderAvatar(document.getElementById('profile-menu-avatar'), null);
+    const name = document.getElementById('profile-menu-name');
+    const handle = document.getElementById('profile-menu-handle');
+    if (name) name.textContent = 'Loading account…';
+    if (handle) {
+        handle.textContent = '';
+        handle.style.display = 'none';
     }
-    renderProfile();
+}
+
+async function ensureProfileLoaded() {
+    if (state.selfUser) return;
+    renderProfileLoading();
+    try {
+        await loadSelfUser();
+    } catch {}
 }
 
 function renderProfile() {
@@ -68,7 +95,7 @@ function renderProfile() {
     const name = document.getElementById('profile-menu-name');
     const handle = document.getElementById('profile-menu-handle');
 
-    if (name) name.textContent = user?.display_name || 'Signed in';
+    if (name) name.textContent = user?.display_name || 'Telegram account';
     if (handle) {
         const u = String(user?.username || '').trim();
         handle.textContent = u ? `@${u}` : '';
@@ -93,6 +120,7 @@ function openMenu() {
     if (!trigger || !menu) return;
     menu.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
+    ensureProfileLoaded();
     if (!outsideClickBound) {
         document.addEventListener('click', onDocumentClick, true);
         outsideClickBound = true;
