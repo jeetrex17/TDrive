@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/gotd/td v0.136.0
-	github.com/joho/godotenv v1.5.1
 	github.com/wailsapp/wails/v2 v2.11.0
 	golang.org/x/crypto v0.50.0
 	modernc.org/sqlite v1.45.0
