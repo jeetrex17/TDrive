@@ -129,7 +129,7 @@ export async function showDashboard() {
     }
 
     // Refresh the personal-drive encryption snapshot so the upload
-    // dialog's follow-up modals can decide between setup vs unlock.
+    // dialog can decide between first-time setup and password entry.
     loadEncryptionStatus();
 
     // Hydrate the profile menu (display name, photo). Failure is non-fatal —

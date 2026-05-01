@@ -1,16 +1,10 @@
-// First-time encryption password setup. Triggered the very first time
-// a user picks "Encrypt and upload" — never standalone, never as a
-// drive-wide settings action. Resolves the returned promise to true on
-// success, false on cancel.
-//
-// Folded together with unlock on the backend side: UnlockOrCreateVault
-// creates a vault when none exists. We only call this modal when the
-// status snapshot shows vault_exists=false; we don't show the strong
-// "if you forget this password your files are gone" warning during a
-// later normal unlock.
+// First-time encryption password setup. Triggered when a user first
+// chooses "Encrypt before upload". This password protects every
+// encrypted personal file; if forgotten, those files cannot be recovered.
 
-import { UnlockOrCreateVault } from '../../../wailsjs/go/main/App';
+import { UseEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { notify } from '../notifications.js';
+import { loadEncryptionStatus } from '../encryption.js';
 
 let pending = null;
 
@@ -52,12 +46,13 @@ export function setupEncryptionSetupModal() {
         confirm.disabled = true;
         cancel.disabled = true;
         try {
-            await UnlockOrCreateVault(a);
+            await UseEncryptionPassword(a);
+            await loadEncryptionStatus();
             finish(true);
             notify({
                 level: 'success',
-                title: 'Encryption is set up',
-                body: 'These files will now be encrypted on this device.',
+                title: 'Encryption password created',
+                body: 'Encrypted uploads will be protected before they leave this device.',
             });
         } catch (err) {
             showError(String(err));

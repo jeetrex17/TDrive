@@ -2,12 +2,7 @@
 // per-batch encryption. Resolves to { encrypt: boolean } on Continue,
 // or null on Cancel.
 //
-// Sticky in-memory across the session: once the user picks an option,
-// future opens default to that. We never persist it — security-relevant
-// defaults shouldn't survive a restart.
-
 let pending = null;
-let lastChoice = 'plain'; // 'plain' | 'encrypt'
 
 export function setupUploadOptionsModal() {
     const modal = document.getElementById('upload-options-modal');
@@ -30,7 +25,6 @@ export function setupUploadOptionsModal() {
     confirm.addEventListener('click', () => {
         const selected = modal.querySelector('input[name="upload-mode"]:checked');
         const value = selected?.value === 'encrypt' ? 'encrypt' : 'plain';
-        lastChoice = value;
         finish({ encrypt: value === 'encrypt' });
     });
 }
@@ -46,9 +40,9 @@ export function openUploadOptionsModal({ count }) {
             : `Upload ${count} files`;
     }
 
-    // Pre-select last choice so the user's preference compounds.
+    // Default to normal upload every time. Encryption is explicit per batch.
     const radios = modal.querySelectorAll('input[name="upload-mode"]');
-    radios.forEach((r) => { r.checked = r.value === lastChoice; });
+    radios.forEach((r) => { r.checked = r.value === 'plain'; });
 
     return new Promise((resolve) => {
         if (pending) {

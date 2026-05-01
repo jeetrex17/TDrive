@@ -349,8 +349,8 @@
                 <label class="modal-choice-row">
                     <input type="radio" name="upload-mode" value="encrypt">
                     <span>
-                        <strong>Encrypt and upload</strong>
-                        <small>Only you can open these files. You’ll need your encryption password to download or preview them later.</small>
+                        <strong>Encrypt before upload</strong>
+                        <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
                     </span>
                 </label>
                 <div class="modal-actions">
@@ -363,7 +363,7 @@
         <div id="encryption-setup-modal" class="modal-overlay" style="display: none;">
             <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-setup-title">
                 <h3 id="encryption-setup-title" class="modal-title">Set an encryption password</h3>
-                <p class="modal-subtitle">This password unlocks every file you encrypt on this device. <strong>If you forget it, encrypted files cannot be recovered.</strong></p>
+                <p class="modal-subtitle">Use one password for every encrypted file in My Drive. <strong>If you forget it, encrypted files cannot be recovered.</strong></p>
                 <input id="encryption-setup-password" type="password" placeholder="Password" autocomplete="new-password">
                 <input id="encryption-setup-password-confirm" type="password" placeholder="Confirm password" autocomplete="new-password">
                 <div id="encryption-setup-error" class="modal-error" style="display:none;"></div>
@@ -374,15 +374,15 @@
             </div>
         </div>
 
-        <div id="encryption-unlock-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-unlock-title">
-                <h3 id="encryption-unlock-title" class="modal-title">Unlock encrypted files</h3>
-                <p class="modal-subtitle">Enter your password to access encrypted files for this session.</p>
-                <input id="encryption-unlock-password" type="password" placeholder="Password" autocomplete="current-password">
-                <div id="encryption-unlock-error" class="modal-error" style="display:none;"></div>
+        <div id="encryption-password-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-password-title">
+                <h3 id="encryption-password-title" class="modal-title">Enter encryption password</h3>
+                <p class="modal-subtitle">Needed for encrypted uploads, downloads, and previews. TDrive remembers it until you close the app.</p>
+                <input id="encryption-password-input" type="password" placeholder="Password" autocomplete="current-password">
+                <div id="encryption-password-error" class="modal-error" style="display:none;"></div>
                 <div class="modal-actions">
-                    <button id="encryption-unlock-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="encryption-unlock-confirm" class="primary-btn" type="button">Unlock</button>
+                    <button id="encryption-password-cancel" class="secondary-btn" type="button">Cancel</button>
+                    <button id="encryption-password-confirm" class="primary-btn" type="button">Continue</button>
                 </div>
             </div>
         </div>

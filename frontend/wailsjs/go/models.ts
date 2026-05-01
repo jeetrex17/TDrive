@@ -7,6 +7,8 @@ export namespace backend {
 	    parent_id: string;
 	    upload_time: number;
 	    uploader_id: number;
+	    encrypted?: boolean;
+	    plaintext_size?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new FileMetaData(source);
@@ -20,6 +22,8 @@ export namespace backend {
 	        this.parent_id = source["parent_id"];
 	        this.upload_time = source["upload_time"];
 	        this.uploader_id = source["uploader_id"];
+	        this.encrypted = source["encrypted"];
+	        this.plaintext_size = source["plaintext_size"];
 	    }
 	}
 	export class Folder {
@@ -136,6 +140,22 @@ export namespace main {
 	        this.status = source["status"];
 	        this.message = source["message"];
 	        this.saved_path = source["saved_path"];
+	    }
+	}
+	export class EncryptionStatus {
+	    available: boolean;
+	    password_set: boolean;
+	    password_remembered: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EncryptionStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.password_set = source["password_set"];
+	        this.password_remembered = source["password_remembered"];
 	    }
 	}
 	export class PendingJoinInfo {

@@ -59,13 +59,13 @@ export const state = {
     myUserID: 0,                 // logged-in Telegram user id; 0 = unknown
     selfUser: null,              // { user_id, display_name, username, phone, photo_base64 }
 
-    // Per-upload encryption. There's no drive-wide "mode" — these flags
-    // only exist so the upload-options modal knows which follow-up
-    // (setup vs unlock) to chain after the user chooses Encrypt.
+    // Per-upload encryption. There is no drive-wide mode: the user picks
+    // encrypted upload per batch, and the password is remembered only for
+    // the current app session.
     encryption: {
-        available: false,    // a personal channel id is known
-        vaultExists: false,  // user has set a password before
-        unlocked: false,     // master key is in process memory
+        available: false,           // a personal channel id is known
+        passwordSet: false,         // user has created an encryption password
+        passwordRemembered: false,  // master key is in process memory
         loaded: false,
     },
 

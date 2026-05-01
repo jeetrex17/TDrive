@@ -114,16 +114,16 @@ export function ListPendingJoins() {
   return window['go']['main']['App']['ListPendingJoins']();
 }
 
-export function LockEncryption() {
-  return window['go']['main']['App']['LockEncryption']();
-}
-
 export function LoginPhoneNumber(arg1) {
   return window['go']['main']['App']['LoginPhoneNumber'](arg1);
 }
 
 export function Logout(arg1) {
   return window['go']['main']['App']['Logout'](arg1);
+}
+
+export function Me() {
+  return window['go']['main']['App']['Me']();
 }
 
 export function MoveFile(arg1, arg2) {
@@ -136,10 +136,6 @@ export function MoveFolder(arg1, arg2) {
 
 export function MsgToTdriveSystem(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['MsgToTdriveSystem'](arg1, arg2, arg3, arg4);
-}
-
-export function Me() {
-  return window['go']['main']['App']['Me']();
 }
 
 export function MyUserID() {
@@ -210,10 +206,10 @@ export function SyncChannel(arg1) {
   return window['go']['main']['App']['SyncChannel'](arg1);
 }
 
-export function UnlockOrCreateVault(arg1) {
-  return window['go']['main']['App']['UnlockOrCreateVault'](arg1);
-}
-
 export function UploadToDriveFS(arg1, arg2, arg3) {
   return window['go']['main']['App']['UploadToDriveFS'](arg1, arg2, arg3);
+}
+
+export function UseEncryptionPassword(arg1) {
+  return window['go']['main']['App']['UseEncryptionPassword'](arg1);
 }

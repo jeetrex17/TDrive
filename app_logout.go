@@ -26,6 +26,8 @@ import (
 // instead of tearing them down mid-process while goroutines may still be
 // touching backend.DB.
 func (a *App) Logout(mode string) error {
+	clearMasterKey()
+
 	m := auth.LogoutMode(mode)
 	if mode == "" {
 		// Empty arg defaults to the safer choice: a no-arg call shouldn't

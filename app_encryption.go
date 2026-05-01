@@ -14,23 +14,21 @@ import (
 	"TDrive/backend/projection"
 )
 
-// EncryptionStatus is the snapshot the frontend uses for the upload-time
-// "encrypt these files?" prompt. There is no drive-wide "enabled" mode —
-// encryption is a per-upload choice. The vault either exists (because
-// the user once set a password) or it doesn't.
+// EncryptionStatus is the snapshot the frontend uses for per-upload
+// encryption prompts. There is no drive-wide encrypted mode: the user
+// chooses whether each upload batch should be encrypted.
 type EncryptionStatus struct {
-	Available   bool `json:"available"`    // a personal channel is known
-	VaultExists bool `json:"vault_exists"` // the user has set a password
-	Unlocked    bool `json:"unlocked"`     // master key is in process memory
+	Available          bool `json:"available"`           // a personal channel is known
+	PasswordSet        bool `json:"password_set"`        // user has created an encryption password
+	PasswordRemembered bool `json:"password_remembered"` // master key is in process memory
 }
 
-// ErrEncryptionLocked is returned by upload/download/preview paths when
-// they need the master key but it isn't loaded. The frontend converts
-// this into an unlock prompt.
-var ErrEncryptionLocked = errors.New("encryption: locked")
+// ErrEncryptionPasswordRequired is returned by upload/download/preview
+// paths when they need the master key but it is not loaded into memory.
+var ErrEncryptionPasswordRequired = errors.New("encryption password required")
 
 // personalMasterKey holds the unwrapped master key for the active session.
-// Cleared on logout, on Lock(), and on app restart (the binary just exits).
+// Cleared on logout and on app restart (the binary just exits).
 var personalMasterKey atomic.Pointer[[]byte]
 
 func loadedMasterKey() ([]byte, bool) {
@@ -58,8 +56,9 @@ func personalChannelID() int64 {
 	return id
 }
 
-// EncryptionStatus reports whether the user has ever set a password on
-// this device, and whether the master key is currently in memory.
+// EncryptionStatus reports whether the user has set an encryption
+// password, and whether that password has already been accepted for the
+// current app session.
 func (a *App) EncryptionStatus() (EncryptionStatus, error) {
 	if backend.DB == nil {
 		return EncryptionStatus{}, fmt.Errorf("db not ready")
@@ -73,25 +72,20 @@ func (a *App) EncryptionStatus() (EncryptionStatus, error) {
 	if err != nil && !errors.Is(err, projection.ErrEncryptionConfigNotFound) {
 		return EncryptionStatus{}, err
 	}
-	_, unlocked := loadedMasterKey()
+	_, remembered := loadedMasterKey()
 	return EncryptionStatus{
-		Available:   true,
-		VaultExists: exists,
-		Unlocked:    exists && unlocked,
+		Available:          true,
+		PasswordSet:        exists,
+		PasswordRemembered: exists && remembered,
 	}, nil
 }
 
-// UnlockOrCreateVault is the single password method the frontend calls.
-// If no vault exists for the personal drive, this creates one with the
-// supplied password. If a vault already exists, this verifies the
-// password and loads the master key into memory. Either way, the
-// session ends up unlocked on success.
-//
-// Folding setup and unlock into one call means the frontend doesn't
-// need to know — and doesn't need to ask the backend — whether this is
-// the user's first encrypted upload. The upload flow asks for a
-// password and the backend figures out the rest.
-func (a *App) UnlockOrCreateVault(password string) error {
+// UseEncryptionPassword is the single password method the frontend calls.
+// If the user has not created an encryption password yet, this creates
+// the master key and stores it wrapped by the supplied password. If the
+// password already exists, this verifies it and keeps the master key in
+// memory for the rest of the app session.
+func (a *App) UseEncryptionPassword(password string) error {
 	if backend.DB == nil {
 		return fmt.Errorf("db not ready")
 	}
@@ -108,12 +102,12 @@ func (a *App) UnlockOrCreateVault(password string) error {
 		return err
 	}
 	if errors.Is(err, projection.ErrEncryptionConfigNotFound) {
-		return createVault(channelID, password)
+		return createEncryptionPassword(channelID, password)
 	}
-	return unlockExistingVault(existing, password)
+	return rememberEncryptionPassword(existing, password)
 }
 
-func createVault(channelID int64, password string) error {
+func createEncryptionPassword(channelID int64, password string) error {
 	params := crypto.DefaultParams()
 	salt, err := crypto.NewSalt(params)
 	if err != nil {
@@ -152,7 +146,7 @@ func createVault(channelID int64, password string) error {
 	return nil
 }
 
-func unlockExistingVault(cfg projection.EncryptionConfig, password string) error {
+func rememberEncryptionPassword(cfg projection.EncryptionConfig, password string) error {
 	params, err := crypto.UnmarshalParams(cfg.KDFParamsJSON)
 	if err != nil {
 		return err
@@ -172,22 +166,14 @@ func unlockExistingVault(cfg projection.EncryptionConfig, password string) error
 	return nil
 }
 
-// LockEncryption clears the in-memory master key. Bound for parity with
-// the logout cleanup path; not surfaced in the UI in v1.
-func (a *App) LockEncryption() error {
-	clearMasterKey()
-	return nil
-}
-
 // masterKeyForUpload returns the loaded master key when the caller has
 // opted in to encryption for this batch. Encryption is a per-upload
 // choice now — no drive-wide gate. When wantEncrypted is false the
 // caller wants plaintext; we return a nil key and no error.
 //
-// Returns ErrEncryptionLocked if the user asked to encrypt but the
-// session isn't unlocked. The frontend handles the prompt before
-// calling, so this is a defensive check for a race where the key was
-// cleared between the prompt and the upload.
+// Returns ErrEncryptionPasswordRequired if the user asked to encrypt but
+// the password has not been accepted for this app session. The frontend
+// handles the prompt before calling, so this is a defensive race check.
 func masterKeyForUpload(channelID int64, wantEncrypted bool) ([]byte, error) {
 	if !wantEncrypted {
 		return nil, nil
@@ -198,7 +184,7 @@ func masterKeyForUpload(channelID int64, wantEncrypted bool) ([]byte, error) {
 	if k, ok := loadedMasterKey(); ok {
 		return k, nil
 	}
-	return nil, ErrEncryptionLocked
+	return nil, ErrEncryptionPasswordRequired
 }
 
 // writeCiphertextTemp encrypts the contents of plain into a fresh temp
@@ -233,5 +219,5 @@ func requireMasterKeyForFile(encrypted bool) (key []byte, err error) {
 	if k, ok := loadedMasterKey(); ok {
 		return k, nil
 	}
-	return nil, ErrEncryptionLocked
+	return nil, ErrEncryptionPasswordRequired
 }

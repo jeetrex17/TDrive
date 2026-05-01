@@ -11,7 +11,7 @@ import { notify } from './notifications.js';
 import { loadEncryptionStatus } from './encryption.js';
 import { openUploadOptionsModal } from './modals/upload-options.js';
 import { openEncryptionSetupModal } from './modals/encryption-setup.js';
-import { openEncryptionUnlockModal } from './modals/encryption-unlock.js';
+import { openEncryptionPasswordModal } from './modals/encryption-password.js';
 import {
     pushTransferStart,
     updateTransferProgress,
@@ -71,11 +71,11 @@ async function startNextDownload() {
 
     try {
         let result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
-        // If the backend signals the master key is missing, prompt the
-        // user once and retry. Avoids needing a per-file encrypted-vs-
-        // plaintext check on the frontend before download starts.
-        if (result.status === "error" && /encryption.*locked/i.test(result.message || "")) {
-            const ok = await openEncryptionUnlockModal();
+        // If the backend needs the encryption password, prompt once and
+        // retry. This avoids a separate per-file encryption lookup before
+        // download starts.
+        if (result.status === "error" && /encryption password required/i.test(result.message || "")) {
+            const ok = await openEncryptionPasswordModal();
             if (ok) {
                 result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
             }
@@ -249,9 +249,9 @@ export async function uploadWithParentID(parentID) {
         if (!choice) return;
         encrypt = !!choice.encrypt;
 
-        if (encrypt && !state.encryption.unlocked) {
-            const ok = state.encryption.vaultExists
-                ? await openEncryptionUnlockModal()
+        if (encrypt && !state.encryption.passwordRemembered) {
+            const ok = state.encryption.passwordSet
+                ? await openEncryptionPasswordModal()
                 : await openEncryptionSetupModal();
             if (!ok) return;
         }

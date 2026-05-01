@@ -298,9 +298,9 @@ async function resolveFullPreviewEntry(target) {
     try {
         payload = await PreviewFile(msgID);
     } catch (err) {
-        if (/encryption.*locked/i.test(String(err))) {
-            const { openEncryptionUnlockModal } = await import('./encryption-unlock.js');
-            const ok = await openEncryptionUnlockModal();
+        if (/encryption password required/i.test(String(err))) {
+            const { openEncryptionPasswordModal } = await import('./encryption-password.js');
+            const ok = await openEncryptionPasswordModal();
             if (!ok) throw err;
             payload = await PreviewFile(msgID);
         } else {

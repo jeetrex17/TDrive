@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// EncryptionConfig is the per-channel vault metadata. v1 uses it for the
-// personal channel only.
+// EncryptionConfig is the per-channel encryption password metadata. v1
+// uses it for the personal channel only.
 type EncryptionConfig struct {
 	ChannelID        int64
 	Enabled          bool
@@ -40,7 +40,8 @@ func GetEncryptionConfig(db *sql.DB, channelID int64) (EncryptionConfig, error) 
 }
 
 // PutEncryptionConfig writes (inserts or replaces) the config for a
-// channel. Used during EnableEncryption and, later, password change.
+// channel. Used when the user first creates an encryption password and,
+// later, password change.
 func PutEncryptionConfig(db *sql.DB, c EncryptionConfig) error {
 	if c.ChannelID == 0 {
 		return fmt.Errorf("projection: encryption config requires channel id")

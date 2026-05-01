@@ -1,23 +1,19 @@
-// Unlock modal — used both proactively (user clicks the locked pill)
-// and reactively (an upload/download/preview tried while locked).
-//
-// openEncryptionUnlockModal returns a Promise that resolves to true on
-// successful unlock and false on cancel. Callers chain off this so the
-// triggering action can resume after the modal closes.
+// Password prompt for encrypted uploads, downloads, and previews.
+// On success the backend remembers the decrypted master key in memory
+// until the app exits, so users do not re-enter the password per file.
 
-import { UnlockOrCreateVault } from '../../../wailsjs/go/main/App';
+import { UseEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { loadEncryptionStatus } from '../encryption.js';
-import { notify } from '../notifications.js';
 
 let pending = null;
 
-export function setupEncryptionUnlockModal() {
-    const modal = document.getElementById('encryption-unlock-modal');
+export function setupEncryptionPasswordModal() {
+    const modal = document.getElementById('encryption-password-modal');
     if (!modal) return;
-    const cancel = modal.querySelector('#encryption-unlock-cancel');
-    const confirm = modal.querySelector('#encryption-unlock-confirm');
-    const pwd = modal.querySelector('#encryption-unlock-password');
-    const errEl = modal.querySelector('#encryption-unlock-error');
+    const cancel = modal.querySelector('#encryption-password-cancel');
+    const confirm = modal.querySelector('#encryption-password-confirm');
+    const pwd = modal.querySelector('#encryption-password-input');
+    const errEl = modal.querySelector('#encryption-password-error');
 
     const finish = (ok) => {
         modal.style.display = 'none';
@@ -41,13 +37,13 @@ export function setupEncryptionUnlockModal() {
     confirm.addEventListener('click', async () => {
         const value = String(pwd?.value || '');
         if (!value) {
-            showError('Enter your password.');
+            showError('Enter your encryption password.');
             return;
         }
         confirm.disabled = true;
         cancel.disabled = true;
         try {
-            await UnlockOrCreateVault(value);
+            await UseEncryptionPassword(value);
             await loadEncryptionStatus();
             finish(true);
         } catch (err) {
@@ -65,19 +61,18 @@ export function setupEncryptionUnlockModal() {
     }
 }
 
-export function openEncryptionUnlockModal() {
-    const modal = document.getElementById('encryption-unlock-modal');
+export function openEncryptionPasswordModal() {
+    const modal = document.getElementById('encryption-password-modal');
     if (!modal) return Promise.resolve(false);
     return new Promise((resolve) => {
         if (pending) {
-            // Don't stack prompts; bind the new caller to the open one.
             const prev = pending;
             pending = (ok) => { prev(ok); resolve(ok); };
             return;
         }
         pending = resolve;
         modal.style.display = 'flex';
-        const pwd = modal.querySelector('#encryption-unlock-password');
+        const pwd = modal.querySelector('#encryption-password-input');
         setTimeout(() => pwd?.focus(), 0);
     });
 }

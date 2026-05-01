@@ -59,19 +59,17 @@ export function ListJoinRequests(arg1:number):Promise<Array<main.JoinRequestInfo
 
 export function ListPendingJoins():Promise<Array<main.PendingJoinInfo>>;
 
-export function LockEncryption():Promise<void>;
-
 export function LoginPhoneNumber(arg1:string):Promise<void>;
 
 export function Logout(arg1:string):Promise<void>;
+
+export function Me():Promise<main.SelfUser>;
 
 export function MoveFile(arg1:number,arg2:string):Promise<string>;
 
 export function MoveFolder(arg1:string,arg2:string):Promise<string>;
 
 export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:string):Promise<string>;
-
-export function Me():Promise<main.SelfUser>;
 
 export function MyUserID():Promise<number>;
 
@@ -107,6 +105,6 @@ export function SumbitPassword(arg1:string):Promise<void>;
 
 export function SyncChannel(arg1:number):Promise<void>;
 
-export function UnlockOrCreateVault(arg1:string):Promise<void>;
-
 export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<Array<backend.FileMetaData>>;
+
+export function UseEncryptionPassword(arg1:string):Promise<void>;

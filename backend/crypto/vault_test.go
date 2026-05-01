@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestVaultRoundTrip(t *testing.T) {
+func TestKeyWrapRoundTrip(t *testing.T) {
 	password := []byte("correct horse battery staple")
 	params := DefaultParams()
 	salt, err := NewSalt(params)

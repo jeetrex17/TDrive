@@ -6,6 +6,7 @@ import { clearSelection } from '../selection.js';
 import { ensureNotInsideDeletedFolder } from '../navigation.js';
 import { deleteFolder } from '../file-list.js';
 import { notify, dismissNotification } from '../notifications.js';
+import { openEncryptionPasswordModal } from './encryption-password.js';
 
 function successTitle(item) {
     const name = String(item?.name || '').trim();
@@ -17,6 +18,16 @@ function failureTitle(item) {
     const name = String(item?.name || '').trim();
     if (!name) return item?.type === 'folder' ? 'Could not delete folder' : 'Could not delete file';
     return item?.type === 'folder' ? `Could not delete folder "${name}"` : `Could not delete "${name}"`;
+}
+
+async function deleteFileWithPasswordRetry(id) {
+    let res = await DeleteFile(Number(id));
+    if (typeof res === "string" && res.startsWith("Error") && /encryption password required/i.test(res)) {
+        const ok = await openEncryptionPasswordModal();
+        if (!ok) return "Error: Encryption password required";
+        res = await DeleteFile(Number(id));
+    }
+    return res;
 }
 
 export function openDeleteModal(target) {
@@ -132,7 +143,7 @@ export function setupDeleteModal() {
 
                 for (const file of files) {
                     try {
-                        const res = await DeleteFile(Number(file.id));
+                        const res = await deleteFileWithPasswordRetry(file.id);
                         if (typeof res === "string" && res.startsWith("Error")) {
                             failures.push({ item: file, error: res.replace(/^Error:?\s*/i, '') });
                             continue;
@@ -163,7 +174,7 @@ export function setupDeleteModal() {
             } else {
                 const res = target.type === "folder"
                     ? await deleteFolder(String(target.id))
-                    : await DeleteFile(Number(target.id));
+                    : await deleteFileWithPasswordRetry(target.id);
 
                 dismissNotification(progressId);
                 if (typeof res === "string" && res.startsWith("Error")) {

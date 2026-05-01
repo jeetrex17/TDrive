@@ -1,7 +1,8 @@
-// Package crypto implements the personal-drive vault: password-derived
-// key wrapping and authenticated streaming file encryption.
+// Package crypto implements password-derived key wrapping and
+// authenticated streaming file encryption for personal-drive encrypted
+// uploads.
 //
-// Threat model
+// # Threat model
 //
 // We treat the Telegram channel and any local Telegram cache as untrusted
 // public storage. The user's password never leaves the device. We never
@@ -23,8 +24,8 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
-// Params controls the Argon2id cost. Stored as JSON in the vault row so we
-// can dial the cost upward in future versions without breaking old vaults.
+// Params controls the Argon2id cost. Stored as JSON so we can dial the
+// cost upward in future versions without breaking existing encrypted files.
 type Params struct {
 	Memory      uint32 `json:"memory"`      // KiB
 	Time        uint32 `json:"time"`        // iterations
@@ -34,8 +35,9 @@ type Params struct {
 }
 
 // DefaultParams targets ~250 ms on a modern laptop and 64 MiB RAM. Tuned
-// down from "interactive" libsodium presets so unlock is responsive on
-// low-end machines too. Keys are 32 bytes for XChaCha20-Poly1305.
+// down from "interactive" libsodium presets so password entry is
+// responsive on low-end machines too. Keys are 32 bytes for
+// XChaCha20-Poly1305.
 func DefaultParams() Params {
 	return Params{
 		Memory:      64 * 1024,
@@ -50,13 +52,14 @@ const (
 	masterKeyLen = 32
 )
 
-// keyCheckPlaintext is decrypted on every unlock. Anything fixed and
-// nonempty works; the bytes themselves never need to be secret.
+// keyCheckPlaintext is decrypted whenever the password is entered.
+// Anything fixed and nonempty works; the bytes themselves never need to
+// be secret.
 var keyCheckPlaintext = []byte("tdrive-key-check-v1")
 
 var (
-	ErrWrongPassword = errors.New("crypto: wrong password")
-	ErrCorruptVault  = errors.New("crypto: corrupt vault data")
+	ErrWrongPassword  = errors.New("crypto: wrong password")
+	ErrCorruptKeyData = errors.New("crypto: corrupt encryption key data")
 )
 
 // DeriveKEK runs Argon2id against the password+salt with the supplied
@@ -129,7 +132,7 @@ func UnwrapMasterKey(wrapped, kek []byte) ([]byte, error) {
 		return nil, err
 	}
 	if len(wrapped) < aead.NonceSize()+aead.Overhead() {
-		return nil, ErrCorruptVault
+		return nil, ErrCorruptKeyData
 	}
 	nonce := wrapped[:aead.NonceSize()]
 	ct := wrapped[aead.NonceSize():]
@@ -138,7 +141,7 @@ func UnwrapMasterKey(wrapped, kek []byte) ([]byte, error) {
 		return nil, ErrWrongPassword
 	}
 	if len(master) != masterKeyLen {
-		return nil, ErrCorruptVault
+		return nil, ErrCorruptKeyData
 	}
 	return master, nil
 }
@@ -169,7 +172,7 @@ func VerifyKeyCheck(master, blob []byte) error {
 		return err
 	}
 	if len(blob) < aead.NonceSize()+aead.Overhead() {
-		return ErrCorruptVault
+		return ErrCorruptKeyData
 	}
 	nonce := blob[:aead.NonceSize()]
 	ct := blob[aead.NonceSize():]
@@ -178,7 +181,7 @@ func VerifyKeyCheck(master, blob []byte) error {
 		return ErrWrongPassword
 	}
 	if string(pt) != string(keyCheckPlaintext) {
-		return ErrCorruptVault
+		return ErrCorruptKeyData
 	}
 	return nil
 }

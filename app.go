@@ -177,12 +177,12 @@ type PreviewPayload struct {
 const maxPreviewPayloadBytes int64 = 10 * 1024 * 1024
 
 var (
-	errPreviewNotFound         = errors.New("File not found")
-	errPreviewNotSupported     = errors.New("Not a supported image")
-	errPreviewTooLarge         = errors.New("File too large")
-	errPreviewDownloadFailed   = errors.New("Download failed")
-	errPreviewThumbMissing     = errors.New("Preview thumbnail unavailable")
-	errPreviewEncryptionLocked = errors.New("encryption: locked")
+	errPreviewNotFound                   = errors.New("File not found")
+	errPreviewNotSupported               = errors.New("Not a supported image")
+	errPreviewTooLarge                   = errors.New("File too large")
+	errPreviewDownloadFailed             = errors.New("Download failed")
+	errPreviewThumbMissing               = errors.New("Preview thumbnail unavailable")
+	errPreviewEncryptionPasswordRequired = errors.New("encryption password required")
 )
 
 var previewMimeTypes = map[string]string{
@@ -395,8 +395,8 @@ func normalizePreviewError(err error) error {
 		return errPreviewNotSupported
 	case errors.Is(err, errPreviewTooLarge):
 		return errPreviewTooLarge
-	case errors.Is(err, errPreviewEncryptionLocked), errors.Is(err, ErrEncryptionLocked):
-		return errPreviewEncryptionLocked
+	case errors.Is(err, errPreviewEncryptionPasswordRequired), errors.Is(err, ErrEncryptionPasswordRequired):
+		return errPreviewEncryptionPasswordRequired
 	default:
 		return errPreviewDownloadFailed
 	}
@@ -568,9 +568,9 @@ func (pr *ProgressReader) Read(p []byte) (int, error) {
 
 // UploadToDriveFS uploads each chosen file to the active drive. The
 // `encrypt` flag is a per-batch choice made in the upload-options modal:
-// true means encrypt-and-upload (master key must already be loaded into
-// the session by an unlock prompt before this call), false means plain
-// upload regardless of vault state.
+// true means encrypt-and-upload (the encryption password must already
+// be remembered for this app session before this call), false means plain
+// upload regardless of encryption password state.
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) ([]backend.FileMetaData, error) {
 	if len(filePaths) != len(parentIDs) {
 		return nil, fmt.Errorf("filepaths and parentIDs length mismatch")
@@ -1280,6 +1280,24 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 			}
 		}
 
+		// Decide ahead of time whether to decrypt. The per-file flag in
+		// the projection is the source of truth — channel-wide enable
+		// alone isn't enough because mixed plaintext+ciphertext history
+		// is a normal state. Done BEFORE the save dialog so a missing
+		// password doesn't make the user pick a save location twice.
+		encrypted := false
+		if backend.DB != nil {
+			enc, _, _, err := projection.FileEncryptionMeta(backend.DB, channelid, int64(lookupID))
+			if err == nil {
+				encrypted = enc
+			}
+		}
+		masterKey, err := requireMasterKeyForFile(encrypted)
+		if err != nil {
+			downloadResult = DownloadResult{Status: "error", Message: ErrEncryptionPasswordRequired.Error()}
+			return nil
+		}
+
 		savePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 			DefaultFilename: originalName,
 			Title:           "Save File As...",
@@ -1296,23 +1314,6 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 		}
 
 		d := downloader.NewDownloader()
-
-		// Decide ahead of time whether to decrypt. The per-file flag in
-		// the projection is the source of truth — channel-wide enable
-		// alone isn't enough because mixed plaintext+ciphertext history
-		// is a normal state.
-		encrypted := false
-		if backend.DB != nil {
-			enc, _, _, err := projection.FileEncryptionMeta(backend.DB, channelid, int64(lookupID))
-			if err == nil {
-				encrypted = enc
-			}
-		}
-		masterKey, err := requireMasterKeyForFile(encrypted)
-		if err != nil {
-			downloadResult = DownloadResult{Status: "error", Message: ErrEncryptionLocked.Error()}
-			return nil
-		}
 
 		f, err := os.Create(savePath)
 		if err != nil {
@@ -1395,6 +1396,12 @@ func (a *App) DeleteFile(msgID int) string {
 
 	if !projection.FileExists(backend.DB, channelid, int64(msgID)) {
 		return "Error: File not found"
+	}
+
+	if encrypted, _, _, err := projection.FileEncryptionMeta(backend.DB, channelid, int64(msgID)); err == nil {
+		if _, err := requireMasterKeyForFile(encrypted); err != nil {
+			return "Error: " + ErrEncryptionPasswordRequired.Error()
+		}
 	}
 
 	// Step 4 safety gate: in a shared drive, only the uploader may tomb a
