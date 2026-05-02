@@ -71,9 +71,7 @@ function driveRow(c, isShared) {
     row.title = c.title;
     row.innerHTML = `
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            ${isShared
-                ? '<path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5H10l2 2h6.5A2.5 2.5 0 0121 9.5v6A2.5 2.5 0 0118.5 18h-13A2.5 2.5 0 013 15.5v-8z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.5 14.5a2.5 2.5 0 015 0"/><circle cx="11" cy="11" r="1.5"/>'
-                : '<path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>'}
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
         </svg>
         <span class="drive-item-title"></span>
     `;
