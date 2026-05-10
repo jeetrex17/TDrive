@@ -1,5 +1,7 @@
 # TDrive
 
+![GitHub Downloads](https://img.shields.io/github/downloads/jeetrex17/TDrive/total)
+
 TDrive is my first Golang project. It uses Telegram as the storage layer: files are posted into Telegram channels/groups, and the app gives you a drive-like UI on top.
 
 This project is for **educational purposes only**. I’m not trying to harm Telegram, abuse their services, or bypass anything, it’s just a learning project to understand Go + Wails + Telegram APIs.
@@ -76,6 +78,17 @@ wails dev
 ```bash
 wails build
 ```
+
+## Release download counts
+
+The README badge shows total GitHub release asset downloads. For a detailed per-release/per-OS breakdown:
+
+```bash
+./scripts/release-downloads.sh
+./scripts/release-downloads.sh v1.0.0
+```
+
+This uses GitHub's release asset download counts through the `gh` CLI. It does not track active users.
 
 ## macOS Installation Note
 
