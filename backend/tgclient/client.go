@@ -71,6 +71,23 @@ type SendFileResult struct {
 	MsgID int64
 }
 
+type InviteInfo struct {
+	AlreadyJoined bool
+	RequestNeeded bool
+	Title         string
+	ChannelID     int64
+	AccessHash    int64
+}
+
+type JoinRequest struct {
+	UserID      int64
+	AccessHash  int64
+	DisplayName string
+	Username    string
+	RequestedAt int64
+	About       string
+}
+
 // Client is the surface sync, backfill, and local-action paths use to talk
 // to Telegram. Both the real (gotd-backed) and fake test implementations
 // implement this.
@@ -98,4 +115,15 @@ type Client interface {
 	// DeleteMessages removes file bodies from the channel. Used by tomb
 	// follow-up and folder hard-delete. Best effort.
 	DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int64) error
+
+	CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error)
+	ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error)
+	CheckInvite(ctx context.Context, hash string) (InviteInfo, error)
+	RequestJoin(ctx context.Context, hash string) error
+	JoinByInvite(ctx context.Context, hash string) (InputPeer, error)
+	LookupChannelTitle(ctx context.Context, peer InputPeer) (string, error)
+	ListJoinRequests(ctx context.Context, peer InputPeer) ([]JoinRequest, error)
+	HideJoinRequest(ctx context.Context, peer InputPeer, userID, accessHash int64, approved bool) error
+	ResolveDriveChannel(ctx context.Context, channelID int64) (InputPeer, error)
+	LeaveChannel(ctx context.Context, peer InputPeer) error
 }

@@ -18,14 +18,22 @@ import (
 type Fake struct {
 	mu sync.Mutex
 
-	self         int64
-	nextMsgID    int64
-	history      []HistoryMessage // ordered by msg_id ascending
-	sentControls []SentControl
-	sentFiles    []SentFile
-	deletedBatch [][]int64
-	floodWait    int // counter; pre-injects ErrFloodWait this many times before succeeding
-	failNextSend bool
+	self          int64
+	nextMsgID     int64
+	nextChannelID int64
+	history       []HistoryMessage // ordered by msg_id ascending
+	sentControls  []SentControl
+	sentFiles     []SentFile
+	deletedBatch  [][]int64
+	floodWait     int // counter; pre-injects ErrFloodWait this many times before succeeding
+	failNextSend  bool
+
+	channels       map[int64]fakeChannel
+	invites        map[string]InviteInfo
+	joinRequests   map[int64][]JoinRequest
+	requestedJoins []string
+	hiddenRequests []HiddenJoinRequest
+	leftChannels   []InputPeer
 }
 
 type SentControl struct {
@@ -43,14 +51,30 @@ type SentFile struct {
 	MsgID   int64
 }
 
+type HiddenJoinRequest struct {
+	Peer     InputPeer
+	UserID   int64
+	Approved bool
+}
+
+type fakeChannel struct {
+	Peer  InputPeer
+	Title string
+	About string
+}
+
 var (
 	ErrInjectedSend = errors.New("tgclient.Fake: injected send failure")
 )
 
 func NewFake(selfID int64) *Fake {
 	return &Fake{
-		self:      selfID,
-		nextMsgID: 100,
+		self:          selfID,
+		nextMsgID:     100,
+		nextChannelID: 10000,
+		channels:      make(map[int64]fakeChannel),
+		invites:       make(map[string]InviteInfo),
+		joinRequests:  make(map[int64][]JoinRequest),
 	}
 }
 
@@ -116,6 +140,62 @@ func (f *Fake) DeletedBatches() [][]int64 {
 		out[i] = c
 	}
 	return out
+}
+
+func (f *Fake) RequestedJoins() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.requestedJoins))
+	copy(out, f.requestedJoins)
+	return out
+}
+
+func (f *Fake) HiddenJoinRequests() []HiddenJoinRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]HiddenJoinRequest, len(f.hiddenRequests))
+	copy(out, f.hiddenRequests)
+	return out
+}
+
+func (f *Fake) LeftChannels() []InputPeer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]InputPeer, len(f.leftChannels))
+	copy(out, f.leftChannels)
+	return out
+}
+
+func (f *Fake) SeedChannel(peer InputPeer, title string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channels[peer.ChannelID] = fakeChannel{Peer: peer, Title: title}
+	if peer.ChannelID >= f.nextChannelID {
+		f.nextChannelID = peer.ChannelID + 1
+	}
+}
+
+func (f *Fake) SeedInvite(hash string, info InviteInfo) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.invites[hash] = info
+	if info.ChannelID != 0 {
+		f.channels[info.ChannelID] = fakeChannel{
+			Peer:  InputPeer{ChannelID: info.ChannelID, AccessHash: info.AccessHash},
+			Title: info.Title,
+		}
+		if info.ChannelID >= f.nextChannelID {
+			f.nextChannelID = info.ChannelID + 1
+		}
+	}
+}
+
+func (f *Fake) SeedJoinRequests(channelID int64, reqs ...JoinRequest) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := make([]JoinRequest, len(reqs))
+	copy(cp, reqs)
+	f.joinRequests[channelID] = cp
 }
 
 // EditLastControlText simulates a member editing a TDX1 caption from the
@@ -269,5 +349,117 @@ func (f *Fake) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 		kept = append(kept, m)
 	}
 	f.history = kept
+	return nil
+}
+
+func (f *Fake) CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := f.nextChannelID
+	f.nextChannelID++
+	peer := InputPeer{ChannelID: id, AccessHash: id + 1000}
+	f.channels[id] = fakeChannel{Peer: peer, Title: title, About: about}
+	return peer, nil
+}
+
+func (f *Fake) ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	hash := fmt.Sprintf("fake-%d", peer.ChannelID)
+	if requestNeeded {
+		hash = fmt.Sprintf("approval-%d", peer.ChannelID)
+	}
+	ch := f.channels[peer.ChannelID]
+	f.invites[hash] = InviteInfo{
+		RequestNeeded: requestNeeded,
+		Title:         ch.Title,
+		ChannelID:     peer.ChannelID,
+		AccessHash:    peer.AccessHash,
+	}
+	return "https://t.me/+" + hash, nil
+}
+
+func (f *Fake) CheckInvite(ctx context.Context, hash string) (InviteInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	info, ok := f.invites[hash]
+	if !ok {
+		return InviteInfo{}, fmt.Errorf("tgclient.Fake: invite %q not found", hash)
+	}
+	return info, nil
+}
+
+func (f *Fake) RequestJoin(ctx context.Context, hash string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requestedJoins = append(f.requestedJoins, hash)
+	return nil
+}
+
+func (f *Fake) JoinByInvite(ctx context.Context, hash string) (InputPeer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	info, ok := f.invites[hash]
+	if !ok {
+		return InputPeer{}, fmt.Errorf("tgclient.Fake: invite %q not found", hash)
+	}
+	if info.ChannelID == 0 {
+		return InputPeer{}, fmt.Errorf("tgclient.Fake: invite %q has no channel", hash)
+	}
+	peer := InputPeer{ChannelID: info.ChannelID, AccessHash: info.AccessHash}
+	f.channels[peer.ChannelID] = fakeChannel{Peer: peer, Title: info.Title}
+	return peer, nil
+}
+
+func (f *Fake) LookupChannelTitle(ctx context.Context, peer InputPeer) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch, ok := f.channels[peer.ChannelID]
+	if !ok {
+		return "", nil
+	}
+	return ch.Title, nil
+}
+
+func (f *Fake) ListJoinRequests(ctx context.Context, peer InputPeer) ([]JoinRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	reqs := f.joinRequests[peer.ChannelID]
+	out := make([]JoinRequest, len(reqs))
+	copy(out, reqs)
+	return out, nil
+}
+
+func (f *Fake) HideJoinRequest(ctx context.Context, peer InputPeer, userID, accessHash int64, approved bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hiddenRequests = append(f.hiddenRequests, HiddenJoinRequest{Peer: peer, UserID: userID, Approved: approved})
+	reqs := f.joinRequests[peer.ChannelID]
+	kept := reqs[:0]
+	for _, r := range reqs {
+		if r.UserID == userID {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	f.joinRequests[peer.ChannelID] = kept
+	return nil
+}
+
+func (f *Fake) ResolveDriveChannel(ctx context.Context, channelID int64) (InputPeer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch, ok := f.channels[channelID]
+	if !ok {
+		return InputPeer{}, fmt.Errorf("tgclient.Fake: channel %d not found", channelID)
+	}
+	return ch.Peer, nil
+}
+
+func (f *Fake) LeaveChannel(ctx context.Context, peer InputPeer) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.leftChannels = append(f.leftChannels, peer)
+	delete(f.channels, peer.ChannelID)
 	return nil
 }

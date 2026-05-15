@@ -7,6 +7,8 @@ import (
 	"math/rand"
 	"strings"
 
+	"TDrive/backend/auth"
+
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
@@ -32,6 +34,17 @@ func (g *Gotd) run(ctx context.Context, fn func(ctx context.Context, api *tg.Cli
 	}
 	err = client.Run(ctx, func(rctx context.Context) error {
 		return fn(rctx, client.API())
+	})
+	return normalizeError(err)
+}
+
+func (g *Gotd) runClient(ctx context.Context, fn func(ctx context.Context, client *telegram.Client) error) error {
+	client, err := g.connect()
+	if err != nil {
+		return fmt.Errorf("tgclient: connect: %w", err)
+	}
+	err = client.Run(ctx, func(rctx context.Context) error {
+		return fn(rctx, client)
 	})
 	return normalizeError(err)
 }
@@ -205,6 +218,143 @@ func (g *Gotd) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 			ID:      ids,
 		})
 		return err
+	})
+}
+
+func (g *Gotd) CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error) {
+	var peer InputPeer
+	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
+		channelID, accessHash, err := auth.CreateMegagroup(ctx, client, title, about)
+		if err != nil {
+			return err
+		}
+		peer = InputPeer{ChannelID: channelID, AccessHash: accessHash}
+		return nil
+	})
+	return peer, err
+}
+
+func (g *Gotd) ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error) {
+	var link string
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		l, err := auth.ExportInviteLink(ctx, api, toPeer(peer), requestNeeded)
+		if err != nil {
+			return err
+		}
+		link = l
+		return nil
+	})
+	return link, err
+}
+
+func (g *Gotd) CheckInvite(ctx context.Context, hash string) (InviteInfo, error) {
+	var out InviteInfo
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		info, err := auth.CheckInvite(ctx, api, hash)
+		if err != nil {
+			return err
+		}
+		out = InviteInfo{
+			AlreadyJoined: info.AlreadyJoined,
+			RequestNeeded: info.RequestNeeded,
+			Title:         info.Title,
+			ChannelID:     info.ChannelID,
+			AccessHash:    info.AccessHash,
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (g *Gotd) RequestJoin(ctx context.Context, hash string) error {
+	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		return auth.RequestJoin(ctx, api, hash)
+	})
+}
+
+func (g *Gotd) JoinByInvite(ctx context.Context, hash string) (InputPeer, error) {
+	var peer InputPeer
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		channelID, accessHash, err := auth.JoinByInvite(ctx, api, hash)
+		if err != nil {
+			return err
+		}
+		peer = InputPeer{ChannelID: channelID, AccessHash: accessHash}
+		return nil
+	})
+	return peer, err
+}
+
+func (g *Gotd) LookupChannelTitle(ctx context.Context, peer InputPeer) (string, error) {
+	var title string
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		chats, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
+			&tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
+		})
+		if err != nil {
+			return err
+		}
+		if cc, ok := chats.(*tg.MessagesChats); ok {
+			for _, ch := range cc.Chats {
+				if c, ok := ch.(*tg.Channel); ok && c.ID == peer.ChannelID {
+					title = c.Title
+					return nil
+				}
+			}
+		}
+		return nil
+	})
+	return title, err
+}
+
+func (g *Gotd) ListJoinRequests(ctx context.Context, peer InputPeer) ([]JoinRequest, error) {
+	var out []JoinRequest
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		rows, err := auth.ListJoinRequests(ctx, api, toPeer(peer))
+		if err != nil {
+			return err
+		}
+		out = make([]JoinRequest, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, JoinRequest{
+				UserID:      r.UserID,
+				AccessHash:  r.AccessHash,
+				DisplayName: r.DisplayName,
+				Username:    r.Username,
+				RequestedAt: r.RequestedAt,
+				About:       r.About,
+			})
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (g *Gotd) HideJoinRequest(ctx context.Context, peer InputPeer, userID, accessHash int64, approved bool) error {
+	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		return auth.HideJoinRequest(ctx, api, toPeer(peer), userID, accessHash, approved)
+	})
+}
+
+func (g *Gotd) ResolveDriveChannel(ctx context.Context, channelID int64) (InputPeer, error) {
+	var peer InputPeer
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		_, resolved, err := auth.ResolveDriveChannel(ctx, api, channelID)
+		if err != nil {
+			return err
+		}
+		peer = InputPeer{ChannelID: resolved.ChannelID, AccessHash: resolved.AccessHash}
+		return nil
+	})
+	return peer, err
+}
+
+func (g *Gotd) LeaveChannel(ctx context.Context, peer InputPeer) error {
+	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		return auth.LeaveChannel(ctx, api, &tg.InputChannel{
+			ChannelID:  peer.ChannelID,
+			AccessHash: peer.AccessHash,
+		})
 	})
 }
 
