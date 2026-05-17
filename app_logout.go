@@ -26,7 +26,7 @@ import (
 // instead of tearing them down mid-process while goroutines may still be
 // touching backend.DB.
 func (a *App) Logout(mode string) error {
-	clearMasterKey()
+	a.clearEncryptionSession()
 
 	m := auth.LogoutMode(mode)
 	if mode == "" {

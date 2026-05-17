@@ -21,6 +21,7 @@ import (
 	"TDrive/backend/backfill"
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
+	encservice "TDrive/backend/services/encryption"
 	tdsync "TDrive/backend/sync"
 	"TDrive/backend/tgclient"
 
@@ -38,6 +39,7 @@ type App struct {
 	Passch          chan string
 	Client          *telegram.Client
 	tg              tgclient.Client
+	enc             *encservice.Service
 	syncEngine      *tdsync.Engine
 	backfillRunner  *backfill.Runner
 	backfillMu      sync.Mutex
@@ -609,7 +611,7 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, c
 	filename := filepath.Base(filePath)
 	plaintextSize := info.Size()
 
-	masterKey, err := masterKeyForUpload(channelID, wantEncrypted)
+	masterKey, err := a.encryptionService().MasterKeyForUpload(channelID, wantEncrypted)
 	if err != nil {
 		return backend.FileMetaData{}, projection.Op{}, "", err
 	}
@@ -622,7 +624,7 @@ func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, c
 	var uploadSource *os.File = plainFile
 	uploadSize := plaintextSize
 	if encrypted {
-		tempCipher, err := writeCiphertextTemp(plainFile, plaintextSize, masterKey)
+		tempCipher, err := a.encryptionService().WriteCiphertextTemp(plainFile, plaintextSize, masterKey)
 		if err != nil {
 			return backend.FileMetaData{}, projection.Op{}, "", fmt.Errorf("encrypt: %w", err)
 		}
@@ -1088,7 +1090,7 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 		if exceedsPreviewPayloadBudget(plaintextSize) {
 			return errPreviewTooLarge
 		}
-		masterKey, err := requireMasterKeyForFile(encrypted)
+		masterKey, err := a.encryptionService().RequireMasterKeyForFile(encrypted)
 		if err != nil {
 			return err
 		}
@@ -1214,7 +1216,7 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 				encrypted = enc
 			}
 		}
-		masterKey, err := requireMasterKeyForFile(encrypted)
+		masterKey, err := a.encryptionService().RequireMasterKeyForFile(encrypted)
 		if err != nil {
 			downloadResult = DownloadResult{Status: "error", Message: ErrEncryptionPasswordRequired.Error()}
 			return nil
@@ -1321,7 +1323,7 @@ func (a *App) DeleteFile(msgID int) string {
 	}
 
 	if encrypted, _, _, err := projection.FileEncryptionMeta(backend.DB, channelid, int64(msgID)); err == nil {
-		if _, err := requireMasterKeyForFile(encrypted); err != nil {
+		if _, err := a.encryptionService().RequireMasterKeyForFile(encrypted); err != nil {
 			return "Error: " + ErrEncryptionPasswordRequired.Error()
 		}
 	}
@@ -1497,6 +1499,7 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
+	a.enc = a.newEncryptionService()
 	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
 	a.backfillRunner = backfill.NewRunner(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
 	a.backfilling = make(map[int64]bool)
