@@ -22,10 +22,10 @@ import (
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
 	encservice "TDrive/backend/services/encryption"
+	folderservice "TDrive/backend/services/folder"
 	tdsync "TDrive/backend/sync"
 	"TDrive/backend/tgclient"
 
-	"github.com/google/uuid"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
@@ -40,6 +40,7 @@ type App struct {
 	Client          *telegram.Client
 	tg              tgclient.Client
 	enc             *encservice.Service
+	folders         *folderservice.Service
 	syncEngine      *tdsync.Engine
 	backfillRunner  *backfill.Runner
 	backfillMu      sync.Mutex
@@ -734,6 +735,23 @@ func normalizeOpParent(p string) string {
 		return projection.RootParent
 	}
 	return p
+}
+
+func (a *App) newFolderService() *folderservice.Service {
+	return &folderservice.Service{
+		DB: backend.DB,
+		EmitOp: func(channelID int64, op projection.Op) error {
+			_, err := a.emitAndProject(channelID, op)
+			return err
+		},
+	}
+}
+
+func (a *App) folderService() *folderservice.Service {
+	if a.folders == nil {
+		a.folders = a.newFolderService()
+	}
+	return a.folders
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) {
@@ -1431,50 +1449,15 @@ func (a *App) SumbitPassword(password string) {
 }
 
 func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, error) {
-	if backend.DB == nil {
-		return backend.Folder{}, fmt.Errorf("db not ready")
-	}
 	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return backend.Folder{}, fmt.Errorf("no active channel")
-	}
-
-	foldername = strings.TrimSpace(foldername)
-	if foldername == "" {
-		return backend.Folder{}, fmt.Errorf("folder name can't be empty")
-	}
-	parent := normalizeOpParent(parentID)
-	if parent != projection.RootParent {
-		if !projection.IsFolderID(parent) {
-			return backend.Folder{}, fmt.Errorf("invalid parent folder id")
-		}
-		if !projection.FolderExists(backend.DB, channelID, parent) {
-			return backend.Folder{}, fmt.Errorf("parent folder not found")
-		}
-	}
-	taken, err := projection.FolderSiblingHasName(backend.DB, channelID, parent, foldername)
+	folder, err := a.folderService().Create(channelID, foldername, parentID)
 	if err != nil {
 		return backend.Folder{}, err
 	}
-	if taken {
-		return backend.Folder{}, fmt.Errorf("folder '%s' already exists here", foldername)
-	}
-
-	folderID := projection.FolderIDPrefix + uuid.NewString()
-	op := projection.Op{
-		Type:   projection.OpMkdir,
-		Obj:    folderID,
-		Parent: parent,
-		Name:   foldername,
-	}
-	if _, err := a.emitAndProject(channelID, op); err != nil {
-		return backend.Folder{}, fmt.Errorf("create folder failed: %w", err)
-	}
-
 	return backend.Folder{
-		ID:       folderID,
-		Name:     foldername,
-		ParentID: parent,
+		ID:       folder.ID,
+		Name:     folder.Name,
+		ParentID: folder.ParentID,
 	}, nil
 }
 
@@ -1500,6 +1483,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	a.enc = a.newEncryptionService()
+	a.folders = a.newFolderService()
 	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
 	a.backfillRunner = backfill.NewRunner(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
 	a.backfilling = make(map[int64]bool)
@@ -1749,33 +1733,13 @@ func (a *App) GetAllFsMsgIDs() ([]int, error) {
 }
 
 func (a *App) GetFolderSize(folderID string) (int64, error) {
-	if backend.DB == nil {
-		return 0, fmt.Errorf("db not ready")
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return 0, fmt.Errorf("no active channel")
-	}
-	return projection.FolderSize(backend.DB, channelID, folderID)
+	return a.folderService().Size(a.ActiveChannelID(), folderID)
 }
 
 func (a *App) DeleteFolder(folderID string) string {
-	if backend.DB == nil {
-		return "Error: DB not ready"
-	}
-	channelid := a.ActiveChannelID()
-	if channelid == 0 {
-		return "Error: No active channel"
-	}
-	if !projection.IsFolderID(folderID) || !projection.FolderExists(backend.DB, channelid, folderID) {
-		return "Error: Folder not found"
-	}
-
-	op := projection.Op{Type: projection.OpRmdir, Obj: folderID}
-	if _, err := a.emitAndProject(channelid, op); err != nil {
+	if err := a.folderService().Delete(a.ActiveChannelID(), folderID); err != nil {
 		return "Error: " + err.Error()
 	}
-
 	return "Success"
 }
 
@@ -1871,26 +1835,7 @@ func (a *App) RenameFile(msgID int, newName string) string {
 }
 
 func (a *App) RenameFolder(folderID string, newName string) string {
-	if backend.DB == nil {
-		return "Error: DB not ready"
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return "Error: No active channel"
-	}
-	newName = strings.TrimSpace(newName)
-	if newName == "" {
-		return "Error: Invalid name"
-	}
-	if !projection.IsFolderID(folderID) || !projection.FolderExists(backend.DB, channelID, folderID) {
-		return "Error: Folder not found"
-	}
-	op := projection.Op{
-		Type: projection.OpRename,
-		Obj:  folderID,
-		Name: newName,
-	}
-	if _, err := a.emitAndProject(channelID, op); err != nil {
+	if err := a.folderService().Rename(a.ActiveChannelID(), folderID, newName); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
@@ -1932,51 +1877,7 @@ func (a *App) MoveFile(msgID int, newParentID string) string {
 }
 
 func (a *App) MoveFolder(folderID string, newParentID string) string {
-	if backend.DB == nil {
-		return "Error: DB not ready"
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return "Error: No active channel"
-	}
-	if !projection.IsFolderID(folderID) {
-		return "Error: Invalid folder id"
-	}
-	parent := normalizeOpParent(newParentID)
-	if folderID == parent {
-		return "Error: Cannot move folder into its own subfolder"
-	}
-	if !projection.FolderExists(backend.DB, channelID, folderID) {
-		return "Error: Folder not found"
-	}
-	cur, err := projection.FolderParent(backend.DB, channelID, folderID)
-	if err != nil {
-		return "Error: Folder not found"
-	}
-	if cur == parent {
-		return "Error: Folder is already here"
-	}
-	if parent != projection.RootParent {
-		if !projection.IsFolderID(parent) {
-			return "Error: Invalid target folder id"
-		}
-		if !projection.FolderExists(backend.DB, channelID, parent) {
-			return "Error: Target folder not found"
-		}
-		isAnc, err := projection.IsAncestor(backend.DB, channelID, folderID, parent)
-		if err != nil {
-			return "Error: " + err.Error()
-		}
-		if isAnc {
-			return "Error: Cannot move folder into its own subfolder"
-		}
-	}
-	op := projection.Op{
-		Type:   projection.OpMove,
-		Obj:    folderID,
-		Parent: parent,
-	}
-	if _, err := a.emitAndProject(channelID, op); err != nil {
+	if err := a.folderService().Move(a.ActiveChannelID(), folderID, newParentID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
