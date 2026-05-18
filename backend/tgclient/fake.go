@@ -290,12 +290,13 @@ func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 	f.nextMsgID++
 	f.sentFiles = append(f.sentFiles, SentFile{Peer: peer, Name: name, Caption: caption, Size: totalSize, MsgID: id})
 	f.history = append(f.history, HistoryMessage{
-		MsgID:     id,
-		Date:      0,
-		FromID:    f.self,
-		Text:      caption,
-		HasMedia:  true,
-		MediaSize: totalSize,
+		MsgID:        id,
+		Date:         0,
+		FromID:       f.self,
+		Text:         caption,
+		HasMedia:     true,
+		MediaSize:    totalSize,
+		DocumentName: name,
 	})
 	return SendFileResult{MsgID: id}, nil
 }

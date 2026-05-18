@@ -180,23 +180,34 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 				fromID = from.UserID
 			}
 			var (
-				hasMedia  bool
-				mediaSize int64
+				hasMedia           bool
+				mediaSize          int64
+				documentName       string
+				documentAccessHash int64
 			)
 			if media, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
 				hasMedia = true
 				if doc, ok := media.Document.(*tg.Document); ok {
 					mediaSize = doc.Size
+					documentAccessHash = doc.AccessHash
+					for _, attr := range doc.Attributes {
+						if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
+							documentName = fname.FileName
+							break
+						}
+					}
 				}
 			}
 
 			out = append(out, HistoryMessage{
-				MsgID:     int64(fullMsg.ID),
-				Date:      int64(fullMsg.Date),
-				FromID:    fromID,
-				Text:      text,
-				HasMedia:  hasMedia,
-				MediaSize: mediaSize,
+				MsgID:              int64(fullMsg.ID),
+				Date:               int64(fullMsg.Date),
+				FromID:             fromID,
+				Text:               text,
+				HasMedia:           hasMedia,
+				MediaSize:          mediaSize,
+				DocumentName:       documentName,
+				DocumentAccessHash: documentAccessHash,
 			})
 		}
 		return nil

@@ -23,6 +23,7 @@ import (
 	"TDrive/backend/projection"
 	encservice "TDrive/backend/services/encryption"
 	folderservice "TDrive/backend/services/folder"
+	readservice "TDrive/backend/services/read"
 	tdsync "TDrive/backend/sync"
 	"TDrive/backend/tgclient"
 
@@ -41,6 +42,7 @@ type App struct {
 	tg              tgclient.Client
 	enc             *encservice.Service
 	folders         *folderservice.Service
+	reads           *readservice.Service
 	syncEngine      *tdsync.Engine
 	backfillRunner  *backfill.Runner
 	backfillMu      sync.Mutex
@@ -754,6 +756,21 @@ func (a *App) folderService() *folderservice.Service {
 	return a.folders
 }
 
+func (a *App) newReadService() *readservice.Service {
+	return &readservice.Service{
+		DB:    backend.DB,
+		TG:    a.tg,
+		Peers: peerResolverFn(a.resolvePeer),
+	}
+}
+
+func (a *App) readService() *readservice.Service {
+	if a.reads == nil {
+		a.reads = a.newReadService()
+	}
+	return a.reads
+}
+
 func (a *App) LoginPhoneNumber(phoneNumber string) {
 	client, err := auth.Connect()
 	if err != nil {
@@ -814,79 +831,21 @@ func (a *App) InitDrive() string {
 }
 
 func (a *App) GetFileList() []TDriveFile {
-	channelid := a.ActiveChannelID()
-	if channelid == 0 {
-		return nil
-	}
-
-	freshClient, err := auth.Connect()
+	files, err := a.readService().TelegramRootFiles(a.ctx, a.ActiveChannelID())
 	if err != nil {
 		return nil
 	}
-
-	var fileList []TDriveFile
-
-	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		_, peer, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
-		if err != nil {
-			return err
-		}
-
-		req := &tg.MessagesGetHistoryRequest{
-			Peer:  peer,
-			Limit: 100,
-		}
-
-		result, err := freshClient.API().MessagesGetHistory(ctx, req)
-		if err != nil {
-			return err
-		}
-
-		var messages []tg.MessageClass
-		switch r := result.(type) {
-		case *tg.MessagesMessages:
-			messages = r.Messages
-		case *tg.MessagesMessagesSlice:
-			messages = r.Messages
-		case *tg.MessagesChannelMessages:
-			messages = r.Messages
-		}
-
-		for _, msg := range messages {
-			fullMsg, ok := msg.(*tg.Message)
-			if !ok {
-				continue
-			}
-
-			if docMedia, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
-				if doc, ok := docMedia.Document.(*tg.Document); ok {
-
-					filename := "Unknown"
-					for _, attr := range doc.Attributes {
-						if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
-							filename = fname.FileName
-						}
-					}
-
-					newFile := TDriveFile{
-						ID:         fullMsg.ID,
-						Name:       filename,
-						Size:       doc.Size,
-						Date:       fullMsg.Date,
-						AccessHash: doc.AccessHash,
-					}
-
-					fileList = append(fileList, newFile)
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil
+	out := make([]TDriveFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, TDriveFile{
+			ID:         f.ID,
+			Name:       f.Name,
+			Size:       f.Size,
+			AccessHash: f.AccessHash,
+			Date:       f.Date,
+		})
 	}
-
-	return fileList
+	return out
 }
 
 type ProgressWriter struct {
@@ -1393,14 +1352,7 @@ func (a *App) DeleteFile(msgID int) string {
 }
 
 func (a *App) GetStorageUsed() (int64, error) {
-	if backend.DB == nil {
-		return 0, fmt.Errorf("db not ready")
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return 0, nil
-	}
-	return projection.StorageUsed(backend.DB, channelID)
+	return a.readService().StorageUsed(a.ActiveChannelID())
 }
 
 func (a *App) GetCodech() chan string {
@@ -1484,6 +1436,7 @@ func (a *App) startup(ctx context.Context) {
 
 	a.enc = a.newEncryptionService()
 	a.folders = a.newFolderService()
+	a.reads = a.newReadService()
 	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
 	a.backfillRunner = backfill.NewRunner(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
 	a.backfilling = make(map[int64]bool)
@@ -1560,31 +1513,23 @@ func (a *App) RebuildProjection(channelID int64) error {
 }
 
 func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
-	if backend.DB == nil {
-		return backend.FileSystem{}, fmt.Errorf("db not ready")
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return backend.FileSystem{Folders: []backend.Folder{}, Files: []backend.FileMetaData{}}, nil
-	}
-
-	folders, files, err := projection.ListFolderContents(backend.DB, channelID, parentID)
+	fs, err := a.readService().FolderContents(a.ActiveChannelID(), parentID)
 	if err != nil {
 		return backend.FileSystem{}, err
 	}
 
 	result := backend.FileSystem{
-		Folders: make([]backend.Folder, 0, len(folders)),
-		Files:   make([]backend.FileMetaData, 0, len(files)),
+		Folders: make([]backend.Folder, 0, len(fs.Folders)),
+		Files:   make([]backend.FileMetaData, 0, len(fs.Files)),
 	}
-	for _, f := range folders {
+	for _, f := range fs.Folders {
 		result.Folders = append(result.Folders, backend.Folder{
 			ID:       f.ID,
 			Name:     f.Name,
 			ParentID: f.ParentID,
 		})
 	}
-	for _, f := range files {
+	for _, f := range fs.Files {
 		result.Files = append(result.Files, backend.FileMetaData{
 			TgMsgID:       int(f.MsgID),
 			Name:          f.Name,
@@ -1600,86 +1545,23 @@ func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
 }
 
 func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
-	if backend.DB == nil {
-		return nil, fmt.Errorf("db not ready")
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return []backend.SearchResult{}, nil
-	}
-
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return []backend.SearchResult{}, nil
-	}
-
-	allFolders, err := projection.ListAllFolders(backend.DB, channelID)
-	if err != nil {
-		return nil, err
-	}
-	folderMap := make(map[string]projection.FolderSlim, len(allFolders))
-	for _, f := range allFolders {
-		if f.ID != "" {
-			folderMap[f.ID] = f
-		}
-	}
-
-	buildFolderPath := func(folderID string) string {
-		folderID = strings.TrimSpace(folderID)
-		if folderID == projection.RootParent {
-			return "My Drive"
-		}
-		names := make([]string, 0, 8)
-		visited := make(map[string]bool)
-		cur := folderID
-		for cur != projection.RootParent && !visited[cur] {
-			visited[cur] = true
-			folder, ok := folderMap[cur]
-			if !ok {
-				break
-			}
-			if name := strings.TrimSpace(folder.Name); name != "" {
-				names = append(names, name)
-			}
-			cur = strings.TrimSpace(folder.ParentID)
-		}
-		if len(names) == 0 {
-			return "My Drive"
-		}
-		for i, j := 0, len(names)-1; i < j; i, j = i+1, j-1 {
-			names[i], names[j] = names[j], names[i]
-		}
-		return "My Drive / " + strings.Join(names, " / ")
-	}
-
-	hits, err := projection.Search(backend.DB, channelID, query, limit)
+	hits, err := a.readService().Search(a.ActiveChannelID(), query, limit)
 	if err != nil {
 		return nil, err
 	}
 
 	results := make([]backend.SearchResult, 0, len(hits))
 	for _, h := range hits {
-		switch h.Type {
-		case "folder":
-			results = append(results, backend.SearchResult{
-				Type:     "folder",
-				ID:       h.ID,
-				Name:     h.Name,
-				ParentID: h.ParentID,
-				Path:     buildFolderPath(h.ID),
-			})
-		case "file":
-			results = append(results, backend.SearchResult{
-				Type:       "file",
-				ID:         fmt.Sprintf("%d", h.MsgID),
-				Name:       h.Name,
-				ParentID:   h.ParentID,
-				Size:       h.Size,
-				UploadTime: h.Time,
-				UploaderID: h.UploaderID,
-				Path:       buildFolderPath(h.ParentID),
-			})
-		}
+		results = append(results, backend.SearchResult{
+			Type:       h.Type,
+			ID:         h.ID,
+			Name:       h.Name,
+			ParentID:   h.ParentID,
+			Size:       h.Size,
+			UploadTime: h.UploadTime,
+			UploaderID: h.UploaderID,
+			Path:       h.Path,
+		})
 	}
 	return results, nil
 }
@@ -1688,14 +1570,7 @@ func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
 // tombstoned (or non-existent) folder. The frontend renders these in a
 // virtual "Orphaned" bucket at root.
 func (a *App) GetOrphanedFiles() ([]backend.FileMetaData, error) {
-	if backend.DB == nil {
-		return nil, fmt.Errorf("db not ready")
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return []backend.FileMetaData{}, nil
-	}
-	files, err := projection.OrphanedFiles(backend.DB, channelID)
+	files, err := a.readService().OrphanedFiles(a.ActiveChannelID())
 	if err != nil {
 		return nil, err
 	}
@@ -1714,26 +1589,11 @@ func (a *App) GetOrphanedFiles() ([]backend.FileMetaData, error) {
 }
 
 func (a *App) GetAllFsMsgIDs() ([]int, error) {
-	if backend.DB == nil {
-		return nil, fmt.Errorf("db not ready")
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return []int{}, nil
-	}
-	ids64, err := projection.AllFileMsgIDs(backend.DB, channelID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]int, 0, len(ids64))
-	for _, id := range ids64 {
-		out = append(out, int(id))
-	}
-	return out, nil
+	return a.readService().AllFileMsgIDs(a.ActiveChannelID())
 }
 
 func (a *App) GetFolderSize(folderID string) (int64, error) {
-	return a.folderService().Size(a.ActiveChannelID(), folderID)
+	return a.readService().FolderSize(a.ActiveChannelID(), folderID)
 }
 
 func (a *App) DeleteFolder(folderID string) string {

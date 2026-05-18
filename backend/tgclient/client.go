@@ -53,15 +53,17 @@ type InputPeer struct {
 	AccessHash int64
 }
 
-// HistoryMessage is the subset of a tg.Message that sync/backfill care about.
+// HistoryMessage is the subset of a tg.Message that sync/backfill/read paths care about.
 // We deliberately avoid leaking the gotd types so the fake stays cheap.
 type HistoryMessage struct {
-	MsgID     int64
-	Date      int64
-	FromID    int64
-	Text      string // caption for media messages, body for text messages
-	HasMedia  bool
-	MediaSize int64
+	MsgID              int64
+	Date               int64
+	FromID             int64
+	Text               string // caption for media messages, body for text messages
+	HasMedia           bool
+	MediaSize          int64
+	DocumentName       string
+	DocumentAccessHash int64
 }
 
 // SendFileResult is what SendFile returns. We split it from a bare msgID

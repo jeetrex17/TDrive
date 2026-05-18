@@ -104,30 +104,3 @@ func TestRenameMoveAndDeleteFolder(t *testing.T) {
 		t.Fatalf("deleted folder still exists")
 	}
 }
-
-func TestFolderSize(t *testing.T) {
-	svc, db := newTestService(t)
-
-	f, err := svc.Create(testChannelID, "Docs", "")
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	op := projection.Op{
-		Type:     projection.OpFileUpload,
-		Parent:   f.ID,
-		Name:     "x.txt",
-		FileSize: 12,
-	}
-	header := projection.Format(op)
-	if _, err := projection.ProjectFromOp(db, testChannelID, 99, op, 1, header); err != nil {
-		t.Fatalf("seed file: %v", err)
-	}
-
-	size, err := svc.Size(testChannelID, f.ID)
-	if err != nil {
-		t.Fatalf("size: %v", err)
-	}
-	if size != 12 {
-		t.Fatalf("size = %d, want 12", size)
-	}
-}

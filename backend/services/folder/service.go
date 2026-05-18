@@ -154,16 +154,6 @@ func (s *Service) Move(channelID int64, folderID string, newParentID string) err
 	return s.emit(channelID, op)
 }
 
-func (s *Service) Size(channelID int64, folderID string) (int64, error) {
-	if err := s.ready(); err != nil {
-		return 0, err
-	}
-	if channelID == 0 {
-		return 0, fmt.Errorf("no active channel")
-	}
-	return projection.FolderSize(s.DB, channelID, folderID)
-}
-
 func (s *Service) emit(channelID int64, op projection.Op) error {
 	if s.EmitOp == nil {
 		return fmt.Errorf("folder emitter not ready")
