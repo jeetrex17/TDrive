@@ -22,6 +22,7 @@ import (
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
 	encservice "TDrive/backend/services/encryption"
+	fileservice "TDrive/backend/services/file"
 	folderservice "TDrive/backend/services/folder"
 	readservice "TDrive/backend/services/read"
 	tdsync "TDrive/backend/sync"
@@ -41,6 +42,7 @@ type App struct {
 	Client          *telegram.Client
 	tg              tgclient.Client
 	enc             *encservice.Service
+	files           *fileservice.Service
 	folders         *folderservice.Service
 	reads           *readservice.Service
 	syncEngine      *tdsync.Engine
@@ -756,6 +758,36 @@ func (a *App) folderService() *folderservice.Service {
 	return a.folders
 }
 
+func (a *App) newFileService() *fileservice.Service {
+	return &fileservice.Service{
+		DB:    backend.DB,
+		TG:    a.tg,
+		Peers: peerResolverFn(a.resolvePeer),
+		EmitOp: func(channelID int64, op projection.Op) (int64, error) {
+			return a.emitAndProject(channelID, op)
+		},
+		ActorID: func(ctx context.Context) (int64, error) {
+			return a.actorID(ctx)
+		},
+		RequireEncryptionKey: func(encrypted bool) error {
+			if _, err := a.encryptionService().RequireMasterKeyForFile(encrypted); err != nil {
+				return ErrEncryptionPasswordRequired
+			}
+			return nil
+		},
+		Warnf: func(format string, args ...any) {
+			fmt.Printf(format, args...)
+		},
+	}
+}
+
+func (a *App) fileService() *fileservice.Service {
+	if a.files == nil {
+		a.files = a.newFileService()
+	}
+	return a.files
+}
+
 func (a *App) newReadService() *readservice.Service {
 	return &readservice.Service{
 		DB:    backend.DB,
@@ -1287,67 +1319,9 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 }
 
 func (a *App) DeleteFile(msgID int) string {
-	if backend.DB == nil {
-		return "Error: DB not ready"
-	}
-	channelid := a.ActiveChannelID()
-	if channelid == 0 {
-		return "Error: Drive ID not found"
-	}
-
-	if !projection.FileExists(backend.DB, channelid, int64(msgID)) {
-		return "Error: File not found"
-	}
-
-	if encrypted, _, _, err := projection.FileEncryptionMeta(backend.DB, channelid, int64(msgID)); err == nil {
-		if _, err := a.encryptionService().RequireMasterKeyForFile(encrypted); err != nil {
-			return "Error: " + ErrEncryptionPasswordRequired.Error()
-		}
-	}
-
-	// Step 4 safety gate: in a shared drive, only the uploader may tomb a
-	// file. Otherwise B could hide A's file for everyone with no recourse;
-	// admin-delete will arrive with proper Telegram permission checking in
-	// a later step.
-	ch, err := projection.GetChannel(backend.DB, channelid)
-	if err != nil {
+	if err := a.fileService().Delete(a.ctx, a.ActiveChannelID(), msgID); err != nil {
 		return "Error: " + err.Error()
 	}
-	if ch.Kind == projection.KindShared {
-		actorID, aerr := a.actorID(a.ctx)
-		if aerr != nil {
-			return "Error: " + aerr.Error()
-		}
-		uploader, uerr := projection.FileUploader(backend.DB, channelid, int64(msgID))
-		if uerr != nil {
-			return "Error: " + uerr.Error()
-		}
-		if uploader == 0 || uploader != actorID {
-			return "Error: Only the uploader can delete this file in a shared drive"
-		}
-	}
-
-	// Tomb first: visibility convergence is the contract; body delete is
-	// best-effort. If we deleted the body first and then failed to publish
-	// a tomb, other clients would see "the message vanished" with no signal.
-	tombOp := projection.Op{
-		Type: projection.OpTomb,
-		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
-	}
-	if _, err := a.emitAndProject(channelid, tombOp); err != nil {
-		return "Error: " + err.Error()
-	}
-
-	peer, err := a.channelPeer(a.ctx, channelid)
-	if err != nil {
-		// Tomb succeeded; body cleanup deferred. Visible state is correct.
-		fmt.Printf("warn: tomb succeeded but peer resolve failed for msg=%d: %v\n", msgID, err)
-		return "Success"
-	}
-	if err := a.tg.DeleteMessages(a.ctx, peer, []int64{int64(msgID)}); err != nil {
-		fmt.Printf("warn: tomb succeeded but body delete failed for msg=%d: %v\n", msgID, err)
-	}
-
 	return "Success"
 }
 
@@ -1435,6 +1409,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	a.enc = a.newEncryptionService()
+	a.files = a.newFileService()
 	a.folders = a.newFolderService()
 	a.reads = a.newReadService()
 	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
@@ -1604,91 +1579,14 @@ func (a *App) DeleteFolder(folderID string) string {
 }
 
 func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID string) string {
-	if backend.DB == nil {
-		return "Error: DB not ready"
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return "Error: No active channel"
-	}
-	if msgID <= 0 {
-		return "Error: Invalid msgID"
-	}
-
-	if projection.FileExists(backend.DB, channelID, int64(msgID)) {
-		return "Success"
-	}
-
-	parent := normalizeOpParent(parentID)
-	if parent != projection.RootParent {
-		if !projection.IsFolderID(parent) {
-			return "Error: Invalid parent folder id"
-		}
-		if !projection.FolderExists(backend.DB, channelID, parent) {
-			return "Error: Target folder not found"
-		}
-	}
-	cleanName := strings.TrimSpace(name)
-	if cleanName == "" {
-		cleanName = "Untitled"
-	}
-
-	op := projection.Op{
-		Type:           projection.OpMeta,
-		Obj:            fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
-		Parent:         parent,
-		Name:           cleanName,
-		FileSize:       size,
-		FileUploadTime: time.Now().Unix(),
-	}
-	if _, err := a.emitAndProject(channelID, op); err != nil {
+	if err := a.fileService().Meta(a.ActiveChannelID(), msgID, name, size, parentID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) RenameFile(msgID int, newName string) string {
-	if backend.DB == nil {
-		return "Error: DB not ready"
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return "Error: No active channel"
-	}
-	newName = strings.TrimSpace(newName)
-	if newName == "" {
-		return "Error: Invalid name"
-	}
-	if !projection.FileExists(backend.DB, channelID, int64(msgID)) {
-		return "Error: File not found"
-	}
-
-	// Same owner-only gate as DeleteFile in shared drives. Frontend hides
-	// the action for non-owners but the backend stays authoritative.
-	ch, err := projection.GetChannel(backend.DB, channelID)
-	if err != nil {
-		return "Error: " + err.Error()
-	}
-	if ch.Kind == projection.KindShared {
-		actorID, aerr := a.actorID(a.ctx)
-		if aerr != nil {
-			return "Error: " + aerr.Error()
-		}
-		uploader, uerr := projection.FileUploader(backend.DB, channelID, int64(msgID))
-		if uerr != nil {
-			return "Error: " + uerr.Error()
-		}
-		if uploader == 0 || uploader != actorID {
-			return "Error: Only the uploader can rename this file in a shared drive"
-		}
-	}
-
-	op := projection.Op{
-		Type: projection.OpRename,
-		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
-		Name: newName,
-	}
-	if _, err := a.emitAndProject(channelID, op); err != nil {
+	if err := a.fileService().Rename(a.ctx, a.ActiveChannelID(), msgID, newName); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
@@ -1702,35 +1600,7 @@ func (a *App) RenameFolder(folderID string, newName string) string {
 }
 
 func (a *App) MoveFile(msgID int, newParentID string) string {
-	if backend.DB == nil {
-		return "Error: DB not ready"
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return "Error: No active channel"
-	}
-	parent := normalizeOpParent(newParentID)
-	if parent != projection.RootParent {
-		if !projection.IsFolderID(parent) {
-			return "Error: Invalid target folder id"
-		}
-		if !projection.FolderExists(backend.DB, channelID, parent) {
-			return "Error: Target folder not found"
-		}
-	}
-	cur, err := projection.FileParent(backend.DB, channelID, int64(msgID))
-	if err != nil {
-		return "Error: File not found"
-	}
-	if cur == parent {
-		return "Error: File is already in this folder"
-	}
-	op := projection.Op{
-		Type:   projection.OpMove,
-		Obj:    fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
-		Parent: parent,
-	}
-	if _, err := a.emitAndProject(channelID, op); err != nil {
+	if err := a.fileService().Move(a.ActiveChannelID(), msgID, newParentID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
