@@ -169,6 +169,19 @@ func TestParseRejectsNonFolderParent(t *testing.T) {
 	}
 }
 
+func TestParseRejectsNegativeFileSizes(t *testing.T) {
+	for _, header := range []string{
+		"TDX1|t=f|p=|n=x|sz=-1",
+		"TDX1|t=f|p=|n=x|ts=-1",
+		"TDX1|t=f|p=|n=x|enc=1|psz=-1",
+	} {
+		_, err := Parse(header)
+		if !errors.Is(err, ErrWireMalformed) {
+			t.Fatalf("Parse(%q) err = %v, want ErrWireMalformed", header, err)
+		}
+	}
+}
+
 func TestParseEmptyHeader(t *testing.T) {
 	_, err := Parse("")
 	if !errors.Is(err, ErrWireMissingHeader) {

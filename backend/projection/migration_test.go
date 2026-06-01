@@ -49,7 +49,7 @@ func TestMigrateAddsSchemaTables(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	for _, name := range []string{"channels", "replay_log", "replay_log_tamper", "backfill_progress", "pending_joins", "schema_version"} {
+	for _, name := range []string{"channels", "replay_log", "replay_log_tamper", "replay_log_rejects", "backfill_progress", "pending_joins", "schema_version"} {
 		var got string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&got)
 		if err != nil {

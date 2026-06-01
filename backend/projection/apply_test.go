@@ -420,6 +420,16 @@ func TestApplyRejectsUnknownType(t *testing.T) {
 	}
 }
 
+func TestApplyRejectsOverflowFileID(t *testing.T) {
+	db := newTestDB(t)
+	tx, _ := db.Begin()
+	defer tx.Rollback()
+	err := ApplyOp(tx, testChan, 1, Op{Type: OpTomb, Obj: "f:999999999999999999999999999999"}, 0)
+	if !errors.Is(err, ErrBadOp) {
+		t.Fatalf("err = %v want ErrBadOp", err)
+	}
+}
+
 func mustOp(t *testing.T, db *sql.DB, msgID int64, op Op) {
 	t.Helper()
 	if err := runOp(t, db, testChan, msgID, op); err != nil {

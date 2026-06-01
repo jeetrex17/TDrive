@@ -28,6 +28,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -273,12 +274,17 @@ func parseFileMsgID(obj string) (int64, error) {
 		return 0, fmt.Errorf("%w: not a file id %q", ErrBadOp, obj)
 	}
 	raw := obj[len(FileIDPrefix):]
-	var n int64
+	if raw == "" {
+		return 0, fmt.Errorf("%w: file id must be positive", ErrBadOp)
+	}
 	for _, ch := range raw {
 		if ch < '0' || ch > '9' {
 			return 0, fmt.Errorf("%w: file id has non-digit %q", ErrBadOp, obj)
 		}
-		n = n*10 + int64(ch-'0')
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%w: file id out of range %q", ErrBadOp, obj)
 	}
 	if n <= 0 {
 		return 0, fmt.Errorf("%w: file id must be positive", ErrBadOp)

@@ -100,22 +100,33 @@ func TestProjectFromOpDetectsTamper(t *testing.T) {
 	}
 }
 
-func TestProjectFromOpRollsBackOnApplyError(t *testing.T) {
+func TestProjectFromOpRecordsAndSkipsRejectedApplyError(t *testing.T) {
 	db := newTestDB(t)
 	op := Op{Type: OpRename, Obj: "raw", Name: "x"}
 	header := Format(op)
 
-	_, err := ProjectFromOp(db, testChan, 1, op, 0, header)
-	if err == nil {
-		t.Fatal("expected error from applying a malformed op")
+	already, err := ProjectFromOp(db, testChan, 1, op, 0, header)
+	if err != nil {
+		t.Fatalf("project rejected op: %v", err)
+	}
+	if already {
+		t.Fatal("fresh rejected op should not be alreadySeen")
 	}
 
 	var rows int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM replay_log WHERE channel_id=? AND msg_id=?`, testChan, 1).Scan(&rows); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	if rows != 0 {
-		t.Fatalf("replay_log row count = %d, want 0 (tx should have rolled back)", rows)
+	if rows != 1 {
+		t.Fatalf("replay_log row count = %d, want 1", rows)
+	}
+
+	var rejectRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM replay_log_rejects WHERE channel_id=? AND msg_id=?`, testChan, 1).Scan(&rejectRows); err != nil {
+		t.Fatalf("count rejects: %v", err)
+	}
+	if rejectRows != 1 {
+		t.Fatalf("reject row count = %d, want 1", rejectRows)
 	}
 }
 
