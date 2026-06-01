@@ -1,24 +1,17 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"TDrive/backend"
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
-	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
 	encservice "TDrive/backend/services/encryption"
 	fileservice "TDrive/backend/services/file"
@@ -28,8 +21,6 @@ import (
 	"TDrive/backend/tgclient"
 
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/downloader"
-	"github.com/gotd/td/tg"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -47,7 +38,6 @@ type App struct {
 	backfillRunner  *backfill.Runner
 	backfillMu      sync.Mutex
 	backfilling     map[int64]bool
-	previewMu       sync.Mutex
 	activeChannelID atomic.Int64
 	selfUserID      atomic.Int64
 }
@@ -190,234 +180,6 @@ type PreviewPayload struct {
 	MimeType   string `json:"mime_type"`
 }
 
-const maxPreviewPayloadBytes int64 = 10 * 1024 * 1024
-
-var (
-	errPreviewNotFound                   = errors.New("File not found")
-	errPreviewNotSupported               = errors.New("Not a supported image")
-	errPreviewTooLarge                   = errors.New("File too large")
-	errPreviewDownloadFailed             = errors.New("Download failed")
-	errPreviewThumbMissing               = errors.New("Preview thumbnail unavailable")
-	errPreviewEncryptionPasswordRequired = errors.New("encryption password required")
-)
-
-var previewMimeTypes = map[string]string{
-	"jpg":  "image/jpeg",
-	"jpeg": "image/jpeg",
-	"png":  "image/png",
-	"gif":  "image/gif",
-	"webp": "image/webp",
-	"bmp":  "image/bmp",
-	"svg":  "image/svg+xml",
-}
-
-func previewFilenameFromDocument(doc *tg.Document) string {
-	if doc == nil {
-		return ""
-	}
-
-	for _, attr := range doc.Attributes {
-		if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
-			return strings.TrimSpace(fname.FileName)
-		}
-	}
-
-	return ""
-}
-
-func lookupStoredFilename(channelID int64, msgID int, doc *tg.Document) string {
-	if backend.DB != nil && channelID != 0 {
-		if name := projection.LookupFileName(backend.DB, channelID, int64(msgID)); name != "" {
-			return name
-		}
-	}
-
-	return previewFilenameFromDocument(doc)
-}
-
-func previewMimeTypeForName(name string) (string, bool) {
-	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(strings.TrimSpace(name))), ".")
-	if ext == "" {
-		return "", false
-	}
-
-	mimeType, ok := previewMimeTypes[ext]
-	return mimeType, ok
-}
-
-func estimatedBase64Size(rawBytes int64) int64 {
-	if rawBytes <= 0 {
-		return 0
-	}
-
-	return ((rawBytes + 2) / 3) * 4
-}
-
-func exceedsPreviewPayloadBudget(rawBytes int64) bool {
-	if rawBytes < 0 {
-		return true
-	}
-
-	return estimatedBase64Size(rawBytes) > maxPreviewPayloadBytes
-}
-
-func detectedPreviewMimeType(data []byte, fallback string) string {
-	detected := strings.TrimSpace(http.DetectContentType(data))
-	if strings.HasPrefix(detected, "image/") {
-		return detected
-	}
-
-	fallback = strings.TrimSpace(fallback)
-	if fallback != "" {
-		return fallback
-	}
-
-	return detected
-}
-
-func previewPayloadFromBytes(data []byte, mimeType string) (PreviewPayload, error) {
-	if len(data) == 0 {
-		return PreviewPayload{}, errPreviewDownloadFailed
-	}
-	if exceedsPreviewPayloadBudget(int64(len(data))) {
-		return PreviewPayload{}, errPreviewTooLarge
-	}
-
-	return PreviewPayload{
-		DataBase64: base64.StdEncoding.EncodeToString(data),
-		MimeType:   detectedPreviewMimeType(data, mimeType),
-	}, nil
-}
-
-func previewMessageFromResult(result tg.MessagesMessagesClass) *tg.Message {
-	switch m := result.(type) {
-	case *tg.MessagesChannelMessages:
-		for _, message := range m.Messages {
-			if targetMsg, ok := message.(*tg.Message); ok {
-				return targetMsg
-			}
-		}
-	case *tg.MessagesMessages:
-		for _, message := range m.Messages {
-			if targetMsg, ok := message.(*tg.Message); ok {
-				return targetMsg
-			}
-		}
-	case *tg.MessagesMessagesSlice:
-		for _, message := range m.Messages {
-			if targetMsg, ok := message.(*tg.Message); ok {
-				return targetMsg
-			}
-		}
-	}
-
-	return nil
-}
-
-func previewThumbScore(size tg.PhotoSizeClass) int {
-	switch thumb := size.(type) {
-	case *tg.PhotoCachedSize:
-		score := thumb.W * thumb.H
-		if score <= 0 {
-			score = len(thumb.Bytes)
-		}
-		return score
-	case *tg.PhotoSize:
-		score := thumb.W * thumb.H
-		if score <= 0 {
-			score = thumb.Size
-		}
-		return score
-	case *tg.PhotoSizeProgressive:
-		score := thumb.W * thumb.H
-		if n := len(thumb.Sizes); n > 0 && thumb.Sizes[n-1] > score {
-			score = thumb.Sizes[n-1]
-		}
-		return score
-	default:
-		return 0
-	}
-}
-
-func previewInlineThumbPayload(doc *tg.Document, fallbackMimeType string) (PreviewPayload, bool, error) {
-	if doc == nil {
-		return PreviewPayload{}, false, nil
-	}
-
-	var best *tg.PhotoCachedSize
-	bestScore := 0
-
-	for _, size := range doc.Thumbs {
-		thumb, ok := size.(*tg.PhotoCachedSize)
-		if !ok || len(thumb.Bytes) == 0 {
-			continue
-		}
-
-		score := previewThumbScore(thumb)
-		if best == nil || score > bestScore {
-			best = thumb
-			bestScore = score
-		}
-	}
-
-	if best == nil {
-		return PreviewPayload{}, false, nil
-	}
-
-	payload, err := previewPayloadFromBytes(best.Bytes, fallbackMimeType)
-	if err != nil {
-		return PreviewPayload{}, true, err
-	}
-	return payload, true, nil
-}
-
-func previewThumbTypeForDocument(doc *tg.Document) (string, bool) {
-	if doc == nil {
-		return "", false
-	}
-
-	bestType := ""
-	bestScore := 0
-
-	for _, size := range doc.Thumbs {
-		switch size.(type) {
-		case *tg.PhotoSize, *tg.PhotoSizeProgressive:
-		default:
-			continue
-		}
-
-		thumbType := strings.TrimSpace(size.GetType())
-		if thumbType == "" {
-			continue
-		}
-
-		score := previewThumbScore(size)
-		if bestType == "" || score > bestScore {
-			bestType = thumbType
-			bestScore = score
-		}
-	}
-
-	return bestType, bestType != ""
-}
-
-func normalizePreviewError(err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, errPreviewNotFound):
-		return errPreviewNotFound
-	case errors.Is(err, errPreviewNotSupported):
-		return errPreviewNotSupported
-	case errors.Is(err, errPreviewTooLarge):
-		return errPreviewTooLarge
-	case errors.Is(err, errPreviewEncryptionPasswordRequired), errors.Is(err, ErrEncryptionPasswordRequired):
-		return errPreviewEncryptionPasswordRequired
-	default:
-		return errPreviewDownloadFailed
-	}
-}
-
 func (a *App) CheckLoginStatus() bool {
 	if a.ctx == nil {
 		return false
@@ -510,11 +272,12 @@ func (a *App) newFileService() *fileservice.Service {
 		ActorID: func(ctx context.Context) (int64, error) {
 			return a.actorID(ctx)
 		},
-		RequireEncryptionKey: func(encrypted bool) error {
-			if _, err := a.encryptionService().RequireMasterKeyForFile(encrypted); err != nil {
-				return ErrEncryptionPasswordRequired
+		RequireEncryptionKey: func(encrypted bool) ([]byte, error) {
+			key, err := a.encryptionService().RequireMasterKeyForFile(encrypted)
+			if err != nil {
+				return nil, ErrEncryptionPasswordRequired
 			}
-			return nil
+			return key, nil
 		},
 		MasterKeyForUpload: func(channelID int64, wantEncrypted bool) ([]byte, error) {
 			return a.encryptionService().MasterKeyForUpload(channelID, wantEncrypted)
@@ -628,442 +391,34 @@ func (a *App) GetFileList() []TDriveFile {
 	return out
 }
 
-type ProgressWriter struct {
-	Writer    io.Writer
-	Total     int64
-	Current   int64
-	Ctx       context.Context
-	LastPrint time.Time
-}
-
-type PreviewProgressWriter struct {
-	Writer    io.Writer
-	Total     int64
-	Current   int64
-	Ctx       context.Context
-	LastPrint time.Time
-	MsgID     int
-}
-
-// i named it Dwrite first but then i learnt that
-// WE MUST NAME THIS "Write" coz
-// the Telegram library Stream() function demands an argument of type 'io.Writer'.
-// In Go, to satisfy 'io.Writer', a struct MUST have a method with the exact signature:
-//     Write(p []byte) (n int, err error)
-//
-// If we named this "DWrite" or anything else, this struct would not match the
-// interface, and the compiler would reject it.
-
-func (pw *ProgressWriter) Write(p []byte) (int, error) {
-	n, err := pw.Writer.Write(p)
-	if err != nil {
-		return n, fmt.Errorf("erorr upladting downlad progress : %v", err)
-	}
-
-	pw.Current += int64(n)
-	if time.Since(pw.LastPrint) > 100*time.Millisecond {
-		var perct float64
-
-		if pw.Total > 0 {
-			perct = (float64(pw.Current) / float64(pw.Total)) * 100
-		} else {
-			perct = 100
-		}
-
-		runtime.EventsEmit(pw.Ctx, "download_progress", perct)
-
-		pw.LastPrint = time.Now()
-	}
-
-	return n, nil
-}
-
-func (pw *PreviewProgressWriter) Write(p []byte) (int, error) {
-	n, err := pw.Writer.Write(p)
-	if err != nil {
-		return n, fmt.Errorf("error updating preview progress: %v", err)
-	}
-
-	pw.Current += int64(n)
-	if time.Since(pw.LastPrint) > 100*time.Millisecond {
-		var perct float64
-
-		if pw.Total > 0 {
-			perct = (float64(pw.Current) / float64(pw.Total)) * 100
-		} else {
-			perct = 100
-		}
-
-		if perct > 100 {
-			perct = 100
-		}
-
-		runtime.EventsEmit(pw.Ctx, "preview_progress", pw.MsgID, perct)
-		pw.LastPrint = time.Now()
-	}
-
-	return n, nil
-}
-
-func (a *App) withPreviewSession(fn func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, channelID int64) error) error {
-	if a.ctx == nil {
-		return errPreviewDownloadFailed
-	}
-
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return errPreviewDownloadFailed
-	}
-
-	a.previewMu.Lock()
-	defer a.previewMu.Unlock()
-
-	client, err := auth.Connect()
-	if err != nil {
-		return errPreviewDownloadFailed
-	}
-
-	return client.Run(a.ctx, func(ctx context.Context) error {
-		inChan, _, err := auth.ResolveDriveChannel(ctx, client.API(), channelID)
-		if err != nil {
-			return errPreviewDownloadFailed
-		}
-
-		return fn(ctx, client.API(), inChan, channelID)
-	})
-}
-
-func loadPreviewDocument(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, channelID int64, msgID int) (*tg.Document, string, string, error) {
-	result, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-		Channel: inChan,
-		ID: []tg.InputMessageClass{
-			&tg.InputMessageID{ID: msgID},
-		},
-	})
-	if err != nil {
-		return nil, "", "", errPreviewDownloadFailed
-	}
-
-	targetMsg := previewMessageFromResult(result)
-	if targetMsg == nil {
-		return nil, "", "", errPreviewNotFound
-	}
-
-	docMedia, ok := targetMsg.Media.(*tg.MessageMediaDocument)
-	if !ok {
-		return nil, "", "", errPreviewNotFound
-	}
-
-	doc, ok := docMedia.Document.(*tg.Document)
-	if !ok || doc == nil {
-		return nil, "", "", errPreviewNotFound
-	}
-
-	filename := lookupStoredFilename(channelID, msgID, doc)
-	mimeType, ok := previewMimeTypeForName(filename)
-	if !ok {
-		return nil, "", "", errPreviewNotSupported
-	}
-
-	return doc, filename, mimeType, nil
-}
-
 func (a *App) PreviewThumbnail(msgID int) (PreviewPayload, error) {
-	if msgID <= 0 {
-		return PreviewPayload{}, errPreviewNotFound
-	}
-
-	var payload PreviewPayload
-
-	err := a.withPreviewSession(func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, channelID int64) error {
-		doc, _, mimeType, err := loadPreviewDocument(ctx, api, inChan, channelID, msgID)
-		if err != nil {
-			return err
-		}
-
-		if inlinePayload, ok, err := previewInlineThumbPayload(doc, mimeType); ok || err != nil {
-			if err != nil {
-				return err
-			}
-			payload = inlinePayload
-			return nil
-		}
-
-		thumbType, ok := previewThumbTypeForDocument(doc)
-		if !ok {
-			return errPreviewThumbMissing
-		}
-
-		location := &tg.InputDocumentFileLocation{
-			ID:            doc.ID,
-			AccessHash:    doc.AccessHash,
-			FileReference: doc.FileReference,
-			ThumbSize:     thumbType,
-		}
-
-		var buf bytes.Buffer
-		d := downloader.NewDownloader()
-		if _, err := d.Download(api, location).Stream(ctx, &buf); err != nil {
-			return errPreviewDownloadFailed
-		}
-
-		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
-		return err
-	})
+	payload, err := a.fileService().PreviewThumbnail(a.ctx, a.ActiveChannelID(), msgID)
 	if err != nil {
-		return PreviewPayload{}, normalizePreviewError(err)
+		return PreviewPayload{}, err
 	}
-
-	return payload, nil
+	return PreviewPayload(payload), nil
 }
 
 func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
-	if msgID <= 0 {
-		return PreviewPayload{}, errPreviewNotFound
-	}
-
-	var payload PreviewPayload
-
-	err := a.withPreviewSession(func(ctx context.Context, api *tg.Client, inChan *tg.InputChannel, channelID int64) error {
-		doc, _, mimeType, err := loadPreviewDocument(ctx, api, inChan, channelID, msgID)
-		if err != nil {
-			return err
-		}
-
-		// For encrypted files, gate the preview budget on the plaintext
-		// size and require the master key. Telegram's `doc.Size` is the
-		// ciphertext size and doesn't reflect what the user will see.
-		encrypted := false
-		plaintextSize := int64(doc.Size)
-		if backend.DB != nil {
-			enc, psz, _, lookupErr := projection.FileEncryptionMeta(backend.DB, channelID, int64(msgID))
-			if lookupErr == nil && enc {
-				encrypted = true
-				if psz > 0 {
-					plaintextSize = psz
-				}
-			}
-		}
-		if exceedsPreviewPayloadBudget(plaintextSize) {
-			return errPreviewTooLarge
-		}
-		masterKey, err := a.encryptionService().RequireMasterKeyForFile(encrypted)
-		if err != nil {
-			return err
-		}
-
-		var buf bytes.Buffer
-		pw := &PreviewProgressWriter{
-			Writer:    &buf,
-			Total:     int64(doc.Size),
-			Ctx:       a.ctx,
-			LastPrint: time.Now(),
-			MsgID:     msgID,
-		}
-		d := downloader.NewDownloader()
-		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, pw); err != nil {
-			return errPreviewDownloadFailed
-		}
-
-		if encrypted {
-			var plain bytes.Buffer
-			if _, err := tdcrypto.DecryptStream(&buf, &plain, masterKey); err != nil {
-				return errPreviewDownloadFailed
-			}
-			runtime.EventsEmit(a.ctx, "preview_progress", msgID, 100.0)
-			payload, err = previewPayloadFromBytes(plain.Bytes(), mimeType)
-			return err
-		}
-
-		runtime.EventsEmit(a.ctx, "preview_progress", msgID, 100.0)
-		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
-		return err
-	})
+	payload, err := a.fileService().PreviewFile(a.ctx, a.ActiveChannelID(), msgID)
 	if err != nil {
-		return PreviewPayload{}, normalizePreviewError(err)
+		return PreviewPayload{}, err
 	}
-
-	return payload, nil
+	return PreviewPayload(payload), nil
 }
 
 func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
-	channelid := a.ActiveChannelID()
-	if channelid == 0 {
-		return DownloadResult{Status: "error", Message: "Drive ID not found"}
-	}
-
-	freshClient, err := auth.Connect()
-	if err != nil {
-		return DownloadResult{Status: "error", Message: "Connection error: " + err.Error()}
-	}
-
-	downloadResult := DownloadResult{Status: "error", Message: "Download failed"}
-
-	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		inChan, _, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelid)
-		if err != nil {
-			downloadResult = DownloadResult{Status: "error", Message: "Error: " + err.Error()}
-			return nil
-		}
-
-		targetID := []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}}
-
-		messageResult, err := freshClient.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-			Channel: inChan,
-			ID:      targetID,
-		})
-		if err != nil {
-			return err
-		}
-
-		var targetMsg *tg.Message
-		switch m := messageResult.(type) {
-		case *tg.MessagesChannelMessages:
-			if len(m.Messages) > 0 {
-				targetMsg, _ = m.Messages[0].(*tg.Message)
-			}
-		}
-
-		if targetMsg == nil {
-			downloadResult = DownloadResult{Status: "error", Message: "Message deleted or not found"}
-			return nil
-		}
-
-		docMedia, ok := targetMsg.Media.(*tg.MessageMediaDocument)
-		if !ok {
-			downloadResult = DownloadResult{Status: "error", Message: "This is not a file"}
-			return nil
-		}
-
-		doc, ok := docMedia.Document.(*tg.Document)
-		if !ok {
-			downloadResult = DownloadResult{Status: "error", Message: "Empty document"}
-			return nil
-		}
-
-		/*
-			originalName := "tdrive_download"
-			for _, attr := range doc.Attributes {
-				if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
-					originalName = fname.FileName
-				}
-			}
-		*/
-
-		originalName := "tdrive_download"
-		lookupID := msgID
-		if TgMsgID != 0 {
-			lookupID = TgMsgID
-		}
-		if backend.DB != nil {
-			if name := projection.LookupFileName(backend.DB, channelid, int64(lookupID)); name != "" {
-				originalName = name
-			}
-		}
-
-		// Decide ahead of time whether to decrypt. The per-file flag in
-		// the projection is the source of truth — channel-wide enable
-		// alone isn't enough because mixed plaintext+ciphertext history
-		// is a normal state. Done BEFORE the save dialog so a missing
-		// password doesn't make the user pick a save location twice.
-		encrypted := false
-		if backend.DB != nil {
-			enc, _, _, err := projection.FileEncryptionMeta(backend.DB, channelid, int64(lookupID))
-			if err == nil {
-				encrypted = enc
-			}
-		}
-		masterKey, err := a.encryptionService().RequireMasterKeyForFile(encrypted)
-		if err != nil {
-			downloadResult = DownloadResult{Status: "error", Message: ErrEncryptionPasswordRequired.Error()}
-			return nil
-		}
-
-		savePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-			DefaultFilename: originalName,
+	result := a.fileService().Download(a.ctx, a.ActiveChannelID(), msgID, TgMsgID, func(defaultName string) (string, error) {
+		return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+			DefaultFilename: defaultName,
 			Title:           "Save File As...",
 		})
-
-		if err != nil {
-			downloadResult = DownloadResult{Status: "error", Message: "Failed to choose download location: " + err.Error()}
-			return nil
-		}
-
-		if savePath == "" {
-			downloadResult = DownloadResult{Status: "canceled", Message: "Download canceled"}
-			return nil
-		}
-
-		d := downloader.NewDownloader()
-
-		f, err := os.Create(savePath)
-		if err != nil {
-			downloadResult = DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-			return nil
-		}
-		defer f.Close()
-
-		pw := &ProgressWriter{
-			Writer:    f,
-			Total:     int64(doc.Size),
-			Ctx:       a.ctx,
-			LastPrint: time.Now(),
-		}
-
-		if !encrypted {
-			if _, err := d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, pw); err != nil {
-				downloadResult = DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
-				return nil
-			}
-		} else {
-			// Stream ciphertext into a temp file (with progress so the
-			// user sees something during the network step), then decrypt
-			// into the user-chosen savePath. Two-step rather than piped
-			// because the AEAD stream layer reads chunks of arbitrary
-			// length and the gotd downloader does not produce them.
-			cipher, err := os.CreateTemp("", "tdrive-dl-*")
-			if err != nil {
-				downloadResult = DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-				return nil
-			}
-			defer func() {
-				_ = cipher.Close()
-				_ = os.Remove(cipher.Name())
-			}()
-			cipherPW := &ProgressWriter{
-				Writer:    cipher,
-				Total:     int64(doc.Size),
-				Ctx:       a.ctx,
-				LastPrint: time.Now(),
-			}
-			if _, err := d.Download(freshClient.API(), doc.AsInputDocumentFileLocation()).Stream(ctx, cipherPW); err != nil {
-				downloadResult = DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
-				return nil
-			}
-			if _, err := cipher.Seek(0, io.SeekStart); err != nil {
-				downloadResult = DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-				return nil
-			}
-			if _, err := tdcrypto.DecryptStream(cipher, f, masterKey); err != nil {
-				_ = os.Remove(savePath)
-				downloadResult = DownloadResult{Status: "error", Message: "Decrypt failed: " + err.Error()}
-				return nil
-			}
-		}
-
-		runtime.EventsEmit(a.ctx, "download_progress", 100.0)
-		downloadResult = DownloadResult{
-			Status:    "success",
-			Message:   "Download complete",
-			SavedPath: savePath,
-		}
-		return nil
 	})
-	if err != nil {
-		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}
+	return DownloadResult{
+		Status:    result.Status,
+		Message:   result.Message,
+		SavedPath: result.SavedPath,
 	}
-
-	return downloadResult
 }
 
 func (a *App) DeleteFile(msgID int) string {

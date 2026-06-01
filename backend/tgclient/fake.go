@@ -1,6 +1,7 @@
 package tgclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ type Fake struct {
 	nextMsgID     int64
 	nextChannelID int64
 	history       []HistoryMessage // ordered by msg_id ascending
+	fileBodies    map[int64][]byte
 	sentControls  []SentControl
 	sentFiles     []SentFile
 	deletedBatch  [][]int64
@@ -72,6 +74,7 @@ func NewFake(selfID int64) *Fake {
 		self:          selfID,
 		nextMsgID:     100,
 		nextChannelID: 10000,
+		fileBodies:    make(map[int64][]byte),
 		channels:      make(map[int64]fakeChannel),
 		invites:       make(map[string]InviteInfo),
 		joinRequests:  make(map[int64][]JoinRequest),
@@ -263,6 +266,7 @@ func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 	}
 	f.mu.Unlock()
 
+	var body bytes.Buffer
 	// Drain the reader so callers passing real Readers don't hang.
 	if r != nil {
 		var sent int64
@@ -270,6 +274,7 @@ func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
+				_, _ = body.Write(buf[:n])
 				sent += int64(n)
 				if onProgress != nil {
 					onProgress(sent, totalSize)
@@ -289,6 +294,7 @@ func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 	id := f.nextMsgID
 	f.nextMsgID++
 	f.sentFiles = append(f.sentFiles, SentFile{Peer: peer, Name: name, Caption: caption, Size: totalSize, MsgID: id})
+	f.fileBodies[id] = append([]byte(nil), body.Bytes()...)
 	f.history = append(f.history, HistoryMessage{
 		MsgID:        id,
 		Date:         0,
@@ -328,6 +334,93 @@ func (f *Fake) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	return out, nil
 }
 
+func (f *Fake) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64) (FileDocument, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.history {
+		if m.MsgID != msgID {
+			continue
+		}
+		if !m.HasMedia {
+			return FileDocument{}, ErrNotFile
+		}
+		name := m.DocumentName
+		if name == "" {
+			name = "tdrive_download"
+		}
+		thumbs := make([]FileThumb, len(m.Thumbs))
+		copy(thumbs, m.Thumbs)
+		return FileDocument{MsgID: msgID, Name: name, Size: m.MediaSize, Thumbs: thumbs}, nil
+	}
+	return FileDocument{}, ErrMessageNotFound
+}
+
+func (f *Fake) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error {
+	f.mu.Lock()
+	var (
+		msg   HistoryMessage
+		found bool
+	)
+	for _, m := range f.history {
+		if m.MsgID == msgID {
+			msg = m
+			found = true
+			break
+		}
+	}
+	if !found {
+		f.mu.Unlock()
+		return ErrMessageNotFound
+	}
+	if !msg.HasMedia {
+		f.mu.Unlock()
+		return ErrNotFile
+	}
+	body := append([]byte(nil), f.fileBodies[msgID]...)
+	f.mu.Unlock()
+
+	if len(body) == 0 && msg.MediaSize > 0 {
+		return ErrEmptyDocument
+	}
+	n, err := w.Write(body)
+	if onProgress != nil {
+		onProgress(int64(n), msg.MediaSize)
+	}
+	return err
+}
+
+func (f *Fake) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {
+	f.mu.Lock()
+	var (
+		msg   HistoryMessage
+		found bool
+	)
+	for _, m := range f.history {
+		if m.MsgID == msgID {
+			msg = m
+			found = true
+			break
+		}
+	}
+	f.mu.Unlock()
+	if !found {
+		return ErrMessageNotFound
+	}
+	if !msg.HasMedia {
+		return ErrNotFile
+	}
+	for _, thumb := range msg.Thumbs {
+		if thumb.Type == thumbType {
+			if len(thumb.Bytes) == 0 {
+				return ErrEmptyDocument
+			}
+			_, err := w.Write(thumb.Bytes)
+			return err
+		}
+	}
+	return ErrEmptyDocument
+}
+
 func (f *Fake) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -341,6 +434,7 @@ func (f *Fake) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 	doomed := make(map[int64]struct{}, len(msgIDs))
 	for _, id := range msgIDs {
 		doomed[id] = struct{}{}
+		delete(f.fileBodies, id)
 	}
 	kept := f.history[:0]
 	for _, m := range f.history {

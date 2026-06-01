@@ -16,6 +16,12 @@ import (
 
 var ErrFloodWait = errors.New("tgclient: flood wait")
 
+var (
+	ErrMessageNotFound = errors.New("tgclient: message not found")
+	ErrNotFile         = errors.New("tgclient: message is not a file")
+	ErrEmptyDocument   = errors.New("tgclient: empty document")
+)
+
 type FloodWaitError struct {
 	Duration time.Duration
 }
@@ -64,6 +70,7 @@ type HistoryMessage struct {
 	MediaSize          int64
 	DocumentName       string
 	DocumentAccessHash int64
+	Thumbs             []FileThumb
 }
 
 // SendFileResult is what SendFile returns. We split it from a bare msgID
@@ -71,6 +78,21 @@ type HistoryMessage struct {
 // extend with more fields (e.g. document size confirmation).
 type SendFileResult struct {
 	MsgID int64
+}
+
+type FileDocument struct {
+	MsgID  int64
+	Name   string
+	Size   int64
+	Thumbs []FileThumb
+}
+
+type FileThumb struct {
+	Type   string
+	Bytes  []byte
+	Width  int
+	Height int
+	Size   int
 }
 
 type InviteInfo struct {
@@ -113,6 +135,17 @@ type Client interface {
 	// below that watermark; offsetID pages older than a previous page.
 	// Callers must sort before applying projection ops.
 	GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error)
+
+	// GetFileDocument resolves one Telegram message into a downloadable
+	// document descriptor without downloading the bytes.
+	GetFileDocument(ctx context.Context, peer InputPeer, msgID int64) (FileDocument, error)
+
+	// DownloadFile streams a Telegram document message into w. onProgress is
+	// optional; callers can use it to surface transfer progress.
+	DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error
+
+	// DownloadFileThumbnail streams a Telegram document thumbnail into w.
+	DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error
 
 	// DeleteMessages removes file bodies from the channel. Used by tomb
 	// follow-up and folder hard-delete. Best effort.

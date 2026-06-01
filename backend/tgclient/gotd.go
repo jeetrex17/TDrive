@@ -10,6 +10,7 @@ import (
 	"TDrive/backend/auth"
 
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 )
@@ -215,6 +216,66 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	return out, err
 }
 
+func (g *Gotd) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64) (FileDocument, error) {
+	var info FileDocument
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		doc, name, err := getDocumentByMessageID(ctx, api, peer, msgID)
+		if err != nil {
+			return err
+		}
+		info = FileDocument{
+			MsgID:  msgID,
+			Name:   name,
+			Size:   doc.Size,
+			Thumbs: fileThumbsFromDocument(doc),
+		}
+		return nil
+	})
+	return info, err
+}
+
+func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error {
+	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
+		if err != nil {
+			return err
+		}
+		var dst io.Writer = w
+		if onProgress != nil {
+			dst = &progressWriter{
+				w:          w,
+				total:      doc.Size,
+				onProgress: onProgress,
+			}
+		}
+		d := downloader.NewDownloader()
+		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, dst); err != nil {
+			return fmt.Errorf("tgclient: download: %w", err)
+		}
+		return nil
+	})
+}
+
+func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {
+	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
+		if err != nil {
+			return err
+		}
+		d := downloader.NewDownloader()
+		location := &tg.InputDocumentFileLocation{
+			ID:            doc.ID,
+			AccessHash:    doc.AccessHash,
+			FileReference: doc.FileReference,
+			ThumbSize:     thumbType,
+		}
+		if _, err := d.Download(api, location).Stream(ctx, w); err != nil {
+			return fmt.Errorf("tgclient: download thumbnail: %w", err)
+		}
+		return nil
+	})
+}
+
 func (g *Gotd) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int64) error {
 	if len(msgIDs) == 0 {
 		return nil
@@ -400,6 +461,78 @@ func extractMsgID(updates tg.UpdatesClass) int64 {
 	return 0
 }
 
+func getDocumentByMessageID(ctx context.Context, api *tg.Client, peer InputPeer, msgID int64) (*tg.Document, string, error) {
+	messageResult, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
+		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: int(msgID)}},
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	var targetMsg *tg.Message
+	switch m := messageResult.(type) {
+	case *tg.MessagesChannelMessages:
+		if len(m.Messages) > 0 {
+			targetMsg, _ = m.Messages[0].(*tg.Message)
+		}
+	}
+	if targetMsg == nil {
+		return nil, "", ErrMessageNotFound
+	}
+
+	docMedia, ok := targetMsg.Media.(*tg.MessageMediaDocument)
+	if !ok {
+		return nil, "", ErrNotFile
+	}
+	doc, ok := docMedia.Document.(*tg.Document)
+	if !ok {
+		return nil, "", ErrEmptyDocument
+	}
+
+	name := "tdrive_download"
+	for _, attr := range doc.Attributes {
+		if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
+			name = fname.FileName
+			break
+		}
+	}
+	return doc, name, nil
+}
+
+func fileThumbsFromDocument(doc *tg.Document) []FileThumb {
+	if doc == nil {
+		return nil
+	}
+	out := make([]FileThumb, 0, len(doc.Thumbs))
+	for _, size := range doc.Thumbs {
+		thumb := FileThumb{Type: strings.TrimSpace(size.GetType())}
+		switch t := size.(type) {
+		case *tg.PhotoCachedSize:
+			thumb.Bytes = append([]byte(nil), t.Bytes...)
+			thumb.Width = t.W
+			thumb.Height = t.H
+			if len(t.Bytes) > 0 {
+				thumb.Size = len(t.Bytes)
+			}
+		case *tg.PhotoSize:
+			thumb.Width = t.W
+			thumb.Height = t.H
+			thumb.Size = t.Size
+		case *tg.PhotoSizeProgressive:
+			thumb.Width = t.W
+			thumb.Height = t.H
+			if n := len(t.Sizes); n > 0 {
+				thumb.Size = t.Sizes[n-1]
+			}
+		}
+		if thumb.Type != "" || len(thumb.Bytes) > 0 {
+			out = append(out, thumb)
+		}
+	}
+	return out
+}
+
 type progressReader struct {
 	r          io.Reader
 	total      int64
@@ -413,6 +546,24 @@ func (p *progressReader) Read(b []byte) (int, error) {
 		p.sent += int64(n)
 		if p.onProgress != nil {
 			p.onProgress(p.sent, p.total)
+		}
+	}
+	return n, err
+}
+
+type progressWriter struct {
+	w          io.Writer
+	total      int64
+	done       int64
+	onProgress func(done, total int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	if n > 0 {
+		p.done += int64(n)
+		if p.onProgress != nil {
+			p.onProgress(p.done, p.total)
 		}
 	}
 	return n, err

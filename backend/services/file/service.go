@@ -1,16 +1,21 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
 )
@@ -21,7 +26,7 @@ type PeerResolver interface {
 
 type EmitOpFunc func(channelID int64, op projection.Op) (int64, error)
 type ActorIDFunc func(ctx context.Context) (int64, error)
-type RequireEncryptionKeyFunc func(encrypted bool) error
+type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
 type MasterKeyForUploadFunc func(channelID int64, wantEncrypted bool) ([]byte, error)
 type WriteCiphertextTempFunc func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error)
 type WarnFunc func(format string, args ...any)
@@ -42,6 +47,7 @@ type Service struct {
 	Events               EventSink
 	Warnf                WarnFunc
 	Now                  func() time.Time
+	previewMu            sync.Mutex
 }
 
 type Metadata struct {
@@ -52,6 +58,40 @@ type Metadata struct {
 	UploadTime    int64
 	Encrypted     bool
 	PlaintextSize int64
+}
+
+type DownloadResult struct {
+	Status    string
+	Message   string
+	SavedPath string
+}
+
+type PreviewPayload struct {
+	DataBase64 string `json:"data_base64"`
+	MimeType   string `json:"mime_type"`
+}
+
+type ChooseSavePathFunc func(defaultName string) (string, error)
+
+const maxPreviewPayloadBytes int64 = 10 * 1024 * 1024
+
+var (
+	errPreviewNotFound                   = errors.New("File not found")
+	errPreviewNotSupported               = errors.New("Not a supported image")
+	errPreviewTooLarge                   = errors.New("File too large")
+	errPreviewDownloadFailed             = errors.New("Download failed")
+	errPreviewThumbMissing               = errors.New("Preview thumbnail unavailable")
+	errPreviewEncryptionPasswordRequired = errors.New("encryption password required")
+)
+
+var previewMimeTypes = map[string]string{
+	"jpg":  "image/jpeg",
+	"jpeg": "image/jpeg",
+	"png":  "image/png",
+	"gif":  "image/gif",
+	"webp": "image/webp",
+	"bmp":  "image/bmp",
+	"svg":  "image/svg+xml",
 }
 
 func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool) ([]Metadata, error) {
@@ -267,6 +307,194 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	}, op, header, nil
 }
 
+func (s *Service) Download(ctx context.Context, channelID int64, msgID int, lookupID int, chooseSavePath ChooseSavePathFunc) DownloadResult {
+	if err := s.ready(); err != nil {
+		return DownloadResult{Status: "error", Message: err.Error()}
+	}
+	if channelID == 0 {
+		return DownloadResult{Status: "error", Message: "Drive ID not found"}
+	}
+	if s.TG == nil {
+		return DownloadResult{Status: "error", Message: "Connection error: tg client not ready"}
+	}
+	if s.Peers == nil {
+		return DownloadResult{Status: "error", Message: "Connection error: peer resolver not ready"}
+	}
+	if chooseSavePath == nil {
+		return DownloadResult{Status: "error", Message: "Failed to choose download location: save dialog not ready"}
+	}
+
+	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return DownloadResult{Status: "error", Message: "Error: " + err.Error()}
+	}
+	doc, err := s.TG.GetFileDocument(ctx, peer, int64(msgID))
+	if err != nil {
+		return downloadResolveError(err)
+	}
+
+	originalName := "tdrive_download"
+	if lookupID == 0 {
+		lookupID = msgID
+	}
+	if name := projection.LookupFileName(s.DB, channelID, int64(lookupID)); name != "" {
+		originalName = name
+	}
+
+	// Check decryption readiness before opening the save dialog. Otherwise a
+	// locked vault makes the user choose a path and then repeat it after unlock.
+	encrypted := false
+	if enc, _, _, err := projection.FileEncryptionMeta(s.DB, channelID, int64(lookupID)); err == nil {
+		encrypted = enc
+	}
+	masterKey, err := s.requireEncryptionKey(encrypted)
+	if err != nil {
+		return DownloadResult{Status: "error", Message: err.Error()}
+	}
+
+	savePath, err := chooseSavePath(originalName)
+	if err != nil {
+		return DownloadResult{Status: "error", Message: "Failed to choose download location: " + err.Error()}
+	}
+	if savePath == "" {
+		return DownloadResult{Status: "canceled", Message: "Download canceled"}
+	}
+
+	f, err := os.Create(savePath)
+	if err != nil {
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	}
+	defer f.Close()
+
+	if !encrypted {
+		if err := s.TG.DownloadFile(ctx, peer, int64(msgID), f, s.downloadProgress(doc.Size)); err != nil {
+			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
+		}
+	} else {
+		cipher, err := os.CreateTemp("", "tdrive-dl-*")
+		if err != nil {
+			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+		}
+		defer func() {
+			_ = cipher.Close()
+			_ = os.Remove(cipher.Name())
+		}()
+		if err := s.TG.DownloadFile(ctx, peer, int64(msgID), cipher, s.downloadProgress(doc.Size)); err != nil {
+			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
+		}
+		if _, err := cipher.Seek(0, io.SeekStart); err != nil {
+			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+		}
+		if _, err := tdcrypto.DecryptStream(cipher, f, masterKey); err != nil {
+			_ = os.Remove(savePath)
+			return DownloadResult{Status: "error", Message: "Decrypt failed: " + err.Error()}
+		}
+	}
+
+	s.emitEvent("download_progress", 100.0)
+	return DownloadResult{
+		Status:    "success",
+		Message:   "Download complete",
+		SavedPath: savePath,
+	}
+}
+
+func (s *Service) PreviewThumbnail(ctx context.Context, channelID int64, msgID int) (PreviewPayload, error) {
+	if msgID <= 0 {
+		return PreviewPayload{}, errPreviewNotFound
+	}
+
+	var payload PreviewPayload
+	err := s.withPreviewSession(ctx, channelID, func(ctx context.Context, peer tgclient.InputPeer, channelID int64) error {
+		doc, _, mimeType, err := s.loadPreviewDocument(ctx, peer, channelID, msgID)
+		if err != nil {
+			return err
+		}
+
+		if inlinePayload, ok, err := previewInlineThumbPayload(doc, mimeType); ok || err != nil {
+			if err != nil {
+				return err
+			}
+			payload = inlinePayload
+			return nil
+		}
+
+		thumbType, ok := previewThumbTypeForDocument(doc)
+		if !ok {
+			return errPreviewThumbMissing
+		}
+
+		var buf bytes.Buffer
+		if err := s.TG.DownloadFileThumbnail(ctx, peer, int64(msgID), thumbType, &buf); err != nil {
+			return errPreviewDownloadFailed
+		}
+
+		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
+		return err
+	})
+	if err != nil {
+		return PreviewPayload{}, normalizePreviewError(err)
+	}
+
+	return payload, nil
+}
+
+func (s *Service) PreviewFile(ctx context.Context, channelID int64, msgID int) (PreviewPayload, error) {
+	if msgID <= 0 {
+		return PreviewPayload{}, errPreviewNotFound
+	}
+
+	var payload PreviewPayload
+	err := s.withPreviewSession(ctx, channelID, func(ctx context.Context, peer tgclient.InputPeer, channelID int64) error {
+		doc, _, mimeType, err := s.loadPreviewDocument(ctx, peer, channelID, msgID)
+		if err != nil {
+			return err
+		}
+
+		// For encrypted files, gate the preview budget on the plaintext size.
+		// Telegram's document size is ciphertext size and can differ.
+		encrypted := false
+		plaintextSize := doc.Size
+		if enc, psz, _, lookupErr := projection.FileEncryptionMeta(s.DB, channelID, int64(msgID)); lookupErr == nil && enc {
+			encrypted = true
+			if psz > 0 {
+				plaintextSize = psz
+			}
+		}
+		if exceedsPreviewPayloadBudget(plaintextSize) {
+			return errPreviewTooLarge
+		}
+		masterKey, err := s.requireEncryptionKey(encrypted)
+		if err != nil {
+			return errPreviewEncryptionPasswordRequired
+		}
+
+		var buf bytes.Buffer
+		if err := s.TG.DownloadFile(ctx, peer, int64(msgID), &buf, s.previewProgress(msgID, doc.Size)); err != nil {
+			return errPreviewDownloadFailed
+		}
+
+		if encrypted {
+			var plain bytes.Buffer
+			if _, err := tdcrypto.DecryptStream(&buf, &plain, masterKey); err != nil {
+				return errPreviewDownloadFailed
+			}
+			s.emitEvent("preview_progress", msgID, 100.0)
+			payload, err = previewPayloadFromBytes(plain.Bytes(), mimeType)
+			return err
+		}
+
+		s.emitEvent("preview_progress", msgID, 100.0)
+		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
+		return err
+	})
+	if err != nil {
+		return PreviewPayload{}, normalizePreviewError(err)
+	}
+
+	return payload, nil
+}
+
 func (s *Service) Meta(channelID int64, msgID int, name string, size int64, parentID string) error {
 	if err := s.ready(); err != nil {
 		return err
@@ -369,7 +597,7 @@ func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) error 
 	}
 
 	if encrypted, _, _, err := projection.FileEncryptionMeta(s.DB, channelID, int64(msgID)); err == nil {
-		if err := s.requireEncryptionKey(encrypted); err != nil {
+		if _, err := s.requireEncryptionKey(encrypted); err != nil {
 			return err
 		}
 	}
@@ -450,9 +678,9 @@ func (s *Service) emit(channelID int64, op projection.Op) (int64, error) {
 	return s.EmitOp(channelID, op)
 }
 
-func (s *Service) requireEncryptionKey(encrypted bool) error {
+func (s *Service) requireEncryptionKey(encrypted bool) ([]byte, error) {
 	if s.RequireEncryptionKey == nil {
-		return nil
+		return nil, nil
 	}
 	return s.RequireEncryptionKey(encrypted)
 }
@@ -477,6 +705,255 @@ func (s *Service) writeCiphertextTemp(plain io.Reader, plaintextSize int64, mast
 func (s *Service) emitEvent(name string, args ...any) {
 	if s.Events != nil {
 		s.Events.Emit(name, args...)
+	}
+}
+
+func (s *Service) downloadProgress(total int64) func(done, total int64) {
+	lastProgress := time.Now()
+	var mu sync.Mutex
+	return func(done, callbackTotal int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(lastProgress) <= 100*time.Millisecond {
+			return
+		}
+		useTotal := callbackTotal
+		if useTotal <= 0 {
+			useTotal = total
+		}
+		percent := 100.0
+		if useTotal > 0 {
+			percent = (float64(done) / float64(useTotal)) * 100
+			if percent > 100 {
+				percent = 100
+			}
+		}
+		s.emitEvent("download_progress", percent)
+		lastProgress = time.Now()
+	}
+}
+
+func (s *Service) previewProgress(msgID int, total int64) func(done, total int64) {
+	lastProgress := time.Now()
+	var mu sync.Mutex
+	return func(done, callbackTotal int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(lastProgress) <= 100*time.Millisecond {
+			return
+		}
+		useTotal := callbackTotal
+		if useTotal <= 0 {
+			useTotal = total
+		}
+		percent := 100.0
+		if useTotal > 0 {
+			percent = (float64(done) / float64(useTotal)) * 100
+			if percent > 100 {
+				percent = 100
+			}
+		}
+		s.emitEvent("preview_progress", msgID, percent)
+		lastProgress = time.Now()
+	}
+}
+
+func (s *Service) withPreviewSession(ctx context.Context, channelID int64, fn func(context.Context, tgclient.InputPeer, int64) error) error {
+	if ctx == nil {
+		return errPreviewDownloadFailed
+	}
+	if channelID == 0 {
+		return errPreviewDownloadFailed
+	}
+	if s.TG == nil || s.Peers == nil {
+		return errPreviewDownloadFailed
+	}
+
+	s.previewMu.Lock()
+	defer s.previewMu.Unlock()
+
+	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return errPreviewDownloadFailed
+	}
+	return fn(ctx, peer, channelID)
+}
+
+func (s *Service) loadPreviewDocument(ctx context.Context, peer tgclient.InputPeer, channelID int64, msgID int) (tgclient.FileDocument, string, string, error) {
+	doc, err := s.TG.GetFileDocument(ctx, peer, int64(msgID))
+	if err != nil {
+		if errors.Is(err, tgclient.ErrMessageNotFound) || errors.Is(err, tgclient.ErrNotFile) || errors.Is(err, tgclient.ErrEmptyDocument) {
+			return tgclient.FileDocument{}, "", "", errPreviewNotFound
+		}
+		return tgclient.FileDocument{}, "", "", errPreviewDownloadFailed
+	}
+
+	filename := s.lookupStoredFilename(channelID, msgID, doc)
+	mimeType, ok := previewMimeTypeForName(filename)
+	if !ok {
+		return tgclient.FileDocument{}, "", "", errPreviewNotSupported
+	}
+
+	return doc, filename, mimeType, nil
+}
+
+func previewFilenameFromDocument(doc tgclient.FileDocument) string {
+	return strings.TrimSpace(doc.Name)
+}
+
+func (s *Service) lookupStoredFilename(channelID int64, msgID int, doc tgclient.FileDocument) string {
+	if s.DB != nil && channelID != 0 {
+		if name := projection.LookupFileName(s.DB, channelID, int64(msgID)); name != "" {
+			return name
+		}
+	}
+
+	return previewFilenameFromDocument(doc)
+}
+
+func previewMimeTypeForName(name string) (string, bool) {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(strings.TrimSpace(name))), ".")
+	if ext == "" {
+		return "", false
+	}
+
+	mimeType, ok := previewMimeTypes[ext]
+	return mimeType, ok
+}
+
+func estimatedBase64Size(rawBytes int64) int64 {
+	if rawBytes <= 0 {
+		return 0
+	}
+
+	return ((rawBytes + 2) / 3) * 4
+}
+
+func exceedsPreviewPayloadBudget(rawBytes int64) bool {
+	if rawBytes < 0 {
+		return true
+	}
+
+	return estimatedBase64Size(rawBytes) > maxPreviewPayloadBytes
+}
+
+func detectedPreviewMimeType(data []byte, fallback string) string {
+	detected := strings.TrimSpace(http.DetectContentType(data))
+	if strings.HasPrefix(detected, "image/") {
+		return detected
+	}
+
+	fallback = strings.TrimSpace(fallback)
+	if fallback != "" {
+		return fallback
+	}
+
+	return detected
+}
+
+func previewPayloadFromBytes(data []byte, mimeType string) (PreviewPayload, error) {
+	if len(data) == 0 {
+		return PreviewPayload{}, errPreviewDownloadFailed
+	}
+	if exceedsPreviewPayloadBudget(int64(len(data))) {
+		return PreviewPayload{}, errPreviewTooLarge
+	}
+
+	return PreviewPayload{
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+		MimeType:   detectedPreviewMimeType(data, mimeType),
+	}, nil
+}
+
+func previewThumbScore(thumb tgclient.FileThumb) int {
+	score := thumb.Width * thumb.Height
+	if score <= 0 {
+		score = thumb.Size
+	}
+	if score <= 0 {
+		score = len(thumb.Bytes)
+	}
+	return score
+}
+
+func previewInlineThumbPayload(doc tgclient.FileDocument, fallbackMimeType string) (PreviewPayload, bool, error) {
+	var best *tgclient.FileThumb
+	bestScore := 0
+
+	for i := range doc.Thumbs {
+		thumb := &doc.Thumbs[i]
+		if len(thumb.Bytes) == 0 {
+			continue
+		}
+
+		score := previewThumbScore(*thumb)
+		if best == nil || score > bestScore {
+			best = thumb
+			bestScore = score
+		}
+	}
+
+	if best == nil {
+		return PreviewPayload{}, false, nil
+	}
+
+	payload, err := previewPayloadFromBytes(best.Bytes, fallbackMimeType)
+	if err != nil {
+		return PreviewPayload{}, true, err
+	}
+	return payload, true, nil
+}
+
+func previewThumbTypeForDocument(doc tgclient.FileDocument) (string, bool) {
+	bestType := ""
+	bestScore := 0
+
+	for _, thumb := range doc.Thumbs {
+		if len(thumb.Bytes) > 0 {
+			continue
+		}
+		thumbType := strings.TrimSpace(thumb.Type)
+		if thumbType == "" {
+			continue
+		}
+
+		score := previewThumbScore(thumb)
+		if bestType == "" || score > bestScore {
+			bestType = thumbType
+			bestScore = score
+		}
+	}
+
+	return bestType, bestType != ""
+}
+
+func normalizePreviewError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errPreviewNotFound):
+		return errPreviewNotFound
+	case errors.Is(err, errPreviewNotSupported):
+		return errPreviewNotSupported
+	case errors.Is(err, errPreviewTooLarge):
+		return errPreviewTooLarge
+	case errors.Is(err, errPreviewEncryptionPasswordRequired):
+		return errPreviewEncryptionPasswordRequired
+	default:
+		return errPreviewDownloadFailed
+	}
+}
+
+func downloadResolveError(err error) DownloadResult {
+	switch {
+	case errors.Is(err, tgclient.ErrMessageNotFound):
+		return DownloadResult{Status: "error", Message: "Message deleted or not found"}
+	case errors.Is(err, tgclient.ErrNotFile):
+		return DownloadResult{Status: "error", Message: "This is not a file"}
+	case errors.Is(err, tgclient.ErrEmptyDocument):
+		return DownloadResult{Status: "error", Message: "Empty document"}
+	default:
+		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}
 	}
 }
 

@@ -1,16 +1,20 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
 
@@ -93,8 +97,8 @@ func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
 		ActorID: func(ctx context.Context) (int64, error) {
 			return actor, nil
 		},
-		RequireEncryptionKey: func(encrypted bool) error {
-			return nil
+		RequireEncryptionKey: func(encrypted bool) ([]byte, error) {
+			return nil, nil
 		},
 		Now: func() time.Time {
 			return time.Unix(1234, 0)
@@ -112,11 +116,180 @@ func writeTempFile(t *testing.T, body string) string {
 	return path
 }
 
+func writeTempNamedFile(t *testing.T, name string, body []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	return path
+}
+
+var tinyPNG = []byte{
+	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+	0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+	0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+	0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+	0x89,
+}
+
 func project(t *testing.T, db *sql.DB, channelID int64, msgID int64, actorID int64, op projection.Op) {
 	t.Helper()
 	header := projection.Format(op)
 	if _, err := projection.ProjectFromOp(db, channelID, msgID, op, actorID, header); err != nil {
 		t.Fatalf("project %s msg=%d: %v", op.Type, msgID, err)
+	}
+}
+
+func TestPreviewFilePlainReturnsBase64(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	path := writeTempNamedFile(t, "image.png", tinyPNG)
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	payload, err := svc.PreviewFile(context.Background(), personalChannelID, files[0].MsgID)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if payload.MimeType != "image/png" {
+		t.Fatalf("mime = %q, want image/png", payload.MimeType)
+	}
+	got, err := base64.StdEncoding.DecodeString(payload.DataBase64)
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if !bytes.Equal(got, tinyPNG) {
+		t.Fatalf("preview bytes = %x, want %x", got, tinyPNG)
+	}
+}
+
+func TestPreviewFileEncryptedDecrypts(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	masterKey := bytes.Repeat([]byte{9}, 32)
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		if !wantEncrypted {
+			return nil, nil
+		}
+		return masterKey, nil
+	}
+	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
+		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
+		if err != nil {
+			return nil, err
+		}
+		if err := tdcrypto.EncryptStream(plain, tmp, masterKey, plaintextSize); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		return tmp, nil
+	}
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if encrypted {
+			return masterKey, nil
+		}
+		return nil, nil
+	}
+
+	path := writeTempNamedFile(t, "secret.png", tinyPNG)
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	payload, err := svc.PreviewFile(context.Background(), personalChannelID, files[0].MsgID)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	got, err := base64.StdEncoding.DecodeString(payload.DataBase64)
+	if err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if !bytes.Equal(got, tinyPNG) {
+		t.Fatalf("preview bytes = %x, want %x", got, tinyPNG)
+	}
+}
+
+func TestPreviewFileEncryptedRequiresPassword(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	masterKey := bytes.Repeat([]byte{8}, 32)
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		if !wantEncrypted {
+			return nil, nil
+		}
+		return masterKey, nil
+	}
+	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
+		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
+		if err != nil {
+			return nil, err
+		}
+		if err := tdcrypto.EncryptStream(plain, tmp, masterKey, plaintextSize); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		return tmp, nil
+	}
+
+	path := writeTempNamedFile(t, "locked.png", tinyPNG)
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if encrypted {
+			return nil, errNeedPassword
+		}
+		return nil, nil
+	}
+
+	payload, err := svc.PreviewFile(context.Background(), personalChannelID, files[0].MsgID)
+	if !errors.Is(err, errPreviewEncryptionPasswordRequired) {
+		t.Fatalf("preview err = %v, want password required", err)
+	}
+	if payload.DataBase64 != "" || payload.MimeType != "" {
+		t.Fatalf("payload = %+v, want empty", payload)
+	}
+}
+
+func TestPreviewFileTooLargeUsesPlaintextSize(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	project(t, db, personalChannelID, 81, 7, projection.Op{
+		Type:              projection.OpFileUpload,
+		Parent:            "",
+		Name:              "huge.png",
+		FileSize:          1,
+		FileUploadTime:    1,
+		Encrypted:         true,
+		PlaintextSize:     7_864_321,
+		EncryptionVersion: 1,
+	})
+	fakeTG.SeedHistory(tgclient.HistoryMessage{
+		MsgID:        81,
+		HasMedia:     true,
+		MediaSize:    1,
+		DocumentName: "huge.png",
+	})
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		t.Fatalf("RequireEncryptionKey called; budget should fail first")
+		return nil, nil
+	}
+
+	if _, err := svc.PreviewFile(context.Background(), personalChannelID, 81); !errors.Is(err, errPreviewTooLarge) {
+		t.Fatalf("preview err = %v, want too large", err)
 	}
 }
 
@@ -212,6 +385,126 @@ func TestUploadEncryptedRequiresPasswordBeforeSend(t *testing.T) {
 	}
 	if sent := fakeTG.SentFiles(); len(sent) != 0 {
 		t.Fatalf("sent files = %+v, want none", sent)
+	}
+}
+
+func TestDownloadPlainFileWritesBytes(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	path := writeTempFile(t, "hello")
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	savePath := filepath.Join(t.TempDir(), "download.txt")
+	result := svc.Download(context.Background(), personalChannelID, files[0].MsgID, files[0].MsgID, func(defaultName string) (string, error) {
+		if defaultName != "upload.txt" {
+			t.Fatalf("defaultName = %q, want upload.txt", defaultName)
+		}
+		return savePath, nil
+	})
+	if result.Status != "success" {
+		t.Fatalf("download = %+v", result)
+	}
+	got, err := os.ReadFile(savePath)
+	if err != nil {
+		t.Fatalf("read downloaded file: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("downloaded bytes = %q, want hello", string(got))
+	}
+}
+
+func TestDownloadEncryptedFileDecrypts(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	masterKey := bytes.Repeat([]byte{7}, 32)
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		if !wantEncrypted {
+			return nil, nil
+		}
+		return masterKey, nil
+	}
+	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
+		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
+		if err != nil {
+			return nil, err
+		}
+		if err := tdcrypto.EncryptStream(plain, tmp, masterKey, plaintextSize); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		return tmp, nil
+	}
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if encrypted {
+			return masterKey, nil
+		}
+		return nil, nil
+	}
+
+	path := writeTempFile(t, "secret")
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	savePath := filepath.Join(t.TempDir(), "secret.out")
+	result := svc.Download(context.Background(), personalChannelID, files[0].MsgID, files[0].MsgID, func(defaultName string) (string, error) {
+		return savePath, nil
+	})
+	if result.Status != "success" {
+		t.Fatalf("download = %+v", result)
+	}
+	got, err := os.ReadFile(savePath)
+	if err != nil {
+		t.Fatalf("read downloaded file: %v", err)
+	}
+	if string(got) != "secret" {
+		t.Fatalf("downloaded bytes = %q, want secret", string(got))
+	}
+}
+
+func TestDownloadEncryptedRequiresPassword(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	project(t, db, personalChannelID, 80, 7, projection.Op{
+		Type:              projection.OpFileUpload,
+		Parent:            "",
+		Name:              "locked.bin",
+		FileSize:          4,
+		FileUploadTime:    1,
+		Encrypted:         true,
+		PlaintextSize:     4,
+		EncryptionVersion: 1,
+	})
+	fakeTG.SeedHistory(tgclient.HistoryMessage{
+		MsgID:        80,
+		HasMedia:     true,
+		MediaSize:    4,
+		DocumentName: "locked.bin",
+	})
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if encrypted {
+			return nil, errNeedPassword
+		}
+		return nil, nil
+	}
+
+	called := false
+	result := svc.Download(context.Background(), personalChannelID, 80, 80, func(defaultName string) (string, error) {
+		called = true
+		return filepath.Join(t.TempDir(), "should-not-exist"), nil
+	})
+	if result.Status != "error" || !strings.Contains(result.Message, errNeedPassword.Error()) {
+		t.Fatalf("download = %+v, want password error", result)
+	}
+	if called {
+		t.Fatalf("chooseSavePath was called before password check")
 	}
 }
 
@@ -315,11 +608,11 @@ func TestDeleteEncryptedFileRequiresPassword(t *testing.T) {
 		PlaintextSize:     10,
 		EncryptionVersion: 1,
 	})
-	svc.RequireEncryptionKey = func(encrypted bool) error {
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return errNeedPassword
+			return nil, errNeedPassword
 		}
-		return nil
+		return nil, nil
 	}
 
 	if err := svc.Delete(context.Background(), personalChannelID, 70); !errors.Is(err, errNeedPassword) {
