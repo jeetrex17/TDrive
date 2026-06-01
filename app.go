@@ -17,6 +17,7 @@ import (
 	folderservice "TDrive/backend/services/folder"
 	lifecycleservice "TDrive/backend/services/lifecycle"
 	readservice "TDrive/backend/services/read"
+	userservice "TDrive/backend/services/user"
 	tdsync "TDrive/backend/sync"
 	"TDrive/backend/tgclient"
 
@@ -35,6 +36,7 @@ type App struct {
 	folders    *folderservice.Service
 	reads      *readservice.Service
 	lifecycle  *lifecycleservice.Service
+	users      *userservice.Service
 	syncEngine *tdsync.Engine
 	active     *lifecycleservice.ActiveDrive
 	selfUserID atomic.Int64
@@ -358,6 +360,25 @@ func (a *App) lifecycleService() *lifecycleservice.Service {
 	return a.lifecycle
 }
 
+func (a *App) newUserService() *userservice.Service {
+	return &userservice.Service{
+		DB:    backend.DB,
+		TG:    a.tg,
+		Peers: peerResolverFn(a.resolvePeer),
+		ActorID: func(ctx context.Context) (int64, error) {
+			return a.actorID(ctx)
+		},
+		Active: a.ActiveChannelID,
+	}
+}
+
+func (a *App) userService() *userservice.Service {
+	if a.users == nil {
+		a.users = a.newUserService()
+	}
+	return a.users
+}
+
 func (a *App) LoginPhoneNumber(phoneNumber string) {
 	client, err := auth.Connect()
 	if err != nil {
@@ -530,6 +551,7 @@ func (a *App) startup(ctx context.Context) {
 	a.reads = a.newReadService()
 	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
 	a.lifecycle = a.newLifecycleService()
+	a.users = a.newUserService()
 
 	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {
 		if err := a.lifecycle.UsePersonalChannel(a.ctx, savedID); err != nil {

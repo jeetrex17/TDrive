@@ -1,11 +1,13 @@
 package tgclient
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"math/rand"
 	"strings"
+	"time"
 
 	"TDrive/backend/auth"
 
@@ -76,6 +78,95 @@ func (g *Gotd) SelfID(ctx context.Context) (int64, error) {
 		return fmt.Errorf("tgclient: self user not found")
 	})
 	return id, err
+}
+
+func (g *Gotd) SelfProfile(ctx context.Context) (UserProfile, error) {
+	var out UserProfile
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		me, err := api.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}})
+		if err != nil {
+			return err
+		}
+		var u *tg.User
+		for _, raw := range me {
+			if user, ok := raw.(*tg.User); ok && user.ID != 0 {
+				u = user
+				break
+			}
+		}
+		if u == nil {
+			return fmt.Errorf("tgclient: self user not found")
+		}
+
+		out = UserProfile{
+			ID:        u.ID,
+			FirstName: u.FirstName,
+			LastName:  u.LastName,
+			Username:  u.Username,
+		}
+
+		photo, ok := u.Photo.(*tg.UserProfilePhoto)
+		if !ok {
+			return nil
+		}
+		dlCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		var buf bytes.Buffer
+		loc := &tg.InputPeerPhotoFileLocation{
+			Big:     false,
+			Peer:    &tg.InputPeerSelf{},
+			PhotoID: photo.PhotoID,
+		}
+		if _, err := downloader.NewDownloader().Download(api, loc).Stream(dlCtx, &buf); err != nil {
+			fmt.Printf("self photo download failed: %v\n", err)
+			return nil
+		}
+		out.PhotoBytes = append([]byte(nil), buf.Bytes()...)
+		return nil
+	})
+	return out, err
+}
+
+func (g *Gotd) ResolveUsersFromMessages(ctx context.Context, peer InputPeer, refs []UserMessageRef) ([]UserProfile, error) {
+	var out []UserProfile
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		const batchSize = 100
+		inputs := make([]tg.InputUserClass, 0, len(refs))
+		for _, ref := range refs {
+			if ref.UserID <= 0 || ref.MsgID <= 0 {
+				continue
+			}
+			inputs = append(inputs, &tg.InputUserFromMessage{
+				Peer:   toPeer(peer),
+				MsgID:  int(ref.MsgID),
+				UserID: ref.UserID,
+			})
+		}
+		for i := 0; i < len(inputs); i += batchSize {
+			end := i + batchSize
+			if end > len(inputs) {
+				end = len(inputs)
+			}
+			resolved, err := api.UsersGetUsers(ctx, inputs[i:end])
+			if err != nil {
+				return err
+			}
+			for _, raw := range resolved {
+				user, ok := raw.(*tg.User)
+				if !ok || user.ID == 0 {
+					continue
+				}
+				out = append(out, UserProfile{
+					ID:        user.ID,
+					FirstName: user.FirstName,
+					LastName:  user.LastName,
+					Username:  user.Username,
+				})
+			}
+		}
+		return nil
+	})
+	return out, err
 }
 
 func (g *Gotd) SendControl(ctx context.Context, peer InputPeer, text string, silent bool) (int64, error) {

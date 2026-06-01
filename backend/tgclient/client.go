@@ -112,6 +112,19 @@ type JoinRequest struct {
 	About       string
 }
 
+type UserProfile struct {
+	ID         int64
+	FirstName  string
+	LastName   string
+	Username   string
+	PhotoBytes []byte
+}
+
+type UserMessageRef struct {
+	UserID int64
+	MsgID  int64
+}
+
 // Client is the surface sync, backfill, and local-action paths use to talk
 // to Telegram. Both the real (gotd-backed) and fake test implementations
 // implement this.
@@ -119,6 +132,14 @@ type Client interface {
 	// SelfID returns the logged-in user's Telegram user ID. Used by
 	// ProjectFromOp's actorID field.
 	SelfID(ctx context.Context) (int64, error)
+
+	// SelfProfile returns the logged-in user's display fields and, when
+	// available, a small avatar photo. Photo fetch is best-effort.
+	SelfProfile(ctx context.Context) (UserProfile, error)
+
+	// ResolveUsersFromMessages resolves channel members through message refs.
+	// Telegram requires InputUserFromMessage for users not already in contacts.
+	ResolveUsersFromMessages(ctx context.Context, peer InputPeer, refs []UserMessageRef) ([]UserProfile, error)
 
 	// SendControl posts a text-only message into the channel. The text is
 	// expected to be a TDX1 header (possibly with a human-readable comment

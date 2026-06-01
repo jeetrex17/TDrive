@@ -36,6 +36,9 @@ type Fake struct {
 	requestedJoins []string
 	hiddenRequests []HiddenJoinRequest
 	leftChannels   []InputPeer
+	users          map[int64]UserProfile
+	selfCalls      int
+	resolveCalls   int
 }
 
 type SentControl struct {
@@ -78,6 +81,7 @@ func NewFake(selfID int64) *Fake {
 		channels:      make(map[int64]fakeChannel),
 		invites:       make(map[string]InviteInfo),
 		joinRequests:  make(map[int64][]JoinRequest),
+		users:         make(map[int64]UserProfile),
 	}
 }
 
@@ -201,6 +205,24 @@ func (f *Fake) SeedJoinRequests(channelID int64, reqs ...JoinRequest) {
 	f.joinRequests[channelID] = cp
 }
 
+func (f *Fake) SeedUser(user UserProfile) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.users[user.ID] = user
+}
+
+func (f *Fake) SelfProfileCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.selfCalls
+}
+
+func (f *Fake) ResolveUsersFromMessagesCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resolveCalls
+}
+
 // EditLastControlText simulates a member editing a TDX1 caption from the
 // regular Telegram client. The history record's text changes; msg_id stays
 // the same. Returns the msg_id mutated.
@@ -225,6 +247,29 @@ func (f *Fake) SelfID(ctx context.Context) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.self, nil
+}
+
+func (f *Fake) SelfProfile(ctx context.Context) (UserProfile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selfCalls++
+	if user, ok := f.users[f.self]; ok {
+		return user, nil
+	}
+	return UserProfile{ID: f.self, FirstName: "Self"}, nil
+}
+
+func (f *Fake) ResolveUsersFromMessages(ctx context.Context, peer InputPeer, refs []UserMessageRef) ([]UserProfile, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolveCalls++
+	out := make([]UserProfile, 0, len(refs))
+	for _, ref := range refs {
+		if user, ok := f.users[ref.UserID]; ok {
+			out = append(out, user)
+		}
+	}
+	return out, nil
 }
 
 func (f *Fake) SendControl(ctx context.Context, peer InputPeer, text string, silent bool) (int64, error) {
