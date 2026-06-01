@@ -12,6 +12,7 @@ import (
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
 	"TDrive/backend/projection"
+	authsvc "TDrive/backend/services/auth"
 	encservice "TDrive/backend/services/encryption"
 	fileservice "TDrive/backend/services/file"
 	folderservice "TDrive/backend/services/folder"
@@ -27,10 +28,9 @@ import (
 
 type App struct {
 	ctx        context.Context
-	Codech     chan string
-	Passch     chan string
 	Client     *telegram.Client
 	tg         tgclient.Client
+	auth       *authsvc.Service
 	enc        *encservice.Service
 	files      *fileservice.Service
 	folders    *folderservice.Service
@@ -191,16 +191,7 @@ type PreviewPayload struct {
 }
 
 func (a *App) CheckLoginStatus() bool {
-	if a.ctx == nil {
-		return false
-	}
-	login, err := auth.CheckLogin(a.ctx)
-	if err != nil {
-		fmt.Println("error auto login", err)
-		return false
-	}
-
-	return login
+	return a.authService().IsLoggedIn(a.ctx)
 }
 
 func (a *App) SelectFiles() ([]string, error) {
@@ -379,24 +370,19 @@ func (a *App) userService() *userservice.Service {
 	return a.users
 }
 
-func (a *App) LoginPhoneNumber(phoneNumber string) {
-	client, err := auth.Connect()
-	if err != nil {
-		fmt.Println("Could not connect to Telegram:", err)
-		return
+func (a *App) newAuthService() *authsvc.Service {
+	return authsvc.NewService(runtimeEventSink{app: a})
+}
+
+func (a *App) authService() *authsvc.Service {
+	if a.auth == nil {
+		a.auth = a.newAuthService()
 	}
+	return a.auth
+}
 
-	go func() {
-		err := auth.StartLogin(a.ctx, client, a, phoneNumber)
-		if err != nil {
-			fmt.Println("Login failed:", err)
-
-			return
-		}
-
-		fmt.Println("Login Flow Complete. Emitting Success Event.")
-		runtime.EventsEmit(a.ctx, "login-success", true)
-	}()
+func (a *App) LoginPhoneNumber(phoneNumber string) {
+	a.authService().StartLogin(a.ctx, phoneNumber)
 }
 
 func (a *App) InitDrive() string {
@@ -463,49 +449,38 @@ func (a *App) GetStorageUsed() (int64, error) {
 }
 
 func (a *App) GetCodech() chan string {
-	return a.Codech
+	return a.authService().Codech()
 }
 
 func (a *App) GetPassch() chan string {
-	return a.Passch
+	return a.authService().Passch()
 }
 
 func NewApp() *App {
 	return &App{
-		ctx:    nil,
-		Codech: make(chan string),
-		Passch: make(chan string),
 		Client: nil,
 		active: lifecycleservice.NewActiveDrive(),
 	}
 }
 
 func (a *App) CheckSystemStatus() string {
-	_, err := auth.LoadImpCredentials()
-	if err != nil {
-		return "NEEDS_SETUP"
-	}
-	return "READY_FOR_LOGIN"
+	return a.authService().SystemStatus()
 }
 
 func (a *App) SaveSetup(apiId int, apiHash string) string {
-	err := auth.SaveImpCredentials(apiId, apiHash)
-	if err != nil {
-		return "Error: " + err.Error()
-	}
-	return "Success"
+	return a.authService().SaveSetup(apiId, apiHash)
 }
 
 func (a *App) SumbitCode(code string) {
-	a.Codech <- code
+	a.authService().SubmitCode(code)
 }
 
 func (a *App) SendHint(hint string) {
-	runtime.EventsEmit(a.ctx, "gothint", hint)
+	a.authService().SendHint(hint)
 }
 
 func (a *App) SumbitPassword(password string) {
-	a.Passch <- password
+	a.authService().SubmitPassword(password)
 }
 
 func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, error) {
@@ -545,6 +520,7 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 
+	a.auth = a.newAuthService()
 	a.enc = a.newEncryptionService()
 	a.files = a.newFileService()
 	a.folders = a.newFolderService()
