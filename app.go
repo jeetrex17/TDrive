@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,7 +29,6 @@ import (
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
-	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -58,6 +56,17 @@ type peerResolverFn func(context.Context, int64) (tgclient.InputPeer, error)
 
 func (f peerResolverFn) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
 	return f(ctx, channelID)
+}
+
+type runtimeEventSink struct {
+	app *App
+}
+
+func (s runtimeEventSink) Emit(name string, args ...any) {
+	if s.app == nil {
+		return
+	}
+	runtime.EventsEmit(s.app.ctx, name, args...)
 }
 
 // resolvePeer satisfies tdsync.PeerResolver through peerResolverFn. Keeping
@@ -432,305 +441,37 @@ func (a *App) SelectFiles() ([]string, error) {
 	return uploadfilepaths, nil
 }
 
-// AIs Job
-func extractMsgID(updates tg.UpdatesClass) int {
-	switch u := updates.(type) {
-	case *tg.Updates:
-		for _, update := range u.Updates {
-			if msg, ok := update.(*tg.UpdateNewMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return m.ID
-				}
-			}
-			if msg, ok := update.(*tg.UpdateNewChannelMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return m.ID
-				}
-			}
-		}
-	case *tg.UpdatesCombined:
-		for _, update := range u.Updates {
-			if msg, ok := update.(*tg.UpdateNewChannelMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return m.ID
-				}
-			}
-		}
-	}
-	return 0
-}
-
-type ProgressReader struct {
-	Reader    io.Reader
-	Total     int64
-	Current   int64
-	Ctx       context.Context
-	LastPrint time.Time
-	UploadID  int
-}
-
-func (pr *ProgressReader) Read(p []byte) (int, error) {
-	n, err := pr.Reader.Read(p)
-
-	if n > 0 {
-		pr.Current += int64(n)
-		if time.Since(pr.LastPrint) > 100*time.Millisecond {
-			perct := 0.0
-			if pr.Total > 0 {
-				perct = (float64(pr.Current) / float64(pr.Total)) * 100
-				if perct > 100 {
-					perct = 100
-				}
-			}
-
-			runtime.EventsEmit(pr.Ctx, "upload_progress", pr.UploadID, perct)
-
-			pr.LastPrint = time.Now()
-		}
-	}
-
-	if err != nil && err != io.EOF {
-		return n, err
-	}
-	return n, err
-}
-
 // UploadToDriveFS uploads each chosen file to the active drive. The
 // `encrypt` flag is a per-batch choice made in the upload-options modal:
 // true means encrypt-and-upload (the encryption password must already
 // be remembered for this app session before this call), false means plain
 // upload regardless of encryption password state.
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) ([]backend.FileMetaData, error) {
-	if len(filePaths) != len(parentIDs) {
-		return nil, fmt.Errorf("filepaths and parentIDs length mismatch")
-	}
-	if backend.DB == nil {
-		return nil, fmt.Errorf("db not ready")
-	}
-	channelID := a.ActiveChannelID()
-	if channelID == 0 {
-		return nil, fmt.Errorf("no active channel")
-	}
-	actorID, err := a.actorID(a.ctx)
+	files, err := a.fileService().Upload(a.ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
 	if err != nil {
-		return nil, err
-	}
-
-	type uploadedResult struct {
-		UploadID  int
-		Meta      backend.FileMetaData
-		RawHeader string
-		Op        projection.Op
-	}
-
-	sem := make(chan struct{}, 3)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	uploaded := make([]uploadedResult, 0, len(filePaths))
-	failed := 0
-
-	for i := 0; i < len(filePaths); i++ {
-		path := filePaths[i]
-		pid := parentIDs[i]
-		uploadID := i
-		wg.Add(1)
-		sem <- struct{}{}
-
-		go func(uploadID int, path string, pid string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			meta, op, header, err := a.uploadSingleFile(uploadID, path, pid, channelID, encrypt)
-			if err != nil {
-				mu.Lock()
-				failed++
-				mu.Unlock()
-				runtime.EventsEmit(a.ctx, "upload_error", uploadID, filepath.Base(path), err.Error())
-				return
-			}
-
-			mu.Lock()
-			uploaded = append(uploaded, uploadedResult{
-				UploadID:  uploadID,
-				Meta:      meta,
-				RawHeader: header,
-				Op:        op,
-			})
-			mu.Unlock()
-		}(uploadID, path, pid)
-	}
-
-	wg.Wait()
-
-	uploadedFiles := make([]backend.FileMetaData, 0, len(uploaded))
-	for _, item := range uploaded {
-		uploadedFiles = append(uploadedFiles, item.Meta)
-	}
-
-	emitLocalIndexError := func(reason string) {
-		for _, item := range uploaded {
-			runtime.EventsEmit(a.ctx, "upload_error", item.UploadID, item.Meta.Name, reason)
+		out := make([]backend.FileMetaData, 0, len(files))
+		for _, f := range files {
+			out = append(out, uploadMetaToBackend(f))
 		}
+		return out, err
 	}
-
-	for _, item := range uploaded {
-		if _, err := projection.ProjectFromOp(
-			backend.DB,
-			channelID,
-			int64(item.Meta.TgMsgID),
-			item.Op,
-			actorID,
-			item.RawHeader,
-		); err != nil {
-			emitLocalIndexError("local index write failed")
-			return uploadedFiles, err
-		}
+	out := make([]backend.FileMetaData, 0, len(files))
+	for _, f := range files {
+		out = append(out, uploadMetaToBackend(f))
 	}
-
-	for _, item := range uploaded {
-		runtime.EventsEmit(a.ctx, "upload_complete", item.UploadID, item.Meta.Name)
-	}
-
-	if failed > 0 {
-		return uploadedFiles, fmt.Errorf("%d uploads failed", failed)
-	}
-	return uploadedFiles, nil
+	return out, nil
 }
 
-func (a *App) uploadSingleFile(uploadID int, filePath string, parentID string, channelID int64, wantEncrypted bool) (backend.FileMetaData, projection.Op, string, error) {
-	if channelID == 0 {
-		return backend.FileMetaData{}, projection.Op{}, "", fmt.Errorf("drive channel id not found")
-	}
-
-	plainFile, err := os.Open(filePath)
-	if err != nil {
-		return backend.FileMetaData{}, projection.Op{}, "", err
-	}
-	defer plainFile.Close()
-
-	info, err := plainFile.Stat()
-	if err != nil {
-		return backend.FileMetaData{}, projection.Op{}, "", err
-	}
-	filename := filepath.Base(filePath)
-	plaintextSize := info.Size()
-
-	masterKey, err := a.encryptionService().MasterKeyForUpload(channelID, wantEncrypted)
-	if err != nil {
-		return backend.FileMetaData{}, projection.Op{}, "", err
-	}
-	encrypted := wantEncrypted
-
-	// uploadSource is what the Telegram uploader streams. For plaintext,
-	// it's the raw file. For encrypted, we materialise a temp ciphertext
-	// file on disk and stream from there — keeps memory bounded and lets
-	// the existing ProgressReader work without changes.
-	var uploadSource *os.File = plainFile
-	uploadSize := plaintextSize
-	if encrypted {
-		tempCipher, err := a.encryptionService().WriteCiphertextTemp(plainFile, plaintextSize, masterKey)
-		if err != nil {
-			return backend.FileMetaData{}, projection.Op{}, "", fmt.Errorf("encrypt: %w", err)
-		}
-		defer func() {
-			_ = tempCipher.Close()
-			_ = os.Remove(tempCipher.Name())
-		}()
-		ciphInfo, err := tempCipher.Stat()
-		if err != nil {
-			return backend.FileMetaData{}, projection.Op{}, "", err
-		}
-		uploadSource = tempCipher
-		uploadSize = ciphInfo.Size()
-	}
-
-	pu := &ProgressReader{
-		Reader:    uploadSource,
-		Total:     uploadSize,
-		Ctx:       a.ctx,
-		LastPrint: time.Now(),
-		UploadID:  uploadID,
-	}
-
-	uploadTime := time.Now().Unix()
-	op := projection.Op{
-		Type:           projection.OpFileUpload,
-		Parent:         normalizeOpParent(parentID),
-		Name:           filename,
-		FileSize:       uploadSize,
-		FileUploadTime: uploadTime,
-	}
-	if encrypted {
-		op.Encrypted = true
-		op.PlaintextSize = plaintextSize
-		op.EncryptionVersion = 1
-	}
-	header := projection.Format(op)
-	caption := header + "\nTDrive: " + filename
-	totalSize := uploadSize
-
-	freshClient, err := auth.Connect()
-	if err != nil {
-		return backend.FileMetaData{}, projection.Op{}, "", err
-	}
-
-	var msgID int
-
-	err = freshClient.Run(a.ctx, func(ctx context.Context) error {
-		_, inputPeer, err := auth.ResolveDriveChannel(ctx, freshClient.API(), channelID)
-		if err != nil {
-			return err
-		}
-
-		u := uploader.NewUploader(freshClient.API())
-		fmt.Printf("Starting upload: %s\n", filename)
-
-		runtime.EventsEmit(a.ctx, "upload_start", uploadID, filename, totalSize, parentID)
-
-		uploadResult, err := u.FromReader(ctx, filename, pu)
-		if err != nil {
-			return err
-		}
-
-		req := &tg.MessagesSendMediaRequest{
-			Peer: inputPeer,
-			Media: &tg.InputMediaUploadedDocument{
-				File:      uploadResult,
-				MimeType:  "application/octet-stream",
-				ForceFile: true,
-				Attributes: []tg.DocumentAttributeClass{
-					&tg.DocumentAttributeFilename{FileName: filename},
-				},
-			},
-			RandomID: rand.Int63(),
-			Message:  caption,
-		}
-
-		updates, err := freshClient.API().MessagesSendMedia(ctx, req)
-		if err != nil {
-			return err
-		}
-
-		msgID = extractMsgID(updates)
-		if msgID == 0 {
-			return fmt.Errorf("upload success, but could not find msgID")
-		}
-
-		runtime.EventsEmit(a.ctx, "upload_progress", uploadID, 100.0)
-		return nil
-	})
-	if err != nil {
-		return backend.FileMetaData{}, projection.Op{}, "", err
-	}
-
+func uploadMetaToBackend(f fileservice.Metadata) backend.FileMetaData {
 	return backend.FileMetaData{
-		Name:       filename,
-		Size:       totalSize,
-		TgMsgID:    msgID,
-		ParentID:   normalizeOpParent(parentID),
-		UploadTime: uploadTime,
-	}, op, header, nil
+		Name:          f.Name,
+		Size:          f.Size,
+		TgMsgID:       f.MsgID,
+		ParentID:      f.ParentID,
+		UploadTime:    f.UploadTime,
+		Encrypted:     f.Encrypted,
+		PlaintextSize: f.PlaintextSize,
+	}
 }
 
 func normalizeOpParent(p string) string {
@@ -775,6 +516,13 @@ func (a *App) newFileService() *fileservice.Service {
 			}
 			return nil
 		},
+		MasterKeyForUpload: func(channelID int64, wantEncrypted bool) ([]byte, error) {
+			return a.encryptionService().MasterKeyForUpload(channelID, wantEncrypted)
+		},
+		WriteCiphertextTemp: func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
+			return a.encryptionService().WriteCiphertextTemp(plain, plaintextSize, masterKey)
+		},
+		Events: runtimeEventSink{app: a},
 		Warnf: func(format string, args ...any) {
 			fmt.Printf(format, args...)
 		},

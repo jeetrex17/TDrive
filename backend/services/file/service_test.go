@@ -4,6 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +30,28 @@ type testPeerResolver struct {
 
 func (r testPeerResolver) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
 	return r.peer, nil
+}
+
+type eventRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *eventRecorder) Emit(name string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, name)
+}
+
+func (r *eventRecorder) Has(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ev := range r.events {
+		if ev == name {
+			return true
+		}
+	}
+	return false
 }
 
 func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
@@ -77,11 +103,115 @@ func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
 	return svc, db, fakeTG, &actor
 }
 
+func writeTempFile(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "upload.txt")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	return path
+}
+
 func project(t *testing.T, db *sql.DB, channelID int64, msgID int64, actorID int64, op projection.Op) {
 	t.Helper()
 	header := projection.Format(op)
 	if _, err := projection.ProjectFromOp(db, channelID, msgID, op, actorID, header); err != nil {
 		t.Fatalf("project %s msg=%d: %v", op.Type, msgID, err)
+	}
+}
+
+func TestUploadPlainFileSendsAndProjects(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	events := &eventRecorder{}
+	svc.Events = events
+	path := writeTempFile(t, "hello")
+
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %+v, want one", files)
+	}
+	if files[0].Name != "upload.txt" || files[0].Size != 5 || files[0].ParentID != "" {
+		t.Fatalf("bad metadata: %+v", files[0])
+	}
+	if !projection.FileExists(db, personalChannelID, int64(files[0].MsgID)) {
+		t.Fatalf("projected file missing")
+	}
+	sent := fakeTG.SentFiles()
+	if len(sent) != 1 {
+		t.Fatalf("sent files = %+v, want one", sent)
+	}
+	if _, err := projection.Parse(sent[0].Caption); err != nil {
+		t.Fatalf("caption does not parse: %v", err)
+	}
+	if !events.Has("upload_start") || !events.Has("upload_complete") || !events.Has("upload_progress") {
+		t.Fatalf("events = %+v, missing upload lifecycle event", events.events)
+	}
+}
+
+func TestUploadEncryptedUsesCiphertextAndPlaintextMetadata(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	path := writeTempFile(t, "plain")
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		if !wantEncrypted {
+			return nil, nil
+		}
+		return []byte("master-key"), nil
+	}
+	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
+		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tmp.Write([]byte("ciphertext")); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		return tmp, nil
+	}
+
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files = %+v, want one", files)
+	}
+	if !files[0].Encrypted || files[0].PlaintextSize != 5 || files[0].Size != 10 {
+		t.Fatalf("bad encrypted metadata: %+v", files[0])
+	}
+	encrypted, plaintextSize, _, err := projection.FileEncryptionMeta(db, personalChannelID, int64(files[0].MsgID))
+	if err != nil {
+		t.Fatalf("encryption meta: %v", err)
+	}
+	if !encrypted || plaintextSize != 5 {
+		t.Fatalf("db encrypted=%v plaintext=%d, want encrypted plaintext=5", encrypted, plaintextSize)
+	}
+	if sent := fakeTG.SentFiles(); len(sent) != 1 || sent[0].Size != 10 {
+		t.Fatalf("sent files = %+v, want ciphertext size 10", sent)
+	}
+}
+
+func TestUploadEncryptedRequiresPasswordBeforeSend(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	path := writeTempFile(t, "plain")
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		return nil, errNeedPassword
+	}
+
+	if _, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true); err == nil {
+		t.Fatalf("upload unexpectedly succeeded")
+	}
+	if sent := fakeTG.SentFiles(); len(sent) != 0 {
+		t.Fatalf("sent files = %+v, want none", sent)
 	}
 }
 
