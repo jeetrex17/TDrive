@@ -1,16 +1,9 @@
 package main
 
 import (
-	"context"
-	"fmt"
-	"strings"
-	"time"
-
 	"TDrive/backend"
-	"TDrive/backend/auth"
 	"TDrive/backend/projection"
-
-	"github.com/gotd/td/tg"
+	channelservice "TDrive/backend/services/channel"
 )
 
 // ChannelInfo is the Wails-bound DTO for a drive listed in the sidebar.
@@ -50,26 +43,27 @@ type JoinRequestInfo struct {
 	About       string `json:"about,omitempty"`
 }
 
+func (a *App) channelService() *channelservice.Service {
+	return &channelservice.Service{
+		DB:        backend.DB,
+		TG:        a.tg,
+		Sync:      a.syncEngine,
+		GetActive: a.ActiveChannelID,
+		SetActive: a.setActiveChannelID,
+	}
+}
+
 // ListChannels returns every drive known to this client (personal first,
 // then shared in joined-at order). Used to render the sidebar.
 func (a *App) ListChannels() ([]ChannelInfo, error) {
-	if backend.DB == nil {
-		return nil, fmt.Errorf("db not ready")
-	}
-	rows, err := projection.ListChannels(backend.DB)
+	rows, err := a.channelService().ListChannels()
 	if err != nil {
 		return nil, err
 	}
 	active := a.ActiveChannelID()
 	out := make([]ChannelInfo, 0, len(rows))
 	for _, c := range rows {
-		out = append(out, ChannelInfo{
-			ID:         c.ChannelID,
-			Title:      c.Title,
-			Kind:       c.Kind,
-			IsActive:   c.ChannelID == active,
-			InviteLink: c.InviteLink,
-		})
+		out = append(out, channelInfo(c, active))
 	}
 	return out, nil
 }
@@ -79,153 +73,27 @@ func (a *App) ListChannels() ([]ChannelInfo, error) {
 //
 // Returns the new ChannelInfo with the invite link populated.
 func (a *App) CreateSharedDrive(title string, requireApproval bool) (ChannelInfo, error) {
-	if backend.DB == nil {
-		return ChannelInfo{}, fmt.Errorf("db not ready")
-	}
-	if title == "" {
-		return ChannelInfo{}, fmt.Errorf("title required")
-	}
-	client, err := auth.Connect()
-	if err != nil {
-		return ChannelInfo{}, fmt.Errorf("connect: %w", err)
-	}
-
-	var (
-		channelID  int64
-		accessHash int64
-		invite     string
-	)
-	err = client.Run(a.ctx, func(ctx context.Context) error {
-		id, hash, err := auth.CreateMegagroup(ctx, client, title, "TDrive shared drive")
-		if err != nil {
-			return err
-		}
-		channelID, accessHash = id, hash
-
-		peer := &tg.InputPeerChannel{ChannelID: id, AccessHash: hash}
-		link, err := auth.ExportInviteLink(ctx, client.API(), peer, requireApproval)
-		if err != nil {
-			// Channel exists but no link yet. Save what we have; the
-			// "Share" button will retry the export.
-			fmt.Printf("warn: invite export failed for new drive %d: %v\n", id, err)
-			return nil
-		}
-		invite = link
-		return nil
-	})
+	row, err := a.channelService().CreateSharedDrive(a.ctx, title, requireApproval)
 	if err != nil {
 		return ChannelInfo{}, err
 	}
-
-	row := projection.Channel{
-		ChannelID:            channelID,
-		AccessHash:           accessHash,
-		Title:                title,
-		Kind:                 projection.KindShared,
-		InviteLink:           invite,
-		PersonalBackfillDone: true, // freshly created — nothing local to backfill
-	}
-	if err := projection.InsertChannel(backend.DB, row); err != nil {
-		return ChannelInfo{}, err
-	}
-	a.activeChannelID.Store(channelID)
-
-	return ChannelInfo{
-		ID:         channelID,
-		Title:      title,
-		Kind:       projection.KindShared,
-		IsActive:   true,
-		InviteLink: invite,
-	}, nil
+	return channelInfo(row, row.ChannelID), nil
 }
 
 // JoinSharedDrive imports an invite link. Immediate links return a joined
 // channel. Approval-required links send a Telegram join request and return a
 // durable pending record that can be checked later.
 func (a *App) JoinSharedDrive(inviteLink string) (JoinDriveResult, error) {
-	if backend.DB == nil {
-		return JoinDriveResult{}, fmt.Errorf("db not ready")
-	}
-	hash, err := auth.ParseInviteHash(inviteLink)
+	result, err := a.channelService().JoinSharedDrive(a.ctx, inviteLink)
 	if err != nil {
 		return JoinDriveResult{}, err
 	}
-
-	client, err := auth.Connect()
-	if err != nil {
-		return JoinDriveResult{}, fmt.Errorf("connect: %w", err)
-	}
-
-	var (
-		channelID  int64
-		accessHash int64
-		title      string
-		pending    bool
-	)
-	err = client.Run(a.ctx, func(ctx context.Context) error {
-		info, err := auth.CheckInvite(ctx, client.API(), hash)
-		if err != nil {
-			return err
-		}
-		title = info.Title
-		if info.AlreadyJoined {
-			channelID, accessHash = info.ChannelID, info.AccessHash
-			return nil
-		}
-		if info.RequestNeeded {
-			if err := auth.RequestJoin(ctx, client.API(), hash); err != nil {
-				return err
-			}
-			pending = true
-			return nil
-		}
-
-		id, ah, err := auth.JoinByInvite(ctx, client.API(), hash)
-		if err != nil {
-			return err
-		}
-		channelID, accessHash = id, ah
-		if resolvedTitle := lookupChannelTitle(ctx, client.API(), id, ah); resolvedTitle != "" {
-			title = resolvedTitle
-		}
-		if title == "" {
-			title = fmt.Sprintf("Drive %d", id)
-		}
-		return nil
-	})
-	if err != nil {
-		return JoinDriveResult{}, err
-	}
-
-	if pending {
-		p := projection.PendingJoin{
-			InviteHash:  hash,
-			InviteLink:  inviteLink,
-			Title:       title,
-			RequestedAt: time.Now().Unix(),
-			Status:      projection.PendingJoinStatusPending,
-		}
-		if err := projection.UpsertPendingJoin(backend.DB, p); err != nil {
-			return JoinDriveResult{}, err
-		}
-		info := pendingJoinInfo(p)
-		return JoinDriveResult{Status: "pending", Pending: &info}, nil
-	}
-
-	info, err := a.registerJoinedSharedDrive(channelID, accessHash, title, "")
-	if err != nil {
-		return JoinDriveResult{}, err
-	}
-	_ = projection.DeletePendingJoin(backend.DB, hash)
-	return JoinDriveResult{Status: "joined", Channel: &info}, nil
+	return joinDriveResult(result), nil
 }
 
 // ListPendingJoins returns approval-required joins this client is waiting on.
 func (a *App) ListPendingJoins() ([]PendingJoinInfo, error) {
-	if backend.DB == nil {
-		return nil, fmt.Errorf("db not ready")
-	}
-	rows, err := projection.ListPendingJoins(backend.DB)
+	rows, err := a.channelService().ListPendingJoins()
 	if err != nil {
 		return nil, err
 	}
@@ -240,68 +108,17 @@ func (a *App) ListPendingJoins() ([]PendingJoinInfo, error) {
 // become a membership. Users call this manually from the sidebar; no realtime
 // Telegram update stream is required for v1.
 func (a *App) CheckPendingJoin(inviteHash string) (JoinDriveResult, error) {
-	if backend.DB == nil {
-		return JoinDriveResult{}, fmt.Errorf("db not ready")
-	}
-	hash, err := auth.ParseInviteHash(inviteHash)
+	result, err := a.channelService().CheckPendingJoin(a.ctx, inviteHash)
 	if err != nil {
 		return JoinDriveResult{}, err
 	}
-	p, err := projection.GetPendingJoin(backend.DB, hash)
-	if err != nil {
-		return JoinDriveResult{}, err
-	}
-
-	client, err := auth.Connect()
-	if err != nil {
-		_ = projection.UpdatePendingJoinCheck(backend.DB, hash, projection.PendingJoinStatusError, fmt.Sprintf("connect: %v", err))
-		updated, _ := projection.GetPendingJoin(backend.DB, hash)
-		info := pendingJoinInfo(updated)
-		return JoinDriveResult{Status: "pending", Pending: &info}, nil
-	}
-
-	var invite auth.InviteInfo
-	err = client.Run(a.ctx, func(ctx context.Context) error {
-		var checkErr error
-		invite, checkErr = auth.CheckInvite(ctx, client.API(), hash)
-		return checkErr
-	})
-	if err != nil {
-		_ = projection.UpdatePendingJoinCheck(backend.DB, hash, projection.PendingJoinStatusError, err.Error())
-		updated, _ := projection.GetPendingJoin(backend.DB, hash)
-		info := pendingJoinInfo(updated)
-		return JoinDriveResult{Status: "pending", Pending: &info}, nil
-	}
-	if invite.AlreadyJoined {
-		title := invite.Title
-		if title == "" {
-			title = p.Title
-		}
-		info, err := a.registerJoinedSharedDrive(invite.ChannelID, invite.AccessHash, title, p.InviteLink)
-		if err != nil {
-			return JoinDriveResult{}, err
-		}
-		_ = projection.DeletePendingJoin(backend.DB, hash)
-		return JoinDriveResult{Status: "joined", Channel: &info}, nil
-	}
-
-	_ = projection.UpdatePendingJoinCheck(backend.DB, hash, projection.PendingJoinStatusPending, "")
-	updated, _ := projection.GetPendingJoin(backend.DB, hash)
-	info := pendingJoinInfo(updated)
-	return JoinDriveResult{Status: "pending", Pending: &info}, nil
+	return joinDriveResult(result), nil
 }
 
 // RemovePendingJoin forgets a local pending request. It does not revoke the
 // Telegram-side request; only a drive admin can reject it.
 func (a *App) RemovePendingJoin(inviteHash string) error {
-	if backend.DB == nil {
-		return fmt.Errorf("db not ready")
-	}
-	hash, err := auth.ParseInviteHash(inviteHash)
-	if err != nil {
-		return err
-	}
-	return projection.DeletePendingJoin(backend.DB, hash)
+	return a.channelService().RemovePendingJoin(inviteHash)
 }
 
 // GetInviteLink fetches a fresh link from Telegram and caches it. Admin-
@@ -309,74 +126,18 @@ func (a *App) RemovePendingJoin(inviteHash string) error {
 // MessagesExportChatInvite. (Step 4 doesn't gate this client-side; we
 // surface whatever Telegram returns.)
 func (a *App) GetInviteLink(channelID int64) (string, error) {
-	return a.exportInviteLink(channelID, false)
+	return a.channelService().ExportInviteLink(a.ctx, channelID, false)
 }
 
 // GetApprovalInviteLink fetches an invite link where Telegram requires an
 // admin to approve each requester before they become a member.
 func (a *App) GetApprovalInviteLink(channelID int64) (string, error) {
-	return a.exportInviteLink(channelID, true)
-}
-
-func (a *App) exportInviteLink(channelID int64, requireApproval bool) (string, error) {
-	if backend.DB == nil {
-		return "", fmt.Errorf("db not ready")
-	}
-	if channelID == 0 {
-		channelID = a.ActiveChannelID()
-	}
-	if channelID == 0 {
-		return "", fmt.Errorf("no channel id")
-	}
-
-	client, err := auth.Connect()
-	if err != nil {
-		return "", fmt.Errorf("connect: %w", err)
-	}
-	var link string
-	err = client.Run(a.ctx, func(ctx context.Context) error {
-		return a.withInputPeerForChannel(ctx, client.API(), channelID, func(peer *tg.InputPeerChannel) error {
-			l, err := auth.ExportInviteLink(ctx, client.API(), peer, requireApproval)
-			if err != nil {
-				return err
-			}
-			link = l
-			return nil
-		})
-	})
-	if err != nil {
-		return "", err
-	}
-	if err := projection.UpdateInviteLink(backend.DB, channelID, link); err != nil {
-		fmt.Printf("warn: cache invite link: %v\n", err)
-	}
-	return link, nil
+	return a.channelService().ExportInviteLink(a.ctx, channelID, true)
 }
 
 // ListJoinRequests lists Telegram users waiting for admin approval on a drive.
 func (a *App) ListJoinRequests(channelID int64) ([]JoinRequestInfo, error) {
-	if backend.DB == nil {
-		return nil, fmt.Errorf("db not ready")
-	}
-	if channelID == 0 {
-		return nil, fmt.Errorf("channel id required")
-	}
-	client, err := auth.Connect()
-	if err != nil {
-		return nil, fmt.Errorf("connect: %w", err)
-	}
-
-	var reqs []auth.JoinRequest
-	err = client.Run(a.ctx, func(ctx context.Context) error {
-		return a.withInputPeerForChannel(ctx, client.API(), channelID, func(peer *tg.InputPeerChannel) error {
-			rows, err := auth.ListJoinRequests(ctx, client.API(), peer)
-			if err != nil {
-				return err
-			}
-			reqs = rows
-			return nil
-		})
-	})
+	reqs, err := a.channelService().ListJoinRequests(a.ctx, channelID)
 	if err != nil {
 		return nil, err
 	}
@@ -395,194 +156,41 @@ func (a *App) ListJoinRequests(channelID int64) ([]JoinRequestInfo, error) {
 }
 
 func (a *App) ApproveJoinRequest(channelID, userID int64) error {
-	return a.hideJoinRequest(channelID, userID, true)
+	return a.channelService().HideJoinRequest(a.ctx, channelID, userID, true)
 }
 
 func (a *App) RejectJoinRequest(channelID, userID int64) error {
-	return a.hideJoinRequest(channelID, userID, false)
-}
-
-func (a *App) hideJoinRequest(channelID, userID int64, approved bool) error {
-	if channelID == 0 {
-		return fmt.Errorf("channel id required")
-	}
-	if userID == 0 {
-		return fmt.Errorf("user id required")
-	}
-	client, err := auth.Connect()
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-	return client.Run(a.ctx, func(ctx context.Context) error {
-		return a.withInputPeerForChannel(ctx, client.API(), channelID, func(peer *tg.InputPeerChannel) error {
-			reqs, err := auth.ListJoinRequests(ctx, client.API(), peer)
-			if err != nil {
-				return err
-			}
-			var accessHash int64
-			for _, r := range reqs {
-				if r.UserID == userID {
-					accessHash = r.AccessHash
-					break
-				}
-			}
-			if accessHash == 0 {
-				return fmt.Errorf("join request for user %d not found", userID)
-			}
-			return auth.HideJoinRequest(ctx, client.API(), peer, userID, accessHash, approved)
-		})
-	})
-}
-
-func (a *App) withInputPeerForChannel(ctx context.Context, api *tg.Client, channelID int64, fn func(*tg.InputPeerChannel) error) error {
-	peer, fromCache, err := a.inputPeerForChannel(ctx, api, channelID)
-	if err != nil {
-		return err
-	}
-	err = fn(peer)
-	if err == nil || !fromCache {
-		return err
-	}
-	if !retryWithFreshPeer(err) {
-		return err
-	}
-	// Access hashes can rotate. If a cached peer fails, resolve fresh once,
-	// update the cache, and retry the Telegram call with the exact peer.
-	_, fresh, resolveErr := auth.ResolveDriveChannel(ctx, api, channelID)
-	if resolveErr != nil {
-		return err
-	}
-	_ = projection.UpdateAccessHash(backend.DB, channelID, fresh.AccessHash)
-	return fn(fresh)
-}
-
-func (a *App) inputPeerForChannel(ctx context.Context, api *tg.Client, channelID int64) (*tg.InputPeerChannel, bool, error) {
-	if backend.DB != nil {
-		if c, err := projection.GetChannel(backend.DB, channelID); err == nil && c.AccessHash != 0 {
-			return &tg.InputPeerChannel{ChannelID: channelID, AccessHash: c.AccessHash}, true, nil
-		}
-	}
-	_, peer, err := auth.ResolveDriveChannel(ctx, api, channelID)
-	return peer, false, err
-}
-
-func retryWithFreshPeer(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToUpper(err.Error())
-	return strings.Contains(msg, "CHANNEL_INVALID") ||
-		strings.Contains(msg, "CHANNEL_PRIVATE") ||
-		strings.Contains(msg, "PEER_ID_INVALID") ||
-		strings.Contains(msg, "ACCESS_HASH")
+	return a.channelService().HideJoinRequest(a.ctx, channelID, userID, false)
 }
 
 // LeaveSharedDrive leaves the Telegram channel and drops every local row
 // scoped to it. If the active drive was this one, switches active to the
 // personal drive.
 func (a *App) LeaveSharedDrive(channelID int64) error {
-	if backend.DB == nil {
-		return fmt.Errorf("db not ready")
-	}
-	if channelID == 0 {
-		return fmt.Errorf("channel id required")
-	}
-	c, err := projection.GetChannel(backend.DB, channelID)
-	if err != nil {
-		return err
-	}
-	if c.Kind != projection.KindShared {
-		return fmt.Errorf("can only leave shared drives")
-	}
-
-	client, err := auth.Connect()
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-	err = client.Run(a.ctx, func(ctx context.Context) error {
-		inChan, _, err := auth.ResolveDriveChannel(ctx, client.API(), channelID)
-		if err != nil {
-			return err
-		}
-		return auth.LeaveChannel(ctx, client.API(), inChan)
-	})
-	if err != nil {
-		// Even if Telegram refused, still drop local state — the user
-		// asked to leave; they can rejoin via invite link if needed.
-		fmt.Printf("warn: telegram leave failed: %v\n", err)
-	}
-
-	if err := projection.DeleteChannel(backend.DB, channelID); err != nil {
-		return err
-	}
-
-	if a.ActiveChannelID() == channelID {
-		// Switch to personal channel.
-		rows, err := projection.ListChannels(backend.DB)
-		if err == nil {
-			for _, r := range rows {
-				if r.Kind == projection.KindPersonal {
-					a.activeChannelID.Store(r.ChannelID)
-					break
-				}
-			}
-		}
-	}
-	return nil
+	return a.channelService().LeaveSharedDrive(a.ctx, channelID)
 }
 
-// lookupChannelTitle returns the channel title via ChannelsGetChannels.
-// Returns "" on any failure — caller falls back to a placeholder.
-func lookupChannelTitle(ctx context.Context, api *tg.Client, channelID, accessHash int64) string {
-	chats, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
-		&tg.InputChannel{ChannelID: channelID, AccessHash: accessHash},
-	})
-	if err != nil {
-		return ""
-	}
-	if cc, ok := chats.(*tg.MessagesChats); ok {
-		for _, ch := range cc.Chats {
-			if c, ok := ch.(*tg.Channel); ok && c.ID == channelID {
-				return c.Title
-			}
-		}
-	}
-	return ""
-}
-
-func (a *App) registerJoinedSharedDrive(channelID, accessHash int64, title, inviteLink string) (ChannelInfo, error) {
-	if channelID == 0 {
-		return ChannelInfo{}, fmt.Errorf("channel id required")
-	}
-	if title == "" {
-		title = fmt.Sprintf("Drive %d", channelID)
-	}
-	row := projection.Channel{
-		ChannelID:            channelID,
-		AccessHash:           accessHash,
-		Title:                title,
-		Kind:                 projection.KindShared,
-		InviteLink:           inviteLink,
-		PersonalBackfillDone: true, // shared drives don't backfill local state
-	}
-	if err := projection.InsertChannel(backend.DB, row); err != nil {
-		return ChannelInfo{}, err
-	}
-	a.activeChannelID.Store(channelID)
-
-	// Keep this synchronous so callers only return once the joined drive has
-	// projected whatever history exists.
-	if err := a.syncEngine.InitialSyncEmptyChannel(a.ctx, channelID); err != nil {
-		fmt.Printf("initial sync failed for joined drive %d: %v\n", channelID, err)
-	}
-
+func channelInfo(c projection.Channel, active int64) ChannelInfo {
 	return ChannelInfo{
-		ID:         channelID,
-		Title:      title,
-		Kind:       projection.KindShared,
-		IsActive:   true,
-		InviteLink: inviteLink,
-	}, nil
+		ID:         c.ChannelID,
+		Title:      c.Title,
+		Kind:       c.Kind,
+		IsActive:   c.ChannelID == active,
+		InviteLink: c.InviteLink,
+	}
+}
+
+func joinDriveResult(result channelservice.JoinResult) JoinDriveResult {
+	out := JoinDriveResult{Status: result.Status}
+	if result.Channel != nil {
+		info := channelInfo(*result.Channel, result.Channel.ChannelID)
+		out.Channel = &info
+	}
+	if result.Pending != nil {
+		info := pendingJoinInfo(*result.Pending)
+		out.Pending = &info
+	}
+	return out
 }
 
 func pendingJoinInfo(p projection.PendingJoin) PendingJoinInfo {

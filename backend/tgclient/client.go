@@ -16,6 +16,12 @@ import (
 
 var ErrFloodWait = errors.New("tgclient: flood wait")
 
+var (
+	ErrMessageNotFound = errors.New("tgclient: message not found")
+	ErrNotFile         = errors.New("tgclient: message is not a file")
+	ErrEmptyDocument   = errors.New("tgclient: empty document")
+)
+
 type FloodWaitError struct {
 	Duration time.Duration
 }
@@ -53,15 +59,18 @@ type InputPeer struct {
 	AccessHash int64
 }
 
-// HistoryMessage is the subset of a tg.Message that sync/backfill care about.
+// HistoryMessage is the subset of a tg.Message that sync/backfill/read paths care about.
 // We deliberately avoid leaking the gotd types so the fake stays cheap.
 type HistoryMessage struct {
-	MsgID     int64
-	Date      int64
-	FromID    int64
-	Text      string // caption for media messages, body for text messages
-	HasMedia  bool
-	MediaSize int64
+	MsgID              int64
+	Date               int64
+	FromID             int64
+	Text               string // caption for media messages, body for text messages
+	HasMedia           bool
+	MediaSize          int64
+	DocumentName       string
+	DocumentAccessHash int64
+	Thumbs             []FileThumb
 }
 
 // SendFileResult is what SendFile returns. We split it from a bare msgID
@@ -71,6 +80,51 @@ type SendFileResult struct {
 	MsgID int64
 }
 
+type FileDocument struct {
+	MsgID  int64
+	Name   string
+	Size   int64
+	Thumbs []FileThumb
+}
+
+type FileThumb struct {
+	Type   string
+	Bytes  []byte
+	Width  int
+	Height int
+	Size   int
+}
+
+type InviteInfo struct {
+	AlreadyJoined bool
+	RequestNeeded bool
+	Title         string
+	ChannelID     int64
+	AccessHash    int64
+}
+
+type JoinRequest struct {
+	UserID      int64
+	AccessHash  int64
+	DisplayName string
+	Username    string
+	RequestedAt int64
+	About       string
+}
+
+type UserProfile struct {
+	ID         int64
+	FirstName  string
+	LastName   string
+	Username   string
+	PhotoBytes []byte
+}
+
+type UserMessageRef struct {
+	UserID int64
+	MsgID  int64
+}
+
 // Client is the surface sync, backfill, and local-action paths use to talk
 // to Telegram. Both the real (gotd-backed) and fake test implementations
 // implement this.
@@ -78,6 +132,14 @@ type Client interface {
 	// SelfID returns the logged-in user's Telegram user ID. Used by
 	// ProjectFromOp's actorID field.
 	SelfID(ctx context.Context) (int64, error)
+
+	// SelfProfile returns the logged-in user's display fields and, when
+	// available, a small avatar photo. Photo fetch is best-effort.
+	SelfProfile(ctx context.Context) (UserProfile, error)
+
+	// ResolveUsersFromMessages resolves channel members through message refs.
+	// Telegram requires InputUserFromMessage for users not already in contacts.
+	ResolveUsersFromMessages(ctx context.Context, peer InputPeer, refs []UserMessageRef) ([]UserProfile, error)
 
 	// SendControl posts a text-only message into the channel. The text is
 	// expected to be a TDX1 header (possibly with a human-readable comment
@@ -95,7 +157,29 @@ type Client interface {
 	// Callers must sort before applying projection ops.
 	GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error)
 
+	// GetFileDocument resolves one Telegram message into a downloadable
+	// document descriptor without downloading the bytes.
+	GetFileDocument(ctx context.Context, peer InputPeer, msgID int64) (FileDocument, error)
+
+	// DownloadFile streams a Telegram document message into w. onProgress is
+	// optional; callers can use it to surface transfer progress.
+	DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error
+
+	// DownloadFileThumbnail streams a Telegram document thumbnail into w.
+	DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error
+
 	// DeleteMessages removes file bodies from the channel. Used by tomb
 	// follow-up and folder hard-delete. Best effort.
 	DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int64) error
+
+	CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error)
+	ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error)
+	CheckInvite(ctx context.Context, hash string) (InviteInfo, error)
+	RequestJoin(ctx context.Context, hash string) error
+	JoinByInvite(ctx context.Context, hash string) (InputPeer, error)
+	LookupChannelTitle(ctx context.Context, peer InputPeer) (string, error)
+	ListJoinRequests(ctx context.Context, peer InputPeer) ([]JoinRequest, error)
+	HideJoinRequest(ctx context.Context, peer InputPeer, userID, accessHash int64, approved bool) error
+	ResolveDriveChannel(ctx context.Context, channelID int64) (InputPeer, error)
+	LeaveChannel(ctx context.Context, peer InputPeer) error
 }

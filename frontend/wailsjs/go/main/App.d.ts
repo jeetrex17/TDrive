@@ -49,8 +49,6 @@ export function GetPassch():Promise<any>;
 
 export function GetStorageUsed():Promise<number>;
 
-export function Greet(arg1:string):Promise<string>;
-
 export function InitDrive():Promise<string>;
 
 export function JoinSharedDrive(arg1:string):Promise<main.JoinDriveResult>;

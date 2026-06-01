@@ -26,7 +26,7 @@ import (
 // instead of tearing them down mid-process while goroutines may still be
 // touching backend.DB.
 func (a *App) Logout(mode string) error {
-	clearMasterKey()
+	a.clearEncryptionSession()
 
 	m := auth.LogoutMode(mode)
 	if mode == "" {
@@ -51,7 +51,7 @@ func (a *App) Logout(mode string) error {
 
 	// Drop the cached self user so a re-login (without re-launching, in
 	// dev mode) doesn't show the previous account's avatar.
-	selfUserCache.Store(nil)
+	a.userService().ClearCache()
 
 	if err := auth.ClearUserData(m); err != nil {
 		return err
