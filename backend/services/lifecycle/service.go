@@ -168,6 +168,10 @@ func (s *Service) kickoffPersonalBackfill(ctx context.Context, channelID int64) 
 
 	go func() {
 		defer func() {
+			if r := recover(); r != nil {
+				s.warnf("backfill panic: %v\n", r)
+				s.emit("backfill_error", channelID, fmt.Sprintf("backfill panic: %v", r))
+			}
 			s.backfillMu.Lock()
 			delete(s.backfilling, channelID)
 			s.backfillMu.Unlock()

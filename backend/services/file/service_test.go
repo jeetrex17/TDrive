@@ -470,6 +470,65 @@ func TestDownloadEncryptedFileDecrypts(t *testing.T) {
 	}
 }
 
+func TestDownloadEncryptedDecryptFailurePreservesExistingFile(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	masterKey := bytes.Repeat([]byte{7}, 32)
+	wrongKey := bytes.Repeat([]byte{8}, 32)
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		if !wantEncrypted {
+			return nil, nil
+		}
+		return masterKey, nil
+	}
+	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
+		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
+		if err != nil {
+			return nil, err
+		}
+		if err := tdcrypto.EncryptStream(plain, tmp, masterKey, plaintextSize); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmp.Name())
+			return nil, err
+		}
+		return tmp, nil
+	}
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if encrypted {
+			return wrongKey, nil
+		}
+		return nil, nil
+	}
+
+	path := writeTempFile(t, "secret")
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	savePath := filepath.Join(t.TempDir(), "existing.txt")
+	if err := os.WriteFile(savePath, []byte("keep me"), 0o600); err != nil {
+		t.Fatalf("write existing: %v", err)
+	}
+	result := svc.Download(context.Background(), personalChannelID, files[0].MsgID, files[0].MsgID, func(defaultName string) (string, error) {
+		return savePath, nil
+	})
+	if result.Status != "error" || !strings.Contains(result.Message, "Decrypt failed") {
+		t.Fatalf("download = %+v, want decrypt error", result)
+	}
+	got, err := os.ReadFile(savePath)
+	if err != nil {
+		t.Fatalf("read existing: %v", err)
+	}
+	if string(got) != "keep me" {
+		t.Fatalf("existing file = %q, want preserved contents", string(got))
+	}
+}
+
 func TestDownloadEncryptedRequiresPassword(t *testing.T) {
 	svc, db, fakeTG, _ := newTestService(t)
 	project(t, db, personalChannelID, 80, 7, projection.Op{
@@ -551,7 +610,7 @@ func TestRenameAndMoveFile(t *testing.T) {
 	if err := svc.Rename(context.Background(), personalChannelID, 50, "new.txt"); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
-	if err := svc.Move(personalChannelID, 50, "d:docs"); err != nil {
+	if err := svc.Move(context.Background(), personalChannelID, 50, "d:docs"); err != nil {
 		t.Fatalf("move: %v", err)
 	}
 	parent, err := projection.FileParent(db, personalChannelID, 50)
@@ -563,8 +622,14 @@ func TestRenameAndMoveFile(t *testing.T) {
 	}
 }
 
-func TestSharedRenameAndDeleteRequireUploader(t *testing.T) {
+func TestSharedRenameMoveAndDeleteRequireUploader(t *testing.T) {
 	svc, db, fakeTG, actor := newTestService(t)
+	project(t, db, sharedChannelID, 11, 9, projection.Op{
+		Type:   projection.OpMkdir,
+		Obj:    "d:shared-docs",
+		Parent: "",
+		Name:   "Docs",
+	})
 	project(t, db, sharedChannelID, 60, 9, projection.Op{
 		Type:           projection.OpFileUpload,
 		Parent:         "",
@@ -577,6 +642,9 @@ func TestSharedRenameAndDeleteRequireUploader(t *testing.T) {
 	if err := svc.Rename(context.Background(), sharedChannelID, 60, "bad.txt"); err == nil {
 		t.Fatalf("rename by non-uploader unexpectedly succeeded")
 	}
+	if err := svc.Move(context.Background(), sharedChannelID, 60, "d:shared-docs"); err == nil {
+		t.Fatalf("move by non-uploader unexpectedly succeeded")
+	}
 	if err := svc.Delete(context.Background(), sharedChannelID, 60); err == nil {
 		t.Fatalf("delete by non-uploader unexpectedly succeeded")
 	}
@@ -584,6 +652,9 @@ func TestSharedRenameAndDeleteRequireUploader(t *testing.T) {
 	*actor = 9
 	if err := svc.Rename(context.Background(), sharedChannelID, 60, "good.txt"); err != nil {
 		t.Fatalf("rename by uploader: %v", err)
+	}
+	if err := svc.Move(context.Background(), sharedChannelID, 60, "d:shared-docs"); err != nil {
+		t.Fatalf("move by uploader: %v", err)
 	}
 	if err := svc.Delete(context.Background(), sharedChannelID, 60); err != nil {
 		t.Fatalf("delete by uploader: %v", err)

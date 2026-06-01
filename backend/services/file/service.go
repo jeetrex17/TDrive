@@ -142,6 +142,14 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 		go func(uploadID int, path string, pid string) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					mu.Lock()
+					failed++
+					mu.Unlock()
+					s.emitEvent("upload_error", uploadID, filepath.Base(path), fmt.Sprintf("upload panic: %v", r))
+				}
+			}()
 
 			meta, op, header, err := s.uploadSingle(ctx, uploadID, path, pid, channelID, encrypt)
 			if err != nil {
@@ -360,14 +368,21 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 		return DownloadResult{Status: "canceled", Message: "Download canceled"}
 	}
 
-	f, err := os.Create(savePath)
+	finalTmp, err := os.CreateTemp(filepath.Dir(savePath), ".tdrive-download-*")
 	if err != nil {
 		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 	}
-	defer f.Close()
+	finalTmpPath := finalTmp.Name()
+	committed := false
+	defer func() {
+		_ = finalTmp.Close()
+		if !committed {
+			_ = os.Remove(finalTmpPath)
+		}
+	}()
 
 	if !encrypted {
-		if err := s.TG.DownloadFile(ctx, peer, int64(msgID), f, s.downloadProgress(doc.Size)); err != nil {
+		if err := s.TG.DownloadFile(ctx, peer, int64(msgID), finalTmp, s.downloadProgress(doc.Size)); err != nil {
 			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 		}
 	} else {
@@ -385,11 +400,17 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 		if _, err := cipher.Seek(0, io.SeekStart); err != nil {
 			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 		}
-		if _, err := tdcrypto.DecryptStream(cipher, f, masterKey); err != nil {
-			_ = os.Remove(savePath)
+		if _, err := tdcrypto.DecryptStream(cipher, finalTmp, masterKey); err != nil {
 			return DownloadResult{Status: "error", Message: "Decrypt failed: " + err.Error()}
 		}
 	}
+	if err := finalTmp.Close(); err != nil {
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	}
+	if err := replaceDownloadedFile(finalTmpPath, savePath); err != nil {
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	}
+	committed = true
 
 	s.emitEvent("download_progress", 100.0)
 	return DownloadResult{
@@ -397,6 +418,16 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 		Message:   "Download complete",
 		SavedPath: savePath,
 	}
+}
+
+func replaceDownloadedFile(tmpPath string, savePath string) error {
+	if err := os.Rename(tmpPath, savePath); err == nil {
+		return nil
+	}
+	if err := os.Remove(savePath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Rename(tmpPath, savePath)
 }
 
 func (s *Service) PreviewThumbnail(ctx context.Context, channelID int64, msgID int) (PreviewPayload, error) {
@@ -558,7 +589,7 @@ func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newNam
 	return err
 }
 
-func (s *Service) Move(channelID int64, msgID int, newParentID string) error {
+func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParentID string) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -575,6 +606,9 @@ func (s *Service) Move(channelID int64, msgID int, newParentID string) error {
 	}
 	if cur == parent {
 		return fmt.Errorf("File is already in this folder")
+	}
+	if err := s.requireOwnerForShared(ctx, channelID, msgID, "move"); err != nil {
+		return err
 	}
 	op := projection.Op{
 		Type:   projection.OpMove,
