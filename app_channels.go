@@ -49,7 +49,7 @@ func (a *App) channelService() *channelservice.Service {
 		TG:        a.tg,
 		Sync:      a.syncEngine,
 		GetActive: a.ActiveChannelID,
-		SetActive: a.activeChannelID.Store,
+		SetActive: a.setActiveChannelID,
 	}
 }
 

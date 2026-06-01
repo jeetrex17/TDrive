@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"TDrive/backend"
@@ -16,6 +15,7 @@ import (
 	encservice "TDrive/backend/services/encryption"
 	fileservice "TDrive/backend/services/file"
 	folderservice "TDrive/backend/services/folder"
+	lifecycleservice "TDrive/backend/services/lifecycle"
 	readservice "TDrive/backend/services/read"
 	tdsync "TDrive/backend/sync"
 	"TDrive/backend/tgclient"
@@ -25,21 +25,19 @@ import (
 )
 
 type App struct {
-	ctx             context.Context
-	Codech          chan string
-	Passch          chan string
-	Client          *telegram.Client
-	tg              tgclient.Client
-	enc             *encservice.Service
-	files           *fileservice.Service
-	folders         *folderservice.Service
-	reads           *readservice.Service
-	syncEngine      *tdsync.Engine
-	backfillRunner  *backfill.Runner
-	backfillMu      sync.Mutex
-	backfilling     map[int64]bool
-	activeChannelID atomic.Int64
-	selfUserID      atomic.Int64
+	ctx        context.Context
+	Codech     chan string
+	Passch     chan string
+	Client     *telegram.Client
+	tg         tgclient.Client
+	enc        *encservice.Service
+	files      *fileservice.Service
+	folders    *folderservice.Service
+	reads      *readservice.Service
+	lifecycle  *lifecycleservice.Service
+	syncEngine *tdsync.Engine
+	active     *lifecycleservice.ActiveDrive
+	selfUserID atomic.Int64
 }
 
 type peerResolverFn func(context.Context, int64) (tgclient.InputPeer, error)
@@ -117,7 +115,17 @@ func (a *App) emitAndProject(channelID int64, op projection.Op) (int64, error) {
 }
 
 func (a *App) ActiveChannelID() int64 {
-	return a.activeChannelID.Load()
+	if a.active == nil {
+		return 0
+	}
+	return a.active.ID()
+}
+
+func (a *App) setActiveChannelID(channelID int64) {
+	if a.active == nil {
+		a.active = lifecycleservice.NewActiveDrive()
+	}
+	a.active.Set(channelID)
 }
 
 // MyUserID returns the logged-in Telegram user id (cached after first
@@ -158,7 +166,7 @@ func (a *App) SetActiveChannel(channelID int64) error {
 	if err != nil {
 		return fmt.Errorf("channel not known locally")
 	}
-	a.activeChannelID.Store(channelID)
+	a.setActiveChannelID(channelID)
 	return nil
 }
 
@@ -314,6 +322,42 @@ func (a *App) readService() *readservice.Service {
 	return a.reads
 }
 
+func (a *App) newLifecycleService() *lifecycleservice.Service {
+	return lifecycleservice.NewService(lifecycleservice.Config{
+		DB:       backend.DB,
+		Sync:     a.syncEngine,
+		Backfill: backfill.NewRunner(backend.DB, a.tg, peerResolverFn(a.resolvePeer)),
+		Active:   a.active,
+		Events:   runtimeEventSink{app: a},
+		PersonalChannel: func(ctx context.Context) (int64, error) {
+			client, err := auth.Connect()
+			if err != nil {
+				return 0, fmt.Errorf("Could not connect: %w", err)
+			}
+			var channelID int64
+			err = client.Run(ctx, func(ctx context.Context) error {
+				id, err := auth.GetTDriveChannel(ctx, client)
+				if err != nil {
+					return err
+				}
+				channelID = id
+				return nil
+			})
+			return channelID, err
+		},
+		Warnf: func(format string, args ...any) {
+			fmt.Printf(format, args...)
+		},
+	})
+}
+
+func (a *App) lifecycleService() *lifecycleservice.Service {
+	if a.lifecycle == nil {
+		a.lifecycle = a.newLifecycleService()
+	}
+	return a.lifecycle
+}
+
 func (a *App) LoginPhoneNumber(phoneNumber string) {
 	client, err := auth.Connect()
 	if err != nil {
@@ -335,42 +379,7 @@ func (a *App) LoginPhoneNumber(phoneNumber string) {
 }
 
 func (a *App) InitDrive() string {
-	if a.ctx == nil {
-		return "Error: App context not ready"
-	}
-
-	var (
-		output    string
-		channelID int64
-	)
-
-	client, err := auth.Connect()
-	if err != nil {
-		return "Error: Could not connect: " + err.Error()
-	}
-
-	err = client.Run(a.ctx, func(ctx context.Context) error {
-		id, err := auth.GetTDriveChannel(ctx, client)
-		if err != nil {
-			return err
-		}
-		channelID = id
-		output = fmt.Sprintf("Success , channel ID: %d", id)
-		return nil
-	})
-	if err != nil {
-		return "Error: " + err.Error()
-	}
-
-	if channelID != 0 && backend.DB != nil {
-		if err := backend.MigratePersonalChannel(channelID); err != nil {
-			return "Error: migration failed: " + err.Error()
-		}
-		a.activeChannelID.Store(channelID)
-		a.kickoffPersonalBackfill(channelID)
-	}
-
-	return output
+	return a.lifecycleService().InitDrive(a.ctx)
 }
 
 func (a *App) GetFileList() []TDriveFile {
@@ -446,6 +455,7 @@ func NewApp() *App {
 		Codech: make(chan string),
 		Passch: make(chan string),
 		Client: nil,
+		active: lifecycleservice.NewActiveDrive(),
 	}
 }
 
@@ -492,6 +502,9 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.active == nil {
+		a.active = lifecycleservice.NewActiveDrive()
+	}
 
 	a.tg = tgclient.NewGotd(auth.Connect)
 
@@ -516,78 +529,27 @@ func (a *App) startup(ctx context.Context) {
 	a.folders = a.newFolderService()
 	a.reads = a.newReadService()
 	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
-	a.backfillRunner = backfill.NewRunner(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
-	a.backfilling = make(map[int64]bool)
+	a.lifecycle = a.newLifecycleService()
 
 	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {
-		if err := backend.MigratePersonalChannel(savedID); err != nil {
+		if err := a.lifecycle.UsePersonalChannel(a.ctx, savedID); err != nil {
 			fmt.Printf("Warning: migration failed: %v\n", err)
-		} else {
-			a.activeChannelID.Store(savedID)
-			a.kickoffPersonalBackfill(savedID)
 		}
 	}
 
 	fmt.Println("TDrive DB ready!")
 }
 
-// kickoffPersonalBackfill runs RunPersonal in a background goroutine if it
-// isn't already running for this channel. Safe to call repeatedly — the
-// per-channel guard prevents concurrent runs and the runner short-circuits
-// if personal_backfill_done is already set.
-func (a *App) kickoffPersonalBackfill(channelID int64) {
-	a.backfillMu.Lock()
-	if a.backfilling[channelID] {
-		a.backfillMu.Unlock()
-		return
-	}
-	a.backfilling[channelID] = true
-	a.backfillMu.Unlock()
-
-	go func() {
-		defer func() {
-			a.backfillMu.Lock()
-			delete(a.backfilling, channelID)
-			a.backfillMu.Unlock()
-		}()
-		err := a.backfillRunner.RunPersonal(a.ctx, channelID, func(ev backfill.ProgressEvent) {
-			runtime.EventsEmit(a.ctx, "backfill_progress", ev.ChannelID, ev.Done, ev.Total, ev.Phase)
-		})
-		if err != nil {
-			fmt.Printf("backfill: %v\n", err)
-			runtime.EventsEmit(a.ctx, "backfill_error", channelID, err.Error())
-		}
-	}()
-}
-
 // SyncChannel triggers an incremental sync for the given channel. Wails-bound
 // for the future "Refresh" UI button and for debug.
 func (a *App) SyncChannel(channelID int64) error {
-	if a.syncEngine == nil {
-		return fmt.Errorf("sync engine not ready")
-	}
-	if channelID == 0 {
-		channelID = a.ActiveChannelID()
-	}
-	if channelID == 0 {
-		return fmt.Errorf("no active channel")
-	}
-	return a.syncEngine.Incremental(a.ctx, channelID)
+	return a.lifecycleService().SyncChannel(a.ctx, channelID)
 }
 
 // RebuildProjection wipes and replays the local projection for a channel
 // from the channel's replay_log. Hidden Wails method for debug/recovery.
 func (a *App) RebuildProjection(channelID int64) error {
-	if backend.DB == nil {
-		return fmt.Errorf("db not ready")
-	}
-	if channelID == 0 {
-		channelID = a.ActiveChannelID()
-	}
-	if channelID == 0 {
-		return fmt.Errorf("no active channel")
-	}
-	return projection.RebuildProjection(backend.DB, channelID)
+	return a.lifecycleService().RebuildProjection(channelID)
 }
 
 func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
