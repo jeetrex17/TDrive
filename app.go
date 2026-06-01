@@ -381,8 +381,8 @@ func (a *App) authService() *authsvc.Service {
 	return a.auth
 }
 
-func (a *App) LoginPhoneNumber(phoneNumber string) {
-	a.authService().StartLogin(a.ctx, phoneNumber)
+func (a *App) LoginPhoneNumber(phoneNumber string) error {
+	return a.authService().StartLogin(a.ctx, phoneNumber)
 }
 
 func (a *App) InitDrive() string {

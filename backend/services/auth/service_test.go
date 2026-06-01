@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,11 +44,13 @@ func TestSystemStatusReadyWhenCredsExist(t *testing.T) {
 	}
 }
 
-func TestSubmitCodeUnblocksGetCodech(t *testing.T) {
+func TestSubmitCodeUnblocksWaitCode(t *testing.T) {
 	svc := NewService(nil)
+	svc.resetAttempt(stageStarted)
 	done := make(chan string, 1)
 	go func() {
-		done <- <-svc.Codech()
+		code, _ := svc.WaitCode(context.Background())
+		done <- code
 	}()
 
 	svc.SubmitCode("12345")
@@ -58,6 +61,25 @@ func TestSubmitCodeUnblocksGetCodech(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for code channel")
+	}
+}
+
+func TestSubmitPasswordWithoutPasswordRequestDoesNotBlock(t *testing.T) {
+	events := &fakeEvents{}
+	svc := NewService(events)
+	done := make(chan struct{}, 1)
+	go func() {
+		svc.SubmitPassword("secret")
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SubmitPassword blocked without password request")
+	}
+	if len(events.events) != 1 || events.events[0].name != "login-error" {
+		t.Fatalf("events = %+v, want login-error", events.events)
 	}
 }
 
