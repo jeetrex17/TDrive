@@ -55,7 +55,7 @@ export function setupNotifications() {
         if (lastError) dismissNotification(lastError.id);
     });
 
-    requestAnimationFrame(tick);
+    ensureTimer();
 }
 
 // notify enqueues a toast. Returns its id; pass the same id back via
@@ -111,6 +111,7 @@ export function notify(opts = {}) {
         state.toasts.push(entry);
         renderStack();
     }
+    ensureTimer();
     return id;
 }
 
@@ -119,11 +120,16 @@ export function dismissNotification(id) {
     if (idx < 0) return;
     state.toasts.splice(idx, 1);
     renderStack();
+    ensureTimer();
 }
 
 export function clearAllNotifications() {
     state.toasts = [];
     renderStack();
+    if (timer) {
+        cancelAnimationFrame(timer);
+        timer = null;
+    }
 }
 
 function setAllPaused(paused) {
@@ -139,9 +145,20 @@ function setAllPaused(paused) {
             t.expiresAt = now + (t.remainingMs || 0);
         }
     }
+    ensureTimer();
+}
+
+function hasExpiringToasts() {
+    return state.toasts.some((t) => !t.sticky && !t.paused && t.expiresAt);
+}
+
+function ensureTimer() {
+    if (timer || !hasExpiringToasts()) return;
+    timer = requestAnimationFrame(tick);
 }
 
 function tick() {
+    timer = null;
     const now = Date.now();
     let changed = false;
     for (let i = state.toasts.length - 1; i >= 0; i--) {
@@ -153,7 +170,7 @@ function tick() {
         }
     }
     if (changed) renderStack();
-    timer = requestAnimationFrame(tick);
+    ensureTimer();
 }
 
 function renderStack({ keepNode = null } = {}) {

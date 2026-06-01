@@ -5,6 +5,7 @@ import { icons } from '../../constants.js';
 import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
 import { clearSelection } from '../selection.js';
 import { buildFolderIndex, collectDescendants, getFolderContents } from '../file-list.js';
+import { humanizeBackendError } from '../errors.js';
 
 let movePath = [];
 let moveBlocked = new Set();
@@ -23,7 +24,7 @@ async function ensureFileInTdriveSystem(target) {
     );
 
     if (typeof res === "string" && res.startsWith("Error")) {
-        throw new Error(res);
+        throw new Error(humanizeBackendError(res));
     }
 }
 
@@ -285,7 +286,7 @@ export function setupMoveModal() {
                 for (const folder of folders) {
                     const res = await MoveFolder(String(folder.id), String(destId));
                     if (typeof res === "string" && res.startsWith("Error")) {
-                        throw new Error(res);
+                        throw new Error(humanizeBackendError(res));
                     }
                 }
 
@@ -293,19 +294,19 @@ export function setupMoveModal() {
                     await ensureFileInTdriveSystem(file);
                     const res = await MoveFile(Number(file.id), String(destId));
                     if (typeof res === "string" && res.startsWith("Error")) {
-                        throw new Error(res);
+                        throw new Error(humanizeBackendError(res));
                     }
                 }
             } else if (target.type === "folder") {
                 const res = await MoveFolder(String(target.id), String(destId));
                 if (typeof res === "string" && res.startsWith("Error")) {
-                    throw new Error(res);
+                    throw new Error(humanizeBackendError(res));
                 }
             } else {
                 await ensureFileInTdriveSystem(target);
                 const res = await MoveFile(Number(target.id), String(destId));
                 if (typeof res === "string" && res.startsWith("Error")) {
-                    throw new Error(res);
+                    throw new Error(humanizeBackendError(res));
                 }
             }
 
@@ -313,7 +314,7 @@ export function setupMoveModal() {
             clearSelection();
             window.refreshFiles();
         } catch (err) {
-            setMoveError(err?.message || String(err));
+            setMoveError(humanizeBackendError(err));
         } finally {
             updateMoveConfirm();
         }

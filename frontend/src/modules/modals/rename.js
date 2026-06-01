@@ -2,6 +2,7 @@
 
 import { state } from '../../state.js';
 import { RenameFile, RenameFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
+import { humanizeBackendError } from '../errors.js';
 
 async function ensureFileInTdriveSystem(target) {
     if (!target || target.type !== "file") return;
@@ -15,7 +16,7 @@ async function ensureFileInTdriveSystem(target) {
     );
 
     if (typeof res === "string" && res.startsWith("Error")) {
-        throw new Error(res);
+        throw new Error(humanizeBackendError(res));
     }
 }
 
@@ -114,13 +115,13 @@ export function setupRenameModal() {
             }
 
             if (typeof res === "string" && res.startsWith("Error")) {
-                showError(res);
+                showError(humanizeBackendError(res));
                 return;
             }
             close();
             window.refreshFiles();
         } catch (err) {
-            showError(err?.message || String(err));
+            showError(humanizeBackendError(err));
         }
     });
 }

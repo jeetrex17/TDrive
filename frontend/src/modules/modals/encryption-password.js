@@ -67,6 +67,8 @@ export function setupEncryptionPasswordModal() {
 export function openEncryptionPasswordModal() {
     const modal = document.getElementById('encryption-password-modal');
     if (!modal) return Promise.resolve(false);
+    const hintRow = modal.querySelector('#encryption-password-hint');
+    const hintText = modal.querySelector('#encryption-password-hint-text');
     return new Promise((resolve) => {
         if (pending) {
             const prev = pending;
