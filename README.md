@@ -29,6 +29,8 @@ Shared drives are usable now, but still new. You can:
 
 Treat invite links like passwords. Anyone with a normal invite link can join unless you revoke it. If you need tighter control, create an approval-required link.
 
+Folder structure inside a shared drive is collaborative: any member can create, rename, move, or delete folders. Deleting a folder does not delete the files inside it; those files show up in the Orphaned view.
+
 ## Encryption
 
 Personal-drive encryption is per upload. When you choose encrypted upload, TDrive encrypts the file contents before sending them to Telegram, and decrypts automatically on preview/download after you enter the correct password.
