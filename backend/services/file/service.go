@@ -424,10 +424,39 @@ func replaceDownloadedFile(tmpPath string, savePath string) error {
 	if err := os.Rename(tmpPath, savePath); err == nil {
 		return nil
 	}
-	if err := os.Remove(savePath); err != nil && !os.IsNotExist(err) {
+
+	dir := filepath.Dir(savePath)
+	backup, err := os.CreateTemp(dir, ".tdrive-backup-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, savePath)
+	backupPath := backup.Name()
+	if err := backup.Close(); err != nil {
+		_ = os.Remove(backupPath)
+		return err
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return err
+	}
+
+	hadExisting := false
+	if err := os.Rename(savePath, backupPath); err == nil {
+		hadExisting = true
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.Rename(tmpPath, savePath); err != nil {
+		if hadExisting {
+			_ = os.Rename(backupPath, savePath)
+		}
+		return err
+	}
+
+	if hadExisting {
+		_ = os.Remove(backupPath)
+	}
+	return nil
 }
 
 func (s *Service) PreviewThumbnail(ctx context.Context, channelID int64, msgID int) (PreviewPayload, error) {
