@@ -8,7 +8,7 @@ import { setupSelectionBar } from './modules/selection.js';
 import { setupDownloadProgress, setupUploadProgress, uploadWithParentID } from './modules/transfers.js';
 import { setupBreadcrumb } from './modules/navigation.js';
 import { setupContextMenu } from './modules/context-menu.js';
-import { setupPasswordReveal, setupAuthWindowBindings, checkStatusAndShowScreen } from './modules/auth.js';
+import { setupPasswordReveal, setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } from './modules/auth.js';
 import { setupFileListWindowBindings, refreshFiles } from './modules/file-list.js';
 import { setupSearchBar, runGlobalSearch } from './modules/search.js';
 
@@ -65,6 +65,7 @@ window.initDelete = function(id, name) {
 // Application initialization
 window.onload = async function() {
     console.log("App loaded. Checking Status...");
+    hideAllScreens();
 
     // Notifications surface — must be set up before any other module that
     // might emit toasts. Bell is the unified history; toasts feed into it.
