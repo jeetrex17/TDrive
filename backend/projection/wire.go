@@ -139,14 +139,14 @@ func Parse(raw string) (Op, error) {
 
 	if s, ok := kv["sz"]; ok {
 		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
+		if err != nil || n < 0 {
 			return Op{}, ErrWireMalformed
 		}
 		op.FileSize = n
 	}
 	if s, ok := kv["ts"]; ok {
 		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
+		if err != nil || n < 0 {
 			return Op{}, ErrWireMalformed
 		}
 		op.FileUploadTime = n
@@ -166,7 +166,7 @@ func Parse(raw string) (Op, error) {
 	}
 	if s, ok := kv["psz"]; ok {
 		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
+		if err != nil || n < 0 {
 			return Op{}, ErrWireMalformed
 		}
 		op.PlaintextSize = n

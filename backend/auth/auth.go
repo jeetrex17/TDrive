@@ -24,8 +24,8 @@ const (
 )
 
 type getchanel interface {
-	GetCodech() chan string
-	GetPassch() chan string
+	WaitCode(ctx context.Context) (string, error)
+	WaitPassword(ctx context.Context, hint string) (string, error)
 	SendHint(hint string)
 }
 
@@ -151,9 +151,7 @@ func (a AuthT) Phone(ctx context.Context) (string, error) {
 }
 
 func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, error) {
-	code := <-a.app.GetCodech()
-
-	return code, nil
+	return a.app.WaitCode(ctx)
 }
 
 func (a AuthT) Password(ctx context.Context) (string, error) {
@@ -162,15 +160,14 @@ func (a AuthT) Password(ctx context.Context) (string, error) {
 		return "", err
 	}
 
+	hint := ""
 	if passObj.Hint != "" {
-		a.app.SendHint("Hint : " + passObj.Hint)
+		hint = "Hint : " + passObj.Hint
 	} else {
-		a.app.SendHint("NO HINT found")
+		hint = "NO HINT found"
 	}
 
-	Password := <-a.app.GetPassch()
-
-	return Password, nil
+	return a.app.WaitPassword(ctx, hint)
 }
 
 func (a AuthT) AcceptTermsOfService(ctx context.Context, tos tg.HelpTermsOfService) error {

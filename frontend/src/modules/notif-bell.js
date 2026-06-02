@@ -200,14 +200,11 @@ function renderBell() {
 }
 
 function startPulseTicker() {
-    // Keep the bell rerendered while transfers are active so the
-    // pulsing dot's CSS animation begins/ends as state changes.
-    if (pulseTickerHandle) return;
-    const tick = () => {
+    if (pulseTickerHandle) cancelAnimationFrame(pulseTickerHandle);
+    pulseTickerHandle = requestAnimationFrame(() => {
+        pulseTickerHandle = null;
         renderBell();
-        pulseTickerHandle = requestAnimationFrame(tick);
-    };
-    pulseTickerHandle = requestAnimationFrame(tick);
+    });
 }
 
 // ─── HOVER POPOVER ───────────────────────────────────────────────────────────

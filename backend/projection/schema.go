@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -47,6 +47,13 @@ func EnsureSchema(db *sql.DB) error {
 			msg_id      INTEGER NOT NULL,
 			old_hash    TEXT NOT NULL,
 			new_hash    TEXT NOT NULL,
+			detected_at INTEGER NOT NULL,
+			PRIMARY KEY (channel_id, msg_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS replay_log_rejects (
+			channel_id  INTEGER NOT NULL,
+			msg_id      INTEGER NOT NULL,
+			error       TEXT NOT NULL,
 			detected_at INTEGER NOT NULL,
 			PRIMARY KEY (channel_id, msg_id)
 		);`,
@@ -155,6 +162,9 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 		if err := addEncryptionHintColumn(tx); err != nil {
 			return err
 		}
+	}
+	if v < 6 {
+		// replay_log_rejects is created by EnsureSchema above. Nothing to backfill.
 	}
 
 	if _, err := tx.Exec(`DELETE FROM schema_version`); err != nil {

@@ -33,9 +33,30 @@ func SaveConfig(id int64) error {
 	}
 	_ = os.Chmod(dir, privateDirMode)
 
-	err = os.WriteFile(path, jsonData, privateFileMode)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, err := tmp.Write(jsonData); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmp.Chmod(privateFileMode); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp config: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
 	}
 	_ = os.Chmod(path, privateFileMode)
 
@@ -57,14 +78,14 @@ func LoadConfig() (int64, error) {
 	}
 
 	if err != nil {
-		return 0, nil
+		return 0, fmt.Errorf("read config: %w", err)
 	}
 
 	channels := ChannelS{}
 
 	err = json.Unmarshal(file, &channels)
 	if err != nil {
-		return 0, nil
+		return 0, fmt.Errorf("parse config: %w", err)
 	}
 
 	cid := channels.ChannelID

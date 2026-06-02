@@ -381,8 +381,8 @@ func (a *App) authService() *authsvc.Service {
 	return a.auth
 }
 
-func (a *App) LoginPhoneNumber(phoneNumber string) {
-	a.authService().StartLogin(a.ctx, phoneNumber)
+func (a *App) LoginPhoneNumber(phoneNumber string) error {
+	return a.authService().StartLogin(a.ctx, phoneNumber)
 }
 
 func (a *App) InitDrive() string {
@@ -663,7 +663,7 @@ func (a *App) RenameFolder(folderID string, newName string) string {
 }
 
 func (a *App) MoveFile(msgID int, newParentID string) string {
-	if err := a.fileService().Move(a.ActiveChannelID(), msgID, newParentID); err != nil {
+	if err := a.fileService().Move(a.ctx, a.ActiveChannelID(), msgID, newParentID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"

@@ -64,6 +64,12 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 			op.Type = OpType(r.opType)
 		}
 		if err := ApplyOp(tx, channelID, r.msgID, op, r.actorUserID); err != nil {
+			if isSkippableApplyError(err) {
+				if recErr := recordReject(tx, channelID, r.msgID, err); recErr != nil {
+					return recErr
+				}
+				continue
+			}
 			return fmt.Errorf("projection: rebuild apply msg=%d: %w", r.msgID, err)
 		}
 	}

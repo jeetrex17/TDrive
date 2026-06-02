@@ -3,6 +3,7 @@
 import { state } from '../state.js';
 import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../wailsjs/go/main/App';
 import { notify } from './notifications.js';
+import { humanizeBackendError } from './errors.js';
 
 export function clearDropHighlights() {
     if (state.dragOverEl) {
@@ -53,7 +54,7 @@ async function ensureFileInTdriveSystem(target) {
     );
 
     if (typeof res === "string" && res.startsWith("Error")) {
-        throw new Error(res);
+        throw new Error(humanizeBackendError(res));
     }
 }
 
@@ -84,11 +85,17 @@ export async function performDropMove(newParentId) {
             notify({
                 level: 'error',
                 title: 'Move failed',
-                body: res.replace(/^Error:?\s*/i, ''),
+                body: humanizeBackendError(res),
             });
         } else {
             window.refreshFiles();
         }
+    } catch (err) {
+        notify({
+            level: 'error',
+            title: 'Move failed',
+            body: humanizeBackendError(err),
+        });
     } finally {
         clearDropHighlights();
     }

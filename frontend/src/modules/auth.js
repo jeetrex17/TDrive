@@ -216,37 +216,49 @@ export function setupAuthWindowBindings() {
             const target = document.getElementById("code-target");
             if (target) target.innerText = state.lastLoginPhoneNumber;
             if (row) row.style.display = state.lastLoginPhoneNumber ? "flex" : "none";
+        }).catch((err) => {
+            notify({ level: 'error', title: 'Could not start login', body: String(err) });
         });
     };
 
     window.sendCode = function () {
         const code = document.getElementById("entercode").value;
-        SumbitCode(code).then(() => {
-            showAuthWrapper();
-            hideAllScreens();
-            document.getElementById("passwordcontainer").style.display = "block";
-
-            const hintBox = document.getElementById("hint-box");
-            const hintEl = document.getElementById("hinttext");
-            if (hintEl) hintEl.innerText = "";
-            if (hintBox) hintBox.style.display = "none";
-
-            const pw = document.getElementById("enterpassword");
-            const toggle = document.getElementById("toggle-password");
-            if (pw) pw.type = "password";
-            if (toggle) {
-                toggle.dataset.state = "hidden";
-                toggle.setAttribute("aria-label", "Show password");
-                toggle.setAttribute("title", "Show password");
-            }
+        SumbitCode(code).catch((err) => {
+            notify({ level: 'error', title: 'Could not submit code', body: String(err) });
         });
     };
 
     window.sendPassword = function () {
-        SumbitPassword(document.getElementById("enterpassword").value);
+        SumbitPassword(document.getElementById("enterpassword").value).catch((err) => {
+            notify({ level: 'error', title: 'Could not submit password', body: String(err) });
+        });
     };
 
     window.runtime.EventsOn("login-success", () => showDashboard());
+
+    window.runtime.EventsOn("login-password-required", () => {
+        showAuthWrapper();
+        hideAllScreens();
+        document.getElementById("passwordcontainer").style.display = "block";
+
+        const hintBox = document.getElementById("hint-box");
+        const hintEl = document.getElementById("hinttext");
+        if (hintEl) hintEl.innerText = "";
+        if (hintBox) hintBox.style.display = "none";
+
+        const pw = document.getElementById("enterpassword");
+        const toggle = document.getElementById("toggle-password");
+        if (pw) pw.type = "password";
+        if (toggle) {
+            toggle.dataset.state = "hidden";
+            toggle.setAttribute("aria-label", "Show password");
+            toggle.setAttribute("title", "Show password");
+        }
+    });
+
+    window.runtime.EventsOn("login-error", (msg) => {
+        notify({ level: 'error', title: 'Login failed', body: String(msg || 'Try again.') });
+    });
 
     window.runtime.EventsOn("gothint", (hint) => {
         const hintEl = document.getElementById("hinttext");

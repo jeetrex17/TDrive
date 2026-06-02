@@ -97,9 +97,19 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 	}
 
 	if err := ApplyOp(tx, channelID, msgID, op, actorID); err != nil {
+		if isSkippableApplyError(err) {
+			if recErr := recordReject(tx, channelID, msgID, err); recErr != nil {
+				return false, recErr
+			}
+			return false, nil
+		}
 		return false, fmt.Errorf("projection: apply op msg=%d: %w", msgID, err)
 	}
 	return false, nil
+}
+
+func isSkippableApplyError(err error) bool {
+	return errors.Is(err, ErrCycleRejected) || errors.Is(err, ErrBadOp)
 }
 
 func existingHash(tx *sql.Tx, channelID, msgID int64) (string, bool, error) {
@@ -127,6 +137,20 @@ func recordTamper(tx *sql.Tx, channelID, msgID int64, oldHash, newHash string) e
 	`, channelID, msgID, oldHash, newHash, time.Now().Unix())
 	if err != nil {
 		return fmt.Errorf("projection: record tamper: %w", err)
+	}
+	return nil
+}
+
+func recordReject(tx *sql.Tx, channelID, msgID int64, applyErr error) error {
+	_, err := tx.Exec(`
+		INSERT INTO replay_log_rejects (channel_id, msg_id, error, detected_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(channel_id, msg_id) DO UPDATE SET
+			error = excluded.error,
+			detected_at = excluded.detected_at
+	`, channelID, msgID, applyErr.Error(), time.Now().Unix())
+	if err != nil {
+		return fmt.Errorf("projection: record rejected op: %w", err)
 	}
 	return nil
 }

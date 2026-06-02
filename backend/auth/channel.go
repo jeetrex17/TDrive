@@ -10,8 +10,11 @@ import (
 
 func GetTDriveChannel(ctx context.Context, Client *telegram.Client) (int64, error) {
 	savedId, err := LoadConfig()
+	if err != nil {
+		return 0, fmt.Errorf("load TDrive channel config: %w", err)
+	}
 
-	if err == nil && savedId != 0 {
+	if savedId != 0 {
 		return savedId, nil
 	}
 
