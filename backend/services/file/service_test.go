@@ -415,6 +415,32 @@ func TestDownloadPlainFileWritesBytes(t *testing.T) {
 	}
 }
 
+func TestReplaceDownloadedFileReplacesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	tmpPath := filepath.Join(dir, "download.tmp")
+	savePath := filepath.Join(dir, "download.txt")
+	if err := os.WriteFile(tmpPath, []byte("new"), 0o600); err != nil {
+		t.Fatalf("write tmp: %v", err)
+	}
+	if err := os.WriteFile(savePath, []byte("old"), 0o600); err != nil {
+		t.Fatalf("write existing: %v", err)
+	}
+
+	if err := replaceDownloadedFile(tmpPath, savePath); err != nil {
+		t.Fatalf("replaceDownloadedFile: %v", err)
+	}
+	got, err := os.ReadFile(savePath)
+	if err != nil {
+		t.Fatalf("read replaced file: %v", err)
+	}
+	if string(got) != "new" {
+		t.Fatalf("replaced file = %q, want new", string(got))
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("tmp still exists or stat failed unexpectedly: %v", err)
+	}
+}
+
 func TestDownloadEncryptedFileDecrypts(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	masterKey := bytes.Repeat([]byte{7}, 32)
