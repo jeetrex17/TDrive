@@ -24,7 +24,7 @@ jobs:
           - os: ubuntu-22.04
             platform: linux/amd64
             output_name: TDrive-linux-amd64
-            asset_name: TDrive-${{ github.ref_name }}-linux-amd64.tar.gz
+            asset_name: TDrive-${{ github.ref_name }}-linux-amd64.AppImage
 
           - os: windows-latest
             platform: windows/amd64
@@ -70,12 +70,47 @@ jobs:
         run: |
           wails build -clean -platform "${{ matrix.platform }}" -o "${{ matrix.output_name }}"
 
-      - name: Package (Linux)
+      - name: Package (Linux AppImage)
         if: matrix.os == 'ubuntu-22.04'
         shell: bash
         run: |
+          set -euo pipefail
+          sudo apt-get install -y imagemagick
+
+          APPDIR=TDrive.AppDir
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr/bin" \
+                   "$APPDIR/usr/share/applications" \
+                   "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+
+          # App binary
+          cp "build/bin/${{ matrix.output_name }}" "$APPDIR/usr/bin/TDrive"
+          chmod +x "$APPDIR/usr/bin/TDrive"
+
+          # Icon from the canonical appicon.png (AppDir root + hicolor theme path)
+          convert build/appicon.png -resize 256x256 \
+            "$APPDIR/usr/share/icons/hicolor/256x256/apps/TDrive.png"
+          cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/TDrive.png" "$APPDIR/TDrive.png"
+
+          # Desktop entry (AppDir root + standard location)
+          cp build/linux/TDrive.desktop "$APPDIR/usr/share/applications/TDrive.desktop"
+          cp build/linux/TDrive.desktop "$APPDIR/TDrive.desktop"
+
+          # Launcher
+          cat > "$APPDIR/AppRun" <<'SH'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          exec "${HERE}/usr/bin/TDrive" "$@"
+          SH
+          chmod +x "$APPDIR/AppRun"
+
+          # appimagetool — GitHub runners have no FUSE, so extract-and-run.
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+
           mkdir -p dist
-          tar -C build/bin -czf "dist/${{ matrix.asset_name }}" "${{ matrix.output_name }}"
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
+            ./appimagetool-x86_64.AppImage "$APPDIR" "dist/${{ matrix.asset_name }}"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'

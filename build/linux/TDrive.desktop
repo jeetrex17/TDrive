@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TDrive
+Comment=Use a private Telegram channel as cloud storage
+Exec=TDrive
+Icon=TDrive
+Categories=Utility;Network;
+Terminal=false
