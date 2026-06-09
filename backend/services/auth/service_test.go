@@ -64,6 +64,62 @@ func TestSubmitCodeUnblocksWaitCode(t *testing.T) {
 	}
 }
 
+func TestCodeRejectedEmitsInvalidEvent(t *testing.T) {
+	events := &fakeEvents{}
+	svc := NewService(events)
+
+	svc.CodeRejected()
+
+	if len(events.events) != 1 || events.events[0].name != "login-code-invalid" {
+		t.Fatalf("events = %+v, want one login-code-invalid", events.events)
+	}
+}
+
+func TestCodeRetryDeliversNewCodeAfterRejection(t *testing.T) {
+	events := &fakeEvents{}
+	svc := NewService(events)
+	svc.resetAttempt(stageStarted)
+
+	// The flow asks for a code; the user submits a wrong one.
+	first := make(chan string, 1)
+	go func() {
+		code, _ := svc.WaitCode(context.Background())
+		first <- code
+	}()
+	svc.SubmitCode("11111")
+	if got := <-first; got != "11111" {
+		t.Fatalf("first code = %q, want 11111", got)
+	}
+
+	// Telegram rejects it; the flow loops back and waits for another code.
+	svc.CodeRejected()
+
+	second := make(chan string, 1)
+	go func() {
+		code, _ := svc.WaitCode(context.Background())
+		second <- code
+	}()
+	svc.SubmitCode("22222")
+	select {
+	case got := <-second:
+		if got != "22222" {
+			t.Fatalf("retry code = %q, want 22222", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retry code was not accepted after rejection")
+	}
+
+	invalid := 0
+	for _, e := range events.events {
+		if e.name == "login-code-invalid" {
+			invalid++
+		}
+	}
+	if invalid != 1 {
+		t.Fatalf("login-code-invalid count = %d, want 1", invalid)
+	}
+}
+
 func TestSubmitPasswordWithoutPasswordRequestDoesNotBlock(t *testing.T) {
 	events := &fakeEvents{}
 	svc := NewService(events)

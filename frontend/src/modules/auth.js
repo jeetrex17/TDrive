@@ -222,7 +222,11 @@ export function setupAuthWindowBindings() {
     };
 
     window.sendCode = function () {
-        const code = document.getElementById("entercode").value;
+        const code = (document.getElementById("entercode").value || "").trim();
+        if (!code) {
+            notify({ level: 'warning', title: 'Enter the code from Telegram' });
+            return;
+        }
         SumbitCode(code).catch((err) => {
             notify({ level: 'error', title: 'Could not submit code', body: String(err) });
         });
@@ -258,6 +262,21 @@ export function setupAuthWindowBindings() {
 
     window.runtime.EventsOn("login-error", (msg) => {
         notify({ level: 'error', title: 'Login failed', body: String(msg || 'Try again.') });
+    });
+
+    // Wrong code: the backend keeps the login attempt alive and waits for a new
+    // code, so stay on the code screen, clear the field, and let the user retry.
+    window.runtime.EventsOn("login-code-invalid", () => {
+        showAuthWrapper();
+        hideAllScreens();
+        document.getElementById("codecontainer").style.display = "block";
+
+        const codeEl = document.getElementById("entercode");
+        if (codeEl) {
+            codeEl.value = "";
+            codeEl.focus();
+        }
+        notify({ level: 'error', title: 'Wrong code', body: 'That code was incorrect — try again.' });
     });
 
     window.runtime.EventsOn("gothint", (hint) => {
