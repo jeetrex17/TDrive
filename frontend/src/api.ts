@@ -1,0 +1,94 @@
+// Typed boundary over the generated Wails bindings.
+//
+// Every read that returns drive data goes through here so the snake_case Go
+// payloads are normalized into the camelCase types in `types.ts` exactly once.
+// UI modules should import from this module instead of calling the raw
+// `wailsjs/go/main/App` functions directly.
+
+import {
+    GetFolderContents as rawGetFolderContents,
+    GetFileList as rawGetFileList,
+    GetOrphanedFiles as rawGetOrphanedFiles,
+    Search as rawSearch,
+} from "../wailsjs/go/main/App";
+import type { backend, main } from "../wailsjs/go/models";
+import type {
+    FileItem,
+    FolderItem,
+    FolderContents,
+    RootFile,
+    SearchHit,
+    SearchHitType,
+} from "./types";
+
+function toFileItem(f: backend.FileMetaData): FileItem {
+    return {
+        msgId: Number(f.msg_id ?? 0),
+        name: String(f.name ?? ""),
+        size: Number(f.size ?? 0),
+        parentId: String(f.parent_id ?? ""),
+        uploadTime: Number(f.upload_time ?? 0),
+        uploaderId: Number(f.uploader_id ?? 0),
+        encrypted: Boolean(f.encrypted),
+        plaintextSize: Number(f.plaintext_size ?? 0),
+    };
+}
+
+function toFolderItem(d: backend.Folder): FolderItem {
+    return {
+        id: String(d.id ?? ""),
+        name: String(d.name ?? ""),
+        parentId: String(d.parent_id ?? ""),
+    };
+}
+
+function toRootFile(f: main.TDriveFile): RootFile {
+    return {
+        msgId: Number(f.id ?? 0),
+        name: String(f.name ?? ""),
+        size: Number(f.size ?? 0),
+        accessHash: Number(f.access_hash ?? 0),
+        date: Number(f.date ?? 0),
+    };
+}
+
+function toSearchHit(h: backend.SearchResult): SearchHit {
+    const type: SearchHitType = h.type === "folder" ? "folder" : "file";
+    return {
+        type,
+        id: String(h.id ?? ""),
+        name: String(h.name ?? ""),
+        parentId: String(h.parent_id ?? ""),
+        size: Number(h.size ?? 0),
+        uploadTime: Number(h.upload_time ?? 0),
+        uploaderId: Number(h.uploader_id ?? 0),
+        path: String(h.path ?? ""),
+    };
+}
+
+/** Subfolders and files under a parent folder, normalized. */
+export async function getFolderContents(parentId: string): Promise<FolderContents> {
+    const fs = await rawGetFolderContents(parentId);
+    return {
+        folders: (fs?.folders ?? []).map(toFolderItem),
+        files: (fs?.files ?? []).map(toFileItem),
+    };
+}
+
+/** Flat list of root files read straight from Telegram history, normalized. */
+export async function getFileList(): Promise<RootFile[]> {
+    const files = await rawGetFileList();
+    return (files ?? []).map(toRootFile);
+}
+
+/** Files whose parent folder was deleted, surfaced in the Orphaned view. */
+export async function getOrphanedFiles(): Promise<FileItem[]> {
+    const files = await rawGetOrphanedFiles();
+    return (files ?? []).map(toFileItem);
+}
+
+/** Search files and folders in the active drive, normalized. */
+export async function search(query: string, limit: number): Promise<SearchHit[]> {
+    const hits = await rawSearch(query, limit);
+    return (hits ?? []).map(toSearchHit);
+}

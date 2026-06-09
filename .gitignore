@@ -7,6 +7,8 @@ frontend/dist
 .env.local
 secret.json
 *.json
+# Tracked config that the blanket *.json above would otherwise hide.
+!frontend/tsconfig.json
 
 # --- Wails / Build Artifacts ---
 build/bin/
