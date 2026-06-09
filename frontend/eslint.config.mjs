@@ -15,7 +15,7 @@ export default tseslint.config(
         rules: {
             // Surface, don't fail, on pre-existing legacy patterns. Tighten to
             // "error" as modules get migrated onto the typed boundary.
-            "no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+            "no-unused-vars": "off",
             "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
             "no-empty": ["warn", { allowEmptyCatch: true }],
         },
