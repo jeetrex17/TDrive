@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 type ImpCredentials struct {
@@ -27,12 +29,10 @@ type getchanel interface {
 	WaitCode(ctx context.Context) (string, error)
 	WaitPassword(ctx context.Context, hint string) (string, error)
 	SendHint(hint string)
-}
-
-type AuthT struct {
-	Client      *telegram.Client
-	app         getchanel
-	PhoneNumber string
+	// CodeRejected signals that Telegram rejected the last code as invalid.
+	// The flow stays alive and waits for another code, so the UI can let the
+	// user fix a typo instead of restarting login from the phone step.
+	CodeRejected()
 }
 
 func GetConfigPath() string {
@@ -146,50 +146,71 @@ func CheckLogin(ctx context.Context) (bool, error) {
 	return isValid, nil
 }
 
-func (a AuthT) Phone(ctx context.Context) (string, error) {
-	return a.PhoneNumber, nil
-}
-
-func (a AuthT) Code(ctx context.Context, sendcode *tg.AuthSentCode) (string, error) {
-	return a.app.WaitCode(ctx)
-}
-
-func (a AuthT) Password(ctx context.Context) (string, error) {
-	passObj, err := a.Client.API().AccountGetPassword(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	hint := ""
-	if passObj.Hint != "" {
-		hint = "Hint : " + passObj.Hint
-	} else {
-		hint = "NO HINT found"
-	}
-
-	return a.app.WaitPassword(ctx, hint)
-}
-
-func (a AuthT) AcceptTermsOfService(ctx context.Context, tos tg.HelpTermsOfService) error {
-	return nil
-}
-
-func (a AuthT) SignUp(ctx context.Context) (auth.UserInfo, error) {
-	return auth.UserInfo{}, fmt.Errorf("sign-up not implemented: please register manually")
-}
-
+// StartLogin drives the Telegram user-authentication flow: send a code, then
+// sign in. Unlike gotd's one-shot auth.Flow, this keeps the same phone-code
+// hash and re-prompts on an invalid code, so a mistyped code can be corrected
+// without requesting (and waiting for) a brand-new code.
 func StartLogin(ctx context.Context, client *telegram.Client, ch getchanel, phone string) error {
-	authenticator := AuthT{
-		Client:      client,
-		app:         ch,
-		PhoneNumber: phone,
+	return client.Run(ctx, func(ctx context.Context) error {
+		ac := client.Auth()
+
+		status, err := ac.Status(ctx)
+		if err != nil {
+			return err
+		}
+		if status.Authorized {
+			return nil
+		}
+
+		sent, err := ac.SendCode(ctx, phone, auth.SendCodeOptions{})
+		if err != nil {
+			return err
+		}
+		sentCode, ok := sent.(*tg.AuthSentCode)
+		if !ok {
+			return fmt.Errorf("unexpected sent-code type %T", sent)
+		}
+		codeHash := sentCode.PhoneCodeHash
+
+		for {
+			code, err := ch.WaitCode(ctx)
+			if err != nil {
+				return err
+			}
+
+			_, err = ac.SignIn(ctx, phone, code, codeHash)
+			switch {
+			case err == nil:
+				return nil
+			case errors.Is(err, auth.ErrPasswordAuthNeeded):
+				return signInWithPassword(ctx, client, ch)
+			case tgerr.Is(err, "PHONE_CODE_INVALID", "PHONE_CODE_EMPTY"):
+				// Retryable: the code hash is still valid, just ask again.
+				ch.CodeRejected()
+				continue
+			default:
+				// Terminal (expired code, unregistered number, flood, ...).
+				return err
+			}
+		}
+	})
+}
+
+// signInWithPassword completes a 2FA login. The hint is best-effort: failing to
+// fetch it must not block the password prompt.
+func signInWithPassword(ctx context.Context, client *telegram.Client, ch getchanel) error {
+	hint := "NO HINT found"
+	if passObj, err := client.API().AccountGetPassword(ctx); err == nil && passObj.Hint != "" {
+		hint = "Hint : " + passObj.Hint
 	}
 
-	flow := auth.NewFlow(authenticator, auth.SendCodeOptions{})
+	password, err := ch.WaitPassword(ctx, hint)
+	if err != nil {
+		return err
+	}
 
-	return client.Run(ctx, func(ctx context.Context) error {
-		return client.Auth().IfNecessary(ctx, flow)
-	})
+	_, err = client.Auth().Password(ctx, password)
+	return err
 }
 
 func ResolveDriveChannel(ctx context.Context, api *tg.Client, channelID int64) (*tg.InputChannel, *tg.InputPeerChannel, error) {

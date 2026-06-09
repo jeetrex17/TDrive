@@ -117,6 +117,13 @@ func (s *Service) SendHint(hint string) {
 	s.emit("gothint", hint)
 }
 
+// CodeRejected is called by the login flow when Telegram rejects the entered
+// code. The attempt stays alive and loops back to WaitCode, so we only need to
+// tell the UI to clear the field and let the user try again.
+func (s *Service) CodeRejected() {
+	s.emit("login-code-invalid", true)
+}
+
 func (s *Service) WaitCode(ctx context.Context) (string, error) {
 	s.setStage(stageWaitingCode)
 	select {
