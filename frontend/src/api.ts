@@ -21,7 +21,7 @@ import type {
     SearchHitType,
 } from "./types";
 
-function toFileItem(f: backend.FileMetaData): FileItem {
+export function toFileItem(f: backend.FileMetaData): FileItem {
     return {
         msgId: Number(f.msg_id ?? 0),
         name: String(f.name ?? ""),
@@ -34,7 +34,7 @@ function toFileItem(f: backend.FileMetaData): FileItem {
     };
 }
 
-function toFolderItem(d: backend.Folder): FolderItem {
+export function toFolderItem(d: backend.Folder): FolderItem {
     return {
         id: String(d.id ?? ""),
         name: String(d.name ?? ""),
@@ -42,7 +42,7 @@ function toFolderItem(d: backend.Folder): FolderItem {
     };
 }
 
-function toRootFile(f: main.TDriveFile): RootFile {
+export function toRootFile(f: main.TDriveFile): RootFile {
     return {
         msgId: Number(f.id ?? 0),
         name: String(f.name ?? ""),
@@ -52,7 +52,7 @@ function toRootFile(f: main.TDriveFile): RootFile {
     };
 }
 
-function toSearchHit(h: backend.SearchResult): SearchHit {
+export function toSearchHit(h: backend.SearchResult): SearchHit {
     const type: SearchHitType = h.type === "folder" ? "folder" : "file";
     return {
         type,
