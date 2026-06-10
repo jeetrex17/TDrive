@@ -8,8 +8,12 @@ import { openRenameModal } from './modals/rename.js';
 import { navigateToFolder } from './navigation.js';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop.js';
 import {
-    GetFileList, DeleteFile, GetStorageUsed, GetOrphanedFiles,
+    GetFileList, GetStorageUsed,
 } from '../../wailsjs/go/main/App';
+import {
+    getFolderContents as apiGetFolderContents,
+    getOrphanedFiles as apiGetOrphanedFiles,
+} from '../api';
 import { enqueueDownload } from './transfers.js';
 import { populateUploaderChips, uploaderChipHTML } from './uploaders.js';
 
@@ -187,7 +191,7 @@ export function refreshFiles() {
     }
 
     let folderErr = null;
-    const folderPromise = getFolderContents(requestedFolderId).catch((err) => {
+    const folderPromise = apiGetFolderContents(requestedFolderId).catch((err) => {
         folderErr = err;
         console.error("GetFolderContents failed:", err);
         return null;
@@ -221,17 +225,17 @@ export function refreshFiles() {
 
         const fsFileItems = fsFiles.map((f) => {
             const encrypted = !!f.encrypted;
-            const plaintextSize = Number(f.plaintext_size || 0);
+            const plaintextSize = Number(f.plaintextSize || 0);
             // For encrypted files, the displayed size should be the
             // original plaintext size, not the on-wire ciphertext.
             const displaySize = encrypted && plaintextSize > 0 ? plaintextSize : f.size;
             return {
                 source: "fs",
-                id: f.msg_id,
+                id: f.msgId,
                 name: f.name,
                 size: displaySize,
-                date: f.upload_time,
-                uploaderID: Number(f.uploader_id || 0),
+                date: f.uploadTime,
+                uploaderID: Number(f.uploaderId || 0),
                 encrypted,
             };
         });
@@ -274,7 +278,7 @@ export function refreshFiles() {
             let orphanCount = 0;
             if (requestedFolderId === "") {
                 try {
-                    const orphans = await GetOrphanedFiles();
+                    const orphans = await apiGetOrphanedFiles();
                     orphanCount = Array.isArray(orphans) ? orphans.length : 0;
                 } catch (err) {
                     console.warn("GetOrphanedFiles failed:", err);
@@ -612,7 +616,7 @@ async function refreshOrphanView() {
 
     let orphans;
     try {
-        orphans = await GetOrphanedFiles();
+        orphans = await apiGetOrphanedFiles();
     } catch (err) {
         console.error("GetOrphanedFiles failed:", err);
         list.innerHTML = '<div style="padding:20px; color:#c0caf5;">Failed to load orphan files.</div>';
@@ -642,29 +646,29 @@ async function refreshOrphanView() {
         return;
     }
 
-    orphans.sort((a, b) => (Number(b.upload_time || 0)) - (Number(a.upload_time || 0)));
+    orphans.sort((a, b) => (Number(b.uploadTime || 0)) - (Number(a.uploadTime || 0)));
 
     orphans.forEach((file) => {
         const { base, ext } = splitNameAndExt(file.name);
         const row = document.createElement("div");
         row.className = "file-row drive-row";
         row.dataset.type = "file";
-        row.dataset.id = String(file.msg_id);
+        row.dataset.id = String(file.msgId);
         row.dataset.name = String(file.name || "");
         row.dataset.source = "fs";
         row.dataset.size = String(file.size || 0);
         row.dataset.parentId = "";
-        row.dataset.uploaderId = String(file.uploader_id || 0);
+        row.dataset.uploaderId = String(file.uploaderId || 0);
         const fileShape = {
-            id: file.msg_id,
+            id: file.msgId,
             name: file.name,
             size: file.size,
-            uploaderID: Number(file.uploader_id || 0),
+            uploaderID: Number(file.uploaderId || 0),
         };
         const ownerOnly = canOwnerActOnFile(fileShape);
         row.dataset.canDelete = ownerOnly ? "true" : "false";
         row.dataset.canRename = ownerOnly ? "true" : "false";
-        row.dataset.uploadTime = String(file.upload_time || 0);
+        row.dataset.uploadTime = String(file.uploadTime || 0);
 
         row.innerHTML = `
             <div class="row-name">
@@ -672,14 +676,14 @@ async function refreshOrphanView() {
                 ${escapeHtml(base)}
                 <span class="uploader-chip" data-uploader-slot></span>
             </div>
-            <div class="row-meta">${formatDate(file.upload_time)}</div>
+            <div class="row-meta">${formatDate(file.uploadTime)}</div>
             <div class="row-meta">${formatBytes(file.size)}</div>
             <div class="row-actions">
                 <button class="action-icon download" type="button" title="Download">${icons.download}</button>
             </div>
         `;
         row.querySelector("button.download")
-            ?.addEventListener("click", () => window.initDownload(file.msg_id, file.name, file.size));
+            ?.addEventListener("click", () => window.initDownload(file.msgId, file.name, file.size));
         row.addEventListener("click", (e) => {
             if (e.target.closest("button")) return;
             handleRowSelection(row, e);
