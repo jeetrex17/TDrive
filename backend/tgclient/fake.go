@@ -91,6 +91,9 @@ func (f *Fake) SetSelfID(id int64) {
 	f.self = id
 }
 
+// Close satisfies Client. The fake holds no connection.
+func (f *Fake) Close() {}
+
 // SeedHistory pre-loads messages as if they already existed in the channel.
 // Useful for sync tests. Auto-sorts ascending by msg_id.
 func (f *Fake) SeedHistory(msgs ...HistoryMessage) {

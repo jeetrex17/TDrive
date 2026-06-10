@@ -182,4 +182,7 @@ type Client interface {
 	HideJoinRequest(ctx context.Context, peer InputPeer, userID, accessHash int64, approved bool) error
 	ResolveDriveChannel(ctx context.Context, channelID int64) (InputPeer, error)
 	LeaveChannel(ctx context.Context, peer InputPeer) error
+
+	// Close releases the shared connection. Called once at app shutdown.
+	Close()
 }

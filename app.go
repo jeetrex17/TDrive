@@ -65,24 +65,14 @@ func (a *App) resolvePeer(ctx context.Context, channelID int64) (tgclient.InputP
 	return a.channelPeer(ctx, channelID)
 }
 
-// channelPeer resolves the active drive's tgclient.InputPeer. Used by every
-// op that needs to send into Telegram. Resolution may hit Telegram once per
-// call; callers should not hold this across long operations.
+// channelPeer resolves the active drive's tgclient.InputPeer through the shared
+// Telegram client. Used by every op that needs to send into Telegram; callers
+// should not hold this across long operations.
 func (a *App) channelPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	client, err := auth.Connect()
-	if err != nil {
-		return tgclient.InputPeer{}, err
+	if a.tg == nil {
+		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
 	}
-	var peer tgclient.InputPeer
-	err = client.Run(ctx, func(rctx context.Context) error {
-		_, ip, err := auth.ResolveDriveChannel(rctx, client.API(), channelID)
-		if err != nil {
-			return err
-		}
-		peer = tgclient.InputPeer{ChannelID: ip.ChannelID, AccessHash: ip.AccessHash}
-		return nil
-	})
-	return peer, err
+	return a.tg.ResolveDriveChannel(ctx, channelID)
 }
 
 // emitAndProject sends a control op and projects it locally. Returns the
@@ -494,6 +484,14 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 		Name:     folder.Name,
 		ParentID: folder.ParentID,
 	}, nil
+}
+
+// shutdown runs on app exit. Tear down the shared Telegram connection so the
+// background Run scope's goroutine exits cleanly.
+func (a *App) shutdown(ctx context.Context) {
+	if a.tg != nil {
+		a.tg.Close()
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
