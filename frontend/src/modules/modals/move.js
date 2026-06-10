@@ -4,7 +4,8 @@ import { state } from '../../state.js';
 import { icons } from '../../constants.js';
 import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
 import { clearSelection } from '../selection.js';
-import { buildFolderIndex, collectDescendants, getFolderContents } from '../file-list.js';
+import { getFolderContents } from '../drive-data.js';
+import { buildFolderIndex, collectDescendants } from '../folder-index.js';
 import { humanizeBackendError } from '../errors.js';
 
 let movePath = [];
