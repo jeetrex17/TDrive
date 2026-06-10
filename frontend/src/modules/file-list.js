@@ -335,12 +335,6 @@ export function refreshFiles() {
                     </div>
                 `;
 
-                row.addEventListener("dblclick", () => navigateToFolder(folder.id, folder.name));
-                row.addEventListener("click", (e) => {
-                    if (e.target.closest("button.open-folder")) return navigateToFolder(folder.id, folder.name);
-                    handleRowSelection(row, e);
-                });
-
                 const folderNameEl = row.querySelector(".row-name");
                 if (folderNameEl) {
                     folderNameEl.draggable = true;
@@ -462,16 +456,6 @@ export function refreshFiles() {
                     uploadTime: file.date,
                 });
 
-                const downloadBtn = row.querySelector("button.download");
-                if (downloadBtn) {
-                    downloadBtn.addEventListener("click", () => window.initDownload(file.id, file.name, file.size));
-                }
-
-                row.addEventListener("click", (e) => {
-                    if (e.target.closest("button")) return;
-                    handleRowSelection(row, e);
-                });
-
                 const nameEl = row.querySelector(".row-name");
                 if (nameEl) {
                     nameEl.draggable = true;
@@ -496,22 +480,6 @@ export function refreshFiles() {
                         });
                     });
                     nameEl.addEventListener("dragend", endRowDrag);
-
-                    nameEl.addEventListener("dblclick", (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const selection = window.getSelection?.();
-                        if (selection) selection.removeAllRanges();
-                        if (!canOwnerActOnFile(file)) return;
-                        openRenameModal({
-                            type: "file",
-                            id: file.id,
-                            name: file.name,
-                            size: Number(file.size || row.dataset.size || 0),
-                            parentId: state.currentFolderId,
-                            source: file.source || row.dataset.source || "fs",
-                        });
-                    });
                 }
                 list.appendChild(row);
             });
@@ -582,8 +550,6 @@ function buildOrphanEntryRow(count) {
         <div class="row-actions"></div>
     `;
     row.title = "Files whose parent folder was deleted. Click to view.";
-    row.addEventListener("click", () => enterOrphanView());
-    row.addEventListener("dblclick", () => enterOrphanView());
     return row;
 }
 
@@ -636,7 +602,6 @@ async function refreshOrphanView() {
         <button id="orphan-back" class="secondary-btn" type="button">Back to root</button>
     `;
     list.appendChild(banner);
-    banner.querySelector("#orphan-back")?.addEventListener("click", () => exitOrphanView());
 
     if (orphans.length === 0) {
         const empty = document.createElement("div");
@@ -682,16 +647,75 @@ async function refreshOrphanView() {
                 <button class="action-icon download" type="button" title="Download">${icons.download}</button>
             </div>
         `;
-        row.querySelector("button.download")
-            ?.addEventListener("click", () => window.initDownload(file.msgId, file.name, file.size));
-        row.addEventListener("click", (e) => {
-            if (e.target.closest("button")) return;
-            handleRowSelection(row, e);
-        });
         list.appendChild(row);
     });
 
     populateUploaderChips(list);
+}
+
+// Delegated row interactions. Listeners live on the #file-list container and
+// read each row's data-* attributes, so re-rendering rows costs no click
+// listener churn. Drag handlers are still attached per row for now.
+function handleListClick(e) {
+    if (e.target.closest("#orphan-back")) {
+        exitOrphanView();
+        return;
+    }
+    const row = e.target.closest(".drive-row");
+    if (!row) return;
+
+    if (row.dataset.type === "orphan-entry") {
+        enterOrphanView();
+        return;
+    }
+    if (row.dataset.type === "folder") {
+        if (e.target.closest("button.open-folder")) {
+            navigateToFolder(row.dataset.id, row.dataset.name);
+            return;
+        }
+        handleRowSelection(row, e);
+        return;
+    }
+    if (row.dataset.type === "file") {
+        if (e.target.closest("button.download")) {
+            window.initDownload(Number(row.dataset.id), row.dataset.name, Number(row.dataset.size || 0));
+            return;
+        }
+        if (e.target.closest("button")) return;
+        handleRowSelection(row, e);
+    }
+}
+
+function handleListDblClick(e) {
+    const row = e.target.closest(".drive-row");
+    if (!row) return;
+
+    if (row.dataset.type === "orphan-entry") {
+        enterOrphanView();
+        return;
+    }
+    if (row.dataset.type === "folder") {
+        navigateToFolder(row.dataset.id, row.dataset.name);
+        return;
+    }
+    if (row.dataset.type === "file") {
+        // Rename only from the name area, only when allowed, and never in the
+        // orphan view (orphan files were never rename-on-double-click).
+        if (!e.target.closest(".row-name")) return;
+        if (state.virtualView === "orphaned") return;
+        if (row.dataset.canRename !== "true") return;
+        e.preventDefault();
+        const selection = window.getSelection?.();
+        if (selection) selection.removeAllRanges();
+        openRenameModal({
+            type: "file",
+            id: Number(row.dataset.id),
+            name: row.dataset.name,
+            size: Number(row.dataset.size || 0),
+            parentId: state.currentFolderId,
+            source: row.dataset.source || "fs",
+        });
+    }
 }
 
 export function setupFileListWindowBindings() {
@@ -700,6 +724,12 @@ export function setupFileListWindowBindings() {
     window.initDownload = function(id, name, size) {
         enqueueDownload(id, name, size);
     };
+
+    const list = document.getElementById("file-list");
+    if (list) {
+        list.addEventListener("click", handleListClick);
+        list.addEventListener("dblclick", handleListDblClick);
+    }
 
     // Note: window.initDelete and window.initDeleteFolder are set up in main.js
     // to avoid circular dependency issues with the delete modal
