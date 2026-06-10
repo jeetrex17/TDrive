@@ -3,7 +3,7 @@ import { icons } from '../constants.js';
 import { escapeHtml, splitNameAndExt, formatBytes } from '../utils.js';
 import { clearSelection, handleRowSelection } from './selection.js';
 import { renderBreadcrumb } from './navigation.js';
-import { fillUploaderSlot, refreshFolderIndex } from './file-list.js';
+import { fillUploaderSlot, refreshFolderIndex, resetFileListScrollRestore } from './file-list.js';
 import { populateUploaderChips } from './uploaders.js';
 
 let activeToken = 0;
@@ -148,6 +148,7 @@ function clearSearch({ refresh = true } = {}) {
     const input = getSearchInput();
     if (input) input.value = "";
     state.searchQuery = "";
+    resetFileListScrollRestore();
     setHeaderMode(false);
     clearSelection();
     if (refresh) window.refreshFiles();

@@ -161,6 +161,14 @@ export function collectDescendants(folderId, children) {
     return out;
 }
 
+// Tracks the folder whose rows are currently rendered, so a same-folder
+// re-render can restore the scroll position instead of jumping to the top.
+let lastRenderedFolderId = null;
+
+export function resetFileListScrollRestore() {
+    lastRenderedFolderId = null;
+}
+
 export function refreshFiles() {
     if (state.virtualView === "orphaned") {
         return refreshOrphanView();
@@ -172,6 +180,12 @@ export function refreshFiles() {
     resetFolderCaches();
     const folderEpoch = state.folderSizeEpoch;
     clearSelection();
+
+    // Preserve scroll on a same-folder re-render (upload, delete, rename,
+    // sync); navigation into a different folder still starts at the top.
+    // Captured before the "Loading…" wipe resets scrollTop.
+    const prevScrollTop = list.scrollTop;
+    const keepScroll = lastRenderedFolderId === requestedFolderId;
 
     list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
     if (storageUsed) {
@@ -299,6 +313,7 @@ export function refreshFiles() {
 
             if (folders.length === 0 && files.length === 0 && orphanCount === 0 && pendingForParent.length === 0) {
                 list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
+                lastRenderedFolderId = requestedFolderId;
                 return;
             }
 
@@ -483,6 +498,14 @@ export function refreshFiles() {
                 }
                 list.appendChild(row);
             });
+
+            // Restore prior scroll on a same-folder re-render. Before
+            // pendingFocus so a just-uploaded/renamed file can still scroll
+            // itself into view and win.
+            lastRenderedFolderId = requestedFolderId;
+            if (keepScroll && state.currentFolderId === requestedFolderId) {
+                list.scrollTop = prevScrollTop;
+            }
 
             if (state.pendingFocus && state.pendingFocus.type === "file") {
                 const targetID = String(state.pendingFocus.id || "");
