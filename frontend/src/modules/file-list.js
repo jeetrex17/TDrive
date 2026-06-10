@@ -165,6 +165,10 @@ export function collectDescendants(folderId, children) {
 // re-render can restore the scroll position instead of jumping to the top.
 let lastRenderedFolderId = null;
 
+export function resetFileListScrollRestore() {
+    lastRenderedFolderId = null;
+}
+
 export function refreshFiles() {
     if (state.virtualView === "orphaned") {
         return refreshOrphanView();
