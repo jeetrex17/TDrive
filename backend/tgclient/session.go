@@ -22,11 +22,17 @@ var errScopeClosed = errors.New("tgclient: connection scope closed")
 type liveConn struct {
 	scopeFn func(ctx context.Context, ready func()) error
 
-	mu      sync.Mutex
-	closed  bool
+	mu     sync.Mutex
+	closed bool
+	scope  *connScope
+}
+
+type connScope struct {
 	cancel  context.CancelFunc
 	readyCh chan struct{}
 	doneCh  chan struct{}
+	ready   bool
+	done    bool
 	err     error
 }
 
@@ -39,57 +45,90 @@ func newLiveConn(scopeFn func(ctx context.Context, ready func()) error) *liveCon
 // ends. Returns the caller's ctx error if it is cancelled first, or the
 // scope's error if the scope failed before becoming ready.
 func (l *liveConn) acquire(ctx context.Context) error {
-	l.mu.Lock()
-	if l.closed {
-		l.mu.Unlock()
-		return errScopeClosed
-	}
-	if l.readyCh == nil {
-		l.start()
-	}
-	readyCh, doneCh := l.readyCh, l.doneCh
-	l.mu.Unlock()
-
-	select {
-	case <-readyCh:
-		return nil
-	case <-doneCh:
+	for {
 		l.mu.Lock()
-		err := l.err
-		// Drop the dead scope so the next acquire starts a fresh one.
-		if l.readyCh == readyCh {
-			l.readyCh, l.doneCh = nil, nil
+		if l.closed {
+			l.mu.Unlock()
+			return errScopeClosed
 		}
+		if l.scope == nil || l.scope.done {
+			l.start()
+		}
+		scope := l.scope
+		readyCh, doneCh := scope.readyCh, scope.doneCh
 		l.mu.Unlock()
-		if err == nil {
-			err = errScopeClosed
+
+		select {
+		case <-readyCh:
+			l.mu.Lock()
+			if l.scope != scope {
+				l.mu.Unlock()
+				continue
+			}
+			if scope.done {
+				wasReady, err := scope.ready, scope.err
+				l.scope = nil
+				l.mu.Unlock()
+				if wasReady {
+					continue
+				}
+				if err == nil {
+					err = errScopeClosed
+				}
+				return err
+			}
+			l.mu.Unlock()
+			return nil
+		case <-doneCh:
+			l.mu.Lock()
+			if l.scope != scope {
+				l.mu.Unlock()
+				continue
+			}
+			wasReady, err := scope.ready, scope.err
+			l.scope = nil
+			l.mu.Unlock()
+			if wasReady {
+				continue
+			}
+			if err == nil {
+				err = errScopeClosed
+			}
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 
 // start launches the scope goroutine. Caller must hold l.mu.
 func (l *liveConn) start() {
 	runCtx, cancel := context.WithCancel(context.Background())
-	readyCh := make(chan struct{})
-	doneCh := make(chan struct{})
-	l.cancel = cancel
-	l.readyCh = readyCh
-	l.doneCh = doneCh
-	l.err = nil
+	scope := &connScope{
+		cancel:  cancel,
+		readyCh: make(chan struct{}),
+		doneCh:  make(chan struct{}),
+	}
+	l.scope = scope
 
 	var once sync.Once
-	ready := func() { once.Do(func() { close(readyCh) }) }
+	ready := func() {
+		once.Do(func() {
+			l.mu.Lock()
+			scope.ready = true
+			l.mu.Unlock()
+			close(scope.readyCh)
+		})
+	}
 
 	go func() {
 		err := l.scopeFn(runCtx, ready)
 		l.mu.Lock()
-		l.err = err
+		scope.err = err
+		scope.done = true
 		l.mu.Unlock()
 		cancel()
-		close(doneCh)
+		close(scope.doneCh)
 	}()
 }
 
@@ -98,15 +137,12 @@ func (l *liveConn) start() {
 func (l *liveConn) Close() {
 	l.mu.Lock()
 	l.closed = true
-	cancel := l.cancel
-	doneCh := l.doneCh
-	l.cancel, l.readyCh, l.doneCh = nil, nil, nil
+	scope := l.scope
+	l.scope = nil
 	l.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
-	}
-	if doneCh != nil {
-		<-doneCh
+	if scope != nil {
+		scope.cancel()
+		<-scope.doneCh
 	}
 }

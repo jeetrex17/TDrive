@@ -132,6 +132,50 @@ func TestLiveConnRestartsAfterFailure(t *testing.T) {
 	}
 }
 
+func TestLiveConnRestartsAfterReadyScopeDies(t *testing.T) {
+	var attempt int32
+	dropFirst := make(chan struct{})
+	lc := newLiveConn(func(ctx context.Context, ready func()) error {
+		n := atomic.AddInt32(&attempt, 1)
+		ready()
+		if n == 1 {
+			<-dropFirst
+			return errors.New("connection dropped")
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	defer lc.Close()
+
+	if err := lc.acquire(context.Background()); err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	close(dropFirst)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		lc.mu.Lock()
+		dead := lc.scope != nil && lc.scope.done
+		lc.mu.Unlock()
+		if dead {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("first scope did not exit")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	if err := lc.acquire(context.Background()); err != nil {
+		t.Fatalf("second acquire should restart and succeed, got %v", err)
+	}
+	if got := atomic.LoadInt32(&attempt); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+}
+
 func TestLiveConnCloseWithoutStart(t *testing.T) {
 	lc := newLiveConn(blockingScope(nil))
 	lc.Close() // must not panic or block
