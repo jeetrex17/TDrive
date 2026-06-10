@@ -656,7 +656,15 @@ async function refreshOrphanView() {
 // Delegated row interactions. Listeners live on the #file-list container and
 // read each row's data-* attributes, so re-rendering rows costs no click
 // listener churn. Drag handlers are still attached per row for now.
+function isSearchMode() {
+    return String(state.searchQuery || "").trim() !== "";
+}
+
 function handleListClick(e) {
+    // Search results still own their row handlers. Ignore those events here
+    // so downloads/open/double-click navigation do not fire twice.
+    if (isSearchMode()) return;
+
     if (e.target.closest("#orphan-back")) {
         exitOrphanView();
         return;
@@ -687,6 +695,8 @@ function handleListClick(e) {
 }
 
 function handleListDblClick(e) {
+    if (isSearchMode()) return;
+
     const row = e.target.closest(".drive-row");
     if (!row) return;
 
