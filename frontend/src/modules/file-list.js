@@ -14,41 +14,10 @@ import {
     getFolderContents as apiGetFolderContents,
     getOrphanedFiles as apiGetOrphanedFiles,
 } from '../api';
+import { calculateFolderTotalBytes, getAllFsMsgIDs } from './drive-data.js';
+import { refreshFolderIndex, collectDescendants } from './folder-index.js';
 import { enqueueDownload } from './transfers.js';
 import { populateUploaderChips, uploaderChipHTML } from './uploaders.js';
-
-export async function getFolderContents(parentID) {
-    if (window.go?.main?.App?.GetFolderContents) {
-        return window.go.main.App.GetFolderContents(parentID);
-    }
-    throw new Error("GetFolderContents is not available. Restart `wails dev` to regenerate bindings.");
-}
-
-export async function deleteFolder(folderID) {
-    if (window.go?.main?.App?.DeleteFolder) {
-        return window.go.main.App.DeleteFolder(folderID);
-    }
-    throw new Error("DeleteFolder is not available. Restart `wails dev` to regenerate bindings.");
-}
-
-export async function createFolder(name, parentID) {
-    if (window.go?.main?.App?.CreateFolder) {
-        return window.go.main.App.CreateFolder(name, parentID);
-    }
-    throw new Error("CreateFolder is not available. Restart `wails dev` to regenerate bindings.");
-}
-
-export async function calculateFolderTotalBytes(folderID) {
-    const id = String(folderID || "");
-    if (!id) return 0;
-
-    if (window.go?.main?.App?.GetFolderSize) {
-        const value = await window.go.main.App.GetFolderSize(id);
-        const bytes = Number(value);
-        return Number.isFinite(bytes) && bytes >= 0 ? bytes : 0;
-    }
-    throw new Error("GetFolderSize is not available. Restart `wails dev` to regenerate bindings.");
-}
 
 // canOwnerActOnFile returns true when the current user is allowed to
 // rename/delete the given file. In personal drives it's always true (you
@@ -78,87 +47,6 @@ export function fillUploaderSlot(row, file) {
     if (!slot) return;
     const html = uploaderChipHTML(file);
     slot.innerHTML = html ?? '';
-}
-
-async function getAllFsMsgIDs() {
-    if (window.go?.main?.App?.GetAllFsMsgIDs) {
-        const ids = await window.go.main.App.GetAllFsMsgIDs();
-        return Array.isArray(ids) ? ids : [];
-    }
-    throw new Error("GetAllFsMsgIDs is not available. Restart `wails dev` to regenerate bindings.");
-}
-
-export async function buildFolderIndex() {
-    const folders = [];
-    const byId = new Map();
-    const children = new Map();
-
-    const addFolder = (folder) => {
-        if (!folder?.id || byId.has(folder.id)) return;
-        byId.set(folder.id, folder);
-        folders.push(folder);
-        const pid = folder.parent_id || "";
-        if (!children.has(pid)) children.set(pid, []);
-        children.get(pid).push(folder.id);
-    };
-
-    const queue = [""];
-    const visited = new Set();
-
-    while (queue.length) {
-        const parentID = queue.shift();
-        if (visited.has(parentID)) continue;
-        visited.add(parentID);
-
-        let contents;
-        try {
-            contents = await getFolderContents(parentID);
-        } catch {
-            contents = { folders: [] };
-        }
-
-        const sub = Array.isArray(contents?.folders) ? contents.folders : [];
-        sub.forEach((folder) => {
-            addFolder(folder);
-            if (folder?.id) queue.push(folder.id);
-        });
-    }
-
-    folders.forEach((folder) => {
-        const pid = folder.parent_id || "";
-        if (!children.has(pid)) children.set(pid, []);
-        children.get(pid).sort((a, b) => (byId.get(a)?.name || "").localeCompare(byId.get(b)?.name || ""));
-    });
-
-    return { folders, byId, children };
-}
-
-export async function refreshFolderIndex() {
-    if (state.folderIndexBuildPromise) return state.folderIndexBuildPromise;
-    state.folderIndexBuildPromise = buildFolderIndex()
-        .then((idx) => {
-            state.folderIndexCache = idx;
-            return idx;
-        })
-        .finally(() => {
-            state.folderIndexBuildPromise = null;
-        });
-    return state.folderIndexBuildPromise;
-}
-
-export function collectDescendants(folderId, children) {
-    const out = new Set();
-    const stack = [folderId];
-    while (stack.length) {
-        const id = stack.pop();
-        const kids = children.get(id) || [];
-        for (const k of kids) {
-            if (out.has(k)) continue;
-            out.add(k);
-            stack.push(k);
-        }
-    }
-    return out;
 }
 
 // Tracks the folder whose rows are currently rendered, so a same-folder

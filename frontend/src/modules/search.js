@@ -3,7 +3,8 @@ import { icons } from '../constants.js';
 import { escapeHtml, splitNameAndExt, formatBytes } from '../utils.js';
 import { clearSelection, handleRowSelection } from './selection.js';
 import { renderBreadcrumb } from './navigation.js';
-import { fillUploaderSlot, refreshFolderIndex, resetFileListScrollRestore } from './file-list.js';
+import { fillUploaderSlot, resetFileListScrollRestore } from './file-list.js';
+import { refreshFolderIndex } from './folder-index.js';
 import { populateUploaderChips } from './uploaders.js';
 
 let activeToken = 0;

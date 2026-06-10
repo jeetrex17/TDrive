@@ -4,7 +4,7 @@ import { state } from '../../state.js';
 import { DeleteFile } from '../../../wailsjs/go/main/App';
 import { clearSelection } from '../selection.js';
 import { ensureNotInsideDeletedFolder } from '../navigation.js';
-import { deleteFolder } from '../file-list.js';
+import { deleteFolder } from '../drive-data.js';
 import { notify, dismissNotification } from '../notifications.js';
 import { openEncryptionPasswordModal } from './encryption-password.js';
 

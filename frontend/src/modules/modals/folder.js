@@ -1,7 +1,7 @@
 // New folder modal for TDrive frontend
 
 import { state } from '../../state.js';
-import { createFolder } from '../file-list.js';
+import { createFolder } from '../drive-data.js';
 import { notify, dismissNotification } from '../notifications.js';
 
 export function setupFolderModal() {
