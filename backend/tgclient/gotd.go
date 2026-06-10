@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"TDrive/backend/auth"
@@ -17,39 +18,79 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-// Gotd is the production Client implementation. Each call opens a fresh
-// gotd Run scope so we don't have to keep a long-lived client in TDrive's
-// previous style.
+// Gotd is the production Client implementation. It keeps one long-lived gotd
+// Run scope (a single authenticated connection) and dispatches every call onto
+// it, instead of dialing a fresh connection per call. The scope starts lazily
+// on first use and is torn down by Close.
 type Gotd struct {
 	connect func() (*telegram.Client, error)
+	conn    *liveConn
+
+	mu     sync.Mutex
+	client *telegram.Client
 }
 
-// NewGotd constructs a Client that uses the given factory to spin up gotd
-// clients on demand. In production wire this to auth.Connect.
+// NewGotd constructs a Client that dispatches onto one shared connection built
+// from the given factory. In production wire this to auth.Connect.
 func NewGotd(connect func() (*telegram.Client, error)) *Gotd {
-	return &Gotd{connect: connect}
+	g := &Gotd{connect: connect}
+	g.conn = newLiveConn(g.scope)
+	return g
+}
+
+// scope is the liveConn scopeFn: connect, publish the client, signal ready,
+// then block until the connection's context is cancelled (Close or a dropped
+// link). The connection stays usable for concurrent API calls while blocked.
+func (g *Gotd) scope(runCtx context.Context, ready func()) error {
+	client, err := g.connect()
+	if err != nil {
+		return fmt.Errorf("tgclient: connect: %w", err)
+	}
+	return client.Run(runCtx, func(rctx context.Context) error {
+		g.mu.Lock()
+		g.client = client
+		g.mu.Unlock()
+		ready()
+		<-rctx.Done()
+		return rctx.Err()
+	})
+}
+
+// acquire blocks until the shared connection is ready, then returns the live
+// client. The per-call ctx bounds the wait and the API calls the caller makes;
+// the connection itself lives under the liveConn's own lifetime, not ctx.
+func (g *Gotd) acquire(ctx context.Context) (*telegram.Client, error) {
+	if err := g.conn.acquire(ctx); err != nil {
+		return nil, err
+	}
+	g.mu.Lock()
+	client := g.client
+	g.mu.Unlock()
+	if client == nil {
+		return nil, fmt.Errorf("tgclient: client unavailable after connect")
+	}
+	return client, nil
 }
 
 func (g *Gotd) run(ctx context.Context, fn func(ctx context.Context, api *tg.Client) error) error {
-	client, err := g.connect()
+	client, err := g.acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("tgclient: connect: %w", err)
+		return normalizeError(err)
 	}
-	err = client.Run(ctx, func(rctx context.Context) error {
-		return fn(rctx, client.API())
-	})
-	return normalizeError(err)
+	return normalizeError(fn(ctx, client.API()))
 }
 
 func (g *Gotd) runClient(ctx context.Context, fn func(ctx context.Context, client *telegram.Client) error) error {
-	client, err := g.connect()
+	client, err := g.acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("tgclient: connect: %w", err)
+		return normalizeError(err)
 	}
-	err = client.Run(ctx, func(rctx context.Context) error {
-		return fn(rctx, client)
-	})
-	return normalizeError(err)
+	return normalizeError(fn(ctx, client))
+}
+
+// Close tears down the shared connection. Safe to call once at shutdown.
+func (g *Gotd) Close() {
+	g.conn.Close()
 }
 
 func normalizeError(err error) error {

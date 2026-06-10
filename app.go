@@ -496,6 +496,14 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 	}, nil
 }
 
+// shutdown runs on app exit. Tear down the shared Telegram connection so the
+// background Run scope's goroutine exits cleanly.
+func (a *App) shutdown(ctx context.Context) {
+	if a.tg != nil {
+		a.tg.Close()
+	}
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	if a.active == nil {
