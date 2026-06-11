@@ -9,7 +9,9 @@ import {
     GetFolderContents as rawGetFolderContents,
     GetFileList as rawGetFileList,
     GetOrphanedFiles as rawGetOrphanedFiles,
+    ListMedia as rawListMedia,
     Search as rawSearch,
+    Thumbnail as rawThumbnail,
 } from "../wailsjs/go/main/App";
 import type { backend, main } from "../wailsjs/go/models";
 import type {
@@ -91,4 +93,23 @@ export async function getOrphanedFiles(): Promise<FileItem[]> {
 export async function search(query: string, limit: number): Promise<SearchHit[]> {
     const hits = await rawSearch(query, limit);
     return (hits ?? []).map(toSearchHit);
+}
+
+/** Every image in the active drive, newest first, for the Photos gallery. */
+export async function getMedia(): Promise<FileItem[]> {
+    const files = await rawListMedia();
+    return (files ?? []).map(toFileItem);
+}
+
+/**
+ * A downscaled JPEG thumbnail for one image, as a ready-to-use data URL.
+ * Rejects when the backend can't produce one (unsupported, too large, or a
+ * locked encrypted drive) so the caller can render the right placeholder.
+ */
+export async function getThumbnail(msgId: number): Promise<string> {
+    const payload = await rawThumbnail(msgId);
+    const dataBase64 = String(payload?.data_base64 ?? "");
+    const mimeType = String(payload?.mime_type ?? "");
+    if (!dataBase64 || !mimeType) throw new Error("thumbnail unavailable");
+    return `data:${mimeType};base64,${dataBase64}`;
 }

@@ -10,6 +10,7 @@ import { setupBreadcrumb } from './modules/navigation';
 import { setupContextMenu } from './modules/context-menu';
 import { setupPasswordReveal, setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } from './modules/auth';
 import { setupFileListWindowBindings, refreshFiles } from './modules/file-list';
+import { setupGallery } from './modules/gallery';
 import { setupSearchBar, runGlobalSearch } from './modules/search';
 
 // Import modal setup functions
@@ -98,6 +99,7 @@ window.onload = async function() {
     setupUploadProgress();
     setupPasswordReveal();
     setupSearchBar();
+    setupGallery();
 
     // Sidebar — wire renderers BEFORE setup so the first render finds the
     // right callbacks. setupSidebar will trigger an initial empty render;

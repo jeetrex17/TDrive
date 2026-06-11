@@ -18,6 +18,7 @@ import { calculateFolderTotalBytes, getAllFsMsgIDs } from './drive-data';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { enqueueDownload } from './transfers';
 import { populateUploaderChips, uploaderChipHTML } from './uploaders';
+import { renderGallery, setPhotosMode } from './gallery';
 
 // canOwnerActOnFile returns true when the current user is allowed to
 // rename/delete the given file. In personal drives it's always true (you
@@ -58,6 +59,14 @@ export function resetFileListScrollRestore() {
 }
 
 export function refreshFiles() {
+    if (state.virtualView === "photos") {
+        clearSelection();
+        setPhotosMode(true);
+        void renderGallery();
+        return;
+    }
+    setPhotosMode(false);
+
     if (state.virtualView === "orphaned") {
         return refreshOrphanView();
     }

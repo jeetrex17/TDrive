@@ -73,6 +73,9 @@ export function setupBreadcrumb() {
         if (state.folderPath.length === 0) return;
         state.folderPath = state.folderPath.slice(0, -1);
         state.currentFolderId = state.folderPath.length ? state.folderPath[state.folderPath.length - 1].id : "";
+        // Parity with breadcrumb-link / navigateToFolder: any virtual view
+        // (orphaned, photos) exits on folder navigation.
+        state.virtualView = null;
         renderBreadcrumb();
         window.refreshFiles();
     });

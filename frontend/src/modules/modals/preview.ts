@@ -25,11 +25,22 @@ let loadingEl: any = null;
 let loadingFillEl: any = null;
 let errorEl: any = null;
 let closeBtnEl: any = null;
+let prevBtnEl: any = null;
+let nextBtnEl: any = null;
+let counterEl: any = null;
+let downloadBtnEl: any = null;
 let previewReady = false;
 let previewRequestToken = 0;
 let activePreviewKey = "";
 let activePreviewMsgID = 0;
+let activePreviewItem: any = null;
 let chromeHideTimer: any = null;
+
+// Lightbox navigation context. When opened from the gallery this holds the
+// ordered image set and the current position so ←/→ and the on-screen chevrons
+// can page through it. A single-item open (file-list preview) leaves it empty.
+let navItems: any[] = [];
+let navIndex = -1;
 
 function isSpaceKey(event: any) {
     return event.code === "Space" || event.key === " " || event.key === "Spacebar";
@@ -64,6 +75,10 @@ function getPreviewKey(item: any) {
 function clearActivePreview() {
     activePreviewKey = "";
     activePreviewMsgID = 0;
+    activePreviewItem = null;
+    navItems = [];
+    navIndex = -1;
+    updateNavChrome();
 }
 
 function isPreviewVisible() {
@@ -322,8 +337,10 @@ export async function loadPreview(target: any) {
     const token = ++previewRequestToken;
     const previousActivePreviewKey = activePreviewKey;
     const previousActivePreviewMsgID = activePreviewMsgID;
+    const previousActivePreviewItem = activePreviewItem;
     activePreviewKey = previewKey;
     activePreviewMsgID = msgID;
+    activePreviewItem = target;
 
     if (!msgID || !previewKey) {
         const err = new Error("Download failed");
@@ -338,13 +355,23 @@ export async function loadPreview(target: any) {
     try {
         setPreviewProgress(0);
 
-        void resolveThumbnailPreviewEntry(target)
-            .then((asset) => {
-                if (fullShown || token !== previewRequestToken || !isPreviewOpen()) return;
-                if (!asset?.src) return;
-                showPreviewImage(asset.src, filename, { keepLoading: true });
-            })
-            .catch(() => {});
+        // Instant low-res placeholder. The gallery hands us a thumbnail data
+        // URL it already loaded (zero extra work); elsewhere we fall back to a
+        // server-side thumbnail fetch. Either way the full image replaces it.
+        const initialThumb = String(target?.thumbUrl || "");
+        if (initialThumb) {
+            if (token === previewRequestToken && isPreviewOpen()) {
+                showPreviewImage(initialThumb, filename, { keepLoading: true });
+            }
+        } else {
+            void resolveThumbnailPreviewEntry(target)
+                .then((asset) => {
+                    if (fullShown || token !== previewRequestToken || !isPreviewOpen()) return;
+                    if (!asset?.src) return;
+                    showPreviewImage(asset.src, filename, { keepLoading: true });
+                })
+                .catch(() => {});
+        }
 
         const asset = await resolveFullPreviewEntry(target);
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
@@ -363,6 +390,7 @@ export async function loadPreview(target: any) {
         if (!keepCurrentImage) {
             activePreviewKey = previousActivePreviewKey;
             activePreviewMsgID = previousActivePreviewMsgID;
+            activePreviewItem = previousActivePreviewItem;
         }
         showPreviewError(normalized.message, { keepCurrentImage });
         throw normalized;
@@ -389,20 +417,9 @@ export function closePreviewModal() {
     resetImageSurface();
 }
 
-export async function openPreviewForSelection(target = null) {
-    if (!assertPreviewReady()) return false;
-
-    const selection = target
-        ? { reason: "ok", item: target, key: getPreviewKey(target) }
-        : getSelectedPreviewTarget();
-
-    if (selection.reason === "none") return false;
-    if (selection.reason !== "ok") {
-        showSelectionPreviewError(selection);
-        return false;
-    }
-
-    const item = selection.item;
+// openPreviewItem shows the modal and loads one item. It does not touch the
+// navigation context, so both single-item and list callers route through it.
+async function openPreviewItem(item: any) {
     const keepCurrentImage = isPreviewOpen() && isPreviewVisible();
 
     modalEl.style.display = "flex";
@@ -418,6 +435,74 @@ export async function openPreviewForSelection(target = null) {
     }
 }
 
+export async function openPreviewForSelection(target = null) {
+    if (!assertPreviewReady()) return false;
+
+    const selection = target
+        ? { reason: "ok", item: target, key: getPreviewKey(target) }
+        : getSelectedPreviewTarget();
+
+    if (selection.reason === "none") return false;
+    if (selection.reason !== "ok") {
+        showSelectionPreviewError(selection);
+        return false;
+    }
+
+    // Single-item open: no list to page through.
+    navItems = [];
+    navIndex = -1;
+    updateNavChrome();
+    return openPreviewItem(selection.item);
+}
+
+// openPreviewList opens the lightbox on items[index] with ←/→ navigation across
+// the whole list. Items are { type:"file", id, name, size?, thumbUrl? }.
+export async function openPreviewList(items: any[], index: number) {
+    if (!assertPreviewReady()) return false;
+    if (!Array.isArray(items) || items.length === 0) return false;
+
+    const i = Math.max(0, Math.min(items.length - 1, Number(index) || 0));
+    navItems = items;
+    navIndex = i;
+    updateNavChrome();
+    return openPreviewItem(items[i]);
+}
+
+async function navigatePreview(delta: number) {
+    if (!isPreviewOpen() || navItems.length === 0) return;
+    const next = navIndex + delta;
+    if (next < 0 || next >= navItems.length) return;
+    navIndex = next;
+    updateNavChrome();
+    await openPreviewItem(navItems[next]);
+}
+
+function updateNavChrome() {
+    const hasList = navItems.length > 1;
+    if (prevBtnEl) {
+        prevBtnEl.hidden = !hasList;
+        prevBtnEl.disabled = navIndex <= 0;
+    }
+    if (nextBtnEl) {
+        nextBtnEl.hidden = !hasList;
+        nextBtnEl.disabled = navIndex >= navItems.length - 1;
+    }
+    if (counterEl) {
+        counterEl.hidden = !hasList;
+        counterEl.textContent = hasList ? `${navIndex + 1} / ${navItems.length}` : "";
+    }
+}
+
+function handleDownloadFromPreview() {
+    const id = Number(activePreviewItem?.id || 0);
+    if (!id) return;
+    const name = String(activePreviewItem?.name || "");
+    const size = Number(activePreviewItem?.size || 0);
+    if (typeof window.initDownload === "function") {
+        window.initDownload(id, name, size);
+    }
+}
+
 async function handlePreviewKeydown(event: any) {
     const spacePressed = isSpaceKey(event);
     const previewOpen = isPreviewOpen();
@@ -426,6 +511,15 @@ async function handlePreviewKeydown(event: any) {
         event.preventDefault();
         event.stopPropagation();
         closePreviewModal();
+        return;
+    }
+
+    if (previewOpen && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        if (navItems.length <= 1) return;
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void navigatePreview(event.key === "ArrowLeft" ? -1 : 1);
         return;
     }
 
@@ -477,7 +571,33 @@ export function setupPreviewModal() {
     loadingFillEl = document.getElementById("preview-loading-fill");
     errorEl = document.getElementById("preview-error");
     closeBtnEl = document.getElementById("preview-close");
+    // Optional chrome: list navigation + download. Absent in older markup, so
+    // these are not in REQUIRED_ELEMENT_IDS and every use is guarded.
+    prevBtnEl = document.getElementById("preview-prev");
+    nextBtnEl = document.getElementById("preview-next");
+    counterEl = document.getElementById("preview-counter");
+    downloadBtnEl = document.getElementById("preview-download");
     previewReady = true;
+
+    if (prevBtnEl) {
+        prevBtnEl.addEventListener("click", (e: any) => {
+            e.stopPropagation();
+            void navigatePreview(-1);
+        });
+    }
+    if (nextBtnEl) {
+        nextBtnEl.addEventListener("click", (e: any) => {
+            e.stopPropagation();
+            void navigatePreview(1);
+        });
+    }
+    if (downloadBtnEl) {
+        downloadBtnEl.addEventListener("click", (e: any) => {
+            e.stopPropagation();
+            handleDownloadFromPreview();
+        });
+    }
+    updateNavChrome();
 
     closeBtnEl.addEventListener("click", closePreviewModal);
     modalEl.addEventListener("click", (event: any) => {
