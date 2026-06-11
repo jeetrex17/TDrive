@@ -34,6 +34,24 @@ let infoBtnEl: any = null;
 let infoPanelEl: any = null;
 let activeFullSrc = "";
 let infoOpen = false;
+
+// Zoom/pan state for the displayed image. scale 1 = fit; tx/ty are screen-px
+// offsets from center. Reset on navigation and close.
+const MAX_ZOOM = 5;
+let zoomScale = 1;
+let zoomTx = 0;
+let zoomTy = 0;
+let panning = false;
+let panMoved = false;
+let panPointerId = -1;
+let panStartX = 0;
+let panStartY = 0;
+
+// Full-resolution data URLs keyed by msgID, with neighbor prefetch so next/prev
+// is instant. preloadEpoch lets a new navigation abort the prior prefetch run.
+const FULL_CACHE_MAX = 12;
+const fullCache = new Map<number, string>();
+let preloadEpoch = 0;
 let previewReady = false;
 let previewRequestToken = 0;
 let activePreviewKey = "";
@@ -206,17 +224,12 @@ function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
     imageEl.alt = "";
     imageEl.src = src;
     imageEl.hidden = false;
+    // Opacity-only entrance: we drive transform via zoom/pan, so the animation
+    // must not write transform (and must not hold it with fill).
     if (typeof imageEl.animate === "function") {
         imageEl.animate(
-            [
-                { opacity: 0.84, transform: "scale(0.992)" },
-                { opacity: 1, transform: "scale(1)" },
-            ],
-            {
-                duration: 180,
-                easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-                fill: "both",
-            },
+            [{ opacity: 0.6 }, { opacity: 1 }],
+            { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
         );
     }
     revealChrome();
@@ -314,6 +327,12 @@ async function resolveFullPreviewEntry(target: any) {
         throw new Error("Download failed");
     }
 
+    // Prefetched neighbor? Its data URL is already decoded and cached.
+    const cached = fullCache.get(msgID);
+    if (cached) {
+        return { src: cached, mimeType: "" };
+    }
+
     let payload;
     try {
         payload = await PreviewFile(msgID);
@@ -332,6 +351,7 @@ async function resolveFullPreviewEntry(target: any) {
     }
     const asset = payloadToPreviewAsset(payload);
     await decodePreviewSource(asset.src);
+    cacheFull(msgID, asset.src);
     return asset;
 }
 
@@ -350,6 +370,7 @@ export async function loadPreview(target: any) {
     activePreviewMsgID = msgID;
     activePreviewItem = target;
     activeFullSrc = "";
+    resetZoom();
     refreshInfoPanel();
 
     if (!msgID || !previewKey) {
@@ -402,6 +423,7 @@ export async function loadPreview(target: any) {
         activeFullSrc = asset.src;
         showPreviewImage(asset.src, filename);
         refreshInfoPanel();
+        preloadNeighbors();
         return asset;
     } catch (err) {
         fullSettled = true;
@@ -422,8 +444,13 @@ export async function loadPreview(target: any) {
 
 export function closePreviewModal() {
     previewRequestToken += 1;
+    preloadEpoch += 1; // abort any in-flight neighbor prefetch
+    // Drop the full-image cache between sessions: it's keyed by msg id, which is
+    // only unique within a drive, so a stale entry must not survive a drive switch.
+    fullCache.clear();
     clearActivePreview();
     closeInfoPanel();
+    resetZoom();
     activeFullSrc = "";
     clearChromeHideTimer();
 
@@ -561,6 +588,158 @@ function refreshInfoPanel() {
     });
 }
 
+// --- zoom / pan ---
+
+function applyZoomTransform() {
+    if (!imageEl) return;
+    imageEl.style.transform = `translate(${zoomTx}px, ${zoomTy}px) scale(${zoomScale})`;
+    imageEl.style.cursor = zoomScale > 1 ? (panning ? "grabbing" : "grab") : "zoom-in";
+}
+
+function resetZoom() {
+    zoomScale = 1;
+    zoomTx = 0;
+    zoomTy = 0;
+    panning = false;
+    panPointerId = -1;
+    if (imageEl) {
+        imageEl.style.transform = "";
+        imageEl.style.cursor = "zoom-in";
+    }
+}
+
+// displayedImageSize is the painted size of the image inside its element box.
+// With object-fit:contain the box can be larger than the picture on one axis,
+// so we fit naturalWidth/Height into the box to get the real edges.
+function displayedImageSize(): { w: number; h: number } {
+    const cw = imageEl?.clientWidth || 0;
+    const ch = imageEl?.clientHeight || 0;
+    const nw = imageEl?.naturalWidth || 0;
+    const nh = imageEl?.naturalHeight || 0;
+    if (nw <= 0 || nh <= 0 || cw <= 0 || ch <= 0) return { w: cw, h: ch };
+    const fit = Math.min(cw / nw, ch / nh);
+    return { w: nw * fit, h: nh * fit };
+}
+
+// clampPan keeps the panned image from drifting past its own painted edges.
+function clampPan() {
+    if (!imageEl) return;
+    const { w, h } = displayedImageSize();
+    const maxX = Math.max(0, ((zoomScale - 1) * w) / 2);
+    const maxY = Math.max(0, ((zoomScale - 1) * h) / 2);
+    zoomTx = Math.max(-maxX, Math.min(maxX, zoomTx));
+    zoomTy = Math.max(-maxY, Math.min(maxY, zoomTy));
+}
+
+// zoomAt scales toward a screen point so the pixel under the cursor stays put.
+// The anchor is the cursor's offset from the image's *current* on-screen center
+// (getBoundingClientRect already reflects the live transform), which is correct
+// regardless of the stage's padding, centering, or the info panel.
+function zoomAt(clientX: number, clientY: number, factor: number) {
+    if (!imageEl || !isPreviewVisible()) return;
+    const next = Math.max(1, Math.min(MAX_ZOOM, zoomScale * factor));
+    if (next === zoomScale) return;
+    const rect = imageEl.getBoundingClientRect();
+    const ax = clientX - (rect.left + rect.width / 2);
+    const ay = clientY - (rect.top + rect.height / 2);
+    const ratio = next / zoomScale;
+    zoomTx += ax * (1 - ratio);
+    zoomTy += ay * (1 - ratio);
+    zoomScale = next;
+    if (zoomScale <= 1.001) {
+        zoomScale = 1;
+        zoomTx = 0;
+        zoomTy = 0;
+    }
+    clampPan();
+    applyZoomTransform();
+}
+
+function handleZoomWheel(e: any) {
+    if (!isPreviewVisible()) return;
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.18 : 1 / 1.18);
+}
+
+function handleZoomDblClick(e: any) {
+    if (!isPreviewVisible()) return;
+    e.preventDefault();
+    if (zoomScale > 1) resetZoom();
+    else zoomAt(e.clientX, e.clientY, 2.5);
+}
+
+function handlePanStart(e: any) {
+    if (zoomScale <= 1 || !imageEl) return;
+    panning = true;
+    panMoved = false;
+    panPointerId = e.pointerId;
+    panStartX = e.clientX - zoomTx;
+    panStartY = e.clientY - zoomTy;
+    try {
+        imageEl.setPointerCapture(e.pointerId);
+    } catch {}
+    imageEl.style.cursor = "grabbing";
+    e.preventDefault();
+}
+
+function handlePanMove(e: any) {
+    if (!panning || e.pointerId !== panPointerId) return;
+    panMoved = true;
+    zoomTx = e.clientX - panStartX;
+    zoomTy = e.clientY - panStartY;
+    clampPan();
+    applyZoomTransform();
+}
+
+function handlePanEnd(e: any) {
+    if (!panning || e.pointerId !== panPointerId) return;
+    panning = false;
+    panPointerId = -1;
+    try {
+        imageEl.releasePointerCapture(e.pointerId);
+    } catch {}
+    if (imageEl) imageEl.style.cursor = zoomScale > 1 ? "grab" : "zoom-in";
+}
+
+// --- full-image cache + neighbor prefetch ---
+
+function cacheFull(msgID: number, src: string) {
+    fullCache.set(msgID, src);
+    if (fullCache.size > FULL_CACHE_MAX) {
+        const oldest = fullCache.keys().next().value;
+        if (oldest !== undefined) fullCache.delete(oldest);
+    }
+}
+
+// preloadNeighbors prefetches the next/prev few full images so navigation is
+// instant. It runs sequentially and aborts the instant the user navigates
+// again (preloadEpoch), so it never queues many downloads ahead of an
+// on-demand load. PreviewFile is called raw here so a locked image is skipped
+// rather than popping the password modal during a background prefetch.
+function preloadNeighbors() {
+    if (navItems.length <= 1) return;
+    const epoch = ++preloadEpoch;
+    const baseIndex = navIndex;
+    void (async () => {
+        for (const off of [1, -1, 2, -2, 3, -3]) {
+            if (epoch !== preloadEpoch) return;
+            const idx = baseIndex + off;
+            if (idx < 0 || idx >= navItems.length) continue;
+            const id = Number(navItems[idx]?.id || 0);
+            if (!id || fullCache.has(id)) continue;
+            try {
+                const payload = await PreviewFile(id);
+                if (epoch !== preloadEpoch) return;
+                const asset = payloadToPreviewAsset(payload);
+                await decodePreviewSource(asset.src);
+                cacheFull(id, asset.src);
+            } catch {
+                // Too large, locked, or failed — the on-demand view handles it.
+            }
+        }
+    })();
+}
+
 async function handlePreviewKeydown(event: any) {
     const spacePressed = isSpaceKey(event);
     const previewOpen = isPreviewOpen();
@@ -689,6 +868,12 @@ export function setupPreviewModal() {
 
     closeBtnEl.addEventListener("click", closePreviewModal);
     modalEl.addEventListener("click", (event: any) => {
+        // A pan drag can end with a click on the backdrop; don't treat it as
+        // a close.
+        if (panMoved) {
+            panMoved = false;
+            return;
+        }
         if (event.target === modalEl || event.target === shellEl || event.target === stageEl) {
             closePreviewModal();
         }
@@ -697,6 +882,15 @@ export function setupPreviewModal() {
         if (!isPreviewOpen()) return;
         revealChrome();
     });
+
+    // Zoom + pan on the image. Wheel zooms toward the cursor, double-click
+    // toggles, and dragging pans while zoomed.
+    stageEl.addEventListener("wheel", handleZoomWheel, { passive: false });
+    imageEl.addEventListener("dblclick", handleZoomDblClick);
+    imageEl.addEventListener("pointerdown", handlePanStart);
+    imageEl.addEventListener("pointermove", handlePanMove);
+    imageEl.addEventListener("pointerup", handlePanEnd);
+    imageEl.addEventListener("pointercancel", handlePanEnd);
     closeBtnEl.addEventListener("focus", () => {
         setChromeVisible(true);
         clearChromeHideTimer();

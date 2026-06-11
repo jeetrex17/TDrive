@@ -1689,37 +1689,46 @@ header {
 }
 
 /* ----- Lightbox info panel (the "ⓘ" card) ----- */
+/* A glassy overlay that floats over the right of the image rather than pushing
+   it aside; the image stays put and shows through the blur. */
 .preview-info {
     position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
+    top: 16px;
+    right: 16px;
+    bottom: 16px;
     z-index: 3;
-    width: 340px;
-    max-width: 86vw;
-    padding: 80px 26px 28px;
+    width: 332px;
+    max-width: calc(100vw - 32px);
+    padding: 78px 24px 24px;
     overflow-y: auto;
-    background: rgba(12, 14, 22, 0.72);
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
-    -webkit-backdrop-filter: blur(26px);
-    backdrop-filter: blur(26px);
-    transform: translateX(100%);
-    transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+    border-radius: 20px;
+    background: rgba(16, 18, 28, 0.46);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+    -webkit-backdrop-filter: blur(42px) saturate(1.25);
+    backdrop-filter: blur(42px) saturate(1.25);
+    opacity: 0;
+    transform: translateX(18px) scale(0.99);
+    transition: opacity 0.24s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+}
+.preview-overlay.is-info-open .preview-info {
+    opacity: 1;
+    transform: translateX(0) scale(1);
     pointer-events: auto;
 }
-.preview-overlay.is-info-open .preview-info { transform: translateX(0); }
-/* Keep the image clear of the panel while it is open. */
-.preview-overlay.is-info-open .preview-content { padding-right: 372px; }
-.preview-overlay.is-info-open .preview-nav-next { right: 364px; }
+/* Keep the next chevron clear of the floating panel. */
+.preview-overlay.is-info-open .preview-nav-next { right: 372px; }
 
 .info-date {
-    color: rgba(255, 255, 255, 0.95);
-    font-size: 1rem;
+    color: rgba(255, 255, 255, 0.96);
+    font-size: 1.04rem;
     font-weight: 700;
-    line-height: 1.4;
-    margin-bottom: 18px;
+    line-height: 1.45;
+    margin-bottom: 20px;
+    letter-spacing: 0.01em;
 }
-.info-section { margin-bottom: 18px; }
+.info-section { margin-bottom: 20px; }
 .info-section-title {
     color: rgba(255, 255, 255, 0.5);
     font-size: 0.7rem;
@@ -1765,7 +1774,6 @@ header {
     .preview-nav-prev { left: 12px; }
     .preview-nav-next { right: 12px; }
     .gallery-view { padding: 0 14px 24px; }
-    /* On narrow windows the info panel overlays the image instead of pushing it. */
-    .preview-overlay.is-info-open .preview-content { padding-right: 16px; }
+    /* Narrow windows: the panel nearly fills the width, so keep the chevron put. */
     .preview-overlay.is-info-open .preview-nav-next { right: 12px; }
 }
