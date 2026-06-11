@@ -32,6 +32,8 @@ let counterEl: any = null;
 let downloadBtnEl: any = null;
 let infoBtnEl: any = null;
 let infoPanelEl: any = null;
+let infoBodyEl: any = null;
+let infoCloseBtnEl: any = null;
 let activeFullSrc = "";
 let infoOpen = false;
 
@@ -578,9 +580,9 @@ function closeInfoPanel() {
 // only sourced from the displayed <img> once the full image is in (activeFullSrc
 // set); until then we rely on EXIF, so a thumbnail's size never leaks in.
 function refreshInfoPanel() {
-    if (!infoOpen || !infoPanelEl || !activePreviewItem) return;
+    if (!infoOpen || !infoBodyEl || !activePreviewItem) return;
     const hasFull = Boolean(activeFullSrc);
-    infoPanelEl.innerHTML = renderImageInfoHTML({
+    infoBodyEl.innerHTML = renderImageInfoHTML({
         item: activePreviewItem,
         fullSrc: activeFullSrc,
         naturalWidth: hasFull ? imageEl?.naturalWidth || 0 : 0,
@@ -825,6 +827,8 @@ export function setupPreviewModal() {
     downloadBtnEl = document.getElementById("preview-download");
     infoBtnEl = document.getElementById("preview-info-btn");
     infoPanelEl = document.getElementById("preview-info");
+    infoBodyEl = document.getElementById("preview-info-body");
+    infoCloseBtnEl = document.getElementById("preview-info-close");
     previewReady = true;
 
     if (prevBtnEl) {
@@ -849,6 +853,12 @@ export function setupPreviewModal() {
         infoBtnEl.addEventListener("click", (e: any) => {
             e.stopPropagation();
             toggleInfoPanel();
+        });
+    }
+    if (infoCloseBtnEl) {
+        infoCloseBtnEl.addEventListener("click", (e: any) => {
+            e.stopPropagation();
+            closeInfoPanel();
         });
     }
     if (infoPanelEl) {

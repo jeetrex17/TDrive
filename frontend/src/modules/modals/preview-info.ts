@@ -54,10 +54,15 @@ export function renderImageInfoHTML(input: InfoInput): string {
     if (camera) sections.push(section('Camera', camera));
 
     if (exif.gps) {
-        const coords = `${exif.gps.lat}, ${exif.gps.lon}`;
-        const url = `https://www.openstreetmap.org/?mlat=${exif.gps.lat}&mlon=${exif.gps.lon}#map=15/${exif.gps.lat}/${exif.gps.lon}`;
-        const body = row('Coordinates', escapeHtml(coords))
-            + `<button class="info-map-link" type="button" data-map-url="${escapeHtml(url)}">View on map</button>`;
+        const { lat, lon } = exif.gps;
+        const d = 0.008; // ~1km half-span around the point for a neighborhood view
+        const bbox = `${lon - d}%2C${lat - d}%2C${lon + d}%2C${lat + d}`;
+        // Keyless, no-tracking OpenStreetMap embed with a marker on the spot.
+        const embed = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat}%2C${lon}`;
+        const open = `https://www.google.com/maps/search/?api=1&query=${lat}%2C${lon}`;
+        const body = row('Coordinates', escapeHtml(`${lat}, ${lon}`))
+            + `<iframe class="info-map" loading="lazy" referrerpolicy="no-referrer" title="Map location" src="${escapeHtml(embed)}"></iframe>`
+            + `<button class="info-map-link" type="button" data-map-url="${escapeHtml(open)}">Open in Google Maps</button>`;
         sections.push(section('Location', body));
     }
 
