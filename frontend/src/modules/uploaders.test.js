@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { formatRelative, uploaderChipHTML } from "./uploaders.js";
-import { state } from "../state.js";
+import { formatRelative, uploaderChipHTML } from "./uploaders";
+import { state } from "../state";
 
 describe("formatRelative", () => {
     const now = Math.floor(Date.now() / 1000);

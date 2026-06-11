@@ -1,0 +1,310 @@
+// Upload/Download progress handling for TDrive frontend.
+//
+// All transfer state surfaces through the notification bell — there is no
+// separate transfer pill or sheet anymore. Active transfers feed the bell's
+// hover popover via pushTransferStart/updateTransferProgress/markTransferDone.
+// Completed transfers stay in the bell's "Recent" panel until cleared.
+
+import { state } from '../state';
+import { SelectFiles, DownloadFile } from '../../wailsjs/go/main/App';
+import { notify } from './notifications';
+import { loadEncryptionStatus } from './encryption';
+import { openUploadOptionsModal } from './modals/upload-options';
+import { openEncryptionSetupModal } from './modals/encryption-setup';
+import { openEncryptionPasswordModal } from './modals/encryption-password';
+import {
+    pushTransferStart,
+    updateTransferProgress,
+    markTransferDone,
+} from './notif-bell';
+
+const DOWNLOAD_TERMINAL_STATES = new Set(["done", "failed", "canceled"]);
+
+function isDownloadTerminalState(status: any) {
+    return DOWNLOAD_TERMINAL_STATES.has(String(status || ""));
+}
+
+function normalizeDownloadResult(result: any) {
+    if (!result || typeof result !== "object") {
+        return { status: "error", message: "Download failed", saved_path: "" };
+    }
+
+    const status = String(result.status || "error").toLowerCase();
+    return {
+        status: status === "success" || status === "canceled" || status === "error" ? status : "error",
+        message: String(result.message || "Download failed"),
+        saved_path: String(result.saved_path || ""),
+    };
+}
+
+export function setupDownloadProgress() {
+    if (!window.runtime?.EventsOn) return;
+
+    window.runtime.EventsOn("download_progress", (percent: any) => {
+        const activeId = state.activeDownloadId;
+        if (activeId === null || activeId === undefined) return;
+        const value = Number(percent);
+        if (!Number.isFinite(value)) return;
+
+        const clamped = Math.max(0, Math.min(100, value));
+        const item = (state.downloadQueue || []).find((entry) => entry.id === activeId);
+        if (!item) return;
+
+        item.progress = clamped;
+        if (!isDownloadTerminalState(item.state)) {
+            item.state = "downloading";
+        }
+        updateTransferProgress({ id: item.id, direction: 'down', progress: clamped });
+    });
+}
+
+async function startNextDownload() {
+    if (state.activeDownloadId !== null && state.activeDownloadId !== undefined) return;
+    const queue = Array.isArray(state.downloadQueue) ? state.downloadQueue : [];
+    const next = queue.find((entry) => String(entry?.state || "queued") === "queued");
+    if (!next) return;
+
+    state.activeDownloadId = next.id;
+    next.state = "downloading";
+    next.progress = Math.max(0, Math.min(100, Number(next.progress) || 0));
+    pushTransferStart({ id: next.id, direction: 'down', name: next.name, total: next.size });
+
+    try {
+        let result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
+        // If the backend needs the encryption password, prompt once and
+        // retry. This avoids a separate per-file encryption lookup before
+        // download starts.
+        if (result.status === "error" && /encryption password required/i.test(result.message || "")) {
+            const ok = await openEncryptionPasswordModal();
+            if (ok) {
+                result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
+            }
+        }
+        next.message = result.message;
+
+        if (result.status === "success") {
+            next.state = "done";
+            next.progress = 100;
+            markTransferDone({ id: next.id, direction: 'down', status: 'done' });
+        } else if (result.status === "canceled") {
+            next.state = "canceled";
+            markTransferDone({ id: next.id, direction: 'down', status: 'canceled' });
+        } else {
+            next.state = "failed";
+            markTransferDone({ id: next.id, direction: 'down', status: 'failed' });
+        }
+    } catch (err) {
+        console.error("Download failed:", err);
+        next.message = "Download failed";
+        next.state = "failed";
+        markTransferDone({ id: next.id, direction: 'down', status: 'failed' });
+    } finally {
+        state.activeDownloadId = null;
+        startNextDownload();
+    }
+}
+
+export function enqueueDownload(id: any, name: any, size: any) {
+    const downloadId = Number(id);
+    if (!Number.isFinite(downloadId)) return;
+    if (!Array.isArray(state.downloadQueue)) state.downloadQueue = [];
+
+    const label = String(name || "Download");
+    const existing = state.downloadQueue.find((entry) => entry.id === downloadId);
+    if (existing) {
+        existing.name = existing.name || label;
+        existing.size = Number(size) || existing.size || 0;
+        existing.progress = 0;
+        existing.state = "queued";
+        existing.message = "";
+        if (state.activeDownloadId === null || state.activeDownloadId === undefined) startNextDownload();
+        return;
+    }
+
+    const item = {
+        id: downloadId,
+        name: label,
+        size: Number(size) || 0,
+        progress: 0,
+        state: "queued",
+        message: "",
+    };
+
+    state.downloadQueue.push(item);
+    if (state.activeDownloadId === null || state.activeDownloadId === undefined) startNextDownload();
+}
+
+export function setupUploadProgress() {
+    if (!window.runtime?.EventsOn) return;
+
+    window.runtime.EventsOn("upload_start", (id: any, name: any, size: any, parentId: any) => {
+        const uploadId = Number(id);
+        if (!Number.isFinite(uploadId)) return;
+        const filename = String(name ?? "");
+
+        const existing = state.uploadTransfers.get(uploadId);
+        if (existing) {
+            existing.name = existing.name || filename;
+            existing.size = Number(size) || existing.size || 0;
+            existing.parentId = String(parentId ?? existing.parentId ?? "");
+            existing.state = "uploading";
+            existing.progress = Math.max(0, Math.min(100, Number(existing.progress) || 0));
+        } else {
+            state.uploadTransfers.set(uploadId, {
+                id: uploadId,
+                name: filename,
+                size: Number(size) || 0,
+                parentId: String(parentId ?? ""),
+                progress: 0,
+                state: "uploading",
+            });
+        }
+
+        pushTransferStart({ id: uploadId, direction: 'up', name: filename, total: Number(size) || 0 });
+    });
+
+    window.runtime.EventsOn("upload_progress", (id: any, percent: any) => {
+        const uploadId = Number(id);
+        if (!Number.isFinite(uploadId)) return;
+        const value = Number(percent);
+        if (!Number.isFinite(value)) return;
+        const clamped = Math.max(0, Math.min(100, value));
+
+        const item = state.uploadTransfers.get(uploadId);
+        if (!item) return;
+        item.progress = clamped;
+        updateTransferProgress({ id: uploadId, direction: 'up', progress: clamped });
+    });
+
+    window.runtime.EventsOn("upload_complete", (id: any, name: any) => {
+        const uploadId = Number(id);
+        if (!Number.isFinite(uploadId)) return;
+        const item = state.uploadTransfers.get(uploadId);
+        if (!item) {
+            state.uploadTransfers.set(uploadId, {
+                id: uploadId,
+                name: String(name ?? ""),
+                size: 0,
+                parentId: "",
+                progress: 100,
+                state: "done",
+            });
+        } else {
+            item.progress = 100;
+            item.state = "done";
+        }
+
+        if (state.uploadBatch) state.uploadBatch.done += 1;
+        const batchFinished = Boolean(state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total);
+        if (batchFinished) state.uploadBatch = null;
+
+        markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+
+        if (batchFinished) {
+            window.refreshFiles();
+        }
+    });
+
+    window.runtime.EventsOn("upload_error", (id: any, name: any) => {
+        const uploadId = Number(id);
+        if (!Number.isFinite(uploadId)) return;
+        const filename = String(name ?? "");
+
+        const item = state.uploadTransfers.get(uploadId) || {
+            id: uploadId,
+            name: filename,
+            size: 0,
+            parentId: "",
+            progress: 0,
+            state: "failed",
+        };
+        item.state = "failed";
+        item.progress = 100;
+        state.uploadTransfers.set(uploadId, item);
+
+        if (state.uploadBatch) state.uploadBatch.failed += 1;
+        const batchFinished = Boolean(state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total);
+        if (batchFinished) state.uploadBatch = null;
+
+        markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
+
+        if (batchFinished) {
+            window.refreshFiles();
+        }
+    });
+}
+
+export async function uploadWithParentID(parentID: any) {
+    const paths = await SelectFiles();
+    if (!paths || !paths.length) return;
+
+    // Decide whether to encrypt this batch.
+    const onPersonal = state.activeChannel?.kind === 'personal';
+    let encrypt = false;
+    if (onPersonal) {
+        // Refresh the snapshot so the modal's follow-up steps see truth.
+        await loadEncryptionStatus();
+
+        const choice: any = await openUploadOptionsModal({ count: paths.length });
+        if (!choice) return;
+        encrypt = !!choice.encrypt;
+
+        if (encrypt && !state.encryption.passwordRemembered) {
+            const ok = state.encryption.passwordSet
+                ? await openEncryptionPasswordModal()
+                : await openEncryptionSetupModal();
+            if (!ok) return;
+        }
+    }
+    // Shared drives skip the modal entirely — encryption is personal-only
+    // and we don't want to surface a control that silently degrades.
+
+    state.activeTransfer = "upload";
+    state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
+
+    const nextTransfers = new Map();
+    for (let i = 0; i < paths.length; i++) {
+        const p = String(paths[i] ?? "");
+        const name = p ? p.split(/[/\\\\]/).pop() : "Untitled";
+        nextTransfers.set(i, {
+            id: i,
+            name,
+            size: 0,
+            parentId: String(parentID || ""),
+            progress: 0,
+            state: "queued",
+        });
+    }
+    state.uploadTransfers = nextTransfers;
+
+    const upload = window?.go?.main?.App?.UploadToDriveFS;
+    if (typeof upload !== "function") {
+        state.activeTransfer = null;
+        state.uploadBatch = null;
+        state.uploadTransfers = new Map();
+        notify({
+            level: 'error',
+            title: 'Upload bindings missing',
+            body: 'UploadToDriveFS is missing in the backend. Rebuild the app (wails dev/build) and try again.',
+        });
+        return;
+    }
+
+    try {
+        const parentIDs = paths.map(() => parentID || "");
+        await upload(paths, parentIDs, encrypt);
+    } catch (err) {
+        console.error("Upload failed:", err);
+    } finally {
+        if (state.activeTransfer === "upload") state.activeTransfer = null;
+        // Safety sweep: by the time UploadToDriveFS resolves, every upload
+        // in the batch has terminated on the backend. If a Wails event was
+        // dropped, an entry may still be stuck in 'active' at 100% in the
+        // bell. markTransferDone is idempotent against terminal entries,
+        // so this only flips orphaned 'active' rows.
+        for (const [uploadId] of state.uploadTransfers) {
+            markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+        }
+        state.uploadBatch = null;
+    }
+}

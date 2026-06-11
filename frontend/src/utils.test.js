@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatBytes, splitNameAndExt, formatDate, escapeHtml } from "./utils.js";
+import { formatBytes, splitNameAndExt, formatDate, escapeHtml } from "./utils";
 
 describe("formatBytes", () => {
     it("formats zero", () => expect(formatBytes(0)).toBe("0 B"));

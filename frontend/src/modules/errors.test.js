@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanizeBackendError } from "./errors.js";
+import { humanizeBackendError } from "./errors";
 
 describe("humanizeBackendError", () => {
     it("strips the Error: prefix", () => {
