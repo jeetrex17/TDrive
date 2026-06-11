@@ -15,20 +15,56 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
 )
 
-const defaultPageSize = 100
+const (
+	defaultPageSize     = 100
+	maxFloodWaitRetries = 5
+	maxFloodWaitSleep   = 60 * time.Second
+)
 
 type Engine struct {
 	db    *sql.DB
 	tg    tgclient.Client
 	peers PeerResolver
 
+	// OnFloodWait, if set, is invoked before sleeping out a read-side
+	// FLOOD_WAIT. Optional progress/UI hook; nil is fine.
+	OnFloodWait func(channelID int64, wait time.Duration)
+
 	mu    stdsync.Mutex
 	locks map[int64]*stdsync.Mutex
+}
+
+// getHistory wraps tg.GetHistory with bounded FLOOD_WAIT retries. Telegram
+// rate-limits history reads on large channels; without this a single
+// FLOOD_WAIT would abort the whole sync pass.
+func (e *Engine) getHistory(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID, offsetID int64, limit int) ([]tgclient.HistoryMessage, error) {
+	for attempt := 0; ; attempt++ {
+		page, err := e.tg.GetHistory(ctx, peer, minID, offsetID, limit)
+		if err == nil {
+			return page, nil
+		}
+		wait, ok := tgclient.FloodWaitDuration(err)
+		if !ok || attempt >= maxFloodWaitRetries {
+			return nil, err
+		}
+		if wait > maxFloodWaitSleep {
+			wait = maxFloodWaitSleep
+		}
+		if e.OnFloodWait != nil {
+			e.OnFloodWait(channelID, wait)
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // PeerResolver returns the InputPeer for a given channel id. Channels know
@@ -79,7 +115,7 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 	highestSeen := watermark
 	offsetID := int64(0)
 	for {
-		page, err := e.tg.GetHistory(ctx, peer, watermark, offsetID, defaultPageSize)
+		page, err := e.getHistory(ctx, channelID, peer, watermark, offsetID, defaultPageSize)
 		if err != nil {
 			return fmt.Errorf("sync: get history: %w", err)
 		}
@@ -106,9 +142,18 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 	}
 
 	SortAscending(allParsed)
+	applied := watermark
 	for _, p := range allParsed {
 		if _, err := projection.ProjectFromOp(e.db, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
+			// Persist progress so a re-run resumes past what already applied
+			// instead of re-fetching the whole channel from the old watermark.
+			if applied > watermark {
+				_ = writeWatermark(e.db, channelID, applied)
+			}
 			return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
+		}
+		if p.MsgID > applied {
+			applied = p.MsgID
 		}
 	}
 	if highestSeen > watermark {
@@ -145,7 +190,7 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 	var highestSeen int64
 	offsetID := int64(0)
 	for {
-		page, err := e.tg.GetHistory(ctx, peer, 0, offsetID, defaultPageSize)
+		page, err := e.getHistory(ctx, channelID, peer, 0, offsetID, defaultPageSize)
 		if err != nil {
 			return fmt.Errorf("sync: get history: %w", err)
 		}

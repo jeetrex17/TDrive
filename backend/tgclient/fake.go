@@ -28,6 +28,7 @@ type Fake struct {
 	sentFiles     []SentFile
 	deletedBatch  [][]int64
 	floodWait     int // counter; pre-injects ErrFloodWait this many times before succeeding
+	readFloodWait int // counter; pre-injects ErrFloodWait on GetHistory this many times
 	failNextSend  bool
 
 	channels       map[int64]fakeChannel
@@ -114,6 +115,14 @@ func (f *Fake) InjectFloodWaits(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.floodWait = n
+}
+
+// InjectReadFloodWaits causes the next n GetHistory calls to fail with
+// ErrFloodWait before succeeding. Drives read-side backoff tests.
+func (f *Fake) InjectReadFloodWaits(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readFloodWait = n
 }
 
 // FailNextSend causes the next send to fail with ErrInjectedSend, then
@@ -358,6 +367,11 @@ func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 func (f *Fake) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.readFloodWait > 0 {
+		f.readFloodWait--
+		return nil, NewFloodWaitError(time.Millisecond)
+	}
 
 	if limit <= 0 {
 		limit = 100
