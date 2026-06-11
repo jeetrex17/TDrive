@@ -8,6 +8,7 @@ import (
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
+	"TDrive/backend/thumbnail"
 )
 
 type PeerResolver interface {
@@ -167,6 +168,34 @@ func (s *Service) OrphanedFiles(channelID int64) ([]File, error) {
 	out := make([]File, 0, len(files))
 	for _, f := range files {
 		out = append(out, fileFromProjection(f))
+	}
+	return out, nil
+}
+
+// MediaFiles returns every image file across the channel, newest first, for
+// the gallery view. "Image" is defined by thumbnail.IsImage so the gallery
+// shows exactly the files a thumbnail can be produced for. Filtering happens
+// here rather than in SQL because the projection stores no content type.
+//
+// Images inside a deleted folder (orphans) are intentionally included: the
+// gallery is a flat index of every image in the drive, independent of folder
+// structure, so a photo never disappears just because its folder was removed.
+func (s *Service) MediaFiles(channelID int64) ([]File, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	if channelID == 0 {
+		return []File{}, nil
+	}
+	all, err := projection.ListAllFiles(s.DB, channelID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]File, 0, len(all))
+	for _, f := range all {
+		if thumbnail.IsImage(f.Name) {
+			out = append(out, fileFromProjection(f))
+		}
 	}
 	return out, nil
 }

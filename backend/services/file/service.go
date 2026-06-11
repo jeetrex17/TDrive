@@ -18,6 +18,9 @@ import (
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
+	"TDrive/backend/thumbnail"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type PeerResolver interface {
@@ -48,6 +51,17 @@ type Service struct {
 	Warnf                WarnFunc
 	Now                  func() time.Time
 	previewMu            sync.Mutex
+
+	// Thumbs is the on-disk thumbnail cache. Nil disables caching (every
+	// Thumbnail call regenerates), which keeps the cache optional in tests.
+	Thumbs *thumbnail.Cache
+	// ThumbConcurrency bounds how many thumbnails generate at once. <= 0 uses
+	// a sensible default. Thumbnail generation runs off previewMu so the grid
+	// can fill in parallel without blocking single-file previews/downloads.
+	ThumbConcurrency int
+	thumbOnce        sync.Once
+	thumbSem         chan struct{}
+	thumbGroup       singleflight.Group
 }
 
 type Metadata struct {

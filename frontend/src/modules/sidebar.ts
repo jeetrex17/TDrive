@@ -15,6 +15,7 @@ import { openNewDriveModal } from './modals/new-drive';
 import { openJoinDriveModal } from './modals/join-drive';
 import { openJoinRequestsModal } from './modals/join-requests';
 import { notify } from './notifications';
+import { enterPhotos, exitPhotos } from './gallery';
 
 let personalEl: HTMLElement | null = null;
 let sharedEl: HTMLElement | null = null;
@@ -27,6 +28,8 @@ export function setupSidebar() {
     if (newBtn) newBtn.addEventListener('click', () => openNewDriveModal());
     const joinBtn = document.getElementById('open-join-drive');
     if (joinBtn) joinBtn.addEventListener('click', () => openJoinDriveModal());
+    const photosBtn = document.getElementById('nav-photos');
+    if (photosBtn) photosBtn.addEventListener('click', () => enterPhotos());
 
     renderSidebar();
 }
@@ -53,6 +56,9 @@ export function renderSidebar() {
         for (const c of shared) sharedEl.appendChild(driveRow(c, true));
         for (const p of pending) sharedEl.appendChild(pendingJoinRow(p));
     }
+
+    // The Photos item owns the highlight while the gallery is open.
+    document.getElementById('nav-photos')?.classList.toggle('active', state.virtualView === 'photos');
 }
 
 function emptyRow(label: string) {
@@ -66,7 +72,7 @@ function driveRow(c: any, isShared: boolean) {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'drive-item';
-    if (c.is_active) row.classList.add('active');
+    if (c.is_active && state.virtualView !== 'photos') row.classList.add('active');
     row.dataset.channelId = String(c.id);
     row.title = c.title;
     row.innerHTML = `
@@ -78,7 +84,11 @@ function driveRow(c: any, isShared: boolean) {
     row.querySelector('.drive-item-title')!.textContent = c.title || 'Untitled';
 
     row.addEventListener('click', () => {
-        if (Number(c.id) === Number(state.activeChannel?.id)) return;
+        if (Number(c.id) === Number(state.activeChannel?.id)) {
+            // Clicking the already-active drive while in Photos returns to its files.
+            if (state.virtualView === 'photos') exitPhotos();
+            return;
+        }
         switchActiveChannel(Number(c.id));
     });
 

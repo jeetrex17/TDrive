@@ -109,3 +109,36 @@ func TestOrphanedFilesScopedByChannel(t *testing.T) {
 		}
 	}
 }
+
+func TestOrphanedFilesReportsEncryptionMetadata(t *testing.T) {
+	db := newTestDB(t)
+	// An encrypted file under a missing parent surfaces as an orphan, and must
+	// carry its encryption flag + plaintext size through the read path so the
+	// orphan view can show a lock badge and the real (decrypted) size rather
+	// than the ciphertext length.
+	if _, err := db.Exec(`
+		INSERT INTO files (channel_id, msg_id, name, size, parent_id, upload_time, uploader_user_id, tombstoned, encrypted, plaintext_size)
+		VALUES (?, ?, 'secret.jpg', 5120, 'd:gone', 0, 0, 0, 1, 4096)
+	`, testChan, 1); err != nil {
+		t.Fatalf("seed encrypted file: %v", err)
+	}
+
+	orphans, err := OrphanedFiles(db, testChan)
+	if err != nil {
+		t.Fatalf("orphans: %v", err)
+	}
+	if len(orphans) != 1 {
+		t.Fatalf("expected 1 orphan, got %d", len(orphans))
+	}
+	o := orphans[0]
+	if !o.Encrypted {
+		t.Error("orphan Encrypted = false, want true")
+	}
+	if o.PlaintextSize != 4096 {
+		t.Errorf("orphan PlaintextSize = %d, want 4096", o.PlaintextSize)
+	}
+	// On-wire size is the ciphertext length, distinct from the plaintext size.
+	if o.Size != 5120 {
+		t.Errorf("orphan Size = %d, want 5120", o.Size)
+	}
+}

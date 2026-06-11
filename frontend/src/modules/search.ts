@@ -4,6 +4,7 @@ import { escapeHtml, splitNameAndExt, formatBytes } from '../utils';
 import { clearSelection, handleRowSelection } from './selection';
 import { renderBreadcrumb } from './navigation';
 import { fillUploaderSlot, resetFileListScrollRestore } from './file-list';
+import { setPhotosMode } from './gallery';
 import { refreshFolderIndex } from './folder-index';
 import { populateUploaderChips } from './uploaders';
 
@@ -145,7 +146,7 @@ function renderSearchResults(results: any, query: any) {
     populateUploaderChips(list);
 }
 
-function clearSearch({ refresh = true } = {}) {
+export function clearSearch({ refresh = true } = {}) {
     const input = getSearchInput();
     if (input) input.value = "";
     state.searchQuery = "";
@@ -215,6 +216,13 @@ export async function runGlobalSearch() {
     const list = document.getElementById("file-list");
     if (!list) return;
     if (!query) return;
+
+    // Search results render into #file-list, which the Photos view hides. A
+    // search is a file-list operation, so leave Photos mode when one runs.
+    if (state.virtualView === "photos") {
+        state.virtualView = null;
+        setPhotosMode(false);
+    }
 
     const token = ++activeToken;
     setHeaderMode(true);

@@ -114,6 +114,10 @@ export function ListJoinRequests(arg1) {
   return window['go']['main']['App']['ListJoinRequests'](arg1);
 }
 
+export function ListMedia() {
+  return window['go']['main']['App']['ListMedia']();
+}
+
 export function ListPendingJoins() {
   return window['go']['main']['App']['ListPendingJoins']();
 }
@@ -208,6 +212,10 @@ export function SumbitPassword(arg1) {
 
 export function SyncChannel(arg1) {
   return window['go']['main']['App']['SyncChannel'](arg1);
+}
+
+export function Thumbnail(arg1) {
+  return window['go']['main']['App']['Thumbnail'](arg1);
 }
 
 export function UploadToDriveFS(arg1, arg2, arg3) {
