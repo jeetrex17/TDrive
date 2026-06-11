@@ -135,7 +135,7 @@ WITH RECURSIVE chain(file_msg_id, cur_id, broken) AS (
       ON p.channel_id = ?1 AND p.id = c.cur_id
     WHERE c.cur_id != ''
 )
-SELECT f.msg_id, f.name, f.size, f.parent_id, f.upload_time, f.uploader_user_id
+SELECT f.msg_id, f.name, f.size, f.parent_id, f.upload_time, f.uploader_user_id, f.encrypted, f.plaintext_size
 FROM files f
 WHERE f.channel_id = ?1
   AND f.tombstoned = 0
@@ -154,9 +154,11 @@ ORDER BY f.upload_time DESC
 	var out []FileSlim
 	for rows.Next() {
 		var f FileSlim
-		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID); err != nil {
+		var enc int
+		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
 			return nil, err
 		}
+		f.Encrypted = enc == 1
 		out = append(out, f)
 	}
 	return out, rows.Err()

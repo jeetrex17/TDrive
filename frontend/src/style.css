@@ -1281,16 +1281,25 @@ header {
 }
 
 .preview-overlay {
+    position: fixed;
     align-items: stretch;
     justify-content: stretch;
     padding: 0;
+    background: transparent;
+    overflow: hidden;
+}
+.preview-overlay::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
     background: rgba(7, 9, 15, 0.72);
-    backdrop-filter: blur(22px);
-    -webkit-backdrop-filter: blur(22px);
 }
 
 .preview-shell {
     position: relative;
+    z-index: 1;
     width: 100%;
     height: 100%;
 }
@@ -1699,22 +1708,32 @@ header {
     z-index: 3;
     width: 332px;
     max-width: calc(100vw - 32px);
-    padding: 22px 22px 24px;
-    overflow-y: auto;
+    overflow: hidden;
     border-radius: 20px;
-    background: rgba(16, 18, 28, 0.46);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
-    -webkit-backdrop-filter: blur(42px) saturate(1.25);
-    backdrop-filter: blur(42px) saturate(1.25);
+    isolation: isolate;
     opacity: 0;
     transform: translateX(18px) scale(0.99);
     transition: opacity 0.24s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
     pointer-events: none;
 }
+.preview-info::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    background: rgba(22, 24, 34, 0.88);
+}
+#preview-info-body {
+    height: 100%;
+    overflow-y: auto;
+    padding: 22px 22px 24px;
+}
 .preview-overlay.is-info-open .preview-info {
     opacity: 1;
-    transform: translateX(0) scale(1);
+    transform: none;
     pointer-events: auto;
 }
 /* Keep the next chevron clear of the floating panel. */
@@ -1771,12 +1790,15 @@ header {
 .info-value { color: rgba(255, 255, 255, 0.92); text-align: right; word-break: break-word; }
 .info-map {
     display: block;
+    position: relative;
+    z-index: 2;
     width: 100%;
-    height: 168px;
+    height: 220px;
     margin-top: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 0;
     border-radius: 12px;
     background: rgba(255, 255, 255, 0.04);
+    pointer-events: auto;
 }
 .info-map-link {
     display: inline-block;
@@ -1792,15 +1814,136 @@ header {
     transition: background 0.15s ease;
 }
 .info-map-link:hover { background: rgba(255, 255, 255, 0.09); }
-.info-filename {
-    margin-top: 6px;
-    padding-top: 16px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 0.78rem;
-    word-break: break-all;
-}
 .info-empty { color: rgba(255, 255, 255, 0.5); font-size: 0.86rem; }
+
+/* tabindex=-1 scroll containers are focused programmatically, never tabbed to,
+   so they must not paint a focus outline (it was bleeding through the lightbox). */
+#file-list:focus, #gallery-view:focus, .drives-nav:focus { outline: none; }
+
+/* ----- Lightbox locked (encrypted) state: a single liquid-glass unlock pill ----- */
+/* We can't decrypt the photo without the key, so the backdrop is the gallery
+   behind, heavily frosted into a soft abstract wash (not flat black). Per
+   lock-screen convention the pill is the only element on top: the form and
+   nothing else. The blur lives on the overlay's ::before layer. */
+.preview-overlay.is-preview-locked::before {
+    background: rgba(16, 18, 28, 0.62);
+    -webkit-backdrop-filter: blur(60px) saturate(1.25);
+    backdrop-filter: blur(60px) saturate(1.25);
+}
+.preview-overlay.is-preview-locked .preview-content {
+    overflow: hidden;
+    outline: none;
+}
+.preview-overlay.is-preview-locked #preview-image,
+.preview-overlay.is-preview-locked #preview-image[hidden] {
+    display: none !important;
+    box-shadow: none;
+}
+.preview-locked {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    /* display toggled to flex by JS */
+    align-items: center;
+    justify-content: center;
+    padding: 96px 24px 48px;
+    outline: none;
+    pointer-events: none; /* let the chevrons through; the pill re-enables below */
+}
+.preview-unlock {
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: min(420px, calc(100vw - 48px));
+}
+/* The one element: a flat, dark glass pill. No gradient and no shadow/highlight
+   (kept deliberately flat); a thin accent rim plus the backdrop blur give it a
+   clean defined edge against the frosted backdrop. */
+.preview-unlock-bar {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 7px 7px 7px 17px;
+    border-radius: 18px;
+    background: rgba(18, 20, 30, 0.78);
+    border: 1px solid rgba(122, 162, 247, 0.26);
+    -webkit-backdrop-filter: blur(28px) saturate(1.4);
+    backdrop-filter: blur(28px) saturate(1.4);
+    transition: border-color 0.18s ease;
+}
+.preview-unlock-bar:focus-within {
+    border-color: rgba(122, 162, 247, 0.6);
+}
+.preview-unlock-lock { width: 18px; height: 18px; flex-shrink: 0; color: var(--text-muted); }
+.preview-unlock-bar input {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 12px 0;
+    border: none;
+    background: transparent;
+    color: var(--text-main);
+    font-size: 1rem;
+    letter-spacing: 0.01em;
+    outline: none;
+}
+.preview-unlock-bar input:focus { box-shadow: none; }
+.preview-unlock-bar input::placeholder { color: var(--text-muted); }
+/* Secondary action: a ghost show/hide toggle, muted so it doesn't compete. */
+.preview-unlock-eye {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+}
+.preview-unlock-eye:hover { color: var(--text-main); background: rgba(255, 255, 255, 0.06); }
+.preview-unlock-eye svg { width: 18px; height: 18px; }
+/* Primary action: the single filled accent button (the one strong CTA), flat. */
+.preview-unlock-go {
+    flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 12px;
+    background: var(--accent);
+    color: var(--bg-dark);
+    cursor: pointer;
+    transition: filter 0.15s ease, transform 0.15s ease;
+}
+.preview-unlock-go:hover { filter: brightness(1.08); transform: translateX(1px); }
+.preview-unlock-go:active { transform: scale(0.96); }
+.preview-unlock-go:disabled { opacity: 0.5; cursor: progress; transform: none; filter: none; }
+.preview-unlock-go svg { width: 18px; height: 18px; }
+.preview-unlock-error {
+    margin-top: 16px;
+    color: var(--danger);
+    font-family: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 0.8rem;
+    text-align: center;
+}
+.preview-unlock-hint {
+    margin-top: 16px;
+    color: var(--text-muted);
+    font-family: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    text-align: center;
+}
 
 @media (max-width: 720px) {
     .preview-nav { width: 44px; height: 44px; }

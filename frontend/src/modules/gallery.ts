@@ -130,6 +130,7 @@ function buildCell(item: FileItem, index: number): HTMLElement {
     cell.className = 'gallery-cell';
     cell.dataset.id = String(item.msgId);
     cell.dataset.index = String(index);
+    cell.dataset.name = item.name;
     cell.title = item.name;
     cell.setAttribute('aria-label', item.name);
 
@@ -214,12 +215,13 @@ async function loadCell(cell: HTMLElement): Promise<void> {
     } catch (err) {
         if (token !== renderToken || channelId !== currentChannelId || !cell.isConnected) return;
         cell.classList.remove('is-loading');
+        const name = cell.dataset.name || '';
         if (/password required/i.test(String(err))) {
             cell.classList.add('is-locked');
-            cell.title = `${cell.dataset.name || ''} — locked, click to unlock`.trim();
+            cell.title = `${name} — locked, click to unlock`.trim();
         } else {
             cell.classList.add('is-failed');
-            cell.title = `${cell.title} — couldn't load`;
+            cell.title = `${name} — couldn't load`.trim();
             const badge = document.createElement('span');
             badge.className = 'gallery-broken';
             badge.innerHTML = brokenSvg;

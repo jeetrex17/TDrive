@@ -55,19 +55,14 @@ export function renderImageInfoHTML(input: InfoInput): string {
 
     if (exif.gps) {
         const { lat, lon } = exif.gps;
-        // Keyless Google Maps embed: the classic output=embed iframe needs no
-        // API key (only the official Maps Embed API does). q=lat,lon centers it
-        // and drops a marker.
-        const embed = `https://maps.google.com/maps?q=${lat}%2C${lon}&z=14&output=embed`;
+        // Keyless classic Google Maps embed. The official Maps Embed API also
+        // supports interactive iframes, but its /embed/v1 URL requires an API key.
+        const embed = `https://www.google.com/maps?q=${lat}%2C${lon}&z=14&output=embed`;
         const open = `https://www.google.com/maps/search/?api=1&query=${lat}%2C${lon}`;
         const body = row('Coordinates', escapeHtml(`${lat}, ${lon}`))
-            + `<iframe class="info-map" loading="lazy" referrerpolicy="no-referrer" title="Map location" src="${escapeHtml(embed)}"></iframe>`
+            + `<iframe class="info-map" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" title="Map location" src="${escapeHtml(embed)}"></iframe>`
             + `<button class="info-map-link" type="button" data-map-url="${escapeHtml(open)}">Open in Google Maps</button>`;
         sections.push(section('Location', body));
-    }
-
-    if (item?.name) {
-        sections.push(`<div class="info-filename" title="${escapeHtml(String(item.name))}">${escapeHtml(String(item.name))}</div>`);
     }
 
     if (!sections.length) {

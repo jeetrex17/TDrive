@@ -535,19 +535,24 @@ async function refreshOrphanView() {
 
     orphans.forEach((file) => {
         const { base, ext } = splitNameAndExt(file.name);
+        const encrypted = !!file.encrypted;
+        const plaintextSize = Number(file.plaintextSize || 0);
+        // Encrypted files display their original plaintext size, not the
+        // on-wire ciphertext size — same as the main file list.
+        const displaySize = encrypted && plaintextSize > 0 ? plaintextSize : file.size;
         const row = document.createElement("div");
         row.className = "file-row drive-row";
         row.dataset.type = "file";
         row.dataset.id = String(file.msgId);
         row.dataset.name = String(file.name || "");
         row.dataset.source = "fs";
-        row.dataset.size = String(file.size || 0);
+        row.dataset.size = String(displaySize || 0);
         row.dataset.parentId = "";
         row.dataset.uploaderId = String(file.uploaderId || 0);
         const fileShape = {
             id: file.msgId,
             name: file.name,
-            size: file.size,
+            size: displaySize,
             uploaderID: Number(file.uploaderId || 0),
         };
         const ownerOnly = canOwnerActOnFile(fileShape);
@@ -555,14 +560,17 @@ async function refreshOrphanView() {
         row.dataset.canRename = ownerOnly ? "true" : "false";
         row.dataset.uploadTime = String(file.uploadTime || 0);
 
+        const lockBadge = encrypted
+            ? `<span class="file-lock-badge" title="Encrypted" aria-label="Encrypted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 11h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0v4"/></svg></span>`
+            : '';
         row.innerHTML = `
             <div class="row-name">
                 <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
-                ${escapeHtml(base)}
+                ${lockBadge}${escapeHtml(base)}
                 <span class="uploader-chip" data-uploader-slot></span>
             </div>
             <div class="row-meta">${formatDate(file.uploadTime)}</div>
-            <div class="row-meta">${formatBytes(file.size)}</div>
+            <div class="row-meta">${formatBytes(displaySize)}</div>
             <div class="row-actions">
                 <button class="action-icon download" type="button" title="Download">${icons.download}</button>
             </div>

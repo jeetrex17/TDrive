@@ -1,6 +1,7 @@
-import { PreviewFile, PreviewThumbnail } from '../../../wailsjs/go/main/App';
+import { PreviewFile, PreviewThumbnail, UseEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { state } from '../../state';
 import { notify } from '../notifications';
+import { loadEncryptionStatus } from '../encryption';
 import { renderImageInfoHTML } from './preview-info';
 
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
@@ -34,6 +35,13 @@ let infoBtnEl: any = null;
 let infoPanelEl: any = null;
 let infoBodyEl: any = null;
 let infoCloseBtnEl: any = null;
+let lockedEl: any = null;
+let lockedInputEl: any = null;
+let lockedUnlockEl: any = null;
+let lockedEyeEl: any = null;
+let lockedErrorEl: any = null;
+let lockedHintEl: any = null;
+let lockedHintTextEl: any = null;
 let activeFullSrc = "";
 let infoOpen = false;
 
@@ -53,6 +61,10 @@ let panStartY = 0;
 // is instant. preloadEpoch lets a new navigation abort the prior prefetch run.
 const FULL_CACHE_MAX = 12;
 const fullCache = new Map<number, string>();
+// In-flight full-image downloads keyed by msgID, so a neighbor prefetch and the
+// user's own navigation to the same image share one download instead of racing
+// two (which would serialize on the backend's preview mutex).
+const inflightFull = new Map<number, Promise<string>>();
 let preloadEpoch = 0;
 let previewReady = false;
 let previewRequestToken = 0;
@@ -187,6 +199,7 @@ function hidePreviewProgress() {
 
 function preparePreviewSurface(filename: any, { keepCurrentImage = false } = {}) {
     if (!modalEl || !filenameEl || !loadingEl || !errorEl) return;
+    hideLockedState();
     if (!keepCurrentImage) {
         filenameEl.textContent = filename || "Preview";
     }
@@ -202,6 +215,8 @@ function preparePreviewSurface(filename: any, { keepCurrentImage = false } = {})
 function showPreviewError(message: any, { keepCurrentImage = false } = {}) {
     if (!modalEl || !loadingEl || !errorEl) return;
 
+    hideLockedState();
+    modalEl.classList.remove("is-preview-locked");
     hidePreviewProgress();
     if (!keepCurrentImage) resetImageSurface();
     errorEl.textContent = message || "Download failed";
@@ -214,6 +229,8 @@ function showPreviewError(message: any, { keepCurrentImage = false } = {}) {
 function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
     if (!modalEl || !filenameEl || !imageEl || !loadingEl || !errorEl) return;
 
+    hideLockedState();
+    modalEl.classList.remove("is-preview-locked");
     if (!keepLoading) {
         hidePreviewProgress();
     } else {
@@ -329,32 +346,10 @@ async function resolveFullPreviewEntry(target: any) {
         throw new Error("Download failed");
     }
 
-    // Prefetched neighbor? Its data URL is already decoded and cached.
-    const cached = fullCache.get(msgID);
-    if (cached) {
-        return { src: cached, mimeType: "" };
-    }
-
-    let payload;
-    try {
-        payload = await PreviewFile(msgID);
-    } catch (err) {
-        if (/encryption password required/i.test(String(err))) {
-            const { openEncryptionPasswordModal } = await import('./encryption-password.js');
-            const ok = await openEncryptionPasswordModal();
-            if (!ok) throw err;
-            // The vault is now unlocked. Tell other surfaces (the gallery's
-            // locked thumbnail cells) so they can load without a full refresh.
-            window.dispatchEvent(new Event("tdrive:unlocked"));
-            payload = await PreviewFile(msgID);
-        } else {
-            throw err;
-        }
-    }
-    const asset = payloadToPreviewAsset(payload);
-    await decodePreviewSource(asset.src);
-    cacheFull(msgID, asset.src);
-    return asset;
+    // Shares an in-flight neighbor prefetch for the same image. A locked
+    // encrypted file rejects with "encryption password required"; loadPreview
+    // turns that into the inline unlock card rather than a popup modal.
+    return { src: await fetchFullRaw(msgID), mimeType: "" };
 }
 
 export async function loadPreview(target: any) {
@@ -365,6 +360,9 @@ export async function loadPreview(target: any) {
     const previewKey = getPreviewKey(target);
     const filename = String(target?.name || filenameEl?.textContent || "Preview");
     const token = ++previewRequestToken;
+    // Stop the previous image's neighbor prefetch so this load doesn't queue
+    // behind its remaining downloads (the in-flight one is shared via fetchFullRaw).
+    preloadEpoch += 1;
     // Navigation commits to the target: activePreview* always reflect the item
     // the user is on, so the counter, info panel, and download stay in agreement
     // even when the full-size load fails.
@@ -387,8 +385,22 @@ export async function loadPreview(target: any) {
     // this request, and whether the full-size load has settled.
     let placeholderShown = false;
     let fullSettled = false;
+    // Resolves to a fallback thumbnail src ("" if none) for when the full-size
+    // load fails (e.g. over the preview budget) so we show an image, not an error.
+    let thumbPromise: Promise<string> = Promise.resolve("");
 
     try {
+        // Already prefetched by a neighbor preload? Show it instantly with no
+        // loading indicator at all.
+        const cachedFull = fullCache.get(msgID);
+        if (cachedFull) {
+            activeFullSrc = cachedFull;
+            showPreviewImage(cachedFull, filename);
+            refreshInfoPanel();
+            preloadNeighbors();
+            return { src: cachedFull };
+        }
+
         setPreviewProgress(0);
 
         // Instant low-res placeholder. The gallery hands us a thumbnail data
@@ -402,16 +414,16 @@ export async function loadPreview(target: any) {
                 placeholderShown = true;
             }
         } else {
-            void resolveThumbnailPreviewEntry(target)
-                .then((asset) => {
-                    // Ignore a late thumbnail once the full-size load settled, so
-                    // it can never overwrite a shown image or a hard error.
-                    if (fullSettled || token !== previewRequestToken || !isPreviewOpen()) return;
-                    if (!asset?.src) return;
-                    showPreviewImage(asset.src, filename, { keepLoading: true });
-                    placeholderShown = true;
-                })
-                .catch(() => {});
+            thumbPromise = resolveThumbnailPreviewEntry(target)
+                .then((asset) => String(asset?.src || ""))
+                .catch(() => "");
+            void thumbPromise.then((src) => {
+                // Show as a placeholder only while the full load is still pending;
+                // once it settles, the catch/ success path owns what's displayed.
+                if (!src || fullSettled || token !== previewRequestToken || !isPreviewOpen()) return;
+                showPreviewImage(src, filename, { keepLoading: true });
+                placeholderShown = true;
+            });
         }
 
         const asset = await resolveFullPreviewEntry(target);
@@ -431,11 +443,26 @@ export async function loadPreview(target: any) {
         fullSettled = true;
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
 
+        // Locked encrypted photo: show the inline unlock card in place of the
+        // image, never a popup modal, so navigation stays uninterrupted.
+        if (/encryption password required/i.test(String(err))) {
+            showLockedState();
+            return null;
+        }
+
         // If a placeholder image is standing in, keep it: an image over the
         // full-size budget, or a cancelled unlock, should still show the
         // thumbnail rather than a hard error. Only error when we have nothing.
         if (placeholderShown && isPreviewVisible()) {
             hidePreviewProgress();
+            return null;
+        }
+        // Nothing shown yet: if a thumbnail is still on its way, show it instead
+        // of a hard error (e.g. an image over the full-size preview budget).
+        const thumbSrc = await thumbPromise;
+        if (token !== previewRequestToken || !isPreviewOpen()) return null;
+        if (thumbSrc) {
+            showPreviewImage(thumbSrc, filename);
             return null;
         }
         const normalized = normalizePreviewError(err);
@@ -452,6 +479,8 @@ export function closePreviewModal() {
     fullCache.clear();
     clearActivePreview();
     closeInfoPanel();
+    hideLockedState();
+    if (lockedInputEl) lockedInputEl.value = "";
     resetZoom();
     activeFullSrc = "";
     clearChromeHideTimer();
@@ -459,7 +488,7 @@ export function closePreviewModal() {
     if (modalEl) {
         modalEl.style.display = "none";
         modalEl.setAttribute("aria-hidden", "true");
-        modalEl.classList.remove("is-chrome-visible", "is-preview-error");
+        modalEl.classList.remove("is-chrome-visible", "is-preview-error", "is-preview-locked");
     }
     if (filenameEl) filenameEl.textContent = "";
     if (loadingEl) loadingEl.style.display = "none";
@@ -590,6 +619,102 @@ function refreshInfoPanel() {
     });
 }
 
+// --- encrypted "locked" state: an inline unlock card shown in place of the
+// image, so navigating onto a locked photo never throws up a modal. ---
+
+function showLockedState() {
+    if (!lockedEl) return;
+    hidePreviewProgress();
+    resetImageSurface();
+    if (errorEl) {
+        errorEl.style.display = "none";
+        errorEl.textContent = "";
+    }
+    modalEl?.classList.remove("is-preview-error");
+    if (lockedErrorEl) {
+        lockedErrorEl.style.display = "none";
+        lockedErrorEl.textContent = "";
+    }
+    if (lockedInputEl) lockedInputEl.value = "";
+    resetLockedReveal();
+
+    const hint = String(state.encryption?.hint || "").trim();
+    if (lockedHintEl && lockedHintTextEl) {
+        lockedHintTextEl.textContent = hint;
+        lockedHintEl.style.display = hint ? "block" : "none";
+    }
+    lockedEl.style.display = "flex";
+    // Make the backdrop opaque so the gallery behind isn't visible through it.
+    modalEl?.classList.add("is-preview-locked");
+    setChromeVisible(true);
+    clearChromeHideTimer();
+    // Intentionally not auto-focusing the field: while browsing, arrow keys
+    // should skip past a locked photo, not get captured as typing. The user
+    // clicks the field when they actually want to unlock.
+}
+
+function hideLockedState() {
+    // Only hides the unlock pill; the frosted backdrop class is cleared when an
+    // image or error actually takes over, so navigating between two locked
+    // photos doesn't flash the gallery during the load in between.
+    if (lockedEl) lockedEl.style.display = "none";
+}
+
+const EYE_OPEN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M2.5 12S6 5.5 12 5.5s9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3.2"/></svg>';
+const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9.9 5.7A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.3 16.3 0 0 1-2.9 3.6M6.2 7.2A15.9 15.9 0 0 0 2.5 12S6 18.5 12 18.5c1.4 0 2.6-.2 3.7-.7M3 3l18 18M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+
+// Show/hide the typed password. A ghost toggle inside the pill (a polish
+// hallmark for password fields); resets to hidden whenever the state reopens.
+function toggleLockedReveal() {
+    if (!lockedInputEl || !lockedEyeEl) return;
+    const reveal = lockedInputEl.type === "password";
+    lockedInputEl.type = reveal ? "text" : "password";
+    lockedEyeEl.innerHTML = reveal ? EYE_OFF_SVG : EYE_OPEN_SVG;
+    lockedEyeEl.setAttribute("aria-pressed", reveal ? "true" : "false");
+    lockedEyeEl.setAttribute("aria-label", reveal ? "Hide password" : "Show password");
+    try { lockedInputEl.focus(); } catch { /* focus is best-effort */ }
+}
+
+function resetLockedReveal() {
+    if (lockedInputEl) lockedInputEl.type = "password";
+    if (lockedEyeEl) {
+        lockedEyeEl.innerHTML = EYE_OPEN_SVG;
+        lockedEyeEl.setAttribute("aria-pressed", "false");
+        lockedEyeEl.setAttribute("aria-label", "Show password");
+    }
+}
+
+function showLockedError(msg: string) {
+    if (!lockedErrorEl) return;
+    lockedErrorEl.textContent = msg;
+    lockedErrorEl.style.display = "block";
+}
+
+async function submitInlineUnlock() {
+    const value = String(lockedInputEl?.value || "");
+    if (!value) {
+        showLockedError("Enter your encryption password.");
+        return;
+    }
+    const target = activePreviewItem;
+    if (lockedUnlockEl) lockedUnlockEl.disabled = true;
+    if (lockedInputEl) lockedInputEl.disabled = true;
+    try {
+        await UseEncryptionPassword(value);
+        await loadEncryptionStatus();
+        if (lockedInputEl) lockedInputEl.value = "";
+        // Let the gallery's locked thumbnail cells reload too.
+        window.dispatchEvent(new Event("tdrive:unlocked"));
+        hideLockedState();
+        if (target) void loadPreview(target); // re-load the photo, now decryptable
+    } catch (err) {
+        showLockedError(String(err) || "Incorrect password");
+    } finally {
+        if (lockedUnlockEl) lockedUnlockEl.disabled = false;
+        if (lockedInputEl) lockedInputEl.disabled = false;
+    }
+}
+
 // --- zoom / pan ---
 
 function applyZoomTransform() {
@@ -713,6 +838,28 @@ function cacheFull(msgID: number, src: string) {
     }
 }
 
+// fetchFullRaw downloads + decodes + caches one full image, returning its data
+// URL. Concurrent callers for the same id share a single download. It never
+// opens the unlock modal; callers that need it wrap this and retry.
+function fetchFullRaw(id: number): Promise<string> {
+    const cached = fullCache.get(id);
+    if (cached) return Promise.resolve(cached);
+    const existing = inflightFull.get(id);
+    if (existing) return existing;
+
+    const p = (async () => {
+        const asset = payloadToPreviewAsset(await PreviewFile(id));
+        await decodePreviewSource(asset.src);
+        cacheFull(id, asset.src);
+        return asset.src;
+    })();
+    inflightFull.set(id, p);
+    void p.catch(() => {}).finally(() => {
+        if (inflightFull.get(id) === p) inflightFull.delete(id);
+    });
+    return p;
+}
+
 // preloadNeighbors prefetches the next/prev few full images so navigation is
 // instant. It runs sequentially and aborts the instant the user navigates
 // again (preloadEpoch), so it never queues many downloads ahead of an
@@ -730,14 +877,11 @@ function preloadNeighbors() {
             const id = Number(navItems[idx]?.id || 0);
             if (!id || fullCache.has(id)) continue;
             try {
-                const payload = await PreviewFile(id);
-                if (epoch !== preloadEpoch) return;
-                const asset = payloadToPreviewAsset(payload);
-                await decodePreviewSource(asset.src);
-                cacheFull(id, asset.src);
+                await fetchFullRaw(id);
             } catch {
                 // Too large, locked, or failed — the on-demand view handles it.
             }
+            if (epoch !== preloadEpoch) return;
         }
     })();
 }
@@ -756,6 +900,7 @@ async function handlePreviewKeydown(event: any) {
     if (previewOpen && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
         if (navItems.length <= 1) return;
         if (event.metaKey || event.ctrlKey || event.altKey) return;
+        if (isTypingContext(document.activeElement)) return; // e.g. the unlock field
         event.preventDefault();
         event.stopPropagation();
         void navigatePreview(event.key === "ArrowLeft" ? -1 : 1);
@@ -829,6 +974,13 @@ export function setupPreviewModal() {
     infoPanelEl = document.getElementById("preview-info");
     infoBodyEl = document.getElementById("preview-info-body");
     infoCloseBtnEl = document.getElementById("preview-info-close");
+    lockedEl = document.getElementById("preview-locked");
+    lockedInputEl = document.getElementById("preview-locked-input");
+    lockedUnlockEl = document.getElementById("preview-locked-unlock");
+    lockedEyeEl = document.getElementById("preview-locked-eye");
+    lockedErrorEl = document.getElementById("preview-locked-error");
+    lockedHintEl = document.getElementById("preview-locked-hint");
+    lockedHintTextEl = document.getElementById("preview-locked-hint-text");
     previewReady = true;
 
     if (prevBtnEl) {
@@ -859,6 +1011,28 @@ export function setupPreviewModal() {
         infoCloseBtnEl.addEventListener("click", (e: any) => {
             e.stopPropagation();
             closeInfoPanel();
+        });
+    }
+    if (lockedUnlockEl) {
+        lockedUnlockEl.addEventListener("click", (e: any) => {
+            e.stopPropagation();
+            void submitInlineUnlock();
+        });
+    }
+    if (lockedEyeEl) {
+        lockedEyeEl.addEventListener("click", (e: any) => {
+            e.stopPropagation();
+            toggleLockedReveal();
+        });
+    }
+    if (lockedInputEl) {
+        lockedInputEl.addEventListener("keydown", (e: any) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                void submitInlineUnlock();
+            }
+            // Don't let typing (Space/arrows/i) trigger preview keyboard shortcuts.
+            e.stopPropagation();
         });
     }
     if (infoPanelEl) {
