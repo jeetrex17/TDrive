@@ -59,6 +59,8 @@ export function ListChannels():Promise<Array<main.ChannelInfo>>;
 
 export function ListJoinRequests(arg1:number):Promise<Array<main.JoinRequestInfo>>;
 
+export function ListMedia():Promise<Array<backend.FileMetaData>>;
+
 export function ListPendingJoins():Promise<Array<main.PendingJoinInfo>>;
 
 export function LoginPhoneNumber(arg1:string):Promise<void>;
@@ -106,6 +108,8 @@ export function SumbitCode(arg1:string):Promise<void>;
 export function SumbitPassword(arg1:string):Promise<void>;
 
 export function SyncChannel(arg1:number):Promise<void>;
+
+export function Thumbnail(arg1:number):Promise<main.PreviewPayload>;
 
 export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<Array<backend.FileMetaData>>;
 

@@ -162,6 +162,37 @@ ORDER BY f.upload_time DESC
 	return out, rows.Err()
 }
 
+// ListAllFiles returns every non-tombstoned file in the channel, newest
+// first. Used by the gallery, which filters the result down to images in the
+// service layer. Returns metadata only (no bodies), so it stays cheap even
+// for large drives.
+func ListAllFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
+	// msg_id is the tiebreaker so the gallery order is stable across refreshes
+	// when several files share an upload_time (batch uploads collide on the
+	// second). msg_id is monotonic and unique per channel.
+	rows, err := db.Query(`
+		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
+		WHERE channel_id = ? AND tombstoned = 0
+		ORDER BY upload_time DESC, msg_id DESC
+	`, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []FileSlim
+	for rows.Next() {
+		var f FileSlim
+		var enc int
+		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
+			return nil, err
+		}
+		f.Encrypted = enc == 1
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 func ListAllFolders(db *sql.DB, channelID int64) ([]FolderSlim, error) {
 	rows, err := db.Query(`
 		SELECT id, name, parent_id FROM folders
