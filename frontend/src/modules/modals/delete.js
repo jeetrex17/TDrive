@@ -105,7 +105,11 @@ export function setupDeleteModal() {
     modal.addEventListener("click", (e) => {
         if (e.target === modal) close();
     });
-    a11y = installModalA11y(modal, { requestClose: close, initialFocus: cancelBtn });
+    a11y = installModalA11y(modal, {
+        requestClose: close,
+        initialFocus: cancelBtn,
+        restoreFocus: '#file-list',
+    });
 
     confirmBtn.addEventListener("click", async () => {
         const target = state.pendingDeleteTarget;

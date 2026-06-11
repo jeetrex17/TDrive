@@ -18,11 +18,33 @@ const FOCUSABLE = [
     '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-export function installModalA11y(modal, { requestClose, initialFocus } = {}) {
+function resolveTarget(target) {
+    if (typeof target === 'function') return target();
+    if (typeof target === 'string') return document.querySelector(target);
+    return target || null;
+}
+
+function canFocus(el) {
+    return Boolean(
+        el &&
+        typeof el.focus === 'function' &&
+        el.isConnected &&
+        !el.disabled &&
+        el.offsetParent !== null
+    );
+}
+
+function focusIfPossible(el) {
+    if (!canFocus(el)) return false;
+    el.focus({ preventScroll: true });
+    return true;
+}
+
+export function installModalA11y(modal, { requestClose, initialFocus, restoreFocus } = {}) {
     let lastActive = null;
 
     const focusable = () =>
-        Array.from(modal.querySelectorAll(FOCUSABLE)).filter((el) => el.offsetParent !== null);
+        Array.from(modal.querySelectorAll(FOCUSABLE)).filter(canFocus);
 
     const onKeydown = (e) => {
         if (e.key === 'Escape') {
@@ -33,9 +55,17 @@ export function installModalA11y(modal, { requestClose, initialFocus } = {}) {
         }
         if (e.key !== 'Tab') return;
         const items = focusable();
-        if (items.length === 0) return;
+        if (items.length === 0) {
+            e.preventDefault();
+            return;
+        }
         const first = items[0];
         const last = items[items.length - 1];
+        if (!modal.contains(document.activeElement)) {
+            e.preventDefault();
+            first.focus();
+            return;
+        }
         if (e.shiftKey && document.activeElement === first) {
             e.preventDefault();
             last.focus();
@@ -48,18 +78,22 @@ export function installModalA11y(modal, { requestClose, initialFocus } = {}) {
     return {
         activate() {
             lastActive = document.activeElement;
-            modal.addEventListener('keydown', onKeydown);
+            document.addEventListener('keydown', onKeydown, true);
             requestAnimationFrame(() => {
                 const target =
                     (typeof initialFocus === 'function' ? initialFocus() : initialFocus) || focusable()[0];
-                target?.focus();
+                if (!focusIfPossible(target)) {
+                    focusIfPossible(focusable()[0]);
+                }
             });
         },
         deactivate() {
-            modal.removeEventListener('keydown', onKeydown);
+            document.removeEventListener('keydown', onKeydown, true);
             const restore = lastActive;
             lastActive = null;
-            if (restore && typeof restore.focus === 'function') restore.focus();
+            if (!focusIfPossible(restore)) {
+                focusIfPossible(resolveTarget(restoreFocus));
+            }
         },
     };
 }

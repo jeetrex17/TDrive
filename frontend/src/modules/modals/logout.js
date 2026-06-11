@@ -19,7 +19,11 @@ export function setupLogoutModal() {
 
     cancel.addEventListener('click', () => closeLogoutModal());
     modal.addEventListener('click', (e) => { if (e.target === modal) closeLogoutModal(); });
-    a11y = installModalA11y(modal, { requestClose: closeLogoutModal, initialFocus: cancel });
+    a11y = installModalA11y(modal, {
+        requestClose: closeLogoutModal,
+        initialFocus: cancel,
+        restoreFocus: '#profile-trigger',
+    });
 
     confirm.addEventListener('click', async () => {
         const selected = modal.querySelector('input[name="logout-mode"]:checked');

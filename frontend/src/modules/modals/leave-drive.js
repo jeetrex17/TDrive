@@ -22,7 +22,11 @@ export function setupLeaveDriveModal() {
 
     cancel.addEventListener('click', close);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
-    a11y = installModalA11y(modal, { requestClose: close, initialFocus: cancel });
+    a11y = installModalA11y(modal, {
+        requestClose: close,
+        initialFocus: cancel,
+        restoreFocus: '#drives-nav',
+    });
 
     confirm.addEventListener('click', async () => {
         if (!pendingTarget) { close(); return; }
