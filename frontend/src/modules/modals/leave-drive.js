@@ -2,8 +2,10 @@
 
 import { leaveSharedDrive } from '../channels.js';
 import { notify, dismissNotification } from '../notifications.js';
+import { installModalA11y } from './modal-a11y.js';
 
 let pendingTarget = null;
+let a11y = null;
 
 export function setupLeaveDriveModal() {
     const modal = document.getElementById('leave-drive-modal');
@@ -13,12 +15,18 @@ export function setupLeaveDriveModal() {
     if (!modal || !cancel || !confirm) return;
 
     const close = () => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         pendingTarget = null;
     };
 
     cancel.addEventListener('click', close);
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    a11y = installModalA11y(modal, {
+        requestClose: close,
+        initialFocus: cancel,
+        restoreFocus: '#drives-nav',
+    });
 
     confirm.addEventListener('click', async () => {
         if (!pendingTarget) { close(); return; }
@@ -66,4 +74,5 @@ export function openLeaveDriveModal({ id, title }) {
         subtitle.textContent = `Leave "${pendingTarget.title}"? You can rejoin later with the invite link.`;
     }
     modal.style.display = 'flex';
+    a11y?.activate();
 }
