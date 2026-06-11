@@ -7,6 +7,9 @@ import { ensureNotInsideDeletedFolder } from '../navigation.js';
 import { deleteFolder } from '../drive-data.js';
 import { notify, dismissNotification } from '../notifications.js';
 import { openEncryptionPasswordModal } from './encryption-password.js';
+import { installModalA11y } from './modal-a11y.js';
+
+let a11y = null;
 
 function successTitle(item) {
     const name = String(item?.name || '').trim();
@@ -82,6 +85,7 @@ export function openDeleteModal(target) {
     }
 
     modal.style.display = "flex";
+    a11y?.activate();
 }
 
 export function setupDeleteModal() {
@@ -92,6 +96,7 @@ export function setupDeleteModal() {
     if (!modal || !cancelBtn || !confirmBtn) return;
 
     const close = () => {
+        a11y?.deactivate();
         state.pendingDeleteTarget = null;
         modal.style.display = "none";
     };
@@ -100,6 +105,7 @@ export function setupDeleteModal() {
     modal.addEventListener("click", (e) => {
         if (e.target === modal) close();
     });
+    a11y = installModalA11y(modal, { requestClose: close, initialFocus: cancelBtn });
 
     confirmBtn.addEventListener("click", async () => {
         const target = state.pendingDeleteTarget;

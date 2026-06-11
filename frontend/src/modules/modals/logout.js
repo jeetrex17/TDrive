@@ -7,6 +7,9 @@
 import { Logout } from '../../../wailsjs/go/main/App';
 import { showAuthWrapper, hideAllScreens } from '../auth.js';
 import { notify, dismissNotification } from '../notifications.js';
+import { installModalA11y } from './modal-a11y.js';
+
+let a11y = null;
 
 export function setupLogoutModal() {
     const modal = document.getElementById('logout-modal');
@@ -16,6 +19,7 @@ export function setupLogoutModal() {
 
     cancel.addEventListener('click', () => closeLogoutModal());
     modal.addEventListener('click', (e) => { if (e.target === modal) closeLogoutModal(); });
+    a11y = installModalA11y(modal, { requestClose: closeLogoutModal, initialFocus: cancel });
 
     confirm.addEventListener('click', async () => {
         const selected = modal.querySelector('input[name="logout-mode"]:checked');
@@ -58,9 +62,11 @@ export function openLogoutModal() {
     const soft = modal.querySelector('input[name="logout-mode"][value="soft"]');
     if (soft) soft.checked = true;
     modal.style.display = 'flex';
+    a11y?.activate();
 }
 
 function closeLogoutModal() {
+    a11y?.deactivate();
     const modal = document.getElementById('logout-modal');
     if (modal) modal.style.display = 'none';
 }
