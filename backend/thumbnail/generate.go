@@ -96,7 +96,10 @@ func Generate(src []byte, maxEdge int) ([]byte, error) {
 		return nil, ErrUnsupported
 	}
 
+	// Downscale first, then bake in any EXIF rotation. Orienting the small
+	// thumbnail (not the full-size decode) keeps the transform cheap.
 	dst := render(img, maxEdge)
+	dst = applyOrientation(dst, exifOrientation(src))
 
 	var out bytes.Buffer
 	if err := jpeg.Encode(&out, dst, &jpeg.Options{Quality: jpegQuality}); err != nil {

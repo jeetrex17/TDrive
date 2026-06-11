@@ -1,19 +1,14 @@
 // Photos gallery: a flat, date-grouped grid of every image in the active
 // drive. Thumbnails lazy-load as cells scroll into view (IntersectionObserver),
 // and clicking a cell opens the shared lightbox with prev/next over the whole
-// set. Entered via the Files/Photos toggle in the breadcrumb row; renders into
-// #gallery-view, a sibling of #file-list that CSS shows only in photos mode.
+// set. Entered via the Photos item in the sidebar; renders into #gallery-view,
+// a sibling of #file-list that CSS shows only in photos mode.
 
 import { state } from '../state';
 import { getMedia, getThumbnail } from '../api';
 import { openPreviewList } from './modals/preview';
+import { clearSearch } from './search';
 import type { FileItem } from '../types';
-
-// Cell minimum widths in px, smallest to largest. Zoom steps through these and
-// the grid auto-fills columns to fit, so the layout stays responsive.
-const ZOOM_STEPS = [120, 168, 232];
-const DEFAULT_ZOOM = 1;
-const ZOOM_STORAGE_KEY = 'tdrive.gallery.zoom';
 
 // Soft cap on the in-memory thumbnail-URL map (keyed channelId:msgId). The
 // backend disk cache makes a re-fetch cheap, so this only bounds bookkeeping.
@@ -31,7 +26,6 @@ const photosSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 
 let galleryEl: HTMLElement | null = null;
 let observer: IntersectionObserver | null = null;
-let zoomIndex = DEFAULT_ZOOM;
 let renderToken = 0;
 let currentItems: FileItem[] = [];
 let currentChannelId = 0;
@@ -46,10 +40,10 @@ const loadedCells: HTMLElement[] = [];
 
 export function setupGallery(): void {
     galleryEl = document.getElementById('gallery-view');
-    zoomIndex = loadZoom();
-    applyZoom();
-    setupZoomControls();
     setupGalleryClicks();
+    // When the vault is unlocked (e.g. from the lightbox), let locked thumbnail
+    // cells try again without waiting for a full gallery refresh.
+    window.addEventListener('tdrive:unlocked', rearmLockedCells);
 }
 
 // setPhotosMode toggles the whole main view between the file list and the
@@ -274,20 +268,38 @@ function setupGalleryClicks(): void {
 
 function openGalleryLightbox(index: number): void {
     const channelId = currentChannelId;
+    // Carry the fields the lightbox + info panel need: a download size (plaintext
+    // for encrypted files), the loaded thumbnail as an instant placeholder, and
+    // the metadata the info panel shows.
     const items = currentItems.map((it) => ({
         type: 'file',
         id: it.msgId,
         name: it.name,
         size: it.encrypted && it.plaintextSize > 0 ? it.plaintextSize : it.size,
+        encrypted: it.encrypted,
+        uploaderId: it.uploaderId,
+        uploadTime: it.uploadTime,
         thumbUrl: thumbCache.get(`${channelId}:${it.msgId}`) || '',
     }));
     void openPreviewList(items, index);
+}
+
+// rearmLockedCells lets locked thumbnail cells retry after the vault unlocks.
+function rearmLockedCells(): void {
+    if (!observer || !galleryEl) return;
+    galleryEl.querySelectorAll('.gallery-cell.is-locked').forEach((cell) => {
+        cell.classList.remove('is-locked');
+        observer!.observe(cell);
+    });
 }
 
 // --- view switching (wired from the sidebar Photos item) ---
 
 export function enterPhotos(): void {
     if (state.virtualView === 'photos') return;
+    // The gallery is not a search surface: drop any active search so returning
+    // to Files restores normal row interaction instead of search mode.
+    clearSearch({ refresh: false });
     state.virtualView = 'photos';
     window.refreshFiles();
 }
@@ -296,46 +308,6 @@ export function exitPhotos(): void {
     if (state.virtualView !== 'photos') return;
     state.virtualView = null;
     window.refreshFiles();
-}
-
-// --- zoom ---
-
-function setupZoomControls(): void {
-    document.getElementById('gallery-zoom-out')?.addEventListener('click', () => setZoom(zoomIndex - 1));
-    document.getElementById('gallery-zoom-in')?.addEventListener('click', () => setZoom(zoomIndex + 1));
-}
-
-function setZoom(next: number): void {
-    const clamped = Math.max(0, Math.min(ZOOM_STEPS.length - 1, next));
-    if (clamped === zoomIndex) return;
-    zoomIndex = clamped;
-    applyZoom();
-    saveZoom();
-    // Wider cells can reveal previously-unobserved rows; re-arm the observer.
-    observeCells();
-}
-
-function applyZoom(): void {
-    if (!galleryEl) galleryEl = document.getElementById('gallery-view');
-    galleryEl?.style.setProperty('--gallery-cell-min', `${ZOOM_STEPS[zoomIndex]}px`);
-    const out = document.getElementById('gallery-zoom-out') as HTMLButtonElement | null;
-    const inn = document.getElementById('gallery-zoom-in') as HTMLButtonElement | null;
-    if (out) out.disabled = zoomIndex <= 0;
-    if (inn) inn.disabled = zoomIndex >= ZOOM_STEPS.length - 1;
-}
-
-function loadZoom(): number {
-    try {
-        const v = Number(localStorage.getItem(ZOOM_STORAGE_KEY));
-        if (Number.isInteger(v) && v >= 0 && v < ZOOM_STEPS.length) return v;
-    } catch {}
-    return DEFAULT_ZOOM;
-}
-
-function saveZoom(): void {
-    try {
-        localStorage.setItem(ZOOM_STORAGE_KEY, String(zoomIndex));
-    } catch {}
 }
 
 // --- date grouping ---

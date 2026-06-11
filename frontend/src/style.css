@@ -1524,31 +1524,14 @@ header {
 .drives-list + .drives-list { margin-top: 2px; }
 .nav-photos-item .icon { opacity: 0.95; }
 
-/* Thumbnail size stepper — only visible in photos mode, pinned to the right. */
-.gallery-zoom { display: none; align-items: center; gap: 4px; margin-left: auto; }
-.gallery-zoom-btn {
-    width: 30px; height: 30px;
-    display: inline-flex; align-items: center; justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease;
-}
-.gallery-zoom-btn:hover:not(:disabled) { color: var(--text-main); border-color: var(--text-main); }
-.gallery-zoom-btn:disabled { opacity: 0.35; cursor: default; }
-.gallery-zoom-btn svg { width: 16px; height: 16px; }
-
-/* View switching: photos mode hides the list + table header and the
-   folder breadcrumb, and reveals the gallery + its zoom control. */
+/* View switching: photos mode hides the file list, its table header, and the
+   folder breadcrumb, and reveals the gallery with its "Photos" title. */
 .gallery-view { display: none; flex: 1; overflow-y: auto; padding: 0 24px 28px; }
 .main-content.photos-mode #file-list,
 .main-content.photos-mode .file-table-header { display: none; }
 .main-content.photos-mode #breadcrumb-back,
 .main-content.photos-mode .breadcrumb-path { display: none; }
 .main-content.photos-mode .gallery-view { display: block; }
-.main-content.photos-mode .gallery-zoom { display: inline-flex; }
 
 .gallery-status, .gallery-empty { color: var(--text-muted); padding: 40px 8px; text-align: center; }
 .gallery-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 64px; }
@@ -1573,7 +1556,7 @@ header {
 
 .gallery-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(var(--gallery-cell-min, 168px), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
     gap: 5px;
 }
 
@@ -1705,9 +1688,84 @@ header {
     pointer-events: none;
 }
 
+/* ----- Lightbox info panel (the "ⓘ" card) ----- */
+.preview-info {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 3;
+    width: 340px;
+    max-width: 86vw;
+    padding: 80px 26px 28px;
+    overflow-y: auto;
+    background: rgba(12, 14, 22, 0.72);
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+    -webkit-backdrop-filter: blur(26px);
+    backdrop-filter: blur(26px);
+    transform: translateX(100%);
+    transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: auto;
+}
+.preview-overlay.is-info-open .preview-info { transform: translateX(0); }
+/* Keep the image clear of the panel while it is open. */
+.preview-overlay.is-info-open .preview-content { padding-right: 372px; }
+.preview-overlay.is-info-open .preview-nav-next { right: 364px; }
+
+.info-date {
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.4;
+    margin-bottom: 18px;
+}
+.info-section { margin-bottom: 18px; }
+.info-section-title {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+}
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 5px 0;
+    font-size: 0.86rem;
+}
+.info-label { color: rgba(255, 255, 255, 0.55); flex-shrink: 0; }
+.info-value { color: rgba(255, 255, 255, 0.92); text-align: right; word-break: break-word; }
+.info-map-link {
+    margin-top: 8px;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--accent);
+    font-size: 0.82rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+.info-map-link:hover { background: rgba(255, 255, 255, 0.09); }
+.info-filename {
+    margin-top: 6px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.78rem;
+    word-break: break-all;
+}
+.info-empty { color: rgba(255, 255, 255, 0.5); font-size: 0.86rem; }
+
 @media (max-width: 720px) {
     .preview-nav { width: 44px; height: 44px; }
     .preview-nav-prev { left: 12px; }
     .preview-nav-next { right: 12px; }
-    .gallery-view { padding: 4px 14px 24px; }
+    .gallery-view { padding: 0 14px 24px; }
+    /* On narrow windows the info panel overlays the image instead of pushing it. */
+    .preview-overlay.is-info-open .preview-content { padding-right: 16px; }
+    .preview-overlay.is-info-open .preview-nav-next { right: 12px; }
 }

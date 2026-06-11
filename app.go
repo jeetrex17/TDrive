@@ -280,6 +280,7 @@ func (a *App) newFileService() *fileservice.Service {
 		Warnf: func(format string, args ...any) {
 			fmt.Printf(format, args...)
 		},
+		Thumbs: newThumbnailCache(),
 	}
 }
 

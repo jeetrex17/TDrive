@@ -187,15 +187,6 @@
                     </button>
                     <div id="breadcrumb-path" class="breadcrumb-path"></div>
                     <div id="gallery-title" class="gallery-title">Photos</div>
-
-                    <div class="gallery-zoom" aria-label="Thumbnail size">
-                        <button id="gallery-zoom-out" class="gallery-zoom-btn" type="button" title="Smaller thumbnails" aria-label="Smaller thumbnails">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M5 12h14"/></svg>
-                        </button>
-                        <button id="gallery-zoom-in" class="gallery-zoom-btn" type="button" title="Larger thumbnails" aria-label="Larger thumbnails">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
-                        </button>
-                    </div>
                 </div>
 
                 <div class="file-table-header">
@@ -289,6 +280,9 @@
                 <div class="preview-chrome">
                     <div id="preview-filename" class="preview-filename" aria-live="polite"></div>
                     <div class="preview-chrome-actions">
+                        <button id="preview-info-btn" class="preview-icon-btn" type="button" aria-label="Photo info" aria-pressed="false" title="Info (i)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 11.5v4.5"/><circle cx="12" cy="7.8" r="0.6" fill="currentColor" stroke="none"/></svg>
+                        </button>
                         <button id="preview-download" class="preview-icon-btn" type="button" aria-label="Download" title="Download">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
                         </button>
@@ -311,6 +305,7 @@
                     <div id="preview-error" class="preview-error" style="display: none;" role="alert"></div>
                     <img id="preview-image" src="" alt="Preview" hidden>
                 </div>
+                <aside id="preview-info" class="preview-info" aria-label="Photo info"></aside>
             </div>
         </div>
     </div>

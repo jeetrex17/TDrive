@@ -1,6 +1,7 @@
 import { PreviewFile, PreviewThumbnail } from '../../../wailsjs/go/main/App';
 import { state } from '../../state';
 import { notify } from '../notifications';
+import { renderImageInfoHTML } from './preview-info';
 
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
@@ -29,6 +30,10 @@ let prevBtnEl: any = null;
 let nextBtnEl: any = null;
 let counterEl: any = null;
 let downloadBtnEl: any = null;
+let infoBtnEl: any = null;
+let infoPanelEl: any = null;
+let activeFullSrc = "";
+let infoOpen = false;
 let previewReady = false;
 let previewRequestToken = 0;
 let activePreviewKey = "";
@@ -317,6 +322,9 @@ async function resolveFullPreviewEntry(target: any) {
             const { openEncryptionPasswordModal } = await import('./encryption-password.js');
             const ok = await openEncryptionPasswordModal();
             if (!ok) throw err;
+            // The vault is now unlocked. Tell other surfaces (the gallery's
+            // locked thumbnail cells) so they can load without a full refresh.
+            window.dispatchEvent(new Event("tdrive:unlocked"));
             payload = await PreviewFile(msgID);
         } else {
             throw err;
@@ -335,12 +343,14 @@ export async function loadPreview(target: any) {
     const previewKey = getPreviewKey(target);
     const filename = String(target?.name || filenameEl?.textContent || "Preview");
     const token = ++previewRequestToken;
-    const previousActivePreviewKey = activePreviewKey;
-    const previousActivePreviewMsgID = activePreviewMsgID;
-    const previousActivePreviewItem = activePreviewItem;
+    // Navigation commits to the target: activePreview* always reflect the item
+    // the user is on, so the counter, info panel, and download stay in agreement
+    // even when the full-size load fails.
     activePreviewKey = previewKey;
     activePreviewMsgID = msgID;
     activePreviewItem = target;
+    activeFullSrc = "";
+    refreshInfoPanel();
 
     if (!msgID || !previewKey) {
         const err = new Error("Download failed");
@@ -350,49 +360,62 @@ export async function loadPreview(target: any) {
         throw err;
     }
 
-    let fullShown = false;
+    // Whether a usable image (placeholder or full) is currently standing in for
+    // this request, and whether the full-size load has settled.
+    let placeholderShown = false;
+    let fullSettled = false;
 
     try {
         setPreviewProgress(0);
 
         // Instant low-res placeholder. The gallery hands us a thumbnail data
         // URL it already loaded (zero extra work); elsewhere we fall back to a
-        // server-side thumbnail fetch. Either way the full image replaces it.
+        // server-side thumbnail fetch. Either becomes the standing image until
+        // the full-size load lands.
         const initialThumb = String(target?.thumbUrl || "");
         if (initialThumb) {
             if (token === previewRequestToken && isPreviewOpen()) {
                 showPreviewImage(initialThumb, filename, { keepLoading: true });
+                placeholderShown = true;
             }
         } else {
             void resolveThumbnailPreviewEntry(target)
                 .then((asset) => {
-                    if (fullShown || token !== previewRequestToken || !isPreviewOpen()) return;
+                    // Ignore a late thumbnail once the full-size load settled, so
+                    // it can never overwrite a shown image or a hard error.
+                    if (fullSettled || token !== previewRequestToken || !isPreviewOpen()) return;
                     if (!asset?.src) return;
                     showPreviewImage(asset.src, filename, { keepLoading: true });
+                    placeholderShown = true;
                 })
                 .catch(() => {});
         }
 
         const asset = await resolveFullPreviewEntry(target);
+        fullSettled = true;
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
 
         if (!asset?.src) {
             throw new Error("Download failed");
         }
 
-        fullShown = true;
+        activeFullSrc = asset.src;
         showPreviewImage(asset.src, filename);
+        refreshInfoPanel();
         return asset;
     } catch (err) {
+        fullSettled = true;
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
-        const normalized = normalizePreviewError(err);
-        const keepCurrentImage = isPreviewVisible() && previousActivePreviewKey === previewKey;
-        if (!keepCurrentImage) {
-            activePreviewKey = previousActivePreviewKey;
-            activePreviewMsgID = previousActivePreviewMsgID;
-            activePreviewItem = previousActivePreviewItem;
+
+        // If a placeholder image is standing in, keep it: an image over the
+        // full-size budget, or a cancelled unlock, should still show the
+        // thumbnail rather than a hard error. Only error when we have nothing.
+        if (placeholderShown && isPreviewVisible()) {
+            hidePreviewProgress();
+            return null;
         }
-        showPreviewError(normalized.message, { keepCurrentImage });
+        const normalized = normalizePreviewError(err);
+        showPreviewError(normalized.message);
         throw normalized;
     }
 }
@@ -400,6 +423,8 @@ export async function loadPreview(target: any) {
 export function closePreviewModal() {
     previewRequestToken += 1;
     clearActivePreview();
+    closeInfoPanel();
+    activeFullSrc = "";
     clearChromeHideTimer();
 
     if (modalEl) {
@@ -503,6 +528,39 @@ function handleDownloadFromPreview() {
     }
 }
 
+function toggleInfoPanel() {
+    if (infoOpen) closeInfoPanel();
+    else openInfoPanel();
+}
+
+function openInfoPanel() {
+    if (!infoPanelEl || !modalEl) return;
+    infoOpen = true;
+    modalEl.classList.add("is-info-open");
+    infoBtnEl?.setAttribute("aria-pressed", "true");
+    refreshInfoPanel();
+}
+
+function closeInfoPanel() {
+    infoOpen = false;
+    modalEl?.classList.remove("is-info-open");
+    infoBtnEl?.setAttribute("aria-pressed", "false");
+}
+
+// refreshInfoPanel re-renders the panel for the active item. Dimensions are
+// only sourced from the displayed <img> once the full image is in (activeFullSrc
+// set); until then we rely on EXIF, so a thumbnail's size never leaks in.
+function refreshInfoPanel() {
+    if (!infoOpen || !infoPanelEl || !activePreviewItem) return;
+    const hasFull = Boolean(activeFullSrc);
+    infoPanelEl.innerHTML = renderImageInfoHTML({
+        item: activePreviewItem,
+        fullSrc: activeFullSrc,
+        naturalWidth: hasFull ? imageEl?.naturalWidth || 0 : 0,
+        naturalHeight: hasFull ? imageEl?.naturalHeight || 0 : 0,
+    });
+}
+
 async function handlePreviewKeydown(event: any) {
     const spacePressed = isSpaceKey(event);
     const previewOpen = isPreviewOpen();
@@ -520,6 +578,15 @@ async function handlePreviewKeydown(event: any) {
         event.preventDefault();
         event.stopPropagation();
         void navigatePreview(event.key === "ArrowLeft" ? -1 : 1);
+        return;
+    }
+
+    if (previewOpen && (event.key === "i" || event.key === "I")) {
+        if (event.metaKey || event.ctrlKey || event.altKey) return;
+        if (isTypingContext(document.activeElement)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleInfoPanel();
         return;
     }
 
@@ -577,6 +644,8 @@ export function setupPreviewModal() {
     nextBtnEl = document.getElementById("preview-next");
     counterEl = document.getElementById("preview-counter");
     downloadBtnEl = document.getElementById("preview-download");
+    infoBtnEl = document.getElementById("preview-info-btn");
+    infoPanelEl = document.getElementById("preview-info");
     previewReady = true;
 
     if (prevBtnEl) {
@@ -595,6 +664,25 @@ export function setupPreviewModal() {
         downloadBtnEl.addEventListener("click", (e: any) => {
             e.stopPropagation();
             handleDownloadFromPreview();
+        });
+    }
+    if (infoBtnEl) {
+        infoBtnEl.addEventListener("click", (e: any) => {
+            e.stopPropagation();
+            toggleInfoPanel();
+        });
+    }
+    if (infoPanelEl) {
+        // Map links open in the system browser. The panel is rebuilt via
+        // innerHTML, so handle clicks by delegation.
+        infoPanelEl.addEventListener("click", (e: any) => {
+            const link = (e.target as HTMLElement).closest("[data-map-url]") as HTMLElement | null;
+            if (!link) return;
+            e.stopPropagation();
+            const url = link.getAttribute("data-map-url") || "";
+            if (!url) return;
+            if (window.runtime?.BrowserOpenURL) window.runtime.BrowserOpenURL(url);
+            else window.open(url, "_blank");
         });
     }
     updateNavChrome();
@@ -619,6 +707,10 @@ export function setupPreviewModal() {
     imageEl.addEventListener("error", () => {
         if (!isPreviewOpen() || !imageEl.getAttribute("src")) return;
         showPreviewError("Not a supported image");
+    });
+    imageEl.addEventListener("load", () => {
+        // Full image decoded: the info panel can now report real dimensions.
+        if (infoOpen) refreshInfoPanel();
     });
     if (window.runtime?.EventsOn) {
         window.runtime.EventsOn("preview_progress", (msgID: any, percent: any) => {

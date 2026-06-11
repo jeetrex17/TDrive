@@ -146,7 +146,7 @@ function renderSearchResults(results: any, query: any) {
     populateUploaderChips(list);
 }
 
-function clearSearch({ refresh = true } = {}) {
+export function clearSearch({ refresh = true } = {}) {
     const input = getSearchInput();
     if (input) input.value = "";
     state.searchQuery = "";
