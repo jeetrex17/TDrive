@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
@@ -79,6 +81,46 @@ func TestIncrementalAppliesOpsAscending(t *testing.T) {
 	}
 	if wm != idB {
 		t.Fatalf("watermark = %d, want %d", wm, idB)
+	}
+}
+
+func TestIncrementalRetriesReadFloodWait(t *testing.T) {
+	db, tg, eng := newSyncEnv(t)
+	idA := sendOp(t, tg, projection.Op{Type: projection.OpMkdir, Obj: "d:a", Parent: projection.RootParent, Name: "A"})
+
+	var hooks int
+	eng.OnFloodWait = func(channelID int64, wait time.Duration) { hooks++ }
+	tg.InjectReadFloodWaits(2) // first two history reads flood-wait, then succeed
+
+	if err := eng.Incremental(context.Background(), testChan); err != nil {
+		t.Fatalf("incremental: %v", err)
+	}
+	if !projection.FolderExists(db, testChan, "d:a") {
+		t.Fatal("d:a missing after flood-wait retry")
+	}
+	if hooks != 2 {
+		t.Fatalf("OnFloodWait fired %d times, want 2", hooks)
+	}
+	var wm int64
+	if err := db.QueryRow(`SELECT last_synced_msg FROM channels WHERE channel_id = ?`, testChan).Scan(&wm); err != nil {
+		t.Fatalf("watermark: %v", err)
+	}
+	if wm != idA {
+		t.Fatalf("watermark = %d, want %d", wm, idA)
+	}
+}
+
+func TestIncrementalFailsAfterMaxFloodRetries(t *testing.T) {
+	_, tg, eng := newSyncEnv(t)
+	sendOp(t, tg, projection.Op{Type: projection.OpMkdir, Obj: "d:a", Parent: projection.RootParent, Name: "A"})
+	tg.InjectReadFloodWaits(maxFloodWaitRetries + 2) // never recovers within the retry budget
+
+	err := eng.Incremental(context.Background(), testChan)
+	if err == nil {
+		t.Fatal("expected error after exhausting flood-wait retries")
+	}
+	if !errors.Is(err, tgclient.ErrFloodWait) {
+		t.Fatalf("err = %v, want flood-wait", err)
 	}
 }
 
