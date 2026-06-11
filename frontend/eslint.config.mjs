@@ -18,6 +18,10 @@ export default tseslint.config(
             "no-unused-vars": "off",
             "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
             "no-empty": ["warn", { allowEmptyCatch: true }],
+            // `any` is a deliberate bridge at the JS<->TS boundary (untyped
+            // Wails globals, loosely-shaped transient state) during the gradual
+            // migration. Surface it, don't fail on it.
+            "@typescript-eslint/no-explicit-any": "warn",
         },
     },
     {
