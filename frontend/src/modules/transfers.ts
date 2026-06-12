@@ -626,6 +626,9 @@ export function setupUploadMenu() {
 export function setupFileDrop() {
     if (!window.runtime?.EventsOn) return;
     window.runtime.EventsOn('files_dropped', (payload: any) => {
+        // If an in-app drag-to-move is underway, ignore native drops entirely
+        // (macOS can still fire one for the internal drag).
+        if (state.dragState) return;
         const paths = Array.isArray(payload) ? payload : payload?.paths;
         if (!Array.isArray(paths) || !paths.length) return;
         if (!state.activeChannel) return; // ignore drops before a drive is open

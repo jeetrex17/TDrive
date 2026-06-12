@@ -80,6 +80,15 @@ export function setupNotifBell() {
         else if (state.notifHoverOpen) closeHoverPopover();
     });
 
+    // Cancel button on an active transfer row (delegated; rows re-render).
+    document.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement)?.closest?.('.notif-row-cancel') as HTMLElement | null;
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        cancelTransfersInDirection(btn.dataset.cancelDir || 'up');
+    });
+
     renderBell();
     startPulseTicker();
 }
@@ -165,6 +174,26 @@ export function markTransferDone({ id, direction, status = 'done' }: any) {
         state.notifUnreadErrors += 1;
     }
     renderAll();
+}
+
+// cancelTransfersInDirection cancels the active upload/import or download and
+// marks its rows canceled immediately; backend abort events that arrive on the
+// now-terminal rows are no-ops.
+function cancelTransfersInDirection(direction: string) {
+    const app = (window as any)?.go?.main?.App;
+    try {
+        if (direction === 'down') app?.CancelDownload?.();
+        else app?.CancelUpload?.();
+    } catch { /* binding optional */ }
+    let changed = false;
+    for (const e of state.historyEvents) {
+        if (e.kind === 'transfer' && e.direction === direction && e.status === 'active') {
+            e.status = 'canceled';
+            e.finishedAt = Date.now();
+            changed = true;
+        }
+    }
+    if (changed) renderAll();
 }
 
 export function clearHistory() {
@@ -375,6 +404,9 @@ function transferRowHTML(t: any) {
         t.status === 'failed' ? 'Failed' :
         t.status === 'canceled' ? 'Canceled' :
         `${Math.round(t.progress || 0)}%`;
+    const cancelBtn = t.status === 'active'
+        ? `<button class="notif-row-cancel" type="button" data-cancel-dir="${direction}" aria-label="Cancel transfer" title="Cancel">&times;</button>`
+        : '';
     return `
         <div class="notif-row notif-row-transfer ${statusClass}">
             <span class="notif-row-icon" data-kind="${direction}" aria-hidden="true">${ICONS[direction]}</span>
@@ -385,6 +417,7 @@ function transferRowHTML(t: any) {
                 </div>
             </div>
             <div class="notif-row-meta">${escapeHTML(meta)}</div>
+            ${cancelBtn}
         </div>
     `;
 }
