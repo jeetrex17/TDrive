@@ -92,15 +92,18 @@ async function startNextDownload() {
             next.state = "canceled";
             markTransferDone({ id: next.id, direction: 'down', status: 'canceled' });
         } else {
-            next.state = "failed";
-            markTransferDone({ id: next.id, direction: 'down', status: 'failed' });
+            const canceled = state.cancelingDownload;
+            next.state = canceled ? "canceled" : "failed";
+            markTransferDone({ id: next.id, direction: 'down', status: canceled ? 'canceled' : 'failed' });
         }
     } catch (err) {
         console.error("Download failed:", err);
         next.message = "Download failed";
-        next.state = "failed";
-        markTransferDone({ id: next.id, direction: 'down', status: 'failed' });
+        const canceled = state.cancelingDownload;
+        next.state = canceled ? "canceled" : "failed";
+        markTransferDone({ id: next.id, direction: 'down', status: canceled ? 'canceled' : 'failed' });
     } finally {
+        state.cancelingDownload = false;
         state.activeDownloadId = null;
         startNextDownload();
     }
@@ -283,7 +286,7 @@ export function setupUploadProgress() {
             importFileIds.delete(uploadId);
             state.importBatch.failed += 1;
             pushTransferStart({ id: uploadId, direction: 'up', name: String(name ?? "") || 'Upload failed', total: 0 });
-            markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
+            markTransferDone({ id: uploadId, direction: 'up', status: state.cancelingUpload ? 'canceled' : 'failed' });
             refreshImportRow();
             return;
         }
@@ -309,7 +312,7 @@ export function setupUploadProgress() {
         if (!hadItem) {
             pushTransferStart({ id: uploadId, direction: 'up', name: filename || 'Upload failed', total: 0 });
         }
-        markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
+        markTransferDone({ id: uploadId, direction: 'up', status: state.cancelingUpload ? 'canceled' : 'failed' });
 
         if (batchFinished) {
             window.refreshFiles();
@@ -349,14 +352,15 @@ export function setupUploadProgress() {
         const uploaded = Number(info?.uploaded) || 0;
         const oversize = Number(info?.oversize) || 0;
         const errorCount = Array.isArray(info?.errors) ? info.errors.length : 0;
-        const status = failedUploads > 0 ? 'failed' : 'done';
+        const canceled = state.cancelingUpload;
+        const status = canceled ? 'canceled' : (failedUploads > 0 ? 'failed' : 'done');
         if (!state.importBatch) {
             pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import completed', total: uploaded + failedUploads });
         }
         updateTransferName({
             id: IMPORT_TRANSFER_ID,
             direction: 'up',
-            name: uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`,
+            name: canceled ? 'Import canceled' : (uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`),
         });
         markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status });
         state.importBatch = null;
@@ -509,6 +513,7 @@ async function runImportFlow(parentID: any, paths: any) {
         }
     } finally {
         flowBusy = false;
+        state.cancelingUpload = false;
     }
 }
 
@@ -556,7 +561,9 @@ async function uploadPathsBatch(paths: any, parentID: any, encrypt: boolean) {
         // an entry may still be stuck 'active' at 100% in the bell.
         // markTransferDone is idempotent against terminal entries.
         for (const [uploadId, item] of state.uploadTransfers) {
-            if (uploadThrew && item?.state !== 'done' && item?.state !== 'failed') {
+            if (state.cancelingUpload) {
+                markTransferDone({ id: uploadId, direction: 'up', status: 'canceled' });
+            } else if (uploadThrew && item?.state !== 'done' && item?.state !== 'failed') {
                 pushTransferStart({ id: uploadId, direction: 'up', name: item?.name || 'Upload failed', total: item?.size || 0 });
                 markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
             } else {
@@ -564,6 +571,7 @@ async function uploadPathsBatch(paths: any, parentID: any, encrypt: boolean) {
             }
         }
         state.uploadBatch = null;
+        state.cancelingUpload = false;
     }
 }
 

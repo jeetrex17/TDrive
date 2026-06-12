@@ -50,6 +50,10 @@ export interface State {
     // Aggregate progress for a folder/archive import. When set, per-file upload
     // events feed this single bell row instead of spawning one row per file.
     importBatch: { total: number; done: number; failed: number } | null;
+    // True while a cancel is in flight, so abort events relabel rows as canceled
+    // instead of failed.
+    cancelingUpload: boolean;
+    cancelingDownload: boolean;
 
     dragState: any;
     dragOverEl: HTMLElement | null;
@@ -118,6 +122,8 @@ export const state: State = {
     uploadTransfers: new Map(),
     uploadBatch: null,
     importBatch: null,
+    cancelingUpload: false,
+    cancelingDownload: false,
 
     dragState: null,
     dragOverEl: null,

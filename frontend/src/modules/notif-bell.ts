@@ -185,18 +185,12 @@ export function markTransferDone({ id, direction, status = 'done' }: any) {
 function cancelTransfersInDirection(direction: string) {
     const app = (window as any)?.go?.main?.App;
     try {
-        if (direction === 'down') app?.CancelDownload?.();
-        else app?.CancelUpload?.();
+        if (direction === 'down') { app?.CancelDownload?.(); state.cancelingDownload = true; }
+        else { app?.CancelUpload?.(); state.cancelingUpload = true; }
     } catch { /* binding optional */ }
-    let changed = false;
-    for (const e of state.historyEvents) {
-        if (e.kind === 'transfer' && e.direction === direction && e.status === 'active') {
-            e.status = 'canceled';
-            e.finishedAt = Date.now();
-            changed = true;
-        }
-    }
-    if (changed) renderAll();
+    // Don't mark rows here. The backend reports the real per-file outcome, so a
+    // file that already finished (and committed) ends as Done while aborted ones
+    // end as Canceled (see the upload_error / download handlers).
 }
 
 export function clearHistory() {
@@ -408,7 +402,7 @@ function transferRowHTML(t: any) {
         t.status === 'canceled' ? 'Canceled' :
         `${Math.round(t.progress || 0)}%`;
     const cancelBtn = t.status === 'active'
-        ? `<button class="notif-row-cancel" type="button" data-cancel-dir="${direction}" aria-label="Cancel transfer" title="Cancel">&times;</button>`
+        ? `<button class="notif-row-cancel" type="button" data-cancel-dir="${t.direction}" aria-label="Cancel transfer" title="Cancel">&times;</button>`
         : '';
     return `
         <div class="notif-row notif-row-transfer ${statusClass}">
