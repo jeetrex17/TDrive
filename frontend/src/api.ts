@@ -8,7 +8,6 @@
 import {
     GetFolderContents as rawGetFolderContents,
     GetFileList as rawGetFileList,
-    GetOrphanedFiles as rawGetOrphanedFiles,
     ListMedia as rawListMedia,
     Search as rawSearch,
     Thumbnail as rawThumbnail,
@@ -81,12 +80,6 @@ export async function getFolderContents(parentId: string): Promise<FolderContent
 export async function getFileList(): Promise<RootFile[]> {
     const files = await rawGetFileList();
     return (files ?? []).map(toRootFile);
-}
-
-/** Files whose parent folder was deleted, surfaced in the Orphaned view. */
-export async function getOrphanedFiles(): Promise<FileItem[]> {
-    const files = await rawGetOrphanedFiles();
-    return (files ?? []).map(toFileItem);
 }
 
 /** Search files and folders in the active drive, normalized. */

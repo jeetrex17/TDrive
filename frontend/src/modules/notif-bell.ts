@@ -139,6 +139,18 @@ export function updateTransferProgress({ id, direction, progress }: any) {
     renderAll();
 }
 
+// updateTransferName changes an active transfer's title in place (no progress
+// reset), used to show an import's live phase: extracting, adding folders, etc.
+export function updateTransferName({ id, direction, name }: any) {
+    const key = `xfer:${direction}:${id}`;
+    const entry = state.historyEvents.find((e) => e.id === key);
+    if (!entry || entry.status !== 'active') return;
+    const next = String(name || '');
+    if (entry.name === next) return;
+    entry.name = next;
+    renderAll();
+}
+
 export function markTransferDone({ id, direction, status = 'done' }: any) {
     const key = `xfer:${direction}:${id}`;
     const entry = state.historyEvents.find((e) => e.id === key);

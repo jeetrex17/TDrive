@@ -177,9 +177,9 @@ func (s *Service) OrphanedFiles(channelID int64) ([]File, error) {
 // shows exactly the files a thumbnail can be produced for. Filtering happens
 // here rather than in SQL because the projection stores no content type.
 //
-// Images inside a deleted folder (orphans) are intentionally included: the
-// gallery is a flat index of every image in the drive, independent of folder
-// structure, so a photo never disappears just because its folder was removed.
+// Legacy files with broken parent chains are still included: the gallery is a
+// flat index over every visible image in the drive, independent of folder
+// structure.
 func (s *Service) MediaFiles(channelID int64) ([]File, error) {
 	if err := s.ready(); err != nil {
 		return nil, err

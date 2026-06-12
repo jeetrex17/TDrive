@@ -5,7 +5,6 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../wailsjs/go/main/App", () => ({
     GetFolderContents: vi.fn(),
     GetFileList: vi.fn(),
-    GetOrphanedFiles: vi.fn(),
     ListMedia: vi.fn(),
     Search: vi.fn(),
     Thumbnail: vi.fn(),

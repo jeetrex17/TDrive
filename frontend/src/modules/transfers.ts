@@ -10,11 +10,13 @@ import { SelectFiles, DownloadFile } from '../../wailsjs/go/main/App';
 import { notify } from './notifications';
 import { loadEncryptionStatus } from './encryption';
 import { openUploadOptionsModal } from './modals/upload-options';
+import { openImportOptionsModal } from './modals/import-options';
 import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
 import {
     pushTransferStart,
     updateTransferProgress,
+    updateTransferName,
     markTransferDone,
 } from './notif-bell';
 
@@ -134,10 +136,63 @@ export function enqueueDownload(id: any, name: any, size: any) {
     if (state.activeDownloadId === null || state.activeDownloadId === undefined) startNextDownload();
 }
 
+// IMPORT_TRANSFER_ID keys the single aggregate bell row for a folder/archive
+// import. It is a string so it never collides with numeric per-file upload ids.
+const IMPORT_TRANSFER_ID = 'import';
+
+// flowBusy serializes import/upload flows: a second trigger (rapid menu clicks,
+// or a drop during an active import) is rejected rather than corrupting the
+// shared batch/transfer state.
+let flowBusy = false;
+const importProgressById = new Map<number, number>();
+// Per-file upload ids seen during the current import, so stray per-file rows
+// can be swept if a completion event is dropped.
+const importFileIds = new Set<number>();
+
+// refreshImportRow advances the aggregate import row as files finish.
+function refreshImportRow() {
+    const batch = state.importBatch;
+    if (!batch) return;
+    let partial = 0;
+    for (const value of importProgressById.values()) partial += value;
+    const finished = batch.done + batch.failed + partial;
+    const total = batch.total || 0;
+    const pct = total > 0 ? Math.min(100, (finished / total) * 100) : 100;
+    updateTransferProgress({ id: IMPORT_TRANSFER_ID, direction: 'up', progress: pct });
+    if (total > 0) {
+        updateTransferName({
+            id: IMPORT_TRANSFER_ID,
+            direction: 'up',
+            name: `Importing ${batch.done + batch.failed} / ${total}`,
+        });
+    }
+}
+
+// sweepImportFileRows finalizes any import per-file rows still marked active
+// (e.g. if a completion event was dropped). markTransferDone is idempotent, so
+// rows that already ended (done/failed) are left untouched.
+function sweepImportFileRows() {
+    for (const fid of importFileIds) {
+        markTransferDone({ id: fid, direction: 'up', status: 'done' });
+    }
+    importFileIds.clear();
+}
+
 export function setupUploadProgress() {
     if (!window.runtime?.EventsOn) return;
 
     window.runtime.EventsOn("upload_start", (id: any, name: any, size: any, parentId: any) => {
+        // During an import, also show a per-file row; the aggregate row owns the
+        // batch counters and the overall progress.
+        if (state.importBatch) {
+            const fid = Number(id);
+            if (Number.isFinite(fid)) {
+                importFileIds.add(fid);
+                pushTransferStart({ id: fid, direction: 'up', name: String(name ?? ""), total: Number(size) || 0 });
+            }
+            return;
+        }
+
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         const filename = String(name ?? "");
@@ -170,6 +225,13 @@ export function setupUploadProgress() {
         if (!Number.isFinite(value)) return;
         const clamped = Math.max(0, Math.min(100, value));
 
+        if (state.importBatch) {
+            importProgressById.set(uploadId, clamped / 100);
+            updateTransferProgress({ id: uploadId, direction: 'up', progress: clamped });
+            refreshImportRow();
+            return;
+        }
+
         const item = state.uploadTransfers.get(uploadId);
         if (!item) return;
         item.progress = clamped;
@@ -179,6 +241,14 @@ export function setupUploadProgress() {
     window.runtime.EventsOn("upload_complete", (id: any, name: any) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
+        if (state.importBatch) {
+            importProgressById.delete(uploadId);
+            importFileIds.delete(uploadId);
+            state.importBatch.done += 1;
+            markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+            refreshImportRow();
+            return;
+        }
         const item = state.uploadTransfers.get(uploadId);
         if (!item) {
             state.uploadTransfers.set(uploadId, {
@@ -208,8 +278,18 @@ export function setupUploadProgress() {
     window.runtime.EventsOn("upload_error", (id: any, name: any) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
+        if (state.importBatch) {
+            importProgressById.delete(uploadId);
+            importFileIds.delete(uploadId);
+            state.importBatch.failed += 1;
+            pushTransferStart({ id: uploadId, direction: 'up', name: String(name ?? "") || 'Upload failed', total: 0 });
+            markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
+            refreshImportRow();
+            return;
+        }
         const filename = String(name ?? "");
 
+        const hadItem = state.uploadTransfers.has(uploadId);
         const item = state.uploadTransfers.get(uploadId) || {
             id: uploadId,
             name: filename,
@@ -226,46 +306,221 @@ export function setupUploadProgress() {
         const batchFinished = Boolean(state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total);
         if (batchFinished) state.uploadBatch = null;
 
+        if (!hadItem) {
+            pushTransferStart({ id: uploadId, direction: 'up', name: filename || 'Upload failed', total: 0 });
+        }
         markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
 
         if (batchFinished) {
             window.refreshFiles();
         }
     });
+
+    window.runtime.EventsOn("import_start", () => {
+        importProgressById.clear();
+        importFileIds.clear();
+        state.importBatch = { total: 0, done: 0, failed: 0 };
+        pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Preparing import…', total: 0 });
+    });
+
+    // Live phase label: "Extracting backup.zip", "Adding Photos", etc.
+    window.runtime.EventsOn("import_progress", (info: any) => {
+        if (!state.importBatch) return;
+        const label = String(info?.label ?? "").trim();
+        if (label) updateTransferName({ id: IMPORT_TRANSFER_ID, direction: 'up', name: label });
+    });
+
+    // Folders done, uploads begin: now we know the real file count.
+    window.runtime.EventsOn("import_uploading", (info: any) => {
+        if (!state.importBatch) return;
+        const files = Number(info?.files) || 0;
+        state.importBatch.total = files;
+        importProgressById.clear();
+        updateTransferName({
+            id: IMPORT_TRANSFER_ID,
+            direction: 'up',
+            name: files > 0 ? `Importing 0 / ${files}` : 'Finishing import…',
+        });
+        refreshImportRow();
+    });
+
+    window.runtime.EventsOn("import_complete", (info: any) => {
+        const failedUploads = Math.max(Number(info?.failed) || 0, state.importBatch?.failed || 0);
+        const uploaded = Number(info?.uploaded) || 0;
+        const oversize = Number(info?.oversize) || 0;
+        const errorCount = Array.isArray(info?.errors) ? info.errors.length : 0;
+        const status = failedUploads > 0 ? 'failed' : 'done';
+        if (!state.importBatch) {
+            pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import completed', total: uploaded + failedUploads });
+        }
+        updateTransferName({
+            id: IMPORT_TRANSFER_ID,
+            direction: 'up',
+            name: uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`,
+        });
+        markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status });
+        state.importBatch = null;
+        importProgressById.clear();
+        sweepImportFileRows();
+
+        if (typeof window.refreshFiles === 'function') window.refreshFiles();
+
+        if (failedUploads > 0 || oversize > 0 || errorCount > 0) {
+            const bits: string[] = [];
+            if (failedUploads > 0) bits.push(`${failedUploads} failed`);
+            if (oversize > 0) bits.push(`${oversize} skipped (too large)`);
+            if (errorCount > 0) bits.push(`${errorCount} ${errorCount === 1 ? 'item' : 'items'} had errors`);
+            notify({
+                level: failedUploads > 0 ? 'error' : 'info',
+                title: `Imported ${uploaded === 1 ? '1 file' : `${uploaded} files`}`,
+                body: bits.join('  ·  '),
+            });
+        }
+    });
 }
 
+// uploadWithParentID opens the file picker and routes the selection through the
+// shared import flow (kept as the name the context menu and window.selectFile
+// already call).
 export async function uploadWithParentID(parentID: any) {
     const paths = await SelectFiles();
+    await runImportFlow(parentID, paths);
+}
+
+// importFolderWithParentID opens the directory picker and imports the chosen
+// folder tree into parentID.
+export async function importFolderWithParentID(parentID: any) {
+    const selectFolder = window?.go?.main?.App?.SelectFolder;
+    if (typeof selectFolder !== "function") {
+        notifyBindingsMissing("SelectFolder");
+        return;
+    }
+    let dir = "";
+    try {
+        dir = String((await selectFolder()) || "");
+    } catch (err) {
+        console.error("SelectFolder failed:", err);
+        notify({ level: 'error', title: 'Could not open the folder picker', body: String(err) });
+        return;
+    }
+    if (!dir) return;
+    await runImportFlow(parentID, [dir]);
+}
+
+// runImportFlow is the single entry point for any selection (file picker, folder
+// picker, or drag-drop). A plain-files selection keeps the original per-file
+// upload UX; a selection containing folders or archives goes through the import
+// dialog and the aggregated import flow.
+async function runImportFlow(parentID: any, paths: any) {
     if (!paths || !paths.length) return;
+    if (flowBusy) {
+        notify({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish, then start another.' });
+        return;
+    }
+    flowBusy = true;
+    try {
+        const onPersonal = state.activeChannel?.kind === 'personal';
+        if (onPersonal) {
+            // Refresh the snapshot so the modal's follow-up steps see truth.
+            await loadEncryptionStatus();
+        }
 
-    // Decide whether to encrypt this batch.
-    const onPersonal = state.activeChannel?.kind === 'personal';
-    let encrypt = false;
-    if (onPersonal) {
-        // Refresh the snapshot so the modal's follow-up steps see truth.
-        await loadEncryptionStatus();
+        const planFn = window?.go?.main?.App?.PlanImport;
+        const importFn = window?.go?.main?.App?.ImportPaths;
+        if (typeof planFn !== "function" || typeof importFn !== "function") {
+            notifyBindingsMissing(typeof planFn !== "function" ? "PlanImport" : "ImportPaths");
+            return;
+        }
 
-        const choice: any = await openUploadOptionsModal({ count: paths.length });
+        let plan: any = null;
+        try {
+            plan = await planFn(paths, false, false);
+        } catch (err) {
+            console.error("PlanImport failed:", err);
+        }
+        if (!plan) {
+            // Don't fall through to the plain uploader: a directory path would be
+            // sent to UploadToDriveFS and fail. Surface it and stop.
+            notify({ level: 'error', title: 'Could not read the selection', body: 'Please try again.' });
+            return;
+        }
+
+        const complex = Number(plan.folders) > 0 || Number(plan.archives) > 0;
+
+        if (!complex) {
+            // Plain files: the original flow (per-file rows, encrypt-options modal).
+            let encrypt = false;
+            if (onPersonal) {
+                const choice: any = await openUploadOptionsModal({ count: plan.files || paths.length });
+                if (!choice) return;
+                encrypt = !!choice.encrypt;
+                if (encrypt && !state.encryption.passwordRemembered) {
+                    const ok = state.encryption.passwordSet
+                        ? await openEncryptionPasswordModal()
+                        : await openEncryptionSetupModal();
+                    if (!ok) return;
+                }
+            }
+            await uploadPathsBatch(paths, parentID, encrypt);
+            return;
+        }
+
+        // Folders/archives: confirm via the import dialog.
+        const choice = await openImportOptionsModal({
+            plan,
+            personal: onPersonal,
+            hasArchives: Number(plan.archives) > 0,
+            replan: (encrypt: boolean, extract: boolean) => planFn(paths, encrypt, extract),
+        });
         if (!choice) return;
-        encrypt = !!choice.encrypt;
 
+        const { encrypt, extract } = choice;
         if (encrypt && !state.encryption.passwordRemembered) {
             const ok = state.encryption.passwordSet
                 ? await openEncryptionPasswordModal()
                 : await openEncryptionSetupModal();
             if (!ok) return;
         }
-    }
-    // Shared drives skip the modal entirely — encryption is personal-only
-    // and we don't want to surface a control that silently degrades.
 
+        state.activeTransfer = "upload";
+        let importThrew = false;
+        try {
+            await importFn(paths, parentID || "", encrypt, extract);
+        } catch (err) {
+            importThrew = true;
+            console.error("Import failed:", err);
+            notify({ level: 'error', title: 'Import failed', body: String(err) });
+            if (!state.importBatch) {
+                pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
+            }
+        } finally {
+            if (state.activeTransfer === "upload") state.activeTransfer = null;
+            // import_complete is authoritative; if it never arrived (error or a
+            // dropped event), finalize the aggregate row here with the right status.
+            if (state.importBatch) {
+                markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importThrew ? 'failed' : 'done' });
+                state.importBatch = null;
+            }
+            if (importThrew) {
+                markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
+            }
+            importProgressById.clear();
+            sweepImportFileRows();
+        }
+    } finally {
+        flowBusy = false;
+    }
+}
+
+// uploadPathsBatch runs the classic per-file upload (one bell row per file).
+async function uploadPathsBatch(paths: any, parentID: any, encrypt: boolean) {
     state.activeTransfer = "upload";
     state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
 
     const nextTransfers = new Map();
     for (let i = 0; i < paths.length; i++) {
         const p = String(paths[i] ?? "");
-        const name = p ? p.split(/[/\\\\]/).pop() : "Untitled";
+        const name = p ? p.split(/[/\\]/).pop() : "Untitled";
         nextTransfers.set(i, {
             id: i,
             name,
@@ -282,29 +537,103 @@ export async function uploadWithParentID(parentID: any) {
         state.activeTransfer = null;
         state.uploadBatch = null;
         state.uploadTransfers = new Map();
-        notify({
-            level: 'error',
-            title: 'Upload bindings missing',
-            body: 'UploadToDriveFS is missing in the backend. Rebuild the app (wails dev/build) and try again.',
-        });
+        notifyBindingsMissing("UploadToDriveFS");
         return;
     }
 
+    let uploadThrew = false;
     try {
         const parentIDs = paths.map(() => parentID || "");
         await upload(paths, parentIDs, encrypt);
     } catch (err) {
+        uploadThrew = true;
         console.error("Upload failed:", err);
+        notify({ level: 'error', title: 'Upload failed', body: String(err) });
     } finally {
         if (state.activeTransfer === "upload") state.activeTransfer = null;
-        // Safety sweep: by the time UploadToDriveFS resolves, every upload
-        // in the batch has terminated on the backend. If a Wails event was
-        // dropped, an entry may still be stuck in 'active' at 100% in the
-        // bell. markTransferDone is idempotent against terminal entries,
-        // so this only flips orphaned 'active' rows.
-        for (const [uploadId] of state.uploadTransfers) {
-            markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+        // Safety sweep: by the time UploadToDriveFS resolves, every upload in
+        // the batch has terminated on the backend. If a Wails event was dropped,
+        // an entry may still be stuck 'active' at 100% in the bell.
+        // markTransferDone is idempotent against terminal entries.
+        for (const [uploadId, item] of state.uploadTransfers) {
+            if (uploadThrew && item?.state !== 'done' && item?.state !== 'failed') {
+                pushTransferStart({ id: uploadId, direction: 'up', name: item?.name || 'Upload failed', total: item?.size || 0 });
+                markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
+            } else {
+                markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+            }
         }
         state.uploadBatch = null;
     }
+}
+
+function notifyBindingsMissing(name: string) {
+    notify({
+        level: 'error',
+        title: 'Upload bindings missing',
+        body: `${name} is missing in the backend. Rebuild the app (wails dev/build) and try again.`,
+    });
+}
+
+// setupUploadMenu wires the Upload button's popover (Files / Folder). The OS
+// dialogs cannot select files and folders together, so the entry point splits
+// them; drag-drop covers truly mixed selections.
+export function setupUploadMenu() {
+    const btn = document.getElementById('upload-btn');
+    const menu = document.getElementById('upload-menu');
+    if (!btn || !menu) return;
+    const filesItem = document.getElementById('upload-menu-files');
+    const folderItem = document.getElementById('upload-menu-folder');
+
+    const close = (returnFocus = false) => {
+        menu.style.display = 'none';
+        btn.setAttribute('aria-expanded', 'false');
+        if (returnFocus) (btn as HTMLElement).focus();
+    };
+    const open = () => {
+        menu.style.display = 'flex';
+        btn.setAttribute('aria-expanded', 'true');
+        (filesItem as HTMLElement | null)?.focus();
+    };
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu.style.display === 'none') open(); else close();
+    });
+    document.addEventListener('click', (e) => {
+        if (menu.style.display !== 'none' && e.target !== btn && !menu.contains(e.target as Node)) close();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && menu.style.display !== 'none') close(true);
+    });
+    // Arrow-key navigation between the menu items.
+    menu.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        e.preventDefault();
+        const items = [filesItem, folderItem].filter(Boolean) as HTMLElement[];
+        if (!items.length) return;
+        const idx = items.indexOf(document.activeElement as HTMLElement);
+        const next = e.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length;
+        items[next].focus();
+    });
+
+    filesItem?.addEventListener('click', () => { close(); void uploadWithParentID(state.currentFolderId); });
+    folderItem?.addEventListener('click', () => { close(); void importFolderWithParentID(state.currentFolderId); });
+}
+
+// setupFileDrop handles native OS file drops (mixed files + folders) forwarded
+// by the Go side. The drop target is the current folder.
+export function setupFileDrop() {
+    if (!window.runtime?.EventsOn) return;
+    window.runtime.EventsOn('files_dropped', (payload: any) => {
+        const paths = Array.isArray(payload) ? payload : payload?.paths;
+        if (!Array.isArray(paths) || !paths.length) return;
+        if (!state.activeChannel) return; // ignore drops before a drive is open
+        const x = Number(payload?.x);
+        const y = Number(payload?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const target = document.elementFromPoint(x, y);
+        if (!target || !(target as HTMLElement).closest('#file-list')) return;
+        void runImportFlow(state.currentFolderId, paths);
+    });
 }

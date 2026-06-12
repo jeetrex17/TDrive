@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
@@ -14,15 +15,15 @@ import (
 
 // On-wire layout written at the start of every encrypted file:
 //
-//   magic(4)       "TDE1"
-//   flags(1)       reserved, currently 0
-//   chunk_log2(1)  log2 of the plaintext chunk size; v1 = 16 (= 64 KiB)
-//   file_salt(16)  random per-file salt for HKDF
-//   nonce_prefix(20) random per-file nonce prefix; per-chunk nonce =
-//                  prefix ‖ counter_be32 (last bit of counter = "final"
-//                  marker so a truncated stream fails authentication)
-//   plaintext_size(8) little-endian; informational, used as a sanity
-//                  check vs. what we actually decrypt
+//	magic(4)       "TDE1"
+//	flags(1)       reserved, currently 0
+//	chunk_log2(1)  log2 of the plaintext chunk size; v1 = 16 (= 64 KiB)
+//	file_salt(16)  random per-file salt for HKDF
+//	nonce_prefix(20) random per-file nonce prefix; per-chunk nonce =
+//	               prefix ‖ counter_be32 (last bit of counter = "final"
+//	               marker so a truncated stream fails authentication)
+//	plaintext_size(8) little-endian; informational, used as a sanity
+//	               check vs. what we actually decrypt
 //
 // Total: 50 bytes header + 16 bytes AEAD tag per chunk.
 const (
@@ -32,6 +33,7 @@ const (
 	chunkSizePlain    = 1 << chunkSizeLog2 // 64 KiB
 	streamFileSaltLen = 16
 	streamPrefixLen   = 20
+	streamTagLen      = chacha20poly1305.Overhead // 16, AEAD tag per chunk
 	finalChunkBit     = uint32(1) << 31
 	hkdfInfo          = "tdrive/file/v1"
 )
@@ -73,8 +75,8 @@ func EncryptStream(src io.Reader, dst io.Writer, masterKey []byte, plaintextSize
 
 	header := make([]byte, streamHeaderLen)
 	copy(header[0:4], streamMagic)
-	header[4] = 0                     // flags
-	header[5] = byte(chunkSizeLog2)   // chunk size
+	header[4] = 0                   // flags
+	header[5] = byte(chunkSizeLog2) // chunk size
 	copy(header[6:6+streamFileSaltLen], salt)
 	copy(header[22:22+streamPrefixLen], noncePrefix)
 	binary.LittleEndian.PutUint64(header[42:50], uint64(plaintextSize))
@@ -107,6 +109,27 @@ func EncryptStream(src io.Reader, dst io.Writer, masterKey []byte, plaintextSize
 			return nil
 		}
 	}
+}
+
+// CiphertextSize returns the exact number of bytes EncryptStream writes for a
+// plaintext of the given size: the fixed header plus a 16-byte tag per 64 KiB
+// chunk (including the always-present final chunk). Callers use it to check the
+// real upload size against Telegram's per-file limit before encrypting. Returns
+// 0 for negative input.
+func CiphertextSize(plaintextSize int64) int64 {
+	if plaintextSize < 0 {
+		return 0
+	}
+	chunks := plaintextSize/chunkSizePlain + 1
+	base := int64(streamHeaderLen) + plaintextSize
+	if base < plaintextSize {
+		return math.MaxInt64
+	}
+	maxTags := (math.MaxInt64 - base) / int64(streamTagLen)
+	if chunks > maxTags {
+		return math.MaxInt64
+	}
+	return base + chunks*int64(streamTagLen)
 }
 
 // DecryptStream is the inverse. It returns the plaintext size declared

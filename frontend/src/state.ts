@@ -47,6 +47,9 @@ export interface State {
     transferClearEl: HTMLElement | null;
     uploadTransfers: Map<string | number, any>;
     uploadBatch: { total: number; done: number; failed: number } | null;
+    // Aggregate progress for a folder/archive import. When set, per-file upload
+    // events feed this single bell row instead of spawning one row per file.
+    importBatch: { total: number; done: number; failed: number } | null;
 
     dragState: any;
     dragOverEl: HTMLElement | null;
@@ -78,7 +81,7 @@ export interface State {
 
     encryption: EncryptionState;
 
-    virtualView: "orphaned" | "photos" | null;
+    virtualView: "photos" | null;
 
     pendingFolderOps: Map<string, { parentId: string; name: string }>;
 
@@ -114,6 +117,7 @@ export const state: State = {
     transferClearEl: null,
     uploadTransfers: new Map(),
     uploadBatch: null,
+    importBatch: null,
 
     dragState: null,
     dragOverEl: null,

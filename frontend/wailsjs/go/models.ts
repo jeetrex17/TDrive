@@ -104,6 +104,35 @@ export namespace backend {
 
 }
 
+export namespace file {
+
+	export class ImportPlan {
+	    files: number;
+	    folders: number;
+	    bytes: number;
+	    oversize: number;
+	    archives: number;
+	    maxBytes: number;
+	    errors: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new ImportPlan(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.files = source["files"];
+	        this.folders = source["folders"];
+	        this.bytes = source["bytes"];
+	        this.oversize = source["oversize"];
+	        this.archives = source["archives"];
+	        this.maxBytes = source["maxBytes"];
+	        this.errors = source["errors"];
+	    }
+	}
+
+}
+
 export namespace main {
 	
 	export class ChannelInfo {
@@ -293,4 +322,3 @@ export namespace main {
 	}
 
 }
-

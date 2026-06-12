@@ -144,6 +144,7 @@ func (g *Gotd) SelfProfile(ctx context.Context) (UserProfile, error) {
 			FirstName: u.FirstName,
 			LastName:  u.LastName,
 			Username:  u.Username,
+			Premium:   u.Premium,
 		}
 
 		photo, ok := u.Photo.(*tg.UserProfilePhoto)

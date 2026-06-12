@@ -104,9 +104,9 @@ func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, e
 // would otherwise look "fine" — their immediate parent C is alive, but
 // the chain is broken at A.
 //
-// Step 4 makes DeleteFolder only emit rmdir, so files inside (at any depth)
-// become orphans rather than being destroyed. Step 5 will let users move
-// them out of the bucket.
+// New folder deletes tombstone descendants before rmdir; this reader is kept
+// for legacy or externally-corrupted histories where a file's parent chain is
+// already broken.
 func OrphanedFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
 	const q = `
 WITH RECURSIVE chain(file_msg_id, cur_id, broken) AS (
@@ -211,6 +211,101 @@ func ListAllFolders(db *sql.DB, channelID int64) ([]FolderSlim, error) {
 		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID); err != nil {
 			return nil, err
 		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func FolderSubtreeFolders(db *sql.DB, channelID int64, folderID string) ([]FolderSlim, error) {
+	folderID = strings.TrimSpace(folderID)
+	if folderID == "" {
+		return nil, fmt.Errorf("projection: invalid folder id")
+	}
+	if !FolderExists(db, channelID, folderID) {
+		return nil, fmt.Errorf("projection: folder not found")
+	}
+
+	const q = `
+WITH RECURSIVE descendants(id, name, parent_id, depth, path) AS (
+    SELECT id, name, parent_id, 0, ',' || id || ','
+    FROM folders
+    WHERE channel_id = ?1 AND id = ?2 AND tombstoned = 0
+
+    UNION ALL
+
+    SELECT f.id, f.name, f.parent_id, d.depth + 1, d.path || f.id || ','
+    FROM folders f
+    JOIN descendants d ON f.parent_id = d.id
+    WHERE f.channel_id = ?1
+      AND f.tombstoned = 0
+      AND instr(d.path, ',' || f.id || ',') = 0
+)
+SELECT id, name, parent_id
+FROM descendants
+ORDER BY depth DESC, name
+`
+	rows, err := db.Query(q, channelID, folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []FolderSlim
+	for rows.Next() {
+		var f FolderSlim
+		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+func FolderSubtreeFiles(db *sql.DB, channelID int64, folderID string) ([]FileSlim, error) {
+	folderID = strings.TrimSpace(folderID)
+	if folderID == "" {
+		return nil, fmt.Errorf("projection: invalid folder id")
+	}
+	if !FolderExists(db, channelID, folderID) {
+		return nil, fmt.Errorf("projection: folder not found")
+	}
+
+	const q = `
+WITH RECURSIVE descendants(id, path) AS (
+    SELECT id, ',' || id || ','
+    FROM folders
+    WHERE channel_id = ?1 AND id = ?2 AND tombstoned = 0
+
+    UNION ALL
+
+    SELECT f.id, d.path || f.id || ','
+    FROM folders f
+    JOIN descendants d ON f.parent_id = d.id
+    WHERE f.channel_id = ?1
+      AND f.tombstoned = 0
+      AND instr(d.path, ',' || f.id || ',') = 0
+)
+SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size
+FROM files
+WHERE channel_id = ?1
+  AND tombstoned = 0
+  AND parent_id IN (SELECT id FROM descendants)
+ORDER BY upload_time DESC, msg_id DESC
+`
+	rows, err := db.Query(q, channelID, folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []FileSlim
+	for rows.Next() {
+		var f FileSlim
+		var enc int
+		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
+			return nil, err
+		}
+		f.Encrypted = enc == 1
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -426,6 +521,32 @@ func FolderSiblingHasName(db *sql.DB, channelID int64, parentID, name string) (b
 		return false, err
 	}
 	return true, nil
+}
+
+// NextFreeFolderName returns name if no live folder by that name exists under
+// parentID; otherwise the first available "name (k)" for k = 2, 3, .... Folder
+// and archive import use this so a colliding import becomes a new sibling copy
+// instead of merging into the existing folder. channelID/parentID semantics
+// match FolderSiblingHasName.
+func NextFreeFolderName(db *sql.DB, channelID int64, parentID, name string) (string, error) {
+	taken, err := FolderSiblingHasName(db, channelID, parentID, name)
+	if err != nil {
+		return "", err
+	}
+	if !taken {
+		return name, nil
+	}
+	for k := 2; k <= 10000; k++ {
+		candidate := fmt.Sprintf("%s (%d)", name, k)
+		taken, err := FolderSiblingHasName(db, channelID, parentID, candidate)
+		if err != nil {
+			return "", err
+		}
+		if !taken {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("projection: no free name for %q under %q", name, parentID)
 }
 
 func LookupFileName(db *sql.DB, channelID int64, msgID int64) string {

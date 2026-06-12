@@ -33,6 +33,19 @@ async function deleteFileWithPasswordRetry(id: any) {
     return res;
 }
 
+// Folder delete also rejects with "encryption password required" when the
+// subtree contains encrypted files and the vault is locked. Mirror the file
+// path: prompt for the password once and retry.
+async function deleteFolderWithPasswordRetry(id: any) {
+    let res = await deleteFolder(String(id));
+    if (typeof res === "string" && res.startsWith("Error") && /encryption password required/i.test(res)) {
+        const ok = await openEncryptionPasswordModal();
+        if (!ok) return "Error: Encryption password required";
+        res = await deleteFolder(String(id));
+    }
+    return res;
+}
+
 export function openDeleteModal(target: any) {
     const modal = document.getElementById("delete-modal");
     const title = document.getElementById("delete-modal-title");
@@ -65,9 +78,9 @@ export function openDeleteModal(target: any) {
             ? ` ${skipped} item(s) you don't own will be skipped.`
             : "";
         if (folders > 0 && files > 0) {
-            subtitle.textContent = `This will hide ${folders} folder(s). Files inside those folders are not deleted. The ${files} selected file(s) will be removed from Telegram.${skippedNote}`;
+            subtitle.textContent = `This will delete ${folders} folder(s), all files inside them, and ${files} selected file(s) from Telegram. This action can't be undone.${skippedNote}`;
         } else if (folders > 0) {
-            subtitle.textContent = `This will hide ${folders} folder(s). Files inside become orphaned and are not deleted.${skippedNote}`;
+            subtitle.textContent = `This will delete ${folders} folder(s) and all files inside them from Telegram. This action can't be undone.${skippedNote}`;
         } else if (files > 0) {
             subtitle.textContent = `This will remove ${files} file(s) from your Telegram channel. The action can't be undone.${skippedNote}`;
         } else {
@@ -76,8 +89,8 @@ export function openDeleteModal(target: any) {
         confirmBtn.textContent = total === 0 ? "Close" : "Delete";
     } else if (target?.type === "folder") {
         title.textContent = name ? `Delete folder "${name}"?` : "Delete folder?";
-        subtitle.textContent = "This hides the folder only. Files inside become orphaned and are not deleted.";
-        confirmBtn.textContent = "Delete folder";
+        subtitle.textContent = "This will delete the folder and every file inside it from Telegram. This action can't be undone.";
+        confirmBtn.textContent = "Delete folder and files";
     } else {
         title.textContent = name ? `Delete "${name}"?` : "Delete file?";
         subtitle.textContent = "This will remove the file from your Telegram channel. The action can't be undone.";
@@ -138,7 +151,7 @@ export function setupDeleteModal() {
 
                 for (const folder of folders) {
                     try {
-                        const res = await deleteFolder(String(folder.id));
+                        const res = await deleteFolderWithPasswordRetry(folder.id);
                         if (typeof res === "string" && res.startsWith("Error")) {
                             failures.push({ item: folder, error: res.replace(/^Error:?\s*/i, '') });
                             continue;
@@ -183,7 +196,7 @@ export function setupDeleteModal() {
                 window.refreshFiles();
             } else {
                 const res = target.type === "folder"
-                    ? await deleteFolder(String(target.id))
+                    ? await deleteFolderWithPasswordRetry(target.id)
                     : await deleteFileWithPasswordRetry(target.id);
 
                 dismissNotification(progressId);

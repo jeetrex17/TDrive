@@ -25,11 +25,10 @@ Shared drives are usable now, but still new. You can:
 - Upload, download, rename, move, and delete files.
 - Create, rename, move, and delete folders.
 - See who uploaded files.
-- Recover files from deleted folders through the Orphaned view.
 
 Treat invite links like passwords. Anyone with a normal invite link can join unless you revoke it. If you need tighter control, create an approval-required link.
 
-Folder structure inside a shared drive is collaborative: any member can create, rename, move, or delete folders. Deleting a folder does not delete the files inside it; those files show up in the Orphaned view.
+Folder structure inside a shared drive is collaborative: any member can create, rename, move, or delete folders. Deleting a folder also deletes the files inside it, after a confirmation warning.
 
 ## Encryption
 
