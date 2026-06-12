@@ -10,6 +10,14 @@ export function ApproveJoinRequest(arg1, arg2) {
   return window['go']['main']['App']['ApproveJoinRequest'](arg1, arg2);
 }
 
+export function CancelDownload() {
+  return window['go']['main']['App']['CancelDownload']();
+}
+
+export function CancelUpload() {
+  return window['go']['main']['App']['CancelUpload']();
+}
+
 export function ChangeEncryptionPassword(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChangeEncryptionPassword'](arg1, arg2, arg3);
 }
@@ -208,6 +216,10 @@ export function SendHint(arg1) {
 
 export function SetActiveChannel(arg1) {
   return window['go']['main']['App']['SetActiveChannel'](arg1);
+}
+
+export function SetFileDropEnabled(arg1) {
+  return window['go']['main']['App']['SetFileDropEnabled'](arg1);
 }
 
 export function SumbitCode(arg1) {

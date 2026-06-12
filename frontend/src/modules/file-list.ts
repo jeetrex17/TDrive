@@ -3,7 +3,7 @@
 import { state, resetFolderCaches } from '../state';
 import { icons } from '../constants';
 import { escapeHtml, splitNameAndExt, formatDate, formatBytes } from '../utils';
-import { clearSelection, handleRowSelection, selectRow } from './selection';
+import { clearSelection, handleRowSelection, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
@@ -16,6 +16,40 @@ import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { enqueueDownload } from './transfers';
 import { populateUploaderChips, uploaderChipHTML } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
+
+// dragItemsFor returns the items to move for a drag started on `row`: the whole
+// current selection when the row is part of a multi-selection, else just the
+// row's own item.
+function dragItemsFor(row: HTMLElement, fallback: any): any[] {
+    const key = getRowKey(row);
+    const sel = state.selectedItems;
+    if (key && sel.has(key) && sel.size > 1) {
+        return Array.from(sel.values());
+    }
+    return [fallback];
+}
+
+// startDrag begins an internal drag-to-move, resolving multi-select and the set
+// of folders that can't be a drop target (a dragged folder or its own subtree).
+function startDrag(row: HTMLElement, fallback: any, parentId: string) {
+    const items = dragItemsFor(row, fallback);
+    const folderIds = items
+        .filter((i: any) => i && i.type === "folder")
+        .map((i: any) => String(i.id));
+    beginRowDrag(row, items, parentId, new Set<string>(folderIds));
+    if (folderIds.length) {
+        refreshFolderIndex()
+            .then((index: any) => {
+                if (!state.dragState || state.dragState.row !== row) return;
+                const blocked = new Set<string>(folderIds);
+                for (const fid of folderIds) {
+                    for (const d of collectDescendants(fid, index.children)) blocked.add(d);
+                }
+                state.dragState.blocked = blocked;
+            })
+            .catch(() => {});
+    }
+}
 
 // canOwnerActOnFile returns true when the current user is allowed to
 // rename/delete the given file. In personal drives it's always true (you
@@ -236,25 +270,13 @@ export function refreshFiles() {
                         }
 
                         const folderID = String(folder.id || row.dataset.id || "");
-                        beginRowDrag(row, {
+                        startDrag(row, {
                             type: "folder",
                             id: folderID,
                             name: folder.name || row.dataset.name || "Folder",
                             parentId: requestedFolderId,
-                            blocked: folderID ? new Set([folderID]) : new Set(),
-                        });
-
-                        if (folderID) {
-                            refreshFolderIndex()
-                                .then((index) => {
-                                    if (!state.dragState || state.dragState.type !== "folder") return;
-                                    if (String(state.dragState.id || "") !== folderID) return;
-                                    const blocked = collectDescendants(folderID, index.children);
-                                    blocked.add(folderID);
-                                    state.dragState.blocked = blocked;
-                                })
-                                .catch(() => {});
-                        }
+                            row,
+                        }, requestedFolderId);
                     });
                     folderNameEl.addEventListener("dragend", endRowDrag);
                 }
@@ -356,14 +378,15 @@ export function refreshFiles() {
                             } catch {}
                         }
 
-                        beginRowDrag(row, {
+                        startDrag(row, {
                             type: "file",
                             id: Number(file.id),
                             name: file.name || row.dataset.name || "File",
                             size: Number(file.size || row.dataset.size || 0),
                             parentId: requestedFolderId,
                             source: file.source || row.dataset.source || "fs",
-                        });
+                            row,
+                        }, requestedFolderId);
                     });
                     nameEl.addEventListener("dragend", endRowDrag);
                 }

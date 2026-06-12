@@ -627,6 +627,21 @@ func (s *Service) Meta(channelID int64, msgID int, name string, size int64, pare
 	return err
 }
 
+// requireEncryptedFileKey demands the encryption key before a mutation
+// (rename/move/delete) on an encrypted file, so only someone who can decrypt it
+// can change it. A locked vault returns the "encryption password required" error
+// the frontend prompts on. An unknown encryption state does not block.
+func (s *Service) requireEncryptedFileKey(channelID int64, msgID int) error {
+	encrypted, _, _, err := projection.FileEncryptionMeta(s.DB, channelID, int64(msgID))
+	if err != nil {
+		return nil
+	}
+	if _, err := s.requireEncryptionKey(encrypted); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newName string) error {
 	if err := s.ready(); err != nil {
 		return err
@@ -640,6 +655,9 @@ func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newNam
 	}
 	if !projection.FileExists(s.DB, channelID, int64(msgID)) {
 		return fmt.Errorf("File not found")
+	}
+	if err := s.requireEncryptedFileKey(channelID, msgID); err != nil {
+		return err
 	}
 	if err := s.requireOwnerForShared(ctx, channelID, msgID, "rename"); err != nil {
 		return err
@@ -672,6 +690,9 @@ func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParen
 	if cur == parent {
 		return fmt.Errorf("File is already in this folder")
 	}
+	if err := s.requireEncryptedFileKey(channelID, msgID); err != nil {
+		return err
+	}
 	if err := s.requireOwnerForShared(ctx, channelID, msgID, "move"); err != nil {
 		return err
 	}
@@ -695,10 +716,8 @@ func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) error 
 		return fmt.Errorf("File not found")
 	}
 
-	if encrypted, _, _, err := projection.FileEncryptionMeta(s.DB, channelID, int64(msgID)); err == nil {
-		if _, err := s.requireEncryptionKey(encrypted); err != nil {
-			return err
-		}
+	if err := s.requireEncryptedFileKey(channelID, msgID); err != nil {
+		return err
 	}
 	if err := s.requireOwnerForShared(ctx, channelID, msgID, "delete"); err != nil {
 		return err

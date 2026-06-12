@@ -8,6 +8,10 @@ export function ActiveChannelID():Promise<number>;
 
 export function ApproveJoinRequest(arg1:number,arg2:number):Promise<void>;
 
+export function CancelDownload():Promise<void>;
+
+export function CancelUpload():Promise<void>;
+
 export function ChangeEncryptionPassword(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function CheckLoginStatus():Promise<boolean>;
@@ -107,6 +111,8 @@ export function SelectFolder():Promise<string>;
 export function SendHint(arg1:string):Promise<void>;
 
 export function SetActiveChannel(arg1:number):Promise<void>;
+
+export function SetFileDropEnabled(arg1:boolean):Promise<void>;
 
 export function SumbitCode(arg1:string):Promise<void>;
 

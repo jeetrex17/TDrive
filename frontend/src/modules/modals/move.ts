@@ -3,6 +3,7 @@
 import { state } from '../../state';
 import { icons } from '../../constants';
 import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
+import { callWithPasswordRetry } from './encryption-password';
 import { clearSelection } from '../selection';
 import { getFolderContents } from '../drive-data';
 import { buildFolderIndex, collectDescendants } from '../folder-index';
@@ -285,7 +286,7 @@ export function setupMoveModal() {
                 const files = items.filter((item: any) => item?.type === "file");
 
                 for (const folder of folders) {
-                    const res = await MoveFolder(String(folder.id), String(destId));
+                    const res = await callWithPasswordRetry(() => MoveFolder(String(folder.id), String(destId)));
                     if (typeof res === "string" && res.startsWith("Error")) {
                         throw new Error(humanizeBackendError(res));
                     }
@@ -293,19 +294,19 @@ export function setupMoveModal() {
 
                 for (const file of files) {
                     await ensureFileInTdriveSystem(file);
-                    const res = await MoveFile(Number(file.id), String(destId));
+                    const res = await callWithPasswordRetry(() => MoveFile(Number(file.id), String(destId)));
                     if (typeof res === "string" && res.startsWith("Error")) {
                         throw new Error(humanizeBackendError(res));
                     }
                 }
             } else if (target.type === "folder") {
-                const res = await MoveFolder(String(target.id), String(destId));
+                const res = await callWithPasswordRetry(() => MoveFolder(String(target.id), String(destId)));
                 if (typeof res === "string" && res.startsWith("Error")) {
                     throw new Error(humanizeBackendError(res));
                 }
             } else {
                 await ensureFileInTdriveSystem(target);
-                const res = await MoveFile(Number(target.id), String(destId));
+                const res = await callWithPasswordRetry(() => MoveFile(Number(target.id), String(destId)));
                 if (typeof res === "string" && res.startsWith("Error")) {
                     throw new Error(humanizeBackendError(res));
                 }

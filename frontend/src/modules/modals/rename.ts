@@ -2,6 +2,7 @@
 
 import { state } from '../../state';
 import { RenameFile, RenameFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
+import { callWithPasswordRetry } from './encryption-password';
 import { humanizeBackendError } from '../errors';
 
 async function ensureFileInTdriveSystem(target: any) {
@@ -108,10 +109,10 @@ export function setupRenameModal() {
         try {
             let res = "";
             if (state.pendingRenameTarget.type === "folder") {
-                res = await RenameFolder(String(state.pendingRenameTarget.id), nextName);
+                res = await callWithPasswordRetry(() => RenameFolder(String(state.pendingRenameTarget.id), nextName));
             } else {
                 await ensureFileInTdriveSystem(state.pendingRenameTarget);
-                res = await RenameFile(Number(state.pendingRenameTarget.id), nextName);
+                res = await callWithPasswordRetry(() => RenameFile(Number(state.pendingRenameTarget.id), nextName));
             }
 
             if (typeof res === "string" && res.startsWith("Error")) {
