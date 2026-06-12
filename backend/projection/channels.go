@@ -45,7 +45,8 @@ func InsertChannel(db *sql.DB, c Channel) error {
 }
 
 // DeleteChannel removes the channel row plus everything scoped to it:
-// replay_log, replay_log_tamper, folders, files, backfill_progress.
+// replay_log, replay_log_tamper, folders, files, file_parts,
+// pending_part_cleanup, backfill_progress.
 //
 // Used by LeaveSharedDrive. Wraps the cascade in a single transaction so a
 // crash mid-delete leaves the channel intact rather than half-deleted.
@@ -61,6 +62,8 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 
 	for _, q := range []string{
 		`DELETE FROM files WHERE channel_id = ?`,
+		`DELETE FROM file_parts WHERE channel_id = ?`,
+		`DELETE FROM pending_part_cleanup WHERE channel_id = ?`,
 		`DELETE FROM folders WHERE channel_id = ?`,
 		`DELETE FROM replay_log WHERE channel_id = ?`,
 		`DELETE FROM replay_log_tamper WHERE channel_id = ?`,

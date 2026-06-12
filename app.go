@@ -237,6 +237,16 @@ func (a *App) endUpload() {
 	a.transferMu.Unlock()
 }
 
+// sweepOrphanParts retries deleting the part bodies of already-deleted multipart
+// files whose cleanup didn't finish. It only touches parts behind a tombstone,
+// never an upload still in flight, so it's safe to run at the start of an upload
+// flow. Best effort — a normal session finds nothing and never hits Telegram.
+func (a *App) sweepOrphanParts(ctx context.Context) {
+	if err := a.fileService().SweepOrphanParts(ctx, a.ActiveChannelID()); err != nil {
+		fmt.Printf("warn: orphan-part sweep failed: %v\n", err)
+	}
+}
+
 // CancelUpload cancels the in-flight upload or import: in-flight sends abort and
 // the rest are skipped. The frontend marks the affected transfers canceled.
 func (a *App) CancelUpload() {
@@ -278,9 +288,9 @@ func (a *App) CancelDownload() {
 }
 
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) ([]backend.FileMetaData, error) {
-	a.applyUploadLimit(a.fileService())
 	ctx := a.beginUpload()
 	defer a.endUpload()
+	a.sweepOrphanParts(ctx)
 	files, err := a.fileService().Upload(ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
 	if err != nil {
 		out := make([]backend.FileMetaData, 0, len(files))
@@ -301,7 +311,6 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 // mutates nothing.
 func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fileservice.ImportPlan {
 	svc := a.fileService()
-	a.applyUploadLimit(svc)
 	return svc.PlanImport(paths, encrypt, extractArchives)
 }
 
@@ -311,25 +320,10 @@ func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fil
 // per-file upload_* events.
 func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) error {
 	svc := a.fileService()
-	a.applyUploadLimit(svc)
 	ctx := a.beginUpload()
 	defer a.endUpload()
+	a.sweepOrphanParts(ctx)
 	return svc.RunImport(ctx, a.ActiveChannelID(), paths, parentID, encrypt, extractArchives)
-}
-
-// applyUploadLimit raises the file service's per-file cap to the Premium limit
-// when the account is Telegram Premium; otherwise the standard 2 GiB cap stands.
-func (a *App) applyUploadLimit(svc *fileservice.Service) {
-	svc.MaxUploadBytes = a.accountMaxUploadBytes()
-}
-
-func (a *App) accountMaxUploadBytes() int64 {
-	if a.tg != nil {
-		if p, err := a.tg.SelfProfile(a.ctx); err == nil && p.Premium {
-			return fileservice.MaxUploadBytesPremium
-		}
-	}
-	return fileservice.MaxUploadBytesStandard
 }
 
 func uploadMetaToBackend(f fileservice.Metadata) backend.FileMetaData {

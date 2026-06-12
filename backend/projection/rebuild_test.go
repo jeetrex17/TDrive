@@ -50,6 +50,38 @@ func TestRebuildEmptyChannelClears(t *testing.T) {
 	}
 }
 
+func TestRebuildClearsAndReplaysFileParts(t *testing.T) {
+	db := newRebuildDB(t)
+
+	// A stale file_parts row that no replay_log op accounts for.
+	if _, err := db.Exec(`INSERT INTO file_parts (channel_id, upload_uuid, part_index, msg_id, size) VALUES (?, 'stale', 0, 999, 10)`, testChan); err != nil {
+		t.Fatalf("seed stale part: %v", err)
+	}
+
+	// A real multipart file in the log: two part ops then a manifest.
+	seedReplay(t, db, testChan, 1, Op{Type: OpFilePart, UploadUUID: "u1", PartIndex: 0, FileSize: 100})
+	seedReplay(t, db, testChan, 2, Op{Type: OpFilePart, UploadUUID: "u1", PartIndex: 1, FileSize: 100})
+	seedReplay(t, db, testChan, 3, Op{Type: OpFileManifest, UploadUUID: "u1", Parent: RootParent, Name: "big.bin", FileSize: 200, PartCount: 2})
+
+	if err := RebuildProjection(db, testChan); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+
+	// The stale row is gone — file_parts reflects exactly the replayed log.
+	var staleCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM file_parts WHERE channel_id = ? AND upload_uuid = 'stale'`, testChan).Scan(&staleCount); err != nil {
+		t.Fatalf("count stale: %v", err)
+	}
+	if staleCount != 0 {
+		t.Fatalf("stale file_parts survived rebuild = %d, want 0", staleCount)
+	}
+	// And the real multipart file rebuilt cleanly.
+	parts, err := MultipartParts(db, testChan, 3)
+	if err != nil || len(parts) != 2 {
+		t.Fatalf("rebuilt parts = %+v (err %v), want 2", parts, err)
+	}
+}
+
 func TestRebuildReplaysAscending(t *testing.T) {
 	db := newRebuildDB(t)
 	seedReplay(t, db, testChan, 10, Op{Type: OpMkdir, Obj: "d:a", Parent: RootParent, Name: "First"})

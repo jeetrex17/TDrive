@@ -284,18 +284,52 @@ func (s *Service) deleteBodiesBestEffort(ctx context.Context, channelID int64, f
 	if len(files) == 0 || s.TG == nil || s.Peers == nil {
 		return
 	}
+	// Each file's body is its own message; a multipart file also has N part
+	// document bodies that must be deleted too (and their file_parts rows).
 	ids := make([]int64, 0, len(files))
+	var partIDs []int64
 	for _, file := range files {
 		ids = append(ids, file.MsgID)
+		if parts, err := projection.MultipartParts(s.DB, channelID, file.MsgID); err == nil {
+			for _, p := range parts {
+				ids = append(ids, p.MsgID)
+				partIDs = append(partIDs, p.MsgID)
+			}
+		}
 	}
 	peer, err := s.Peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		s.warnf("warn: folder tomb succeeded but peer resolve failed for %d file bodies: %v\n", len(ids), err)
 		return
 	}
-	if err := s.TG.DeleteMessages(ctx, peer, ids); err != nil {
-		s.warnf("warn: folder tomb succeeded but body delete failed for %d file bodies: %v\n", len(ids), err)
+	if err := s.deleteMessagesChunked(ctx, peer, ids); err != nil {
+		// Keep the file_parts rows so the orphan sweep can retry the part bodies.
+		s.warnf("warn: folder tomb succeeded but body delete failed for %d bodies: %v\n", len(ids), err)
+		return
 	}
+	if len(partIDs) > 0 {
+		if err := projection.DeleteFilePartsByMsgIDs(s.DB, channelID, partIDs); err != nil {
+			s.warnf("warn: folder tomb succeeded but dropping file_parts rows failed: %v\n", err)
+		}
+	}
+}
+
+// deleteMessagesChunked deletes Telegram messages in batches of 100 (a folder
+// subtree plus multipart parts can exceed the deleteMessages limit), returning
+// the first error encountered, nil if every chunk succeeded.
+func (s *Service) deleteMessagesChunked(ctx context.Context, peer tgclient.InputPeer, msgIDs []int64) error {
+	if s.TG == nil || len(msgIDs) == 0 {
+		return nil
+	}
+	const chunk = 100
+	var firstErr error
+	for start := 0; start < len(msgIDs); start += chunk {
+		end := min(start+chunk, len(msgIDs))
+		if err := s.TG.DeleteMessages(ctx, peer, msgIDs[start:end]); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (s *Service) warnf(format string, args ...any) {

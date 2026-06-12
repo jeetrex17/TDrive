@@ -209,6 +209,12 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	}
 
 	for _, item := range uploaded {
+		// Multipart uploads project their own parts + manifest inside
+		// uploadMultipart and return an empty op, so there's nothing to project
+		// here for them.
+		if item.Op.Type == "" {
+			continue
+		}
 		if _, err := projection.ProjectFromOp(
 			s.DB,
 			channelID,
@@ -256,10 +262,11 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 		return Metadata{}, projection.Op{}, "", err
 	}
 
-	// Fail fast on oversize files: Telegram rejects them mid-stream otherwise.
-	// The check uses the ciphertext size when encrypting, since the encryption
-	// overhead can push a file that is just under the limit over it.
-	if err := s.checkUploadSize(filename, plaintextSize, wantEncrypted); err != nil {
+	// Decide single vs multipart, rejecting only files beyond the hard cap.
+	// The ciphertext size is used when encrypting, since the overhead can push
+	// a file that is just under a part boundary over it.
+	storedSize, multipart, err := s.planUpload(filename, plaintextSize, wantEncrypted)
+	if err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
 
@@ -267,8 +274,21 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	if err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
-	encrypted := wantEncrypted
 
+	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return Metadata{}, projection.Op{}, "", err
+	}
+
+	if multipart {
+		// uploadMultipart sends the parts, projects them, and emits the manifest
+		// (the commit point) itself. Returning an empty op tells the caller not
+		// to re-project this upload.
+		meta, err := s.uploadMultipart(ctx, uploadID, plainFile, filename, plaintextSize, parent, channelID, wantEncrypted, masterKey, peer, storedSize)
+		return meta, projection.Op{}, "", err
+	}
+
+	encrypted := wantEncrypted
 	var uploadSource *os.File = plainFile
 	uploadSize := plaintextSize
 	if encrypted {
@@ -303,11 +323,6 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	}
 	header := projection.Format(op)
 	caption := header + "\nTDrive: " + filename
-
-	peer, err := s.Peers.ResolvePeer(ctx, channelID)
-	if err != nil {
-		return Metadata{}, projection.Op{}, "", err
-	}
 
 	s.warnf("Starting upload: %s\n", filename)
 	s.emitEvent("upload_start", uploadID, filename, uploadSize, parent)
@@ -351,6 +366,191 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	}, op, header, nil
 }
 
+// uploadMultipart stores a file too big for one Telegram message as N part
+// documents plus a manifest. The stored byte stream (ciphertext when encrypting,
+// else the plaintext file) is produced once and sliced into <= MaxPartBytes
+// parts; each part is sent and projected, then a manifest op commits the logical
+// file (its msg_id becomes the file id). On any failure the already-sent parts
+// are deleted and no manifest is emitted, so a failed upload leaves nothing
+// visible. Disk use stays bounded — the ciphertext is streamed through a pipe,
+// never materialized whole.
+func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *os.File, filename string, plaintextSize int64, parent string, channelID int64, encrypt bool, masterKey []byte, peer tgclient.InputPeer, storedSize int64) (Metadata, error) {
+	if s.ActorID == nil {
+		return Metadata{}, fmt.Errorf("actor resolver not ready")
+	}
+	actorID, err := s.ActorID(ctx)
+	if err != nil {
+		return Metadata{}, err
+	}
+
+	partSize := s.maxPartBytes()
+	numParts := int((storedSize + partSize - 1) / partSize)
+	if numParts < 1 {
+		numParts = 1
+	}
+	if numParts > MaxParts {
+		return Metadata{}, fmt.Errorf("%s would split into %d parts (max %d): %w", filename, numParts, MaxParts, ErrFileTooLarge)
+	}
+
+	uploadUUID := projection.NewUploadUUID()
+	s.warnf("Starting multipart upload: %s (%d parts)\n", filename, numParts)
+	s.emitEvent("upload_start", uploadID, filename, storedSize, parent)
+
+	// Produce the stored byte stream. Encrypting streams the ciphertext through
+	// a pipe so the whole ciphertext is never written to disk; plaintext reads
+	// straight from the seekable source file.
+	var storedReader io.Reader = plainFile
+	var closeReader func()
+	if encrypt {
+		pr, pw := io.Pipe()
+		go func() {
+			_ = pw.CloseWithError(tdcrypto.EncryptStream(plainFile, pw, masterKey, plaintextSize))
+		}()
+		storedReader = pr
+		closeReader = func() { _ = pr.Close() }
+	}
+	if closeReader != nil {
+		defer closeReader()
+	}
+
+	partMsgIDs := make([]int64, 0, numParts)
+	abort := func() {
+		// Clean-up-and-fail: drop the parts already sent + their rows, using a
+		// fresh context since ctx may itself be canceled.
+		if len(partMsgIDs) > 0 {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := s.deleteMessagesChunked(cleanupCtx, peer, partMsgIDs); err != nil {
+				// Couldn't delete the bodies now; queue them so a later sweep
+				// retries rather than leaking them. These parts have no manifest,
+				// so the tombstone-scoped sweep wouldn't otherwise see them.
+				_ = projection.QueuePartCleanup(s.DB, channelID, partMsgIDs)
+			}
+		}
+		_ = projection.DeleteFileParts(s.DB, channelID, uploadUUID)
+	}
+
+	var (
+		sentBytes    int64
+		progressMu   sync.Mutex
+		lastProgress = time.Now()
+	)
+	for i := 0; i < numParts; i++ {
+		if err := ctx.Err(); err != nil {
+			abort()
+			return Metadata{}, err
+		}
+		partLen := partSize
+		if remaining := storedSize - sentBytes; remaining < partLen {
+			partLen = remaining
+		}
+		partOp := projection.Op{
+			Type:       projection.OpFilePart,
+			UploadUUID: uploadUUID,
+			PartIndex:  i,
+			FileSize:   partLen,
+		}
+		partCaption := projection.Format(partOp)
+		partBase := sentBytes
+		result, err := s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), fmt.Sprintf("part-%05d", i), partCaption, partLen, func(sent, total int64) {
+			progressMu.Lock()
+			defer progressMu.Unlock()
+			if time.Since(lastProgress) <= 100*time.Millisecond {
+				return
+			}
+			percent := 0.0
+			if storedSize > 0 {
+				percent = float64(partBase+sent) / float64(storedSize) * 100
+				if percent > 100 {
+					percent = 100
+				}
+			}
+			s.emitEvent("upload_progress", uploadID, percent)
+			lastProgress = time.Now()
+		})
+		if err != nil {
+			abort()
+			return Metadata{}, err
+		}
+		if result.MsgID == 0 {
+			abort()
+			return Metadata{}, fmt.Errorf("upload part %d: no msg id", i)
+		}
+		// Track the sent part for cleanup before projecting it, so a projection
+		// failure here still deletes this part's body in abort().
+		partMsgIDs = append(partMsgIDs, result.MsgID)
+		if _, err := projection.ProjectFromOp(s.DB, channelID, result.MsgID, partOp, actorID, partCaption); err != nil {
+			abort()
+			return Metadata{}, err
+		}
+		sentBytes += partLen
+	}
+
+	// Commit: the manifest is a text op whose own msg_id becomes the file id.
+	uploadTime := s.now().Unix()
+	manifestOp := projection.Op{
+		Type:           projection.OpFileManifest,
+		UploadUUID:     uploadUUID,
+		Parent:         parent,
+		Name:           filename,
+		FileSize:       storedSize,
+		FileUploadTime: uploadTime,
+		PartCount:      numParts,
+	}
+	if encrypt {
+		manifestOp.Encrypted = true
+		manifestOp.PlaintextSize = plaintextSize
+		manifestOp.EncryptionVersion = 1
+	}
+	manifestMsgID, err := s.emit(channelID, manifestOp)
+	if err != nil {
+		if manifestMsgID == 0 {
+			// The manifest never reached Telegram: nothing is committed, so clean
+			// up the parts and fail.
+			abort()
+			return Metadata{}, err
+		}
+		// The manifest IS in Telegram (only the local projection failed): the file
+		// is committed and the next sync will project it. Deleting the parts now
+		// would corrupt that committed file, so leave Telegram intact and surface
+		// the error.
+		return Metadata{}, err
+	}
+
+	s.emitEvent("upload_progress", uploadID, 100.0)
+	return Metadata{
+		Name:          filename,
+		Size:          storedSize,
+		MsgID:         int(manifestMsgID),
+		ParentID:      parent,
+		UploadTime:    uploadTime,
+		Encrypted:     encrypt,
+		PlaintextSize: plaintextSize,
+	}, nil
+}
+
+// deleteMessagesChunked deletes Telegram messages in batches of 100 so a large
+// part set stays under the deleteMessages API limit. It returns the first error
+// encountered (nil if every chunk succeeded) so callers can decide whether to
+// drop the local file_parts pointers or keep them for a later retry.
+func (s *Service) deleteMessagesChunked(ctx context.Context, peer tgclient.InputPeer, msgIDs []int64) error {
+	if s.TG == nil || len(msgIDs) == 0 {
+		return nil
+	}
+	const chunk = 100
+	var firstErr error
+	for start := 0; start < len(msgIDs); start += chunk {
+		end := min(start+chunk, len(msgIDs))
+		if err := s.TG.DeleteMessages(ctx, peer, msgIDs[start:end]); err != nil {
+			s.warnf("warn: delete %d message bodies failed: %v\n", end-start, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
 func (s *Service) Download(ctx context.Context, channelID int64, msgID int, lookupID int, chooseSavePath ChooseSavePathFunc) DownloadResult {
 	if err := s.ready(); err != nil {
 		return DownloadResult{Status: "error", Message: err.Error()}
@@ -372,6 +572,19 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 	if err != nil {
 		return DownloadResult{Status: "error", Message: "Error: " + err.Error()}
 	}
+
+	// A multipart file's identity is its manifest (a text op, not a document),
+	// so GetFileDocument would fail. Detect it first and reassemble from parts.
+	fileID := int64(lookupID)
+	if fileID == 0 {
+		fileID = int64(msgID)
+	}
+	if parts, err := projection.MultipartParts(s.DB, channelID, fileID); err != nil {
+		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}
+	} else if len(parts) > 0 {
+		return s.downloadMultipart(ctx, channelID, fileID, parts, peer, chooseSavePath)
+	}
+
 	doc, err := s.TG.GetFileDocument(ctx, peer, int64(msgID))
 	if err != nil {
 		return downloadResolveError(err)
@@ -440,6 +653,107 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 			return DownloadResult{Status: "error", Message: "Decrypt failed: " + err.Error()}
 		}
 	}
+	if err := finalTmp.Close(); err != nil {
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	}
+	if err := replaceDownloadedFile(finalTmpPath, savePath); err != nil {
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	}
+	committed = true
+
+	s.emitEvent("download_progress", 100.0)
+	return DownloadResult{
+		Status:    "success",
+		Message:   "Download complete",
+		SavedPath: savePath,
+	}
+}
+
+// downloadMultipart reassembles a multipart file by streaming its parts in
+// order. Plain files append each part to the output; encrypted files stream the
+// concatenated ciphertext through a pipe into DecryptStream, so the only disk
+// use is the final output (never a full ciphertext temp). Progress is aggregate
+// across all parts.
+func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID int64, parts []projection.FilePart, peer tgclient.InputPeer, chooseSavePath ChooseSavePathFunc) DownloadResult {
+	// Refuse to reassemble an incomplete part set: a missing part would otherwise
+	// produce a silently-truncated file (plain downloads especially, since
+	// there's no AEAD tag to catch it).
+	if err := projection.MultipartComplete(s.DB, channelID, fileID, parts); err != nil {
+		return DownloadResult{Status: "error", Message: err.Error()}
+	}
+
+	originalName := "tdrive_download"
+	if name := projection.LookupFileName(s.DB, channelID, fileID); name != "" {
+		originalName = name
+	}
+
+	encrypted := false
+	if enc, _, _, err := projection.FileEncryptionMeta(s.DB, channelID, fileID); err == nil {
+		encrypted = enc
+	}
+	masterKey, err := s.requireEncryptionKey(encrypted)
+	if err != nil {
+		return DownloadResult{Status: "error", Message: err.Error()}
+	}
+
+	savePath, err := chooseSavePath(originalName)
+	if err != nil {
+		return DownloadResult{Status: "error", Message: "Failed to choose download location: " + err.Error()}
+	}
+	if savePath == "" {
+		return DownloadResult{Status: "canceled", Message: "Download canceled"}
+	}
+
+	finalTmp, err := os.CreateTemp(filepath.Dir(savePath), ".tdrive-download-*")
+	if err != nil {
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	}
+	finalTmpPath := finalTmp.Name()
+	committed := false
+	defer func() {
+		_ = finalTmp.Close()
+		if !committed {
+			_ = os.Remove(finalTmpPath)
+		}
+	}()
+
+	var totalStored int64
+	for _, p := range parts {
+		totalStored += p.Size
+	}
+	progress := s.downloadProgress(totalStored)
+
+	// downloadParts streams every part in order into dst, reporting aggregate
+	// progress by offsetting each part's bytes by the bytes already written.
+	downloadParts := func(dst io.Writer) error {
+		var base int64
+		for _, p := range parts {
+			startBase := base
+			if err := s.TG.DownloadFile(ctx, peer, p.MsgID, dst, func(partDone, _ int64) {
+				progress(startBase+partDone, totalStored)
+			}); err != nil {
+				return err
+			}
+			base += p.Size
+		}
+		return nil
+	}
+
+	if !encrypted {
+		if err := downloadParts(finalTmp); err != nil {
+			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
+		}
+	} else {
+		pr, pw := io.Pipe()
+		go func() {
+			_ = pw.CloseWithError(downloadParts(pw))
+		}()
+		if _, err := tdcrypto.DecryptStream(pr, finalTmp, masterKey); err != nil {
+			_ = pr.CloseWithError(err)
+			return DownloadResult{Status: "error", Message: "Download/decrypt failed: " + err.Error()}
+		}
+	}
+
 	if err := finalTmp.Close(); err != nil {
 		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 	}
@@ -723,6 +1037,17 @@ func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) error 
 		return err
 	}
 
+	// Gather the bodies to drop: the file/manifest message plus any multipart
+	// parts. Captured before the tomb while file_parts is intact.
+	bodyMsgIDs := []int64{int64(msgID)}
+	var partMsgIDs []int64
+	if parts, err := projection.MultipartParts(s.DB, channelID, int64(msgID)); err == nil {
+		for _, p := range parts {
+			bodyMsgIDs = append(bodyMsgIDs, p.MsgID)
+			partMsgIDs = append(partMsgIDs, p.MsgID)
+		}
+	}
+
 	// Tomb first: visibility convergence is the contract; body delete is
 	// best-effort. If body cleanup fails, the visible state is still correct.
 	tombOp := projection.Op{
@@ -741,8 +1066,64 @@ func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) error 
 		s.warnf("warn: tomb succeeded but peer resolve failed for msg=%d: %v\n", msgID, err)
 		return nil
 	}
-	if err := s.TG.DeleteMessages(ctx, peer, []int64{int64(msgID)}); err != nil {
-		s.warnf("warn: tomb succeeded but body delete failed for msg=%d: %v\n", msgID, err)
+	if err := s.deleteMessagesChunked(ctx, peer, bodyMsgIDs); err != nil {
+		// Body cleanup failed; keep the file_parts rows so the orphan sweep can
+		// retry the part-body delete later. The file is already tombstoned, so it
+		// stays hidden in the meantime.
+		return nil
+	}
+	if len(partMsgIDs) > 0 {
+		if err := projection.DeleteFilePartsByMsgIDs(s.DB, channelID, partMsgIDs); err != nil {
+			s.warnf("warn: tomb succeeded but dropping file_parts rows failed for msg=%d: %v\n", msgID, err)
+		}
+	}
+	return nil
+}
+
+// SweepOrphanParts cleans up two safe sets of part bodies and removes their
+// local pointers: parts of a deleted file whose cleanup didn't finish (a
+// tombstoned manifest with surviving file_parts rows), and parts queued by a
+// failed upload whose inline cleanup failed (pending_part_cleanup). It never
+// touches parts that merely lack a manifest row, so it cannot disturb an upload
+// still in flight (this client, another instance, or another user on a shared
+// drive).
+func (s *Service) SweepOrphanParts(ctx context.Context, channelID int64) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if channelID == 0 || s.TG == nil || s.Peers == nil {
+		return nil
+	}
+	tombParts, err := projection.OrphanPartMessages(s.DB, channelID)
+	if err != nil {
+		return err
+	}
+	pending, err := projection.PendingPartCleanup(s.DB, channelID)
+	if err != nil {
+		return err
+	}
+	if len(tombParts) == 0 && len(pending) == 0 {
+		return nil
+	}
+	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return err
+	}
+	if len(tombParts) > 0 {
+		if err := s.deleteMessagesChunked(ctx, peer, tombParts); err != nil {
+			return err // keep the rows; retry next sweep
+		}
+		if err := projection.DeleteFilePartsByMsgIDs(s.DB, channelID, tombParts); err != nil {
+			return err
+		}
+	}
+	if len(pending) > 0 {
+		if err := s.deleteMessagesChunked(ctx, peer, pending); err != nil {
+			return err // keep the queue; retry next sweep
+		}
+		if err := projection.ClearPartCleanup(s.DB, channelID, pending); err != nil {
+			return err
+		}
 	}
 	return nil
 }

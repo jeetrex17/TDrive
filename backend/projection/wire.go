@@ -104,6 +104,26 @@ func Parse(raw string) (Op, error) {
 		if err := setObj(&op, kv["obj"], FileIDPrefix); err != nil {
 			return Op{}, err
 		}
+	case OpFilePart:
+		if err := setUUID(&op, kv["u"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPartIndex(&op, kv["pix"]); err != nil {
+			return Op{}, err
+		}
+	case OpFileManifest:
+		if err := setUUID(&op, kv["u"]); err != nil {
+			return Op{}, err
+		}
+		if err := setParent(&op, kv["p"]); err != nil {
+			return Op{}, err
+		}
+		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPartCount(&op, kv["pc"]); err != nil {
+			return Op{}, err
+		}
 	case OpEncConfig:
 		if err := setB64(&op.KDFSalt, kv["salt"]); err != nil {
 			return Op{}, err
@@ -216,6 +236,25 @@ func Format(op Op) string {
 	case OpRmdir, OpTomb:
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
+	case OpFilePart:
+		b.WriteString("|u=")
+		b.WriteString(op.UploadUUID)
+		b.WriteString("|pix=")
+		b.WriteString(strconv.Itoa(op.PartIndex))
+		if op.FileSize > 0 {
+			b.WriteString("|sz=")
+			b.WriteString(strconv.FormatInt(op.FileSize, 10))
+		}
+	case OpFileManifest:
+		b.WriteString("|u=")
+		b.WriteString(op.UploadUUID)
+		b.WriteString("|p=")
+		b.WriteString(op.Parent)
+		b.WriteString("|n=")
+		b.WriteString(url.QueryEscape(op.Name))
+		b.WriteString("|pc=")
+		b.WriteString(strconv.Itoa(op.PartCount))
+		appendFileAttrs(&b, op)
 	case OpEncConfig:
 		b.WriteString("|salt=")
 		b.WriteString(base64.RawURLEncoding.EncodeToString(op.KDFSalt))
@@ -328,5 +367,31 @@ func setName(op *Op, raw string) error {
 		return ErrWireMalformed
 	}
 	op.Name = decoded
+	return nil
+}
+
+func setUUID(op *Op, raw string) error {
+	if raw == "" {
+		return ErrWireMalformed
+	}
+	op.UploadUUID = raw
+	return nil
+}
+
+func setPartIndex(op *Op, raw string) error {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return ErrWireMalformed
+	}
+	op.PartIndex = n
+	return nil
+}
+
+func setPartCount(op *Op, raw string) error {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return ErrWireMalformed
+	}
+	op.PartCount = n
 	return nil
 }

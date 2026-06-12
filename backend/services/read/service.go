@@ -191,9 +191,15 @@ func (s *Service) MediaFiles(channelID int64) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Multipart files have no single document (their id is a text manifest), so
+	// they can't thumbnail or preview — keep them out of the gallery.
+	multipart, err := projection.MultipartFileMsgIDs(s.DB, channelID)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]File, 0, len(all))
 	for _, f := range all {
-		if thumbnail.IsImage(f.Name) {
+		if thumbnail.IsImage(f.Name) && !multipart[f.MsgID] {
 			out = append(out, fileFromProjection(f))
 		}
 	}
@@ -250,6 +256,13 @@ func (s *Service) TelegramRootFiles(ctx context.Context, channelID int64) ([]Tel
 	files := make([]TelegramFile, 0, len(messages))
 	for _, msg := range messages {
 		if !msg.HasMedia {
+			continue
+		}
+		// Multipart part documents are internal artifacts, not user files. They
+		// carry a TDX1 t=part header; skip them so they never surface at root.
+		// Their msg_ids live in file_parts, not files, so the frontend's
+		// unmanaged-file filter wouldn't otherwise exclude them.
+		if op, err := projection.Parse(projection.ExtractHeaderLine(msg.Text)); err == nil && op.Type == projection.OpFilePart {
 			continue
 		}
 		name := strings.TrimSpace(msg.DocumentName)

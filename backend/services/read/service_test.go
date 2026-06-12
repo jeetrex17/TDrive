@@ -188,3 +188,30 @@ func TestTelegramRootFilesUsesTGHistory(t *testing.T) {
 		t.Fatalf("bad file: %+v", files[0])
 	}
 }
+
+func TestTelegramRootFilesSkipsMultipartParts(t *testing.T) {
+	svc, _, fakeTG := newTestService(t)
+	partCaption := projection.Format(projection.Op{
+		Type: projection.OpFilePart, UploadUUID: "u1", PartIndex: 0, FileSize: 1024,
+	})
+	fakeTG.SeedHistory(
+		// A multipart part document: has media, but a t=part header.
+		tgclient.HistoryMessage{
+			MsgID: 60, Date: 600, HasMedia: true, MediaSize: 1024,
+			DocumentName: "part-00000", Text: partCaption,
+		},
+		// A genuine loose document with no TDrive header stays visible.
+		tgclient.HistoryMessage{
+			MsgID: 61, Date: 601, HasMedia: true, MediaSize: 50,
+			DocumentName: "real.bin",
+		},
+	)
+
+	files, err := svc.TelegramRootFiles(context.Background(), testChannelID)
+	if err != nil {
+		t.Fatalf("telegram root files: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "real.bin" {
+		t.Fatalf("files = %+v, want only real.bin (multipart parts skipped)", files)
+	}
+}
