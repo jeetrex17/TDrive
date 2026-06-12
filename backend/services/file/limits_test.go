@@ -16,28 +16,39 @@ func TestUploadByteSize(t *testing.T) {
 	}
 }
 
-func TestCheckUploadSize(t *testing.T) {
+func TestPlanUpload(t *testing.T) {
+	// MaxUploadBytes overrides the part size: 1000 here, hard cap = 1000*MaxParts.
 	s := &Service{MaxUploadBytes: 1000}
+	hardCap := int64(1000) * int64(MaxParts)
 
-	if err := s.checkUploadSize("ok.bin", 900, false); err != nil {
-		t.Errorf("900 under 1000 cap should pass, got %v", err)
+	// At or under the part size: a single upload, no split, no error.
+	if stored, multi, err := s.planUpload("ok.bin", 900, false); err != nil || multi || stored != 900 {
+		t.Errorf("900 plain: stored=%d multi=%v err=%v, want 900,false,nil", stored, multi, err)
 	}
-	if err := s.checkUploadSize("edge.bin", 1000, false); err != nil {
-		t.Errorf("exactly at the cap should pass, got %v", err)
-	}
-
-	err := s.checkUploadSize("big.bin", 1001, false)
-	if err == nil || !errors.Is(err, ErrFileTooLarge) {
-		t.Errorf("1001 over 1000 cap should be ErrFileTooLarge, got %v", err)
+	if _, multi, err := s.planUpload("edge.bin", 1000, false); err != nil || multi {
+		t.Errorf("1000 plain should be single, got multi=%v err=%v", multi, err)
 	}
 
-	// Encryption overhead pushes a file that fits in plaintext over the cap.
-	if err := s.checkUploadSize("enc.bin", 1000, true); err == nil || !errors.Is(err, ErrFileTooLarge) {
-		t.Errorf("encrypted 1000 should exceed a 1000 cap, got %v", err)
+	// Over the part size but under the hard cap: multipart, not an error.
+	if stored, multi, err := s.planUpload("big.bin", 1001, false); err != nil || !multi || stored != 1001 {
+		t.Errorf("1001 plain: stored=%d multi=%v err=%v, want 1001,true,nil", stored, multi, err)
 	}
 
-	// With no override, the standard 2 GiB cap applies: 1 GiB is fine.
-	if err := (&Service{}).checkUploadSize("g.bin", 1<<30, false); err != nil {
-		t.Errorf("1 GiB under the default cap should pass, got %v", err)
+	// Encryption overhead pushes a part-sized file into multipart.
+	if _, multi, err := s.planUpload("enc.bin", 1000, true); err != nil || !multi {
+		t.Errorf("encrypted 1000 should be multipart, got multi=%v err=%v", multi, err)
+	}
+
+	// Exactly at the hard cap is allowed (multipart); beyond it is rejected.
+	if _, multi, err := s.planUpload("max.bin", hardCap, false); err != nil || !multi {
+		t.Errorf("at hard cap: multi=%v err=%v, want true,nil", multi, err)
+	}
+	if _, _, err := s.planUpload("huge.bin", hardCap+1, false); err == nil || !errors.Is(err, ErrFileTooLarge) {
+		t.Errorf("over hard cap should be ErrFileTooLarge, got %v", err)
+	}
+
+	// With no override, a 1 GiB file is well under the part size: single upload.
+	if _, multi, err := (&Service{}).planUpload("g.bin", 1<<30, false); err != nil || multi {
+		t.Errorf("1 GiB default should be single, got multi=%v err=%v", multi, err)
 	}
 }

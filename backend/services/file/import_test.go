@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"TDrive/backend/projection"
@@ -127,21 +128,25 @@ func TestPlanImportCountsTreeAndArchive(t *testing.T) {
 
 func TestPlanImportFlagsOversize(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
-	svc.MaxUploadBytes = 3
+	svc.MaxUploadBytes = 3 // part size 3, hard cap = 3*MaxParts
+	hardCap := int64(3) * int64(MaxParts)
 
 	root := filepath.Join(t.TempDir(), "Big")
-	mkfile(t, filepath.Join(root, "a.txt"), "hello") // 5 bytes, over 3
-	mkfile(t, filepath.Join(root, "b.txt"), "world") // 5 bytes, over 3
+	// 5 bytes: over the part size but well under the hard cap — splittable, so
+	// it counts as an importable file, not oversize.
+	mkfile(t, filepath.Join(root, "split.txt"), "hello")
+	// Over the hard cap: genuinely too large, flagged oversize.
+	mkfile(t, filepath.Join(root, "huge.txt"), strings.Repeat("x", int(hardCap)+50))
 
 	plan := svc.PlanImport([]string{root}, false, false)
-	if plan.Oversize != 2 {
-		t.Errorf("plan.Oversize = %d, want 2", plan.Oversize)
+	if plan.Oversize != 1 {
+		t.Errorf("plan.Oversize = %d, want 1 (only the over-cap file)", plan.Oversize)
 	}
-	if plan.Files != 0 {
-		t.Errorf("plan.Files = %d, want 0 (all oversize)", plan.Files)
+	if plan.Files != 1 {
+		t.Errorf("plan.Files = %d, want 1 (the splittable file)", plan.Files)
 	}
-	if plan.MaxBytes != 3 {
-		t.Errorf("plan.MaxBytes = %d, want 3", plan.MaxBytes)
+	if plan.MaxBytes != hardCap {
+		t.Errorf("plan.MaxBytes = %d, want %d", plan.MaxBytes, hardCap)
 	}
 }
 
@@ -262,11 +267,12 @@ func TestRunImportNameCollisionSuffixes(t *testing.T) {
 func TestRunImportSkipsOversize(t *testing.T) {
 	svc, db, _, _ := newTestService(t)
 	svc.CreateFolder = testFolderCreator(db)
-	svc.MaxUploadBytes = 10
+	svc.MaxUploadBytes = 5 // part size 5, hard cap = 5*MaxParts
+	hardCap := int64(5) * int64(MaxParts)
 
 	root := filepath.Join(t.TempDir(), "Mix")
-	mkfile(t, filepath.Join(root, "small.txt"), "hello")                  // 5 bytes
-	mkfile(t, filepath.Join(root, "big.txt"), "this is over ten bytes!!") // > 10
+	mkfile(t, filepath.Join(root, "small.txt"), "hello")                           // 5 bytes: single upload
+	mkfile(t, filepath.Join(root, "big.txt"), strings.Repeat("x", int(hardCap)+50)) // over the hard cap: skipped
 
 	if err := svc.RunImport(context.Background(), personalChannelID, []string{root}, "", false, false); err != nil {
 		t.Fatalf("RunImport: %v", err)
@@ -346,13 +352,14 @@ func TestRunImportArchiveCollapsesDuplicateRootAndSkipsMacOSMetadata(t *testing.
 func TestRunImportArchiveSkipsOversizeEntry(t *testing.T) {
 	svc, db, _, _ := newTestService(t)
 	svc.CreateFolder = testFolderCreator(db)
-	svc.MaxUploadBytes = 10
+	svc.MaxUploadBytes = 5 // part size 5, hard cap = 5*MaxParts
+	hardCap := int64(5) * int64(MaxParts)
 
-	// big.txt exceeds the cap and must be skipped during extraction/upload;
+	// big.txt exceeds the hard cap and must be skipped during extraction/upload;
 	// small.txt is imported normally.
 	zip := buildZip(t, map[string]string{
 		"small.txt": "hi",
-		"big.txt":   "this content is definitely well over ten bytes",
+		"big.txt":   strings.Repeat("x", int(hardCap)+50),
 	}, nil, nil)
 
 	if err := svc.RunImport(context.Background(), personalChannelID, []string{zip}, "", false, true); err != nil {

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 6
+const currentSchemaVersion = 7
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -83,6 +83,20 @@ func EnsureSchema(db *sql.DB) error {
 			hint                TEXT    NOT NULL DEFAULT '',
 			created_at          INTEGER NOT NULL,
 			version             INTEGER NOT NULL DEFAULT 1
+		);`,
+		`CREATE TABLE IF NOT EXISTS file_parts (
+			channel_id   INTEGER NOT NULL,
+			upload_uuid  TEXT NOT NULL,
+			part_index   INTEGER NOT NULL,
+			msg_id       INTEGER NOT NULL,
+			size         INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (channel_id, upload_uuid, part_index)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_file_parts_msg ON file_parts(channel_id, msg_id);`,
+		`CREATE TABLE IF NOT EXISTS pending_part_cleanup (
+			channel_id  INTEGER NOT NULL,
+			msg_id      INTEGER NOT NULL,
+			PRIMARY KEY (channel_id, msg_id)
 		);`,
 	}
 
@@ -165,6 +179,11 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 	}
 	if v < 6 {
 		// replay_log_rejects is created by EnsureSchema above. Nothing to backfill.
+	}
+	if v < 7 {
+		if err := addMultipartColumnsToFiles(tx); err != nil {
+			return err
+		}
 	}
 
 	if _, err := tx.Exec(`DELETE FROM schema_version`); err != nil {
@@ -388,6 +407,8 @@ func createFreshFiles(tx *sql.Tx) error {
 			encrypted           INTEGER NOT NULL DEFAULT 0,
 			plaintext_size      INTEGER NOT NULL DEFAULT 0,
 			encryption_version  INTEGER NOT NULL DEFAULT 0,
+			upload_uuid         TEXT NOT NULL DEFAULT '',
+			part_count          INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (channel_id, msg_id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_channel_parent
@@ -443,6 +464,34 @@ func addEncryptionHintColumn(tx *sql.Tx) error {
 	}
 	if _, err := tx.Exec(`ALTER TABLE encryption ADD COLUMN hint TEXT NOT NULL DEFAULT ''`); err != nil {
 		return fmt.Errorf("projection: add encryption.hint: %w", err)
+	}
+	return nil
+}
+
+// addMultipartColumnsToFiles tops up an existing files table with the multipart
+// large-file columns. SQLite ADD COLUMN is constant-time and non-destructive.
+// The file_parts table itself is created by EnsureSchema (CREATE IF NOT EXISTS),
+// so this only handles the files-table columns. Idempotent. Skips when files
+// doesn't exist yet — the v0→v1 reshape's createFreshFiles already includes them.
+func addMultipartColumnsToFiles(tx *sql.Tx) error {
+	if !tableExists(tx, "files") {
+		return nil
+	}
+	cols, err := tableColumnSet(tx, "files")
+	if err != nil {
+		return err
+	}
+	stmts := map[string]string{
+		"upload_uuid": `ALTER TABLE files ADD COLUMN upload_uuid TEXT NOT NULL DEFAULT ''`,
+		"part_count":  `ALTER TABLE files ADD COLUMN part_count INTEGER NOT NULL DEFAULT 0`,
+	}
+	for col, stmt := range stmts {
+		if _, present := cols[col]; present {
+			continue
+		}
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("projection: add files.%s: %w", col, err)
+		}
 	}
 	return nil
 }

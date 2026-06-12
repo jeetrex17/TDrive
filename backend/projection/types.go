@@ -23,6 +23,13 @@ const (
 	OpTomb       OpType = "tomb"
 	OpMeta       OpType = "meta"
 	OpEncConfig  OpType = "encfg"
+
+	// Multipart large files. A file too big for one Telegram message is stored
+	// as N OpFilePart document messages followed by one OpFileManifest text op
+	// whose msg_id becomes the logical file's identity. Parts never enter the
+	// files table, so they never surface as files or orphans.
+	OpFilePart     OpType = "part"
+	OpFileManifest OpType = "manifest"
 )
 
 type Op struct {
@@ -41,6 +48,13 @@ type Op struct {
 	Encrypted         bool
 	PlaintextSize     int64
 	EncryptionVersion int
+
+	// Multipart large-file metadata. UploadUUID groups the parts and manifest
+	// of one logical file. PartIndex is the 0-based position of a part;
+	// PartCount is the total number of parts (carried on the manifest).
+	UploadUUID string
+	PartIndex  int
+	PartCount  int
 
 	// Personal-drive encryption password metadata. This is safe to store in
 	// Telegram because the master key stays wrapped under the user's password.

@@ -120,7 +120,7 @@ func archiveFolderName(p string) string {
 // dialog. encrypt and extractArchives must match what RunImport will be called
 // with so the totals line up. It never mutates anything.
 func (s *Service) PlanImport(paths []string, encrypt, extractArchives bool) ImportPlan {
-	plan := ImportPlan{MaxBytes: s.maxUploadBytes()}
+	plan := ImportPlan{MaxBytes: s.largeFileMaxBytes()}
 	for _, p := range paths {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -145,7 +145,7 @@ func (s *Service) PlanImport(paths []string, encrypt, extractArchives bool) Impo
 }
 
 func (s *Service) planFile(size int64, encrypt bool, plan *ImportPlan) {
-	if uploadByteSize(size, encrypt) > s.maxUploadBytes() {
+	if uploadByteSize(size, encrypt) > s.largeFileMaxBytes() {
 		plan.Oversize++
 		return
 	}
@@ -365,7 +365,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 // addFileTask queues a single file for upload, skipping (and counting) it if it
 // exceeds the per-file limit.
 func (s *Service) addFileTask(srcPath string, size int64, parentID string, encrypt bool, tasks *importTasks) {
-	if uploadByteSize(size, encrypt) > s.maxUploadBytes() {
+	if uploadByteSize(size, encrypt) > s.largeFileMaxBytes() {
 		tasks.oversize++
 		return
 	}
@@ -471,7 +471,7 @@ func (s *Service) extractArchiveToTemp(archivePath, tmpRoot string, encrypt bool
 	// could not be uploaded anyway, and the cap stops a decompression bomb (a
 	// tiny entry that expands to fill the disk) from writing more than the limit;
 	// importTree then skips the oversize result.
-	limit := s.maxUploadBytes()
+	limit := s.largeFileMaxBytes()
 	readLimit := limit
 	if readLimit < math.MaxInt64 {
 		readLimit++
@@ -576,7 +576,7 @@ func createUniqueExtractFile(dest string) (*os.File, string, error) {
 }
 
 func (s *Service) maxArchiveExtractBytes() int64 {
-	limit := s.maxUploadBytes()
+	limit := s.largeFileMaxBytes()
 	if limit > math.MaxInt64/archiveExtractedBytesLimitMultiplier {
 		return math.MaxInt64
 	}

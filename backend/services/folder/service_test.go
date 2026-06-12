@@ -155,6 +155,61 @@ func TestRenameMoveAndDeleteFolder(t *testing.T) {
 	}
 }
 
+func TestDeleteFolderCascadesToMultipartParts(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+
+	folder, err := svc.Create(testChannelID, "Big", "")
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
+	// Seed a multipart file inside the folder: 3 part ops + a manifest op.
+	const uuid = "uft-1"
+	for i := 0; i < 3; i++ {
+		if err := svc.EmitOp(testChannelID, projection.Op{
+			Type: projection.OpFilePart, UploadUUID: uuid, PartIndex: i, FileSize: 100,
+		}); err != nil {
+			t.Fatalf("emit part %d: %v", i, err)
+		}
+	}
+	if err := svc.EmitOp(testChannelID, projection.Op{
+		Type: projection.OpFileManifest, UploadUUID: uuid, Parent: folder.ID,
+		Name: "big.bin", FileSize: 300, PartCount: 3, FileUploadTime: time.Unix(123, 0).Unix(),
+	}); err != nil {
+		t.Fatalf("emit manifest: %v", err)
+	}
+
+	var manifestID int64
+	if err := db.QueryRow(`SELECT msg_id FROM files WHERE channel_id = ? AND upload_uuid = ?`, testChannelID, uuid).Scan(&manifestID); err != nil {
+		t.Fatalf("scan manifest id: %v", err)
+	}
+	parts, err := projection.MultipartParts(db, testChannelID, manifestID)
+	if err != nil || len(parts) != 3 {
+		t.Fatalf("parts = %+v (err %v), want 3", parts, err)
+	}
+
+	if err := svc.Delete(context.Background(), testChannelID, folder.ID); err != nil {
+		t.Fatalf("delete folder: %v", err)
+	}
+
+	// The file_parts rows are dropped...
+	if left, _ := projection.MultipartParts(db, testChannelID, manifestID); len(left) != 0 {
+		t.Fatalf("file_parts after delete = %d, want 0", len(left))
+	}
+	// ...and the manifest + every part body were deleted from Telegram.
+	deleted := map[int64]bool{}
+	for _, batch := range fakeTG.DeletedBatches() {
+		for _, id := range batch {
+			deleted[id] = true
+		}
+	}
+	for _, id := range []int64{manifestID, parts[0].MsgID, parts[1].MsgID, parts[2].MsgID} {
+		if !deleted[id] {
+			t.Fatalf("msg %d was not deleted from Telegram; deleted=%v", id, deleted)
+		}
+	}
+}
+
 func TestDeleteFolderRequiresOwnershipForSharedDescendantFiles(t *testing.T) {
 	svc, db, fakeTG, actor := newTestService(t)
 	const sharedChannelID int64 = 717171

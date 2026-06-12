@@ -42,6 +42,10 @@ func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) err
 		return applyMkdir(tx, channelID, op)
 	case OpFileUpload, OpMeta:
 		return applyFileMeta(tx, channelID, msgID, op, actorID)
+	case OpFilePart:
+		return applyFilePart(tx, channelID, msgID, op)
+	case OpFileManifest:
+		return applyManifest(tx, channelID, msgID, op, actorID)
 	case OpRename:
 		return applyRename(tx, channelID, op)
 	case OpMove:
@@ -127,6 +131,80 @@ func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 			encryption_version = CASE WHEN excluded.encryption_version > 0 THEN excluded.encryption_version ELSE files.encryption_version END
 	`, channelID, fileMsgID, op.Name, op.FileSize, op.Parent, op.FileUploadTime, actorID,
 		encryptedFlag, op.PlaintextSize, encryptionVersion)
+	return err
+}
+
+// applyFilePart records one part of a multipart file in file_parts. Parts never
+// enter the files table, so they never surface as files or as orphans. The
+// manifest op (applied last, with a higher msg_id) creates the single logical
+// file row that references these parts by upload_uuid.
+func applyFilePart(tx *sql.Tx, channelID int64, msgID int64, op Op) error {
+	if strings.TrimSpace(op.UploadUUID) == "" {
+		return fmt.Errorf("%w: part requires upload uuid", ErrBadOp)
+	}
+	if op.PartIndex < 0 {
+		return fmt.Errorf("%w: part index must be >= 0", ErrBadOp)
+	}
+	if msgID <= 0 {
+		return fmt.Errorf("%w: part requires msg id", ErrBadOp)
+	}
+	// First-write-wins, like applyMkdir: a duplicate part op (same uuid+index)
+	// must not repoint to a different message, which would strand the original
+	// body (delete would clean up the replacement and miss the original).
+	_, err := tx.Exec(`
+		INSERT INTO file_parts (channel_id, upload_uuid, part_index, msg_id, size)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(channel_id, upload_uuid, part_index) DO NOTHING
+	`, channelID, op.UploadUUID, op.PartIndex, msgID, op.FileSize)
+	return err
+}
+
+// applyManifest commits a multipart file: it creates the single logical file
+// row whose identity is the manifest's own msg_id (f:<msgID>), mirroring how a
+// normal file row keys off its upload message. The part rows already exist
+// (their ops carry lower msg_ids), linked by upload_uuid. size is the stored
+// (ciphertext) total; plaintext_size is the display size.
+func applyManifest(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) error {
+	if op.Parent != RootParent && !IsFolderID(op.Parent) {
+		return fmt.Errorf("%w: manifest parent must be root or d:", ErrBadOp)
+	}
+	if strings.TrimSpace(op.Name) == "" {
+		return fmt.Errorf("%w: manifest requires name", ErrBadOp)
+	}
+	if strings.TrimSpace(op.UploadUUID) == "" {
+		return fmt.Errorf("%w: manifest requires upload uuid", ErrBadOp)
+	}
+	if op.PartCount <= 0 {
+		return fmt.Errorf("%w: manifest requires part count", ErrBadOp)
+	}
+	if msgID <= 0 {
+		return fmt.Errorf("%w: manifest requires msg id", ErrBadOp)
+	}
+
+	encryptedFlag := 0
+	if op.Encrypted {
+		encryptedFlag = 1
+	}
+	encryptionVersion := op.EncryptionVersion
+	if op.Encrypted && encryptionVersion == 0 {
+		encryptionVersion = 1
+	}
+	_, err := tx.Exec(`
+		INSERT INTO files (channel_id, msg_id, name, size, parent_id, upload_time, uploader_user_id, tombstoned, encrypted, plaintext_size, encryption_version, upload_uuid, part_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+		ON CONFLICT(channel_id, msg_id) DO UPDATE SET
+			name = excluded.name,
+			parent_id = excluded.parent_id,
+			size = CASE WHEN excluded.size > 0 THEN excluded.size ELSE files.size END,
+			upload_time = CASE WHEN excluded.upload_time > 0 THEN excluded.upload_time ELSE files.upload_time END,
+			uploader_user_id = CASE WHEN files.uploader_user_id > 0 THEN files.uploader_user_id ELSE excluded.uploader_user_id END,
+			encrypted = CASE WHEN excluded.encrypted = 1 THEN 1 ELSE files.encrypted END,
+			plaintext_size = CASE WHEN excluded.plaintext_size > 0 THEN excluded.plaintext_size ELSE files.plaintext_size END,
+			encryption_version = CASE WHEN excluded.encryption_version > 0 THEN excluded.encryption_version ELSE files.encryption_version END,
+			upload_uuid = excluded.upload_uuid,
+			part_count = excluded.part_count
+	`, channelID, msgID, op.Name, op.FileSize, op.Parent, op.FileUploadTime, actorID,
+		encryptedFlag, op.PlaintextSize, encryptionVersion, op.UploadUUID, op.PartCount)
 	return err
 }
 
