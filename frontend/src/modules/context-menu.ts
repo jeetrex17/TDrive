@@ -1,13 +1,12 @@
 // Context menu handling for TDrive frontend
 
 import { state } from '../state';
-import { icons } from '../constants';
 import { clearSelection, ensureRowSelectedForContextMenu, getSelectionPayload } from './selection';
 import { openDeleteModal } from './modals/delete';
 import { openRenameModal } from './modals/rename';
 import { openMoveModal } from './modals/move';
 import { navigateToFolder } from './navigation';
-import { uploadWithParentID } from './transfers';
+import { importFolderWithParentID, uploadWithParentID } from './transfers';
 
 export function setupContextMenu() {
     const menu = document.getElementById("context-menu");
@@ -62,9 +61,6 @@ export function setupContextMenu() {
         const row = (e.target as HTMLElement).closest(".drive-row") as any;
         const type = row?.dataset?.type || "background";
 
-        // The synthetic Orphaned entry row is navigation-only; no menu.
-        if (type === "orphan-entry") return;
-
         if (row) ensureRowSelectedForContextMenu(row);
 
         if (state.selectedItems.size > 1) {
@@ -84,7 +80,8 @@ export function setupContextMenu() {
             const folderName = row.dataset.name || "Folder";
             show(e.clientX, e.clientY, [
                 { label: `Open "${folderName}"`, onClick: () => navigateToFolder(folderID, folderName) },
-                { label: "Upload to this folder", onClick: () => uploadWithParentID(folderID) },
+                { label: "Upload files to this folder", onClick: () => uploadWithParentID(folderID) },
+                { label: "Upload folder to this folder", onClick: () => importFolderWithParentID(folderID) },
                 { label: "Rename…", onClick: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
                 { label: "Move to…", onClick: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
                 { label: `Delete "${folderName}"`, danger: true, onClick: () => window.initDeleteFolder(folderID, folderName) },
@@ -120,7 +117,8 @@ export function setupContextMenu() {
             }
             items.push(
                 { type: "divider" },
-                { label: "Upload", onClick: () => window.selectFile() },
+                { label: "Upload files", onClick: () => window.selectFile() },
+                { label: "Upload folder", onClick: () => importFolderWithParentID(state.currentFolderId) },
                 { label: "New folder", onClick: () => window.openNewFolderModal() },
                 { label: "Refresh", onClick: () => window.triggerRefresh() },
             );
@@ -130,7 +128,8 @@ export function setupContextMenu() {
 
         show(e.clientX, e.clientY, [
             { label: "New folder", onClick: () => window.openNewFolderModal() },
-            { label: "Upload", onClick: () => window.selectFile() },
+            { label: "Upload files", onClick: () => window.selectFile() },
+            { label: "Upload folder", onClick: () => importFolderWithParentID(state.currentFolderId) },
             { label: "Refresh", onClick: () => window.triggerRefresh() },
         ]);
     });

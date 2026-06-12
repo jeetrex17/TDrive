@@ -117,6 +117,7 @@ type UserProfile struct {
 	FirstName  string
 	LastName   string
 	Username   string
+	Premium    bool
 	PhotoBytes []byte
 }
 

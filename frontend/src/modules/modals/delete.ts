@@ -65,9 +65,9 @@ export function openDeleteModal(target: any) {
             ? ` ${skipped} item(s) you don't own will be skipped.`
             : "";
         if (folders > 0 && files > 0) {
-            subtitle.textContent = `This will hide ${folders} folder(s). Files inside those folders are not deleted. The ${files} selected file(s) will be removed from Telegram.${skippedNote}`;
+            subtitle.textContent = `This will delete ${folders} folder(s), all files inside them, and ${files} selected file(s) from Telegram. This action can't be undone.${skippedNote}`;
         } else if (folders > 0) {
-            subtitle.textContent = `This will hide ${folders} folder(s). Files inside become orphaned and are not deleted.${skippedNote}`;
+            subtitle.textContent = `This will delete ${folders} folder(s) and all files inside them from Telegram. This action can't be undone.${skippedNote}`;
         } else if (files > 0) {
             subtitle.textContent = `This will remove ${files} file(s) from your Telegram channel. The action can't be undone.${skippedNote}`;
         } else {
@@ -76,8 +76,8 @@ export function openDeleteModal(target: any) {
         confirmBtn.textContent = total === 0 ? "Close" : "Delete";
     } else if (target?.type === "folder") {
         title.textContent = name ? `Delete folder "${name}"?` : "Delete folder?";
-        subtitle.textContent = "This hides the folder only. Files inside become orphaned and are not deleted.";
-        confirmBtn.textContent = "Delete folder";
+        subtitle.textContent = "This will delete the folder and every file inside it from Telegram. This action can't be undone.";
+        confirmBtn.textContent = "Delete folder and files";
     } else {
         title.textContent = name ? `Delete "${name}"?` : "Delete file?";
         subtitle.textContent = "This will remove the file from your Telegram channel. The action can't be undone.";

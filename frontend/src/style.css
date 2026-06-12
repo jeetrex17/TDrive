@@ -282,17 +282,6 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 }
 .drive-action-btn .icon { width: 16px; height: 16px; }
 
-.orphan-banner {
-    background: rgba(247, 162, 122, 0.07);
-    border: 1px solid rgba(247, 162, 122, 0.22);
-    color: var(--text-muted);
-    padding: 10px 14px; border-radius: 8px; margin: 0 0 8px;
-    font-size: 0.85rem; display: flex; align-items: center;
-    justify-content: space-between; gap: 12px;
-}
-.orphan-entry { opacity: 0.85; }
-.orphan-entry:hover { opacity: 1; }
-
 .uploader-chip {
     display: inline-block;
     margin-left: 10px;
@@ -1953,3 +1942,50 @@ header {
     /* Narrow windows: the panel nearly fills the width, so keep the chevron put. */
     .preview-overlay.is-info-open .preview-nav-next { right: 12px; }
 }
+
+/* ----- Upload menu (Files / Folder) ----- */
+.upload-menu-wrap { position: relative; display: inline-flex; }
+.upload-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    min-width: 170px;
+    padding: 6px;
+    border-radius: 12px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.4);
+}
+.upload-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-main);
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.upload-menu-item:hover,
+.upload-menu-item:focus-visible { background: rgba(122, 162, 247, 0.12); color: var(--accent); outline: none; }
+.upload-menu-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+/* Import dialog: the "will be skipped" note for oversize files. */
+.import-options-note {
+    margin: 2px 0 0;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    line-height: 1.4;
+}
+
+/* Mark the file area as a native file-drop target (folders + files). */
+#file-list { --wails-drop-target: drop; }

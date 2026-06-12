@@ -5,7 +5,7 @@ import { state } from './state';
 
 // Import setup functions from modules
 import { setupSelectionBar } from './modules/selection';
-import { setupDownloadProgress, setupUploadProgress, uploadWithParentID } from './modules/transfers';
+import { setupDownloadProgress, setupUploadProgress, setupUploadMenu, setupFileDrop, uploadWithParentID } from './modules/transfers';
 import { setupBreadcrumb } from './modules/navigation';
 import { setupContextMenu } from './modules/context-menu';
 import { setupPasswordReveal, setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } from './modules/auth';
@@ -28,6 +28,7 @@ import { setupEncryptionSetupModal } from './modules/modals/encryption-setup';
 import { setupEncryptionPasswordModal } from './modules/modals/encryption-password';
 import { setupEncryptionSettingsModal } from './modules/modals/encryption-settings';
 import { setupUploadOptionsModal } from './modules/modals/upload-options';
+import { setupImportOptionsModal } from './modules/modals/import-options';
 import { setupLogoutModal } from './modules/modals/logout';
 
 // Sidebar / drives
@@ -88,6 +89,7 @@ window.onload = async function() {
     setupEncryptionPasswordModal();
     setupEncryptionSettingsModal();
     setupUploadOptionsModal();
+    setupImportOptionsModal();
     setupLogoutModal();
     setupProfileMenu();
 
@@ -97,6 +99,8 @@ window.onload = async function() {
     setupSelectionBar();
     setupDownloadProgress();
     setupUploadProgress();
+    setupUploadMenu();
+    setupFileDrop();
     setupPasswordReveal();
     setupSearchBar();
     setupGallery();

@@ -34,6 +34,11 @@ type MasterKeyForUploadFunc func(channelID int64, wantEncrypted bool) ([]byte, e
 type WriteCiphertextTempFunc func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error)
 type WarnFunc func(format string, args ...any)
 
+// CreateFolderFunc creates a folder and returns its new ID. It is injected so
+// import can build folder trees without the file service depending on the
+// folder service directly.
+type CreateFolderFunc func(channelID int64, name, parentID string) (folderID string, err error)
+
 type EventSink interface {
 	Emit(name string, args ...any)
 }
@@ -47,10 +52,15 @@ type Service struct {
 	RequireEncryptionKey RequireEncryptionKeyFunc
 	MasterKeyForUpload   MasterKeyForUploadFunc
 	WriteCiphertextTemp  WriteCiphertextTempFunc
+	CreateFolder         CreateFolderFunc
 	Events               EventSink
 	Warnf                WarnFunc
 	Now                  func() time.Time
-	previewMu            sync.Mutex
+	// MaxUploadBytes overrides the per-file upload limit. 0 uses the standard
+	// 2 GiB cap; it is raised to the 4 GiB Premium cap once the account is known
+	// to be Premium. See maxUploadBytes.
+	MaxUploadBytes int64
+	previewMu      sync.Mutex
 
 	// Thumbs is the on-disk thumbnail cache. Nil disables caching (every
 	// Thumbnail call regenerates), which keeps the cache optional in tests.
@@ -227,6 +237,9 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 		return Metadata{}, projection.Op{}, "", fmt.Errorf("drive channel id not found")
 	}
 
+	filename := filepath.Base(filePath)
+	s.emitEvent("upload_start", uploadID, filename, int64(0), parentID)
+
 	plainFile, err := os.Open(filePath)
 	if err != nil {
 		return Metadata{}, projection.Op{}, "", err
@@ -237,8 +250,18 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	if err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
-	filename := filepath.Base(filePath)
 	plaintextSize := info.Size()
+	parent, err := s.validParent(channelID, parentID, "parent")
+	if err != nil {
+		return Metadata{}, projection.Op{}, "", err
+	}
+
+	// Fail fast on oversize files: Telegram rejects them mid-stream otherwise.
+	// The check uses the ciphertext size when encrypting, since the encryption
+	// overhead can push a file that is just under the limit over it.
+	if err := s.checkUploadSize(filename, plaintextSize, wantEncrypted); err != nil {
+		return Metadata{}, projection.Op{}, "", err
+	}
 
 	masterKey, err := s.masterKeyForUpload(channelID, wantEncrypted)
 	if err != nil {
@@ -266,7 +289,6 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	}
 
 	uploadTime := s.now().Unix()
-	parent := normalizeParent(parentID)
 	op := projection.Op{
 		Type:           projection.OpFileUpload,
 		Parent:         parent,
@@ -288,7 +310,7 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	}
 
 	s.warnf("Starting upload: %s\n", filename)
-	s.emitEvent("upload_start", uploadID, filename, uploadSize, parentID)
+	s.emitEvent("upload_start", uploadID, filename, uploadSize, parent)
 
 	var (
 		lastProgress = time.Now()

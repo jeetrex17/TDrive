@@ -194,12 +194,21 @@ func (a *App) SelectFiles() ([]string, error) {
 	return uploadfilepaths, nil
 }
 
+// SelectFolder opens a directory picker and returns the chosen folder path
+// (empty if the user cancels). Folder import walks it on the Go side.
+func (a *App) SelectFolder() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select a folder to upload",
+	})
+}
+
 // UploadToDriveFS uploads each chosen file to the active drive. The
 // `encrypt` flag is a per-batch choice made in the upload-options modal:
 // true means encrypt-and-upload (the encryption password must already
 // be remembered for this app session before this call), false means plain
 // upload regardless of encryption password state.
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) ([]backend.FileMetaData, error) {
+	a.applyUploadLimit(a.fileService())
 	files, err := a.fileService().Upload(a.ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
 	if err != nil {
 		out := make([]backend.FileMetaData, 0, len(files))
@@ -213,6 +222,40 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 		out = append(out, uploadMetaToBackend(f))
 	}
 	return out, nil
+}
+
+// PlanImport scans the selected paths and returns the counts shown in the
+// import dialog (files, folders, total size, archives, oversize-skipped). It
+// mutates nothing.
+func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fileservice.ImportPlan {
+	svc := a.fileService()
+	a.applyUploadLimit(svc)
+	return svc.PlanImport(paths, encrypt, extractArchives)
+}
+
+// ImportPaths recreates the folder structure of the selected paths under
+// parentID and uploads their files. Archives are extracted when extractArchives
+// is set, otherwise uploaded as-is. Progress flows through the import_* and the
+// per-file upload_* events.
+func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) error {
+	svc := a.fileService()
+	a.applyUploadLimit(svc)
+	return svc.RunImport(a.ctx, a.ActiveChannelID(), paths, parentID, encrypt, extractArchives)
+}
+
+// applyUploadLimit raises the file service's per-file cap to the Premium limit
+// when the account is Telegram Premium; otherwise the standard 2 GiB cap stands.
+func (a *App) applyUploadLimit(svc *fileservice.Service) {
+	svc.MaxUploadBytes = a.accountMaxUploadBytes()
+}
+
+func (a *App) accountMaxUploadBytes() int64 {
+	if a.tg != nil {
+		if p, err := a.tg.SelfProfile(a.ctx); err == nil && p.Premium {
+			return fileservice.MaxUploadBytesPremium
+		}
+	}
+	return fileservice.MaxUploadBytesStandard
 }
 
 func uploadMetaToBackend(f fileservice.Metadata) backend.FileMetaData {
@@ -237,10 +280,25 @@ func normalizeOpParent(p string) string {
 
 func (a *App) newFolderService() *folderservice.Service {
 	return &folderservice.Service{
-		DB: backend.DB,
+		DB:    backend.DB,
+		TG:    a.tg,
+		Peers: peerResolverFn(a.resolvePeer),
 		EmitOp: func(channelID int64, op projection.Op) error {
 			_, err := a.emitAndProject(channelID, op)
 			return err
+		},
+		ActorID: func(ctx context.Context) (int64, error) {
+			return a.actorID(ctx)
+		},
+		RequireEncryptionKey: func(encrypted bool) ([]byte, error) {
+			key, err := a.encryptionService().RequireMasterKeyForFile(encrypted)
+			if err != nil {
+				return nil, ErrEncryptionPasswordRequired
+			}
+			return key, nil
+		},
+		Warnf: func(format string, args ...any) {
+			fmt.Printf(format, args...)
 		},
 	}
 }
@@ -275,6 +333,10 @@ func (a *App) newFileService() *fileservice.Service {
 		},
 		WriteCiphertextTemp: func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
 			return a.encryptionService().WriteCiphertextTemp(plain, plaintextSize, masterKey)
+		},
+		CreateFolder: func(channelID int64, name, parentID string) (string, error) {
+			f, err := a.folderService().Create(channelID, name, parentID)
+			return f.ID, err
 		},
 		Events: runtimeEventSink{app: a},
 		Warnf: func(format string, args ...any) {
@@ -497,6 +559,20 @@ func (a *App) shutdown(ctx context.Context) {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// Native file drop: hand the dropped absolute paths to the frontend, which
+	// resolves the target folder and runs the import flow. Drop zones opt in via
+	// the --wails-drop-target CSS property.
+	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
+		if len(paths) > 0 {
+			runtime.EventsEmit(ctx, "files_dropped", map[string]any{
+				"x":     x,
+				"y":     y,
+				"paths": paths,
+			})
+		}
+	})
+
 	if a.active == nil {
 		a.active = lifecycleservice.NewActiveDrive()
 	}
@@ -603,28 +679,6 @@ func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
 	return results, nil
 }
 
-// GetOrphanedFiles returns files in the active channel whose parent is a
-// tombstoned (or non-existent) folder. The frontend renders these in a
-// virtual "Orphaned" bucket at root.
-func (a *App) GetOrphanedFiles() ([]backend.FileMetaData, error) {
-	files, err := a.readService().OrphanedFiles(a.ActiveChannelID())
-	if err != nil {
-		return nil, err
-	}
-	out := make([]backend.FileMetaData, 0, len(files))
-	for _, f := range files {
-		out = append(out, backend.FileMetaData{
-			TgMsgID:    int(f.MsgID),
-			Name:       f.Name,
-			Size:       f.Size,
-			ParentID:   f.ParentID,
-			UploadTime: f.UploadTime,
-			UploaderID: f.UploaderID,
-		})
-	}
-	return out, nil
-}
-
 func (a *App) GetAllFsMsgIDs() ([]int, error) {
 	return a.readService().AllFileMsgIDs(a.ActiveChannelID())
 }
@@ -634,7 +688,7 @@ func (a *App) GetFolderSize(folderID string) (int64, error) {
 }
 
 func (a *App) DeleteFolder(folderID string) string {
-	if err := a.folderService().Delete(a.ActiveChannelID(), folderID); err != nil {
+	if err := a.folderService().Delete(a.ctx, a.ActiveChannelID(), folderID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"

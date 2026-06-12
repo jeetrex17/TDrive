@@ -8,14 +8,13 @@
 //  3. Object IDs are namespaced: files use "f:<msg_id>", folders use "d:<uuid>".
 //     Parent refs always carry the prefix. "" is the only unprefixed value
 //     and means root.
-//  4. mkdir into a missing or tombstoned parent is recorded — orphan handling
-//     happens at read time, never by rejecting writes.
+//  4. mkdir into a missing or tombstoned parent is recorded; recovery/debug
+//     reads can still detect broken parent chains without rejecting history.
 //  5. move/rename targeting a tombstoned or missing object: ignored, logged.
 //  6. A move that would create a cycle is rejected deterministically by walking
 //     ancestors before applying. Projection is not mutated on rejection.
 //  7. tomb / rmdir is idempotent. Re-applying does nothing.
-//  8. Virtual buckets (Unmanaged, Orphaned) are SELECT-time concepts. Never
-//     written as folder rows.
+//  8. Virtual buckets are SELECT-time concepts. Never written as folder rows.
 //  9. ApplyOp is the only writer to files and folders. The rest of the app
 //     reads via read.go and mutates only by calling Local* helpers in writes.go,
 //     which themselves call ApplyOp.

@@ -142,3 +142,25 @@ func TestOrphanedFilesReportsEncryptionMetadata(t *testing.T) {
 		t.Errorf("orphan Size = %d, want 5120", o.Size)
 	}
 }
+
+func TestNextFreeFolderNameSkipsTakenSiblings(t *testing.T) {
+	db := newTestDB(t)
+	mustOp(t, db, 1, Op{Type: OpMkdir, Obj: "d:photos", Parent: RootParent, Name: "Photos"})
+	mustOp(t, db, 2, Op{Type: OpMkdir, Obj: "d:photos2", Parent: RootParent, Name: "Photos (2)"})
+
+	name, err := NextFreeFolderName(db, testChan, RootParent, "Photos")
+	if err != nil {
+		t.Fatalf("NextFreeFolderName Photos: %v", err)
+	}
+	if name != "Photos (3)" {
+		t.Fatalf("NextFreeFolderName Photos = %q, want %q", name, "Photos (3)")
+	}
+
+	name, err = NextFreeFolderName(db, testChan, RootParent, "Unused")
+	if err != nil {
+		t.Fatalf("NextFreeFolderName Unused: %v", err)
+	}
+	if name != "Unused" {
+		t.Fatalf("NextFreeFolderName Unused = %q, want %q", name, "Unused")
+	}
+}

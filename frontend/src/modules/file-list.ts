@@ -10,10 +10,7 @@ import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDro
 import {
     GetFileList, GetStorageUsed,
 } from '../../wailsjs/go/main/App';
-import {
-    getFolderContents as apiGetFolderContents,
-    getOrphanedFiles as apiGetOrphanedFiles,
-} from '../api';
+import { getFolderContents as apiGetFolderContents } from '../api';
 import { calculateFolderTotalBytes, getAllFsMsgIDs } from './drive-data';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { enqueueDownload } from './transfers';
@@ -66,10 +63,6 @@ export function refreshFiles() {
         return;
     }
     setPhotosMode(false);
-
-    if (state.virtualView === "orphaned") {
-        return refreshOrphanView();
-    }
 
     const list = document.getElementById("file-list") as HTMLElement;
     const storageUsed = document.getElementById("storage-used");
@@ -181,21 +174,6 @@ export function refreshFiles() {
             folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
             files.sort((a, b) => (b.date || 0) - (a.date || 0));
 
-            // At root, surface a synthetic "Orphaned" entry if any files
-            // exist whose parent points at a tombstoned/missing folder.
-            // Real folders + files render below it. The query is cheap;
-            // running it always at root keeps the bucket honest after
-            // any folder delete.
-            let orphanCount = 0;
-            if (requestedFolderId === "") {
-                try {
-                    const orphans = await apiGetOrphanedFiles();
-                    orphanCount = Array.isArray(orphans) ? orphans.length : 0;
-                } catch (err) {
-                    console.warn("GetOrphanedFiles failed:", err);
-                }
-            }
-
             // Pending optimistic-create rows scoped to the current parent.
             // Computed up front so the empty-folder branch can include
             // them — otherwise creating a folder inside an empty one
@@ -208,17 +186,13 @@ export function refreshFiles() {
                 }
             }
 
-            if (folders.length === 0 && files.length === 0 && orphanCount === 0 && pendingForParent.length === 0) {
+            if (folders.length === 0 && files.length === 0 && pendingForParent.length === 0) {
                 list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
                 lastRenderedFolderId = requestedFolderId;
                 return;
             }
 
             list.innerHTML = "";
-
-            if (orphanCount > 0) {
-                list.appendChild(buildOrphanEntryRow(orphanCount));
-            }
 
             // Pending CreateFolder ghost rows: rendered before real folders
             // so the just-clicked entry shows up at the top until the
@@ -452,135 +426,6 @@ function buildPendingFolderRow(tempId: string, name: string) {
     return row;
 }
 
-// buildOrphanEntryRow renders the synthetic "Orphaned (N)" entry that
-// appears at the top of root listings. Click drops the user into the
-// virtual orphan view (no real folder navigation; state.currentFolderId
-// stays "").
-function buildOrphanEntryRow(count: number) {
-    const row = document.createElement("div");
-    row.className = "file-row drive-row folder-row orphan-entry";
-    row.dataset.type = "orphan-entry";
-    row.innerHTML = `
-        <div class="row-name">
-            <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
-            Orphaned <span style="opacity:.6;">(${count})</span>
-        </div>
-        <div class="row-meta">—</div>
-        <div class="row-meta">—</div>
-        <div class="row-actions"></div>
-    `;
-    row.title = "Files whose parent folder was deleted. Click to view.";
-    return row;
-}
-
-export function enterOrphanView() {
-    state.virtualView = "orphaned";
-    refreshFiles();
-}
-
-export function exitOrphanView() {
-    state.virtualView = null;
-    refreshFiles();
-}
-
-async function refreshOrphanView() {
-    const list = document.getElementById("file-list") as HTMLElement;
-    const storageUsed = document.getElementById("storage-used");
-    clearSelection();
-    list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
-    if (storageUsed) {
-        // Storage usage stays consistent across virtual views.
-        GetStorageUsed()
-            .then((bytes) => {
-                const value = Number(bytes);
-                storageUsed.innerText = (Number.isFinite(value) && value >= 0)
-                    ? `${formatBytes(value)} / Unlimited`
-                    : "— / Unlimited";
-            })
-            .catch(() => { storageUsed.innerText = "— / Unlimited"; });
-    }
-
-    let orphans;
-    try {
-        orphans = await apiGetOrphanedFiles();
-    } catch (err) {
-        console.error("GetOrphanedFiles failed:", err);
-        list.innerHTML = '<div style="padding:20px; color:#c0caf5;">Failed to load orphan files.</div>';
-        return;
-    }
-    orphans = Array.isArray(orphans) ? orphans : [];
-
-    list.innerHTML = "";
-
-    const banner = document.createElement("div");
-    banner.className = "orphan-banner";
-    banner.innerHTML = `
-        <div>
-            <strong>Orphaned files</strong> — these files lived in folders that were deleted.
-            They aren't in any folder anymore, but they aren't deleted either.
-        </div>
-        <button id="orphan-back" class="secondary-btn" type="button">Back to root</button>
-    `;
-    list.appendChild(banner);
-
-    if (orphans.length === 0) {
-        const empty = document.createElement("div");
-        empty.style.cssText = "padding:20px; color:#565f89;";
-        empty.textContent = "Nothing here. (If you've just refreshed and expected files, try Refresh again.)";
-        list.appendChild(empty);
-        return;
-    }
-
-    orphans.sort((a, b) => (Number(b.uploadTime || 0)) - (Number(a.uploadTime || 0)));
-
-    orphans.forEach((file) => {
-        const { base, ext } = splitNameAndExt(file.name);
-        const encrypted = !!file.encrypted;
-        const plaintextSize = Number(file.plaintextSize || 0);
-        // Encrypted files display their original plaintext size, not the
-        // on-wire ciphertext size — same as the main file list.
-        const displaySize = encrypted && plaintextSize > 0 ? plaintextSize : file.size;
-        const row = document.createElement("div");
-        row.className = "file-row drive-row";
-        row.dataset.type = "file";
-        row.dataset.id = String(file.msgId);
-        row.dataset.name = String(file.name || "");
-        row.dataset.source = "fs";
-        row.dataset.size = String(displaySize || 0);
-        row.dataset.parentId = "";
-        row.dataset.uploaderId = String(file.uploaderId || 0);
-        const fileShape = {
-            id: file.msgId,
-            name: file.name,
-            size: displaySize,
-            uploaderID: Number(file.uploaderId || 0),
-        };
-        const ownerOnly = canOwnerActOnFile(fileShape);
-        row.dataset.canDelete = ownerOnly ? "true" : "false";
-        row.dataset.canRename = ownerOnly ? "true" : "false";
-        row.dataset.uploadTime = String(file.uploadTime || 0);
-
-        const lockBadge = encrypted
-            ? `<span class="file-lock-badge" title="Encrypted" aria-label="Encrypted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 11h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0v4"/></svg></span>`
-            : '';
-        row.innerHTML = `
-            <div class="row-name">
-                <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
-                ${lockBadge}${escapeHtml(base)}
-                <span class="uploader-chip" data-uploader-slot></span>
-            </div>
-            <div class="row-meta">${formatDate(file.uploadTime)}</div>
-            <div class="row-meta">${formatBytes(displaySize)}</div>
-            <div class="row-actions">
-                <button class="action-icon download" type="button" title="Download">${icons.download}</button>
-            </div>
-        `;
-        list.appendChild(row);
-    });
-
-    populateUploaderChips(list);
-}
-
 // Delegated row interactions. Listeners live on the #file-list container and
 // read each row's data-* attributes, so re-rendering rows costs no click
 // listener churn. Drag handlers are still attached per row for now.
@@ -593,17 +438,9 @@ function handleListClick(e: MouseEvent) {
     // so downloads/open/double-click navigation do not fire twice.
     if (isSearchMode()) return;
 
-    if ((e.target as HTMLElement).closest("#orphan-back")) {
-        exitOrphanView();
-        return;
-    }
     const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
     if (!row) return;
 
-    if (row.dataset.type === "orphan-entry") {
-        enterOrphanView();
-        return;
-    }
     if (row.dataset.type === "folder") {
         if ((e.target as HTMLElement).closest("button.open-folder")) {
             navigateToFolder(row.dataset.id as string, row.dataset.name as string);
@@ -628,19 +465,13 @@ function handleListDblClick(e: MouseEvent) {
     const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
     if (!row) return;
 
-    if (row.dataset.type === "orphan-entry") {
-        enterOrphanView();
-        return;
-    }
     if (row.dataset.type === "folder") {
         navigateToFolder(row.dataset.id as string, row.dataset.name as string);
         return;
     }
     if (row.dataset.type === "file") {
-        // Rename only from the name area, only when allowed, and never in the
-        // orphan view (orphan files were never rename-on-double-click).
+        // Rename only from the name area and only when allowed.
         if (!(e.target as HTMLElement).closest(".row-name")) return;
-        if (state.virtualView === "orphaned") return;
         if (row.dataset.canRename !== "true") return;
         e.preventDefault();
         const selection = window.getSelection?.();

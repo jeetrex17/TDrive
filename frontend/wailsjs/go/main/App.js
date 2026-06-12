@@ -82,16 +82,16 @@ export function GetInviteLink(arg1) {
   return window['go']['main']['App']['GetInviteLink'](arg1);
 }
 
-export function GetOrphanedFiles() {
-  return window['go']['main']['App']['GetOrphanedFiles']();
-}
-
 export function GetPassch() {
   return window['go']['main']['App']['GetPassch']();
 }
 
 export function GetStorageUsed() {
   return window['go']['main']['App']['GetStorageUsed']();
+}
+
+export function ImportPaths(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ImportPaths'](arg1, arg2, arg3, arg4);
 }
 
 export function InitDrive() {
@@ -150,6 +150,10 @@ export function MyUserID() {
   return window['go']['main']['App']['MyUserID']();
 }
 
+export function PlanImport(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PlanImport'](arg1, arg2, arg3);
+}
+
 export function PreviewFile(arg1) {
   return window['go']['main']['App']['PreviewFile'](arg1);
 }
@@ -192,6 +196,10 @@ export function Search(arg1, arg2) {
 
 export function SelectFiles() {
   return window['go']['main']['App']['SelectFiles']();
+}
+
+export function SelectFolder() {
+  return window['go']['main']['App']['SelectFolder']();
 }
 
 export function SendHint(arg1) {

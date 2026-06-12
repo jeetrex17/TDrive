@@ -64,6 +64,7 @@ func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
 	if err := projection.MigratePersonalChannel(db, personalChannelID); err != nil {
 		t.Fatalf("migrate personal: %v", err)
@@ -321,6 +322,27 @@ func TestUploadPlainFileSendsAndProjects(t *testing.T) {
 	}
 	if !events.Has("upload_start") || !events.Has("upload_complete") || !events.Has("upload_progress") {
 		t.Fatalf("events = %+v, missing upload lifecycle event", events.events)
+	}
+}
+
+func TestUploadRejectsMissingParentBeforeSend(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	events := &eventRecorder{}
+	svc.Events = events
+	path := writeTempFile(t, "hello")
+
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{"d:missing"}, false)
+	if err == nil {
+		t.Fatal("upload should reject a missing parent")
+	}
+	if len(files) != 0 {
+		t.Fatalf("files = %+v, want none", files)
+	}
+	if sent := fakeTG.SentFiles(); len(sent) != 0 {
+		t.Fatalf("sent files = %+v, want none", sent)
+	}
+	if !events.Has("upload_start") || !events.Has("upload_error") {
+		t.Fatalf("events = %+v, want visible failed upload lifecycle", events.events)
 	}
 }
 

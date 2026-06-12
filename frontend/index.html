@@ -147,10 +147,22 @@
                             Folder
                         </button>
                         
-                        <button class="primary-btn upload-btn" onclick="selectFile()">
-                            <svg class="btn-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
-                            Upload
-                        </button>
+                        <div class="upload-menu-wrap">
+                            <button id="upload-btn" class="primary-btn upload-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="upload-menu">
+                                <svg class="btn-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                                Upload
+                            </button>
+                            <div id="upload-menu" class="upload-menu" role="menu" style="display: none;">
+                                <button id="upload-menu-files" class="upload-menu-item" type="button" role="menuitem">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 13h6m-6 4h6m2 4H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z"/></svg>
+                                    Files
+                                </button>
+                                <button id="upload-menu-folder" class="upload-menu-item" type="button" role="menuitem">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+                                    Folder
+                                </button>
+                            </div>
+                        </div>
 
                         <button id="profile-trigger" class="profile-trigger" type="button"
                                 aria-haspopup="menu" aria-expanded="false" aria-controls="profile-menu"
@@ -410,6 +422,32 @@
                 <div class="modal-actions">
                     <button id="upload-options-cancel" class="secondary-btn" type="button">Cancel</button>
                     <button id="upload-options-confirm" class="primary-btn" type="button">Continue</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="import-options-modal" class="modal-overlay" style="display: none;">
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="import-options-title">
+                <h3 id="import-options-title" class="modal-title">Import</h3>
+                <p id="import-options-summary" class="modal-subtitle"></p>
+                <label id="import-options-extract-row" class="modal-choice-row" style="display: none;">
+                    <input id="import-options-extract" type="checkbox">
+                    <span>
+                        <strong>Extract archives</strong>
+                        <small>Unpack archive contents into folders instead of uploading the archive file.</small>
+                    </span>
+                </label>
+                <label id="import-options-encrypt-row" class="modal-choice-row" style="display: none;">
+                    <input id="import-options-encrypt" type="checkbox">
+                    <span>
+                        <strong>Encrypt before upload</strong>
+                        <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
+                    </span>
+                </label>
+                <p id="import-options-note" class="import-options-note" style="display: none;"></p>
+                <div class="modal-actions">
+                    <button id="import-options-cancel" class="secondary-btn" type="button">Cancel</button>
+                    <button id="import-options-confirm" class="primary-btn" type="button">Import</button>
                 </div>
             </div>
         </div>

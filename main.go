@@ -29,6 +29,13 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		// Native file drop: dropped folders and files arrive as absolute paths,
+		// which is the only way to accept a mixed files+folders selection (the
+		// OS open dialogs cannot). Drop zones opt in via the --wails-drop-target
+		// CSS property in the frontend.
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop: true,
+		},
 		Bind: []interface{}{
 			app,
 		},
