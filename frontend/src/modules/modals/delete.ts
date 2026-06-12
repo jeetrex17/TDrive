@@ -33,6 +33,19 @@ async function deleteFileWithPasswordRetry(id: any) {
     return res;
 }
 
+// Folder delete also rejects with "encryption password required" when the
+// subtree contains encrypted files and the vault is locked. Mirror the file
+// path: prompt for the password once and retry.
+async function deleteFolderWithPasswordRetry(id: any) {
+    let res = await deleteFolder(String(id));
+    if (typeof res === "string" && res.startsWith("Error") && /encryption password required/i.test(res)) {
+        const ok = await openEncryptionPasswordModal();
+        if (!ok) return "Error: Encryption password required";
+        res = await deleteFolder(String(id));
+    }
+    return res;
+}
+
 export function openDeleteModal(target: any) {
     const modal = document.getElementById("delete-modal");
     const title = document.getElementById("delete-modal-title");
@@ -138,7 +151,7 @@ export function setupDeleteModal() {
 
                 for (const folder of folders) {
                     try {
-                        const res = await deleteFolder(String(folder.id));
+                        const res = await deleteFolderWithPasswordRetry(folder.id);
                         if (typeof res === "string" && res.startsWith("Error")) {
                             failures.push({ item: folder, error: res.replace(/^Error:?\s*/i, '') });
                             continue;
@@ -183,7 +196,7 @@ export function setupDeleteModal() {
                 window.refreshFiles();
             } else {
                 const res = target.type === "folder"
-                    ? await deleteFolder(String(target.id))
+                    ? await deleteFolderWithPasswordRetry(target.id)
                     : await deleteFileWithPasswordRetry(target.id);
 
                 dismissNotification(progressId);

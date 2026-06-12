@@ -111,23 +111,36 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 		return err
 	}
 
+	// Delete the whole subtree, but don't abort on the first per-item failure.
+	// Each tombstone op is idempotent, so we make maximal progress and report
+	// what's left; a retry finishes the rest rather than stranding the tree in a
+	// worse half-state with a bare "delete failed".
+	var failed []string
+	deleted := make([]projection.FileSlim, 0, len(files))
 	for _, file := range files {
 		op := projection.Op{
 			Type: projection.OpTomb,
 			Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, file.MsgID),
 		}
 		if err := s.emit(channelID, op); err != nil {
-			return fmt.Errorf("delete file %q in folder failed: %w", file.Name, err)
+			failed = append(failed, fmt.Sprintf("file %q: %v", file.Name, err))
+			continue
 		}
+		deleted = append(deleted, file)
 	}
 	for _, folder := range folders {
-		op := projection.Op{Type: projection.OpRmdir, Obj: folder.ID}
-		if err := s.emit(channelID, op); err != nil {
-			return fmt.Errorf("delete folder %q failed: %w", folder.Name, err)
+		if err := s.emit(channelID, projection.Op{Type: projection.OpRmdir, Obj: folder.ID}); err != nil {
+			failed = append(failed, fmt.Sprintf("folder %q: %v", folder.Name, err))
 		}
 	}
 
-	s.deleteBodiesBestEffort(ctx, channelID, files)
+	// Only drop bodies for files whose tombstone actually landed, so a file's
+	// content is never deleted while its metadata still shows it as present.
+	s.deleteBodiesBestEffort(ctx, channelID, deleted)
+
+	if len(failed) > 0 {
+		return fmt.Errorf("folder partially deleted, try again to finish (%d item(s) failed: %s)", len(failed), strings.Join(failed, "; "))
+	}
 	return nil
 }
 

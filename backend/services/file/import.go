@@ -352,7 +352,14 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 		"oversize": tasks.oversize,
 		"errors":   tasks.errors,
 	})
-	return uploadErr
+	// Per-file upload failures are already reported through import_complete (and
+	// the upload_error events). Returning them here too made the frontend
+	// overwrite that accurate summary with a generic "Import failed", so log and
+	// swallow; only genuine pre-import errors above reject the call.
+	if uploadErr != nil {
+		s.warnf("import: some uploads failed: %v\n", uploadErr)
+	}
+	return nil
 }
 
 // addFileTask queues a single file for upload, skipping (and counting) it if it
@@ -501,7 +508,7 @@ func (s *Service) extractArchiveToTemp(archivePath, tmpRoot string, encrypt bool
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return err
 		}
-		f, err := os.Create(dest)
+		f, actualDest, err := createUniqueExtractFile(dest)
 		if err != nil {
 			return err
 		}
@@ -513,20 +520,20 @@ func (s *Service) extractArchiveToTemp(archivePath, tmpRoot string, encrypt bool
 		written, copyErr := io.Copy(f, io.LimitReader(r, entryReadLimit))
 		closeErr := f.Close()
 		if copyErr != nil {
-			_ = os.Remove(dest)
+			_ = os.Remove(actualDest)
 			return copyErr
 		}
 		if closeErr != nil {
-			_ = os.Remove(dest)
+			_ = os.Remove(actualDest)
 			return closeErr
 		}
 		if written > remaining {
-			_ = os.Remove(dest)
+			_ = os.Remove(actualDest)
 			return fmt.Errorf("archive expands past %s", humanByteSize(totalLimit))
 		}
 		if uploadByteSize(written, encrypt) > limit {
 			stats.oversize++
-			_ = os.Remove(dest)
+			_ = os.Remove(actualDest)
 			return nil
 		}
 		stats.files++
@@ -538,6 +545,34 @@ func (s *Service) extractArchiveToTemp(archivePath, tmpRoot string, encrypt bool
 		return "", stats, err
 	}
 	return dir, stats, nil
+}
+
+// createUniqueExtractFile opens dest for writing without ever overwriting. If
+// the path is already taken (an exact duplicate archive entry, or a case-only
+// collision on a case-insensitive filesystem), it falls back to "name (2).ext",
+// "name (3).ext", and so on, so both colliding entries survive instead of one
+// silently clobbering the other. Returns the file and the path actually used.
+func createUniqueExtractFile(dest string) (*os.File, string, error) {
+	const flags = os.O_CREATE | os.O_EXCL | os.O_WRONLY
+	if f, err := os.OpenFile(dest, flags, 0o644); err == nil {
+		return f, dest, nil
+	} else if !os.IsExist(err) {
+		return nil, "", err
+	}
+	dir := filepath.Dir(dest)
+	ext := filepath.Ext(dest)
+	stem := strings.TrimSuffix(filepath.Base(dest), ext)
+	for k := 2; k < 10000; k++ {
+		cand := filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, k, ext))
+		f, err := os.OpenFile(cand, flags, 0o644)
+		if err == nil {
+			return f, cand, nil
+		}
+		if !os.IsExist(err) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("could not find a free name for %q", filepath.Base(dest))
 }
 
 func (s *Service) maxArchiveExtractBytes() int64 {
