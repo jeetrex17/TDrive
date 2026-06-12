@@ -64,6 +64,20 @@ export function setupEncryptionPasswordModal() {
     }
 }
 
+// callWithPasswordRetry runs a backend binding that returns "Error: ..." strings.
+// If it fails with "encryption password required" (a locked vault), it prompts
+// for the password once and retries. Used by rename/move/delete on encrypted
+// files and folders.
+export async function callWithPasswordRetry(call: () => Promise<any>): Promise<any> {
+    let res = await call();
+    if (typeof res === "string" && res.startsWith("Error") && /encryption password required/i.test(res)) {
+        const ok = await openEncryptionPasswordModal();
+        if (!ok) return "Error: Encryption password required";
+        res = await call();
+    }
+    return res;
+}
+
 export function openEncryptionPasswordModal() {
     const modal = document.getElementById('encryption-password-modal');
     if (!modal) return Promise.resolve(false);

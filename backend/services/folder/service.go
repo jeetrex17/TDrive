@@ -107,7 +107,7 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 	if err := s.requireDeletePermission(ctx, channelID, files); err != nil {
 		return err
 	}
-	if err := s.requireEncryptedDeleteKey(files); err != nil {
+	if err := s.requireEncryptedKey(files); err != nil {
 		return err
 	}
 
@@ -158,6 +158,9 @@ func (s *Service) Rename(channelID int64, folderID string, newName string) error
 	if !projection.IsFolderID(folderID) || !projection.FolderExists(s.DB, channelID, folderID) {
 		return fmt.Errorf("Folder not found")
 	}
+	if err := s.requireSubtreeEncryptionKey(channelID, folderID); err != nil {
+		return err
+	}
 	op := projection.Op{
 		Type: projection.OpRename,
 		Obj:  folderID,
@@ -205,6 +208,9 @@ func (s *Service) Move(channelID int64, folderID string, newParentID string) err
 			return fmt.Errorf("Cannot move folder into its own subfolder")
 		}
 	}
+	if err := s.requireSubtreeEncryptionKey(channelID, folderID); err != nil {
+		return err
+	}
 	op := projection.Op{
 		Type:   projection.OpMove,
 		Obj:    folderID,
@@ -246,7 +252,10 @@ func (s *Service) requireDeletePermission(ctx context.Context, channelID int64, 
 	return nil
 }
 
-func (s *Service) requireEncryptedDeleteKey(files []projection.FileSlim) error {
+// requireEncryptedKey demands the encryption key when any of the files is
+// encrypted, before a destructive or moving operation. A locked vault returns
+// the "encryption password required" error the frontend prompts on.
+func (s *Service) requireEncryptedKey(files []projection.FileSlim) error {
 	encrypted := false
 	for _, file := range files {
 		if file.Encrypted {
@@ -259,6 +268,16 @@ func (s *Service) requireEncryptedDeleteKey(files []projection.FileSlim) error {
 	}
 	_, err := s.RequireEncryptionKey(true)
 	return err
+}
+
+// requireSubtreeEncryptionKey demands the key when the folder's subtree contains
+// any encrypted file, before renaming/moving/deleting the folder.
+func (s *Service) requireSubtreeEncryptionKey(channelID int64, folderID string) error {
+	files, err := projection.FolderSubtreeFiles(s.DB, channelID, folderID)
+	if err != nil {
+		return err
+	}
+	return s.requireEncryptedKey(files)
 }
 
 func (s *Service) deleteBodiesBestEffort(ctx context.Context, channelID int64, files []projection.FileSlim) {

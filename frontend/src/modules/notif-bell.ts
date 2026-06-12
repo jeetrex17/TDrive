@@ -80,14 +80,17 @@ export function setupNotifBell() {
         else if (state.notifHoverOpen) closeHoverPopover();
     });
 
-    // Cancel button on an active transfer row (delegated; rows re-render).
-    document.addEventListener('click', (e) => {
+    // Cancel button on an active transfer row. pointerdown in the capture phase:
+    // the panel re-renders on every progress tick (which would eat a click
+    // landing between mousedown and mouseup), and capture runs before the row's
+    // own click-to-copy handler can stop the event.
+    document.addEventListener('pointerdown', (e) => {
         const btn = (e.target as HTMLElement)?.closest?.('.notif-row-cancel') as HTMLElement | null;
         if (!btn) return;
         e.preventDefault();
         e.stopPropagation();
         cancelTransfersInDirection(btn.dataset.cancelDir || 'up');
-    });
+    }, true);
 
     renderBell();
     startPulseTicker();

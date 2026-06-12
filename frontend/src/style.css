@@ -451,7 +451,7 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 /* Rows */
 .notif-row {
     display: grid;
-    grid-template-columns: 22px 1fr auto;
+    grid-template-columns: 22px 1fr auto auto;
     gap: 12px;
     align-items: center;
     padding: 10px 12px;
@@ -508,7 +508,6 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
     flex-shrink: 0;
     width: 22px;
     height: 22px;
-    margin-left: 6px;
     padding: 0;
     border: none;
     border-radius: 6px;

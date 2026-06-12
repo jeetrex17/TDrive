@@ -2,6 +2,7 @@
 
 import { state } from '../state';
 import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../wailsjs/go/main/App';
+import { callWithPasswordRetry } from './modals/encryption-password';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
 
@@ -68,7 +69,7 @@ export async function performDropMove(newParentId: string) {
         try {
             let res = "";
             if (item.type === "folder") {
-                res = await MoveFolder(String(item.id), parent);
+                res = await callWithPasswordRetry(() => MoveFolder(String(item.id), parent));
             } else {
                 await ensureFileInTdriveSystem({
                     type: "file",
@@ -78,7 +79,7 @@ export async function performDropMove(newParentId: string) {
                     parentId: item.parentId,
                     source: item.source,
                 });
-                res = await MoveFile(Number(item.id), parent);
+                res = await callWithPasswordRetry(() => MoveFile(Number(item.id), parent));
             }
             if (typeof res === "string" && res.startsWith("Error")) {
                 failures++;
