@@ -416,8 +416,10 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
 .notif-panel-clear {
     background: transparent;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    color: var(--text-muted);
-    font-size: 0.78rem;
+    color: rgba(192, 202, 245, 0.8);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
     padding: 4px 10px;
     border-radius: 7px;
     cursor: pointer;
@@ -503,7 +505,14 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(122, 162, 
     font-size: 0.74rem;
     flex-shrink: 0;
     margin-left: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    white-space: nowrap;
 }
+.notif-row-size { color: rgba(192, 202, 245, 0.82); }
+.notif-row-speed { font-size: 0.68rem; color: var(--text-muted); }
 .notif-row-cancel {
     flex-shrink: 0;
     width: 22px;

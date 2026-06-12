@@ -553,7 +553,11 @@ async function uploadPathsBatch(paths: any, parentID: any, encrypt: boolean) {
     } catch (err) {
         uploadThrew = true;
         console.error("Upload failed:", err);
-        notify({ level: 'error', title: 'Upload failed', body: String(err) });
+        // On cancel the backend returns "N uploads failed"; the per-file rows
+        // already show Canceled, so don't also pop a generic failure toast.
+        if (!state.cancelingUpload) {
+            notify({ level: 'error', title: 'Upload failed', body: String(err) });
+        }
     } finally {
         if (state.activeTransfer === "upload") state.activeTransfer = null;
         // Safety sweep: by the time UploadToDriveFS resolves, every upload in

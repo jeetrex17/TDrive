@@ -11,6 +11,7 @@
 // `updateTransferProgress()` / `markTransferDone()` to feed the bell.
 
 import { state } from '../state';
+import { formatBytes } from '../utils';
 
 const HISTORY_CAP = 100;
 const HOVER_GRACE_MS = 280;
@@ -146,7 +147,24 @@ export function updateTransferProgress({ id, direction, progress }: any) {
     const entry = state.historyEvents.find((e) => e.id === key);
     if (!entry || entry.status !== 'active') return;
     const value = Math.max(0, Math.min(100, Number(progress) || 0));
-    if (Math.round(entry.progress) === Math.round(value)) return; // skip noise
+
+    // Track transferred bytes and a smoothed speed for the row meta.
+    const total = Number(entry.total) || 0;
+    if (total > 0) {
+        const bytes = (value / 100) * total;
+        const now = Date.now();
+        if (entry.speedAt && now > entry.speedAt) {
+            const inst = (bytes - (entry.speedBytes || 0)) / ((now - entry.speedAt) / 1000);
+            if (Number.isFinite(inst) && inst >= 0) {
+                entry.speed = entry.speed ? entry.speed * 0.6 + inst * 0.4 : inst;
+            }
+        }
+        entry.speedAt = now;
+        entry.speedBytes = bytes;
+        entry.bytes = bytes;
+    }
+
+    if (Math.round(entry.progress) === Math.round(value)) return; // skip render noise
     entry.progress = value;
     renderAll();
 }
@@ -388,6 +406,21 @@ function renderPanel() {
 
 // ─── ROW TEMPLATES ───────────────────────────────────────────────────────────
 
+// transferMetaHTML is the right-side meta: a status word once terminal, else the
+// transferred size (e.g. "2.1 MB / 37 MB") with the current speed under it.
+function transferMetaHTML(t: any): string {
+    if (t.status === 'done') return 'Done';
+    if (t.status === 'failed') return 'Failed';
+    if (t.status === 'canceled') return 'Canceled';
+    const total = Number(t.total) || 0;
+    if (total <= 0) return `${Math.round(t.progress || 0)}%`;
+    const done = Math.min(total, (Number(t.progress) || 0) / 100 * total);
+    const speed = Number(t.speed) > 0
+        ? `<div class="notif-row-speed">${escapeHTML(formatBytes(t.speed))}/s</div>`
+        : '';
+    return `<div class="notif-row-size">${escapeHTML(`${formatBytes(done)} / ${formatBytes(total)}`)}</div>${speed}`;
+}
+
 function transferRowHTML(t: any) {
     const direction = t.direction === 'up' ? 'upload' : 'download';
     const dirLabel = t.direction === 'up' ? 'Uploading' : 'Downloading';
@@ -396,11 +429,7 @@ function transferRowHTML(t: any) {
         t.status === 'failed' ? 'is-failed' :
         t.status === 'canceled' ? 'is-canceled' :
         'is-active';
-    const meta =
-        t.status === 'done' ? 'Done' :
-        t.status === 'failed' ? 'Failed' :
-        t.status === 'canceled' ? 'Canceled' :
-        `${Math.round(t.progress || 0)}%`;
+    const metaHTML = transferMetaHTML(t);
     const cancelBtn = t.status === 'active'
         ? `<button class="notif-row-cancel" type="button" data-cancel-dir="${t.direction}" aria-label="Cancel transfer" title="Cancel">&times;</button>`
         : '';
@@ -413,7 +442,7 @@ function transferRowHTML(t: any) {
                     <div class="notif-row-progress-fill" style="width:${Math.max(0, Math.min(100, t.progress || 0))}%"></div>
                 </div>
             </div>
-            <div class="notif-row-meta">${escapeHTML(meta)}</div>
+            <div class="notif-row-meta">${metaHTML}</div>
             ${cancelBtn}
         </div>
     `;
