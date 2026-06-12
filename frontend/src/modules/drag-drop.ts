@@ -2,6 +2,7 @@
 
 import { state } from '../state';
 import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../wailsjs/go/main/App';
+import { callWithPasswordRetry } from './modals/encryption-password';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
 
@@ -30,15 +31,10 @@ export function setDropHighlight(el: HTMLElement, allowed: boolean) {
 export function canDropOnFolder(targetFolderId: string) {
     if (!state.dragState) return false;
     const target = String(targetFolderId || "");
-    const currentParent = String(state.dragState.parentId || "");
-    if (target === currentParent) return false;
-
-    if (state.dragState.type === "folder") {
-        const movingId = String(state.dragState.id || "");
-        if (!movingId) return false;
-        if (target === movingId) return false;
-        if (state.dragState.blocked && state.dragState.blocked.has(target)) return false;
-    }
+    if (target === String(state.dragState.parentId || "")) return false;
+    // blocked holds every dragged folder id plus its descendants, so we never
+    // drop a folder into itself or its own subtree.
+    if (state.dragState.blocked && state.dragState.blocked.has(target)) return false;
     return true;
 }
 
@@ -60,56 +56,83 @@ async function ensureFileInTdriveSystem(target: any) {
 
 export async function performDropMove(newParentId: string) {
     if (!state.dragState) return;
-    const dragData = state.dragState;
+    const items = Array.isArray(state.dragState.items) ? state.dragState.items : [];
     const parent = String(newParentId || "");
-    const currentParent = String(dragData.parentId || "");
-    if (parent === currentParent) return;
+    if (!items.length || parent === String(state.dragState.parentId || "")) {
+        clearDropHighlights();
+        return;
+    }
 
-    try {
-        let res = "";
-        if (dragData.type === "folder") {
-            res = await MoveFolder(String(dragData.id), parent);
-        } else {
-            await ensureFileInTdriveSystem({
-                type: "file",
-                id: Number(dragData.id),
-                name: dragData.name,
-                size: dragData.size,
-                parentId: dragData.parentId,
-                source: dragData.source,
-            });
-            res = await MoveFile(Number(dragData.id), parent);
+    let failures = 0;
+    let lastError = "";
+    for (const item of items) {
+        try {
+            let res = "";
+            if (item.type === "folder") {
+                res = await callWithPasswordRetry(() => MoveFolder(String(item.id), parent));
+            } else {
+                await ensureFileInTdriveSystem({
+                    type: "file",
+                    id: Number(item.id),
+                    name: item.name,
+                    size: item.size,
+                    parentId: item.parentId,
+                    source: item.source,
+                });
+                res = await callWithPasswordRetry(() => MoveFile(Number(item.id), parent));
+            }
+            if (typeof res === "string" && res.startsWith("Error")) {
+                failures++;
+                lastError = humanizeBackendError(res);
+            }
+        } catch (err) {
+            failures++;
+            lastError = humanizeBackendError(err);
         }
+    }
 
-        if (typeof res === "string" && res.startsWith("Error")) {
-            notify({
-                level: 'error',
-                title: 'Move failed',
-                body: humanizeBackendError(res),
-            });
-        } else {
-            window.refreshFiles();
-        }
-    } catch (err) {
+    if (failures > 0) {
         notify({
             level: 'error',
-            title: 'Move failed',
-            body: humanizeBackendError(err),
+            title: failures === items.length ? 'Move failed' : `${failures} of ${items.length} moves failed`,
+            body: lastError,
         });
-    } finally {
-        clearDropHighlights();
+    }
+    window.refreshFiles();
+    clearDropHighlights();
+}
+
+function setNativeFileDrop(enabled: boolean) {
+    // macOS intercepts the in-app HTML5 drag while the native OS file-drop target
+    // is live, breaking the move and popping the upload dialog. Turn it off for
+    // the duration of an internal drag.
+    try { (window as any)?.go?.main?.App?.SetFileDropEnabled?.(enabled); } catch { /* binding optional */ }
+}
+
+function clearDragRows() {
+    if (!state.dragState) return;
+    if (state.dragState.row) state.dragState.row.classList.remove("is-dragging");
+    if (Array.isArray(state.dragState.items)) {
+        for (const it of state.dragState.items) {
+            if (it?.row) it.row.classList.remove("is-dragging");
+        }
     }
 }
 
-export function beginRowDrag(row: HTMLElement, nextState: any) {
+export function beginRowDrag(row: HTMLElement, items: any[], parentId: string, blocked?: Set<string>) {
     clearDropHighlights();
-    if (state.dragState?.row) state.dragState.row.classList.remove("is-dragging");
-    state.dragState = { ...nextState, row };
+    clearDragRows();
+    setNativeFileDrop(false);
+    state.dragState = { items, parentId: String(parentId || ""), blocked: blocked || new Set<string>(), row };
+    for (const it of items) {
+        if (it?.row) it.row.classList.add("is-dragging");
+    }
     row.classList.add("is-dragging");
 }
 
 export function endRowDrag() {
-    if (state.dragState?.row) state.dragState.row.classList.remove("is-dragging");
+    clearDragRows();
     state.dragState = null;
     clearDropHighlights();
+    setNativeFileDrop(true);
 }

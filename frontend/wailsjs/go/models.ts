@@ -105,7 +105,7 @@ export namespace backend {
 }
 
 export namespace file {
-
+	
 	export class ImportPlan {
 	    files: number;
 	    folders: number;
@@ -114,11 +114,11 @@ export namespace file {
 	    archives: number;
 	    maxBytes: number;
 	    errors: string[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ImportPlan(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.files = source["files"];
@@ -322,3 +322,4 @@ export namespace main {
 	}
 
 }
+

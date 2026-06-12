@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"TDrive/backend"
@@ -40,6 +41,16 @@ type App struct {
 	syncEngine *tdsync.Engine
 	active     *lifecycleservice.ActiveDrive
 	selfUserID atomic.Int64
+	// fileDropEnabled tracks whether the native OS file-drop handler is
+	// registered. The frontend toggles it off during an internal drag-to-move so
+	// macOS does not intercept the in-app HTML5 drag.
+	fileDropEnabled bool
+
+	// transferMu guards the cancel handles for the active upload/import and the
+	// active download (both serialized by the frontend).
+	transferMu     sync.Mutex
+	uploadCancel   context.CancelFunc
+	downloadCancel context.CancelFunc
 }
 
 type peerResolverFn func(context.Context, int64) (tgclient.InputPeer, error)
@@ -207,9 +218,70 @@ func (a *App) SelectFolder() (string, error) {
 // true means encrypt-and-upload (the encryption password must already
 // be remembered for this app session before this call), false means plain
 // upload regardless of encryption password state.
+// beginUpload starts a cancellable context for an upload/import and stores its
+// cancel handle so CancelUpload can stop it. endUpload clears it.
+func (a *App) beginUpload() context.Context {
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.transferMu.Lock()
+	if a.uploadCancel != nil {
+		a.uploadCancel()
+	}
+	a.uploadCancel = cancel
+	a.transferMu.Unlock()
+	return ctx
+}
+
+func (a *App) endUpload() {
+	a.transferMu.Lock()
+	a.uploadCancel = nil
+	a.transferMu.Unlock()
+}
+
+// CancelUpload cancels the in-flight upload or import: in-flight sends abort and
+// the rest are skipped. The frontend marks the affected transfers canceled.
+func (a *App) CancelUpload() {
+	a.transferMu.Lock()
+	cancel := a.uploadCancel
+	a.transferMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// beginDownload / endDownload / CancelDownload do the same for the active
+// download.
+func (a *App) beginDownload() context.Context {
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.transferMu.Lock()
+	if a.downloadCancel != nil {
+		a.downloadCancel()
+	}
+	a.downloadCancel = cancel
+	a.transferMu.Unlock()
+	return ctx
+}
+
+func (a *App) endDownload() {
+	a.transferMu.Lock()
+	a.downloadCancel = nil
+	a.transferMu.Unlock()
+}
+
+// CancelDownload cancels the active download.
+func (a *App) CancelDownload() {
+	a.transferMu.Lock()
+	cancel := a.downloadCancel
+	a.transferMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) ([]backend.FileMetaData, error) {
 	a.applyUploadLimit(a.fileService())
-	files, err := a.fileService().Upload(a.ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
+	ctx := a.beginUpload()
+	defer a.endUpload()
+	files, err := a.fileService().Upload(ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
 	if err != nil {
 		out := make([]backend.FileMetaData, 0, len(files))
 		for _, f := range files {
@@ -240,7 +312,9 @@ func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fil
 func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) error {
 	svc := a.fileService()
 	a.applyUploadLimit(svc)
-	return svc.RunImport(a.ctx, a.ActiveChannelID(), paths, parentID, encrypt, extractArchives)
+	ctx := a.beginUpload()
+	defer a.endUpload()
+	return svc.RunImport(ctx, a.ActiveChannelID(), paths, parentID, encrypt, extractArchives)
 }
 
 // applyUploadLimit raises the file service's per-file cap to the Premium limit
@@ -477,7 +551,9 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 }
 
 func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
-	result := a.fileService().Download(a.ctx, a.ActiveChannelID(), msgID, TgMsgID, func(defaultName string) (string, error) {
+	ctx := a.beginDownload()
+	defer a.endDownload()
+	result := a.fileService().Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, func(defaultName string) (string, error) {
 		return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 			DefaultFilename: defaultName,
 			Title:           "Save File As...",
@@ -557,21 +633,45 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 }
 
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-
-	// Native file drop: hand the dropped absolute paths to the frontend, which
-	// resolves the target folder and runs the import flow. Drop zones opt in via
-	// the --wails-drop-target CSS property.
-	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
+// enableFileDrop registers the native OS file-drop handler (idempotent).
+func (a *App) enableFileDrop() {
+	if a.fileDropEnabled {
+		return
+	}
+	runtime.OnFileDrop(a.ctx, func(x, y int, paths []string) {
 		if len(paths) > 0 {
-			runtime.EventsEmit(ctx, "files_dropped", map[string]any{
+			runtime.EventsEmit(a.ctx, "files_dropped", map[string]any{
 				"x":     x,
 				"y":     y,
 				"paths": paths,
 			})
 		}
 	})
+	a.fileDropEnabled = true
+}
+
+// SetFileDropEnabled toggles the native OS file-drop handler. The frontend turns
+// it off for the duration of an internal drag-to-move: on macOS the webview's
+// native drop destination otherwise intercepts the in-app HTML5 drag, which
+// breaks the move and pops the upload dialog.
+func (a *App) SetFileDropEnabled(enabled bool) {
+	if enabled {
+		a.enableFileDrop()
+		return
+	}
+	if a.fileDropEnabled {
+		runtime.OnFileDropOff(a.ctx)
+		a.fileDropEnabled = false
+	}
+}
+
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+
+	// Native file drop: hand the dropped absolute paths to the frontend, which
+	// resolves the target folder and runs the import flow. Drop zones opt in via
+	// the --wails-drop-target CSS property.
+	a.enableFileDrop()
 
 	if a.active == nil {
 		a.active = lifecycleservice.NewActiveDrive()
