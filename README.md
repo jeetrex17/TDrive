@@ -3,9 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/jeetrex17/TDrive/releases/latest"><img src="https://img.shields.io/github/v/release/jeetrex17/TDrive?style=flat-square&color=2AABEE" alt="Latest release"></a>
-  <img src="https://img.shields.io/github/license/jeetrex17/TDrive?style=flat-square&color=2AABEE" alt="License">
-  <img src="https://img.shields.io/github/downloads/jeetrex17/TDrive/total?style=flat-square&color=2AABEE" alt="Downloads">
+  <a href="https://github.com/jeetrex17/TDrive/releases/latest"><img src="https://img.shields.io/github/v/release/jeetrex17/TDrive?style=flat-square&color=0e6ba8" alt="Latest release"></a>
+  <img src="https://img.shields.io/github/license/jeetrex17/TDrive?style=flat-square&color=0e6ba8" alt="License">
+  <img src="https://img.shields.io/github/downloads/jeetrex17/TDrive/total?style=flat-square&color=0e6ba8" alt="Downloads">
 </p>
 
 TDrive is my first Golang project. It uses Telegram as the storage layer: files are posted into Telegram channels/groups, and the app gives you a drive-like UI on top.
