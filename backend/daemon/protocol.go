@@ -8,17 +8,22 @@ import (
 const ProtocolVersion = 1
 
 const (
-	CommandStatus    = "daemon.status"
-	CommandShutdown  = "daemon.shutdown"
-	CommandDriveList = "drive.list"
-	CommandDriveUse  = "drive.use"
-	CommandPWD       = "fs.pwd"
-	CommandCD        = "fs.cd"
-	CommandList      = "fs.list"
-	CommandFind      = "fs.find"
-	CommandMkdir     = "fs.mkdir"
-	CommandRemove    = "fs.remove"
-	CommandMove      = "fs.move"
+	CommandStatus      = "daemon.status"
+	CommandShutdown    = "daemon.shutdown"
+	CommandDriveList   = "drive.list"
+	CommandDriveUse    = "drive.use"
+	CommandPWD         = "fs.pwd"
+	CommandCD          = "fs.cd"
+	CommandList        = "fs.list"
+	CommandFind        = "fs.find"
+	CommandMkdir       = "fs.mkdir"
+	CommandRemove      = "fs.remove"
+	CommandMove        = "fs.move"
+	CommandVaultStatus = "vault.status"
+	CommandVaultUnlock = "vault.unlock"
+	CommandVaultLock   = "vault.lock"
+	CommandUpload      = "transfer.upload"
+	CommandDownload    = "transfer.download"
 )
 
 type Request struct {
@@ -124,6 +129,48 @@ type EntryResponse struct {
 	Entry Entry `json:"entry"`
 }
 
+type VaultStatus struct {
+	Available  bool   `json:"available"`
+	Configured bool   `json:"configured"`
+	Unlocked   bool   `json:"unlocked"`
+	Hint       string `json:"hint,omitempty"`
+}
+
+type VaultUnlockRequest struct {
+	Password string `json:"password"`
+}
+
+type VaultResponse struct {
+	Status VaultStatus `json:"status"`
+}
+
+type UploadRequest struct {
+	LocalPath  string `json:"local_path"`
+	RemotePath string `json:"remote_path,omitempty"`
+	Encrypt    bool   `json:"encrypt,omitempty"`
+}
+
+type UploadResponse struct {
+	Drive Drive `json:"drive"`
+	Entry Entry `json:"entry"`
+}
+
+type DownloadRequest struct {
+	RemotePath string `json:"remote_path"`
+	LocalPath  string `json:"local_path"`
+}
+
+type DownloadResponse struct {
+	Drive     Drive  `json:"drive"`
+	Entry     Entry  `json:"entry"`
+	SavedPath string `json:"saved_path"`
+}
+
+type Event struct {
+	Name string `json:"name"`
+	Args []any  `json:"args,omitempty"`
+}
+
 func NewRequest(command string, payload any) (Request, error) {
 	raw, err := marshalPayload(payload)
 	if err != nil {
@@ -146,6 +193,21 @@ func Response(id string, payload any) (Frame, error) {
 		Version: ProtocolVersion,
 		Type:    "response",
 		OK:      true,
+		Payload: raw,
+	}, nil
+}
+
+func EventFrame(id string, event Event) (Frame, error) {
+	raw, err := marshalPayload(event)
+	if err != nil {
+		return Frame{}, err
+	}
+	return Frame{
+		ID:      id,
+		Version: ProtocolVersion,
+		Type:    "event",
+		OK:      true,
+		Event:   event.Name,
 		Payload: raw,
 	}, nil
 }
