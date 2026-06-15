@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -366,7 +367,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.upload(ctx, in.LocalPath, in.RemotePath, in.Encrypt)
+		out, err := s.upload(ctx, in.LocalPath, in.RemotePath, in.Encrypt, in.Extract)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -765,7 +766,7 @@ func (s *Server) move(ctx context.Context, source string, destination string) (E
 	return EntryResponse{Drive: drive, Entry: entry}, nil
 }
 
-func (s *Server) upload(ctx context.Context, localPath string, remotePath string, encrypt bool) (UploadResponse, error) {
+func (s *Server) upload(ctx context.Context, localPath string, remotePath string, encrypt bool, extract bool) (UploadResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -780,14 +781,22 @@ func (s *Server) upload(ctx context.Context, localPath string, remotePath string
 	if err != nil {
 		return UploadResponse{}, err
 	}
-	if info.IsDir() {
-		return UploadResponse{}, fmt.Errorf("folder upload is not wired in the CLI yet")
-	}
 
 	drive, err := s.activeDrive()
 	if err != nil {
 		return UploadResponse{}, err
 	}
+	if info.IsDir() || extract {
+		parentID, parentPath, err := s.importTarget(drive.ID, remotePath)
+		if err != nil {
+			return UploadResponse{}, err
+		}
+		if err := s.engine.FileService().RunImport(ctx, drive.ID, []string{localPath}, parentID, encrypt, extract); err != nil {
+			return UploadResponse{}, err
+		}
+		return UploadResponse{Drive: drive, Entry: folderEntry(parentID, parentPath)}, nil
+	}
+
 	parentID, parentPath, targetName, err := s.uploadTarget(drive.ID, remotePath, filepath.Base(localPath))
 	if err != nil {
 		return UploadResponse{}, err
@@ -1015,6 +1024,35 @@ func (s *Server) moveTarget(channelID int64, dstAbs string, sourceName string) (
 	return parent.FolderID, parent.Path, parent.Name, nil
 }
 
+// importTarget resolves the destination folder for directory and archive
+// imports. RunImport owns creating the imported top-level folders beneath it.
+func (s *Server) importTarget(channelID int64, remotePath string) (folderID string, folderPath string, err error) {
+	remotePath = strings.TrimSpace(remotePath)
+	if remotePath == "" {
+		folder, err := s.engine.ResolveFolderPath(channelID, s.currentPath(), ".")
+		if err != nil {
+			return "", "", err
+		}
+		return folder.ID, folder.Path, nil
+	}
+
+	dstAbs, err := core.NormalizeRemotePath(s.currentPath(), remotePath)
+	if err != nil {
+		return "", "", err
+	}
+	dst, err := s.engine.ResolveEntryPath(channelID, "/", dstAbs)
+	if err == nil {
+		if dst.Type != "folder" {
+			return "", "", fmt.Errorf("destination exists and is not a folder: %s", dstAbs)
+		}
+		return dst.ID, dst.Path, nil
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		return "", "", err
+	}
+	return "", "", fmt.Errorf("destination folder not found: %s", dstAbs)
+}
+
 func (s *Server) uploadTarget(channelID int64, remotePath string, defaultName string) (parentID string, parentPath string, name string, err error) {
 	remotePath = strings.TrimSpace(remotePath)
 	if remotePath == "" {
@@ -1078,6 +1116,14 @@ func (s *Server) ensureNameFree(channelID int64, parentID string, name string, a
 		return fmt.Errorf("destination already exists: %s", name)
 	}
 	return nil
+}
+
+func folderEntry(id string, folderPath string) Entry {
+	name := ""
+	if folderPath != "/" {
+		name = path.Base(folderPath)
+	}
+	return Entry{Type: "folder", ID: id, Name: name, Path: folderPath}
 }
 
 func entryFromResolved(entry core.ResolvedEntry) Entry {

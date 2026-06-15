@@ -148,6 +148,7 @@ type UploadRequest struct {
 	LocalPath  string `json:"local_path"`
 	RemotePath string `json:"remote_path,omitempty"`
 	Encrypt    bool   `json:"encrypt,omitempty"`
+	Extract    bool   `json:"extract,omitempty"`
 }
 
 type UploadResponse struct {

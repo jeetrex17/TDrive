@@ -128,12 +128,13 @@ func (c *Client) VaultLock() (VaultResponse, error) {
 	return out, nil
 }
 
-func (c *Client) Upload(localPath string, remotePath string, encrypt bool, onEvent EventHandler) (UploadResponse, error) {
+func (c *Client) Upload(localPath string, remotePath string, encrypt bool, extract bool, onEvent EventHandler) (UploadResponse, error) {
 	var out UploadResponse
 	err := c.stream(CommandUpload, UploadRequest{
 		LocalPath:  localPath,
 		RemotePath: remotePath,
 		Encrypt:    encrypt,
+		Extract:    extract,
 	}, &out, onEvent)
 	if err != nil {
 		return UploadResponse{}, err
