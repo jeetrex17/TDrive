@@ -135,12 +135,18 @@ jobs:
           echo "Packaging application from: $APP_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "dist/${{ matrix.asset_name }}"
 
+      - name: Package CLI (macOS/Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./scripts/package-cli-release.sh "${{ github.ref_name }}"
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           # FIX 2: Sanitized the artifact name (removed slashes)
           name: binary-${{ matrix.os }}
-          path: dist/${{ matrix.asset_name }}
+          path: dist/*
           if-no-files-found: error
 
   release:

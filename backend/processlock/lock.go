@@ -141,3 +141,11 @@ func Read() (Info, error) {
 	}
 	return info, nil
 }
+
+func ReadActive() (Info, bool, error) {
+	info, err := Read()
+	if err != nil {
+		return Info{}, false, err
+	}
+	return info, processRunning(info.PID), nil
+}

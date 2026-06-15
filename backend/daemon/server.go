@@ -121,7 +121,8 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
-	dec := json.NewDecoder(bufio.NewReader(conn))
+	reader := bufio.NewReader(conn)
+	dec := json.NewDecoder(reader)
 	enc := json.NewEncoder(conn)
 	var encMu sync.Mutex
 	writeFrame := func(frame Frame) error {
@@ -136,16 +137,28 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		if isStreamingCommand(req.Command) {
-			if err := s.handleStreamingRequest(ctx, req, writeFrame); err != nil {
+			reqCtx, cancelReq := context.WithCancel(ctx)
+			// Streaming requests do not read from the socket again while work is
+			// in flight. Watch for EOF so an abandoned prompt cancels the backend
+			// operation and releases streamMu.
+			go cancelOnConnectionClose(reader, cancelReq)
+			if err := s.handleStreamingRequest(reqCtx, req, writeFrame); err != nil {
+				cancelReq()
 				return
 			}
-			continue
+			cancelReq()
+			return
 		}
 		frame := s.handleRequest(ctx, req)
 		if err := writeFrame(frame); err != nil {
 			return
 		}
 	}
+}
+
+func cancelOnConnectionClose(reader *bufio.Reader, cancel context.CancelFunc) {
+	_, _ = reader.Peek(1)
+	cancel()
 }
 
 func (s *Server) handleStreamingRequest(ctx context.Context, req Request, writeFrame func(Frame) error) error {
@@ -184,7 +197,7 @@ func (s *Server) handleStreamingRequest(ctx context.Context, req Request, writeF
 
 func isStreamingCommand(command string) bool {
 	switch command {
-	case CommandUpload, CommandDownload:
+	case CommandAuthLogin, CommandUpload, CommandDownload:
 		return true
 	default:
 		return false
@@ -210,6 +223,91 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		}
 		go s.stopOnce.Do(s.stop)
 		return frame
+	case CommandAuthSetup:
+		var in AuthSetupRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.authSetup(in.APIID, in.APIHash)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandAuthStatus:
+		out, err := s.authStatus(ctx)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandAuthLogin:
+		var in AuthLoginRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.authLogin(ctx, in.Phone)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandAuthSubmitCode:
+		var in AuthSubmitRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		s.engine.AuthService().SubmitCode(in.Value)
+		frame, err := Response(req.ID, map[string]string{"status": "ok"})
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandAuthSubmitPassword:
+		var in AuthSubmitRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		s.engine.AuthService().SubmitPassword(in.Value)
+		frame, err := Response(req.ID, map[string]string{"status": "ok"})
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandAuthLogout:
+		var in AuthLogoutRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.authLogout(ctx, in.Mode)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		go s.stopOnce.Do(s.stop)
+		return frame
+	case CommandWhoami:
+		out, err := s.whoami(ctx)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
 	case CommandDriveList:
 		out, err := s.listDrives()
 		if err != nil {
@@ -226,6 +324,155 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 			return ErrorResponse(req.ID, err)
 		}
 		out, err := s.useDrive(in.Selector)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDriveCreate:
+		var in DriveCreateRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.createDrive(ctx, in.Title, in.RequireApproval)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDriveJoin:
+		var in DriveJoinRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.joinDrive(ctx, in.InviteLink)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDrivePendingList:
+		out, err := s.listPendingJoins()
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDrivePendingCheck:
+		var in PendingJoinRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.checkPendingJoin(ctx, in.InviteHash)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDrivePendingRemove:
+		var in PendingJoinRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		if err := s.removePendingJoin(in.InviteHash); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, map[string]string{"status": "ok"})
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDriveInviteLink:
+		var in InviteLinkRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.inviteLink(ctx, in.Selector, in.RequireApproval)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDriveJoinRequests:
+		var in DriveSelectorRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.joinRequests(ctx, in.Selector)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDriveJoinAction:
+		var in JoinRequestActionRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.resolveJoinRequest(ctx, in.Selector, in.UserID, in.Approve)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDriveLeave:
+		var in DriveSelectorRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.leaveDrive(ctx, in.Selector)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandSync:
+		var in DriveSelectorRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.syncDrive(ctx, in.Selector)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandRebuild:
+		var in DriveSelectorRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.rebuildDrive(in.Selector)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -478,12 +725,7 @@ func (s *Server) listDrives() (DriveListResponse, error) {
 	active := s.engine.ActiveChannelID()
 	out := DriveListResponse{Drives: make([]Drive, 0, len(channels))}
 	for _, ch := range channels {
-		out.Drives = append(out.Drives, Drive{
-			ID:     ch.ChannelID,
-			Title:  ch.Title,
-			Kind:   ch.Kind,
-			Active: ch.ChannelID == active,
-		})
+		out.Drives = append(out.Drives, driveFromChannel(ch, active))
 	}
 	return out, nil
 }
