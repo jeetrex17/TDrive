@@ -2,25 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
-	"os"
-	"strings"
 	"sync"
-	"sync/atomic"
 
 	"TDrive/backend"
-	"TDrive/backend/auth"
-	"TDrive/backend/backfill"
+	"TDrive/backend/core"
+	"TDrive/backend/processlock"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
-	encservice "TDrive/backend/services/encryption"
 	fileservice "TDrive/backend/services/file"
 	folderservice "TDrive/backend/services/folder"
 	lifecycleservice "TDrive/backend/services/lifecycle"
 	readservice "TDrive/backend/services/read"
 	userservice "TDrive/backend/services/user"
-	tdsync "TDrive/backend/sync"
 	"TDrive/backend/tgclient"
 
 	"github.com/gotd/td/telegram"
@@ -28,19 +23,11 @@ import (
 )
 
 type App struct {
-	ctx        context.Context
-	Client     *telegram.Client
-	tg         tgclient.Client
-	auth       *authsvc.Service
-	enc        *encservice.Service
-	files      *fileservice.Service
-	folders    *folderservice.Service
-	reads      *readservice.Service
-	lifecycle  *lifecycleservice.Service
-	users      *userservice.Service
-	syncEngine *tdsync.Engine
-	active     *lifecycleservice.ActiveDrive
-	selfUserID atomic.Int64
+	ctx         context.Context
+	engine      *core.Engine
+	Client      *telegram.Client
+	backendLock *processlock.Lock
+
 	// fileDropEnabled tracks whether the native OS file-drop handler is
 	// registered. The frontend toggles it off during an internal drag-to-move so
 	// macOS does not intercept the in-app HTML5 drag.
@@ -51,12 +38,6 @@ type App struct {
 	transferMu     sync.Mutex
 	uploadCancel   context.CancelFunc
 	downloadCancel context.CancelFunc
-}
-
-type peerResolverFn func(context.Context, int64) (tgclient.InputPeer, error)
-
-func (f peerResolverFn) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	return f(ctx, channelID)
 }
 
 type runtimeEventSink struct {
@@ -73,17 +54,20 @@ func (s runtimeEventSink) Emit(name string, args ...any) {
 // resolvePeer satisfies tdsync.PeerResolver through peerResolverFn. Keeping
 // it unexported prevents Wails from exposing this internal sync helper.
 func (a *App) resolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	return a.channelPeer(ctx, channelID)
+	if a.engine == nil {
+		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
+	}
+	return a.engine.ResolvePeer(ctx, channelID)
 }
 
 // channelPeer resolves the active drive's tgclient.InputPeer through the shared
 // Telegram client. Used by every op that needs to send into Telegram; callers
 // should not hold this across long operations.
 func (a *App) channelPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	if a.tg == nil {
+	if a.engine == nil {
 		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
 	}
-	return a.tg.ResolveDriveChannel(ctx, channelID)
+	return a.engine.ChannelPeer(ctx, channelID)
 }
 
 // emitAndProject sends a control op and projects it locally. Returns the
@@ -94,41 +78,24 @@ func (a *App) channelPeer(ctx context.Context, channelID int64) (tgclient.InputP
 // the caller can surface it. The op IS in Telegram and will be projected on
 // the next sync.
 func (a *App) emitAndProject(channelID int64, op projection.Op) (int64, error) {
-	if a.tg == nil {
+	if a.engine == nil {
 		return 0, fmt.Errorf("tg client not ready")
 	}
-	actorID, err := a.actorID(a.ctx)
-	if err != nil {
-		return 0, err
-	}
-	peer, err := a.channelPeer(a.ctx, channelID)
-	if err != nil {
-		return 0, err
-	}
-	header := projection.Format(op)
-	msgID, err := a.tg.SendControl(a.ctx, peer, header, true)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := projection.ProjectFromOp(backend.DB, channelID, msgID, op, actorID, header); err != nil {
-		fmt.Printf("warn: projection failed after send msg=%d op=%s: %v\n", msgID, op.Type, err)
-		return msgID, err
-	}
-	return msgID, nil
+	return a.engine.EmitAndProject(channelID, op)
 }
 
 func (a *App) ActiveChannelID() int64 {
-	if a.active == nil {
+	if a.engine == nil {
 		return 0
 	}
-	return a.active.ID()
+	return a.engine.ActiveChannelID()
 }
 
 func (a *App) setActiveChannelID(channelID int64) {
-	if a.active == nil {
-		a.active = lifecycleservice.NewActiveDrive()
+	if a.engine == nil {
+		return
 	}
-	a.active.Set(channelID)
+	a.engine.SetActiveChannelID(channelID)
 }
 
 // MyUserID returns the logged-in Telegram user id (cached after first
@@ -140,37 +107,17 @@ func (a *App) MyUserID() (int64, error) {
 }
 
 func (a *App) actorID(ctx context.Context) (int64, error) {
-	if a.tg == nil {
+	if a.engine == nil {
 		return 0, fmt.Errorf("tg client not ready")
 	}
-	if id := a.selfUserID.Load(); id != 0 {
-		return id, nil
-	}
-	id, err := a.tg.SelfID(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("self user id: %w", err)
-	}
-	if id == 0 {
-		return 0, fmt.Errorf("self user id not found")
-	}
-	a.selfUserID.Store(id)
-	return id, nil
+	return a.engine.ActorID(ctx)
 }
 
 func (a *App) SetActiveChannel(channelID int64) error {
-	if channelID <= 0 {
-		return fmt.Errorf("invalid channel id")
+	if a.engine == nil {
+		return fmt.Errorf("backend not ready")
 	}
-	if backend.DB == nil {
-		return fmt.Errorf("db not ready")
-	}
-	var got int64
-	err := backend.DB.QueryRow(`SELECT channel_id FROM channels WHERE channel_id = ?`, channelID).Scan(&got)
-	if err != nil {
-		return fmt.Errorf("channel not known locally")
-	}
-	a.setActiveChannelID(channelID)
-	return nil
+	return a.engine.SetActiveChannel(channelID)
 }
 
 type TDriveFile struct {
@@ -338,168 +285,46 @@ func uploadMetaToBackend(f fileservice.Metadata) backend.FileMetaData {
 	}
 }
 
-func normalizeOpParent(p string) string {
-	p = strings.TrimSpace(p)
-	if p == "" {
-		return projection.RootParent
-	}
-	return p
-}
-
-func (a *App) newFolderService() *folderservice.Service {
-	return &folderservice.Service{
-		DB:    backend.DB,
-		TG:    a.tg,
-		Peers: peerResolverFn(a.resolvePeer),
-		EmitOp: func(channelID int64, op projection.Op) error {
-			_, err := a.emitAndProject(channelID, op)
-			return err
-		},
-		ActorID: func(ctx context.Context) (int64, error) {
-			return a.actorID(ctx)
-		},
-		RequireEncryptionKey: func(encrypted bool) ([]byte, error) {
-			key, err := a.encryptionService().RequireMasterKeyForFile(encrypted)
-			if err != nil {
-				return nil, ErrEncryptionPasswordRequired
-			}
-			return key, nil
-		},
-		Warnf: func(format string, args ...any) {
-			fmt.Printf(format, args...)
-		},
-	}
-}
-
 func (a *App) folderService() *folderservice.Service {
-	if a.folders == nil {
-		a.folders = a.newFolderService()
+	if a.engine == nil {
+		return nil
 	}
-	return a.folders
-}
-
-func (a *App) newFileService() *fileservice.Service {
-	return &fileservice.Service{
-		DB:    backend.DB,
-		TG:    a.tg,
-		Peers: peerResolverFn(a.resolvePeer),
-		EmitOp: func(channelID int64, op projection.Op) (int64, error) {
-			return a.emitAndProject(channelID, op)
-		},
-		ActorID: func(ctx context.Context) (int64, error) {
-			return a.actorID(ctx)
-		},
-		RequireEncryptionKey: func(encrypted bool) ([]byte, error) {
-			key, err := a.encryptionService().RequireMasterKeyForFile(encrypted)
-			if err != nil {
-				return nil, ErrEncryptionPasswordRequired
-			}
-			return key, nil
-		},
-		MasterKeyForUpload: func(channelID int64, wantEncrypted bool) ([]byte, error) {
-			return a.encryptionService().MasterKeyForUpload(channelID, wantEncrypted)
-		},
-		WriteCiphertextTemp: func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
-			return a.encryptionService().WriteCiphertextTemp(plain, plaintextSize, masterKey)
-		},
-		CreateFolder: func(channelID int64, name, parentID string) (string, error) {
-			f, err := a.folderService().Create(channelID, name, parentID)
-			return f.ID, err
-		},
-		Events: runtimeEventSink{app: a},
-		Warnf: func(format string, args ...any) {
-			fmt.Printf(format, args...)
-		},
-		Thumbs: newThumbnailCache(),
-	}
+	return a.engine.FolderService()
 }
 
 func (a *App) fileService() *fileservice.Service {
-	if a.files == nil {
-		a.files = a.newFileService()
+	if a.engine == nil {
+		return nil
 	}
-	return a.files
-}
-
-func (a *App) newReadService() *readservice.Service {
-	return &readservice.Service{
-		DB:    backend.DB,
-		TG:    a.tg,
-		Peers: peerResolverFn(a.resolvePeer),
-	}
+	return a.engine.FileService()
 }
 
 func (a *App) readService() *readservice.Service {
-	if a.reads == nil {
-		a.reads = a.newReadService()
+	if a.engine == nil {
+		return nil
 	}
-	return a.reads
-}
-
-func (a *App) newLifecycleService() *lifecycleservice.Service {
-	return lifecycleservice.NewService(lifecycleservice.Config{
-		DB:       backend.DB,
-		Sync:     a.syncEngine,
-		Backfill: backfill.NewRunner(backend.DB, a.tg, peerResolverFn(a.resolvePeer)),
-		Active:   a.active,
-		Events:   runtimeEventSink{app: a},
-		PersonalChannel: func(ctx context.Context) (int64, error) {
-			client, err := auth.Connect()
-			if err != nil {
-				return 0, fmt.Errorf("Could not connect: %w", err)
-			}
-			var channelID int64
-			err = client.Run(ctx, func(ctx context.Context) error {
-				id, err := auth.GetTDriveChannel(ctx, client)
-				if err != nil {
-					return err
-				}
-				channelID = id
-				return nil
-			})
-			return channelID, err
-		},
-		Warnf: func(format string, args ...any) {
-			fmt.Printf(format, args...)
-		},
-	})
+	return a.engine.ReadService()
 }
 
 func (a *App) lifecycleService() *lifecycleservice.Service {
-	if a.lifecycle == nil {
-		a.lifecycle = a.newLifecycleService()
+	if a.engine == nil {
+		return nil
 	}
-	return a.lifecycle
-}
-
-func (a *App) newUserService() *userservice.Service {
-	return &userservice.Service{
-		DB:    backend.DB,
-		TG:    a.tg,
-		Peers: peerResolverFn(a.resolvePeer),
-		ActorID: func(ctx context.Context) (int64, error) {
-			return a.actorID(ctx)
-		},
-		Active: a.ActiveChannelID,
-	}
+	return a.engine.LifecycleService()
 }
 
 func (a *App) userService() *userservice.Service {
-	if a.users == nil {
-		a.users = a.newUserService()
+	if a.engine == nil {
+		return nil
 	}
-	return a.users
-}
-
-func (a *App) newAuthService() *authsvc.Service {
-	return authsvc.NewService(runtimeEventSink{app: a})
+	return a.engine.UserService()
 }
 
 func (a *App) authService() *authsvc.Service {
-	if a.auth == nil {
-		a.auth = a.newAuthService()
+	if a.engine == nil {
+		return authsvc.NewService(runtimeEventSink{app: a})
 	}
-	return a.auth
+	return a.engine.AuthService()
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) error {
@@ -580,10 +405,7 @@ func (a *App) GetPassch() chan string {
 }
 
 func NewApp() *App {
-	return &App{
-		Client: nil,
-		active: lifecycleservice.NewActiveDrive(),
-	}
+	return &App{}
 }
 
 func (a *App) CheckSystemStatus() string {
@@ -622,8 +444,14 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 // shutdown runs on app exit. Tear down the shared Telegram connection so the
 // background Run scope's goroutine exits cleanly.
 func (a *App) shutdown(ctx context.Context) {
-	if a.tg != nil {
-		a.tg.Close()
+	if a.engine != nil {
+		a.engine.Close()
+	}
+	if a.backendLock != nil {
+		if err := a.backendLock.Release(); err != nil {
+			fmt.Printf("Warning: backend lock release failed: %v\n", err)
+		}
+		a.backendLock = nil
 	}
 }
 
@@ -662,47 +490,41 @@ func (a *App) SetFileDropEnabled(enabled bool) {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	lock, err := processlock.Acquire("gui")
+	if err != nil {
+		if errors.Is(err, processlock.ErrAlreadyRunning) {
+			fmt.Printf("TDrive backend is already running: %v\n", err)
+		} else {
+			fmt.Printf("Warning: Failed to acquire backend lock: %v\n", err)
+		}
+		runtime.Quit(ctx)
+		return
+	}
+	a.backendLock = lock
+
 	// Native file drop: hand the dropped absolute paths to the frontend, which
 	// resolves the target folder and runs the import flow. Drop zones opt in via
 	// the --wails-drop-target CSS property.
 	a.enableFileDrop()
 
-	if a.active == nil {
-		a.active = lifecycleservice.NewActiveDrive()
-	}
-
-	a.tg = tgclient.NewGotd(auth.Connect)
-
-	ac, err := auth.Connect()
+	engine, err := core.New(ctx, core.Config{
+		Events: runtimeEventSink{app: a},
+		Warnf: func(format string, args ...any) {
+			fmt.Printf(format, args...)
+		},
+		Thumbs: newThumbnailCache(),
+	})
 	if err != nil {
-		fmt.Println("Warning: Telegram connect failed (offline?):", err)
-	} else {
-		a.Client = ac
-	}
-
-	if err := backend.InitDB(); err != nil {
-		fmt.Printf("Warning: Failed to init local db: %v\n", err)
-		return
-	}
-	if err := backend.EnsureSchema(); err != nil {
-		fmt.Printf("Warning: Failed to init db schema: %v\n", err)
-		return
-	}
-
-	a.auth = a.newAuthService()
-	a.enc = a.newEncryptionService()
-	a.files = a.newFileService()
-	a.folders = a.newFolderService()
-	a.reads = a.newReadService()
-	a.syncEngine = tdsync.NewEngine(backend.DB, a.tg, peerResolverFn(a.resolvePeer))
-	a.lifecycle = a.newLifecycleService()
-	a.users = a.newUserService()
-
-	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {
-		if err := a.lifecycle.UsePersonalChannel(a.ctx, savedID); err != nil {
-			fmt.Printf("Warning: migration failed: %v\n", err)
+		fmt.Printf("Warning: Failed to init TDrive backend: %v\n", err)
+		if releaseErr := a.backendLock.Release(); releaseErr != nil {
+			fmt.Printf("Warning: backend lock release failed: %v\n", releaseErr)
 		}
+		a.backendLock = nil
+		runtime.Quit(ctx)
+		return
 	}
+	a.engine = engine
+	a.Client = engine.RawClient()
 
 	fmt.Println("TDrive DB ready!")
 }

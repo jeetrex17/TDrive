@@ -1,0 +1,464 @@
+package core
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"sync/atomic"
+
+	"TDrive/backend"
+	"TDrive/backend/auth"
+	"TDrive/backend/backfill"
+	"TDrive/backend/projection"
+	authsvc "TDrive/backend/services/auth"
+	channelservice "TDrive/backend/services/channel"
+	encservice "TDrive/backend/services/encryption"
+	fileservice "TDrive/backend/services/file"
+	folderservice "TDrive/backend/services/folder"
+	lifecycleservice "TDrive/backend/services/lifecycle"
+	readservice "TDrive/backend/services/read"
+	userservice "TDrive/backend/services/user"
+	tdsync "TDrive/backend/sync"
+	"TDrive/backend/tgclient"
+	"TDrive/backend/thumbnail"
+
+	"github.com/gotd/td/telegram"
+)
+
+// EventSink is the narrow event boundary between the headless backend and a
+// frontend. Wails turns these into runtime events; the daemon will stream them
+// over its local socket; tests can pass nil.
+type EventSink interface {
+	Emit(name string, args ...any)
+}
+
+// WarnFunc is intentionally tiny so backend/core does not depend on a logging
+// framework. Frontends can route warnings to stdout, stderr, or their own logs.
+type WarnFunc func(format string, args ...any)
+
+// TelegramConnectFunc builds the gotd client from persisted credentials and
+// session state. It is injected mostly for tests; production uses auth.Connect.
+type TelegramConnectFunc func() (*telegram.Client, error)
+
+// Config contains the few frontend-owned details needed to wire the shared
+// backend. Everything else lives in services under backend/.
+type Config struct {
+	Events EventSink
+	Warnf  WarnFunc
+
+	// Connect defaults to auth.Connect. Supplying it lets tests or future
+	// binaries choose a different session store without changing services.
+	Connect TelegramConnectFunc
+
+	// TG defaults to tgclient.NewGotd(Connect). Supplying it is useful for
+	// tests and keeps the engine independent of the concrete Telegram adapter.
+	TG tgclient.Client
+
+	// Thumbs is optional. Nil disables thumbnail caching for this engine.
+	Thumbs *thumbnail.Cache
+
+	// SkipDBInit is for tests that already installed backend.DB. Normal GUI and
+	// daemon startup should leave this false.
+	SkipDBInit bool
+}
+
+// Engine owns the reusable, headless TDrive backend. The Wails app and daemon
+// should both build one of these instead of duplicating service wiring.
+type Engine struct {
+	ctx context.Context
+
+	connect TelegramConnectFunc
+	events  EventSink
+	warnf   WarnFunc
+
+	client     *telegram.Client
+	tg         tgclient.Client
+	auth       *authsvc.Service
+	enc        *encservice.Service
+	files      *fileservice.Service
+	folders    *folderservice.Service
+	reads      *readservice.Service
+	lifecycle  *lifecycleservice.Service
+	users      *userservice.Service
+	syncEngine *tdsync.Engine
+	active     *lifecycleservice.ActiveDrive
+	selfUserID atomic.Int64
+	thumbs     *thumbnail.Cache
+}
+
+// New initializes storage, Telegram adapters, and all service dependencies.
+// It deliberately preserves the existing GUI startup side effects: schema
+// creation, saved personal-drive migration, and lazy Telegram connection.
+func New(ctx context.Context, cfg Config) (*Engine, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if cfg.Connect == nil {
+		cfg.Connect = auth.Connect
+	}
+	if cfg.Warnf == nil {
+		cfg.Warnf = func(format string, args ...any) {
+			fmt.Printf(format, args...)
+		}
+	}
+
+	e := &Engine{
+		ctx:     ctx,
+		connect: cfg.Connect,
+		events:  cfg.Events,
+		warnf:   cfg.Warnf,
+		tg:      cfg.TG,
+		active:  lifecycleservice.NewActiveDrive(),
+		thumbs:  cfg.Thumbs,
+	}
+	if e.tg == nil {
+		e.tg = tgclient.NewGotd(e.connect)
+	}
+
+	if client, err := e.connect(); err != nil {
+		e.warnf("Warning: Telegram connect failed (offline?): %v\n", err)
+	} else {
+		e.client = client
+	}
+
+	if !cfg.SkipDBInit {
+		if err := backend.InitDB(); err != nil {
+			return nil, fmt.Errorf("init db: %w", err)
+		}
+		if err := backend.EnsureSchema(); err != nil {
+			return nil, fmt.Errorf("init db schema: %w", err)
+		}
+	}
+
+	e.auth = authsvc.NewService(e.events)
+	e.enc = e.newEncryptionService()
+	e.folders = e.newFolderService()
+	e.files = e.newFileService()
+	e.reads = e.newReadService()
+	e.syncEngine = tdsync.NewEngine(backend.DB, e.tg, peerResolverFn(e.ResolvePeer))
+	e.lifecycle = e.newLifecycleService()
+	e.users = e.newUserService()
+
+	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {
+		if err := e.lifecycle.UsePersonalChannel(e.ctx, savedID); err != nil {
+			e.warnf("Warning: migration failed: %v\n", err)
+		}
+	}
+
+	return e, nil
+}
+
+func (e *Engine) Close() {
+	if e != nil && e.tg != nil {
+		e.tg.Close()
+	}
+}
+
+func (e *Engine) RawClient() *telegram.Client {
+	if e == nil {
+		return nil
+	}
+	return e.client
+}
+
+func (e *Engine) Telegram() tgclient.Client {
+	if e == nil {
+		return nil
+	}
+	return e.tg
+}
+
+func (e *Engine) ActiveChannelID() int64 {
+	if e == nil || e.active == nil {
+		return 0
+	}
+	return e.active.ID()
+}
+
+func (e *Engine) SetActiveChannelID(channelID int64) {
+	if e == nil {
+		return
+	}
+	if e.active == nil {
+		e.active = lifecycleservice.NewActiveDrive()
+	}
+	e.active.Set(channelID)
+}
+
+func (e *Engine) SetActiveChannel(channelID int64) error {
+	if channelID <= 0 {
+		return fmt.Errorf("invalid channel id")
+	}
+	if backend.DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	var got int64
+	err := backend.DB.QueryRow(`SELECT channel_id FROM channels WHERE channel_id = ?`, channelID).Scan(&got)
+	if err != nil {
+		return fmt.Errorf("channel not known locally")
+	}
+	e.SetActiveChannelID(channelID)
+	return nil
+}
+
+func (e *Engine) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+	return e.ChannelPeer(ctx, channelID)
+}
+
+func (e *Engine) ChannelPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+	if e == nil || e.tg == nil {
+		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
+	}
+	return e.tg.ResolveDriveChannel(ctx, channelID)
+}
+
+func (e *Engine) ActorID(ctx context.Context) (int64, error) {
+	if e == nil || e.tg == nil {
+		return 0, fmt.Errorf("tg client not ready")
+	}
+	if id := e.selfUserID.Load(); id != 0 {
+		return id, nil
+	}
+	id, err := e.tg.SelfID(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("self user id: %w", err)
+	}
+	if id == 0 {
+		return 0, fmt.Errorf("self user id not found")
+	}
+	e.selfUserID.Store(id)
+	return id, nil
+}
+
+// EmitAndProject sends one TDX control op to Telegram, then applies it to the
+// local projection. If local projection fails after the send, the op remains in
+// Telegram and the next sync can replay it.
+func (e *Engine) EmitAndProject(channelID int64, op projection.Op) (int64, error) {
+	if e == nil || e.tg == nil {
+		return 0, fmt.Errorf("tg client not ready")
+	}
+	actorID, err := e.ActorID(e.ctx)
+	if err != nil {
+		return 0, err
+	}
+	peer, err := e.ChannelPeer(e.ctx, channelID)
+	if err != nil {
+		return 0, err
+	}
+	header := projection.Format(op)
+	msgID, err := e.tg.SendControl(e.ctx, peer, header, true)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := projection.ProjectFromOp(backend.DB, channelID, msgID, op, actorID, header); err != nil {
+		e.warnf("warn: projection failed after send msg=%d op=%s: %v\n", msgID, op.Type, err)
+		return msgID, err
+	}
+	return msgID, nil
+}
+
+func (e *Engine) AuthService() *authsvc.Service {
+	if e.auth == nil {
+		e.auth = authsvc.NewService(e.events)
+	}
+	return e.auth
+}
+
+func (e *Engine) EncryptionService() *encservice.Service {
+	if e.enc == nil {
+		e.enc = e.newEncryptionService()
+	}
+	return e.enc
+}
+
+func (e *Engine) FileService() *fileservice.Service {
+	if e.files == nil {
+		e.files = e.newFileService()
+	}
+	return e.files
+}
+
+func (e *Engine) FolderService() *folderservice.Service {
+	if e.folders == nil {
+		e.folders = e.newFolderService()
+	}
+	return e.folders
+}
+
+func (e *Engine) ReadService() *readservice.Service {
+	if e.reads == nil {
+		e.reads = e.newReadService()
+	}
+	return e.reads
+}
+
+func (e *Engine) LifecycleService() *lifecycleservice.Service {
+	if e.lifecycle == nil {
+		e.lifecycle = e.newLifecycleService()
+	}
+	return e.lifecycle
+}
+
+func (e *Engine) UserService() *userservice.Service {
+	if e.users == nil {
+		e.users = e.newUserService()
+	}
+	return e.users
+}
+
+func (e *Engine) ChannelService() *channelservice.Service {
+	return &channelservice.Service{
+		DB:        backend.DB,
+		TG:        e.tg,
+		Sync:      e.syncEngine,
+		GetActive: e.ActiveChannelID,
+		SetActive: e.SetActiveChannelID,
+	}
+}
+
+func (e *Engine) ClearEncryptionSession() {
+	if e != nil && e.enc != nil {
+		e.enc.Clear()
+	}
+}
+
+func (e *Engine) ClearUserCache() {
+	if e != nil && e.users != nil {
+		e.users.ClearCache()
+	}
+}
+
+func (e *Engine) newEncryptionService() *encservice.Service {
+	return encservice.NewService(encservice.Config{
+		DB:                backend.DB,
+		PersonalChannelID: PersonalChannelID,
+		EmitOp: func(channelID int64, op projection.Op) error {
+			_, err := e.EmitAndProject(channelID, op)
+			return err
+		},
+	})
+}
+
+func (e *Engine) newFolderService() *folderservice.Service {
+	return &folderservice.Service{
+		DB:    backend.DB,
+		TG:    e.tg,
+		Peers: peerResolverFn(e.ResolvePeer),
+		EmitOp: func(channelID int64, op projection.Op) error {
+			_, err := e.EmitAndProject(channelID, op)
+			return err
+		},
+		ActorID: func(ctx context.Context) (int64, error) {
+			return e.ActorID(ctx)
+		},
+		RequireEncryptionKey: func(encrypted bool) ([]byte, error) {
+			key, err := e.EncryptionService().RequireMasterKeyForFile(encrypted)
+			if err != nil {
+				return nil, encservice.ErrPasswordRequired
+			}
+			return key, nil
+		},
+		Warnf: func(format string, args ...any) {
+			e.warnf(format, args...)
+		},
+	}
+}
+
+func (e *Engine) newFileService() *fileservice.Service {
+	return &fileservice.Service{
+		DB:    backend.DB,
+		TG:    e.tg,
+		Peers: peerResolverFn(e.ResolvePeer),
+		EmitOp: func(channelID int64, op projection.Op) (int64, error) {
+			return e.EmitAndProject(channelID, op)
+		},
+		ActorID: func(ctx context.Context) (int64, error) {
+			return e.ActorID(ctx)
+		},
+		RequireEncryptionKey: func(encrypted bool) ([]byte, error) {
+			key, err := e.EncryptionService().RequireMasterKeyForFile(encrypted)
+			if err != nil {
+				return nil, encservice.ErrPasswordRequired
+			}
+			return key, nil
+		},
+		MasterKeyForUpload: func(channelID int64, wantEncrypted bool) ([]byte, error) {
+			return e.EncryptionService().MasterKeyForUpload(channelID, wantEncrypted)
+		},
+		WriteCiphertextTemp: func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
+			return e.EncryptionService().WriteCiphertextTemp(plain, plaintextSize, masterKey)
+		},
+		CreateFolder: func(channelID int64, name, parentID string) (string, error) {
+			f, err := e.FolderService().Create(channelID, name, parentID)
+			return f.ID, err
+		},
+		Events: e.events,
+		Warnf: func(format string, args ...any) {
+			e.warnf(format, args...)
+		},
+		Thumbs: e.thumbs,
+	}
+}
+
+func (e *Engine) newReadService() *readservice.Service {
+	return &readservice.Service{
+		DB:    backend.DB,
+		TG:    e.tg,
+		Peers: peerResolverFn(e.ResolvePeer),
+	}
+}
+
+func (e *Engine) newLifecycleService() *lifecycleservice.Service {
+	return lifecycleservice.NewService(lifecycleservice.Config{
+		DB:       backend.DB,
+		Sync:     e.syncEngine,
+		Backfill: backfill.NewRunner(backend.DB, e.tg, peerResolverFn(e.ResolvePeer)),
+		Active:   e.active,
+		Events:   e.events,
+		PersonalChannel: func(ctx context.Context) (int64, error) {
+			client, err := e.connect()
+			if err != nil {
+				return 0, fmt.Errorf("Could not connect: %w", err)
+			}
+			var channelID int64
+			err = client.Run(ctx, func(ctx context.Context) error {
+				id, err := auth.GetTDriveChannel(ctx, client)
+				if err != nil {
+					return err
+				}
+				channelID = id
+				return nil
+			})
+			return channelID, err
+		},
+		Warnf: func(format string, args ...any) {
+			e.warnf(format, args...)
+		},
+	})
+}
+
+func (e *Engine) newUserService() *userservice.Service {
+	return &userservice.Service{
+		DB:    backend.DB,
+		TG:    e.tg,
+		Peers: peerResolverFn(e.ResolvePeer),
+		ActorID: func(ctx context.Context) (int64, error) {
+			return e.ActorID(ctx)
+		},
+		Active: e.ActiveChannelID,
+	}
+}
+
+type peerResolverFn func(context.Context, int64) (tgclient.InputPeer, error)
+
+func (f peerResolverFn) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+	return f(ctx, channelID)
+}
+
+// PersonalChannelID returns the saved personal drive id without requiring it to
+// be the currently active drive. It returns 0 before first-run drive setup.
+func PersonalChannelID() int64 {
+	id, _ := auth.LoadConfig()
+	return id
+}

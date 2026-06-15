@@ -6,9 +6,11 @@ import (
 
 	"TDrive/backend"
 	"TDrive/backend/auth"
+	"TDrive/backend/core"
 	"TDrive/backend/projection"
-	encservice "TDrive/backend/services/encryption"
+	"TDrive/backend/tgclient"
 
+	"github.com/gotd/td/telegram"
 	_ "modernc.org/sqlite"
 )
 
@@ -26,6 +28,8 @@ func setupEncryptionApp(t *testing.T) (*App, *sql.DB) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	backend.DB = db
 	t.Cleanup(func() {
 		backend.DB = oldDB
@@ -38,19 +42,25 @@ func setupEncryptionApp(t *testing.T) (*App, *sql.DB) {
 	if err := projection.MigratePersonalChannel(db, testEncryptionChannelID); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	if _, err := db.Exec(`UPDATE channels SET personal_backfill_done = 1 WHERE channel_id = ?`, testEncryptionChannelID); err != nil {
+		t.Fatalf("mark backfill done: %v", err)
+	}
 
-	var msgID int64
-	app := &App{}
-	app.enc = encservice.NewService(encservice.Config{
-		DB:                db,
-		PersonalChannelID: personalChannelID,
-		EmitOp: func(channelID int64, op projection.Op) error {
-			msgID++
-			header := projection.Format(op)
-			_, err := projection.ProjectFromOp(db, channelID, msgID, op, 1, header)
-			return err
+	fakeTG := tgclient.NewFake(1)
+	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: testEncryptionChannelID, AccessHash: 7}, "My Drive")
+
+	engine, err := core.New(t.Context(), core.Config{
+		TG:         fakeTG,
+		SkipDBInit: true,
+		Connect: func() (nilClient *telegram.Client, err error) {
+			return nil, nil
 		},
 	})
+	if err != nil {
+		t.Fatalf("new core engine: %v", err)
+	}
+
+	app := &App{engine: engine}
 	return app, db
 }
 
