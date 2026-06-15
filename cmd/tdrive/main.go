@@ -431,17 +431,20 @@ func runVaultUnlock(args []string) error {
 
 func runPut(args []string) error {
 	encrypt := false
+	extract := false
 	var positional []string
 	for _, arg := range args {
 		switch arg {
 		case "-e", "--encrypt":
 			encrypt = true
+		case "--extract":
+			extract = true
 		default:
 			positional = append(positional, arg)
 		}
 	}
 	if len(positional) < 1 || len(positional) > 2 {
-		return fmt.Errorf("usage: tdrive put [--encrypt] <local-file> [remote-path]")
+		return fmt.Errorf("usage: tdrive put [-e] [--extract] <local> [remote-path]")
 	}
 	localPath, err := filepath.Abs(positional[0])
 	if err != nil {
@@ -456,7 +459,7 @@ func runPut(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := c.Upload(localPath, remotePath, encrypt, printTransferEvent)
+	out, err := c.Upload(localPath, remotePath, encrypt, extract, printTransferEvent)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return err
@@ -596,6 +599,20 @@ func printTransferEvent(event daemon.Event) {
 		fmt.Fprintf(os.Stderr, "\rupload 100.0%%\n")
 	case "download_progress":
 		fmt.Fprintf(os.Stderr, "\rdownload %.1f%%", eventArgFloat(event, 0))
+	case "import_progress":
+		if label := eventArgMapString(event, 0, "label"); label != "" {
+			fmt.Fprintf(os.Stderr, "%s\n", label)
+		}
+	case "import_uploading":
+		files := eventArgMapFloat(event, 0, "files")
+		folders := eventArgMapFloat(event, 0, "folders")
+		fmt.Fprintf(os.Stderr, "uploading %.0f files from %.0f folders\n", files, folders)
+	case "import_complete":
+		uploaded := eventArgMapFloat(event, 0, "uploaded")
+		failed := eventArgMapFloat(event, 0, "failed")
+		folders := eventArgMapFloat(event, 0, "folders")
+		oversize := eventArgMapFloat(event, 0, "oversize")
+		fmt.Fprintf(os.Stderr, "import complete: %.0f uploaded, %.0f failed, %.0f folders, %.0f oversize\n", uploaded, failed, folders, oversize)
 	}
 }
 
@@ -627,6 +644,48 @@ func eventArgFloat(event daemon.Event, index int) float64 {
 	default:
 		return 0
 	}
+}
+
+func eventArgMapString(event daemon.Event, index int, key string) string {
+	m := eventArgMap(event, index)
+	if m == nil {
+		return ""
+	}
+	value, ok := m[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
+func eventArgMapFloat(event daemon.Event, index int, key string) float64 {
+	m := eventArgMap(event, index)
+	if m == nil {
+		return 0
+	}
+	switch v := m[key].(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	default:
+		return 0
+	}
+}
+
+func eventArgMap(event daemon.Event, index int) map[string]any {
+	if index >= len(event.Args) {
+		return nil
+	}
+	m, ok := event.Args[index].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return m
 }
 
 func entryDisplayName(entry daemon.Entry) string {
@@ -691,7 +750,7 @@ Usage:
   tdrive mv <src> <dst>     Move or rename a remote file or folder
   tdrive vault status       Show vault state
   tdrive unlock             Unlock the vault in the daemon
-  tdrive put [-e] <local> [remote]
+  tdrive put [-e] [--extract] <local> [remote-path]
   tdrive get <remote> [local]
   tdrive cat <remote>
 
