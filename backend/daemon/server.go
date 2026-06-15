@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,11 +28,17 @@ type Server struct {
 	warnf  func(format string, args ...any)
 	state  *state
 
-	mu sync.Mutex
+	mu        sync.Mutex
+	eventMu   sync.Mutex
+	eventSubs map[chan Event]struct{}
 	// writeMu serializes operations that mutate daemon state or the remote
 	// projection. The daemon can accept concurrent clients, but the underlying
 	// Telegram send + local projection sequence is intentionally single-writer.
-	writeMu  sync.Mutex
+	writeMu sync.Mutex
+	// streamMu keeps progress events request-scoped in v1. Backend services emit
+	// global transfer events, and download_progress has no transfer id, so only
+	// one streaming transfer may be active until events carry a request id.
+	streamMu sync.Mutex
 	stopOnce sync.Once
 	stop     context.CancelFunc
 }
@@ -51,6 +58,11 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 		s.warnf = func(format string, args ...any) {
 			fmt.Printf(format, args...)
 		}
+	}
+	if cfg.CoreConfig.Events == nil {
+		cfg.CoreConfig.Events = s
+	} else {
+		cfg.CoreConfig.Events = multiEventSink{s, cfg.CoreConfig.Events}
 	}
 
 	lock, err := processlock.Acquire("daemon")
@@ -110,16 +122,71 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 	dec := json.NewDecoder(bufio.NewReader(conn))
 	enc := json.NewEncoder(conn)
+	var encMu sync.Mutex
+	writeFrame := func(frame Frame) error {
+		encMu.Lock()
+		defer encMu.Unlock()
+		return enc.Encode(frame)
+	}
 
 	for {
 		var req Request
 		if err := dec.Decode(&req); err != nil {
 			return
 		}
+		if isStreamingCommand(req.Command) {
+			if err := s.handleStreamingRequest(ctx, req, writeFrame); err != nil {
+				return
+			}
+			continue
+		}
 		frame := s.handleRequest(ctx, req)
-		if err := enc.Encode(frame); err != nil {
+		if err := writeFrame(frame); err != nil {
 			return
 		}
+	}
+}
+
+func (s *Server) handleStreamingRequest(ctx context.Context, req Request, writeFrame func(Frame) error) error {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+
+	if err := validateRequest(req); err != nil {
+		return writeFrame(ErrorResponse(req.ID, err))
+	}
+
+	events := s.subscribeEvents()
+	defer s.unsubscribeEvents(events)
+
+	done := make(chan Frame, 1)
+	go func() {
+		done <- s.handleRequest(ctx, req)
+	}()
+
+	for {
+		select {
+		case event := <-events:
+			frame, err := EventFrame(req.ID, event)
+			if err != nil {
+				frame = ErrorResponse(req.ID, err)
+			}
+			if err := writeFrame(frame); err != nil {
+				return err
+			}
+		case frame := <-done:
+			return writeFrame(frame)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func isStreamingCommand(command string) bool {
+	switch command {
+	case CommandUpload, CommandDownload:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -260,6 +327,68 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 			return ErrorResponse(req.ID, err)
 		}
 		return frame
+	case CommandVaultStatus:
+		out, err := s.vaultStatus()
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandVaultUnlock:
+		var in VaultUnlockRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.vaultUnlock(in.Password)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandVaultLock:
+		out, err := s.vaultLock()
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandUpload:
+		var in UploadRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.upload(ctx, in.LocalPath, in.RemotePath, in.Encrypt)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandDownload:
+		var in DownloadRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.download(ctx, in.RemotePath, in.LocalPath)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
 	default:
 		return ErrorResponse(req.ID, fmt.Errorf("unknown command %q", req.Command))
 	}
@@ -280,6 +409,37 @@ func (s *Server) status(ctx context.Context) Status {
 		}
 	}
 	return out
+}
+
+func (s *Server) vaultStatus() (VaultResponse, error) {
+	status, err := s.engine.EncryptionService().Status()
+	if err != nil {
+		return VaultResponse{}, err
+	}
+	return VaultResponse{Status: VaultStatus{
+		Available:  status.Available,
+		Configured: status.PasswordSet,
+		Unlocked:   status.PasswordRemembered,
+		Hint:       status.Hint,
+	}}, nil
+}
+
+func (s *Server) vaultUnlock(password string) (VaultResponse, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if err := s.engine.EncryptionService().UsePassword(password); err != nil {
+		return VaultResponse{}, err
+	}
+	return s.vaultStatus()
+}
+
+func (s *Server) vaultLock() (VaultResponse, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	s.engine.ClearEncryptionSession()
+	return s.vaultStatus()
 }
 
 func (s *Server) loadState() error {
@@ -605,6 +765,107 @@ func (s *Server) move(ctx context.Context, source string, destination string) (E
 	return EntryResponse{Drive: drive, Entry: entry}, nil
 }
 
+func (s *Server) upload(ctx context.Context, localPath string, remotePath string, encrypt bool) (UploadResponse, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	localPath = strings.TrimSpace(localPath)
+	if localPath == "" {
+		return UploadResponse{}, fmt.Errorf("local path required")
+	}
+	if !filepath.IsAbs(localPath) {
+		return UploadResponse{}, fmt.Errorf("local path must be absolute")
+	}
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	if info.IsDir() {
+		return UploadResponse{}, fmt.Errorf("folder upload is not wired in the CLI yet")
+	}
+
+	drive, err := s.activeDrive()
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	parentID, parentPath, targetName, err := s.uploadTarget(drive.ID, remotePath, filepath.Base(localPath))
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	if err := s.ensureNameFree(drive.ID, parentID, targetName, core.ResolvedEntry{}); err != nil {
+		return UploadResponse{}, err
+	}
+
+	metas, err := s.engine.FileService().Upload(ctx, drive.ID, []string{localPath}, []string{parentID}, encrypt)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	if len(metas) == 0 {
+		return UploadResponse{}, fmt.Errorf("upload produced no file")
+	}
+	meta := metas[0]
+	if meta.Name != targetName {
+		if err := s.engine.FileService().Rename(ctx, drive.ID, meta.MsgID, targetName); err != nil {
+			return UploadResponse{}, err
+		}
+	}
+
+	entry := Entry{
+		Type:       "file",
+		ID:         strconv.Itoa(meta.MsgID),
+		MsgID:      int64(meta.MsgID),
+		Name:       targetName,
+		Path:       core.JoinRemotePath(parentPath, targetName),
+		Size:       meta.Size,
+		UploadTime: meta.UploadTime,
+		Encrypted:  meta.Encrypted,
+	}
+	return UploadResponse{Drive: drive, Entry: entry}, nil
+}
+
+func (s *Server) download(ctx context.Context, remotePath string, localPath string) (DownloadResponse, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	localPath = strings.TrimSpace(localPath)
+	if localPath == "" {
+		return DownloadResponse{}, fmt.Errorf("local path required")
+	}
+	if !filepath.IsAbs(localPath) {
+		return DownloadResponse{}, fmt.Errorf("local path must be absolute")
+	}
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return DownloadResponse{}, err
+	}
+
+	drive, err := s.activeDrive()
+	if err != nil {
+		return DownloadResponse{}, err
+	}
+	resolved, err := s.engine.ResolveEntryPath(drive.ID, s.currentPath(), remotePath)
+	if err != nil {
+		return DownloadResponse{}, err
+	}
+	if resolved.Type != "file" {
+		return DownloadResponse{}, fmt.Errorf("%s is not a file", resolved.Path)
+	}
+
+	entry := entryFromResolved(resolved)
+	result := s.engine.FileService().Download(ctx, drive.ID, int(resolved.MsgID), int(resolved.MsgID), func(defaultName string) (string, error) {
+		return localPath, nil
+	})
+	if result.Status != "success" {
+		if result.Message == "" {
+			result.Message = result.Status
+		}
+		return DownloadResponse{}, fmt.Errorf("%s", result.Message)
+	}
+	if result.SavedPath != "" {
+		localPath = result.SavedPath
+	}
+	return DownloadResponse{Drive: drive, Entry: entry, SavedPath: localPath}, nil
+}
+
 func (s *Server) resolveDrive(selector string) (Drive, error) {
 	selector = strings.TrimSpace(selector)
 	if selector == "" {
@@ -747,6 +1008,41 @@ func (s *Server) moveTarget(channelID int64, dstAbs string, sourceName string) (
 		return "", "", "", err
 	}
 
+	parent, err := s.engine.ResolveParentPath(channelID, "/", dstAbs)
+	if err != nil {
+		return "", "", "", err
+	}
+	return parent.FolderID, parent.Path, parent.Name, nil
+}
+
+func (s *Server) uploadTarget(channelID int64, remotePath string, defaultName string) (parentID string, parentPath string, name string, err error) {
+	remotePath = strings.TrimSpace(remotePath)
+	if remotePath == "" {
+		folder, err := s.engine.ResolveFolderPath(channelID, s.currentPath(), ".")
+		if err != nil {
+			return "", "", "", err
+		}
+		return folder.ID, folder.Path, defaultName, nil
+	}
+	mustBeFolder := strings.HasSuffix(remotePath, "/")
+
+	dstAbs, err := core.NormalizeRemotePath(s.currentPath(), remotePath)
+	if err != nil {
+		return "", "", "", err
+	}
+	dst, err := s.engine.ResolveEntryPath(channelID, "/", dstAbs)
+	if err == nil {
+		if dst.Type != "folder" {
+			return "", "", "", fmt.Errorf("destination exists and is not a folder: %s", dstAbs)
+		}
+		return dst.ID, dst.Path, defaultName, nil
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		return "", "", "", err
+	}
+	if mustBeFolder {
+		return "", "", "", fmt.Errorf("destination folder not found: %s", dstAbs)
+	}
 	parent, err := s.engine.ResolveParentPath(channelID, "/", dstAbs)
 	if err != nil {
 		return "", "", "", err

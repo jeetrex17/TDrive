@@ -10,6 +10,8 @@ type Client struct {
 	socketPath string
 }
 
+type EventHandler func(Event)
+
 func NewClient() (*Client, error) {
 	path, err := SocketPath()
 	if err != nil {
@@ -102,6 +104,55 @@ func (c *Client) Move(source string, destination string) (EntryResponse, error) 
 	return out, nil
 }
 
+func (c *Client) VaultStatus() (VaultResponse, error) {
+	var out VaultResponse
+	if err := c.call(CommandVaultStatus, nil, &out); err != nil {
+		return VaultResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) VaultUnlock(password string) (VaultResponse, error) {
+	var out VaultResponse
+	if err := c.call(CommandVaultUnlock, VaultUnlockRequest{Password: password}, &out); err != nil {
+		return VaultResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) VaultLock() (VaultResponse, error) {
+	var out VaultResponse
+	if err := c.call(CommandVaultLock, nil, &out); err != nil {
+		return VaultResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) Upload(localPath string, remotePath string, encrypt bool, onEvent EventHandler) (UploadResponse, error) {
+	var out UploadResponse
+	err := c.stream(CommandUpload, UploadRequest{
+		LocalPath:  localPath,
+		RemotePath: remotePath,
+		Encrypt:    encrypt,
+	}, &out, onEvent)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) Download(remotePath string, localPath string, onEvent EventHandler) (DownloadResponse, error) {
+	var out DownloadResponse
+	err := c.stream(CommandDownload, DownloadRequest{
+		RemotePath: remotePath,
+		LocalPath:  localPath,
+	}, &out, onEvent)
+	if err != nil {
+		return DownloadResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) call(command string, payload any, out any) error {
 	req, err := NewRequest(command, payload)
 	if err != nil {
@@ -136,4 +187,61 @@ func (c *Client) call(command string, payload any, out any) error {
 		}
 	}
 	return nil
+}
+
+func (c *Client) stream(command string, payload any, out any, onEvent EventHandler) error {
+	req, err := NewRequest(command, payload)
+	if err != nil {
+		return err
+	}
+
+	conn, err := dialSocket(c.socketPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(bufio.NewReader(conn))
+
+	if err := enc.Encode(req); err != nil {
+		return fmt.Errorf("daemon request: %w", err)
+	}
+	for {
+		var frame Frame
+		if err := dec.Decode(&frame); err != nil {
+			return fmt.Errorf("daemon response: %w", err)
+		}
+		switch frame.Type {
+		case "event":
+			if onEvent == nil {
+				continue
+			}
+			var event Event
+			if len(frame.Payload) > 0 {
+				if err := json.Unmarshal(frame.Payload, &event); err != nil {
+					return fmt.Errorf("daemon event payload: %w", err)
+				}
+			}
+			if event.Name == "" {
+				event.Name = frame.Event
+			}
+			onEvent(event)
+		case "response", "":
+			if !frame.OK {
+				if frame.Error == "" {
+					frame.Error = "daemon request failed"
+				}
+				return fmt.Errorf("%s", frame.Error)
+			}
+			if out != nil && len(frame.Payload) > 0 {
+				if err := json.Unmarshal(frame.Payload, out); err != nil {
+					return fmt.Errorf("daemon response payload: %w", err)
+				}
+			}
+			return nil
+		default:
+			return fmt.Errorf("unexpected daemon frame type %q", frame.Type)
+		}
+	}
 }

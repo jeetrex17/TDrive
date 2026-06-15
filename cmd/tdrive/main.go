@@ -1,16 +1,22 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"TDrive/backend/daemon"
+
+	"golang.org/x/term"
 )
 
 func main() {
@@ -49,6 +55,16 @@ func run(args []string) error {
 		return runRM(args[1:])
 	case "mv":
 		return runMV(args[1:])
+	case "vault":
+		return runVault(args[1:])
+	case "unlock":
+		return runVaultUnlock(args[1:])
+	case "put":
+		return runPut(args[1:])
+	case "get":
+		return runGet(args[1:])
+	case "cat":
+		return runCat(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -358,6 +374,261 @@ func runMV(args []string) error {
 	return nil
 }
 
+func runVault(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing vault command\n\nRun: tdrive vault status|unlock|lock")
+	}
+	switch args[0] {
+	case "status":
+		return printVaultStatus()
+	case "unlock":
+		return runVaultUnlock(args[1:])
+	case "lock":
+		c, err := daemon.NewClient()
+		if err != nil {
+			return err
+		}
+		out, err := c.VaultLock()
+		if err != nil {
+			return err
+		}
+		printVault(out.Status)
+		return nil
+	default:
+		return fmt.Errorf("unknown vault command %q", args[0])
+	}
+}
+
+func printVaultStatus() error {
+	c, err := daemon.NewClient()
+	if err != nil {
+		return err
+	}
+	out, err := c.VaultStatus()
+	if err != nil {
+		return err
+	}
+	printVault(out.Status)
+	return nil
+}
+
+func runVaultUnlock(args []string) error {
+	password, err := passwordFromArgs(args)
+	if err != nil {
+		return err
+	}
+	c, err := daemon.NewClient()
+	if err != nil {
+		return err
+	}
+	out, err := c.VaultUnlock(password)
+	if err != nil {
+		return err
+	}
+	printVault(out.Status)
+	return nil
+}
+
+func runPut(args []string) error {
+	encrypt := false
+	var positional []string
+	for _, arg := range args {
+		switch arg {
+		case "-e", "--encrypt":
+			encrypt = true
+		default:
+			positional = append(positional, arg)
+		}
+	}
+	if len(positional) < 1 || len(positional) > 2 {
+		return fmt.Errorf("usage: tdrive put [--encrypt] <local-file> [remote-path]")
+	}
+	localPath, err := filepath.Abs(positional[0])
+	if err != nil {
+		return err
+	}
+	remotePath := ""
+	if len(positional) == 2 {
+		remotePath = positional[1]
+	}
+
+	c, err := daemon.NewClient()
+	if err != nil {
+		return err
+	}
+	out, err := c.Upload(localPath, remotePath, encrypt, printTransferEvent)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return err
+	}
+	fmt.Println(out.Entry.Path)
+	return nil
+}
+
+func runGet(args []string) error {
+	if len(args) < 1 || len(args) > 2 {
+		return fmt.Errorf("usage: tdrive get <remote-file> [local-path]")
+	}
+	localPath, err := downloadTargetPath(args[0], optionalArg(args, 1))
+	if err != nil {
+		return err
+	}
+
+	c, err := daemon.NewClient()
+	if err != nil {
+		return err
+	}
+	out, err := c.Download(args[0], localPath, printTransferEvent)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return err
+	}
+	fmt.Println(out.SavedPath)
+	return nil
+}
+
+func runCat(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: tdrive cat <remote-file>")
+	}
+	tmp, err := os.CreateTemp("", "tdrive-cat-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	c, err := daemon.NewClient()
+	if err != nil {
+		return err
+	}
+	if _, err := c.Download(args[0], tmpPath, printTransferEvent); err != nil {
+		fmt.Fprintln(os.Stderr)
+		return err
+	}
+	fmt.Fprintln(os.Stderr)
+
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(os.Stdout, f)
+	return err
+}
+
+func printVault(status daemon.VaultStatus) {
+	switch {
+	case !status.Available:
+		fmt.Println("vault: unavailable")
+	case !status.Configured:
+		fmt.Println("vault: not configured")
+	case status.Unlocked:
+		fmt.Println("vault: unlocked")
+	default:
+		fmt.Println("vault: locked")
+	}
+	if status.Hint != "" {
+		fmt.Println("hint:  " + status.Hint)
+	}
+}
+
+func passwordFromArgs(args []string) (string, error) {
+	if len(args) > 1 {
+		return "", fmt.Errorf("usage: tdrive unlock [--password-stdin]")
+	}
+	if len(args) == 1 {
+		if args[0] != "--password-stdin" {
+			return "", fmt.Errorf("usage: tdrive unlock [--password-stdin]")
+		}
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimRight(string(b), "\r\n"), nil
+	}
+	fmt.Fprint(os.Stderr, "Password: ")
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			return "", err
+		}
+		return strings.TrimRight(line, "\r\n"), nil
+	}
+	return string(b), nil
+}
+
+func downloadTargetPath(remotePath string, localPath string) (string, error) {
+	name := path.Base(strings.TrimRight(remotePath, "/"))
+	if name == "." || name == "/" || name == "" {
+		name = "tdrive_download"
+	}
+	if strings.TrimSpace(localPath) == "" {
+		return filepath.Abs(name)
+	}
+	info, err := os.Stat(localPath)
+	if err == nil && info.IsDir() {
+		return filepath.Abs(filepath.Join(localPath, name))
+	}
+	return filepath.Abs(localPath)
+}
+
+func optionalArg(args []string, index int) string {
+	if index >= len(args) {
+		return ""
+	}
+	return args[index]
+}
+
+func printTransferEvent(event daemon.Event) {
+	switch event.Name {
+	case "upload_start":
+		name := eventArgString(event, 1)
+		if name != "" {
+			fmt.Fprintf(os.Stderr, "upload %s\n", name)
+		}
+	case "upload_progress":
+		fmt.Fprintf(os.Stderr, "\rupload %.1f%%", eventArgFloat(event, 1))
+	case "upload_complete":
+		fmt.Fprintf(os.Stderr, "\rupload 100.0%%\n")
+	case "download_progress":
+		fmt.Fprintf(os.Stderr, "\rdownload %.1f%%", eventArgFloat(event, 0))
+	}
+}
+
+func eventArgString(event daemon.Event, index int) string {
+	if index >= len(event.Args) {
+		return ""
+	}
+	switch v := event.Args[index].(type) {
+	case string:
+		return v
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+func eventArgFloat(event daemon.Event, index int) float64 {
+	if index >= len(event.Args) {
+		return 0
+	}
+	switch v := event.Args[index].(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	default:
+		return 0
+	}
+}
+
 func entryDisplayName(entry daemon.Entry) string {
 	if entry.Type == "folder" {
 		return entry.Name + "/"
@@ -418,6 +689,11 @@ Usage:
   tdrive mkdir [-p] <path>  Create a remote folder
   tdrive rm [-r] <path>     Remove a remote file or folder
   tdrive mv <src> <dst>     Move or rename a remote file or folder
+  tdrive vault status       Show vault state
+  tdrive unlock             Unlock the vault in the daemon
+  tdrive put [-e] <local> [remote]
+  tdrive get <remote> [local]
+  tdrive cat <remote>
 
 The CLI talks to the local daemon. It does not auto-start it.
 `)
