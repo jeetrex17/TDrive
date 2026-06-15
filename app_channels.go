@@ -1,7 +1,6 @@
 package main
 
 import (
-	"TDrive/backend"
 	"TDrive/backend/projection"
 	channelservice "TDrive/backend/services/channel"
 )
@@ -44,13 +43,10 @@ type JoinRequestInfo struct {
 }
 
 func (a *App) channelService() *channelservice.Service {
-	return &channelservice.Service{
-		DB:        backend.DB,
-		TG:        a.tg,
-		Sync:      a.syncEngine,
-		GetActive: a.ActiveChannelID,
-		SetActive: a.setActiveChannelID,
+	if a.engine == nil {
+		return nil
 	}
+	return a.engine.ChannelService()
 }
 
 // ListChannels returns every drive known to this client (personal first,
