@@ -32,6 +32,54 @@ func (c *Client) Shutdown() error {
 	return c.call(CommandShutdown, nil, nil)
 }
 
+func (c *Client) AuthSetup(apiID int, apiHash string) (AuthStatusResponse, error) {
+	var out AuthStatusResponse
+	if err := c.call(CommandAuthSetup, AuthSetupRequest{APIID: apiID, APIHash: apiHash}, &out); err != nil {
+		return AuthStatusResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) AuthStatus() (AuthStatusResponse, error) {
+	var out AuthStatusResponse
+	if err := c.call(CommandAuthStatus, nil, &out); err != nil {
+		return AuthStatusResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) Login(phone string, onEvent EventHandler) (AuthLoginResponse, error) {
+	var out AuthLoginResponse
+	if err := c.stream(CommandAuthLogin, AuthLoginRequest{Phone: phone}, &out, onEvent); err != nil {
+		return AuthLoginResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) SubmitLoginCode(code string) error {
+	return c.call(CommandAuthSubmitCode, AuthSubmitRequest{Value: code}, nil)
+}
+
+func (c *Client) SubmitLoginPassword(password string) error {
+	return c.call(CommandAuthSubmitPassword, AuthSubmitRequest{Value: password}, nil)
+}
+
+func (c *Client) Logout(mode string) (AuthLogoutResponse, error) {
+	var out AuthLogoutResponse
+	if err := c.call(CommandAuthLogout, AuthLogoutRequest{Mode: mode}, &out); err != nil {
+		return AuthLogoutResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) Whoami() (SelfUserResponse, error) {
+	var out SelfUserResponse
+	if err := c.call(CommandWhoami, nil, &out); err != nil {
+		return SelfUserResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) ListDrives() (DriveListResponse, error) {
 	var out DriveListResponse
 	if err := c.call(CommandDriveList, nil, &out); err != nil {
@@ -44,6 +92,90 @@ func (c *Client) UseDrive(selector string) (DriveUseResponse, error) {
 	var out DriveUseResponse
 	if err := c.call(CommandDriveUse, DriveUseRequest{Selector: selector}, &out); err != nil {
 		return DriveUseResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) CreateDrive(title string, requireApproval bool) (DriveUseResponse, error) {
+	var out DriveUseResponse
+	if err := c.call(CommandDriveCreate, DriveCreateRequest{Title: title, RequireApproval: requireApproval}, &out); err != nil {
+		return DriveUseResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) JoinDrive(inviteLink string) (DriveJoinResponse, error) {
+	var out DriveJoinResponse
+	if err := c.call(CommandDriveJoin, DriveJoinRequest{InviteLink: inviteLink}, &out); err != nil {
+		return DriveJoinResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ListPendingJoins() (PendingJoinsResponse, error) {
+	var out PendingJoinsResponse
+	if err := c.call(CommandDrivePendingList, nil, &out); err != nil {
+		return PendingJoinsResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) CheckPendingJoin(inviteHash string) (DriveJoinResponse, error) {
+	var out DriveJoinResponse
+	if err := c.call(CommandDrivePendingCheck, PendingJoinRequest{InviteHash: inviteHash}, &out); err != nil {
+		return DriveJoinResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) RemovePendingJoin(inviteHash string) error {
+	return c.call(CommandDrivePendingRemove, PendingJoinRequest{InviteHash: inviteHash}, nil)
+}
+
+func (c *Client) InviteLink(selector string, requireApproval bool) (InviteLinkResponse, error) {
+	var out InviteLinkResponse
+	if err := c.call(CommandDriveInviteLink, InviteLinkRequest{Selector: selector, RequireApproval: requireApproval}, &out); err != nil {
+		return InviteLinkResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) JoinRequests(selector string) (JoinRequestsResponse, error) {
+	var out JoinRequestsResponse
+	if err := c.call(CommandDriveJoinRequests, DriveSelectorRequest{Selector: selector}, &out); err != nil {
+		return JoinRequestsResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) ResolveJoinRequest(selector string, userID int64, approve bool) (JoinRequestsResponse, error) {
+	var out JoinRequestsResponse
+	if err := c.call(CommandDriveJoinAction, JoinRequestActionRequest{Selector: selector, UserID: userID, Approve: approve}, &out); err != nil {
+		return JoinRequestsResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) LeaveDrive(selector string) (DriveUseResponse, error) {
+	var out DriveUseResponse
+	if err := c.call(CommandDriveLeave, DriveSelectorRequest{Selector: selector}, &out); err != nil {
+		return DriveUseResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) Sync(selector string) (MaintenanceResponse, error) {
+	var out MaintenanceResponse
+	if err := c.call(CommandSync, DriveSelectorRequest{Selector: selector}, &out); err != nil {
+		return MaintenanceResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) Rebuild(selector string) (MaintenanceResponse, error) {
+	var out MaintenanceResponse
+	if err := c.call(CommandRebuild, DriveSelectorRequest{Selector: selector}, &out); err != nil {
+		return MaintenanceResponse{}, err
 	}
 	return out, nil
 }

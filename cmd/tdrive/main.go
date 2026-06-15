@@ -35,6 +35,18 @@ func run(args []string) error {
 	switch args[0] {
 	case "daemon":
 		return runDaemon(args[1:])
+	case "install-cli":
+		return runInstallCLI(args[1:])
+	case "uninstall-cli":
+		return runUninstallCLI(args[1:])
+	case "setup":
+		return runSetup(args[1:])
+	case "login":
+		return runLogin(args[1:])
+	case "logout":
+		return runLogout(args[1:])
+	case "whoami":
+		return printWhoami()
 	case "status":
 		return printDaemonStatus()
 	case "drives":
@@ -65,6 +77,10 @@ func run(args []string) error {
 		return runGet(args[1:])
 	case "cat":
 		return runCat(args[1:])
+	case "sync":
+		return runSync(args[1:])
+	case "rebuild":
+		return runRebuild(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -84,7 +100,7 @@ func runDrive(args []string) error {
 		if len(args) != 2 {
 			return fmt.Errorf("usage: tdrive drive use <name|id>")
 		}
-		c, err := daemon.NewClient()
+		c, err := newDaemonClient()
 		if err != nil {
 			return err
 		}
@@ -95,6 +111,22 @@ func runDrive(args []string) error {
 		fmt.Printf("drive: %s (%d)\n", out.Drive.Title, out.Drive.ID)
 		fmt.Printf("cwd:   %s\n", out.CurrentPath)
 		return nil
+	case "create":
+		return runDriveCreate(args[1:])
+	case "join":
+		return runDriveJoin(args[1:])
+	case "pending":
+		return runDrivePending(args[1:])
+	case "link":
+		return runDriveLink(args[1:])
+	case "requests":
+		return runDriveRequests(args[1:])
+	case "approve":
+		return runDriveJoinAction(args[1:], true)
+	case "deny", "reject":
+		return runDriveJoinAction(args[1:], false)
+	case "leave":
+		return runDriveLeave(args[1:])
 	default:
 		return fmt.Errorf("unknown drive command %q", args[0])
 	}
@@ -102,15 +134,27 @@ func runDrive(args []string) error {
 
 func runDaemon(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("missing daemon command\n\nRun: tdrive daemon start|status|stop")
+		return fmt.Errorf("missing daemon command\n\nRun: tdrive daemon start [--background]|status|stop")
 	}
 
 	switch args[0] {
 	case "start":
+		if len(args) > 2 {
+			return fmt.Errorf("usage: tdrive daemon start [--background]")
+		}
+		if len(args) == 2 {
+			if args[1] != "--background" && args[1] != "-b" {
+				return fmt.Errorf("usage: tdrive daemon start [--background]")
+			}
+			return startDaemonBackground(true)
+		}
 		return runDaemonForeground()
 	case "status":
 		return printDaemonStatus()
 	case "stop":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: tdrive daemon stop")
+		}
 		c, err := daemon.NewClient()
 		if err != nil {
 			return err
@@ -121,8 +165,22 @@ func runDaemon(args []string) error {
 		fmt.Println("TDrive daemon stopping")
 		return nil
 	case "restart":
-		if err := runDaemon([]string{"stop"}); err != nil && !strings.Contains(err.Error(), "daemon is not running") {
+		background := false
+		if len(args) > 2 {
+			return fmt.Errorf("usage: tdrive daemon restart [--background]")
+		}
+		if len(args) == 2 {
+			if args[1] != "--background" && args[1] != "-b" {
+				return fmt.Errorf("usage: tdrive daemon restart [--background]")
+			}
+			background = true
+		}
+		if err := runDaemon([]string{"stop"}); err != nil && !isDaemonNotRunning(err) {
 			return err
+		}
+		waitForDaemonStop(3 * time.Second)
+		if background {
+			return startDaemonBackground(true)
 		}
 		return runDaemonForeground()
 	default:
@@ -174,7 +232,7 @@ func printDaemonStatus() error {
 }
 
 func printDrives() error {
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -197,7 +255,7 @@ func printDrives() error {
 }
 
 func printPWD() error {
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -213,7 +271,7 @@ func runCD(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: tdrive cd <remote-path>")
 	}
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -240,7 +298,7 @@ func runLS(args []string) error {
 		}
 	}
 
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -284,7 +342,7 @@ func runFind(args []string) error {
 		return fmt.Errorf("usage: tdrive find [-n limit] <query>")
 	}
 
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -316,7 +374,7 @@ func runMkdir(args []string) error {
 		return fmt.Errorf("usage: tdrive mkdir [-p] <remote-path>")
 	}
 
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -346,7 +404,7 @@ func runRM(args []string) error {
 		return fmt.Errorf("usage: tdrive rm [-r] <remote-path>")
 	}
 
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -362,7 +420,7 @@ func runMV(args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("usage: tdrive mv <source> <destination>")
 	}
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -384,7 +442,7 @@ func runVault(args []string) error {
 	case "unlock":
 		return runVaultUnlock(args[1:])
 	case "lock":
-		c, err := daemon.NewClient()
+		c, err := newDaemonClient()
 		if err != nil {
 			return err
 		}
@@ -400,7 +458,7 @@ func runVault(args []string) error {
 }
 
 func printVaultStatus() error {
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -417,7 +475,7 @@ func runVaultUnlock(args []string) error {
 	if err != nil {
 		return err
 	}
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -455,7 +513,7 @@ func runPut(args []string) error {
 		remotePath = positional[1]
 	}
 
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -477,7 +535,7 @@ func runGet(args []string) error {
 		return err
 	}
 
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -502,7 +560,7 @@ func runCat(args []string) error {
 	_ = tmp.Close()
 	defer func() { _ = os.Remove(tmpPath) }()
 
-	c, err := daemon.NewClient()
+	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
@@ -736,11 +794,26 @@ func printUsage() {
 
 Usage:
   tdrive daemon start       Run the daemon in the foreground
+  tdrive daemon start -b    Run the daemon in the background
   tdrive daemon status      Show daemon status
   tdrive daemon stop        Ask the daemon to stop
+  tdrive install-cli        Install tdrive into ~/.local/bin
+  tdrive uninstall-cli      Remove ~/.local/bin/tdrive
+  tdrive setup [--api-id ID --api-hash HASH]
+  tdrive login <phone>
+  tdrive logout [--soft|--full]
+  tdrive whoami
   tdrive status             Alias for daemon status
   tdrive drives             List known drives
   tdrive drive use <name|id> Switch the active drive
+  tdrive drive create [--approval] <title>
+  tdrive drive join <invite-link>
+  tdrive drive link [--approval] [name|id]
+  tdrive drive pending [check|rm]
+  tdrive drive requests [name|id]
+  tdrive drive approve <user-id> [name|id]
+  tdrive drive deny <user-id> [name|id]
+  tdrive drive leave <name|id>
   tdrive pwd                Print the remote working directory
   tdrive cd <path>          Change the remote working directory
   tdrive ls [-l] [path]     List remote files
@@ -753,7 +826,9 @@ Usage:
   tdrive put [-e] [--extract] <local> [remote-path]
   tdrive get <remote> [local]
   tdrive cat <remote>
+  tdrive sync [name|id]
+  tdrive rebuild [name|id]
 
-The CLI talks to the local daemon. It does not auto-start it.
+Most commands auto-start the local daemon in the background when needed.
 `)
 }

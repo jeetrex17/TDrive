@@ -8,22 +8,40 @@ import (
 const ProtocolVersion = 1
 
 const (
-	CommandStatus      = "daemon.status"
-	CommandShutdown    = "daemon.shutdown"
-	CommandDriveList   = "drive.list"
-	CommandDriveUse    = "drive.use"
-	CommandPWD         = "fs.pwd"
-	CommandCD          = "fs.cd"
-	CommandList        = "fs.list"
-	CommandFind        = "fs.find"
-	CommandMkdir       = "fs.mkdir"
-	CommandRemove      = "fs.remove"
-	CommandMove        = "fs.move"
-	CommandVaultStatus = "vault.status"
-	CommandVaultUnlock = "vault.unlock"
-	CommandVaultLock   = "vault.lock"
-	CommandUpload      = "transfer.upload"
-	CommandDownload    = "transfer.download"
+	CommandStatus             = "daemon.status"
+	CommandShutdown           = "daemon.shutdown"
+	CommandAuthSetup          = "auth.setup"
+	CommandAuthStatus         = "auth.status"
+	CommandAuthLogin          = "auth.login"
+	CommandAuthSubmitCode     = "auth.submit_code"
+	CommandAuthSubmitPassword = "auth.submit_password"
+	CommandAuthLogout         = "auth.logout"
+	CommandWhoami             = "auth.whoami"
+	CommandDriveList          = "drive.list"
+	CommandDriveUse           = "drive.use"
+	CommandDriveCreate        = "drive.create"
+	CommandDriveJoin          = "drive.join"
+	CommandDrivePendingList   = "drive.pending.list"
+	CommandDrivePendingCheck  = "drive.pending.check"
+	CommandDrivePendingRemove = "drive.pending.remove"
+	CommandDriveInviteLink    = "drive.invite_link"
+	CommandDriveJoinRequests  = "drive.join_requests"
+	CommandDriveJoinAction    = "drive.join_action"
+	CommandDriveLeave         = "drive.leave"
+	CommandSync               = "maintenance.sync"
+	CommandRebuild            = "maintenance.rebuild"
+	CommandPWD                = "fs.pwd"
+	CommandCD                 = "fs.cd"
+	CommandList               = "fs.list"
+	CommandFind               = "fs.find"
+	CommandMkdir              = "fs.mkdir"
+	CommandRemove             = "fs.remove"
+	CommandMove               = "fs.move"
+	CommandVaultStatus        = "vault.status"
+	CommandVaultUnlock        = "vault.unlock"
+	CommandVaultLock          = "vault.lock"
+	CommandUpload             = "transfer.upload"
+	CommandDownload           = "transfer.download"
 )
 
 type Request struct {
@@ -54,14 +72,62 @@ type Status struct {
 }
 
 type Drive struct {
-	ID     int64  `json:"id"`
-	Title  string `json:"title"`
-	Kind   string `json:"kind"`
-	Active bool   `json:"active"`
+	ID         int64  `json:"id"`
+	Title      string `json:"title"`
+	Kind       string `json:"kind"`
+	Active     bool   `json:"active"`
+	InviteLink string `json:"invite_link,omitempty"`
 }
 
 type DriveListResponse struct {
 	Drives []Drive `json:"drives"`
+}
+
+type AuthSetupRequest struct {
+	APIID   int    `json:"api_id"`
+	APIHash string `json:"api_hash"`
+}
+
+type AuthStatus struct {
+	SystemStatus string `json:"system_status"`
+	LoggedIn     bool   `json:"logged_in"`
+}
+
+type AuthStatusResponse struct {
+	Status AuthStatus `json:"status"`
+}
+
+type AuthLoginRequest struct {
+	Phone string `json:"phone"`
+}
+
+type AuthLoginResponse struct {
+	LoggedIn        bool   `json:"logged_in"`
+	InitDriveResult string `json:"init_drive_result,omitempty"`
+	ActiveChannelID int64  `json:"active_channel_id,omitempty"`
+}
+
+type AuthSubmitRequest struct {
+	Value string `json:"value"`
+}
+
+type AuthLogoutRequest struct {
+	Mode string `json:"mode,omitempty"`
+}
+
+type AuthLogoutResponse struct {
+	Mode     string `json:"mode"`
+	Stopping bool   `json:"stopping"`
+}
+
+type SelfUser struct {
+	UserID      int64  `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Username    string `json:"username,omitempty"`
+}
+
+type SelfUserResponse struct {
+	User SelfUser `json:"user"`
 }
 
 type DriveUseRequest struct {
@@ -71,6 +137,77 @@ type DriveUseRequest struct {
 type DriveUseResponse struct {
 	Drive       Drive  `json:"drive"`
 	CurrentPath string `json:"current_path"`
+}
+
+type DriveCreateRequest struct {
+	Title           string `json:"title"`
+	RequireApproval bool   `json:"require_approval,omitempty"`
+}
+
+type DriveJoinRequest struct {
+	InviteLink string `json:"invite_link"`
+}
+
+type PendingJoin struct {
+	InviteHash    string `json:"invite_hash"`
+	InviteLink    string `json:"invite_link"`
+	Title         string `json:"title"`
+	RequestedAt   int64  `json:"requested_at"`
+	LastCheckedAt int64  `json:"last_checked_at"`
+	Status        string `json:"status"`
+	LastError     string `json:"last_error,omitempty"`
+}
+
+type DriveJoinResponse struct {
+	Status  string       `json:"status"`
+	Drive   *Drive       `json:"drive,omitempty"`
+	Pending *PendingJoin `json:"pending,omitempty"`
+}
+
+type PendingJoinsResponse struct {
+	Pending []PendingJoin `json:"pending"`
+}
+
+type PendingJoinRequest struct {
+	InviteHash string `json:"invite_hash"`
+}
+
+type DriveSelectorRequest struct {
+	Selector string `json:"selector,omitempty"`
+}
+
+type InviteLinkRequest struct {
+	Selector        string `json:"selector,omitempty"`
+	RequireApproval bool   `json:"require_approval,omitempty"`
+}
+
+type InviteLinkResponse struct {
+	Drive           Drive  `json:"drive"`
+	Link            string `json:"link"`
+	RequireApproval bool   `json:"require_approval,omitempty"`
+}
+
+type JoinRequest struct {
+	UserID      int64  `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Username    string `json:"username,omitempty"`
+	RequestedAt int64  `json:"requested_at"`
+	About       string `json:"about,omitempty"`
+}
+
+type JoinRequestsResponse struct {
+	Drive    Drive         `json:"drive"`
+	Requests []JoinRequest `json:"requests"`
+}
+
+type JoinRequestActionRequest struct {
+	Selector string `json:"selector,omitempty"`
+	UserID   int64  `json:"user_id"`
+	Approve  bool   `json:"approve"`
+}
+
+type MaintenanceResponse struct {
+	Drive Drive `json:"drive"`
 }
 
 type PathRequest struct {

@@ -126,6 +126,7 @@ func (s *Service) CodeRejected() {
 
 func (s *Service) WaitCode(ctx context.Context) (string, error) {
 	s.setStage(stageWaitingCode)
+	s.emit("login-code-required", true)
 	select {
 	case code := <-s.codech:
 		return code, nil
