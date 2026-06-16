@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner-clouds.png" alt="TDrive" width="100%">
+  <img src="assets/tdrive-banner-loop-main.gif" alt="TDrive" width="100%">
 </p>
 
 <p align="center">
@@ -31,10 +31,16 @@ This project is for **educational purposes only**. I’m not trying to harm Tele
 - **Photos gallery** — browse every image in a drive, newest first.
 - **Shared drives** — invite friends with instant or approval-required links; everyone can upload, organize, and see who uploaded what.
 - **Cancellable transfers** — cancel uploads and downloads mid-flight, with live size and speed.
+- **CLI mode** — use TDrive from the terminal with a local daemon, Linux-like commands, folder/archive upload, shared drives, vault unlock, and progress output.
 
 ## Download
 
-Grab the latest build for your platform from the [**Releases**](https://github.com/jeetrex17/TDrive/releases/latest) page (macOS, Windows, and Linux AppImage). On first run, enter your Telegram API credentials (see [Telegram API ID + Hash](#telegram-api-id--hash-required) below).
+Grab the latest build for your platform from the [**Releases**](https://github.com/jeetrex17/TDrive/releases/latest) page.
+
+- GUI builds: macOS, Windows, and Linux AppImage.
+- CLI builds: macOS and Linux `*-cli.tar.gz` assets.
+
+Windows CLI support is not wired yet. Use the GUI on Windows for now. On first run, enter your Telegram API credentials (see [Telegram API ID + Hash](#telegram-api-id--hash-required) below).
 
 ### macOS installation note
 
@@ -103,18 +109,99 @@ You need your own Telegram API credentials:
 
 The app stores these credentials locally after you enter them in the setup screen.
 
+## CLI
+
+The CLI is for macOS and Linux power users who want to use TDrive from a terminal.
+
+Install from a release asset:
+
+```bash
+tar -xzf TDrive-*-cli.tar.gz
+cd TDrive-*-cli
+./install-cli.sh
+```
+
+If the installer updated your shell config, reload it:
+
+```bash
+source ~/.zshrc   # or ~/.bashrc
+```
+
+Set up Telegram credentials and log in:
+
+```bash
+tdrive setup --api-id YOUR_ID --api-hash YOUR_HASH
+tdrive login +15551234567
+tdrive whoami
+tdrive ls
+```
+
+You can also run `tdrive setup` without flags and enter the API ID + Hash interactively.
+
+Most commands auto-start the local daemon in the background. The daemon keeps the Telegram session, sync state, and unlocked vault key alive while you use CLI commands. The GUI and CLI daemon cannot run at the same time because they use the same Telegram session/backend state; if the GUI is open, the CLI will ask you to close it first.
+
+Common commands:
+
+```bash
+tdrive drives
+tdrive drive use <name|id>
+
+tdrive pwd
+tdrive ls -l
+tdrive mkdir -p /Photos
+tdrive put photo.jpg /Photos/
+tdrive get /Photos/photo.jpg .
+tdrive cat /Notes/readme.txt
+
+tdrive mkdir -p /Backups
+tdrive put folder /Backups/
+
+tdrive mkdir -p /Imports
+tdrive put --extract archive.zip /Imports/
+
+tdrive mv /old /new
+tdrive rm -r /folder
+tdrive sync
+tdrive rebuild
+
+tdrive vault status
+tdrive unlock
+tdrive vault lock
+```
+
+Folder and archive imports require the destination folder to already exist first. Single-file uploads can create or rename the final file path.
+
+Shared drive commands:
+
+```bash
+tdrive drive create "Team Drive"
+tdrive drive link
+tdrive drive join <invite-link>
+tdrive drive requests
+tdrive drive approve <user-id>
+tdrive drive deny <user-id>
+tdrive drive leave <name|id>
+```
+
+Remove the installed CLI:
+
+```bash
+tdrive uninstall-cli
+```
+
 ## Build from source
 
 ```bash
 wails dev      # run in development
 wails build    # build a release binary
+go build -o tdrive ./cmd/tdrive  # build the CLI
 ```
 
 You’ll need your own Telegram API credentials (see above) the first time you run it.
 
 ## Where data is stored (local files)
 
-Everything is stored inside your OS “user config” folder under a `TDrive` directory:
+Persistent local files are stored inside your OS “user config” folder under a `TDrive` directory:
 
 - macOS: `~/Library/Application Support/TDrive/`
 - Linux: `~/.config/TDrive/`
@@ -125,10 +212,17 @@ Files you’ll see there:
 - `session.json` → Telegram login session
 - `config.json` → Drive channel id (`channel_id`)
 - `tdrive.db` → Local cache for channels, folders, files, sync log, and encryption metadata
+- `cli.json` → CLI current drive and per-drive working directory
+- `daemon.log` → CLI daemon log
+- `backend.lock` → Prevents the GUI and CLI daemon from using the backend at the same time
+
+The CLI daemon socket is runtime-only and lives under `$XDG_RUNTIME_DIR` or `/tmp/tdrive-<uid>` on Unix-like systems, not in the config folder.
 
 ## Notes & caveats
 
 **TDX metadata.** You will see `TDX1|...` messages in Telegram. They are silent but visible, and they are how TDrive remembers the drive structure. Don’t edit or delete them from the regular Telegram app. Changing them can desync what different members see.
+
+**CLI status.** The CLI is currently macOS/Linux only. The GUI and CLI daemon are mutually exclusive: close the GUI before using CLI commands. `tdrive unlock` keeps the vault key only in daemon memory, and `tdrive cat` may stage decrypted content through a temporary file before writing it to stdout. Folder/archive import is copy-style import, not sync/merge; importing the same folder again can create names like `folder (2)`.
 
 **Download counts.** The downloads badge shows total GitHub release asset downloads. For a per-release/per-OS breakdown:
 
