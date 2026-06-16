@@ -31,6 +31,9 @@ func run(args []string) error {
 		printUsage()
 		return nil
 	}
+	if topic, ok := requestedHelp(args); ok {
+		return printHelp(topic)
+	}
 
 	switch args[0] {
 	case "daemon":
@@ -81,9 +84,6 @@ func run(args []string) error {
 		return runSync(args[1:])
 	case "rebuild":
 		return runRebuild(args[1:])
-	case "help", "-h", "--help":
-		printUsage()
-		return nil
 	default:
 		return fmt.Errorf("unknown command %q\n\nRun: tdrive help", args[0])
 	}
@@ -830,5 +830,6 @@ Usage:
   tdrive rebuild [name|id]
 
 Most commands auto-start the local daemon in the background when needed.
+Run: tdrive help <command> or tdrive <command> --help
 `)
 }
