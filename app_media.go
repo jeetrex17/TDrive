@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"TDrive/backend"
+	"TDrive/backend/media"
 	"TDrive/backend/thumbnail"
 )
 
@@ -59,4 +61,21 @@ func (a *App) Thumbnail(msgID int) (PreviewPayload, error) {
 		return PreviewPayload{}, err
 	}
 	return PreviewPayload(payload), nil
+}
+
+// OpenMedia creates a short-lived, tokenized loopback URL for a plain media
+// file in the active drive. The frontend player must call CloseMedia when the
+// preview closes so the underlying range reader and cache are released.
+func (a *App) OpenMedia(msgID int) (media.OpenResult, error) {
+	if a.engine == nil {
+		return media.OpenResult{}, fmt.Errorf("backend not ready")
+	}
+	return a.engine.MediaService().Open(a.ctx, a.ActiveChannelID(), int64(msgID))
+}
+
+func (a *App) CloseMedia(token string) error {
+	if a.engine == nil {
+		return fmt.Errorf("backend not ready")
+	}
+	return a.engine.MediaService().CloseSession(token)
 }

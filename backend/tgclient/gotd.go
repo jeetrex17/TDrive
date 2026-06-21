@@ -28,12 +28,18 @@ type Gotd struct {
 
 	mu     sync.Mutex
 	client *telegram.Client
+
+	cdnMu sync.Mutex
+	cdn   map[int]telegram.CloseInvoker
 }
 
 // NewGotd constructs a Client that dispatches onto one shared connection built
 // from the given factory. In production wire this to auth.Connect.
 func NewGotd(connect func() (*telegram.Client, error)) *Gotd {
-	g := &Gotd{connect: connect}
+	g := &Gotd{
+		connect: connect,
+		cdn:     make(map[int]telegram.CloseInvoker),
+	}
 	g.conn = newLiveConn(g.scope)
 	return g
 }
@@ -47,6 +53,7 @@ func (g *Gotd) scope(runCtx context.Context, ready func()) error {
 		return fmt.Errorf("tgclient: connect: %w", err)
 	}
 	return client.Run(runCtx, func(rctx context.Context) error {
+		defer g.closeCDN()
 		g.mu.Lock()
 		g.client = client
 		g.mu.Unlock()
@@ -90,7 +97,18 @@ func (g *Gotd) runClient(ctx context.Context, fn func(ctx context.Context, clien
 
 // Close tears down the shared connection. Safe to call once at shutdown.
 func (g *Gotd) Close() {
+	g.closeCDN()
 	g.conn.Close()
+}
+
+func (g *Gotd) closeCDN() {
+	g.cdnMu.Lock()
+	conns := g.cdn
+	g.cdn = make(map[int]telegram.CloseInvoker)
+	g.cdnMu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
 }
 
 func normalizeError(err error) error {

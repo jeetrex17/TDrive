@@ -34,6 +34,10 @@ export function CheckSystemStatus() {
   return window['go']['main']['App']['CheckSystemStatus']();
 }
 
+export function CloseMedia(arg1) {
+  return window['go']['main']['App']['CloseMedia'](arg1);
+}
+
 export function CreateEncryptionPassword(arg1, arg2) {
   return window['go']['main']['App']['CreateEncryptionPassword'](arg1, arg2);
 }
@@ -156,6 +160,10 @@ export function MsgToTdriveSystem(arg1, arg2, arg3, arg4) {
 
 export function MyUserID() {
   return window['go']['main']['App']['MyUserID']();
+}
+
+export function OpenMedia(arg1) {
+  return window['go']['main']['App']['OpenMedia'](arg1);
 }
 
 export function PlanImport(arg1, arg2, arg3) {
