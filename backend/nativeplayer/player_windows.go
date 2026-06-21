@@ -22,13 +22,22 @@ const (
 	wsClipChildren = 0x02000000
 	wsClipSiblings = 0x04000000
 
-	swHide        = 0
-	swpNoZOrder   = 0x0004
-	swpNoActivate = 0x0010
+	swHide = 0
+
+	jobObjectInfoClassExtendedLimitInformation = 9
+	jobObjectLimitKillOnJobClose               = 0x00002000
+
+	processTerminate = 0x0001
+	processSetQuota  = 0x0100
 )
 
 var (
-	user32 = syscall.NewLazyDLL("user32.dll")
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	user32   = syscall.NewLazyDLL("user32.dll")
+
+	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
+	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
+	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
 
 	procCreateWindowExW        = user32.NewProc("CreateWindowExW")
 	procDestroyWindow          = user32.NewProc("DestroyWindow")
@@ -39,19 +48,27 @@ var (
 	procGetWindowThreadProcess = user32.NewProc("GetWindowThreadProcessId")
 	procIsWindowVisible        = user32.NewProc("IsWindowVisible")
 	procMoveWindow             = user32.NewProc("MoveWindow")
-	procSetWindowPos           = user32.NewProc("SetWindowPos")
 	procShowWindow             = user32.NewProc("ShowWindow")
+
+	enumWindowsMu       sync.Mutex
+	enumWindowsCallback = syscall.NewCallback(enumWindowsProc)
+	enumTargetPID       uint32
+	enumFirstWindow     uintptr
+	enumTitledWindow    uintptr
 )
 
 type Player struct {
 	mu      sync.Mutex
 	closed  bool
+	parent  uintptr
 	child   uintptr
 	ipcPath string
 	cmd     *exec.Cmd
 	done    chan error
+	job     syscall.Handle
 
 	destroyOnce sync.Once
+	jobOnce     sync.Once
 }
 
 func Start(ctx context.Context, url string, rect Rect) (*Player, error) {
@@ -68,7 +85,7 @@ func Start(ctx context.Context, url string, rect Rect) (*Player, error) {
 		return nil, err
 	}
 
-	player := &Player{child: child, done: make(chan error, 1)}
+	player := &Player{parent: parent, child: child, done: make(chan error, 1)}
 	if err := player.startProcess(ctx, url); err != nil {
 		player.destroyChild()
 		return nil, err
@@ -81,6 +98,11 @@ func (p *Player) startProcess(ctx context.Context, url string) error {
 	if err != nil {
 		return err
 	}
+	job, err := createKillOnCloseJob()
+	if err != nil {
+		return err
+	}
+	p.job = job
 
 	p.ipcPath = fmt.Sprintf(`\\.\pipe\tdrive-mpv-%d-%d`, os.Getpid(), time.Now().UnixNano())
 	args := []string{
@@ -102,13 +124,21 @@ func (p *Player) startProcess(ctx context.Context, url string) error {
 	cmd := exec.CommandContext(ctx, mpvPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Start(); err != nil {
+		p.closeJob()
 		return fmt.Errorf("native player: start mpv: %w", err)
+	}
+	if err := assignProcessToJob(job, cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		p.closeJob()
+		return err
 	}
 	p.cmd = cmd
 	go func() {
 		err := cmd.Wait()
 		p.done <- err
 		p.destroyChild()
+		p.closeJob()
 	}()
 	return nil
 }
@@ -122,22 +152,18 @@ func (p *Player) Resize(rect Rect) error {
 	}
 
 	p.mu.Lock()
+	parent := p.parent
 	child := p.child
 	closed := p.closed
 	p.mu.Unlock()
 	if closed || child == 0 {
 		return nil
 	}
-	parent := uintptr(0)
-	if hwnd, err := findTDriveWindow(); err == nil {
-		parent = hwnd
-	}
 	x, y, w, h := scaleRect(rect, parent)
 	ret, _, callErr := procMoveWindow.Call(child, uintptr(x), uintptr(y), uintptr(w), uintptr(h), 1)
 	if ret == 0 {
 		return callFailed("MoveWindow", callErr)
 	}
-	procSetWindowPos.Call(child, 0, uintptr(x), uintptr(y), uintptr(w), uintptr(h), swpNoZOrder|swpNoActivate)
 	return nil
 }
 
@@ -195,6 +221,7 @@ func (p *Player) Close() error {
 		}
 	}
 	p.destroyChild()
+	p.closeJob()
 	return nil
 }
 
@@ -210,6 +237,21 @@ func (p *Player) destroyChild() {
 		if child != 0 {
 			procShowWindow.Call(child, swHide)
 			procDestroyWindow.Call(child)
+		}
+	})
+}
+
+func (p *Player) closeJob() {
+	if p == nil {
+		return
+	}
+	p.jobOnce.Do(func() {
+		p.mu.Lock()
+		job := p.job
+		p.job = 0
+		p.mu.Unlock()
+		if job != 0 {
+			_ = syscall.CloseHandle(job)
 		}
 	})
 }
@@ -233,23 +275,19 @@ func writeMPVIPC(path string, payload []byte) error {
 }
 
 func findTDriveWindow() (uintptr, error) {
-	currentPID := uint32(os.Getpid())
-	var first uintptr
-	var titled uintptr
-	cb := syscall.NewCallback(func(hwnd uintptr, lparam uintptr) uintptr {
-		if !windowVisible(hwnd) || windowProcessID(hwnd) != currentPID {
-			return 1
-		}
-		if first == 0 {
-			first = hwnd
-		}
-		if strings.Contains(windowText(hwnd), "TDrive") {
-			titled = hwnd
-			return 0
-		}
-		return 1
-	})
-	ret, _, callErr := procEnumWindows.Call(cb, 0)
+	enumWindowsMu.Lock()
+	defer enumWindowsMu.Unlock()
+
+	enumTargetPID = uint32(os.Getpid())
+	enumFirstWindow = 0
+	enumTitledWindow = 0
+	ret, _, callErr := procEnumWindows.Call(enumWindowsCallback, 0)
+	first := enumFirstWindow
+	titled := enumTitledWindow
+	enumTargetPID = 0
+	enumFirstWindow = 0
+	enumTitledWindow = 0
+
 	if ret == 0 && titled == 0 && first == 0 {
 		return 0, callFailed("EnumWindows", callErr)
 	}
@@ -260,6 +298,20 @@ func findTDriveWindow() (uintptr, error) {
 		return first, nil
 	}
 	return 0, fmt.Errorf("native player: TDrive window not found")
+}
+
+func enumWindowsProc(hwnd uintptr, lparam uintptr) uintptr {
+	if !windowVisible(hwnd) || windowProcessID(hwnd) != enumTargetPID {
+		return 1
+	}
+	if enumFirstWindow == 0 {
+		enumFirstWindow = hwnd
+	}
+	if strings.Contains(windowText(hwnd), "TDrive") {
+		enumTitledWindow = hwnd
+		return 0
+	}
+	return 1
 }
 
 func createVideoChildWindow(parent uintptr, rect Rect) (uintptr, error) {
@@ -285,6 +337,71 @@ func createVideoChildWindow(parent uintptr, rect Rect) (uintptr, error) {
 		return 0, callFailed("CreateWindowExW", callErr)
 	}
 	return child, nil
+}
+
+type jobObjectBasicLimitInformation struct {
+	PerProcessUserTimeLimit int64
+	PerJobUserTimeLimit     int64
+	LimitFlags              uint32
+	MinimumWorkingSetSize   uintptr
+	MaximumWorkingSetSize   uintptr
+	ActiveProcessLimit      uint32
+	Affinity                uintptr
+	PriorityClass           uint32
+	SchedulingClass         uint32
+}
+
+type ioCounters struct {
+	ReadOperationCount  uint64
+	WriteOperationCount uint64
+	OtherOperationCount uint64
+	ReadTransferCount   uint64
+	WriteTransferCount  uint64
+	OtherTransferCount  uint64
+}
+
+type jobObjectExtendedLimitInformation struct {
+	BasicLimitInformation jobObjectBasicLimitInformation
+	IoInfo                ioCounters
+	ProcessMemoryLimit    uintptr
+	JobMemoryLimit        uintptr
+	PeakProcessMemoryUsed uintptr
+	PeakJobMemoryUsed     uintptr
+}
+
+func createKillOnCloseJob() (syscall.Handle, error) {
+	handle, _, callErr := procCreateJobObjectW.Call(0, 0)
+	if handle == 0 {
+		return 0, callFailed("CreateJobObjectW", callErr)
+	}
+
+	info := jobObjectExtendedLimitInformation{}
+	info.BasicLimitInformation.LimitFlags = jobObjectLimitKillOnJobClose
+	ret, _, callErr := procSetInformationJobObject.Call(
+		handle,
+		jobObjectInfoClassExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)),
+		unsafe.Sizeof(info),
+	)
+	if ret == 0 {
+		_ = syscall.CloseHandle(syscall.Handle(handle))
+		return 0, callFailed("SetInformationJobObject", callErr)
+	}
+	return syscall.Handle(handle), nil
+}
+
+func assignProcessToJob(job syscall.Handle, pid int) error {
+	process, err := syscall.OpenProcess(processSetQuota|processTerminate, false, uint32(pid))
+	if err != nil {
+		return fmt.Errorf("native player: open mpv process for job assignment: %w", err)
+	}
+	defer syscall.CloseHandle(process)
+
+	ret, _, callErr := procAssignProcessToJobObject.Call(uintptr(job), uintptr(process))
+	if ret == 0 {
+		return callFailed("AssignProcessToJobObject", callErr)
+	}
+	return nil
 }
 
 func scaleRect(rect Rect, hwnd uintptr) (int, int, int, int) {
