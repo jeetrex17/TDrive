@@ -16,6 +16,8 @@ import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { enqueueDownload } from './transfers';
 import { populateUploaderChips, uploaderChipHTML } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
+import { isVideoFile } from './media-types';
+import { openVideoModal } from './modals/video';
 
 // dragItemsFor returns the items to move for a drag started on `row`: the whole
 // current selection when the row is part of a multi-selection, else just the
@@ -340,9 +342,11 @@ export function refreshFiles() {
                 row.dataset.parentId = requestedFolderId;
                 row.dataset.uploaderId = String(file.uploaderID || 0);
                 row.dataset.uploadTime = String(file.date || 0);
+                row.dataset.encrypted = file.encrypted ? "true" : "false";
                 const ownerOnly = canOwnerActOnFile(file);
                 row.dataset.canDelete = ownerOnly ? "true" : "false";
                 row.dataset.canRename = ownerOnly ? "true" : "false";
+                const playable = isVideoFile(file.name || "");
 
                 const lockBadge = file.encrypted
                     ? `<span class="file-lock-badge" title="Encrypted" aria-label="Encrypted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 11h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0v4"/></svg></span>`
@@ -356,6 +360,7 @@ export function refreshFiles() {
                     <div class="row-meta">${formatDate(file.date)}</div>
                     <div class="row-meta">${formatBytes(file.size)}</div>
                     <div class="row-actions">
+                        ${playable ? `<button class="action-icon play-video" type="button" title="Play">${icons.play}</button>` : ""}
                         <button class="action-icon download" type="button" title="Download">${icons.download}</button>
                     </div>
                 `;
@@ -477,6 +482,15 @@ function handleListClick(e: MouseEvent) {
             window.initDownload(Number(row.dataset.id), row.dataset.name, Number(row.dataset.size || 0));
             return;
         }
+        if ((e.target as HTMLElement).closest("button.play-video")) {
+            window.initVideoPlayback(
+                Number(row.dataset.id),
+                row.dataset.name,
+                Number(row.dataset.size || 0),
+                row.dataset.encrypted === "true",
+            );
+            return;
+        }
         if ((e.target as HTMLElement).closest("button")) return;
         handleRowSelection(row, e);
     }
@@ -495,6 +509,18 @@ function handleListDblClick(e: MouseEvent) {
     if (row.dataset.type === "file") {
         // Rename only from the name area and only when allowed.
         if (!(e.target as HTMLElement).closest(".row-name")) return;
+        if (isVideoFile(row.dataset.name || "")) {
+            e.preventDefault();
+            const selection = window.getSelection?.();
+            if (selection) selection.removeAllRanges();
+            window.initVideoPlayback(
+                Number(row.dataset.id),
+                row.dataset.name,
+                Number(row.dataset.size || 0),
+                row.dataset.encrypted === "true",
+            );
+            return;
+        }
         if (row.dataset.canRename !== "true") return;
         e.preventDefault();
         const selection = window.getSelection?.();
@@ -515,6 +541,15 @@ export function setupFileListWindowBindings() {
 
     window.initDownload = function(id, name, size) {
         enqueueDownload(id, name, size);
+    };
+
+    window.initVideoPlayback = function(id, name, size, encrypted) {
+        void openVideoModal({
+            id: Number(id || 0),
+            name: String(name || ""),
+            size: Number(size || 0),
+            encrypted: encrypted === true || encrypted === "true",
+        });
     };
 
     const list = document.getElementById("file-list");

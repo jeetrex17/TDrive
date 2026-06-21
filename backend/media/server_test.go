@@ -81,7 +81,7 @@ func TestMediaServerRangeForms(t *testing.T) {
 	mustApplyOp(t, db, 10, projection.Op{
 		Type:     projection.OpFileUpload,
 		Parent:   projection.RootParent,
-		Name:     "clip.bin",
+		Name:     "clip.mp4",
 		FileSize: int64(len(body)),
 	})
 	ranges := newMediaRangeFake(map[int64][]byte{10: body})
@@ -138,7 +138,7 @@ func TestMediaServerClosesSessionAndReader(t *testing.T) {
 	mustApplyOp(t, db, 10, projection.Op{
 		Type:     projection.OpFileUpload,
 		Parent:   projection.RootParent,
-		Name:     "clip.bin",
+		Name:     "clip.mp4",
 		FileSize: int64(len(body)),
 	})
 	ranges := newMediaRangeFake(map[int64][]byte{10: body})
@@ -224,6 +224,24 @@ func TestMediaOpenRejectsEncryptedFiles(t *testing.T) {
 	}
 }
 
+func TestMediaOpenRejectsUnsupportedFileTypes(t *testing.T) {
+	db := newResolverTestDB(t)
+	mustApplyOp(t, db, 10, projection.Op{
+		Type:     projection.OpFileUpload,
+		Parent:   projection.RootParent,
+		Name:     "notes.txt",
+		FileSize: 200,
+	})
+	ranges := newMediaRangeFake(map[int64][]byte{10: testBytes(200)})
+	svc := NewService(Config{DB: db, Peers: staticPeerResolver{peer: ranges.peer}, Ranges: ranges})
+	defer svc.Close()
+
+	_, err := svc.Open(context.Background(), testChannelID, 10)
+	if !errors.Is(err, ErrUnsupportedMediaType) {
+		t.Fatalf("err = %v, want ErrUnsupportedMediaType", err)
+	}
+}
+
 type staticPeerResolver struct {
 	peer tgclient.InputPeer
 }
@@ -295,6 +313,22 @@ func TestParseRangeHeader(t *testing.T) {
 		start, end, partial, ok := parseRangeHeader(tt.raw, tt.size)
 		if start != tt.start || end != tt.end || partial != tt.partial || ok != tt.ok {
 			t.Fatalf("%q = %d,%d,%v,%v want %d,%d,%v,%v", tt.raw, start, end, partial, ok, tt.start, tt.end, tt.partial, tt.ok)
+		}
+	}
+}
+
+func TestContentTypeForCommonVideoContainers(t *testing.T) {
+	tests := map[string]string{
+		"clip.mp4":  "video/mp4",
+		"clip.mov":  "video/quicktime",
+		"clip.webm": "video/webm",
+		"clip.mkv":  "video/x-matroska",
+		"clip.avi":  "video/x-msvideo",
+		"clip.ts":   "video/mp2t",
+	}
+	for name, want := range tests {
+		if got := contentTypeFor(name); got != want {
+			t.Fatalf("contentTypeFor(%q) = %q, want %q", name, got, want)
 		}
 	}
 }

@@ -245,8 +245,40 @@ func contentTypeFor(name string) string {
 	if ext == "" {
 		return "application/octet-stream"
 	}
+	switch strings.ToLower(ext) {
+	case ".mp4", ".m4v":
+		return "video/mp4"
+	case ".mov", ".qt":
+		return "video/quicktime"
+	case ".webm":
+		return "video/webm"
+	case ".mkv", ".mk3d":
+		return "video/x-matroska"
+	case ".avi":
+		return "video/x-msvideo"
+	case ".ts", ".m2ts", ".mts":
+		return "video/mp2t"
+	case ".flv":
+		return "video/x-flv"
+	case ".wmv":
+		return "video/x-ms-wmv"
+	case ".ogv":
+		return "video/ogg"
+	case ".mpeg", ".mpg":
+		return "video/mpeg"
+	}
 	if typ := mime.TypeByExtension(ext); typ != "" {
 		return typ
 	}
 	return "application/octet-stream"
+}
+
+func isSupportedMediaName(name string) bool {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".mp4", ".m4v", ".mov", ".qt", ".webm", ".mkv", ".mk3d", ".avi",
+		".ts", ".m2ts", ".mts", ".flv", ".wmv", ".ogv", ".mpeg", ".mpg":
+		return true
+	default:
+		return false
+	}
 }

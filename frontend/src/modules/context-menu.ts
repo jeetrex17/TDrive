@@ -7,6 +7,7 @@ import { openRenameModal } from './modals/rename';
 import { openMoveModal } from './modals/move';
 import { navigateToFolder } from './navigation';
 import { importFolderWithParentID, uploadWithParentID } from './transfers';
+import { isVideoFile } from './media-types';
 
 export function setupContextMenu() {
     const menu = document.getElementById("context-menu");
@@ -99,9 +100,13 @@ export function setupContextMenu() {
             const fileSource = row.dataset.source || "fs";
             const canDelete = row.dataset.canDelete === "true";
             const canRename = row.dataset.canRename !== "false";
+            const encrypted = row.dataset.encrypted === "true";
             const items: any[] = [
                 { label: "Download", onClick: () => window.initDownload(fileID, fileName, fileSize) },
             ];
+            if (isVideoFile(fileName)) {
+                items.unshift({ label: "Play", onClick: () => window.initVideoPlayback(fileID, fileName, fileSize, encrypted) });
+            }
             if (canRename) {
                 const renamePayload = fileSource === "fs"
                     ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }

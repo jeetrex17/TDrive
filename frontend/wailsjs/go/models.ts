@@ -326,8 +326,8 @@ export namespace main {
 export namespace media {
 	
 	export class Segment {
-	    MsgID: number;
-	    Size: number;
+	    msg_id: number;
+	    size: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Segment(source);
@@ -335,20 +335,20 @@ export namespace media {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.MsgID = source["MsgID"];
-	        this.Size = source["Size"];
+	        this.msg_id = source["msg_id"];
+	        this.size = source["size"];
 	    }
 	}
 	export class LogicalFile {
-	    ChannelID: number;
-	    FileID: number;
-	    Name: string;
-	    StoredSize: number;
-	    PlaintextSize: number;
-	    Encrypted: boolean;
-	    EncryptionVersion: number;
-	    Multipart: boolean;
-	    Segments: Segment[];
+	    channel_id: number;
+	    file_id: number;
+	    name: string;
+	    stored_size: number;
+	    plaintext_size: number;
+	    encrypted: boolean;
+	    encryption_version: number;
+	    multipart: boolean;
+	    segments: Segment[];
 	
 	    static createFrom(source: any = {}) {
 	        return new LogicalFile(source);
@@ -356,15 +356,15 @@ export namespace media {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ChannelID = source["ChannelID"];
-	        this.FileID = source["FileID"];
-	        this.Name = source["Name"];
-	        this.StoredSize = source["StoredSize"];
-	        this.PlaintextSize = source["PlaintextSize"];
-	        this.Encrypted = source["Encrypted"];
-	        this.EncryptionVersion = source["EncryptionVersion"];
-	        this.Multipart = source["Multipart"];
-	        this.Segments = this.convertValues(source["Segments"], Segment);
+	        this.channel_id = source["channel_id"];
+	        this.file_id = source["file_id"];
+	        this.name = source["name"];
+	        this.stored_size = source["stored_size"];
+	        this.plaintext_size = source["plaintext_size"];
+	        this.encrypted = source["encrypted"];
+	        this.encryption_version = source["encryption_version"];
+	        this.multipart = source["multipart"];
+	        this.segments = this.convertValues(source["segments"], Segment);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

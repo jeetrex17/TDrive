@@ -17,5 +17,6 @@ declare global {
         initDelete: (id: any, name: any) => void;
         initDeleteFolder: (folderID: any, folderName: any) => void;
         initDownload: (id: any, name: any, size: any) => void;
+        initVideoPlayback: (id: any, name: any, size?: any, encrypted?: any) => void;
     }
 }
