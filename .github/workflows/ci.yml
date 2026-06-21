@@ -77,8 +77,8 @@ jobs:
             platform: linux/amd64
           - os: windows-latest
             platform: windows/amd64
-          - os: macos-latest
-            platform: darwin/universal
+          - os: macos-15
+            platform: darwin/arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -101,6 +101,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Install macOS media dependencies
+        if: runner.os == 'macOS'
+        run: brew install mpv
 
       - name: Install Wails
         run: |

@@ -31,10 +31,10 @@ jobs:
             output_name: TDrive-windows-amd64.exe
             asset_name: TDrive-${{ github.ref_name }}-windows-amd64.zip
 
-          - os: macos-latest
-            platform: darwin/universal
-            output_name: TDrive-macos-universal
-            asset_name: TDrive-${{ github.ref_name }}-macos-universal.zip
+          - os: macos-15
+            platform: darwin/arm64
+            output_name: TDrive-macos-arm64
+            asset_name: TDrive-${{ github.ref_name }}-macos-arm64.zip
 
     steps:
       - name: Checkout
@@ -59,6 +59,10 @@ jobs:
           sudo apt-get update
           # FIX 1: Explicitly install the 4.0 version which Wails expects
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Install macOS media dependencies
+        if: runner.os == 'macOS'
+        run: brew install mpv
 
       - name: Install Wails
         run: |
@@ -133,6 +137,7 @@ jobs:
           fi
           
           echo "Packaging application from: $APP_PATH"
+          ./scripts/package-mpv-darwin.sh "$APP_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "dist/${{ matrix.asset_name }}"
 
       - name: Package CLI (macOS/Linux)

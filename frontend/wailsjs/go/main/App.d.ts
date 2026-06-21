@@ -3,6 +3,7 @@
 import {main} from '../models';
 import {backend} from '../models';
 import {media} from '../models';
+import {nativeplayer} from '../models';
 import {file} from '../models';
 
 export function ActiveChannelID():Promise<number>;
@@ -22,6 +23,8 @@ export function CheckPendingJoin(arg1:string):Promise<main.JoinDriveResult>;
 export function CheckSystemStatus():Promise<string>;
 
 export function CloseMedia(arg1:string):Promise<void>;
+
+export function CloseNativeMedia(arg1:string):Promise<void>;
 
 export function CreateEncryptionPassword(arg1:string,arg2:string):Promise<void>;
 
@@ -85,7 +88,11 @@ export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:strin
 
 export function MyUserID():Promise<number>;
 
+export function NativeMediaCommand(arg1:string,arg2:Array<string>):Promise<void>;
+
 export function OpenMedia(arg1:number):Promise<media.OpenResult>;
+
+export function OpenNativeMedia(arg1:number,arg2:nativeplayer.Rect):Promise<main.NativeMediaResult>;
 
 export function PlanImport(arg1:Array<string>,arg2:boolean,arg3:boolean):Promise<file.ImportPlan>;
 
@@ -102,6 +109,8 @@ export function RemovePendingJoin(arg1:string):Promise<void>;
 export function RenameFile(arg1:number,arg2:string):Promise<string>;
 
 export function RenameFolder(arg1:string,arg2:string):Promise<string>;
+
+export function ResizeNativeMedia(arg1:string,arg2:nativeplayer.Rect):Promise<void>;
 
 export function ResolveUsernames(arg1:Array<number>):Promise<Record<string, string>>;
 

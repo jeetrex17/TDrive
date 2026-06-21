@@ -7,10 +7,14 @@
 
 import {
     CloseMedia as rawCloseMedia,
+    CloseNativeMedia as rawCloseNativeMedia,
     GetFolderContents as rawGetFolderContents,
     GetFileList as rawGetFileList,
     ListMedia as rawListMedia,
+    NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
+    OpenNativeMedia as rawOpenNativeMedia,
+    ResizeNativeMedia as rawResizeNativeMedia,
     Search as rawSearch,
     Thumbnail as rawThumbnail,
 } from "../wailsjs/go/main/App";
@@ -37,6 +41,19 @@ export interface MediaOpenInfo {
 export interface MediaOpenResult {
     token: string;
     url: string;
+    name: string;
+    info: MediaOpenInfo;
+}
+
+export interface NativeMediaRect {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export interface NativeMediaOpenResult {
+    token: string;
     name: string;
     info: MediaOpenInfo;
 }
@@ -150,4 +167,38 @@ export async function openMedia(msgId: number): Promise<MediaOpenResult> {
 export async function closeMedia(token: string): Promise<void> {
     if (!token) return;
     await rawCloseMedia(token);
+}
+
+/** Open a native all-format player for one projected file. */
+export async function openNativeMedia(msgId: number, rect: NativeMediaRect): Promise<NativeMediaOpenResult> {
+    const opened = await rawOpenNativeMedia(msgId, rect as any);
+    const info: media.LogicalFile | undefined = opened?.info;
+    return {
+        token: String(opened?.token ?? ""),
+        name: String(opened?.name ?? ""),
+        info: {
+            channelId: Number(info?.channel_id ?? 0),
+            fileId: Number(info?.file_id ?? 0),
+            name: String(info?.name ?? opened?.name ?? ""),
+            storedSize: Number(info?.stored_size ?? 0),
+            plaintextSize: Number(info?.plaintext_size ?? 0),
+            encrypted: Boolean(info?.encrypted),
+            multipart: Boolean(info?.multipart),
+        },
+    };
+}
+
+export async function resizeNativeMedia(token: string, rect: NativeMediaRect): Promise<void> {
+    if (!token) return;
+    await rawResizeNativeMedia(token, rect as any);
+}
+
+export async function nativeMediaCommand(token: string, command: string[]): Promise<void> {
+    if (!token || command.length === 0) return;
+    await rawNativeMediaCommand(token, command);
+}
+
+export async function closeNativeMedia(token: string): Promise<void> {
+    if (!token) return;
+    await rawCloseNativeMedia(token);
 }

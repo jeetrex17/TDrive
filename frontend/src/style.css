@@ -2003,6 +2003,31 @@ header {
     background: #000;
 }
 
+.video-native-viewport {
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    top: 78px;
+    bottom: 18px;
+    display: none;
+    background: #000;
+}
+
+.video-overlay.is-video-native .video-native-viewport {
+    display: block;
+}
+
+.video-overlay.is-video-native .video-player,
+.video-overlay.is-video-native .video-controls {
+    display: none;
+}
+
+.video-overlay.is-video-native .video-topbar {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
 .video-topbar,
 .video-controls {
     position: absolute;
@@ -2186,6 +2211,13 @@ header {
     .video-topbar {
         min-height: 60px;
         padding: 12px 14px;
+    }
+
+    .video-native-viewport {
+        left: 10px;
+        right: 10px;
+        top: 64px;
+        bottom: 10px;
     }
 
     .video-filename {
