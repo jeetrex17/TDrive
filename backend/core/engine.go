@@ -10,6 +10,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
+	"TDrive/backend/media"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
 	channelservice "TDrive/backend/services/channel"
@@ -78,6 +79,7 @@ type Engine struct {
 	enc        *encservice.Service
 	files      *fileservice.Service
 	folders    *folderservice.Service
+	media      *media.Service
 	reads      *readservice.Service
 	lifecycle  *lifecycleservice.Service
 	users      *userservice.Service
@@ -136,6 +138,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.folders = e.newFolderService()
 	e.files = e.newFileService()
 	e.reads = e.newReadService()
+	e.media = e.newMediaService()
 	e.syncEngine = tdsync.NewEngine(backend.DB, e.tg, peerResolverFn(e.ResolvePeer))
 	e.lifecycle = e.newLifecycleService()
 	e.users = e.newUserService()
@@ -150,6 +153,9 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 }
 
 func (e *Engine) Close() {
+	if e != nil && e.media != nil {
+		_ = e.media.Close()
+	}
 	if e != nil && e.tg != nil {
 		e.tg.Close()
 	}
@@ -293,6 +299,13 @@ func (e *Engine) ReadService() *readservice.Service {
 	return e.reads
 }
 
+func (e *Engine) MediaService() *media.Service {
+	if e.media == nil {
+		e.media = e.newMediaService()
+	}
+	return e.media
+}
+
 func (e *Engine) LifecycleService() *lifecycleservice.Service {
 	if e.lifecycle == nil {
 		e.lifecycle = e.newLifecycleService()
@@ -407,6 +420,18 @@ func (e *Engine) newReadService() *readservice.Service {
 		TG:    e.tg,
 		Peers: peerResolverFn(e.ResolvePeer),
 	}
+}
+
+func (e *Engine) newMediaService() *media.Service {
+	var ranges tgclient.RangeClient
+	if rc, ok := e.tg.(tgclient.RangeClient); ok {
+		ranges = rc
+	}
+	return media.NewService(media.Config{
+		DB:     backend.DB,
+		Peers:  peerResolverFn(e.ResolvePeer),
+		Ranges: ranges,
+	})
 }
 
 func (e *Engine) newLifecycleService() *lifecycleservice.Service {

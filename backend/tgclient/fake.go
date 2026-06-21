@@ -417,6 +417,45 @@ func (f *Fake) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 	return FileDocument{}, ErrMessageNotFound
 }
 
+func (f *Fake) ResolveDocument(ctx context.Context, peer InputPeer, msgID int64) (DocumentRef, error) {
+	doc, err := f.GetFileDocument(ctx, peer, msgID)
+	if err != nil {
+		return DocumentRef{}, err
+	}
+	return DocumentRef{
+		Peer:       peer,
+		MsgID:      msgID,
+		Size:       doc.Size,
+		Name:       doc.Name,
+		DocumentID: msgID,
+	}, nil
+}
+
+func (f *Fake) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset int64, dst []byte) (int, error) {
+	if len(dst) == 0 {
+		return 0, nil
+	}
+	if offset < 0 {
+		return 0, fmt.Errorf("tgclient.Fake: negative range offset")
+	}
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	default:
+	}
+
+	f.mu.Lock()
+	body, ok := f.fileBodies[ref.MsgID]
+	f.mu.Unlock()
+	if !ok {
+		return 0, ErrMessageNotFound
+	}
+	if offset+int64(len(dst)) > int64(len(body)) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return copy(dst, body[offset:offset+int64(len(dst))]), nil
+}
+
 func (f *Fake) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error {
 	f.mu.Lock()
 	var (
