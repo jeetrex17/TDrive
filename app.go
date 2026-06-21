@@ -38,6 +38,12 @@ type App struct {
 	transferMu     sync.Mutex
 	uploadCancel   context.CancelFunc
 	downloadCancel context.CancelFunc
+
+	// nativeMedia owns out-of-webview player processes tied to media loopback
+	// sessions. Each token must be closed before the backend shuts down so the
+	// range reader and native surface do not outlive the app.
+	nativeMediaMu sync.Mutex
+	nativeMedia   map[string]*nativeMediaSession
 }
 
 type runtimeEventSink struct {
@@ -444,6 +450,7 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 // shutdown runs on app exit. Tear down the shared Telegram connection so the
 // background Run scope's goroutine exits cleanly.
 func (a *App) shutdown(ctx context.Context) {
+	a.closeAllNativeMedia()
 	if a.engine != nil {
 		a.engine.Close()
 	}

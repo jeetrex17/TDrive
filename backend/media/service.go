@@ -18,8 +18,8 @@ type Config struct {
 	Ranges tgclient.RangeClient
 }
 
-// Service is the app-facing media entry point. Later slices will attach the
-// loopback server, native player sessions, and byte-range reader here.
+// Service is the app-facing media entry point. It owns logical file resolution
+// and loopback sessions; UI-specific players sit above it.
 type Service struct {
 	peers    PeerResolver
 	ranges   tgclient.RangeClient

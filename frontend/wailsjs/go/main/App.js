@@ -38,6 +38,10 @@ export function CloseMedia(arg1) {
   return window['go']['main']['App']['CloseMedia'](arg1);
 }
 
+export function CloseNativeMedia(arg1) {
+  return window['go']['main']['App']['CloseNativeMedia'](arg1);
+}
+
 export function CreateEncryptionPassword(arg1, arg2) {
   return window['go']['main']['App']['CreateEncryptionPassword'](arg1, arg2);
 }
@@ -162,8 +166,16 @@ export function MyUserID() {
   return window['go']['main']['App']['MyUserID']();
 }
 
+export function NativeMediaCommand(arg1, arg2) {
+  return window['go']['main']['App']['NativeMediaCommand'](arg1, arg2);
+}
+
 export function OpenMedia(arg1) {
   return window['go']['main']['App']['OpenMedia'](arg1);
+}
+
+export function OpenNativeMedia(arg1, arg2) {
+  return window['go']['main']['App']['OpenNativeMedia'](arg1, arg2);
 }
 
 export function PlanImport(arg1, arg2, arg3) {
@@ -196,6 +208,10 @@ export function RenameFile(arg1, arg2) {
 
 export function RenameFolder(arg1, arg2) {
   return window['go']['main']['App']['RenameFolder'](arg1, arg2);
+}
+
+export function ResizeNativeMedia(arg1, arg2) {
+  return window['go']['main']['App']['ResizeNativeMedia'](arg1, arg2);
 }
 
 export function ResolveUsernames(arg1) {

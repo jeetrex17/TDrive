@@ -1,4 +1,14 @@
-import { closeMedia, openMedia, type MediaOpenResult } from "../../api";
+import {
+    closeMedia,
+    closeNativeMedia,
+    nativeMediaCommand,
+    openMedia,
+    openNativeMedia,
+    resizeNativeMedia,
+    type MediaOpenResult,
+    type NativeMediaOpenResult,
+    type NativeMediaRect,
+} from "../../api";
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { installModalA11y } from "./modal-a11y";
@@ -19,6 +29,7 @@ let shellEl: HTMLElement | null = null;
 let filenameEl: HTMLElement | null = null;
 let metaEl: HTMLElement | null = null;
 let closeBtnEl: HTMLButtonElement | null = null;
+let nativeViewportEl: HTMLElement | null = null;
 let videoEl: HTMLVideoElement | null = null;
 let loadingEl: HTMLElement | null = null;
 let errorEl: HTMLElement | null = null;
@@ -31,8 +42,10 @@ let durationEl: HTMLElement | null = null;
 let speedEl: HTMLSelectElement | null = null;
 
 let active: MediaOpenResult | null = null;
+let activeNative: NativeMediaOpenResult | null = null;
 let openSeq = 0;
 let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
+let nativeResizeFrame = 0;
 let seekingWithPointer = false;
 let hasError = false;
 let a11y: ReturnType<typeof installModalA11y> | null = null;
@@ -47,6 +60,40 @@ function isOpen() {
 
 function setChromeVisible(visible: boolean) {
     modalEl?.classList.toggle("is-video-chrome-visible", visible);
+}
+
+function setNativeMode(visible: boolean) {
+    modalEl?.classList.toggle("is-video-native", visible);
+}
+
+function nextFrame(): Promise<void> {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+function currentNativeRect(): NativeMediaRect | null {
+    if (!nativeViewportEl) return null;
+    const rect = nativeViewportEl.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return null;
+    return {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+    };
+}
+
+function scheduleNativeResize() {
+    if (!activeNative) return;
+    if (nativeResizeFrame) cancelAnimationFrame(nativeResizeFrame);
+    nativeResizeFrame = requestAnimationFrame(() => {
+        nativeResizeFrame = 0;
+        const token = activeNative?.token || "";
+        const rect = currentNativeRect();
+        if (!token || !rect) return;
+        void resizeNativeMedia(token, rect).catch((err) => {
+            console.warn("ResizeNativeMedia failed:", err);
+        });
+    });
 }
 
 function clearChromeTimer() {
@@ -162,7 +209,10 @@ function loadIntoVideo(opened: MediaOpenResult, target: VideoOpenTarget) {
 
 async function releaseActive() {
     const token = active?.token || "";
+    const nativeToken = activeNative?.token || "";
     active = null;
+    activeNative = null;
+    setNativeMode(false);
     if (videoEl) {
         videoEl.pause();
         videoEl.removeAttribute("src");
@@ -175,11 +225,21 @@ async function releaseActive() {
             console.warn("CloseMedia failed:", err);
         }
     }
+    if (nativeToken) {
+        try {
+            await closeNativeMedia(nativeToken);
+        } catch (err) {
+            console.warn("CloseNativeMedia failed:", err);
+        }
+    }
 }
 
 function releaseActiveSoon() {
     const token = active?.token || "";
+    const nativeToken = activeNative?.token || "";
     active = null;
+    activeNative = null;
+    setNativeMode(false);
     if (videoEl) {
         videoEl.pause();
         videoEl.removeAttribute("src");
@@ -188,6 +248,11 @@ function releaseActiveSoon() {
     if (token) {
         void closeMedia(token).catch((err) => {
             console.warn("CloseMedia failed:", err);
+        });
+    }
+    if (nativeToken) {
+        void closeNativeMedia(nativeToken).catch((err) => {
+            console.warn("CloseNativeMedia failed:", err);
         });
     }
 }
@@ -215,9 +280,38 @@ export async function openVideoModal(target: VideoOpenTarget) {
         return;
     }
     if (!isWebviewDirectVideo(target.name)) {
-        setError(`${videoFormatLabel(target.name)} playback is not supported in this preview yet. MP4, MOV, and WebM can play now.`);
+        setNativeMode(true);
+        await nextFrame();
+        const rect = currentNativeRect();
+        if (seq !== openSeq || !isOpen()) return;
+        if (!rect) {
+            setNativeMode(false);
+            setError("Could not prepare the native video surface.");
+            return;
+        }
+        try {
+            const opened = await openNativeMedia(id, rect);
+            if (seq !== openSeq || !isOpen()) {
+                await closeNativeMedia(opened.token);
+                return;
+            }
+            if (!opened.token) {
+                throw new Error("native media session did not return a token");
+            }
+            activeNative = opened;
+            filenameEl.textContent = opened.info.name || opened.name || target.name || "Video";
+            const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
+            metaEl.textContent = `${videoFormatLabel(opened.info.name || opened.name || target.name)}${displaySize ? ` · ${formatBytes(displaySize)}` : ""}`;
+            setLoading(false);
+            scheduleNativeResize();
+        } catch (err: any) {
+            console.error("OpenNativeMedia failed:", err);
+            setNativeMode(false);
+            setError(String(err?.message || err || "Could not open this video."));
+        }
         return;
     }
+    setNativeMode(false);
 
     try {
         const opened = await openMedia(id);
@@ -253,6 +347,13 @@ export async function closeVideoModal() {
 }
 
 function togglePlayback() {
+    if (activeNative?.token) {
+        void nativeMediaCommand(activeNative.token, ["cycle", "pause"]).catch((err) => {
+            console.warn("NativeMediaCommand failed:", err);
+        });
+        revealChrome();
+        return;
+    }
     if (!videoEl || hasError) return;
     if (videoEl.paused) {
         videoEl.play().catch((err) => setError(String(err?.message || err || "Playback failed.")));
@@ -263,6 +364,13 @@ function togglePlayback() {
 }
 
 function seekBy(delta: number) {
+    if (activeNative?.token) {
+        void nativeMediaCommand(activeNative.token, ["seek", String(delta), "relative"]).catch((err) => {
+            console.warn("NativeMediaCommand failed:", err);
+        });
+        revealChrome();
+        return;
+    }
     if (!videoEl || !Number.isFinite(videoEl.duration)) return;
     videoEl.currentTime = Math.max(0, Math.min(videoEl.duration, videoEl.currentTime + delta));
     syncTimeline();
@@ -350,9 +458,16 @@ function bindControls() {
             seekBy(SEEK_STEP_SECONDS);
         } else if (event.key.toLowerCase() === "m") {
             event.preventDefault();
-            muteBtnEl?.click();
+            if (activeNative?.token) {
+                void nativeMediaCommand(activeNative.token, ["cycle", "mute"]).catch((err) => {
+                    console.warn("NativeMediaCommand failed:", err);
+                });
+            } else {
+                muteBtnEl?.click();
+            }
         }
     });
+    window.addEventListener("resize", scheduleNativeResize);
 }
 
 function renderSpeedOptions() {
@@ -368,6 +483,7 @@ export function setupVideoModal() {
     filenameEl = byID("video-filename");
     metaEl = byID("video-meta");
     closeBtnEl = byID("video-close");
+    nativeViewportEl = byID("video-native-viewport");
     videoEl = byID("video-player");
     loadingEl = byID("video-loading");
     errorEl = byID("video-error");
