@@ -64,6 +64,11 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install mpv
 
+      - name: Install Windows media dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install mpvio.install --no-progress -y
+
       - name: Install Wails
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
@@ -121,7 +126,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Force -Path "build/bin/${{ matrix.output_name }}" -DestinationPath "dist/${{ matrix.asset_name }}"
+          ./scripts/package-mpv-windows.ps1 "build/bin/${{ matrix.output_name }}"
+          Compress-Archive -Force -Path "build/bin/${{ matrix.output_name }}", "build/bin/media" -DestinationPath "dist/${{ matrix.asset_name }}"
 
       - name: Package (macOS)
         if: runner.os == 'macOS'

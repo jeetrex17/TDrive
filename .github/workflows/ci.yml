@@ -114,3 +114,14 @@ jobs:
       - name: Build Wails app
         shell: bash
         run: wails build -clean -platform "${{ matrix.platform }}"
+
+      - name: Verify Windows media bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install mpvio.install --no-progress -y
+          $app = Get-ChildItem -Path build/bin -Filter "*.exe" | Select-Object -First 1
+          if ($null -eq $app) {
+            throw "no Windows executable found in build/bin"
+          }
+          ./scripts/package-mpv-windows.ps1 $app.FullName
