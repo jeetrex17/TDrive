@@ -41,6 +41,7 @@ export interface MediaOpenInfo {
 export interface MediaOpenResult {
     token: string;
     url: string;
+    thumbnailUrl: string;
     name: string;
     info: MediaOpenInfo;
 }
@@ -150,6 +151,7 @@ export async function openMedia(msgId: number): Promise<MediaOpenResult> {
     return {
         token: String(opened?.token ?? ""),
         url: String(opened?.url ?? ""),
+        thumbnailUrl: String(opened?.thumbnail_url ?? ""),
         name: String(opened?.name ?? ""),
         info: {
             channelId: Number(info?.channel_id ?? 0),

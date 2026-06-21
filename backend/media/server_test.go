@@ -5,12 +5,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
+	"TDrive/backend/thumbnail"
 
 	_ "modernc.org/sqlite"
 )
@@ -204,6 +210,92 @@ func TestMediaSessionReadsAcrossMultipartSegments(t *testing.T) {
 	}
 }
 
+func TestMediaServerQueuesAndServesVideoThumbnail(t *testing.T) {
+	db := newResolverTestDB(t)
+	body := testBytes(4096)
+	mustApplyOp(t, db, 10, projection.Op{
+		Type:     projection.OpFileUpload,
+		Parent:   projection.RootParent,
+		Name:     "clip.mp4",
+		FileSize: int64(len(body)),
+	})
+	ranges := newMediaRangeFake(map[int64][]byte{10: body})
+	gen := &fakeVideoThumbGenerator{available: true}
+	svc := NewService(Config{
+		DB:             db,
+		Peers:          staticPeerResolver{peer: ranges.peer},
+		Ranges:         ranges,
+		Thumbs:         thumbnail.NewCache(t.TempDir(), 1<<20),
+		ThumbGenerator: gen,
+	})
+	defer svc.Close()
+	opened, err := svc.Open(context.Background(), testChannelID, 10)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if opened.ThumbnailURL == "" {
+		t.Fatalf("Open missing ThumbnailURL: %+v", opened)
+	}
+
+	resp, err := http.Get(opened.ThumbnailURL + "?t=14")
+	if err != nil {
+		t.Fatalf("first thumbnail GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first thumbnail status = %d, want 202", resp.StatusCode)
+	}
+
+	got := waitForThumbnail(t, opened.ThumbnailURL+"?t=14")
+	wantPrefix := []byte("thumb:10:")
+	if !bytes.HasPrefix(got, wantPrefix) {
+		t.Fatalf("thumbnail body %q does not start with %q", got, wantPrefix)
+	}
+
+	call := gen.firstCall(t)
+	if call.seconds != 10 {
+		t.Fatalf("generated second = %d, want rounded bucket 10", call.seconds)
+	}
+	if !strings.Contains(call.sourceURL, mediaThumbSourcePrefix) {
+		t.Fatalf("generator source URL = %q, want thumbnail source route", call.sourceURL)
+	}
+	if !bytes.Equal(call.sourceBytes, body[16:24]) {
+		t.Fatalf("generator source bytes = %x, want %x", call.sourceBytes, body[16:24])
+	}
+}
+
+func TestMediaServerThumbnailUnavailableWithoutGenerator(t *testing.T) {
+	db := newResolverTestDB(t)
+	body := testBytes(256)
+	mustApplyOp(t, db, 10, projection.Op{
+		Type:     projection.OpFileUpload,
+		Parent:   projection.RootParent,
+		Name:     "clip.mp4",
+		FileSize: int64(len(body)),
+	})
+	ranges := newMediaRangeFake(map[int64][]byte{10: body})
+	svc := NewService(Config{
+		DB:             db,
+		Peers:          staticPeerResolver{peer: ranges.peer},
+		Ranges:         ranges,
+		ThumbGenerator: &fakeVideoThumbGenerator{available: false},
+	})
+	defer svc.Close()
+	opened, err := svc.Open(context.Background(), testChannelID, 10)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	resp, err := http.Get(opened.ThumbnailURL + "?t=1")
+	if err != nil {
+		t.Fatalf("thumbnail GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("thumbnail status = %d, want 503", resp.StatusCode)
+	}
+}
+
 func TestMediaOpenRejectsEncryptedFiles(t *testing.T) {
 	db := newResolverTestDB(t)
 	mustApplyOp(t, db, 10, projection.Op{
@@ -253,6 +345,93 @@ func (s staticPeerResolver) ResolvePeer(context.Context, int64) (tgclient.InputP
 type mediaRangeFake struct {
 	peer   tgclient.InputPeer
 	bodies map[int64][]byte
+}
+
+type fakeVideoThumbCall struct {
+	seconds     int
+	sourceURL   string
+	sourceBytes []byte
+}
+
+type fakeVideoThumbGenerator struct {
+	available bool
+
+	mu    sync.Mutex
+	calls []fakeVideoThumbCall
+}
+
+func (f *fakeVideoThumbGenerator) Available() bool {
+	return f != nil && f.available
+}
+
+func (f *fakeVideoThumbGenerator) GenerateVideoThumbnail(ctx context.Context, sourceURL, outPath string, seconds int) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Range", "bytes=16-23")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	source, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		return fmt.Errorf("source status = %d", resp.StatusCode)
+	}
+	f.mu.Lock()
+	f.calls = append(f.calls, fakeVideoThumbCall{
+		seconds:     seconds,
+		sourceURL:   sourceURL,
+		sourceBytes: append([]byte(nil), source...),
+	})
+	f.mu.Unlock()
+	return os.WriteFile(outPath, []byte(fmt.Sprintf("thumb:%d:%x", seconds, source)), 0o600)
+}
+
+func (f *fakeVideoThumbGenerator) firstCall(t *testing.T) fakeVideoThumbCall {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		if len(f.calls) > 0 {
+			call := f.calls[0]
+			f.mu.Unlock()
+			return call
+		}
+		f.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("thumbnail generator was not called")
+	return fakeVideoThumbCall{}
+}
+
+func waitForThumbnail(t *testing.T, url string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(url)
+		if err != nil {
+			t.Fatalf("thumbnail GET: %v", err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			t.Fatalf("thumbnail read: %v", readErr)
+		}
+		if resp.StatusCode == http.StatusOK {
+			return body
+		}
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("thumbnail status = %d body=%q", resp.StatusCode, body)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("thumbnail did not become ready")
+	return nil
 }
 
 func newMediaRangeFake(bodies map[int64][]byte) *mediaRangeFake {

@@ -2415,11 +2415,16 @@ header {
     position: absolute;
     left: 0;
     bottom: calc(100% + 8px);
+    display: grid;
+    justify-items: center;
+    gap: 5px;
+    min-width: 42px;
     padding: 4px 7px;
-    border-radius: 6px;
+    border-radius: 7px;
     color: #fff;
     background: rgba(8, 10, 16, 0.92);
     border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.34);
     font-size: 11px;
     font-weight: 800;
     font-variant-numeric: tabular-nums;
@@ -2427,6 +2432,30 @@ header {
     opacity: 0;
     transform: translateX(-50%);
     transition: opacity 140ms ease;
+}
+
+.video-scrubber-tooltip.has-thumbnail {
+    width: 178px;
+    padding: 6px;
+    border-radius: 10px;
+    background: rgba(7, 9, 15, 0.96);
+}
+
+.video-scrubber-tooltip-image {
+    display: none;
+    width: 166px;
+    aspect-ratio: 16 / 9;
+    border-radius: 7px;
+    object-fit: cover;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.video-scrubber-tooltip.has-thumbnail .video-scrubber-tooltip-image {
+    display: block;
+}
+
+.video-scrubber-tooltip-time {
+    line-height: 1;
 }
 
 .video-scrubber.is-hovered .video-scrubber-track,

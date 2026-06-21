@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"TDrive/backend/tgclient"
+	"TDrive/backend/thumbnail"
 )
 
 type PeerResolver interface {
@@ -13,9 +14,11 @@ type PeerResolver interface {
 }
 
 type Config struct {
-	DB     *sql.DB
-	Peers  PeerResolver
-	Ranges tgclient.RangeClient
+	DB             *sql.DB
+	Peers          PeerResolver
+	Ranges         tgclient.RangeClient
+	Thumbs         *thumbnail.Cache
+	ThumbGenerator VideoThumbnailGenerator
 }
 
 // Service is the app-facing media entry point. It owns logical file resolution
@@ -23,6 +26,8 @@ type Config struct {
 type Service struct {
 	peers    PeerResolver
 	ranges   tgclient.RangeClient
+	thumbs   *thumbnail.Cache
+	thumbGen VideoThumbnailGenerator
 	resolver *Resolver
 	server   *Server
 }
@@ -31,8 +36,14 @@ func NewService(cfg Config) *Service {
 	s := &Service{
 		peers:    cfg.Peers,
 		ranges:   cfg.Ranges,
+		thumbs:   cfg.Thumbs,
+		thumbGen: cfg.ThumbGenerator,
 		resolver: NewResolver(cfg.DB),
 	}
+	if s.thumbGen == nil {
+		s.thumbGen = NewMPVThumbnailGenerator()
+	}
+	sweepStaleVideoThumbnailDirs()
 	s.server = NewServer(s)
 	return s
 }
@@ -94,7 +105,7 @@ func (s *Service) Open(ctx context.Context, channelID, fileID int64) (OpenResult
 		return OpenResult{}, fmt.Errorf("media: logical size mismatch: segments=%d file=%d", start, file.StoredSize)
 	}
 
-	session, err := newSession(file, segments, s.ranges)
+	session, err := newSession(file, segments, s.ranges, s.thumbs, s.thumbGen)
 	if err != nil {
 		return OpenResult{}, err
 	}
@@ -103,10 +114,11 @@ func (s *Service) Open(ctx context.Context, channelID, fileID int64) (OpenResult
 		return OpenResult{}, err
 	}
 	return OpenResult{
-		Token: session.Token(),
-		URL:   session.URL(),
-		Name:  file.Name,
-		Info:  file,
+		Token:        session.Token(),
+		URL:          session.URL(),
+		ThumbnailURL: session.ThumbnailURL(),
+		Name:         file.Name,
+		Info:         file,
 	}, nil
 }
 
