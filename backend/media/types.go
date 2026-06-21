@@ -17,6 +17,8 @@ var (
 	ErrEncryptedUnsupported = errors.New("media: encrypted playback is not implemented yet")
 	ErrUnsupportedMediaType = errors.New("media: unsupported media type")
 	ErrSessionNotFound      = errors.New("media: session not found")
+	ErrThumbnailPending     = errors.New("media: thumbnail pending")
+	ErrThumbnailUnavailable = errors.New("media: thumbnail unavailable")
 )
 
 // Segment is one stored Telegram document body in a logical TDrive file.
@@ -52,8 +54,9 @@ func (f LogicalFile) SegmentCount() int {
 }
 
 type OpenResult struct {
-	Token string      `json:"token"`
-	URL   string      `json:"url"`
-	Name  string      `json:"name"`
-	Info  LogicalFile `json:"info"`
+	Token        string      `json:"token"`
+	URL          string      `json:"url"`
+	ThumbnailURL string      `json:"thumbnail_url"`
+	Name         string      `json:"name"`
+	Info         LogicalFile `json:"info"`
 }

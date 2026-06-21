@@ -422,6 +422,7 @@ export namespace media {
 	export class OpenResult {
 	    token: string;
 	    url: string;
+	    thumbnail_url: string;
 	    name: string;
 	    info: LogicalFile;
 
@@ -433,6 +434,7 @@ export namespace media {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.token = source["token"];
 	        this.url = source["url"];
+	        this.thumbnail_url = source["thumbnail_url"];
 	        this.name = source["name"];
 	        this.info = this.convertValues(source["info"], LogicalFile);
 	    }

@@ -19,6 +19,9 @@ const LOADING_DEBOUNCE_MS = 250;
 const SEEK_STEP_SECONDS = 10;
 const VOLUME_STEP = 0.05;
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const THUMBNAIL_BUCKET_SECONDS = 10;
+const THUMBNAIL_RETRY_MS = 650;
+const THUMBNAIL_FAILURE_TTL_MS = 15_000;
 
 interface VideoOpenTarget {
     id: number;
@@ -273,6 +276,8 @@ let scrubberPlayedEl: HTMLElement | null = null;
 let scrubberBufferedEl: HTMLElement | null = null;
 let scrubberThumbEl: HTMLElement | null = null;
 let scrubberTooltipEl: HTMLElement | null = null;
+let scrubberTooltipImageEl: HTMLImageElement | null = null;
+let scrubberTooltipTimeEl: HTMLElement | null = null;
 let volumeSliderEl: HTMLElement | null = null;
 let volumeFillEl: HTMLElement | null = null;
 let volumeThumbEl: HTMLElement | null = null;
@@ -295,6 +300,13 @@ let volumeDragging = false;
 let hasError = false;
 let isWindowFullscreen = false;
 let lastBufferedSignature = "";
+let activeThumbnailURL = "";
+let currentPreviewBucket = -1;
+let lastPreviewRatio = 0;
+let thumbnailRequestSeq = 0;
+const thumbnailObjectURLs = new Map<number, string>();
+const pendingThumbnails = new Set<number>();
+const failedThumbnails = new Map<number, number>();
 let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 function byID<T extends HTMLElement>(id: string): T | null {
@@ -713,11 +725,99 @@ function previewScrubber(event: PointerEvent | MouseEvent) {
     const rect = scrubberEl.getBoundingClientRect();
     const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
     const seconds = ratio * currentState.duration;
+    lastPreviewRatio = ratio;
+    updateThumbnailTooltip(seconds);
+    positionScrubberTooltip(ratio, rect);
+}
+
+function positionScrubberTooltip(ratio: number, rect?: DOMRect) {
+    if (!scrubberEl || !scrubberTooltipEl) return;
+    const bounds = rect || scrubberEl.getBoundingClientRect();
     const tooltipWidth = scrubberTooltipEl.offsetWidth || 44;
     const half = tooltipWidth / 2;
-    const x = clamp(ratio * rect.width, half, Math.max(half, rect.width - half));
-    scrubberTooltipEl.textContent = formatTime(seconds);
+    const x = clamp(ratio * bounds.width, half, Math.max(half, bounds.width - half));
     scrubberTooltipEl.style.left = `${x}px`;
+}
+
+function updateThumbnailTooltip(seconds: number) {
+    if (scrubberTooltipTimeEl) scrubberTooltipTimeEl.textContent = formatTime(seconds);
+    const bucket = thumbnailBucket(seconds);
+    currentPreviewBucket = bucket;
+    const cached = thumbnailObjectURLs.get(bucket);
+    if (cached && scrubberTooltipImageEl && scrubberTooltipEl) {
+        if (scrubberTooltipImageEl.src !== cached) {
+            scrubberTooltipImageEl.src = cached;
+        }
+        scrubberTooltipEl.classList.add("has-thumbnail");
+        return;
+    }
+    scrubberTooltipEl?.classList.remove("has-thumbnail");
+    requestThumbnail(bucket);
+}
+
+function thumbnailBucket(seconds: number) {
+    if (!Number.isFinite(seconds) || seconds < 0) return 0;
+    return Math.max(0, Math.round(seconds / THUMBNAIL_BUCKET_SECONDS) * THUMBNAIL_BUCKET_SECONDS);
+}
+
+function requestThumbnail(bucket: number) {
+    if (!activeThumbnailURL || pendingThumbnails.has(bucket) || thumbnailObjectURLs.has(bucket)) return;
+    const failedAt = failedThumbnails.get(bucket);
+    if (failedAt && Date.now() - failedAt < THUMBNAIL_FAILURE_TTL_MS) return;
+    pendingThumbnails.add(bucket);
+    const seq = thumbnailRequestSeq;
+    const url = `${activeThumbnailURL}?t=${encodeURIComponent(String(bucket))}`;
+    let retryScheduled = false;
+    fetch(url, { cache: "no-store" })
+        .then(async (response) => {
+            if (seq !== thumbnailRequestSeq) return;
+            if (response.status === 202) {
+                retryScheduled = true;
+                window.setTimeout(() => {
+                    pendingThumbnails.delete(bucket);
+                    if (seq === thumbnailRequestSeq && currentPreviewBucket === bucket) requestThumbnail(bucket);
+                }, THUMBNAIL_RETRY_MS);
+                return;
+            }
+            if (!response.ok) {
+                failedThumbnails.set(bucket, Date.now());
+                return;
+            }
+            const blob = await response.blob();
+            if (!blob.size || seq !== thumbnailRequestSeq) return;
+            const objectURL = URL.createObjectURL(blob);
+            const old = thumbnailObjectURLs.get(bucket);
+            if (old) URL.revokeObjectURL(old);
+            thumbnailObjectURLs.set(bucket, objectURL);
+            failedThumbnails.delete(bucket);
+            if (currentPreviewBucket === bucket && scrubberTooltipImageEl && scrubberTooltipEl) {
+                scrubberTooltipImageEl.src = objectURL;
+                scrubberTooltipEl.classList.add("has-thumbnail");
+                positionScrubberTooltip(lastPreviewRatio);
+            }
+        })
+        .catch(() => {
+            if (seq === thumbnailRequestSeq) failedThumbnails.set(bucket, Date.now());
+        })
+        .finally(() => {
+            if (seq === thumbnailRequestSeq && !retryScheduled) pendingThumbnails.delete(bucket);
+        });
+}
+
+function resetThumbnailPreview() {
+    thumbnailRequestSeq += 1;
+    activeThumbnailURL = "";
+    currentPreviewBucket = -1;
+    lastPreviewRatio = 0;
+    pendingThumbnails.clear();
+    failedThumbnails.clear();
+    for (const objectURL of thumbnailObjectURLs.values()) {
+        URL.revokeObjectURL(objectURL);
+    }
+    thumbnailObjectURLs.clear();
+    if (scrubberTooltipImageEl) scrubberTooltipImageEl.removeAttribute("src");
+    if (scrubberTooltipTimeEl) scrubberTooltipTimeEl.textContent = "0:00";
+    scrubberTooltipEl?.classList.remove("has-thumbnail");
 }
 
 function updateScrubVisual(seconds: number) {
@@ -746,6 +846,7 @@ async function releaseActive() {
     unsubscribeState?.();
     unsubscribeState = null;
     clearSkipFeedback();
+    resetThumbnailPreview();
     setSpeedMenuOpen(false);
     setNativeMode(false);
     if (adapter) {
@@ -766,6 +867,7 @@ function releaseActiveSoon() {
     unsubscribeState?.();
     unsubscribeState = null;
     clearSkipFeedback();
+    resetThumbnailPreview();
     setSpeedMenuOpen(false);
     setNativeMode(false);
     if (adapter) {
@@ -853,10 +955,12 @@ export async function openVideoModal(target: VideoOpenTarget) {
         const displayName = opened.info.name || opened.name || target.name || "Video";
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
         updateMediaText(displayName, displaySize);
+        activeThumbnailURL = opened.thumbnailUrl;
+        thumbnailRequestSeq += 1;
         const adapter = new HtmlVideoAdapter(videoEl, opened);
         activeAdapter = adapter;
         unsubscribeState = adapter.subscribe(applyState);
-        adapter.load();
+		adapter.load();
     } catch (err: unknown) {
         console.error("OpenMedia failed:", err);
         setError(errorMessage(err, "Could not open this video."));
@@ -910,6 +1014,7 @@ function bindScrubber() {
         updateScrubVisual(scrubberSecondsFromEvent(event));
     });
     scrubberEl?.addEventListener("pointerleave", () => {
+        currentPreviewBucket = -1;
         if (!seekingWithPointer) scrubberEl?.classList.remove("is-hovered");
     });
     scrubberEl?.addEventListener("pointerdown", (event) => {
@@ -1191,8 +1296,10 @@ export function setupVideoModal() {
     scrubberBufferedEl = byID("video-scrubber-buffered");
     scrubberThumbEl = byID("video-scrubber-thumb");
     scrubberTooltipEl = byID("video-scrubber-tooltip");
-    volumeSliderEl = byID("video-volume-slider");
-    volumeFillEl = byID("video-volume-fill");
+    scrubberTooltipImageEl = byID("video-scrubber-tooltip-image");
+    scrubberTooltipTimeEl = byID("video-scrubber-tooltip-time");
+	volumeSliderEl = byID("video-volume-slider");
+	volumeFillEl = byID("video-volume-fill");
     volumeThumbEl = byID("video-volume-thumb");
     timeEl = byID("video-time");
     durationEl = byID("video-duration");

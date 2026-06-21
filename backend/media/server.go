@@ -15,7 +15,11 @@ import (
 	"time"
 )
 
-const mediaRoutePrefix = "/media/file/"
+const (
+	mediaRoutePrefix       = "/media/file/"
+	mediaThumbRoutePrefix  = "/media/thumb/"
+	mediaThumbSourcePrefix = "/media/thumb-source/"
+)
 
 type Server struct {
 	owner *Service
@@ -45,8 +49,11 @@ func (s *Server) Add(session *Session) error {
 	s.mu.Lock()
 	s.sessions[session.Token()] = session
 	url := s.baseURL + mediaRoutePrefix + session.Token()
+	thumbSourceURL := s.baseURL + mediaThumbSourcePrefix + session.Token()
+	thumbURL := s.baseURL + mediaThumbRoutePrefix + session.Token()
 	s.mu.Unlock()
 	session.setURL(url)
+	session.setThumbnailURLs(thumbSourceURL, thumbURL)
 	return nil
 }
 
@@ -100,6 +107,8 @@ func (s *Server) ensureStarted() error {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(mediaRoutePrefix, s.handleFile)
+	mux.HandleFunc(mediaThumbSourcePrefix, s.handleThumbSource)
+	mux.HandleFunc(mediaThumbRoutePrefix, s.handleThumbnail)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -118,11 +127,19 @@ func (s *Server) ensureStarted() error {
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
+	s.handleSessionBytes(w, r, mediaRoutePrefix, (*Session).ReadAt)
+}
+
+func (s *Server) handleThumbSource(w http.ResponseWriter, r *http.Request) {
+	s.handleSessionBytes(w, r, mediaThumbSourcePrefix, (*Session).ReadThumbAt)
+}
+
+func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, prefix string, readAt func(*Session, context.Context, []byte, int64) (int, error)) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	token := strings.TrimPrefix(path.Clean(r.URL.Path), mediaRoutePrefix)
+	token := strings.TrimPrefix(path.Clean(r.URL.Path), prefix)
 	if token == "" || strings.Contains(token, "/") {
 		http.NotFound(w, r)
 		return
@@ -162,8 +179,54 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead || length == 0 {
 		return
 	}
-	if err := streamSessionRange(r.Context(), w, session, start, length); err != nil {
+	if err := streamSessionRange(r.Context(), w, session, start, length, readAt); err != nil {
 		return
+	}
+}
+
+func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := strings.TrimPrefix(path.Clean(r.URL.Path), mediaThumbRoutePrefix)
+	if token == "" || strings.Contains(token, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	session := s.session(token)
+	if session == nil {
+		http.NotFound(w, r)
+		return
+	}
+	seconds, err := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
+	if err != nil || seconds < 0 {
+		http.Error(w, "invalid thumbnail time", http.StatusBadRequest)
+		return
+	}
+	data, err := session.Thumbnail(r.Context(), seconds)
+	switch {
+	case err == nil:
+		w.Header().Set("Content-Type", videoThumbMime)
+		w.Header().Set("Cache-Control", "private, max-age=86400")
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(data)
+		}
+	case errors.Is(err, ErrThumbnailPending):
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusAccepted)
+	case errors.Is(err, ErrThumbnailUnavailable):
+		http.Error(w, "thumbnail unavailable", http.StatusServiceUnavailable)
+	default:
+		http.Error(w, "thumbnail error", http.StatusInternalServerError)
 	}
 }
 
@@ -214,7 +277,7 @@ func parseRangeHeader(raw string, size int64) (start, end int64, partial bool, o
 	}
 }
 
-func streamSessionRange(ctx context.Context, w io.Writer, session *Session, start, length int64) error {
+func streamSessionRange(ctx context.Context, w io.Writer, session *Session, start, length int64, readAt func(*Session, context.Context, []byte, int64) (int, error)) error {
 	const chunkSize = 256 * 1024
 	buf := make([]byte, chunkSize)
 	var sent int64
@@ -223,7 +286,7 @@ func streamSessionRange(ctx context.Context, w io.Writer, session *Session, star
 		if want > int64(len(buf)) {
 			want = int64(len(buf))
 		}
-		n, err := session.ReadAt(ctx, buf[:want], start+sent)
+		n, err := readAt(session, ctx, buf[:want], start+sent)
 		if n > 0 {
 			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
 				return writeErr
