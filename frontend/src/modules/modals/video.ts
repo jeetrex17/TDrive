@@ -9,6 +9,7 @@ import {
     type NativeMediaOpenResult,
     type NativeMediaRect,
 } from "../../api";
+import { WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from "../../../wailsjs/runtime/runtime";
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { installModalA11y } from "./modal-a11y";
@@ -26,11 +27,16 @@ interface VideoOpenTarget {
     encrypted?: boolean;
 }
 
+interface BufferedRange {
+    start: number;
+    end: number;
+}
+
 interface PlayerState {
     paused: boolean;
     currentTime: number;
     duration: number;
-    bufferedEnd: number;
+    buffered: BufferedRange[];
     volume: number;
     muted: boolean;
     rate: number;
@@ -52,7 +58,7 @@ const EMPTY_STATE: PlayerState = {
     paused: true,
     currentTime: 0,
     duration: 0,
-    bufferedEnd: 0,
+    buffered: [],
     volume: 1,
     muted: false,
     rate: 1,
@@ -168,12 +174,11 @@ class HtmlVideoAdapter implements PlayerAdapter {
     private snapshot(): PlayerState {
         const duration = Number.isFinite(this.video.duration) ? this.video.duration : 0;
         const currentTime = Number.isFinite(this.video.currentTime) ? this.video.currentTime : 0;
-        const bufferedEnd = bufferedEndFor(this.video, currentTime);
         return {
             paused: this.video.paused,
             currentTime,
             duration,
-            bufferedEnd,
+            buffered: bufferedRanges(this.video),
             volume: this.video.volume,
             muted: this.video.muted || this.video.volume === 0,
             rate: this.video.playbackRate || 1,
@@ -253,8 +258,16 @@ let nativeViewportEl: HTMLElement | null = null;
 let videoEl: HTMLVideoElement | null = null;
 let loadingEl: HTMLElement | null = null;
 let errorEl: HTMLElement | null = null;
+let centerControlsEl: HTMLElement | null = null;
+let centerPlayBtnEl: HTMLButtonElement | null = null;
+let centerSkipBackBtnEl: HTMLButtonElement | null = null;
+let centerSkipForwardBtnEl: HTMLButtonElement | null = null;
+let skipFeedbackEl: HTMLElement | null = null;
 let playBtnEl: HTMLButtonElement | null = null;
+let skipBackBtnEl: HTMLButtonElement | null = null;
+let skipForwardBtnEl: HTMLButtonElement | null = null;
 let muteBtnEl: HTMLButtonElement | null = null;
+let fullscreenBtnEl: HTMLButtonElement | null = null;
 let scrubberEl: HTMLElement | null = null;
 let scrubberPlayedEl: HTMLElement | null = null;
 let scrubberBufferedEl: HTMLElement | null = null;
@@ -275,10 +288,13 @@ let currentState: PlayerState = { ...EMPTY_STATE };
 let openSeq = 0;
 let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
 let loadingTimer: ReturnType<typeof setTimeout> | null = null;
+let skipFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 let nativeResizeFrame = 0;
 let seekingWithPointer = false;
 let volumeDragging = false;
 let hasError = false;
+let isWindowFullscreen = false;
+let lastBufferedSignature = "";
 let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 function byID<T extends HTMLElement>(id: string): T | null {
@@ -293,13 +309,46 @@ function percent(value: number, total: number) {
     return total > 0 ? clamp((value / total) * 100, 0, 100) : 0;
 }
 
-function bufferedEndFor(video: HTMLVideoElement, currentTime: number) {
-    for (let i = 0; i < video.buffered.length; i += 1) {
-        const start = video.buffered.start(i);
-        const end = video.buffered.end(i);
-        if (currentTime >= start && currentTime <= end) return end;
+// Fragment boundaries (e.g. fMP4 segments) can split one contiguous download
+// into several adjacent ranges; rendering every hairline gap is visual noise,
+// not honesty, so segments closer than this are fused for display.
+const BUFFERED_MERGE_GAP_SECONDS = 0.4;
+
+// bufferedRanges reads the full set of cached [start, end] segments from the
+// media element. HTML video keeps several disjoint ranges after seeking, so we
+// preserve all of them instead of collapsing to a single "buffered end" — the
+// timeline can then honestly show which parts are actually downloaded.
+function bufferedRanges(video: HTMLVideoElement): BufferedRange[] {
+    const ranges: BufferedRange[] = [];
+    const buffered = video.buffered;
+    for (let i = 0; i < buffered.length; i += 1) {
+        const start = buffered.start(i);
+        const end = buffered.end(i);
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+            ranges.push({ start, end });
+        }
     }
-    return video.buffered.length > 0 ? video.buffered.end(video.buffered.length - 1) : 0;
+    return ranges;
+}
+
+// coalesceRanges clamps ranges to the known duration and merges any whose gap is
+// within BUFFERED_MERGE_GAP_SECONDS, returning a sorted, disjoint set ready to
+// paint. The native adapter can feed the same shape later from mpv's cache state.
+function coalesceRanges(ranges: BufferedRange[], duration: number): BufferedRange[] {
+    const sorted = ranges
+        .map((range) => ({ start: clamp(range.start, 0, duration), end: clamp(range.end, 0, duration) }))
+        .filter((range) => range.end > range.start)
+        .sort((a, b) => a.start - b.start);
+    const merged: BufferedRange[] = [];
+    for (const range of sorted) {
+        const last = merged[merged.length - 1];
+        if (last && range.start - last.end <= BUFFERED_MERGE_GAP_SECONDS) {
+            last.end = Math.max(last.end, range.end);
+        } else {
+            merged.push({ ...range });
+        }
+    }
+    return merged;
 }
 
 function isOpen() {
@@ -318,6 +367,71 @@ function setChromeVisible(visible: boolean) {
 
 function setNativeMode(visible: boolean) {
     modalEl?.classList.toggle("is-video-native", visible);
+}
+
+function fullscreenRuntimeAvailable() {
+    return Boolean(
+        window.runtime?.WindowFullscreen &&
+        window.runtime?.WindowUnfullscreen &&
+        window.runtime?.WindowIsFullscreen
+    );
+}
+
+function canUseFullscreen() {
+    return Boolean(fullscreenRuntimeAvailable() && !activeNative && activeAdapter && !hasError);
+}
+
+function applyFullscreenState(isFullscreen: boolean) {
+    isWindowFullscreen = isFullscreen;
+    modalEl?.classList.toggle("is-video-fullscreen", isWindowFullscreen);
+    if (!fullscreenBtnEl) return;
+    fullscreenBtnEl.dataset.state = isWindowFullscreen ? "fullscreen" : "windowed";
+    fullscreenBtnEl.setAttribute("aria-label", isWindowFullscreen ? "Exit fullscreen" : "Enter fullscreen");
+    fullscreenBtnEl.title = isWindowFullscreen ? "Exit fullscreen" : "Enter fullscreen";
+    setButtonDisabled(fullscreenBtnEl, !canUseFullscreen());
+}
+
+async function readWindowFullscreen() {
+    if (!fullscreenRuntimeAvailable()) return false;
+    try {
+        return Boolean(await WindowIsFullscreen());
+    } catch (err) {
+        console.warn("WindowIsFullscreen failed:", err);
+        return false;
+    }
+}
+
+async function syncFullscreenState() {
+    applyFullscreenState(await readWindowFullscreen());
+}
+
+async function exitVideoFullscreen() {
+    if (!fullscreenRuntimeAvailable()) return;
+    if (!(await readWindowFullscreen())) return;
+    try {
+        WindowUnfullscreen();
+        applyFullscreenState(false);
+    } catch (err) {
+        console.warn("WindowUnfullscreen failed:", err);
+    }
+}
+
+async function toggleFullscreen() {
+    if (!canUseFullscreen()) return;
+    try {
+        const next = !(await readWindowFullscreen());
+        if (next) {
+            WindowFullscreen();
+        } else {
+            WindowUnfullscreen();
+        }
+        applyFullscreenState(next);
+    } catch (err) {
+        console.warn("toggle fullscreen failed:", err);
+    } finally {
+        setTimeout(() => void syncFullscreenState(), 180);
+        revealChrome();
+    }
 }
 
 function nextFrame(): Promise<void> {
@@ -373,6 +487,7 @@ function revealChrome() {
 
 function setLoading(visible: boolean) {
     if (!loadingEl) return;
+    modalEl?.classList.toggle("is-video-loading", visible);
     if (loadingTimer) {
         clearTimeout(loadingTimer);
         loadingTimer = null;
@@ -388,6 +503,35 @@ function setLoading(visible: boolean) {
         loadingEl.style.display = "flex";
         loadingEl.setAttribute("aria-hidden", "false");
     }, LOADING_DEBOUNCE_MS);
+}
+
+function showSkipFeedback(delta: number) {
+    if (!skipFeedbackEl || activeNative) return;
+    const value = Math.abs(Math.round(delta));
+    const label = `${delta > 0 ? "+" : "-"}${value}s`;
+    const textEl = skipFeedbackEl.querySelector("span");
+    if (textEl) textEl.textContent = label;
+
+    if (skipFeedbackTimer) {
+        clearTimeout(skipFeedbackTimer);
+        skipFeedbackTimer = null;
+    }
+    skipFeedbackEl.classList.remove("is-visible", "is-forward", "is-back");
+    // Restart the pulse when repeated skips happen quickly.
+    void skipFeedbackEl.offsetWidth;
+    skipFeedbackEl.classList.add(delta > 0 ? "is-forward" : "is-back", "is-visible");
+    skipFeedbackTimer = setTimeout(() => {
+        skipFeedbackTimer = null;
+        skipFeedbackEl?.classList.remove("is-visible");
+    }, 620);
+}
+
+function clearSkipFeedback() {
+    if (skipFeedbackTimer) {
+        clearTimeout(skipFeedbackTimer);
+        skipFeedbackTimer = null;
+    }
+    skipFeedbackEl?.classList.remove("is-visible", "is-forward", "is-back");
 }
 
 function setError(message: string) {
@@ -429,6 +573,35 @@ function setSliderARIA(el: HTMLElement | null, value: number, min: number, max: 
     el.setAttribute("aria-valuetext", text);
 }
 
+function setButtonDisabled(button: HTMLButtonElement | null, disabled: boolean) {
+    if (!button) return;
+    button.disabled = disabled;
+    button.setAttribute("aria-disabled", disabled ? "true" : "false");
+}
+
+function setSliderDisabled(el: HTMLElement | null, disabled: boolean) {
+    if (!el) return;
+    el.classList.toggle("is-disabled", disabled);
+    el.setAttribute("aria-disabled", disabled ? "true" : "false");
+    el.tabIndex = disabled ? -1 : 0;
+}
+
+function syncTransportAvailability(state: PlayerState) {
+    const canSeek = Boolean(activeAdapter && state.duration > 0);
+    setButtonDisabled(skipBackBtnEl, !canSeek);
+    setButtonDisabled(skipForwardBtnEl, !canSeek);
+    setButtonDisabled(centerSkipBackBtnEl, !canSeek);
+    setButtonDisabled(centerSkipForwardBtnEl, !canSeek);
+    setSliderDisabled(scrubberEl, !canSeek);
+    applyFullscreenState(isWindowFullscreen);
+}
+
+function syncCenterPlay(state: PlayerState) {
+    const visible = Boolean(activeAdapter && !activeNative && state.paused && !state.loading && !hasError);
+    modalEl?.classList.toggle("is-video-paused", visible);
+    centerControlsEl?.setAttribute("aria-hidden", visible ? "false" : "true");
+}
+
 function syncButtonState(state: PlayerState) {
     if (!playBtnEl || !muteBtnEl) return;
     playBtnEl.dataset.state = state.paused ? "paused" : "playing";
@@ -444,14 +617,50 @@ function syncTimeline(state: PlayerState) {
     if (durationEl) durationEl.textContent = state.duration > 0 ? formatTime(state.duration) : "--:--";
 
     const played = percent(state.currentTime, state.duration);
-    const buffered = percent(state.bufferedEnd, state.duration);
     if (scrubberPlayedEl && !seekingWithPointer) scrubberPlayedEl.style.width = `${played}%`;
-    if (scrubberBufferedEl) scrubberBufferedEl.style.width = `${buffered}%`;
     if (scrubberThumbEl && !seekingWithPointer) scrubberThumbEl.style.left = `${played}%`;
+    renderBuffered(state);
     if (scrubberEl) {
-        scrubberEl.classList.toggle("is-disabled", state.duration <= 0);
         setSliderARIA(scrubberEl, state.currentTime, 0, Math.max(0, state.duration), `${formatTime(state.currentTime)} of ${state.duration > 0 ? formatTime(state.duration) : "unknown"}`);
     }
+}
+
+// renderBuffered paints one segment per cached range so the bar honestly shows
+// the disjoint downloaded islands (not a single block to the furthest point).
+// It is diff-guarded: buffered only changes on the media element's "progress"
+// event, but applyState also runs on every "timeupdate", so we skip DOM work
+// whenever the rendered set is unchanged. Releasing a session resets to an empty
+// state, which clears the segments and the signature for the next video.
+function renderBuffered(state: PlayerState) {
+    const container = scrubberBufferedEl;
+    if (!container) return;
+
+    const segments: Array<{ left: number; width: number }> = [];
+    if (state.duration > 0) {
+        for (const range of coalesceRanges(state.buffered, state.duration)) {
+            const left = clamp((range.start / state.duration) * 100, 0, 100);
+            const width = clamp(((range.end - range.start) / state.duration) * 100, 0, 100 - left);
+            if (width > 0) segments.push({ left, width });
+        }
+    }
+
+    const signature = segments.map((s) => `${s.left.toFixed(3)}:${s.width.toFixed(3)}`).join("|");
+    if (signature === lastBufferedSignature) return;
+    lastBufferedSignature = signature;
+
+    while (container.childElementCount > segments.length) {
+        container.lastElementChild?.remove();
+    }
+    while (container.childElementCount < segments.length) {
+        const segment = document.createElement("span");
+        segment.className = "video-scrubber-segment";
+        container.appendChild(segment);
+    }
+    segments.forEach((segment, index) => {
+        const node = container.children[index] as HTMLElement;
+        node.style.left = `${segment.left}%`;
+        node.style.width = `${segment.width}%`;
+    });
 }
 
 function syncVolume(state: PlayerState) {
@@ -477,6 +686,8 @@ function applyState(state: PlayerState) {
     syncTimeline(state);
     syncVolume(state);
     syncSpeed(state);
+    syncTransportAvailability(state);
+    syncCenterPlay(state);
     setLoading(state.loading);
     if (state.paused || hasError) {
         clearChromeTimer();
@@ -502,8 +713,11 @@ function previewScrubber(event: PointerEvent | MouseEvent) {
     const rect = scrubberEl.getBoundingClientRect();
     const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
     const seconds = ratio * currentState.duration;
+    const tooltipWidth = scrubberTooltipEl.offsetWidth || 44;
+    const half = tooltipWidth / 2;
+    const x = clamp(ratio * rect.width, half, Math.max(half, rect.width - half));
     scrubberTooltipEl.textContent = formatTime(seconds);
-    scrubberTooltipEl.style.left = `${ratio * 100}%`;
+    scrubberTooltipEl.style.left = `${x}px`;
 }
 
 function updateScrubVisual(seconds: number) {
@@ -531,6 +745,7 @@ async function releaseActive() {
     activeNative = null;
     unsubscribeState?.();
     unsubscribeState = null;
+    clearSkipFeedback();
     setSpeedMenuOpen(false);
     setNativeMode(false);
     if (adapter) {
@@ -550,6 +765,7 @@ function releaseActiveSoon() {
     activeNative = null;
     unsubscribeState?.();
     unsubscribeState = null;
+    clearSkipFeedback();
     setSpeedMenuOpen(false);
     setNativeMode(false);
     if (adapter) {
@@ -581,6 +797,7 @@ export async function openVideoModal(target: VideoOpenTarget) {
     modalEl.style.display = "flex";
     modalEl.setAttribute("aria-hidden", "false");
     a11y?.activate();
+    void syncFullscreenState();
 
     if (target.encrypted) {
         setError("Encrypted videos can't be played yet.");
@@ -650,6 +867,7 @@ export async function closeVideoModal() {
     if (!modalEl) return;
     openSeq += 1;
     clearChromeTimer();
+    await exitVideoFullscreen();
     modalEl.style.display = "none";
     modalEl.setAttribute("aria-hidden", "true");
     a11y?.deactivate();
@@ -667,6 +885,7 @@ function togglePlayback() {
 function seekBy(delta: number) {
     if (!activeAdapter || (currentState.duration <= 0 && !activeNative)) return;
     activeAdapter.seekRelative(delta);
+    showSkipFeedback(delta);
     revealChrome();
 }
 
@@ -872,6 +1091,7 @@ function targetShouldUseOwnKeyboard(target: HTMLElement | null) {
     if (!target) return false;
     if (target.isContentEditable) return true;
     const tag = String(target.tagName || "").toUpperCase();
+    if (tag === "BUTTON") return true;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
     return Boolean(target.closest("#video-scrubber, #video-volume-slider, #video-speed-button, #video-speed-menu"));
 }
@@ -880,13 +1100,14 @@ function handleVideoShortcut(event: KeyboardEvent) {
     if (!isOpen()) return;
     const target = event.target as HTMLElement | null;
     if (targetShouldUseOwnKeyboard(target)) return;
-    if (event.code === "Space" || event.key === " ") {
+    const key = event.key.toLowerCase();
+    if (event.code === "Space" || event.key === " " || key === "k") {
         event.preventDefault();
         togglePlayback();
-    } else if (event.key === "ArrowLeft") {
+    } else if (event.key === "ArrowLeft" || key === "j") {
         event.preventDefault();
         seekBy(-SEEK_STEP_SECONDS);
-    } else if (event.key === "ArrowRight") {
+    } else if (event.key === "ArrowRight" || key === "l") {
         event.preventDefault();
         seekBy(SEEK_STEP_SECONDS);
     } else if (event.key === "ArrowUp" && !activeNative) {
@@ -897,10 +1118,13 @@ function handleVideoShortcut(event: KeyboardEvent) {
         event.preventDefault();
         activeAdapter?.setVolume(currentState.volume - VOLUME_STEP);
         revealChrome();
-    } else if (event.key.toLowerCase() === "m") {
+    } else if (key === "m") {
         event.preventDefault();
         activeAdapter?.setMuted(!currentState.muted);
         revealChrome();
+    } else if (key === "f") {
+        event.preventDefault();
+        void toggleFullscreen();
     }
 }
 
@@ -914,11 +1138,18 @@ function handleVideoClick() {
 
 function handleWindowResize() {
     scheduleNativeResize();
+    void syncFullscreenState();
 }
 
 function bindControls() {
     closeBtnEl?.addEventListener("click", () => void closeVideoModal());
+    centerPlayBtnEl?.addEventListener("click", togglePlayback);
+    centerSkipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
+    centerSkipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
+    skipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
+    skipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
     playBtnEl?.addEventListener("click", togglePlayback);
+    fullscreenBtnEl?.addEventListener("click", () => void toggleFullscreen());
     bindScrubber();
     bindVolume();
     bindSpeedMenu();
@@ -931,7 +1162,7 @@ function bindControls() {
 function renderSpeedOptions() {
     if (!speedMenuEl) return;
     speedMenuEl.innerHTML = RATE_OPTIONS.map((rate) => (
-        `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}">${formatRate(rate)}x</button>`
+        `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}"><span class="video-speed-check" aria-hidden="true">✓</span><span>${formatRate(rate)}x</span></button>`
     )).join("");
 }
 
@@ -945,8 +1176,16 @@ export function setupVideoModal() {
     videoEl = byID("video-player");
     loadingEl = byID("video-loading");
     errorEl = byID("video-error");
+    centerControlsEl = byID("video-center-controls");
+    centerPlayBtnEl = byID("video-center-play");
+    centerSkipBackBtnEl = byID("video-center-skip-back");
+    centerSkipForwardBtnEl = byID("video-center-skip-forward");
+    skipFeedbackEl = byID("video-skip-feedback");
     playBtnEl = byID("video-play");
+    skipBackBtnEl = byID("video-skip-back");
+    skipForwardBtnEl = byID("video-skip-forward");
     muteBtnEl = byID("video-mute");
+    fullscreenBtnEl = byID("video-fullscreen");
     scrubberEl = byID("video-scrubber");
     scrubberPlayedEl = byID("video-scrubber-played");
     scrubberBufferedEl = byID("video-scrubber-buffered");
