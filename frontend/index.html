@@ -345,6 +345,40 @@
                 </div>
             </div>
         </div>
+
+        <div id="video-modal" class="modal-overlay video-overlay" style="display: none;" aria-hidden="true">
+            <div id="video-shell" class="video-shell" role="dialog" aria-modal="true" aria-labelledby="video-filename" tabindex="-1">
+                <div class="video-topbar">
+                    <div class="video-title-group">
+                        <div id="video-filename" class="video-filename"></div>
+                        <div id="video-meta" class="video-meta"></div>
+                    </div>
+                    <button id="video-close" class="video-icon-btn video-close-btn" type="button" aria-label="Close video" title="Close">×</button>
+                </div>
+                <div id="video-stage" class="video-stage">
+                    <video id="video-player" class="video-player" playsinline preload="metadata"></video>
+                    <div id="video-loading" class="video-loading" aria-hidden="true" style="display: none;">
+                        <div class="video-spinner"></div>
+                    </div>
+                    <div id="video-error" class="video-error" role="alert" style="display: none;"></div>
+                </div>
+                <div class="video-controls" aria-label="Video controls">
+                    <button id="video-play" class="video-icon-btn video-play-btn" type="button" data-state="paused" aria-label="Play" title="Play (Space)">
+                        <svg class="video-play-symbol video-symbol-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.8c0-.9.98-1.45 1.74-.98l9.08 5.67a1.15 1.15 0 010 1.96l-9.08 5.67A1.15 1.15 0 018 17.14V5.8z"/></svg>
+                        <svg class="video-play-symbol video-symbol-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5h3.4v14H7V5zm6.6 0H17v14h-3.4V5z"/></svg>
+                    </button>
+                    <span id="video-time" class="video-time">0:00</span>
+                    <input id="video-progress" class="video-progress" type="range" min="0" max="0" step="0.05" value="0" aria-label="Seek">
+                    <span id="video-duration" class="video-time">--:--</span>
+                    <button id="video-mute" class="video-icon-btn video-mute-btn" type="button" data-state="unmuted" aria-label="Mute" title="Mute">
+                        <svg class="video-mute-symbol video-symbol-volume" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 10v4h4l5 4V6l-5 4H4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M16 9.5a4 4 0 010 5"/></svg>
+                        <svg class="video-mute-symbol video-symbol-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 10v4h4l5 4V6l-5 4H4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M18 9l-5 6m0-6l5 6"/></svg>
+                    </button>
+                    <input id="video-volume" class="video-volume" type="range" min="0" max="100" step="1" value="100" aria-label="Volume">
+                    <select id="video-speed" class="video-speed" aria-label="Playback speed"></select>
+                </div>
+            </div>
+        </div>
     </div>
 
         <div id="new-drive-modal" class="modal-overlay" style="display: none;">

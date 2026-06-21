@@ -7,6 +7,7 @@ import { fillUploaderSlot, resetFileListScrollRestore } from './file-list';
 import { setPhotosMode } from './gallery';
 import { refreshFolderIndex } from './folder-index';
 import { populateUploaderChips } from './uploaders';
+import { isVideoFile } from './media-types';
 
 let activeToken = 0;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -101,6 +102,7 @@ function renderSearchResults(results: any, query: any) {
             row.dataset.source = String(result.source || "fs");
             row.dataset.uploaderId = String(result.uploader_id || 0);
             row.dataset.uploadTime = String(result.upload_time || 0);
+            row.dataset.encrypted = result.encrypted ? "true" : "false";
             // Search results may not be in the active drive; keep
             // owner-only gating consistent: same canOwnerAct heuristic as
             // file-list. We approximate by reading state.activeChannel
@@ -120,6 +122,7 @@ function renderSearchResults(results: any, query: any) {
                 <div class="row-meta">${escapeHtml(result.path || "My Drive")}</div>
                 <div class="row-meta">${formatBytes(Number(result.size || 0))}</div>
                 <div class="row-actions">
+                    ${isVideoFile(name) ? `<button class="action-icon play-video" type="button" title="Play">${icons.play}</button>` : ""}
                     <button class="action-icon download" type="button" title="Download">${icons.download}</button>
                 </div>
             `;
@@ -132,8 +135,20 @@ function renderSearchResults(results: any, query: any) {
             if (downloadBtn) {
                 downloadBtn.addEventListener("click", () => window.initDownload(Number(result.id || 0), name, Number(result.size || 0)));
             }
+            const playBtn = row.querySelector("button.play-video");
+            if (playBtn) {
+                playBtn.addEventListener("click", () => {
+                    window.initVideoPlayback(Number(result.id || 0), name, Number(result.size || 0), Boolean(result.encrypted));
+                });
+            }
 
-            row.addEventListener("dblclick", () => openFileResult(String(result.id || ""), String(result.parent_id || "")));
+            row.addEventListener("dblclick", () => {
+                if (isVideoFile(name)) {
+                    window.initVideoPlayback(Number(result.id || 0), name, Number(result.size || 0), Boolean(result.encrypted));
+                    return;
+                }
+                openFileResult(String(result.id || ""), String(result.parent_id || ""));
+            });
             row.addEventListener("click", (e) => {
                 if ((e.target as HTMLElement).closest("button")) return;
                 handleRowSelection(row, e);

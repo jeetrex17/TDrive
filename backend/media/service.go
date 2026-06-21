@@ -65,6 +65,9 @@ func (s *Service) Open(ctx context.Context, channelID, fileID int64) (OpenResult
 	if file.Encrypted {
 		return OpenResult{}, ErrEncryptedUnsupported
 	}
+	if !isSupportedMediaName(file.Name) {
+		return OpenResult{}, ErrUnsupportedMediaType
+	}
 
 	peer, err := s.peers.ResolvePeer(ctx, channelID)
 	if err != nil {

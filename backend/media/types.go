@@ -15,6 +15,7 @@ var (
 	ErrRangeClientNotReady  = errors.New("media: range client not ready")
 	ErrPeerResolverNotReady = errors.New("media: peer resolver not ready")
 	ErrEncryptedUnsupported = errors.New("media: encrypted playback is not implemented yet")
+	ErrUnsupportedMediaType = errors.New("media: unsupported media type")
 	ErrSessionNotFound      = errors.New("media: session not found")
 )
 
@@ -24,8 +25,8 @@ var (
 // message id. For multipart files, MsgID is a part message id while FileID on
 // LogicalFile remains the manifest message id used by the UI.
 type Segment struct {
-	MsgID int64
-	Size  int64
+	MsgID int64 `json:"msg_id"`
+	Size  int64 `json:"size"`
 }
 
 // LogicalFile is the media subsystem's canonical view of a projected file.
@@ -35,15 +36,15 @@ type Segment struct {
 // spans the concatenated stored stream, so multipart encrypted files are still
 // decrypted as one logical stream.
 type LogicalFile struct {
-	ChannelID         int64
-	FileID            int64
-	Name              string
-	StoredSize        int64
-	PlaintextSize     int64
-	Encrypted         bool
-	EncryptionVersion int
-	Multipart         bool
-	Segments          []Segment
+	ChannelID         int64     `json:"channel_id"`
+	FileID            int64     `json:"file_id"`
+	Name              string    `json:"name"`
+	StoredSize        int64     `json:"stored_size"`
+	PlaintextSize     int64     `json:"plaintext_size"`
+	Encrypted         bool      `json:"encrypted"`
+	EncryptionVersion int       `json:"encryption_version"`
+	Multipart         bool      `json:"multipart"`
+	Segments          []Segment `json:"segments"`
 }
 
 func (f LogicalFile) SegmentCount() int {

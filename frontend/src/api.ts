@@ -6,13 +6,15 @@
 // `wailsjs/go/main/App` functions directly.
 
 import {
+    CloseMedia as rawCloseMedia,
     GetFolderContents as rawGetFolderContents,
     GetFileList as rawGetFileList,
     ListMedia as rawListMedia,
+    OpenMedia as rawOpenMedia,
     Search as rawSearch,
     Thumbnail as rawThumbnail,
 } from "../wailsjs/go/main/App";
-import type { backend, main } from "../wailsjs/go/models";
+import type { backend, main, media } from "../wailsjs/go/models";
 import type {
     FileItem,
     FolderItem,
@@ -21,6 +23,23 @@ import type {
     SearchHit,
     SearchHitType,
 } from "./types";
+
+export interface MediaOpenInfo {
+    channelId: number;
+    fileId: number;
+    name: string;
+    storedSize: number;
+    plaintextSize: number;
+    encrypted: boolean;
+    multipart: boolean;
+}
+
+export interface MediaOpenResult {
+    token: string;
+    url: string;
+    name: string;
+    info: MediaOpenInfo;
+}
 
 export function toFileItem(f: backend.FileMetaData): FileItem {
     return {
@@ -105,4 +124,30 @@ export async function getThumbnail(msgId: number): Promise<string> {
     const mimeType = String(payload?.mime_type ?? "");
     if (!dataBase64 || !mimeType) throw new Error("thumbnail unavailable");
     return `data:${mimeType};base64,${dataBase64}`;
+}
+
+/** Open a short-lived loopback media URL for a projected file. */
+export async function openMedia(msgId: number): Promise<MediaOpenResult> {
+    const opened = await rawOpenMedia(msgId);
+    const info: media.LogicalFile | undefined = opened?.info;
+    return {
+        token: String(opened?.token ?? ""),
+        url: String(opened?.url ?? ""),
+        name: String(opened?.name ?? ""),
+        info: {
+            channelId: Number(info?.channel_id ?? 0),
+            fileId: Number(info?.file_id ?? 0),
+            name: String(info?.name ?? opened?.name ?? ""),
+            storedSize: Number(info?.stored_size ?? 0),
+            plaintextSize: Number(info?.plaintext_size ?? 0),
+            encrypted: Boolean(info?.encrypted),
+            multipart: Boolean(info?.multipart),
+        },
+    };
+}
+
+/** Release the media session and its range-reader cache. */
+export async function closeMedia(token: string): Promise<void> {
+    if (!token) return;
+    await rawCloseMedia(token);
 }

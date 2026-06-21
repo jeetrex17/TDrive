@@ -19,6 +19,7 @@ import { setupRenameModal } from './modules/modals/rename';
 import { setupMoveModal } from './modules/modals/move';
 import { setupFolderModal, openNewFolderModal } from './modules/modals/folder';
 import { setupPreviewModal } from './modules/modals/preview';
+import { setupVideoModal } from './modules/modals/video';
 import { setupNewDriveModal } from './modules/modals/new-drive';
 import { setupJoinDriveModal } from './modules/modals/join-drive';
 import { setupShareDriveModal } from './modules/modals/share-drive';
@@ -101,6 +102,7 @@ window.onload = async function() {
     setupRenameModal();
     setupMoveModal();
     setupPreviewModal();
+    setupVideoModal();
     setupNewDriveModal();
     setupJoinDriveModal();
     setupShareDriveModal();
