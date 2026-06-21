@@ -31,6 +31,8 @@ const (
 	processSetQuota  = 0x0100
 )
 
+const windowsNativePlayerFlag = "TDRIVE_EXPERIMENTAL_WINDOWS_NATIVE_PLAYER"
+
 var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	user32   = syscall.NewLazyDLL("user32.dll")
@@ -72,6 +74,9 @@ type Player struct {
 }
 
 func Start(ctx context.Context, url string, rect Rect) (*Player, error) {
+	if !windowsNativePlayerEnabled() {
+		return nil, ErrUnsupported
+	}
 	if !rect.Valid() {
 		return nil, fmt.Errorf("native player: invalid view rect")
 	}
@@ -453,4 +458,8 @@ func callFailed(name string, err error) error {
 		return fmt.Errorf("native player: %s failed", name)
 	}
 	return fmt.Errorf("native player: %s failed: %w", name, err)
+}
+
+func windowsNativePlayerEnabled() bool {
+	return os.Getenv(windowsNativePlayerFlag) == "1"
 }

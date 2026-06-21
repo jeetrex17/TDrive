@@ -18,6 +18,9 @@ const preflightTimeout = 6 * time.Second
 // keeps broken local decoder builds from flashing a window or attaching a dead
 // child surface before we can show a normal error.
 func PreflightDecode(ctx context.Context, url string) error {
+	if !windowsNativePlayerEnabled() {
+		return nil
+	}
 	if os.Getenv("TDRIVE_SKIP_MPV_PREFLIGHT") == "1" {
 		return nil
 	}
