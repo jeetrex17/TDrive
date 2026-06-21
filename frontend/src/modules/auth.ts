@@ -248,6 +248,13 @@ export function setupAuthWindowBindings() {
         });
     };
 
+    // The login-flow listeners below need the Wails runtime. Boot waits for it
+    // (see waitForWailsRuntime in main.ts), but guard here too so a genuinely
+    // missing runtime degrades to the startup error toast instead of throwing
+    // and blanking the whole window. Mirrors the window.runtime?.EventsOn guards
+    // in transfers.ts.
+    if (!window.runtime?.EventsOn) return;
+
     window.runtime.EventsOn("login-success", () => showDashboard());
 
     window.runtime.EventsOn("login-password-required", () => {
