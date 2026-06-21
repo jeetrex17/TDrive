@@ -64,9 +64,30 @@ window.initDelete = function(id, name) {
     openDeleteModal({ type: "file", id, name: name || "" });
 };
 
+// The Wails runtime (`window.runtime`) and bound Go methods (`window.go`) are
+// injected by the webview, not bundled by us. With the Vite dev server they can
+// land a tick after `window.onload` fires, and until then any `window.runtime`
+// access throws — which aborts the whole boot before any screen is shown and
+// leaves a blank window. Wait for them first. A packaged build has them
+// immediately (resolves at once); the timeout stops a genuinely missing runtime
+// from hanging boot forever, letting the startup error toast surface instead.
+function waitForWailsRuntime(timeoutMs = 4000): Promise<void> {
+    const ready = () => Boolean(window.runtime?.EventsOn && window.go?.main?.App);
+    if (ready()) return Promise.resolve();
+    return new Promise((resolve) => {
+        const start = Date.now();
+        const tick = () => {
+            if (ready() || Date.now() - start >= timeoutMs) resolve();
+            else setTimeout(tick, 30);
+        };
+        tick();
+    });
+}
+
 // Application initialization
 window.onload = async function() {
     console.log("App loaded. Checking Status...");
+    await waitForWailsRuntime();
     hideAllScreens();
 
     // Notifications surface — must be set up before any other module that
