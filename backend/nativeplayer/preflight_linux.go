@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 )
 
@@ -40,7 +39,6 @@ func PreflightDecode(ctx context.Context, url string) error {
 		"--",
 		url,
 	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		if runCtx.Err() != nil {
 			return fmt.Errorf("%w: timed out", ErrDecoderUnsafe)

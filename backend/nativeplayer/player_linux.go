@@ -359,7 +359,7 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr)
 	}
 
 	cmd := exec.CommandContext(ctx, mpvPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		_ = os.Remove(p.ipcPath)
 		return fmt.Errorf("native player: start mpv: %w", err)
@@ -385,11 +385,12 @@ func (p *Player) Resize(rect Rect) error {
 	p.mu.Lock()
 	view := p.view
 	closed := p.closed
-	p.mu.Unlock()
 	if closed || view == nil {
+		p.mu.Unlock()
 		return nil
 	}
 	C.tdrive_x11_resize((*C.tdrive_x11_view)(view), C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height))
+	p.mu.Unlock()
 	return nil
 }
 
@@ -460,10 +461,10 @@ func (p *Player) destroyView() {
 		p.mu.Lock()
 		view := p.view
 		p.view = nil
-		p.mu.Unlock()
 		if view != nil {
 			C.tdrive_x11_destroy((*C.tdrive_x11_view)(view))
 		}
+		p.mu.Unlock()
 	})
 }
 
