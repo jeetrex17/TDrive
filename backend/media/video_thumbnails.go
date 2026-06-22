@@ -2,7 +2,9 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,14 +17,21 @@ import (
 )
 
 const (
-	videoThumbIntervalSeconds = 10
-	videoThumbTimeout         = 8 * time.Second
-	videoThumbTempPrefix      = "tdrive-media-thumbs-"
-	videoThumbTempMaxAge      = 24 * time.Hour
-	videoThumbDirMode         = 0o700
-	videoThumbFileMode        = 0o600
-	videoThumbMime            = "image/jpeg"
+	videoThumbIntervalSeconds  = 10
+	videoThumbLongInterval     = 20
+	videoThumbVeryLongInterval = 30
+	videoThumbTimeout          = 20 * time.Second
+	videoThumbTempPrefix       = "tdrive-media-thumbs-"
+	videoThumbTempMaxAge       = 24 * time.Hour
+	videoThumbFailureTTL       = 15 * time.Second
+	videoThumbPrecomputeIdle   = 1200 * time.Millisecond
+	videoThumbFloodWaitPause   = 20 * time.Second
+	videoThumbDirMode          = 0o700
+	videoThumbFileMode         = 0o600
+	videoThumbMime             = "image/jpeg"
 )
+
+var errThumbnailSessionDead = errors.New("media: thumbnail session dead")
 
 // VideoThumbnailGenerator extracts one preview frame from a media URL.
 // Implementations must write an image file at outPath or return an error.
@@ -31,40 +40,63 @@ type VideoThumbnailGenerator interface {
 	Available() bool
 }
 
+// VideoThumbnailSession is an optional persistent extractor for one media
+// session. It lets mpv keep the container/index warm across hover requests.
+type VideoThumbnailSession interface {
+	GenerateVideoThumbnail(ctx context.Context, outPath string, seconds int) error
+	Close()
+}
+
+type statefulVideoThumbnailGenerator interface {
+	NewVideoThumbnailSession(sourceURL string) (VideoThumbnailSession, error)
+}
+
 type videoThumbnailer struct {
 	session   *Session
 	cache     *thumbnail.Cache
 	generator VideoThumbnailGenerator
 	dir       string
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	jobs   chan int
-	wg     sync.WaitGroup
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wake           chan struct{}
+	precomputeWake chan struct{}
+	wg             sync.WaitGroup
 
-	mu       sync.Mutex
-	ready    map[int]string
-	queued   map[int]struct{}
-	inflight map[int]struct{}
-	failed   map[int]time.Time
+	mu                sync.Mutex
+	ready             map[int]string
+	latest            int
+	hasLatest         bool
+	inflight          map[int]struct{}
+	failed            map[int]time.Time
+	instrumentLog     bool
+	persistent        VideoThumbnailSession
+	persistentOff     bool
+	playbackTime      float64
+	playbackDuration  float64
+	playerBusy        bool
+	thumbBackoffUntil time.Time
+	lastStatsLog      time.Time
 }
 
 func newVideoThumbnailer(session *Session, cache *thumbnail.Cache, generator VideoThumbnailGenerator) *videoThumbnailer {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &videoThumbnailer{
-		session:   session,
-		cache:     cache,
-		generator: generator,
-		ctx:       ctx,
-		cancel:    cancel,
-		jobs:      make(chan int, 16),
-		ready:     make(map[int]string),
-		queued:    make(map[int]struct{}),
-		inflight:  make(map[int]struct{}),
-		failed:    make(map[int]time.Time),
+		session:        session,
+		cache:          cache,
+		generator:      generator,
+		ctx:            ctx,
+		cancel:         cancel,
+		wake:           make(chan struct{}, 1),
+		precomputeWake: make(chan struct{}, 1),
+		ready:          make(map[int]string),
+		inflight:       make(map[int]struct{}),
+		failed:         make(map[int]time.Time),
 	}
-	t.wg.Add(1)
+	t.instrumentLog = os.Getenv("TDRIVE_MEDIA_THUMB_DEBUG") == "1"
+	t.wg.Add(2)
 	go t.worker()
+	go t.precomputeWorker()
 	return t
 }
 
@@ -72,17 +104,85 @@ func (t *videoThumbnailer) Get(ctx context.Context, seconds float64) ([]byte, er
 	if t == nil || t.session == nil || t.generator == nil || !t.generator.Available() {
 		return nil, ErrThumbnailUnavailable
 	}
-	bucket := thumbnailBucket(seconds, t.session.Size())
+	bucket := thumbnailBucket(seconds, t.durationHint())
 	if bucket < 0 {
 		return nil, ErrThumbnailUnavailable
 	}
 	if data, ok := t.cached(bucket); ok {
+		t.logf("hit bucket=%d bytes=%d", bucket, len(data))
 		return data, nil
 	}
 	if err := t.queue(ctx, bucket); err != nil {
 		return nil, err
 	}
 	return nil, ErrThumbnailPending
+}
+
+func (t *videoThumbnailer) UpdatePlayback(currentTime, duration float64, busy bool) {
+	if t == nil {
+		return
+	}
+	if !isFiniteNonNegative(currentTime) {
+		currentTime = 0
+	}
+	if !isFiniteNonNegative(duration) {
+		duration = 0
+	}
+	if duration > 0 && currentTime > duration {
+		currentTime = duration
+	}
+	t.mu.Lock()
+	t.playbackTime = currentTime
+	t.playbackDuration = duration
+	t.playerBusy = busy
+	t.mu.Unlock()
+	if !busy {
+		t.wakePrecompute()
+	}
+}
+
+func (t *videoThumbnailer) NoteFloodWait(wait time.Duration) {
+	if t == nil {
+		return
+	}
+	pause := videoThumbFloodWaitPause
+	if wait > pause {
+		pause = wait
+	}
+	until := time.Now().Add(pause)
+	t.mu.Lock()
+	if until.After(t.thumbBackoffUntil) {
+		t.thumbBackoffUntil = until
+	}
+	t.mu.Unlock()
+	t.logf("precompute paused after flood-wait for %s", pause.Round(time.Second))
+}
+
+func (t *videoThumbnailer) LogStats(stats MediaStats) {
+	if t == nil || !t.instrumentLog {
+		return
+	}
+	now := time.Now()
+	t.mu.Lock()
+	if !t.lastStatsLog.IsZero() && now.Sub(t.lastStatsLog) < time.Second {
+		t.mu.Unlock()
+		return
+	}
+	t.lastStatsLog = now
+	t.mu.Unlock()
+
+	floodWait := 0.0
+	if stats.Playback.RecentFloodWait {
+		floodWait = stats.Playback.LastFloodWaitSeconds
+	} else if stats.Thumbnails.RecentFloodWait {
+		floodWait = stats.Thumbnails.LastFloodWaitSeconds
+	}
+	t.logf(
+		"stream stats playback=%s thumbs=%s floodwait=%.0fs",
+		formatThroughputLog(stats.Playback.BytesPerSecond),
+		formatThroughputLog(stats.Thumbnails.BytesPerSecond),
+		floodWait,
+	)
 }
 
 func (t *videoThumbnailer) Close() {
@@ -103,6 +203,10 @@ func (t *videoThumbnailer) Close() {
 	dir := t.dir
 	t.dir = ""
 	t.mu.Unlock()
+	if t.persistent != nil {
+		t.persistent.Close()
+		t.persistent = nil
+	}
 	if dir != "" {
 		_ = os.RemoveAll(dir)
 	}
@@ -131,67 +235,27 @@ func (t *videoThumbnailer) cached(bucket int) ([]byte, bool) {
 
 func (t *videoThumbnailer) queue(ctx context.Context, bucket int) error {
 	t.mu.Lock()
-	if failedAt, failed := t.failed[bucket]; failed && time.Since(failedAt) < 15*time.Second {
+	if failedAt, failed := t.failed[bucket]; failed && time.Since(failedAt) < videoThumbFailureTTL {
 		t.mu.Unlock()
 		return ErrThumbnailUnavailable
-	}
-	if _, ok := t.queued[bucket]; ok {
-		t.mu.Unlock()
-		return nil
 	}
 	if _, ok := t.inflight[bucket]; ok {
 		t.mu.Unlock()
 		return nil
 	}
-	t.queued[bucket] = struct{}{}
+	t.latest = bucket
+	t.hasLatest = true
 	t.mu.Unlock()
 
 	select {
-	case t.jobs <- bucket:
-		t.queueNeighbor(bucket - videoThumbIntervalSeconds)
-		t.queueNeighbor(bucket + videoThumbIntervalSeconds)
+	case t.wake <- struct{}{}:
 		return nil
 	case <-t.ctx.Done():
 		return ErrSessionNotFound
 	case <-ctx.Done():
-		t.mu.Lock()
-		delete(t.queued, bucket)
-		t.mu.Unlock()
 		return ctx.Err()
 	default:
-		t.mu.Lock()
-		delete(t.queued, bucket)
-		t.mu.Unlock()
 		return nil
-	}
-}
-
-func (t *videoThumbnailer) queueNeighbor(bucket int) {
-	if bucket < 0 {
-		return
-	}
-	t.mu.Lock()
-	if _, ready := t.ready[bucket]; ready {
-		t.mu.Unlock()
-		return
-	}
-	if _, queued := t.queued[bucket]; queued {
-		t.mu.Unlock()
-		return
-	}
-	if _, inflight := t.inflight[bucket]; inflight {
-		t.mu.Unlock()
-		return
-	}
-	t.queued[bucket] = struct{}{}
-	t.mu.Unlock()
-
-	select {
-	case t.jobs <- bucket:
-	default:
-		t.mu.Lock()
-		delete(t.queued, bucket)
-		t.mu.Unlock()
 	}
 }
 
@@ -201,15 +265,190 @@ func (t *videoThumbnailer) worker() {
 		select {
 		case <-t.ctx.Done():
 			return
-		case bucket := <-t.jobs:
-			t.generate(bucket)
+		case <-t.wake:
+			for {
+				bucket, ok := t.takeLatest()
+				if !ok {
+					break
+				}
+				if !t.waitForForegroundTurn(bucket) {
+					continue
+				}
+				t.generate(bucket, false)
+			}
+			t.wakePrecompute()
 		}
 	}
 }
 
-func (t *videoThumbnailer) generate(bucket int) {
+func (t *videoThumbnailer) precomputeWorker() {
+	defer t.wg.Done()
+	timer := time.NewTimer(videoThumbPrecomputeIdle)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-t.precomputeWake:
+		case <-timer.C:
+		}
+
+		for {
+			bucket, ok := t.nextPrecomputeBucket()
+			if !ok {
+				break
+			}
+			t.logf("precompute bucket=%d", bucket)
+			t.generate(bucket, true)
+			if !t.precomputeStillIdle() {
+				break
+			}
+		}
+		resetTimer(timer, videoThumbPrecomputeIdle)
+	}
+}
+
+func (t *videoThumbnailer) takeLatest() (int, bool) {
 	t.mu.Lock()
-	delete(t.queued, bucket)
+	defer t.mu.Unlock()
+	if !t.hasLatest {
+		return 0, false
+	}
+	bucket := t.latest
+	t.hasLatest = false
+	return bucket, true
+}
+
+func (t *videoThumbnailer) waitForForegroundTurn(bucket int) bool {
+	logged := false
+	for {
+		now := time.Now()
+		t.mu.Lock()
+		stale := t.hasLatest
+		busy := t.playerBusy || now.Before(t.thumbBackoffUntil)
+		t.mu.Unlock()
+		if stale {
+			t.logf("foreground preempted bucket=%d", bucket)
+			return false
+		}
+		if !busy {
+			return true
+		}
+		if !logged {
+			t.logf("foreground paused bucket=%d while playback is busy", bucket)
+			logged = true
+		}
+		select {
+		case <-t.ctx.Done():
+			return false
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+func (t *videoThumbnailer) nextPrecomputeBucket() (int, bool) {
+	if !t.precomputeStillIdle() {
+		return 0, false
+	}
+
+	now := time.Now()
+	t.mu.Lock()
+	current := t.playbackTime
+	duration := t.playbackDuration
+	t.mu.Unlock()
+	if duration <= 0 {
+		return 0, false
+	}
+
+	interval := thumbnailInterval(duration)
+	currentBucket := int(math.Floor(current/float64(interval))) * interval
+	maxBucket := int(math.Floor(duration/float64(interval))) * interval
+	for step := 0; step <= maxBucket+interval; step += interval {
+		for _, bucket := range precomputeCandidates(currentBucket, step, maxBucket) {
+			if t.precomputeCandidateReady(bucket, now) {
+				return bucket, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func precomputeCandidates(currentBucket, step, maxBucket int) []int {
+	if step == 0 {
+		return []int{currentBucket}
+	}
+	out := make([]int, 0, 2)
+	if ahead := currentBucket + step; ahead <= maxBucket {
+		out = append(out, ahead)
+	}
+	if behind := currentBucket - step; behind >= 0 {
+		out = append(out, behind)
+	}
+	return out
+}
+
+func (t *videoThumbnailer) precomputeCandidateReady(bucket int, now time.Time) bool {
+	if bucket < 0 {
+		return false
+	}
+	t.mu.Lock()
+	if t.hasLatest || len(t.inflight) > 0 || t.playerBusy || now.Before(t.thumbBackoffUntil) {
+		t.mu.Unlock()
+		return false
+	}
+	if _, ready := t.ready[bucket]; ready {
+		t.mu.Unlock()
+		return false
+	}
+	if failedAt, failed := t.failed[bucket]; failed && now.Sub(failedAt) < videoThumbFailureTTL {
+		t.mu.Unlock()
+		return false
+	}
+	t.mu.Unlock()
+	_, cached := t.cache.Get(t.cacheKey(bucket))
+	return !cached
+}
+
+func (t *videoThumbnailer) precomputeStillIdle() bool {
+	if t == nil {
+		return false
+	}
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.hasLatest && len(t.inflight) == 0 && !t.playerBusy && !now.Before(t.thumbBackoffUntil)
+}
+
+func (t *videoThumbnailer) precomputeShouldYield() bool {
+	if t == nil {
+		return true
+	}
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.hasLatest || t.playerBusy || now.Before(t.thumbBackoffUntil)
+}
+
+func (t *videoThumbnailer) wakePrecompute() {
+	if t == nil {
+		return
+	}
+	select {
+	case t.precomputeWake <- struct{}{}:
+	default:
+	}
+}
+
+func (t *videoThumbnailer) durationHint() float64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.playbackDuration
+}
+
+func (t *videoThumbnailer) generate(bucket int, background bool) {
+	start := time.Now()
+	t.mu.Lock()
 	if _, ok := t.ready[bucket]; ok {
 		t.mu.Unlock()
 		return
@@ -224,26 +463,31 @@ func (t *videoThumbnailer) generate(bucket int) {
 	}()
 
 	if _, ok := t.cache.Get(t.cacheKey(bucket)); ok {
+		t.logf("persistent-hit bucket=%d background=%t", bucket, background)
 		return
 	}
 
 	dir, err := t.ensureDir()
 	if err != nil {
-		t.markFailed(bucket)
+		t.markFailed(bucket, err, background)
 		return
 	}
 	outPath := filepath.Join(dir, fmt.Sprintf("thumb-%d.jpg", bucket))
 	sourceURL := t.session.thumbnailSourceURL()
 	if sourceURL == "" {
-		t.markFailed(bucket)
+		t.markFailed(bucket, fmt.Errorf("missing source URL"), background)
+		return
+	}
+	if background && t.precomputeShouldYield() {
+		t.logf("precompute preempted bucket=%d before mpv", bucket)
 		return
 	}
 
 	runCtx, cancel := context.WithTimeout(t.ctx, videoThumbTimeout)
 	defer cancel()
-	if err := t.generator.GenerateVideoThumbnail(runCtx, sourceURL, outPath, bucket); err != nil {
+	if err := t.generateThumbnail(runCtx, sourceURL, outPath, bucket); err != nil {
 		_ = os.Remove(outPath)
-		t.markFailed(bucket)
+		t.markFailed(bucket, err, background)
 		return
 	}
 	_ = os.Chmod(outPath, videoThumbFileMode)
@@ -251,7 +495,10 @@ func (t *videoThumbnailer) generate(bucket int) {
 	data, err := os.ReadFile(outPath)
 	if err != nil || len(data) == 0 {
 		_ = os.Remove(outPath)
-		t.markFailed(bucket)
+		if err == nil {
+			err = fmt.Errorf("empty output")
+		}
+		t.markFailed(bucket, err, background)
 		return
 	}
 	_ = t.cache.Put(t.cacheKey(bucket), data)
@@ -260,6 +507,87 @@ func (t *videoThumbnailer) generate(bucket int) {
 	t.ready[bucket] = outPath
 	delete(t.failed, bucket)
 	t.mu.Unlock()
+	t.logf("generated bucket=%d bytes=%d took=%s background=%t", bucket, len(data), time.Since(start).Round(time.Millisecond), background)
+}
+
+func (t *videoThumbnailer) generateThumbnail(ctx context.Context, sourceURL, outPath string, bucket int) error {
+	if t == nil || t.generator == nil {
+		return ErrThumbnailUnavailable
+	}
+	if !t.persistentOff {
+		err := t.generatePersistent(ctx, sourceURL, outPath, bucket)
+		if err == nil {
+			return nil
+		}
+		if thumbnailWorkDeferred(err) {
+			t.logf("persistent deferred bucket=%d err=%v", bucket, err)
+			return err
+		}
+		if errors.Is(err, errThumbnailSessionDead) {
+			t.logf("persistent extractor restarting after bucket=%d err=%v", bucket, err)
+			t.resetPersistent()
+			err = t.generatePersistent(ctx, sourceURL, outPath, bucket)
+			if err == nil {
+				return nil
+			}
+			if thumbnailWorkDeferred(err) {
+				t.logf("persistent deferred after restart bucket=%d err=%v", bucket, err)
+				return err
+			}
+			if errors.Is(err, errThumbnailSessionDead) {
+				t.logf("persistent extractor disabled after restart bucket=%d err=%v", bucket, err)
+				t.disablePersistent()
+			} else {
+				t.logf("persistent extractor fell back after restart bucket=%d err=%v", bucket, err)
+			}
+		} else if !errors.Is(err, ErrThumbnailUnavailable) {
+			t.logf("persistent extractor fell back bucket=%d err=%v", bucket, err)
+		}
+	}
+	return t.generator.GenerateVideoThumbnail(ctx, sourceURL, outPath, bucket)
+}
+
+func (t *videoThumbnailer) generatePersistent(ctx context.Context, sourceURL, outPath string, bucket int) error {
+	session, err := t.thumbnailSession(sourceURL)
+	if err != nil {
+		return err
+	}
+	if session == nil {
+		return ErrThumbnailUnavailable
+	}
+	if err := session.GenerateVideoThumbnail(ctx, outPath, bucket); err != nil {
+		return err
+	}
+	t.logf("persistent bucket=%d", bucket)
+	return nil
+}
+
+func (t *videoThumbnailer) thumbnailSession(sourceURL string) (VideoThumbnailSession, error) {
+	if t.persistent != nil {
+		return t.persistent, nil
+	}
+	stateful, ok := t.generator.(statefulVideoThumbnailGenerator)
+	if !ok {
+		return nil, nil
+	}
+	session, err := stateful.NewVideoThumbnailSession(sourceURL)
+	if err != nil {
+		return nil, err
+	}
+	t.persistent = session
+	return session, nil
+}
+
+func (t *videoThumbnailer) resetPersistent() {
+	if t.persistent != nil {
+		t.persistent.Close()
+		t.persistent = nil
+	}
+}
+
+func (t *videoThumbnailer) disablePersistent() {
+	t.resetPersistent()
+	t.persistentOff = true
 }
 
 func (t *videoThumbnailer) ensureDir() (string, error) {
@@ -289,10 +617,43 @@ func (t *videoThumbnailer) ensureDir() (string, error) {
 	return existing, nil
 }
 
-func (t *videoThumbnailer) markFailed(bucket int) {
+func (t *videoThumbnailer) markFailed(bucket int, err error, background bool) {
+	if err == nil {
+		err = ErrThumbnailUnavailable
+	}
+	if thumbnailWorkDeferred(err) {
+		t.logf("deferred bucket=%d err=%v", bucket, err)
+		return
+	}
+	if background {
+		t.logf("precompute skipped bucket=%d err=%v", bucket, err)
+		return
+	}
 	t.mu.Lock()
 	t.failed[bucket] = time.Now()
 	t.mu.Unlock()
+	t.logf("failed bucket=%d err=%v", bucket, err)
+}
+
+func (t *videoThumbnailer) logf(format string, args ...any) {
+	if t == nil || !t.instrumentLog {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "tdrive video thumbnail: "+format+"\n", args...)
+}
+
+func formatThroughputLog(bytesPerSecond int64) string {
+	if bytesPerSecond < 1024 {
+		return fmt.Sprintf("%dB/s", bytesPerSecond)
+	}
+	if bytesPerSecond < 1024*1024 {
+		return fmt.Sprintf("%.1fKB/s", float64(bytesPerSecond)/1024)
+	}
+	return fmt.Sprintf("%.1fMB/s", float64(bytesPerSecond)/(1024*1024))
+}
+
+func thumbnailWorkDeferred(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (t *videoThumbnailer) cacheKey(bucket int) string {
@@ -300,16 +661,42 @@ func (t *videoThumbnailer) cacheKey(bucket int) string {
 	return fmt.Sprintf("video-thumb-v1-ch%d-file%d-size%d-t%d", file.ChannelID, file.FileID, file.StoredSize, bucket)
 }
 
-func thumbnailBucket(seconds float64, size int64) int {
-	if size <= 0 || seconds < 0 {
+func thumbnailBucket(seconds, duration float64) int {
+	if seconds < 0 {
 		return -1
 	}
-	bucket := int((seconds + float64(videoThumbIntervalSeconds)/2) / float64(videoThumbIntervalSeconds))
-	bucket *= videoThumbIntervalSeconds
+	interval := thumbnailInterval(duration)
+	bucket := int((seconds + float64(interval)/2) / float64(interval))
+	bucket *= interval
 	if bucket < 0 {
 		return 0
 	}
 	return bucket
+}
+
+func thumbnailInterval(duration float64) int {
+	switch {
+	case duration >= 2*60*60:
+		return videoThumbVeryLongInterval
+	case duration >= 30*60:
+		return videoThumbLongInterval
+	default:
+		return videoThumbIntervalSeconds
+	}
+}
+
+func isFiniteNonNegative(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
+}
+
+func resetTimer(timer *time.Timer, d time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(d)
 }
 
 type MPVThumbnailGenerator struct {

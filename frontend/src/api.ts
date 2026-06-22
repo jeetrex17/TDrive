@@ -10,6 +10,7 @@ import {
     CloseNativeMedia as rawCloseNativeMedia,
     GetFolderContents as rawGetFolderContents,
     GetFileList as rawGetFileList,
+    GetMediaStats as rawGetMediaStats,
     ListMedia as rawListMedia,
     NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
@@ -17,6 +18,7 @@ import {
     ResizeNativeMedia as rawResizeNativeMedia,
     Search as rawSearch,
     Thumbnail as rawThumbnail,
+    UpdateMediaPlayback as rawUpdateMediaPlayback,
 } from "../wailsjs/go/main/App";
 import type { backend, main, media } from "../wailsjs/go/models";
 import type {
@@ -59,6 +61,24 @@ export interface NativeMediaOpenResult {
     htmlControls: boolean;
     name: string;
     info: MediaOpenInfo;
+}
+
+export interface MediaPlaybackUpdate {
+    token: string;
+    currentTime: number;
+    duration: number;
+    busy: boolean;
+}
+
+export interface ThroughputStats {
+    bytesPerSecond: number;
+    recentFloodWait: boolean;
+    lastFloodWaitSeconds: number;
+}
+
+export interface MediaStats {
+    playback: ThroughputStats;
+    thumbnails: ThroughputStats;
 }
 
 export function toFileItem(f: backend.FileMetaData): FileItem {
@@ -207,4 +227,36 @@ export async function nativeMediaCommand(token: string, command: string[]): Prom
 export async function closeNativeMedia(token: string): Promise<void> {
     if (!token) return;
     await rawCloseNativeMedia(token);
+}
+
+export async function updateMediaPlayback(update: MediaPlaybackUpdate): Promise<void> {
+    if (!update.token) return;
+    await rawUpdateMediaPlayback({
+        token: update.token,
+        current_time: update.currentTime,
+        duration: update.duration,
+        busy: update.busy,
+    } as any);
+}
+
+function toThroughputStats(stats?: media.ThroughputStats): ThroughputStats {
+    return {
+        bytesPerSecond: Number(stats?.bytes_per_second ?? 0),
+        recentFloodWait: Boolean(stats?.recent_flood_wait),
+        lastFloodWaitSeconds: Number(stats?.last_flood_wait_seconds ?? 0),
+    };
+}
+
+export async function getMediaStats(token: string): Promise<MediaStats> {
+    if (!token) {
+        return {
+            playback: toThroughputStats(),
+            thumbnails: toThroughputStats(),
+        };
+    }
+    const stats = await rawGetMediaStats(token);
+    return {
+        playback: toThroughputStats(stats?.playback),
+        thumbnails: toThroughputStats(stats?.thumbnails),
+    };
 }

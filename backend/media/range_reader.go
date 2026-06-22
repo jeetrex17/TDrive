@@ -55,6 +55,7 @@ type RangeReader struct {
 	cancel           context.CancelFunc
 	client           tgclient.RangeClient
 	cache            *blockCache
+	meter            *throughputMeter
 	sem              chan struct{}
 	group            singleflight.Group
 	floodWaitRetries int
@@ -89,6 +90,7 @@ func NewRangeReader(cfg RangeReaderConfig) *RangeReader {
 		cancel:           cancel,
 		client:           cfg.Client,
 		cache:            newBlockCache(maxCache),
+		meter:            newThroughputMeter(),
 		sem:              make(chan struct{}, concurrency),
 		floodWaitRetries: retries,
 		floodWaitMax:     maxSleep,
@@ -100,6 +102,13 @@ func (r *RangeReader) Close() {
 	if r != nil && r.cancel != nil {
 		r.cancel()
 	}
+}
+
+func (r *RangeReader) Throughput() ThroughputStats {
+	if r == nil || r.meter == nil {
+		return ThroughputStats{}
+	}
+	return r.meter.Stats()
 }
 
 // ReadStoredAt reads stored Telegram bytes from ref into p. It follows
@@ -207,6 +216,9 @@ func (r *RangeReader) fetchBlock(ctx context.Context, ref tgclient.DocumentRef, 
 		}
 		n, err := r.client.ReadDocumentRange(ctx, ref, blockStart, buf)
 		r.release()
+		if n > 0 && r.meter != nil {
+			r.meter.Add(n)
+		}
 		if err == nil {
 			if n != len(buf) {
 				return nil, io.ErrUnexpectedEOF
@@ -219,6 +231,9 @@ func (r *RangeReader) fetchBlock(ctx context.Context, ref tgclient.DocumentRef, 
 		}
 		if wait > r.floodWaitMax {
 			wait = r.floodWaitMax
+		}
+		if r.meter != nil {
+			r.meter.NoteFloodWait(wait)
 		}
 		if r.onFloodWait != nil {
 			r.onFloodWait(wait)

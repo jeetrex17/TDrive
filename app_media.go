@@ -79,3 +79,17 @@ func (a *App) CloseMedia(token string) error {
 	}
 	return a.engine.MediaService().CloseSession(token)
 }
+
+func (a *App) UpdateMediaPlayback(update media.PlaybackUpdate) error {
+	if a.engine == nil {
+		return fmt.Errorf("backend not ready")
+	}
+	return a.engine.MediaService().UpdatePlayback(update)
+}
+
+func (a *App) GetMediaStats(token string) (media.MediaStats, error) {
+	if a.engine == nil {
+		return media.MediaStats{}, fmt.Errorf("backend not ready")
+	}
+	return a.engine.MediaService().Stats(token), nil
+}
