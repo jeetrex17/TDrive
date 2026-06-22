@@ -21,6 +21,13 @@ const (
 	mediaThumbSourcePrefix = "/media/thumb-source/"
 )
 
+type PlaybackUpdate struct {
+	Token       string  `json:"token"`
+	CurrentTime float64 `json:"current_time"`
+	Duration    float64 `json:"duration"`
+	Busy        bool    `json:"busy"`
+}
+
 type Server struct {
 	owner *Service
 
@@ -69,6 +76,25 @@ func (s *Server) CloseSession(token string) error {
 	}
 	session.Close()
 	return nil
+}
+
+func (s *Server) UpdatePlayback(update PlaybackUpdate) error {
+	session := s.session(update.Token)
+	if session == nil {
+		return ErrSessionNotFound
+	}
+	session.UpdatePlayback(update.CurrentTime, update.Duration, update.Busy)
+	return nil
+}
+
+func (s *Server) Stats(token string) MediaStats {
+	session := s.session(token)
+	if session == nil {
+		return MediaStats{}
+	}
+	stats := session.Stats()
+	session.logStats(stats)
+	return stats
 }
 
 func (s *Server) Close() error {

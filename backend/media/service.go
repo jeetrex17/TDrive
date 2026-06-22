@@ -129,6 +129,20 @@ func (s *Service) CloseSession(token string) error {
 	return s.server.CloseSession(token)
 }
 
+func (s *Service) UpdatePlayback(update PlaybackUpdate) error {
+	if s == nil || s.server == nil {
+		return ErrSessionNotFound
+	}
+	return s.server.UpdatePlayback(update)
+}
+
+func (s *Service) Stats(token string) MediaStats {
+	if s == nil || s.server == nil {
+		return MediaStats{}
+	}
+	return s.server.Stats(token)
+}
+
 func (s *Service) Close() error {
 	if s != nil && s.server != nil {
 		return s.server.Close()

@@ -35,6 +35,11 @@ type Session struct {
 	closed    bool
 }
 
+type MediaStats struct {
+	Playback   ThroughputStats `json:"playback"`
+	Thumbnails ThroughputStats `json:"thumbnails"`
+}
+
 func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.RangeClient, cache *thumbnail.Cache, generator VideoThumbnailGenerator) (*Session, error) {
 	token, err := randomToken()
 	if err != nil {
@@ -42,17 +47,22 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 	}
 	copied := append([]resolvedSegment(nil), segments...)
 	s := &Session{
-		token:    token,
-		file:     file,
-		segments: copied,
-		reader:   NewRangeReader(RangeReaderConfig{Client: ranges}),
-		thumbReader: NewRangeReader(RangeReaderConfig{
-			Client:         ranges,
-			MaxCacheBytes:  8 * 1024 * 1024,
-			MaxConcurrency: 1,
-		}),
+		token:     token,
+		file:      file,
+		segments:  copied,
 		lastTouch: time.Now(),
 	}
+	s.reader = NewRangeReader(RangeReaderConfig{Client: ranges})
+	s.thumbReader = NewRangeReader(RangeReaderConfig{
+		Client:         ranges,
+		MaxCacheBytes:  8 * 1024 * 1024,
+		MaxConcurrency: 3,
+		OnFloodWait: func(wait time.Duration) {
+			if s.thumbs != nil {
+				s.thumbs.NoteFloodWait(wait)
+			}
+		},
+	})
 	s.thumbs = newVideoThumbnailer(s, cache, generator)
 	return s, nil
 }
@@ -162,6 +172,30 @@ func (s *Session) Thumbnail(ctx context.Context, seconds float64) ([]byte, error
 		return nil, ErrSessionNotFound
 	}
 	return s.thumbs.Get(ctx, seconds)
+}
+
+func (s *Session) UpdatePlayback(currentTime, duration float64, busy bool) {
+	if s == nil || s.thumbs == nil {
+		return
+	}
+	s.thumbs.UpdatePlayback(currentTime, duration, busy)
+}
+
+func (s *Session) Stats() MediaStats {
+	if s == nil {
+		return MediaStats{}
+	}
+	return MediaStats{
+		Playback:   s.reader.Throughput(),
+		Thumbnails: s.thumbReader.Throughput(),
+	}
+}
+
+func (s *Session) logStats(stats MediaStats) {
+	if s == nil || s.thumbs == nil {
+		return
+	}
+	s.thumbs.LogStats(stats)
 }
 
 func (s *Session) readAt(ctx context.Context, reader *RangeReader, p []byte, off int64) (int, error) {

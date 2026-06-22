@@ -1,10 +1,13 @@
 import {
     closeMedia,
     closeNativeMedia,
+    getMediaStats,
     nativeMediaCommand,
     openMedia,
     openNativeMedia,
     resizeNativeMedia,
+    updateMediaPlayback,
+    type MediaStats,
     type MediaOpenResult,
     type NativeMediaOpenResult,
     type NativeMediaRect,
@@ -20,8 +23,15 @@ const SEEK_STEP_SECONDS = 10;
 const VOLUME_STEP = 0.05;
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const THUMBNAIL_BUCKET_SECONDS = 10;
+const THUMBNAIL_LONG_BUCKET_SECONDS = 20;
+const THUMBNAIL_VERY_LONG_BUCKET_SECONDS = 30;
+const THUMBNAIL_REQUEST_DEBOUNCE_MS = 140;
+const THUMBNAIL_DWELL_PREFETCH_MS = 420;
 const THUMBNAIL_RETRY_MS = 650;
 const THUMBNAIL_FAILURE_TTL_MS = 15_000;
+const PLAYBACK_HINT_INTERVAL_MS = 1000;
+const MEDIA_STATS_POLL_MS = 1000;
+const STREAM_ACTIVITY_HOLD_MS = 2000;
 
 interface VideoOpenTarget {
     id: number;
@@ -294,6 +304,7 @@ let closeBtnEl: HTMLButtonElement | null = null;
 let nativeViewportEl: HTMLElement | null = null;
 let videoEl: HTMLVideoElement | null = null;
 let loadingEl: HTMLElement | null = null;
+let loadingStatusEl: HTMLElement | null = null;
 let errorEl: HTMLElement | null = null;
 let centerControlsEl: HTMLElement | null = null;
 let centerPlayBtnEl: HTMLButtonElement | null = null;
@@ -322,6 +333,7 @@ let speedMenuEl: HTMLElement | null = null;
 
 let activeAdapter: PlayerAdapter | null = null;
 let activeNative: NativeMediaOpenResult | null = null;
+let activeMediaToken = "";
 let unsubscribeState: (() => void) | null = null;
 let currentState: PlayerState = { ...EMPTY_STATE };
 let openSeq = 0;
@@ -331,6 +343,8 @@ let skipFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 let nativeResizeFrame = 0;
 let seekingWithPointer = false;
 let volumeDragging = false;
+let pendingVolumeValue: number | null = null;
+let volumeCommandFrame = 0;
 let hasError = false;
 let isWindowFullscreen = false;
 let lastBufferedSignature = "";
@@ -338,6 +352,19 @@ let activeThumbnailURL = "";
 let currentPreviewBucket = -1;
 let lastPreviewRatio = 0;
 let thumbnailRequestSeq = 0;
+let thumbnailRequestTimer: number | null = null;
+let thumbnailDwellTimer: number | null = null;
+let scheduledThumbnailBucket = -1;
+let lastPlaybackHintAt = 0;
+let playbackHintTimer: number | null = null;
+let playbackHintInFlight = false;
+let mediaStatsTimer: number | null = null;
+let mediaStatsInFlight = false;
+let streamActivityClearTimer: number | null = null;
+let streamActivityText = "";
+let streamActivityAt = 0;
+let mediaMetaBaseText = "";
+let mediaMetaBytes = 0;
 const thumbnailObjectURLs = new Map<number, string>();
 const pendingThumbnails = new Set<number>();
 const failedThumbnails = new Map<number, number>();
@@ -427,8 +454,20 @@ function isOpen() {
 }
 
 function errorMessage(err: unknown, fallback: string) {
-    if (err instanceof Error && err.message) return err.message;
-    return String(err || fallback);
+    const raw = err instanceof Error && err.message ? err.message : String(err || "");
+    const normalized = raw.toLowerCase();
+    if (
+        normalized.includes("resolve peer") ||
+        normalized.includes("rpcdorequest") ||
+        normalized.includes("retryuntilack") ||
+        normalized.includes("engine forcibly closed")
+    ) {
+        return "Could not reach Telegram. Check your connection and try again.";
+    }
+    if (normalized.includes("context canceled")) {
+        return "The video request was canceled. Try opening it again.";
+    }
+    return raw || fallback;
 }
 
 function setChromeVisible(visible: boolean) {
@@ -516,8 +555,9 @@ function nextFrame(): Promise<void> {
 }
 
 function currentNativeRect(): NativeMediaRect | null {
-    if (!nativeViewportEl) return null;
-    const rect = nativeViewportEl.getBoundingClientRect();
+    const source = nativeViewportEl || stageEl;
+    if (!source) return null;
+    const rect = source.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return null;
     return {
         x: rect.left,
@@ -557,11 +597,15 @@ function clearChromeTimer() {
 
 function scheduleChromeHide() {
     clearChromeTimer();
-    if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen()) return;
+    if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
     chromeHideTimer = setTimeout(() => {
-        if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen()) return;
+        if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
         setChromeVisible(false);
     }, CHROME_HIDE_DELAY_MS);
+}
+
+function isScrubberTooltipActive() {
+    return Boolean(scrubberEl?.classList.contains("is-hovered") || currentPreviewBucket >= 0);
 }
 
 function revealChrome() {
@@ -580,14 +624,110 @@ function setLoading(visible: boolean) {
     if (!visible) {
         loadingEl.style.display = "none";
         loadingEl.setAttribute("aria-hidden", "true");
+        updateLoadingStatus();
         return;
     }
+    updateLoadingStatus();
     loadingTimer = setTimeout(() => {
         loadingTimer = null;
         if (!loadingEl || hasError) return;
         loadingEl.style.display = "flex";
         loadingEl.setAttribute("aria-hidden", "false");
     }, LOADING_DEBOUNCE_MS);
+}
+
+function updateLoadingStatus() {
+    if (!loadingStatusEl) return;
+    loadingStatusEl.textContent = "Buffering";
+}
+
+function syncMediaStatsPolling() {
+    if (activeMediaToken && !hasError) {
+        startMediaStatsPolling();
+    } else {
+        clearMediaStatsPolling();
+    }
+}
+
+function startMediaStatsPolling() {
+    if (mediaStatsTimer != null) return;
+    void pollMediaStats();
+    mediaStatsTimer = window.setInterval(() => {
+        void pollMediaStats();
+    }, MEDIA_STATS_POLL_MS);
+}
+
+function clearMediaStatsPolling() {
+    if (mediaStatsTimer != null) {
+        window.clearInterval(mediaStatsTimer);
+        mediaStatsTimer = null;
+    }
+    clearStreamActivity();
+    updateLoadingStatus();
+}
+
+async function pollMediaStats() {
+    if (!activeMediaToken || mediaStatsInFlight) return;
+    const token = activeMediaToken;
+    mediaStatsInFlight = true;
+    try {
+        const stats = await getMediaStats(token);
+        if (token !== activeMediaToken) return;
+        syncStreamActivity(stats);
+    } catch (err) {
+        console.warn("GetMediaStats failed:", err);
+    } finally {
+        mediaStatsInFlight = false;
+    }
+}
+
+function syncStreamActivity(stats: MediaStats | null) {
+    const text = stats ? streamActivityLabel(stats) : "";
+    const now = Date.now();
+    if (text) {
+        streamActivityText = text;
+        streamActivityAt = now;
+        scheduleStreamActivityClear();
+    } else if (streamActivityText && now - streamActivityAt >= STREAM_ACTIVITY_HOLD_MS) {
+        streamActivityText = "";
+        clearStreamActivityTimer();
+    }
+    renderMediaMeta();
+}
+
+function streamActivityLabel(stats: MediaStats) {
+    const playback = stats.playback;
+    if (playback.recentFloodWait) {
+        return "Rate-limited";
+    }
+    const rate = playback.bytesPerSecond || 0;
+    if (rate <= 0) return "";
+    const multiplier = formatStreamMultiplier(rate);
+    return `Streaming ${formatStreamRate(rate)}${multiplier ? ` ${multiplier}` : ""}`;
+}
+
+function scheduleStreamActivityClear() {
+    clearStreamActivityTimer();
+    streamActivityClearTimer = window.setTimeout(() => {
+        if (Date.now() - streamActivityAt >= STREAM_ACTIVITY_HOLD_MS) {
+            streamActivityText = "";
+            renderMediaMeta();
+        }
+        streamActivityClearTimer = null;
+    }, STREAM_ACTIVITY_HOLD_MS);
+}
+
+function clearStreamActivityTimer() {
+    if (streamActivityClearTimer == null) return;
+    window.clearTimeout(streamActivityClearTimer);
+    streamActivityClearTimer = null;
+}
+
+function clearStreamActivity() {
+    clearStreamActivityTimer();
+    streamActivityText = "";
+    streamActivityAt = 0;
+    renderMediaMeta();
 }
 
 function showSkipFeedback(delta: number) {
@@ -622,6 +762,7 @@ function clearSkipFeedback() {
 function setError(message: string) {
     hasError = true;
     setLoading(false);
+    clearMediaStatsPolling();
     if (!errorEl) return;
     errorEl.textContent = message;
     errorEl.style.display = "block";
@@ -750,9 +891,14 @@ function renderBuffered(state: PlayerState) {
 
 function syncVolume(state: PlayerState) {
     const value = state.muted ? 0 : state.volume;
-    if (volumeFillEl) volumeFillEl.style.width = `${clamp(value, 0, 1) * 100}%`;
-    if (volumeThumbEl) volumeThumbEl.style.left = `${clamp(value, 0, 1) * 100}%`;
-    setSliderARIA(volumeSliderEl, value * 100, 0, 100, `${Math.round(value * 100)}%`);
+    previewVolume(value);
+}
+
+function previewVolume(value: number) {
+    const safe = clamp(value, 0, 1);
+    if (volumeFillEl) volumeFillEl.style.width = `${safe * 100}%`;
+    if (volumeThumbEl) volumeThumbEl.style.left = `${safe * 100}%`;
+    setSliderARIA(volumeSliderEl, safe * 100, 0, 100, `${Math.round(safe * 100)}%`);
 }
 
 function syncSpeed(state: PlayerState) {
@@ -767,6 +913,7 @@ function syncSpeed(state: PlayerState) {
 function applyState(state: PlayerState) {
     const wasPaused = currentState.paused;
     currentState = state;
+    schedulePlaybackHint(state);
     syncButtonState(state);
     syncTimeline(state);
     syncVolume(state);
@@ -774,6 +921,7 @@ function applyState(state: PlayerState) {
     syncTransportAvailability(state);
     syncCenterPlay(state);
     setLoading(state.loading);
+    syncMediaStatsPolling();
     if (state.paused || hasError) {
         clearChromeTimer();
         setChromeVisible(true);
@@ -782,8 +930,67 @@ function applyState(state: PlayerState) {
     }
 }
 
+function schedulePlaybackHint(state: PlayerState) {
+    if (!activeMediaToken || state.duration <= 0) return;
+    const now = Date.now();
+    const dueIn = PLAYBACK_HINT_INTERVAL_MS - (now - lastPlaybackHintAt);
+    if (dueIn <= 0) {
+        void sendPlaybackHint(state);
+        return;
+    }
+    if (playbackHintTimer != null) return;
+    playbackHintTimer = window.setTimeout(() => {
+        playbackHintTimer = null;
+        void sendPlaybackHint(currentState);
+    }, dueIn);
+}
+
+async function sendPlaybackHint(state: PlayerState) {
+    if (!activeMediaToken || playbackHintInFlight || state.duration <= 0) return;
+    playbackHintInFlight = true;
+    lastPlaybackHintAt = Date.now();
+    try {
+        await updateMediaPlayback({
+            token: activeMediaToken,
+            currentTime: state.currentTime,
+            duration: state.duration,
+            busy: Boolean(state.loading),
+        });
+    } catch (err) {
+        console.warn("UpdateMediaPlayback failed:", err);
+    } finally {
+        playbackHintInFlight = false;
+    }
+}
+
+function clearPlaybackHintTimer() {
+    if (playbackHintTimer == null) return;
+    window.clearTimeout(playbackHintTimer);
+    playbackHintTimer = null;
+}
+
 function formatRate(rate: number) {
     return Number.isInteger(rate) ? String(rate) : String(rate).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatStreamRate(bytesPerSecond: number) {
+    const safe = Math.max(0, Number.isFinite(bytesPerSecond) ? bytesPerSecond : 0);
+    if (safe < 1024 * 1024) {
+        return `${Math.max(0.1, safe / 1024).toFixed(1)} KB/s`;
+    }
+    return `${(safe / (1024 * 1024)).toFixed(1)} MB/s`;
+}
+
+function formatStreamMultiplier(bytesPerSecond: number) {
+    const duration = currentState.duration;
+    if (!(mediaMetaBytes > 0 && duration > 0 && bytesPerSecond > 0)) return "";
+    const averageBytesPerSecond = mediaMetaBytes / duration;
+    if (!(averageBytesPerSecond > 0)) return "";
+    const multiplier = bytesPerSecond / averageBytesPerSecond;
+    if (!Number.isFinite(multiplier) || multiplier <= 0) return "";
+    if (multiplier >= 100) return "(~99x+)";
+    if (multiplier < 10) return `(~${Math.max(0.1, multiplier).toFixed(1)}x)`;
+    return `(~${Math.round(multiplier)}x)`;
 }
 
 function scrubberSecondsFromEvent(event: PointerEvent | MouseEvent) {
@@ -818,26 +1025,80 @@ function updateThumbnailTooltip(seconds: number) {
     currentPreviewBucket = bucket;
     const cached = thumbnailObjectURLs.get(bucket);
     if (cached && scrubberTooltipImageEl && scrubberTooltipEl) {
+        clearThumbnailRequestTimer();
+        scheduleThumbnailDwell(bucket);
         if (scrubberTooltipImageEl.src !== cached) {
             scrubberTooltipImageEl.src = cached;
         }
-        scrubberTooltipEl.classList.add("has-thumbnail");
+        setThumbnailTooltipState("ready");
         return;
     }
-    scrubberTooltipEl?.classList.remove("has-thumbnail");
-    requestThumbnail(bucket);
+    clearThumbnailDwellTimer();
+    if (thumbnailFailedRecently(bucket)) {
+        setThumbnailTooltipState("failed");
+        return;
+    }
+    setThumbnailTooltipState("pending");
+    scheduleThumbnailRequest(bucket);
 }
 
 function thumbnailBucket(seconds: number) {
     if (!Number.isFinite(seconds) || seconds < 0) return 0;
-    return Math.max(0, Math.round(seconds / THUMBNAIL_BUCKET_SECONDS) * THUMBNAIL_BUCKET_SECONDS);
+    const interval = thumbnailBucketInterval(currentState.duration);
+    return Math.max(0, Math.round(seconds / interval) * interval);
 }
 
-function requestThumbnail(bucket: number) {
+function thumbnailBucketInterval(duration: number) {
+    if (duration >= 2 * 60 * 60) return THUMBNAIL_VERY_LONG_BUCKET_SECONDS;
+    if (duration >= 30 * 60) return THUMBNAIL_LONG_BUCKET_SECONDS;
+    return THUMBNAIL_BUCKET_SECONDS;
+}
+
+function clearThumbnailRequestTimer() {
+    if (thumbnailRequestTimer == null) return;
+    window.clearTimeout(thumbnailRequestTimer);
+    thumbnailRequestTimer = null;
+    scheduledThumbnailBucket = -1;
+}
+
+function clearThumbnailDwellTimer() {
+    if (thumbnailDwellTimer == null) return;
+    window.clearTimeout(thumbnailDwellTimer);
+    thumbnailDwellTimer = null;
+}
+
+function scheduleThumbnailRequest(bucket: number) {
+    if (!activeThumbnailURL || thumbnailObjectURLs.has(bucket)) return;
+    scheduledThumbnailBucket = bucket;
+    if (thumbnailRequestTimer != null) window.clearTimeout(thumbnailRequestTimer);
+    thumbnailRequestTimer = window.setTimeout(() => {
+        thumbnailRequestTimer = null;
+        const bucketToRequest = scheduledThumbnailBucket;
+        scheduledThumbnailBucket = -1;
+        if (bucketToRequest !== currentPreviewBucket) return;
+        requestThumbnail(bucketToRequest);
+    }, THUMBNAIL_REQUEST_DEBOUNCE_MS);
+}
+
+function scheduleThumbnailDwell(bucket: number) {
+    clearThumbnailDwellTimer();
+    if (!activeThumbnailURL || !thumbnailObjectURLs.has(bucket) || seekingWithPointer) return;
+    thumbnailDwellTimer = window.setTimeout(() => {
+        thumbnailDwellTimer = null;
+        if (currentPreviewBucket !== bucket || seekingWithPointer || !thumbnailObjectURLs.has(bucket)) return;
+        const interval = thumbnailBucketInterval(currentState.duration);
+        for (const neighbor of [bucket - interval, bucket + interval, bucket - 2 * interval, bucket + 2 * interval]) {
+            if (neighbor < 0 || neighbor > currentState.duration) continue;
+            requestThumbnail(neighbor, true);
+        }
+    }, THUMBNAIL_DWELL_PREFETCH_MS);
+}
+
+function requestThumbnail(bucket: number, prefetch = false) {
     if (!activeThumbnailURL || pendingThumbnails.has(bucket) || thumbnailObjectURLs.has(bucket)) return;
-    const failedAt = failedThumbnails.get(bucket);
-    if (failedAt && Date.now() - failedAt < THUMBNAIL_FAILURE_TTL_MS) return;
+    if (thumbnailFailedRecently(bucket)) return;
     pendingThumbnails.add(bucket);
+    if (!prefetch && currentPreviewBucket === bucket) setThumbnailTooltipState("pending");
     const seq = thumbnailRequestSeq;
     const url = `${activeThumbnailURL}?t=${encodeURIComponent(String(bucket))}`;
     let retryScheduled = false;
@@ -854,6 +1115,7 @@ function requestThumbnail(bucket: number) {
             }
             if (!response.ok) {
                 failedThumbnails.set(bucket, Date.now());
+                if (!prefetch && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
                 return;
             }
             const blob = await response.blob();
@@ -865,16 +1127,31 @@ function requestThumbnail(bucket: number) {
             failedThumbnails.delete(bucket);
             if (currentPreviewBucket === bucket && scrubberTooltipImageEl && scrubberTooltipEl) {
                 scrubberTooltipImageEl.src = objectURL;
-                scrubberTooltipEl.classList.add("has-thumbnail");
+                setThumbnailTooltipState("ready");
                 positionScrubberTooltip(lastPreviewRatio);
+                scheduleThumbnailDwell(bucket);
             }
         })
         .catch(() => {
             if (seq === thumbnailRequestSeq) failedThumbnails.set(bucket, Date.now());
+            if (!prefetch && seq === thumbnailRequestSeq && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
         })
         .finally(() => {
             if (seq === thumbnailRequestSeq && !retryScheduled) pendingThumbnails.delete(bucket);
         });
+}
+
+function thumbnailFailedRecently(bucket: number) {
+    const failedAt = failedThumbnails.get(bucket);
+    return Boolean(failedAt && Date.now() - failedAt < THUMBNAIL_FAILURE_TTL_MS);
+}
+
+function setThumbnailTooltipState(state: "pending" | "ready" | "failed") {
+    if (!scrubberTooltipEl) return;
+    scrubberTooltipEl.classList.toggle("has-thumbnail", state === "ready");
+    scrubberTooltipEl.classList.toggle("is-thumbnail-pending", state === "pending");
+    scrubberTooltipEl.classList.toggle("is-thumbnail-failed", state === "failed");
+    if (state !== "ready") scrubberTooltipImageEl?.removeAttribute("src");
 }
 
 function resetThumbnailPreview() {
@@ -882,6 +1159,8 @@ function resetThumbnailPreview() {
     activeThumbnailURL = "";
     currentPreviewBucket = -1;
     lastPreviewRatio = 0;
+    clearThumbnailRequestTimer();
+    clearThumbnailDwellTimer();
     pendingThumbnails.clear();
     failedThumbnails.clear();
     for (const objectURL of thumbnailObjectURLs.values()) {
@@ -890,7 +1169,7 @@ function resetThumbnailPreview() {
     thumbnailObjectURLs.clear();
     if (scrubberTooltipImageEl) scrubberTooltipImageEl.removeAttribute("src");
     if (scrubberTooltipTimeEl) scrubberTooltipTimeEl.textContent = "0:00";
-    scrubberTooltipEl?.classList.remove("has-thumbnail");
+    scrubberTooltipEl?.classList.remove("has-thumbnail", "is-thumbnail-pending", "is-thumbnail-failed");
 }
 
 function updateScrubVisual(seconds: number) {
@@ -908,16 +1187,41 @@ function volumeFromEvent(event: PointerEvent | MouseEvent) {
 
 function setVolumeFromPointer(event: PointerEvent | MouseEvent) {
     const value = volumeFromEvent(event);
-    activeAdapter?.setVolume(value);
+    previewVolume(value);
+    scheduleVolumeSet(value);
     revealChrome();
+}
+
+function scheduleVolumeSet(value: number) {
+    pendingVolumeValue = clamp(value, 0, 1);
+    if (volumeCommandFrame) return;
+    volumeCommandFrame = requestAnimationFrame(() => {
+        volumeCommandFrame = 0;
+        const next = pendingVolumeValue;
+        pendingVolumeValue = null;
+        if (next == null) return;
+        activeAdapter?.setVolume(next);
+    });
+}
+
+function clearVolumeCommandFrame() {
+    if (volumeCommandFrame) {
+        cancelAnimationFrame(volumeCommandFrame);
+        volumeCommandFrame = 0;
+    }
+    pendingVolumeValue = null;
 }
 
 async function releaseActive() {
     const adapter = activeAdapter;
     activeAdapter = null;
     activeNative = null;
+    activeMediaToken = "";
     unsubscribeState?.();
     unsubscribeState = null;
+    clearPlaybackHintTimer();
+    clearMediaStatsPolling();
+    clearVolumeCommandFrame();
     clearSkipFeedback();
     resetThumbnailPreview();
     setSpeedMenuOpen(false);
@@ -937,8 +1241,12 @@ function releaseActiveSoon() {
     const adapter = activeAdapter;
     activeAdapter = null;
     activeNative = null;
+    activeMediaToken = "";
     unsubscribeState?.();
     unsubscribeState = null;
+    clearPlaybackHintTimer();
+    clearMediaStatsPolling();
+    clearVolumeCommandFrame();
     clearSkipFeedback();
     resetThumbnailPreview();
     setSpeedMenuOpen(false);
@@ -954,7 +1262,14 @@ function releaseActiveSoon() {
 
 function updateMediaText(name: string, size: number) {
     if (filenameEl) filenameEl.textContent = name || "Video";
-    if (metaEl) metaEl.textContent = `${videoFormatLabel(name)}${size ? ` · ${formatBytes(size)}` : ""}`;
+    mediaMetaBaseText = `${videoFormatLabel(name)}${size ? ` · ${formatBytes(size)}` : ""}`;
+    mediaMetaBytes = size || 0;
+    renderMediaMeta();
+}
+
+function renderMediaMeta() {
+    if (!metaEl) return;
+    metaEl.textContent = streamActivityText ? `${mediaMetaBaseText} · ${streamActivityText}` : mediaMetaBaseText;
 }
 
 export async function openVideoModal(target: VideoOpenTarget) {
@@ -979,7 +1294,9 @@ export async function openVideoModal(target: VideoOpenTarget) {
         return;
     }
     if (!isWebviewDirectVideo(target.name)) {
-        setNativeMode(true);
+        // Keep the modal opaque while Telegram/mpv is still opening. The native
+        // surface only shows through after openNativeMedia has created it.
+        setNativeMode(false);
         await nextFrame();
         const rect = currentNativeRect();
         if (seq !== openSeq || !isOpen()) return;
@@ -999,6 +1316,7 @@ export async function openVideoModal(target: VideoOpenTarget) {
             }
             setNativeMode(true, !opened.htmlControls);
             activeNative = opened;
+            activeMediaToken = opened.token;
             const displayName = opened.info.name || opened.name || target.name || "Video";
             const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
             updateMediaText(displayName, displaySize);
@@ -1031,6 +1349,7 @@ export async function openVideoModal(target: VideoOpenTarget) {
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
         updateMediaText(displayName, displaySize);
         activeThumbnailURL = opened.thumbnailUrl;
+        activeMediaToken = opened.token;
         thumbnailRequestSeq += 1;
         const adapter = new HtmlVideoAdapter(videoEl, opened);
         activeAdapter = adapter;
@@ -1090,7 +1409,9 @@ function bindScrubber() {
     });
     scrubberEl?.addEventListener("pointerleave", () => {
         currentPreviewBucket = -1;
+        clearThumbnailDwellTimer();
         if (!seekingWithPointer) scrubberEl?.classList.remove("is-hovered");
+        scheduleChromeHide();
     });
     scrubberEl?.addEventListener("pointerdown", (event) => {
         if (!activeAdapter || currentState.duration <= 0) return;
@@ -1361,6 +1682,7 @@ export function setupVideoModal() {
     nativeViewportEl = byID("video-native-viewport");
     videoEl = byID("video-player");
     loadingEl = byID("video-loading");
+    loadingStatusEl = byID("video-loading-status");
     errorEl = byID("video-error");
     centerControlsEl = byID("video-center-controls");
     centerPlayBtnEl = byID("video-center-play");
