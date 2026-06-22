@@ -73,7 +73,7 @@ type Player struct {
 	jobOnce     sync.Once
 }
 
-func Start(ctx context.Context, url string, rect Rect) (*Player, error) {
+func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
 	if !windowsNativePlayerEnabled() {
 		return nil, ErrUnsupported
 	}

@@ -1,0 +1,7 @@
+//go:build darwin
+
+package nativeplayer
+
+func SupportsHTMLControls() bool {
+	return true
+}
