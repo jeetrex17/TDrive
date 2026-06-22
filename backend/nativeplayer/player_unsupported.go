@@ -1,4 +1,4 @@
-//go:build !darwin && !windows
+//go:build !darwin && !linux && !windows
 
 package nativeplayer
 
@@ -8,7 +8,7 @@ import (
 
 type Player struct{}
 
-func Start(ctx context.Context, url string, rect Rect) (*Player, error) {
+func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
 	return nil, ErrUnsupported
 }
 

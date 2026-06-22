@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"TDrive/backend/tgclient"
+	"TDrive/backend/thumbnail"
 )
 
 type resolvedSegment struct {
@@ -19,30 +20,51 @@ type resolvedSegment struct {
 }
 
 type Session struct {
-	token    string
-	url      string
-	file     LogicalFile
-	segments []resolvedSegment
-	reader   *RangeReader
+	token       string
+	url         string
+	thumbURL    string
+	sourceURL   string
+	file        LogicalFile
+	segments    []resolvedSegment
+	reader      *RangeReader
+	thumbReader *RangeReader
+	thumbs      *videoThumbnailer
 
 	mu        sync.Mutex
 	lastTouch time.Time
 	closed    bool
 }
 
-func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.RangeClient) (*Session, error) {
+type MediaStats struct {
+	Playback   ThroughputStats `json:"playback"`
+	Thumbnails ThroughputStats `json:"thumbnails"`
+}
+
+func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.RangeClient, cache *thumbnail.Cache, generator VideoThumbnailGenerator) (*Session, error) {
 	token, err := randomToken()
 	if err != nil {
 		return nil, err
 	}
 	copied := append([]resolvedSegment(nil), segments...)
-	return &Session{
+	s := &Session{
 		token:     token,
 		file:      file,
 		segments:  copied,
-		reader:    NewRangeReader(RangeReaderConfig{Client: ranges}),
 		lastTouch: time.Now(),
-	}, nil
+	}
+	s.reader = NewRangeReader(RangeReaderConfig{Client: ranges})
+	s.thumbReader = NewRangeReader(RangeReaderConfig{
+		Client:         ranges,
+		MaxCacheBytes:  8 * 1024 * 1024,
+		MaxConcurrency: 3,
+		OnFloodWait: func(wait time.Duration) {
+			if s.thumbs != nil {
+				s.thumbs.NoteFloodWait(wait)
+			}
+		},
+	})
+	s.thumbs = newVideoThumbnailer(s, cache, generator)
+	return s, nil
 }
 
 func (s *Session) Token() string {
@@ -61,10 +83,32 @@ func (s *Session) URL() string {
 	return s.url
 }
 
+func (s *Session) ThumbnailURL() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.thumbURL
+}
+
 func (s *Session) setURL(url string) {
 	s.mu.Lock()
 	s.url = url
 	s.mu.Unlock()
+}
+
+func (s *Session) setThumbnailURLs(sourceURL, thumbURL string) {
+	s.mu.Lock()
+	s.sourceURL = sourceURL
+	s.thumbURL = thumbURL
+	s.mu.Unlock()
+}
+
+func (s *Session) thumbnailSourceURL() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sourceURL
 }
 
 func (s *Session) Size() int64 {
@@ -101,14 +145,68 @@ func (s *Session) Close() {
 	if s.reader != nil {
 		s.reader.Close()
 	}
+	if s.thumbReader != nil {
+		s.thumbReader.Close()
+	}
+	if s.thumbs != nil {
+		s.thumbs.Close()
+	}
 }
 
 func (s *Session) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
+	return s.readAt(ctx, s.reader, p, off)
+}
+
+func (s *Session) ReadThumbAt(ctx context.Context, p []byte, off int64) (int, error) {
+	return s.readAt(ctx, s.thumbReader, p, off)
+}
+
+func (s *Session) Thumbnail(ctx context.Context, seconds float64) ([]byte, error) {
+	if s == nil || s.thumbs == nil {
+		return nil, ErrThumbnailUnavailable
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil, ErrSessionNotFound
+	}
+	return s.thumbs.Get(ctx, seconds)
+}
+
+func (s *Session) UpdatePlayback(currentTime, duration float64, busy bool) {
+	if s == nil || s.thumbs == nil {
+		return
+	}
+	s.thumbs.UpdatePlayback(currentTime, duration, busy)
+}
+
+func (s *Session) Stats() MediaStats {
+	if s == nil {
+		return MediaStats{}
+	}
+	return MediaStats{
+		Playback:   s.reader.Throughput(),
+		Thumbnails: s.thumbReader.Throughput(),
+	}
+}
+
+func (s *Session) logStats(stats MediaStats) {
+	if s == nil || s.thumbs == nil {
+		return
+	}
+	s.thumbs.LogStats(stats)
+}
+
+func (s *Session) readAt(ctx context.Context, reader *RangeReader, p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 	if off < 0 {
 		return 0, fmt.Errorf("media: negative session offset")
+	}
+	if reader == nil {
+		return 0, ErrRangeClientNotReady
 	}
 	s.mu.Lock()
 	closed := s.closed
@@ -142,7 +240,7 @@ func (s *Session) ReadAt(ctx context.Context, p []byte, off int64) (int, error) 
 		if int64(need) > available {
 			need = int(available)
 		}
-		n, err := s.reader.ReadStoredAt(ctx, seg.ref, p[done:done+need], segOff)
+		n, err := reader.ReadStoredAt(ctx, seg.ref, p[done:done+need], segOff)
 		done += n
 		if err != nil {
 			if done > 0 {

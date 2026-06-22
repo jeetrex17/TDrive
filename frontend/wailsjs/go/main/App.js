@@ -98,6 +98,10 @@ export function GetInviteLink(arg1) {
   return window['go']['main']['App']['GetInviteLink'](arg1);
 }
 
+export function GetMediaStats(arg1) {
+  return window['go']['main']['App']['GetMediaStats'](arg1);
+}
+
 export function GetPassch() {
   return window['go']['main']['App']['GetPassch']();
 }
@@ -260,6 +264,10 @@ export function SyncChannel(arg1) {
 
 export function Thumbnail(arg1) {
   return window['go']['main']['App']['Thumbnail'](arg1);
+}
+
+export function UpdateMediaPlayback(arg1) {
+  return window['go']['main']['App']['UpdateMediaPlayback'](arg1);
 }
 
 export function UploadToDriveFS(arg1, arg2, arg3) {

@@ -54,6 +54,8 @@ export function GetFolderSize(arg1:string):Promise<number>;
 
 export function GetInviteLink(arg1:number):Promise<string>;
 
+export function GetMediaStats(arg1:string):Promise<media.MediaStats>;
+
 export function GetPassch():Promise<any>;
 
 export function GetStorageUsed():Promise<number>;
@@ -135,6 +137,8 @@ export function SumbitPassword(arg1:string):Promise<void>;
 export function SyncChannel(arg1:number):Promise<void>;
 
 export function Thumbnail(arg1:number):Promise<main.PreviewPayload>;
+
+export function UpdateMediaPlayback(arg1:media.PlaybackUpdate):Promise<void>;
 
 export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<Array<backend.FileMetaData>>;
 

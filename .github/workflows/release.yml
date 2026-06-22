@@ -58,7 +58,7 @@ jobs:
         run: |
           sudo apt-get update
           # FIX 1: Explicitly install the 4.0 version which Wails expects
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev
 
       - name: Install macOS media dependencies
         if: runner.os == 'macOS'

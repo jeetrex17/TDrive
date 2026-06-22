@@ -1,21 +1,37 @@
 import {
     closeMedia,
     closeNativeMedia,
+    getMediaStats,
     nativeMediaCommand,
     openMedia,
     openNativeMedia,
     resizeNativeMedia,
+    updateMediaPlayback,
+    type MediaStats,
     type MediaOpenResult,
     type NativeMediaOpenResult,
     type NativeMediaRect,
 } from "../../api";
+import { EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from "../../../wailsjs/runtime/runtime";
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { installModalA11y } from "./modal-a11y";
 
-const CHROME_HIDE_DELAY_MS = 1800;
+const CHROME_HIDE_DELAY_MS = 2500;
+const LOADING_DEBOUNCE_MS = 250;
 const SEEK_STEP_SECONDS = 10;
+const VOLUME_STEP = 0.05;
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const THUMBNAIL_BUCKET_SECONDS = 10;
+const THUMBNAIL_LONG_BUCKET_SECONDS = 20;
+const THUMBNAIL_VERY_LONG_BUCKET_SECONDS = 30;
+const THUMBNAIL_REQUEST_DEBOUNCE_MS = 140;
+const THUMBNAIL_DWELL_PREFETCH_MS = 420;
+const THUMBNAIL_RETRY_MS = 650;
+const THUMBNAIL_FAILURE_TTL_MS = 15_000;
+const PLAYBACK_HINT_INTERVAL_MS = 1000;
+const MEDIA_STATS_POLL_MS = 1000;
+const STREAM_ACTIVITY_HOLD_MS = 2000;
 
 interface VideoOpenTarget {
     id: number;
@@ -24,46 +40,514 @@ interface VideoOpenTarget {
     encrypted?: boolean;
 }
 
+interface BufferedRange {
+    start: number;
+    end: number;
+}
+
+interface PlayerState {
+    paused: boolean;
+    currentTime: number;
+    duration: number;
+    buffered: BufferedRange[];
+    volume: number;
+    muted: boolean;
+    rate: number;
+    loading: boolean;
+}
+
+interface NativeMediaStatePayload {
+    token?: string;
+    paused?: boolean;
+    current_time?: number;
+    duration?: number;
+    buffered?: BufferedRange[];
+    volume?: number;
+    muted?: boolean;
+    rate?: number;
+    loading?: boolean;
+}
+
+interface PlayerAdapter {
+    subscribe(callback: (state: PlayerState) => void): () => void;
+    playPause(): void;
+    seekAbsolute(seconds: number): void;
+    seekRelative(seconds: number): void;
+    setVolume(value: number): void;
+    setMuted(value: boolean): void;
+    setSpeed(value: number): void;
+    close(): Promise<void>;
+}
+
+const EMPTY_STATE: PlayerState = {
+    paused: true,
+    currentTime: 0,
+    duration: 0,
+    buffered: [],
+    volume: 1,
+    muted: false,
+    rate: 1,
+    loading: false,
+};
+
+class HtmlVideoAdapter implements PlayerAdapter {
+    private subscribers = new Set<(state: PlayerState) => void>();
+    private listeners: Array<() => void> = [];
+    private closed = false;
+    private lastAudibleVolume: number;
+
+    constructor(private readonly video: HTMLVideoElement, private readonly opened: MediaOpenResult) {
+        this.lastAudibleVolume = video.volume > 0 ? video.volume : 1;
+        const events = [
+            "loadstart",
+            "loadedmetadata",
+            "canplay",
+            "waiting",
+            "playing",
+            "pause",
+            "timeupdate",
+            "durationchange",
+            "progress",
+            "volumechange",
+            "ratechange",
+            "seeking",
+            "seeked",
+        ];
+        for (const event of events) {
+            const listener = () => this.emit();
+            video.addEventListener(event, listener);
+            this.listeners.push(() => video.removeEventListener(event, listener));
+        }
+    }
+
+    load() {
+        this.video.pause();
+        this.video.removeAttribute("src");
+        this.video.load();
+        this.video.src = this.opened.url;
+        this.video.playbackRate = 1;
+        this.emit();
+
+        const playPromise = this.video.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+            playPromise.catch(() => {
+                // Autoplay may be blocked; leave the first frame and explicit play control visible.
+                this.emit();
+                revealChrome();
+            });
+        }
+    }
+
+    subscribe(callback: (state: PlayerState) => void) {
+        this.subscribers.add(callback);
+        callback(this.snapshot());
+        return () => this.subscribers.delete(callback);
+    }
+
+    playPause() {
+        if (this.video.paused) {
+            this.video.play().catch((err) => setError(String(err?.message || err || "Playback failed.")));
+        } else {
+            this.video.pause();
+        }
+        this.emit();
+    }
+
+    seekAbsolute(seconds: number) {
+        const duration = Number.isFinite(this.video.duration) ? this.video.duration : 0;
+        if (duration <= 0) return;
+        this.video.currentTime = clamp(seconds, 0, duration);
+        this.emit();
+    }
+
+    seekRelative(seconds: number) {
+        this.seekAbsolute(this.video.currentTime + seconds);
+    }
+
+    setVolume(value: number) {
+        const next = clamp(value, 0, 1);
+        this.video.volume = next;
+        if (next > 0) this.lastAudibleVolume = next;
+        this.video.muted = next === 0;
+        this.emit();
+    }
+
+    setMuted(value: boolean) {
+        if (!value && this.video.volume === 0) {
+            this.video.volume = this.lastAudibleVolume;
+        }
+        this.video.muted = value;
+        this.emit();
+    }
+
+    setSpeed(value: number) {
+        this.video.playbackRate = clamp(value, 0.25, 4);
+        this.emit();
+    }
+
+    async close() {
+        if (this.closed) return;
+        this.closed = true;
+        for (const remove of this.listeners.splice(0)) remove();
+        this.subscribers.clear();
+        this.video.pause();
+        this.video.removeAttribute("src");
+        this.video.load();
+        await closeMedia(this.opened.token);
+    }
+
+    private snapshot(): PlayerState {
+        const duration = Number.isFinite(this.video.duration) ? this.video.duration : 0;
+        const currentTime = Number.isFinite(this.video.currentTime) ? this.video.currentTime : 0;
+        return {
+            paused: this.video.paused,
+            currentTime,
+            duration,
+            buffered: bufferedRanges(this.video),
+            volume: this.video.volume,
+            muted: this.video.muted || this.video.volume === 0,
+            rate: this.video.playbackRate || 1,
+            loading: this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !this.video.paused,
+        };
+    }
+
+    private emit() {
+        if (this.closed) return;
+        const state = this.snapshot();
+        for (const callback of this.subscribers) callback(state);
+    }
+}
+
+class NativeMpvAdapter implements PlayerAdapter {
+    private subscribers = new Set<(state: PlayerState) => void>();
+    private state: PlayerState = { ...EMPTY_STATE, loading: true };
+    private closed = false;
+    private unsubscribeRuntime: (() => void) | null = null;
+
+    constructor(private readonly opened: NativeMediaOpenResult) {
+        if (opened.htmlControls) {
+            this.unsubscribeRuntime = EventsOn("native_media_state", (payload: NativeMediaStatePayload) => {
+                if (this.closed || payload?.token !== this.opened.token) return;
+                this.state = nativePayloadToState(payload, this.state);
+                this.emit();
+            });
+        }
+    }
+
+    subscribe(callback: (state: PlayerState) => void) {
+        this.subscribers.add(callback);
+        callback(this.state);
+        return () => this.subscribers.delete(callback);
+    }
+
+    playPause() {
+        void this.command(["cycle", "pause"]);
+    }
+
+    seekAbsolute(_seconds: number) {
+        if (!this.opened.htmlControls) return;
+        void this.command(["seek", String(clamp(_seconds, 0, Math.max(0, this.state.duration || _seconds))), "absolute"]);
+    }
+
+    seekRelative(seconds: number) {
+        void this.command(["seek", String(seconds), "relative"]);
+    }
+
+    setVolume(value: number) {
+        if (!this.opened.htmlControls) return;
+        const next = clamp(value, 0, 1);
+        void this.command(["set", "volume", String(Math.round(next * 100))]);
+        if (next > 0) void this.command(["set", "mute", "no"]);
+    }
+
+    setMuted(value: boolean) {
+        if (!this.opened.htmlControls) {
+            void this.command(["cycle", "mute"]);
+            return;
+        }
+        void this.command(["set", "mute", value ? "yes" : "no"]);
+    }
+
+    setSpeed(value: number) {
+        if (!this.opened.htmlControls) return;
+        void this.command(["set", "speed", String(clamp(value, 0.25, 4))]);
+    }
+
+    async close() {
+        if (this.closed) return;
+        this.closed = true;
+        this.unsubscribeRuntime?.();
+        this.unsubscribeRuntime = null;
+        this.subscribers.clear();
+        await closeNativeMedia(this.opened.token);
+    }
+
+    private emit() {
+        for (const callback of this.subscribers) callback(this.state);
+    }
+
+    private async command(command: string[]) {
+        if (this.closed) return;
+        try {
+            await nativeMediaCommand(this.opened.token, command);
+        } catch (err) {
+            console.warn("NativeMediaCommand failed:", err);
+        }
+    }
+}
+
 let modalEl: HTMLElement | null = null;
-let shellEl: HTMLElement | null = null;
+let stageEl: HTMLElement | null = null;
 let filenameEl: HTMLElement | null = null;
 let metaEl: HTMLElement | null = null;
 let closeBtnEl: HTMLButtonElement | null = null;
 let nativeViewportEl: HTMLElement | null = null;
 let videoEl: HTMLVideoElement | null = null;
 let loadingEl: HTMLElement | null = null;
+let loadingStatusEl: HTMLElement | null = null;
 let errorEl: HTMLElement | null = null;
+let centerControlsEl: HTMLElement | null = null;
+let centerPlayBtnEl: HTMLButtonElement | null = null;
+let centerSkipBackBtnEl: HTMLButtonElement | null = null;
+let centerSkipForwardBtnEl: HTMLButtonElement | null = null;
+let skipFeedbackEl: HTMLElement | null = null;
 let playBtnEl: HTMLButtonElement | null = null;
+let skipBackBtnEl: HTMLButtonElement | null = null;
+let skipForwardBtnEl: HTMLButtonElement | null = null;
 let muteBtnEl: HTMLButtonElement | null = null;
-let progressEl: HTMLInputElement | null = null;
-let volumeEl: HTMLInputElement | null = null;
+let fullscreenBtnEl: HTMLButtonElement | null = null;
+let scrubberEl: HTMLElement | null = null;
+let scrubberPlayedEl: HTMLElement | null = null;
+let scrubberBufferedEl: HTMLElement | null = null;
+let scrubberThumbEl: HTMLElement | null = null;
+let scrubberTooltipEl: HTMLElement | null = null;
+let scrubberTooltipImageEl: HTMLImageElement | null = null;
+let scrubberTooltipTimeEl: HTMLElement | null = null;
+let volumeSliderEl: HTMLElement | null = null;
+let volumeFillEl: HTMLElement | null = null;
+let volumeThumbEl: HTMLElement | null = null;
 let timeEl: HTMLElement | null = null;
 let durationEl: HTMLElement | null = null;
-let speedEl: HTMLSelectElement | null = null;
+let speedBtnEl: HTMLButtonElement | null = null;
+let speedMenuEl: HTMLElement | null = null;
 
-let active: MediaOpenResult | null = null;
+let activeAdapter: PlayerAdapter | null = null;
 let activeNative: NativeMediaOpenResult | null = null;
+let activeMediaToken = "";
+let unsubscribeState: (() => void) | null = null;
+let currentState: PlayerState = { ...EMPTY_STATE };
 let openSeq = 0;
 let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
+let loadingTimer: ReturnType<typeof setTimeout> | null = null;
+let skipFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 let nativeResizeFrame = 0;
 let seekingWithPointer = false;
+let volumeDragging = false;
+let pendingVolumeValue: number | null = null;
+let volumeCommandFrame = 0;
 let hasError = false;
+let isWindowFullscreen = false;
+let lastBufferedSignature = "";
+let activeThumbnailURL = "";
+let currentPreviewBucket = -1;
+let lastPreviewRatio = 0;
+let thumbnailRequestSeq = 0;
+let thumbnailRequestTimer: number | null = null;
+let thumbnailDwellTimer: number | null = null;
+let scheduledThumbnailBucket = -1;
+let lastPlaybackHintAt = 0;
+let playbackHintTimer: number | null = null;
+let playbackHintInFlight = false;
+let mediaStatsTimer: number | null = null;
+let mediaStatsInFlight = false;
+let streamActivityClearTimer: number | null = null;
+let streamActivityText = "";
+let streamActivityAt = 0;
+let mediaMetaBaseText = "";
+let mediaMetaBytes = 0;
+const thumbnailObjectURLs = new Map<number, string>();
+const pendingThumbnails = new Set<number>();
+const failedThumbnails = new Map<number, number>();
 let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 function byID<T extends HTMLElement>(id: string): T | null {
     return document.getElementById(id) as T | null;
 }
 
+function clamp(value: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
+}
+
+function percent(value: number, total: number) {
+    return total > 0 ? clamp((value / total) * 100, 0, 100) : 0;
+}
+
+// Fragment boundaries (e.g. fMP4 segments) can split one contiguous download
+// into several adjacent ranges; rendering every hairline gap is visual noise,
+// not honesty, so segments closer than this are fused for display.
+const BUFFERED_MERGE_GAP_SECONDS = 0.4;
+
+// bufferedRanges reads the full set of cached [start, end] segments from the
+// media element. HTML video keeps several disjoint ranges after seeking, so we
+// preserve all of them instead of collapsing to a single "buffered end" — the
+// timeline can then honestly show which parts are actually downloaded.
+function bufferedRanges(video: HTMLVideoElement): BufferedRange[] {
+    const ranges: BufferedRange[] = [];
+    const buffered = video.buffered;
+    for (let i = 0; i < buffered.length; i += 1) {
+        const start = buffered.start(i);
+        const end = buffered.end(i);
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+            ranges.push({ start, end });
+        }
+    }
+    return ranges;
+}
+
+function nativePayloadToState(payload: NativeMediaStatePayload, previous: PlayerState): PlayerState {
+    const duration = Number(payload.duration ?? previous.duration ?? 0);
+    const currentTime = Number(payload.current_time ?? previous.currentTime ?? 0);
+    const volume = Number(payload.volume ?? previous.volume ?? 1);
+    const rate = Number(payload.rate ?? previous.rate ?? 1);
+    const buffered = Array.isArray(payload.buffered)
+        ? payload.buffered
+            .map((range) => ({
+                start: Number(range.start ?? 0),
+                end: Number(range.end ?? 0),
+            }))
+            .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+        : previous.buffered;
+    return {
+        paused: Boolean(payload.paused ?? previous.paused),
+        currentTime: clamp(currentTime, 0, Math.max(0, duration || currentTime)),
+        duration: Math.max(0, Number.isFinite(duration) ? duration : 0),
+        buffered,
+        volume: clamp(volume, 0, 1),
+        muted: Boolean(payload.muted ?? previous.muted),
+        rate: clamp(rate, 0.25, 4),
+        loading: Boolean(payload.loading ?? false),
+    };
+}
+
+// coalesceRanges clamps ranges to the known duration and merges any whose gap is
+// within BUFFERED_MERGE_GAP_SECONDS, returning a sorted, disjoint set ready to
+// paint. The native adapter can feed the same shape later from mpv's cache state.
+function coalesceRanges(ranges: BufferedRange[], duration: number): BufferedRange[] {
+    const sorted = ranges
+        .map((range) => ({ start: clamp(range.start, 0, duration), end: clamp(range.end, 0, duration) }))
+        .filter((range) => range.end > range.start)
+        .sort((a, b) => a.start - b.start);
+    const merged: BufferedRange[] = [];
+    for (const range of sorted) {
+        const last = merged[merged.length - 1];
+        if (last && range.start - last.end <= BUFFERED_MERGE_GAP_SECONDS) {
+            last.end = Math.max(last.end, range.end);
+        } else {
+            merged.push({ ...range });
+        }
+    }
+    return merged;
+}
+
 function isOpen() {
     return Boolean(modalEl && modalEl.style.display !== "none");
 }
 
-function setChromeVisible(visible: boolean) {
-    modalEl?.classList.toggle("is-video-chrome-visible", visible);
+function errorMessage(err: unknown, fallback: string) {
+    const raw = err instanceof Error && err.message ? err.message : String(err || "");
+    const normalized = raw.toLowerCase();
+    if (
+        normalized.includes("resolve peer") ||
+        normalized.includes("rpcdorequest") ||
+        normalized.includes("retryuntilack") ||
+        normalized.includes("engine forcibly closed")
+    ) {
+        return "Could not reach Telegram. Check your connection and try again.";
+    }
+    if (normalized.includes("context canceled")) {
+        return "The video request was canceled. Try opening it again.";
+    }
+    return raw || fallback;
 }
 
-function setNativeMode(visible: boolean) {
+function setChromeVisible(visible: boolean) {
+    modalEl?.classList.toggle("is-video-chrome-visible", visible);
+    modalEl?.classList.toggle("is-video-cursor-hidden", !visible && !hasError);
+}
+
+function setNativeMode(visible: boolean, fallback = false) {
     modalEl?.classList.toggle("is-video-native", visible);
+    modalEl?.classList.toggle("is-video-native-fallback", visible && fallback);
+    document.body.classList.toggle("native-video-active", visible && !fallback);
+}
+
+function fullscreenRuntimeAvailable() {
+    return Boolean(
+        window.runtime?.WindowFullscreen &&
+        window.runtime?.WindowUnfullscreen &&
+        window.runtime?.WindowIsFullscreen
+    );
+}
+
+function canUseFullscreen() {
+    return Boolean(fullscreenRuntimeAvailable() && activeAdapter && !hasError);
+}
+
+function applyFullscreenState(isFullscreen: boolean) {
+    isWindowFullscreen = isFullscreen;
+    modalEl?.classList.toggle("is-video-fullscreen", isWindowFullscreen);
+    if (!fullscreenBtnEl) return;
+    fullscreenBtnEl.dataset.state = isWindowFullscreen ? "fullscreen" : "windowed";
+    fullscreenBtnEl.setAttribute("aria-label", isWindowFullscreen ? "Exit fullscreen" : "Enter fullscreen");
+    fullscreenBtnEl.title = isWindowFullscreen ? "Exit fullscreen" : "Enter fullscreen";
+    setButtonDisabled(fullscreenBtnEl, !canUseFullscreen());
+}
+
+async function readWindowFullscreen() {
+    if (!fullscreenRuntimeAvailable()) return false;
+    try {
+        return Boolean(await WindowIsFullscreen());
+    } catch (err) {
+        console.warn("WindowIsFullscreen failed:", err);
+        return false;
+    }
+}
+
+async function syncFullscreenState() {
+    applyFullscreenState(await readWindowFullscreen());
+}
+
+async function exitVideoFullscreen() {
+    if (!fullscreenRuntimeAvailable()) return;
+    if (!(await readWindowFullscreen())) return;
+    try {
+        WindowUnfullscreen();
+        applyFullscreenState(false);
+    } catch (err) {
+        console.warn("WindowUnfullscreen failed:", err);
+    }
+}
+
+async function toggleFullscreen() {
+    if (!canUseFullscreen()) return;
+    try {
+        const next = !(await readWindowFullscreen());
+        if (next) {
+            WindowFullscreen();
+        } else {
+            WindowUnfullscreen();
+        }
+        applyFullscreenState(next);
+    } catch (err) {
+        console.warn("toggle fullscreen failed:", err);
+    } finally {
+        scheduleNativeResizeAfterWindowTransition();
+        setTimeout(() => {
+            void syncFullscreenState();
+            scheduleNativeResizeAfterWindowTransition();
+        }, 180);
+        revealChrome();
+    }
 }
 
 function nextFrame(): Promise<void> {
@@ -71,8 +555,9 @@ function nextFrame(): Promise<void> {
 }
 
 function currentNativeRect(): NativeMediaRect | null {
-    if (!nativeViewportEl) return null;
-    const rect = nativeViewportEl.getBoundingClientRect();
+    const source = nativeViewportEl || stageEl;
+    if (!source) return null;
+    const rect = source.getBoundingClientRect();
     if (rect.width < 2 || rect.height < 2) return null;
     return {
         x: rect.left,
@@ -96,6 +581,14 @@ function scheduleNativeResize() {
     });
 }
 
+function scheduleNativeResizeAfterWindowTransition() {
+    if (!activeNative) return;
+    scheduleNativeResize();
+    requestAnimationFrame(scheduleNativeResize);
+    window.setTimeout(scheduleNativeResize, 180);
+    window.setTimeout(scheduleNativeResize, 420);
+}
+
 function clearChromeTimer() {
     if (!chromeHideTimer) return;
     clearTimeout(chromeHideTimer);
@@ -104,11 +597,15 @@ function clearChromeTimer() {
 
 function scheduleChromeHide() {
     clearChromeTimer();
-    if (!isOpen() || videoEl?.paused || hasError) return;
+    if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
     chromeHideTimer = setTimeout(() => {
-        if (!isOpen() || videoEl?.paused || hasError) return;
+        if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
         setChromeVisible(false);
     }, CHROME_HIDE_DELAY_MS);
+}
+
+function isScrubberTooltipActive() {
+    return Boolean(scrubberEl?.classList.contains("is-hovered") || currentPreviewBucket >= 0);
 }
 
 function revealChrome() {
@@ -119,13 +616,153 @@ function revealChrome() {
 
 function setLoading(visible: boolean) {
     if (!loadingEl) return;
-    loadingEl.style.display = visible ? "flex" : "none";
-    loadingEl.setAttribute("aria-hidden", visible ? "false" : "true");
+    modalEl?.classList.toggle("is-video-loading", visible);
+    if (loadingTimer) {
+        clearTimeout(loadingTimer);
+        loadingTimer = null;
+    }
+    if (!visible) {
+        loadingEl.style.display = "none";
+        loadingEl.setAttribute("aria-hidden", "true");
+        updateLoadingStatus();
+        return;
+    }
+    updateLoadingStatus();
+    loadingTimer = setTimeout(() => {
+        loadingTimer = null;
+        if (!loadingEl || hasError) return;
+        loadingEl.style.display = "flex";
+        loadingEl.setAttribute("aria-hidden", "false");
+    }, LOADING_DEBOUNCE_MS);
+}
+
+function updateLoadingStatus() {
+    if (!loadingStatusEl) return;
+    loadingStatusEl.textContent = "Buffering";
+}
+
+function syncMediaStatsPolling() {
+    if (activeMediaToken && !hasError) {
+        startMediaStatsPolling();
+    } else {
+        clearMediaStatsPolling();
+    }
+}
+
+function startMediaStatsPolling() {
+    if (mediaStatsTimer != null) return;
+    void pollMediaStats();
+    mediaStatsTimer = window.setInterval(() => {
+        void pollMediaStats();
+    }, MEDIA_STATS_POLL_MS);
+}
+
+function clearMediaStatsPolling() {
+    if (mediaStatsTimer != null) {
+        window.clearInterval(mediaStatsTimer);
+        mediaStatsTimer = null;
+    }
+    clearStreamActivity();
+    updateLoadingStatus();
+}
+
+async function pollMediaStats() {
+    if (!activeMediaToken || mediaStatsInFlight) return;
+    const token = activeMediaToken;
+    mediaStatsInFlight = true;
+    try {
+        const stats = await getMediaStats(token);
+        if (token !== activeMediaToken) return;
+        syncStreamActivity(stats);
+    } catch (err) {
+        console.warn("GetMediaStats failed:", err);
+    } finally {
+        mediaStatsInFlight = false;
+    }
+}
+
+function syncStreamActivity(stats: MediaStats | null) {
+    const text = stats ? streamActivityLabel(stats) : "";
+    const now = Date.now();
+    if (text) {
+        streamActivityText = text;
+        streamActivityAt = now;
+        scheduleStreamActivityClear();
+    } else if (streamActivityText && now - streamActivityAt >= STREAM_ACTIVITY_HOLD_MS) {
+        streamActivityText = "";
+        clearStreamActivityTimer();
+    }
+    renderMediaMeta();
+}
+
+function streamActivityLabel(stats: MediaStats) {
+    const playback = stats.playback;
+    if (playback.recentFloodWait) {
+        return "Rate-limited";
+    }
+    const rate = playback.bytesPerSecond || 0;
+    if (rate <= 0) return "";
+    const multiplier = formatStreamMultiplier(rate);
+    return `Streaming ${formatStreamRate(rate)}${multiplier ? ` ${multiplier}` : ""}`;
+}
+
+function scheduleStreamActivityClear() {
+    clearStreamActivityTimer();
+    streamActivityClearTimer = window.setTimeout(() => {
+        if (Date.now() - streamActivityAt >= STREAM_ACTIVITY_HOLD_MS) {
+            streamActivityText = "";
+            renderMediaMeta();
+        }
+        streamActivityClearTimer = null;
+    }, STREAM_ACTIVITY_HOLD_MS);
+}
+
+function clearStreamActivityTimer() {
+    if (streamActivityClearTimer == null) return;
+    window.clearTimeout(streamActivityClearTimer);
+    streamActivityClearTimer = null;
+}
+
+function clearStreamActivity() {
+    clearStreamActivityTimer();
+    streamActivityText = "";
+    streamActivityAt = 0;
+    renderMediaMeta();
+}
+
+function showSkipFeedback(delta: number) {
+    if (!skipFeedbackEl) return;
+    const value = Math.abs(Math.round(delta));
+    const label = `${delta > 0 ? "+" : "-"}${value}s`;
+    const textEl = skipFeedbackEl.querySelector("span");
+    if (textEl) textEl.textContent = label;
+
+    if (skipFeedbackTimer) {
+        clearTimeout(skipFeedbackTimer);
+        skipFeedbackTimer = null;
+    }
+    skipFeedbackEl.classList.remove("is-visible", "is-forward", "is-back");
+    // Restart the pulse when repeated skips happen quickly.
+    void skipFeedbackEl.offsetWidth;
+    skipFeedbackEl.classList.add(delta > 0 ? "is-forward" : "is-back", "is-visible");
+    skipFeedbackTimer = setTimeout(() => {
+        skipFeedbackTimer = null;
+        skipFeedbackEl?.classList.remove("is-visible");
+    }, 620);
+}
+
+function clearSkipFeedback() {
+    if (skipFeedbackTimer) {
+        clearTimeout(skipFeedbackTimer);
+        skipFeedbackTimer = null;
+    }
+    skipFeedbackEl?.classList.remove("is-visible", "is-forward", "is-back");
 }
 
 function setError(message: string) {
     hasError = true;
     setLoading(false);
+    clearMediaStatsPolling();
     if (!errorEl) return;
     errorEl.textContent = message;
     errorEl.style.display = "block";
@@ -154,107 +791,485 @@ function formatTime(value: number) {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
-function setButtonState() {
-    if (!videoEl || !playBtnEl || !muteBtnEl) return;
-    playBtnEl.dataset.state = videoEl.paused ? "paused" : "playing";
-    playBtnEl.setAttribute("aria-label", videoEl.paused ? "Play" : "Pause");
-    playBtnEl.title = videoEl.paused ? "Play (Space)" : "Pause (Space)";
-    muteBtnEl.dataset.state = videoEl.muted || videoEl.volume === 0 ? "muted" : "unmuted";
-    muteBtnEl.setAttribute("aria-label", videoEl.muted ? "Unmute" : "Mute");
-    muteBtnEl.title = videoEl.muted ? "Unmute" : "Mute";
+function setSliderARIA(el: HTMLElement | null, value: number, min: number, max: number, text: string) {
+    if (!el) return;
+    el.setAttribute("aria-valuemin", String(min));
+    el.setAttribute("aria-valuemax", String(max));
+    el.setAttribute("aria-valuenow", String(Math.round(value)));
+    el.setAttribute("aria-valuetext", text);
 }
 
-function syncTimeline() {
-    if (!videoEl) return;
-    const duration = Number.isFinite(videoEl.duration) ? videoEl.duration : 0;
-    const current = Number.isFinite(videoEl.currentTime) ? videoEl.currentTime : 0;
-    if (timeEl) timeEl.textContent = formatTime(current);
-    if (durationEl) durationEl.textContent = duration > 0 ? formatTime(duration) : "--:--";
-    if (progressEl && !seekingWithPointer) {
-        progressEl.max = duration > 0 ? String(duration) : "0";
-        progressEl.value = String(Math.min(current, duration || current));
-        progressEl.disabled = duration <= 0;
+function setButtonDisabled(button: HTMLButtonElement | null, disabled: boolean) {
+    if (!button) return;
+    button.disabled = disabled;
+    button.setAttribute("aria-disabled", disabled ? "true" : "false");
+}
+
+function setSliderDisabled(el: HTMLElement | null, disabled: boolean) {
+    if (!el) return;
+    el.classList.toggle("is-disabled", disabled);
+    el.setAttribute("aria-disabled", disabled ? "true" : "false");
+    el.tabIndex = disabled ? -1 : 0;
+}
+
+function syncTransportAvailability(state: PlayerState) {
+    const canSeek = Boolean(activeAdapter && state.duration > 0);
+    setButtonDisabled(skipBackBtnEl, !canSeek);
+    setButtonDisabled(skipForwardBtnEl, !canSeek);
+    setButtonDisabled(centerSkipBackBtnEl, !canSeek);
+    setButtonDisabled(centerSkipForwardBtnEl, !canSeek);
+    setSliderDisabled(scrubberEl, !canSeek);
+    applyFullscreenState(isWindowFullscreen);
+}
+
+function syncCenterPlay(state: PlayerState) {
+    const visible = Boolean(activeAdapter && state.paused && !state.loading && !hasError);
+    modalEl?.classList.toggle("is-video-paused", visible);
+    centerControlsEl?.setAttribute("aria-hidden", visible ? "false" : "true");
+}
+
+function syncButtonState(state: PlayerState) {
+    if (!playBtnEl || !muteBtnEl) return;
+    playBtnEl.dataset.state = state.paused ? "paused" : "playing";
+    playBtnEl.setAttribute("aria-label", state.paused ? "Play" : "Pause");
+    playBtnEl.title = state.paused ? "Play" : "Pause";
+    muteBtnEl.dataset.state = state.muted ? "muted" : "unmuted";
+    muteBtnEl.setAttribute("aria-label", state.muted ? "Unmute" : "Mute");
+    muteBtnEl.title = state.muted ? "Unmute" : "Mute";
+}
+
+function syncTimeline(state: PlayerState) {
+    if (timeEl) timeEl.textContent = formatTime(state.currentTime);
+    if (durationEl) durationEl.textContent = state.duration > 0 ? formatTime(state.duration) : "--:--";
+
+    const played = percent(state.currentTime, state.duration);
+    if (scrubberPlayedEl && !seekingWithPointer) scrubberPlayedEl.style.width = `${played}%`;
+    if (scrubberThumbEl && !seekingWithPointer) scrubberThumbEl.style.left = `${played}%`;
+    renderBuffered(state);
+    if (scrubberEl) {
+        setSliderARIA(scrubberEl, state.currentTime, 0, Math.max(0, state.duration), `${formatTime(state.currentTime)} of ${state.duration > 0 ? formatTime(state.duration) : "unknown"}`);
     }
 }
 
-function syncVolume() {
-    if (!videoEl || !volumeEl) return;
-    volumeEl.value = String(Math.round((videoEl.muted ? 0 : videoEl.volume) * 100));
-    setButtonState();
+// renderBuffered paints one segment per cached range so the bar honestly shows
+// the disjoint downloaded islands (not a single block to the furthest point).
+// It is diff-guarded: buffered only changes on the media element's "progress"
+// event, but applyState also runs on every "timeupdate", so we skip DOM work
+// whenever the rendered set is unchanged. Releasing a session resets to an empty
+// state, which clears the segments and the signature for the next video.
+function renderBuffered(state: PlayerState) {
+    const container = scrubberBufferedEl;
+    if (!container) return;
+
+    const segments: Array<{ left: number; width: number }> = [];
+    if (state.duration > 0) {
+        for (const range of coalesceRanges(state.buffered, state.duration)) {
+            const left = clamp((range.start / state.duration) * 100, 0, 100);
+            const width = clamp(((range.end - range.start) / state.duration) * 100, 0, 100 - left);
+            if (width > 0) segments.push({ left, width });
+        }
+    }
+
+    const signature = segments.map((s) => `${s.left.toFixed(3)}:${s.width.toFixed(3)}`).join("|");
+    if (signature === lastBufferedSignature) return;
+    lastBufferedSignature = signature;
+
+    while (container.childElementCount > segments.length) {
+        container.lastElementChild?.remove();
+    }
+    while (container.childElementCount < segments.length) {
+        const segment = document.createElement("span");
+        segment.className = "video-scrubber-segment";
+        container.appendChild(segment);
+    }
+    segments.forEach((segment, index) => {
+        const node = container.children[index] as HTMLElement;
+        node.style.left = `${segment.left}%`;
+        node.style.width = `${segment.width}%`;
+    });
 }
 
-function loadIntoVideo(opened: MediaOpenResult, target: VideoOpenTarget) {
-    if (!videoEl) return;
-    clearError();
-    setLoading(true);
-    videoEl.pause();
-    videoEl.removeAttribute("src");
-    videoEl.load();
-    videoEl.src = opened.url;
-    videoEl.playbackRate = 1;
-    syncTimeline();
-    syncVolume();
+function syncVolume(state: PlayerState) {
+    const value = state.muted ? 0 : state.volume;
+    previewVolume(value);
+}
 
-    const playPromise = videoEl.play();
-    if (playPromise && typeof playPromise.catch === "function") {
-        playPromise.catch(() => {
-            // Autoplay may be blocked by the platform; showing the first frame
-            // with an explicit play button is a good state, not an error.
-            setLoading(false);
-            setButtonState();
-            revealChrome();
+function previewVolume(value: number) {
+    const safe = clamp(value, 0, 1);
+    if (volumeFillEl) volumeFillEl.style.width = `${safe * 100}%`;
+    if (volumeThumbEl) volumeThumbEl.style.left = `${safe * 100}%`;
+    setSliderARIA(volumeSliderEl, safe * 100, 0, 100, `${Math.round(safe * 100)}%`);
+}
+
+function syncSpeed(state: PlayerState) {
+    if (speedBtnEl) speedBtnEl.textContent = `${formatRate(state.rate)}x`;
+    speedMenuEl?.querySelectorAll<HTMLButtonElement>("[data-rate]").forEach((button) => {
+        const selected = Number(button.dataset.rate || 1) === state.rate;
+        button.classList.toggle("is-selected", selected);
+        button.setAttribute("aria-checked", selected ? "true" : "false");
+    });
+}
+
+function applyState(state: PlayerState) {
+    const wasPaused = currentState.paused;
+    currentState = state;
+    schedulePlaybackHint(state);
+    syncButtonState(state);
+    syncTimeline(state);
+    syncVolume(state);
+    syncSpeed(state);
+    syncTransportAvailability(state);
+    syncCenterPlay(state);
+    setLoading(state.loading);
+    syncMediaStatsPolling();
+    if (state.paused || hasError) {
+        clearChromeTimer();
+        setChromeVisible(true);
+    } else if (wasPaused) {
+        scheduleChromeHide();
+    }
+}
+
+function schedulePlaybackHint(state: PlayerState) {
+    if (!activeMediaToken || state.duration <= 0) return;
+    const now = Date.now();
+    const dueIn = PLAYBACK_HINT_INTERVAL_MS - (now - lastPlaybackHintAt);
+    if (dueIn <= 0) {
+        void sendPlaybackHint(state);
+        return;
+    }
+    if (playbackHintTimer != null) return;
+    playbackHintTimer = window.setTimeout(() => {
+        playbackHintTimer = null;
+        void sendPlaybackHint(currentState);
+    }, dueIn);
+}
+
+async function sendPlaybackHint(state: PlayerState) {
+    if (!activeMediaToken || playbackHintInFlight || state.duration <= 0) return;
+    playbackHintInFlight = true;
+    lastPlaybackHintAt = Date.now();
+    try {
+        await updateMediaPlayback({
+            token: activeMediaToken,
+            currentTime: state.currentTime,
+            duration: state.duration,
+            busy: Boolean(state.loading),
         });
+    } catch (err) {
+        console.warn("UpdateMediaPlayback failed:", err);
+    } finally {
+        playbackHintInFlight = false;
     }
+}
+
+function clearPlaybackHintTimer() {
+    if (playbackHintTimer == null) return;
+    window.clearTimeout(playbackHintTimer);
+    playbackHintTimer = null;
+}
+
+function formatRate(rate: number) {
+    return Number.isInteger(rate) ? String(rate) : String(rate).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function formatStreamRate(bytesPerSecond: number) {
+    const safe = Math.max(0, Number.isFinite(bytesPerSecond) ? bytesPerSecond : 0);
+    if (safe < 1024 * 1024) {
+        return `${Math.max(0.1, safe / 1024).toFixed(1)} KB/s`;
+    }
+    return `${(safe / (1024 * 1024)).toFixed(1)} MB/s`;
+}
+
+function formatStreamMultiplier(bytesPerSecond: number) {
+    const duration = currentState.duration;
+    if (!(mediaMetaBytes > 0 && duration > 0 && bytesPerSecond > 0)) return "";
+    const averageBytesPerSecond = mediaMetaBytes / duration;
+    if (!(averageBytesPerSecond > 0)) return "";
+    const multiplier = bytesPerSecond / averageBytesPerSecond;
+    if (!Number.isFinite(multiplier) || multiplier <= 0) return "";
+    if (multiplier >= 100) return "(~99x+)";
+    if (multiplier < 10) return `(~${Math.max(0.1, multiplier).toFixed(1)}x)`;
+    return `(~${Math.round(multiplier)}x)`;
+}
+
+function scrubberSecondsFromEvent(event: PointerEvent | MouseEvent) {
+    if (!scrubberEl || currentState.duration <= 0) return 0;
+    const rect = scrubberEl.getBoundingClientRect();
+    const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    return ratio * currentState.duration;
+}
+
+function previewScrubber(event: PointerEvent | MouseEvent) {
+    if (!scrubberEl || !scrubberTooltipEl || currentState.duration <= 0) return;
+    const rect = scrubberEl.getBoundingClientRect();
+    const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    const seconds = ratio * currentState.duration;
+    lastPreviewRatio = ratio;
+    updateThumbnailTooltip(seconds);
+    positionScrubberTooltip(ratio, rect);
+}
+
+function positionScrubberTooltip(ratio: number, rect?: DOMRect) {
+    if (!scrubberEl || !scrubberTooltipEl) return;
+    const bounds = rect || scrubberEl.getBoundingClientRect();
+    const tooltipWidth = scrubberTooltipEl.offsetWidth || 44;
+    const half = tooltipWidth / 2;
+    const x = clamp(ratio * bounds.width, half, Math.max(half, bounds.width - half));
+    scrubberTooltipEl.style.left = `${x}px`;
+}
+
+function updateThumbnailTooltip(seconds: number) {
+    if (scrubberTooltipTimeEl) scrubberTooltipTimeEl.textContent = formatTime(seconds);
+    const bucket = thumbnailBucket(seconds);
+    currentPreviewBucket = bucket;
+    const cached = thumbnailObjectURLs.get(bucket);
+    if (cached && scrubberTooltipImageEl && scrubberTooltipEl) {
+        clearThumbnailRequestTimer();
+        scheduleThumbnailDwell(bucket);
+        if (scrubberTooltipImageEl.src !== cached) {
+            scrubberTooltipImageEl.src = cached;
+        }
+        setThumbnailTooltipState("ready");
+        return;
+    }
+    clearThumbnailDwellTimer();
+    if (thumbnailFailedRecently(bucket)) {
+        setThumbnailTooltipState("failed");
+        return;
+    }
+    setThumbnailTooltipState("pending");
+    scheduleThumbnailRequest(bucket);
+}
+
+function thumbnailBucket(seconds: number) {
+    if (!Number.isFinite(seconds) || seconds < 0) return 0;
+    const interval = thumbnailBucketInterval(currentState.duration);
+    return Math.max(0, Math.round(seconds / interval) * interval);
+}
+
+function thumbnailBucketInterval(duration: number) {
+    if (duration >= 2 * 60 * 60) return THUMBNAIL_VERY_LONG_BUCKET_SECONDS;
+    if (duration >= 30 * 60) return THUMBNAIL_LONG_BUCKET_SECONDS;
+    return THUMBNAIL_BUCKET_SECONDS;
+}
+
+function clearThumbnailRequestTimer() {
+    if (thumbnailRequestTimer == null) return;
+    window.clearTimeout(thumbnailRequestTimer);
+    thumbnailRequestTimer = null;
+    scheduledThumbnailBucket = -1;
+}
+
+function clearThumbnailDwellTimer() {
+    if (thumbnailDwellTimer == null) return;
+    window.clearTimeout(thumbnailDwellTimer);
+    thumbnailDwellTimer = null;
+}
+
+function scheduleThumbnailRequest(bucket: number) {
+    if (!activeThumbnailURL || thumbnailObjectURLs.has(bucket)) return;
+    scheduledThumbnailBucket = bucket;
+    if (thumbnailRequestTimer != null) window.clearTimeout(thumbnailRequestTimer);
+    thumbnailRequestTimer = window.setTimeout(() => {
+        thumbnailRequestTimer = null;
+        const bucketToRequest = scheduledThumbnailBucket;
+        scheduledThumbnailBucket = -1;
+        if (bucketToRequest !== currentPreviewBucket) return;
+        requestThumbnail(bucketToRequest);
+    }, THUMBNAIL_REQUEST_DEBOUNCE_MS);
+}
+
+function scheduleThumbnailDwell(bucket: number) {
+    clearThumbnailDwellTimer();
+    if (!activeThumbnailURL || !thumbnailObjectURLs.has(bucket) || seekingWithPointer) return;
+    thumbnailDwellTimer = window.setTimeout(() => {
+        thumbnailDwellTimer = null;
+        if (currentPreviewBucket !== bucket || seekingWithPointer || !thumbnailObjectURLs.has(bucket)) return;
+        const interval = thumbnailBucketInterval(currentState.duration);
+        for (const neighbor of [bucket - interval, bucket + interval, bucket - 2 * interval, bucket + 2 * interval]) {
+            if (neighbor < 0 || neighbor > currentState.duration) continue;
+            requestThumbnail(neighbor, true);
+        }
+    }, THUMBNAIL_DWELL_PREFETCH_MS);
+}
+
+function requestThumbnail(bucket: number, prefetch = false) {
+    if (!activeThumbnailURL || pendingThumbnails.has(bucket) || thumbnailObjectURLs.has(bucket)) return;
+    if (thumbnailFailedRecently(bucket)) return;
+    pendingThumbnails.add(bucket);
+    if (!prefetch && currentPreviewBucket === bucket) setThumbnailTooltipState("pending");
+    const seq = thumbnailRequestSeq;
+    const url = `${activeThumbnailURL}?t=${encodeURIComponent(String(bucket))}`;
+    let retryScheduled = false;
+    fetch(url, { cache: "no-store" })
+        .then(async (response) => {
+            if (seq !== thumbnailRequestSeq) return;
+            if (response.status === 202) {
+                retryScheduled = true;
+                window.setTimeout(() => {
+                    pendingThumbnails.delete(bucket);
+                    if (seq === thumbnailRequestSeq && currentPreviewBucket === bucket) requestThumbnail(bucket);
+                }, THUMBNAIL_RETRY_MS);
+                return;
+            }
+            if (!response.ok) {
+                failedThumbnails.set(bucket, Date.now());
+                if (!prefetch && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
+                return;
+            }
+            const blob = await response.blob();
+            if (!blob.size || seq !== thumbnailRequestSeq) return;
+            const objectURL = URL.createObjectURL(blob);
+            const old = thumbnailObjectURLs.get(bucket);
+            if (old) URL.revokeObjectURL(old);
+            thumbnailObjectURLs.set(bucket, objectURL);
+            failedThumbnails.delete(bucket);
+            if (currentPreviewBucket === bucket && scrubberTooltipImageEl && scrubberTooltipEl) {
+                scrubberTooltipImageEl.src = objectURL;
+                setThumbnailTooltipState("ready");
+                positionScrubberTooltip(lastPreviewRatio);
+                scheduleThumbnailDwell(bucket);
+            }
+        })
+        .catch(() => {
+            if (seq === thumbnailRequestSeq) failedThumbnails.set(bucket, Date.now());
+            if (!prefetch && seq === thumbnailRequestSeq && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
+        })
+        .finally(() => {
+            if (seq === thumbnailRequestSeq && !retryScheduled) pendingThumbnails.delete(bucket);
+        });
+}
+
+function thumbnailFailedRecently(bucket: number) {
+    const failedAt = failedThumbnails.get(bucket);
+    return Boolean(failedAt && Date.now() - failedAt < THUMBNAIL_FAILURE_TTL_MS);
+}
+
+function setThumbnailTooltipState(state: "pending" | "ready" | "failed") {
+    if (!scrubberTooltipEl) return;
+    scrubberTooltipEl.classList.toggle("has-thumbnail", state === "ready");
+    scrubberTooltipEl.classList.toggle("is-thumbnail-pending", state === "pending");
+    scrubberTooltipEl.classList.toggle("is-thumbnail-failed", state === "failed");
+    if (state !== "ready") scrubberTooltipImageEl?.removeAttribute("src");
+}
+
+function resetThumbnailPreview() {
+    thumbnailRequestSeq += 1;
+    activeThumbnailURL = "";
+    currentPreviewBucket = -1;
+    lastPreviewRatio = 0;
+    clearThumbnailRequestTimer();
+    clearThumbnailDwellTimer();
+    pendingThumbnails.clear();
+    failedThumbnails.clear();
+    for (const objectURL of thumbnailObjectURLs.values()) {
+        URL.revokeObjectURL(objectURL);
+    }
+    thumbnailObjectURLs.clear();
+    if (scrubberTooltipImageEl) scrubberTooltipImageEl.removeAttribute("src");
+    if (scrubberTooltipTimeEl) scrubberTooltipTimeEl.textContent = "0:00";
+    scrubberTooltipEl?.classList.remove("has-thumbnail", "is-thumbnail-pending", "is-thumbnail-failed");
+}
+
+function updateScrubVisual(seconds: number) {
+    const played = percent(seconds, currentState.duration);
+    if (scrubberPlayedEl) scrubberPlayedEl.style.width = `${played}%`;
+    if (scrubberThumbEl) scrubberThumbEl.style.left = `${played}%`;
+    if (timeEl) timeEl.textContent = formatTime(seconds);
+}
+
+function volumeFromEvent(event: PointerEvent | MouseEvent) {
+    if (!volumeSliderEl) return currentState.volume;
+    const rect = volumeSliderEl.getBoundingClientRect();
+    return clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+}
+
+function setVolumeFromPointer(event: PointerEvent | MouseEvent) {
+    const value = volumeFromEvent(event);
+    previewVolume(value);
+    scheduleVolumeSet(value);
+    revealChrome();
+}
+
+function scheduleVolumeSet(value: number) {
+    pendingVolumeValue = clamp(value, 0, 1);
+    if (volumeCommandFrame) return;
+    volumeCommandFrame = requestAnimationFrame(() => {
+        volumeCommandFrame = 0;
+        const next = pendingVolumeValue;
+        pendingVolumeValue = null;
+        if (next == null) return;
+        activeAdapter?.setVolume(next);
+    });
+}
+
+function clearVolumeCommandFrame() {
+    if (volumeCommandFrame) {
+        cancelAnimationFrame(volumeCommandFrame);
+        volumeCommandFrame = 0;
+    }
+    pendingVolumeValue = null;
 }
 
 async function releaseActive() {
-    const token = active?.token || "";
-    const nativeToken = activeNative?.token || "";
-    active = null;
+    const adapter = activeAdapter;
+    activeAdapter = null;
     activeNative = null;
+    activeMediaToken = "";
+    unsubscribeState?.();
+    unsubscribeState = null;
+    clearPlaybackHintTimer();
+    clearMediaStatsPolling();
+    clearVolumeCommandFrame();
+    clearSkipFeedback();
+    resetThumbnailPreview();
+    setSpeedMenuOpen(false);
     setNativeMode(false);
-    if (videoEl) {
-        videoEl.pause();
-        videoEl.removeAttribute("src");
-        videoEl.load();
-    }
-    if (token) {
+    if (adapter) {
         try {
-            await closeMedia(token);
+            await adapter.close();
         } catch (err) {
-            console.warn("CloseMedia failed:", err);
+            console.warn("Close media failed:", err);
         }
     }
-    if (nativeToken) {
-        try {
-            await closeNativeMedia(nativeToken);
-        } catch (err) {
-            console.warn("CloseNativeMedia failed:", err);
-        }
-    }
+    currentState = { ...EMPTY_STATE };
+    applyState(currentState);
 }
 
 function releaseActiveSoon() {
-    const token = active?.token || "";
-    const nativeToken = activeNative?.token || "";
-    active = null;
+    const adapter = activeAdapter;
+    activeAdapter = null;
     activeNative = null;
+    activeMediaToken = "";
+    unsubscribeState?.();
+    unsubscribeState = null;
+    clearPlaybackHintTimer();
+    clearMediaStatsPolling();
+    clearVolumeCommandFrame();
+    clearSkipFeedback();
+    resetThumbnailPreview();
+    setSpeedMenuOpen(false);
     setNativeMode(false);
-    if (videoEl) {
-        videoEl.pause();
-        videoEl.removeAttribute("src");
-        videoEl.load();
-    }
-    if (token) {
-        void closeMedia(token).catch((err) => {
-            console.warn("CloseMedia failed:", err);
+    if (adapter) {
+        void adapter.close().catch((err) => {
+            console.warn("Close media failed:", err);
         });
     }
-    if (nativeToken) {
-        void closeNativeMedia(nativeToken).catch((err) => {
-            console.warn("CloseNativeMedia failed:", err);
-        });
-    }
+    currentState = { ...EMPTY_STATE };
+    applyState(currentState);
+}
+
+function updateMediaText(name: string, size: number) {
+    if (filenameEl) filenameEl.textContent = name || "Video";
+    mediaMetaBaseText = `${videoFormatLabel(name)}${size ? ` · ${formatBytes(size)}` : ""}`;
+    mediaMetaBytes = size || 0;
+    renderMediaMeta();
+}
+
+function renderMediaMeta() {
+    if (!metaEl) return;
+    metaEl.textContent = streamActivityText ? `${mediaMetaBaseText} · ${streamActivityText}` : mediaMetaBaseText;
 }
 
 export async function openVideoModal(target: VideoOpenTarget) {
@@ -265,22 +1280,23 @@ export async function openVideoModal(target: VideoOpenTarget) {
     const seq = ++openSeq;
     releaseActiveSoon();
 
-    filenameEl.textContent = target.name || "Video";
-    metaEl.textContent = `${videoFormatLabel(target.name)}${target.size ? ` · ${formatBytes(target.size)}` : ""}`;
-    if (speedEl) speedEl.value = "1";
+    updateMediaText(target.name || "Video", target.size || 0);
     clearError();
     setLoading(true);
     setChromeVisible(true);
     modalEl.style.display = "flex";
     modalEl.setAttribute("aria-hidden", "false");
     a11y?.activate();
+    void syncFullscreenState();
 
     if (target.encrypted) {
         setError("Encrypted videos can't be played yet.");
         return;
     }
     if (!isWebviewDirectVideo(target.name)) {
-        setNativeMode(true);
+        // Keep the modal opaque while Telegram/mpv is still opening. The native
+        // surface only shows through after openNativeMedia has created it.
+        setNativeMode(false);
         await nextFrame();
         const rect = currentNativeRect();
         if (seq !== openSeq || !isOpen()) return;
@@ -298,16 +1314,23 @@ export async function openVideoModal(target: VideoOpenTarget) {
             if (!opened.token) {
                 throw new Error("native media session did not return a token");
             }
+            setNativeMode(true, !opened.htmlControls);
             activeNative = opened;
-            filenameEl.textContent = opened.info.name || opened.name || target.name || "Video";
+            activeMediaToken = opened.token;
+            const displayName = opened.info.name || opened.name || target.name || "Video";
             const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
-            metaEl.textContent = `${videoFormatLabel(opened.info.name || opened.name || target.name)}${displaySize ? ` · ${formatBytes(displaySize)}` : ""}`;
-            setLoading(false);
+            updateMediaText(displayName, displaySize);
+            const adapter = new NativeMpvAdapter(opened);
+            activeAdapter = adapter;
+            activeThumbnailURL = opened.thumbnailUrl;
+            thumbnailRequestSeq += 1;
+            unsubscribeState = adapter.subscribe(applyState);
+            setChromeVisible(true);
             scheduleNativeResize();
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error("OpenNativeMedia failed:", err);
             setNativeMode(false);
-            setError(String(err?.message || err || "Could not open this video."));
+            setError(errorMessage(err, "Could not open this video."));
         }
         return;
     }
@@ -322,14 +1345,19 @@ export async function openVideoModal(target: VideoOpenTarget) {
         if (!opened.url || !opened.token) {
             throw new Error("media session did not return a playable URL");
         }
-        active = opened;
-        filenameEl.textContent = opened.info.name || opened.name || target.name || "Video";
+        const displayName = opened.info.name || opened.name || target.name || "Video";
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
-        metaEl.textContent = `${videoFormatLabel(opened.info.name || opened.name || target.name)}${displaySize ? ` · ${formatBytes(displaySize)}` : ""}`;
-        loadIntoVideo(opened, target);
-    } catch (err: any) {
+        updateMediaText(displayName, displaySize);
+        activeThumbnailURL = opened.thumbnailUrl;
+        activeMediaToken = opened.token;
+        thumbnailRequestSeq += 1;
+        const adapter = new HtmlVideoAdapter(videoEl, opened);
+        activeAdapter = adapter;
+        unsubscribeState = adapter.subscribe(applyState);
+		adapter.load();
+    } catch (err: unknown) {
         console.error("OpenMedia failed:", err);
-        setError(String(err?.message || err || "Could not open this video."));
+        setError(errorMessage(err, "Could not open this video."));
     }
 }
 
@@ -337,67 +1365,30 @@ export async function closeVideoModal() {
     if (!modalEl) return;
     openSeq += 1;
     clearChromeTimer();
+    await exitVideoFullscreen();
     modalEl.style.display = "none";
     modalEl.setAttribute("aria-hidden", "true");
     a11y?.deactivate();
     await releaseActive();
     clearError();
     setLoading(false);
-    syncTimeline();
 }
 
 function togglePlayback() {
-    if (activeNative?.token) {
-        void nativeMediaCommand(activeNative.token, ["cycle", "pause"]).catch((err) => {
-            console.warn("NativeMediaCommand failed:", err);
-        });
-        revealChrome();
-        return;
-    }
-    if (!videoEl || hasError) return;
-    if (videoEl.paused) {
-        videoEl.play().catch((err) => setError(String(err?.message || err || "Playback failed.")));
-    } else {
-        videoEl.pause();
-    }
+    if (!activeAdapter || hasError) return;
+    activeAdapter.playPause();
     revealChrome();
 }
 
 function seekBy(delta: number) {
-    if (activeNative?.token) {
-        void nativeMediaCommand(activeNative.token, ["seek", String(delta), "relative"]).catch((err) => {
-            console.warn("NativeMediaCommand failed:", err);
-        });
-        revealChrome();
-        return;
-    }
-    if (!videoEl || !Number.isFinite(videoEl.duration)) return;
-    videoEl.currentTime = Math.max(0, Math.min(videoEl.duration, videoEl.currentTime + delta));
-    syncTimeline();
+    if (!activeAdapter || (currentState.duration <= 0 && !activeNative)) return;
+    activeAdapter.seekRelative(delta);
+    showSkipFeedback(delta);
     revealChrome();
 }
 
 function bindVideoEvents() {
     if (!videoEl) return;
-    videoEl.addEventListener("loadstart", () => setLoading(true));
-    videoEl.addEventListener("loadedmetadata", () => {
-        setLoading(false);
-        syncTimeline();
-    });
-    videoEl.addEventListener("canplay", () => setLoading(false));
-    videoEl.addEventListener("waiting", () => setLoading(true));
-    videoEl.addEventListener("playing", () => {
-        setLoading(false);
-        setButtonState();
-        scheduleChromeHide();
-    });
-    videoEl.addEventListener("pause", () => {
-        setButtonState();
-        revealChrome();
-    });
-    videoEl.addEventListener("timeupdate", syncTimeline);
-    videoEl.addEventListener("durationchange", syncTimeline);
-    videoEl.addEventListener("volumechange", syncVolume);
     videoEl.addEventListener("error", () => {
         const code = videoEl?.error?.code;
         const hint = code ? ` (media error ${code})` : "";
@@ -406,107 +1397,335 @@ function bindVideoEvents() {
     });
 }
 
-function bindControls() {
-    closeBtnEl?.addEventListener("click", () => void closeVideoModal());
-    playBtnEl?.addEventListener("click", togglePlayback);
-    muteBtnEl?.addEventListener("click", () => {
-        if (!videoEl) return;
-        videoEl.muted = !videoEl.muted;
-        syncVolume();
-        revealChrome();
+function bindScrubber() {
+    scrubberEl?.addEventListener("pointerenter", (event) => {
+        scrubberEl?.classList.add("is-hovered");
+        previewScrubber(event);
     });
-    volumeEl?.addEventListener("input", () => {
-        if (!videoEl || !volumeEl) return;
-        const value = Math.max(0, Math.min(100, Number(volumeEl.value || 0)));
-        videoEl.volume = value / 100;
-        videoEl.muted = value === 0;
-        syncVolume();
-        revealChrome();
+    scrubberEl?.addEventListener("pointermove", (event) => {
+        previewScrubber(event);
+        if (!seekingWithPointer) return;
+        updateScrubVisual(scrubberSecondsFromEvent(event));
     });
-    progressEl?.addEventListener("pointerdown", () => {
+    scrubberEl?.addEventListener("pointerleave", () => {
+        currentPreviewBucket = -1;
+        clearThumbnailDwellTimer();
+        if (!seekingWithPointer) scrubberEl?.classList.remove("is-hovered");
+        scheduleChromeHide();
+    });
+    scrubberEl?.addEventListener("pointerdown", (event) => {
+        if (!activeAdapter || currentState.duration <= 0) return;
         seekingWithPointer = true;
+        scrubberEl?.setPointerCapture(event.pointerId);
+        scrubberEl?.classList.add("is-dragging", "is-hovered");
+        updateScrubVisual(scrubberSecondsFromEvent(event));
+        revealChrome();
     });
-    progressEl?.addEventListener("pointerup", () => {
+    scrubberEl?.addEventListener("pointerup", (event) => {
+        if (!activeAdapter || currentState.duration <= 0) return;
+        const seconds = scrubberSecondsFromEvent(event);
         seekingWithPointer = false;
-    });
-    progressEl?.addEventListener("input", () => {
-        if (!videoEl || !progressEl) return;
-        videoEl.currentTime = Number(progressEl.value || 0);
-        syncTimeline();
+        if (scrubberEl?.hasPointerCapture(event.pointerId)) {
+            scrubberEl.releasePointerCapture(event.pointerId);
+        }
+        scrubberEl?.classList.remove("is-dragging");
+        activeAdapter.seekAbsolute(seconds);
         revealChrome();
     });
-    speedEl?.addEventListener("change", () => {
-        if (!videoEl || !speedEl) return;
-        videoEl.playbackRate = Number(speedEl.value || 1);
-        revealChrome();
+    scrubberEl?.addEventListener("pointercancel", (event) => {
+        seekingWithPointer = false;
+        if (scrubberEl?.hasPointerCapture(event.pointerId)) {
+            scrubberEl.releasePointerCapture(event.pointerId);
+        }
+        scrubberEl?.classList.remove("is-dragging", "is-hovered");
+        syncTimeline(currentState);
     });
-    modalEl?.addEventListener("pointermove", revealChrome);
-    videoEl?.addEventListener("click", togglePlayback);
-    document.addEventListener("keydown", (event) => {
-        if (!isOpen()) return;
-        const target = event.target as HTMLElement | null;
-        const tag = String(target?.tagName || "").toUpperCase();
-        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-        if (event.code === "Space" || event.key === " ") {
-            event.preventDefault();
-            togglePlayback();
-        } else if (event.key === "ArrowLeft") {
-            event.preventDefault();
-            seekBy(-SEEK_STEP_SECONDS);
+    scrubberEl?.addEventListener("keydown", (event) => {
+        const handled = ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key);
+        if (!handled) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!activeAdapter || currentState.duration <= 0) return;
+        if (event.key === "ArrowLeft") {
+            activeAdapter.seekRelative(-SEEK_STEP_SECONDS);
         } else if (event.key === "ArrowRight") {
-            event.preventDefault();
-            seekBy(SEEK_STEP_SECONDS);
-        } else if (event.key.toLowerCase() === "m") {
-            event.preventDefault();
-            if (activeNative?.token) {
-                void nativeMediaCommand(activeNative.token, ["cycle", "mute"]).catch((err) => {
-                    console.warn("NativeMediaCommand failed:", err);
-                });
-            } else {
-                muteBtnEl?.click();
-            }
+            activeAdapter.seekRelative(SEEK_STEP_SECONDS);
+        } else if (event.key === "Home") {
+            activeAdapter.seekAbsolute(0);
+        } else if (event.key === "End") {
+            activeAdapter.seekAbsolute(currentState.duration);
         }
     });
-    window.addEventListener("resize", scheduleNativeResize);
+}
+
+function bindVolume() {
+    muteBtnEl?.addEventListener("click", () => {
+        activeAdapter?.setMuted(!currentState.muted);
+        revealChrome();
+    });
+    volumeSliderEl?.addEventListener("pointerdown", (event) => {
+        if (!activeAdapter) return;
+        volumeDragging = true;
+        volumeSliderEl?.setPointerCapture(event.pointerId);
+        setVolumeFromPointer(event);
+    });
+    volumeSliderEl?.addEventListener("pointermove", (event) => {
+        if (!volumeDragging) return;
+        setVolumeFromPointer(event);
+    });
+    volumeSliderEl?.addEventListener("pointerup", (event) => {
+        if (!volumeDragging) return;
+        volumeDragging = false;
+        if (volumeSliderEl?.hasPointerCapture(event.pointerId)) {
+            volumeSliderEl.releasePointerCapture(event.pointerId);
+        }
+        setVolumeFromPointer(event);
+    });
+    volumeSliderEl?.addEventListener("pointercancel", (event) => {
+        volumeDragging = false;
+        if (volumeSliderEl?.hasPointerCapture(event.pointerId)) {
+            volumeSliderEl.releasePointerCapture(event.pointerId);
+        }
+    });
+    volumeSliderEl?.addEventListener("keydown", (event) => {
+        const handled = ["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp"].includes(event.key);
+        if (!handled) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (!activeAdapter) return;
+        if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+            activeAdapter.setVolume(currentState.volume - VOLUME_STEP);
+        } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+            activeAdapter.setVolume(currentState.volume + VOLUME_STEP);
+        }
+    });
+}
+
+function isSpeedMenuOpen() {
+    return Boolean(speedMenuEl?.classList.contains("is-open"));
+}
+
+function speedMenuButtons() {
+    return Array.from(speedMenuEl?.querySelectorAll<HTMLButtonElement>("[data-rate]") || []);
+}
+
+function selectedSpeedButton() {
+    return speedMenuButtons().find((button) => button.classList.contains("is-selected")) || speedMenuButtons()[0] || null;
+}
+
+function setSpeedMenuOpen(open: boolean) {
+    speedBtnEl?.setAttribute("aria-expanded", open ? "true" : "false");
+    speedMenuEl?.classList.toggle("is-open", open);
+    if (open) {
+        clearChromeTimer();
+        requestAnimationFrame(() => selectedSpeedButton()?.focus({ preventScroll: true }));
+    } else if (isOpen() && !currentState.paused && !hasError) {
+        scheduleChromeHide();
+    }
+}
+
+function closeSpeedMenu(restoreFocus = false) {
+    if (!isSpeedMenuOpen()) return;
+    setSpeedMenuOpen(false);
+    if (restoreFocus) speedBtnEl?.focus({ preventScroll: true });
+}
+
+function moveSpeedMenuFocus(delta: number) {
+    const buttons = speedMenuButtons();
+    if (buttons.length === 0) return;
+    const active = document.activeElement as HTMLButtonElement | null;
+    const current = Math.max(0, buttons.indexOf(active as HTMLButtonElement));
+    buttons[(current + delta + buttons.length) % buttons.length].focus({ preventScroll: true });
+}
+
+function bindSpeedMenu() {
+    speedBtnEl?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setSpeedMenuOpen(!isSpeedMenuOpen());
+        revealChrome();
+    });
+    speedMenuEl?.addEventListener("click", (event) => {
+        const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-rate]");
+        if (!button || !activeAdapter) return;
+        activeAdapter.setSpeed(Number(button.dataset.rate || 1));
+        closeSpeedMenu(true);
+        revealChrome();
+    });
+    speedMenuEl?.addEventListener("keydown", (event) => {
+        if (!isSpeedMenuOpen()) return;
+        if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            closeSpeedMenu(true);
+        } else if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+            event.preventDefault();
+            event.stopPropagation();
+            moveSpeedMenuFocus(1);
+        } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+            event.preventDefault();
+            event.stopPropagation();
+            moveSpeedMenuFocus(-1);
+        } else if (event.key === "Home") {
+            event.preventDefault();
+            event.stopPropagation();
+            speedMenuButtons()[0]?.focus({ preventScroll: true });
+        } else if (event.key === "End") {
+            event.preventDefault();
+            event.stopPropagation();
+            const buttons = speedMenuButtons();
+            buttons[buttons.length - 1]?.focus({ preventScroll: true });
+        } else if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            event.stopPropagation();
+            (document.activeElement as HTMLButtonElement | null)?.click();
+        }
+    });
+    document.addEventListener("click", (event) => {
+        if (!isSpeedMenuOpen()) return;
+        const target = event.target as Node | null;
+        if (target && (speedMenuEl?.contains(target) || speedBtnEl?.contains(target))) return;
+        closeSpeedMenu();
+    });
+}
+
+function targetShouldUseOwnKeyboard(target: HTMLElement | null) {
+    if (!target) return false;
+    if (target.isContentEditable) return true;
+    const tag = String(target.tagName || "").toUpperCase();
+    if (tag === "BUTTON") return true;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+    return Boolean(target.closest("#video-scrubber, #video-volume-slider, #video-speed-button, #video-speed-menu"));
+}
+
+function handleVideoShortcut(event: KeyboardEvent) {
+    if (!isOpen()) return;
+    const target = event.target as HTMLElement | null;
+    if (targetShouldUseOwnKeyboard(target)) return;
+    const key = event.key.toLowerCase();
+    if (event.code === "Space" || event.key === " " || key === "k") {
+        event.preventDefault();
+        togglePlayback();
+    } else if (event.key === "ArrowLeft" || key === "j") {
+        event.preventDefault();
+        seekBy(-SEEK_STEP_SECONDS);
+    } else if (event.key === "ArrowRight" || key === "l") {
+        event.preventDefault();
+        seekBy(SEEK_STEP_SECONDS);
+    } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        activeAdapter?.setVolume(currentState.volume + VOLUME_STEP);
+        revealChrome();
+    } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        activeAdapter?.setVolume(currentState.volume - VOLUME_STEP);
+        revealChrome();
+    } else if (key === "m") {
+        event.preventDefault();
+        activeAdapter?.setMuted(!currentState.muted);
+        revealChrome();
+    } else if (key === "f") {
+        event.preventDefault();
+        void toggleFullscreen();
+    }
+}
+
+function handleVideoPointerMove() {
+    revealChrome();
+}
+
+function targetIsVideoChrome(target: EventTarget | null) {
+    const el = target as HTMLElement | null;
+    return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading"));
+}
+
+function handleStageClick(event: MouseEvent) {
+    if (targetIsVideoChrome(event.target)) return;
+    togglePlayback();
+}
+
+function handleWindowResize() {
+    scheduleNativeResize();
+    void syncFullscreenState();
+}
+
+function bindControls() {
+    closeBtnEl?.addEventListener("click", () => void closeVideoModal());
+    centerPlayBtnEl?.addEventListener("click", togglePlayback);
+    centerSkipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
+    centerSkipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
+    skipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
+    skipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
+    playBtnEl?.addEventListener("click", togglePlayback);
+    fullscreenBtnEl?.addEventListener("click", () => void toggleFullscreen());
+    bindScrubber();
+    bindVolume();
+    bindSpeedMenu();
+    modalEl?.addEventListener("pointermove", handleVideoPointerMove);
+    stageEl?.addEventListener("click", handleStageClick);
+    document.addEventListener("keydown", handleVideoShortcut);
+    window.addEventListener("resize", handleWindowResize);
 }
 
 function renderSpeedOptions() {
-    if (!speedEl) return;
-    speedEl.innerHTML = RATE_OPTIONS.map((rate) => (
-        `<option value="${rate}"${rate === 1 ? " selected" : ""}>${rate}x</option>`
+    if (!speedMenuEl) return;
+    speedMenuEl.innerHTML = RATE_OPTIONS.map((rate) => (
+        `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}"><span class="video-speed-check" aria-hidden="true">✓</span><span>${formatRate(rate)}x</span></button>`
     )).join("");
 }
 
 export function setupVideoModal() {
     modalEl = byID("video-modal");
-    shellEl = byID("video-shell");
+    stageEl = byID("video-stage");
     filenameEl = byID("video-filename");
     metaEl = byID("video-meta");
     closeBtnEl = byID("video-close");
     nativeViewportEl = byID("video-native-viewport");
     videoEl = byID("video-player");
     loadingEl = byID("video-loading");
+    loadingStatusEl = byID("video-loading-status");
     errorEl = byID("video-error");
+    centerControlsEl = byID("video-center-controls");
+    centerPlayBtnEl = byID("video-center-play");
+    centerSkipBackBtnEl = byID("video-center-skip-back");
+    centerSkipForwardBtnEl = byID("video-center-skip-forward");
+    skipFeedbackEl = byID("video-skip-feedback");
     playBtnEl = byID("video-play");
+    skipBackBtnEl = byID("video-skip-back");
+    skipForwardBtnEl = byID("video-skip-forward");
     muteBtnEl = byID("video-mute");
-    progressEl = byID("video-progress");
-    volumeEl = byID("video-volume");
+    fullscreenBtnEl = byID("video-fullscreen");
+    scrubberEl = byID("video-scrubber");
+    scrubberPlayedEl = byID("video-scrubber-played");
+    scrubberBufferedEl = byID("video-scrubber-buffered");
+    scrubberThumbEl = byID("video-scrubber-thumb");
+    scrubberTooltipEl = byID("video-scrubber-tooltip");
+    scrubberTooltipImageEl = byID("video-scrubber-tooltip-image");
+    scrubberTooltipTimeEl = byID("video-scrubber-tooltip-time");
+	volumeSliderEl = byID("video-volume-slider");
+	volumeFillEl = byID("video-volume-fill");
+    volumeThumbEl = byID("video-volume-thumb");
     timeEl = byID("video-time");
     durationEl = byID("video-duration");
-    speedEl = byID("video-speed");
+    speedBtnEl = byID("video-speed-button");
+    speedMenuEl = byID("video-speed-menu");
 
-    if (!modalEl || !videoEl) {
-        console.error("Video modal setup failed. Missing #video-modal or #video-player.");
+    if (!modalEl || !videoEl || !stageEl) {
+        console.error("Video modal setup failed. Missing #video-modal, #video-stage, or #video-player.");
         return;
     }
     a11y = installModalA11y(modalEl, {
-        requestClose: () => void closeVideoModal(),
+        requestClose: () => {
+            if (isSpeedMenuOpen()) {
+                closeSpeedMenu(true);
+                return;
+            }
+            void closeVideoModal();
+        },
         initialFocus: () => playBtnEl || closeBtnEl,
         restoreFocus: "#file-list",
     });
     renderSpeedOptions();
     bindVideoEvents();
     bindControls();
-    syncTimeline();
-    syncVolume();
+    applyState(EMPTY_STATE);
 }

@@ -431,6 +431,7 @@ func (e *Engine) newMediaService() *media.Service {
 		DB:     backend.DB,
 		Peers:  peerResolverFn(e.ResolvePeer),
 		Ranges: ranges,
+		Thumbs: e.thumbs,
 	})
 }
 
