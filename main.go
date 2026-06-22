@@ -43,7 +43,8 @@ func main() {
 		// fully active. Without this, the default Wails behavior leaves
 		// the button visually dim until first manual resize.
 		Mac: &mac.Options{
-			TitleBar: mac.TitleBarDefault(),
+			TitleBar:             mac.TitleBarDefault(),
+			WebviewIsTransparent: true,
 		},
 	})
 	if err != nil {

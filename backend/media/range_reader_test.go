@@ -72,6 +72,35 @@ func TestRangeReaderEOFReaderAtSemantics(t *testing.T) {
 	}
 }
 
+func TestRangeReaderReadsLargeOffsetsWithoutLargeAllocation(t *testing.T) {
+	const threeGiB = int64(3) * 1024 * 1024 * 1024
+	fake := &largeSparseRangeFake{size: threeGiB + 2*int64(tgclient.RangeReadMaxBytes)}
+	reader := NewRangeReader(RangeReaderConfig{Client: fake})
+	defer reader.Close()
+
+	off := threeGiB + 33*1024
+	buf := make([]byte, 512)
+	n, err := reader.ReadStoredAt(context.Background(), fake.ref(), buf, off)
+	if err != nil {
+		t.Fatalf("ReadStoredAt: %v", err)
+	}
+	if n != len(buf) {
+		t.Fatalf("n = %d, want %d", n, len(buf))
+	}
+	for i, b := range buf {
+		if want := sparseByte(off + int64(i)); b != want {
+			t.Fatalf("buf[%d] = %d, want %d", i, b, want)
+		}
+	}
+	calls := fake.calls()
+	if len(calls) != 1 {
+		t.Fatalf("calls = %+v, want one block read", calls)
+	}
+	if calls[0].offset < threeGiB || calls[0].length != tgclient.RangeReadMaxBytes {
+		t.Fatalf("call = %+v, want one 1 MiB block beyond 3 GiB", calls[0])
+	}
+}
+
 func TestRangeReaderCachesBlocks(t *testing.T) {
 	data := testBytes(tgclient.RangeReadMaxBytes + 1)
 	fake := newStrictRangeFake(data)
@@ -375,7 +404,59 @@ func validateNormalizedRange(offset int64, length int) error {
 func testBytes(n int) []byte {
 	data := make([]byte, n)
 	for i := range data {
-		data[i] = byte((i * 31) % 251)
+		data[i] = sparseByte(int64(i))
 	}
 	return data
+}
+
+type largeSparseRangeFake struct {
+	mu      sync.Mutex
+	size    int64
+	callLog []rangeCall
+}
+
+func (f *largeSparseRangeFake) ref() tgclient.DocumentRef {
+	return tgclient.DocumentRef{
+		MsgID: 99,
+		Size:  f.size,
+		Name:  "large-video.mkv",
+	}
+}
+
+func (f *largeSparseRangeFake) ResolveDocument(context.Context, tgclient.InputPeer, int64) (tgclient.DocumentRef, error) {
+	return f.ref(), nil
+}
+
+func (f *largeSparseRangeFake) ReadDocumentRange(ctx context.Context, ref tgclient.DocumentRef, offset int64, dst []byte) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := validateNormalizedRange(offset, len(dst)); err != nil {
+		return 0, err
+	}
+	if ref.MsgID != 99 {
+		return 0, tgclient.ErrMessageNotFound
+	}
+	if offset < 0 || offset+int64(len(dst)) > f.size {
+		return 0, io.ErrUnexpectedEOF
+	}
+
+	f.mu.Lock()
+	f.callLog = append(f.callLog, rangeCall{offset: offset, length: len(dst)})
+	f.mu.Unlock()
+
+	for i := range dst {
+		dst[i] = sparseByte(offset + int64(i))
+	}
+	return len(dst), nil
+}
+
+func (f *largeSparseRangeFake) calls() []rangeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]rangeCall(nil), f.callLog...)
+}
+
+func sparseByte(offset int64) byte {
+	return byte((offset * 31) % 251)
 }

@@ -9,7 +9,7 @@ import {
     type NativeMediaOpenResult,
     type NativeMediaRect,
 } from "../../api";
-import { WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from "../../../wailsjs/runtime/runtime";
+import { EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from "../../../wailsjs/runtime/runtime";
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { installModalA11y } from "./modal-a11y";
@@ -44,6 +44,18 @@ interface PlayerState {
     muted: boolean;
     rate: number;
     loading: boolean;
+}
+
+interface NativeMediaStatePayload {
+    token?: string;
+    paused?: boolean;
+    current_time?: number;
+    duration?: number;
+    buffered?: BufferedRange[];
+    volume?: number;
+    muted?: boolean;
+    rate?: number;
+    loading?: boolean;
 }
 
 interface PlayerAdapter {
@@ -198,10 +210,19 @@ class HtmlVideoAdapter implements PlayerAdapter {
 
 class NativeMpvAdapter implements PlayerAdapter {
     private subscribers = new Set<(state: PlayerState) => void>();
-    private state = { ...EMPTY_STATE };
+    private state: PlayerState = { ...EMPTY_STATE, loading: true };
     private closed = false;
+    private unsubscribeRuntime: (() => void) | null = null;
 
-    constructor(private readonly opened: NativeMediaOpenResult) {}
+    constructor(private readonly opened: NativeMediaOpenResult) {
+        if (opened.htmlControls) {
+            this.unsubscribeRuntime = EventsOn("native_media_state", (payload: NativeMediaStatePayload) => {
+                if (this.closed || payload?.token !== this.opened.token) return;
+                this.state = nativePayloadToState(payload, this.state);
+                this.emit();
+            });
+        }
+    }
 
     subscribe(callback: (state: PlayerState) => void) {
         this.subscribers.add(callback);
@@ -214,32 +235,45 @@ class NativeMpvAdapter implements PlayerAdapter {
     }
 
     seekAbsolute(_seconds: number) {
-        // Native playback keeps mpv's own controls until we have an evented state
-        // bridge. The backend command whitelist intentionally exposes relative
-        // seeks only, so do not synthesize unsupported absolute commands here.
+        if (!this.opened.htmlControls) return;
+        void this.command(["seek", String(clamp(_seconds, 0, Math.max(0, this.state.duration || _seconds))), "absolute"]);
     }
 
     seekRelative(seconds: number) {
         void this.command(["seek", String(seconds), "relative"]);
     }
 
-    setVolume(_value: number) {
-        // Native state transport lands in the next slice; keep mpv OSC for native UI until then.
+    setVolume(value: number) {
+        if (!this.opened.htmlControls) return;
+        const next = clamp(value, 0, 1);
+        void this.command(["set", "volume", String(Math.round(next * 100))]);
+        if (next > 0) void this.command(["set", "mute", "no"]);
     }
 
-    setMuted(_value: boolean) {
-        void this.command(["cycle", "mute"]);
+    setMuted(value: boolean) {
+        if (!this.opened.htmlControls) {
+            void this.command(["cycle", "mute"]);
+            return;
+        }
+        void this.command(["set", "mute", value ? "yes" : "no"]);
     }
 
-    setSpeed(_value: number) {
-        // Native state transport lands in the next slice; keep mpv OSC for native UI until then.
+    setSpeed(value: number) {
+        if (!this.opened.htmlControls) return;
+        void this.command(["set", "speed", String(clamp(value, 0.25, 4))]);
     }
 
     async close() {
         if (this.closed) return;
         this.closed = true;
+        this.unsubscribeRuntime?.();
+        this.unsubscribeRuntime = null;
         this.subscribers.clear();
         await closeNativeMedia(this.opened.token);
+    }
+
+    private emit() {
+        for (const callback of this.subscribers) callback(this.state);
     }
 
     private async command(command: string[]) {
@@ -343,6 +377,31 @@ function bufferedRanges(video: HTMLVideoElement): BufferedRange[] {
     return ranges;
 }
 
+function nativePayloadToState(payload: NativeMediaStatePayload, previous: PlayerState): PlayerState {
+    const duration = Number(payload.duration ?? previous.duration ?? 0);
+    const currentTime = Number(payload.current_time ?? previous.currentTime ?? 0);
+    const volume = Number(payload.volume ?? previous.volume ?? 1);
+    const rate = Number(payload.rate ?? previous.rate ?? 1);
+    const buffered = Array.isArray(payload.buffered)
+        ? payload.buffered
+            .map((range) => ({
+                start: Number(range.start ?? 0),
+                end: Number(range.end ?? 0),
+            }))
+            .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+        : previous.buffered;
+    return {
+        paused: Boolean(payload.paused ?? previous.paused),
+        currentTime: clamp(currentTime, 0, Math.max(0, duration || currentTime)),
+        duration: Math.max(0, Number.isFinite(duration) ? duration : 0),
+        buffered,
+        volume: clamp(volume, 0, 1),
+        muted: Boolean(payload.muted ?? previous.muted),
+        rate: clamp(rate, 0.25, 4),
+        loading: Boolean(payload.loading ?? false),
+    };
+}
+
 // coalesceRanges clamps ranges to the known duration and merges any whose gap is
 // within BUFFERED_MERGE_GAP_SECONDS, returning a sorted, disjoint set ready to
 // paint. The native adapter can feed the same shape later from mpv's cache state.
@@ -374,11 +433,13 @@ function errorMessage(err: unknown, fallback: string) {
 
 function setChromeVisible(visible: boolean) {
     modalEl?.classList.toggle("is-video-chrome-visible", visible);
-    modalEl?.classList.toggle("is-video-cursor-hidden", !visible && !hasError && !activeNative);
+    modalEl?.classList.toggle("is-video-cursor-hidden", !visible && !hasError);
 }
 
-function setNativeMode(visible: boolean) {
+function setNativeMode(visible: boolean, fallback = false) {
     modalEl?.classList.toggle("is-video-native", visible);
+    modalEl?.classList.toggle("is-video-native-fallback", visible && fallback);
+    document.body.classList.toggle("native-video-active", visible && !fallback);
 }
 
 function fullscreenRuntimeAvailable() {
@@ -390,7 +451,7 @@ function fullscreenRuntimeAvailable() {
 }
 
 function canUseFullscreen() {
-    return Boolean(fullscreenRuntimeAvailable() && !activeNative && activeAdapter && !hasError);
+    return Boolean(fullscreenRuntimeAvailable() && activeAdapter && !hasError);
 }
 
 function applyFullscreenState(isFullscreen: boolean) {
@@ -441,7 +502,11 @@ async function toggleFullscreen() {
     } catch (err) {
         console.warn("toggle fullscreen failed:", err);
     } finally {
-        setTimeout(() => void syncFullscreenState(), 180);
+        scheduleNativeResizeAfterWindowTransition();
+        setTimeout(() => {
+            void syncFullscreenState();
+            scheduleNativeResizeAfterWindowTransition();
+        }, 180);
         revealChrome();
     }
 }
@@ -476,6 +541,14 @@ function scheduleNativeResize() {
     });
 }
 
+function scheduleNativeResizeAfterWindowTransition() {
+    if (!activeNative) return;
+    scheduleNativeResize();
+    requestAnimationFrame(scheduleNativeResize);
+    window.setTimeout(scheduleNativeResize, 180);
+    window.setTimeout(scheduleNativeResize, 420);
+}
+
 function clearChromeTimer() {
     if (!chromeHideTimer) return;
     clearTimeout(chromeHideTimer);
@@ -484,9 +557,9 @@ function clearChromeTimer() {
 
 function scheduleChromeHide() {
     clearChromeTimer();
-    if (!isOpen() || currentState.paused || hasError || activeNative || isSpeedMenuOpen()) return;
+    if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen()) return;
     chromeHideTimer = setTimeout(() => {
-        if (!isOpen() || currentState.paused || hasError || activeNative || isSpeedMenuOpen()) return;
+        if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen()) return;
         setChromeVisible(false);
     }, CHROME_HIDE_DELAY_MS);
 }
@@ -518,7 +591,7 @@ function setLoading(visible: boolean) {
 }
 
 function showSkipFeedback(delta: number) {
-    if (!skipFeedbackEl || activeNative) return;
+    if (!skipFeedbackEl) return;
     const value = Math.abs(Math.round(delta));
     const label = `${delta > 0 ? "+" : "-"}${value}s`;
     const textEl = skipFeedbackEl.querySelector("span");
@@ -609,7 +682,7 @@ function syncTransportAvailability(state: PlayerState) {
 }
 
 function syncCenterPlay(state: PlayerState) {
-    const visible = Boolean(activeAdapter && !activeNative && state.paused && !state.loading && !hasError);
+    const visible = Boolean(activeAdapter && state.paused && !state.loading && !hasError);
     modalEl?.classList.toggle("is-video-paused", visible);
     centerControlsEl?.setAttribute("aria-hidden", visible ? "false" : "true");
 }
@@ -924,14 +997,16 @@ export async function openVideoModal(target: VideoOpenTarget) {
             if (!opened.token) {
                 throw new Error("native media session did not return a token");
             }
+            setNativeMode(true, !opened.htmlControls);
             activeNative = opened;
             const displayName = opened.info.name || opened.name || target.name || "Video";
             const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
             updateMediaText(displayName, displaySize);
             const adapter = new NativeMpvAdapter(opened);
             activeAdapter = adapter;
+            activeThumbnailURL = opened.thumbnailUrl;
+            thumbnailRequestSeq += 1;
             unsubscribeState = adapter.subscribe(applyState);
-            setLoading(false);
             setChromeVisible(true);
             scheduleNativeResize();
         } catch (err: unknown) {
@@ -1123,7 +1198,7 @@ function setSpeedMenuOpen(open: boolean) {
     if (open) {
         clearChromeTimer();
         requestAnimationFrame(() => selectedSpeedButton()?.focus({ preventScroll: true }));
-    } else if (isOpen() && !currentState.paused && !hasError && !activeNative) {
+    } else if (isOpen() && !currentState.paused && !hasError) {
         scheduleChromeHide();
     }
 }
@@ -1215,11 +1290,11 @@ function handleVideoShortcut(event: KeyboardEvent) {
     } else if (event.key === "ArrowRight" || key === "l") {
         event.preventDefault();
         seekBy(SEEK_STEP_SECONDS);
-    } else if (event.key === "ArrowUp" && !activeNative) {
+    } else if (event.key === "ArrowUp") {
         event.preventDefault();
         activeAdapter?.setVolume(currentState.volume + VOLUME_STEP);
         revealChrome();
-    } else if (event.key === "ArrowDown" && !activeNative) {
+    } else if (event.key === "ArrowDown") {
         event.preventDefault();
         activeAdapter?.setVolume(currentState.volume - VOLUME_STEP);
         revealChrome();
@@ -1237,7 +1312,13 @@ function handleVideoPointerMove() {
     revealChrome();
 }
 
-function handleVideoClick() {
+function targetIsVideoChrome(target: EventTarget | null) {
+    const el = target as HTMLElement | null;
+    return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading"));
+}
+
+function handleStageClick(event: MouseEvent) {
+    if (targetIsVideoChrome(event.target)) return;
     togglePlayback();
 }
 
@@ -1259,7 +1340,7 @@ function bindControls() {
     bindVolume();
     bindSpeedMenu();
     modalEl?.addEventListener("pointermove", handleVideoPointerMove);
-    videoEl?.addEventListener("click", handleVideoClick);
+    stageEl?.addEventListener("click", handleStageClick);
     document.addEventListener("keydown", handleVideoShortcut);
     window.addEventListener("resize", handleWindowResize);
 }
