@@ -49,7 +49,7 @@ func (a *App) OpenNativeMedia(msgID int, rect nativeplayer.Rect) (NativeMediaRes
 	}
 
 	token := opened.Token
-	htmlControls := nativeHTMLControlsEnabled()
+	htmlControls := nativeHTMLControlsEnabled() && nativeplayer.SupportsHTMLControls()
 	opts := nativeplayer.Options{UseHTMLControls: htmlControls}
 	if htmlControls {
 		opts.OnState = func(state nativeplayer.State) {

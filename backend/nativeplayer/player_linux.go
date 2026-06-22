@@ -305,7 +305,7 @@ type Player struct {
 	closeOnce sync.Once
 }
 
-func Start(ctx context.Context, url string, rect Rect) (*Player, error) {
+func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
 	if !linuxNativePlayerEnabled() {
 		return nil, ErrUnsupported
 	}
