@@ -8,12 +8,15 @@ package nativeplayer
 #cgo darwin pkg-config: mpv
 
 #import <Cocoa/Cocoa.h>
+#import <math.h>
 #import <OpenGL/gl3.h>
 #import <QuartzCore/QuartzCore.h>
 #import <dispatch/dispatch.h>
 #import <mpv/client.h>
 #import <mpv/render.h>
 #import <mpv/render_gl.h>
+#import <stdint.h>
+#import <string.h>
 
 static void *tdrive_gl_get_proc_address(void *ctx, const char *name) {
     CFStringRef symbol = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingASCII);
@@ -22,14 +25,56 @@ static void *tdrive_gl_get_proc_address(void *ctx, const char *name) {
     return addr;
 }
 
+typedef struct {
+    double time_pos;
+    double duration;
+    double volume;
+    double speed;
+    double cache_duration;
+    int64_t cache_buffering_state;
+    int paused;
+    int muted;
+    int paused_for_cache;
+    int eof_reached;
+    int has_time_pos;
+    int has_duration;
+    int has_cache_duration;
+} tdrive_player_state;
+
+static int tdrive_mpv_get_double(mpv_handle *mpv, const char *name, double *out) {
+    double value = 0;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_DOUBLE, &value) < 0 || !isfinite(value)) {
+        return 0;
+    }
+    *out = value;
+    return 1;
+}
+
+static int tdrive_mpv_get_flag(mpv_handle *mpv, const char *name) {
+    int value = 0;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_FLAG, &value) < 0) {
+        return 0;
+    }
+    return value != 0;
+}
+
+static int64_t tdrive_mpv_get_int64(mpv_handle *mpv, const char *name) {
+    int64_t value = 0;
+    if (mpv_get_property(mpv, name, MPV_FORMAT_INT64, &value) < 0) {
+        return 0;
+    }
+    return value;
+}
+
 @interface TDriveMPVView : NSOpenGLView {
     mpv_handle *_mpv;
     mpv_render_context *_render;
     BOOL _closed;
 }
-- (BOOL)startWithURL:(NSString *)url;
+- (BOOL)startWithURL:(NSString *)url htmlControls:(BOOL)htmlControls;
 - (void)shutdown;
 - (int)sendCommand:(int)argc argv:(const char **)argv;
+- (BOOL)snapshot:(tdrive_player_state *)state;
 @end
 
 static void tdrive_mpv_render_update(void *ctx) {
@@ -63,7 +108,7 @@ static void tdrive_mpv_render_update(void *ctx) {
     return self;
 }
 
-- (BOOL)startWithURL:(NSString *)url {
+- (BOOL)startWithURL:(NSString *)url htmlControls:(BOOL)htmlControls {
     _mpv = mpv_create();
     if (_mpv == NULL) {
         return NO;
@@ -75,8 +120,12 @@ static void tdrive_mpv_render_update(void *ctx) {
 	mpv_set_option_string(_mpv, "vo", "libmpv");
 	mpv_set_option_string(_mpv, "ytdl", "no");
 	mpv_set_option_string(_mpv, "hwdec", "auto-safe");
-	mpv_set_option_string(_mpv, "osc", "yes");
-	mpv_set_option_string(_mpv, "osd-bar", "yes");
+	mpv_set_option_string(_mpv, "cache", "yes");
+	mpv_set_option_string(_mpv, "demuxer-readahead-secs", "20");
+	mpv_set_option_string(_mpv, "demuxer-max-bytes", "67108864");
+	mpv_set_option_string(_mpv, "demuxer-max-back-bytes", "33554432");
+	mpv_set_option_string(_mpv, "osc", htmlControls ? "no" : "yes");
+	mpv_set_option_string(_mpv, "osd-bar", htmlControls ? "no" : "yes");
 
     if (mpv_initialize(_mpv) < 0) {
         return NO;
@@ -142,6 +191,27 @@ static void tdrive_mpv_render_update(void *ctx) {
     return mpv_command_async(_mpv, 0, argv);
 }
 
+- (BOOL)snapshot:(tdrive_player_state *)state {
+    if (_closed || _mpv == NULL || state == NULL) {
+        return NO;
+    }
+
+    memset(state, 0, sizeof(tdrive_player_state));
+    state->paused = tdrive_mpv_get_flag(_mpv, "pause");
+    state->muted = tdrive_mpv_get_flag(_mpv, "mute");
+    state->paused_for_cache = tdrive_mpv_get_flag(_mpv, "paused-for-cache");
+    state->eof_reached = tdrive_mpv_get_flag(_mpv, "eof-reached");
+    state->cache_buffering_state = tdrive_mpv_get_int64(_mpv, "cache-buffering-state");
+    state->volume = 100.0;
+    state->speed = 1.0;
+    tdrive_mpv_get_double(_mpv, "volume", &state->volume);
+    tdrive_mpv_get_double(_mpv, "speed", &state->speed);
+    state->has_time_pos = tdrive_mpv_get_double(_mpv, "time-pos", &state->time_pos);
+    state->has_duration = tdrive_mpv_get_double(_mpv, "duration", &state->duration);
+    state->has_cache_duration = tdrive_mpv_get_double(_mpv, "demuxer-cache-duration", &state->cache_duration);
+    return YES;
+}
+
 - (void)shutdown {
     if (_closed) {
         return;
@@ -189,7 +259,7 @@ static NSRect tdrive_player_frame(NSView *content, double x, double y, double w,
     return NSMakeRect(x, bottomY, w, h);
 }
 
-static void* tdrive_player_create_view(const char *rawURL, double x, double y, double w, double h) {
+static void* tdrive_player_create_view(const char *rawURL, double x, double y, double w, double h, int htmlControls) {
     if (rawURL == NULL) {
         return nil;
     }
@@ -206,13 +276,13 @@ static void* tdrive_player_create_view(const char *rawURL, double x, double y, d
         }
         NSRect frame = tdrive_player_frame(content, x, y, w, h);
         view = [[TDriveMPVView alloc] initWithFrame:frame];
-        if (view == nil || ![view startWithURL:url]) {
+        if (view == nil || ![view startWithURL:url htmlControls:(htmlControls != 0)]) {
             [view release];
             view = nil;
             return;
         }
         [view setAutoresizingMask:0];
-        [content addSubview:view positioned:NSWindowAbove relativeTo:nil];
+        [content addSubview:view positioned:(htmlControls ? NSWindowBelow : NSWindowAbove) relativeTo:nil];
     };
     if ([NSThread isMainThread]) {
         create();
@@ -259,6 +329,14 @@ static int tdrive_player_command(void *ptr, int argc, const char **argv) {
     return result;
 }
 
+static int tdrive_player_snapshot(void *ptr, tdrive_player_state *state) {
+    if (ptr == nil || state == NULL) {
+        return 0;
+    }
+    TDriveMPVView *view = (TDriveMPVView *)ptr;
+    return [view snapshot:state] ? 1 : 0;
+}
+
 static void tdrive_player_destroy_view(void *ptr) {
     if (ptr == nil) {
         return;
@@ -281,27 +359,50 @@ import "C"
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
+	"time"
 	"unsafe"
 )
 
+const statePollInterval = 250 * time.Millisecond
+
 type Player struct {
-	mu     sync.Mutex
-	view   unsafe.Pointer
-	closed bool
+	mu      sync.Mutex
+	view    unsafe.Pointer
+	closed  bool
+	cancel  context.CancelFunc
+	done    chan struct{}
+	onState StateHandler
 }
 
-func Start(ctx context.Context, url string, rect Rect) (*Player, error) {
+func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
 	if !rect.Valid() {
 		return nil, fmt.Errorf("native player: invalid view rect")
 	}
 	rawURL := C.CString(url)
 	defer C.free(unsafe.Pointer(rawURL))
-	view := C.tdrive_player_create_view(rawURL, C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height))
+	htmlControls := 0
+	if opts.UseHTMLControls {
+		htmlControls = 1
+	}
+	view := C.tdrive_player_create_view(rawURL, C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height), C.int(htmlControls))
 	if view == nil {
 		return nil, fmt.Errorf("native player: could not start libmpv view")
 	}
-	return &Player{view: view}, nil
+	runCtx, cancel := context.WithCancel(ctx)
+	p := &Player{
+		view:    view,
+		cancel:  cancel,
+		done:    make(chan struct{}),
+		onState: opts.OnState,
+	}
+	if p.onState != nil {
+		go p.streamState(runCtx)
+	} else {
+		close(p.done)
+	}
+	return p, nil
 }
 
 func (p *Player) Resize(rect Rect) error {
@@ -312,13 +413,11 @@ func (p *Player) Resize(rect Rect) error {
 		return fmt.Errorf("native player: invalid view rect")
 	}
 	p.mu.Lock()
-	view := p.view
-	closed := p.closed
-	p.mu.Unlock()
-	if closed || view == nil {
+	defer p.mu.Unlock()
+	if p.closed || p.view == nil {
 		return nil
 	}
-	C.tdrive_player_set_frame(view, C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height))
+	C.tdrive_player_set_frame(p.view, C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height))
 	return nil
 }
 
@@ -327,10 +426,8 @@ func (p *Player) Command(command ...string) error {
 		return nil
 	}
 	p.mu.Lock()
-	view := p.view
-	closed := p.closed
-	p.mu.Unlock()
-	if closed || view == nil {
+	defer p.mu.Unlock()
+	if p.closed || p.view == nil {
 		return nil
 	}
 
@@ -345,7 +442,7 @@ func (p *Player) Command(command ...string) error {
 			}
 		}
 	}()
-	if rc := C.tdrive_player_command(view, C.int(len(command)), (**C.char)(unsafe.Pointer(&cStrings[0]))); rc < 0 {
+	if rc := C.tdrive_player_command(p.view, C.int(len(command)), (**C.char)(unsafe.Pointer(&cStrings[0]))); rc < 0 {
 		return fmt.Errorf("native player: libmpv command failed: %d", int(rc))
 	}
 	return nil
@@ -354,6 +451,15 @@ func (p *Player) Command(command ...string) error {
 func (p *Player) Close() error {
 	if p == nil {
 		return nil
+	}
+	if p.cancel != nil {
+		p.cancel()
+	}
+	if p.done != nil {
+		select {
+		case <-p.done:
+		case <-time.After(time.Second):
+		}
 	}
 	p.mu.Lock()
 	if p.closed {
@@ -368,4 +474,109 @@ func (p *Player) Close() error {
 		C.tdrive_player_destroy_view(view)
 	}
 	return nil
+}
+
+func (p *Player) streamState(ctx context.Context) {
+	defer close(p.done)
+	p.emitState()
+	ticker := time.NewTicker(statePollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.emitState()
+		}
+	}
+}
+
+func (p *Player) emitState() {
+	if p == nil || p.onState == nil {
+		return
+	}
+	state, ok := p.State()
+	if !ok {
+		return
+	}
+	p.onState(state)
+}
+
+func (p *Player) State() (State, bool) {
+	if p == nil {
+		return State{}, false
+	}
+	var raw C.tdrive_player_state
+	p.mu.Lock()
+	if p.closed || p.view == nil {
+		p.mu.Unlock()
+		return State{}, false
+	}
+	ok := C.tdrive_player_snapshot(p.view, &raw) != 0
+	p.mu.Unlock()
+	if !ok {
+		return State{}, false
+	}
+
+	currentTime := cleanSeconds(float64(raw.time_pos), raw.has_time_pos != 0)
+	duration := cleanSeconds(float64(raw.duration), raw.has_duration != 0)
+	volume := clampFloat(float64(raw.volume)/100, 0, 1)
+	rate := clampFloat(float64(raw.speed), 0.25, 4)
+	if rate == 0 {
+		rate = 1
+	}
+	paused := raw.paused != 0 || raw.eof_reached != 0
+	if raw.eof_reached != 0 && duration > 0 {
+		currentTime = duration
+	}
+
+	state := State{
+		Paused:      paused,
+		CurrentTime: clampFloat(currentTime, 0, maxPositive(duration, currentTime)),
+		Duration:    duration,
+		Volume:      volume,
+		Muted:       raw.muted != 0 || volume == 0,
+		Rate:        rate,
+		Loading:     raw.paused_for_cache != 0 || (!paused && raw.cache_buffering_state > 0 && raw.cache_buffering_state < 100),
+	}
+	if duration > 0 && raw.has_cache_duration != 0 {
+		cacheDuration := cleanSeconds(float64(raw.cache_duration), true)
+		if cacheDuration > 0 {
+			state.Buffered = []BufferedRange{{
+				Start: clampFloat(state.CurrentTime, 0, duration),
+				End:   clampFloat(state.CurrentTime+cacheDuration, 0, duration),
+			}}
+		}
+	}
+	return state, true
+}
+
+func cleanSeconds(value float64, ok bool) float64 {
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0
+	}
+	return value
+}
+
+func clampFloat(value, min, max float64) float64 {
+	if max < min {
+		max = min
+	}
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func maxPositive(values ...float64) float64 {
+	var max float64
+	for _, value := range values {
+		if value > max {
+			max = value
+		}
+	}
+	return max
 }

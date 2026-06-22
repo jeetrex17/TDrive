@@ -55,6 +55,8 @@ export interface NativeMediaRect {
 
 export interface NativeMediaOpenResult {
     token: string;
+    thumbnailUrl: string;
+    htmlControls: boolean;
     name: string;
     info: MediaOpenInfo;
 }
@@ -177,6 +179,8 @@ export async function openNativeMedia(msgId: number, rect: NativeMediaRect): Pro
     const info: media.LogicalFile | undefined = opened?.info;
     return {
         token: String(opened?.token ?? ""),
+        thumbnailUrl: String(opened?.thumbnail_url ?? ""),
+        htmlControls: Boolean(opened?.html_controls),
         name: String(opened?.name ?? ""),
         info: {
             channelId: Number(info?.channel_id ?? 0),

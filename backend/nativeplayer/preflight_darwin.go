@@ -4,19 +4,23 @@ package nativeplayer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
-const preflightTimeout = 6 * time.Second
+const preflightTimeout = 12 * time.Second
 
 // PreflightDecode decodes a tiny prefix in a separate process before libmpv is
 // loaded in-process. A bad system decoder can segfault; doing the first probe
 // out-of-process keeps TDrive alive and turns that class of failure into a
-// normal playback error.
+// normal playback error. The probe is deliberately best-effort for remote media:
+// timeouts and ordinary decoder exits are not treated as unsafe because Telegram
+// range latency can make a healthy file look like a failed probe.
 func PreflightDecode(ctx context.Context, url string) error {
 	if os.Getenv("TDRIVE_SKIP_MPV_PREFLIGHT") == "1" {
 		return nil
@@ -45,14 +49,35 @@ func PreflightDecode(ctx context.Context, url string) error {
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		if runCtx.Err() != nil {
-			return fmt.Errorf("%w: timed out", ErrDecoderUnsafe)
+			return nil
 		}
-		if len(output) > 0 {
-			return fmt.Errorf("%w: %v: %s", ErrDecoderUnsafe, err, string(output))
+		if sig, crashed := decoderCrashSignal(err); crashed {
+			if len(output) > 0 {
+				return fmt.Errorf("%w: %s: %s", ErrDecoderUnsafe, sig, string(output))
+			}
+			return fmt.Errorf("%w: %s", ErrDecoderUnsafe, sig)
 		}
-		return fmt.Errorf("%w: %v", ErrDecoderUnsafe, err)
+		return nil
 	}
 	return nil
+}
+
+func decoderCrashSignal(err error) (syscall.Signal, bool) {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 0, false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return 0, false
+	}
+	sig := status.Signal()
+	switch sig {
+	case syscall.SIGABRT, syscall.SIGBUS, syscall.SIGFPE, syscall.SIGILL, syscall.SIGSEGV, syscall.SIGTRAP:
+		return sig, true
+	default:
+		return 0, false
+	}
 }
 
 func findPreflightMPV() (string, error) {
