@@ -429,6 +429,54 @@ WHERE files.channel_id = ? AND files.tombstoned = 0;
 	return total, err
 }
 
+// ChildFolderSizes returns the recursive byte size for every direct child
+// folder under parentID. It performs one subtree walk for the visible folder
+// set instead of one recursive CTE per row in the UI.
+func ChildFolderSizes(db *sql.DB, channelID int64, parentID string) (map[string]int64, error) {
+	const q = `
+WITH RECURSIVE
+child_roots(id) AS (
+    SELECT id
+    FROM folders
+    WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
+),
+descendants(root_id, id, path) AS (
+    SELECT id, id, ',' || id || ','
+    FROM child_roots
+    UNION ALL
+    SELECT d.root_id, f.id, d.path || f.id || ','
+    FROM folders f
+    JOIN descendants d ON f.parent_id = d.id
+    WHERE f.channel_id = ?
+      AND f.tombstoned = 0
+      AND instr(d.path, ',' || f.id || ',') = 0
+)
+SELECT cr.id, COALESCE(SUM(files.size), 0)
+FROM child_roots cr
+LEFT JOIN descendants d ON d.root_id = cr.id
+LEFT JOIN files ON files.channel_id = ?
+    AND files.parent_id = d.id
+    AND files.tombstoned = 0
+GROUP BY cr.id;
+`
+	rows, err := db.Query(q, channelID, parentID, channelID, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var id string
+		var size int64
+		if err := rows.Scan(&id, &size); err != nil {
+			return nil, err
+		}
+		out[id] = size
+	}
+	return out, rows.Err()
+}
+
 func FolderExists(db *sql.DB, channelID int64, folderID string) bool {
 	var tmp int
 	err := db.QueryRow(`

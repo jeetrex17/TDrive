@@ -610,6 +610,10 @@ func (a *App) GetFolderSize(folderID string) (int64, error) {
 	return a.readService().FolderSize(a.ActiveChannelID(), folderID)
 }
 
+func (a *App) GetFolderSizes(parentID string) (map[string]int64, error) {
+	return a.readService().ChildFolderSizes(a.ActiveChannelID(), parentID)
+}
+
 func (a *App) DeleteFolder(folderID string) string {
 	if err := a.folderService().Delete(a.ctx, a.ActiveChannelID(), folderID); err != nil {
 		return "Error: " + err.Error()

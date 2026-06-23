@@ -52,11 +52,15 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		segments:  copied,
 		lastTouch: time.Now(),
 	}
-	s.reader = NewRangeReader(RangeReaderConfig{Client: ranges})
+	s.reader = NewRangeReader(RangeReaderConfig{
+		Client:         ranges,
+		PrefetchBlocks: 2,
+	})
 	s.thumbReader = NewRangeReader(RangeReaderConfig{
 		Client:         ranges,
 		MaxCacheBytes:  8 * 1024 * 1024,
 		MaxConcurrency: 3,
+		Background:     true,
 		OnFloodWait: func(wait time.Duration) {
 			if s.thumbs != nil {
 				s.thumbs.NoteFloodWait(wait)
@@ -174,11 +178,11 @@ func (s *Session) Thumbnail(ctx context.Context, seconds float64) ([]byte, error
 	return s.thumbs.Get(ctx, seconds)
 }
 
-func (s *Session) UpdatePlayback(currentTime, duration float64, busy bool) {
+func (s *Session) UpdatePlayback(currentTime, duration, bufferAhead float64) {
 	if s == nil || s.thumbs == nil {
 		return
 	}
-	s.thumbs.UpdatePlayback(currentTime, duration, busy)
+	s.thumbs.UpdatePlayback(currentTime, duration, bufferAhead)
 }
 
 func (s *Session) Stats() MediaStats {

@@ -166,6 +166,11 @@ type Client interface {
 	// optional; callers can use it to surface transfer progress.
 	DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error
 
+	// DownloadFileAt downloads a Telegram document into w using random-access
+	// writes starting at baseOffset. It may fetch chunks concurrently; callers
+	// that need append/order semantics must use DownloadFile instead.
+	DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, w io.WriterAt, baseOffset int64, onProgress func(done, total int64)) error
+
 	// DownloadFileThumbnail streams a Telegram document thumbnail into w.
 	DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error
 

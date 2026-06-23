@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"sync"
 	"time"
 
 	"TDrive/backend/tgclient"
@@ -45,6 +46,16 @@ type RangeReaderConfig struct {
 	// OnFloodWait, when set, is called before sleeping for a Telegram
 	// FLOOD_WAIT. It is a logging/progress hook; nil is fine.
 	OnFloodWait func(wait time.Duration)
+
+	// PrefetchBlocks asynchronously warms this many sequential 1 MiB blocks
+	// after a foreground read. 0 disables prefetching.
+	PrefetchBlocks int
+
+	// Background routes this reader's fetches through the shared background getFile
+	// pool instead of the foreground playback reserve. Set it for non-playback
+	// readers (such as the thumbnail reader) so their reads yield to live
+	// playback. Prefetch fetches are always treated as background regardless.
+	Background bool
 }
 
 // RangeReader turns arbitrary app byte reads into Telegram-compatible block
@@ -58,6 +69,10 @@ type RangeReader struct {
 	meter            *throughputMeter
 	sem              chan struct{}
 	group            singleflight.Group
+	prefetchMu       sync.Mutex
+	prefetching      map[string]struct{}
+	prefetchBlocks   int
+	background       bool
 	floodWaitRetries int
 	floodWaitMax     time.Duration
 	onFloodWait      func(time.Duration)
@@ -92,6 +107,9 @@ func NewRangeReader(cfg RangeReaderConfig) *RangeReader {
 		cache:            newBlockCache(maxCache),
 		meter:            newThroughputMeter(),
 		sem:              make(chan struct{}, concurrency),
+		prefetching:      make(map[string]struct{}),
+		prefetchBlocks:   cfg.PrefetchBlocks,
+		background:       cfg.Background,
 		floodWaitRetries: retries,
 		floodWaitMax:     maxSleep,
 		onFloodWait:      cfg.OnFloodWait,
@@ -144,7 +162,7 @@ func (r *RangeReader) ReadStoredAt(ctx context.Context, ref tgclient.DocumentRef
 		}
 		absolute := off + int64(done)
 		blockStart := blockStartFor(absolute)
-		block, err := r.block(ctx, ref, blockStart)
+		block, err := r.block(ctx, ref, blockStart, r.background)
 		if err != nil {
 			if done > 0 {
 				return done, err
@@ -162,12 +180,52 @@ func (r *RangeReader) ReadStoredAt(ctx context.Context, ref tgclient.DocumentRef
 		done += n
 	}
 	if done < len(p) {
+		r.prefetchAfter(ref, off+int64(done))
 		return done, io.EOF
 	}
+	r.prefetchAfter(ref, off+int64(done))
 	return done, nil
 }
 
-func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, blockStart int64) ([]byte, error) {
+func (r *RangeReader) prefetchAfter(ref tgclient.DocumentRef, nextOffset int64) {
+	if r == nil || r.prefetchBlocks <= 0 || nextOffset <= 0 || nextOffset >= ref.Size {
+		return
+	}
+	nextBlock := blockStartFor(nextOffset)
+	if nextBlock < nextOffset {
+		nextBlock += rangeUploadBoundary
+	}
+	for i := 0; i < r.prefetchBlocks && nextBlock < ref.Size; i++ {
+		r.prefetchBlock(ref, nextBlock)
+		nextBlock += rangeUploadBoundary
+	}
+}
+
+func (r *RangeReader) prefetchBlock(ref tgclient.DocumentRef, blockStart int64) {
+	key := blockKey(ref, blockStart)
+	if _, ok := r.cache.get(key); ok {
+		return
+	}
+	r.prefetchMu.Lock()
+	if _, ok := r.prefetching[key]; ok {
+		r.prefetchMu.Unlock()
+		return
+	}
+	r.prefetching[key] = struct{}{}
+	r.prefetchMu.Unlock()
+
+	go func() {
+		defer func() {
+			r.prefetchMu.Lock()
+			delete(r.prefetching, key)
+			r.prefetchMu.Unlock()
+		}()
+		// Prefetch is speculative read-ahead, so it always yields to live playback.
+		_, _ = r.block(r.ctx, ref, blockStart, true)
+	}()
+}
+
+func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, blockStart int64, background bool) ([]byte, error) {
 	key := blockKey(ref, blockStart)
 	if data, ok := r.cache.get(key); ok {
 		return data, nil
@@ -180,7 +238,7 @@ func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, block
 		// The shared fetch is tied to the reader lifetime, not the first
 		// caller's request context. Otherwise one aborted HTTP request could
 		// poison coalesced waiters for the same block.
-		data, err := r.fetchBlock(r.ctx, ref, blockStart)
+		data, err := r.fetchBlock(r.ctx, ref, blockStart, background)
 		if err != nil {
 			return nil, err
 		}
@@ -203,7 +261,7 @@ func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, block
 	}
 }
 
-func (r *RangeReader) fetchBlock(ctx context.Context, ref tgclient.DocumentRef, blockStart int64) ([]byte, error) {
+func (r *RangeReader) fetchBlock(ctx context.Context, ref tgclient.DocumentRef, blockStart int64, background bool) ([]byte, error) {
 	limit := blockLimit(ref.Size, blockStart)
 	if limit <= 0 {
 		return nil, io.EOF
@@ -214,7 +272,13 @@ func (r *RangeReader) fetchBlock(ctx context.Context, ref tgclient.DocumentRef, 
 		if err := r.acquire(ctx); err != nil {
 			return nil, err
 		}
+		releaseGetFile, err := acquireGetFileSlot(ctx, background)
+		if err != nil {
+			r.release()
+			return nil, err
+		}
 		n, err := r.client.ReadDocumentRange(ctx, ref, blockStart, buf)
+		releaseGetFile()
 		r.release()
 		if n > 0 && r.meter != nil {
 			r.meter.Add(n)
@@ -257,6 +321,16 @@ func (r *RangeReader) acquire(ctx context.Context) error {
 
 func (r *RangeReader) release() {
 	<-r.sem
+}
+
+// acquireGetFileSlot reserves one global getFile slot. Background reads (the
+// thumbnail reader and all prefetch) go through the background pool so they yield
+// to foreground playback, which keeps its reserved headroom.
+func acquireGetFileSlot(ctx context.Context, background bool) (func(), error) {
+	if background {
+		return tgclient.AcquireBackgroundGetFileSlots(ctx, 1)
+	}
+	return tgclient.AcquireGetFileSlots(ctx, 1)
 }
 
 func blockStartFor(off int64) int64 {

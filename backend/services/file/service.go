@@ -631,7 +631,7 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 	}()
 
 	if !encrypted {
-		if err := s.TG.DownloadFile(ctx, peer, int64(msgID), finalTmp, s.downloadProgress(doc.Size)); err != nil {
+		if err := s.TG.DownloadFileAt(ctx, peer, int64(msgID), finalTmp, 0, s.downloadProgress(doc.Size)); err != nil {
 			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 		}
 	} else {
@@ -643,7 +643,7 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 			_ = cipher.Close()
 			_ = os.Remove(cipher.Name())
 		}()
-		if err := s.TG.DownloadFile(ctx, peer, int64(msgID), cipher, s.downloadProgress(doc.Size)); err != nil {
+		if err := s.TG.DownloadFileAt(ctx, peer, int64(msgID), cipher, 0, s.downloadProgress(doc.Size)); err != nil {
 			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 		}
 		if _, err := cipher.Seek(0, io.SeekStart); err != nil {
@@ -723,9 +723,10 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 	}
 	progress := s.downloadProgress(totalStored)
 
-	// downloadParts streams every part in order into dst, reporting aggregate
-	// progress by offsetting each part's bytes by the bytes already written.
-	downloadParts := func(dst io.Writer) error {
+	// downloadPartsOrdered streams every part in order into dst. The encrypted
+	// path depends on this exact ordering because DecryptStream consumes one
+	// concatenated ciphertext stream.
+	downloadPartsOrdered := func(dst io.Writer) error {
 		var base int64
 		for _, p := range parts {
 			startBase := base
@@ -739,14 +740,87 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 		return nil
 	}
 
+	downloadPartsAt := func(dst io.WriterAt) error {
+		const partConcurrency = 2
+
+		partOffsets := make([]int64, len(parts))
+		var off int64
+		for i, p := range parts {
+			partOffsets[i] = off
+			off += p.Size
+		}
+
+		dlCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		sem := make(chan struct{}, partConcurrency)
+		errCh := make(chan error, len(parts))
+		var wg sync.WaitGroup
+		var progressMu sync.Mutex
+		partDone := make([]int64, len(parts))
+
+		report := func(i int, done int64) {
+			if done < 0 {
+				done = 0
+			}
+			if done > parts[i].Size {
+				done = parts[i].Size
+			}
+			progressMu.Lock()
+			if done > partDone[i] {
+				partDone[i] = done
+				var totalDone int64
+				for _, n := range partDone {
+					totalDone += n
+				}
+				progress(totalDone, totalStored)
+			}
+			progressMu.Unlock()
+		}
+
+		for i, part := range parts {
+			i, part := i, part
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+				case <-dlCtx.Done():
+					return
+				}
+				defer func() { <-sem }()
+
+				if err := s.TG.DownloadFileAt(dlCtx, peer, part.MsgID, dst, partOffsets[i], func(partDone, _ int64) {
+					report(i, partDone)
+				}); err != nil {
+					errCh <- err
+					cancel()
+					return
+				}
+				report(i, part.Size)
+			}()
+		}
+
+		wg.Wait()
+		close(errCh)
+		if err, ok := <-errCh; ok {
+			return err
+		}
+		progress(totalStored, totalStored)
+		return nil
+	}
+
 	if !encrypted {
-		if err := downloadParts(finalTmp); err != nil {
+		if err := finalTmp.Truncate(totalStored); err != nil {
+			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+		}
+		if err := downloadPartsAt(finalTmp); err != nil {
 			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 		}
 	} else {
 		pr, pw := io.Pipe()
 		go func() {
-			_ = pw.CloseWithError(downloadParts(pw))
+			_ = pw.CloseWithError(downloadPartsOrdered(pw))
 		}()
 		if _, err := tdcrypto.DecryptStream(pr, finalTmp, masterKey); err != nil {
 			_ = pr.CloseWithError(err)

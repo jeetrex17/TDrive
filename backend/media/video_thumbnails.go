@@ -29,6 +29,35 @@ const (
 	videoThumbDirMode          = 0o700
 	videoThumbFileMode         = 0o600
 	videoThumbMime             = "image/jpeg"
+
+	// Playback-buffer watermarks (seconds ahead of the playhead) govern how much
+	// the background thumbnail builder may steal from the shared pipe. Foreground
+	// playback reads are already reserved at the limiter; these bands keep the
+	// *background* precompute from competing while the buffer is at risk.
+	//
+	// HealthyStart/HealthyStop form a hysteresis band so precompute does not flap:
+	// it ramps to full speed at HealthyStart and keeps going until the buffer
+	// drains below HealthyStop. Below Emergency even the hovered thumbnail defers
+	// so playback can refill.
+	thumbBufferHealthyStart = 30.0
+	thumbBufferHealthyStop  = 20.0
+	thumbBufferEmergency    = 8.0
+
+	// thumbPrecomputeAging lets one background bucket through this often even while
+	// the buffer is only in the mid band, so a slow connection still builds the
+	// track instead of stalling at zero.
+	thumbPrecomputeAging = 3 * time.Second
+
+	// precomputeCoarseFactor sets the coarse precompute grid as a multiple of the
+	// fine interval. The builder fills the coarse grid across the whole timeline
+	// first (so the entire scrubber has a preview quickly), then refines.
+	precomputeCoarseFactor = 4
+
+	// precomputeAnchorCount is the number of evenly-spaced "anchor" thumbnails the
+	// builder lays down across the whole timeline before anything else, so even a
+	// multi-hour movie has a sparse full-bar preview within the first few seconds.
+	// Anchors fall on the coarse grid; the coarse and fine passes fill in between.
+	precomputeAnchorCount = 16
 )
 
 var errThumbnailSessionDead = errors.New("media: thumbnail session dead")
@@ -63,20 +92,23 @@ type videoThumbnailer struct {
 	precomputeWake chan struct{}
 	wg             sync.WaitGroup
 
-	mu                sync.Mutex
-	ready             map[int]string
-	latest            int
-	hasLatest         bool
-	inflight          map[int]struct{}
-	failed            map[int]time.Time
-	instrumentLog     bool
-	persistent        VideoThumbnailSession
-	persistentOff     bool
-	playbackTime      float64
-	playbackDuration  float64
-	playerBusy        bool
-	thumbBackoffUntil time.Time
-	lastStatsLog      time.Time
+	mu                  sync.Mutex
+	ready               map[int]string
+	latest              int
+	hasLatest           bool
+	inflight            map[int]struct{}
+	failed              map[int]time.Time
+	instrumentLog       bool
+	persistent          VideoThumbnailSession
+	persistentOff       bool
+	playbackTime        float64
+	playbackDuration    float64
+	playbackBufferAhead float64   // seconds buffered ahead of the playhead
+	playbackKnown       bool      // false until the first UpdatePlayback signal
+	precomputeFullSpeed bool      // hysteresis latch for the healthy buffer band
+	lastPrecomputeAt    time.Time // aging floor: last background bucket generated
+	thumbBackoffUntil   time.Time
+	lastStatsLog        time.Time
 }
 
 func newVideoThumbnailer(session *Session, cache *thumbnail.Cache, generator VideoThumbnailGenerator) *videoThumbnailer {
@@ -118,7 +150,7 @@ func (t *videoThumbnailer) Get(ctx context.Context, seconds float64) ([]byte, er
 	return nil, ErrThumbnailPending
 }
 
-func (t *videoThumbnailer) UpdatePlayback(currentTime, duration float64, busy bool) {
+func (t *videoThumbnailer) UpdatePlayback(currentTime, duration, bufferAhead float64) {
 	if t == nil {
 		return
 	}
@@ -131,14 +163,25 @@ func (t *videoThumbnailer) UpdatePlayback(currentTime, duration float64, busy bo
 	if duration > 0 && currentTime > duration {
 		currentTime = duration
 	}
+	if !isFiniteNonNegative(bufferAhead) {
+		bufferAhead = 0
+	}
 	t.mu.Lock()
 	t.playbackTime = currentTime
 	t.playbackDuration = duration
-	t.playerBusy = busy
-	t.mu.Unlock()
-	if !busy {
-		t.wakePrecompute()
+	t.playbackBufferAhead = bufferAhead
+	t.playbackKnown = true
+	// Hysteresis: ramp precompute to full speed once the buffer is comfortable and
+	// hold it there until the buffer drains past the lower watermark.
+	if bufferAhead >= thumbBufferHealthyStart {
+		t.precomputeFullSpeed = true
+	} else if bufferAhead < thumbBufferHealthyStop {
+		t.precomputeFullSpeed = false
 	}
+	t.mu.Unlock()
+	// Re-evaluate background work on every signal; the worker bails if the band no
+	// longer allows it.
+	t.wakePrecompute()
 }
 
 func (t *videoThumbnailer) NoteFloodWait(wait time.Duration) {
@@ -295,13 +338,29 @@ func (t *videoThumbnailer) precomputeWorker() {
 		}
 
 		for {
+			// Stop promptly on shutdown. Without this the loop could spin: a
+			// canceled t.ctx makes generate fail instantly, and a deferred result
+			// is intentionally not marked failed, so the same bucket is re-picked.
+			if t.ctx.Err() != nil {
+				return
+			}
 			bucket, ok := t.nextPrecomputeBucket()
 			if !ok {
 				break
 			}
 			t.logf("precompute bucket=%d", bucket)
 			t.generate(bucket, true)
-			if !t.precomputeStillIdle() {
+
+			t.mu.Lock()
+			_, produced := t.ready[bucket]
+			if produced {
+				t.lastPrecomputeAt = time.Now()
+			}
+			t.mu.Unlock()
+			// If the bucket did not actually generate (deferred/failed/canceled),
+			// don't immediately re-pick it. Yield to the idle timer so retries are
+			// spaced instead of hot-looping on a stuck bucket.
+			if !produced || !t.precomputeStillIdle() {
 				break
 			}
 		}
@@ -320,23 +379,55 @@ func (t *videoThumbnailer) takeLatest() (int, bool) {
 	return bucket, true
 }
 
+// foregroundShouldWaitLocked reports whether a hovered (foreground) thumbnail
+// must defer. It only defers when the playback buffer is critically low or
+// Telegram is rate-limiting, so the thumbnail the user is looking at still
+// appears while the player merely tops up its buffer. Caller holds t.mu.
+func (t *videoThumbnailer) foregroundShouldWaitLocked(now time.Time) bool {
+	if now.Before(t.thumbBackoffUntil) {
+		return true
+	}
+	return t.playbackKnown && t.playbackBufferAhead < thumbBufferEmergency
+}
+
+// precomputeAllowedLocked reports whether a background precompute bucket may run
+// now: full speed while the buffer is healthy, an occasional aging tick in the
+// mid band so slow links still build, and never while the buffer is critically
+// low or Telegram is rate-limiting. Caller holds t.mu.
+func (t *videoThumbnailer) precomputeAllowedLocked(now time.Time) bool {
+	if now.Before(t.thumbBackoffUntil) {
+		return false
+	}
+	if !t.playbackKnown {
+		// Build immediately on open, before the first buffer signal arrives.
+		return true
+	}
+	if t.playbackBufferAhead < thumbBufferEmergency {
+		return false
+	}
+	if t.precomputeFullSpeed {
+		return true
+	}
+	return now.Sub(t.lastPrecomputeAt) >= thumbPrecomputeAging
+}
+
 func (t *videoThumbnailer) waitForForegroundTurn(bucket int) bool {
 	logged := false
 	for {
 		now := time.Now()
 		t.mu.Lock()
 		stale := t.hasLatest
-		busy := t.playerBusy || now.Before(t.thumbBackoffUntil)
+		wait := t.foregroundShouldWaitLocked(now)
 		t.mu.Unlock()
 		if stale {
 			t.logf("foreground preempted bucket=%d", bucket)
 			return false
 		}
-		if !busy {
+		if !wait {
 			return true
 		}
 		if !logged {
-			t.logf("foreground paused bucket=%d while playback is busy", bucket)
+			t.logf("foreground deferred bucket=%d while playback buffer is low", bucket)
 			logged = true
 		}
 		select {
@@ -361,7 +452,34 @@ func (t *videoThumbnailer) nextPrecomputeBucket() (int, bool) {
 		return 0, false
 	}
 
-	interval := thumbnailInterval(duration)
+	fine := thumbnailInterval(duration)
+	coarse := fine * precomputeCoarseFactor
+	// Tiered coarse-to-fine. Each pass walks outward from the playhead:
+	//  1. anchors  — ~16 evenly-spaced frames so the whole bar has a preview ASAP,
+	//  2. coarse   — fills the coarse grid,
+	//  3. fine     — refines into every bucket.
+	// Anchors and coarse buckets are multiples of the fine interval, so they share
+	// the same grid the frontend requests on hover.
+	if anchor := anchorPrecomputeInterval(duration, coarse); anchor > coarse {
+		if bucket, ok := t.scanPrecompute(current, duration, anchor, now); ok {
+			return bucket, true
+		}
+	}
+	if coarse > fine {
+		if bucket, ok := t.scanPrecompute(current, duration, coarse, now); ok {
+			return bucket, true
+		}
+	}
+	return t.scanPrecompute(current, duration, fine, now)
+}
+
+// scanPrecompute walks the timeline outward from the current playhead at the
+// given bucket interval (ahead first, then behind) and returns the nearest bucket
+// that still needs generating, if any.
+func (t *videoThumbnailer) scanPrecompute(current, duration float64, interval int, now time.Time) (int, bool) {
+	if interval <= 0 {
+		return 0, false
+	}
 	currentBucket := int(math.Floor(current/float64(interval))) * interval
 	maxBucket := int(math.Floor(duration/float64(interval))) * interval
 	for step := 0; step <= maxBucket+interval; step += interval {
@@ -372,6 +490,21 @@ func (t *videoThumbnailer) nextPrecomputeBucket() (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// anchorPrecomputeInterval returns the spacing for the evenly-spaced anchor pass,
+// snapped to (a multiple of) the coarse grid so anchors stay on the shared bucket
+// grid. It returns 0 when the video is short enough that an anchor tier coarser
+// than the coarse grid would be pointless.
+func anchorPrecomputeInterval(duration float64, coarse int) int {
+	if coarse <= 0 || duration <= 0 {
+		return 0
+	}
+	steps := int(duration) / (precomputeAnchorCount * coarse)
+	if steps < 1 {
+		return 0
+	}
+	return steps * coarse
 }
 
 func precomputeCandidates(currentBucket, step, maxBucket int) []int {
@@ -393,7 +526,7 @@ func (t *videoThumbnailer) precomputeCandidateReady(bucket int, now time.Time) b
 		return false
 	}
 	t.mu.Lock()
-	if t.hasLatest || len(t.inflight) > 0 || t.playerBusy || now.Before(t.thumbBackoffUntil) {
+	if t.hasLatest || len(t.inflight) > 0 || !t.precomputeAllowedLocked(now) {
 		t.mu.Unlock()
 		return false
 	}
@@ -417,7 +550,7 @@ func (t *videoThumbnailer) precomputeStillIdle() bool {
 	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return !t.hasLatest && len(t.inflight) == 0 && !t.playerBusy && !now.Before(t.thumbBackoffUntil)
+	return !t.hasLatest && len(t.inflight) == 0 && t.precomputeAllowedLocked(now)
 }
 
 func (t *videoThumbnailer) precomputeShouldYield() bool {
@@ -427,7 +560,7 @@ func (t *videoThumbnailer) precomputeShouldYield() bool {
 	now := time.Now()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.hasLatest || t.playerBusy || now.Before(t.thumbBackoffUntil)
+	return t.hasLatest || !t.precomputeAllowedLocked(now)
 }
 
 func (t *videoThumbnailer) wakePrecompute() {

@@ -24,7 +24,7 @@ func TestMultipartRoundTripPlain(t *testing.T) {
 	svc, db, _, _ := newTestService(t)
 	svc.MaxUploadBytes = 1000 // force splitting above 1000 stored bytes
 
-	body := bigBody(3500) // -> 4 parts (1000,1000,1000,500)
+	body := bigBody(3503) // -> 4 parts (1000,1000,1000,503)
 	path := writeTempNamedFile(t, "movie.bin", body)
 	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
 	if err != nil {

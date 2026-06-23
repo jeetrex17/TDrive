@@ -47,6 +47,20 @@ export async function calculateFolderTotalBytes(folderID: string): Promise<numbe
     throw new Error("GetFolderSize is not available. Restart `wails dev` to regenerate bindings.");
 }
 
+export async function calculateVisibleFolderBytes(parentID: string): Promise<Map<string, number>> {
+    const a = app();
+    if (a?.GetFolderSizes) {
+        const raw = await a.GetFolderSizes(String(parentID || ""));
+        const out = new Map<string, number>();
+        for (const [id, value] of Object.entries(raw || {})) {
+            const bytes = Number(value);
+            out.set(String(id), Number.isFinite(bytes) && bytes >= 0 ? bytes : 0);
+        }
+        return out;
+    }
+    throw new Error("GetFolderSizes is not available. Restart `wails dev` to regenerate bindings.");
+}
+
 export async function getAllFsMsgIDs(): Promise<number[]> {
     const a = app();
     if (a?.GetAllFsMsgIDs) {

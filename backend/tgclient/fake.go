@@ -490,6 +490,40 @@ func (f *Fake) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 	return err
 }
 
+func (f *Fake) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, w io.WriterAt, baseOffset int64, onProgress func(done, total int64)) error {
+	f.mu.Lock()
+	var (
+		msg   HistoryMessage
+		found bool
+	)
+	for _, m := range f.history {
+		if m.MsgID == msgID {
+			msg = m
+			found = true
+			break
+		}
+	}
+	if !found {
+		f.mu.Unlock()
+		return ErrMessageNotFound
+	}
+	if !msg.HasMedia {
+		f.mu.Unlock()
+		return ErrNotFile
+	}
+	body := append([]byte(nil), f.fileBodies[msgID]...)
+	f.mu.Unlock()
+
+	if len(body) == 0 && msg.MediaSize > 0 {
+		return ErrEmptyDocument
+	}
+	n, err := w.WriteAt(body, baseOffset)
+	if onProgress != nil {
+		onProgress(int64(n), msg.MediaSize)
+	}
+	return err
+}
+
 func (f *Fake) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {
 	f.mu.Lock()
 	var (
