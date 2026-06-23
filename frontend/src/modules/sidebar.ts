@@ -167,6 +167,8 @@ function showSharedContextMenu(event: any, c: any) {
     const addItem = (label: string, fn: () => void) => {
         const btn = document.createElement('button');
         btn.type = 'button';
+        btn.setAttribute('role', 'menuitem');
+        btn.tabIndex = -1;
         btn.textContent = label;
         btn.addEventListener('click', () => {
             menu.style.display = 'none';
@@ -213,6 +215,9 @@ function showSharedContextMenu(event: any, c: any) {
         }
     };
     setTimeout(() => document.addEventListener('click', close), 0);
+    requestAnimationFrame(() => {
+        menu.querySelector<HTMLButtonElement>('button[role="menuitem"]')?.focus({ preventScroll: true });
+    });
 }
 
 function showPendingContextMenu(event: any, p: any) {
@@ -226,6 +231,8 @@ function showPendingContextMenu(event: any, p: any) {
     const addItem = (label: string, fn: () => void, className = '') => {
         const btn = document.createElement('button');
         btn.type = 'button';
+        btn.setAttribute('role', 'menuitem');
+        btn.tabIndex = -1;
         btn.textContent = label;
         if (className) btn.className = className;
         btn.addEventListener('click', () => {
@@ -277,4 +284,7 @@ function showPendingContextMenu(event: any, p: any) {
         }
     };
     setTimeout(() => document.addEventListener('click', close), 0);
+    requestAnimationFrame(() => {
+        menu.querySelector<HTMLButtonElement>('button[role="menuitem"]')?.focus({ preventScroll: true });
+    });
 }

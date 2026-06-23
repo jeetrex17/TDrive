@@ -3,7 +3,7 @@ import { icons } from '../constants';
 import { escapeHtml, splitNameAndExt, formatBytes } from '../utils';
 import { clearSelection, handleRowSelection } from './selection';
 import { renderBreadcrumb } from './navigation';
-import { fillUploaderSlot, resetFileListScrollRestore } from './file-list';
+import { fillUploaderSlot, prepareDriveRow, resetFileListScrollRestore, syncDriveRowTabStops } from './file-list';
 import { setPhotosMode } from './gallery';
 import { refreshFolderIndex } from './folder-index';
 import { populateUploaderChips } from './uploaders';
@@ -51,7 +51,7 @@ function renderSearchResults(results: any, query: any) {
 
     const rows = Array.isArray(results) ? results : [];
     if (!rows.length) {
-        list.innerHTML = `<div class="search-empty">No results for "${escapeHtml(query)}"</div>`;
+        list.innerHTML = `<div class="search-empty" role="status">No results for "${escapeHtml(query)}"</div>`;
         return;
     }
 
@@ -66,6 +66,7 @@ function renderSearchResults(results: any, query: any) {
             row.dataset.id = String(result.id || "");
             row.dataset.name = String(result.name || "");
             row.dataset.parentId = String(result.parent_id || "");
+            prepareDriveRow(row);
 
             row.innerHTML = `
                 <div class="row-name">
@@ -112,6 +113,7 @@ function renderSearchResults(results: any, query: any) {
                     && Number(result.uploader_id) === Number(state.myUserID || 0));
             row.dataset.canDelete = ownerOnly ? "true" : "false";
             row.dataset.canRename = ownerOnly ? "true" : "false";
+            prepareDriveRow(row);
 
             row.innerHTML = `
                 <div class="row-name">
@@ -159,6 +161,7 @@ function renderSearchResults(results: any, query: any) {
     });
 
     populateUploaderChips(list);
+    syncDriveRowTabStops(list);
 }
 
 export function clearSearch({ refresh = true } = {}) {
@@ -242,7 +245,7 @@ export async function runGlobalSearch() {
     const token = ++activeToken;
     setHeaderMode(true);
     clearSelection();
-    list.innerHTML = `<div class="search-empty">Searching…</div>`;
+    list.innerHTML = `<div class="search-empty" role="status">Searching…</div>`;
 
     try {
         const [fsResults, tgFiles] = await Promise.all([
@@ -278,7 +281,7 @@ export async function runGlobalSearch() {
         renderSearchResults([...fs, ...tgMatches], query);
     } catch (err) {
         if (token !== activeToken) return;
-        list.innerHTML = `<div class="search-empty">Search failed</div>`;
+        list.innerHTML = `<div class="search-empty" role="alert">Search failed</div>`;
         console.error("Search failed:", err);
     }
 }

@@ -4,6 +4,9 @@ import { state } from '../../state';
 import { RenameFile, RenameFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
 import { callWithPasswordRetry } from './encryption-password';
 import { humanizeBackendError } from '../errors';
+import { installModalA11y } from './modal-a11y';
+
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 async function ensureFileInTdriveSystem(target: any) {
     if (!target || target.type !== "file") return;
@@ -42,6 +45,7 @@ export function openRenameModal(target: any) {
 
     input.value = String(target?.name || "");
     modal.style.display = "flex";
+    a11y?.activate();
 
     requestAnimationFrame(() => {
         input.focus();
@@ -72,6 +76,7 @@ export function setupRenameModal() {
 
     const close = () => {
         showError("");
+        a11y?.deactivate();
         modal.style.display = "none";
         state.pendingRenameTarget = null;
     };
@@ -79,6 +84,12 @@ export function setupRenameModal() {
     cancelBtn.addEventListener("click", close);
     modal.addEventListener("click", (e) => {
         if (e.target === modal) close();
+    });
+
+    a11y = installModalA11y(modal, {
+        requestClose: close,
+        initialFocus: input,
+        restoreFocus: '#file-list',
     });
 
     input.addEventListener("keydown", (e) => {

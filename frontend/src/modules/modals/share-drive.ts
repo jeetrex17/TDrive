@@ -1,5 +1,9 @@
 // "Invite link" share modal — shows the t.me link with a Copy button.
 
+import { installModalA11y } from './modal-a11y';
+
+let a11y: ReturnType<typeof installModalA11y> | null = null;
+
 export function setupShareDriveModal() {
     const modal = document.getElementById('share-drive-modal');
     const close = document.getElementById('share-drive-close');
@@ -8,6 +12,7 @@ export function setupShareDriveModal() {
     if (!modal || !close || !copy || !input) return;
 
     const dismiss = () => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         input.value = '';
     };
@@ -26,8 +31,10 @@ export function setupShareDriveModal() {
         }
     });
 
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') dismiss();
+    a11y = installModalA11y(modal, {
+        requestClose: dismiss,
+        initialFocus: input,
+        restoreFocus: '#drives-nav',
     });
 }
 
@@ -43,5 +50,6 @@ export function openShareDriveModal(link: string, options: { approvalRequired?: 
     }
     input.value = String(link || '');
     modal.style.display = 'flex';
-    setTimeout(() => { input.focus(); input.select(); }, 0);
+    a11y?.activate();
+    requestAnimationFrame(() => input.select());
 }

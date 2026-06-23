@@ -2,7 +2,10 @@
 
 import { state } from '../../state';
 import { createFolder } from '../drive-data';
-import { notify, dismissNotification } from '../notifications';
+import { notify } from '../notifications';
+import { installModalA11y } from './modal-a11y';
+
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 export function setupFolderModal() {
     const modal = document.getElementById("folder-modal");
@@ -15,6 +18,7 @@ export function setupFolderModal() {
     let inFlight = false;
 
     const close = () => {
+        a11y?.deactivate();
         modal.style.display = "none";
         nameInput.value = "";
     };
@@ -76,6 +80,14 @@ export function setupFolderModal() {
         if (e.key === "Enter") submit();
         if (e.key === "Escape" && !inFlight) close();
     });
+
+    a11y = installModalA11y(modal, {
+        requestClose: () => {
+            if (!inFlight) close();
+        },
+        initialFocus: nameInput,
+        restoreFocus: '#new-folder-btn',
+    });
 }
 
 export function openNewFolderModal() {
@@ -84,5 +96,5 @@ export function openNewFolderModal() {
     if (!modal || !nameInput) return;
 
     modal.style.display = "flex";
-    setTimeout(() => nameInput.focus(), 0);
+    a11y?.activate();
 }

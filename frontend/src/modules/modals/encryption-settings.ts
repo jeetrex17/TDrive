@@ -6,6 +6,9 @@ import { ChangeEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { state } from '../../state';
 import { loadEncryptionStatus } from '../encryption';
 import { notify } from '../notifications';
+import { installModalA11y } from './modal-a11y';
+
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 export function setupEncryptionSettingsModal() {
     const modal = document.getElementById('encryption-settings-modal');
@@ -30,6 +33,7 @@ export function setupEncryptionSettingsModal() {
         errEl.style.display = 'none';
     };
     const close = () => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         if (current) current.value = '';
         if (next) next.value = '';
@@ -90,6 +94,12 @@ export function setupEncryptionSettingsModal() {
             cancel!.disabled = false;
         }
     });
+
+    a11y = installModalA11y(modal, {
+        requestClose: close,
+        initialFocus: current,
+        restoreFocus: '#profile-trigger',
+    });
 }
 
 export function openEncryptionSettingsModal() {
@@ -98,6 +108,5 @@ export function openEncryptionSettingsModal() {
     const hint = modal.querySelector('#encryption-settings-hint') as HTMLInputElement | null;
     if (hint) hint.value = String(state.encryption?.hint || '');
     modal.style.display = 'flex';
-    const current = modal.querySelector('#encryption-current-password') as HTMLInputElement | null;
-    setTimeout(() => current?.focus(), 0);
+    a11y?.activate();
 }

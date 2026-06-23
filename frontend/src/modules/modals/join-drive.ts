@@ -2,6 +2,9 @@
 
 import { joinSharedDrive } from '../channels';
 import { notify, dismissNotification } from '../notifications';
+import { installModalA11y } from './modal-a11y';
+
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 export function setupJoinDriveModal() {
     const modal = document.getElementById('join-drive-modal');
@@ -11,6 +14,7 @@ export function setupJoinDriveModal() {
     if (!modal || !cancel || !go || !input) return;
 
     const close = () => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         input.value = '';
     };
@@ -62,7 +66,12 @@ export function setupJoinDriveModal() {
     go.addEventListener('click', submit);
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') submit();
-        if (e.key === 'Escape') close();
+    });
+
+    a11y = installModalA11y(modal, {
+        requestClose: close,
+        initialFocus: input,
+        restoreFocus: '#drives-nav',
     });
 }
 
@@ -71,5 +80,5 @@ export function openJoinDriveModal() {
     const input = document.getElementById('join-drive-link');
     if (!modal || !input) return;
     modal.style.display = 'flex';
-    setTimeout(() => input.focus(), 0);
+    a11y?.activate();
 }

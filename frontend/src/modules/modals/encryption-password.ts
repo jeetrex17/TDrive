@@ -5,8 +5,10 @@
 import { UseEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { loadEncryptionStatus } from '../encryption';
 import { state } from '../../state';
+import { installModalA11y } from './modal-a11y';
 
 let pending: any = null;
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 export function setupEncryptionPasswordModal() {
     const modal = document.getElementById('encryption-password-modal');
@@ -19,6 +21,7 @@ export function setupEncryptionPasswordModal() {
     const errEl = modal.querySelector('#encryption-password-error') as HTMLElement | null;
 
     const finish = (ok: any) => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         if (pwd) pwd.value = '';
         if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
@@ -62,6 +65,12 @@ export function setupEncryptionPasswordModal() {
             if (e.key === 'Enter') confirm!.click();
         });
     }
+
+    a11y = installModalA11y(modal, {
+        requestClose: () => finish(false),
+        initialFocus: pwd,
+        restoreFocus: '#file-list',
+    });
 }
 
 // callWithPasswordRetry runs a backend binding that returns "Error: ..." strings.
@@ -100,8 +109,7 @@ export function openEncryptionPasswordModal() {
                 hintText.textContent = hint;
                 hintRow.style.display = hint ? 'block' : 'none';
             }
-            const pwd = modal.querySelector('#encryption-password-input') as HTMLInputElement | null;
-            setTimeout(() => pwd?.focus(), 0);
+            a11y?.activate();
         };
         showPrompt().catch(() => {
             modal.style.display = 'flex';
@@ -109,8 +117,7 @@ export function openEncryptionPasswordModal() {
                 hintText.textContent = '';
                 hintRow.style.display = 'none';
             }
-            const pwd = modal.querySelector('#encryption-password-input') as HTMLInputElement | null;
-            setTimeout(() => pwd?.focus(), 0);
+            a11y?.activate();
         });
     });
 }

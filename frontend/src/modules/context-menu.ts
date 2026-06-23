@@ -19,8 +19,24 @@ export function setupContextMenu() {
         menu.innerHTML = "";
     };
 
+    const focusMenuItem = (delta: number) => {
+        const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'));
+        if (!items.length) return;
+        const current = document.activeElement instanceof HTMLButtonElement ? items.indexOf(document.activeElement) : -1;
+        const next = current < 0
+            ? 0
+            : (current + delta + items.length) % items.length;
+        items[next]?.focus();
+    };
+    const focusMenuEdge = (edge: "first" | "last") => {
+        const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'));
+        const target = edge === "first" ? items[0] : items[items.length - 1];
+        target?.focus();
+    };
+
     const show = (x: number, y: number, items: any[]) => {
         menu.innerHTML = "";
+        menu.setAttribute("role", "menu");
         items.forEach((item: any) => {
             if (item.type === "divider") {
                 const div = document.createElement("div");
@@ -31,6 +47,8 @@ export function setupContextMenu() {
 
             const btn = document.createElement("button");
             btn.type = "button";
+            btn.setAttribute("role", "menuitem");
+            btn.tabIndex = -1;
             btn.textContent = item.label;
             if (item.danger) btn.classList.add("danger");
             btn.addEventListener("click", () => {
@@ -50,11 +68,40 @@ export function setupContextMenu() {
         const maxY = window.innerHeight - rect.height - 8;
         menu.style.left = `${Math.max(8, Math.min(x, maxX))}px`;
         menu.style.top = `${Math.max(8, Math.min(y, maxY))}px`;
+        requestAnimationFrame(() => {
+            menu.querySelector<HTMLButtonElement>('button[role="menuitem"]')?.focus({ preventScroll: true });
+        });
     };
 
     document.addEventListener("click", hide);
     window.addEventListener("keydown", (e) => {
         if (e.key === "Escape") hide();
+    });
+    menu.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            e.preventDefault();
+            hide();
+            return;
+        }
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            focusMenuItem(1);
+            return;
+        }
+        if (e.key === "ArrowUp") {
+            e.preventDefault();
+            focusMenuItem(-1);
+            return;
+        }
+        if (e.key === "Home") {
+            e.preventDefault();
+            focusMenuEdge("first");
+            return;
+        }
+        if (e.key === "End") {
+            e.preventDefault();
+            focusMenuEdge("last");
+        }
     });
 
     list.addEventListener("contextmenu", (e) => {

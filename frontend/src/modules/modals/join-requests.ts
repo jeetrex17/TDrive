@@ -2,8 +2,10 @@
 
 import { approveJoinRequest, listJoinRequests, rejectJoinRequest } from '../channels';
 import { notify } from '../notifications';
+import { installModalA11y } from './modal-a11y';
 
 let activeDrive: { id: number; title: string } | null = null;
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 export function setupJoinRequestsModal() {
     const modal = document.getElementById('join-requests-modal');
@@ -11,12 +13,18 @@ export function setupJoinRequestsModal() {
     if (!modal || !close) return;
 
     const dismiss = () => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         activeDrive = null;
     };
 
     close.addEventListener('click', dismiss);
     modal.addEventListener('click', (e) => { if (e.target === modal) dismiss(); });
+    a11y = installModalA11y(modal, {
+        requestClose: dismiss,
+        initialFocus: close,
+        restoreFocus: '#drives-nav',
+    });
 }
 
 export async function openJoinRequestsModal(drive: any) {
@@ -30,6 +38,7 @@ export async function openJoinRequestsModal(drive: any) {
 
     if (subtitle) subtitle.textContent = `Pending requests for ${activeDrive.title}.`;
     modal.style.display = 'flex';
+    a11y?.activate();
     await renderJoinRequests();
 }
 
