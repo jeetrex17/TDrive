@@ -3,6 +3,9 @@
 import { createSharedDrive } from '../channels';
 import { openShareDriveModal } from './share-drive';
 import { notify, dismissNotification } from '../notifications';
+import { installModalA11y } from './modal-a11y';
+
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 export function setupNewDriveModal() {
     const modal = document.getElementById('new-drive-modal');
@@ -13,6 +16,7 @@ export function setupNewDriveModal() {
     if (!modal || !cancel || !create || !input) return;
 
     const close = () => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         input.value = '';
         if (approval) approval.checked = false;
@@ -55,7 +59,12 @@ export function setupNewDriveModal() {
     create.addEventListener('click', submit);
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') submit();
-        if (e.key === 'Escape') close();
+    });
+
+    a11y = installModalA11y(modal, {
+        requestClose: close,
+        initialFocus: input,
+        restoreFocus: '#drives-nav',
     });
 }
 
@@ -64,5 +73,5 @@ export function openNewDriveModal() {
     const input = document.getElementById('new-drive-name');
     if (!modal || !input) return;
     modal.style.display = 'flex';
-    setTimeout(() => input.focus(), 0);
+    a11y?.activate();
 }

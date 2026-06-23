@@ -5,6 +5,7 @@ import { icons } from '../constants';
 import { escapeHtml, splitNameAndExt, formatDate, formatBytes } from '../utils';
 import { clearSelection, handleRowSelection, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
+import { openDeleteModal } from './modals/delete';
 import { navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
@@ -91,6 +92,168 @@ export function resetFileListScrollRestore() {
     lastRenderedFolderId = null;
 }
 
+type FileStateKind = "loading" | "empty" | "error";
+
+function renderFileState(
+    list: HTMLElement,
+    kind: FileStateKind,
+    title: string,
+    body = "",
+    action?: { label: string; onClick: () => void },
+) {
+    const stateEl = document.createElement("div");
+    stateEl.className = `file-state is-${kind}`;
+    stateEl.setAttribute("role", kind === "error" ? "alert" : "status");
+
+    const icon = document.createElement("div");
+    icon.className = "file-state-icon";
+    if (kind === "empty") icon.innerHTML = icons.folder;
+    if (kind === "error") {
+        icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.3 4.3L2.8 17.2A2 2 0 004.5 20h15a2 2 0 001.7-2.8L13.7 4.3a2 2 0 00-3.4 0z"/></svg>`;
+    }
+    stateEl.appendChild(icon);
+
+    const titleEl = document.createElement("div");
+    titleEl.className = "file-state-title";
+    titleEl.textContent = title;
+    stateEl.appendChild(titleEl);
+
+    if (body) {
+        const bodyEl = document.createElement("div");
+        bodyEl.className = "file-state-body";
+        bodyEl.textContent = body;
+        stateEl.appendChild(bodyEl);
+    }
+
+    if (action) {
+        const actions = document.createElement("div");
+        actions.className = "file-state-actions";
+        const button = document.createElement("button");
+        button.className = "secondary-btn";
+        button.type = "button";
+        button.textContent = action.label;
+        button.addEventListener("click", action.onClick);
+        actions.appendChild(button);
+        stateEl.appendChild(actions);
+    }
+
+    list.replaceChildren(stateEl);
+}
+
+function rowLabel(row: HTMLElement) {
+    const type = row.dataset.type === "folder" ? "Folder" : "File";
+    const name = row.dataset.name || "Untitled";
+    return `${type}: ${name}`;
+}
+
+export function prepareDriveRow(row: HTMLElement) {
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", row.classList.contains("is-selected") ? "true" : "false");
+    row.setAttribute("aria-label", rowLabel(row));
+    row.tabIndex = -1;
+}
+
+function interactiveRows(list: HTMLElement = document.getElementById("file-list") as HTMLElement) {
+    if (!list) return [] as HTMLElement[];
+    return Array.from(list.querySelectorAll<HTMLElement>('.drive-row[data-type="folder"], .drive-row[data-type="file"]'));
+}
+
+function setFocusedRow(row: HTMLElement | null, { preventScroll = true } = {}) {
+    const list = document.getElementById("file-list") as HTMLElement | null;
+    if (!list || !row) return;
+    for (const item of interactiveRows(list)) {
+        item.tabIndex = item === row ? 0 : -1;
+        item.classList.toggle("is-keyboard-active", item === row);
+    }
+    row.focus({ preventScroll });
+}
+
+export function syncDriveRowTabStops(list: HTMLElement, preferred?: HTMLElement | null) {
+    const rows = interactiveRows(list);
+    if (!rows.length) return;
+    const target = preferred && rows.includes(preferred) ? preferred : rows[0];
+    for (const row of rows) {
+        row.tabIndex = row === target ? 0 : -1;
+        row.classList.toggle("is-keyboard-active", false);
+    }
+}
+
+function activeRowFromEventTarget(target: EventTarget | null) {
+    const row = (target as HTMLElement | null)?.closest?.('.drive-row[data-type="folder"], .drive-row[data-type="file"]') as HTMLElement | null;
+    if (row) return row;
+    const list = document.getElementById("file-list") as HTMLElement | null;
+    return (document.activeElement as HTMLElement | null)?.closest?.('.drive-row[data-type="folder"], .drive-row[data-type="file"]') as HTMLElement | null
+        || list?.querySelector<HTMLElement>('.drive-row[tabindex="0"]')
+        || list?.querySelector<HTMLElement>('.drive-row[data-type="folder"], .drive-row[data-type="file"]')
+        || null;
+}
+
+function triggerRowContextMenu(row: HTMLElement) {
+    const rect = row.getBoundingClientRect();
+    row.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + Math.min(48, rect.width / 2),
+        clientY: rect.top + Math.min(24, rect.height / 2),
+    }));
+}
+
+function deleteRow(row: HTMLElement) {
+    if (row.dataset.type === "folder") {
+        openDeleteModal({
+            type: "folder",
+            id: row.dataset.id,
+            name: row.dataset.name,
+            parentId: row.dataset.parentId || state.currentFolderId,
+        });
+        return;
+    }
+    if (row.dataset.canDelete === "false") return;
+    openDeleteModal({
+        type: "file",
+        id: Number(row.dataset.id),
+        name: row.dataset.name,
+        size: Number(row.dataset.size || 0),
+        parentId: row.dataset.parentId || state.currentFolderId,
+        source: row.dataset.source || "fs",
+        canDelete: row.dataset.canDelete !== "false",
+    });
+}
+
+function renameRow(row: HTMLElement) {
+    if (row.dataset.canRename === "false") return;
+    openRenameModal({
+        type: row.dataset.type,
+        id: row.dataset.type === "folder" ? row.dataset.id : Number(row.dataset.id),
+        name: row.dataset.name,
+        size: Number(row.dataset.size || 0),
+        parentId: row.dataset.parentId || state.currentFolderId,
+        source: row.dataset.source || "fs",
+    });
+}
+
+function activateRow(row: HTMLElement) {
+    if (isSearchMode()) {
+        row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+        return;
+    }
+    if (row.dataset.type === "folder") {
+        navigateToFolder(row.dataset.id as string, row.dataset.name as string);
+        return;
+    }
+    if (row.dataset.type !== "file") return;
+    if (isVideoFile(row.dataset.name || "")) {
+        window.initVideoPlayback(
+            Number(row.dataset.id),
+            row.dataset.name,
+            Number(row.dataset.size || 0),
+            row.dataset.encrypted === "true",
+        );
+        return;
+    }
+    window.initDownload(Number(row.dataset.id), row.dataset.name, Number(row.dataset.size || 0));
+}
+
 function fillVisibleFolderSizes(folders: any[], parentId: string, folderEpoch: number, list: HTMLElement) {
     if (!folders.length) return;
     calculateVisibleFolderBytes(parentId)
@@ -141,7 +304,7 @@ export function refreshFiles() {
     const prevScrollTop = list.scrollTop;
     const keepScroll = lastRenderedFolderId === requestedFolderId;
 
-    list.innerHTML = '<div style="padding:20px; color:#565f89;">Loading...</div>';
+    renderFileState(list, "loading", "Loading files");
     if (storageUsed) {
         storageUsed.innerText = "Calculating... / Unlimited";
         GetStorageUsed()
@@ -169,13 +332,10 @@ export function refreshFiles() {
         if (folderErr || !fs) {
             if (state.currentFolderId !== requestedFolderId) return;
             const msg = String(folderErr?.message || folderErr || "Failed to load files");
-            list.innerHTML = `
-                <div style="padding:20px; color:#c0caf5;">
-                    <div style="font-weight:700; margin-bottom:8px;">Could not load this folder</div>
-                    <div style="color:#8b95c5; margin-bottom:12px;">${escapeHtml(msg)}</div>
-                    <button class="secondary-btn" type="button" onclick="triggerRefresh()">Retry</button>
-                </div>
-            `;
+            renderFileState(list, "error", "Could not load this folder", msg, {
+                label: "Retry",
+                onClick: () => window.refreshFiles(),
+            });
             return;
         }
 
@@ -247,18 +407,18 @@ export function refreshFiles() {
             }
 
             if (folders.length === 0 && files.length === 0 && pendingForParent.length === 0) {
-                list.innerHTML = '<div style="padding:20px; color:#565f89;">This folder is empty.</div>';
+                renderFileState(list, "empty", "This folder is empty", "Upload files or create a folder to start organizing this drive.");
                 lastRenderedFolderId = requestedFolderId;
                 return;
             }
 
-            list.innerHTML = "";
+            const fragment = document.createDocumentFragment();
 
             // Pending CreateFolder ghost rows: rendered before real folders
             // so the just-clicked entry shows up at the top until the
             // backend confirms it.
             for (const op of pendingForParent) {
-                list.appendChild(buildPendingFolderRow(op.tempId, op.name));
+                fragment.appendChild(buildPendingFolderRow(op.tempId, op.name));
             }
 
             folders.forEach((folder) => {
@@ -268,6 +428,7 @@ export function refreshFiles() {
                 row.dataset.id = folder.id;
                 row.dataset.name = folder.name;
                 row.dataset.parentId = requestedFolderId;
+                prepareDriveRow(row);
 
                 row.innerHTML = `
                     <div class="row-name">
@@ -334,11 +495,9 @@ export function refreshFiles() {
                     await performDropMove(folder.id);
                 });
 
-                list.appendChild(row);
+                fragment.appendChild(row);
 
             });
-
-            fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch, list);
 
             files.forEach((file: any) => {
                 const { base, ext } = splitNameAndExt(file.name);
@@ -357,6 +516,7 @@ export function refreshFiles() {
                 row.dataset.canDelete = ownerOnly ? "true" : "false";
                 row.dataset.canRename = ownerOnly ? "true" : "false";
                 const playable = isVideoFile(file.name || "");
+                prepareDriveRow(row);
 
                 const lockBadge = file.encrypted
                     ? `<span class="file-lock-badge" title="Encrypted" aria-label="Encrypted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 11h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0v4"/></svg></span>`
@@ -405,8 +565,12 @@ export function refreshFiles() {
                     });
                     nameEl.addEventListener("dragend", endRowDrag);
                 }
-                list.appendChild(row);
+                fragment.appendChild(row);
             });
+
+            list.replaceChildren(fragment);
+            syncDriveRowTabStops(list);
+            fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch, list);
 
             // Restore prior scroll on a same-folder re-render. Before
             // pendingFocus so a just-uploaded/renamed file can still scroll
@@ -425,6 +589,7 @@ export function refreshFiles() {
                     const idx = rows.indexOf(targetRow);
                     clearSelection();
                     if (idx >= 0) selectRow(targetRow, idx);
+                    setFocusedRow(targetRow as HTMLElement);
                     try {
                         targetRow.scrollIntoView({ block: "center" });
                     } catch {}
@@ -498,6 +663,7 @@ function handleListClick(e: MouseEvent) {
             navigateToFolder(row.dataset.id as string, row.dataset.name as string);
             return;
         }
+        setFocusedRow(row, { preventScroll: true });
         handleRowSelection(row, e);
         return;
     }
@@ -516,8 +682,69 @@ function handleListClick(e: MouseEvent) {
             return;
         }
         if ((e.target as HTMLElement).closest("button")) return;
+        setFocusedRow(row, { preventScroll: true });
         handleRowSelection(row, e);
     }
+}
+
+function handleListKeyDown(e: KeyboardEvent) {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, input, textarea, select, [contenteditable='true']")) return;
+
+    const list = document.getElementById("file-list") as HTMLElement | null;
+    if (!list) return;
+    const rows = interactiveRows(list);
+    if (!rows.length) return;
+
+    const current = activeRowFromEventTarget(e.target) || rows[0];
+    const currentIndex = Math.max(0, rows.indexOf(current));
+    let next: HTMLElement | null = null;
+
+    switch (e.key) {
+        case "ArrowDown":
+            next = rows[Math.min(rows.length - 1, currentIndex + 1)];
+            break;
+        case "ArrowUp":
+            next = rows[Math.max(0, currentIndex - 1)];
+            break;
+        case "Home":
+            next = rows[0];
+            break;
+        case "End":
+            next = rows[rows.length - 1];
+            break;
+        case " ":
+            e.preventDefault();
+            handleRowSelection(current, e);
+            return;
+        case "Enter":
+            e.preventDefault();
+            activateRow(current);
+            return;
+        case "F2":
+            e.preventDefault();
+            renameRow(current);
+            return;
+        case "Delete":
+            e.preventDefault();
+            deleteRow(current);
+            return;
+        case "ContextMenu":
+            e.preventDefault();
+            triggerRowContextMenu(current);
+            return;
+        case "F10":
+            if (!e.shiftKey) return;
+            e.preventDefault();
+            triggerRowContextMenu(current);
+            return;
+        default:
+            return;
+    }
+
+    if (!next) return;
+    e.preventDefault();
+    setFocusedRow(next, { preventScroll: false });
 }
 
 function handleListDblClick(e: MouseEvent) {
@@ -580,6 +807,7 @@ export function setupFileListWindowBindings() {
     if (list) {
         list.addEventListener("click", handleListClick);
         list.addEventListener("dblclick", handleListDblClick);
+        list.addEventListener("keydown", handleListKeyDown);
     }
 
     // Note: window.initDelete and window.initDeleteFolder are set up in main.js

@@ -8,11 +8,13 @@ import { clearSelection } from '../selection';
 import { getFolderContents } from '../drive-data';
 import { buildFolderIndex, collectDescendants } from '../folder-index';
 import { humanizeBackendError } from '../errors';
+import { installModalA11y } from './modal-a11y';
 
 let movePath: any[] = [];
 let moveBlocked = new Set();
 let moveSourceParent = "";
 let moveRenderEpoch = 0;
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 async function ensureFileInTdriveSystem(target: any) {
     if (!target || target.type !== "file") return;
@@ -207,6 +209,7 @@ export async function openMoveModal(target: any) {
     setMoveError("");
 
     modal.style.display = "flex";
+    a11y?.activate();
 
     let index = { children: new Map() };
     try {
@@ -252,6 +255,7 @@ export function setupMoveModal() {
     if (!modal || !cancelBtn || !confirmBtn) return;
 
     const close = () => {
+        a11y?.deactivate();
         modal.style.display = "none";
         state.pendingMoveTarget = null;
         movePath = [];
@@ -265,8 +269,10 @@ export function setupMoveModal() {
         if (e.target === modal) close();
     });
 
-    window.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && modal.style.display === "flex") close();
+    a11y = installModalA11y(modal, {
+        requestClose: close,
+        initialFocus: cancelBtn,
+        restoreFocus: '#file-list',
     });
 
     confirmBtn.addEventListener("click", async () => {

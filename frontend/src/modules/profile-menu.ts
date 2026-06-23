@@ -33,6 +33,39 @@ export function setupProfileMenu() {
         }
     });
 
+    menu.addEventListener('keydown', (e) => {
+        if (!isOpen()) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeMenu();
+            trigger!.focus();
+            return;
+        }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+
+        const items = menuItems();
+        if (!items.length) return;
+
+        e.preventDefault();
+        const current = document.activeElement as HTMLElement | null;
+        const index = current ? items.indexOf(current) : -1;
+
+        if (e.key === 'Home') {
+            items[0].focus();
+            return;
+        }
+        if (e.key === 'End') {
+            items[items.length - 1].focus();
+            return;
+        }
+
+        const direction = e.key === 'ArrowDown' ? 1 : -1;
+        const next = index >= 0
+            ? (index + direction + items.length) % items.length
+            : direction > 0 ? 0 : items.length - 1;
+        items[next].focus();
+    });
+
     logoutItem.addEventListener('click', () => {
         closeMenu();
         openLogoutModal();
@@ -125,7 +158,7 @@ function openMenu() {
         document.addEventListener('click', onDocumentClick, true);
         outsideClickBound = true;
     }
-    const first = menu.querySelector('[role="menuitem"]') as HTMLElement | null;
+    const first = menuItems()[0];
     if (first) first.focus();
 }
 
@@ -147,4 +180,10 @@ function onDocumentClick(e: MouseEvent) {
     if (!menu || !trigger) return;
     if (menu.contains(e.target as Node) || trigger.contains(e.target as Node)) return;
     closeMenu();
+}
+
+function menuItems(): HTMLElement[] {
+    if (!menu) return [];
+    return Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        .filter((item) => !item.hidden && item.offsetParent !== null && !item.hasAttribute('disabled'));
 }

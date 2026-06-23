@@ -42,6 +42,7 @@ function focusIfPossible(el: any) {
 
 export function installModalA11y(modal: any, { requestClose, initialFocus, restoreFocus }: { requestClose?: any; initialFocus?: any; restoreFocus?: any } = {}) {
     let lastActive: any = null;
+    let active = false;
 
     const focusable = (): any[] =>
         Array.from(modal.querySelectorAll(FOCUSABLE)).filter(canFocus);
@@ -77,6 +78,8 @@ export function installModalA11y(modal: any, { requestClose, initialFocus, resto
 
     return {
         activate() {
+            if (active) return;
+            active = true;
             lastActive = document.activeElement;
             document.addEventListener('keydown', onKeydown, true);
             requestAnimationFrame(() => {
@@ -88,6 +91,8 @@ export function installModalA11y(modal: any, { requestClose, initialFocus, resto
             });
         },
         deactivate() {
+            if (!active) return;
+            active = false;
             document.removeEventListener('keydown', onKeydown, true);
             const restore = lastActive;
             lastActive = null;

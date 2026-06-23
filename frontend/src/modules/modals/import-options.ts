@@ -3,6 +3,8 @@
 // archives, and (on My Drive) Encrypt vs plain. Toggling either option re-plans
 // so the counts stay accurate. Resolves to { encrypt, extract } or null.
 
+import { installModalA11y } from './modal-a11y';
+
 export type ImportPlan = {
     files: number;
     folders: number;
@@ -19,6 +21,7 @@ type ImportChoice = { encrypt: boolean; extract: boolean };
 let pending: ((result: ImportChoice | null) => void) | null = null;
 let currentReplan: ReplanFn | null = null;
 let replanSeq = 0;
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 function humanBytes(n: number): string {
     if (!Number.isFinite(n) || n <= 0) return '0 B';
@@ -78,6 +81,7 @@ export function setupImportOptionsModal() {
     const encrypt = modal.querySelector('#import-options-encrypt') as HTMLInputElement | null;
 
     const finish = (result: ImportChoice | null) => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         currentReplan = null;
         replanSeq++;
@@ -90,9 +94,6 @@ export function setupImportOptionsModal() {
 
     cancel?.addEventListener('click', () => finish(null));
     modal.addEventListener('click', (e) => { if (e.target === modal) finish(null); });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && modal.style.display !== 'none') finish(null);
-    });
     confirm?.addEventListener('click', () => finish({
         encrypt: !!encrypt?.checked,
         extract: !!extract?.checked,
@@ -110,6 +111,15 @@ export function setupImportOptionsModal() {
     };
     extract?.addEventListener('change', refresh);
     encrypt?.addEventListener('change', refresh);
+
+    a11y = installModalA11y(modal, {
+        requestClose: () => finish(null),
+        initialFocus: () =>
+            modal.querySelector('#import-options-extract-row input:not([disabled])') ||
+            modal.querySelector('#import-options-encrypt-row input:not([disabled])') ||
+            confirm,
+        restoreFocus: '#file-list',
+    });
 }
 
 export function openImportOptionsModal(opts: {
@@ -138,5 +148,6 @@ export function openImportOptionsModal(opts: {
     return new Promise((resolve) => {
         pending = resolve;
         modal.style.display = 'flex';
+        a11y?.activate();
     });
 }

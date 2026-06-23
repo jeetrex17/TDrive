@@ -2,7 +2,10 @@
 // per-batch encryption. Resolves to { encrypt: boolean } on Continue,
 // or null on Cancel.
 //
+import { installModalA11y } from './modal-a11y';
+
 let pending: any = null;
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 export function setupUploadOptionsModal() {
     const modal = document.getElementById('upload-options-modal');
@@ -11,6 +14,7 @@ export function setupUploadOptionsModal() {
     const confirm = modal.querySelector('#upload-options-confirm') as HTMLButtonElement | null;
 
     const finish = (result: any) => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         if (pending) {
             const resolve = pending;
@@ -26,6 +30,12 @@ export function setupUploadOptionsModal() {
         const selected = modal.querySelector('input[name="upload-mode"]:checked') as HTMLInputElement | null;
         const value = selected?.value === 'encrypt' ? 'encrypt' : 'plain';
         finish({ encrypt: value === 'encrypt' });
+    });
+
+    a11y = installModalA11y(modal, {
+        requestClose: () => finish(null),
+        initialFocus: () => modal.querySelector('input[name="upload-mode"]:checked') || confirm,
+        restoreFocus: '#file-list',
     });
 }
 
@@ -52,5 +62,6 @@ export function openUploadOptionsModal({ count }: { count: any }) {
         }
         pending = resolve;
         modal.style.display = 'flex';
+        a11y?.activate();
     });
 }

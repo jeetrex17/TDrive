@@ -4,6 +4,8 @@ import { state } from '../state';
 import { openDeleteModal } from './modals/delete';
 import { openMoveModal } from './modals/move';
 
+const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
+
 function emitSelectionChange() {
     window.dispatchEvent(new Event("tdrive:selectionchange"));
 }
@@ -97,7 +99,7 @@ export function handleRowSelection(row: any, e: any) {
     if (e?.button === 2) return;
 
     const list = document.getElementById("file-list");
-    const rows = list ? Array.from(list.querySelectorAll(".drive-row")) : [];
+    const rows = list ? Array.from(list.querySelectorAll(SELECTABLE_ROW_SELECTOR)) : [];
     const idx = rows.indexOf(row);
     if (idx === -1) return;
 
@@ -144,7 +146,7 @@ export function handleRowSelection(row: any, e: any) {
 export function ensureRowSelectedForContextMenu(row: any) {
     if (!row) return;
     const list = document.getElementById("file-list");
-    const rows = list ? Array.from(list.querySelectorAll(".drive-row")) : [];
+    const rows = list ? Array.from(list.querySelectorAll(SELECTABLE_ROW_SELECTOR)) : [];
     const idx = rows.indexOf(row);
     if (idx === -1) return;
 

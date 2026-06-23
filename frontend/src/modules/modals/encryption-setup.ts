@@ -5,8 +5,10 @@
 import { CreateEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
+import { installModalA11y } from './modal-a11y';
 
 let pending: any = null;
+let a11y: ReturnType<typeof installModalA11y> | null = null;
 
 export function setupEncryptionSetupModal() {
     const modal = document.getElementById('encryption-setup-modal');
@@ -19,6 +21,7 @@ export function setupEncryptionSetupModal() {
     const errEl = modal.querySelector('#encryption-setup-error') as HTMLElement | null;
 
     const finish = (ok: any) => {
+        a11y?.deactivate();
         modal.style.display = 'none';
         if (pwd) pwd.value = '';
         if (pwd2) pwd2.value = '';
@@ -63,6 +66,12 @@ export function setupEncryptionSetupModal() {
             cancel!.disabled = false;
         }
     });
+
+    a11y = installModalA11y(modal, {
+        requestClose: () => finish(false),
+        initialFocus: pwd,
+        restoreFocus: '#file-list',
+    });
 }
 
 export function openEncryptionSetupModal() {
@@ -76,7 +85,6 @@ export function openEncryptionSetupModal() {
         }
         pending = resolve;
         modal.style.display = 'flex';
-        const pwd = modal.querySelector('#encryption-setup-password') as HTMLInputElement | null;
-        setTimeout(() => pwd?.focus(), 0);
+        a11y?.activate();
     });
 }
