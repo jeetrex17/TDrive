@@ -67,7 +67,7 @@ export interface MediaPlaybackUpdate {
     token: string;
     currentTime: number;
     duration: number;
-    busy: boolean;
+    bufferAhead: number;
 }
 
 export interface ThroughputStats {
@@ -235,7 +235,7 @@ export async function updateMediaPlayback(update: MediaPlaybackUpdate): Promise<
         token: update.token,
         current_time: update.currentTime,
         duration: update.duration,
-        busy: update.busy,
+        buffer_ahead: update.bufferAhead,
     } as any);
 }
 

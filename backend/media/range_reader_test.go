@@ -128,6 +128,36 @@ func TestRangeReaderCachesBlocks(t *testing.T) {
 	}
 }
 
+func TestRangeReaderPrefetchesNextBlockWhenEnabled(t *testing.T) {
+	data := testBytes(tgclient.RangeReadMaxBytes*3 + 1)
+	fake := newStrictRangeFake(data)
+	reader := NewRangeReader(RangeReaderConfig{Client: fake, PrefetchBlocks: 1})
+	defer reader.Close()
+
+	buf := make([]byte, 64)
+	if _, err := reader.ReadStoredAt(context.Background(), fake.ref(), buf, 128); err != nil {
+		t.Fatalf("ReadStoredAt: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		calls := fake.calls()
+		if len(calls) >= 2 {
+			if calls[0].offset != 0 {
+				t.Fatalf("first call = %+v, want foreground block 0", calls[0])
+			}
+			if calls[1].offset != int64(tgclient.RangeReadMaxBytes) {
+				t.Fatalf("second call = %+v, want prefetched next block", calls[1])
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("calls = %+v, want foreground + prefetch", calls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRangeReaderCoalescesConcurrentBlockReads(t *testing.T) {
 	data := testBytes(tgclient.RangeReadMaxBytes)
 	fake := newStrictRangeFake(data)

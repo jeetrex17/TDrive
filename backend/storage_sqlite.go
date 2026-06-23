@@ -71,6 +71,17 @@ func InitDB() error {
 		_ = db.Close()
 		return err
 	}
+	if _, err := db.Exec(`PRAGMA temp_store=MEMORY;`); err != nil {
+		_ = db.Close()
+		return err
+	}
+	if _, err := db.Exec(`PRAGMA cache_size=-32768;`); err != nil {
+		_ = db.Close()
+		return err
+	}
+	// mmap_size is a read optimization on drivers/platforms that support it.
+	// Treat it as opportunistic so startup does not depend on mmap support.
+	_, _ = db.Exec(`PRAGMA mmap_size=134217728;`)
 
 	DB = db
 

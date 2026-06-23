@@ -11,7 +11,7 @@ import {
     GetFileList, GetStorageUsed,
 } from '../../wailsjs/go/main/App';
 import { getFolderContents as apiGetFolderContents } from '../api';
-import { calculateFolderTotalBytes, getAllFsMsgIDs } from './drive-data';
+import { calculateVisibleFolderBytes, getAllFsMsgIDs } from './drive-data';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { enqueueDownload } from './transfers';
 import { populateUploaderChips, uploaderChipHTML } from './uploaders';
@@ -91,6 +91,34 @@ export function resetFileListScrollRestore() {
     lastRenderedFolderId = null;
 }
 
+function fillVisibleFolderSizes(folders: any[], parentId: string, folderEpoch: number, list: HTMLElement) {
+    if (!folders.length) return;
+    calculateVisibleFolderBytes(parentId)
+        .then((sizes) => {
+            if (state.folderSizeEpoch !== folderEpoch) return;
+            if (state.currentFolderId !== parentId) return;
+            for (const folder of folders) {
+                const id = String(folder?.id || "");
+                if (!id) continue;
+                const row = list.querySelector(`.folder-row[data-id="${CSS.escape(id)}"]`);
+                const sizeEl = row?.querySelector(".folder-size");
+                if (!sizeEl) continue;
+                sizeEl.textContent = formatBytes(sizes.get(id) ?? 0);
+            }
+        })
+        .catch(() => {
+            if (state.folderSizeEpoch !== folderEpoch) return;
+            if (state.currentFolderId !== parentId) return;
+            for (const folder of folders) {
+                const id = String(folder?.id || "");
+                if (!id) continue;
+                const row = list.querySelector(`.folder-row[data-id="${CSS.escape(id)}"]`);
+                const sizeEl = row?.querySelector(".folder-size");
+                if (sizeEl) sizeEl.textContent = "—";
+            }
+        });
+}
+
 export function refreshFiles() {
     if (state.virtualView === "photos") {
         clearSelection();
@@ -137,14 +165,7 @@ export function refreshFiles() {
         return null;
     });
 
-    const tgPromise = requestedFolderId === ""
-        ? GetFileList().catch((err) => {
-            console.error("GetFileList failed:", err);
-            return [];
-        })
-        : Promise.resolve([]);
-
-    Promise.all([folderPromise, tgPromise]).then(([fs, tgFiles]) => {
+    Promise.all([folderPromise]).then(async ([fs]) => {
         if (folderErr || !fs) {
             if (state.currentFolderId !== requestedFolderId) return;
             const msg = String(folderErr?.message || folderErr || "Failed to load files");
@@ -160,8 +181,6 @@ export function refreshFiles() {
 
         const folders = Array.isArray(fs?.folders) ? fs.folders : [];
         const fsFiles = Array.isArray(fs?.files) ? fs.files : [];
-        const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
-        if (requestedFolderId === "") state.telegramRootCache = telegramFiles;
 
         const fsFileItems = fsFiles.map((f) => {
             const encrypted = !!f.encrypted;
@@ -180,9 +199,14 @@ export function refreshFiles() {
             };
         });
 
-        const finalize = async () => {
+        const finalize = async (tgFiles: any[] = [], preserveCurrentScroll = false) => {
+            if (state.folderSizeEpoch !== folderEpoch) return;
+            if (state.currentFolderId !== requestedFolderId) return;
+            const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
+            const scrollTopForRender = preserveCurrentScroll ? list.scrollTop : prevScrollTop;
+            const keepScrollForRender = preserveCurrentScroll || keepScroll;
             let fsIDs;
-            if (requestedFolderId === "") {
+            if (requestedFolderId === "" && telegramFiles.length > 0) {
                 try {
                     fsIDs = new Set((await getAllFsMsgIDs()).filter((id) => typeof id === "number"));
                 } catch (err) {
@@ -312,23 +336,9 @@ export function refreshFiles() {
 
                 list.appendChild(row);
 
-                const sizeEl = row.querySelector(".folder-size");
-                if (sizeEl) {
-                    calculateFolderTotalBytes(folder.id)
-                        .then((bytes) => {
-                            if (state.folderSizeEpoch !== folderEpoch) return;
-                            if (state.currentFolderId !== requestedFolderId) return;
-                            if (!row.isConnected) return;
-                            sizeEl.textContent = formatBytes(bytes);
-                        })
-                        .catch(() => {
-                            if (state.folderSizeEpoch !== folderEpoch) return;
-                            if (state.currentFolderId !== requestedFolderId) return;
-                            if (!row.isConnected) return;
-                            sizeEl.textContent = "—";
-                        });
-                }
             });
+
+            fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch, list);
 
             files.forEach((file: any) => {
                 const { base, ext } = splitNameAndExt(file.name);
@@ -402,8 +412,8 @@ export function refreshFiles() {
             // pendingFocus so a just-uploaded/renamed file can still scroll
             // itself into view and win.
             lastRenderedFolderId = requestedFolderId;
-            if (keepScroll && state.currentFolderId === requestedFolderId) {
-                list.scrollTop = prevScrollTop;
+            if (keepScrollForRender && state.currentFolderId === requestedFolderId) {
+                list.scrollTop = scrollTopForRender;
             }
 
             if (state.pendingFocus && state.pendingFocus.type === "file") {
@@ -427,7 +437,21 @@ export function refreshFiles() {
             populateUploaderChips(list);
         };
 
-        finalize();
+        await finalize();
+
+        if (requestedFolderId === "" && state.currentFolderId === requestedFolderId) {
+            GetFileList()
+                .then(async (tgFiles) => {
+                    if (state.folderSizeEpoch !== folderEpoch) return;
+                    if (state.currentFolderId !== requestedFolderId) return;
+                    const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
+                    state.telegramRootCache = telegramFiles;
+                    await finalize(telegramFiles, true);
+                })
+                .catch((err) => {
+                    console.error("GetFileList failed:", err);
+                });
+        }
     });
 }
 

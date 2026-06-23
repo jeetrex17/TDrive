@@ -52,6 +52,8 @@ export function GetFolderContents(arg1:string):Promise<backend.FileSystem>;
 
 export function GetFolderSize(arg1:string):Promise<number>;
 
+export function GetFolderSizes(arg1:string):Promise<Record<string, number>>;
+
 export function GetInviteLink(arg1:number):Promise<string>;
 
 export function GetMediaStats(arg1:string):Promise<media.MediaStats>;

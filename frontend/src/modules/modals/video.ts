@@ -29,6 +29,10 @@ const THUMBNAIL_REQUEST_DEBOUNCE_MS = 140;
 const THUMBNAIL_DWELL_PREFETCH_MS = 420;
 const THUMBNAIL_RETRY_MS = 650;
 const THUMBNAIL_FAILURE_TTL_MS = 15_000;
+// When the exact bucket isn't ready yet, show the nearest already-cached frame
+// within this many seconds as a placeholder (the exact frame swaps in on load).
+// Kept small so the placeholder is genuinely the same scene, never a far one.
+const THUMBNAIL_NEAREST_MAX_SECONDS = 120;
 const PLAYBACK_HINT_INTERVAL_MS = 1000;
 const MEDIA_STATS_POLL_MS = 1000;
 const STREAM_ACTIVITY_HOLD_MS = 2000;
@@ -954,13 +958,27 @@ async function sendPlaybackHint(state: PlayerState) {
             token: activeMediaToken,
             currentTime: state.currentTime,
             duration: state.duration,
-            busy: Boolean(state.loading),
+            bufferAhead: bufferAheadSeconds(state),
         });
     } catch (err) {
         console.warn("UpdateMediaPlayback failed:", err);
     } finally {
         playbackHintInFlight = false;
     }
+}
+
+// bufferAheadSeconds reports how many seconds are buffered ahead of the current
+// playhead. It reads the shared PlayerState.buffered ranges, so it works for both
+// the HTML <video> and native mpv engines. The thumbnail scheduler uses it to
+// decide how aggressively it may build previews without starving playback.
+function bufferAheadSeconds(state: PlayerState): number {
+    const t = state.currentTime;
+    for (const range of state.buffered) {
+        if (range.start <= t && t <= range.end) {
+            return Math.max(0, range.end - t);
+        }
+    }
+    return 0;
 }
 
 function clearPlaybackHintTimer() {
@@ -1027,19 +1045,48 @@ function updateThumbnailTooltip(seconds: number) {
     if (cached && scrubberTooltipImageEl && scrubberTooltipEl) {
         clearThumbnailRequestTimer();
         scheduleThumbnailDwell(bucket);
-        if (scrubberTooltipImageEl.src !== cached) {
-            scrubberTooltipImageEl.src = cached;
-        }
+        showTooltipImage(cached);
         setThumbnailTooltipState("ready");
         return;
     }
     clearThumbnailDwellTimer();
+    // No exact frame yet: show the nearest already-cached frame as a placeholder so
+    // the user never stares at a blank skeleton. The time label stays exact, and the
+    // precise frame swaps in when it loads (keepVisible avoids a skeleton flash).
+    const nearest = nearestCachedThumbnail(bucket);
+    if (nearest && scrubberTooltipImageEl && scrubberTooltipEl) {
+        showTooltipImage(nearest);
+        setThumbnailTooltipState("ready");
+        scheduleThumbnailRequest(bucket, true);
+        return;
+    }
     if (thumbnailFailedRecently(bucket)) {
         setThumbnailTooltipState("failed");
         return;
     }
     setThumbnailTooltipState("pending");
     scheduleThumbnailRequest(bucket);
+}
+
+// nearestCachedThumbnail returns the cached frame closest to bucket, but only if
+// it is within THUMBNAIL_NEAREST_MAX_SECONDS so the placeholder is the same scene.
+function nearestCachedThumbnail(bucket: number): string | null {
+    let bestURL: string | null = null;
+    let bestDistance = Infinity;
+    for (const [cachedBucket, url] of thumbnailObjectURLs) {
+        const distance = Math.abs(cachedBucket - bucket);
+        if (distance <= THUMBNAIL_NEAREST_MAX_SECONDS && distance < bestDistance) {
+            bestDistance = distance;
+            bestURL = url;
+        }
+    }
+    return bestURL;
+}
+
+function showTooltipImage(url: string) {
+    if (scrubberTooltipImageEl && scrubberTooltipImageEl.src !== url) {
+        scrubberTooltipImageEl.src = url;
+    }
 }
 
 function thumbnailBucket(seconds: number) {
@@ -1067,7 +1114,7 @@ function clearThumbnailDwellTimer() {
     thumbnailDwellTimer = null;
 }
 
-function scheduleThumbnailRequest(bucket: number) {
+function scheduleThumbnailRequest(bucket: number, keepVisible = false) {
     if (!activeThumbnailURL || thumbnailObjectURLs.has(bucket)) return;
     scheduledThumbnailBucket = bucket;
     if (thumbnailRequestTimer != null) window.clearTimeout(thumbnailRequestTimer);
@@ -1076,7 +1123,7 @@ function scheduleThumbnailRequest(bucket: number) {
         const bucketToRequest = scheduledThumbnailBucket;
         scheduledThumbnailBucket = -1;
         if (bucketToRequest !== currentPreviewBucket) return;
-        requestThumbnail(bucketToRequest);
+        requestThumbnail(bucketToRequest, false, keepVisible);
     }, THUMBNAIL_REQUEST_DEBOUNCE_MS);
 }
 
@@ -1094,11 +1141,11 @@ function scheduleThumbnailDwell(bucket: number) {
     }, THUMBNAIL_DWELL_PREFETCH_MS);
 }
 
-function requestThumbnail(bucket: number, prefetch = false) {
+function requestThumbnail(bucket: number, prefetch = false, keepVisible = false) {
     if (!activeThumbnailURL || pendingThumbnails.has(bucket) || thumbnailObjectURLs.has(bucket)) return;
     if (thumbnailFailedRecently(bucket)) return;
     pendingThumbnails.add(bucket);
-    if (!prefetch && currentPreviewBucket === bucket) setThumbnailTooltipState("pending");
+    if (!prefetch && !keepVisible && currentPreviewBucket === bucket) setThumbnailTooltipState("pending");
     const seq = thumbnailRequestSeq;
     const url = `${activeThumbnailURL}?t=${encodeURIComponent(String(bucket))}`;
     let retryScheduled = false;
@@ -1115,7 +1162,7 @@ function requestThumbnail(bucket: number, prefetch = false) {
             }
             if (!response.ok) {
                 failedThumbnails.set(bucket, Date.now());
-                if (!prefetch && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
+                if (!prefetch && !keepVisible && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
                 return;
             }
             const blob = await response.blob();
@@ -1134,7 +1181,7 @@ function requestThumbnail(bucket: number, prefetch = false) {
         })
         .catch(() => {
             if (seq === thumbnailRequestSeq) failedThumbnails.set(bucket, Date.now());
-            if (!prefetch && seq === thumbnailRequestSeq && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
+            if (!prefetch && !keepVisible && seq === thumbnailRequestSeq && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
         })
         .finally(() => {
             if (seq === thumbnailRequestSeq && !retryScheduled) pendingThumbnails.delete(bucket);

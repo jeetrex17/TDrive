@@ -513,7 +513,7 @@ export namespace media {
 	    token: string;
 	    current_time: number;
 	    duration: number;
-	    busy: boolean;
+	    buffer_ahead: number;
 
 	    static createFrom(source: any = {}) {
 	        return new PlaybackUpdate(source);
@@ -524,7 +524,7 @@ export namespace media {
 	        this.token = source["token"];
 	        this.current_time = source["current_time"];
 	        this.duration = source["duration"];
-	        this.busy = source["busy"];
+	        this.buffer_ahead = source["buffer_ahead"];
 	    }
 	}
 

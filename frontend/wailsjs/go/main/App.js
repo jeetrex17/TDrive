@@ -94,6 +94,10 @@ export function GetFolderSize(arg1) {
   return window['go']['main']['App']['GetFolderSize'](arg1);
 }
 
+export function GetFolderSizes(arg1) {
+  return window['go']['main']['App']['GetFolderSizes'](arg1);
+}
+
 export function GetInviteLink(arg1) {
   return window['go']['main']['App']['GetInviteLink'](arg1);
 }

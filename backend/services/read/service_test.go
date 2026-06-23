@@ -110,6 +110,42 @@ func TestFolderContentsStorageIDsAndSize(t *testing.T) {
 	}
 }
 
+func TestChildFolderSizesBatchesVisibleSubtrees(t *testing.T) {
+	svc, db, _ := newTestService(t)
+
+	project(t, db, 10, projection.Op{Type: projection.OpMkdir, Obj: "d:a", Parent: projection.RootParent, Name: "A"})
+	project(t, db, 11, projection.Op{Type: projection.OpMkdir, Obj: "d:b", Parent: projection.RootParent, Name: "B"})
+	project(t, db, 12, projection.Op{Type: projection.OpMkdir, Obj: "d:a-child", Parent: "d:a", Name: "A child"})
+	project(t, db, 20, projection.Op{
+		Type:           projection.OpFileUpload,
+		Parent:         "d:a",
+		Name:           "a.txt",
+		FileSize:       7,
+		FileUploadTime: 1,
+	})
+	project(t, db, 21, projection.Op{
+		Type:           projection.OpFileUpload,
+		Parent:         "d:a-child",
+		Name:           "nested.txt",
+		FileSize:       13,
+		FileUploadTime: 2,
+	})
+
+	sizes, err := svc.ChildFolderSizes(testChannelID, projection.RootParent)
+	if err != nil {
+		t.Fatalf("child sizes: %v", err)
+	}
+	if got := sizes["d:a"]; got != 20 {
+		t.Fatalf("size d:a = %d, want 20", got)
+	}
+	if got := sizes["d:b"]; got != 0 {
+		t.Fatalf("size d:b = %d, want 0", got)
+	}
+	if _, ok := sizes["d:a-child"]; ok {
+		t.Fatalf("nested child should not be keyed as visible root: %+v", sizes)
+	}
+}
+
 func TestSearchBuildsFolderPaths(t *testing.T) {
 	svc, db, _ := newTestService(t)
 

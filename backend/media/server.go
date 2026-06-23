@@ -25,7 +25,10 @@ type PlaybackUpdate struct {
 	Token       string  `json:"token"`
 	CurrentTime float64 `json:"current_time"`
 	Duration    float64 `json:"duration"`
-	Busy        bool    `json:"busy"`
+	// BufferAhead is the number of seconds the player has buffered ahead of the
+	// playhead. The thumbnail scheduler uses it to steal slack: build aggressively
+	// while the buffer is comfortable and yield to playback as it drains.
+	BufferAhead float64 `json:"buffer_ahead"`
 }
 
 type Server struct {
@@ -83,7 +86,7 @@ func (s *Server) UpdatePlayback(update PlaybackUpdate) error {
 	if session == nil {
 		return ErrSessionNotFound
 	}
-	session.UpdatePlayback(update.CurrentTime, update.Duration, update.Busy)
+	session.UpdatePlayback(update.CurrentTime, update.Duration, update.BufferAhead)
 	return nil
 }
 

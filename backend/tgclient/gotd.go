@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"TDrive/backend/auth"
@@ -399,9 +400,48 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 				onProgress: onProgress,
 			}
 		}
+		release, err := AcquireBackgroundGetFileSlots(ctx, 1)
+		if err != nil {
+			return err
+		}
+		defer release()
+
 		d := downloader.NewDownloader()
 		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, dst); err != nil {
 			return fmt.Errorf("tgclient: download: %w", err)
+		}
+		return nil
+	})
+}
+
+func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, w io.WriterAt, baseOffset int64, onProgress func(done, total int64)) error {
+	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
+		if err != nil {
+			return err
+		}
+
+		threads := DefaultDownloadThreads
+		release, err := AcquireBackgroundGetFileSlots(ctx, threads)
+		if err != nil {
+			return err
+		}
+		defer release()
+
+		dst := io.WriterAt(offsetWriterAt{w: w, base: baseOffset})
+		if onProgress != nil {
+			dst = &progressWriterAt{
+				w:          dst,
+				total:      doc.Size,
+				onProgress: onProgress,
+			}
+		}
+		d := downloader.NewDownloader()
+		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).WithThreads(threads).Parallel(ctx, dst); err != nil {
+			return fmt.Errorf("tgclient: download: %w", err)
+		}
+		if onProgress != nil {
+			onProgress(doc.Size, doc.Size)
 		}
 		return nil
 	})
@@ -413,6 +453,12 @@ func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID 
 		if err != nil {
 			return err
 		}
+		release, err := AcquireBackgroundGetFileSlots(ctx, 1)
+		if err != nil {
+			return err
+		}
+		defer release()
+
 		d := downloader.NewDownloader()
 		location := &tg.InputDocumentFileLocation{
 			ID:            doc.ID,
@@ -715,6 +761,36 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 		p.done += int64(n)
 		if p.onProgress != nil {
 			p.onProgress(p.done, p.total)
+		}
+	}
+	return n, err
+}
+
+type offsetWriterAt struct {
+	w    io.WriterAt
+	base int64
+}
+
+func (o offsetWriterAt) WriteAt(b []byte, off int64) (int, error) {
+	return o.w.WriteAt(b, o.base+off)
+}
+
+type progressWriterAt struct {
+	w          io.WriterAt
+	total      int64
+	done       atomic.Int64
+	lastEmit   atomic.Int64
+	onProgress func(done, total int64)
+}
+
+func (p *progressWriterAt) WriteAt(b []byte, off int64) (int, error) {
+	n, err := p.w.WriteAt(b, off)
+	if n > 0 && p.onProgress != nil {
+		done := p.done.Add(int64(n))
+		now := time.Now().UnixNano()
+		last := p.lastEmit.Load()
+		if now-last >= int64(100*time.Millisecond) && p.lastEmit.CompareAndSwap(last, now) {
+			p.onProgress(done, p.total)
 		}
 	}
 	return n, err

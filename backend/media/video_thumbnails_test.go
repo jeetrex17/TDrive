@@ -106,12 +106,14 @@ func TestVideoThumbnailerBackgroundPrecomputeGenerates(t *testing.T) {
 	thumbs := newVideoThumbnailer(session, thumbnail.NewCache(t.TempDir(), 1<<20), gen)
 	defer thumbs.Close()
 
-	thumbs.UpdatePlayback(30, 120, false)
+	// Healthy buffer → precompute runs; coarse-to-fine builds the coarse bucket at
+	// the playhead (currentTime 0) first.
+	thumbs.UpdatePlayback(0, 120, 60)
 	got := waitForGeneratorEntry(t, gen.entered)
-	if got != 30 {
-		t.Fatalf("precomputed bucket = %d, want 30", got)
+	if got != 0 {
+		t.Fatalf("precomputed bucket = %d, want 0", got)
 	}
-	if !waitForCachedThumbnail(t, thumbs, 30) {
+	if !waitForCachedThumbnail(t, thumbs, 0) {
 		t.Fatal("precomputed bucket was not cached")
 	}
 }
@@ -137,6 +139,176 @@ func TestVideoThumbnailerBackgroundPrecomputeYieldsToForeground(t *testing.T) {
 	if _, ok := thumbs.cached(30); ok {
 		t.Fatal("background bucket was cached even though foreground was pending")
 	}
+}
+
+func TestVideoThumbnailerBufferBandGating(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	cases := []struct {
+		name        string
+		bufferAhead float64
+		wantFGWait  bool
+		wantPC      bool
+	}{
+		{"healthy", thumbBufferHealthyStart + 5, false, true},
+		{"emergency", thumbBufferEmergency - 1, true, false},
+		{"mid band aging tick", (thumbBufferEmergency + thumbBufferHealthyStop) / 2, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vt := &videoThumbnailer{}
+			vt.UpdatePlayback(10, 120, tc.bufferAhead)
+			vt.mu.Lock()
+			fgWait := vt.foregroundShouldWaitLocked(now)
+			pc := vt.precomputeAllowedLocked(now)
+			vt.mu.Unlock()
+			if fgWait != tc.wantFGWait {
+				t.Fatalf("foregroundShouldWait = %v, want %v", fgWait, tc.wantFGWait)
+			}
+			if pc != tc.wantPC {
+				t.Fatalf("precomputeAllowed = %v, want %v", pc, tc.wantPC)
+			}
+		})
+	}
+}
+
+func TestVideoThumbnailerPrecomputeAgingFloor(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	vt := &videoThumbnailer{}
+	vt.UpdatePlayback(10, 120, (thumbBufferEmergency+thumbBufferHealthyStop)/2) // mid band
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+
+	vt.lastPrecomputeAt = time.Time{}
+	if !vt.precomputeAllowedLocked(now) {
+		t.Fatal("mid band should allow an aging precompute tick")
+	}
+	vt.lastPrecomputeAt = now
+	if vt.precomputeAllowedLocked(now) {
+		t.Fatal("mid band should throttle precompute right after a tick")
+	}
+	if !vt.precomputeAllowedLocked(now.Add(thumbPrecomputeAging)) {
+		t.Fatal("mid band should allow another tick once the aging interval elapses")
+	}
+}
+
+func TestVideoThumbnailerPrecomputeHysteresis(t *testing.T) {
+	vt := &videoThumbnailer{}
+	fullSpeed := func() bool {
+		vt.mu.Lock()
+		defer vt.mu.Unlock()
+		return vt.precomputeFullSpeed
+	}
+
+	vt.UpdatePlayback(10, 120, thumbBufferHealthyStart)
+	if !fullSpeed() {
+		t.Fatal("should latch full speed at the healthy-start watermark")
+	}
+	// Draining within the hysteresis band must not flap back off.
+	vt.UpdatePlayback(10, 120, (thumbBufferHealthyStart+thumbBufferHealthyStop)/2)
+	if !fullSpeed() {
+		t.Fatal("should hold full speed inside the hysteresis band")
+	}
+	// Below the stop watermark it releases.
+	vt.UpdatePlayback(10, 120, thumbBufferHealthyStop-1)
+	if fullSpeed() {
+		t.Fatal("should release full speed below the healthy-stop watermark")
+	}
+}
+
+func TestVideoThumbnailerPrecomputeCoarseToFine(t *testing.T) {
+	vt := &videoThumbnailer{
+		session:  testVideoThumbSession(),
+		cache:    thumbnail.NewCache(t.TempDir(), 1<<20),
+		ready:    map[int]string{},
+		inflight: map[int]struct{}{},
+		failed:   map[int]time.Time{},
+	}
+	vt.UpdatePlayback(0, 600, 60) // healthy buffer so precompute is allowed
+	coarse := thumbnailInterval(600) * precomputeCoarseFactor
+
+	// The first targets must all land on the coarse grid (whole-bar coverage first).
+	for i := range 4 {
+		bucket, ok := vt.nextPrecomputeBucket()
+		if !ok {
+			t.Fatalf("iteration %d: expected a precompute bucket", i)
+		}
+		if bucket%coarse != 0 {
+			t.Fatalf("iteration %d: bucket %d is not on the coarse grid (%d)", i, bucket, coarse)
+		}
+		vt.mu.Lock()
+		vt.ready[bucket] = "x" // simulate it being generated
+		vt.mu.Unlock()
+	}
+}
+
+func TestVideoThumbnailerPrecomputeAnchorTierFirst(t *testing.T) {
+	vt := &videoThumbnailer{
+		session:  testVideoThumbSession(),
+		cache:    thumbnail.NewCache(t.TempDir(), 1<<20),
+		ready:    map[int]string{},
+		inflight: map[int]struct{}{},
+		failed:   map[int]time.Time{},
+	}
+	const duration = 3.0 * 60 * 60 // 3 hours
+	vt.UpdatePlayback(0, duration, 120)
+
+	anchor := anchorPrecomputeInterval(duration, thumbnailInterval(duration)*precomputeCoarseFactor)
+	if anchor <= 0 {
+		t.Fatal("expected an anchor tier for a 3h video")
+	}
+
+	// The first targets must be evenly-spaced anchors across the whole timeline.
+	for i := range 5 {
+		bucket, ok := vt.nextPrecomputeBucket()
+		if !ok {
+			t.Fatalf("iteration %d: expected a precompute bucket", i)
+		}
+		if bucket%anchor != 0 {
+			t.Fatalf("iteration %d: bucket %d not on the anchor grid (%d)", i, bucket, anchor)
+		}
+		vt.mu.Lock()
+		vt.ready[bucket] = "x"
+		vt.mu.Unlock()
+	}
+}
+
+func TestVideoThumbnailerPrecomputeDoesNotHotLoopOnDefer(t *testing.T) {
+	gen := &deferringVideoThumbGenerator{available: true}
+	session := testVideoThumbSession()
+	session.setThumbnailURLs("http://127.0.0.1/thumb-source", "http://127.0.0.1/thumb")
+
+	thumbs := newVideoThumbnailer(session, thumbnail.NewCache(t.TempDir(), 1<<20), gen)
+	defer thumbs.Close()
+
+	// Healthy buffer makes precompute want to run; every generate "defers", which
+	// is intentionally not marked failed. A regressed inner loop would re-pick the
+	// same bucket with no delay and spin hundreds of times.
+	thumbs.UpdatePlayback(30, 120, 60)
+	time.Sleep(300 * time.Millisecond)
+	if n := gen.count(); n > 20 {
+		t.Fatalf("precompute hot-looped on deferred generation: %d calls in 300ms", n)
+	}
+}
+
+type deferringVideoThumbGenerator struct {
+	available bool
+	mu        sync.Mutex
+	calls     int
+}
+
+func (g *deferringVideoThumbGenerator) Available() bool { return g != nil && g.available }
+
+func (g *deferringVideoThumbGenerator) GenerateVideoThumbnail(_ context.Context, _, _ string, _ int) error {
+	g.mu.Lock()
+	g.calls++
+	g.mu.Unlock()
+	return context.Canceled
+}
+
+func (g *deferringVideoThumbGenerator) count() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.calls
 }
 
 type recordingVideoThumbGenerator struct {
