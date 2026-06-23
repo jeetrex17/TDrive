@@ -31,6 +31,7 @@ type App struct {
 	// fileDropEnabled tracks whether the native OS file-drop handler is
 	// registered. The frontend toggles it off during an internal drag-to-move so
 	// macOS does not intercept the in-app HTML5 drag.
+	fileDropMu      sync.Mutex
 	fileDropEnabled bool
 
 	// transferMu guards the cancel handles for the active upload/import and the
@@ -145,7 +146,8 @@ type PreviewPayload struct {
 }
 
 func (a *App) CheckLoginStatus() bool {
-	return a.authService().IsLoggedIn(a.ctx)
+	svc := a.authService()
+	return svc != nil && svc.IsLoggedIn(a.ctx)
 }
 
 func (a *App) SelectFiles() ([]string, error) {
@@ -195,7 +197,11 @@ func (a *App) endUpload() {
 // never an upload still in flight, so it's safe to run at the start of an upload
 // flow. Best effort — a normal session finds nothing and never hits Telegram.
 func (a *App) sweepOrphanParts(ctx context.Context) {
-	if err := a.fileService().SweepOrphanParts(ctx, a.ActiveChannelID()); err != nil {
+	svc := a.fileService()
+	if svc == nil {
+		return
+	}
+	if err := svc.SweepOrphanParts(ctx, a.ActiveChannelID()); err != nil {
 		fmt.Printf("warn: orphan-part sweep failed: %v\n", err)
 	}
 }
@@ -241,10 +247,14 @@ func (a *App) CancelDownload() {
 }
 
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) ([]backend.FileMetaData, error) {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return nil, err
+	}
 	ctx := a.beginUpload()
 	defer a.endUpload()
 	a.sweepOrphanParts(ctx)
-	files, err := a.fileService().Upload(ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
+	files, err := svc.Upload(ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
 	if err != nil {
 		out := make([]backend.FileMetaData, 0, len(files))
 		for _, f := range files {
@@ -264,6 +274,9 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 // mutates nothing.
 func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fileservice.ImportPlan {
 	svc := a.fileService()
+	if svc == nil {
+		return fileservice.ImportPlan{Errors: []string{"backend not ready"}}
+	}
 	return svc.PlanImport(paths, encrypt, extractArchives)
 }
 
@@ -272,7 +285,10 @@ func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fil
 // is set, otherwise uploaded as-is. Progress flows through the import_* and the
 // per-file upload_* events.
 func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) error {
-	svc := a.fileService()
+	svc, err := a.requireFileService()
+	if err != nil {
+		return err
+	}
 	ctx := a.beginUpload()
 	defer a.endUpload()
 	a.sweepOrphanParts(ctx)
@@ -298,11 +314,25 @@ func (a *App) folderService() *folderservice.Service {
 	return a.engine.FolderService()
 }
 
+func (a *App) requireFolderService() (*folderservice.Service, error) {
+	if svc := a.folderService(); svc != nil {
+		return svc, nil
+	}
+	return nil, fmt.Errorf("backend not ready")
+}
+
 func (a *App) fileService() *fileservice.Service {
 	if a.engine == nil {
 		return nil
 	}
 	return a.engine.FileService()
+}
+
+func (a *App) requireFileService() (*fileservice.Service, error) {
+	if svc := a.fileService(); svc != nil {
+		return svc, nil
+	}
+	return nil, fmt.Errorf("backend not ready")
 }
 
 func (a *App) readService() *readservice.Service {
@@ -312,6 +342,13 @@ func (a *App) readService() *readservice.Service {
 	return a.engine.ReadService()
 }
 
+func (a *App) requireReadService() (*readservice.Service, error) {
+	if svc := a.readService(); svc != nil {
+		return svc, nil
+	}
+	return nil, fmt.Errorf("backend not ready")
+}
+
 func (a *App) lifecycleService() *lifecycleservice.Service {
 	if a.engine == nil {
 		return nil
@@ -319,11 +356,25 @@ func (a *App) lifecycleService() *lifecycleservice.Service {
 	return a.engine.LifecycleService()
 }
 
+func (a *App) requireLifecycleService() (*lifecycleservice.Service, error) {
+	if svc := a.lifecycleService(); svc != nil {
+		return svc, nil
+	}
+	return nil, fmt.Errorf("backend not ready")
+}
+
 func (a *App) userService() *userservice.Service {
 	if a.engine == nil {
 		return nil
 	}
 	return a.engine.UserService()
+}
+
+func (a *App) requireUserService() (*userservice.Service, error) {
+	if svc := a.userService(); svc != nil {
+		return svc, nil
+	}
+	return nil, fmt.Errorf("backend not ready")
 }
 
 func (a *App) authService() *authsvc.Service {
@@ -334,15 +385,27 @@ func (a *App) authService() *authsvc.Service {
 }
 
 func (a *App) LoginPhoneNumber(phoneNumber string) error {
-	return a.authService().StartLogin(a.ctx, phoneNumber)
+	svc := a.authService()
+	if svc == nil {
+		return fmt.Errorf("backend not ready")
+	}
+	return svc.StartLogin(a.ctx, phoneNumber)
 }
 
 func (a *App) InitDrive() string {
-	return a.lifecycleService().InitDrive(a.ctx)
+	svc, err := a.requireLifecycleService()
+	if err != nil {
+		return err.Error()
+	}
+	return svc.InitDrive(a.ctx)
 }
 
 func (a *App) GetFileList() []TDriveFile {
-	files, err := a.readService().TelegramRootFiles(a.ctx, a.ActiveChannelID())
+	svc, err := a.requireReadService()
+	if err != nil {
+		return nil
+	}
+	files, err := svc.TelegramRootFiles(a.ctx, a.ActiveChannelID())
 	if err != nil {
 		return nil
 	}
@@ -360,7 +423,11 @@ func (a *App) GetFileList() []TDriveFile {
 }
 
 func (a *App) PreviewThumbnail(msgID int) (PreviewPayload, error) {
-	payload, err := a.fileService().PreviewThumbnail(a.ctx, a.ActiveChannelID(), msgID)
+	svc, err := a.requireFileService()
+	if err != nil {
+		return PreviewPayload{}, err
+	}
+	payload, err := svc.PreviewThumbnail(a.ctx, a.ActiveChannelID(), msgID)
 	if err != nil {
 		return PreviewPayload{}, err
 	}
@@ -368,7 +435,11 @@ func (a *App) PreviewThumbnail(msgID int) (PreviewPayload, error) {
 }
 
 func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
-	payload, err := a.fileService().PreviewFile(a.ctx, a.ActiveChannelID(), msgID)
+	svc, err := a.requireFileService()
+	if err != nil {
+		return PreviewPayload{}, err
+	}
+	payload, err := svc.PreviewFile(a.ctx, a.ActiveChannelID(), msgID)
 	if err != nil {
 		return PreviewPayload{}, err
 	}
@@ -376,9 +447,13 @@ func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
 }
 
 func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return DownloadResult{Status: "error", Message: err.Error()}
+	}
 	ctx := a.beginDownload()
 	defer a.endDownload()
-	result := a.fileService().Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, func(defaultName string) (string, error) {
+	result := svc.Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, func(defaultName string) (string, error) {
 		return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 			DefaultFilename: defaultName,
 			Title:           "Save File As...",
@@ -392,14 +467,22 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 }
 
 func (a *App) DeleteFile(msgID int) string {
-	if err := a.fileService().Delete(a.ctx, a.ActiveChannelID(), msgID); err != nil {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	if err := svc.Delete(a.ctx, a.ActiveChannelID(), msgID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) GetStorageUsed() (int64, error) {
-	return a.readService().StorageUsed(a.ActiveChannelID())
+	svc, err := a.requireReadService()
+	if err != nil {
+		return 0, err
+	}
+	return svc.StorageUsed(a.ActiveChannelID())
 }
 
 func (a *App) GetCodech() chan string {
@@ -436,7 +519,11 @@ func (a *App) SumbitPassword(password string) {
 
 func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, error) {
 	channelID := a.ActiveChannelID()
-	folder, err := a.folderService().Create(channelID, foldername, parentID)
+	svc, err := a.requireFolderService()
+	if err != nil {
+		return backend.Folder{}, err
+	}
+	folder, err := svc.Create(channelID, foldername, parentID)
 	if err != nil {
 		return backend.Folder{}, err
 	}
@@ -464,6 +551,8 @@ func (a *App) shutdown(ctx context.Context) {
 
 // enableFileDrop registers the native OS file-drop handler (idempotent).
 func (a *App) enableFileDrop() {
+	a.fileDropMu.Lock()
+	defer a.fileDropMu.Unlock()
 	if a.fileDropEnabled {
 		return
 	}
@@ -488,6 +577,8 @@ func (a *App) SetFileDropEnabled(enabled bool) {
 		a.enableFileDrop()
 		return
 	}
+	a.fileDropMu.Lock()
+	defer a.fileDropMu.Unlock()
 	if a.fileDropEnabled {
 		runtime.OnFileDropOff(a.ctx)
 		a.fileDropEnabled = false
@@ -539,17 +630,29 @@ func (a *App) startup(ctx context.Context) {
 // SyncChannel triggers an incremental sync for the given channel. Wails-bound
 // for the future "Refresh" UI button and for debug.
 func (a *App) SyncChannel(channelID int64) error {
-	return a.lifecycleService().SyncChannel(a.ctx, channelID)
+	svc, err := a.requireLifecycleService()
+	if err != nil {
+		return err
+	}
+	return svc.SyncChannel(a.ctx, channelID)
 }
 
 // RebuildProjection wipes and replays the local projection for a channel
 // from the channel's replay_log. Hidden Wails method for debug/recovery.
 func (a *App) RebuildProjection(channelID int64) error {
-	return a.lifecycleService().RebuildProjection(channelID)
+	svc, err := a.requireLifecycleService()
+	if err != nil {
+		return err
+	}
+	return svc.RebuildProjection(channelID)
 }
 
 func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
-	fs, err := a.readService().FolderContents(a.ActiveChannelID(), parentID)
+	svc, err := a.requireReadService()
+	if err != nil {
+		return backend.FileSystem{}, err
+	}
+	fs, err := svc.FolderContents(a.ActiveChannelID(), parentID)
 	if err != nil {
 		return backend.FileSystem{}, err
 	}
@@ -581,7 +684,11 @@ func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
 }
 
 func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
-	hits, err := a.readService().Search(a.ActiveChannelID(), query, limit)
+	svc, err := a.requireReadService()
+	if err != nil {
+		return nil, err
+	}
+	hits, err := svc.Search(a.ActiveChannelID(), query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -589,68 +696,106 @@ func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
 	results := make([]backend.SearchResult, 0, len(hits))
 	for _, h := range hits {
 		results = append(results, backend.SearchResult{
-			Type:       h.Type,
-			ID:         h.ID,
-			Name:       h.Name,
-			ParentID:   h.ParentID,
-			Size:       h.Size,
-			UploadTime: h.UploadTime,
-			UploaderID: h.UploaderID,
-			Path:       h.Path,
+			Type:          h.Type,
+			ID:            h.ID,
+			Name:          h.Name,
+			ParentID:      h.ParentID,
+			Size:          h.Size,
+			UploadTime:    h.UploadTime,
+			UploaderID:    h.UploaderID,
+			Encrypted:     h.Encrypted,
+			PlaintextSize: h.PlaintextSize,
+			Path:          h.Path,
 		})
 	}
 	return results, nil
 }
 
 func (a *App) GetAllFsMsgIDs() ([]int, error) {
-	return a.readService().AllFileMsgIDs(a.ActiveChannelID())
+	svc, err := a.requireReadService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.AllFileMsgIDs(a.ActiveChannelID())
 }
 
 func (a *App) GetFolderSize(folderID string) (int64, error) {
-	return a.readService().FolderSize(a.ActiveChannelID(), folderID)
+	svc, err := a.requireReadService()
+	if err != nil {
+		return 0, err
+	}
+	return svc.FolderSize(a.ActiveChannelID(), folderID)
 }
 
 func (a *App) GetFolderSizes(parentID string) (map[string]int64, error) {
-	return a.readService().ChildFolderSizes(a.ActiveChannelID(), parentID)
+	svc, err := a.requireReadService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.ChildFolderSizes(a.ActiveChannelID(), parentID)
 }
 
 func (a *App) DeleteFolder(folderID string) string {
-	if err := a.folderService().Delete(a.ctx, a.ActiveChannelID(), folderID); err != nil {
+	svc, err := a.requireFolderService()
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	if err := svc.Delete(a.ctx, a.ActiveChannelID(), folderID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID string) string {
-	if err := a.fileService().Meta(a.ActiveChannelID(), msgID, name, size, parentID); err != nil {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	if err := svc.Meta(a.ActiveChannelID(), msgID, name, size, parentID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) RenameFile(msgID int, newName string) string {
-	if err := a.fileService().Rename(a.ctx, a.ActiveChannelID(), msgID, newName); err != nil {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	if err := svc.Rename(a.ctx, a.ActiveChannelID(), msgID, newName); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) RenameFolder(folderID string, newName string) string {
-	if err := a.folderService().Rename(a.ActiveChannelID(), folderID, newName); err != nil {
+	svc, err := a.requireFolderService()
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	if err := svc.Rename(a.ActiveChannelID(), folderID, newName); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) MoveFile(msgID int, newParentID string) string {
-	if err := a.fileService().Move(a.ctx, a.ActiveChannelID(), msgID, newParentID); err != nil {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	if err := svc.Move(a.ctx, a.ActiveChannelID(), msgID, newParentID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"
 }
 
 func (a *App) MoveFolder(folderID string, newParentID string) string {
-	if err := a.folderService().Move(a.ActiveChannelID(), folderID, newParentID); err != nil {
+	svc, err := a.requireFolderService()
+	if err != nil {
+		return "Error: " + err.Error()
+	}
+	if err := svc.Move(a.ActiveChannelID(), folderID, newParentID); err != nil {
 		return "Error: " + err.Error()
 	}
 	return "Success"

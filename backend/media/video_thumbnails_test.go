@@ -141,6 +141,55 @@ func TestVideoThumbnailerBackgroundPrecomputeYieldsToForeground(t *testing.T) {
 	}
 }
 
+func TestVideoThumbnailerSerializesPersistentForegroundAndPrecompute(t *testing.T) {
+	persistent := &blockingVideoThumbSession{
+		entered: make(chan int, 2),
+		release: make(chan struct{}),
+	}
+	gen := &blockingStatefulVideoThumbGenerator{session: persistent}
+	session := testVideoThumbSession()
+	session.setThumbnailURLs("http://127.0.0.1/thumb-source", "http://127.0.0.1/thumb")
+
+	thumbs := newVideoThumbnailer(session, thumbnail.NewCache(t.TempDir(), 1<<20), gen)
+	defer thumbs.Close()
+
+	backgroundDone := make(chan struct{})
+	go func() {
+		defer close(backgroundDone)
+		thumbs.generate(10, true)
+	}()
+	if got := waitForGeneratorEntry(t, persistent.entered); got != 10 {
+		t.Fatalf("background bucket = %d, want 10", got)
+	}
+
+	foregroundDone := make(chan struct{})
+	go func() {
+		defer close(foregroundDone)
+		thumbs.generate(20, false)
+	}()
+
+	select {
+	case got := <-persistent.entered:
+		t.Fatalf("foreground entered persistent extractor before background released; got bucket %d", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(persistent.release)
+	select {
+	case <-backgroundDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background generation did not finish")
+	}
+	if got := waitForGeneratorEntry(t, persistent.entered); got != 20 {
+		t.Fatalf("foreground bucket = %d, want 20", got)
+	}
+	select {
+	case <-foregroundDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("foreground generation did not finish")
+	}
+}
+
 func TestVideoThumbnailerBufferBandGating(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	cases := []struct {
@@ -436,3 +485,40 @@ func (s *fakeVideoThumbSession) GenerateVideoThumbnail(_ context.Context, outPat
 }
 
 func (s *fakeVideoThumbSession) Close() {}
+
+type blockingStatefulVideoThumbGenerator struct {
+	session *blockingVideoThumbSession
+}
+
+func (g *blockingStatefulVideoThumbGenerator) Available() bool { return true }
+
+func (g *blockingStatefulVideoThumbGenerator) GenerateVideoThumbnail(_ context.Context, _ string, _ string, _ int) error {
+	return errors.New("cold extractor should not be used")
+}
+
+func (g *blockingStatefulVideoThumbGenerator) NewVideoThumbnailSession(_ string) (VideoThumbnailSession, error) {
+	return g.session, nil
+}
+
+type blockingVideoThumbSession struct {
+	entered chan int
+	release chan struct{}
+}
+
+func (s *blockingVideoThumbSession) GenerateVideoThumbnail(ctx context.Context, outPath string, seconds int) error {
+	select {
+	case s.entered <- seconds:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if seconds == 10 {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return os.WriteFile(outPath, []byte{byte(seconds)}, videoThumbFileMode)
+}
+
+func (s *blockingVideoThumbSession) Close() {}

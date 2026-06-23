@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && cgo
 
 package nativeplayer
 
@@ -292,13 +292,12 @@ import (
 	"unsafe"
 )
 
-const linuxNativePlayerFlag = "TDRIVE_EXPERIMENTAL_LINUX_NATIVE_PLAYER"
-
 type Player struct {
 	mu      sync.Mutex
 	closed  bool
 	view    unsafe.Pointer
 	ipcPath string
+	ipcDir  string
 	cmd     *exec.Cmd
 	done    chan error
 
@@ -340,7 +339,13 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr)
 		return err
 	}
 
-	p.ipcPath = filepath.Join(os.TempDir(), fmt.Sprintf("tdrive-mpv-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))
+	ipcDir, err := os.MkdirTemp("", "tdrive-mpv-*")
+	if err != nil {
+		return fmt.Errorf("native player: create IPC dir: %w", err)
+	}
+	_ = os.Chmod(ipcDir, 0o700)
+	p.ipcDir = ipcDir
+	p.ipcPath = filepath.Join(ipcDir, fmt.Sprintf("mpv-%d.sock", os.Getpid()))
 	_ = os.Remove(p.ipcPath)
 	args := []string{
 		"--no-config",
@@ -348,6 +353,10 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr)
 		"--msg-level=all=warn",
 		"--ytdl=no",
 		"--hwdec=auto-safe",
+		"--cache=yes",
+		"--demuxer-readahead-secs=20",
+		"--demuxer-max-bytes=67108864",
+		"--demuxer-max-back-bytes=33554432",
 		"--osc=yes",
 		"--osd-bar=yes",
 		"--force-window=immediate",
@@ -361,7 +370,7 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr)
 	cmd := exec.CommandContext(ctx, mpvPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
-		_ = os.Remove(p.ipcPath)
+		_ = os.RemoveAll(p.ipcDir)
 		return fmt.Errorf("native player: start mpv: %w", err)
 	}
 	p.cmd = cmd
@@ -369,7 +378,7 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr)
 		err := cmd.Wait()
 		p.done <- err
 		p.destroyView()
-		_ = os.Remove(p.ipcPath)
+		_ = os.RemoveAll(p.ipcDir)
 	}()
 	return nil
 }
@@ -429,6 +438,7 @@ func (p *Player) Close() error {
 	}
 	p.closed = true
 	ipcPath := p.ipcPath
+	ipcDir := p.ipcDir
 	cmd := p.cmd
 	done := p.done
 	p.mu.Unlock()
@@ -449,7 +459,7 @@ func (p *Player) Close() error {
 		}
 	}
 	p.destroyView()
-	_ = os.Remove(ipcPath)
+	_ = os.RemoveAll(ipcDir)
 	return nil
 }
 
@@ -484,8 +494,4 @@ func writeMPVIPC(path string, payload []byte) error {
 		time.Sleep(25 * time.Millisecond)
 	}
 	return fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
-}
-
-func linuxNativePlayerEnabled() bool {
-	return os.Getenv(linuxNativePlayerFlag) == "1"
 }

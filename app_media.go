@@ -32,7 +32,11 @@ func newThumbnailCache() *thumbnail.Cache {
 // ListMedia returns every image in the active drive, newest first, for the
 // gallery view. Non-image files are filtered out in the read service.
 func (a *App) ListMedia() ([]backend.FileMetaData, error) {
-	files, err := a.readService().MediaFiles(a.ActiveChannelID())
+	svc, err := a.requireReadService()
+	if err != nil {
+		return nil, err
+	}
+	files, err := svc.MediaFiles(a.ActiveChannelID())
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +60,11 @@ func (a *App) ListMedia() ([]backend.FileMetaData, error) {
 // frontend to turn into a data URL. Cheap on a cache hit; on a miss it pulls
 // and downscales the original once.
 func (a *App) Thumbnail(msgID int) (PreviewPayload, error) {
-	payload, err := a.fileService().Thumbnail(a.ctx, a.ActiveChannelID(), msgID)
+	svc, err := a.requireFileService()
+	if err != nil {
+		return PreviewPayload{}, err
+	}
+	payload, err := svc.Thumbnail(a.ctx, a.ActiveChannelID(), msgID)
 	if err != nil {
 		return PreviewPayload{}, err
 	}
@@ -75,21 +83,21 @@ func (a *App) OpenMedia(msgID int) (media.OpenResult, error) {
 
 func (a *App) CloseMedia(token string) error {
 	if a.engine == nil {
-		return fmt.Errorf("backend not ready")
+		return nil
 	}
 	return a.engine.MediaService().CloseSession(token)
 }
 
 func (a *App) UpdateMediaPlayback(update media.PlaybackUpdate) error {
 	if a.engine == nil {
-		return fmt.Errorf("backend not ready")
+		return nil
 	}
 	return a.engine.MediaService().UpdatePlayback(update)
 }
 
 func (a *App) GetMediaStats(token string) (media.MediaStats, error) {
 	if a.engine == nil {
-		return media.MediaStats{}, fmt.Errorf("backend not ready")
+		return media.MediaStats{}, nil
 	}
 	return a.engine.MediaService().Stats(token), nil
 }

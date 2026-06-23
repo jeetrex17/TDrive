@@ -177,6 +177,18 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 
 			meta, op, header, err := s.uploadSingle(ctx, uploadID, path, pid, channelID, encrypt)
 			if err != nil {
+				if meta.MsgID != 0 {
+					mu.Lock()
+					uploaded = append(uploaded, uploadedResult{
+						UploadID:  uploadID,
+						Meta:      meta,
+						RawHeader: header,
+						Op:        op,
+					})
+					mu.Unlock()
+					s.warnf("warn: upload committed but local projection is pending for %q: %v\n", meta.Name, err)
+					return
+				}
 				mu.Lock()
 				failed++
 				mu.Unlock()
@@ -502,6 +514,21 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 		manifestOp.PlaintextSize = plaintextSize
 		manifestOp.EncryptionVersion = 1
 	}
+	committedMeta := func(msgID int64) Metadata {
+		return Metadata{
+			Name:          filename,
+			Size:          storedSize,
+			MsgID:         int(msgID),
+			ParentID:      parent,
+			UploadTime:    uploadTime,
+			Encrypted:     encrypt,
+			PlaintextSize: plaintextSize,
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		abort()
+		return Metadata{}, err
+	}
 	manifestMsgID, err := s.emit(channelID, manifestOp)
 	if err != nil {
 		if manifestMsgID == 0 {
@@ -514,19 +541,11 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 		// is committed and the next sync will project it. Deleting the parts now
 		// would corrupt that committed file, so leave Telegram intact and surface
 		// the error.
-		return Metadata{}, err
+		return committedMeta(manifestMsgID), err
 	}
 
 	s.emitEvent("upload_progress", uploadID, 100.0)
-	return Metadata{
-		Name:          filename,
-		Size:          storedSize,
-		MsgID:         int(manifestMsgID),
-		ParentID:      parent,
-		UploadTime:    uploadTime,
-		Encrypted:     encrypt,
-		PlaintextSize: plaintextSize,
-	}, nil
+	return committedMeta(manifestMsgID), nil
 }
 
 // deleteMessagesChunked deletes Telegram messages in batches of 100 so a large
@@ -578,6 +597,9 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 	fileID := int64(lookupID)
 	if fileID == 0 {
 		fileID = int64(msgID)
+	}
+	if !projection.FileExists(s.DB, channelID, fileID) {
+		return DownloadResult{Status: "error", Message: "Message deleted or not found"}
 	}
 	if parts, err := projection.MultipartParts(s.DB, channelID, fileID); err != nil {
 		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}

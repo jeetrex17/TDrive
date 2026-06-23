@@ -49,6 +49,25 @@ func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
 			_, err := projection.ProjectFromOp(db, channelID, msgID, op, actor, header)
 			return err
 		},
+		EmitOps: func(channelID int64, ops []projection.Op) (err error) {
+			tx, err := db.Begin()
+			if err != nil {
+				return err
+			}
+			defer func() {
+				if err != nil {
+					_ = tx.Rollback()
+				}
+			}()
+			for _, op := range ops {
+				msgID++
+				header := projection.Format(op)
+				if _, err = projection.ProjectFromOpTx(tx, channelID, msgID, op, actor, header); err != nil {
+					return err
+				}
+			}
+			return tx.Commit()
+		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return actor, nil
 		},
@@ -75,6 +94,49 @@ func TestCreateFolderProjectsMkdir(t *testing.T) {
 
 	if _, err := svc.Create(testChannelID, "Photos", ""); err == nil {
 		t.Fatalf("duplicate folder name unexpectedly succeeded")
+	}
+}
+
+func TestDeleteFolderBatchFailureLeavesProjectionUntouched(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+
+	folder, err := svc.Create(testChannelID, "Parent", "")
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+	if err := svc.EmitOp(testChannelID, projection.Op{
+		Type:           projection.OpFileUpload,
+		Parent:         folder.ID,
+		Name:           "keep.txt",
+		FileSize:       10,
+		FileUploadTime: 1,
+	}); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	var fileID int64
+	if err := db.QueryRow(`
+		SELECT msg_id FROM files
+		WHERE channel_id = ? AND parent_id = ? AND name = 'keep.txt'
+	`, testChannelID, folder.ID).Scan(&fileID); err != nil {
+		t.Fatalf("scan file id: %v", err)
+	}
+
+	batchErr := errors.New("injected batch failure")
+	svc.EmitOps = func(channelID int64, ops []projection.Op) error {
+		return batchErr
+	}
+
+	if err := svc.Delete(context.Background(), testChannelID, folder.ID); !errors.Is(err, batchErr) {
+		t.Fatalf("delete err = %v, want %v", err, batchErr)
+	}
+	if !projection.FolderExists(db, testChannelID, folder.ID) {
+		t.Fatalf("folder was locally tombstoned despite batch failure")
+	}
+	if !projection.FileExists(db, testChannelID, fileID) {
+		t.Fatalf("file was locally tombstoned despite batch failure")
+	}
+	if batches := fakeTG.DeletedBatches(); len(batches) != 0 {
+		t.Fatalf("body delete happened despite metadata failure: %+v", batches)
 	}
 }
 

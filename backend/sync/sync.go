@@ -216,14 +216,23 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 
 	SortAscending(allParsed)
 
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("sync: begin initial projection: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	for _, p := range allParsed {
-		if _, err := projection.ProjectFromOp(e.db, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
+		if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
 			return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
 		}
 	}
 
-	if err := markInitialSyncDone(e.db, channelID, highestSeen); err != nil {
+	if err := markInitialSyncDoneTx(tx, channelID, highestSeen); err != nil {
 		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: commit initial projection: %w", err)
 	}
 	return nil
 }
@@ -247,6 +256,15 @@ func writeWatermark(db *sql.DB, channelID int64, msgID int64) error {
 
 func markInitialSyncDone(db *sql.DB, channelID int64, watermark int64) error {
 	_, err := db.Exec(`
+		UPDATE channels
+		SET last_synced_msg = ?, initial_sync_done = 1
+		WHERE channel_id = ?
+	`, watermark, channelID)
+	return err
+}
+
+func markInitialSyncDoneTx(tx *sql.Tx, channelID int64, watermark int64) error {
+	_, err := tx.Exec(`
 		UPDATE channels
 		SET last_synced_msg = ?, initial_sync_done = 1
 		WHERE channel_id = ?

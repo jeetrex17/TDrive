@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"TDrive/backend"
 	coreauth "TDrive/backend/auth"
 	"TDrive/backend/projection"
 	channelservice "TDrive/backend/services/channel"
@@ -94,12 +93,6 @@ func (s *Server) authLogout(ctx context.Context, mode string) (AuthLogoutRespons
 	}
 	if s.engine != nil {
 		s.engine.Close()
-	}
-	if backend.DB != nil {
-		if err := backend.DB.Close(); err != nil {
-			s.warnf("logout: close db: %v\n", err)
-		}
-		backend.DB = nil
 	}
 	if err := coreauth.ClearUserData(m); err != nil {
 		return AuthLogoutResponse{}, err

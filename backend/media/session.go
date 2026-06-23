@@ -135,6 +135,15 @@ func (s *Session) touch() {
 	s.mu.Unlock()
 }
 
+func (s *Session) LastTouch() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastTouch
+}
+
 func (s *Session) Close() {
 	if s == nil {
 		return
@@ -175,6 +184,7 @@ func (s *Session) Thumbnail(ctx context.Context, seconds float64) ([]byte, error
 	if closed {
 		return nil, ErrSessionNotFound
 	}
+	s.touch()
 	return s.thumbs.Get(ctx, seconds)
 }
 

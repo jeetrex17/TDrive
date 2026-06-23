@@ -17,6 +17,7 @@ type PeerResolver interface {
 }
 
 type EmitOpFunc func(channelID int64, op projection.Op) error
+type EmitOpsFunc func(channelID int64, ops []projection.Op) error
 type ActorIDFunc func(ctx context.Context) (int64, error)
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
 type WarnFunc func(format string, args ...any)
@@ -26,6 +27,7 @@ type Service struct {
 	TG                   tgclient.Client
 	Peers                PeerResolver
 	EmitOp               EmitOpFunc
+	EmitOps              EmitOpsFunc
 	ActorID              ActorIDFunc
 	RequireEncryptionKey RequireEncryptionKeyFunc
 	Warnf                WarnFunc
@@ -111,36 +113,24 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 		return err
 	}
 
-	// Delete the whole subtree, but don't abort on the first per-item failure.
-	// Each tombstone op is idempotent, so we make maximal progress and report
-	// what's left; a retry finishes the rest rather than stranding the tree in a
-	// worse half-state with a bare "delete failed".
-	var failed []string
-	deleted := make([]projection.FileSlim, 0, len(files))
+	ops := make([]projection.Op, 0, len(files)+len(folders))
 	for _, file := range files {
-		op := projection.Op{
+		ops = append(ops, projection.Op{
 			Type: projection.OpTomb,
 			Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, file.MsgID),
-		}
-		if err := s.emit(channelID, op); err != nil {
-			failed = append(failed, fmt.Sprintf("file %q: %v", file.Name, err))
-			continue
-		}
-		deleted = append(deleted, file)
+		})
 	}
 	for _, folder := range folders {
-		if err := s.emit(channelID, projection.Op{Type: projection.OpRmdir, Obj: folder.ID}); err != nil {
-			failed = append(failed, fmt.Sprintf("folder %q: %v", folder.Name, err))
-		}
+		ops = append(ops, projection.Op{Type: projection.OpRmdir, Obj: folder.ID})
+	}
+	if err := s.emitMany(channelID, ops); err != nil {
+		return fmt.Errorf("delete folder failed: %w", err)
 	}
 
-	// Only drop bodies for files whose tombstone actually landed, so a file's
-	// content is never deleted while its metadata still shows it as present.
-	s.deleteBodiesBestEffort(ctx, channelID, deleted)
-
-	if len(failed) > 0 {
-		return fmt.Errorf("folder partially deleted, try again to finish (%d item(s) failed: %s)", len(failed), strings.Join(failed, "; "))
-	}
+	// Body deletion is best effort and runs only after the whole subtree's
+	// metadata is locally tombstoned. If Telegram body cleanup fails, replayed
+	// tombstone metadata stays canonical and the orphan sweep can retry parts.
+	s.deleteBodiesBestEffort(ctx, channelID, files)
 	return nil
 }
 
@@ -226,6 +216,16 @@ func (s *Service) emit(channelID int64, op projection.Op) error {
 	return s.EmitOp(channelID, op)
 }
 
+func (s *Service) emitMany(channelID int64, ops []projection.Op) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	if s.EmitOps == nil {
+		return fmt.Errorf("folder batch emitter not ready")
+	}
+	return s.EmitOps(channelID, ops)
+}
+
 func (s *Service) requireDeletePermission(ctx context.Context, channelID int64, files []projection.FileSlim) error {
 	if len(files) == 0 {
 		return nil
@@ -287,16 +287,15 @@ func (s *Service) deleteBodiesBestEffort(ctx context.Context, channelID int64, f
 	// Each file's body is its own message; a multipart file also has N part
 	// document bodies that must be deleted too (and their file_parts rows).
 	ids := make([]int64, 0, len(files))
-	var partIDs []int64
 	for _, file := range files {
 		ids = append(ids, file.MsgID)
-		if parts, err := projection.MultipartParts(s.DB, channelID, file.MsgID); err == nil {
-			for _, p := range parts {
-				ids = append(ids, p.MsgID)
-				partIDs = append(partIDs, p.MsgID)
-			}
-		}
 	}
+	partIDs, err := projection.MultipartPartMsgIDsForFiles(s.DB, channelID, ids)
+	if err != nil {
+		s.warnf("warn: folder tomb succeeded but reading multipart part bodies failed: %v\n", err)
+		return
+	}
+	ids = append(ids, partIDs...)
 	peer, err := s.Peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		s.warnf("warn: folder tomb succeeded but peer resolve failed for %d file bodies: %v\n", len(ids), err)

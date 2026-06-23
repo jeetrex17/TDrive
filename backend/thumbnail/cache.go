@@ -88,6 +88,38 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 	return data, true
 }
 
+// Has reports whether key is present and refreshes recency without reading the
+// value. It is used by background schedulers that only need to avoid duplicate
+// work; callers that need bytes should still use Get.
+func (c *Cache) Has(key string) bool {
+	if c == nil || c.dir == "" {
+		return false
+	}
+	name := fileName(key)
+
+	c.mu.Lock()
+	c.ensureInitLocked()
+	if _, known := c.entries[name]; !known {
+		c.mu.Unlock()
+		return false
+	}
+	now := time.Now()
+	e := c.entries[name]
+	e.used = now
+	c.entries[name] = e
+	c.mu.Unlock()
+
+	path := filepath.Join(c.dir, name)
+	if _, err := os.Stat(path); err != nil {
+		c.mu.Lock()
+		c.forgetLocked(name)
+		c.mu.Unlock()
+		return false
+	}
+	_ = os.Chtimes(path, now, now)
+	return true
+}
+
 // Put stores data under key, replacing any previous value, and evicts the
 // least-recently-used entries until the cache is within its size budget.
 // Empty data and disabled caches are no-ops. Errors are I/O failures writing

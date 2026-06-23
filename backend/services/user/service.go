@@ -145,24 +145,57 @@ func uploaderMessageRefs(db *sql.DB, channelID int64, userIDs []int64) (map[int6
 		return nil, fmt.Errorf("db not ready")
 	}
 	out := make(map[int64]int64, len(userIDs))
+	unique := make([]int64, 0, len(userIDs))
+	seen := make(map[int64]struct{}, len(userIDs))
 	for _, id := range userIDs {
 		if id <= 0 {
 			continue
 		}
-		var msgID int64
-		err := db.QueryRow(`
-			SELECT msg_id FROM files
-			WHERE channel_id = ? AND uploader_user_id = ? AND tombstoned = 0
-			ORDER BY upload_time DESC, msg_id DESC
-			LIMIT 1
-		`, channelID, id).Scan(&msgID)
-		if err == nil {
-			out[id] = msgID
+		if _, ok := seen[id]; ok {
 			continue
 		}
-		if err == sql.ErrNoRows {
-			continue
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return out, nil
+	}
+
+	values := make([]string, len(unique))
+	args := make([]any, 0, len(unique)+1)
+	for i, id := range unique {
+		values[i] = "(?)"
+		args = append(args, id)
+	}
+	args = append(args, channelID)
+
+	query := `
+WITH wanted(user_id) AS (VALUES ` + strings.Join(values, ",") + `),
+ranked AS (
+	SELECT f.uploader_user_id, f.msg_id,
+	       ROW_NUMBER() OVER (
+	         PARTITION BY f.uploader_user_id
+	         ORDER BY f.upload_time DESC, f.msg_id DESC
+	       ) AS rn
+	FROM files f
+	JOIN wanted w ON w.user_id = f.uploader_user_id
+	WHERE f.channel_id = ? AND f.tombstoned = 0
+)
+SELECT uploader_user_id, msg_id FROM ranked WHERE rn = 1
+`
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var userID, msgID int64
+		if err := rows.Scan(&userID, &msgID); err != nil {
+			return nil, err
 		}
+		out[userID] = msgID
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil

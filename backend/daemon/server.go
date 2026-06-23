@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path"
@@ -13,9 +14,17 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"TDrive/backend/core"
 	"TDrive/backend/processlock"
+)
+
+const (
+	daemonMaxFrameBytes = 1 << 20 // 1 MiB is far above the CLI protocol needs.
+	daemonReadTimeout   = 5 * time.Minute
+	daemonWriteTimeout  = 30 * time.Second
+	daemonDrainTimeout  = 10 * time.Second
 )
 
 type ServerConfig struct {
@@ -42,6 +51,7 @@ type Server struct {
 	streamMu sync.Mutex
 	stopOnce sync.Once
 	stop     context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg ServerConfig) error {
@@ -83,6 +93,7 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 	}
 	s.engine = engine
 	defer s.engine.Close()
+	defer s.wg.Wait()
 
 	if err := s.loadState(); err != nil {
 		s.warnf("daemon: load cli state: %v\n", err)
@@ -114,7 +125,11 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 			s.warnf("daemon: accept: %v\n", err)
 			continue
 		}
-		go s.handleConn(runCtx, conn)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.handleConn(runCtx, conn)
+		}()
 	}
 }
 
@@ -122,18 +137,19 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
-	dec := json.NewDecoder(reader)
 	enc := json.NewEncoder(conn)
 	var encMu sync.Mutex
 	writeFrame := func(frame Frame) error {
 		encMu.Lock()
 		defer encMu.Unlock()
+		_ = conn.SetWriteDeadline(time.Now().Add(daemonWriteTimeout))
+		defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
 		return enc.Encode(frame)
 	}
 
 	for {
 		var req Request
-		if err := dec.Decode(&req); err != nil {
+		if err := readRequestFrame(conn, reader, &req); err != nil {
 			return
 		}
 		if isStreamingCommand(req.Command) {
@@ -141,6 +157,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			// Streaming requests do not read from the socket again while work is
 			// in flight. Watch for EOF so an abandoned prompt cancels the backend
 			// operation and releases streamMu.
+			_ = conn.SetReadDeadline(time.Time{})
 			go cancelOnConnectionClose(reader, cancelReq)
 			if err := s.handleStreamingRequest(reqCtx, req, writeFrame); err != nil {
 				cancelReq()
@@ -159,6 +176,43 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 func cancelOnConnectionClose(reader *bufio.Reader, cancel context.CancelFunc) {
 	_, _ = reader.Peek(1)
 	cancel()
+}
+
+func readRequestFrame(conn net.Conn, reader *bufio.Reader, req *Request) error {
+	_ = conn.SetReadDeadline(time.Now().Add(daemonReadTimeout))
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }()
+
+	line, err := readLimitedLine(reader, daemonMaxFrameBytes)
+	if err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(line))) == 0 {
+		return io.EOF
+	}
+	if err := json.Unmarshal(line, req); err != nil {
+		return err
+	}
+	if len(req.Payload) > daemonMaxFrameBytes {
+		return fmt.Errorf("daemon: payload too large")
+	}
+	return nil
+}
+
+func readLimitedLine(reader *bufio.Reader, limit int) ([]byte, error) {
+	var out []byte
+	for {
+		part, isPrefix, err := reader.ReadLine()
+		if err != nil {
+			return nil, err
+		}
+		if len(out)+len(part) > limit {
+			return nil, fmt.Errorf("daemon: request too large")
+		}
+		out = append(out, part...)
+		if !isPrefix {
+			return out, nil
+		}
+	}
 }
 
 func (s *Server) handleStreamingRequest(ctx context.Context, req Request, writeFrame func(Frame) error) error {
@@ -190,7 +244,12 @@ func (s *Server) handleStreamingRequest(ctx context.Context, req Request, writeF
 		case frame := <-done:
 			return writeFrame(frame)
 		case <-ctx.Done():
-			return ctx.Err()
+			select {
+			case frame := <-done:
+				return writeFrame(frame)
+			case <-time.After(daemonDrainTimeout):
+				return ctx.Err()
+			}
 		}
 	}
 }
@@ -1255,7 +1314,7 @@ func (s *Server) moveTarget(channelID int64, dstAbs string, sourceName string) (
 		}
 		return dst.ID, dst.Path, sourceName, nil
 	}
-	if !strings.Contains(err.Error(), "not found") {
+	if !errors.Is(err, core.ErrPathNotFound) {
 		return "", "", "", err
 	}
 
@@ -1289,7 +1348,7 @@ func (s *Server) importTarget(channelID int64, remotePath string) (folderID stri
 		}
 		return dst.ID, dst.Path, nil
 	}
-	if !strings.Contains(err.Error(), "not found") {
+	if !errors.Is(err, core.ErrPathNotFound) {
 		return "", "", err
 	}
 	return "", "", fmt.Errorf("destination folder not found: %s", dstAbs)
@@ -1317,7 +1376,7 @@ func (s *Server) uploadTarget(channelID int64, remotePath string, defaultName st
 		}
 		return dst.ID, dst.Path, defaultName, nil
 	}
-	if !strings.Contains(err.Error(), "not found") {
+	if !errors.Is(err, core.ErrPathNotFound) {
 		return "", "", "", err
 	}
 	if mustBeFolder {

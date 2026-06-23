@@ -264,6 +264,62 @@ func (e *Engine) EmitAndProject(channelID int64, op projection.Op) (int64, error
 	return msgID, nil
 }
 
+type projectedOp struct {
+	msgID  int64
+	op     projection.Op
+	header string
+}
+
+// EmitAndProjectBatch sends a sequence of control ops, then commits their
+// local projection in one transaction. The network side cannot be atomic, but
+// the UI-facing cache must be: if a later send fails, the already-sent ops will
+// converge through the next sync instead of locally half-applying a subtree.
+func (e *Engine) EmitAndProjectBatch(channelID int64, ops []projection.Op) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	if e == nil || e.tg == nil {
+		return fmt.Errorf("tg client not ready")
+	}
+	actorID, err := e.ActorID(e.ctx)
+	if err != nil {
+		return err
+	}
+	peer, err := e.ChannelPeer(e.ctx, channelID)
+	if err != nil {
+		return err
+	}
+
+	sent := make([]projectedOp, 0, len(ops))
+	for _, op := range ops {
+		header := projection.Format(op)
+		msgID, err := e.tg.SendControl(e.ctx, peer, header, true)
+		if err != nil {
+			return err
+		}
+		sent = append(sent, projectedOp{msgID: msgID, op: op, header: header})
+	}
+
+	tx, err := backend.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("projection: begin batch tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	for _, item := range sent {
+		if _, err = projection.ProjectFromOpTx(tx, channelID, item.msgID, item.op, actorID, item.header); err != nil {
+			return fmt.Errorf("projection: project batch msg=%d op=%s: %w", item.msgID, item.op.Type, err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("projection: commit batch tx: %w", err)
+	}
+	return nil
+}
+
 func (e *Engine) AuthService() *authsvc.Service {
 	if e.auth == nil {
 		e.auth = authsvc.NewService(e.events)
@@ -361,6 +417,9 @@ func (e *Engine) newFolderService() *folderservice.Service {
 		EmitOp: func(channelID int64, op projection.Op) error {
 			_, err := e.EmitAndProject(channelID, op)
 			return err
+		},
+		EmitOps: func(channelID int64, ops []projection.Op) error {
+			return e.EmitAndProjectBatch(channelID, ops)
 		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return e.ActorID(ctx)

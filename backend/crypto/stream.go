@@ -35,6 +35,7 @@ const (
 	streamPrefixLen   = 20
 	streamTagLen      = chacha20poly1305.Overhead // 16, AEAD tag per chunk
 	finalChunkBit     = uint32(1) << 31
+	maxPlaintextSize  = int64(finalChunkBit) * int64(chunkSizePlain)
 	hkdfInfo          = "tdrive/file/v1"
 )
 
@@ -54,6 +55,9 @@ var (
 func EncryptStream(src io.Reader, dst io.Writer, masterKey []byte, plaintextSize int64) error {
 	if plaintextSize < 0 {
 		return fmt.Errorf("crypto: negative plaintext size")
+	}
+	if plaintextSize > maxPlaintextSize {
+		return fmt.Errorf("crypto: plaintext size exceeds stream counter capacity")
 	}
 	salt := make([]byte, streamFileSaltLen)
 	if _, err := rand.Read(salt); err != nil {
