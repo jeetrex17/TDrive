@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -8,6 +9,8 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/projection"
 )
+
+var ErrPathNotFound = errors.New("path not found")
 
 type ResolvedFolder struct {
 	ID   string `json:"id"`
@@ -149,7 +152,7 @@ func (e *Engine) ResolveFolderPath(channelID int64, cwd string, input string) (R
 			}
 		}
 		if next == "" {
-			return ResolvedFolder{}, fmt.Errorf("folder not found: %s", abs)
+			return ResolvedFolder{}, fmt.Errorf("%w: folder %s", ErrPathNotFound, abs)
 		}
 		cur = next
 	}
@@ -243,7 +246,7 @@ func (e *Engine) ResolveEntryPath(channelID int64, cwd string, input string) (Re
 	case len(files) > 1:
 		return ResolvedEntry{}, fmt.Errorf("file path is ambiguous: %s", abs)
 	default:
-		return ResolvedEntry{}, fmt.Errorf("path not found: %s", abs)
+		return ResolvedEntry{}, fmt.Errorf("%w: %s", ErrPathNotFound, abs)
 	}
 }
 

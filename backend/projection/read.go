@@ -25,14 +25,16 @@ type FileSlim struct {
 }
 
 type SearchHit struct {
-	Type       string
-	ID         string
-	Name       string
-	ParentID   string
-	Size       int64
-	Time       int64
-	MsgID      int64
-	UploaderID int64
+	Type          string
+	ID            string
+	Name          string
+	ParentID      string
+	Size          int64
+	Time          int64
+	MsgID         int64
+	UploaderID    int64
+	Encrypted     bool
+	PlaintextSize int64
 }
 
 func ListFolderContents(db *sql.DB, channelID int64, parentID string) ([]FolderSlim, []FileSlim, error) {
@@ -164,17 +166,23 @@ ORDER BY f.upload_time DESC
 	return out, rows.Err()
 }
 
-// ListAllFiles returns every non-tombstoned file in the channel, newest
-// first. Used by the gallery, which filters the result down to images in the
-// service layer. Returns metadata only (no bodies), so it stays cheap even
-// for large drives.
-func ListAllFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
-	// msg_id is the tiebreaker so the gallery order is stable across refreshes
-	// when several files share an upload_time (batch uploads collide on the
-	// second). msg_id is monotonic and unique per channel.
+// MediaFiles returns gallery-compatible image files only, newest first. Keeping
+// the extension filter and multipart-manifest exclusion in SQL avoids loading
+// every document in large drives just to discard most of them in Go.
+func MediaFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
 	rows, err := db.Query(`
 		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
-		WHERE channel_id = ? AND tombstoned = 0
+		WHERE channel_id = ?
+		  AND tombstoned = 0
+		  AND upload_uuid = ''
+		  AND (
+		      name LIKE '%.jpg' COLLATE NOCASE
+		   OR name LIKE '%.jpeg' COLLATE NOCASE
+		   OR name LIKE '%.png' COLLATE NOCASE
+		   OR name LIKE '%.gif' COLLATE NOCASE
+		   OR name LIKE '%.webp' COLLATE NOCASE
+		   OR name LIKE '%.bmp' COLLATE NOCASE
+		  )
 		ORDER BY upload_time DESC, msg_id DESC
 	`, channelID)
 	if err != nil {
@@ -346,7 +354,7 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 	_ = folderRows.Close()
 
 	fileRows, err := db.Query(`
-		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id FROM files
+		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
 		WHERE channel_id = ? AND tombstoned = 0 AND name LIKE ? COLLATE NOCASE
 		ORDER BY upload_time DESC LIMIT ?
 	`, channelID, pattern, limit)
@@ -355,11 +363,13 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 	}
 	for fileRows.Next() {
 		var h SearchHit
+		var enc int
 		h.Type = "file"
-		if err := fileRows.Scan(&h.MsgID, &h.Name, &h.Size, &h.ParentID, &h.Time, &h.UploaderID); err != nil {
+		if err := fileRows.Scan(&h.MsgID, &h.Name, &h.Size, &h.ParentID, &h.Time, &h.UploaderID, &enc, &h.PlaintextSize); err != nil {
 			_ = fileRows.Close()
 			return nil, err
 		}
+		h.Encrypted = enc == 1
 		results = append(results, h)
 	}
 	if err := fileRows.Err(); err != nil {
@@ -601,7 +611,7 @@ func LookupFileName(db *sql.DB, channelID int64, msgID int64) string {
 	var name string
 	err := db.QueryRow(`
 		SELECT name FROM files
-		WHERE channel_id = ? AND msg_id = ?
+		WHERE channel_id = ? AND msg_id = ? AND tombstoned = 0
 	`, channelID, msgID).Scan(&name)
 	if err != nil {
 		return ""

@@ -91,6 +91,7 @@ type videoThumbnailer struct {
 	wake           chan struct{}
 	precomputeWake chan struct{}
 	wg             sync.WaitGroup
+	extractMu      sync.Mutex
 
 	mu                  sync.Mutex
 	ready               map[int]string
@@ -246,10 +247,9 @@ func (t *videoThumbnailer) Close() {
 	dir := t.dir
 	t.dir = ""
 	t.mu.Unlock()
-	if t.persistent != nil {
-		t.persistent.Close()
-		t.persistent = nil
-	}
+	t.extractMu.Lock()
+	t.resetPersistent()
+	t.extractMu.Unlock()
 	if dir != "" {
 		_ = os.RemoveAll(dir)
 	}
@@ -539,8 +539,7 @@ func (t *videoThumbnailer) precomputeCandidateReady(bucket int, now time.Time) b
 		return false
 	}
 	t.mu.Unlock()
-	_, cached := t.cache.Get(t.cacheKey(bucket))
-	return !cached
+	return !t.cache.Has(t.cacheKey(bucket))
 }
 
 func (t *videoThumbnailer) precomputeStillIdle() bool {
@@ -586,6 +585,10 @@ func (t *videoThumbnailer) generate(bucket int, background bool) {
 		t.mu.Unlock()
 		return
 	}
+	if _, ok := t.inflight[bucket]; ok {
+		t.mu.Unlock()
+		return
+	}
 	t.inflight[bucket] = struct{}{}
 	t.mu.Unlock()
 
@@ -611,6 +614,10 @@ func (t *videoThumbnailer) generate(bucket int, background bool) {
 		t.markFailed(bucket, fmt.Errorf("missing source URL"), background)
 		return
 	}
+
+	t.extractMu.Lock()
+	defer t.extractMu.Unlock()
+
 	if background && t.precomputeShouldYield() {
 		t.logf("precompute preempted bucket=%d before mpv", bucket)
 		return

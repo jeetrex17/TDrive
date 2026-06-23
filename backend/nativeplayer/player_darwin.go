@@ -73,14 +73,16 @@ static int64_t tdrive_mpv_get_int64(mpv_handle *mpv, const char *name) {
 }
 - (BOOL)startWithURL:(NSString *)url htmlControls:(BOOL)htmlControls;
 - (void)shutdown;
+- (void)shutdownSynchronously;
 - (int)sendCommand:(int)argc argv:(const char **)argv;
 - (BOOL)snapshot:(tdrive_player_state *)state;
 @end
 
 static void tdrive_mpv_render_update(void *ctx) {
-    TDriveMPVView *view = (TDriveMPVView *)ctx;
+    TDriveMPVView *view = [(TDriveMPVView *)ctx retain];
     dispatch_async(dispatch_get_main_queue(), ^{
         [view setNeedsDisplay:YES];
+        [view release];
     });
 }
 
@@ -212,7 +214,7 @@ static void tdrive_mpv_render_update(void *ctx) {
     return YES;
 }
 
-- (void)shutdown {
+- (void)shutdownWithAsyncTerminate:(BOOL)asyncTerminate {
     if (_closed) {
         return;
     }
@@ -227,14 +229,30 @@ static void tdrive_mpv_render_update(void *ctx) {
         [NSOpenGLContext clearCurrentContext];
     }
     if (mpv != NULL) {
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        if (asyncTerminate) {
+            TDriveMPVView *view = [self retain];
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                mpv_terminate_destroy(mpv);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [view release];
+                });
+            });
+        } else {
             mpv_terminate_destroy(mpv);
-        });
+        }
     }
 }
 
+- (void)shutdown {
+    [self shutdownWithAsyncTerminate:YES];
+}
+
+- (void)shutdownSynchronously {
+    [self shutdownWithAsyncTerminate:NO];
+}
+
 - (void)dealloc {
-    [self shutdown];
+    [self shutdownSynchronously];
     [super dealloc];
 }
 
@@ -276,7 +294,11 @@ static void* tdrive_player_create_view(const char *rawURL, double x, double y, d
         }
         NSRect frame = tdrive_player_frame(content, x, y, w, h);
         view = [[TDriveMPVView alloc] initWithFrame:frame];
-        if (view == nil || ![view startWithURL:url htmlControls:(htmlControls != 0)]) {
+        if (view == nil) {
+            return;
+        }
+        if (![view startWithURL:url htmlControls:(htmlControls != 0)]) {
+            [view shutdownSynchronously];
             [view release];
             view = nil;
             return;

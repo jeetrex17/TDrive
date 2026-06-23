@@ -57,14 +57,15 @@ let panPointerId = -1;
 let panStartX = 0;
 let panStartY = 0;
 
-// Full-resolution data URLs keyed by msgID, with neighbor prefetch so next/prev
-// is instant. preloadEpoch lets a new navigation abort the prior prefetch run.
+// Full-resolution data URLs keyed by drive + msgID, with neighbor prefetch so
+// next/prev is instant. Telegram message ids are scoped to a channel, so using
+// msgID alone can show the wrong image after switching drives.
 const FULL_CACHE_MAX = 12;
-const fullCache = new Map<number, string>();
-// In-flight full-image downloads keyed by msgID, so a neighbor prefetch and the
-// user's own navigation to the same image share one download instead of racing
-// two (which would serialize on the backend's preview mutex).
-const inflightFull = new Map<number, Promise<string>>();
+const fullCache = new Map<string, string>();
+// In-flight full-image downloads keyed by drive + msgID, so a neighbor prefetch
+// and the user's own navigation to the same image share one download instead of
+// racing two (which would serialize on the backend's preview mutex).
+const inflightFull = new Map<string, Promise<string>>();
 let preloadEpoch = 0;
 let previewReady = false;
 let previewRequestToken = 0;
@@ -105,8 +106,9 @@ function flashStatus(message: any) {
 }
 
 function getPreviewKey(item: any) {
-    if (!item || item.type !== "file") return "";
-    return `file:${Number(item.id || 0)}`;
+	if (!item || item.type !== "file") return "";
+	const channelID = Number(item.channel_id || item.channelId || item.ChannelID || state.activeChannel?.id || 0);
+	return `file:${channelID}:${Number(item.id || 0)}`;
 }
 
 function clearActivePreview() {
@@ -349,7 +351,7 @@ async function resolveFullPreviewEntry(target: any) {
     // Shares an in-flight neighbor prefetch for the same image. A locked
     // encrypted file rejects with "encryption password required"; loadPreview
     // turns that into the inline unlock card rather than a popup modal.
-    return { src: await fetchFullRaw(msgID), mimeType: "" };
+	return { src: await fetchFullRaw(target), mimeType: "" };
 }
 
 export async function loadPreview(target: any) {
@@ -392,7 +394,7 @@ export async function loadPreview(target: any) {
     try {
         // Already prefetched by a neighbor preload? Show it instantly with no
         // loading indicator at all.
-        const cachedFull = fullCache.get(msgID);
+		const cachedFull = fullCache.get(previewKey);
         if (cachedFull) {
             activeFullSrc = cachedFull;
             showPreviewImage(cachedFull, filename);
@@ -830,34 +832,36 @@ function handlePanEnd(e: any) {
 
 // --- full-image cache + neighbor prefetch ---
 
-function cacheFull(msgID: number, src: string) {
-    fullCache.set(msgID, src);
-    if (fullCache.size > FULL_CACHE_MAX) {
-        const oldest = fullCache.keys().next().value;
-        if (oldest !== undefined) fullCache.delete(oldest);
-    }
+function cacheFull(key: string, src: string) {
+	fullCache.set(key, src);
+	if (fullCache.size > FULL_CACHE_MAX) {
+		const oldest = fullCache.keys().next().value;
+		if (oldest !== undefined) fullCache.delete(oldest);
+	}
 }
 
 // fetchFullRaw downloads + decodes + caches one full image, returning its data
 // URL. Concurrent callers for the same id share a single download. It never
 // opens the unlock modal; callers that need it wrap this and retry.
-function fetchFullRaw(id: number): Promise<string> {
-    const cached = fullCache.get(id);
-    if (cached) return Promise.resolve(cached);
-    const existing = inflightFull.get(id);
-    if (existing) return existing;
+function fetchFullRaw(item: any): Promise<string> {
+	const id = Number(item?.id || 0);
+	const key = getPreviewKey(item);
+	const cached = fullCache.get(key);
+	if (cached) return Promise.resolve(cached);
+	const existing = inflightFull.get(key);
+	if (existing) return existing;
 
-    const p = (async () => {
-        const asset = payloadToPreviewAsset(await PreviewFile(id));
-        await decodePreviewSource(asset.src);
-        cacheFull(id, asset.src);
-        return asset.src;
-    })();
-    inflightFull.set(id, p);
-    void p.catch(() => {}).finally(() => {
-        if (inflightFull.get(id) === p) inflightFull.delete(id);
-    });
-    return p;
+	const p = (async () => {
+		const asset = payloadToPreviewAsset(await PreviewFile(id));
+		await decodePreviewSource(asset.src);
+		cacheFull(key, asset.src);
+		return asset.src;
+	})();
+	inflightFull.set(key, p);
+	void p.catch(() => {}).finally(() => {
+		if (inflightFull.get(key) === p) inflightFull.delete(key);
+	});
+	return p;
 }
 
 // preloadNeighbors prefetches the next/prev few full images so navigation is
@@ -874,11 +878,13 @@ function preloadNeighbors() {
             if (epoch !== preloadEpoch) return;
             const idx = baseIndex + off;
             if (idx < 0 || idx >= navItems.length) continue;
-            const id = Number(navItems[idx]?.id || 0);
-            if (!id || fullCache.has(id)) continue;
-            try {
-                await fetchFullRaw(id);
-            } catch {
+			const item = navItems[idx];
+			const id = Number(item?.id || 0);
+			const key = getPreviewKey(item);
+			if (!id || !key || fullCache.has(key)) continue;
+			try {
+				await fetchFullRaw(item);
+			} catch {
                 // Too large, locked, or failed — the on-demand view handles it.
             }
             if (epoch !== preloadEpoch) return;

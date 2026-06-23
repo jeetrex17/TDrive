@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"TDrive/backend"
 	"TDrive/backend/auth"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -40,13 +39,6 @@ func (a *App) Logout(mode string) error {
 
 	if m == auth.LogoutFull {
 		a.revokeTelegramSession()
-	}
-
-	if backend.DB != nil {
-		if err := backend.DB.Close(); err != nil {
-			fmt.Printf("logout: close db: %v\n", err)
-		}
-		backend.DB = nil
 	}
 
 	// Drop the cached self user so a re-login (without re-launching, in

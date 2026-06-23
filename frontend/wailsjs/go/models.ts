@@ -83,6 +83,8 @@ export namespace backend {
 	    size: number;
 	    upload_time: number;
 	    uploader_id: number;
+	    encrypted?: boolean;
+	    plaintext_size?: number;
 	    path: string;
 
 	    static createFrom(source: any = {}) {
@@ -98,6 +100,8 @@ export namespace backend {
 	        this.size = source["size"];
 	        this.upload_time = source["upload_time"];
 	        this.uploader_id = source["uploader_id"];
+	        this.encrypted = source["encrypted"];
+	        this.plaintext_size = source["plaintext_size"];
 	        this.path = source["path"];
 	    }
 	}

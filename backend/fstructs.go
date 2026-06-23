@@ -23,12 +23,14 @@ type FileSystem struct {
 }
 
 type SearchResult struct {
-	Type       string `json:"type"`
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	ParentID   string `json:"parent_id"`
-	Size       int64  `json:"size"`
-	UploadTime int64  `json:"upload_time"`
-	UploaderID int64  `json:"uploader_id"`
-	Path       string `json:"path"`
+	Type          string `json:"type"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	ParentID      string `json:"parent_id"`
+	Size          int64  `json:"size"`
+	UploadTime    int64  `json:"upload_time"`
+	UploaderID    int64  `json:"uploader_id"`
+	Encrypted     bool   `json:"encrypted,omitempty"`
+	PlaintextSize int64  `json:"plaintext_size,omitempty"`
+	Path          string `json:"path"`
 }

@@ -114,6 +114,54 @@ func DeleteFilePartsByMsgIDs(db *sql.DB, channelID int64, msgIDs []int64) error 
 	return deleteByMsgIDs(db, "file_parts", channelID, msgIDs)
 }
 
+// MultipartPartMsgIDsForFiles returns all part document msg_ids behind the given
+// live multipart manifest msg_ids. It is chunked so folder-delete cleanup can
+// collect part bodies with one set-based query per chunk instead of one
+// MultipartParts lookup per file.
+func MultipartPartMsgIDsForFiles(db *sql.DB, channelID int64, fileMsgIDs []int64) ([]int64, error) {
+	const chunk = 500
+	var out []int64
+	for start := 0; start < len(fileMsgIDs); start += chunk {
+		end := min(start+chunk, len(fileMsgIDs))
+		batch := fileMsgIDs[start:end]
+		placeholders := make([]string, len(batch))
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, channelID)
+		for i, id := range batch {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		rows, err := db.Query(`
+			SELECT fp.msg_id
+			FROM files f
+			JOIN file_parts fp
+			  ON fp.channel_id = f.channel_id
+			 AND fp.upload_uuid = f.upload_uuid
+			WHERE f.channel_id = ?
+			  AND f.msg_id IN (`+strings.Join(placeholders, ",")+`)
+			  AND f.upload_uuid != ''
+			ORDER BY f.msg_id ASC, fp.part_index ASC
+		`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			out = append(out, id)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		_ = rows.Close()
+	}
+	return out, nil
+}
+
 func deleteByMsgIDs(db *sql.DB, table string, channelID int64, msgIDs []int64) error {
 	const chunk = 500
 	for start := 0; start < len(msgIDs); start += chunk {
@@ -161,26 +209,6 @@ func MultipartComplete(db *sql.DB, channelID, fileMsgID int64, parts []FilePart)
 		return fmt.Errorf("multipart file is incomplete: parts total %d bytes, expected %d", sum, size)
 	}
 	return nil
-}
-
-// MultipartFileMsgIDs returns the set of live multipart-file msg_ids (manifests).
-// Views that can't operate on a manifest (a text message, not a document) use it
-// to exclude multipart files — e.g. the Photos gallery thumbnail/preview path.
-func MultipartFileMsgIDs(db *sql.DB, channelID int64) (map[int64]bool, error) {
-	rows, err := db.Query(`SELECT msg_id FROM files WHERE channel_id = ? AND upload_uuid != '' AND tombstoned = 0`, channelID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make(map[int64]bool)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
-	}
-	return out, rows.Err()
 }
 
 // QueuePartCleanup records part message ids whose bodies couldn't be deleted

@@ -91,13 +91,13 @@ func EnsureSchema(db *sql.DB) error {
 			msg_id       INTEGER NOT NULL,
 			size         INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (channel_id, upload_uuid, part_index)
-		);`,
+			);`,
 		`CREATE INDEX IF NOT EXISTS idx_file_parts_msg ON file_parts(channel_id, msg_id);`,
 		`CREATE TABLE IF NOT EXISTS pending_part_cleanup (
-			channel_id  INTEGER NOT NULL,
-			msg_id      INTEGER NOT NULL,
-			PRIMARY KEY (channel_id, msg_id)
-		);`,
+				channel_id  INTEGER NOT NULL,
+				msg_id      INTEGER NOT NULL,
+				PRIMARY KEY (channel_id, msg_id)
+			);`,
 	}
 
 	for _, s := range stmts {
@@ -105,7 +105,70 @@ func EnsureSchema(db *sql.DB) error {
 			return fmt.Errorf("projection: ensure schema: %w", err)
 		}
 	}
+	if err := ensureCompatibleIndexes(db); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureCompatibleIndexes(db *sql.DB) error {
+	if dbTableHasColumns(db, "files", "channel_id", "uploader_user_id", "upload_time", "msg_id", "tombstoned") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_uploader_latest
+			ON files(channel_id, uploader_user_id, upload_time DESC, msg_id DESC)
+			WHERE tombstoned = 0 AND uploader_user_id > 0;`); err != nil {
+			return fmt.Errorf("projection: create files uploader index: %w", err)
+		}
+	}
+	if dbTableHasColumns(db, "files", "channel_id", "upload_time", "msg_id", "tombstoned") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_channel_upload_time
+			ON files(channel_id, upload_time DESC, msg_id DESC)
+			WHERE tombstoned = 0;`); err != nil {
+			return fmt.Errorf("projection: create files upload-time index: %w", err)
+		}
+	}
+	if dbTableHasColumns(db, "files", "channel_id", "name", "tombstoned") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_channel_name_nocase
+			ON files(channel_id, name COLLATE NOCASE)
+			WHERE tombstoned = 0;`); err != nil {
+			return fmt.Errorf("projection: create files name index: %w", err)
+		}
+	}
+	if dbTableHasColumns(db, "folders", "channel_id", "name", "tombstoned") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_folders_channel_name_nocase
+			ON folders(channel_id, name COLLATE NOCASE)
+			WHERE tombstoned = 0;`); err != nil {
+			return fmt.Errorf("projection: create folders name index: %w", err)
+		}
+	}
+	return nil
+}
+
+func dbTableHasColumns(db *sql.DB, table string, names ...string) bool {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+
+	needed := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		needed[name] = struct{}{}
+	}
+	for rows.Next() {
+		var (
+			cid     int
+			cname   string
+			ctype   string
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &cname, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false
+		}
+		delete(needed, cname)
+	}
+	return rows.Err() == nil && len(needed) == 0
 }
 
 func currentVersion(db *sql.DB) (int, error) {
@@ -384,6 +447,9 @@ func createFreshFolders(tx *sql.Tx) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_folders_channel_parent
 			ON folders(channel_id, parent_id) WHERE tombstoned = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_folders_channel_name_nocase
+			ON folders(channel_id, name COLLATE NOCASE)
+			WHERE tombstoned = 0;`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.Exec(s); err != nil {
@@ -413,6 +479,15 @@ func createFreshFiles(tx *sql.Tx) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_channel_parent
 			ON files(channel_id, parent_id) WHERE tombstoned = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_files_uploader_latest
+			ON files(channel_id, uploader_user_id, upload_time DESC, msg_id DESC)
+			WHERE tombstoned = 0 AND uploader_user_id > 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_files_channel_upload_time
+			ON files(channel_id, upload_time DESC, msg_id DESC)
+			WHERE tombstoned = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_files_channel_name_nocase
+			ON files(channel_id, name COLLATE NOCASE)
+			WHERE tombstoned = 0;`,
 	}
 	for _, s := range stmts {
 		if _, err := tx.Exec(s); err != nil {

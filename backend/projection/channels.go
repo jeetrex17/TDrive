@@ -65,6 +65,7 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 		`DELETE FROM file_parts WHERE channel_id = ?`,
 		`DELETE FROM pending_part_cleanup WHERE channel_id = ?`,
 		`DELETE FROM folders WHERE channel_id = ?`,
+		`DELETE FROM replay_log_rejects WHERE channel_id = ?`,
 		`DELETE FROM replay_log WHERE channel_id = ?`,
 		`DELETE FROM replay_log_tamper WHERE channel_id = ?`,
 		`DELETE FROM backfill_progress WHERE channel_id = ?`,

@@ -122,6 +122,15 @@ func TestStreamLargeFile(t *testing.T) {
 	}
 }
 
+func TestEncryptStreamRejectsCounterOverflow(t *testing.T) {
+	master, _ := NewMasterKey()
+	var enc bytes.Buffer
+	err := EncryptStream(bytes.NewReader(nil), &enc, master, maxPlaintextSize+1)
+	if err == nil {
+		t.Fatal("EncryptStream accepted plaintext beyond the stream counter capacity")
+	}
+}
+
 type zeroReader struct{}
 
 func (zeroReader) Read(p []byte) (int, error) {

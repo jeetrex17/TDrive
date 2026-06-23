@@ -15,7 +15,11 @@ type SelfUser struct {
 // avatar photo. The result is cached by the user service for the lifetime
 // of the process; logout clears it.
 func (a *App) Me() (SelfUser, error) {
-	me, err := a.userService().Me(a.ctx)
+	svc, err := a.requireUserService()
+	if err != nil {
+		return SelfUser{}, err
+	}
+	me, err := svc.Me(a.ctx)
 	if err != nil {
 		return SelfUser{}, err
 	}

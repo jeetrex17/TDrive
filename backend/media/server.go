@@ -19,6 +19,8 @@ const (
 	mediaRoutePrefix       = "/media/file/"
 	mediaThumbRoutePrefix  = "/media/thumb/"
 	mediaThumbSourcePrefix = "/media/thumb-source/"
+	mediaSessionIdleTTL    = 2 * time.Hour
+	mediaSessionSweepEvery = 5 * time.Minute
 )
 
 type PlaybackUpdate struct {
@@ -38,6 +40,7 @@ type Server struct {
 	listener net.Listener
 	server   *http.Server
 	baseURL  string
+	closed   bool
 	sessions map[string]*Session
 }
 
@@ -57,6 +60,10 @@ func (s *Server) Add(session *Session) error {
 	}
 
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrSessionNotFound
+	}
 	s.sessions[session.Token()] = session
 	url := s.baseURL + mediaRoutePrefix + session.Token()
 	thumbSourceURL := s.baseURL + mediaThumbSourcePrefix + session.Token()
@@ -86,6 +93,7 @@ func (s *Server) UpdatePlayback(update PlaybackUpdate) error {
 	if session == nil {
 		return ErrSessionNotFound
 	}
+	session.touch()
 	session.UpdatePlayback(update.CurrentTime, update.Duration, update.BufferAhead)
 	return nil
 }
@@ -95,6 +103,7 @@ func (s *Server) Stats(token string) MediaStats {
 	if session == nil {
 		return MediaStats{}
 	}
+	session.touch()
 	stats := session.Stats()
 	session.logStats(stats)
 	return stats
@@ -107,6 +116,7 @@ func (s *Server) Close() error {
 	s.server = nil
 	s.listener = nil
 	s.baseURL = ""
+	s.closed = true
 	sessions := s.sessions
 	s.sessions = make(map[string]*Session)
 	s.mu.Unlock()
@@ -125,6 +135,10 @@ func (s *Server) Close() error {
 
 func (s *Server) ensureStarted() error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrSessionNotFound
+	}
 	if s.server != nil {
 		s.mu.Unlock()
 		return nil
@@ -152,7 +166,34 @@ func (s *Server) ensureStarted() error {
 			// There is intentionally no logging dependency in backend/media.
 		}
 	}()
+	go s.sweepIdleSessions(srv)
 	return nil
+}
+
+func (s *Server) sweepIdleSessions(server *http.Server) {
+	ticker := time.NewTicker(mediaSessionSweepEvery)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.mu.Lock()
+		if s.server != server || s.closed {
+			s.mu.Unlock()
+			return
+		}
+		now := time.Now()
+		expired := make([]*Session, 0)
+		for token, session := range s.sessions {
+			if session == nil || now.Sub(session.LastTouch()) < mediaSessionIdleTTL {
+				continue
+			}
+			delete(s.sessions, token)
+			expired = append(expired, session)
+		}
+		s.mu.Unlock()
+
+		for _, session := range expired {
+			session.Close()
+		}
+	}
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {

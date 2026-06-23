@@ -8,7 +8,6 @@ import (
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
-	"TDrive/backend/thumbnail"
 )
 
 type PeerResolver interface {
@@ -44,14 +43,16 @@ type FileSystem struct {
 }
 
 type SearchResult struct {
-	Type       string
-	ID         string
-	Name       string
-	ParentID   string
-	Size       int64
-	UploadTime int64
-	UploaderID int64
-	Path       string
+	Type          string
+	ID            string
+	Name          string
+	ParentID      string
+	Size          int64
+	UploadTime    int64
+	UploaderID    int64
+	Encrypted     bool
+	PlaintextSize int64
+	Path          string
 }
 
 type TelegramFile struct {
@@ -140,14 +141,16 @@ func (s *Service) Search(channelID int64, query string, limit int) ([]SearchResu
 			})
 		case "file":
 			results = append(results, SearchResult{
-				Type:       "file",
-				ID:         fmt.Sprintf("%d", h.MsgID),
-				Name:       h.Name,
-				ParentID:   h.ParentID,
-				Size:       h.Size,
-				UploadTime: h.Time,
-				UploaderID: h.UploaderID,
-				Path:       buildFolderPath(folderMap, h.ParentID),
+				Type:          "file",
+				ID:            fmt.Sprintf("%d", h.MsgID),
+				Name:          h.Name,
+				ParentID:      h.ParentID,
+				Size:          h.Size,
+				UploadTime:    h.Time,
+				UploaderID:    h.UploaderID,
+				Encrypted:     h.Encrypted,
+				PlaintextSize: h.PlaintextSize,
+				Path:          buildFolderPath(folderMap, h.ParentID),
 			})
 		}
 	}
@@ -187,21 +190,13 @@ func (s *Service) MediaFiles(channelID int64) ([]File, error) {
 	if channelID == 0 {
 		return []File{}, nil
 	}
-	all, err := projection.ListAllFiles(s.DB, channelID)
-	if err != nil {
-		return nil, err
-	}
-	// Multipart files have no single document (their id is a text manifest), so
-	// they can't thumbnail or preview — keep them out of the gallery.
-	multipart, err := projection.MultipartFileMsgIDs(s.DB, channelID)
+	all, err := projection.MediaFiles(s.DB, channelID)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]File, 0, len(all))
 	for _, f := range all {
-		if thumbnail.IsImage(f.Name) && !multipart[f.MsgID] {
-			out = append(out, fileFromProjection(f))
-		}
+		out = append(out, fileFromProjection(f))
 	}
 	return out, nil
 }

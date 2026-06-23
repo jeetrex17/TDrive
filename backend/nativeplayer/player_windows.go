@@ -4,16 +4,19 @@ package nativeplayer
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 const (
@@ -26,9 +29,6 @@ const (
 
 	jobObjectInfoClassExtendedLimitInformation = 9
 	jobObjectLimitKillOnJobClose               = 0x00002000
-
-	processTerminate = 0x0001
-	processSetQuota  = 0x0100
 )
 
 const windowsNativePlayerFlag = "TDRIVE_EXPERIMENTAL_WINDOWS_NATIVE_PLAYER"
@@ -65,7 +65,7 @@ type Player struct {
 	parent  uintptr
 	child   uintptr
 	ipcPath string
-	cmd     *exec.Cmd
+	proc    *windowsMPVProcess
 	done    chan error
 	job     syscall.Handle
 
@@ -109,13 +109,22 @@ func (p *Player) startProcess(ctx context.Context, url string) error {
 	}
 	p.job = job
 
-	p.ipcPath = fmt.Sprintf(`\\.\pipe\tdrive-mpv-%d-%d`, os.Getpid(), time.Now().UnixNano())
+	suffix, err := randomPipeSuffix()
+	if err != nil {
+		p.closeJob()
+		return err
+	}
+	p.ipcPath = fmt.Sprintf(`\\.\pipe\tdrive-mpv-%d-%s`, os.Getpid(), suffix)
 	args := []string{
 		"--no-config",
 		"--terminal=no",
 		"--msg-level=all=warn",
 		"--ytdl=no",
 		"--hwdec=auto-safe",
+		"--cache=yes",
+		"--demuxer-readahead-secs=20",
+		"--demuxer-max-bytes=67108864",
+		"--demuxer-max-back-bytes=33554432",
 		"--osc=yes",
 		"--osd-bar=yes",
 		"--force-window=immediate",
@@ -126,26 +135,39 @@ func (p *Player) startProcess(ctx context.Context, url string) error {
 		url,
 	}
 
-	cmd := exec.CommandContext(ctx, mpvPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := cmd.Start(); err != nil {
-		p.closeJob()
-		return fmt.Errorf("native player: start mpv: %w", err)
-	}
-	if err := assignProcessToJob(job, cmd.Process.Pid); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+	proc, err := startSuspendedMPV(ctx, mpvPath, args)
+	if err != nil {
 		p.closeJob()
 		return err
 	}
-	p.cmd = cmd
+	if err := assignProcessToJob(job, proc.process); err != nil {
+		proc.kill()
+		_ = proc.wait()
+		p.closeJob()
+		return err
+	}
+	if err := proc.resume(); err != nil {
+		proc.kill()
+		_ = proc.wait()
+		p.closeJob()
+		return err
+	}
+	p.proc = proc
 	go func() {
-		err := cmd.Wait()
+		err := proc.wait()
 		p.done <- err
 		p.destroyChild()
 		p.closeJob()
 	}()
 	return nil
+}
+
+func randomPipeSuffix() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("native player: generate IPC name: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 func (p *Player) Resize(rect Rect) error {
@@ -207,18 +229,18 @@ func (p *Player) Close() error {
 	}
 	p.closed = true
 	ipcPath := p.ipcPath
-	cmd := p.cmd
+	proc := p.proc
 	done := p.done
 	p.mu.Unlock()
 
 	if ipcPath != "" {
 		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
 	}
-	if cmd != nil && cmd.Process != nil {
+	if proc != nil {
 		select {
 		case <-done:
 		case <-time.After(750 * time.Millisecond):
-			_ = cmd.Process.Kill()
+			proc.kill()
 			select {
 			case <-done:
 			case <-time.After(2 * time.Second):
@@ -395,18 +417,112 @@ func createKillOnCloseJob() (syscall.Handle, error) {
 	return syscall.Handle(handle), nil
 }
 
-func assignProcessToJob(job syscall.Handle, pid int) error {
-	process, err := syscall.OpenProcess(processSetQuota|processTerminate, false, uint32(pid))
-	if err != nil {
-		return fmt.Errorf("native player: open mpv process for job assignment: %w", err)
-	}
-	defer syscall.CloseHandle(process)
-
+func assignProcessToJob(job syscall.Handle, process windows.Handle) error {
 	ret, _, callErr := procAssignProcessToJobObject.Call(uintptr(job), uintptr(process))
 	if ret == 0 {
 		return callFailed("AssignProcessToJobObject", callErr)
 	}
 	return nil
+}
+
+type windowsMPVProcess struct {
+	process windows.Handle
+	thread  windows.Handle
+	once    sync.Once
+}
+
+func startSuspendedMPV(ctx context.Context, mpvPath string, args []string) (*windowsMPVProcess, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	appName, err := windows.UTF16PtrFromString(mpvPath)
+	if err != nil {
+		return nil, fmt.Errorf("native player: encode mpv path: %w", err)
+	}
+	commandLine := windows.ComposeCommandLine(append([]string{mpvPath}, args...))
+	commandLinePtr, err := windows.UTF16PtrFromString(commandLine)
+	if err != nil {
+		return nil, fmt.Errorf("native player: encode mpv command line: %w", err)
+	}
+
+	var startup windows.StartupInfo
+	startup.Cb = uint32(unsafe.Sizeof(startup))
+	startup.Flags = windows.STARTF_USESHOWWINDOW
+	startup.ShowWindow = windows.SW_HIDE
+
+	var info windows.ProcessInformation
+	flags := uint32(windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW | windows.CREATE_UNICODE_ENVIRONMENT)
+	if err := windows.CreateProcess(
+		appName,
+		commandLinePtr,
+		nil,
+		nil,
+		false,
+		flags,
+		nil,
+		nil,
+		&startup,
+		&info,
+	); err != nil {
+		return nil, fmt.Errorf("native player: start mpv suspended: %w", err)
+	}
+	return &windowsMPVProcess{process: info.Process, thread: info.Thread}, nil
+}
+
+func (p *windowsMPVProcess) resume() error {
+	if p == nil || p.thread == 0 {
+		return nil
+	}
+	if _, err := windows.ResumeThread(p.thread); err != nil {
+		return fmt.Errorf("native player: resume mpv: %w", err)
+	}
+	return nil
+}
+
+func (p *windowsMPVProcess) kill() {
+	if p == nil || p.process == 0 {
+		return
+	}
+	_ = windows.TerminateProcess(p.process, 1)
+}
+
+func (p *windowsMPVProcess) wait() error {
+	if p == nil || p.process == 0 {
+		return nil
+	}
+	_, waitErr := windows.WaitForSingleObject(p.process, windows.INFINITE)
+	var exitCode uint32
+	exitErr := windows.GetExitCodeProcess(p.process, &exitCode)
+	p.close()
+	if waitErr != nil {
+		return fmt.Errorf("native player: wait for mpv: %w", waitErr)
+	}
+	if exitErr != nil {
+		return fmt.Errorf("native player: read mpv exit code: %w", exitErr)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("native player: mpv exited with status %d", exitCode)
+	}
+	return nil
+}
+
+func (p *windowsMPVProcess) close() {
+	if p == nil {
+		return
+	}
+	p.once.Do(func() {
+		if p.thread != 0 {
+			_ = windows.CloseHandle(p.thread)
+			p.thread = 0
+		}
+		if p.process != 0 {
+			_ = windows.CloseHandle(p.process)
+			p.process = 0
+		}
+	})
 }
 
 func scaleRect(rect Rect, hwnd uintptr) (int, int, int, int) {
