@@ -89,8 +89,8 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 		INSERT INTO replay_log
 		  (channel_id, msg_id, op_type, op_payload_json, raw_header, first_seen_hash, actor_user_id, seen_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		channelID, msgID, string(op.Type), string(payload),
+		`,
+		channelID, msgID, string(op.Type), payload,
 		rawHeader, hash, actorID, time.Now().Unix())
 	if err != nil {
 		return false, fmt.Errorf("projection: insert replay_log: %w", err)

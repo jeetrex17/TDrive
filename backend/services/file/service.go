@@ -985,6 +985,7 @@ func (s *Service) PreviewFile(ctx context.Context, channelID int64, msgID int) (
 			if _, err := tdcrypto.DecryptStream(&buf, &plain, masterKey); err != nil {
 				return errPreviewDownloadFailed
 			}
+			buf = bytes.Buffer{}
 			s.emitEvent("preview_progress", msgID, 100.0)
 			payload, err = previewPayloadFromBytes(plain.Bytes(), mimeType)
 			return err

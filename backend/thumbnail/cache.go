@@ -1,8 +1,10 @@
 package thumbnail
 
 import (
+	"container/list"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,12 +33,14 @@ type Cache struct {
 	maxBytes int64
 
 	mu      sync.Mutex
-	entries map[string]entry
+	entries map[string]*list.Element
+	lru     *list.List
 	used    int64
 	inited  bool
 }
 
 type entry struct {
+	name string
 	size int64
 	used time.Time
 }
@@ -47,7 +51,8 @@ func NewCache(dir string, maxBytes int64) *Cache {
 	return &Cache{
 		dir:      dir,
 		maxBytes: maxBytes,
-		entries:  make(map[string]entry),
+		entries:  make(map[string]*list.Element),
+		lru:      list.New(),
 	}
 }
 
@@ -79,10 +84,7 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 
 	now := time.Now()
 	c.mu.Lock()
-	if e, ok := c.entries[name]; ok {
-		e.used = now
-		c.entries[name] = e
-	}
+	c.touchLocked(name, now)
 	c.mu.Unlock()
 	_ = os.Chtimes(path, now, now)
 	return data, true
@@ -103,10 +105,6 @@ func (c *Cache) Has(key string) bool {
 		c.mu.Unlock()
 		return false
 	}
-	now := time.Now()
-	e := c.entries[name]
-	e.used = now
-	c.entries[name] = e
 	c.mu.Unlock()
 
 	path := filepath.Join(c.dir, name)
@@ -116,6 +114,10 @@ func (c *Cache) Has(key string) bool {
 		c.mu.Unlock()
 		return false
 	}
+	now := time.Now()
+	c.mu.Lock()
+	c.touchLocked(name, now)
+	c.mu.Unlock()
 	_ = os.Chtimes(path, now, now)
 	return true
 }
@@ -164,10 +166,9 @@ func (c *Cache) Put(key string, data []byte) error {
 
 	c.mu.Lock()
 	c.ensureInitLocked()
-	if old, ok := c.entries[name]; ok {
-		c.used -= old.size
-	}
-	c.entries[name] = entry{size: int64(len(data)), used: now}
+	c.forgetLocked(name)
+	elem := c.lru.PushFront(entry{name: name, size: int64(len(data)), used: now})
+	c.entries[name] = elem
 	c.used += int64(len(data))
 	c.evictLocked()
 	c.mu.Unlock()
@@ -187,6 +188,7 @@ func (c *Cache) ensureInitLocked() {
 	if err != nil {
 		return // dir not created yet; nothing cached
 	}
+	var found []entry
 	for _, de := range dirEntries {
 		if de.IsDir() {
 			continue
@@ -203,8 +205,15 @@ func (c *Cache) ensureInitLocked() {
 		if err != nil {
 			continue
 		}
-		c.entries[fname] = entry{size: info.Size(), used: info.ModTime()}
-		c.used += info.Size()
+		found = append(found, entry{name: fname, size: info.Size(), used: info.ModTime()})
+	}
+	sort.Slice(found, func(i, j int) bool {
+		return found[i].used.After(found[j].used)
+	})
+	for _, e := range found {
+		elem := c.lru.PushBack(e)
+		c.entries[e.name] = elem
+		c.used += e.size
 	}
 	c.evictLocked()
 }
@@ -214,27 +223,34 @@ func (c *Cache) ensureInitLocked() {
 // thumbnail is kept rather than deleted on the spot. Must hold c.mu.
 func (c *Cache) evictLocked() {
 	for c.used > c.maxBytes && len(c.entries) > 1 {
-		oldestName := ""
-		var oldestUsed time.Time
-		for name, e := range c.entries {
-			if oldestName == "" || e.used.Before(oldestUsed) {
-				oldestName = name
-				oldestUsed = e.used
-			}
-		}
-		if oldestName == "" {
+		elem := c.lru.Back()
+		if elem == nil {
 			return
 		}
-		_ = os.Remove(filepath.Join(c.dir, oldestName))
-		c.forgetLocked(oldestName)
+		e := elem.Value.(entry)
+		_ = os.Remove(filepath.Join(c.dir, e.name))
+		c.forgetLocked(e.name)
 	}
 }
 
 func (c *Cache) forgetLocked(name string) {
-	if e, ok := c.entries[name]; ok {
+	if elem, ok := c.entries[name]; ok {
+		e := elem.Value.(entry)
 		c.used -= e.size
+		c.lru.Remove(elem)
 		delete(c.entries, name)
 	}
+}
+
+func (c *Cache) touchLocked(name string, now time.Time) {
+	elem, ok := c.entries[name]
+	if !ok {
+		return
+	}
+	e := elem.Value.(entry)
+	e.used = now
+	elem.Value = e
+	c.lru.MoveToFront(elem)
 }
 
 // fileName maps an arbitrary key to a safe cache filename. Keys are produced

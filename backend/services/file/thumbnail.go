@@ -149,6 +149,7 @@ func (s *Service) generateThumbnail(ctx context.Context, channelID int64, msgID 
 		if _, err := tdcrypto.DecryptStream(&buf, &plain, masterKey); err != nil {
 			return nil, errPreviewDownloadFailed
 		}
+		buf = bytes.Buffer{}
 		source = plain.Bytes()
 	} else {
 		source = buf.Bytes()

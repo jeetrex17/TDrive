@@ -81,10 +81,11 @@ type statefulVideoThumbnailGenerator interface {
 }
 
 type videoThumbnailer struct {
-	session   *Session
-	cache     *thumbnail.Cache
-	generator VideoThumbnailGenerator
-	dir       string
+	session        *Session
+	cache          *thumbnail.Cache
+	generator      VideoThumbnailGenerator
+	dir            string
+	cacheKeyPrefix string
 
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -118,6 +119,7 @@ func newVideoThumbnailer(session *Session, cache *thumbnail.Cache, generator Vid
 		session:        session,
 		cache:          cache,
 		generator:      generator,
+		cacheKeyPrefix: videoThumbnailCacheKeyPrefix(session.file),
 		ctx:            ctx,
 		cancel:         cancel,
 		wake:           make(chan struct{}, 1),
@@ -797,8 +799,14 @@ func thumbnailWorkDeferred(err error) bool {
 }
 
 func (t *videoThumbnailer) cacheKey(bucket int) string {
-	file := t.session.file
-	return fmt.Sprintf("video-thumb-v1-ch%d-file%d-size%d-t%d", file.ChannelID, file.FileID, file.StoredSize, bucket)
+	return t.cacheKeyPrefix + strconv.Itoa(bucket)
+}
+
+func videoThumbnailCacheKeyPrefix(file LogicalFile) string {
+	return "video-thumb-v1-ch" + strconv.FormatInt(file.ChannelID, 10) +
+		"-file" + strconv.FormatInt(file.FileID, 10) +
+		"-size" + strconv.FormatInt(file.StoredSize, 10) +
+		"-t"
 }
 
 func thumbnailBucket(seconds, duration float64) int {

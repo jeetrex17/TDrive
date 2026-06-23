@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -331,27 +332,32 @@ func orderParentsFirst(rows []folderRow) []folderRow {
 	for _, r := range rows {
 		byID[r.ID] = r
 	}
-	depth := func(id string) int {
-		d := 0
-		cur := id
-		seen := map[string]bool{}
-		for cur != projection.RootParent && !seen[cur] {
-			seen[cur] = true
-			f, ok := byID[cur]
-			if !ok {
-				return d
-			}
-			d++
-			cur = f.ParentID
+	depthMemo := make(map[string]int, len(rows))
+	var depth func(id string, seen map[string]bool) int
+	depth = func(id string, seen map[string]bool) int {
+		if id == projection.RootParent || id == "" || seen[id] {
+			return 0
 		}
+		if d, ok := depthMemo[id]; ok {
+			return d
+		}
+		seen[id] = true
+		f, ok := byID[id]
+		if !ok {
+			return 0
+		}
+		d := 1 + depth(f.ParentID, seen)
+		depthMemo[id] = d
 		return d
 	}
 	out := make([]folderRow, len(rows))
 	copy(out, rows)
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && depth(out[j].ID) < depth(out[j-1].ID); j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
+	depths := make(map[string]int, len(out))
+	for _, r := range out {
+		depths[r.ID] = depth(r.ID, make(map[string]bool))
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return depths[out[i].ID] < depths[out[j].ID]
+	})
 	return out
 }

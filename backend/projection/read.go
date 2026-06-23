@@ -224,6 +224,25 @@ func ListAllFolders(db *sql.DB, channelID int64) ([]FolderSlim, error) {
 	return out, rows.Err()
 }
 
+func FolderByID(db *sql.DB, channelID int64, folderID string) (FolderSlim, bool, error) {
+	folderID = strings.TrimSpace(folderID)
+	if folderID == "" || folderID == RootParent {
+		return FolderSlim{}, false, nil
+	}
+	var f FolderSlim
+	err := db.QueryRow(`
+		SELECT id, name, parent_id FROM folders
+		WHERE channel_id = ? AND id = ? AND tombstoned = 0
+	`, channelID, folderID).Scan(&f.ID, &f.Name, &f.ParentID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return FolderSlim{}, false, nil
+	}
+	if err != nil {
+		return FolderSlim{}, false, err
+	}
+	return f, true, nil
+}
+
 func FolderSubtreeFolders(db *sql.DB, channelID int64, folderID string) ([]FolderSlim, error) {
 	folderID = strings.TrimSpace(folderID)
 	if folderID == "" {
@@ -587,20 +606,33 @@ func FolderSiblingHasName(db *sql.DB, channelID int64, parentID, name string) (b
 // instead of merging into the existing folder. channelID/parentID semantics
 // match FolderSiblingHasName.
 func NextFreeFolderName(db *sql.DB, channelID int64, parentID, name string) (string, error) {
-	taken, err := FolderSiblingHasName(db, channelID, parentID, name)
+	rows, err := db.Query(`
+		SELECT name FROM folders
+		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
+		  AND (name = ? OR name LIKE ?)
+	`, channelID, parentID, name, name+" (%)")
 	if err != nil {
 		return "", err
 	}
-	if !taken {
+	defer rows.Close()
+
+	taken := make(map[string]struct{})
+	for rows.Next() {
+		var existing string
+		if err := rows.Scan(&existing); err != nil {
+			return "", err
+		}
+		taken[existing] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if _, ok := taken[name]; !ok {
 		return name, nil
 	}
 	for k := 2; k <= 10000; k++ {
 		candidate := fmt.Sprintf("%s (%d)", name, k)
-		taken, err := FolderSiblingHasName(db, channelID, parentID, candidate)
-		if err != nil {
-			return "", err
-		}
-		if !taken {
+		if _, ok := taken[candidate]; !ok {
 			return candidate, nil
 		}
 	}
@@ -681,22 +713,30 @@ func CollectDescendants(db *sql.DB, channelID int64, folderID string) (folderIDs
 }
 
 func IsAncestor(db *sql.DB, channelID int64, ancestor, candidate string) (bool, error) {
-	cur := candidate
-	visited := make(map[string]bool)
-	for cur != RootParent {
-		if cur == ancestor {
-			return true, nil
-		}
-		if visited[cur] {
-			return false, nil
-		}
-		visited[cur] = true
-
-		next, err := FolderParent(db, channelID, cur)
-		if err != nil {
-			return false, nil
-		}
-		cur = next
+	if ancestor == "" || candidate == "" || candidate == RootParent {
+		return false, nil
 	}
-	return false, nil
+	var found int
+	err := db.QueryRow(`
+		WITH RECURSIVE ancestors(id, parent_id, path) AS (
+			SELECT id, parent_id, ',' || id || ','
+			FROM folders
+			WHERE channel_id = ?1 AND id = ?2 AND tombstoned = 0
+			UNION ALL
+			SELECT f.id, f.parent_id, ancestors.path || f.id || ','
+			FROM folders f
+			JOIN ancestors ON f.id = ancestors.parent_id
+			WHERE f.channel_id = ?1
+			  AND f.tombstoned = 0
+			  AND instr(ancestors.path, ',' || f.id || ',') = 0
+		)
+		SELECT 1 FROM ancestors WHERE id = ?3 LIMIT 1
+	`, channelID, candidate, ancestor).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
