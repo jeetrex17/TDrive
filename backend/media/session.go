@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -271,8 +272,12 @@ func (s *Session) readAt(ctx context.Context, reader *RangeReader, p []byte, off
 }
 
 func (s *Session) segmentFor(off int64) (resolvedSegment, bool) {
-	for _, seg := range s.segments {
-		if off >= seg.start && off < seg.start+seg.size {
+	i := sort.Search(len(s.segments), func(i int) bool {
+		return s.segments[i].start+s.segments[i].size > off
+	})
+	if i < len(s.segments) {
+		seg := s.segments[i]
+		if off >= seg.start {
 			return seg, true
 		}
 	}

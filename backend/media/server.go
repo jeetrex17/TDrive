@@ -21,7 +21,15 @@ const (
 	mediaThumbSourcePrefix = "/media/thumb-source/"
 	mediaSessionIdleTTL    = 2 * time.Hour
 	mediaSessionSweepEvery = 5 * time.Minute
+	mediaStreamChunkSize   = 256 * 1024
 )
+
+var mediaStreamBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, mediaStreamChunkSize)
+		return &buf
+	},
+}
 
 type PlaybackUpdate struct {
 	Token       string  `json:"token"`
@@ -348,8 +356,9 @@ func parseRangeHeader(raw string, size int64) (start, end int64, partial bool, o
 }
 
 func streamSessionRange(ctx context.Context, w io.Writer, session *Session, start, length int64, readAt func(*Session, context.Context, []byte, int64) (int, error)) error {
-	const chunkSize = 256 * 1024
-	buf := make([]byte, chunkSize)
+	bufPtr := mediaStreamBufferPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer mediaStreamBufferPool.Put(bufPtr)
 	var sent int64
 	for sent < length {
 		want := length - sent

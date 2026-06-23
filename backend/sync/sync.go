@@ -27,6 +27,11 @@ const (
 	maxFloodWaitSleep   = 60 * time.Second
 )
 
+type historyPlan struct {
+	upperBounds []int64
+	highestSeen int64
+}
+
 type Engine struct {
 	db    *sql.DB
 	tg    tgclient.Client
@@ -111,57 +116,11 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 		return err
 	}
 
-	var allParsed []ParsedMessage
-	highestSeen := watermark
-	offsetID := int64(0)
-	for {
-		page, err := e.getHistory(ctx, channelID, peer, watermark, offsetID, defaultPageSize)
-		if err != nil {
-			return fmt.Errorf("sync: get history: %w", err)
-		}
-		if len(page) == 0 {
-			break
-		}
-		lowestInPage := page[0].MsgID
-		for _, m := range page {
-			if m.MsgID < lowestInPage {
-				lowestInPage = m.MsgID
-			}
-			if m.MsgID > highestSeen {
-				highestSeen = m.MsgID
-			}
-		}
-		allParsed = append(allParsed, ParseHistoryPage(page)...)
-		if len(page) < defaultPageSize {
-			break
-		}
-		if offsetID == lowestInPage {
-			break
-		}
-		offsetID = lowestInPage
+	plan, err := e.planHistory(ctx, channelID, peer, watermark)
+	if err != nil {
+		return err
 	}
-
-	SortAscending(allParsed)
-	applied := watermark
-	for _, p := range allParsed {
-		if _, err := projection.ProjectFromOp(e.db, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
-			// Persist progress so a re-run resumes past what already applied
-			// instead of re-fetching the whole channel from the old watermark.
-			if applied > watermark {
-				_ = writeWatermark(e.db, channelID, applied)
-			}
-			return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
-		}
-		if p.MsgID > applied {
-			applied = p.MsgID
-		}
-	}
-	if highestSeen > watermark {
-		if err := writeWatermark(e.db, channelID, highestSeen); err != nil {
-			return err
-		}
-	}
-	return nil
+	return e.applyHistoryPlan(ctx, channelID, peer, watermark, plan)
 }
 
 // InitialSyncEmptyChannel paginates the full history of a channel that has
@@ -180,24 +139,35 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 	if !empty {
 		return projection.ErrChannelNotEmpty
 	}
+	watermark := int64(0)
 
 	peer, err := e.peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("sync: resolve peer: %w", err)
 	}
 
-	var allParsed []ParsedMessage
-	var highestSeen int64
+	plan, err := e.planHistory(ctx, channelID, peer, watermark)
+	if err != nil {
+		return err
+	}
+	if len(plan.upperBounds) == 0 {
+		return markInitialSyncDone(e.db, channelID, watermark)
+	}
+	return e.applyInitialHistoryPlan(ctx, channelID, peer, watermark, plan)
+}
+
+func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64) (historyPlan, error) {
+	var lowestPerPage []int64
+	highestSeen := minID
 	offsetID := int64(0)
 	for {
-		page, err := e.getHistory(ctx, channelID, peer, 0, offsetID, defaultPageSize)
+		page, err := e.getHistory(ctx, channelID, peer, minID, offsetID, defaultPageSize)
 		if err != nil {
-			return fmt.Errorf("sync: get history: %w", err)
+			return historyPlan{}, fmt.Errorf("sync: get history: %w", err)
 		}
 		if len(page) == 0 {
 			break
 		}
-		// Backward paging: lowest msg_id is at the end of the page.
 		var lowestInPage int64 = page[0].MsgID
 		for _, m := range page {
 			if m.MsgID < lowestInPage {
@@ -207,28 +177,106 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 				highestSeen = m.MsgID
 			}
 		}
-		allParsed = append(allParsed, ParseHistoryPage(page)...)
+		lowestPerPage = append(lowestPerPage, lowestInPage)
 		if len(page) < defaultPageSize {
+			break
+		}
+		if offsetID == lowestInPage {
 			break
 		}
 		offsetID = lowestInPage
 	}
 
-	SortAscending(allParsed)
+	if len(lowestPerPage) == 0 {
+		return historyPlan{highestSeen: highestSeen}, nil
+	}
+	upperBounds := make([]int64, len(lowestPerPage))
+	upperBounds[0] = highestSeen + 1
+	for i := 1; i < len(lowestPerPage); i++ {
+		upperBounds[i] = lowestPerPage[i-1]
+	}
+	return historyPlan{upperBounds: upperBounds, highestSeen: highestSeen}, nil
+}
 
+func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan) error {
+	for i := len(plan.upperBounds) - 1; i >= 0; i-- {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		page, err := e.getHistory(ctx, channelID, peer, minID, plan.upperBounds[i], defaultPageSize)
+		if err != nil {
+			return fmt.Errorf("sync: get history: %w", err)
+		}
+		pageWatermark := minID
+		filtered := page[:0]
+		for _, m := range page {
+			if m.MsgID <= minID || m.MsgID > plan.highestSeen {
+				continue
+			}
+			filtered = append(filtered, m)
+			if m.MsgID > pageWatermark {
+				pageWatermark = m.MsgID
+			}
+		}
+		parsed := ParseHistoryPage(filtered)
+		SortAscending(parsed)
+
+		tx, err := e.db.Begin()
+		if err != nil {
+			return fmt.Errorf("sync: begin projection: %w", err)
+		}
+		for _, p := range parsed {
+			if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
+			}
+		}
+		if pageWatermark > minID {
+			if err := writeWatermarkTx(tx, channelID, pageWatermark); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			minID = pageWatermark
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("sync: commit projection: %w", err)
+		}
+	}
+	return nil
+}
+
+func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan) error {
 	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("sync: begin initial projection: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	for _, p := range allParsed {
-		if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
-			return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
+	for i := len(plan.upperBounds) - 1; i >= 0; i-- {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		page, err := e.getHistory(ctx, channelID, peer, minID, plan.upperBounds[i], defaultPageSize)
+		if err != nil {
+			return fmt.Errorf("sync: get history: %w", err)
+		}
+		filtered := page[:0]
+		for _, m := range page {
+			if m.MsgID <= minID || m.MsgID > plan.highestSeen {
+				continue
+			}
+			filtered = append(filtered, m)
+		}
+		parsed := ParseHistoryPage(filtered)
+		SortAscending(parsed)
+		for _, p := range parsed {
+			if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
+				return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
+			}
 		}
 	}
 
-	if err := markInitialSyncDoneTx(tx, channelID, highestSeen); err != nil {
+	if err := markInitialSyncDoneTx(tx, channelID, plan.highestSeen); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -251,6 +299,11 @@ func readWatermark(db *sql.DB, channelID int64) (int64, error) {
 
 func writeWatermark(db *sql.DB, channelID int64, msgID int64) error {
 	_, err := db.Exec(`UPDATE channels SET last_synced_msg = ? WHERE channel_id = ?`, msgID, channelID)
+	return err
+}
+
+func writeWatermarkTx(tx *sql.Tx, channelID int64, msgID int64) error {
+	_, err := tx.Exec(`UPDATE channels SET last_synced_msg = ? WHERE channel_id = ?`, msgID, channelID)
 	return err
 }
 

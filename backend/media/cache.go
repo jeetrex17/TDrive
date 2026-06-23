@@ -47,22 +47,23 @@ func (c *blockCache) put(key string, data []byte) {
 	if c == nil || len(data) == 0 {
 		return
 	}
-	stored := append([]byte(nil), data...)
+	// blockCache takes ownership of data. Callers must not mutate a fetched block
+	// after putting it; ReadStoredAt only copies from cached blocks.
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if elem, ok := c.items[key]; ok {
 		ent := elem.Value.(*cacheEntry)
 		c.used -= int64(len(ent.data))
-		ent.data = stored
-		c.used += int64(len(stored))
+		ent.data = data
+		c.used += int64(len(data))
 		c.lru.MoveToFront(elem)
 		c.evictLocked()
 		return
 	}
-	elem := c.lru.PushFront(&cacheEntry{key: key, data: stored})
+	elem := c.lru.PushFront(&cacheEntry{key: key, data: data})
 	c.items[key] = elem
-	c.used += int64(len(stored))
+	c.used += int64(len(data))
 	c.evictLocked()
 }
 

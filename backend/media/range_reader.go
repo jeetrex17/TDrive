@@ -242,7 +242,9 @@ func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, block
 		if err != nil {
 			return nil, err
 		}
-		r.cache.put(key, data)
+		if r.cache != nil {
+			r.cache.put(key, data)
+		}
 		return data, nil
 	})
 

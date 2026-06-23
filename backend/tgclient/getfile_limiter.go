@@ -74,16 +74,22 @@ func AcquireBackgroundGetFileSlots(ctx context.Context, n int) (func(), error) {
 
 func acquireGlobalGetFileSlotsNoQueue(ctx context.Context, weight int64) (func(), error) {
 	weight = int64(clampGetFileWeight(int(weight), MaxConcurrentGetFile))
+	timer := time.NewTimer(backgroundGlobalRetry)
+	defer timer.Stop()
+	first := true
 	for {
 		if getFileSlots.TryAcquire(weight) {
 			return func() {
 				getFileSlots.Release(weight)
 			}, nil
 		}
-		timer := time.NewTimer(backgroundGlobalRetry)
+		if first {
+			first = false
+		} else {
+			timer.Reset(backgroundGlobalRetry)
+		}
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return nil, ctx.Err()
 		case <-timer.C:
 		}

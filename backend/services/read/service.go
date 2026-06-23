@@ -112,34 +112,32 @@ func (s *Service) Search(channelID int64, query string, limit int) ([]SearchResu
 		return []SearchResult{}, nil
 	}
 
-	allFolders, err := projection.ListAllFolders(s.DB, channelID)
-	if err != nil {
-		return nil, err
-	}
-	folderMap := make(map[string]projection.FolderSlim, len(allFolders))
-	for _, f := range allFolders {
-		if f.ID != "" {
-			folderMap[f.ID] = f
-		}
-	}
-
 	hits, err := projection.Search(s.DB, channelID, query, limit)
 	if err != nil {
 		return nil, err
 	}
 
+	pathCache := make(map[string]projection.FolderSlim, len(hits))
 	results := make([]SearchResult, 0, len(hits))
 	for _, h := range hits {
 		switch h.Type {
 		case "folder":
+			path, err := buildFolderPathLazy(s.DB, channelID, h.ID, pathCache)
+			if err != nil {
+				return nil, err
+			}
 			results = append(results, SearchResult{
 				Type:     "folder",
 				ID:       h.ID,
 				Name:     h.Name,
 				ParentID: h.ParentID,
-				Path:     buildFolderPath(folderMap, h.ID),
+				Path:     path,
 			})
 		case "file":
+			path, err := buildFolderPathLazy(s.DB, channelID, h.ParentID, pathCache)
+			if err != nil {
+				return nil, err
+			}
 			results = append(results, SearchResult{
 				Type:          "file",
 				ID:            fmt.Sprintf("%d", h.MsgID),
@@ -150,7 +148,7 @@ func (s *Service) Search(channelID int64, query string, limit int) ([]SearchResu
 				UploaderID:    h.UploaderID,
 				Encrypted:     h.Encrypted,
 				PlaintextSize: h.PlaintextSize,
-				Path:          buildFolderPath(folderMap, h.ParentID),
+				Path:          path,
 			})
 		}
 	}
@@ -335,4 +333,41 @@ func buildFolderPath(folders map[string]projection.FolderSlim, folderID string) 
 		names[i], names[j] = names[j], names[i]
 	}
 	return "My Drive / " + strings.Join(names, " / ")
+}
+
+func buildFolderPathLazy(db *sql.DB, channelID int64, folderID string, cache map[string]projection.FolderSlim) (string, error) {
+	folderID = strings.TrimSpace(folderID)
+	if folderID == projection.RootParent {
+		return "My Drive", nil
+	}
+	names := make([]string, 0, 8)
+	visited := make(map[string]bool)
+	cur := folderID
+	for cur != projection.RootParent && !visited[cur] {
+		visited[cur] = true
+		folder, ok := cache[cur]
+		if !ok {
+			var found bool
+			var err error
+			folder, found, err = projection.FolderByID(db, channelID, cur)
+			if err != nil {
+				return "", err
+			}
+			if !found {
+				break
+			}
+			cache[cur] = folder
+		}
+		if name := strings.TrimSpace(folder.Name); name != "" {
+			names = append(names, name)
+		}
+		cur = strings.TrimSpace(folder.ParentID)
+	}
+	if len(names) == 0 {
+		return "My Drive", nil
+	}
+	for i, j := 0, len(names)-1; i < j; i, j = i+1, j-1 {
+		names[i], names[j] = names[j], names[i]
+	}
+	return "My Drive / " + strings.Join(names, " / "), nil
 }
