@@ -359,6 +359,8 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr)
 		"--demuxer-max-back-bytes=33554432",
 		"--osc=yes",
 		"--osd-bar=yes",
+		"--cursor-autohide=no",
+		"--script-opts=osc-visibility=always",
 		"--force-window=immediate",
 		"--input-terminal=no",
 		"--input-ipc-server=" + p.ipcPath,

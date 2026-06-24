@@ -477,9 +477,13 @@ function errorMessage(err: unknown, fallback: string) {
     return raw || fallback;
 }
 
+function isNativeFallbackActive() {
+    return Boolean(activeNative && !activeNative.htmlControls);
+}
+
 function setChromeVisible(visible: boolean) {
     modalEl?.classList.toggle("is-video-chrome-visible", visible);
-    modalEl?.classList.toggle("is-video-cursor-hidden", !visible && !hasError);
+    modalEl?.classList.toggle("is-video-cursor-hidden", !visible && !hasError && !isNativeFallbackActive());
 }
 
 function setNativeMode(visible: boolean, fallback = false) {
@@ -604,9 +608,9 @@ function clearChromeTimer() {
 
 function scheduleChromeHide() {
     clearChromeTimer();
-    if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
+    if (!isOpen() || isNativeFallbackActive() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
     chromeHideTimer = setTimeout(() => {
-        if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
+        if (!isOpen() || isNativeFallbackActive() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
         setChromeVisible(false);
     }, CHROME_HIDE_DELAY_MS);
 }

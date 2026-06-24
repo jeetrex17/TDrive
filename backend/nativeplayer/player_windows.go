@@ -132,6 +132,8 @@ func (p *Player) startProcess(ctx context.Context, url string) error {
 		"--demuxer-max-back-bytes=4194304",
 		"--osc=yes",
 		"--osd-bar=yes",
+		"--cursor-autohide=no",
+		"--script-opts=osc-visibility=always",
 		"--force-window=immediate",
 		"--input-terminal=no",
 		"--input-ipc-server=" + p.ipcPath,
