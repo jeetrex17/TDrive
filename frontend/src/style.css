@@ -2213,17 +2213,30 @@ header {
 }
 
 .video-overlay.is-video-native-fallback .video-native-viewport {
-    left: 18px;
-    right: 18px;
-    top: 78px;
-    bottom: 18px;
     inset: auto;
+    left: var(--video-native-side-inset, 18px);
+    right: var(--video-native-side-inset, 18px);
+    top: var(--video-native-top-inset, 88px);
+    bottom: var(--video-native-bottom-inset, 128px);
     background: #000;
 }
 
-.video-overlay.is-video-native-fallback .video-controls,
 .video-overlay.is-video-native-fallback .video-center-controls,
 .video-overlay.is-video-native-fallback .video-skip-feedback {
+    display: none;
+}
+
+.video-overlay.is-video-native-fallback .video-controls {
+    display: grid;
+    grid-template-rows: auto;
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+    background: #05070c;
+    padding: 18px 26px 22px;
+}
+
+.video-overlay.is-video-native-fallback .video-timeline-row {
     display: none;
 }
 
@@ -2967,10 +2980,10 @@ header {
     }
 
     .video-overlay.is-video-native-fallback .video-native-viewport {
-        left: 10px;
-        right: 10px;
-        top: 64px;
-        bottom: 10px;
+        left: var(--video-native-side-inset, 10px);
+        right: var(--video-native-side-inset, 10px);
+        top: var(--video-native-top-inset, 74px);
+        bottom: var(--video-native-bottom-inset, 116px);
     }
 
     .video-filename {
@@ -2996,11 +3009,21 @@ header {
         display: none;
     }
 
+    .video-overlay.is-video-native-fallback .video-secondary-cluster {
+        display: flex;
+    }
+
     .video-controls #video-duration,
     .video-controls .video-volume-group,
     .video-controls .video-speed-wrap,
     .video-controls .video-fullscreen-btn {
         display: none;
+    }
+
+    .video-overlay.is-video-native-fallback .video-controls .video-volume-group,
+    .video-overlay.is-video-native-fallback .video-controls .video-speed-wrap,
+    .video-overlay.is-video-native-fallback .video-controls .video-fullscreen-btn {
+        display: flex;
     }
 
     .video-icon-btn {

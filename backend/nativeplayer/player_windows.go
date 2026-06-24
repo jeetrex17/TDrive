@@ -130,11 +130,13 @@ func (p *Player) startProcess(ctx context.Context, url string) error {
 		"--demuxer-readahead-secs=4",
 		"--demuxer-max-bytes=8388608",
 		"--demuxer-max-back-bytes=4194304",
-		"--osc=yes",
-		"--osd-bar=yes",
+		"--osc=no",
+		"--osd-bar=no",
+		"--osd-level=0",
 		"--cursor-autohide=no",
-		"--script-opts=osc-visibility=always",
+		"--no-input-default-bindings",
 		"--force-window=immediate",
+		"--input-vo-keyboard=no",
 		"--input-terminal=no",
 		"--input-ipc-server=" + p.ipcPath,
 		fmt.Sprintf("--wid=%d", p.child),
@@ -186,15 +188,12 @@ func (p *Player) Resize(rect Rect) error {
 	}
 
 	p.mu.Lock()
-	parent := p.parent
-	child := p.child
-	closed := p.closed
-	p.mu.Unlock()
-	if closed || child == 0 {
+	defer p.mu.Unlock()
+	if p.closed || p.child == 0 {
 		return nil
 	}
-	x, y, w, h := scaleRect(rect, parent)
-	return positionVideoChildWindow(child, x, y, w, h)
+	x, y, w, h := scaleRect(rect, p.parent)
+	return positionVideoChildWindow(p.child, x, y, w, h)
 }
 
 func (p *Player) Command(command ...string) error {

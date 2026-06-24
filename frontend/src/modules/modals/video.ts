@@ -249,6 +249,7 @@ class NativeMpvAdapter implements PlayerAdapter {
 
     playPause() {
         void this.command(["cycle", "pause"]);
+        this.updateFallbackState((state) => ({ ...state, paused: !state.paused }));
     }
 
     seekAbsolute(_seconds: number) {
@@ -261,23 +262,25 @@ class NativeMpvAdapter implements PlayerAdapter {
     }
 
     setVolume(value: number) {
-        if (!this.opened.htmlControls) return;
         const next = clamp(value, 0, 1);
         void this.command(["set", "volume", String(Math.round(next * 100))]);
         if (next > 0) void this.command(["set", "mute", "no"]);
+        this.updateFallbackState((state) => ({ ...state, volume: next, muted: next <= 0 }));
     }
 
     setMuted(value: boolean) {
         if (!this.opened.htmlControls) {
             void this.command(["cycle", "mute"]);
+            this.updateFallbackState((state) => ({ ...state, muted: value }));
             return;
         }
         void this.command(["set", "mute", value ? "yes" : "no"]);
     }
 
     setSpeed(value: number) {
-        if (!this.opened.htmlControls) return;
-        void this.command(["set", "speed", String(clamp(value, 0.25, 4))]);
+        const next = clamp(value, 0.25, 4);
+        void this.command(["set", "speed", String(next)]);
+        this.updateFallbackState((state) => ({ ...state, rate: next }));
     }
 
     async close() {
@@ -293,6 +296,12 @@ class NativeMpvAdapter implements PlayerAdapter {
         for (const callback of this.subscribers) callback(this.state);
     }
 
+    private updateFallbackState(update: (state: PlayerState) => PlayerState) {
+        if (this.opened.htmlControls || this.closed) return;
+        this.state = update(this.state);
+        this.emit();
+    }
+
     private async command(command: string[]) {
         if (this.closed) return;
         try {
@@ -305,6 +314,8 @@ class NativeMpvAdapter implements PlayerAdapter {
 
 let modalEl: HTMLElement | null = null;
 let stageEl: HTMLElement | null = null;
+let topbarEl: HTMLElement | null = null;
+let controlsEl: HTMLElement | null = null;
 let filenameEl: HTMLElement | null = null;
 let metaEl: HTMLElement | null = null;
 let closeBtnEl: HTMLButtonElement | null = null;
@@ -376,6 +387,10 @@ const thumbnailObjectURLs = new Map<number, string>();
 const pendingThumbnails = new Set<number>();
 const failedThumbnails = new Map<number, number>();
 let a11y: ReturnType<typeof installModalA11y> | null = null;
+
+const FALLBACK_NATIVE_GAP_PX = 10;
+const FALLBACK_NATIVE_SIDE_PX = 18;
+const FALLBACK_NATIVE_SIDE_COMPACT_PX = 10;
 
 function byID<T extends HTMLElement>(id: string): T | null {
     return document.getElementById(id) as T | null;
@@ -490,6 +505,14 @@ function setNativeMode(visible: boolean, fallback = false) {
     modalEl?.classList.toggle("is-video-native", visible);
     modalEl?.classList.toggle("is-video-native-fallback", visible && fallback);
     document.body.classList.toggle("native-video-active", visible && !fallback);
+    syncFallbackNativeViewportInsets();
+}
+
+function shouldMeasureNativeFallbackBeforeOpen() {
+    // macOS renders libmpv below a transparent WebView and can overlay HTML controls.
+    // Windows/Linux use native child windows above the WebView, so reserve HTML-owned
+    // top/bottom strips before opening mpv or it can briefly cover the whole modal.
+    return !/macintosh|mac os x/i.test(window.navigator.userAgent);
 }
 
 function fullscreenRuntimeAvailable() {
@@ -565,7 +588,27 @@ function nextFrame(): Promise<void> {
     return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+function syncFallbackNativeViewportInsets() {
+    if (!modalEl || !stageEl || !nativeViewportEl || !modalEl.classList.contains("is-video-native-fallback")) return;
+    const stageRect = stageEl.getBoundingClientRect();
+    if (stageRect.width <= 0 || stageRect.height <= 0) return;
+
+    const topbarRect = topbarEl?.getBoundingClientRect();
+    const controlsRect = controlsEl?.getBoundingClientRect();
+    const compact = window.matchMedia("(max-width: 760px)").matches;
+    const side = compact ? FALLBACK_NATIVE_SIDE_COMPACT_PX : FALLBACK_NATIVE_SIDE_PX;
+    const topbarBottom = topbarRect ? Math.max(topbarRect.bottom, stageRect.top) : stageRect.top;
+    const controlsTop = controlsRect ? Math.min(controlsRect.top, stageRect.bottom) : stageRect.bottom;
+    const top = Math.ceil(Math.max(0, topbarBottom - stageRect.top) + FALLBACK_NATIVE_GAP_PX);
+    const bottom = Math.ceil(Math.max(0, stageRect.bottom - controlsTop) + FALLBACK_NATIVE_GAP_PX);
+
+    nativeViewportEl.style.setProperty("--video-native-side-inset", `${side}px`);
+    nativeViewportEl.style.setProperty("--video-native-top-inset", `${top}px`);
+    nativeViewportEl.style.setProperty("--video-native-bottom-inset", `${bottom}px`);
+}
+
 function currentNativeRect(): NativeMediaRect | null {
+    syncFallbackNativeViewportInsets();
     const source = nativeViewportEl || stageEl;
     if (!source) return null;
     const rect = source.getBoundingClientRect();
@@ -824,12 +867,13 @@ function setSliderDisabled(el: HTMLElement | null, disabled: boolean) {
 }
 
 function syncTransportAvailability(state: PlayerState) {
-    const canSeek = Boolean(activeAdapter && state.duration > 0);
-    setButtonDisabled(skipBackBtnEl, !canSeek);
-    setButtonDisabled(skipForwardBtnEl, !canSeek);
-    setButtonDisabled(centerSkipBackBtnEl, !canSeek);
-    setButtonDisabled(centerSkipForwardBtnEl, !canSeek);
-    setSliderDisabled(scrubberEl, !canSeek);
+    const canScrub = Boolean(activeAdapter && state.duration > 0);
+    const canRelativeSeek = canScrub || isNativeFallbackActive();
+    setButtonDisabled(skipBackBtnEl, !canRelativeSeek);
+    setButtonDisabled(skipForwardBtnEl, !canRelativeSeek);
+    setButtonDisabled(centerSkipBackBtnEl, !canRelativeSeek);
+    setButtonDisabled(centerSkipForwardBtnEl, !canRelativeSeek);
+    setSliderDisabled(scrubberEl, !canScrub);
     applyFullscreenState(isWindowFullscreen);
 }
 
@@ -1348,9 +1392,11 @@ export async function openVideoModal(target: VideoOpenTarget) {
         return;
     }
     if (!isWebviewDirectVideo(target.name)) {
-        // Keep the modal opaque while Telegram/mpv is still opening. The native
-        // surface only shows through after openNativeMedia has created it.
-        setNativeMode(false);
+        const measureFallback = shouldMeasureNativeFallbackBeforeOpen();
+        // macOS stays opaque until libmpv exists underneath the transparent stage.
+        // Windows/Linux must enter fallback layout first so the native child HWND/X11
+        // window is never created over the close button or transport controls.
+        setNativeMode(measureFallback, measureFallback);
         await nextFrame();
         const rect = currentNativeRect();
         if (seq !== openSeq || !isOpen()) return;
@@ -1730,6 +1776,8 @@ function renderSpeedOptions() {
 export function setupVideoModal() {
     modalEl = byID("video-modal");
     stageEl = byID("video-stage");
+    topbarEl = document.querySelector<HTMLElement>("#video-modal .video-topbar");
+    controlsEl = document.querySelector<HTMLElement>("#video-modal .video-controls");
     filenameEl = byID("video-filename");
     metaEl = byID("video-meta");
     closeBtnEl = byID("video-close");
