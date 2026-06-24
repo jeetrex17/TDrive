@@ -13,3 +13,14 @@ Rules for this layer:
 - Keep the video player as a vanilla TypeScript island until the shared app
   shell and file-list surfaces are stable.
 - New components should include a small compile or behavior test when practical.
+
+Current primitives:
+
+- `StateView` for loading, empty, and error copy blocks.
+- `Button` and `IconButton` for token-driven controls.
+- `ProgressBar` for bounded and indeterminate progress.
+- `mountSvelte` for mounting components from existing TypeScript modules with
+  explicit teardown.
+
+Migration rule of thumb: replace repeated DOM-string UI first, then move larger
+stateful surfaces once their data model has a typed adapter.

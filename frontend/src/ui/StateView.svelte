@@ -1,10 +1,23 @@
 <script lang="ts">
+    import type { Snippet } from 'svelte';
+
     type Tone = 'loading' | 'empty' | 'error';
 
-    export let tone: Tone = 'empty';
-    export let title: string;
-    export let body = '';
-    export let busy = false;
+    type StateViewProps = {
+        tone?: Tone;
+        title: string;
+        body?: string;
+        busy?: boolean;
+        children?: Snippet;
+    };
+
+    let {
+        tone = 'empty',
+        title,
+        body = '',
+        busy = false,
+        children,
+    }: StateViewProps = $props();
 </script>
 
 <div
@@ -28,6 +41,11 @@
         <div class="state-title">{title}</div>
         {#if body}
             <div class="state-body">{body}</div>
+        {/if}
+        {#if children}
+            <div class="state-actions">
+                {@render children()}
+            </div>
         {/if}
     </div>
 </div>
@@ -79,6 +97,13 @@
         color: var(--text-muted);
         font-size: var(--font-size-xs);
         line-height: 1.45;
+    }
+
+    .state-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+        margin-top: var(--space-3);
     }
 
     .is-error .state-icon {

@@ -67,6 +67,7 @@
     --bg-dark: var(--color-canvas);
     --bg-sidebar: var(--color-surface-0);
     --bg-panel: var(--color-surface-2);
+    --surface-control: var(--color-surface-1);
     --accent: var(--color-accent);
     --accent-hover: var(--color-accent-hover);
     --text-main: var(--color-text-soft);
@@ -74,6 +75,10 @@
     --border: var(--color-border-soft);
     --danger: var(--color-danger);
     --success: var(--color-success);
+    --radius-full: var(--radius-pill);
+    --font-size-xs: var(--type-xs);
+    --font-size-sm: var(--type-sm);
+    --font-size-base: var(--type-base);
 }
 
 @font-face {
