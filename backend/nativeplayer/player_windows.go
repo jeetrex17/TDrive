@@ -25,6 +25,11 @@ const (
 	wsClipChildren = 0x02000000
 	wsClipSiblings = 0x04000000
 
+	hwndTop = 0
+
+	swpNoActivate = 0x0010
+	swpShowWindow = 0x0040
+
 	swHide = 0
 
 	jobObjectInfoClassExtendedLimitInformation = 9
@@ -49,7 +54,7 @@ var (
 	procGetWindowTextW         = user32.NewProc("GetWindowTextW")
 	procGetWindowThreadProcess = user32.NewProc("GetWindowThreadProcessId")
 	procIsWindowVisible        = user32.NewProc("IsWindowVisible")
-	procMoveWindow             = user32.NewProc("MoveWindow")
+	procSetWindowPos           = user32.NewProc("SetWindowPos")
 	procShowWindow             = user32.NewProc("ShowWindow")
 
 	enumWindowsMu       sync.Mutex
@@ -187,11 +192,7 @@ func (p *Player) Resize(rect Rect) error {
 		return nil
 	}
 	x, y, w, h := scaleRect(rect, parent)
-	ret, _, callErr := procMoveWindow.Call(child, uintptr(x), uintptr(y), uintptr(w), uintptr(h), 1)
-	if ret == 0 {
-		return callFailed("MoveWindow", callErr)
-	}
-	return nil
+	return positionVideoChildWindow(child, x, y, w, h)
 }
 
 func (p *Player) Command(command ...string) error {
@@ -363,7 +364,31 @@ func createVideoChildWindow(parent uintptr, rect Rect) (uintptr, error) {
 	if child == 0 {
 		return 0, callFailed("CreateWindowExW", callErr)
 	}
+	if err := positionVideoChildWindow(child, x, y, w, h); err != nil {
+		procDestroyWindow.Call(child)
+		return 0, err
+	}
 	return child, nil
+}
+
+func positionVideoChildWindow(child uintptr, x, y, w, h int) error {
+	// WebView2 is also hosted as a child HWND. MoveWindow preserves z-order, so
+	// a webview repaint/restack can cover mpv and leave a black viewport while
+	// the stream keeps downloading. Raising only the dedicated video child keeps
+	// mpv visible without covering the topbar or close button.
+	ret, _, callErr := procSetWindowPos.Call(
+		child,
+		hwndTop,
+		uintptr(x),
+		uintptr(y),
+		uintptr(w),
+		uintptr(h),
+		swpNoActivate|swpShowWindow,
+	)
+	if ret == 0 {
+		return callFailed("SetWindowPos", callErr)
+	}
+	return nil
 }
 
 type jobObjectBasicLimitInformation struct {
