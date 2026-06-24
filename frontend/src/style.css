@@ -2228,16 +2228,12 @@ header {
 
 .video-overlay.is-video-native-fallback .video-controls {
     display: grid;
-    grid-template-rows: auto;
+    grid-template-rows: auto auto;
     opacity: 1;
     transform: translateY(0);
     pointer-events: auto;
     background: #05070c;
     padding: 18px 26px 22px;
-}
-
-.video-overlay.is-video-native-fallback .video-timeline-row {
-    display: none;
 }
 
 .video-overlay.is-video-native-fallback .video-topbar {
@@ -3018,6 +3014,10 @@ header {
     .video-controls .video-speed-wrap,
     .video-controls .video-fullscreen-btn {
         display: none;
+    }
+
+    .video-overlay.is-video-native-fallback .video-controls #video-duration {
+        display: inline;
     }
 
     .video-overlay.is-video-native-fallback .video-controls .video-volume-group,

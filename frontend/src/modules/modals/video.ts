@@ -229,16 +229,12 @@ class NativeMpvAdapter implements PlayerAdapter {
     private unsubscribeRuntime: (() => void) | null = null;
 
     constructor(private readonly opened: NativeMediaOpenResult) {
-        this.state = opened.htmlControls
-            ? { ...EMPTY_STATE, loading: true }
-            : { ...EMPTY_STATE, paused: false, loading: false };
-        if (opened.htmlControls) {
-            this.unsubscribeRuntime = EventsOn("native_media_state", (payload: NativeMediaStatePayload) => {
-                if (this.closed || payload?.token !== this.opened.token) return;
-                this.state = nativePayloadToState(payload, this.state);
-                this.emit();
-            });
-        }
+        this.state = { ...EMPTY_STATE, paused: false, loading: true };
+        this.unsubscribeRuntime = EventsOn("native_media_state", (payload: NativeMediaStatePayload) => {
+            if (this.closed || payload?.token !== this.opened.token) return;
+            this.state = nativePayloadToState(payload, this.state);
+            this.emit();
+        });
     }
 
     subscribe(callback: (state: PlayerState) => void) {
@@ -253,8 +249,9 @@ class NativeMpvAdapter implements PlayerAdapter {
     }
 
     seekAbsolute(_seconds: number) {
-        if (!this.opened.htmlControls) return;
+        if (this.state.duration <= 0) return;
         void this.command(["seek", String(clamp(_seconds, 0, Math.max(0, this.state.duration || _seconds))), "absolute"]);
+        this.updateFallbackState((state) => ({ ...state, currentTime: clamp(_seconds, 0, Math.max(0, state.duration)) }));
     }
 
     seekRelative(seconds: number) {
@@ -297,7 +294,7 @@ class NativeMpvAdapter implements PlayerAdapter {
     }
 
     private updateFallbackState(update: (state: PlayerState) => PlayerState) {
-        if (this.opened.htmlControls || this.closed) return;
+        if (this.closed) return;
         this.state = update(this.state);
         this.emit();
     }

@@ -50,11 +50,11 @@ func (a *App) OpenNativeMedia(msgID int, rect nativeplayer.Rect) (NativeMediaRes
 
 	token := opened.Token
 	htmlControls := nativeHTMLControlsEnabled() && nativeplayer.SupportsHTMLControls()
-	opts := nativeplayer.Options{UseHTMLControls: htmlControls}
-	if htmlControls {
-		opts.OnState = func(state nativeplayer.State) {
+	opts := nativeplayer.Options{
+		UseHTMLControls: htmlControls,
+		OnState: func(state nativeplayer.State) {
 			a.emitNativeMediaState(token, state)
-		}
+		},
 	}
 	player, err := nativeplayer.Start(a.ctx, opened.URL, rect, opts)
 	if err != nil {

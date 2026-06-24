@@ -3,6 +3,7 @@
 package nativeplayer
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +28,8 @@ const (
 	wsClipSiblings = 0x04000000
 
 	hwndTop = 0
+
+	pmRemove = 0x0001
 
 	swpNoActivate = 0x0010
 	swpShowWindow = 0x0040
@@ -49,30 +53,37 @@ var (
 	procCreateWindowExW        = user32.NewProc("CreateWindowExW")
 	procDestroyWindow          = user32.NewProc("DestroyWindow")
 	procEnumWindows            = user32.NewProc("EnumWindows")
-	procGetDpiForWindow        = user32.NewProc("GetDpiForWindow")
 	procGetWindowTextLengthW   = user32.NewProc("GetWindowTextLengthW")
 	procGetWindowTextW         = user32.NewProc("GetWindowTextW")
 	procGetWindowThreadProcess = user32.NewProc("GetWindowThreadProcessId")
 	procIsWindowVisible        = user32.NewProc("IsWindowVisible")
+	procPeekMessageW           = user32.NewProc("PeekMessageW")
 	procSetWindowPos           = user32.NewProc("SetWindowPos")
 	procShowWindow             = user32.NewProc("ShowWindow")
+	procTranslateMessage       = user32.NewProc("TranslateMessage")
+	procDispatchMessageW       = user32.NewProc("DispatchMessageW")
 
 	enumWindowsMu       sync.Mutex
 	enumWindowsCallback = syscall.NewCallback(enumWindowsProc)
 	enumTargetPID       uint32
 	enumFirstWindow     uintptr
 	enumTitledWindow    uintptr
+
+	errWindowThreadStop = fmt.Errorf("native player: stop window thread")
 )
 
 type Player struct {
-	mu      sync.Mutex
-	closed  bool
-	parent  uintptr
-	child   uintptr
-	ipcPath string
-	proc    *windowsMPVProcess
-	done    chan error
-	job     syscall.Handle
+	mu          sync.Mutex
+	closed      bool
+	parent      uintptr
+	child       uintptr
+	windowOwner *windowsWindowThread
+	ipcPath     string
+	proc        *windowsMPVProcess
+	done        chan error
+	job         syscall.Handle
+	stateCancel context.CancelFunc
+	stateDone   chan struct{}
 
 	destroyOnce sync.Once
 	jobOnce     sync.Once
@@ -90,20 +101,23 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 	if err != nil {
 		return nil, err
 	}
-	child, err := createVideoChildWindow(parent, rect)
+	owner := startWindowsWindowThread()
+	child, err := owner.create(parent, rect)
 	if err != nil {
+		owner.close()
 		return nil, err
 	}
 
-	player := &Player{parent: parent, child: child, done: make(chan error, 1)}
-	if err := player.startProcess(ctx, url); err != nil {
+	player := &Player{parent: parent, child: child, windowOwner: owner, done: make(chan error, 1)}
+	if err := player.startProcess(ctx, url, opts); err != nil {
 		player.destroyChild()
+		owner.close()
 		return nil, err
 	}
 	return player, nil
 }
 
-func (p *Player) startProcess(ctx context.Context, url string) error {
+func (p *Player) startProcess(ctx context.Context, url string, opts Options) error {
 	mpvPath, err := findWindowsMPV()
 	if err != nil {
 		return err
@@ -162,6 +176,12 @@ func (p *Player) startProcess(ctx context.Context, url string) error {
 		return err
 	}
 	p.proc = proc
+	if opts.OnState != nil {
+		stateCtx, cancel := context.WithCancel(ctx)
+		p.stateCancel = cancel
+		p.stateDone = make(chan struct{})
+		go p.pollState(stateCtx, opts.OnState)
+	}
 	go func() {
 		err := proc.wait()
 		p.done <- err
@@ -188,12 +208,16 @@ func (p *Player) Resize(rect Rect) error {
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	owner := p.windowOwner
 	if p.closed || p.child == 0 {
+		p.mu.Unlock()
 		return nil
 	}
-	x, y, w, h := scaleRect(rect, p.parent)
-	return positionVideoChildWindow(p.child, x, y, w, h)
+	p.mu.Unlock()
+	if owner == nil {
+		return nil
+	}
+	return owner.resize(rect)
 }
 
 func (p *Player) Command(command ...string) error {
@@ -233,8 +257,13 @@ func (p *Player) Close() error {
 	ipcPath := p.ipcPath
 	proc := p.proc
 	done := p.done
+	stateCancel := p.stateCancel
+	stateDone := p.stateDone
 	p.mu.Unlock()
 
+	if stateCancel != nil {
+		stateCancel()
+	}
 	if ipcPath != "" {
 		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
 	}
@@ -247,6 +276,12 @@ func (p *Player) Close() error {
 			case <-done:
 			case <-time.After(2 * time.Second):
 			}
+		}
+	}
+	if stateDone != nil {
+		select {
+		case <-stateDone:
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	p.destroyChild()
@@ -262,10 +297,16 @@ func (p *Player) destroyChild() {
 		p.mu.Lock()
 		child := p.child
 		p.child = 0
+		owner := p.windowOwner
+		p.windowOwner = nil
 		p.mu.Unlock()
+		if owner != nil {
+			_ = owner.destroy()
+			owner.close()
+			return
+		}
 		if child != 0 {
-			procShowWindow.Call(child, swHide)
-			procDestroyWindow.Call(child)
+			hideAndDestroyWindow(child)
 		}
 	})
 }
@@ -301,6 +342,172 @@ func writeMPVIPC(path string, payload []byte) error {
 		time.Sleep(25 * time.Millisecond)
 	}
 	return fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
+}
+
+func (p *Player) pollState(ctx context.Context, onState StateHandler) {
+	defer close(p.stateDone)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		p.mu.Lock()
+		ipcPath := p.ipcPath
+		closed := p.closed
+		p.mu.Unlock()
+		if closed || ipcPath == "" {
+			return
+		}
+		state, ok := readWindowsMPVState(ipcPath)
+		if ok {
+			onState(state)
+		}
+	}
+}
+
+func readWindowsMPVState(ipcPath string) (State, bool) {
+	values, err := queryMPVProperties(ipcPath, []string{
+		"time-pos",
+		"duration",
+		"pause",
+		"mute",
+		"volume",
+		"speed",
+		"paused-for-cache",
+		"cache-buffering-state",
+		"demuxer-cache-duration",
+	})
+	if err != nil {
+		return State{}, false
+	}
+
+	current := cleanWindowsSeconds(floatProperty(values, "time-pos"), true)
+	duration := cleanWindowsSeconds(floatProperty(values, "duration"), true)
+	paused := boolProperty(values, "pause")
+	muted := boolProperty(values, "mute")
+	volume := clampWindowsFloat(floatProperty(values, "volume")/100, 0, 1)
+	rate := clampWindowsFloat(floatProperty(values, "speed"), 0.25, 4)
+	if rate == 0 {
+		rate = 1
+	}
+	buffering := floatProperty(values, "cache-buffering-state")
+	state := State{
+		Paused:      paused,
+		CurrentTime: clampWindowsFloat(current, 0, maxWindowsFloat(duration, current)),
+		Duration:    duration,
+		Volume:      volume,
+		Muted:       muted || volume == 0,
+		Rate:        rate,
+		Loading:     boolProperty(values, "paused-for-cache") || (!paused && buffering > 0 && buffering < 100),
+	}
+	cacheDuration := cleanWindowsSeconds(floatProperty(values, "demuxer-cache-duration"), true)
+	if duration > 0 && cacheDuration > 0 {
+		state.Buffered = []BufferedRange{{
+			Start: clampWindowsFloat(state.CurrentTime, 0, duration),
+			End:   clampWindowsFloat(state.CurrentTime+cacheDuration, 0, duration),
+		}}
+	}
+	return state, true
+}
+
+type mpvIPCRequest struct {
+	Command   []string `json:"command"`
+	RequestID int      `json:"request_id"`
+}
+
+type mpvIPCResponse struct {
+	RequestID int             `json:"request_id"`
+	Error     string          `json:"error"`
+	Data      json.RawMessage `json:"data"`
+}
+
+func queryMPVProperties(path string, names []string) (map[string]any, error) {
+	file, err := openMPVIPCReadWrite(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	idToName := make(map[int]string, len(names))
+	for i, name := range names {
+		id := i + 1
+		idToName[id] = name
+		if err := encoder.Encode(mpvIPCRequest{Command: []string{"get_property", name}, RequestID: id}); err != nil {
+			return nil, err
+		}
+	}
+
+	values := make(map[string]any, len(names))
+	scanner := bufio.NewScanner(file)
+	for len(idToName) > 0 && scanner.Scan() {
+		var response mpvIPCResponse
+		if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
+			continue
+		}
+		name, ok := idToName[response.RequestID]
+		if !ok {
+			continue
+		}
+		delete(idToName, response.RequestID)
+		if response.Error != "success" {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(response.Data, &value); err != nil {
+			continue
+		}
+		values[name] = value
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func openMPVIPCReadWrite(path string) (*os.File, error) {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		file, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err == nil {
+			return file, nil
+		}
+		lastErr = err
+		time.Sleep(25 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
+}
+
+func floatProperty(values map[string]any, key string) float64 {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return 0
+	}
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return float64(typed)
+	case json.Number:
+		n, _ := typed.Float64()
+		return n
+	default:
+		return 0
+	}
+}
+
+func boolProperty(values map[string]any, key string) bool {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return false
+	}
+	typed, ok := value.(bool)
+	return ok && typed
 }
 
 func findTDriveWindow() (uintptr, error) {
@@ -344,7 +551,7 @@ func enumWindowsProc(hwnd uintptr, lparam uintptr) uintptr {
 }
 
 func createVideoChildWindow(parent uintptr, rect Rect) (uintptr, error) {
-	x, y, w, h := scaleRect(rect, parent)
+	x, y, w, h := rectToWindowCoords(rect)
 	className, _ := syscall.UTF16PtrFromString("STATIC")
 	title, _ := syscall.UTF16PtrFromString("TDriveNativeVideo")
 	style := uintptr(wsChild | wsVisible | wsClipChildren | wsClipSiblings)
@@ -372,6 +579,11 @@ func createVideoChildWindow(parent uintptr, rect Rect) (uintptr, error) {
 	return child, nil
 }
 
+func hideAndDestroyWindow(child uintptr) {
+	procShowWindow.Call(child, swHide)
+	procDestroyWindow.Call(child)
+}
+
 func positionVideoChildWindow(child uintptr, x, y, w, h int) error {
 	// WebView2 is also hosted as a child HWND. MoveWindow preserves z-order, so
 	// a webview repaint/restack can cover mpv and leave a black viewport while
@@ -390,6 +602,157 @@ func positionVideoChildWindow(child uintptr, x, y, w, h int) error {
 		return callFailed("SetWindowPos", callErr)
 	}
 	return nil
+}
+
+type windowsWindowThread struct {
+	requests chan windowsWindowRequest
+	done     chan struct{}
+	child    uintptr
+}
+
+type windowsWindowRequest struct {
+	fn    func() error
+	reply chan error
+}
+
+type winPoint struct {
+	X int32
+	Y int32
+}
+
+type winMsg struct {
+	Hwnd    uintptr
+	Message uint32
+	WParam  uintptr
+	LParam  uintptr
+	Time    uint32
+	Pt      winPoint
+}
+
+func startWindowsWindowThread() *windowsWindowThread {
+	t := &windowsWindowThread{
+		requests: make(chan windowsWindowRequest),
+		done:     make(chan struct{}),
+	}
+	go t.run()
+	return t
+}
+
+func (t *windowsWindowThread) run() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer close(t.done)
+
+	ticker := time.NewTicker(8 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		pumpWindowMessages()
+		select {
+		case req, ok := <-t.requests:
+			if !ok {
+				pumpWindowMessages()
+				return
+			}
+			err := req.fn()
+			if err == errWindowThreadStop {
+				req.reply <- nil
+				pumpWindowMessages()
+				return
+			}
+			req.reply <- err
+		case <-ticker.C:
+		}
+	}
+}
+
+func (t *windowsWindowThread) call(ctx context.Context, fn func() error) error {
+	if t == nil {
+		return fmt.Errorf("native player: window thread is closed")
+	}
+	reply := make(chan error, 1)
+	req := windowsWindowRequest{fn: fn, reply: reply}
+	select {
+	case t.requests <- req:
+	case <-t.done:
+		return fmt.Errorf("native player: window thread is closed")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-reply:
+		return err
+	case <-t.done:
+		return fmt.Errorf("native player: window thread is closed")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (t *windowsWindowThread) create(parent uintptr, rect Rect) (uintptr, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var child uintptr
+	err := t.call(ctx, func() error {
+		var createErr error
+		child, createErr = createVideoChildWindow(parent, rect)
+		if createErr == nil {
+			t.child = child
+		}
+		return createErr
+	})
+	return child, err
+}
+
+func (t *windowsWindowThread) resize(rect Rect) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return t.call(ctx, func() error {
+		if t.child == 0 {
+			return nil
+		}
+		x, y, w, h := rectToWindowCoords(rect)
+		return positionVideoChildWindow(t.child, x, y, w, h)
+	})
+}
+
+func (t *windowsWindowThread) destroy() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return t.call(ctx, func() error {
+		if t.child != 0 {
+			hideAndDestroyWindow(t.child)
+			t.child = 0
+		}
+		return nil
+	})
+}
+
+func (t *windowsWindowThread) close() {
+	if t == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = t.call(ctx, func() error {
+		return errWindowThreadStop
+	})
+	select {
+	case <-t.done:
+	case <-time.After(2 * time.Second):
+	}
+}
+
+func pumpWindowMessages() {
+	var msg winMsg
+	for {
+		ret, _, _ := procPeekMessageW.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0, pmRemove)
+		if ret == 0 {
+			return
+		}
+		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg)))
+	}
 }
 
 type jobObjectBasicLimitInformation struct {
@@ -551,27 +914,46 @@ func (p *windowsMPVProcess) close() {
 	})
 }
 
-func scaleRect(rect Rect, hwnd uintptr) (int, int, int, int) {
-	scale := 1.0
-	if hwnd != 0 {
-		scale = float64(dpiForWindow(hwnd)) / 96.0
-	}
-	x := int(math.Round(math.Max(0, rect.X*scale)))
-	y := int(math.Round(math.Max(0, rect.Y*scale)))
-	w := int(math.Round(math.Max(1, rect.Width*scale)))
-	h := int(math.Round(math.Max(1, rect.Height*scale)))
+func rectToWindowCoords(rect Rect) (int, int, int, int) {
+	// The frontend rect is measured inside the WebView viewport. Wails/WebView2
+	// already maps those CSS pixels to the host client area; applying an
+	// additional GetDpiForWindow scale can oversize the child HWND on HiDPI
+	// displays and make it eat the fallback controls.
+	x := int(math.Round(math.Max(0, rect.X)))
+	y := int(math.Round(math.Max(0, rect.Y)))
+	w := int(math.Round(math.Max(1, rect.Width)))
+	h := int(math.Round(math.Max(1, rect.Height)))
 	return x, y, w, h
 }
 
-func dpiForWindow(hwnd uintptr) int {
-	if err := procGetDpiForWindow.Find(); err != nil {
-		return 96
+func cleanWindowsSeconds(value float64, ok bool) float64 {
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0
 	}
-	ret, _, _ := procGetDpiForWindow.Call(hwnd)
-	if ret == 0 {
-		return 96
+	return value
+}
+
+func clampWindowsFloat(value, min, max float64) float64 {
+	if max < min {
+		max = min
 	}
-	return int(ret)
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func maxWindowsFloat(values ...float64) float64 {
+	var max float64
+	for _, value := range values {
+		if value > max {
+			max = value
+		}
+	}
+	return max
 }
 
 func windowVisible(hwnd uintptr) bool {
