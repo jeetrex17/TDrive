@@ -224,11 +224,14 @@ class HtmlVideoAdapter implements PlayerAdapter {
 
 class NativeMpvAdapter implements PlayerAdapter {
     private subscribers = new Set<(state: PlayerState) => void>();
-    private state: PlayerState = { ...EMPTY_STATE, loading: true };
+    private state: PlayerState;
     private closed = false;
     private unsubscribeRuntime: (() => void) | null = null;
 
     constructor(private readonly opened: NativeMediaOpenResult) {
+        this.state = opened.htmlControls
+            ? { ...EMPTY_STATE, loading: true }
+            : { ...EMPTY_STATE, paused: false, loading: false };
         if (opened.htmlControls) {
             this.unsubscribeRuntime = EventsOn("native_media_state", (payload: NativeMediaStatePayload) => {
                 if (this.closed || payload?.token !== this.opened.token) return;
