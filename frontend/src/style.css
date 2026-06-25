@@ -2202,7 +2202,7 @@ header {
 }
 
 .video-overlay.is-video-native-fallback {
-    padding: 24px;
+    padding: 0;
     background: rgba(4, 6, 11, 0.94);
     backdrop-filter: blur(16px);
 }
@@ -2214,8 +2214,8 @@ header {
 
 .video-overlay.is-video-native-fallback .video-native-viewport {
     inset: auto;
-    left: var(--video-native-side-inset, 18px);
-    right: var(--video-native-side-inset, 18px);
+    left: var(--video-native-side-inset, 0);
+    right: var(--video-native-side-inset, 0);
     top: var(--video-native-top-inset, 88px);
     bottom: var(--video-native-bottom-inset, 128px);
     background: #000;
@@ -2229,17 +2229,14 @@ header {
 .video-overlay.is-video-native-fallback .video-controls {
     display: grid;
     grid-template-rows: auto auto;
-    opacity: 1;
-    transform: translateY(0);
-    pointer-events: auto;
     background: #05070c;
-    padding: 18px 26px 22px;
+    /* Compact strip: the inset is measured from this height, so tighter padding
+       directly enlarges the video without cramping the controls themselves. */
+    padding: 12px 26px 14px;
 }
 
-.video-overlay.is-video-native-fallback .video-topbar {
-    opacity: 1;
-    transform: translateY(0);
-    pointer-events: auto;
+.video-overlay.is-video-native-fallback .video-scrubber-tooltip {
+    display: none;
 }
 
 .video-topbar,
@@ -2276,6 +2273,8 @@ header {
 }
 
 .video-timeline-row {
+    position: relative;
+    z-index: 2;
     display: grid;
     grid-template-columns: auto minmax(160px, 1fr) auto;
     align-items: center;
@@ -2284,6 +2283,8 @@ header {
 }
 
 .video-command-row {
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2624,6 +2625,7 @@ header {
 
 .video-scrubber-tooltip {
     position: absolute;
+    z-index: 12;
     left: 0;
     bottom: calc(100% + 8px);
     display: grid;
@@ -2808,6 +2810,10 @@ header {
     gap: 2px;
 }
 
+.video-overlay.is-video-native-fallback .video-speed-menu.is-open {
+    display: none;
+}
+
 .video-speed-menu button {
     height: 30px;
     border: none;
@@ -2976,8 +2982,8 @@ header {
     }
 
     .video-overlay.is-video-native-fallback .video-native-viewport {
-        left: var(--video-native-side-inset, 10px);
-        right: var(--video-native-side-inset, 10px);
+        left: var(--video-native-side-inset, 0);
+        right: var(--video-native-side-inset, 0);
         top: var(--video-native-top-inset, 74px);
         bottom: var(--video-native-bottom-inset, 116px);
     }

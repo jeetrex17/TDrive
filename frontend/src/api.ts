@@ -11,12 +11,15 @@ import {
     GetFolderContents as rawGetFolderContents,
     GetFileList as rawGetFileList,
     GetMediaStats as rawGetMediaStats,
+    HideNativeSeekThumbnail as rawHideNativeSeekThumbnail,
     ListMedia as rawListMedia,
+    MoveNativeSeekThumbnail as rawMoveNativeSeekThumbnail,
     NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
     OpenNativeMedia as rawOpenNativeMedia,
     ResizeNativeMedia as rawResizeNativeMedia,
     Search as rawSearch,
+    ShowNativeSeekThumbnail as rawShowNativeSeekThumbnail,
     Thumbnail as rawThumbnail,
     UpdateMediaPlayback as rawUpdateMediaPlayback,
 } from "../wailsjs/go/main/App";
@@ -227,6 +230,25 @@ export async function nativeMediaCommand(token: string, command: string[]): Prom
 export async function closeNativeMedia(token: string): Promise<void> {
     if (!token) return;
     await rawCloseNativeMedia(token);
+}
+
+// showNativeSeekThumbnail paints a seek-preview thumbnail over the native video
+// window (Windows/Linux fallback, where HTML can't draw over the video). The
+// image is the raw base64 of a JPEG/PNG frame; rect is the preview box in CSS
+// pixels. No-op on platforms whose player has no overlay.
+export async function showNativeSeekThumbnail(token: string, imageBase64: string, rect: NativeMediaRect): Promise<void> {
+    if (!token || !imageBase64) return;
+    await rawShowNativeSeekThumbnail(token, imageBase64, rect as any);
+}
+
+export async function moveNativeSeekThumbnail(token: string, rect: NativeMediaRect): Promise<void> {
+    if (!token) return;
+    await rawMoveNativeSeekThumbnail(token, rect as any);
+}
+
+export async function hideNativeSeekThumbnail(token: string): Promise<void> {
+    if (!token) return;
+    await rawHideNativeSeekThumbnail(token);
 }
 
 export async function updateMediaPlayback(update: MediaPlaybackUpdate): Promise<void> {

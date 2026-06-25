@@ -279,6 +279,7 @@ static void tdrive_x11_destroy(tdrive_x11_view *view) {
 import "C"
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -293,13 +294,15 @@ import (
 )
 
 type Player struct {
-	mu      sync.Mutex
-	closed  bool
-	view    unsafe.Pointer
-	ipcPath string
-	ipcDir  string
-	cmd     *exec.Cmd
-	done    chan error
+	mu          sync.Mutex
+	closed      bool
+	view        unsafe.Pointer
+	ipcPath     string
+	ipcDir      string
+	cmd         *exec.Cmd
+	done        chan error
+	stateCancel context.CancelFunc
+	stateDone   chan struct{}
 
 	closeOnce sync.Once
 }
@@ -326,14 +329,14 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 	}
 
 	player := &Player{view: unsafe.Pointer(view), done: make(chan error, 1)}
-	if err := player.startProcess(ctx, url, child); err != nil {
+	if err := player.startProcess(ctx, url, child, opts); err != nil {
 		player.destroyView()
 		return nil, err
 	}
 	return player, nil
 }
 
-func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr) error {
+func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr, opts Options) error {
 	mpvPath, err := findLinuxMPV()
 	if err != nil {
 		return err
@@ -357,6 +360,11 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr)
 		"--demuxer-readahead-secs=20",
 		"--demuxer-max-bytes=67108864",
 		"--demuxer-max-back-bytes=33554432",
+		"--keepaspect=yes",
+		"--keepaspect-window=no",
+		"--auto-window-resize=no",
+		"--video-align-x=0",
+		"--video-align-y=0",
 		"--osc=no",
 		"--osd-bar=no",
 		"--osd-level=0",
@@ -378,8 +386,20 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr)
 		return fmt.Errorf("native player: start mpv: %w", err)
 	}
 	p.cmd = cmd
+	if opts.OnState != nil {
+		stateCtx, cancel := context.WithCancel(ctx)
+		p.stateCancel = cancel
+		p.stateDone = make(chan struct{})
+		go p.pollState(stateCtx, opts.OnState)
+	}
 	go func() {
 		err := cmd.Wait()
+		p.mu.Lock()
+		stateCancel := p.stateCancel
+		p.mu.Unlock()
+		if stateCancel != nil {
+			stateCancel()
+		}
 		p.done <- err
 		p.destroyView()
 		_ = os.RemoveAll(p.ipcDir)
@@ -406,6 +426,15 @@ func (p *Player) Resize(rect Rect) error {
 	p.mu.Unlock()
 	return nil
 }
+
+// ShowSeekThumbnail and HideSeekThumbnail are no-ops on Linux: the native
+// seek-preview overlay is currently implemented only on Windows. The methods
+// exist so the cross-platform app layer can call them uniformly.
+func (p *Player) ShowSeekThumbnail(_ []byte, _ Rect) error { return nil }
+
+func (p *Player) MoveSeekThumbnail(_ Rect) error { return nil }
+
+func (p *Player) HideSeekThumbnail() error { return nil }
 
 func (p *Player) Command(command ...string) error {
 	if p == nil || len(command) == 0 {
@@ -445,8 +474,13 @@ func (p *Player) Close() error {
 	ipcDir := p.ipcDir
 	cmd := p.cmd
 	done := p.done
+	stateCancel := p.stateCancel
+	stateDone := p.stateDone
 	p.mu.Unlock()
 
+	if stateCancel != nil {
+		stateCancel()
+	}
 	if ipcPath != "" {
 		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
 	}
@@ -460,6 +494,12 @@ func (p *Player) Close() error {
 			case <-done:
 			case <-time.After(2 * time.Second):
 			}
+		}
+	}
+	if stateDone != nil {
+		select {
+		case <-stateDone:
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	p.destroyView()
@@ -498,4 +538,195 @@ func writeMPVIPC(path string, payload []byte) error {
 		time.Sleep(25 * time.Millisecond)
 	}
 	return fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
+}
+
+func (p *Player) pollState(ctx context.Context, onState StateHandler) {
+	defer close(p.stateDone)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		p.mu.Lock()
+		ipcPath := p.ipcPath
+		closed := p.closed
+		p.mu.Unlock()
+		if closed || ipcPath == "" {
+			return
+		}
+		state, ok := readLinuxMPVState(ipcPath)
+		if ok {
+			onState(state)
+		}
+	}
+}
+
+func readLinuxMPVState(ipcPath string) (State, bool) {
+	values, err := queryLinuxMPVProperties(ipcPath, []string{
+		"time-pos",
+		"duration",
+		"pause",
+		"mute",
+		"volume",
+		"speed",
+		"paused-for-cache",
+		"cache-buffering-state",
+		"demuxer-cache-duration",
+	})
+	if err != nil {
+		return State{}, false
+	}
+
+	current := cleanLinuxSeconds(linuxFloatProperty(values, "time-pos"))
+	duration := cleanLinuxSeconds(linuxFloatProperty(values, "duration"))
+	paused := linuxBoolProperty(values, "pause")
+	muted := linuxBoolProperty(values, "mute")
+	volume := clampLinuxFloat(linuxFloatProperty(values, "volume")/100, 0, 1)
+	rate := clampLinuxFloat(linuxFloatProperty(values, "speed"), 0.25, 4)
+	if rate == 0 {
+		rate = 1
+	}
+	buffering := linuxFloatProperty(values, "cache-buffering-state")
+	state := State{
+		Paused:      paused,
+		CurrentTime: clampLinuxFloat(current, 0, maxLinuxFloat(duration, current)),
+		Duration:    duration,
+		Volume:      volume,
+		Muted:       muted || volume == 0,
+		Rate:        rate,
+		Loading:     linuxBoolProperty(values, "paused-for-cache") || (!paused && buffering > 0 && buffering < 100),
+	}
+	cacheDuration := cleanLinuxSeconds(linuxFloatProperty(values, "demuxer-cache-duration"))
+	if duration > 0 && cacheDuration > 0 {
+		state.Buffered = []BufferedRange{{
+			Start: clampLinuxFloat(state.CurrentTime, 0, duration),
+			End:   clampLinuxFloat(state.CurrentTime+cacheDuration, 0, duration),
+		}}
+	}
+	return state, true
+}
+
+type linuxMPVIPCRequest struct {
+	Command   []string `json:"command"`
+	RequestID int      `json:"request_id"`
+}
+
+type linuxMPVIPCResponse struct {
+	RequestID int             `json:"request_id"`
+	Error     string          `json:"error"`
+	Data      json.RawMessage `json:"data"`
+}
+
+func queryLinuxMPVProperties(path string, names []string) (map[string]any, error) {
+	conn, err := openLinuxMPVIPCReadWrite(path)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+
+	encoder := json.NewEncoder(conn)
+	idToName := make(map[int]string, len(names))
+	for i, name := range names {
+		id := i + 1
+		idToName[id] = name
+		if err := encoder.Encode(linuxMPVIPCRequest{Command: []string{"get_property", name}, RequestID: id}); err != nil {
+			return nil, err
+		}
+	}
+
+	values := make(map[string]any, len(names))
+	scanner := bufio.NewScanner(conn)
+	for len(idToName) > 0 && scanner.Scan() {
+		var response linuxMPVIPCResponse
+		if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
+			continue
+		}
+		name, ok := idToName[response.RequestID]
+		if !ok {
+			continue
+		}
+		delete(idToName, response.RequestID)
+		if response.Error != "success" {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(response.Data, &value); err != nil {
+			continue
+		}
+		values[name] = value
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+func openLinuxMPVIPCReadWrite(path string) (net.Conn, error) {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		time.Sleep(25 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
+}
+
+func linuxFloatProperty(values map[string]any, key string) float64 {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return 0
+	}
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return float64(typed)
+	case json.Number:
+		n, _ := typed.Float64()
+		return n
+	default:
+		return 0
+	}
+}
+
+func linuxBoolProperty(values map[string]any, key string) bool {
+	value, ok := values[key]
+	if !ok || value == nil {
+		return false
+	}
+	typed, ok := value.(bool)
+	return ok && typed
+}
+
+func cleanLinuxSeconds(value float64) float64 {
+	if value < 0 || value != value {
+		return 0
+	}
+	return value
+}
+
+func clampLinuxFloat(value, minValue, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func maxLinuxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }

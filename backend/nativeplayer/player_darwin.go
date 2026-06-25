@@ -443,6 +443,15 @@ func (p *Player) Resize(rect Rect) error {
 	return nil
 }
 
+// ShowSeekThumbnail and HideSeekThumbnail are no-ops on macOS: the seek preview
+// is drawn by the HTML overlay over the transparent webview, not a native
+// window, so the player has nothing to render here.
+func (p *Player) ShowSeekThumbnail(_ []byte, _ Rect) error { return nil }
+
+func (p *Player) MoveSeekThumbnail(_ Rect) error { return nil }
+
+func (p *Player) HideSeekThumbnail() error { return nil }
+
 func (p *Player) Command(command ...string) error {
 	if p == nil || len(command) == 0 {
 		return nil

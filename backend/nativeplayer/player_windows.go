@@ -27,7 +27,8 @@ const (
 	wsClipChildren = 0x02000000
 	wsClipSiblings = 0x04000000
 
-	hwndTop = 0
+	hwndTop    = 0
+	hwndBottom = 1
 
 	pmRemove = 0x0001
 
@@ -53,6 +54,7 @@ var (
 	procCreateWindowExW        = user32.NewProc("CreateWindowExW")
 	procDestroyWindow          = user32.NewProc("DestroyWindow")
 	procEnumWindows            = user32.NewProc("EnumWindows")
+	procGetDpiForWindow        = user32.NewProc("GetDpiForWindow")
 	procGetWindowTextLengthW   = user32.NewProc("GetWindowTextLengthW")
 	procGetWindowTextW         = user32.NewProc("GetWindowTextW")
 	procGetWindowThreadProcess = user32.NewProc("GetWindowThreadProcessId")
@@ -102,7 +104,7 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 		return nil, err
 	}
 	owner := startWindowsWindowThread()
-	child, err := owner.create(parent, rect)
+	child, err := owner.create(parent, rect, opts.UseHTMLControls)
 	if err != nil {
 		owner.close()
 		return nil, err
@@ -144,6 +146,11 @@ func (p *Player) startProcess(ctx context.Context, url string, opts Options) err
 		"--demuxer-readahead-secs=4",
 		"--demuxer-max-bytes=8388608",
 		"--demuxer-max-back-bytes=4194304",
+		"--keepaspect=yes",
+		"--keepaspect-window=no",
+		"--auto-window-resize=no",
+		"--video-align-x=0",
+		"--video-align-y=0",
 		"--osc=no",
 		"--osd-bar=no",
 		"--osd-level=0",
@@ -218,6 +225,66 @@ func (p *Player) Resize(rect Rect) error {
 		return nil
 	}
 	return owner.resize(rect)
+}
+
+// ShowSeekThumbnail decodes data (a JPEG/PNG seek thumbnail), scales it to rect
+// (CSS pixels, converted to physical pixels via the window DPI) and paints it on
+// an overlay window above the video. WebView2 cannot draw HTML over the native
+// mpv surface, so this gives the Windows fallback an on-video scrub preview.
+func (p *Player) ShowSeekThumbnail(data []byte, rect Rect) error {
+	if p == nil || !rect.Valid() {
+		return nil
+	}
+	p.mu.Lock()
+	owner := p.windowOwner
+	parent := p.parent
+	closed := p.closed
+	p.mu.Unlock()
+	overlayDebugf("ShowSeekThumbnail bytes=%d rect=%+v closed=%v parent=%d hasOwner=%v", len(data), rect, closed, parent, owner != nil)
+	if closed || owner == nil || parent == 0 {
+		return nil
+	}
+	x, y, w, h := rectToWindowCoords(parent, rect)
+	bmp, err := composeSeekThumbnail(data, w, h)
+	if err != nil {
+		overlayDebugf("composeSeekThumbnail err=%v", err)
+		return err
+	}
+	overlayDebugf("composed %dx%d -> show at x=%d y=%d w=%d h=%d", bmp.Width, bmp.Height, x, y, w, h)
+	return owner.showThumbnail(bmp, x, y, w, h)
+}
+
+// MoveSeekThumbnail repositions the existing seek-preview overlay without
+// decoding or uploading a new bitmap. This is the hot path while the cursor
+// moves inside the same thumbnail bucket.
+func (p *Player) MoveSeekThumbnail(rect Rect) error {
+	if p == nil || !rect.Valid() {
+		return nil
+	}
+	p.mu.Lock()
+	owner := p.windowOwner
+	parent := p.parent
+	closed := p.closed
+	p.mu.Unlock()
+	if closed || owner == nil || parent == 0 {
+		return nil
+	}
+	x, y, w, h := rectToWindowCoords(parent, rect)
+	return owner.moveThumbnail(x, y, w, h)
+}
+
+// HideSeekThumbnail hides the seek-thumbnail overlay, leaving it ready to reuse.
+func (p *Player) HideSeekThumbnail() error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	owner := p.windowOwner
+	p.mu.Unlock()
+	if owner == nil {
+		return nil
+	}
+	return owner.hideThumbnail()
 }
 
 func (p *Player) Command(command ...string) error {
@@ -550,8 +617,8 @@ func enumWindowsProc(hwnd uintptr, lparam uintptr) uintptr {
 	return 1
 }
 
-func createVideoChildWindow(parent uintptr, rect Rect) (uintptr, error) {
-	x, y, w, h := rectToWindowCoords(rect)
+func createVideoChildWindow(parent uintptr, rect Rect, htmlControls bool) (uintptr, error) {
+	x, y, w, h := rectToWindowCoords(parent, rect)
 	className, _ := syscall.UTF16PtrFromString("STATIC")
 	title, _ := syscall.UTF16PtrFromString("TDriveNativeVideo")
 	style := uintptr(wsChild | wsVisible | wsClipChildren | wsClipSiblings)
@@ -572,7 +639,7 @@ func createVideoChildWindow(parent uintptr, rect Rect) (uintptr, error) {
 	if child == 0 {
 		return 0, callFailed("CreateWindowExW", callErr)
 	}
-	if err := positionVideoChildWindow(child, x, y, w, h); err != nil {
+	if err := positionVideoChildWindow(child, x, y, w, h, htmlControls); err != nil {
 		procDestroyWindow.Call(child)
 		return 0, err
 	}
@@ -584,14 +651,19 @@ func hideAndDestroyWindow(child uintptr) {
 	procDestroyWindow.Call(child)
 }
 
-func positionVideoChildWindow(child uintptr, x, y, w, h int) error {
-	// WebView2 is also hosted as a child HWND. MoveWindow preserves z-order, so
-	// a webview repaint/restack can cover mpv and leave a black viewport while
-	// the stream keeps downloading. Raising only the dedicated video child keeps
-	// mpv visible without covering the topbar or close button.
+func positionVideoChildWindow(child uintptr, x, y, w, h int, htmlControls bool) error {
+	insertAfter := uintptr(hwndTop)
+	if htmlControls {
+		// Experimental overlay mode: Wails makes WebView2 transparent-capable,
+		// and CSS punches a transparent video stage. Keep mpv under WebView2 so
+		// HTML controls and popovers can render above it. The fallback path keeps
+		// mpv on top because some WebView2/windowed compositions otherwise hide
+		// the child HWND behind an opaque webview repaint.
+		insertAfter = hwndBottom
+	}
 	ret, _, callErr := procSetWindowPos.Call(
 		child,
-		hwndTop,
+		insertAfter,
 		uintptr(x),
 		uintptr(y),
 		uintptr(w),
@@ -607,7 +679,15 @@ func positionVideoChildWindow(child uintptr, x, y, w, h int) error {
 type windowsWindowThread struct {
 	requests chan windowsWindowRequest
 	done     chan struct{}
-	child    uintptr
+	// parent, child, and the overlay handles are created, read, and destroyed
+	// only on the window thread itself (inside call closures), so they need no
+	// further locking. overlay is the STATIC window that paints seek thumbnails
+	// above the video; overlayBmp is the HBITMAP it currently displays.
+	parent       uintptr
+	child        uintptr
+	htmlControls bool
+	overlay      uintptr
+	overlayBmp   uintptr
 }
 
 type windowsWindowRequest struct {
@@ -689,13 +769,15 @@ func (t *windowsWindowThread) call(ctx context.Context, fn func() error) error {
 	}
 }
 
-func (t *windowsWindowThread) create(parent uintptr, rect Rect) (uintptr, error) {
+func (t *windowsWindowThread) create(parent uintptr, rect Rect, htmlControls bool) (uintptr, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	var child uintptr
 	err := t.call(ctx, func() error {
+		t.parent = parent
+		t.htmlControls = htmlControls
 		var createErr error
-		child, createErr = createVideoChildWindow(parent, rect)
+		child, createErr = createVideoChildWindow(parent, rect, htmlControls)
 		if createErr == nil {
 			t.child = child
 		}
@@ -711,8 +793,8 @@ func (t *windowsWindowThread) resize(rect Rect) error {
 		if t.child == 0 {
 			return nil
 		}
-		x, y, w, h := rectToWindowCoords(rect)
-		return positionVideoChildWindow(t.child, x, y, w, h)
+		x, y, w, h := rectToWindowCoords(t.parent, rect)
+		return positionVideoChildWindow(t.child, x, y, w, h, t.htmlControls)
 	})
 }
 
@@ -720,9 +802,85 @@ func (t *windowsWindowThread) destroy() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return t.call(ctx, func() error {
+		t.destroyOverlay()
 		if t.child != 0 {
 			hideAndDestroyWindow(t.child)
 			t.child = 0
+		}
+		return nil
+	})
+}
+
+// destroyOverlay tears down the seek-thumbnail overlay window and its bitmap.
+// Must run on the window thread.
+func (t *windowsWindowThread) destroyOverlay() {
+	if t.overlay != 0 {
+		hideAndDestroyWindow(t.overlay)
+		t.overlay = 0
+	}
+	if t.overlayBmp != 0 {
+		procDeleteObject.Call(t.overlayBmp)
+		t.overlayBmp = 0
+	}
+}
+
+// showThumbnail uploads bmp to the overlay window (creating it lazily) and shows
+// it at x,y,w,h (physical pixels, parent client coords) raised above the video.
+func (t *windowsWindowThread) showThumbnail(bmp *overlayBitmap, x, y, w, h int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return t.call(ctx, func() error {
+		if t.parent == 0 {
+			overlayDebugf("showThumbnail: no parent window")
+			return fmt.Errorf("native player: window not ready")
+		}
+		if t.overlay == 0 {
+			hwnd, err := createSeekOverlayWindow(t.parent)
+			if err != nil {
+				overlayDebugf("createSeekOverlayWindow err=%v", err)
+				return err
+			}
+			t.overlay = hwnd
+			overlayDebugf("created overlay hwnd=%d parent=%d", hwnd, t.parent)
+		}
+		hbm, err := newOverlayDIB(bmp)
+		if err != nil {
+			overlayDebugf("newOverlayDIB err=%v", err)
+			return err
+		}
+		procSendMessageW.Call(t.overlay, stmSetImage, imageBitmap, hbm)
+		// The STATIC now references hbm; free the bitmap it held before.
+		if t.overlayBmp != 0 {
+			procDeleteObject.Call(t.overlayBmp)
+		}
+		t.overlayBmp = hbm
+		positionSeekOverlay(t.overlay, x, y, w, h)
+		return nil
+	})
+}
+
+// moveThumbnail repositions the existing overlay. If no bitmap has been shown
+// yet, it does nothing; the next showThumbnail call will create and paint it.
+func (t *windowsWindowThread) moveThumbnail(x, y, w, h int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	return t.call(ctx, func() error {
+		if t.overlay == 0 || t.overlayBmp == 0 {
+			return nil
+		}
+		positionSeekOverlay(t.overlay, x, y, w, h)
+		return nil
+	})
+}
+
+// hideThumbnail hides the overlay without destroying it, so the next scrub can
+// reuse the window and bitmap.
+func (t *windowsWindowThread) hideThumbnail() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return t.call(ctx, func() error {
+		if t.overlay != 0 {
+			procShowWindow.Call(t.overlay, swHide)
 		}
 		return nil
 	})
@@ -914,16 +1072,43 @@ func (p *windowsMPVProcess) close() {
 	})
 }
 
-func rectToWindowCoords(rect Rect) (int, int, int, int) {
-	// The frontend rect is measured inside the WebView viewport. Wails/WebView2
-	// already maps those CSS pixels to the host client area; applying an
-	// additional GetDpiForWindow scale can oversize the child HWND on HiDPI
-	// displays and make it eat the fallback controls.
-	x := int(math.Round(math.Max(0, rect.X)))
-	y := int(math.Round(math.Max(0, rect.Y)))
-	w := int(math.Round(math.Max(1, rect.Width)))
-	h := int(math.Round(math.Max(1, rect.Height)))
+// rectToWindowCoords converts a viewport rect measured by the frontend in CSS
+// (device-independent) pixels into the physical pixels that CreateWindowExW and
+// SetWindowPos expect for a child of parent.
+//
+// The app is per-monitor DPI aware (WebView2 requires it), so child HWNDs are
+// positioned in physical pixels while getBoundingClientRect reports logical
+// ones. We bridge that gap by scaling with the parent window's DPI exactly
+// once. Reading the parent's per-monitor DPI keeps the mapping correct as the
+// window moves between displays of different scale, and it also stays correct
+// under DPI virtualization: an unaware window reports 96 (scale 1.0), matching
+// its already-virtualized coordinate space.
+func rectToWindowCoords(parent uintptr, rect Rect) (int, int, int, int) {
+	scale := dpiScaleForWindow(parent)
+	x := int(math.Round(math.Max(0, rect.X*scale)))
+	y := int(math.Round(math.Max(0, rect.Y*scale)))
+	w := int(math.Round(math.Max(1, rect.Width*scale)))
+	h := int(math.Round(math.Max(1, rect.Height*scale)))
 	return x, y, w, h
+}
+
+// dpiScaleForWindow returns hwnd's DPI scale factor (1.0 at 100%, 1.25 at 125%,
+// and so on). It falls back to 1.0 whenever the DPI cannot be determined — a
+// zero handle, a Windows build predating GetDpiForWindow (before 1607), or a
+// failed call — so an unknown DPI degrades to unscaled rather than to a guess.
+func dpiScaleForWindow(hwnd uintptr) float64 {
+	const defaultDPI = 96.0
+	if hwnd == 0 {
+		return 1.0
+	}
+	if err := procGetDpiForWindow.Find(); err != nil {
+		return 1.0
+	}
+	ret, _, _ := procGetDpiForWindow.Call(hwnd)
+	if ret == 0 {
+		return 1.0
+	}
+	return float64(ret) / defaultDPI
 }
 
 func cleanWindowsSeconds(value float64, ok bool) float64 {
@@ -985,5 +1170,5 @@ func callFailed(name string, err error) error {
 }
 
 func windowsNativePlayerEnabled() bool {
-	return os.Getenv(windowsNativePlayerFlag) == "1"
+	return os.Getenv(windowsNativePlayerFlag) != "0"
 }

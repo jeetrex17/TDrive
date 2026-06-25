@@ -199,7 +199,7 @@ func TestVideoThumbnailerBufferBandGating(t *testing.T) {
 		wantPC      bool
 	}{
 		{"healthy", thumbBufferHealthyStart + 5, false, true},
-		{"emergency", thumbBufferEmergency - 1, true, false},
+		{"emergency", thumbBufferEmergency - 1, false, false},
 		{"mid band aging tick", (thumbBufferEmergency + thumbBufferHealthyStop) / 2, false, true},
 	}
 	for _, tc := range cases {
@@ -217,6 +217,19 @@ func TestVideoThumbnailerBufferBandGating(t *testing.T) {
 				t.Fatalf("precomputeAllowed = %v, want %v", pc, tc.wantPC)
 			}
 		})
+	}
+}
+
+func TestVideoThumbnailerForegroundOnlyWaitsForFloodWait(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	vt := &videoThumbnailer{thumbBackoffUntil: now.Add(time.Second)}
+
+	vt.mu.Lock()
+	wait := vt.foregroundShouldWaitLocked(now)
+	vt.mu.Unlock()
+
+	if !wait {
+		t.Fatal("foregroundShouldWait = false, want true during flood-wait backoff")
 	}
 }
 
