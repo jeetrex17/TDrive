@@ -2207,7 +2207,7 @@ header {
 }
 
 .video-overlay.is-video-native-fallback {
-    padding: 24px;
+    padding: 0;
     background: rgba(4, 6, 11, 0.94);
     backdrop-filter: blur(16px);
 }
@@ -2218,24 +2218,30 @@ header {
 }
 
 .video-overlay.is-video-native-fallback .video-native-viewport {
-    left: 18px;
-    right: 18px;
-    top: 78px;
-    bottom: 18px;
     inset: auto;
+    left: var(--video-native-side-inset, 0);
+    right: var(--video-native-side-inset, 0);
+    top: var(--video-native-top-inset, 88px);
+    bottom: var(--video-native-bottom-inset, 128px);
     background: #000;
 }
 
-.video-overlay.is-video-native-fallback .video-controls,
 .video-overlay.is-video-native-fallback .video-center-controls,
 .video-overlay.is-video-native-fallback .video-skip-feedback {
     display: none;
 }
 
-.video-overlay.is-video-native-fallback .video-topbar {
-    opacity: 1;
-    transform: translateY(0);
-    pointer-events: auto;
+.video-overlay.is-video-native-fallback .video-controls {
+    display: grid;
+    grid-template-rows: auto auto;
+    background: #05070c;
+    /* Compact strip: the inset is measured from this height, so tighter padding
+       directly enlarges the video without cramping the controls themselves. */
+    padding: 12px 26px 14px;
+}
+
+.video-overlay.is-video-native-fallback .video-scrubber-tooltip {
+    display: none;
 }
 
 .video-topbar,
@@ -2272,6 +2278,8 @@ header {
 }
 
 .video-timeline-row {
+    position: relative;
+    z-index: 2;
     display: grid;
     grid-template-columns: auto minmax(160px, 1fr) auto;
     align-items: center;
@@ -2280,6 +2288,8 @@ header {
 }
 
 .video-command-row {
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2620,6 +2630,7 @@ header {
 
 .video-scrubber-tooltip {
     position: absolute;
+    z-index: 12;
     left: 0;
     bottom: calc(100% + 8px);
     display: grid;
@@ -2804,6 +2815,10 @@ header {
     gap: 2px;
 }
 
+.video-overlay.is-video-native-fallback .video-speed-menu.is-open {
+    display: none;
+}
+
 .video-speed-menu button {
     height: 30px;
     border: none;
@@ -2972,10 +2987,10 @@ header {
     }
 
     .video-overlay.is-video-native-fallback .video-native-viewport {
-        left: 10px;
-        right: 10px;
-        top: 64px;
-        bottom: 10px;
+        left: var(--video-native-side-inset, 0);
+        right: var(--video-native-side-inset, 0);
+        top: var(--video-native-top-inset, 74px);
+        bottom: var(--video-native-bottom-inset, 116px);
     }
 
     .video-filename {
@@ -3001,11 +3016,25 @@ header {
         display: none;
     }
 
+    .video-overlay.is-video-native-fallback .video-secondary-cluster {
+        display: flex;
+    }
+
     .video-controls #video-duration,
     .video-controls .video-volume-group,
     .video-controls .video-speed-wrap,
     .video-controls .video-fullscreen-btn {
         display: none;
+    }
+
+    .video-overlay.is-video-native-fallback .video-controls #video-duration {
+        display: inline;
+    }
+
+    .video-overlay.is-video-native-fallback .video-controls .video-volume-group,
+    .video-overlay.is-video-native-fallback .video-controls .video-speed-wrap,
+    .video-overlay.is-video-native-fallback .video-controls .video-fullscreen-btn {
+        display: flex;
     }
 
     .video-icon-btn {

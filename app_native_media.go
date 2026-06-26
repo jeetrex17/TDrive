@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math"
@@ -50,11 +51,11 @@ func (a *App) OpenNativeMedia(msgID int, rect nativeplayer.Rect) (NativeMediaRes
 
 	token := opened.Token
 	htmlControls := nativeHTMLControlsEnabled() && nativeplayer.SupportsHTMLControls()
-	opts := nativeplayer.Options{UseHTMLControls: htmlControls}
-	if htmlControls {
-		opts.OnState = func(state nativeplayer.State) {
+	opts := nativeplayer.Options{
+		UseHTMLControls: htmlControls,
+		OnState: func(state nativeplayer.State) {
 			a.emitNativeMediaState(token, state)
-		}
+		},
 	}
 	player, err := nativeplayer.Start(a.ctx, opened.URL, rect, opts)
 	if err != nil {
@@ -246,4 +247,45 @@ func validateNativeMediaCommand(command []string) error {
 	default:
 		return fmt.Errorf("unsupported native media command")
 	}
+}
+
+// ShowNativeSeekThumbnail paints a seek-preview thumbnail over the native video.
+// imageBase64 is the raw base64 of a JPEG/PNG frame the frontend already holds;
+// rect is the desired preview box in CSS pixels. It is only meaningful on the
+// Windows/Linux fallback (where HTML can't draw over the video) and is a no-op
+// on platforms whose player does not implement an overlay.
+func (a *App) ShowNativeSeekThumbnail(token string, imageBase64 string, rect nativeplayer.Rect) error {
+	session := a.nativeMediaSession(token)
+	if os.Getenv("TDRIVE_MEDIA_THUMB_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "[seek-overlay] App.ShowNativeSeekThumbnail token=%q b64len=%d hasPlayer=%v\n", token, len(imageBase64), session != nil && session.player != nil)
+	}
+	if session == nil || session.player == nil {
+		return nil
+	}
+	data, err := base64.StdEncoding.DecodeString(imageBase64)
+	if err != nil {
+		return fmt.Errorf("native seek thumbnail: decode image: %w", err)
+	}
+	return session.player.ShowSeekThumbnail(data, rect)
+}
+
+// MoveNativeSeekThumbnail moves the already-painted seek-preview overlay without
+// re-uploading or re-decoding the frame. Windows calls this on every scrub move;
+// keeping it separate from ShowNativeSeekThumbnail avoids doing JPEG decode and
+// GDI bitmap upload work just to follow the cursor.
+func (a *App) MoveNativeSeekThumbnail(token string, rect nativeplayer.Rect) error {
+	session := a.nativeMediaSession(token)
+	if session == nil || session.player == nil {
+		return nil
+	}
+	return session.player.MoveSeekThumbnail(rect)
+}
+
+// HideNativeSeekThumbnail hides the seek-preview overlay for the session.
+func (a *App) HideNativeSeekThumbnail(token string) error {
+	session := a.nativeMediaSession(token)
+	if session == nil || session.player == nil {
+		return nil
+	}
+	return session.player.HideSeekThumbnail()
 }

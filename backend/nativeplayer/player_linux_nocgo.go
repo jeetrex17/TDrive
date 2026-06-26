@@ -14,6 +14,18 @@ func (p *Player) Resize(rect Rect) error {
 	return nil
 }
 
+func (p *Player) ShowSeekThumbnail(_ []byte, _ Rect) error {
+	return nil
+}
+
+func (p *Player) MoveSeekThumbnail(_ Rect) error {
+	return nil
+}
+
+func (p *Player) HideSeekThumbnail() error {
+	return nil
+}
+
 func (p *Player) Command(command ...string) error {
 	return nil
 }

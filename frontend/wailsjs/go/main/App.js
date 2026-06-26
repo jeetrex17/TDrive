@@ -114,6 +114,10 @@ export function GetStorageUsed() {
   return window['go']['main']['App']['GetStorageUsed']();
 }
 
+export function HideNativeSeekThumbnail(arg1) {
+  return window['go']['main']['App']['HideNativeSeekThumbnail'](arg1);
+}
+
 export function ImportPaths(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ImportPaths'](arg1, arg2, arg3, arg4);
 }
@@ -164,6 +168,10 @@ export function MoveFile(arg1, arg2) {
 
 export function MoveFolder(arg1, arg2) {
   return window['go']['main']['App']['MoveFolder'](arg1, arg2);
+}
+
+export function MoveNativeSeekThumbnail(arg1, arg2) {
+  return window['go']['main']['App']['MoveNativeSeekThumbnail'](arg1, arg2);
 }
 
 export function MsgToTdriveSystem(arg1, arg2, arg3, arg4) {
@@ -252,6 +260,10 @@ export function SetActiveChannel(arg1) {
 
 export function SetFileDropEnabled(arg1) {
   return window['go']['main']['App']['SetFileDropEnabled'](arg1);
+}
+
+export function ShowNativeSeekThumbnail(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ShowNativeSeekThumbnail'](arg1, arg2, arg3);
 }
 
 export function SumbitCode(arg1) {

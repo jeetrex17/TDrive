@@ -62,6 +62,8 @@ export function GetPassch():Promise<any>;
 
 export function GetStorageUsed():Promise<number>;
 
+export function HideNativeSeekThumbnail(arg1:string):Promise<void>;
+
 export function ImportPaths(arg1:Array<string>,arg2:string,arg3:boolean,arg4:boolean):Promise<void>;
 
 export function InitDrive():Promise<string>;
@@ -87,6 +89,8 @@ export function Me():Promise<main.SelfUser>;
 export function MoveFile(arg1:number,arg2:string):Promise<string>;
 
 export function MoveFolder(arg1:string,arg2:string):Promise<string>;
+
+export function MoveNativeSeekThumbnail(arg1:string,arg2:nativeplayer.Rect):Promise<void>;
 
 export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:string):Promise<string>;
 
@@ -131,6 +135,8 @@ export function SendHint(arg1:string):Promise<void>;
 export function SetActiveChannel(arg1:number):Promise<void>;
 
 export function SetFileDropEnabled(arg1:boolean):Promise<void>;
+
+export function ShowNativeSeekThumbnail(arg1:string,arg2:string,arg3:nativeplayer.Rect):Promise<void>;
 
 export function SumbitCode(arg1:string):Promise<void>;
 

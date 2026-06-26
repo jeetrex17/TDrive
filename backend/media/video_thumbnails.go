@@ -382,14 +382,15 @@ func (t *videoThumbnailer) takeLatest() (int, bool) {
 }
 
 // foregroundShouldWaitLocked reports whether a hovered (foreground) thumbnail
-// must defer. It only defers when the playback buffer is critically low or
-// Telegram is rate-limiting, so the thumbnail the user is looking at still
-// appears while the player merely tops up its buffer. Caller holds t.mu.
+// must defer. Foreground means the user is actively looking at this point on the
+// timeline, so only a recent Telegram FLOOD_WAIT blocks it. Buffer-ahead can be
+// unknown or underreported by native players, and treating that as an emergency
+// made Windows previews stay pending forever.
 func (t *videoThumbnailer) foregroundShouldWaitLocked(now time.Time) bool {
 	if now.Before(t.thumbBackoffUntil) {
 		return true
 	}
-	return t.playbackKnown && t.playbackBufferAhead < thumbBufferEmergency
+	return false
 }
 
 // precomputeAllowedLocked reports whether a background precompute bucket may run
@@ -954,6 +955,8 @@ func bundledMPVBinaryPath() (string, error) {
 	}
 	dir := filepath.Dir(exe)
 	candidates := []string{
+		filepath.Join(dir, "media", "mpv"),
+		filepath.Join(dir, "media", "mpv.exe"),
 		filepath.Join(dir, "mpv"),
 		filepath.Join(dir, "mpv.exe"),
 		filepath.Join(dir, "..", "Resources", "media", "mpv"),

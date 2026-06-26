@@ -13,15 +13,16 @@ import (
 
 const preflightTimeout = 6 * time.Second
 
-// PreflightDecode decodes one frame out-of-process before the sidecar player is
-// attached to the app window. The sidecar is already out-of-process, but this
-// keeps broken local decoder builds from flashing a window or attaching a dead
-// child surface before we can show a normal error.
+// PreflightDecode can decode one frame out-of-process before the sidecar player
+// is attached to the app window. On Windows the actual player is already an
+// out-of-process mpv.exe sidecar, so decoder crashes do not take down TDrive.
+// Keep this check opt-in only: for long remote Telegram files it can block or
+// fail before the real player has a chance to open the stream.
 func PreflightDecode(ctx context.Context, url string) error {
 	if !windowsNativePlayerEnabled() {
 		return nil
 	}
-	if os.Getenv("TDRIVE_SKIP_MPV_PREFLIGHT") == "1" {
+	if os.Getenv("TDRIVE_ENABLE_MPV_PREFLIGHT") != "1" {
 		return nil
 	}
 	mpvPath, err := findWindowsMPV()
