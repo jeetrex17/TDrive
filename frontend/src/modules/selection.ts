@@ -60,10 +60,6 @@ export function rowToSelectionItem(row: any) {
     };
 }
 
-export function setRowSelected(_row: any, _selected: any) {
-    syncSelectedRowKeys();
-}
-
 export function updateSelectionBar() {
     syncSelectedRowKeys();
     if (!state.selectionBarEl) {
