@@ -14,3 +14,11 @@ export function showFileListState(view: Omit<FileListStateView, 'kind'>) {
 export function showFileListRows(rows: FileListRow[]) {
     fileListView.set({ kind: 'rows', rows });
 }
+
+export function updateFileListRows(updater: (rows: FileListRow[]) => FileListRow[]) {
+    fileListView.update((view) => {
+        if (view.kind !== 'rows') return view;
+        const rows = updater(view.rows);
+        return rows === view.rows ? view : { kind: 'rows', rows };
+    });
+}

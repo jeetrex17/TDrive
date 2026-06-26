@@ -15,12 +15,12 @@ import { getFolderContents as apiGetFolderContents } from '../api';
 import { calculateVisibleFolderBytes, getAllFsMsgIDs } from './drive-data';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { enqueueDownload } from './transfers';
-import { populateUploaderChips, uploaderChipHTML } from './uploaders';
+import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { isVideoFile } from './media-types';
 import { openVideoModal } from './modals/video';
 import FileList from '../ui/file-list/FileList.svelte';
-import { showFileListRows, showFileListState } from '../ui/file-list/file-list-store';
+import { showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
 import type { FileListAction, FileListFileRow, FileListRow, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
 import { mountSvelte, type SvelteMountHandle } from '../ui';
@@ -73,22 +73,6 @@ export function canOwnerActOnFile(file: any) {
     return uploader === me;
 }
 
-// fillUploaderSlot writes the uploader chip text into the [data-uploader-slot]
-// span of the given row. No-op if the chip wouldn't apply (personal drive,
-// uploader unknown, etc.) — uploaderChipHTML returns null in those cases
-// and the slot stays empty.
-//
-// Safe to call before the user-name cache is populated; the slot stays
-// empty and a follow-up populateUploaderChips pass fills it once names
-// resolve.
-export function fillUploaderSlot(row: HTMLElement | null, file: any) {
-    if (!row) return;
-    const slot = row.querySelector('[data-uploader-slot]');
-    if (!slot) return;
-    const html = uploaderChipHTML(file);
-    slot.innerHTML = html ?? '';
-}
-
 // Tracks the folder whose rows are currently rendered, so a same-folder
 // re-render can restore the scroll position instead of jumping to the top.
 let lastRenderedFolderId: string | null = null;
@@ -137,6 +121,38 @@ export function renderFileListRows(list: HTMLElement, rows: FileListRow[], after
     ensureFileListView(list);
     showFileListRows(rows);
     if (afterRender) afterFileListPaint(list, afterRender);
+}
+
+function chipForFileRow(row: FileListFileRow) {
+    const label = uploaderChipLabel({
+        uploaderID: row.uploaderID,
+        uploadTime: row.uploadTime,
+    });
+    return label ? { label } : null;
+}
+
+export function resolveUploaderChipsForRows(rows: FileListRow[], isCurrent: () => boolean) {
+    if (state.activeChannel?.kind !== "shared") return;
+    const uploaderIDs = rows
+        .filter((row): row is FileListFileRow => row.kind === "file")
+        .map((row) => row.uploaderID)
+        .filter((id) => Number.isFinite(id) && id > 0);
+    if (!uploaderIDs.length) return;
+
+    void ensureUserNames(uploaderIDs).then(() => {
+        if (state.activeChannel?.kind !== "shared" || !isCurrent()) return;
+        let changed = false;
+        updateFileListRows((currentRows) => {
+            const nextRows = currentRows.map((row) => {
+                if (row.kind !== "file") return row;
+                const uploaderChip = chipForFileRow(row);
+                if ((row.uploaderChip?.label ?? "") === (uploaderChip?.label ?? "")) return row;
+                changed = true;
+                return { ...row, uploaderChip };
+            });
+            return changed ? nextRows : currentRows;
+        });
+    });
 }
 
 function folderAction(): FileListAction {
@@ -216,6 +232,12 @@ export function buildFileRow(file: any, parentId: string, overrides: Partial<Fil
         encrypted,
         canDelete,
         canRename,
+        uploaderChip: overrides.uploaderChip !== undefined
+            ? overrides.uploaderChip
+            : (() => {
+                const label = uploaderChipLabel({ uploaderID, uploadTime });
+                return label ? { label } : null;
+            })(),
         actions: overrides.actions ?? fileActions(name),
         onClick: overrides.onClick,
         onDoubleClick: overrides.onDoubleClick,
@@ -547,10 +569,10 @@ export function refreshFiles() {
                     }
                 }
 
-                // Resolve any missing uploader names and inject chips. Fire-
-                // and-forget — rows are already shown without chips and will
-                // get them populated within ~one round-trip.
-                populateUploaderChips(list);
+                resolveUploaderChipsForRows(rows, () => (
+                    state.folderSizeEpoch === folderEpoch
+                    && state.currentFolderId === requestedFolderId
+                ));
             });
         };
 

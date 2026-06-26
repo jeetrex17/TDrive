@@ -105,7 +105,9 @@
                             </span>
                         {/if}
                         {row.baseName}
-                        <span class="uploader-chip" data-uploader-slot></span>
+                        {#if row.uploaderChip}
+                            <span class="uploader-chip">{row.uploaderChip.label}</span>
+                        {/if}
                     {/if}
                 </div>
                 <div class="row-meta">{row.metaLabel}</div>
