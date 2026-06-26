@@ -1,13 +1,21 @@
 import { state } from '../state';
-import { icons } from '../constants';
-import { escapeHtml, splitNameAndExt, formatBytes } from '../utils';
+import { formatBytes } from '../utils';
 import { clearSelection, handleRowSelection } from './selection';
 import { renderBreadcrumb } from './navigation';
-import { fillUploaderSlot, prepareDriveRow, resetFileListScrollRestore, syncDriveRowTabStops } from './file-list';
+import {
+    buildFileRow,
+    buildFolderRow,
+    fillUploaderSlot,
+    renderFileListRows,
+    renderFileState,
+    resetFileListScrollRestore,
+    syncDriveRowTabStops,
+} from './file-list';
 import { setPhotosMode } from './gallery';
 import { refreshFolderIndex } from './folder-index';
 import { populateUploaderChips } from './uploaders';
 import { isVideoFile } from './media-types';
+import type { FileListAction, FileListRow } from '../ui/file-list/types';
 
 let activeToken = 0;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -49,61 +57,41 @@ function renderSearchResults(results: any, query: any) {
     const list = document.getElementById("file-list");
     if (!list) return;
 
-    const rows = Array.isArray(results) ? results : [];
-    if (!rows.length) {
-        list.innerHTML = `<div class="search-empty" role="status">No results for "${escapeHtml(query)}"</div>`;
+    const resultRows = Array.isArray(results) ? results : [];
+    if (!resultRows.length) {
+        renderFileState(list, "empty", `No results for "${String(query || "")}"`);
         return;
     }
 
-    list.innerHTML = "";
-
-    rows.forEach((result) => {
+    const rows: FileListRow[] = [];
+    resultRows.forEach((result) => {
         const type = String(result?.type || "");
         if (type === "folder") {
-            const row = document.createElement("div");
-            row.className = "file-row drive-row folder-row";
-            row.dataset.type = "folder";
-            row.dataset.id = String(result.id || "");
-            row.dataset.name = String(result.name || "");
-            row.dataset.parentId = String(result.parent_id || "");
-            prepareDriveRow(row);
-
-            row.innerHTML = `
-                <div class="row-name">
-                    <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
-                    ${escapeHtml(result.name || "Folder")}
-                </div>
-                <div class="row-meta">${escapeHtml(result.path || "My Drive")}</div>
-                <div class="row-meta">—</div>
-                <div class="row-actions">
-                    <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
-                </div>
-            `;
-
-            row.addEventListener("dblclick", () => openFolderResult(String(result.id || "")));
-            row.addEventListener("click", (e) => {
-                if ((e.target as HTMLElement).closest("button.open-folder")) return openFolderResult(String(result.id || ""));
-                handleRowSelection(row, e);
-            });
-
-            list.appendChild(row);
+            const id = String(result.id || "");
+            rows.push(buildFolderRow(result, String(result.parent_id || ""), {
+                key: `search:folder:${id}`,
+                metaLabel: String(result.path || "My Drive"),
+                sizeLabel: "—",
+                actions: [{
+                    kind: "open",
+                    className: "open-folder",
+                    title: "Open",
+                    label: "Open folder",
+                    onClick: () => openFolderResult(id),
+                }],
+                onDoubleClick: () => openFolderResult(id),
+                onClick: (event) => {
+                    const target = event.target as HTMLElement;
+                    if (target.closest("button.open-folder")) return;
+                    const row = target.closest(".drive-row");
+                    if (row) handleRowSelection(row, event);
+                },
+            }));
             return;
         }
 
         if (type === "file") {
             const name = String(result.name || "");
-            const { base, ext } = splitNameAndExt(name);
-            const row = document.createElement("div");
-            row.className = "file-row drive-row";
-            row.dataset.type = "file";
-            row.dataset.id = String(result.id || "");
-            row.dataset.name = name;
-            row.dataset.size = String(result.size || 0);
-            row.dataset.parentId = String(result.parent_id || "");
-            row.dataset.source = String(result.source || "fs");
-            row.dataset.uploaderId = String(result.uploader_id || 0);
-            row.dataset.uploadTime = String(result.upload_time || 0);
-            row.dataset.encrypted = result.encrypted ? "true" : "false";
             // Search results may not be in the active drive; keep
             // owner-only gating consistent: same canOwnerAct heuristic as
             // file-list. We approximate by reading state.activeChannel
@@ -111,57 +99,68 @@ function renderSearchResults(results: any, query: any) {
             const ownerOnly = (state.activeChannel?.kind !== "shared")
                 || (Number(result.uploader_id || 0) > 0
                     && Number(result.uploader_id) === Number(state.myUserID || 0));
-            row.dataset.canDelete = ownerOnly ? "true" : "false";
-            row.dataset.canRename = ownerOnly ? "true" : "false";
-            prepareDriveRow(row);
-
-            row.innerHTML = `
-                <div class="row-name">
-                    <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
-                    ${escapeHtml(base)}
-                    <span class="uploader-chip" data-uploader-slot></span>
-                </div>
-                <div class="row-meta">${escapeHtml(result.path || "My Drive")}</div>
-                <div class="row-meta">${formatBytes(Number(result.size || 0))}</div>
-                <div class="row-actions">
-                    ${isVideoFile(name) ? `<button class="action-icon play-video" type="button" title="Play">${icons.play}</button>` : ""}
-                    <button class="action-icon download" type="button" title="Download">${icons.download}</button>
-                </div>
-            `;
-            fillUploaderSlot(row, {
-                uploaderID: Number(result.uploader_id || 0),
-                uploadTime: Number(result.upload_time || 0),
-            });
-
-            const downloadBtn = row.querySelector("button.download");
-            if (downloadBtn) {
-                downloadBtn.addEventListener("click", () => window.initDownload(Number(result.id || 0), name, Number(result.size || 0)));
-            }
-            const playBtn = row.querySelector("button.play-video");
-            if (playBtn) {
-                playBtn.addEventListener("click", () => {
-                    window.initVideoPlayback(Number(result.id || 0), name, Number(result.size || 0), Boolean(result.encrypted));
+            const id = Number(result.id || 0);
+            const size = Number(result.size || 0);
+            const encrypted = Boolean(result.encrypted);
+            const actions: FileListAction[] = [];
+            if (isVideoFile(name)) {
+                actions.push({
+                    kind: "play",
+                    className: "play-video",
+                    title: "Play",
+                    label: "Play video",
+                    onClick: () => window.initVideoPlayback(id, name, size, encrypted),
                 });
             }
-
-            row.addEventListener("dblclick", () => {
-                if (isVideoFile(name)) {
-                    window.initVideoPlayback(Number(result.id || 0), name, Number(result.size || 0), Boolean(result.encrypted));
-                    return;
-                }
-                openFileResult(String(result.id || ""), String(result.parent_id || ""));
+            actions.push({
+                kind: "download",
+                className: "download",
+                title: "Download",
+                label: "Download",
+                onClick: () => window.initDownload(id, name, size),
             });
-            row.addEventListener("click", (e) => {
-                if ((e.target as HTMLElement).closest("button")) return;
-                handleRowSelection(row, e);
-            });
-
-            list.appendChild(row);
+            rows.push(buildFileRow({
+                id,
+                name,
+                size,
+                source: String(result.source || "fs"),
+                uploaderID: Number(result.uploader_id || 0),
+                date: Number(result.upload_time || 0),
+                encrypted,
+                canDelete: ownerOnly,
+                canRename: ownerOnly,
+            }, String(result.parent_id || ""), {
+                key: `search:file:${String(result.source || "fs")}:${id}`,
+                metaLabel: String(result.path || "My Drive"),
+                sizeLabel: formatBytes(size),
+                actions,
+                onDoubleClick: () => {
+                    if (isVideoFile(name)) {
+                        window.initVideoPlayback(id, name, size, encrypted);
+                        return;
+                    }
+                    openFileResult(String(id || ""), String(result.parent_id || ""));
+                },
+                onClick: (event) => {
+                    const target = event.target as HTMLElement;
+                    if (target.closest("button")) return;
+                    const row = target.closest(".drive-row");
+                    if (row) handleRowSelection(row, event);
+                },
+            }));
         }
     });
 
-    populateUploaderChips(list);
-    syncDriveRowTabStops(list);
+    renderFileListRows(list, rows, () => {
+        for (const row of list.querySelectorAll<HTMLElement>(".drive-row[data-type='file']")) {
+            fillUploaderSlot(row, {
+                uploaderID: Number(row.dataset.uploaderId || 0),
+                uploadTime: Number(row.dataset.uploadTime || 0),
+            });
+        }
+        populateUploaderChips(list);
+        syncDriveRowTabStops(list);
+    });
 }
 
 export function clearSearch({ refresh = true } = {}) {
@@ -245,7 +244,7 @@ export async function runGlobalSearch() {
     const token = ++activeToken;
     setHeaderMode(true);
     clearSelection();
-    list.innerHTML = `<div class="search-empty" role="status">Searching…</div>`;
+    renderFileState(list, "loading", "Searching files");
 
     try {
         const [fsResults, tgFiles] = await Promise.all([
@@ -281,7 +280,7 @@ export async function runGlobalSearch() {
         renderSearchResults([...fs, ...tgMatches], query);
     } catch (err) {
         if (token !== activeToken) return;
-        list.innerHTML = `<div class="search-empty" role="alert">Search failed</div>`;
+        renderFileState(list, "error", "Search failed", "Try again or refine your query.");
         console.error("Search failed:", err);
     }
 }
