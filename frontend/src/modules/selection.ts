@@ -3,8 +3,12 @@
 import { state } from '../state';
 import { openDeleteModal } from './modals/delete';
 import { openMoveModal } from './modals/move';
+import SelectionBar from '../ui/selection/SelectionBar.svelte';
+import { setSelectionCount } from '../ui/selection/selection-bar-store';
+import { mountSvelte } from '../ui';
 
 const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
+let selectionBarMounted = false;
 
 function emitSelectionChange() {
     window.dispatchEvent(new Event("tdrive:selectionchange"));
@@ -51,11 +55,12 @@ export function setRowSelected(row: any, selected: any) {
 }
 
 export function updateSelectionBar() {
-    if (!state.selectionBarEl || !state.selectionCountEl) {
+    if (!state.selectionBarEl) {
         emitSelectionChange();
         return;
     }
     const count = state.selectedItems.size;
+    setSelectionCount(count);
     if (!count) {
         state.selectionBarEl.style.display = "none";
         emitSelectionChange();
@@ -63,7 +68,6 @@ export function updateSelectionBar() {
     }
 
     state.selectionBarEl.style.display = "flex";
-    state.selectionCountEl.textContent = count === 1 ? "1 selected" : `${count} selected`;
     emitSelectionChange();
 }
 
@@ -175,26 +179,25 @@ export function getSelectionPayload() {
 
 export function setupSelectionBar() {
     state.selectionBarEl = document.getElementById("selection-bar");
-    state.selectionCountEl = document.getElementById("selection-count");
-    state.selectionMoveBtnEl = document.getElementById("selection-move");
-    state.selectionDeleteBtnEl = document.getElementById("selection-delete");
-    state.selectionClearBtnEl = document.getElementById("selection-clear");
-    if (!state.selectionBarEl || !state.selectionCountEl) return;
+    if (!state.selectionBarEl) return;
 
-    if (state.selectionClearBtnEl) {
-        state.selectionClearBtnEl.addEventListener("click", () => clearSelection());
-    }
-    if (state.selectionDeleteBtnEl) {
-        state.selectionDeleteBtnEl.addEventListener("click", () => {
-            if (!state.selectedItems.size) return;
-            openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId });
+    if (!selectionBarMounted) {
+        state.selectionBarEl.replaceChildren();
+        mountSvelte(SelectionBar, {
+            target: state.selectionBarEl,
+            props: {
+                onClear: () => clearSelection(),
+                onDelete: () => {
+                    if (!state.selectedItems.size) return;
+                    openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId });
+                },
+                onMove: () => {
+                    if (!state.selectedItems.size) return;
+                    openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId });
+                },
+            },
         });
-    }
-    if (state.selectionMoveBtnEl) {
-        state.selectionMoveBtnEl.addEventListener("click", () => {
-            if (!state.selectedItems.size) return;
-            openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId });
-        });
+        selectionBarMounted = true;
     }
 
     const list = document.getElementById("file-list");

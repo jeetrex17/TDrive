@@ -16,13 +16,24 @@ import { openJoinDriveModal } from './modals/join-drive';
 import { openJoinRequestsModal } from './modals/join-requests';
 import { notify } from './notifications';
 import { enterPhotos, exitPhotos } from './gallery';
+import { showContextMenu, type ContextMenuItem } from './context-menu';
+import DriveList from '../ui/sidebar/DriveList.svelte';
+import {
+    setSidebarState,
+    type SidebarChannel,
+    type SidebarPendingJoin,
+} from '../ui/sidebar/sidebar-store';
+import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 let personalEl: HTMLElement | null = null;
 let sharedEl: HTMLElement | null = null;
+let personalDriveList: SvelteMountHandle<Record<string, unknown>> | null = null;
+let sharedDriveList: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 export function setupSidebar() {
     personalEl = document.getElementById('drives-personal');
     sharedEl = document.getElementById('drives-shared');
+    mountDriveLists();
 
     const newBtn = document.getElementById('open-new-drive');
     if (newBtn) newBtn.addEventListener('click', () => openNewDriveModal());
@@ -38,253 +49,193 @@ export function renderSidebar() {
     if (!personalEl || !sharedEl) return;
 
     const channels = state.channels || [];
-    const personal = channels.filter((c) => c?.kind === 'personal');
-    const shared = channels.filter((c) => c?.kind === 'shared');
-    const pending = Array.isArray(state.pendingJoins) ? state.pendingJoins : [];
+    const personal = channels.filter((c) => c?.kind === 'personal').map(normalizeChannel);
+    const shared = channels.filter((c) => c?.kind === 'shared').map(normalizeChannel);
+    const pending = Array.isArray(state.pendingJoins)
+        ? state.pendingJoins.map(normalizePendingJoin).filter((p) => p.invite_hash)
+        : [];
 
-    personalEl.innerHTML = '';
-    if (personal.length === 0) {
-        personalEl.appendChild(emptyRow('Loading...'));
-    } else {
-        for (const c of personal) personalEl.appendChild(driveRow(c, false));
-    }
-
-    sharedEl.innerHTML = '';
-    if (shared.length === 0 && pending.length === 0) {
-        sharedEl.appendChild(emptyRow('No shared drives yet'));
-    } else {
-        for (const c of shared) sharedEl.appendChild(driveRow(c, true));
-        for (const p of pending) sharedEl.appendChild(pendingJoinRow(p));
-    }
+    setSidebarState({
+        personal,
+        shared,
+        pending,
+        activeChannelId: state.activeChannel ? Number(state.activeChannel.id) : null,
+        photosActive: state.virtualView === 'photos',
+    });
 
     // The Photos item owns the highlight while the gallery is open.
     document.getElementById('nav-photos')?.classList.toggle('active', state.virtualView === 'photos');
 }
 
-function emptyRow(label: string) {
-    const el = document.createElement('div');
-    el.className = 'drive-empty';
-    el.textContent = label;
-    return el;
-}
-
-function driveRow(c: any, isShared: boolean) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'drive-item';
-    if (c.is_active && state.virtualView !== 'photos') row.classList.add('active');
-    row.dataset.channelId = String(c.id);
-    row.title = c.title;
-    row.innerHTML = `
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
-        </svg>
-        <span class="drive-item-title"></span>
-    `;
-    row.querySelector('.drive-item-title')!.textContent = c.title || 'Untitled';
-
-    row.addEventListener('click', () => {
-        if (Number(c.id) === Number(state.activeChannel?.id)) {
-            // Clicking the already-active drive while in Photos returns to its files.
-            if (state.virtualView === 'photos') exitPhotos();
-            return;
-        }
-        switchActiveChannel(Number(c.id));
-    });
-
-    if (isShared) {
-        row.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            showSharedContextMenu(e, c);
+function mountDriveLists(): void {
+    if (personalEl && !personalDriveList) {
+        personalEl.replaceChildren();
+        personalDriveList = mountSvelte(DriveList, {
+            target: personalEl,
+            props: {
+                kind: 'personal' as const,
+                onDriveClick: handleDriveClick,
+            },
         });
     }
 
-    return row;
-}
-
-function pendingJoinRow(p: any) {
-    const row = document.createElement('button');
-    row.type = 'button';
-    row.className = 'drive-item pending-drive-item';
-    row.dataset.inviteHash = String(p.invite_hash || '');
-    const title = String(p.title || 'Pending request');
-    const error = String(p.last_error || '');
-    row.title = error ? `Waiting for approval — ${error}` : 'Waiting for admin approval';
-    row.innerHTML = `
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-        </svg>
-        <span class="drive-item-title"></span>
-        <span class="pending-drive-tag">pending</span>
-    `;
-    row.querySelector('.drive-item-title')!.textContent = title;
-
-    row.addEventListener('click', async () => {
-        try {
-            const result = await checkPendingJoin(String(p.invite_hash || ''));
-            if (result?.status === 'joined') {
-                notify({
-                    level: 'success',
-                    title: 'Request approved',
-                    body: 'Joined the drive.',
-                });
-            } else {
-                const lastError = String(result?.pending?.last_error || '').trim();
-                notify({
-                    level: lastError ? 'error' : 'info',
-                    title: lastError ? 'Could not check request' : 'Still waiting for approval',
-                    body: lastError,
-                });
-            }
-        } catch (err) {
-            notify({
-                level: 'error',
-                title: 'Could not check request',
-                body: String(err),
-            });
-        }
-    });
-
-    row.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        showPendingContextMenu(e, p);
-    });
-
-    return row;
-}
-
-function showSharedContextMenu(event: any, c: any) {
-    const menu = document.getElementById('context-menu');
-    if (!menu) return;
-    menu.innerHTML = '';
-    menu.style.display = 'block';
-    menu.style.top = `${event.clientY}px`;
-    menu.style.left = `${event.clientX}px`;
-
-    // Append a <button> rather than <div>: the global .context-menu CSS
-    // styles its button children, so this matches the file-list right-click
-    // menu instead of rendering as bare text.
-    const addItem = (label: string, fn: () => void) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.setAttribute('role', 'menuitem');
-        btn.tabIndex = -1;
-        btn.textContent = label;
-        btn.addEventListener('click', () => {
-            menu.style.display = 'none';
-            fn();
+    if (sharedEl && !sharedDriveList) {
+        sharedEl.replaceChildren();
+        sharedDriveList = mountSvelte(DriveList, {
+            target: sharedEl,
+            props: {
+                kind: 'shared' as const,
+                onDriveClick: handleDriveClick,
+                onDriveContextMenu: showSharedContextMenu,
+                onPendingClick: handlePendingClick,
+                onPendingContextMenu: showPendingContextMenu,
+            },
         });
-        menu.appendChild(btn);
-    };
-
-    addItem('Copy invite link', async () => {
-        try {
-            const link = await getInviteLink(Number(c.id));
-            openShareDriveModal(link, { approvalRequired: false });
-        } catch (err) {
-            notify({
-                level: 'error',
-                title: 'Could not get invite link',
-                body: String(err),
-            });
-        }
-    });
-    addItem('Copy approval link', async () => {
-        try {
-            const link = await getApprovalInviteLink(Number(c.id));
-            openShareDriveModal(link, { approvalRequired: true });
-        } catch (err) {
-            notify({
-                level: 'error',
-                title: 'Could not get approval link',
-                body: String(err),
-            });
-        }
-    });
-    addItem('Join requests', () => {
-        openJoinRequestsModal({ id: Number(c.id), title: c.title });
-    });
-    addItem('Leave drive', () => {
-        openLeaveDriveModal({ id: Number(c.id), title: c.title });
-    });
-
-    const close = (e: any) => {
-        if (!menu.contains(e.target)) {
-            menu.style.display = 'none';
-            document.removeEventListener('click', close);
-        }
-    };
-    setTimeout(() => document.addEventListener('click', close), 0);
-    requestAnimationFrame(() => {
-        menu.querySelector<HTMLButtonElement>('button[role="menuitem"]')?.focus({ preventScroll: true });
-    });
+    }
 }
 
-function showPendingContextMenu(event: any, p: any) {
-    const menu = document.getElementById('context-menu');
-    if (!menu) return;
-    menu.innerHTML = '';
-    menu.style.display = 'block';
-    menu.style.top = `${event.clientY}px`;
-    menu.style.left = `${event.clientX}px`;
-
-    const addItem = (label: string, fn: () => void, className = '') => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.setAttribute('role', 'menuitem');
-        btn.tabIndex = -1;
-        btn.textContent = label;
-        if (className) btn.className = className;
-        btn.addEventListener('click', () => {
-            menu.style.display = 'none';
-            fn();
-        });
-        menu.appendChild(btn);
+function normalizeChannel(channel: any): SidebarChannel {
+    return {
+        id: Number(channel?.id || 0),
+        title: String(channel?.title || ''),
+        kind: String(channel?.kind || ''),
+        is_active: Boolean(channel?.is_active),
     };
+}
 
-    addItem('Check now', async () => {
-        try {
-            const result = await checkPendingJoin(String(p.invite_hash || ''));
-            const lastError = String(result?.pending?.last_error || '').trim();
-            notify({
-                level: result?.status === 'joined' ? 'success' : (lastError ? 'error' : 'info'),
-                title: result?.status === 'joined'
-                    ? 'Request approved'
-                    : (lastError ? 'Could not check request' : 'Still waiting for approval'),
-                body: result?.status === 'joined' ? 'Joined the drive.' : lastError,
-            });
-        } catch (err) {
-            notify({
-                level: 'error',
-                title: 'Could not check request',
-                body: String(err),
-            });
-        }
-    });
-    addItem('Remove request', async () => {
-        try {
-            await removePendingJoin(String(p.invite_hash || ''));
+function normalizePendingJoin(pending: any): SidebarPendingJoin {
+    return {
+        invite_hash: String(pending?.invite_hash || ''),
+        title: String(pending?.title || ''),
+        last_error: String(pending?.last_error || ''),
+    };
+}
+
+function handleDriveClick(channelId: number): void {
+    if (Number(channelId) === Number(state.activeChannel?.id)) {
+        // Clicking the already-active drive while in Photos returns to its files.
+        if (state.virtualView === 'photos') exitPhotos();
+        return;
+    }
+    void switchActiveChannel(Number(channelId));
+}
+
+async function handlePendingClick(inviteHash: string): Promise<void> {
+    const pending = state.pendingJoins.find((item) => String(item?.invite_hash || '') === inviteHash);
+    if (!pending) return;
+
+    try {
+        const result = await checkPendingJoin(inviteHash);
+        if (result?.status === 'joined') {
             notify({
                 level: 'success',
-                title: 'Pending request removed',
+                title: 'Request approved',
+                body: 'Joined the drive.',
             });
-        } catch (err) {
+        } else {
+            const lastError = String(result?.pending?.last_error || '').trim();
             notify({
-                level: 'error',
-                title: 'Could not remove request',
-                body: String(err),
+                level: lastError ? 'error' : 'info',
+                title: lastError ? 'Could not check request' : 'Still waiting for approval',
+                body: lastError,
             });
         }
-    }, 'danger');
+    } catch (err) {
+        notify({
+            level: 'error',
+            title: 'Could not check request',
+            body: String(err),
+        });
+    }
+}
 
-    const close = (e: any) => {
-        if (!menu.contains(e.target)) {
-            menu.style.display = 'none';
-            document.removeEventListener('click', close);
-        }
-    };
-    setTimeout(() => document.addEventListener('click', close), 0);
-    requestAnimationFrame(() => {
-        menu.querySelector<HTMLButtonElement>('button[role="menuitem"]')?.focus({ preventScroll: true });
-    });
+function showSharedContextMenu(event: MouseEvent, c: SidebarChannel) {
+    const items: ContextMenuItem[] = [
+        {
+            label: 'Copy invite link',
+            action: async () => {
+                try {
+                    const link = await getInviteLink(Number(c.id));
+                    openShareDriveModal(link, { approvalRequired: false });
+                } catch (err) {
+                    notify({
+                        level: 'error',
+                        title: 'Could not get invite link',
+                        body: String(err),
+                    });
+                }
+            },
+        },
+        {
+            label: 'Copy approval link',
+            action: async () => {
+                try {
+                    const link = await getApprovalInviteLink(Number(c.id));
+                    openShareDriveModal(link, { approvalRequired: true });
+                } catch (err) {
+                    notify({
+                        level: 'error',
+                        title: 'Could not get approval link',
+                        body: String(err),
+                    });
+                }
+            },
+        },
+        {
+            label: 'Join requests',
+            action: () => openJoinRequestsModal({ id: Number(c.id), title: c.title }),
+        },
+        {
+            label: 'Leave drive',
+            danger: true,
+            action: () => openLeaveDriveModal({ id: Number(c.id), title: c.title }),
+        },
+    ];
+    showContextMenu(event.clientX, event.clientY, items);
+}
+
+function showPendingContextMenu(event: MouseEvent, p: SidebarPendingJoin) {
+    showContextMenu(event.clientX, event.clientY, [
+        {
+            label: 'Check now',
+            action: async () => {
+                try {
+                    const result = await checkPendingJoin(String(p.invite_hash || ''));
+                    const lastError = String(result?.pending?.last_error || '').trim();
+                    notify({
+                        level: result?.status === 'joined' ? 'success' : (lastError ? 'error' : 'info'),
+                        title: result?.status === 'joined'
+                            ? 'Request approved'
+                            : (lastError ? 'Could not check request' : 'Still waiting for approval'),
+                        body: result?.status === 'joined' ? 'Joined the drive.' : lastError,
+                    });
+                } catch (err) {
+                    notify({
+                        level: 'error',
+                        title: 'Could not check request',
+                        body: String(err),
+                    });
+                }
+            },
+        },
+        {
+            label: 'Remove request',
+            danger: true,
+            action: async () => {
+                try {
+                    await removePendingJoin(String(p.invite_hash || ''));
+                    notify({
+                        level: 'success',
+                        title: 'Pending request removed',
+                    });
+                } catch (err) {
+                    notify({
+                        level: 'error',
+                        title: 'Could not remove request',
+                        body: String(err),
+                    });
+                }
+            },
+        },
+    ]);
 }

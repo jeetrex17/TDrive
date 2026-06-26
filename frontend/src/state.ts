@@ -71,10 +71,6 @@ export interface State {
     selectedItems: Map<string, any>;
     selectionAnchorIndex: number;
     selectionBarEl: HTMLElement | null;
-    selectionCountEl: HTMLElement | null;
-    selectionMoveBtnEl: HTMLElement | null;
-    selectionDeleteBtnEl: HTMLElement | null;
-    selectionClearBtnEl: HTMLElement | null;
 
     activeChannel: Channel | null;
     channels: Channel[];
@@ -141,10 +137,6 @@ export const state: State = {
     selectedItems: new Map(),
     selectionAnchorIndex: -1,
     selectionBarEl: null,
-    selectionCountEl: null,
-    selectionMoveBtnEl: null,
-    selectionDeleteBtnEl: null,
-    selectionClearBtnEl: null,
 
     activeChannel: null,
     channels: [],
