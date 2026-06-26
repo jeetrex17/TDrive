@@ -1,8 +1,8 @@
 // File list rendering for TDrive frontend
 
 import { state, resetFolderCaches } from '../state';
-import { icons } from '../constants';
-import { escapeHtml, splitNameAndExt, formatDate, formatBytes } from '../utils';
+import { splitNameAndExt, formatDate, formatBytes } from '../utils';
+import { tick } from 'svelte';
 import { clearSelection, handleRowSelection, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
@@ -19,7 +19,10 @@ import { populateUploaderChips, uploaderChipHTML } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { isVideoFile } from './media-types';
 import { openVideoModal } from './modals/video';
-import FileState from '../ui/file-list/FileState.svelte';
+import FileList from '../ui/file-list/FileList.svelte';
+import { showFileListRows, showFileListState } from '../ui/file-list/file-list-store';
+import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
+import type { FileListAction, FileListFileRow, FileListRow, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
 import { mountSvelte, type SvelteMountHandle } from '../ui';
 
 // dragItemsFor returns the items to move for a drag started on `row`: the whole
@@ -89,53 +92,143 @@ export function fillUploaderSlot(row: HTMLElement | null, file: any) {
 // Tracks the folder whose rows are currently rendered, so a same-folder
 // re-render can restore the scroll position instead of jumping to the top.
 let lastRenderedFolderId: string | null = null;
-let fileStateHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let fileListHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 export function resetFileListScrollRestore() {
     lastRenderedFolderId = null;
 }
 
-function destroyFileStateView() {
-    const handle = fileStateHandle;
-    if (!handle) return;
-    fileStateHandle = null;
-    void handle.destroy();
+function ensureFileListView(list: HTMLElement) {
+    if (fileListHandle) return;
+    list.replaceChildren();
+    fileListHandle = mountSvelte(FileList, {
+        target: list,
+        props: {},
+    });
 }
 
 type FileStateKind = "loading" | "empty" | "error";
 
-function renderFileState(
+export function renderFileState(
     list: HTMLElement,
     kind: FileStateKind,
     title: string,
     body = "",
     action?: { label: string; onClick: () => void },
 ) {
-    destroyFileStateView();
-    list.replaceChildren();
-    fileStateHandle = mountSvelte(FileState, {
-        target: list,
-        props: {
-            kind,
-            title,
-            body,
-            actionLabel: action?.label ?? '',
-            onAction: action?.onClick,
-        },
+    ensureFileListView(list);
+    showFileListState({
+        stateKind: kind,
+        title,
+        body,
+        actionLabel: action?.label ?? '',
+        onAction: action?.onClick,
     });
 }
 
-function rowLabel(row: HTMLElement) {
-    const type = row.dataset.type === "folder" ? "Folder" : "File";
-    const name = row.dataset.name || "Untitled";
-    return `${type}: ${name}`;
+function afterFileListPaint(list: HTMLElement, callback: () => void) {
+    void tick().then(() => {
+        if (!document.body.contains(list)) return;
+        callback();
+    });
 }
 
-export function prepareDriveRow(row: HTMLElement) {
-    row.setAttribute("role", "option");
-    row.setAttribute("aria-selected", row.classList.contains("is-selected") ? "true" : "false");
-    row.setAttribute("aria-label", rowLabel(row));
-    row.tabIndex = -1;
+export function renderFileListRows(list: HTMLElement, rows: FileListRow[], afterRender?: () => void) {
+    ensureFileListView(list);
+    showFileListRows(rows);
+    if (afterRender) afterFileListPaint(list, afterRender);
+}
+
+function folderAction(): FileListAction {
+    return {
+        kind: "open",
+        className: "open-folder",
+        title: "Open",
+        label: "Open folder",
+    };
+}
+
+function fileActions(name: string): FileListAction[] {
+    const actions: FileListAction[] = [];
+    if (isVideoFile(name || "")) {
+        actions.push({
+            kind: "play",
+            className: "play-video",
+            title: "Play",
+            label: "Play video",
+        });
+    }
+    actions.push({
+        kind: "download",
+        className: "download",
+        title: "Download",
+        label: "Download",
+    });
+    return actions;
+}
+
+export function buildFolderRow(folder: any, parentId: string, overrides: Partial<FolderListRow> = {}): FolderListRow {
+    const id = String(folder?.id || overrides.id || "");
+    const name = String(folder?.name || overrides.name || "Folder");
+    return {
+        kind: "folder",
+        key: overrides.key || `folder:${id}`,
+        selectionKey: overrides.selectionKey || `folder:${id}`,
+        id,
+        name,
+        parentId: String(overrides.parentId ?? parentId ?? ""),
+        metaLabel: overrides.metaLabel ?? "—",
+        sizeLabel: overrides.sizeLabel ?? "…",
+        ariaLabel: overrides.ariaLabel ?? `Folder: ${name}`,
+        actions: overrides.actions ?? [folderAction()],
+        onClick: overrides.onClick,
+        onDoubleClick: overrides.onDoubleClick,
+    };
+}
+
+export function buildFileRow(file: any, parentId: string, overrides: Partial<FileListFileRow> = {}): FileListFileRow {
+    const name = String(file?.name || overrides.name || "File");
+    const { base, ext } = splitNameAndExt(name);
+    const id = String(file?.id ?? overrides.id ?? "");
+    const size = Number(file?.size ?? overrides.size ?? 0);
+    const uploadTime = Number(file?.date ?? file?.uploadTime ?? overrides.uploadTime ?? 0);
+    const source = String(file?.source ?? overrides.source ?? "fs");
+    const uploaderID = Number(file?.uploaderID ?? file?.uploaderId ?? overrides.uploaderID ?? 0);
+    const encrypted = Boolean(file?.encrypted ?? overrides.encrypted ?? false);
+    const canDelete = Boolean(file?.canDelete ?? overrides.canDelete ?? canOwnerActOnFile(file));
+    const canRename = Boolean(file?.canRename ?? overrides.canRename ?? canDelete);
+    return {
+        kind: "file",
+        key: overrides.key || `file:${source}:${id}`,
+        selectionKey: overrides.selectionKey || `file:${id}`,
+        id,
+        name,
+        baseName: overrides.baseName ?? base,
+        ext: overrides.ext ?? ext,
+        source,
+        parentId: String(overrides.parentId ?? parentId ?? ""),
+        size,
+        metaLabel: overrides.metaLabel ?? formatDate(uploadTime),
+        sizeLabel: overrides.sizeLabel ?? formatBytes(size),
+        ariaLabel: overrides.ariaLabel ?? `File: ${name}`,
+        uploaderID,
+        uploadTime,
+        encrypted,
+        canDelete,
+        canRename,
+        actions: overrides.actions ?? fileActions(name),
+        onClick: overrides.onClick,
+        onDoubleClick: overrides.onDoubleClick,
+    };
+}
+
+function buildPendingFolderRow(tempId: string, name: string): PendingFolderListRow {
+    return {
+        kind: "pending-folder",
+        key: `pending-folder:${tempId}`,
+        tempId,
+        name,
+    };
 }
 
 function interactiveRows(list: HTMLElement = document.getElementById("file-list") as HTMLElement) {
@@ -146,21 +239,26 @@ function interactiveRows(list: HTMLElement = document.getElementById("file-list"
 function setFocusedRow(row: HTMLElement | null, { preventScroll = true } = {}) {
     const list = document.getElementById("file-list") as HTMLElement | null;
     if (!list || !row) return;
-    for (const item of interactiveRows(list)) {
-        item.tabIndex = item === row ? 0 : -1;
-        item.classList.toggle("is-keyboard-active", item === row);
-    }
-    row.focus({ preventScroll });
+    setActiveFileRowKey(getRowKey(row));
+    void tick().then(() => {
+        if (!document.body.contains(row)) return;
+        row.focus({ preventScroll });
+    });
 }
 
 export function syncDriveRowTabStops(list: HTMLElement, preferred?: HTMLElement | null) {
     const rows = interactiveRows(list);
-    if (!rows.length) return;
-    const target = preferred && rows.includes(preferred) ? preferred : rows[0];
-    for (const row of rows) {
-        row.tabIndex = row === target ? 0 : -1;
-        row.classList.toggle("is-keyboard-active", false);
+    if (!rows.length) {
+        setActiveFileRowKey("");
+        return;
     }
+    const current = list.querySelector<HTMLElement>('.drive-row[tabindex="0"]');
+    const target = preferred && rows.includes(preferred)
+        ? preferred
+        : current && rows.includes(current)
+            ? current
+            : rows[0];
+    setActiveFileRowKey(getRowKey(target));
 }
 
 function activeRowFromEventTarget(target: EventTarget | null) {
@@ -397,195 +495,63 @@ export function refreshFiles() {
                 return;
             }
 
-            const fragment = document.createDocumentFragment();
+            const rows: FileListRow[] = [];
 
             // Pending CreateFolder ghost rows: rendered before real folders
             // so the just-clicked entry shows up at the top until the
             // backend confirms it.
             for (const op of pendingForParent) {
-                fragment.appendChild(buildPendingFolderRow(op.tempId, op.name));
+                rows.push(buildPendingFolderRow(op.tempId, op.name));
             }
 
             folders.forEach((folder) => {
-                const row = document.createElement("div");
-                row.className = "file-row drive-row folder-row";
-                row.dataset.type = "folder";
-                row.dataset.id = folder.id;
-                row.dataset.name = folder.name;
-                row.dataset.parentId = requestedFolderId;
-                prepareDriveRow(row);
-
-                row.innerHTML = `
-                    <div class="row-name">
-                        <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
-                        ${escapeHtml(folder.name)}
-                    </div>
-                    <div class="row-meta">—</div>
-                    <div class="row-meta folder-size">…</div>
-                    <div class="row-actions">
-                        <button class="action-icon open-folder" type="button" title="Open">${icons.open}</button>
-                    </div>
-                `;
-
-                const folderNameEl = row.querySelector(".row-name") as HTMLElement | null;
-                if (folderNameEl) {
-                    folderNameEl.draggable = true;
-                    folderNameEl.addEventListener("dragstart", (e) => {
-                        const selection = window.getSelection?.();
-                        if (selection) selection.removeAllRanges();
-
-                        if (e.dataTransfer) {
-                            e.dataTransfer.effectAllowed = "move";
-                            try {
-                                e.dataTransfer.setData("text/plain", "tdrive-move");
-                            } catch {}
-                        }
-
-                        const folderID = String(folder.id || row.dataset.id || "");
-                        startDrag(row, {
-                            type: "folder",
-                            id: folderID,
-                            name: folder.name || row.dataset.name || "Folder",
-                            parentId: requestedFolderId,
-                            row,
-                        }, requestedFolderId);
-                    });
-                    folderNameEl.addEventListener("dragend", endRowDrag);
-                }
-
-                row.addEventListener("dragover", (e) => {
-                    if (!state.dragState) return;
-                    const allowed = canDropOnFolder(folder.id);
-                    setDropHighlight(row, allowed);
-                    if (e.dataTransfer) e.dataTransfer.dropEffect = allowed ? "move" : "none";
-                    if (allowed) e.preventDefault();
-                });
-                row.addEventListener("dragleave", (e) => {
-                    if (e.relatedTarget && row.contains(e.relatedTarget as Node)) return;
-                    if (state.dragOverEl === row) {
-                        row.classList.remove("drop-target");
-                        row.classList.remove("drop-denied");
-                        state.dragOverEl = null;
-                    }
-                });
-                row.addEventListener("drop", async (e) => {
-                    if (!state.dragState) return;
-                    const allowed = canDropOnFolder(folder.id);
-                    if (!allowed) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (state.dragOverEl === row) state.dragOverEl = null;
-                    row.classList.remove("drop-target");
-                    row.classList.remove("drop-denied");
-                    await performDropMove(folder.id);
-                });
-
-                fragment.appendChild(row);
-
+                rows.push(buildFolderRow(folder, requestedFolderId));
             });
 
             files.forEach((file: any) => {
-                const { base, ext } = splitNameAndExt(file.name);
-                const row = document.createElement("div");
-                row.className = "file-row drive-row";
-                row.dataset.type = "file";
-                row.dataset.id = String(file.id);
-                row.dataset.name = String(file.name || "");
-                row.dataset.source = String(file.source || "fs");
-                row.dataset.size = String(file.size || 0);
-                row.dataset.parentId = requestedFolderId;
-                row.dataset.uploaderId = String(file.uploaderID || 0);
-                row.dataset.uploadTime = String(file.date || 0);
-                row.dataset.encrypted = file.encrypted ? "true" : "false";
                 const ownerOnly = canOwnerActOnFile(file);
-                row.dataset.canDelete = ownerOnly ? "true" : "false";
-                row.dataset.canRename = ownerOnly ? "true" : "false";
-                const playable = isVideoFile(file.name || "");
-                prepareDriveRow(row);
-
-                const lockBadge = file.encrypted
-                    ? `<span class="file-lock-badge" title="Encrypted" aria-label="Encrypted"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 11h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0v4"/></svg></span>`
-                    : '';
-                row.innerHTML = `
-                    <div class="row-name">
-                        <span class="file-ext-text" aria-hidden="true">${escapeHtml(ext)}</span>
-                        ${lockBadge}${escapeHtml(base)}
-                        <span class="uploader-chip" data-uploader-slot></span>
-                    </div>
-                    <div class="row-meta">${formatDate(file.date)}</div>
-                    <div class="row-meta">${formatBytes(file.size)}</div>
-                    <div class="row-actions">
-                        ${playable ? `<button class="action-icon play-video" type="button" title="Play">${icons.play}</button>` : ""}
-                        <button class="action-icon download" type="button" title="Download">${icons.download}</button>
-                    </div>
-                `;
-                fillUploaderSlot(row, {
-                    uploaderID: file.uploaderID,
-                    uploadTime: file.date,
-                });
-
-                const nameEl = row.querySelector(".row-name") as HTMLElement | null;
-                if (nameEl) {
-                    nameEl.draggable = true;
-                    nameEl.addEventListener("dragstart", (e) => {
-                        const selection = window.getSelection?.();
-                        if (selection) selection.removeAllRanges();
-
-                        if (e.dataTransfer) {
-                            e.dataTransfer.effectAllowed = "move";
-                            try {
-                                e.dataTransfer.setData("text/plain", "tdrive-move");
-                            } catch {}
-                        }
-
-                        startDrag(row, {
-                            type: "file",
-                            id: Number(file.id),
-                            name: file.name || row.dataset.name || "File",
-                            size: Number(file.size || row.dataset.size || 0),
-                            parentId: requestedFolderId,
-                            source: file.source || row.dataset.source || "fs",
-                            row,
-                        }, requestedFolderId);
-                    });
-                    nameEl.addEventListener("dragend", endRowDrag);
-                }
-                fragment.appendChild(row);
+                rows.push(buildFileRow(file, requestedFolderId, {
+                    canDelete: ownerOnly,
+                    canRename: ownerOnly,
+                }));
             });
 
-            destroyFileStateView();
-            list.replaceChildren(fragment);
-            syncDriveRowTabStops(list);
-            fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch, list);
+            renderFileListRows(list, rows, () => {
+                if (state.folderSizeEpoch !== folderEpoch) return;
+                if (state.currentFolderId !== requestedFolderId) return;
 
-            // Restore prior scroll on a same-folder re-render. Before
-            // pendingFocus so a just-uploaded/renamed file can still scroll
-            // itself into view and win.
-            lastRenderedFolderId = requestedFolderId;
-            if (keepScrollForRender && state.currentFolderId === requestedFolderId) {
-                list.scrollTop = scrollTopForRender;
-            }
+                syncDriveRowTabStops(list);
+                fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch, list);
 
-            if (state.pendingFocus && state.pendingFocus.type === "file") {
-                const targetID = String(state.pendingFocus.id || "");
-                const targetRow = targetID ? list.querySelector(`.drive-row[data-type="file"][data-id="${targetID}"]`) : null;
-                state.pendingFocus = null;
-                if (targetRow) {
-                    const rows = Array.from(list.querySelectorAll(".drive-row"));
-                    const idx = rows.indexOf(targetRow);
-                    clearSelection();
-                    if (idx >= 0) selectRow(targetRow, idx);
-                    setFocusedRow(targetRow as HTMLElement);
-                    try {
-                        targetRow.scrollIntoView({ block: "center" });
-                    } catch {}
+                // Restore prior scroll on a same-folder re-render. Before
+                // pendingFocus so a just-uploaded/renamed file can still scroll
+                // itself into view and win.
+                lastRenderedFolderId = requestedFolderId;
+                if (keepScrollForRender && state.currentFolderId === requestedFolderId) {
+                    list.scrollTop = scrollTopForRender;
                 }
-            }
 
-            // Resolve any missing uploader names and inject chips. Fire-
-            // and-forget — rows are already shown without chips and will
-            // get them populated within ~one round-trip.
-            populateUploaderChips(list);
+                if (state.pendingFocus && state.pendingFocus.type === "file") {
+                    const targetID = String(state.pendingFocus.id || "");
+                    const targetRow = targetID ? list.querySelector(`.drive-row[data-type="file"][data-id="${CSS.escape(targetID)}"]`) : null;
+                    state.pendingFocus = null;
+                    if (targetRow) {
+                        const interactive = Array.from(list.querySelectorAll(".drive-row"));
+                        const idx = interactive.indexOf(targetRow);
+                        clearSelection();
+                        if (idx >= 0) selectRow(targetRow, idx);
+                        setFocusedRow(targetRow as HTMLElement);
+                        try {
+                            targetRow.scrollIntoView({ block: "center" });
+                        } catch {}
+                    }
+                }
+
+                // Resolve any missing uploader names and inject chips. Fire-
+                // and-forget — rows are already shown without chips and will
+                // get them populated within ~one round-trip.
+                populateUploaderChips(list);
+            });
         };
 
         await finalize();
@@ -606,32 +572,9 @@ export function refreshFiles() {
     });
 }
 
-// buildPendingFolderRow renders an in-flight CreateFolder as a ghost row.
-// It looks like a real folder row but is dimmed and has no actions; click
-// is a no-op. Removed from the list once the Wails call resolves and
-// refreshFiles re-renders.
-function buildPendingFolderRow(tempId: string, name: string) {
-    const row = document.createElement("div");
-    row.className = "file-row drive-row folder-row pending-folder";
-    row.dataset.type = "pending-folder";
-    row.dataset.tempId = tempId;
-    row.title = "Creating…";
-    row.innerHTML = `
-        <div class="row-name">
-            <span class="folder-chip" aria-hidden="true">${icons.folder}</span>
-            ${escapeHtml(name)}
-            <span class="pending-indicator" aria-hidden="true">·</span>
-        </div>
-        <div class="row-meta">Creating…</div>
-        <div class="row-meta">—</div>
-        <div class="row-actions"></div>
-    `;
-    return row;
-}
-
 // Delegated row interactions. Listeners live on the #file-list container and
-// read each row's data-* attributes, so re-rendering rows costs no click
-// listener churn. Drag handlers are still attached per row for now.
+// read each row's data-* attributes, so re-rendering rows costs no listener
+// churn and Svelte can freely replace keyed rows.
 function isSearchMode() {
     return String(state.searchQuery || "").trim() !== "";
 }
@@ -773,6 +716,78 @@ function handleListDblClick(e: MouseEvent) {
     }
 }
 
+function handleListDragStart(e: DragEvent) {
+    const handle = (e.target as HTMLElement | null)?.closest?.(".row-name[draggable='true']") as HTMLElement | null;
+    const row = handle?.closest(".drive-row[data-type='folder'], .drive-row[data-type='file']") as HTMLElement | null;
+    if (!row) return;
+
+    const selection = window.getSelection?.();
+    if (selection) selection.removeAllRanges();
+
+    if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = "move";
+        try {
+            e.dataTransfer.setData("text/plain", "tdrive-move");
+        } catch {}
+    }
+
+    if (row.dataset.type === "folder") {
+        startDrag(row, {
+            type: "folder",
+            id: String(row.dataset.id || ""),
+            name: row.dataset.name || "Folder",
+            parentId: row.dataset.parentId || state.currentFolderId,
+            row,
+        }, row.dataset.parentId || state.currentFolderId);
+        return;
+    }
+
+    startDrag(row, {
+        type: "file",
+        id: Number(row.dataset.id || 0),
+        name: row.dataset.name || "File",
+        size: Number(row.dataset.size || 0),
+        parentId: row.dataset.parentId || state.currentFolderId,
+        source: row.dataset.source || "fs",
+        row,
+    }, row.dataset.parentId || state.currentFolderId);
+}
+
+function handleListDragOver(e: DragEvent) {
+    if (!state.dragState) return;
+    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
+    if (!row) return;
+    const allowed = canDropOnFolder(row.dataset.id || "");
+    setDropHighlight(row, allowed);
+    if (e.dataTransfer) e.dataTransfer.dropEffect = allowed ? "move" : "none";
+    if (allowed) e.preventDefault();
+}
+
+function handleListDragLeave(e: DragEvent) {
+    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
+    if (!row) return;
+    if (e.relatedTarget && row.contains(e.relatedTarget as Node)) return;
+    if (state.dragOverEl === row) {
+        row.classList.remove("drop-target");
+        row.classList.remove("drop-denied");
+        state.dragOverEl = null;
+    }
+}
+
+async function handleListDrop(e: DragEvent) {
+    if (!state.dragState) return;
+    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
+    if (!row) return;
+    const folderID = row.dataset.id || "";
+    if (!canDropOnFolder(folderID)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (state.dragOverEl === row) state.dragOverEl = null;
+    row.classList.remove("drop-target");
+    row.classList.remove("drop-denied");
+    await performDropMove(folderID);
+}
+
 export function setupFileListWindowBindings() {
     window.refreshFiles = refreshFiles;
 
@@ -794,6 +809,13 @@ export function setupFileListWindowBindings() {
         list.addEventListener("click", handleListClick);
         list.addEventListener("dblclick", handleListDblClick);
         list.addEventListener("keydown", handleListKeyDown);
+        list.addEventListener("dragstart", handleListDragStart);
+        list.addEventListener("dragend", endRowDrag);
+        list.addEventListener("dragover", handleListDragOver);
+        list.addEventListener("dragleave", handleListDragLeave);
+        list.addEventListener("drop", (event) => {
+            void handleListDrop(event);
+        });
     }
 
     // Note: window.initDelete and window.initDeleteFolder are set up in main.js

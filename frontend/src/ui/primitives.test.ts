@@ -3,6 +3,7 @@ import {
     Button,
     ContextMenu,
     DriveList,
+    FileList,
     FileState,
     FolderModal,
     IconButton,
@@ -21,6 +22,7 @@ describe('Svelte UI primitives', () => {
         expect(ProgressBar).toBeTruthy();
         expect(StateView).toBeTruthy();
         expect(ContextMenu).toBeTruthy();
+        expect(FileList).toBeTruthy();
         expect(FileState).toBeTruthy();
         expect(DriveList).toBeTruthy();
         expect(ModalShell).toBeTruthy();

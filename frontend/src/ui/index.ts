@@ -3,6 +3,7 @@ export { default as IconButton } from './IconButton.svelte';
 export { default as ProgressBar } from './ProgressBar.svelte';
 export { default as StateView } from './StateView.svelte';
 export { default as ContextMenu } from './menus/ContextMenu.svelte';
+export { default as FileList } from './file-list/FileList.svelte';
 export { default as FileState } from './file-list/FileState.svelte';
 export { default as DriveList } from './sidebar/DriveList.svelte';
 export { default as FolderModal } from './modals/FolderModal.svelte';

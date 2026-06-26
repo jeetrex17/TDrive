@@ -5,6 +5,7 @@ import { openDeleteModal } from './modals/delete';
 import { openMoveModal } from './modals/move';
 import SelectionBar from '../ui/selection/SelectionBar.svelte';
 import { setSelectionCount } from '../ui/selection/selection-bar-store';
+import { setSelectedFileRowKeys } from '../ui/file-list/row-state-store';
 import { mountSvelte } from '../ui';
 
 const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
@@ -16,10 +17,21 @@ function emitSelectionChange() {
 
 export function getRowKey(row: any) {
     if (!row) return "";
+    const explicitKey = String(row.dataset.rowKey || "");
+    if (explicitKey) return explicitKey;
     const type = String(row.dataset.type || "");
     const id = String(row.dataset.id || "");
     if (!type || !id) return "";
     return `${type}:${id}`;
+}
+
+function syncSelectedRowKeys() {
+    setSelectedFileRowKeys(state.selectedItems.keys());
+}
+
+export function isRowSelected(row: any) {
+    const key = getRowKey(row);
+    return Boolean(key && state.selectedItems.has(key));
 }
 
 export function rowToSelectionItem(row: any) {
@@ -48,13 +60,12 @@ export function rowToSelectionItem(row: any) {
     };
 }
 
-export function setRowSelected(row: any, selected: any) {
-    if (!row) return;
-    row.classList.toggle("is-selected", Boolean(selected));
-    row.setAttribute("aria-selected", selected ? "true" : "false");
+export function setRowSelected(_row: any, _selected: any) {
+    syncSelectedRowKeys();
 }
 
 export function updateSelectionBar() {
+    syncSelectedRowKeys();
     if (!state.selectionBarEl) {
         emitSelectionChange();
         return;
@@ -72,9 +83,6 @@ export function updateSelectionBar() {
 }
 
 export function clearSelection({ keepAnchor = false } = {}) {
-    for (const item of state.selectedItems.values()) {
-        if (item?.row) setRowSelected(item.row, false);
-    }
     state.selectedItems.clear();
     if (!keepAnchor) state.selectionAnchorIndex = -1;
     updateSelectionBar();
@@ -85,7 +93,6 @@ export function selectRow(row: any, rowIndex: any) {
     if (!key) return;
     const item = rowToSelectionItem(row);
     state.selectedItems.set(key, item);
-    setRowSelected(row, true);
     state.selectionAnchorIndex = rowIndex;
     updateSelectionBar();
 }
@@ -94,7 +101,6 @@ export function deselectRow(row: any) {
     const key = getRowKey(row);
     if (!key) return;
     state.selectedItems.delete(key);
-    setRowSelected(row, false);
     updateSelectionBar();
 }
 
@@ -123,7 +129,6 @@ export function handleRowSelection(row: any, e: any) {
             if (state.selectedItems.has(key)) continue;
             const item = rowToSelectionItem(r);
             state.selectedItems.set(key, item);
-            setRowSelected(r, true);
         }
 
         updateSelectionBar();
@@ -131,12 +136,13 @@ export function handleRowSelection(row: any, e: any) {
     }
 
     if (isToggle) {
-        if (row.classList.contains("is-selected")) {
+        if (isRowSelected(row)) {
             deselectRow(row);
         } else {
+            const key = getRowKey(row);
+            if (!key) return;
             const item = rowToSelectionItem(row);
-            state.selectedItems.set(getRowKey(row), item);
-            setRowSelected(row, true);
+            state.selectedItems.set(key, item);
             state.selectionAnchorIndex = idx;
             updateSelectionBar();
         }
@@ -154,7 +160,7 @@ export function ensureRowSelectedForContextMenu(row: any) {
     const idx = rows.indexOf(row);
     if (idx === -1) return;
 
-    if (!row.classList.contains("is-selected") || !state.selectedItems.size) {
+    if (!isRowSelected(row) || !state.selectedItems.size) {
         clearSelection({ keepAnchor: true });
         selectRow(row, idx);
         return;
