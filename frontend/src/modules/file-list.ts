@@ -19,6 +19,8 @@ import { populateUploaderChips, uploaderChipHTML } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { isVideoFile } from './media-types';
 import { openVideoModal } from './modals/video';
+import FileState from '../ui/file-list/FileState.svelte';
+import { mountSvelte, type SvelteMountHandle } from '../ui';
 
 // dragItemsFor returns the items to move for a drag started on `row`: the whole
 // current selection when the row is part of a multi-selection, else just the
@@ -87,9 +89,17 @@ export function fillUploaderSlot(row: HTMLElement | null, file: any) {
 // Tracks the folder whose rows are currently rendered, so a same-folder
 // re-render can restore the scroll position instead of jumping to the top.
 let lastRenderedFolderId: string | null = null;
+let fileStateHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 export function resetFileListScrollRestore() {
     lastRenderedFolderId = null;
+}
+
+function destroyFileStateView() {
+    const handle = fileStateHandle;
+    if (!handle) return;
+    fileStateHandle = null;
+    void handle.destroy();
 }
 
 type FileStateKind = "loading" | "empty" | "error";
@@ -101,43 +111,18 @@ function renderFileState(
     body = "",
     action?: { label: string; onClick: () => void },
 ) {
-    const stateEl = document.createElement("div");
-    stateEl.className = `file-state is-${kind}`;
-    stateEl.setAttribute("role", kind === "error" ? "alert" : "status");
-
-    const icon = document.createElement("div");
-    icon.className = "file-state-icon";
-    if (kind === "empty") icon.innerHTML = icons.folder;
-    if (kind === "error") {
-        icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.3 4.3L2.8 17.2A2 2 0 004.5 20h15a2 2 0 001.7-2.8L13.7 4.3a2 2 0 00-3.4 0z"/></svg>`;
-    }
-    stateEl.appendChild(icon);
-
-    const titleEl = document.createElement("div");
-    titleEl.className = "file-state-title";
-    titleEl.textContent = title;
-    stateEl.appendChild(titleEl);
-
-    if (body) {
-        const bodyEl = document.createElement("div");
-        bodyEl.className = "file-state-body";
-        bodyEl.textContent = body;
-        stateEl.appendChild(bodyEl);
-    }
-
-    if (action) {
-        const actions = document.createElement("div");
-        actions.className = "file-state-actions";
-        const button = document.createElement("button");
-        button.className = "secondary-btn";
-        button.type = "button";
-        button.textContent = action.label;
-        button.addEventListener("click", action.onClick);
-        actions.appendChild(button);
-        stateEl.appendChild(actions);
-    }
-
-    list.replaceChildren(stateEl);
+    destroyFileStateView();
+    list.replaceChildren();
+    fileStateHandle = mountSvelte(FileState, {
+        target: list,
+        props: {
+            kind,
+            title,
+            body,
+            actionLabel: action?.label ?? '',
+            onAction: action?.onClick,
+        },
+    });
 }
 
 function rowLabel(row: HTMLElement) {
@@ -568,6 +553,7 @@ export function refreshFiles() {
                 fragment.appendChild(row);
             });
 
+            destroyFileStateView();
             list.replaceChildren(fragment);
             syncDriveRowTabStops(list);
             fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch, list);

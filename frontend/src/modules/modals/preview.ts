@@ -96,8 +96,7 @@ function isBlockingOverlayOpen() {
         return true;
     }
 
-    const contextMenu = document.getElementById("context-menu");
-    return Boolean(contextMenu && contextMenu.style.display !== "none");
+    return Boolean(document.querySelector("#context-menu .context-menu-panel"));
 }
 
 function flashStatus(message: any) {
