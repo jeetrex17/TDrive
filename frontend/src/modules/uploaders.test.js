@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { formatRelative, uploaderChipHTML } from "./uploaders";
+import { formatRelative, uploaderChipLabel } from "./uploaders";
 import { state } from "../state";
 
 describe("formatRelative", () => {
@@ -15,7 +15,7 @@ describe("formatRelative", () => {
     });
 });
 
-describe("uploaderChipHTML", () => {
+describe("uploaderChipLabel", () => {
     beforeEach(() => {
         state.activeChannel = { kind: "shared" };
         state.userNames = new Map();
@@ -23,17 +23,17 @@ describe("uploaderChipHTML", () => {
 
     it("returns null outside shared drives", () => {
         state.activeChannel = { kind: "personal" };
-        expect(uploaderChipHTML({ uploaderID: 5, uploadTime: 0 })).toBeNull();
+        expect(uploaderChipLabel({ uploaderID: 5, uploadTime: 0 })).toBeNull();
     });
     it("returns null when uploader id is missing", () => {
-        expect(uploaderChipHTML({ uploaderID: 0 })).toBeNull();
+        expect(uploaderChipLabel({ uploaderID: 0 })).toBeNull();
     });
     it("returns null when the name is not yet resolved", () => {
-        expect(uploaderChipHTML({ uploaderID: 5 })).toBeNull();
+        expect(uploaderChipLabel({ uploaderID: 5 })).toBeNull();
     });
-    it("renders the resolved name, HTML-escaped", () => {
+    it("returns the resolved display label", () => {
         state.userNames.set("5", "A<b>");
-        const html = uploaderChipHTML({ uploaderID: 5, uploadTime: 0 });
-        expect(html).toContain("A&lt;b&gt;");
+        const label = uploaderChipLabel({ uploaderID: 5, uploadTime: 0 });
+        expect(label).toContain("A<b>");
     });
 });

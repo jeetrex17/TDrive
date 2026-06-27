@@ -62,4 +62,16 @@ describe('FileList', () => {
         expect(body).toContain('aria-selected="false"');
         expect(body).toContain('tabindex="-1"');
     });
+
+    it('renders uploader chips as escaped text', () => {
+        showFileListRows([makeFileRow({
+            uploaderChip: { label: 'A<b> 2m ago' },
+        })]);
+
+        const { body } = render(FileList);
+
+        expect(body).toContain('<span class="uploader-chip">A&lt;b> 2m ago</span>');
+        expect(body).not.toContain('<span class="uploader-chip">A<b>');
+        expect(body).not.toContain('data-uploader-slot');
+    });
 });

@@ -8,6 +8,10 @@ export type FileListAction = {
     onClick?: (event: MouseEvent, row: FileListRow) => void;
 };
 
+export type FileListUploaderChip = {
+    label: string;
+};
+
 type BaseInteractiveRow = {
     key: string;
     selectionKey: string;
@@ -37,6 +41,7 @@ export type FileListFileRow = BaseInteractiveRow & {
     encrypted: boolean;
     canDelete: boolean;
     canRename: boolean;
+    uploaderChip?: FileListUploaderChip | null;
     actions: FileListAction[];
 };
 

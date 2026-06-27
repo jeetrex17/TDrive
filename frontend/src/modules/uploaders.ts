@@ -61,32 +61,6 @@ export async function ensureUserNames(userIDs: Array<number | string>): Promise<
     await Promise.allSettled(waitFor);
 }
 
-export async function populateUploaderChips(list: HTMLElement | null): Promise<void> {
-    if (!list) return;
-    if (state.activeChannel?.kind !== 'shared') return;
-
-    const slots = list.querySelectorAll('[data-uploader-slot]');
-    const ids: number[] = [];
-    slots.forEach((slot) => {
-        const row = slot.closest('.drive-row') as HTMLElement | null;
-        if (!row) return;
-        const uid = Number(row.dataset.uploaderId || 0);
-        if (uid > 0) ids.push(uid);
-    });
-    if (ids.length === 0) return;
-
-    await ensureUserNames(ids);
-
-    slots.forEach((slot) => {
-        const row = slot.closest('.drive-row') as HTMLElement | null;
-        if (!row) return;
-        const uid = Number(row.dataset.uploaderId || 0);
-        const ts = Number(row.dataset.uploadTime || 0);
-        const html = uploaderChipHTML({ uploaderID: uid, uploadTime: ts });
-        slot.innerHTML = html ?? '';
-    });
-}
-
 // formatRelative produces "2h ago" / "5m ago" / "just now" strings from a
 // unix-second timestamp. Returns "" for 0/invalid so callers hide the time.
 export function formatRelative(unixSec: number): string {
@@ -109,9 +83,9 @@ export function formatRelative(unixSec: number): string {
     return `${y}y ago`;
 }
 
-// Build the inner HTML of an uploader chip for a file row, or null if no chip
-// should show (shared drives only, uploaderID > 0, name resolved).
-export function uploaderChipHTML(file: ChipFile | null): string | null {
+// Build the display text for an uploader chip, or null if no chip should show
+// (shared drives only, uploaderID > 0, name resolved). Svelte owns escaping.
+export function uploaderChipLabel(file: ChipFile | null): string | null {
     if (!file) return null;
     if (state.activeChannel?.kind !== 'shared') return null;
     const uploaderID = Number(file.uploaderID ?? file.uploader_id ?? 0);
@@ -120,17 +94,5 @@ export function uploaderChipHTML(file: ChipFile | null): string | null {
     if (!name) return null;
     const when = formatRelative(file.uploadTime ?? file.upload_time ?? file.date ?? 0);
     const suffix = when ? ` · ${when}` : '';
-    return escapeForChip(name) + escapeForChip(suffix);
-}
-
-const CHIP_ESCAPES: Record<string, string> = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-};
-
-function escapeForChip(s: string): string {
-    return String(s).replace(/[&<>"']/g, (c) => CHIP_ESCAPES[c]);
+    return `${name}${suffix}`;
 }

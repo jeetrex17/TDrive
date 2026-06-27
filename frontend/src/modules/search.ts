@@ -5,15 +5,14 @@ import { renderBreadcrumb } from './navigation';
 import {
     buildFileRow,
     buildFolderRow,
-    fillUploaderSlot,
     renderFileListRows,
     renderFileState,
     resetFileListScrollRestore,
+    resolveUploaderChipsForRows,
     syncDriveRowTabStops,
 } from './file-list';
 import { setPhotosMode } from './gallery';
 import { refreshFolderIndex } from './folder-index';
-import { populateUploaderChips } from './uploaders';
 import { isVideoFile } from './media-types';
 import type { FileListAction, FileListRow } from '../ui/file-list/types';
 
@@ -152,13 +151,7 @@ function renderSearchResults(results: any, query: any) {
     });
 
     renderFileListRows(list, rows, () => {
-        for (const row of list.querySelectorAll<HTMLElement>(".drive-row[data-type='file']")) {
-            fillUploaderSlot(row, {
-                uploaderID: Number(row.dataset.uploaderId || 0),
-                uploadTime: Number(row.dataset.uploadTime || 0),
-            });
-        }
-        populateUploaderChips(list);
+        resolveUploaderChipsForRows(rows, () => String(state.searchQuery || "").trim() === String(query || "").trim());
         syncDriveRowTabStops(list);
     });
 }
