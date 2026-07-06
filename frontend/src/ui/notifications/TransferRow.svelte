@@ -36,6 +36,15 @@
         event.stopPropagation();
         onCancel?.(transfer.direction);
     }
+
+    // Keyboard activation: pointerdown never fires for Enter/Space, and the
+    // native click those keys synthesize is not handled either.
+    function onCancelKeydown(event: KeyboardEvent): void {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel?.(transfer.direction);
+    }
 </script>
 
 <div class={`notif-row notif-row-transfer ${statusClass}`}>
@@ -72,6 +81,7 @@
             aria-label="Cancel transfer"
             title="Cancel"
             onpointerdown={onCancelPointerDown}
+            onkeydown={onCancelKeydown}
         >
             &times;
         </button>

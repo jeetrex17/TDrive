@@ -5,6 +5,7 @@
 import { state } from '../state';
 import { EncryptionStatus } from '../../wailsjs/go/main/App';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
+import { encryptionEntryVisible } from '../ui/chrome/profile-store';
 
 export async function loadEncryptionStatus(): Promise<void> {
     try {
@@ -20,12 +21,14 @@ export async function loadEncryptionStatus(): Promise<void> {
         console.warn('EncryptionStatus failed:', err);
         state.encryption = { available: false, passwordSet: false, passwordRemembered: false, hint: '', loaded: true };
     }
-    try {
-        const { renderEncryptionSettingsEntry } = await import('./profile-menu.js');
-        renderEncryptionSettingsEntry();
-    } catch {
-        // profile menu not mounted yet — non-fatal
-    }
+    renderEncryptionSettingsEntry();
+}
+
+// renderEncryptionSettingsEntry lives here (not in profile-menu.ts) so this
+// module never imports the profile menu, whose modal imports circle back to
+// loadEncryptionStatus.
+export function renderEncryptionSettingsEntry() {
+    encryptionEntryVisible.set(Boolean(state.encryption?.passwordSet));
 }
 
 // requireEncryptionPassword is the gate used by download/preview when an

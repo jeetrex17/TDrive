@@ -2,17 +2,12 @@
 // account/settings actions belong here too.
 
 import { get } from 'svelte/store';
-import { state } from '../state';
 import { Me } from '../../wailsjs/go/main/App';
+import { renderEncryptionSettingsEntry } from './encryption';
 import { openLogoutModal } from './modals/logout';
 import { openEncryptionSettingsModal } from './modals/encryption-settings';
 import ProfileMenu from '../ui/chrome/ProfileMenu.svelte';
-import {
-    encryptionEntryVisible,
-    profileLoaded,
-    profileUser,
-    type ProfileUser,
-} from '../ui/chrome/profile-store';
+import { profileLoaded, profileUser, type ProfileUser } from '../ui/chrome/profile-store';
 import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 let profileMenuHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
@@ -60,8 +55,4 @@ export async function loadSelfUser(): Promise<ProfileUser | null> {
 async function ensureProfileLoaded(): Promise<void> {
     if (get(profileUser)) return; // already hydrated; menu opens use the cache
     await loadSelfUser();
-}
-
-export function renderEncryptionSettingsEntry() {
-    encryptionEntryVisible.set(Boolean(state.encryption?.passwordSet));
 }
