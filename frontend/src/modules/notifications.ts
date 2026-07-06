@@ -16,42 +16,50 @@
 //
 //   // Errors are sticky by default; user dismisses or clicks to copy.
 //   notify({ level: 'error', title: 'Could not join drive', body: String(err) });
+//
+// This module owns the queue: capping, replace-by-id, and the expiry ticker
+// with its hover-pause rules. ToastStack.svelte only renders the store.
 
-import { state } from '../state';
+import { get } from 'svelte/store';
 import { pushHistoryEvent } from './notif-bell';
+import ToastStack from '../ui/notifications/ToastStack.svelte';
+import { toasts, type ToastItem, type ToastLevel } from '../ui/notifications/toast-store';
+import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 const MAX_VISIBLE = 5;
 const DEFAULT_DURATION = 4000;
-const ICONS = {
-    info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
-    success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>',
-    warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-    error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
-    spinner: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" class="toast-spinner"><circle cx="12" cy="12" r="9" stroke-opacity="0.25"/><path d="M12 3 a9 9 0 0 1 9 9"/></svg>',
-};
+const LEVELS: readonly ToastLevel[] = ['info', 'success', 'warning', 'error'];
 
-let stackEl: HTMLElement | null = null;
+let stackHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let timer: number | null = null;
 
 export function setupNotifications() {
-    if (stackEl) return;
-    stackEl = document.createElement('div');
+    if (stackHandle) return;
+
+    const stackEl = document.createElement('div');
     stackEl.id = 'toast-stack';
     stackEl.className = 'toast-stack';
     stackEl.setAttribute('role', 'status');
     stackEl.setAttribute('aria-live', 'polite');
     document.body.appendChild(stackEl);
 
-    // Pause auto-dismiss while the stack is hovered (per-toast pausing
-    // happens via the data attribute too; this is the broad gesture).
-    stackEl.addEventListener('mouseenter', () => setAllPaused(true));
-    stackEl.addEventListener('mouseleave', () => setAllPaused(false));
+    stackHandle = mountSvelte(ToastStack, {
+        target: stackEl,
+        props: {
+            onDismiss: dismissNotification,
+            onPauseToast: pauseToast,
+            onResumeToast: resumeToast,
+            onPauseAll: () => setAllPaused(true),
+            onResumeAll: () => setAllPaused(false),
+        },
+    });
 
     // Esc clears the most recent error toast (sticky errors otherwise
-    // require a manual click).
+    // require a manual click). A modal's own Escape handling runs in the
+    // capture phase and stops propagation, so this never fires behind one.
     window.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
-        const lastError = [...state.toasts].reverse().find((t) => t.level === 'error');
+        const lastError = [...get(toasts)].reverse().find((t) => t.level === 'error');
         if (lastError) dismissNotification(lastError.id);
     });
 
@@ -62,12 +70,12 @@ export function setupNotifications() {
 // `notify({ id })` to replace an existing entry in place (used for
 // long-running operations).
 export function notify(opts: any = {}) {
-    const level = ['info', 'success', 'warning', 'error'].includes(opts.level) ? opts.level : 'info';
+    const level: ToastLevel = LEVELS.includes(opts.level) ? opts.level : 'info';
     const id = opts.id || `t${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const sticky = opts.sticky === true || level === 'error' || opts.durationMs === 0;
     const duration = sticky ? 0 : (Number.isFinite(opts.durationMs) ? opts.durationMs : DEFAULT_DURATION);
     const now = Date.now();
-    const entry = {
+    const entry: ToastItem = {
         id,
         level,
         title: String(opts.title || ''),
@@ -79,11 +87,10 @@ export function notify(opts: any = {}) {
         spinner: opts.spinner === true,
     };
 
-    // Mirror non-spinner / non-progress toasts into the bell history. We
-    // skip in-progress sticky toasts (spinners) because their final
-    // success/failure version replaces them; the panel doesn't need both.
-    const isProgress = entry.spinner === true;
-    if (!isProgress && entry.title) {
+    // Mirror non-spinner toasts into the bell history. In-progress sticky
+    // toasts (spinners) are skipped because their final success/failure
+    // version replaces them; the panel doesn't need both.
+    if (!entry.spinner && entry.title) {
         pushHistoryEvent({
             level: entry.level,
             title: entry.title,
@@ -92,64 +99,88 @@ export function notify(opts: any = {}) {
         });
     }
 
-    const idx = state.toasts.findIndex((t) => t.id === id);
-    if (idx >= 0) {
-        // Preserve element identity if the level is unchanged, so the
-        // replacement morphs in place instead of slide-in/slide-out.
-        const existing = state.toasts[idx];
-        const morph = existing.level === level;
-        state.toasts[idx] = entry;
-        renderStack({ keepNode: morph ? id : null });
-    } else {
+    toasts.update((list) => {
+        const idx = list.findIndex((t) => t.id === id);
+        if (idx >= 0) {
+            // Replace in place; the keyed each block morphs the same node.
+            const next = [...list];
+            next[idx] = entry;
+            return next;
+        }
         // Cap the visible queue; if exceeded, the oldest non-sticky entry
         // is dismissed early so urgent ones aren't drowned.
-        if (state.toasts.length >= MAX_VISIBLE) {
-            const stalest = state.toasts.findIndex((t) => !t.sticky);
-            if (stalest >= 0) state.toasts.splice(stalest, 1);
-            else state.toasts.shift();
+        const next = [...list];
+        if (next.length >= MAX_VISIBLE) {
+            const stalest = next.findIndex((t) => !t.sticky);
+            next.splice(stalest >= 0 ? stalest : 0, 1);
         }
-        state.toasts.push(entry);
-        renderStack();
-    }
+        next.push(entry);
+        return next;
+    });
     ensureTimer();
     return id;
 }
 
-export function dismissNotification(id: any) {
-    const idx = state.toasts.findIndex((t) => t.id === id);
-    if (idx < 0) return;
-    state.toasts.splice(idx, 1);
-    renderStack();
+export function dismissNotification(id: string) {
+    toasts.update((list) => {
+        const idx = list.findIndex((t) => t.id === id);
+        if (idx < 0) return list;
+        const next = [...list];
+        next.splice(idx, 1);
+        return next;
+    });
     ensureTimer();
 }
 
 export function clearAllNotifications() {
-    state.toasts = [];
-    renderStack();
+    toasts.set([]);
     if (timer) {
         cancelAnimationFrame(timer);
         timer = null;
     }
 }
 
-function setAllPaused(paused: boolean) {
-    if (!state.toasts.length) return;
+// pauseToast freezes one toast's countdown while it is hovered; resumeToast
+// restarts it from the captured remainder (or a fresh window when the broad
+// stack-level pause didn't capture one).
+function pauseToast(id: string) {
+    toasts.update((list) =>
+        list.map((t) => (t.id === id && !t.paused ? { ...t, paused: true } : t)),
+    );
+}
+
+function resumeToast(id: string) {
     const now = Date.now();
-    for (const t of state.toasts) {
-        if (t.sticky) continue;
-        if (paused && !t.paused) {
-            t.paused = true;
-            t.remainingMs = Math.max(0, (t.expiresAt || now) - now);
-        } else if (!paused && t.paused) {
-            t.paused = false;
-            t.expiresAt = now + (t.remainingMs || 0);
-        }
-    }
+    toasts.update((list) =>
+        list.map((t) => {
+            if (t.id !== id || t.sticky || !t.paused) return t;
+            const remaining = t.remainingMs || t.durationMs || DEFAULT_DURATION;
+            return { ...t, paused: false, expiresAt: now + remaining };
+        }),
+    );
+    ensureTimer();
+}
+
+function setAllPaused(paused: boolean) {
+    const now = Date.now();
+    toasts.update((list) => {
+        if (!list.length) return list;
+        return list.map((t) => {
+            if (t.sticky) return t;
+            if (paused && !t.paused) {
+                return { ...t, paused: true, remainingMs: Math.max(0, (t.expiresAt || now) - now) };
+            }
+            if (!paused && t.paused) {
+                return { ...t, paused: false, expiresAt: now + (t.remainingMs || 0) };
+            }
+            return t;
+        });
+    });
     ensureTimer();
 }
 
 function hasExpiringToasts() {
-    return state.toasts.some((t) => !t.sticky && !t.paused && t.expiresAt);
+    return get(toasts).some((t) => !t.sticky && !t.paused && t.expiresAt);
 }
 
 function ensureTimer() {
@@ -160,111 +191,11 @@ function ensureTimer() {
 function tick() {
     timer = null;
     const now = Date.now();
-    let changed = false;
-    for (let i = state.toasts.length - 1; i >= 0; i--) {
-        const t = state.toasts[i];
-        if (t.sticky || t.paused) continue;
-        if (t.expiresAt && now >= t.expiresAt) {
-            state.toasts.splice(i, 1);
-            changed = true;
-        }
+    // The rAF loop runs every frame while a countdown is live; only touch the
+    // store (and wake its subscribers) when something actually expired.
+    const survives = (t: ToastItem) => t.sticky || t.paused || !t.expiresAt || now < t.expiresAt;
+    if (!get(toasts).every(survives)) {
+        toasts.update((list) => list.filter(survives));
     }
-    if (changed) renderStack();
     ensureTimer();
-}
-
-function renderStack({ keepNode = null } = {}) {
-    if (!stackEl) return;
-
-    // Build a quick map of existing nodes by id so we can preserve
-    // identity for entries that didn't change (avoids reflow / animation
-    // restart on every render).
-    const existing = new Map();
-    for (const node of stackEl.querySelectorAll('.toast')) {
-        existing.set((node as HTMLElement).dataset.id, node);
-    }
-
-    const fragment = document.createDocumentFragment();
-    for (const t of state.toasts) {
-        let node = existing.get(t.id);
-        if (node && (t.id !== keepNode)) {
-            // Re-attach existing node if the underlying entry hasn't
-            // structurally changed. We always rebuild content for safety
-            // (cheap and keeps title/body in sync if a notify() call
-            // updated them).
-        }
-        if (!node) {
-            node = buildToastNode(t);
-        } else {
-            updateToastNode(node, t);
-        }
-        existing.delete(t.id);
-        fragment.appendChild(node);
-    }
-
-    // Animate-out any nodes whose entries were removed.
-    for (const stale of existing.values()) {
-        stale.classList.add('toast-leaving');
-        // After the CSS transition (~180ms) drop it from the DOM.
-        stale.addEventListener('transitionend', () => stale.remove(), { once: true });
-        // Safety net in case transitionend doesn't fire.
-        setTimeout(() => { if (stale.isConnected) stale.remove(); }, 240);
-    }
-
-    stackEl.appendChild(fragment);
-}
-
-function buildToastNode(t: any) {
-    const node = document.createElement('div');
-    node.className = `toast toast-${t.level}`;
-    node.dataset.id = t.id;
-    node.setAttribute('role', t.level === 'error' ? 'alert' : 'status');
-    node.setAttribute('tabindex', '0');
-
-    node.addEventListener('mouseenter', () => { t.paused = true; });
-    node.addEventListener('mouseleave', () => {
-        if (!t.sticky && t.paused) {
-            t.paused = false;
-            // resume from where we paused — use the remaining time stored
-            // on entry; fall back to a fresh timeout if absent.
-            const remaining = t.remainingMs || t.durationMs || DEFAULT_DURATION;
-            t.expiresAt = Date.now() + remaining;
-        }
-    });
-
-    updateToastNode(node, t);
-    return node;
-}
-
-function updateToastNode(node: HTMLElement, t: any) {
-    const iconKey = (t.spinner ? 'spinner' : t.level) as keyof typeof ICONS;
-    node.innerHTML = `
-        <span class="toast-icon" aria-hidden="true">${ICONS[iconKey] || ICONS.info}</span>
-        <div class="toast-content">
-            <div class="toast-title">${escapeHTML(t.title)}</div>
-            ${t.body ? `<div class="toast-body">${escapeHTML(t.body)}</div>` : ''}
-        </div>
-        <button class="toast-close" type="button" aria-label="Dismiss">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-    `;
-    const closeBtn = node.querySelector('.toast-close');
-    if (closeBtn) {
-        closeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            dismissNotification(t.id);
-        });
-    }
-    // Click body to dismiss errors (lets users clear them quickly without
-    // hunting for the X).
-    node.addEventListener('click', (e) => {
-        if ((e.target as HTMLElement).closest('.toast-close')) return;
-        if (t.level === 'error') dismissNotification(t.id);
-    });
-}
-
-function escapeHTML(s: any) {
-    return String(s).replace(/[&<>"']/g, (c) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-    } as Record<string, string>)[c]);
 }

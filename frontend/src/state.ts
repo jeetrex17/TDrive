@@ -84,13 +84,6 @@ export interface State {
     userNames: Map<string, string>;
     userNameFailures: Set<string>;
     userNameRequests: Map<string, Promise<void>>;
-
-    toasts: any[];
-    historyEvents: any[];
-
-    notifPanelOpen: boolean;
-    notifHoverOpen: boolean;
-    notifUnreadErrors: number;
 }
 
 export const state: State = {
@@ -152,13 +145,6 @@ export const state: State = {
     userNames: new Map(),
     userNameFailures: new Set(),
     userNameRequests: new Map(),
-
-    toasts: [],
-    historyEvents: [],
-
-    notifPanelOpen: false,
-    notifHoverOpen: false,
-    notifUnreadErrors: 0,
 };
 
 // Helper to reset folder caches (called on refresh)
