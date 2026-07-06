@@ -151,6 +151,20 @@ const importProgressById = new Map<number, number>();
 // Per-file upload ids seen during the current import, so stray per-file rows
 // can be swept if a completion event is dropped.
 const importFileIds = new Set<number>();
+// First few distinct per-file failure reasons, folded into the aggregate
+// import summary toast. Imports report one toast for the whole batch, so this
+// is the only place the backend's actual error text survives to the user.
+const MAX_IMPORT_FAILURE_REASONS = 3;
+const importFailureReasons: string[] = [];
+
+function recordImportFailureReason(name: any, message: any) {
+    if (importFailureReasons.length >= MAX_IMPORT_FAILURE_REASONS) return;
+    const reason = String(message ?? '').trim();
+    if (!reason) return;
+    const fname = String(name ?? '').trim();
+    const entry = fname ? `${fname}: ${reason}` : reason;
+    if (!importFailureReasons.includes(entry)) importFailureReasons.push(entry);
+}
 
 // refreshImportRow advances the aggregate import row as files finish.
 function refreshImportRow() {
@@ -285,6 +299,7 @@ export function setupUploadProgress() {
             importProgressById.delete(uploadId);
             importFileIds.delete(uploadId);
             state.importBatch.failed += 1;
+            if (!state.cancelingUpload) recordImportFailureReason(name, message);
             pushTransferStart({ id: uploadId, direction: 'up', name: String(name ?? "") || 'Upload failed', total: 0 });
             markTransferDone({ id: uploadId, direction: 'up', status: state.cancelingUpload ? 'canceled' : 'failed' });
             refreshImportRow();
@@ -333,6 +348,7 @@ export function setupUploadProgress() {
     window.runtime.EventsOn("import_start", () => {
         importProgressById.clear();
         importFileIds.clear();
+        importFailureReasons.length = 0;
         state.importBatch = { total: 0, done: 0, failed: 0 };
         pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Preparing import…', total: 0 });
     });
@@ -385,12 +401,24 @@ export function setupUploadProgress() {
             if (failedUploads > 0) bits.push(`${failedUploads} failed`);
             if (oversize > 0) bits.push(`${oversize} skipped (too large)`);
             if (errorCount > 0) bits.push(`${errorCount} ${errorCount === 1 ? 'item' : 'items'} had errors`);
+            // Include the first few concrete reasons (per-file upload errors,
+            // then backend scan errors) so the summary is actionable, not just
+            // counts.
+            const reasons = [...importFailureReasons];
+            if (Array.isArray(info?.errors)) {
+                for (const raw of info.errors) {
+                    if (reasons.length >= MAX_IMPORT_FAILURE_REASONS) break;
+                    const text = String(raw ?? '').trim();
+                    if (text && !reasons.includes(text)) reasons.push(text);
+                }
+            }
             notify({
                 level: failedUploads > 0 ? 'error' : 'info',
                 title: `Imported ${uploaded === 1 ? '1 file' : `${uploaded} files`}`,
-                body: bits.join('  ·  '),
+                body: [...bits, ...reasons].join('  ·  '),
             });
         }
+        importFailureReasons.length = 0;
     });
 }
 
