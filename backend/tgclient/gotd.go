@@ -256,7 +256,13 @@ func (g *Gotd) SendControl(ctx context.Context, peer InputPeer, text string, sil
 func (g *Gotd) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64)) (SendFileResult, error) {
 	var result SendFileResult
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		u := uploader.NewUploader(api)
+		// Telegram rejects uploads beyond ~4000 parts, so the part size sets the
+		// per-file ceiling: gotd's 128 KiB default tops out near 500 MiB, while
+		// the 512 KiB maximum covers the full 2 GiB document limit and keeps a
+		// 1900 MiB multipart piece at 3800 parts. Passing the known size (instead
+		// of FromReader's unknown-size streaming) lets gotd pick the mode and
+		// part count up front rather than failing mid-stream on a large file.
+		u := uploader.NewUploader(api).WithPartSize(uploader.MaximumPartSize)
 		var src io.Reader = r
 		if onProgress != nil {
 			src = &progressReader{
@@ -265,7 +271,13 @@ func (g *Gotd) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 				onProgress: onProgress,
 			}
 		}
-		uploadResult, err := u.FromReader(ctx, name, src)
+		var uploadResult tg.InputFileClass
+		var err error
+		if totalSize > 0 {
+			uploadResult, err = u.Upload(ctx, uploader.NewUpload(name, src, totalSize))
+		} else {
+			uploadResult, err = u.FromReader(ctx, name, src)
+		}
 		if err != nil {
 			return fmt.Errorf("tgclient: upload: %w", err)
 		}
