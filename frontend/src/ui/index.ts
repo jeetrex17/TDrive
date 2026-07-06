@@ -16,6 +16,7 @@ export { default as JoinDriveModal } from './modals/JoinDriveModal.svelte';
 export { default as JoinRequestsModal } from './modals/JoinRequestsModal.svelte';
 export { default as LeaveDriveModal } from './modals/LeaveDriveModal.svelte';
 export { default as LogoutModal } from './modals/LogoutModal.svelte';
+export { default as MoveModal } from './modals/MoveModal.svelte';
 export { default as NewDriveModal } from './modals/NewDriveModal.svelte';
 export { default as RenameModal } from './modals/RenameModal.svelte';
 export { default as ShareDriveModal } from './modals/ShareDriveModal.svelte';

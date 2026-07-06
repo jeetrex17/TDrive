@@ -5,13 +5,20 @@
     interface Props {
         hostId: string;
         open: boolean;
-        title: string;
+        title?: string;
         titleId: string;
         subtitle?: string;
         cardClass?: string;
+        // actionsClass restyles the footer wrapper for dialogs whose design
+        // system class differs from the default .modal-actions.
+        actionsClass?: string;
         initialFocus?: string;
         restoreFocus?: string;
         onClose: () => void;
+        // header replaces the default title/subtitle block for dialogs with a
+        // custom heading layout. It must render an element with id={titleId}
+        // so the card's aria-labelledby keeps pointing at the visible title.
+        header?: Snippet;
         children?: Snippet;
         actions?: Snippet;
     }
@@ -19,13 +26,15 @@
     let {
         hostId,
         open,
-        title,
+        title = '',
         titleId,
         subtitle = '',
         cardClass = '',
+        actionsClass = 'modal-actions',
         initialFocus,
         restoreFocus,
         onClose,
+        header,
         children,
         actions,
     }: Props = $props();
@@ -101,15 +110,19 @@
 
 {#if open}
     <div class={`modal-card ${cardClass}`.trim()} role="dialog" aria-modal="true" aria-labelledby={titleId}>
-        <h3 id={titleId} class="modal-title">{title}</h3>
-        {#if subtitle}
-            <p class="modal-subtitle">{subtitle}</p>
+        {#if header}
+            {@render header()}
+        {:else}
+            <h3 id={titleId} class="modal-title">{title}</h3>
+            {#if subtitle}
+                <p class="modal-subtitle">{subtitle}</p>
+            {/if}
         {/if}
 
         {@render children?.()}
 
         {#if actions}
-            <div class="modal-actions">
+            <div class={actionsClass}>
                 {@render actions()}
             </div>
         {/if}

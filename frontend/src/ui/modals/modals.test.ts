@@ -5,6 +5,7 @@ import EncryptionPasswordModal from './EncryptionPasswordModal.svelte';
 import ImportOptionsModal from './ImportOptionsModal.svelte';
 import JoinRequestsModal from './JoinRequestsModal.svelte';
 import LogoutModal from './LogoutModal.svelte';
+import MoveModal from './MoveModal.svelte';
 import RenameModal from './RenameModal.svelte';
 import UploadOptionsModal from './UploadOptionsModal.svelte';
 import { closeDeleteModalView, openDeleteModalView } from './delete-modal-store';
@@ -18,6 +19,7 @@ import { encryptionPasswordModal } from './encryption-password-modal-store';
 import { importOptionsModal, type ImportOptionsPlan } from './import-options-modal-store';
 import { joinRequestsList, joinRequestsModal } from './join-requests-modal-store';
 import { logoutModal } from './logout-modal-store';
+import { moveBrowse, moveModal, resetMoveBrowse } from './move-modal-store';
 import { uploadOptionsModal } from './upload-options-modal-store';
 
 const noop = () => {};
@@ -43,6 +45,8 @@ afterEach(() => {
     joinRequestsModal.close();
     joinRequestsList.set({ status: 'loading' });
     logoutModal.close();
+    moveModal.close();
+    resetMoveBrowse('');
     uploadOptionsModal.close();
 });
 
@@ -214,5 +218,48 @@ describe('JoinRequestsModal', () => {
         expect(body).toContain('Ada L.');
         expect(body).toContain('>Approve</button>');
         expect(body).toContain('>Reject</button>');
+    });
+});
+
+describe('MoveModal', () => {
+    it('renders the browse state and disables invalid destinations', () => {
+        resetMoveBrowse('d:source-parent');
+        moveModal.open({ title: 'Move "a.txt"' });
+        moveBrowse.update((browse) => ({
+            ...browse,
+            path: [{ id: 'd:docs', name: 'Docs' }],
+            listing: {
+                status: 'ready',
+                folders: [
+                    { id: 'd:blocked', name: 'Blocked subtree' },
+                    { id: 'd:open', name: 'Open me' },
+                ],
+            },
+            blocked: new Set(['d:blocked']),
+        }));
+
+        const { body } = render(MoveModal, {
+            props: { onOpenFolder: noop, onCrumb: noop, onBack: noop, onConfirm: noop },
+        });
+
+        expect(body).toContain('Move "a.txt"');
+        expect(body).toContain('move-modal-card');
+        expect(body).toContain('move-modal-footer');
+        expect(body).toContain('Move to "Docs"');
+        expect(body).toContain('Open me');
+        expect(body).toContain('is-disabled');
+    });
+
+    it('renders the loading state at the root', () => {
+        resetMoveBrowse('');
+        moveModal.open({ title: 'Move 2 items' });
+
+        const { body } = render(MoveModal, {
+            props: { onOpenFolder: noop, onCrumb: noop, onBack: noop, onConfirm: noop },
+        });
+
+        expect(body).toContain('Move 2 items');
+        expect(body).toContain('Loading folders...');
+        expect(body).toContain('My Drive');
     });
 });

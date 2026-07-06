@@ -28,8 +28,6 @@ export interface EncryptionState {
 }
 
 export interface State {
-    pendingMoveTarget: any;
-
     currentFolderId: string;
     folderPath: DrivePathEntry[];
 
@@ -96,8 +94,6 @@ export interface State {
 }
 
 export const state: State = {
-    pendingMoveTarget: null,
-
     currentFolderId: "",
     folderPath: [],
 
