@@ -106,3 +106,41 @@ describe('ModalShell behavior', () => {
         expect((document.activeElement as HTMLElement | null)?.id).toBe('rename-input');
     });
 });
+
+describe('ModalShell focus management', () => {
+    it('traps Tab inside the dialog', async () => {
+        openRenameModalView({ type: 'file', id: 1, name: 'a.txt' });
+        await settle();
+
+        const confirm = host.querySelector('#rename-confirm') as HTMLButtonElement;
+        const input = host.querySelector('#rename-input') as HTMLInputElement;
+
+        // Tab forward from the last focusable control wraps to the first.
+        confirm.disabled = false;
+        confirm.focus();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+        expect((document.activeElement as HTMLElement | null)?.id).toBe('rename-input');
+
+        // Shift+Tab from the first wraps back to the last.
+        input.focus();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+        expect((document.activeElement as HTMLElement | null)?.id).toBe('rename-confirm');
+    });
+
+    it('restores focus to the previously focused element on close', async () => {
+        const outside = document.createElement('button');
+        outside.id = 'outside-trigger';
+        document.body.appendChild(outside);
+        outside.focus();
+        expect(document.activeElement).toBe(outside);
+
+        openRenameModalView({ type: 'file', id: 1, name: 'a.txt' });
+        await settle();
+        expect((document.activeElement as HTMLElement | null)?.id).toBe('rename-input');
+
+        closeRenameModalView();
+        flushSync();
+        expect(document.activeElement).toBe(outside);
+        outside.remove();
+    });
+});

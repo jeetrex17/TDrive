@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onDestroy, tick, type Snippet } from 'svelte';
-    import { installModalA11y } from '../../modules/modals/modal-a11y';
+    import { installModalA11y } from './modal-a11y';
 
     interface Props {
         hostId: string;
