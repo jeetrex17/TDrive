@@ -5,72 +5,52 @@
 import { UseEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { loadEncryptionStatus } from '../encryption';
 import { state } from '../../state';
-import { installModalA11y } from './modal-a11y';
+import EncryptionPasswordModal from '../../ui/modals/EncryptionPasswordModal.svelte';
+import { encryptionPasswordModal } from '../../ui/modals/encryption-password-modal-store';
+import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
-let pending: any = null;
-let a11y: ReturnType<typeof installModalA11y> | null = null;
+let encryptionPasswordModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let pending: ((ok: boolean) => void) | null = null;
+
+function finish(ok: boolean): void {
+    encryptionPasswordModal.close();
+    if (pending) {
+        const resolve = pending;
+        pending = null;
+        resolve(ok);
+    }
+}
 
 export function setupEncryptionPasswordModal() {
     const modal = document.getElementById('encryption-password-modal');
-    if (!modal) return;
-    const cancel = modal.querySelector('#encryption-password-cancel') as HTMLButtonElement | null;
-    const confirm = modal.querySelector('#encryption-password-confirm') as HTMLButtonElement | null;
-    const pwd = modal.querySelector('#encryption-password-input') as HTMLInputElement | null;
-    const hintRow = modal.querySelector('#encryption-password-hint') as HTMLElement | null;
-    const hintText = modal.querySelector('#encryption-password-hint-text') as HTMLElement | null;
-    const errEl = modal.querySelector('#encryption-password-error') as HTMLElement | null;
+    if (!modal || encryptionPasswordModalHandle) return;
 
-    const finish = (ok: any) => {
-        a11y?.deactivate();
-        modal.style.display = 'none';
-        if (pwd) pwd.value = '';
-        if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
-        if (pending) {
-            const resolve = pending;
-            pending = null;
-            resolve(ok);
-        }
-    };
-    const showError = (msg: any) => {
-        if (!errEl) return;
-        errEl.textContent = String(msg);
-        errEl.style.display = 'block';
-    };
-
-    cancel!.addEventListener('click', () => finish(false));
-    modal.addEventListener('click', (e) => { if (e.target === modal) finish(false); });
-
-    confirm!.addEventListener('click', async () => {
-        const value = String(pwd?.value || '');
-        if (!value) {
-            showError('Enter your encryption password.');
-            return;
-        }
-        confirm!.disabled = true;
-        cancel!.disabled = true;
-        try {
-            await UseEncryptionPassword(value);
-            await loadEncryptionStatus();
-            finish(true);
-        } catch (err) {
-            showError(String(err));
-        } finally {
-            confirm!.disabled = false;
-            cancel!.disabled = false;
-        }
+    modal.replaceChildren();
+    encryptionPasswordModalHandle = mountSvelte(EncryptionPasswordModal, {
+        target: modal,
+        props: {
+            onCancel: () => finish(false),
+            onSubmit: submitPassword,
+        },
     });
+}
 
-    if (pwd) {
-        pwd.addEventListener('keydown', (e: KeyboardEvent) => {
-            if (e.key === 'Enter') confirm!.click();
-        });
+async function submitPassword(password: string): Promise<void> {
+    if (!password) {
+        encryptionPasswordModal.setError('Enter your encryption password.');
+        return;
     }
-
-    a11y = installModalA11y(modal, {
-        requestClose: () => finish(false),
-        initialFocus: pwd,
-        restoreFocus: '#file-list',
-    });
+    encryptionPasswordModal.setError('');
+    encryptionPasswordModal.setBusy(true);
+    try {
+        await UseEncryptionPassword(password);
+        await loadEncryptionStatus();
+        finish(true);
+    } catch (err) {
+        encryptionPasswordModal.setError(String(err));
+    } finally {
+        encryptionPasswordModal.setBusy(false);
+    }
 }
 
 // callWithPasswordRetry runs a backend binding that returns "Error: ..." strings.
@@ -87,37 +67,30 @@ export async function callWithPasswordRetry(call: () => Promise<any>): Promise<a
     return res;
 }
 
-export function openEncryptionPasswordModal() {
-    const modal = document.getElementById('encryption-password-modal');
-    if (!modal) return Promise.resolve(false);
-    const hintRow = modal.querySelector('#encryption-password-hint') as HTMLElement | null;
-    const hintText = modal.querySelector('#encryption-password-hint-text') as HTMLElement | null;
+export function openEncryptionPasswordModal(): Promise<boolean> {
     return new Promise((resolve) => {
+        // A second open while one is pending keeps the visible modal and lets
+        // both callers observe the same eventual outcome.
         if (pending) {
             const prev = pending;
-            pending = (ok: any) => { prev(ok); resolve(ok); };
+            pending = (ok) => {
+                prev(ok);
+                resolve(ok);
+            };
             return;
         }
         pending = resolve;
+
         const showPrompt = async () => {
+            // The hint lives in the synced encryption config; refresh once so
+            // the prompt can show it.
             if (!state.encryption?.loaded || !state.encryption?.hint) {
                 await loadEncryptionStatus();
             }
-            modal.style.display = 'flex';
-            const hint = String(state.encryption?.hint || '').trim();
-            if (hintRow && hintText) {
-                hintText.textContent = hint;
-                hintRow.style.display = hint ? 'block' : 'none';
-            }
-            a11y?.activate();
+            encryptionPasswordModal.open({ hint: String(state.encryption?.hint || '') });
         };
         showPrompt().catch(() => {
-            modal.style.display = 'flex';
-            if (hintRow && hintText) {
-                hintText.textContent = '';
-                hintRow.style.display = 'none';
-            }
-            a11y?.activate();
+            encryptionPasswordModal.open({ hint: '' });
         });
     });
 }

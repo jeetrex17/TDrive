@@ -5,86 +5,77 @@
 import { CreateEncryptionPassword } from '../../../wailsjs/go/main/App';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
-import { installModalA11y } from './modal-a11y';
+import EncryptionSetupModal from '../../ui/modals/EncryptionSetupModal.svelte';
+import { encryptionSetupModal } from '../../ui/modals/encryption-setup-modal-store';
+import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
-let pending: any = null;
-let a11y: ReturnType<typeof installModalA11y> | null = null;
+let encryptionSetupModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let pending: ((ok: boolean) => void) | null = null;
+
+function finish(ok: boolean): void {
+    encryptionSetupModal.close();
+    if (pending) {
+        const resolve = pending;
+        pending = null;
+        resolve(ok);
+    }
+}
 
 export function setupEncryptionSetupModal() {
     const modal = document.getElementById('encryption-setup-modal');
-    if (!modal) return;
-    const cancel = modal.querySelector('#encryption-setup-cancel') as HTMLButtonElement | null;
-    const confirm = modal.querySelector('#encryption-setup-confirm') as HTMLButtonElement | null;
-    const pwd = modal.querySelector('#encryption-setup-password') as HTMLInputElement | null;
-    const pwd2 = modal.querySelector('#encryption-setup-password-confirm') as HTMLInputElement | null;
-    const hint = modal.querySelector('#encryption-setup-hint') as HTMLInputElement | null;
-    const errEl = modal.querySelector('#encryption-setup-error') as HTMLElement | null;
+    if (!modal || encryptionSetupModalHandle) return;
 
-    const finish = (ok: any) => {
-        a11y?.deactivate();
-        modal.style.display = 'none';
-        if (pwd) pwd.value = '';
-        if (pwd2) pwd2.value = '';
-        if (hint) hint.value = '';
-        if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
-        if (pending) {
-            const resolve = pending;
-            pending = null;
-            resolve(ok);
-        }
-    };
-    const showError = (msg: any) => {
-        if (!errEl) return;
-        errEl.textContent = String(msg);
-        errEl.style.display = 'block';
-    };
-
-    cancel!.addEventListener('click', () => finish(false));
-    modal.addEventListener('click', (e) => { if (e.target === modal) finish(false); });
-
-    confirm!.addEventListener('click', async () => {
-        const a = String(pwd?.value || '');
-        const b = String(pwd2?.value || '');
-        if (a.length < 8) { showError('Use at least 8 characters.'); return; }
-        if (a !== b) { showError('Passwords don’t match.'); return; }
-
-        confirm!.disabled = true;
-        cancel!.disabled = true;
-        try {
-            await CreateEncryptionPassword(a, String(hint?.value || ''));
-            await loadEncryptionStatus();
-            finish(true);
-            notify({
-                level: 'success',
-                title: 'Encryption password created',
-                body: 'Encrypted uploads will be protected before they leave this device.',
-            });
-        } catch (err) {
-            showError(String(err));
-        } finally {
-            confirm!.disabled = false;
-            cancel!.disabled = false;
-        }
-    });
-
-    a11y = installModalA11y(modal, {
-        requestClose: () => finish(false),
-        initialFocus: pwd,
-        restoreFocus: '#file-list',
+    modal.replaceChildren();
+    encryptionSetupModalHandle = mountSvelte(EncryptionSetupModal, {
+        target: modal,
+        props: {
+            onCancel: () => finish(false),
+            onSubmit: submitSetup,
+        },
     });
 }
 
-export function openEncryptionSetupModal() {
-    const modal = document.getElementById('encryption-setup-modal');
-    if (!modal) return Promise.resolve(false);
+async function submitSetup(password: string, confirmPassword: string, hint: string): Promise<void> {
+    if (password.length < 8) {
+        encryptionSetupModal.setError('Use at least 8 characters.');
+        return;
+    }
+    if (password !== confirmPassword) {
+        encryptionSetupModal.setError('Passwords don’t match.');
+        return;
+    }
+
+    encryptionSetupModal.setError('');
+    encryptionSetupModal.setBusy(true);
+    try {
+        await CreateEncryptionPassword(password, hint);
+        await loadEncryptionStatus();
+        finish(true);
+        notify({
+            level: 'success',
+            title: 'Encryption password created',
+            body: 'Encrypted uploads will be protected before they leave this device.',
+        });
+    } catch (err) {
+        encryptionSetupModal.setError(String(err));
+    } finally {
+        encryptionSetupModal.setBusy(false);
+    }
+}
+
+export function openEncryptionSetupModal(): Promise<boolean> {
     return new Promise((resolve) => {
+        // A second open while one is pending keeps the visible modal and lets
+        // both callers observe the same eventual outcome.
         if (pending) {
             const prev = pending;
-            pending = (ok: any) => { prev(ok); resolve(ok); };
+            pending = (ok) => {
+                prev(ok);
+                resolve(ok);
+            };
             return;
         }
         pending = resolve;
-        modal.style.display = 'flex';
-        a11y?.activate();
+        encryptionSetupModal.open(null);
     });
 }

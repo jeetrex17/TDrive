@@ -1,15 +1,21 @@
 // Delete modal for TDrive frontend
 
-import { state } from '../../state';
 import { DeleteFile } from '../../../wailsjs/go/main/App';
 import { clearSelection } from '../selection';
 import { ensureNotInsideDeletedFolder } from '../navigation';
 import { deleteFolder } from '../drive-data';
 import { notify, dismissNotification } from '../notifications';
 import { openEncryptionPasswordModal } from './encryption-password';
-import { installModalA11y } from './modal-a11y';
+import DeleteModal from '../../ui/modals/DeleteModal.svelte';
+import { closeDeleteModalView, openDeleteModalView } from '../../ui/modals/delete-modal-store';
+import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
-let a11y: any = null;
+let deleteModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+
+// The target the open modal would act on. Overwritten by every openDeleteModal
+// call and cleared on confirm; a cancel can leave a stale value behind, which
+// is harmless because nothing reads it while the modal is closed.
+let pendingTarget: any = null;
 
 function successTitle(item: any) {
     const name = String(item?.name || '').trim();
@@ -47,16 +53,14 @@ async function deleteFolderWithPasswordRetry(id: any) {
 }
 
 export function openDeleteModal(target: any) {
-    const modal = document.getElementById("delete-modal");
-    const title = document.getElementById("delete-modal-title");
-    const subtitle = document.getElementById("delete-modal-subtitle");
-    const confirmBtn = document.getElementById("delete-confirm");
+    if (!target) return;
 
-    if (!modal || !title || !subtitle || !confirmBtn) return;
-
-    state.pendingDeleteTarget = target;
-
+    pendingTarget = target;
     const name = (target?.name || "").trim();
+
+    let title: string;
+    let subtitle: string;
+    let confirmLabel: string;
 
     if (target?.type === "bulk") {
         const rawItems = Array.isArray(target?.items) ? target.items : [];
@@ -73,159 +77,145 @@ export function openDeleteModal(target: any) {
         const folders = allowed.filter((i: any) => i?.type === "folder").length;
         const files = allowed.filter((i: any) => i?.type === "file").length;
 
-        title.textContent = total === 1 ? "Delete 1 item?" : `Delete ${total} items?`;
+        title = total === 1 ? "Delete 1 item?" : `Delete ${total} items?`;
         const skippedNote = skipped > 0
             ? ` ${skipped} item(s) you don't own will be skipped.`
             : "";
         if (folders > 0 && files > 0) {
-            subtitle.textContent = `This will delete ${folders} folder(s), all files inside them, and ${files} selected file(s) from Telegram. This action can't be undone.${skippedNote}`;
+            subtitle = `This will delete ${folders} folder(s), all files inside them, and ${files} selected file(s) from Telegram. This action can't be undone.${skippedNote}`;
         } else if (folders > 0) {
-            subtitle.textContent = `This will delete ${folders} folder(s) and all files inside them from Telegram. This action can't be undone.${skippedNote}`;
+            subtitle = `This will delete ${folders} folder(s) and all files inside them from Telegram. This action can't be undone.${skippedNote}`;
         } else if (files > 0) {
-            subtitle.textContent = `This will remove ${files} file(s) from your Telegram channel. The action can't be undone.${skippedNote}`;
+            subtitle = `This will remove ${files} file(s) from your Telegram channel. The action can't be undone.${skippedNote}`;
         } else {
-            subtitle.textContent = `Nothing in your selection can be deleted. ${skipped} item(s) you don't own were skipped.`;
+            subtitle = `Nothing in your selection can be deleted. ${skipped} item(s) you don't own were skipped.`;
         }
-        confirmBtn.textContent = total === 0 ? "Close" : "Delete";
+        confirmLabel = total === 0 ? "Close" : "Delete";
     } else if (target?.type === "folder") {
-        title.textContent = name ? `Delete folder "${name}"?` : "Delete folder?";
-        subtitle.textContent = "This will delete the folder and every file inside it from Telegram. This action can't be undone.";
-        confirmBtn.textContent = "Delete folder and files";
+        title = name ? `Delete folder "${name}"?` : "Delete folder?";
+        subtitle = "This will delete the folder and every file inside it from Telegram. This action can't be undone.";
+        confirmLabel = "Delete folder and files";
     } else {
-        title.textContent = name ? `Delete "${name}"?` : "Delete file?";
-        subtitle.textContent = "This will remove the file from your Telegram channel. The action can't be undone.";
-        confirmBtn.textContent = "Delete file";
+        title = name ? `Delete "${name}"?` : "Delete file?";
+        subtitle = "This will remove the file from your Telegram channel. The action can't be undone.";
+        confirmLabel = "Delete file";
     }
 
-    modal.style.display = "flex";
-    a11y?.activate();
+    openDeleteModalView({ title, subtitle, confirmLabel });
 }
 
 export function setupDeleteModal() {
     const modal = document.getElementById("delete-modal");
-    const cancelBtn = document.getElementById("delete-cancel");
-    const confirmBtn = document.getElementById("delete-confirm");
+    if (!modal || deleteModalHandle) return;
 
-    if (!modal || !cancelBtn || !confirmBtn) return;
-
-    const close = () => {
-        a11y?.deactivate();
-        state.pendingDeleteTarget = null;
-        modal.style.display = "none";
-    };
-
-    cancelBtn.addEventListener("click", close);
-    modal.addEventListener("click", (e) => {
-        if (e.target === modal) close();
+    modal.replaceChildren();
+    deleteModalHandle = mountSvelte(DeleteModal, {
+        target: modal,
+        props: {
+            onConfirm: confirmDelete,
+        },
     });
-    a11y = installModalA11y(modal, {
-        requestClose: close,
-        initialFocus: cancelBtn,
-        restoreFocus: '#file-list',
+}
+
+async function confirmDelete(): Promise<void> {
+    const target = pendingTarget;
+    pendingTarget = null;
+    closeDeleteModalView();
+    if (!target) return;
+
+    const progressId = notify({
+        id: 'deleting',
+        level: 'info',
+        title: 'Deleting…',
+        sticky: true,
+        spinner: true,
     });
 
-    confirmBtn.addEventListener("click", async () => {
-        const target = state.pendingDeleteTarget;
-        close();
-        if (!target) return;
-
-        const progressId = notify({
-            id: 'deleting',
-            level: 'info',
-            title: 'Deleting…',
-            sticky: true,
-            spinner: true,
-        });
-
-        try {
-            if (target.type === "bulk") {
-                const items = Array.isArray(target.items) ? target.items : [];
-                if (items.length === 0) {
-                    dismissNotification(progressId);
-                    return;
-                }
-                const folders = items.filter((i: any) => i?.type === "folder");
-                const files = items.filter((i: any) => i?.type === "file");
-                const succeeded: any[] = [];
-                const failures: any[] = [];
-
-                for (const folder of folders) {
-                    try {
-                        const res = await deleteFolderWithPasswordRetry(folder.id);
-                        if (typeof res === "string" && res.startsWith("Error")) {
-                            failures.push({ item: folder, error: res.replace(/^Error:?\s*/i, '') });
-                            continue;
-                        }
-                        ensureNotInsideDeletedFolder(String(folder.id));
-                        succeeded.push(folder);
-                    } catch (err) {
-                        console.error("Delete folder failed:", folder, err);
-                        failures.push({ item: folder, error: (err as any)?.message || String(err) });
-                    }
-                }
-
-                for (const file of files) {
-                    try {
-                        const res = await deleteFileWithPasswordRetry(file.id);
-                        if (typeof res === "string" && res.startsWith("Error")) {
-                            failures.push({ item: file, error: res.replace(/^Error:?\s*/i, '') });
-                            continue;
-                        }
-                        succeeded.push(file);
-                    } catch (err) {
-                        console.error("Delete file failed:", file, err);
-                        failures.push({ item: file, error: (err as any)?.message || String(err) });
-                    }
-                }
-
-                clearSelection();
+    try {
+        if (target.type === "bulk") {
+            const items = Array.isArray(target.items) ? target.items : [];
+            if (items.length === 0) {
                 dismissNotification(progressId);
-                for (const item of succeeded) {
-                    notify({
-                        level: 'success',
-                        title: successTitle(item),
-                    });
-                }
-                for (const { item, error } of failures) {
-                    notify({
-                        level: 'error',
-                        title: failureTitle(item),
-                        body: error,
-                    });
-                }
-                window.refreshFiles();
-            } else {
-                const res = target.type === "folder"
-                    ? await deleteFolderWithPasswordRetry(target.id)
-                    : await deleteFileWithPasswordRetry(target.id);
+                return;
+            }
+            const folders = items.filter((i: any) => i?.type === "folder");
+            const files = items.filter((i: any) => i?.type === "file");
+            const succeeded: any[] = [];
+            const failures: any[] = [];
 
-                dismissNotification(progressId);
-                if (typeof res === "string" && res.startsWith("Error")) {
-                    notify({
-                        level: 'error',
-                        title: failureTitle(target),
-                        body: res.replace(/^Error:?\s*/i, ''),
-                    });
-                    return;
+            for (const folder of folders) {
+                try {
+                    const res = await deleteFolderWithPasswordRetry(folder.id);
+                    if (typeof res === "string" && res.startsWith("Error")) {
+                        failures.push({ item: folder, error: res.replace(/^Error:?\s*/i, '') });
+                        continue;
+                    }
+                    ensureNotInsideDeletedFolder(String(folder.id));
+                    succeeded.push(folder);
+                } catch (err) {
+                    console.error("Delete folder failed:", folder, err);
+                    failures.push({ item: folder, error: (err as any)?.message || String(err) });
                 }
-                if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));
+            }
+
+            for (const file of files) {
+                try {
+                    const res = await deleteFileWithPasswordRetry(file.id);
+                    if (typeof res === "string" && res.startsWith("Error")) {
+                        failures.push({ item: file, error: res.replace(/^Error:?\s*/i, '') });
+                        continue;
+                    }
+                    succeeded.push(file);
+                } catch (err) {
+                    console.error("Delete file failed:", file, err);
+                    failures.push({ item: file, error: (err as any)?.message || String(err) });
+                }
+            }
+
+            clearSelection();
+            dismissNotification(progressId);
+            for (const item of succeeded) {
                 notify({
                     level: 'success',
-                    title: successTitle(target),
+                    title: successTitle(item),
                 });
-                window.refreshFiles();
             }
-        } catch (err) {
-            console.error("Delete failed:", err);
+            for (const { item, error } of failures) {
+                notify({
+                    level: 'error',
+                    title: failureTitle(item),
+                    body: error,
+                });
+            }
+            window.refreshFiles();
+        } else {
+            const res = target.type === "folder"
+                ? await deleteFolderWithPasswordRetry(target.id)
+                : await deleteFileWithPasswordRetry(target.id);
+
             dismissNotification(progressId);
+            if (typeof res === "string" && res.startsWith("Error")) {
+                notify({
+                    level: 'error',
+                    title: failureTitle(target),
+                    body: res.replace(/^Error:?\s*/i, ''),
+                });
+                return;
+            }
+            if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));
             notify({
-                level: 'error',
-                title: 'Delete failed',
-                body: 'Check the console for details.',
+                level: 'success',
+                title: successTitle(target),
             });
-        } finally {
-            // No-op trailer; the legacy 2-second status reset is gone with
-            // the status pill.
+            window.refreshFiles();
         }
-    });
+    } catch (err) {
+        console.error("Delete failed:", err);
+        dismissNotification(progressId);
+        notify({
+            level: 'error',
+            title: 'Delete failed',
+            body: 'Check the console for details.',
+        });
+    }
 }

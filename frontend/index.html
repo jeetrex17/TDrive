@@ -215,65 +215,15 @@
 
         <div id="context-menu" class="context-menu"></div>
 
-        <div id="folder-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
-                <h3 id="folder-modal-title" class="modal-title">New folder</h3>
-                <p class="modal-subtitle">Create a folder in the current location.</p>
-                <input id="new-folder-name" type="text" placeholder="Folder name" autocomplete="off">
-                <div class="modal-actions">
-                    <button id="folder-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="folder-create" class="primary-btn" type="button">Create</button>
-                </div>
-            </div>
-        </div>
+        <!-- Svelte-owned modal hosts: the components render the full dialog
+             into these shells at setup (see src/ui/modals/). -->
+        <div id="folder-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="delete-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
-                <h3 id="delete-modal-title" class="modal-title">Delete?</h3>
-                <p id="delete-modal-subtitle" class="modal-subtitle">This action cannot be undone.</p>
+        <div id="delete-modal" class="modal-overlay" style="display: none;"></div>
 
-                <div class="modal-actions">
-                    <button id="delete-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="delete-confirm" class="primary-btn danger-btn" type="button">Delete</button>
-                </div>
-            </div>
-        </div>
+        <div id="rename-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="rename-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="rename-modal-title">
-                <h3 id="rename-modal-title" class="modal-title">Rename</h3>
-                <p id="rename-modal-subtitle" class="modal-subtitle">Enter a new name.</p>
-                <input id="rename-input" type="text" placeholder="Name" autocomplete="off">
-                <div id="rename-error" class="modal-error" style="display: none;"></div>
-                <div class="modal-actions">
-                    <button id="rename-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="rename-confirm" class="primary-btn" type="button">Rename</button>
-                </div>
-            </div>
-        </div>
-
-        <div id="move-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card move-modal-card" role="dialog" aria-modal="true" aria-labelledby="move-modal-title">
-                <div class="move-modal-header">
-                    <h3 id="move-modal-title" class="modal-title">Move to</h3>
-                    <p id="move-modal-subtitle" class="modal-subtitle">Select destination folder</p>
-                </div>
-                <div class="move-modal-nav">
-                    <button id="move-back" class="move-back-btn" type="button" aria-label="Back">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-                        </svg>
-                    </button>
-                    <div id="move-breadcrumb" class="move-breadcrumb"></div>
-                </div>
-                <div id="move-list" class="move-list"></div>
-                <div id="move-error" class="modal-error" style="display: none;"></div>
-                <div class="move-modal-footer">
-                    <button id="move-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="move-confirm" class="primary-btn" type="button" disabled>Move here</button>
-                </div>
-            </div>
-        </div>
+        <div id="move-modal" class="modal-overlay" style="display: none;"></div>
 
         <div id="preview-modal" class="modal-overlay preview-overlay" style="display: none;" aria-hidden="true">
             <div id="preview-shell" class="preview-shell" role="dialog" aria-modal="true" aria-labelledby="preview-filename">
@@ -421,203 +371,30 @@
         </div>
     </div>
 
-        <div id="new-drive-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="new-drive-title">
-                <h3 id="new-drive-title" class="modal-title">New shared drive</h3>
-                <p class="modal-subtitle">Friends can join your drive with the invite link you'll get next.</p>
-                <input id="new-drive-name" type="text" placeholder="Drive name (e.g. Goa Trip)" autocomplete="off">
-                <label class="modal-choice-row">
-                    <input id="new-drive-require-approval" type="checkbox">
-                    <span>
-                        <strong>Require approval to join</strong>
-                        <small>People can request access with the link, but an admin must approve them.</small>
-                    </span>
-                </label>
-                <div class="modal-actions">
-                    <button id="new-drive-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="new-drive-create" class="primary-btn" type="button">Create</button>
-                </div>
-            </div>
-        </div>
+        <!-- Svelte-owned modal hosts: the components render the full dialog
+             into these shells at setup (see src/ui/modals/). -->
+        <div id="new-drive-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="join-drive-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="join-drive-title">
-                <h3 id="join-drive-title" class="modal-title">Join shared drive</h3>
-                <p class="modal-subtitle">Paste the t.me invite link you received from a friend. If the drive has lots of history, joining may take a few seconds.</p>
-                <input id="join-drive-link" type="text" placeholder="https://t.me/+..." autocomplete="off">
-                <div class="modal-actions">
-                    <button id="join-drive-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="join-drive-go" class="primary-btn" type="button">Join</button>
-                </div>
-            </div>
-        </div>
+        <div id="join-drive-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="share-drive-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="share-drive-title">
-                <h3 id="share-drive-title" class="modal-title">Invite link</h3>
-                <p id="share-drive-subtitle" class="modal-subtitle">Anyone with this link can join the drive.</p>
-                <input id="share-drive-link" type="text" readonly>
-                <div class="modal-actions">
-                    <button id="share-drive-close" class="secondary-btn" type="button">Close</button>
-                    <button id="share-drive-copy" class="primary-btn" type="button">Copy link</button>
-                </div>
-            </div>
-        </div>
+        <div id="share-drive-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="join-requests-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="join-requests-title">
-                <h3 id="join-requests-title" class="modal-title">Join requests</h3>
-                <p id="join-requests-subtitle" class="modal-subtitle">Approve or reject pending access requests.</p>
-                <div id="join-requests-list" class="join-requests-list"></div>
-                <div class="modal-actions">
-                    <button id="join-requests-close" class="secondary-btn" type="button">Close</button>
-                </div>
-            </div>
-        </div>
+        <div id="join-requests-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="upload-options-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="upload-options-title">
-                <h3 id="upload-options-title" class="modal-title">How would you like to upload?</h3>
-                <p id="upload-options-summary" class="modal-subtitle">Upload files</p>
-                <label class="modal-choice-row">
-                    <input type="radio" name="upload-mode" value="plain" checked>
-                    <span>
-                        <strong>Upload</strong>
-                        <small>Files are stored on Telegram as-is.</small>
-                    </span>
-                </label>
-                <label class="modal-choice-row">
-                    <input type="radio" name="upload-mode" value="encrypt">
-                    <span>
-                        <strong>Encrypt before upload</strong>
-                        <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
-                    </span>
-                </label>
-                <div class="modal-actions">
-                    <button id="upload-options-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="upload-options-confirm" class="primary-btn" type="button">Continue</button>
-                </div>
-            </div>
-        </div>
+        <div id="upload-options-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="import-options-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="import-options-title">
-                <h3 id="import-options-title" class="modal-title">Import</h3>
-                <p id="import-options-summary" class="modal-subtitle"></p>
-                <label id="import-options-extract-row" class="modal-choice-row" style="display: none;">
-                    <input id="import-options-extract" type="checkbox">
-                    <span>
-                        <strong>Extract archives</strong>
-                        <small>Unpack archive contents into folders instead of uploading the archive file.</small>
-                    </span>
-                </label>
-                <label id="import-options-encrypt-row" class="modal-choice-row" style="display: none;">
-                    <input id="import-options-encrypt" type="checkbox">
-                    <span>
-                        <strong>Encrypt before upload</strong>
-                        <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
-                    </span>
-                </label>
-                <p id="import-options-note" class="import-options-note" style="display: none;"></p>
-                <div class="modal-actions">
-                    <button id="import-options-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="import-options-confirm" class="primary-btn" type="button">Import</button>
-                </div>
-            </div>
-        </div>
+        <div id="import-options-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="encryption-setup-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-setup-title">
-                <h3 id="encryption-setup-title" class="modal-title">Set an encryption password</h3>
-                <p class="modal-subtitle">Use one password for every encrypted file in My Drive. <strong>If you forget it, encrypted files cannot be recovered.</strong></p>
-                <input id="encryption-setup-password" type="password" placeholder="Password" autocomplete="new-password">
-                <input id="encryption-setup-password-confirm" type="password" placeholder="Confirm password" autocomplete="new-password">
-                <input id="encryption-setup-hint" type="text" placeholder="Optional hint (do not put the password here)" autocomplete="off">
-                <p class="field-help">This hint is shown when TDrive asks for your encryption password. It is not encrypted, so don't put the password itself here.</p>
-                <div id="encryption-setup-error" class="modal-error" style="display:none;"></div>
-                <div class="modal-actions">
-                    <button id="encryption-setup-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="encryption-setup-confirm" class="primary-btn" type="button">Set password</button>
-                </div>
-            </div>
-        </div>
+        <div id="encryption-setup-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="encryption-password-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-password-title">
-                <h3 id="encryption-password-title" class="modal-title">Enter encryption password</h3>
-                <p class="modal-subtitle">Needed for encrypted uploads, downloads, and previews. TDrive remembers it until you close the app.</p>
-                <p id="encryption-password-hint" class="modal-subtitle" style="display:none;">Hint: <span id="encryption-password-hint-text"></span></p>
-                <input id="encryption-password-input" type="password" placeholder="Password" autocomplete="current-password">
-                <div id="encryption-password-error" class="modal-error" style="display:none;"></div>
-                <div class="modal-actions">
-                    <button id="encryption-password-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="encryption-password-confirm" class="primary-btn" type="button">Continue</button>
-                </div>
-            </div>
-        </div>
+        <div id="encryption-password-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="encryption-settings-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="encryption-settings-title">
-                <h3 id="encryption-settings-title" class="modal-title">Encryption settings</h3>
-                <p class="modal-subtitle">Change your encryption password safely. There is no recovery reset without the current password.</p>
-                <div class="input-with-action">
-                    <input id="encryption-current-password" type="password" placeholder="Current password" autocomplete="current-password">
-                    <button class="input-action-btn reveal-on-hold" type="button" data-target="encryption-current-password" aria-label="Hold to show current password" title="Hold to show password">
-                        <svg class="input-action-icon icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                    </button>
-                </div>
-                <div class="input-with-action">
-                    <input id="encryption-new-password" type="password" placeholder="New password" autocomplete="new-password">
-                    <button class="input-action-btn reveal-on-hold" type="button" data-target="encryption-new-password" aria-label="Hold to show new password" title="Hold to show password">
-                        <svg class="input-action-icon icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                    </button>
-                </div>
-                <input id="encryption-new-password-confirm" type="password" placeholder="Confirm new password" autocomplete="new-password">
-                <input id="encryption-settings-hint" type="text" placeholder="Optional hint (do not put the password here)" autocomplete="off">
-                <p class="field-help">This hint is shown when TDrive asks for your encryption password. It is not encrypted, so don't put the password itself here.</p>
-                <div id="encryption-settings-error" class="modal-error" style="display:none;"></div>
-                <div class="modal-actions">
-                    <button id="encryption-settings-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="encryption-settings-confirm" class="primary-btn" type="button">Save</button>
-                </div>
-            </div>
-        </div>
+        <div id="encryption-settings-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="logout-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="logout-title">
-                <h3 id="logout-title" class="modal-title">Log out of TDrive?</h3>
-                <p class="modal-subtitle">Pick how much to clear from this device.</p>
-                <label class="modal-choice-row">
-                    <input type="radio" name="logout-mode" value="soft" checked>
-                    <span>
-                        <strong>Quick logout</strong>
-                        <small>Sign out but keep your local cache. Faster to re-login if it's still you.</small>
-                    </span>
-                </label>
-                <label class="modal-choice-row">
-                    <input type="radio" name="logout-mode" value="full">
-                    <span>
-                        <strong>Log out and reset</strong>
-                        <small>Sign out everywhere and delete TDrive data on this device, including saved API credentials.</small>
-                    </span>
-                </label>
-                <div class="modal-actions">
-                    <button id="logout-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="logout-confirm" class="primary-btn danger" type="button">Log out</button>
-                </div>
-            </div>
-        </div>
+        <div id="logout-modal" class="modal-overlay" style="display: none;"></div>
 
-        <div id="leave-drive-modal" class="modal-overlay" style="display: none;">
-            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="leave-drive-title">
-                <h3 id="leave-drive-title" class="modal-title">Leave drive?</h3>
-                <p id="leave-drive-subtitle" class="modal-subtitle">You can rejoin later with the invite link.</p>
-                <div class="modal-actions">
-                    <button id="leave-drive-cancel" class="secondary-btn" type="button">Cancel</button>
-                    <button id="leave-drive-confirm" class="primary-btn danger" type="button">Leave</button>
-                </div>
-            </div>
-        </div>
+        <!-- Svelte-owned modal host (see src/ui/modals/LeaveDriveModal.svelte). -->
+        <div id="leave-drive-modal" class="modal-overlay" style="display: none;"></div>
 
     <script type="module" src="/src/main.ts"></script>
 </body>
