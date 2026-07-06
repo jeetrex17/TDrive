@@ -2,103 +2,76 @@
 
 import { state } from '../state';
 import { canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
+import Breadcrumb from '../ui/chrome/Breadcrumb.svelte';
+import { breadcrumbPath, type BreadcrumbDrag } from '../ui/chrome/breadcrumb-store';
+import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
+let breadcrumbHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+
+// renderBreadcrumb mirrors state.folderPath (the source of truth, mutated by
+// several modules) into the breadcrumb store.
 export function renderBreadcrumb() {
-    const backBtn = document.getElementById("breadcrumb-back") as HTMLButtonElement | null;
-    const path = document.getElementById("breadcrumb-path");
-    if (!backBtn || !path) return;
+    breadcrumbPath.set(state.folderPath.map((f) => ({ id: f.id, name: f.name })));
+}
 
-    backBtn.disabled = state.folderPath.length === 0;
-    backBtn.style.opacity = state.folderPath.length === 0 ? "0.35" : "1";
-
-    const items = [
-        { id: "", name: "My Drive", index: -1 },
-        ...state.folderPath.map((f, i) => ({ id: f.id, name: f.name, index: i })),
-    ];
-    path.innerHTML = "";
-
-    items.forEach((item, idx) => {
-        if (idx > 0) {
-            const sep = document.createElement("span");
-            sep.className = "breadcrumb-sep";
-            sep.textContent = "/";
-            path.appendChild(sep);
+const drag: BreadcrumbDrag = {
+    isActive: () => Boolean(state.dragState),
+    canDrop: (folderId) => canDropOnFolder(folderId),
+    highlight: (el, allowed) => setDropHighlight(el, allowed),
+    leave: (el) => {
+        if (state.dragOverEl === el) {
+            el.classList.remove('drop-target');
+            el.classList.remove('drop-denied');
+            state.dragOverEl = null;
         }
+    },
+    dropOn: (el, folderId) => {
+        if (state.dragOverEl === el) state.dragOverEl = null;
+        el.classList.remove('drop-target');
+        el.classList.remove('drop-denied');
+        void performDropMove(folderId);
+    },
+    registerRoot: (el) => {
+        state.dragRootEl = el;
+    },
+};
 
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "breadcrumb-link";
-        btn.dataset.index = String(item.index);
-        btn.textContent = item.name;
-        btn.addEventListener("dragover", (e) => {
-            if (!state.dragState) return;
-            const allowed = canDropOnFolder(item.id);
-            setDropHighlight(btn, allowed);
-            if (e.dataTransfer) e.dataTransfer.dropEffect = allowed ? "move" : "none";
-            if (allowed) e.preventDefault();
-        });
-        btn.addEventListener("dragleave", (e) => {
-            if (e.relatedTarget && btn.contains(e.relatedTarget as Node)) return;
-            if (state.dragOverEl === btn) {
-                btn.classList.remove("drop-target");
-                btn.classList.remove("drop-denied");
-                state.dragOverEl = null;
-            }
-        });
-        btn.addEventListener("drop", async (e) => {
-            if (!state.dragState) return;
-            const allowed = canDropOnFolder(item.id);
-            if (!allowed) return;
-            e.preventDefault();
-            e.stopPropagation();
-            if (state.dragOverEl === btn) state.dragOverEl = null;
-            btn.classList.remove("drop-target");
-            btn.classList.remove("drop-denied");
-            await performDropMove(item.id);
-        });
+function navigateToIndex(index: number) {
+    if (index < 0) {
+        state.folderPath = [];
+        state.currentFolderId = '';
+    } else {
+        state.folderPath = state.folderPath.slice(0, index + 1);
+        state.currentFolderId = state.folderPath[index]?.id || '';
+    }
+    // Breadcrumb navigation always exits any virtual view (e.g. Photos).
+    state.virtualView = null;
+    renderBreadcrumb();
+    window.refreshFiles();
+}
 
-        if (item.index === -1) {
-            state.dragRootEl = btn;
-        }
-        path.appendChild(btn);
-    });
+function navigateBack() {
+    if (state.folderPath.length === 0) return;
+    state.folderPath = state.folderPath.slice(0, -1);
+    state.currentFolderId = state.folderPath.length ? state.folderPath[state.folderPath.length - 1].id : '';
+    state.virtualView = null;
+    renderBreadcrumb();
+    window.refreshFiles();
 }
 
 export function setupBreadcrumb() {
-    const backBtn = document.getElementById("breadcrumb-back") as HTMLButtonElement | null;
-    const path = document.getElementById("breadcrumb-path");
-    if (!backBtn || !path) return;
+    const host = document.getElementById('breadcrumb-root');
+    if (!host || breadcrumbHandle) return;
 
-    backBtn.addEventListener("click", () => {
-        if (state.folderPath.length === 0) return;
-        state.folderPath = state.folderPath.slice(0, -1);
-        state.currentFolderId = state.folderPath.length ? state.folderPath[state.folderPath.length - 1].id : "";
-        // Parity with breadcrumb-link / navigateToFolder: folder navigation
-        // exits virtual views such as Photos.
-        state.virtualView = null;
-        renderBreadcrumb();
-        window.refreshFiles();
+    host.replaceChildren();
+    breadcrumbHandle = mountSvelte(Breadcrumb, {
+        target: host,
+        props: {
+            onNavigate: navigateToIndex,
+            onBack: navigateBack,
+            drag,
+        },
     });
-
-    path.addEventListener("click", (e) => {
-        const btn = (e.target as HTMLElement).closest("button.breadcrumb-link") as HTMLElement | null;
-        if (!btn) return;
-        const idx = parseInt(btn.dataset.index as string, 10);
-        if (Number.isNaN(idx)) return;
-
-        if (idx < 0) {
-            state.folderPath = [];
-            state.currentFolderId = "";
-        } else {
-            state.folderPath = state.folderPath.slice(0, idx + 1);
-            state.currentFolderId = state.folderPath[idx]?.id || "";
-        }
-        // Breadcrumb navigation always exits any virtual view.
-        state.virtualView = null;
-        renderBreadcrumb();
-        window.refreshFiles();
-    });
-
     renderBreadcrumb();
 }
 
@@ -117,6 +90,6 @@ export function ensureNotInsideDeletedFolder(deletedFolderID: string) {
     if (idx === -1) return;
 
     state.folderPath = state.folderPath.slice(0, idx);
-    state.currentFolderId = state.folderPath.length ? state.folderPath[state.folderPath.length - 1].id : "";
+    state.currentFolderId = state.folderPath.length ? state.folderPath[state.folderPath.length - 1].id : '';
     renderBreadcrumb();
 }

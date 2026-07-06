@@ -73,7 +73,6 @@ export interface State {
     pendingJoins: any[];
     channelSwitchInProgress: boolean;
     myUserID: number;
-    selfUser: any;
 
     encryption: EncryptionState;
 
@@ -128,7 +127,6 @@ export const state: State = {
     pendingJoins: [],
     channelSwitchInProgress: false,
     myUserID: 0,
-    selfUser: null,
 
     encryption: {
         available: false,

@@ -1,11 +1,18 @@
-// Avatar rendering. Draws a circular profile photo if available, otherwise
-// initials on a deterministic accent color derived from the user id.
+// Avatar view model. Resolves to a profile photo when available, otherwise
+// initials on a deterministic accent color derived from the user id. Pure
+// data so Svelte components can render it declaratively.
 
-interface AvatarUser {
+export interface AvatarUser {
     photo_base64?: string;
     display_name?: string;
     username?: string;
     user_id?: number;
+}
+
+export interface AvatarView {
+    photoUrl?: string;
+    initials?: string;
+    color?: string;
 }
 
 const AVATAR_PALETTE = [
@@ -13,29 +20,14 @@ const AVATAR_PALETTE = [
     '#e0af68', '#f7768e', '#73daca', '#ff9e64',
 ];
 
-export function renderAvatar(el: HTMLElement | null, user: AvatarUser | null): void {
-    if (!el) return;
-    el.textContent = '';
-    el.style.removeProperty('background');
-    el.style.removeProperty('background-image');
-    el.style.removeProperty('background-size');
-    el.style.removeProperty('background-position');
-
-    if (!user) {
-        el.style.background = 'var(--surface-2, rgba(255,255,255,0.06))';
-        return;
-    }
+export function avatarViewFor(user: AvatarUser | null): AvatarView {
+    if (!user) return {};
 
     const photo = String(user.photo_base64 || '').trim();
     if (photo) {
-        el.style.backgroundImage = `url("data:image/jpeg;base64,${photo}")`;
-        el.style.backgroundSize = 'cover';
-        el.style.backgroundPosition = 'center';
-        return;
+        return { photoUrl: `data:image/jpeg;base64,${photo}` };
     }
-
-    el.textContent = initialsFor(user);
-    el.style.background = paletteFor(user);
+    return { initials: initialsFor(user), color: paletteFor(user) };
 }
 
 function initialsFor(user: AvatarUser): string {

@@ -1,189 +1,67 @@
 // Top-right avatar dropdown. Currently hosts the logout entry; future
 // account/settings actions belong here too.
 
+import { get } from 'svelte/store';
 import { state } from '../state';
 import { Me } from '../../wailsjs/go/main/App';
-import { renderAvatar } from './avatar';
 import { openLogoutModal } from './modals/logout';
 import { openEncryptionSettingsModal } from './modals/encryption-settings';
+import ProfileMenu from '../ui/chrome/ProfileMenu.svelte';
+import {
+    encryptionEntryVisible,
+    profileLoaded,
+    profileUser,
+    type ProfileUser,
+} from '../ui/chrome/profile-store';
+import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
-let trigger: HTMLElement | null = null;
-let menu: HTMLElement | null = null;
-let outsideClickBound = false;
-let selfUserPromise: Promise<any> | null = null;
+let profileMenuHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let selfUserPromise: Promise<ProfileUser | null> | null = null;
 
 export function setupProfileMenu() {
-    trigger = document.getElementById('profile-trigger');
-    menu = document.getElementById('profile-menu');
-    const logoutItem = document.getElementById('profile-menu-logout');
-    const encryptionItem = document.getElementById('profile-menu-encryption-settings');
-    if (!trigger || !menu || !logoutItem) return;
+    const host = document.getElementById('profile-root');
+    if (!host || profileMenuHandle) return;
 
-    renderProfileLoading();
-
-    trigger.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleMenu();
+    host.replaceChildren();
+    profileMenuHandle = mountSvelte(ProfileMenu, {
+        target: host,
+        props: {
+            onOpen: () => {
+                void ensureProfileLoaded();
+            },
+            onEncryptionSettings: openEncryptionSettingsModal,
+            onLogout: openLogoutModal,
+        },
     });
-
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && isOpen()) {
-            closeMenu();
-            trigger!.focus();
-        }
-    });
-
-    menu.addEventListener('keydown', (e) => {
-        if (!isOpen()) return;
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            closeMenu();
-            trigger!.focus();
-            return;
-        }
-        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
-
-        const items = menuItems();
-        if (!items.length) return;
-
-        e.preventDefault();
-        const current = document.activeElement as HTMLElement | null;
-        const index = current ? items.indexOf(current) : -1;
-
-        if (e.key === 'Home') {
-            items[0].focus();
-            return;
-        }
-        if (e.key === 'End') {
-            items[items.length - 1].focus();
-            return;
-        }
-
-        const direction = e.key === 'ArrowDown' ? 1 : -1;
-        const next = index >= 0
-            ? (index + direction + items.length) % items.length
-            : direction > 0 ? 0 : items.length - 1;
-        items[next].focus();
-    });
-
-    logoutItem.addEventListener('click', () => {
-        closeMenu();
-        openLogoutModal();
-    });
-    if (encryptionItem) {
-        encryptionItem.addEventListener('click', () => {
-            closeMenu();
-            openEncryptionSettingsModal();
-        });
-    }
 
     renderEncryptionSettingsEntry();
 }
 
 // loadSelfUser fetches the logged-in user once after dashboard mount and
-// hydrates both avatars + the menu header. Called from auth.js after
+// hydrates both avatars + the menu header. Called from auth.ts after
 // InitDrive succeeds. Failures fall back silently to initials/blank.
-export async function loadSelfUser() {
+export async function loadSelfUser(): Promise<ProfileUser | null> {
     if (selfUserPromise) return selfUserPromise;
     selfUserPromise = (async () => {
+        let user: ProfileUser | null = null;
         try {
-            const user = await Me();
-            state.selfUser = user || null;
+            user = ((await Me()) as ProfileUser) || null;
         } catch (err) {
             console.warn('Me failed:', err);
-            state.selfUser = null;
         }
-        renderProfile();
+        profileUser.set(user);
+        profileLoaded.set(true);
         selfUserPromise = null;
-        return state.selfUser;
+        return user;
     })();
     return selfUserPromise;
 }
 
-function renderProfileLoading() {
-    renderAvatar(document.getElementById('profile-avatar'), null);
-    renderAvatar(document.getElementById('profile-menu-avatar'), null);
-    const name = document.getElementById('profile-menu-name');
-    const handle = document.getElementById('profile-menu-handle');
-    if (name) name.textContent = 'Loading account…';
-    if (handle) {
-        handle.textContent = '';
-        handle.style.display = 'none';
-    }
-}
-
-async function ensureProfileLoaded() {
-    if (state.selfUser) return;
-    renderProfileLoading();
-    try {
-        await loadSelfUser();
-    } catch {}
-}
-
-function renderProfile() {
-    const user = state.selfUser;
-    renderAvatar(document.getElementById('profile-avatar'), user);
-    renderAvatar(document.getElementById('profile-menu-avatar'), user);
-
-    const name = document.getElementById('profile-menu-name');
-    const handle = document.getElementById('profile-menu-handle');
-
-    if (name) name.textContent = user?.display_name || 'Telegram account';
-    if (handle) {
-        const u = String(user?.username || '').trim();
-        handle.textContent = u ? `@${u}` : '';
-        handle.style.display = u ? '' : 'none';
-    }
+async function ensureProfileLoaded(): Promise<void> {
+    if (get(profileUser)) return; // already hydrated; menu opens use the cache
+    await loadSelfUser();
 }
 
 export function renderEncryptionSettingsEntry() {
-    const item = document.getElementById('profile-menu-encryption-settings');
-    const divider = document.getElementById('profile-menu-encryption-settings-divider');
-    const show = !!state.encryption?.passwordSet;
-    if (item) item.hidden = !show;
-    if (divider) divider.hidden = !show;
-}
-
-function toggleMenu() {
-    if (isOpen()) closeMenu();
-    else openMenu();
-}
-
-function openMenu() {
-    if (!trigger || !menu) return;
-    menu.hidden = false;
-    trigger.setAttribute('aria-expanded', 'true');
-    ensureProfileLoaded();
-    if (!outsideClickBound) {
-        document.addEventListener('click', onDocumentClick, true);
-        outsideClickBound = true;
-    }
-    const first = menuItems()[0];
-    if (first) first.focus();
-}
-
-function closeMenu() {
-    if (!trigger || !menu) return;
-    menu.hidden = true;
-    trigger.setAttribute('aria-expanded', 'false');
-    if (outsideClickBound) {
-        document.removeEventListener('click', onDocumentClick, true);
-        outsideClickBound = false;
-    }
-}
-
-function isOpen() {
-    return menu && !menu.hidden;
-}
-
-function onDocumentClick(e: MouseEvent) {
-    if (!menu || !trigger) return;
-    if (menu.contains(e.target as Node) || trigger.contains(e.target as Node)) return;
-    closeMenu();
-}
-
-function menuItems(): HTMLElement[] {
-    if (!menu) return [];
-    return Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]'))
-        .filter((item) => !item.hidden && item.offsetParent !== null && !item.hasAttribute('disabled'));
+    encryptionEntryVisible.set(Boolean(state.encryption?.passwordSet));
 }
