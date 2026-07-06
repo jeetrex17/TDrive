@@ -2,140 +2,90 @@
 
 import { approveJoinRequest, listJoinRequests, rejectJoinRequest } from '../channels';
 import { notify } from '../notifications';
-import { installModalA11y } from './modal-a11y';
+import JoinRequestsModal from '../../ui/modals/JoinRequestsModal.svelte';
+import {
+    joinRequestsList,
+    joinRequestsModal,
+    type JoinRequestRow,
+} from '../../ui/modals/join-requests-modal-store';
+import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
-let activeDrive: { id: number; title: string } | null = null;
-let a11y: ReturnType<typeof installModalA11y> | null = null;
+let joinRequestsModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let activeDriveId = 0;
 
 export function setupJoinRequestsModal() {
     const modal = document.getElementById('join-requests-modal');
-    const close = document.getElementById('join-requests-close');
-    if (!modal || !close) return;
+    if (!modal || joinRequestsModalHandle) return;
 
-    const dismiss = () => {
-        a11y?.deactivate();
-        modal.style.display = 'none';
-        activeDrive = null;
-    };
-
-    close.addEventListener('click', dismiss);
-    modal.addEventListener('click', (e) => { if (e.target === modal) dismiss(); });
-    a11y = installModalA11y(modal, {
-        requestClose: dismiss,
-        initialFocus: close,
-        restoreFocus: '#drives-nav',
+    modal.replaceChildren();
+    joinRequestsModalHandle = mountSvelte(JoinRequestsModal, {
+        target: modal,
+        props: {
+            onAction: resolveRequest,
+        },
     });
 }
 
 export async function openJoinRequestsModal(drive: any) {
-    const modal = document.getElementById('join-requests-modal');
-    const subtitle = document.getElementById('join-requests-subtitle');
-    const list = document.getElementById('join-requests-list');
-    if (!modal || !list) return;
+    const driveId = Number(drive?.id || 0);
+    if (!driveId) return;
 
-    activeDrive = { id: Number(drive?.id || 0), title: String(drive?.title || 'this drive') };
-    if (!activeDrive.id) return;
-
-    if (subtitle) subtitle.textContent = `Pending requests for ${activeDrive.title}.`;
-    modal.style.display = 'flex';
-    a11y?.activate();
-    await renderJoinRequests();
+    activeDriveId = driveId;
+    joinRequestsModal.open({ driveId, title: String(drive?.title || 'this drive') });
+    await loadRequests();
 }
 
-async function renderJoinRequests() {
-    const list = document.getElementById('join-requests-list');
-    if (!list || !activeDrive?.id) return;
+function toRow(req: any): JoinRequestRow {
+    const userId = Number(req?.user_id || 0);
+    return {
+        userId,
+        displayName: String(req?.display_name || `User ${userId || ''}`).trim(),
+        username: String(req?.username || ''),
+        requestedAt: Number(req?.requested_at || 0),
+    };
+}
 
-    list.innerHTML = '<div class="modal-empty">Loading requests...</div>';
-    let rows = [];
+async function loadRequests(): Promise<void> {
+    const driveId = activeDriveId;
+    if (!driveId) return;
+
+    joinRequestsList.set({ status: 'loading' });
     try {
-        rows = await listJoinRequests(activeDrive.id);
+        const rows = await listJoinRequests(driveId);
+        if (driveId !== activeDriveId) return; // modal moved to another drive
+        joinRequestsList.set({
+            status: 'ready',
+            rows: (Array.isArray(rows) ? rows : []).map(toRow),
+            actingUserId: 0,
+        });
     } catch (err) {
-        list.innerHTML = '';
-        const el = document.createElement('div');
-        el.className = 'modal-error';
-        el.style.display = 'block';
-        el.textContent = `Failed to load requests: ${err}`;
-        list.appendChild(el);
-        return;
-    }
-
-    list.innerHTML = '';
-    if (!Array.isArray(rows) || rows.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'modal-empty';
-        empty.textContent = 'No pending requests.';
-        list.appendChild(empty);
-        return;
-    }
-
-    for (const req of rows) {
-        list.appendChild(joinRequestRow(req));
+        if (driveId !== activeDriveId) return;
+        joinRequestsList.set({ status: 'error', message: String(err) });
     }
 }
 
-function joinRequestRow(req: any) {
-    const row = document.createElement('div');
-    row.className = 'join-request-row';
+async function resolveRequest(userId: number, approved: boolean): Promise<void> {
+    const driveId = activeDriveId;
+    if (!driveId || !userId) return;
 
-    const meta = document.createElement('div');
-    meta.className = 'join-request-meta';
-
-    const name = document.createElement('div');
-    name.className = 'join-request-name';
-    name.textContent = String(req?.display_name || `User ${req?.user_id || ''}`).trim();
-
-    const detail = document.createElement('div');
-    detail.className = 'join-request-detail';
-    const pieces = [];
-    if (req?.username) pieces.push(String(req.username));
-    if (req?.requested_at) pieces.push(new Date(Number(req.requested_at) * 1000).toLocaleString());
-    detail.textContent = pieces.join(' · ');
-
-    meta.appendChild(name);
-    meta.appendChild(detail);
-
-    const actions = document.createElement('div');
-    actions.className = 'join-request-actions';
-
-    const approve = document.createElement('button');
-    approve.type = 'button';
-    approve.className = 'secondary-btn compact-btn';
-    approve.textContent = 'Approve';
-    approve.addEventListener('click', () => handleRequest(req, true, approve, reject));
-
-    const reject = document.createElement('button');
-    reject.type = 'button';
-    reject.className = 'secondary-btn compact-btn danger-text';
-    reject.textContent = 'Reject';
-    reject.addEventListener('click', () => handleRequest(req, false, approve, reject));
-
-    actions.appendChild(approve);
-    actions.appendChild(reject);
-
-    row.appendChild(meta);
-    row.appendChild(actions);
-    return row;
-}
-
-async function handleRequest(req: any, approved: boolean, approveBtn: HTMLButtonElement, rejectBtn: HTMLButtonElement) {
-    if (!activeDrive?.id || !req?.user_id) return;
-    approveBtn.disabled = true;
-    rejectBtn.disabled = true;
+    joinRequestsList.update((view) =>
+        view.status === 'ready' ? { ...view, actingUserId: userId } : view,
+    );
     try {
         if (approved) {
-            await approveJoinRequest(activeDrive.id, req.user_id);
+            await approveJoinRequest(driveId, userId);
         } else {
-            await rejectJoinRequest(activeDrive.id, req.user_id);
+            await rejectJoinRequest(driveId, userId);
         }
-        await renderJoinRequests();
+        await loadRequests();
     } catch (err) {
         notify({
             level: 'error',
             title: `Could not ${approved ? 'approve' : 'reject'} request`,
             body: String(err),
         });
-        approveBtn.disabled = false;
-        rejectBtn.disabled = false;
+        joinRequestsList.update((view) =>
+            view.status === 'ready' ? { ...view, actingUserId: 0 } : view,
+        );
     }
 }

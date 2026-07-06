@@ -1,67 +1,52 @@
 // "How would you like to upload?" — the single decision point for
 // per-batch encryption. Resolves to { encrypt: boolean } on Continue,
 // or null on Cancel.
-//
-import { installModalA11y } from './modal-a11y';
 
-let pending: any = null;
-let a11y: ReturnType<typeof installModalA11y> | null = null;
+import UploadOptionsModal from '../../ui/modals/UploadOptionsModal.svelte';
+import { uploadOptionsModal } from '../../ui/modals/upload-options-modal-store';
+import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
+
+type UploadChoice = { encrypt: boolean } | null;
+
+let uploadOptionsModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let pending: ((result: UploadChoice) => void) | null = null;
+
+function finish(result: UploadChoice): void {
+    uploadOptionsModal.close();
+    if (pending) {
+        const resolve = pending;
+        pending = null;
+        resolve(result);
+    }
+}
 
 export function setupUploadOptionsModal() {
     const modal = document.getElementById('upload-options-modal');
-    if (!modal) return;
-    const cancel = modal.querySelector('#upload-options-cancel') as HTMLButtonElement | null;
-    const confirm = modal.querySelector('#upload-options-confirm') as HTMLButtonElement | null;
+    if (!modal || uploadOptionsModalHandle) return;
 
-    const finish = (result: any) => {
-        a11y?.deactivate();
-        modal.style.display = 'none';
-        if (pending) {
-            const resolve = pending;
-            pending = null;
-            resolve(result);
-        }
-    };
-
-    cancel!.addEventListener('click', () => finish(null));
-    modal.addEventListener('click', (e) => { if (e.target === modal) finish(null); });
-
-    confirm!.addEventListener('click', () => {
-        const selected = modal.querySelector('input[name="upload-mode"]:checked') as HTMLInputElement | null;
-        const value = selected?.value === 'encrypt' ? 'encrypt' : 'plain';
-        finish({ encrypt: value === 'encrypt' });
-    });
-
-    a11y = installModalA11y(modal, {
-        requestClose: () => finish(null),
-        initialFocus: () => modal.querySelector('input[name="upload-mode"]:checked') || confirm,
-        restoreFocus: '#file-list',
+    modal.replaceChildren();
+    uploadOptionsModalHandle = mountSvelte(UploadOptionsModal, {
+        target: modal,
+        props: {
+            onCancel: () => finish(null),
+            onConfirm: (choice: { encrypt: boolean }) => finish(choice),
+        },
     });
 }
 
-export function openUploadOptionsModal({ count }: { count: any }) {
-    const modal = document.getElementById('upload-options-modal');
-    if (!modal) return Promise.resolve(null);
-
-    const summary = modal.querySelector('#upload-options-summary');
-    if (summary) {
-        summary.textContent = count === 1
-            ? 'Upload 1 file'
-            : `Upload ${count} files`;
-    }
-
-    // Default to normal upload every time. Encryption is explicit per batch.
-    const radios = modal.querySelectorAll('input[name="upload-mode"]');
-    radios.forEach((r: any) => { r.checked = r.value === 'plain'; });
-
-    return new Promise((resolve) => {
+export function openUploadOptionsModal({ count }: { count: any }): Promise<UploadChoice> {
+    return new Promise<UploadChoice>((resolve) => {
+        // A second open while one is pending keeps the visible modal and lets
+        // both callers observe the same eventual choice.
         if (pending) {
             const prev = pending;
-            pending = (r: any) => { prev(r); resolve(r); };
+            pending = (result) => {
+                prev(result);
+                resolve(result);
+            };
             return;
         }
         pending = resolve;
-        modal.style.display = 'flex';
-        a11y?.activate();
+        uploadOptionsModal.open({ count: Number(count) || 0 });
     });
 }

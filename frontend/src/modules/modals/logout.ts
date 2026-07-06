@@ -7,70 +7,54 @@
 import { Logout } from '../../../wailsjs/go/main/App';
 import { showAuthWrapper, hideAllScreens } from '../auth';
 import { notify, dismissNotification } from '../notifications';
-import { installModalA11y } from './modal-a11y';
+import LogoutModal from '../../ui/modals/LogoutModal.svelte';
+import { logoutModal, type LogoutMode } from '../../ui/modals/logout-modal-store';
+import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
-let a11y: any = null;
+let logoutModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 export function setupLogoutModal() {
     const modal = document.getElementById('logout-modal');
-    const cancel = document.getElementById('logout-cancel') as HTMLButtonElement | null;
-    const confirm = document.getElementById('logout-confirm') as HTMLButtonElement | null;
-    if (!modal || !cancel || !confirm) return;
+    if (!modal || logoutModalHandle) return;
 
-    cancel.addEventListener('click', () => closeLogoutModal());
-    modal.addEventListener('click', (e) => { if (e.target === modal) closeLogoutModal(); });
-    a11y = installModalA11y(modal, {
-        requestClose: closeLogoutModal,
-        initialFocus: cancel,
-        restoreFocus: '#profile-trigger',
-    });
-
-    confirm.addEventListener('click', async () => {
-        const selected = modal.querySelector('input[name="logout-mode"]:checked') as HTMLInputElement | null;
-        const mode = selected ? selected.value : 'soft';
-
-        const progressId = notify({
-            id: 'logout-progress',
-            level: 'info',
-            title: 'Logging out…',
-            sticky: true,
-            spinner: true,
-        });
-        confirm.disabled = true;
-        cancel.disabled = true;
-        try {
-            await Logout(mode);
-            // Backend issues runtime.Quit on success, so this fallback only
-            // runs if the process somehow stays alive (e.g. dev hot-reload).
-            closeLogoutModal();
-            dismissNotification(progressId);
-            hideAllScreens();
-            showAuthWrapper();
-        } catch (err) {
-            dismissNotification(progressId);
-            notify({
-                level: 'error',
-                title: 'Could not log out',
-                body: String(err),
-            });
-        } finally {
-            confirm.disabled = false;
-            cancel.disabled = false;
-        }
+    modal.replaceChildren();
+    logoutModalHandle = mountSvelte(LogoutModal, {
+        target: modal,
+        props: {
+            onConfirm: confirmLogout,
+        },
     });
 }
 
 export function openLogoutModal() {
-    const modal = document.getElementById('logout-modal');
-    if (!modal) return;
-    const soft = modal.querySelector('input[name="logout-mode"][value="soft"]') as HTMLInputElement | null;
-    if (soft) soft.checked = true;
-    modal.style.display = 'flex';
-    a11y?.activate();
+    logoutModal.open(null);
 }
 
-function closeLogoutModal() {
-    a11y?.deactivate();
-    const modal = document.getElementById('logout-modal');
-    if (modal) modal.style.display = 'none';
+async function confirmLogout(mode: LogoutMode): Promise<void> {
+    const progressId = notify({
+        id: 'logout-progress',
+        level: 'info',
+        title: 'Logging out…',
+        sticky: true,
+        spinner: true,
+    });
+    logoutModal.setBusy(true);
+    try {
+        await Logout(mode);
+        // Backend issues runtime.Quit on success, so this fallback only
+        // runs if the process somehow stays alive (e.g. dev hot-reload).
+        logoutModal.close();
+        dismissNotification(progressId);
+        hideAllScreens();
+        showAuthWrapper();
+    } catch (err) {
+        dismissNotification(progressId);
+        notify({
+            level: 'error',
+            title: 'Could not log out',
+            body: String(err),
+        });
+    } finally {
+        logoutModal.setBusy(false);
+    }
 }

@@ -1,139 +1,92 @@
 // Rename modal for TDrive frontend
 
-import { state } from '../../state';
 import { RenameFile, RenameFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
 import { callWithPasswordRetry } from './encryption-password';
 import { humanizeBackendError } from '../errors';
-import { installModalA11y } from './modal-a11y';
+import RenameModal from '../../ui/modals/RenameModal.svelte';
+import {
+    closeRenameModalView,
+    openRenameModalView,
+    setRenameModalError,
+    setRenameModalInFlight,
+    type RenameModalTarget,
+} from '../../ui/modals/rename-modal-store';
+import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
-let a11y: ReturnType<typeof installModalA11y> | null = null;
+let renameModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
-async function ensureFileInTdriveSystem(target: any) {
-    if (!target || target.type !== "file") return;
-    if (String(target.source || "fs") !== "tg") return;
+async function ensureFileInTdriveSystem(target: RenameModalTarget): Promise<void> {
+    if (target.type !== 'file') return;
+    if (String(target.source || 'fs') !== 'tg') return;
 
     const res = await MsgToTdriveSystem(
         Number(target.id),
-        String(target.name || ""),
+        String(target.name || ''),
         Number(target.size || 0),
-        String(target.parentId || "")
+        String(target.parentId || ''),
     );
 
-    if (typeof res === "string" && res.startsWith("Error")) {
+    if (typeof res === 'string' && res.startsWith('Error')) {
         throw new Error(humanizeBackendError(res));
     }
 }
 
-export function openRenameModal(target: any) {
-    const modal = document.getElementById("rename-modal");
-    const title = document.getElementById("rename-modal-title");
-    const subtitle = document.getElementById("rename-modal-subtitle");
-    const input = document.getElementById("rename-input") as HTMLInputElement | null;
-    const errorEl = document.getElementById("rename-error");
+export function setupRenameModal() {
+    const modal = document.getElementById('rename-modal');
+    if (!modal || renameModalHandle) return;
 
-    if (!modal || !title || !subtitle || !input) return;
-
-    state.pendingRenameTarget = target;
-    if (errorEl) {
-        errorEl.innerText = "";
-        errorEl.style.display = "none";
-    }
-
-    const isFolder = target?.type === "folder";
-    title.textContent = isFolder ? "Rename folder" : "Rename file";
-    subtitle.textContent = isFolder ? "Choose a new folder name." : "Choose a new file name.";
-
-    input.value = String(target?.name || "");
-    modal.style.display = "flex";
-    a11y?.activate();
-
-    requestAnimationFrame(() => {
-        input.focus();
-        const value = input.value || "";
-        const dot = value.lastIndexOf(".");
-        if (!isFolder && dot > 0 && dot < value.length - 1) {
-            input.setSelectionRange(0, dot);
-        } else {
-            input.select();
-        }
+    modal.replaceChildren();
+    renameModalHandle = mountSvelte(RenameModal, {
+        target: modal,
+        props: {
+            onSubmit: submitRename,
+        },
     });
 }
 
-export function setupRenameModal() {
-    const modal = document.getElementById("rename-modal");
-    const cancelBtn = document.getElementById("rename-cancel");
-    const confirmBtn = document.getElementById("rename-confirm");
-    const input = document.getElementById("rename-input") as HTMLInputElement | null;
-    const errorEl = document.getElementById("rename-error");
-
-    if (!modal || !cancelBtn || !confirmBtn || !input) return;
-
-    const showError = (message: string) => {
-        if (!errorEl) return;
-        errorEl.innerText = message || "";
-        errorEl.style.display = message ? "block" : "none";
-    };
-
-    const close = () => {
-        showError("");
-        a11y?.deactivate();
-        modal.style.display = "none";
-        state.pendingRenameTarget = null;
-    };
-
-    cancelBtn.addEventListener("click", close);
-    modal.addEventListener("click", (e) => {
-        if (e.target === modal) close();
+export function openRenameModal(target: any) {
+    if (!target) return;
+    openRenameModalView({
+        type: target.type === 'folder' ? 'folder' : 'file',
+        id: target.id,
+        name: String(target.name || ''),
+        size: Number(target.size || 0),
+        parentId: String(target.parentId || ''),
+        source: String(target.source || 'fs'),
     });
+}
 
-    a11y = installModalA11y(modal, {
-        requestClose: close,
-        initialFocus: input,
-        restoreFocus: '#file-list',
-    });
+async function submitRename(target: RenameModalTarget, rawName: string): Promise<void> {
+    const nextName = (rawName || '').trim();
+    if (!nextName) {
+        setRenameModalError("Name can't be empty.");
+        return;
+    }
+    if (/[\\/]/.test(nextName)) {
+        setRenameModalError("Name can't include / or \\.");
+        return;
+    }
 
-    input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-            e.preventDefault();
-            confirmBtn.click();
+    setRenameModalError('');
+    setRenameModalInFlight(true);
+    try {
+        let res = '';
+        if (target.type === 'folder') {
+            res = await callWithPasswordRetry(() => RenameFolder(String(target.id), nextName));
+        } else {
+            await ensureFileInTdriveSystem(target);
+            res = await callWithPasswordRetry(() => RenameFile(Number(target.id), nextName));
         }
-        if (e.key === "Escape") {
-            e.preventDefault();
-            close();
-        }
-    });
 
-    confirmBtn.addEventListener("click", async () => {
-        if (!state.pendingRenameTarget) return;
-        const nextName = (input.value || "").trim();
-        if (!nextName) {
-            showError("Name can't be empty.");
+        if (typeof res === 'string' && res.startsWith('Error')) {
+            setRenameModalError(humanizeBackendError(res));
             return;
         }
-        if (/[\\/]/.test(nextName)) {
-            showError("Name can't include / or \\.");
-            return;
-        }
-
-        showError("");
-
-        try {
-            let res = "";
-            if (state.pendingRenameTarget.type === "folder") {
-                res = await callWithPasswordRetry(() => RenameFolder(String(state.pendingRenameTarget.id), nextName));
-            } else {
-                await ensureFileInTdriveSystem(state.pendingRenameTarget);
-                res = await callWithPasswordRetry(() => RenameFile(Number(state.pendingRenameTarget.id), nextName));
-            }
-
-            if (typeof res === "string" && res.startsWith("Error")) {
-                showError(humanizeBackendError(res));
-                return;
-            }
-            close();
-            window.refreshFiles();
-        } catch (err) {
-            showError(humanizeBackendError(err));
-        }
-    });
+        closeRenameModalView();
+        window.refreshFiles();
+    } catch (err) {
+        setRenameModalError(humanizeBackendError(err));
+    } finally {
+        setRenameModalInFlight(false);
+    }
 }
