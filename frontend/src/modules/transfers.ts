@@ -278,7 +278,7 @@ export function setupUploadProgress() {
         }
     });
 
-    window.runtime.EventsOn("upload_error", (id: any, name: any) => {
+    window.runtime.EventsOn("upload_error", (id: any, name: any, message: any) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         if (state.importBatch) {
@@ -313,6 +313,17 @@ export function setupUploadProgress() {
             pushTransferStart({ id: uploadId, direction: 'up', name: filename || 'Upload failed', total: 0 });
         }
         markTransferDone({ id: uploadId, direction: 'up', status: state.cancelingUpload ? 'canceled' : 'failed' });
+
+        // Surface the backend's actual failure reason. The bell row only shows
+        // a generic "failed" state, which leaves the user with nothing to act on.
+        const errorBody = String(message ?? "").trim();
+        if (errorBody && !state.cancelingUpload) {
+            notify({
+                level: 'error',
+                title: filename ? `Couldn't upload "${filename}"` : 'Upload failed',
+                body: errorBody,
+            });
+        }
 
         if (batchFinished) {
             window.refreshFiles();

@@ -192,6 +192,7 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 				mu.Lock()
 				failed++
 				mu.Unlock()
+				s.warnf("warn: upload failed for %q: %v\n", filepath.Base(path), err)
 				s.emitEvent("upload_error", uploadID, filepath.Base(path), err.Error())
 				return
 			}
