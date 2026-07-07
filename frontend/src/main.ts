@@ -8,7 +8,7 @@ import { setupSelectionBar } from './modules/selection';
 import { setupDownloadProgress, setupUploadProgress, setupUploadMenu, setupFileDrop, uploadWithParentID } from './modules/transfers';
 import { setupBreadcrumb } from './modules/navigation';
 import { setupContextMenu } from './modules/context-menu';
-import { setupPasswordReveal, setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } from './modules/auth';
+import { setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } from './modules/auth';
 import { setupFileListWindowBindings, refreshFiles } from './modules/file-list';
 import { setupGallery } from './modules/gallery';
 import { setupSearchBar, runGlobalSearch } from './modules/search';
@@ -124,7 +124,6 @@ window.onload = async function() {
     setupUploadProgress();
     setupUploadMenu();
     setupFileDrop();
-    setupPasswordReveal();
     setupSearchBar();
     setupGallery();
 

@@ -35,8 +35,6 @@ export interface State {
     downloadQueue: any[];
     activeDownloadId: string | number | null;
 
-    lastLoginPhoneNumber: string;
-
     transferPillEl: HTMLElement | null;
     transferSheetEl: HTMLElement | null;
     transferUploadListEl: HTMLElement | null;
@@ -92,8 +90,6 @@ export const state: State = {
     activeTransfer: null,
     downloadQueue: [],
     activeDownloadId: null,
-
-    lastLoginPhoneNumber: "",
 
     transferPillEl: null,
     transferSheetEl: null,

@@ -1,4 +1,9 @@
-// Authentication flows for TDrive frontend
+// Authentication flows for TDrive frontend.
+//
+// The four auth screens (setup, phone, code, 2FA password) are rendered by
+// AuthScreens.svelte from the auth store; this module owns the orchestration:
+// the login state machine, InitDrive/dashboard bring-up, and the Telegram
+// event stream that advances screens.
 
 import { state } from '../state';
 import {
@@ -11,53 +16,28 @@ import { loadChannels } from './channels';
 import { loadEncryptionStatus } from './encryption';
 import { loadSelfUser } from './profile-menu';
 import { notify, dismissNotification } from './notifications';
+import AuthScreens from '../ui/auth/AuthScreens.svelte';
+import { authCodeReset, authHint, authPhone, authScreen } from '../ui/auth/auth-store';
+import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
-declare global {
-    interface Window {
-        submitSetup: () => void;
-        startLogin: () => void;
-        sendCode: () => void;
-        sendPassword: () => void;
-        backToPhone: () => void;
-    }
+let authScreensHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+
+function successScreen(): HTMLElement | null {
+    return document.getElementById('success-screen');
 }
 
 export function hideAllScreens() {
-    const screens = ["setupcontainer", "phonecontainer", "codecontainer", "passwordcontainer", "success-screen"];
-    screens.forEach(id => {
-        const el = document.getElementById(id);
-        if(el) el.style.display = "none";
-    });
+    authScreen.set(null);
+    const dashboard = successScreen();
+    if (dashboard) dashboard.style.display = 'none';
 }
 
 export function showAuthWrapper() {
-    const authWrapper = document.getElementById("auth-wrapper");
-    if (authWrapper) authWrapper.style.display = "flex";
+    const authWrapper = document.getElementById('auth-wrapper');
+    if (authWrapper) authWrapper.style.display = 'flex';
 
-    const dashboard = document.getElementById("success-screen");
-    if (dashboard) dashboard.style.display = "none";
-}
-
-export function setupPasswordReveal() {
-    const pw = document.getElementById("enterpassword") as HTMLInputElement | null;
-    const toggle = document.getElementById("toggle-password") as HTMLElement | null;
-    if (!pw || !toggle) return;
-
-    const apply = (isVisible: boolean) => {
-        pw.type = isVisible ? "text" : "password";
-
-        toggle.dataset.state = isVisible ? "visible" : "hidden";
-        toggle.setAttribute("aria-label", isVisible ? "Hide password" : "Show password");
-        toggle.setAttribute("title", isVisible ? "Hide password" : "Show password");
-    };
-
-    apply(false);
-
-    toggle.addEventListener("click", () => {
-        const isVisible = pw.type === "password";
-        apply(isVisible);
-        pw.focus();
-    });
+    const dashboard = successScreen();
+    if (dashboard) dashboard.style.display = 'none';
 }
 
 async function initDriveWithRetry(maxAttempts = 3) {
@@ -102,8 +82,8 @@ export async function showDashboard() {
     const authWrapper = document.getElementById("auth-wrapper");
     if (authWrapper) authWrapper.style.display = "none";
 
-    hideAllScreens();
-    document.getElementById("success-screen")!.style.display = "flex";
+    authScreen.set(null);
+    successScreen()!.style.display = "flex";
     state.currentFolderId = "";
     state.folderPath = [];
     renderBreadcrumb();
@@ -157,7 +137,6 @@ export async function showDashboard() {
     // Hydrate the profile menu (display name, photo). Failure is non-fatal —
     // the avatar falls back to a blank circle.
     loadSelfUser();
-
 }
 
 export async function checkStatusAndShowScreen() {
@@ -167,8 +146,7 @@ export async function checkStatusAndShowScreen() {
 
         if (status === "NEEDS_SETUP") {
             showAuthWrapper();
-            hideAllScreens();
-            document.getElementById("setupcontainer")!.style.display = "block";
+            authScreen.set('setup');
             return;
         }
 
@@ -178,10 +156,8 @@ export async function checkStatusAndShowScreen() {
             showDashboard();
         } else {
             showAuthWrapper();
-            hideAllScreens();
-            document.getElementById("phonecontainer")!.style.display = "block";
+            authScreen.set('phone');
         }
-
     } catch (err) {
         console.error("Startup Crash:", err);
         notify({
@@ -192,61 +168,73 @@ export async function checkStatusAndShowScreen() {
     }
 }
 
-// Window bindings for auth functions
+// --- screen submit handlers (wired into AuthScreens) ---
+
+function submitSetup(apiIdRaw: string, apiHash: string): void {
+    const id = parseInt(apiIdRaw, 10);
+    const hash = (apiHash || '').trim();
+    if (!id || !hash) {
+        notify({ level: 'warning', title: 'Enter both API ID and hash' });
+        return;
+    }
+    SaveSetup(id, hash).then((res) => {
+        if (res === "Success") location.reload();
+        else notify({ level: 'error', title: 'Setup failed', body: String(res) });
+    });
+}
+
+function submitPhone(phoneRaw: string): void {
+    const phone = (phoneRaw || '').trim();
+    if (!phone) {
+        notify({ level: 'warning', title: 'Enter your phone number' });
+        return;
+    }
+
+    LoginPhoneNumber(phone).then(() => {
+        showAuthWrapper();
+        authPhone.set(phone);
+        authScreen.set('code');
+    }).catch((err) => {
+        notify({ level: 'error', title: 'Could not start login', body: String(err) });
+    });
+}
+
+function submitCode(codeRaw: string): void {
+    const code = (codeRaw || '').trim();
+    if (!code) {
+        notify({ level: 'warning', title: 'Enter the code from Telegram' });
+        return;
+    }
+    SumbitCode(code).catch((err) => {
+        notify({ level: 'error', title: 'Could not submit code', body: String(err) });
+    });
+}
+
+function submitPassword(password: string): void {
+    SumbitPassword(password).catch((err) => {
+        notify({ level: 'error', title: 'Could not submit password', body: String(err) });
+    });
+}
+
+function backToPhone(): void {
+    showAuthWrapper();
+    authScreen.set('phone');
+}
+
 export function setupAuthWindowBindings() {
-    window.submitSetup = function() {
-        const id = parseInt((document.getElementById("api_id") as HTMLInputElement).value);
-        const hash = (document.getElementById("api_hash") as HTMLInputElement).value;
-        if (!id || !hash) {
-            notify({ level: 'warning', title: 'Enter both API ID and hash' });
-            return;
-        }
-
-        SaveSetup(id, hash).then(res => {
-            if (res === "Success") location.reload();
-            else notify({ level: 'error', title: 'Setup failed', body: String(res) });
+    const host = document.getElementById('auth-wrapper');
+    if (host && !authScreensHandle) {
+        authScreensHandle = mountSvelte(AuthScreens, {
+            target: host,
+            props: {
+                onSetup: submitSetup,
+                onPhone: submitPhone,
+                onCode: submitCode,
+                onPassword: submitPassword,
+                onBackToPhone: backToPhone,
+            },
         });
-    };
-
-    window.startLogin = function () {
-        const phone = ((document.getElementById("enterphone") as HTMLInputElement).value || "").trim();
-        if (!phone) {
-            notify({ level: 'warning', title: 'Enter your phone number' });
-            return;
-        }
-
-        state.lastLoginPhoneNumber = phone;
-
-        LoginPhoneNumber(phone).then(() => {
-            showAuthWrapper();
-            hideAllScreens();
-            document.getElementById("codecontainer")!.style.display = "block";
-
-            const row = document.getElementById("code-target-row");
-            const target = document.getElementById("code-target");
-            if (target) target.innerText = state.lastLoginPhoneNumber;
-            if (row) row.style.display = state.lastLoginPhoneNumber ? "flex" : "none";
-        }).catch((err) => {
-            notify({ level: 'error', title: 'Could not start login', body: String(err) });
-        });
-    };
-
-    window.sendCode = function () {
-        const code = ((document.getElementById("entercode") as HTMLInputElement).value || "").trim();
-        if (!code) {
-            notify({ level: 'warning', title: 'Enter the code from Telegram' });
-            return;
-        }
-        SumbitCode(code).catch((err) => {
-            notify({ level: 'error', title: 'Could not submit code', body: String(err) });
-        });
-    };
-
-    window.sendPassword = function () {
-        SumbitPassword((document.getElementById("enterpassword") as HTMLInputElement).value).catch((err) => {
-            notify({ level: 'error', title: 'Could not submit password', body: String(err) });
-        });
-    };
+    }
 
     // The login-flow listeners below need the Wails runtime. Boot waits for it
     // (see waitForWailsRuntime in main.ts), but guard here too so a genuinely
@@ -259,22 +247,8 @@ export function setupAuthWindowBindings() {
 
     window.runtime.EventsOn("login-password-required", () => {
         showAuthWrapper();
-        hideAllScreens();
-        document.getElementById("passwordcontainer")!.style.display = "block";
-
-        const hintBox = document.getElementById("hint-box");
-        const hintEl = document.getElementById("hinttext");
-        if (hintEl) hintEl.innerText = "";
-        if (hintBox) hintBox.style.display = "none";
-
-        const pw = document.getElementById("enterpassword") as HTMLInputElement | null;
-        const toggle = document.getElementById("toggle-password") as HTMLElement | null;
-        if (pw) pw.type = "password";
-        if (toggle) {
-            toggle.dataset.state = "hidden";
-            toggle.setAttribute("aria-label", "Show password");
-            toggle.setAttribute("title", "Show password");
-        }
+        authHint.set('');
+        authScreen.set('password');
     });
 
     window.runtime.EventsOn("login-error", (msg: any) => {
@@ -282,46 +256,22 @@ export function setupAuthWindowBindings() {
     });
 
     // Wrong code: the backend keeps the login attempt alive and waits for a new
-    // code, so stay on the code screen, clear the field, and let the user retry.
+    // code, so stay on the code screen (AuthScreens clears + refocuses it) and
+    // surface the error.
     window.runtime.EventsOn("login-code-invalid", () => {
         showAuthWrapper();
-        hideAllScreens();
-        document.getElementById("codecontainer")!.style.display = "block";
-
-        const codeEl = document.getElementById("entercode") as HTMLInputElement | null;
-        if (codeEl) {
-            codeEl.value = "";
-            codeEl.focus();
-        }
+        authScreen.set('code');
+        authCodeReset.update((n) => n + 1);
         notify({ level: 'error', title: 'Wrong code', body: 'That code was incorrect — try again.' });
     });
 
     window.runtime.EventsOn("gothint", (hint: any) => {
-        const hintEl = document.getElementById("hinttext");
-        const hintBox = document.getElementById("hint-box");
-        if (!hintEl || !hintBox) return;
-
         const text = (hint ?? "").toString().trim();
         const normalized = text.replace(/^(hint\s*:?[\s\u00A0]*)+/i, "").trim();
-
         if (!normalized || normalized.toLowerCase().includes("no hint")) {
-            hintEl.innerText = "";
-            hintBox.style.display = "none";
+            authHint.set('');
             return;
         }
-
-        hintEl.innerText = normalized;
-        hintBox.style.display = "block";
+        authHint.set(normalized);
     });
-
-    window.backToPhone = function () {
-        showAuthWrapper();
-        hideAllScreens();
-
-        const phoneContainer = document.getElementById("phonecontainer");
-        if (phoneContainer) phoneContainer.style.display = "block";
-
-        const codeEl = document.getElementById("entercode") as HTMLInputElement | null;
-        if (codeEl) codeEl.value = "";
-    };
 }
