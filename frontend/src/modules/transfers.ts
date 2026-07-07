@@ -19,6 +19,10 @@ import {
     updateTransferName,
     markTransferDone,
 } from './notif-bell';
+import UploadMenu from '../ui/chrome/UploadMenu.svelte';
+import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
+
+let uploadMenuHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 const DOWNLOAD_TERMINAL_STATES = new Set(["done", "failed", "canceled"]);
 
@@ -630,46 +634,21 @@ function notifyBindingsMissing(name: string) {
 // dialogs cannot select files and folders together, so the entry point splits
 // them; drag-drop covers truly mixed selections.
 export function setupUploadMenu() {
-    const btn = document.getElementById('upload-btn');
-    const menu = document.getElementById('upload-menu');
-    if (!btn || !menu) return;
-    const filesItem = document.getElementById('upload-menu-files');
-    const folderItem = document.getElementById('upload-menu-folder');
+    const host = document.getElementById('upload-menu-root');
+    if (!host || uploadMenuHandle) return;
 
-    const close = (returnFocus = false) => {
-        menu.style.display = 'none';
-        btn.setAttribute('aria-expanded', 'false');
-        if (returnFocus) (btn as HTMLElement).focus();
-    };
-    const open = () => {
-        menu.style.display = 'flex';
-        btn.setAttribute('aria-expanded', 'true');
-        (filesItem as HTMLElement | null)?.focus();
-    };
-
-    btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (menu.style.display === 'none') open(); else close();
+    host.replaceChildren();
+    uploadMenuHandle = mountSvelte(UploadMenu, {
+        target: host,
+        props: {
+            onFiles: () => {
+                void uploadWithParentID(state.currentFolderId);
+            },
+            onFolder: () => {
+                void importFolderWithParentID(state.currentFolderId);
+            },
+        },
     });
-    document.addEventListener('click', (e) => {
-        if (menu.style.display !== 'none' && e.target !== btn && !menu.contains(e.target as Node)) close();
-    });
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && menu.style.display !== 'none') close(true);
-    });
-    // Arrow-key navigation between the menu items.
-    menu.addEventListener('keydown', (e) => {
-        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-        e.preventDefault();
-        const items = [filesItem, folderItem].filter(Boolean) as HTMLElement[];
-        if (!items.length) return;
-        const idx = items.indexOf(document.activeElement as HTMLElement);
-        const next = e.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length;
-        items[next].focus();
-    });
-
-    filesItem?.addEventListener('click', () => { close(); void uploadWithParentID(state.currentFolderId); });
-    folderItem?.addEventListener('click', () => { close(); void importFolderWithParentID(state.currentFolderId); });
 }
 
 // setupFileDrop handles native OS file drops (mixed files + folders) forwarded
