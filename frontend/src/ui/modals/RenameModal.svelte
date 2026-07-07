@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { tick } from 'svelte';
     import ModalShell from './ModalShell.svelte';
     import {
         closeRenameModalView,
@@ -40,8 +41,7 @@
     }
 
     // Pre-select the base name (before the extension) for files, the whole
-    // name for folders. Double rAF so it runs after the a11y controller's
-    // own rAF has focused the input.
+    // name for folders after Svelte has applied the opened state.
     function selectNameRange(): void {
         const el = inputEl;
         if (!el || !el.isConnected) return;
@@ -57,7 +57,7 @@
     $effect(() => {
         if ($renameModalState.open && !wasOpen) {
             name = $renameModalState.target?.name ?? '';
-            requestAnimationFrame(() => requestAnimationFrame(selectNameRange));
+            void tick().then(selectNameRange);
         }
         wasOpen = $renameModalState.open;
     });

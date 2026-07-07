@@ -10,8 +10,9 @@ Rules for this layer:
   typed adapters first, then pass data and callbacks into components.
 - Prefer design tokens from `style.css`; do not introduce one-off colors,
   shadows, z-index values, or spacing scales inside components.
-- Keep the video player as a vanilla TypeScript island until the shared app
-  shell and file-list surfaces are stable.
+- Keep playback engines, native window geometry, and media lifecycle in the
+  TypeScript video controller. Svelte owns the rendered shell; the controller
+  owns behavior.
 - New components should include a small compile or behavior test when practical.
 
 Current primitives:

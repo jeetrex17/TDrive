@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy } from 'svelte';
+    import { onDestroy, tick } from 'svelte';
     import ModalShell from './ModalShell.svelte';
     import { shareDriveModal } from './share-drive-modal-store';
 
@@ -40,7 +40,7 @@
     $effect(() => {
         if ($view.open && !wasOpen) {
             copied = false;
-            requestAnimationFrame(() => requestAnimationFrame(() => inputEl?.select()));
+            void tick().then(() => inputEl?.select());
         }
         wasOpen = $view.open;
     });

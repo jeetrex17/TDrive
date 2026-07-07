@@ -2,6 +2,7 @@
 // This file bootstraps the application by importing and initializing all modules
 
 import { state } from './state';
+import { setupAppShell } from './modules/app-shell';
 
 // Import setup functions from modules
 import { setupSelectionBar } from './modules/selection';
@@ -89,6 +90,7 @@ function waitForWailsRuntime(timeoutMs = 4000): Promise<void> {
 window.onload = async function() {
     console.log("App loaded. Checking Status...");
     await waitForWailsRuntime();
+    setupAppShell();
     hideAllScreens();
 
     // Notifications surface — must be set up before any other module that

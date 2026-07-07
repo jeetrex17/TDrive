@@ -3,6 +3,8 @@ import { state } from '../../state';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
 import { renderImageInfoHTML } from './preview-info';
+import PreviewModal from '../../ui/preview/PreviewModal.svelte';
+import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
@@ -73,6 +75,7 @@ let activePreviewKey = "";
 let activePreviewMsgID = 0;
 let activePreviewItem: any = null;
 let chromeHideTimer: any = null;
+let previewMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 // Lightbox navigation context. When opened from the gallery this holds the
 // ordered image set and the current position so ←/→ and the on-screen chevrons
@@ -953,6 +956,12 @@ async function handlePreviewKeydown(event: any) {
 }
 
 export function setupPreviewModal() {
+    const host = document.getElementById("preview-modal");
+    if (host && !previewMarkupHandle) {
+        host.replaceChildren();
+        previewMarkupHandle = mountSvelte(PreviewModal, { target: host, props: {} });
+    }
+
     const missing = REQUIRED_ELEMENT_IDS.filter((id) => !document.getElementById(id));
     if (missing.length) {
         previewReady = false;
