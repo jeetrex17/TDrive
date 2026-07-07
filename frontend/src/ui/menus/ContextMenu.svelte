@@ -47,7 +47,8 @@
 
         if (lastFocusVersion !== state.focusVersion) {
             lastFocusVersion = state.focusVersion;
-            requestAnimationFrame(() => focusMenuEdge('first'));
+            await tick();
+            focusMenuEdge('first');
         }
     }
 

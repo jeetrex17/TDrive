@@ -19,6 +19,8 @@ import { EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } fr
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { installModalA11y } from "../../ui/modals/modal-a11y";
+import VideoModal from "../../ui/video/VideoModal.svelte";
+import { mountSvelte, type SvelteMountHandle } from "../../ui/mount";
 
 const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
@@ -461,6 +463,7 @@ let nativeSeekAspect = 9 / 16;
 const pendingThumbnails = new Set<number>();
 const failedThumbnails = new Map<number, number>();
 let a11y: ReturnType<typeof installModalA11y> | null = null;
+let videoMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 // Gap between the native video and the chrome strips. Kept small so the picture
 // is as large as possible; the chrome itself is measured, so this is the only
@@ -2048,6 +2051,12 @@ function renderSpeedOptions() {
 }
 
 export function setupVideoModal() {
+    const host = byID<HTMLElement>("video-modal");
+    if (host && !videoMarkupHandle) {
+        host.replaceChildren();
+        videoMarkupHandle = mountSvelte(VideoModal, { target: host, props: {} });
+    }
+
     modalEl = byID("video-modal");
     stageEl = byID("video-stage");
     topbarEl = document.querySelector<HTMLElement>("#video-modal .video-topbar");

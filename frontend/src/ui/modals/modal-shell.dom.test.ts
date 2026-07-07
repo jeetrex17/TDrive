@@ -4,7 +4,7 @@
 // through RenameModal so the store → shell → a11y wiring is the real one.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { flushSync, mount, tick, unmount } from 'svelte';
 import RenameModal from './RenameModal.svelte';
 import {
     closeRenameModalView,
@@ -26,9 +26,9 @@ let app: Record<string, unknown>;
 
 async function settle(): Promise<void> {
     flushSync();
-    // ModalShell activates a11y after tick(); modal-a11y focuses after a rAF.
+    // ModalShell activates a11y after Svelte has rendered the open dialog.
     await Promise.resolve();
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await tick();
     flushSync();
 }
 
@@ -104,6 +104,15 @@ describe('ModalShell behavior', () => {
         await settle();
 
         expect((document.activeElement as HTMLElement | null)?.id).toBe('rename-input');
+    });
+
+    it('selects the editable base name for files after opening', async () => {
+        openRenameModalView({ type: 'file', id: 1, name: 'report.final.pdf' });
+        await settle();
+
+        const input = host.querySelector('#rename-input') as HTMLInputElement;
+        expect(input.selectionStart).toBe(0);
+        expect(input.selectionEnd).toBe('report.final'.length);
     });
 });
 

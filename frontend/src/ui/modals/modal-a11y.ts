@@ -82,13 +82,11 @@ export function installModalA11y(modal: any, { requestClose, initialFocus, resto
             active = true;
             lastActive = document.activeElement;
             document.addEventListener('keydown', onKeydown, true);
-            requestAnimationFrame(() => {
-                const target =
-                    (typeof initialFocus === 'function' ? initialFocus() : initialFocus) || focusable()[0];
-                if (!focusIfPossible(target)) {
-                    focusIfPossible(focusable()[0]);
-                }
-            });
+            const target =
+                (typeof initialFocus === 'function' ? initialFocus() : initialFocus) || focusable()[0];
+            if (!focusIfPossible(target)) {
+                focusIfPossible(focusable()[0]);
+            }
         },
         deactivate() {
             if (!active) return;
