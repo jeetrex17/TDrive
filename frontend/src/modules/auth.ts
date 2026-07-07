@@ -189,7 +189,6 @@ function submitPhone(phoneRaw: string): void {
         notify({ level: 'warning', title: 'Enter your phone number' });
         return;
     }
-    state.lastLoginPhoneNumber = phone;
 
     LoginPhoneNumber(phone).then(() => {
         showAuthWrapper();
