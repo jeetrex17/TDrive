@@ -115,12 +115,19 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 	if err != nil {
 		return err
 	}
+	parseOpts, err := parseOptionsForChannel(e.db, channelID)
+	if err != nil {
+		return err
+	}
 
 	plan, err := e.planHistory(ctx, channelID, peer, watermark)
 	if err != nil {
 		return err
 	}
-	return e.applyHistoryPlan(ctx, channelID, peer, watermark, plan)
+	if len(plan.upperBounds) == 0 {
+		return e.adoptRecentCaptionlessMedia(ctx, channelID, peer, parseOpts)
+	}
+	return e.applyHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
 }
 
 // InitialSyncEmptyChannel paginates the full history of a channel that has
@@ -140,6 +147,10 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 		return projection.ErrChannelNotEmpty
 	}
 	watermark := int64(0)
+	parseOpts, err := parseOptionsForChannel(e.db, channelID)
+	if err != nil {
+		return err
+	}
 
 	peer, err := e.peers.ResolvePeer(ctx, channelID)
 	if err != nil {
@@ -153,7 +164,7 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 	if len(plan.upperBounds) == 0 {
 		return markInitialSyncDone(e.db, channelID, watermark)
 	}
-	return e.applyInitialHistoryPlan(ctx, channelID, peer, watermark, plan)
+	return e.applyInitialHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
 }
 
 func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64) (historyPlan, error) {
@@ -198,7 +209,7 @@ func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient
 	return historyPlan{upperBounds: upperBounds, highestSeen: highestSeen}, nil
 }
 
-func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan) error {
+func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions) error {
 	for i := len(plan.upperBounds) - 1; i >= 0; i-- {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -218,7 +229,7 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 				pageWatermark = m.MsgID
 			}
 		}
-		parsed := ParseHistoryPage(filtered)
+		parsed := ParseHistoryPageWithOptions(filtered, parseOpts)
 		SortAscending(parsed)
 
 		tx, err := e.db.Begin()
@@ -245,7 +256,7 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 	return nil
 }
 
-func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan) error {
+func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions) error {
 	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("sync: begin initial projection: %w", err)
@@ -267,7 +278,7 @@ func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, p
 			}
 			filtered = append(filtered, m)
 		}
-		parsed := ParseHistoryPage(filtered)
+		parsed := ParseHistoryPageWithOptions(filtered, parseOpts)
 		SortAscending(parsed)
 		for _, p := range parsed {
 			if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
@@ -283,6 +294,51 @@ func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, p
 		return fmt.Errorf("sync: commit initial projection: %w", err)
 	}
 	return nil
+}
+
+func (e *Engine) adoptRecentCaptionlessMedia(ctx context.Context, channelID int64, peer tgclient.InputPeer, parseOpts ParseOptions) error {
+	if !parseOpts.AdoptCaptionlessMedia {
+		return nil
+	}
+	page, err := e.getHistory(ctx, channelID, peer, 0, 0, defaultPageSize)
+	if err != nil {
+		return fmt.Errorf("sync: get recent history: %w", err)
+	}
+	parsed := ParseHistoryPageWithOptions(page, parseOpts)
+	SortAscending(parsed)
+	adopted := parsed[:0]
+	for _, p := range parsed {
+		if p.AdoptedCaptionless {
+			adopted = append(adopted, p)
+		}
+	}
+	if len(adopted) == 0 {
+		return nil
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("sync: begin captionless adoption: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, p := range adopted {
+		if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
+			return fmt.Errorf("sync: adopt captionless media msg=%d: %w", p.MsgID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sync: commit captionless adoption: %w", err)
+	}
+	return nil
+}
+
+func parseOptionsForChannel(db *sql.DB, channelID int64) (ParseOptions, error) {
+	ch, err := projection.GetChannel(db, channelID)
+	if err != nil {
+		return ParseOptions{}, err
+	}
+	return ParseOptions{AdoptCaptionlessMedia: ch.Kind == projection.KindPersonal}, nil
 }
 
 func readWatermark(db *sql.DB, channelID int64) (int64, error) {

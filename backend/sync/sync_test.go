@@ -174,6 +174,110 @@ func TestIncrementalBackfillsMissingFileSizeFromTelegramMedia(t *testing.T) {
 	}
 }
 
+func TestIncrementalAutoAdoptsCaptionlessMediaInPersonalDrive(t *testing.T) {
+	db, tg, eng := newSyncEnv(t)
+	tg.SeedHistory(tgclient.HistoryMessage{
+		MsgID:        42,
+		Date:         1234,
+		FromID:       9,
+		Text:         "forwarded from another channel",
+		HasMedia:     true,
+		MediaSize:    9876,
+		DocumentName: "forwarded.mkv",
+	})
+
+	if err := eng.Incremental(context.Background(), testChan); err != nil {
+		t.Fatalf("incremental: %v", err)
+	}
+
+	var name string
+	var size, uploadTime, uploader int64
+	if err := db.QueryRow(`
+		SELECT name, size, upload_time, uploader_user_id FROM files
+		WHERE channel_id = ? AND msg_id = ?
+	`, testChan, 42).Scan(&name, &size, &uploadTime, &uploader); err != nil {
+		t.Fatalf("file row: %v", err)
+	}
+	if name != "forwarded.mkv" {
+		t.Fatalf("name = %q, want forwarded.mkv", name)
+	}
+	if size != 9876 {
+		t.Fatalf("size = %d, want 9876", size)
+	}
+	if uploadTime != 1234 {
+		t.Fatalf("upload_time = %d, want 1234", uploadTime)
+	}
+	if uploader != 9 {
+		t.Fatalf("uploader = %d, want 9", uploader)
+	}
+}
+
+func TestIncrementalRecoversRecentlySkippedCaptionlessMediaBelowWatermark(t *testing.T) {
+	db, tg, eng := newSyncEnv(t)
+	tg.SeedHistory(tgclient.HistoryMessage{
+		MsgID:        42,
+		Date:         1234,
+		FromID:       9,
+		Text:         "forwarded before the auto-adopt fix",
+		HasMedia:     true,
+		MediaSize:    9876,
+		DocumentName: "already-skipped.mkv",
+	})
+	if _, err := db.Exec(`UPDATE channels SET last_synced_msg = ? WHERE channel_id = ?`, int64(100), testChan); err != nil {
+		t.Fatalf("seed watermark: %v", err)
+	}
+
+	if err := eng.Incremental(context.Background(), testChan); err != nil {
+		t.Fatalf("incremental: %v", err)
+	}
+
+	var name string
+	if err := db.QueryRow(`
+		SELECT name FROM files
+		WHERE channel_id = ? AND msg_id = ?
+	`, testChan, 42).Scan(&name); err != nil {
+		t.Fatalf("file row: %v", err)
+	}
+	if name != "already-skipped.mkv" {
+		t.Fatalf("name = %q, want already-skipped.mkv", name)
+	}
+	var wm int64
+	if err := db.QueryRow(`SELECT last_synced_msg FROM channels WHERE channel_id = ?`, testChan).Scan(&wm); err != nil {
+		t.Fatalf("watermark: %v", err)
+	}
+	if wm != 100 {
+		t.Fatalf("watermark = %d, want 100", wm)
+	}
+}
+
+func TestIncrementalDoesNotAutoAdoptCaptionlessMediaInSharedDrive(t *testing.T) {
+	db, tg, eng := newSyncEnv(t)
+	if _, err := db.Exec(`UPDATE channels SET kind = ? WHERE channel_id = ?`, projection.KindShared, testChan); err != nil {
+		t.Fatalf("mark shared: %v", err)
+	}
+	tg.SeedHistory(tgclient.HistoryMessage{
+		MsgID:        42,
+		Date:         1234,
+		FromID:       9,
+		Text:         "regular shared-drive attachment",
+		HasMedia:     true,
+		MediaSize:    9876,
+		DocumentName: "chat-attachment.mkv",
+	})
+
+	if err := eng.Incremental(context.Background(), testChan); err != nil {
+		t.Fatalf("incremental: %v", err)
+	}
+
+	var rows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM files WHERE channel_id = ?`, testChan).Scan(&rows); err != nil {
+		t.Fatalf("file count: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("files = %d, want 0", rows)
+	}
+}
+
 func TestParseHistoryPagePreservesExplicitFileSizeAndTime(t *testing.T) {
 	parsed := ParseHistoryPage([]tgclient.HistoryMessage{{
 		MsgID:     42,
@@ -191,6 +295,49 @@ func TestParseHistoryPagePreservesExplicitFileSizeAndTime(t *testing.T) {
 	}
 	if parsed[0].Op.FileUploadTime != 222 {
 		t.Fatalf("upload_time = %d, want explicit 222", parsed[0].Op.FileUploadTime)
+	}
+}
+
+func TestParseHistoryPageCanAdoptCaptionlessMedia(t *testing.T) {
+	parsed := ParseHistoryPageWithOptions([]tgclient.HistoryMessage{{
+		MsgID:        42,
+		Date:         1234,
+		FromID:       9,
+		Text:         "not a TDX header",
+		HasMedia:     true,
+		MediaSize:    9876,
+		DocumentName: "forwarded.mkv",
+	}}, ParseOptions{AdoptCaptionlessMedia: true})
+	if len(parsed) != 1 {
+		t.Fatalf("parsed = %d, want 1", len(parsed))
+	}
+	got := parsed[0]
+	if got.Op.Type != projection.OpFileUpload {
+		t.Fatalf("op type = %q, want file upload", got.Op.Type)
+	}
+	if got.Op.Parent != projection.RootParent || got.Op.Name != "forwarded.mkv" {
+		t.Fatalf("op parent/name = %q/%q, want root/forwarded.mkv", got.Op.Parent, got.Op.Name)
+	}
+	if got.Op.FileSize != 9876 || got.Op.FileUploadTime != 1234 {
+		t.Fatalf("op size/time = %d/%d, want 9876/1234", got.Op.FileSize, got.Op.FileUploadTime)
+	}
+	if got.RawHeader == "" {
+		t.Fatal("raw header must be deterministic for replay-log hashing")
+	}
+}
+
+func TestParseHistoryPageDoesNotAdoptMalformedTDXMedia(t *testing.T) {
+	parsed := ParseHistoryPageWithOptions([]tgclient.HistoryMessage{{
+		MsgID:        42,
+		Date:         1234,
+		FromID:       9,
+		Text:         "TDX1|t=f|p=",
+		HasMedia:     true,
+		MediaSize:    9876,
+		DocumentName: "forwarded.mkv",
+	}}, ParseOptions{AdoptCaptionlessMedia: true})
+	if len(parsed) != 0 {
+		t.Fatalf("parsed = %d, want 0 for malformed TDX header", len(parsed))
 	}
 }
 
