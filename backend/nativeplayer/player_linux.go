@@ -309,36 +309,56 @@ type Player struct {
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
 	if !linuxNativePlayerEnabled() {
+		linuxNativeLogf("start rejected: disabled by %s=0", linuxNativePlayerFlag)
 		return nil, ErrUnsupported
 	}
 	if os.Getenv("DISPLAY") == "" {
+		linuxNativeLogf("start rejected: DISPLAY is empty (session=%s wayland=%s)", os.Getenv("XDG_SESSION_TYPE"), os.Getenv("WAYLAND_DISPLAY"))
 		return nil, fmt.Errorf("%w: Linux native playback currently requires X11", ErrUnsupported)
 	}
 	if !rect.Valid() {
+		linuxNativeLogf("start rejected: invalid rect x=%.1f y=%.1f w=%.1f h=%.1f", rect.X, rect.Y, rect.Width, rect.Height)
 		return nil, fmt.Errorf("native player: invalid view rect")
 	}
 
+	linuxNativeLogf(
+		"start requested: display=%s session=%s gdk_backend=%s rect=x%.1f y%.1f w%.1f h%.1f html_controls=%t",
+		os.Getenv("DISPLAY"),
+		os.Getenv("XDG_SESSION_TYPE"),
+		os.Getenv("GDK_BACKEND"),
+		rect.X,
+		rect.Y,
+		rect.Width,
+		rect.Height,
+		opts.UseHTMLControls,
+	)
 	view := C.tdrive_x11_create(C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height))
 	if view == nil {
+		linuxNativeLogf("start failed: could not create X11 child window")
 		return nil, fmt.Errorf("native player: could not create X11 child window")
 	}
 	child := uintptr(C.tdrive_x11_child(view))
 	if child == 0 {
 		C.tdrive_x11_destroy(view)
+		linuxNativeLogf("start failed: X11 child window id is zero")
 		return nil, fmt.Errorf("native player: invalid X11 child window")
 	}
+	linuxNativeLogf("x11 child ready: wid=%d", child)
 
 	player := &Player{view: unsafe.Pointer(view), done: make(chan error, 1)}
 	if err := player.startProcess(ctx, url, child, opts); err != nil {
 		player.destroyView()
+		linuxNativeLogf("start failed: %v", err)
 		return nil, err
 	}
+	linuxNativeLogf("start ok: wid=%d", child)
 	return player, nil
 }
 
 func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr, opts Options) error {
 	mpvPath, err := findLinuxMPV()
 	if err != nil {
+		linuxNativeLogf("mpv lookup failed: %v", err)
 		return err
 	}
 
@@ -381,8 +401,10 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 
 	cmd := exec.CommandContext(ctx, mpvPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	linuxNativeLogf("mpv start: path=%s wid=%d ipc=%s", mpvPath, windowID, p.ipcPath)
 	if err := cmd.Start(); err != nil {
 		_ = os.RemoveAll(p.ipcDir)
+		linuxNativeLogf("mpv start failed: %v", err)
 		return fmt.Errorf("native player: start mpv: %w", err)
 	}
 	p.cmd = cmd
@@ -394,6 +416,11 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 	}
 	go func() {
 		err := cmd.Wait()
+		if err != nil {
+			linuxNativeLogf("mpv exited: %v", err)
+		} else {
+			linuxNativeLogf("mpv exited cleanly")
+		}
 		p.mu.Lock()
 		stateCancel := p.stateCancel
 		p.mu.Unlock()
@@ -478,6 +505,7 @@ func (p *Player) Close() error {
 	stateDone := p.stateDone
 	p.mu.Unlock()
 
+	linuxNativeLogf("close requested")
 	if stateCancel != nil {
 		stateCancel()
 	}
@@ -488,6 +516,7 @@ func (p *Player) Close() error {
 		select {
 		case <-done:
 		case <-time.After(750 * time.Millisecond):
+			linuxNativeLogf("close timeout: killing mpv process group pid=%d", cmd.Process.Pid)
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			_ = cmd.Process.Kill()
 			select {
@@ -504,6 +533,7 @@ func (p *Player) Close() error {
 	}
 	p.destroyView()
 	_ = os.RemoveAll(ipcDir)
+	linuxNativeLogf("close complete")
 	return nil
 }
 
@@ -517,6 +547,7 @@ func (p *Player) destroyView() {
 		p.view = nil
 		if view != nil {
 			C.tdrive_x11_destroy((*C.tdrive_x11_view)(view))
+			linuxNativeLogf("x11 child destroyed")
 		}
 		p.mu.Unlock()
 	})
