@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"TDrive/backend/backfill"
 	"TDrive/backend/projection"
@@ -63,12 +64,19 @@ func (f *fakeBackfiller) Started() int {
 type fakeEvents struct {
 	mu     sync.Mutex
 	events []string
+	seen   chan string
 }
 
 func (f *fakeEvents) Emit(name string, args ...any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, name)
+	if f.seen != nil {
+		select {
+		case f.seen <- name:
+		default:
+		}
+	}
 }
 
 func (f *fakeEvents) Has(name string) bool {
@@ -80,6 +88,24 @@ func (f *fakeEvents) Has(name string) bool {
 		}
 	}
 	return false
+}
+
+func (f *fakeEvents) Wait(name string, timeout time.Duration) bool {
+	if f.Has(name) {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-f.seen:
+			if got == name || f.Has(name) {
+				return true
+			}
+		case <-timer.C:
+			return f.Has(name)
+		}
+	}
 }
 
 func testDB(t *testing.T) *sql.DB {
@@ -129,7 +155,8 @@ func TestInitDriveMigratesAndSetsActive(t *testing.T) {
 func TestKickoffBackfillRunsOnce(t *testing.T) {
 	db := testDB(t)
 	backfiller := newFakeBackfiller()
-	events := &fakeEvents{}
+	defer close(backfiller.release)
+	events := &fakeEvents{seen: make(chan string, 8)}
 	svc := NewService(Config{
 		DB:       db,
 		Active:   NewActiveDrive(),
@@ -143,8 +170,7 @@ func TestKickoffBackfillRunsOnce(t *testing.T) {
 	if got := backfiller.Started(); got != 1 {
 		t.Fatalf("backfill started %d times, want 1", got)
 	}
-	close(backfiller.release)
-	if !events.Has("backfill_progress") {
+	if !events.Wait("backfill_progress", time.Second) {
 		t.Fatalf("backfill_progress was not emitted")
 	}
 }
