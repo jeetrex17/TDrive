@@ -22,9 +22,13 @@ import {
     SetActiveChannel,
     SyncChannel,
 } from '../../wailsjs/go/main/App';
+import { runGlobalSearch } from './search';
 
 let renderSidebar = () => {};
 let refreshFilesView = () => {};
+const pendingLiveSyncChannels = new Set<number>();
+let processingLiveSyncRefresh = false;
+let liveSyncEventsBound = false;
 
 export function bindChannelsRenderers({ onSidebarUpdate, onActiveDriveChanged }: { onSidebarUpdate: any; onActiveDriveChanged: any }) {
     if (typeof onSidebarUpdate === 'function') renderSidebar = onSidebarUpdate;
@@ -71,6 +75,53 @@ export async function loadChannels() {
         state.activeChannel = null;
         state.pendingJoins = [];
         renderSidebar();
+    }
+}
+
+export function setupLiveSyncEvents() {
+    if (liveSyncEventsBound) return;
+    if (!window.runtime?.EventsOn) return;
+    liveSyncEventsBound = true;
+
+    window.runtime.EventsOn("live_sync_completed", (payload: any) => {
+        queueLiveSyncRefresh(payload);
+    });
+    window.runtime.EventsOn("live_sync_failed", (payload: any) => {
+        const channelID = Number(payload?.channel_id || 0);
+        const activeID = Number(state.activeChannel?.id || 0);
+        if (channelID && channelID !== activeID) return;
+        console.warn("live sync failed:", payload?.error || payload);
+    });
+}
+
+function queueLiveSyncRefresh(payload: any) {
+    const channelID = Number(payload?.channel_id || 0);
+    if (!channelID) return;
+    pendingLiveSyncChannels.add(channelID);
+    if (processingLiveSyncRefresh) return;
+    processingLiveSyncRefresh = true;
+    void processLiveSyncRefreshes();
+}
+
+async function processLiveSyncRefreshes() {
+    try {
+        while (pendingLiveSyncChannels.size > 0) {
+            const changedChannels = new Set(pendingLiveSyncChannels);
+            pendingLiveSyncChannels.clear();
+
+            await loadChannels();
+            const activeID = Number(state.activeChannel?.id || 0);
+            if (!activeID || !changedChannels.has(activeID)) continue;
+
+            state.telegramRootCache = null;
+            if (String(state.searchQuery || "").trim()) {
+                runGlobalSearch();
+            } else {
+                await refreshFilesView();
+            }
+        }
+    } finally {
+        processingLiveSyncRefresh = false;
     }
 }
 

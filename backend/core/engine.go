@@ -10,6 +10,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
+	"TDrive/backend/livesync"
 	"TDrive/backend/media"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
@@ -84,6 +85,7 @@ type Engine struct {
 	lifecycle  *lifecycleservice.Service
 	users      *userservice.Service
 	syncEngine *tdsync.Engine
+	liveSync   *livesync.Coordinator
 	active     *lifecycleservice.ActiveDrive
 	selfUserID atomic.Int64
 	thumbs     *thumbnail.Cache
@@ -96,6 +98,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	usingDefaultConnect := cfg.Connect == nil
 	if cfg.Connect == nil {
 		cfg.Connect = auth.Connect
 	}
@@ -114,8 +117,16 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		active:  lifecycleservice.NewActiveDrive(),
 		thumbs:  cfg.Thumbs,
 	}
+	var liveActivity *livesync.TelegramActivity
 	if e.tg == nil {
-		e.tg = tgclient.NewGotd(e.connect)
+		if usingDefaultConnect {
+			liveActivity = livesync.NewTelegramActivity(256)
+			e.tg = tgclient.NewGotd(func() (*telegram.Client, error) {
+				return auth.ConnectWithOptions(telegram.Options{UpdateHandler: liveActivity})
+			})
+		} else {
+			e.tg = tgclient.NewGotd(e.connect)
+		}
 	}
 
 	if client, err := e.connect(); err != nil {
@@ -142,6 +153,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.syncEngine = tdsync.NewEngine(backend.DB, e.tg, peerResolverFn(e.ResolvePeer))
 	e.lifecycle = e.newLifecycleService()
 	e.users = e.newUserService()
+	e.startLiveSync(liveActivity)
 
 	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {
 		if err := e.lifecycle.UsePersonalChannel(e.ctx, savedID); err != nil {
@@ -152,7 +164,41 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	return e, nil
 }
 
+func (e *Engine) startLiveSync(activity *livesync.TelegramActivity) {
+	if e == nil || activity == nil || e.lifecycle == nil {
+		return
+	}
+	e.liveSync = livesync.NewCoordinator(livesync.Config{
+		Activity: activity,
+		Syncer:   e.lifecycle,
+		Events:   e.events,
+		Warnf: func(format string, args ...any) {
+			e.warnf(format, args...)
+		},
+		ListChannels: func(ctx context.Context) ([]int64, error) {
+			if backend.DB == nil {
+				return nil, fmt.Errorf("db not ready")
+			}
+			channels, err := projection.ListChannels(backend.DB)
+			if err != nil {
+				return nil, err
+			}
+			ids := make([]int64, 0, len(channels))
+			for _, channel := range channels {
+				if channel.ChannelID > 0 {
+					ids = append(ids, channel.ChannelID)
+				}
+			}
+			return ids, nil
+		},
+	})
+	e.liveSync.Start(e.ctx)
+}
+
 func (e *Engine) Close() {
+	if e != nil && e.liveSync != nil {
+		e.liveSync.Stop()
+	}
 	if e != nil && e.media != nil {
 		_ = e.media.Close()
 	}
