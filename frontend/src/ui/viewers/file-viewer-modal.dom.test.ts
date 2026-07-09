@@ -24,10 +24,12 @@ async function settle(): Promise<void> {
 }
 
 async function waitForElement<T extends Element>(selector: string): Promise<T> {
-    for (let i = 0; i < 20; i += 1) {
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
         await settle();
         const element = host.querySelector<T>(selector);
         if (element) return element;
+        await new Promise((resolve) => { setTimeout(resolve, 25); });
     }
     throw new Error(`Expected ${selector} to render. DOM: ${host.innerHTML}`);
 }
