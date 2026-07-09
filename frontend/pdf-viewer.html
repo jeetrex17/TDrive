@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>PDF Viewer</title>
+    </head>
+    <body>
+        <main id="app" class="pdf-frame-app">
+            <div id="status" class="pdf-frame-status" role="status" aria-live="polite">Opening PDF…</div>
+            <div id="viewerContainer" class="pdf-frame-container">
+                <div id="viewer" class="pdfViewer"></div>
+            </div>
+        </main>
+        <script type="module" src="/src/ui/viewers/pdf-viewer-frame.ts"></script>
+    </body>
+</html>

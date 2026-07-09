@@ -20,7 +20,7 @@ export interface FileViewerTarget {
     encrypted?: boolean;
 }
 
-const STREAM_KINDS = new Set<FileOpenKind>(['audio', 'text']);
+const STREAM_KINDS = new Set<FileOpenKind>(['audio', 'pdf', 'text']);
 
 let viewerHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let activeToken = '';

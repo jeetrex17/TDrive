@@ -1,5 +1,6 @@
 <script lang="ts">
     import ModalShell from '../modals/ModalShell.svelte';
+    import { isPdfFrameMessage, pdfViewerFrameSrc } from './pdf-frame';
     import { fileViewerState } from './file-viewer-store';
 
     interface Props {
@@ -20,6 +21,12 @@
     let audioVolume = $state(1);
     let audioError = $state('');
     let activeAudioUrl = '';
+
+    let pdfFrameEl = $state<HTMLIFrameElement | null>(null);
+    let pdfLoading = $state(false);
+    let pdfError = $state('');
+    let pdfPageCount = $state(0);
+    let activePdfUrl = '';
 
     let textContent = $state('');
     let textOffset = $state(0);
@@ -44,6 +51,8 @@
         switch ($fileViewerState.kind) {
             case 'audio':
                 return 'Audio';
+            case 'pdf':
+                return 'PDF';
             case 'text':
                 return 'Text';
             default:
@@ -55,6 +64,7 @@
         if ($fileViewerState.loading) return 'Opening';
         if ($fileViewerState.error) return 'Unavailable';
         if ($fileViewerState.kind === 'audio') return audioError ? 'Unavailable' : audioWaiting ? 'Buffering' : audioPaused ? 'Ready' : 'Playing';
+        if ($fileViewerState.kind === 'pdf') return pdfError ? 'Unavailable' : pdfLoading ? 'Opening PDF' : pdfPageCount ? `${pdfPageCount} pages` : 'Ready';
         if ($fileViewerState.kind === 'text') return textLoading && !textOffset ? 'Opening text' : textDone ? textCompletionLabel() : textOffset ? 'Partial' : 'Ready';
         return 'Ready';
     }
@@ -184,10 +194,42 @@
 
     $effect(() => {
         const { open, kind, url } = $fileViewerState;
+        const nextUrl = open && kind === 'pdf' ? url : '';
+        if (nextUrl === activePdfUrl) return;
+        activePdfUrl = nextUrl;
+        pdfLoading = Boolean(nextUrl);
+        pdfError = '';
+        pdfPageCount = 0;
+    });
+
+    $effect(() => {
+        const { open, kind, url } = $fileViewerState;
         resetText();
         if (open && kind === 'text' && url) {
             void loadTextChunk(true);
         }
+    });
+
+    $effect(() => {
+        if (typeof window === 'undefined') return;
+
+        const handleMessage = (event: MessageEvent): void => {
+            if (!pdfFrameEl || event.source !== pdfFrameEl.contentWindow) return;
+            if (!isPdfFrameMessage(event.data)) return;
+
+            if (event.data.type === 'loaded') {
+                pdfLoading = false;
+                pdfError = '';
+                pdfPageCount = Math.max(0, Math.floor(event.data.pages));
+                return;
+            }
+            pdfLoading = false;
+            pdfPageCount = 0;
+            pdfError = event.data.message || 'Could not open PDF';
+        };
+
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
     });
 </script>
 
@@ -314,6 +356,22 @@
                         <input class="audio-volume" type="range" min="0" max="1" step="0.01" value={audioVolume} oninput={setAudioVolume} aria-label="Volume" />
                     </div>
                 </div>
+            </div>
+        {:else if $fileViewerState.kind === 'pdf'}
+            <div class="pdf-frame-shell">
+                {#if pdfError}
+                    <div class="file-viewer-state" role="alert">{pdfError}</div>
+                {:else}
+                    <iframe
+                        bind:this={pdfFrameEl}
+                        class="pdf-frame"
+                        title={$fileViewerState.title || 'PDF viewer'}
+                        src={pdfViewerFrameSrc($fileViewerState.url)}
+                    ></iframe>
+                    {#if pdfLoading}
+                        <div class="pdf-frame-overlay" aria-live="polite">Opening PDF…</div>
+                    {/if}
+                {/if}
             </div>
         {:else if $fileViewerState.kind === 'text'}
             <div class="text-viewer">

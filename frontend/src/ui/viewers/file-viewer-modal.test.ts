@@ -52,4 +52,24 @@ describe('FileViewerModal', () => {
         expect(body).toContain('role="alert"');
         expect(body).toContain('Could not open file');
     });
+
+    it('renders a pdf iframe surface for PDF files', () => {
+        openFileViewerView({
+            kind: 'pdf',
+            token: 'tok',
+            url: 'http://127.0.0.1/media/file/tok',
+            title: 'paper.pdf',
+            meta: 'PDF · 1.2 MB',
+            mimeType: 'application/pdf',
+            loading: false,
+            error: '',
+        });
+
+        const { body } = render(FileViewerModal, { props: { onClose: noop, onDownload: noop } });
+
+        expect(body).toContain('file-viewer-shell is-pdf');
+        expect(body).toContain('paper.pdf');
+        expect(body).toContain('pdf-frame');
+        expect(body).toContain('iframe');
+    });
 });

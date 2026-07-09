@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 
-export type FileViewerKind = 'audio' | 'text';
+export type FileViewerKind = 'audio' | 'pdf' | 'text';
 
 export interface FileViewerView {
     open: boolean;
