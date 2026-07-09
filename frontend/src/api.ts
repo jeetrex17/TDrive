@@ -17,6 +17,7 @@ import {
     NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
     OpenNativeMedia as rawOpenNativeMedia,
+    OpenStream as rawOpenStream,
     ResizeNativeMedia as rawResizeNativeMedia,
     Search as rawSearch,
     ShowNativeSeekThumbnail as rawShowNativeSeekThumbnail,
@@ -48,6 +49,9 @@ export interface MediaOpenResult {
     url: string;
     thumbnailUrl: string;
     name: string;
+    kind: string;
+    mimeType: string;
+    supportsRange: boolean;
     info: MediaOpenInfo;
 }
 
@@ -172,12 +176,25 @@ export async function getThumbnail(msgId: number): Promise<string> {
 /** Open a short-lived loopback media URL for a projected file. */
 export async function openMedia(msgId: number): Promise<MediaOpenResult> {
     const opened = await rawOpenMedia(msgId);
+    return normalizeMediaOpenResult(opened);
+}
+
+/** Open a loopback stream URL for a projected audio/PDF/text file. */
+export async function openStream(msgId: number): Promise<MediaOpenResult> {
+    const opened = await rawOpenStream(msgId);
+    return normalizeMediaOpenResult(opened);
+}
+
+function normalizeMediaOpenResult(opened?: media.OpenResult): MediaOpenResult {
     const info: media.LogicalFile | undefined = opened?.info;
     return {
         token: String(opened?.token ?? ""),
         url: String(opened?.url ?? ""),
         thumbnailUrl: String(opened?.thumbnail_url ?? ""),
         name: String(opened?.name ?? ""),
+        kind: String(opened?.kind ?? ""),
+        mimeType: String(opened?.mime_type ?? ""),
+        supportsRange: Boolean(opened?.supports_range),
         info: {
             channelId: Number(info?.channel_id ?? 0),
             fileId: Number(info?.file_id ?? 0),

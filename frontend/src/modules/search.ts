@@ -14,6 +14,7 @@ import {
 import { setPhotosMode } from './gallery';
 import { refreshFolderIndex } from './folder-index';
 import { isVideoFile } from './media-types';
+import { canOpenFileViewer, openFileViewer } from './modals/file-viewer';
 import type { FileListAction, FileListRow } from '../ui/file-list/types';
 
 let activeToken = 0;
@@ -110,6 +111,14 @@ function renderSearchResults(results: any, query: any) {
                     label: "Play video",
                     onClick: () => window.initVideoPlayback(id, name, size, encrypted),
                 });
+            } else if (canOpenFileViewer(name)) {
+                actions.push({
+                    kind: "open",
+                    className: "open-file",
+                    title: "Open",
+                    label: "Open file",
+                    onClick: () => void openFileViewer({ id, name, size, encrypted }),
+                });
             }
             actions.push({
                 kind: "download",
@@ -136,6 +145,10 @@ function renderSearchResults(results: any, query: any) {
                 onDoubleClick: () => {
                     if (isVideoFile(name)) {
                         window.initVideoPlayback(id, name, size, encrypted);
+                        return;
+                    }
+                    if (canOpenFileViewer(name)) {
+                        void openFileViewer({ id, name, size, encrypted });
                         return;
                     }
                     openFileResult(String(id || ""), String(result.parent_id || ""));

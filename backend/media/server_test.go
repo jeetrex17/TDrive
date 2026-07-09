@@ -69,6 +69,12 @@ func TestMediaServerServesTokenizedRanges(t *testing.T) {
 	if !bytes.Equal(got, body[100:200]) {
 		t.Fatal("range body mismatch")
 	}
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want *", resp.Header.Get("Access-Control-Allow-Origin"))
+	}
+	if !strings.Contains(resp.Header.Get("Access-Control-Expose-Headers"), "Content-Range") {
+		t.Fatalf("Access-Control-Expose-Headers = %q, want Content-Range exposed", resp.Header.Get("Access-Control-Expose-Headers"))
+	}
 
 	badURL := opened.URL[:len(opened.URL)-len(opened.Token)] + "bad-token"
 	resp, err = http.Get(badURL)
@@ -78,6 +84,124 @@ func TestMediaServerServesTokenizedRanges(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("bad token status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestMediaServiceOpenStreamSupportsViewerFileTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		wantKind StreamKind
+		wantType string
+	}{
+		{name: "song.mp3", wantKind: StreamKindAudio, wantType: "audio/mpeg"},
+		{name: "paper.pdf", wantKind: StreamKindPDF, wantType: "application/pdf"},
+		{name: "notes.txt", wantKind: StreamKindText, wantType: "text/plain; charset=utf-8"},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := newResolverTestDB(t)
+			msgID := int64(10 + i)
+			body := testBytes(512)
+			mustApplyOp(t, db, msgID, projection.Op{
+				Type:     projection.OpFileUpload,
+				Parent:   projection.RootParent,
+				Name:     tt.name,
+				FileSize: int64(len(body)),
+			})
+			ranges := newMediaRangeFake(map[int64][]byte{msgID: body})
+			svc := NewService(Config{
+				DB:     db,
+				Peers:  staticPeerResolver{peer: ranges.peer},
+				Ranges: ranges,
+			})
+			defer svc.Close()
+
+			opened, err := svc.OpenStream(context.Background(), testChannelID, msgID)
+			if err != nil {
+				t.Fatalf("OpenStream: %v", err)
+			}
+			if opened.Kind != tt.wantKind {
+				t.Fatalf("Kind = %q, want %q", opened.Kind, tt.wantKind)
+			}
+			if opened.MimeType != tt.wantType {
+				t.Fatalf("MimeType = %q, want %q", opened.MimeType, tt.wantType)
+			}
+			if opened.ThumbnailURL != "" {
+				t.Fatalf("ThumbnailURL = %q, want empty for non-video stream", opened.ThumbnailURL)
+			}
+
+			req, _ := http.NewRequest(http.MethodGet, opened.URL, nil)
+			req.Header.Set("Range", "bytes=0-15")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("GET stream: %v", err)
+			}
+			got, err := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if err != nil {
+				t.Fatalf("read stream: %v", err)
+			}
+			if resp.StatusCode != http.StatusPartialContent {
+				t.Fatalf("status = %d, want 206", resp.StatusCode)
+			}
+			if resp.Header.Get("Content-Type") != tt.wantType {
+				t.Fatalf("Content-Type = %q, want %q", resp.Header.Get("Content-Type"), tt.wantType)
+			}
+			if !bytes.Equal(got, body[:16]) {
+				t.Fatal("stream body mismatch")
+			}
+		})
+	}
+}
+
+func TestMediaStreamPreflightAllowsRangeFetches(t *testing.T) {
+	db := newResolverTestDB(t)
+	body := testBytes(256)
+	mustApplyOp(t, db, 10, projection.Op{
+		Type:     projection.OpFileUpload,
+		Parent:   projection.RootParent,
+		Name:     "notes.txt",
+		FileSize: int64(len(body)),
+	})
+	ranges := newMediaRangeFake(map[int64][]byte{10: body})
+	svc := NewService(Config{
+		DB:     db,
+		Peers:  staticPeerResolver{peer: ranges.peer},
+		Ranges: ranges,
+	})
+	defer svc.Close()
+
+	opened, err := svc.OpenStream(context.Background(), testChannelID, 10)
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodOptions, opened.URL, nil)
+	if err != nil {
+		t.Fatalf("options request: %v", err)
+	}
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	req.Header.Set("Access-Control-Request-Headers", "Range")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want *", resp.Header.Get("Access-Control-Allow-Origin"))
+	}
+	if resp.Header.Get("Access-Control-Allow-Methods") != "GET, HEAD, OPTIONS" {
+		t.Fatalf("Access-Control-Allow-Methods = %q, want GET, HEAD, OPTIONS", resp.Header.Get("Access-Control-Allow-Methods"))
+	}
+	if resp.Header.Get("Access-Control-Allow-Headers") != "Range" {
+		t.Fatalf("Access-Control-Allow-Headers = %q, want Range", resp.Header.Get("Access-Control-Allow-Headers"))
 	}
 }
 

@@ -105,6 +105,7 @@
 <div id="move-modal" class="modal-overlay" style="display: none;"></div>
 <div id="preview-modal" class="modal-overlay preview-overlay" style="display: none;" aria-hidden="true"></div>
 <div id="video-modal" class="modal-overlay video-overlay" style="display: none;" aria-hidden="true"></div>
+<div id="viewer-modal" class="modal-overlay file-viewer-overlay" style="display: none;" aria-hidden="true"></div>
 <div id="new-drive-modal" class="modal-overlay" style="display: none;"></div>
 <div id="join-drive-modal" class="modal-overlay" style="display: none;"></div>
 <div id="share-drive-modal" class="modal-overlay" style="display: none;"></div>

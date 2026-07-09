@@ -8,6 +8,7 @@ import { openMoveModal } from './modals/move';
 import { navigateToFolder } from './navigation';
 import { importFolderWithParentID, uploadWithParentID } from './transfers';
 import { isVideoFile } from './media-types';
+import { canOpenFileViewer, openFileViewer } from './modals/file-viewer';
 import ContextMenu from '../ui/menus/ContextMenu.svelte';
 import { hideContextMenu, showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
 import { mountSvelte } from '../ui';
@@ -76,6 +77,8 @@ export function setupContextMenu() {
             ];
             if (isVideoFile(fileName)) {
                 items.unshift({ label: "Play", action: () => window.initVideoPlayback(fileID, fileName, fileSize, encrypted) });
+            } else if (canOpenFileViewer(fileName)) {
+                items.unshift({ label: "Open", action: () => openFileViewer({ id: fileID, name: fileName, size: fileSize, encrypted }) });
             }
             if (canRename) {
                 const renamePayload = fileSource === "fs"

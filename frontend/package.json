@@ -23,5 +23,11 @@
     "typescript-eslint": "^8.11.0",
     "vite": "^8.1.0",
     "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.11",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.3.0",
+    "pdfjs-dist": "^6.1.200"
   }
 }

@@ -213,7 +213,7 @@ func (s *Server) handleThumbSource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, prefix string, readAt func(*Session, context.Context, []byte, int64) (int, error)) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -231,6 +231,14 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 	size := session.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", contentTypeFor(session.Name()))
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Range")
+	w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	start, end, partial, ok := parseRangeHeader(r.Header.Get("Range"), size)
 	if !ok {
@@ -382,45 +390,78 @@ func streamSessionRange(ctx context.Context, w io.Writer, session *Session, star
 	return nil
 }
 
-func contentTypeFor(name string) string {
+type streamTypeInfo struct {
+	kind StreamKind
+	mime string
+}
+
+var streamTypesByExt = map[string]streamTypeInfo{
+	".mp4":      {kind: StreamKindVideo, mime: "video/mp4"},
+	".m4v":      {kind: StreamKindVideo, mime: "video/mp4"},
+	".mov":      {kind: StreamKindVideo, mime: "video/quicktime"},
+	".qt":       {kind: StreamKindVideo, mime: "video/quicktime"},
+	".webm":     {kind: StreamKindVideo, mime: "video/webm"},
+	".mkv":      {kind: StreamKindVideo, mime: "video/x-matroska"},
+	".mk3d":     {kind: StreamKindVideo, mime: "video/x-matroska"},
+	".avi":      {kind: StreamKindVideo, mime: "video/x-msvideo"},
+	".ts":       {kind: StreamKindVideo, mime: "video/mp2t"},
+	".m2ts":     {kind: StreamKindVideo, mime: "video/mp2t"},
+	".mts":      {kind: StreamKindVideo, mime: "video/mp2t"},
+	".flv":      {kind: StreamKindVideo, mime: "video/x-flv"},
+	".wmv":      {kind: StreamKindVideo, mime: "video/x-ms-wmv"},
+	".ogv":      {kind: StreamKindVideo, mime: "video/ogg"},
+	".mpeg":     {kind: StreamKindVideo, mime: "video/mpeg"},
+	".mpg":      {kind: StreamKindVideo, mime: "video/mpeg"},
+	".mp3":      {kind: StreamKindAudio, mime: "audio/mpeg"},
+	".m4a":      {kind: StreamKindAudio, mime: "audio/mp4"},
+	".aac":      {kind: StreamKindAudio, mime: "audio/aac"},
+	".wav":      {kind: StreamKindAudio, mime: "audio/wav"},
+	".flac":     {kind: StreamKindAudio, mime: "audio/flac"},
+	".oga":      {kind: StreamKindAudio, mime: "audio/ogg"},
+	".ogg":      {kind: StreamKindAudio, mime: "audio/ogg"},
+	".opus":     {kind: StreamKindAudio, mime: "audio/ogg"},
+	".pdf":      {kind: StreamKindPDF, mime: "application/pdf"},
+	".txt":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".log":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".md":       {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".markdown": {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".csv":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".tsv":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".json":     {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".yaml":     {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".yml":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".toml":     {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".xml":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".srt":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+	".vtt":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
+}
+
+func streamTypeForName(name string) (streamTypeInfo, bool) {
 	ext := path.Ext(name)
 	if ext == "" {
-		return "application/octet-stream"
+		return streamTypeInfo{}, false
 	}
-	switch strings.ToLower(ext) {
-	case ".mp4", ".m4v":
-		return "video/mp4"
-	case ".mov", ".qt":
-		return "video/quicktime"
-	case ".webm":
-		return "video/webm"
-	case ".mkv", ".mk3d":
-		return "video/x-matroska"
-	case ".avi":
-		return "video/x-msvideo"
-	case ".ts", ".m2ts", ".mts":
-		return "video/mp2t"
-	case ".flv":
-		return "video/x-flv"
-	case ".wmv":
-		return "video/x-ms-wmv"
-	case ".ogv":
-		return "video/ogg"
-	case ".mpeg", ".mpg":
-		return "video/mpeg"
+	info, ok := streamTypesByExt[strings.ToLower(ext)]
+	return info, ok
+}
+
+func contentTypeFor(name string) string {
+	if info, ok := streamTypeForName(name); ok {
+		return info.mime
 	}
-	if typ := mime.TypeByExtension(ext); typ != "" {
+	if typ := mime.TypeByExtension(path.Ext(name)); typ != "" {
 		return typ
 	}
 	return "application/octet-stream"
 }
 
 func isSupportedMediaName(name string) bool {
-	switch strings.ToLower(path.Ext(name)) {
-	case ".mp4", ".m4v", ".mov", ".qt", ".webm", ".mkv", ".mk3d", ".avi",
-		".ts", ".m2ts", ".mts", ".flv", ".wmv", ".ogv", ".mpeg", ".mpg":
-		return true
-	default:
-		return false
+	return streamKindForName(name) == StreamKindVideo
+}
+
+func streamKindForName(name string) StreamKind {
+	if info, ok := streamTypeForName(name); ok {
+		return info.kind
 	}
+	return StreamKindUnknown
 }

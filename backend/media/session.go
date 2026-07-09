@@ -41,7 +41,11 @@ type MediaStats struct {
 	Thumbnails ThroughputStats `json:"thumbnails"`
 }
 
-func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.RangeClient, cache *thumbnail.Cache, generator VideoThumbnailGenerator) (*Session, error) {
+type SessionOptions struct {
+	EnableVideoThumbnails bool
+}
+
+func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.RangeClient, cache *thumbnail.Cache, generator VideoThumbnailGenerator, opts SessionOptions) (*Session, error) {
 	token, err := randomToken()
 	if err != nil {
 		return nil, err
@@ -57,18 +61,20 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		Client:         ranges,
 		PrefetchBlocks: 2,
 	})
-	s.thumbReader = NewRangeReader(RangeReaderConfig{
-		Client:         ranges,
-		MaxCacheBytes:  8 * 1024 * 1024,
-		MaxConcurrency: 3,
-		Background:     true,
-		OnFloodWait: func(wait time.Duration) {
-			if s.thumbs != nil {
-				s.thumbs.NoteFloodWait(wait)
-			}
-		},
-	})
-	s.thumbs = newVideoThumbnailer(s, cache, generator)
+	if opts.EnableVideoThumbnails {
+		s.thumbReader = NewRangeReader(RangeReaderConfig{
+			Client:         ranges,
+			MaxCacheBytes:  8 * 1024 * 1024,
+			MaxConcurrency: 3,
+			Background:     true,
+			OnFloodWait: func(wait time.Duration) {
+				if s.thumbs != nil {
+					s.thumbs.NoteFloodWait(wait)
+				}
+			},
+		})
+		s.thumbs = newVideoThumbnailer(s, cache, generator)
+	}
 	return s, nil
 }
 
@@ -94,6 +100,9 @@ func (s *Session) ThumbnailURL() string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.thumbs == nil {
+		return ""
+	}
 	return s.thumbURL
 }
 
@@ -172,6 +181,9 @@ func (s *Session) ReadAt(ctx context.Context, p []byte, off int64) (int, error) 
 }
 
 func (s *Session) ReadThumbAt(ctx context.Context, p []byte, off int64) (int, error) {
+	if s == nil || s.thumbReader == nil {
+		return 0, ErrThumbnailUnavailable
+	}
 	return s.readAt(ctx, s.thumbReader, p, off)
 }
 
@@ -200,9 +212,13 @@ func (s *Session) Stats() MediaStats {
 	if s == nil {
 		return MediaStats{}
 	}
+	var thumbStats ThroughputStats
+	if s.thumbReader != nil {
+		thumbStats = s.thumbReader.Throughput()
+	}
 	return MediaStats{
 		Playback:   s.reader.Throughput(),
-		Thumbnails: s.thumbReader.Throughput(),
+		Thumbnails: thumbStats,
 	}
 }
 
