@@ -1281,6 +1281,7 @@ header {
     align-items: center;
     gap: var(--space-3);
     flex: 0 0 auto;
+    min-width: 0;
 }
 
 .file-viewer-action,
@@ -1757,6 +1758,42 @@ header {
     font-weight: 700;
 }
 
+.text-viewer-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background: rgba(143, 155, 206, 0.06);
+}
+
+.text-viewer-toggle button {
+    min-width: 72px;
+    padding: 8px 12px;
+    border: 0;
+    border-radius: calc(var(--radius-pill) - 4px);
+    background: transparent;
+    color: var(--color-text-muted);
+    font: inherit;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+}
+
+.text-viewer-toggle button:hover {
+    color: var(--color-text);
+}
+
+.text-viewer-toggle button.active {
+    background: rgba(122, 162, 247, 0.16);
+    color: var(--color-text);
+}
+
+.text-viewer-toggle button:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-accent-ring);
+}
+
 @media (max-width: 760px) {
     .file-viewer-overlay {
         padding: var(--space-3);
@@ -1802,6 +1839,20 @@ header {
 
     .text-viewer-scroll {
         padding: var(--space-4);
+    }
+
+    .text-viewer-footer {
+        justify-content: space-between;
+    }
+
+    .file-viewer-actions .text-viewer-toggle {
+        order: 3;
+        width: 100%;
+        justify-content: center;
+    }
+
+    .file-viewer-actions .text-viewer-toggle button {
+        flex: 1;
     }
 }
 

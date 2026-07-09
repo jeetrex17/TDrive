@@ -3,11 +3,10 @@
     import { isPdfFrameMessage, pdfViewerFrameSrc } from './pdf-frame';
     import { fileViewerState } from './file-viewer-store';
     import {
-        renderStructuredText,
         structuredTextLanguageForName,
         textViewerModeForName,
         type TextViewerMode,
-    } from './text-viewer';
+    } from './text-viewer-types';
 
     interface Props {
         onClose: () => void;
@@ -43,6 +42,8 @@
     let textRenderedHtml = $state('');
     let textDecoder = new TextDecoder('utf-8', { fatal: false });
     let textGeneration = 0;
+    let activeTextSource = '';
+    let markdownView = $state<'rendered' | 'raw'>('rendered');
 
     function formatTime(seconds: number): string {
         if (!Number.isFinite(seconds) || seconds <= 0) return '0:00';
@@ -144,6 +145,10 @@
         return match ? Number(match[1]) : 0;
     }
 
+    function isTextResponseOK(response: Response): boolean {
+        return response.ok && (response.status === 200 || response.status === 206);
+    }
+
     async function loadTextChunk(reset = false): Promise<void> {
         const url = $fileViewerState.url;
         if (!$fileViewerState.open || $fileViewerState.kind !== 'text' || !url || currentTextMode() !== 'plain') return;
@@ -152,28 +157,33 @@
         const generation = textGeneration;
         const offset = reset ? 0 : textOffset;
         const end = Math.min(offset + TEXT_CHUNK_BYTES, TEXT_MAX_BYTES) - 1;
+        const requestedBytes = Math.max(0, end - offset + 1);
         textLoading = true;
         textError = '';
         try {
             const response = await fetch(url, {
                 headers: { Range: `bytes=${offset}-${end}` },
             });
-            if (!response.ok && response.status !== 206) {
+            if (!isTextResponseOK(response)) {
                 throw new Error(`Text request failed (${response.status})`);
             }
             const buffer = await response.arrayBuffer();
             if (generation !== textGeneration) return;
 
+            const isPartial = response.status === 206;
             const total = parseContentRangeTotal(response.headers.get('Content-Range'));
             const nextOffset = offset + buffer.byteLength;
-            const reachedFileEnd = total > 0 && nextOffset >= total;
+            const reachedFileEnd = total > 0
+                ? nextOffset >= total
+                : !isPartial || buffer.byteLength < requestedBytes;
             const reachedViewerCap = nextOffset >= TEXT_MAX_BYTES;
-            const chunk = textDecoder.decode(buffer, { stream: !reachedFileEnd && !reachedViewerCap });
+            const hasMore = !reachedFileEnd && !reachedViewerCap;
+            const chunk = textDecoder.decode(buffer, { stream: hasMore });
 
             textContent = reset ? chunk : textContent + chunk;
             textOffset = nextOffset;
             textTotal = total;
-            textDone = buffer.byteLength === 0 || reachedFileEnd || reachedViewerCap;
+            textDone = buffer.byteLength === 0 || !hasMore;
         } catch (error) {
             if (generation === textGeneration) textError = String(error || 'Could not open text file');
         } finally {
@@ -193,17 +203,22 @@
             const response = await fetch(url, {
                 headers: { Range: `bytes=0-${TEXT_MAX_BYTES - 1}` },
             });
-            if (!response.ok && response.status !== 206) {
+            if (!isTextResponseOK(response)) {
                 throw new Error(`Text request failed (${response.status})`);
             }
             const buffer = await response.arrayBuffer();
             if (generation !== textGeneration) return;
 
+            const isPartial = response.status === 206;
             const total = parseContentRangeTotal(response.headers.get('Content-Range'));
             const nextOffset = buffer.byteLength;
-            const reachedFileEnd = total > 0 && nextOffset >= total;
+            const reachedFileEnd = total > 0
+                ? nextOffset >= total
+                : !isPartial || nextOffset < TEXT_MAX_BYTES;
             const reachedViewerCap = nextOffset >= TEXT_MAX_BYTES;
             const source = textDecoder.decode(buffer, { stream: false });
+            const { renderStructuredText } = await import('./text-viewer');
+            if (generation !== textGeneration) return;
 
             textContent = source;
             textRenderedHtml = renderStructuredText({
@@ -223,6 +238,7 @@
 
     function resetText(): void {
         textGeneration += 1;
+        activeTextSource = '';
         textDecoder = new TextDecoder('utf-8', { fatal: false });
         textContent = '';
         textOffset = 0;
@@ -231,6 +247,7 @@
         textError = '';
         textDone = false;
         textRenderedHtml = '';
+        markdownView = 'rendered';
     }
 
     function textCompletionLabel(): string {
@@ -243,13 +260,18 @@
 
     function textProgressLabel(): string {
         const mode = currentTextMode();
-        if (textOffset > 0) return `${(textOffset / 1024).toFixed(0)} KB loaded`;
+        if (mode !== 'plain') return '';
+        if (textOffset > 0) return `${textOffset < 1024 ? `${textOffset} B` : `${(textOffset / 1024).toFixed(0)} KB`} loaded`;
         if (!textLoading) return '';
-        return mode === 'plain' ? 'Opening text…' : 'Rendering preview…';
+        return 'Opening text…';
     }
 
-    function textStructuredFooterLabel(): string {
-        return textTotal > 0 && textOffset >= textTotal ? 'Preview ready' : 'Preview limit';
+    function shouldShowMarkdownToggle(): boolean {
+        return currentTextMode() === 'markdown' && (textRenderedHtml.length > 0 || textContent.length > 0);
+    }
+
+    function shouldShowTextFooter(): boolean {
+        return currentTextMode() === 'plain';
     }
 
     $effect(() => {
@@ -271,15 +293,17 @@
     });
 
     $effect(() => {
-        const { open, kind, url } = $fileViewerState;
+        const { open, kind, url, title } = $fileViewerState;
+        const nextSource = open && kind === 'text' && url ? `${url}\n${title}` : '';
+        if (nextSource === activeTextSource) return;
         resetText();
-        if (open && kind === 'text' && url) {
-            if (currentTextMode() === 'plain') {
-                void loadTextChunk(true);
-                return;
-            }
-            void loadStructuredText();
+        activeTextSource = nextSource;
+        if (!nextSource) return;
+        if (currentTextMode() === 'plain') {
+            void loadTextChunk(true);
+            return;
         }
+        void loadStructuredText();
     });
 
     $effect(() => {
@@ -343,6 +367,28 @@
             </div>
         </div>
         <div class="file-viewer-actions">
+            {#if shouldShowMarkdownToggle()}
+                <div class="text-viewer-toggle" role="tablist" aria-label="Markdown view">
+                    <button
+                        class:active={markdownView === 'rendered'}
+                        type="button"
+                        role="tab"
+                        aria-selected={markdownView === 'rendered'}
+                        onclick={() => { markdownView = 'rendered'; }}
+                    >
+                        Preview
+                    </button>
+                    <button
+                        class:active={markdownView === 'raw'}
+                        type="button"
+                        role="tab"
+                        aria-selected={markdownView === 'raw'}
+                        onclick={() => { markdownView = 'raw'; }}
+                    >
+                        Raw
+                    </button>
+                </div>
+            {/if}
             <button class="file-viewer-action" type="button" onclick={onDownload} aria-label="Download" title="Download">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" />
@@ -453,6 +499,8 @@
                 <div class="text-viewer-scroll">
                     {#if currentTextMode() === 'plain'}
                         <pre class="text-viewer-body">{textContent}</pre>
+                    {:else if currentTextMode() === 'markdown' && markdownView === 'raw'}
+                        <pre class="text-viewer-body">{textContent}</pre>
                     {:else if textRenderedHtml}
                         <div class={`text-viewer-body is-structured is-${currentTextMode()}`}>
                             <!-- eslint-disable-next-line svelte/no-at-html-tags -->
@@ -462,19 +510,14 @@
                         <div class="file-viewer-state">{textLoading ? 'Rendering preview…' : 'No preview available'}</div>
                     {/if}
                 </div>
-                <div class="text-viewer-footer">
-                    <span>{textProgressLabel()}</span>
-                    {#if textTotal}
-                        <span>{Math.round((textOffset / textTotal) * 100)}%</span>
-                    {/if}
-                    {#if currentTextMode() === 'plain'}
+                {#if shouldShowTextFooter()}
+                    <div class="text-viewer-footer">
+                        <span>{textProgressLabel()}</span>
                         <button class="file-viewer-action" type="button" disabled={textLoading || textDone} onclick={() => void loadTextChunk()}>
                             {textDone ? textCompletionLabel() : textLoading ? 'Loading…' : 'Load more'}
                         </button>
-                    {:else}
-                        <span>{textStructuredFooterLabel()}</span>
-                    {/if}
-                </div>
+                    </div>
+                {/if}
             </div>
         {:else}
             <div class="file-viewer-state">Opening file…</div>

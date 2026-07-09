@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { structuredTextLanguageForName, textViewerModeForName } from './text-viewer';
+import { structuredTextLanguageForName, textViewerModeForName } from './text-viewer-types';
 
 describe('text viewer mode', () => {
     it('streams plain text-like files', () => {

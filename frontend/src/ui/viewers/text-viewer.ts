@@ -6,10 +6,9 @@ import plaintext from 'highlight.js/lib/languages/plaintext';
 import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
 import MarkdownIt from 'markdown-it';
-import { fileExtension } from '../../modules/media-types';
+import type { StructuredTextLanguage, TextViewerMode } from './text-viewer-types';
 
-export type TextViewerMode = 'plain' | 'markdown' | 'code';
-export type StructuredTextLanguage = 'ini' | 'json' | 'plaintext' | 'xml' | 'yaml';
+export type { StructuredTextLanguage, TextViewerMode } from './text-viewer-types';
 
 interface StructuredTextRenderInput {
     mode: Exclude<TextViewerMode, 'plain'>;
@@ -17,17 +16,6 @@ interface StructuredTextRenderInput {
     language?: StructuredTextLanguage;
 }
 
-const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
-const CODE_LANGUAGES = new Map<string, StructuredTextLanguage>([
-    ['cfg', 'ini'],
-    ['conf', 'ini'],
-    ['ini', 'ini'],
-    ['json', 'json'],
-    ['yaml', 'yaml'],
-    ['yml', 'yaml'],
-    ['toml', 'ini'],
-    ['xml', 'xml'],
-]);
 const STRUCTURED_ALLOWED_TAGS = new Set([
     'a',
     'blockquote',
@@ -94,17 +82,6 @@ const secureLinkOpen: MarkdownRenderRule = (tokens, idx, options, env, self) => 
 };
 
 markdown.renderer.rules.link_open = secureLinkOpen;
-
-export function textViewerModeForName(name: string): TextViewerMode {
-    const ext = fileExtension(name);
-    if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown';
-    if (CODE_LANGUAGES.has(ext)) return 'code';
-    return 'plain';
-}
-
-export function structuredTextLanguageForName(name: string): StructuredTextLanguage | null {
-    return CODE_LANGUAGES.get(fileExtension(name)) ?? null;
-}
 
 export function renderStructuredText({ mode, source, language = 'plaintext' }: StructuredTextRenderInput): string {
     const html = mode === 'markdown' ? markdown.render(source) : renderCodeBlock(source, language);

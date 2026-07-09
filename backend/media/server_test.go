@@ -155,6 +155,56 @@ func TestMediaServiceOpenStreamSupportsViewerFileTypes(t *testing.T) {
 	}
 }
 
+func TestMediaStreamPreflightAllowsRangeFetches(t *testing.T) {
+	db := newResolverTestDB(t)
+	body := testBytes(256)
+	mustApplyOp(t, db, 10, projection.Op{
+		Type:     projection.OpFileUpload,
+		Parent:   projection.RootParent,
+		Name:     "notes.txt",
+		FileSize: int64(len(body)),
+	})
+	ranges := newMediaRangeFake(map[int64][]byte{10: body})
+	svc := NewService(Config{
+		DB:     db,
+		Peers:  staticPeerResolver{peer: ranges.peer},
+		Ranges: ranges,
+	})
+	defer svc.Close()
+
+	opened, err := svc.OpenStream(context.Background(), testChannelID, 10)
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodOptions, opened.URL, nil)
+	if err != nil {
+		t.Fatalf("options request: %v", err)
+	}
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	req.Header.Set("Access-Control-Request-Headers", "Range")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("OPTIONS: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want *", resp.Header.Get("Access-Control-Allow-Origin"))
+	}
+	if resp.Header.Get("Access-Control-Allow-Methods") != "GET, HEAD, OPTIONS" {
+		t.Fatalf("Access-Control-Allow-Methods = %q, want GET, HEAD, OPTIONS", resp.Header.Get("Access-Control-Allow-Methods"))
+	}
+	if resp.Header.Get("Access-Control-Allow-Headers") != "Range" {
+		t.Fatalf("Access-Control-Allow-Headers = %q, want Range", resp.Header.Get("Access-Control-Allow-Headers"))
+	}
+}
+
 func TestMediaServerRangeForms(t *testing.T) {
 	db := newResolverTestDB(t)
 	body := testBytes(512)
