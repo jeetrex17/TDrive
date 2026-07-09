@@ -951,6 +951,48 @@ header {
 }
 .col-name { padding-left: 10px; }
 
+.file-sort-button {
+    width: max-content;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 26px;
+    margin: -4px 0;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+    transition:
+        background-color var(--motion-fast) var(--ease-standard),
+        color var(--motion-fast) var(--ease-standard);
+}
+
+.file-sort-button:hover,
+.file-sort-button.active {
+    color: var(--text-main);
+    background: var(--overlay-white-1);
+}
+
+.file-sort-button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
+.file-sort-indicator {
+    width: 10px;
+    display: inline-flex;
+    justify-content: center;
+    color: var(--accent);
+    font-size: 0.72rem;
+    line-height: 1;
+}
+
 .file-list-box {
     flex: 1;
     overflow-y: auto;
@@ -3572,7 +3614,7 @@ header {
     bottom: calc(100% + 10px);
     z-index: 3;
     display: none;
-    min-width: 92px;
+    min-width: 196px;
     padding: 6px;
     border-radius: 10px;
     background: rgba(11, 14, 24, 0.96);
@@ -3624,6 +3666,110 @@ header {
 
 .video-speed-menu button.is-selected .video-speed-check {
     opacity: 1;
+}
+
+.video-speed-custom {
+    margin-top: 5px;
+    padding: 8px 6px 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.video-speed-custom label {
+    display: block;
+    margin: 0 0 7px;
+    color: rgba(255, 255, 255, 0.58);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.video-speed-custom-row {
+    display: grid;
+    grid-template-columns: minmax(78px, 1fr) 12px 54px;
+    align-items: center;
+    gap: 8px;
+}
+
+.video-speed-custom input {
+    box-sizing: border-box;
+    /* Cancel the global `input { margin-bottom: 15px }` reset; inside this
+       align-items:center grid that stray margin shifts the field up ~7px and
+       drops the Set button off its baseline. */
+    margin: 0;
+    width: 100%;
+    min-width: 0;
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 36px;
+    text-align: center;
+    outline: none;
+    /* Hide the native number spinner; it renders as a cramped, off-theme
+       stepper box. Keyboard ArrowUp/ArrowDown still step the value. */
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+.video-speed-custom input::-webkit-inner-spin-button,
+.video-speed-custom input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    appearance: none;
+    margin: 0;
+}
+
+.video-speed-custom input:focus {
+    border-color: var(--video-accent-border);
+    box-shadow: 0 0 0 2px var(--video-accent-ring);
+}
+
+.video-speed-custom-row > span {
+    justify-self: center;
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.video-speed-custom button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    grid-template-columns: none;
+    width: 54px;
+    min-width: 54px;
+    height: 36px;
+    padding: 0;
+    text-align: center;
+    color: #fff;
+    background: var(--video-accent);
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+    transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+/* Own hover/focus/active so the faint generic menu-button hover can't wash
+   the primary "Set" action back out. */
+.video-speed-custom button:hover,
+.video-speed-custom button:focus-visible {
+    background: var(--video-accent);
+    color: #fff;
+    filter: brightness(1.12);
+    outline: none;
+}
+
+.video-speed-custom button:focus-visible {
+    box-shadow: 0 0 0 2px var(--video-accent-ring);
+}
+
+.video-speed-custom button:active {
+    transform: translateY(0.5px) scale(0.98);
 }
 
 .video-loading {
