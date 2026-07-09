@@ -19,6 +19,7 @@
     let audioPaused = $state(true);
     let audioWaiting = $state(false);
     let audioVolume = $state(1);
+    let activeAudioUrl = '';
 
     let pdfCanvas = $state<HTMLCanvasElement | null>(null);
     let pdfDoc = $state<any>(null);
@@ -64,6 +65,15 @@
         }
     }
 
+    function viewerStatus(): string {
+        if ($fileViewerState.loading) return 'Opening';
+        if ($fileViewerState.error) return 'Unavailable';
+        if ($fileViewerState.kind === 'audio') return audioWaiting ? 'Buffering' : audioPaused ? 'Ready' : 'Playing';
+        if ($fileViewerState.kind === 'pdf') return pdfLoading ? 'Opening PDF' : pdfRendering ? 'Rendering' : pdfPageCount ? `${pdfPageCount} pages` : 'Ready';
+        if ($fileViewerState.kind === 'text') return textLoading && !textOffset ? 'Opening text' : textDone ? 'Loaded' : textOffset ? 'Partial' : 'Ready';
+        return 'Ready';
+    }
+
     function syncAudio(): void {
         if (!audioEl) return;
         audioCurrent = Number.isFinite(audioEl.currentTime) ? audioEl.currentTime : 0;
@@ -71,6 +81,14 @@
         audioPaused = audioEl.paused;
         audioWaiting = audioEl.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !audioEl.paused;
         audioVolume = audioEl.volume;
+    }
+
+    function resetAudioState(): void {
+        audioCurrent = 0;
+        audioDuration = 0;
+        audioPaused = true;
+        audioWaiting = false;
+        audioVolume = 1;
     }
 
     async function toggleAudio(): Promise<void> {
@@ -247,6 +265,14 @@
 
     $effect(() => {
         const { open, kind, url } = $fileViewerState;
+        const nextUrl = open && kind === 'audio' ? url : '';
+        if (nextUrl === activeAudioUrl) return;
+        activeAudioUrl = nextUrl;
+        resetAudioState();
+    });
+
+    $effect(() => {
+        const { open, kind, url } = $fileViewerState;
         const nextUrl = open && kind === 'pdf' ? url : '';
 
         if (nextUrl === activePdfUrl) {
@@ -288,16 +314,44 @@
 
 {#snippet viewerHeader()}
     <div class="file-viewer-topbar">
-        <div class="file-viewer-title-group">
-            <h3 id="file-viewer-title" class="file-viewer-title" title={$fileViewerState.title}>
-                {$fileViewerState.title || 'Open file'}
-            </h3>
-            <div class="file-viewer-meta">
-                <span>{viewerLabel()}</span>
-                {#if $fileViewerState.meta}
-                    <span aria-hidden="true">·</span>
-                    <span>{$fileViewerState.meta}</span>
+        <div class="file-viewer-identity">
+            <div class={`file-viewer-kind-mark is-${$fileViewerState.kind || 'file'}`} aria-hidden="true">
+                {#if $fileViewerState.kind === 'audio'}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 18V5l11-2v13" />
+                        <circle cx="6" cy="18" r="3" />
+                        <circle cx="17" cy="16" r="3" />
+                    </svg>
+                {:else if $fileViewerState.kind === 'pdf'}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <path stroke-linejoin="round" d="M7 3h7l4 4v14H7z" />
+                        <path stroke-linecap="round" d="M14 3v5h5M9.5 13h5M9.5 16h3.5" />
+                    </svg>
+                {:else if $fileViewerState.kind === 'text'}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <path stroke-linejoin="round" d="M7 3h10v18H7z" />
+                        <path stroke-linecap="round" d="M10 8h4M10 12h4M10 16h3" />
+                    </svg>
+                {:else}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                        <path stroke-linejoin="round" d="M7 3h7l4 4v14H7z" />
+                        <path stroke-linecap="round" d="M14 3v5h5" />
+                    </svg>
                 {/if}
+            </div>
+            <div class="file-viewer-title-group">
+                <h3 id="file-viewer-title" class="file-viewer-title" title={$fileViewerState.title}>
+                    {$fileViewerState.title || 'Open file'}
+                </h3>
+                <div class="file-viewer-meta">
+                    <span>{viewerLabel()}</span>
+                    {#if $fileViewerState.meta}
+                        <span aria-hidden="true">·</span>
+                        <span>{$fileViewerState.meta}</span>
+                    {/if}
+                    <span aria-hidden="true">·</span>
+                    <span>{viewerStatus()}</span>
+                </div>
             </div>
         </div>
         <div class="file-viewer-actions">
@@ -306,7 +360,11 @@
                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" />
                 </svg>
             </button>
-            <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">×</button>
+            <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+                    <path stroke-linecap="round" d="M6 6l12 12M18 6L6 18" />
+                </svg>
+            </button>
         </div>
     </div>
 {/snippet}
@@ -339,18 +397,25 @@
                     onended={syncAudio}
                     onerror={() => { audioWaiting = false; }}
                 ></audio>
-                <div class="audio-art" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 18V5l11-2v13" />
-                        <circle cx="6" cy="18" r="3" />
-                        <circle cx="17" cy="16" r="3" />
-                    </svg>
+                <div class="audio-hero">
+                    <div class="audio-art" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 18V5l11-2v13" />
+                            <circle cx="6" cy="18" r="3" />
+                            <circle cx="17" cy="16" r="3" />
+                        </svg>
+                    </div>
+                    <div class="audio-copy">
+                        <div class="audio-title" title={$fileViewerState.title}>{$fileViewerState.title}</div>
+                        <div class="audio-subtitle">{audioWaiting ? 'Buffering from Telegram' : audioPaused ? 'Ready to play' : 'Streaming audio'}</div>
+                    </div>
                 </div>
-                <div class="audio-copy">
-                    <div class="audio-title" title={$fileViewerState.title}>{$fileViewerState.title}</div>
-                    <div class="audio-subtitle">{audioWaiting ? 'Buffering' : 'Ready to play'}</div>
+                <div class="audio-timeline">
+                    <span class="audio-time">{formatTime(audioCurrent)}</span>
+                    <input class="audio-seek" type="range" min="0" max={audioDuration || 0} step="0.1" value={audioCurrent} oninput={seekAudio} aria-label="Seek audio" />
+                    <span class="audio-time">{formatTime(audioDuration)}</span>
                 </div>
-                <div class="audio-controls">
+                <div class="audio-controls" aria-label="Audio controls">
                     <button class="audio-play" type="button" onclick={() => void toggleAudio()} aria-label={audioPaused ? 'Play audio' : 'Pause audio'}>
                         {#if audioPaused}
                             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.8c0-.9.98-1.45 1.74-.98l9.08 5.67a1.15 1.15 0 010 1.96l-9.08 5.67A1.15 1.15 0 018 17.14V5.8z" /></svg>
@@ -358,32 +423,39 @@
                             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5h3.4v14H7V5zm6.6 0H17v14h-3.4V5z" /></svg>
                         {/if}
                     </button>
-                    <span class="audio-time">{formatTime(audioCurrent)}</span>
-                    <input class="audio-seek" type="range" min="0" max={audioDuration || 0} step="0.1" value={audioCurrent} oninput={seekAudio} aria-label="Seek audio" />
-                    <span class="audio-time">{formatTime(audioDuration)}</span>
-                    <button class="audio-mute" type="button" onclick={toggleAudioMute} aria-label={audioEl?.muted ? 'Unmute' : 'Mute'}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 10v4h4l5 4V6l-5 4H4z" />
-                            {#if audioEl?.muted || audioVolume <= 0}
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M18 9l-5 6m0-6l5 6" />
-                            {:else}
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M16 9.5a4 4 0 010 5" />
-                            {/if}
-                        </svg>
-                    </button>
-                    <input class="audio-volume" type="range" min="0" max="1" step="0.01" value={audioVolume} oninput={setAudioVolume} aria-label="Volume" />
+                    <div class="audio-volume-group">
+                        <button class="audio-mute" type="button" onclick={toggleAudioMute} aria-label={audioEl?.muted ? 'Unmute' : 'Mute'}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 10v4h4l5 4V6l-5 4H4z" />
+                                {#if audioEl?.muted || audioVolume <= 0}
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M18 9l-5 6m0-6l5 6" />
+                                {:else}
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M16 9.5a4 4 0 010 5" />
+                                {/if}
+                            </svg>
+                        </button>
+                        <input class="audio-volume" type="range" min="0" max="1" step="0.01" value={audioVolume} oninput={setAudioVolume} aria-label="Volume" />
+                    </div>
                 </div>
             </div>
         {:else if $fileViewerState.kind === 'pdf'}
             <div class="pdf-viewer">
                 <div class="pdf-toolbar" aria-label="PDF controls">
-                    <button class="file-viewer-action" type="button" disabled={!pdfDoc || pdfPageNumber <= 1} onclick={() => setPdfPage(pdfPageNumber - 1)}>Previous</button>
+                    <button class="file-viewer-action is-icon-only" type="button" disabled={!pdfDoc || pdfPageNumber <= 1} onclick={() => setPdfPage(pdfPageNumber - 1)} aria-label="Previous page" title="Previous page">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6" />
+                        </svg>
+                    </button>
                     <span class="pdf-page-label">{pdfPageCount ? `Page ${pdfPageNumber} / ${pdfPageCount}` : 'Loading PDF'}</span>
-                    <button class="file-viewer-action" type="button" disabled={!pdfDoc || pdfPageNumber >= pdfPageCount} onclick={() => setPdfPage(pdfPageNumber + 1)}>Next</button>
+                    <button class="file-viewer-action is-icon-only" type="button" disabled={!pdfDoc || pdfPageNumber >= pdfPageCount} onclick={() => setPdfPage(pdfPageNumber + 1)} aria-label="Next page" title="Next page">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 18l6-6-6-6" />
+                        </svg>
+                    </button>
                     <span class="pdf-toolbar-spacer"></span>
-                    <button class="file-viewer-action" type="button" onclick={() => setPdfZoom(pdfScale - 0.15)} aria-label="Zoom out">−</button>
+                    <button class="file-viewer-action is-icon-only" type="button" onclick={() => setPdfZoom(pdfScale - 0.15)} aria-label="Zoom out" title="Zoom out">−</button>
                     <span class="pdf-page-label">{Math.round(pdfScale * 100)}%</span>
-                    <button class="file-viewer-action" type="button" onclick={() => setPdfZoom(pdfScale + 0.15)} aria-label="Zoom in">+</button>
+                    <button class="file-viewer-action is-icon-only" type="button" onclick={() => setPdfZoom(pdfScale + 0.15)} aria-label="Zoom in" title="Zoom in">+</button>
                 </div>
                 <div class="pdf-stage">
                     {#if pdfError}
@@ -399,7 +471,9 @@
                 {#if textError}
                     <div class="file-viewer-state" role="alert">{textError}</div>
                 {/if}
-                <pre class="text-viewer-body">{textContent}</pre>
+                <div class="text-viewer-scroll">
+                    <pre class="text-viewer-body">{textContent}</pre>
+                </div>
                 <div class="text-viewer-footer">
                     <span>{textOffset ? `${(textOffset / 1024).toFixed(0)} KB loaded` : textLoading ? 'Opening text…' : ''}</span>
                     {#if textTotal}

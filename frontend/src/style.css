@@ -1194,8 +1194,8 @@ header {
 .file-viewer-overlay {
     align-items: stretch;
     justify-content: stretch;
-    background: rgba(4, 6, 11, 0.92);
-    padding: var(--space-6);
+    background: rgba(4, 6, 11, 0.94);
+    padding: 28px;
 }
 
 .file-viewer-shell {
@@ -1207,10 +1207,10 @@ header {
     max-width: none;
     padding: 0;
     overflow: hidden;
-    background: var(--color-surface-0);
+    background: #080a0f;
     border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lg);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
 }
 
 .file-viewer-topbar {
@@ -1218,10 +1218,35 @@ header {
     align-items: center;
     justify-content: space-between;
     gap: var(--space-5);
-    min-height: 76px;
-    padding: 18px 22px;
+    min-height: 72px;
+    padding: 14px 18px;
     border-bottom: 1px solid var(--border);
-    background: var(--color-surface-0);
+    background: #0b0d14;
+}
+
+.file-viewer-identity {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.file-viewer-kind-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 42px;
+    height: 42px;
+    color: var(--color-accent);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--overlay-white-1);
+}
+
+.file-viewer-kind-mark svg {
+    width: 22px;
+    height: 22px;
 }
 
 .file-viewer-title-group {
@@ -1232,7 +1257,7 @@ header {
     max-width: min(72vw, 980px);
     overflow: hidden;
     color: var(--color-text);
-    font-size: 1.15rem;
+    font-size: 1.05rem;
     font-weight: 800;
     line-height: 1.2;
     text-overflow: ellipsis;
@@ -1243,9 +1268,9 @@ header {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 5px;
+    margin-top: 4px;
     color: var(--color-text-muted);
-    font-size: var(--type-sm);
+    font-size: var(--type-xs);
     font-weight: 700;
     letter-spacing: 0.02em;
     text-transform: uppercase;
@@ -1266,7 +1291,7 @@ header {
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    background: var(--overlay-white-1);
+    background: rgba(255, 255, 255, 0.035);
     color: var(--color-text-soft);
     appearance: none;
     cursor: pointer;
@@ -1276,25 +1301,35 @@ header {
 }
 
 .file-viewer-action {
-    min-width: 40px;
-    height: 38px;
-    padding: 0 12px;
+    min-width: 38px;
+    height: 36px;
+    padding: 0 11px;
     border-radius: var(--radius-md);
     font-size: var(--type-sm);
     font-weight: 800;
 }
 
+.file-viewer-action.is-icon-only {
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+}
+
 .file-viewer-action svg {
-    width: 17px;
-    height: 17px;
+    width: 16px;
+    height: 16px;
 }
 
 .file-viewer-close {
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
     border-radius: var(--radius-pill);
-    font-size: 32px;
     line-height: 1;
+}
+
+.file-viewer-close svg {
+    width: 19px;
+    height: 19px;
 }
 
 .file-viewer-action:hover,
@@ -1319,6 +1354,16 @@ header {
     transform: none;
 }
 
+.file-viewer-action:focus-visible,
+.file-viewer-close:focus-visible,
+.audio-play:focus-visible,
+.audio-mute:focus-visible,
+.audio-seek:focus-visible,
+.audio-volume:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+
 .file-viewer-stage {
     min-height: 0;
     overflow: hidden;
@@ -1339,43 +1384,47 @@ header {
 
 .audio-viewer {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    gap: var(--space-5);
+    grid-template-rows: auto auto auto;
+    gap: var(--space-6);
     align-content: center;
-    width: min(760px, calc(100% - 48px));
+    width: min(720px, calc(100% - 48px));
     min-height: 100%;
     margin: 0 auto;
-    padding: var(--space-8) 0;
+    padding: 44px 0;
+}
+
+.audio-hero {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-5);
+    align-items: center;
 }
 
 .audio-art {
-    grid-row: 1 / span 2;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 132px;
-    height: 132px;
+    width: 112px;
+    height: 112px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-xl);
-    background: var(--color-surface-1);
+    border-radius: var(--radius-md);
+    background: #10131d;
     color: var(--color-accent);
 }
 
 .audio-art svg {
-    width: 56px;
-    height: 56px;
+    width: 48px;
+    height: 48px;
 }
 
 .audio-copy {
-    align-self: end;
     min-width: 0;
 }
 
 .audio-title {
     overflow: hidden;
     color: var(--color-text);
-    font-size: 1.25rem;
+    font-size: 1.16rem;
     font-weight: 800;
     line-height: 1.25;
     text-overflow: ellipsis;
@@ -1383,26 +1432,41 @@ header {
 }
 
 .audio-subtitle {
-    margin-top: var(--space-1);
+    margin-top: 6px;
     color: var(--color-text-muted);
     font-size: var(--type-sm);
     font-weight: 700;
 }
 
-.audio-controls {
+.audio-timeline {
     display: grid;
-    grid-template-columns: 48px auto minmax(160px, 1fr) auto 40px minmax(96px, 140px);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: var(--space-3);
     align-items: center;
     min-width: 0;
 }
 
+.audio-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
 .audio-play,
 .audio-mute {
-    width: 42px;
-    height: 42px;
+    width: 44px;
+    height: 44px;
     padding: 0;
     border-radius: var(--radius-pill);
+}
+
+.audio-play {
+    width: 50px;
+    height: 50px;
+    color: var(--color-text);
+    border-color: var(--overlay-accent-3);
+    background: var(--overlay-accent-1);
 }
 
 .audio-play svg,
@@ -1418,11 +1482,55 @@ header {
     font-weight: 800;
 }
 
+.audio-volume-group {
+    display: grid;
+    grid-template-columns: 44px minmax(96px, 148px);
+    gap: var(--space-3);
+    align-items: center;
+}
+
 .audio-seek,
 .audio-volume {
     width: 100%;
     min-width: 0;
+    height: 18px;
+    background: transparent;
     accent-color: var(--color-accent);
+    appearance: none;
+}
+
+.audio-seek::-webkit-slider-runnable-track,
+.audio-volume::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: var(--overlay-white-3);
+}
+
+.audio-seek::-webkit-slider-thumb,
+.audio-volume::-webkit-slider-thumb {
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: var(--color-text);
+    appearance: none;
+}
+
+.audio-seek::-moz-range-track,
+.audio-volume::-moz-range-track {
+    height: 4px;
+    border-radius: var(--radius-pill);
+    background: var(--overlay-white-3);
+}
+
+.audio-seek::-moz-range-thumb,
+.audio-volume::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: var(--color-text);
 }
 
 .pdf-viewer {
@@ -1435,10 +1543,11 @@ header {
 .pdf-toolbar {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-3) var(--space-4);
+    gap: var(--space-3);
+    min-height: 54px;
+    padding: 9px var(--space-4);
     border-bottom: 1px solid var(--border);
-    background: var(--color-surface-0);
+    background: #0b0d14;
 }
 
 .pdf-toolbar-spacer {
@@ -1456,7 +1565,7 @@ header {
     position: relative;
     min-height: 0;
     overflow: auto;
-    padding: var(--space-6);
+    padding: 28px;
     text-align: center;
     background: #05070c;
 }
@@ -1476,19 +1585,31 @@ header {
     grid-template-rows: minmax(0, 1fr) auto;
     height: 100%;
     min-height: 0;
-    background: var(--color-surface-0);
+    background: #05070c;
+}
+
+.text-viewer-scroll {
+    min-height: 0;
+    overflow: auto;
+    padding: 30px;
+    user-select: text;
 }
 
 .text-viewer-body {
-    min-height: 0;
-    overflow: auto;
-    padding: var(--space-6);
+    width: min(980px, 100%);
+    min-height: 100%;
+    margin: 0 auto;
+    padding: 26px 28px;
     color: var(--color-text-soft);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: #0b0d14;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    font-size: 0.86rem;
-    line-height: 1.65;
+    font-size: 0.88rem;
+    line-height: 1.72;
     white-space: pre-wrap;
     word-break: break-word;
+    user-select: text;
 }
 
 .text-viewer-footer {
@@ -1499,7 +1620,7 @@ header {
     padding: var(--space-3) var(--space-4);
     color: var(--color-text-muted);
     border-top: 1px solid var(--border);
-    background: var(--color-surface-0);
+    background: #0b0d14;
     font-size: var(--type-sm);
     font-weight: 700;
 }
@@ -1514,6 +1635,10 @@ header {
         padding: var(--space-4);
     }
 
+    .file-viewer-kind-mark {
+        display: none;
+    }
+
     .file-viewer-title {
         max-width: 58vw;
         font-size: var(--type-md);
@@ -1522,6 +1647,11 @@ header {
     .audio-viewer {
         grid-template-columns: minmax(0, 1fr);
         width: calc(100% - 32px);
+        padding: var(--space-6) 0;
+    }
+
+    .audio-hero {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     .audio-art {
@@ -1531,12 +1661,15 @@ header {
     }
 
     .audio-controls {
-        grid-template-columns: 44px auto minmax(90px, 1fr) auto;
+        align-items: flex-start;
     }
 
-    .audio-mute,
-    .audio-volume {
+    .audio-volume-group {
         display: none;
+    }
+
+    .text-viewer-scroll {
+        padding: var(--space-4);
     }
 }
 
