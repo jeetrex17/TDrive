@@ -1018,10 +1018,16 @@ header {
     column-gap: 12px;
 }
 .file-row:hover { background: var(--bg-panel); }
-.file-row:focus-visible,
-.file-row.is-keyboard-active {
+.file-row:focus-visible {
     background: rgba(122, 162, 247, 0.10);
     box-shadow: inset 0 0 0 1px rgba(122, 162, 247, 0.46), var(--focus-ring);
+}
+.file-row.is-keyboard-active:not(.is-selected) {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px rgba(122, 162, 247, 0.22);
+}
+.file-row.is-keyboard-active:not(.is-selected):hover {
+    background: var(--bg-panel);
 }
 .drive-row.is-selected {
     background: rgba(122, 162, 247, 0.12);

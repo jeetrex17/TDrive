@@ -63,6 +63,18 @@ describe('FileList', () => {
         expect(body).toContain('tabindex="-1"');
     });
 
+    it('keeps keyboard-active rows semantically unselected when selection is cleared', () => {
+        showFileListRows([makeFileRow()]);
+        setSelectedFileRowKeys([]);
+        setActiveFileRowKey('file:42');
+
+        const { body } = render(FileList);
+
+        expect(body).toContain('class="file-row drive-row is-keyboard-active"');
+        expect(body).toContain('aria-selected="false"');
+        expect(body).toContain('tabindex="0"');
+    });
+
     it('renders uploader chips as escaped text', () => {
         showFileListRows([makeFileRow({
             uploaderChip: { label: 'A<b> 2m ago' },
