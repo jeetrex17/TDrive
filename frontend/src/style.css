@@ -1533,53 +1533,6 @@ header {
     background: var(--color-text);
 }
 
-.pdf-viewer {
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    height: 100%;
-    min-height: 0;
-}
-
-.pdf-toolbar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    min-height: 54px;
-    padding: 9px var(--space-4);
-    border-bottom: 1px solid var(--border);
-    background: #0b0d14;
-}
-
-.pdf-toolbar-spacer {
-    flex: 1 1 auto;
-}
-
-.pdf-page-label {
-    color: var(--color-text-soft);
-    font-size: var(--type-sm);
-    font-variant-numeric: tabular-nums;
-    font-weight: 800;
-}
-
-.pdf-stage {
-    position: relative;
-    min-height: 0;
-    overflow: auto;
-    padding: 28px;
-    text-align: center;
-    background: #05070c;
-}
-
-.pdf-stage canvas {
-    max-width: 100%;
-    background: white;
-    border-radius: var(--radius-xs);
-}
-
-.pdf-stage canvas.is-rendering {
-    opacity: 0.72;
-}
-
 .text-viewer {
     display: grid;
     grid-template-rows: minmax(0, 1fr) auto;

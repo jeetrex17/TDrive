@@ -20,7 +20,7 @@ export interface FileViewerTarget {
     encrypted?: boolean;
 }
 
-const STREAM_KINDS = new Set<FileOpenKind>(['audio', 'pdf', 'text']);
+const STREAM_KINDS = new Set<FileOpenKind>(['audio', 'text']);
 
 let viewerHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let activeToken = '';
@@ -49,6 +49,15 @@ export async function openFileViewer(target: FileViewerTarget): Promise<void> {
     const kind = fileOpenKind(target.name);
     if (!STREAM_KINDS.has(kind)) {
         notify({ level: 'warning', title: `${fileKindLabel(target.name)} files cannot be opened yet` });
+        return;
+    }
+    if (target.encrypted) {
+        notify({
+            level: 'info',
+            title: 'Encrypted files open by download for now',
+            body: 'Streamed viewers are only enabled for plain files until seekable decrypt is available.',
+        });
+        enqueueDownload(target.id, target.name, target.size);
         return;
     }
 

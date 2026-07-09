@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { onDestroy, untrack } from 'svelte';
     import ModalShell from '../modals/ModalShell.svelte';
     import { fileViewerState } from './file-viewer-store';
 
@@ -19,19 +18,8 @@
     let audioPaused = $state(true);
     let audioWaiting = $state(false);
     let audioVolume = $state(1);
+    let audioError = $state('');
     let activeAudioUrl = '';
-
-    let pdfCanvas = $state<HTMLCanvasElement | null>(null);
-    let pdfDoc = $state<any>(null);
-    let pdfPageNumber = $state(1);
-    let pdfPageCount = $state(0);
-    let pdfScale = $state(1.15);
-    let pdfLoading = $state(false);
-    let pdfRendering = $state(false);
-    let pdfError = $state('');
-    let pdfLoadGeneration = 0;
-    let pdfRenderGeneration = 0;
-    let activePdfUrl = '';
 
     let textContent = $state('');
     let textOffset = $state(0);
@@ -56,8 +44,6 @@
         switch ($fileViewerState.kind) {
             case 'audio':
                 return 'Audio';
-            case 'pdf':
-                return 'PDF';
             case 'text':
                 return 'Text';
             default:
@@ -68,9 +54,8 @@
     function viewerStatus(): string {
         if ($fileViewerState.loading) return 'Opening';
         if ($fileViewerState.error) return 'Unavailable';
-        if ($fileViewerState.kind === 'audio') return audioWaiting ? 'Buffering' : audioPaused ? 'Ready' : 'Playing';
-        if ($fileViewerState.kind === 'pdf') return pdfLoading ? 'Opening PDF' : pdfRendering ? 'Rendering' : pdfPageCount ? `${pdfPageCount} pages` : 'Ready';
-        if ($fileViewerState.kind === 'text') return textLoading && !textOffset ? 'Opening text' : textDone ? 'Loaded' : textOffset ? 'Partial' : 'Ready';
+        if ($fileViewerState.kind === 'audio') return audioError ? 'Unavailable' : audioWaiting ? 'Buffering' : audioPaused ? 'Ready' : 'Playing';
+        if ($fileViewerState.kind === 'text') return textLoading && !textOffset ? 'Opening text' : textDone ? textCompletionLabel() : textOffset ? 'Partial' : 'Ready';
         return 'Ready';
     }
 
@@ -81,6 +66,7 @@
         audioPaused = audioEl.paused;
         audioWaiting = audioEl.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !audioEl.paused;
         audioVolume = audioEl.volume;
+        if (audioEl.readyState >= HTMLMediaElement.HAVE_METADATA) audioError = '';
     }
 
     function resetAudioState(): void {
@@ -89,12 +75,18 @@
         audioPaused = true;
         audioWaiting = false;
         audioVolume = 1;
+        audioError = '';
     }
 
     async function toggleAudio(): Promise<void> {
         if (!audioEl) return;
         if (audioEl.paused) {
-            await audioEl.play();
+            try {
+                await audioEl.play();
+                audioError = '';
+            } catch (error) {
+                audioError = String(error || 'Could not play audio');
+            }
         } else {
             audioEl.pause();
         }
@@ -122,91 +114,6 @@
         if (!audioEl) return;
         audioEl.muted = !audioEl.muted;
         syncAudio();
-    }
-
-    async function loadPdfJs(): Promise<any> {
-        const [pdfjs, worker] = await Promise.all([
-            import('pdfjs-dist/legacy/build/pdf.mjs'),
-            import('pdfjs-dist/legacy/build/pdf.worker.mjs?url'),
-        ]);
-        pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
-        return pdfjs;
-    }
-
-    async function loadPdf(url: string, generation: number): Promise<void> {
-        pdfLoading = true;
-        pdfError = '';
-        pdfPageNumber = 1;
-        pdfPageCount = 0;
-        try {
-            const pdfjs = await loadPdfJs();
-            const loadingTask = pdfjs.getDocument({
-                url,
-                disableAutoFetch: false,
-                disableStream: false,
-                rangeChunkSize: 1024 * 1024,
-            });
-            const doc = await loadingTask.promise;
-            if (generation !== pdfLoadGeneration) {
-                await doc.destroy?.();
-                return;
-            }
-            pdfDoc = doc;
-            pdfPageCount = Number(doc.numPages || 0);
-        } catch (error) {
-            if (generation === pdfLoadGeneration) {
-                pdfError = String(error || 'Could not open PDF');
-            }
-        } finally {
-            if (generation === pdfLoadGeneration) pdfLoading = false;
-        }
-    }
-
-    function destroyPdfDocument(): void {
-        const doc = untrack(() => pdfDoc);
-        doc?.destroy?.();
-        pdfDoc = null;
-    }
-
-    function resetPdfState(): void {
-        destroyPdfDocument();
-        pdfPageCount = 0;
-        pdfPageNumber = 1;
-        pdfError = '';
-        pdfLoading = false;
-        pdfRendering = false;
-    }
-
-    async function renderPdfPage(doc: any, pageNumber: number, scale: number, generation: number): Promise<void> {
-        if (!pdfCanvas) return;
-        pdfRendering = true;
-        try {
-            const page = await doc.getPage(pageNumber);
-            if (generation !== pdfRenderGeneration || !pdfCanvas) return;
-            const viewport = page.getViewport({ scale });
-            const ratio = window.devicePixelRatio || 1;
-            const context = pdfCanvas.getContext('2d', { alpha: false });
-            if (!context) throw new Error('Canvas is not available');
-            pdfCanvas.width = Math.ceil(viewport.width * ratio);
-            pdfCanvas.height = Math.ceil(viewport.height * ratio);
-            pdfCanvas.style.width = `${Math.ceil(viewport.width)}px`;
-            pdfCanvas.style.height = `${Math.ceil(viewport.height)}px`;
-            context.setTransform(ratio, 0, 0, ratio, 0, 0);
-            await page.render({ canvasContext: context, viewport }).promise;
-        } catch (error) {
-            if (generation === pdfRenderGeneration) pdfError = String(error || 'Could not render PDF page');
-        } finally {
-            if (generation === pdfRenderGeneration) pdfRendering = false;
-        }
-    }
-
-    function setPdfPage(page: number): void {
-        if (!pdfDoc) return;
-        pdfPageNumber = Math.max(1, Math.min(pdfPageCount || 1, page));
-    }
-
-    function setPdfZoom(nextScale: number): void {
-        pdfScale = Math.max(0.6, Math.min(2.4, nextScale));
     }
 
     function parseContentRangeTotal(header: string | null): number {
@@ -263,6 +170,10 @@
         textDone = false;
     }
 
+    function textCompletionLabel(): string {
+        return textTotal > 0 && textOffset >= textTotal ? 'End of file' : 'Preview limit';
+    }
+
     $effect(() => {
         const { open, kind, url } = $fileViewerState;
         const nextUrl = open && kind === 'audio' ? url : '';
@@ -273,42 +184,10 @@
 
     $effect(() => {
         const { open, kind, url } = $fileViewerState;
-        const nextUrl = open && kind === 'pdf' ? url : '';
-
-        if (nextUrl === activePdfUrl) {
-            return;
-        }
-
-        activePdfUrl = nextUrl;
-        pdfLoadGeneration += 1;
-        resetPdfState();
-
-        if (!nextUrl) {
-            return;
-        }
-
-        const generation = pdfLoadGeneration;
-        void loadPdf(nextUrl, generation);
-    });
-
-    $effect(() => {
-        if (!$fileViewerState.open || $fileViewerState.kind !== 'pdf' || !pdfDoc || !pdfCanvas) return;
-        pdfRenderGeneration += 1;
-        const generation = pdfRenderGeneration;
-        void renderPdfPage(pdfDoc, pdfPageNumber, pdfScale, generation);
-    });
-
-    $effect(() => {
-        const { open, kind, url } = $fileViewerState;
         resetText();
         if (open && kind === 'text' && url) {
             void loadTextChunk(true);
         }
-    });
-
-    onDestroy(() => {
-        pdfLoadGeneration += 1;
-        destroyPdfDocument();
     });
 </script>
 
@@ -321,11 +200,6 @@
                         <path stroke-linecap="round" stroke-linejoin="round" d="M9 18V5l11-2v13" />
                         <circle cx="6" cy="18" r="3" />
                         <circle cx="17" cy="16" r="3" />
-                    </svg>
-                {:else if $fileViewerState.kind === 'pdf'}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                        <path stroke-linejoin="round" d="M7 3h7l4 4v14H7z" />
-                        <path stroke-linecap="round" d="M14 3v5h5M9.5 13h5M9.5 16h3.5" />
                     </svg>
                 {:else if $fileViewerState.kind === 'text'}
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -395,7 +269,10 @@
                     onwaiting={() => { audioWaiting = true; }}
                     oncanplay={syncAudio}
                     onended={syncAudio}
-                    onerror={() => { audioWaiting = false; }}
+                    onerror={() => {
+                        audioWaiting = false;
+                        audioError = 'Could not load this audio stream';
+                    }}
                 ></audio>
                 <div class="audio-hero">
                     <div class="audio-art" aria-hidden="true">
@@ -407,7 +284,7 @@
                     </div>
                     <div class="audio-copy">
                         <div class="audio-title" title={$fileViewerState.title}>{$fileViewerState.title}</div>
-                        <div class="audio-subtitle">{audioWaiting ? 'Buffering from Telegram' : audioPaused ? 'Ready to play' : 'Streaming audio'}</div>
+                        <div class="audio-subtitle">{audioError || (audioWaiting ? 'Buffering from Telegram' : audioPaused ? 'Ready to play' : 'Streaming audio')}</div>
                     </div>
                 </div>
                 <div class="audio-timeline">
@@ -438,34 +315,6 @@
                     </div>
                 </div>
             </div>
-        {:else if $fileViewerState.kind === 'pdf'}
-            <div class="pdf-viewer">
-                <div class="pdf-toolbar" aria-label="PDF controls">
-                    <button class="file-viewer-action is-icon-only" type="button" disabled={!pdfDoc || pdfPageNumber <= 1} onclick={() => setPdfPage(pdfPageNumber - 1)} aria-label="Previous page" title="Previous page">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6" />
-                        </svg>
-                    </button>
-                    <span class="pdf-page-label">{pdfPageCount ? `Page ${pdfPageNumber} / ${pdfPageCount}` : 'Loading PDF'}</span>
-                    <button class="file-viewer-action is-icon-only" type="button" disabled={!pdfDoc || pdfPageNumber >= pdfPageCount} onclick={() => setPdfPage(pdfPageNumber + 1)} aria-label="Next page" title="Next page">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 18l6-6-6-6" />
-                        </svg>
-                    </button>
-                    <span class="pdf-toolbar-spacer"></span>
-                    <button class="file-viewer-action is-icon-only" type="button" onclick={() => setPdfZoom(pdfScale - 0.15)} aria-label="Zoom out" title="Zoom out">−</button>
-                    <span class="pdf-page-label">{Math.round(pdfScale * 100)}%</span>
-                    <button class="file-viewer-action is-icon-only" type="button" onclick={() => setPdfZoom(pdfScale + 0.15)} aria-label="Zoom in" title="Zoom in">+</button>
-                </div>
-                <div class="pdf-stage">
-                    {#if pdfError}
-                        <div class="file-viewer-state" role="alert">{pdfError}</div>
-                    {:else if pdfLoading}
-                        <div class="file-viewer-state">Opening PDF…</div>
-                    {/if}
-                    <canvas bind:this={pdfCanvas} class:is-rendering={pdfRendering}></canvas>
-                </div>
-            </div>
         {:else if $fileViewerState.kind === 'text'}
             <div class="text-viewer">
                 {#if textError}
@@ -480,7 +329,7 @@
                         <span>{Math.round((textOffset / textTotal) * 100)}%</span>
                     {/if}
                     <button class="file-viewer-action" type="button" disabled={textLoading || textDone} onclick={() => void loadTextChunk()}>
-                        {textDone ? 'End of file' : textLoading ? 'Loading…' : 'Load more'}
+                        {textDone ? textCompletionLabel() : textLoading ? 'Loading…' : 'Load more'}
                     </button>
                 </div>
             </div>
