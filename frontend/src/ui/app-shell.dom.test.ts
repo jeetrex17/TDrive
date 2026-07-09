@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import AppShell from './AppShell.svelte';
+import { resetFileSortState } from './file-list/file-sort-store';
 
 let app: Record<string, unknown> | null = null;
 let host: HTMLElement | null = null;
@@ -20,6 +21,7 @@ function click(selector: string): void {
 }
 
 afterEach(async () => {
+    resetFileSortState();
     delete (window as unknown as { triggerRefresh?: unknown }).triggerRefresh;
     delete (window as unknown as { openNewFolderModal?: unknown }).openNewFolderModal;
     if (app) await unmount(app);
@@ -65,5 +67,21 @@ describe('AppShell behavior', () => {
         const selectionBar = host?.querySelector('#selection-bar');
         expect(selectionBar).not.toBeNull();
         expect(selectionBar?.children).toHaveLength(0);
+    });
+
+    it('toggles file-list sort headers accessibly', () => {
+        setup();
+
+        click('.file-sort-button.col-name');
+        let name = host?.querySelector<HTMLButtonElement>('.file-sort-button.col-name');
+        expect(name?.classList.contains('active')).toBe(true);
+        expect(name?.getAttribute('aria-pressed')).toBe('true');
+        expect(name?.getAttribute('aria-label')).toContain('descending');
+        expect(name?.textContent).toContain('↑');
+
+        click('.file-sort-button.col-name');
+        name = host?.querySelector<HTMLButtonElement>('.file-sort-button.col-name');
+        expect(name?.getAttribute('aria-label')).toContain('ascending');
+        expect(name?.textContent).toContain('↓');
     });
 });

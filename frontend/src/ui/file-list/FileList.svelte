@@ -1,6 +1,8 @@
 <script lang="ts">
     import FileState from './FileState.svelte';
+    import { sortFileListRows } from './file-sort';
     import { fileListView } from './file-list-store';
+    import { fileSortState } from './file-sort-store';
     import { activeFileRowKey, selectedFileRowKeys } from './row-state-store';
     import type { FileListAction, FileListFileRow, FileListRow, FolderListRow } from './types';
 
@@ -28,6 +30,10 @@
     // the row makes Svelte's a11y contract explicit without adding per-row
     // behavior or fighting the existing roving-focus controller.
     function onDelegatedKeydown() {}
+
+    const visibleRows = $derived($fileListView.kind === 'rows'
+        ? sortFileListRows($fileListView.rows, $fileSortState)
+        : []);
 </script>
 
 {#if $fileListView.kind === 'state'}
@@ -39,7 +45,7 @@
         onAction={$fileListView.onAction}
     />
 {:else}
-    {#each $fileListView.rows as row (row.key)}
+    {#each visibleRows as row (row.key)}
         {#if row.kind === 'pending-folder'}
             <div
                 class="file-row drive-row folder-row pending-folder"

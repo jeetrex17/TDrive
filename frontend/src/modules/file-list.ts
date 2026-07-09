@@ -376,32 +376,40 @@ function activateRow(row: HTMLElement) {
     window.initDownload(Number(row.dataset.id), row.dataset.name, Number(row.dataset.size || 0));
 }
 
-function fillVisibleFolderSizes(folders: any[], parentId: string, folderEpoch: number, list: HTMLElement) {
+function fillVisibleFolderSizes(folders: any[], parentId: string, folderEpoch: number) {
     if (!folders.length) return;
     calculateVisibleFolderBytes(parentId)
         .then((sizes) => {
             if (state.folderSizeEpoch !== folderEpoch) return;
             if (state.currentFolderId !== parentId) return;
-            for (const folder of folders) {
-                const id = String(folder?.id || "");
-                if (!id) continue;
-                const row = list.querySelector(`.folder-row[data-id="${CSS.escape(id)}"]`);
-                const sizeEl = row?.querySelector(".folder-size");
-                if (!sizeEl) continue;
-                sizeEl.textContent = formatBytes(sizes.get(id) ?? 0);
-            }
+            applyFolderSizeLabels(folders, (id) => formatBytes(sizes.get(id) ?? 0));
         })
         .catch(() => {
             if (state.folderSizeEpoch !== folderEpoch) return;
             if (state.currentFolderId !== parentId) return;
-            for (const folder of folders) {
-                const id = String(folder?.id || "");
-                if (!id) continue;
-                const row = list.querySelector(`.folder-row[data-id="${CSS.escape(id)}"]`);
-                const sizeEl = row?.querySelector(".folder-size");
-                if (sizeEl) sizeEl.textContent = "—";
-            }
+            applyFolderSizeLabels(folders, () => "—");
         });
+}
+
+function applyFolderSizeLabels(folders: any[], labelForID: (id: string) => string) {
+    const folderIDs = new Set(
+        folders
+            .map((folder) => String(folder?.id || ""))
+            .filter(Boolean),
+    );
+    if (!folderIDs.size) return;
+
+    updateFileListRows((rows) => {
+        let changed = false;
+        const nextRows = rows.map((row) => {
+            if (row.kind !== "folder" || !folderIDs.has(row.id)) return row;
+            const sizeLabel = labelForID(row.id);
+            if (row.sizeLabel === sizeLabel) return row;
+            changed = true;
+            return { ...row, sizeLabel };
+        });
+        return changed ? nextRows : rows;
+    });
 }
 
 export function refreshFiles() {
@@ -560,7 +568,7 @@ export function refreshFiles() {
                 if (state.currentFolderId !== requestedFolderId) return;
 
                 syncDriveRowTabStops(list);
-                fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch, list);
+                fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch);
 
                 // Restore prior scroll on a same-folder re-render. Before
                 // pendingFocus so a just-uploaded/renamed file can still scroll

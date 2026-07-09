@@ -27,6 +27,8 @@ const LOADING_DEBOUNCE_MS = 250;
 const SEEK_STEP_SECONDS = 10;
 const VOLUME_STEP = 0.05;
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const MIN_PLAYBACK_RATE = 0.25;
+const MAX_PLAYBACK_RATE = 4;
 const THUMBNAIL_BUCKET_SECONDS = 10;
 const THUMBNAIL_LONG_BUCKET_SECONDS = 20;
 const THUMBNAIL_VERY_LONG_BUCKET_SECONDS = 30;
@@ -190,7 +192,7 @@ class HtmlVideoAdapter implements PlayerAdapter {
     }
 
     setSpeed(value: number) {
-        this.video.playbackRate = clamp(value, 0.25, 4);
+        this.video.playbackRate = clampPlaybackRate(value);
         this.emit();
     }
 
@@ -298,7 +300,7 @@ class NativeMpvAdapter implements PlayerAdapter {
     }
 
     setSpeed(value: number) {
-        const next = clamp(value, 0.25, 4);
+        const next = clampPlaybackRate(value);
         this.scheduleLatestCommand("speed", ["set", "speed", String(next)]);
         this.updateFallbackState((state) => ({ ...state, rate: next }));
     }
@@ -1051,13 +1053,17 @@ function previewVolume(value: number) {
 }
 
 function syncSpeed(state: PlayerState) {
+    const customInput = byID<HTMLInputElement>("video-speed-custom-input");
     if (speedBtnEl) {
         speedBtnEl.textContent = `${formatRate(state.rate)}x`;
         speedBtnEl.title = isNativeFallbackActive() ? "Playback speed (click to cycle)" : "Playback speed";
         speedBtnEl.setAttribute("aria-label", speedBtnEl.title);
     }
+    if (customInput && document.activeElement !== customInput) {
+        customInput.value = formatRate(state.rate);
+    }
     speedMenuEl?.querySelectorAll<HTMLButtonElement>("[data-rate]").forEach((button) => {
-        const selected = Number(button.dataset.rate || 1) === state.rate;
+        const selected = Math.abs(Number(button.dataset.rate || 1) - state.rate) < 0.001;
         button.classList.toggle("is-selected", selected);
         button.setAttribute("aria-checked", selected ? "true" : "false");
     });
@@ -1069,6 +1075,16 @@ function nextPlaybackRate(currentRate: number) {
     if (currentIndex >= 0) return RATE_OPTIONS[(currentIndex + 1) % RATE_OPTIONS.length];
     const nextHigher = RATE_OPTIONS.find((rate) => rate > current);
     return nextHigher ?? RATE_OPTIONS[0];
+}
+
+function clampPlaybackRate(value: number) {
+    return clamp(Number.isFinite(value) ? value : 1, MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE);
+}
+
+function parseCustomPlaybackRate(value: string) {
+    const rate = Number(value.trim());
+    if (!Number.isFinite(rate) || rate <= 0) return null;
+    return clampPlaybackRate(rate);
 }
 
 function cycleFallbackPlaybackRate() {
@@ -1915,8 +1931,31 @@ function bindSpeedMenu() {
         closeSpeedMenu(true);
         revealChrome();
     });
+    speedMenuEl?.addEventListener("submit", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!activeAdapter) return;
+        const input = byID<HTMLInputElement>("video-speed-custom-input");
+        const rate = input ? parseCustomPlaybackRate(input.value) : null;
+        if (rate == null) {
+            input?.focus({ preventScroll: true });
+            return;
+        }
+        activeAdapter.setSpeed(rate);
+        closeSpeedMenu(true);
+        revealChrome();
+    });
     speedMenuEl?.addEventListener("keydown", (event) => {
         if (!isSpeedMenuOpen()) return;
+        const target = event.target as HTMLElement | null;
+        if (target?.closest(".video-speed-custom")) {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                closeSpeedMenu(true);
+            }
+            return;
+        }
         if (event.key === "Escape") {
             event.preventDefault();
             event.stopPropagation();
@@ -2045,9 +2084,16 @@ function bindControls() {
 
 function renderSpeedOptions() {
     if (!speedMenuEl) return;
-    speedMenuEl.innerHTML = RATE_OPTIONS.map((rate) => (
-        `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}"><span class="video-speed-check" aria-hidden="true">✓</span><span>${formatRate(rate)}x</span></button>`
-    )).join("");
+    const options = RATE_OPTIONS.map(speedOptionMarkup).join("");
+    speedMenuEl.innerHTML = `${options}${customSpeedMarkup()}`;
+}
+
+function speedOptionMarkup(rate: number) {
+    return `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}"><span class="video-speed-check" aria-hidden="true">✓</span><span>${formatRate(rate)}x</span></button>`;
+}
+
+function customSpeedMarkup() {
+    return `<form class="video-speed-custom" role="none" aria-label="Custom playback speed"><label for="video-speed-custom-input">Custom</label><div class="video-speed-custom-row"><input id="video-speed-custom-input" type="number" inputmode="decimal" min="${MIN_PLAYBACK_RATE}" max="${MAX_PLAYBACK_RATE}" step="0.05" value="1" aria-label="Custom playback speed" /><span aria-hidden="true">x</span><button type="submit">Set</button></div></form>`;
 }
 
 export function setupVideoModal() {

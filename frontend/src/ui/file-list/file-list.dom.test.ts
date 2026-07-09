@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import FileList from './FileList.svelte';
 import { showFileListRows, showFileListState, updateFileListRows } from './file-list-store';
+import { resetFileSortState, setFileSortKey } from './file-sort-store';
 import { setActiveFileRowKey, setSelectedFileRowKeys } from './row-state-store';
 import type { FileListFileRow } from './types';
 
@@ -47,6 +48,7 @@ function row(): HTMLElement {
 }
 
 afterEach(async () => {
+    resetFileSortState();
     showFileListState({
         stateKind: 'loading',
         title: 'Loading files',
@@ -120,5 +122,22 @@ describe('FileList DOM behavior', () => {
 
         expect(onRowClick).toHaveBeenCalledTimes(1);
         expect(onDownload).toHaveBeenCalledTimes(1);
+    });
+
+    it('reorders keyed rows when the sort state changes', () => {
+        setup();
+        showFileListRows([
+            makeFileRow({ id: '2', key: 'file:2', selectionKey: 'file:2', name: 'beta.mp4', baseName: 'beta', uploadTime: 10 }),
+            makeFileRow({ id: '1', key: 'file:1', selectionKey: 'file:1', name: 'alpha.mp4', baseName: 'alpha', uploadTime: 20 }),
+        ]);
+        setSelectedFileRowKeys(['file:2']);
+        flushSync();
+
+        setFileSortKey('name');
+        flushSync();
+
+        const rows = Array.from(host?.querySelectorAll<HTMLElement>('.drive-row') ?? []);
+        expect(rows.map((item) => item.dataset.rowKey)).toEqual(['file:1', 'file:2']);
+        expect(rows[1].classList.contains('is-selected')).toBe(true);
     });
 });

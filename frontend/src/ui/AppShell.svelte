@@ -1,10 +1,24 @@
 <script lang="ts">
+    import { setFileSortKey, fileSortState } from './file-list/file-sort-store';
+    import type { FileSortKey } from './file-list/file-sort';
+
     function refreshFiles(): void {
         void window.triggerRefresh?.();
     }
 
     function openFolderModal(): void {
         window.openNewFolderModal?.();
+    }
+
+    function sortButtonLabel(key: FileSortKey): string {
+        const active = $fileSortState.key === key;
+        if (!active) return `Sort by ${key}`;
+        return `Sort by ${key} ${$fileSortState.direction === 'asc' ? 'descending' : 'ascending'}`;
+    }
+
+    function sortIndicator(key: FileSortKey): string {
+        if ($fileSortState.key !== key) return '';
+        return $fileSortState.direction === 'asc' ? '↑' : '↓';
     }
 </script>
 
@@ -82,9 +96,39 @@
         </div>
 
         <div class="file-table-header">
-            <span class="col-name">Name</span>
-            <span class="col-date">Date</span>
-            <span class="col-size">Size</span>
+            <button
+                class:active={$fileSortState.key === 'name'}
+                class="file-sort-button col-name"
+                type="button"
+                aria-label={sortButtonLabel('name')}
+                aria-pressed={$fileSortState.key === 'name'}
+                onclick={() => setFileSortKey('name')}
+            >
+                <span>Name</span>
+                <span class="file-sort-indicator" aria-hidden="true">{sortIndicator('name')}</span>
+            </button>
+            <button
+                class:active={$fileSortState.key === 'date'}
+                class="file-sort-button col-date"
+                type="button"
+                aria-label={sortButtonLabel('date')}
+                aria-pressed={$fileSortState.key === 'date'}
+                onclick={() => setFileSortKey('date')}
+            >
+                <span>Date</span>
+                <span class="file-sort-indicator" aria-hidden="true">{sortIndicator('date')}</span>
+            </button>
+            <button
+                class:active={$fileSortState.key === 'size'}
+                class="file-sort-button col-size"
+                type="button"
+                aria-label={sortButtonLabel('size')}
+                aria-pressed={$fileSortState.key === 'size'}
+                onclick={() => setFileSortKey('size')}
+            >
+                <span>Size</span>
+                <span class="file-sort-indicator" aria-hidden="true">{sortIndicator('size')}</span>
+            </button>
             <span class="col-actions">Actions</span>
             <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite"></div>
         </div>
