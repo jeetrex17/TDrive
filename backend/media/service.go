@@ -56,6 +56,14 @@ func (s *Service) Resolve(ctx context.Context, channelID, fileID int64) (Logical
 }
 
 func (s *Service) Open(ctx context.Context, channelID, fileID int64) (OpenResult, error) {
+	return s.open(ctx, channelID, fileID, StreamKindVideo)
+}
+
+func (s *Service) OpenStream(ctx context.Context, channelID, fileID int64) (OpenResult, error) {
+	return s.open(ctx, channelID, fileID, StreamKindUnknown)
+}
+
+func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKind StreamKind) (OpenResult, error) {
 	if s == nil {
 		return OpenResult{}, ErrDBNotReady
 	}
@@ -76,7 +84,8 @@ func (s *Service) Open(ctx context.Context, channelID, fileID int64) (OpenResult
 	if file.Encrypted {
 		return OpenResult{}, ErrEncryptedUnsupported
 	}
-	if !isSupportedMediaName(file.Name) {
+	kind := streamKindForName(file.Name)
+	if kind == StreamKindUnknown || (requiredKind != StreamKindUnknown && kind != requiredKind) {
 		return OpenResult{}, ErrUnsupportedMediaType
 	}
 
@@ -105,7 +114,9 @@ func (s *Service) Open(ctx context.Context, channelID, fileID int64) (OpenResult
 		return OpenResult{}, fmt.Errorf("media: logical size mismatch: segments=%d file=%d", start, file.StoredSize)
 	}
 
-	session, err := newSession(file, segments, s.ranges, s.thumbs, s.thumbGen)
+	session, err := newSession(file, segments, s.ranges, s.thumbs, s.thumbGen, SessionOptions{
+		EnableVideoThumbnails: kind == StreamKindVideo,
+	})
 	if err != nil {
 		return OpenResult{}, err
 	}
@@ -114,11 +125,14 @@ func (s *Service) Open(ctx context.Context, channelID, fileID int64) (OpenResult
 		return OpenResult{}, err
 	}
 	return OpenResult{
-		Token:        session.Token(),
-		URL:          session.URL(),
-		ThumbnailURL: session.ThumbnailURL(),
-		Name:         file.Name,
-		Info:         file,
+		Token:         session.Token(),
+		URL:           session.URL(),
+		ThumbnailURL:  session.ThumbnailURL(),
+		Name:          file.Name,
+		Kind:          kind,
+		MimeType:      contentTypeFor(file.Name),
+		SupportsRange: true,
+		Info:          file,
 	}, nil
 }
 

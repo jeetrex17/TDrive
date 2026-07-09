@@ -81,6 +81,16 @@ func (a *App) OpenMedia(msgID int) (media.OpenResult, error) {
 	return a.engine.MediaService().Open(a.ctx, a.ActiveChannelID(), int64(msgID))
 }
 
+// OpenStream creates a tokenized loopback byte stream for an in-app file
+// opener. Unlike OpenMedia, it is not video-only; callers choose the viewer
+// from the returned stream kind and must still call CloseMedia on close.
+func (a *App) OpenStream(msgID int) (media.OpenResult, error) {
+	if a.engine == nil {
+		return media.OpenResult{}, fmt.Errorf("backend not ready")
+	}
+	return a.engine.MediaService().OpenStream(a.ctx, a.ActiveChannelID(), int64(msgID))
+}
+
 func (a *App) CloseMedia(token string) error {
 	if a.engine == nil {
 		return nil

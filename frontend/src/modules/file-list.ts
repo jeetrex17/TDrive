@@ -19,6 +19,7 @@ import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { isVideoFile } from './media-types';
 import { openVideoModal } from './modals/video';
+import { canOpenFileViewer, openFileViewer } from './modals/file-viewer';
 import FileList from '../ui/file-list/FileList.svelte';
 import { showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
@@ -172,6 +173,13 @@ function fileActions(name: string): FileListAction[] {
             className: "play-video",
             title: "Play",
             label: "Play video",
+        });
+    } else if (canOpenFileViewer(name || "")) {
+        actions.push({
+            kind: "open",
+            className: "open-file",
+            title: "Open",
+            label: "Open file",
         });
     }
     actions.push({
@@ -354,6 +362,15 @@ function activateRow(row: HTMLElement) {
             Number(row.dataset.size || 0),
             row.dataset.encrypted === "true",
         );
+        return;
+    }
+    if (canOpenFileViewer(row.dataset.name || "")) {
+        void openFileViewer({
+            id: Number(row.dataset.id),
+            name: row.dataset.name || "File",
+            size: Number(row.dataset.size || 0),
+            encrypted: row.dataset.encrypted === "true",
+        });
         return;
     }
     window.initDownload(Number(row.dataset.id), row.dataset.name, Number(row.dataset.size || 0));
@@ -632,6 +649,15 @@ function handleListClick(e: MouseEvent) {
             );
             return;
         }
+        if ((e.target as HTMLElement).closest("button.open-file")) {
+            void openFileViewer({
+                id: Number(row.dataset.id),
+                name: row.dataset.name || "File",
+                size: Number(row.dataset.size || 0),
+                encrypted: row.dataset.encrypted === "true",
+            });
+            return;
+        }
         if ((e.target as HTMLElement).closest("button")) return;
         setFocusedRow(row, { preventScroll: true });
         handleRowSelection(row, e);
@@ -721,6 +747,18 @@ function handleListDblClick(e: MouseEvent) {
                 Number(row.dataset.size || 0),
                 row.dataset.encrypted === "true",
             );
+            return;
+        }
+        if (canOpenFileViewer(row.dataset.name || "")) {
+            e.preventDefault();
+            const selection = window.getSelection?.();
+            if (selection) selection.removeAllRanges();
+            void openFileViewer({
+                id: Number(row.dataset.id),
+                name: row.dataset.name || "File",
+                size: Number(row.dataset.size || 0),
+                encrypted: row.dataset.encrypted === "true",
+            });
             return;
         }
         if (row.dataset.canRename !== "true") return;

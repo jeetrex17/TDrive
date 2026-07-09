@@ -102,6 +102,8 @@ export function OpenMedia(arg1:number):Promise<media.OpenResult>;
 
 export function OpenNativeMedia(arg1:number,arg2:nativeplayer.Rect):Promise<main.NativeMediaResult>;
 
+export function OpenStream(arg1:number):Promise<media.OpenResult>;
+
 export function PlanImport(arg1:Array<string>,arg2:boolean,arg3:boolean):Promise<file.ImportPlan>;
 
 export function PreviewFile(arg1:number):Promise<main.PreviewPayload>;

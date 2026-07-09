@@ -213,7 +213,7 @@ func (s *Server) handleThumbSource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, prefix string, readAt func(*Session, context.Context, []byte, int64) (int, error)) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -231,6 +231,13 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 	size := session.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", contentTypeFor(session.Name()))
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Range")
+	w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 
 	start, end, partial, ok := parseRangeHeader(r.Header.Get("Range"), size)
 	if !ok {
@@ -408,6 +415,22 @@ func contentTypeFor(name string) string {
 		return "video/ogg"
 	case ".mpeg", ".mpg":
 		return "video/mpeg"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".m4a":
+		return "audio/mp4"
+	case ".aac":
+		return "audio/aac"
+	case ".wav":
+		return "audio/wav"
+	case ".flac":
+		return "audio/flac"
+	case ".oga", ".ogg", ".opus":
+		return "audio/ogg"
+	case ".pdf":
+		return "application/pdf"
+	case ".txt", ".log", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml", ".toml", ".xml", ".srt", ".vtt":
+		return "text/plain; charset=utf-8"
 	}
 	if typ := mime.TypeByExtension(ext); typ != "" {
 		return typ
@@ -416,11 +439,25 @@ func contentTypeFor(name string) string {
 }
 
 func isSupportedMediaName(name string) bool {
+	return streamKindForName(name) == StreamKindVideo
+}
+
+func isSupportedStreamName(name string) bool {
+	return streamKindForName(name) != StreamKindUnknown
+}
+
+func streamKindForName(name string) StreamKind {
 	switch strings.ToLower(path.Ext(name)) {
 	case ".mp4", ".m4v", ".mov", ".qt", ".webm", ".mkv", ".mk3d", ".avi",
 		".ts", ".m2ts", ".mts", ".flv", ".wmv", ".ogv", ".mpeg", ".mpg":
-		return true
+		return StreamKindVideo
+	case ".mp3", ".m4a", ".aac", ".wav", ".flac", ".oga", ".ogg", ".opus":
+		return StreamKindAudio
+	case ".pdf":
+		return StreamKindPDF
+	case ".txt", ".log", ".md", ".markdown", ".csv", ".tsv", ".json", ".yaml", ".yml", ".toml", ".xml", ".srt", ".vtt":
+		return StreamKindText
 	default:
-		return false
+		return StreamKindUnknown
 	}
 }

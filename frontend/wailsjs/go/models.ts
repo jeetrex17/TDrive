@@ -480,6 +480,9 @@ export namespace media {
 	    url: string;
 	    thumbnail_url: string;
 	    name: string;
+	    kind: string;
+	    mime_type: string;
+	    supports_range: boolean;
 	    info: LogicalFile;
 
 	    static createFrom(source: any = {}) {
@@ -492,6 +495,9 @@ export namespace media {
 	        this.url = source["url"];
 	        this.thumbnail_url = source["thumbnail_url"];
 	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.mime_type = source["mime_type"];
+	        this.supports_range = source["supports_range"];
 	        this.info = this.convertValues(source["info"], LogicalFile);
 	    }
 

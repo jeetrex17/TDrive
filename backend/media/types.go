@@ -21,6 +21,16 @@ var (
 	ErrThumbnailUnavailable = errors.New("media: thumbnail unavailable")
 )
 
+type StreamKind string
+
+const (
+	StreamKindUnknown StreamKind = "unknown"
+	StreamKindVideo   StreamKind = "video"
+	StreamKindAudio   StreamKind = "audio"
+	StreamKindPDF     StreamKind = "pdf"
+	StreamKindText    StreamKind = "text"
+)
+
 // Segment is one stored Telegram document body in a logical TDrive file.
 //
 // For normal files there is exactly one segment and MsgID is the file's own
@@ -54,9 +64,12 @@ func (f LogicalFile) SegmentCount() int {
 }
 
 type OpenResult struct {
-	Token        string      `json:"token"`
-	URL          string      `json:"url"`
-	ThumbnailURL string      `json:"thumbnail_url"`
-	Name         string      `json:"name"`
-	Info         LogicalFile `json:"info"`
+	Token         string      `json:"token"`
+	URL           string      `json:"url"`
+	ThumbnailURL  string      `json:"thumbnail_url"`
+	Name          string      `json:"name"`
+	Kind          StreamKind  `json:"kind"`
+	MimeType      string      `json:"mime_type"`
+	SupportsRange bool        `json:"supports_range"`
+	Info          LogicalFile `json:"info"`
 }

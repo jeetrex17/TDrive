@@ -194,6 +194,10 @@ export function OpenNativeMedia(arg1, arg2) {
   return window['go']['main']['App']['OpenNativeMedia'](arg1, arg2);
 }
 
+export function OpenStream(arg1) {
+  return window['go']['main']['App']['OpenStream'](arg1);
+}
+
 export function PlanImport(arg1, arg2, arg3) {
   return window['go']['main']['App']['PlanImport'](arg1, arg2, arg3);
 }
