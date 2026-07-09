@@ -1594,6 +1594,151 @@ header {
     user-select: text;
 }
 
+.text-viewer-body.is-structured {
+    font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        'Segoe UI',
+        sans-serif;
+    font-size: 0.95rem;
+    line-height: 1.75;
+    white-space: normal;
+    word-break: normal;
+}
+
+.text-viewer-body.is-markdown {
+    color: var(--color-text);
+}
+
+.text-viewer-body.is-markdown > :first-child,
+.text-viewer-body.is-code > :first-child {
+    margin-top: 0;
+}
+
+.text-viewer-body.is-markdown > :last-child,
+.text-viewer-body.is-code > :last-child {
+    margin-bottom: 0;
+}
+
+.text-viewer-body.is-markdown h1,
+.text-viewer-body.is-markdown h2,
+.text-viewer-body.is-markdown h3,
+.text-viewer-body.is-markdown h4 {
+    margin: 1.6em 0 0.6em;
+    color: var(--color-text);
+    font-weight: 800;
+    line-height: 1.18;
+}
+
+.text-viewer-body.is-markdown h1 {
+    font-size: 1.5rem;
+}
+
+.text-viewer-body.is-markdown h2 {
+    font-size: 1.22rem;
+}
+
+.text-viewer-body.is-markdown h3,
+.text-viewer-body.is-markdown h4 {
+    font-size: 1.02rem;
+}
+
+.text-viewer-body.is-markdown p,
+.text-viewer-body.is-markdown ul,
+.text-viewer-body.is-markdown ol,
+.text-viewer-body.is-markdown blockquote {
+    margin: 0.9em 0;
+}
+
+.text-viewer-body.is-markdown ul,
+.text-viewer-body.is-markdown ol {
+    padding-left: 1.4em;
+}
+
+.text-viewer-body.is-markdown li + li {
+    margin-top: 0.3em;
+}
+
+.text-viewer-body.is-markdown a {
+    color: var(--color-accent);
+    text-decoration: none;
+}
+
+.text-viewer-body.is-markdown a:hover {
+    text-decoration: underline;
+}
+
+.text-viewer-body.is-markdown code {
+    padding: 0.14em 0.4em;
+    border: 1px solid rgba(143, 155, 206, 0.14);
+    border-radius: 8px;
+    background: rgba(143, 155, 206, 0.08);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 0.9em;
+}
+
+.text-viewer-body.is-markdown pre,
+.text-viewer-body.is-code pre {
+    margin: 1em 0;
+    overflow: auto;
+}
+
+.text-viewer-body.is-markdown pre code,
+.text-viewer-body.is-code code.hljs {
+    display: block;
+    padding: 18px 20px;
+    border: 1px solid rgba(143, 155, 206, 0.14);
+    border-radius: var(--radius-md);
+    background: #0f1320;
+    color: var(--color-text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 0.88rem;
+    line-height: 1.72;
+}
+
+.text-viewer-body.is-markdown pre code {
+    padding: 18px 20px;
+}
+
+.text-viewer-body.is-markdown blockquote {
+    padding-left: 16px;
+    color: var(--color-text-muted);
+    border-left: 2px solid rgba(143, 155, 206, 0.26);
+}
+
+.text-viewer-body.is-code {
+    color: var(--color-text);
+}
+
+.text-viewer-body.is-code .hljs-attr,
+.text-viewer-body.is-code .hljs-property,
+.text-viewer-body.is-code .hljs-title,
+.text-viewer-body.is-code .hljs-name,
+.text-viewer-body.is-code .hljs-selector-tag {
+    color: #9db8ff;
+}
+
+.text-viewer-body.is-code .hljs-string,
+.text-viewer-body.is-code .hljs-template-variable,
+.text-viewer-body.is-code .hljs-symbol,
+.text-viewer-body.is-code .hljs-bullet {
+    color: #d4c38a;
+}
+
+.text-viewer-body.is-code .hljs-number,
+.text-viewer-body.is-code .hljs-literal,
+.text-viewer-body.is-code .hljs-boolean {
+    color: #8fd3a8;
+}
+
+.text-viewer-body.is-code .hljs-comment,
+.text-viewer-body.is-code .hljs-quote {
+    color: rgba(245, 247, 255, 0.42);
+}
+
 .text-viewer-footer {
     display: flex;
     align-items: center;

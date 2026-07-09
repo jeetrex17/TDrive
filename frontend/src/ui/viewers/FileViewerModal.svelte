@@ -2,6 +2,12 @@
     import ModalShell from '../modals/ModalShell.svelte';
     import { isPdfFrameMessage, pdfViewerFrameSrc } from './pdf-frame';
     import { fileViewerState } from './file-viewer-store';
+    import {
+        renderStructuredText,
+        structuredTextLanguageForName,
+        textViewerModeForName,
+        type TextViewerMode,
+    } from './text-viewer';
 
     interface Props {
         onClose: () => void;
@@ -34,6 +40,7 @@
     let textLoading = $state(false);
     let textError = $state('');
     let textDone = $state(false);
+    let textRenderedHtml = $state('');
     let textDecoder = new TextDecoder('utf-8', { fatal: false });
     let textGeneration = 0;
 
@@ -65,7 +72,12 @@
         if ($fileViewerState.error) return 'Unavailable';
         if ($fileViewerState.kind === 'audio') return audioError ? 'Unavailable' : audioWaiting ? 'Buffering' : audioPaused ? 'Ready' : 'Playing';
         if ($fileViewerState.kind === 'pdf') return pdfError ? 'Unavailable' : pdfLoading ? 'Opening PDF' : pdfPageCount ? `${pdfPageCount} pages` : 'Ready';
-        if ($fileViewerState.kind === 'text') return textLoading && !textOffset ? 'Opening text' : textDone ? textCompletionLabel() : textOffset ? 'Partial' : 'Ready';
+        if ($fileViewerState.kind === 'text') {
+            const mode = currentTextMode();
+            if (textLoading && !textOffset) return mode === 'plain' ? 'Opening text' : 'Rendering preview';
+            if (mode === 'plain') return textDone ? textCompletionLabel() : textOffset ? 'Partial' : 'Ready';
+            return textDone && textOffset && textTotal > 0 && textOffset >= textTotal ? 'Preview ready' : textOffset ? 'Preview ready' : 'Ready';
+        }
         return 'Ready';
     }
 
@@ -134,7 +146,7 @@
 
     async function loadTextChunk(reset = false): Promise<void> {
         const url = $fileViewerState.url;
-        if (!$fileViewerState.open || $fileViewerState.kind !== 'text' || !url) return;
+        if (!$fileViewerState.open || $fileViewerState.kind !== 'text' || !url || currentTextMode() !== 'plain') return;
         if (textLoading || textDone && !reset) return;
 
         const generation = textGeneration;
@@ -169,6 +181,46 @@
         }
     }
 
+    async function loadStructuredText(): Promise<void> {
+        const url = $fileViewerState.url;
+        const mode = currentTextMode();
+        if (!$fileViewerState.open || $fileViewerState.kind !== 'text' || !url || mode === 'plain') return;
+
+        const generation = textGeneration;
+        textLoading = true;
+        textError = '';
+        try {
+            const response = await fetch(url, {
+                headers: { Range: `bytes=0-${TEXT_MAX_BYTES - 1}` },
+            });
+            if (!response.ok && response.status !== 206) {
+                throw new Error(`Text request failed (${response.status})`);
+            }
+            const buffer = await response.arrayBuffer();
+            if (generation !== textGeneration) return;
+
+            const total = parseContentRangeTotal(response.headers.get('Content-Range'));
+            const nextOffset = buffer.byteLength;
+            const reachedFileEnd = total > 0 && nextOffset >= total;
+            const reachedViewerCap = nextOffset >= TEXT_MAX_BYTES;
+            const source = textDecoder.decode(buffer, { stream: false });
+
+            textContent = source;
+            textRenderedHtml = renderStructuredText({
+                mode,
+                source,
+                language: structuredTextLanguageForName($fileViewerState.title) ?? undefined,
+            });
+            textOffset = nextOffset;
+            textTotal = total;
+            textDone = buffer.byteLength === 0 || reachedFileEnd || reachedViewerCap;
+        } catch (error) {
+            if (generation === textGeneration) textError = String(error || 'Could not open text file');
+        } finally {
+            if (generation === textGeneration) textLoading = false;
+        }
+    }
+
     function resetText(): void {
         textGeneration += 1;
         textDecoder = new TextDecoder('utf-8', { fatal: false });
@@ -178,10 +230,26 @@
         textLoading = false;
         textError = '';
         textDone = false;
+        textRenderedHtml = '';
     }
 
     function textCompletionLabel(): string {
         return textTotal > 0 && textOffset >= textTotal ? 'End of file' : 'Preview limit';
+    }
+
+    function currentTextMode(): TextViewerMode {
+        return textViewerModeForName($fileViewerState.title);
+    }
+
+    function textProgressLabel(): string {
+        const mode = currentTextMode();
+        if (textOffset > 0) return `${(textOffset / 1024).toFixed(0)} KB loaded`;
+        if (!textLoading) return '';
+        return mode === 'plain' ? 'Opening text…' : 'Rendering preview…';
+    }
+
+    function textStructuredFooterLabel(): string {
+        return textTotal > 0 && textOffset >= textTotal ? 'Preview ready' : 'Preview limit';
     }
 
     $effect(() => {
@@ -206,7 +274,11 @@
         const { open, kind, url } = $fileViewerState;
         resetText();
         if (open && kind === 'text' && url) {
-            void loadTextChunk(true);
+            if (currentTextMode() === 'plain') {
+                void loadTextChunk(true);
+                return;
+            }
+            void loadStructuredText();
         }
     });
 
@@ -379,16 +451,29 @@
                     <div class="file-viewer-state" role="alert">{textError}</div>
                 {/if}
                 <div class="text-viewer-scroll">
-                    <pre class="text-viewer-body">{textContent}</pre>
+                    {#if currentTextMode() === 'plain'}
+                        <pre class="text-viewer-body">{textContent}</pre>
+                    {:else if textRenderedHtml}
+                        <div class={`text-viewer-body is-structured is-${currentTextMode()}`}>
+                            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                            {@html textRenderedHtml}
+                        </div>
+                    {:else}
+                        <div class="file-viewer-state">{textLoading ? 'Rendering preview…' : 'No preview available'}</div>
+                    {/if}
                 </div>
                 <div class="text-viewer-footer">
-                    <span>{textOffset ? `${(textOffset / 1024).toFixed(0)} KB loaded` : textLoading ? 'Opening text…' : ''}</span>
+                    <span>{textProgressLabel()}</span>
                     {#if textTotal}
                         <span>{Math.round((textOffset / textTotal) * 100)}%</span>
                     {/if}
-                    <button class="file-viewer-action" type="button" disabled={textLoading || textDone} onclick={() => void loadTextChunk()}>
-                        {textDone ? textCompletionLabel() : textLoading ? 'Loading…' : 'Load more'}
-                    </button>
+                    {#if currentTextMode() === 'plain'}
+                        <button class="file-viewer-action" type="button" disabled={textLoading || textDone} onclick={() => void loadTextChunk()}>
+                            {textDone ? textCompletionLabel() : textLoading ? 'Loading…' : 'Load more'}
+                        </button>
+                    {:else}
+                        <span>{textStructuredFooterLabel()}</span>
+                    {/if}
                 </div>
             </div>
         {:else}
