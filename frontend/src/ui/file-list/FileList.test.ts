@@ -74,4 +74,19 @@ describe('FileList', () => {
         expect(body).not.toContain('<span class="uploader-chip">A<b>');
         expect(body).not.toContain('data-uploader-slot');
     });
+
+    it('renders long file names through a truncating label with a full-name tooltip', () => {
+        const longName = '@Jesseverse_The_Mentalist_S02E05_720p_WEB_DL_x264_350MB_PaHe_in.mkv';
+        showFileListRows([makeFileRow({
+            name: longName,
+            baseName: longName.replace(/\.mkv$/, ''),
+            ext: 'MKV',
+            ariaLabel: `File: ${longName}`,
+        })]);
+
+        const { body } = render(FileList);
+
+        expect(body).toContain(`title="${longName}"`);
+        expect(body).toContain('<span class="row-label">@Jesseverse_The_Mentalist');
+    });
 });
