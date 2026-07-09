@@ -6,6 +6,7 @@ import { writable } from 'svelte/store';
 export interface DeleteModalView {
     open: boolean;
     title: string;
+    itemName: string;
     subtitle: string;
     confirmLabel: string;
 }
@@ -13,6 +14,7 @@ export interface DeleteModalView {
 const initialState: DeleteModalView = {
     open: false,
     title: '',
+    itemName: '',
     subtitle: '',
     confirmLabel: 'Delete',
 };

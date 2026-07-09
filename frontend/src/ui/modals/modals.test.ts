@@ -58,23 +58,27 @@ describe('DeleteModal', () => {
 
     it('renders the pre-computed copy and a danger confirm', () => {
         openDeleteModalView({
-            title: 'Delete "notes.txt"?',
+            title: 'Delete file?',
+            itemName: 'notes.txt',
             subtitle: "This will remove the file from your Telegram channel. The action can't be undone.",
             confirmLabel: 'Delete file',
         });
 
         const { body } = render(DeleteModal, { props: { onConfirm: () => {} } });
 
-        expect(body).toContain('Delete "notes.txt"?');
+        expect(body).toContain('Delete file?');
+        expect(body).toContain('class="delete-target-name"');
+        expect(body).toContain('notes.txt');
         expect(body).toContain('This will remove the file from your Telegram channel.');
         expect(body).toContain('danger-btn');
         expect(body).toContain('>Delete file</button>');
         expect(body).toContain('aria-labelledby="delete-modal-title"');
     });
 
-    it('escapes untrusted names in the title', () => {
+    it('escapes untrusted names in the item label', () => {
         openDeleteModalView({
-            title: 'Delete "<img src=x>"?',
+            title: 'Delete file?',
+            itemName: '<img src=x>',
             subtitle: 'sub',
             confirmLabel: 'Delete',
         });
@@ -82,6 +86,21 @@ describe('DeleteModal', () => {
         const { body } = render(DeleteModal, { props: { onConfirm: () => {} } });
 
         expect(body).not.toContain('<img src=x>');
+    });
+
+    it('keeps long delete targets out of the heading', () => {
+        const longName = '@Jesseverse_The_Mentalist_S02E05_720p_WEB_DL_x264_350MB_PaHe_in.mkv';
+        openDeleteModalView({
+            title: 'Delete file?',
+            itemName: longName,
+            subtitle: 'sub',
+            confirmLabel: 'Delete',
+        });
+
+        const { body } = render(DeleteModal, { props: { onConfirm: () => {} } });
+
+        expect(body).toContain('<h3 id="delete-modal-title" class="modal-title">Delete file?</h3>');
+        expect(body).toContain(longName);
     });
 });
 

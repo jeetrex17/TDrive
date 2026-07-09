@@ -1097,6 +1097,20 @@ header {
 }
 .modal-title { color: white; font-size: 1.05rem; font-weight: 700; margin-bottom: 6px; }
 .modal-subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 18px; }
+.delete-target-name {
+    max-height: 5.5rem;
+    margin: 10px 0 14px;
+    padding: 10px 12px;
+    overflow: auto;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    color: var(--color-text);
+    font-size: var(--type-sm);
+    line-height: 1.35;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--overlay-white-1);
+}
 .field-help {
     color: var(--text-muted);
     font-size: 0.78rem;

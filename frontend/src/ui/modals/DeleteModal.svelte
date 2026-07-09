@@ -29,6 +29,12 @@
     restoreFocus="#file-list"
     onClose={close}
 >
+    {#if $deleteModalState.itemName}
+        <div class="delete-target-name" title={$deleteModalState.itemName}>
+            {$deleteModalState.itemName}
+        </div>
+    {/if}
+
     {#snippet actions()}
         <button id="delete-cancel" class="secondary-btn" type="button" onclick={close}>Cancel</button>
         <button id="delete-confirm" class="primary-btn danger-btn" type="button" onclick={confirm}>
