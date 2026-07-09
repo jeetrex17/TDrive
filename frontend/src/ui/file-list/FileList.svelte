@@ -47,13 +47,13 @@
                 data-temp-id={row.tempId}
                 title="Creating..."
             >
-                <div class="row-name">
+                <div class="row-name" title={row.name}>
                     <span class="folder-chip" aria-hidden="true">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
                         </svg>
                     </span>
-                    {row.name}
+                    <span class="row-label">{row.name}</span>
                     <span class="pending-indicator" aria-hidden="true"></span>
                 </div>
                 <div class="row-meta">Creating...</div>
@@ -86,14 +86,14 @@
                 ondblclick={(event) => onRowDoubleClick(event, row)}
                 onkeydown={onDelegatedKeydown}
             >
-                <div class="row-name" draggable="true">
+                <div class="row-name" draggable="true" title={row.name}>
                     {#if row.kind === 'folder'}
                         <span class="folder-chip" aria-hidden="true">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
                             </svg>
                         </span>
-                        {row.name}
+                        <span class="row-label">{row.name}</span>
                     {:else}
                         <span class="file-ext-text" aria-hidden="true">{row.ext}</span>
                         {#if row.encrypted}
@@ -104,7 +104,7 @@
                                 </svg>
                             </span>
                         {/if}
-                        {row.baseName}
+                        <span class="row-label">{row.baseName}</span>
                         {#if row.uploaderChip}
                             <span class="uploader-chip">{row.uploaderChip.label}</span>
                         {/if}

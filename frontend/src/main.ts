@@ -35,7 +35,7 @@ import { setupLogoutModal } from './modules/modals/logout';
 
 // Sidebar / drives
 import { setupSidebar, renderSidebar } from './modules/sidebar';
-import { bindChannelsRenderers, refreshActiveDrive } from './modules/channels';
+import { bindChannelsRenderers, refreshActiveDrive, setupLiveSyncEvents } from './modules/channels';
 
 // Notifications
 import { setupNotifications } from './modules/notifications';
@@ -141,6 +141,7 @@ window.onload = async function() {
     // Setup window bindings
     setupAuthWindowBindings();
     setupFileListWindowBindings();
+    setupLiveSyncEvents();
 
     // Check status and show appropriate screen
     await checkStatusAndShowScreen();

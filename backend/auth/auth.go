@@ -89,6 +89,10 @@ func LoadImpCredentials() (ImpCredentials, error) {
 }
 
 func Connect() (*telegram.Client, error) {
+	return ConnectWithOptions(telegram.Options{})
+}
+
+func ConnectWithOptions(options telegram.Options) (*telegram.Client, error) {
 	creds, err := LoadImpCredentials()
 	if err != nil {
 		return nil, fmt.Errorf("API credentials are not configured")
@@ -114,9 +118,8 @@ func Connect() (*telegram.Client, error) {
 		Path: sessionPath,
 	}
 
-	tgclient := telegram.NewClient(TgApiID, TgApiHash, telegram.Options{
-		SessionStorage: ses,
-	})
+	options.SessionStorage = ses
+	tgclient := telegram.NewClient(TgApiID, TgApiHash, options)
 
 	return tgclient, nil
 }

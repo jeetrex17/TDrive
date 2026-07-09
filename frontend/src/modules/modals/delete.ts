@@ -59,6 +59,7 @@ export function openDeleteModal(target: any) {
     const name = (target?.name || "").trim();
 
     let title: string;
+    let itemName = "";
     let subtitle: string;
     let confirmLabel: string;
 
@@ -92,16 +93,18 @@ export function openDeleteModal(target: any) {
         }
         confirmLabel = total === 0 ? "Close" : "Delete";
     } else if (target?.type === "folder") {
-        title = name ? `Delete folder "${name}"?` : "Delete folder?";
+        title = "Delete folder?";
+        itemName = name;
         subtitle = "This will delete the folder and every file inside it from Telegram. This action can't be undone.";
         confirmLabel = "Delete folder and files";
     } else {
-        title = name ? `Delete "${name}"?` : "Delete file?";
+        title = "Delete file?";
+        itemName = name;
         subtitle = "This will remove the file from your Telegram channel. The action can't be undone.";
         confirmLabel = "Delete file";
     }
 
-    openDeleteModalView({ title, subtitle, confirmLabel });
+    openDeleteModalView({ title, itemName, subtitle, confirmLabel });
 }
 
 export function setupDeleteModal() {

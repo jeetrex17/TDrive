@@ -63,6 +63,18 @@ describe('FileList', () => {
         expect(body).toContain('tabindex="-1"');
     });
 
+    it('keeps keyboard-active rows semantically unselected when selection is cleared', () => {
+        showFileListRows([makeFileRow()]);
+        setSelectedFileRowKeys([]);
+        setActiveFileRowKey('file:42');
+
+        const { body } = render(FileList);
+
+        expect(body).toContain('class="file-row drive-row is-keyboard-active"');
+        expect(body).toContain('aria-selected="false"');
+        expect(body).toContain('tabindex="0"');
+    });
+
     it('renders uploader chips as escaped text', () => {
         showFileListRows([makeFileRow({
             uploaderChip: { label: 'A<b> 2m ago' },
@@ -73,5 +85,20 @@ describe('FileList', () => {
         expect(body).toContain('<span class="uploader-chip">A&lt;b> 2m ago</span>');
         expect(body).not.toContain('<span class="uploader-chip">A<b>');
         expect(body).not.toContain('data-uploader-slot');
+    });
+
+    it('renders long file names through a truncating label with a full-name tooltip', () => {
+        const longName = '@Jesseverse_The_Mentalist_S02E05_720p_WEB_DL_x264_350MB_PaHe_in.mkv';
+        showFileListRows([makeFileRow({
+            name: longName,
+            baseName: longName.replace(/\.mkv$/, ''),
+            ext: 'MKV',
+            ariaLabel: `File: ${longName}`,
+        })]);
+
+        const { body } = render(FileList);
+
+        expect(body).toContain(`title="${longName}"`);
+        expect(body).toContain('<span class="row-label">@Jesseverse_The_Mentalist');
     });
 });
