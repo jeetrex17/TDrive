@@ -29,5 +29,8 @@ describe('PreviewModal', () => {
         ]) {
             expect(body).toContain(`id="${id}"`);
         }
+
+        expect(body).toContain('preview-eye-show');
+        expect(body).toContain('preview-eye-hide');
     });
 });

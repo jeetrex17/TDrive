@@ -145,7 +145,7 @@ describe('MountControl', () => {
         expect(mountDrives).toHaveBeenCalledWith([11, 22]);
     });
 
-    it('reports a drained writable mount as paused after eject fails', async () => {
+    it('keeps the eject action single-line after eject fails', async () => {
         const api: MountApi = {
             mountDrive: vi.fn(async () => writableMountedStatus()),
             mountStatus: vi.fn(async () => writableMountedStatus()),
@@ -162,13 +162,13 @@ describe('MountControl', () => {
         click('#disconnect-mounted-drive-button');
         await settle();
 
-        expect(host.textContent).toContain('Writes paused');
+        expect(host.textContent).not.toContain('Writes paused');
         const eject = host.querySelector<HTMLButtonElement>('#disconnect-mounted-drive-button');
         expect(eject?.textContent).toContain('Eject Tdrive');
         expect(eject?.textContent).not.toContain('Retry');
     });
 
-    it('shows the actual writable mode and active-write drain state', async () => {
+    it('hides the writable mode while preserving the active-write drain state', async () => {
         const pending = deferred<MountStatusView>();
         const api: MountApi = {
             mountDrive: vi.fn(async () => writableMountedStatus({ activeWrites: 2 })),
@@ -181,7 +181,7 @@ describe('MountControl', () => {
         component = mount(MountControl, { target: host, props: { controller } });
         await settle();
 
-        expect(host.textContent).toContain('Read/write');
+        expect(host.textContent).not.toContain('Read/write');
         click('#disconnect-mounted-drive-button');
         await settle();
         expect(host.textContent).toContain('Finishing 2 changes...');

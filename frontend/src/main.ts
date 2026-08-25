@@ -13,6 +13,7 @@ import { setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } fro
 import { setupFileListWindowBindings, refreshFiles } from './modules/file-list';
 import { setupGallery } from './modules/gallery';
 import { setupSearchBar, runGlobalSearch } from './modules/search';
+import { setupRefreshShortcut } from './modules/refresh-shortcut';
 
 // Import modal setup functions
 import { setupDeleteModal, openDeleteModal } from './modules/modals/delete';
@@ -131,6 +132,7 @@ window.onload = async function() {
     setupUploadMenu();
     setupFileDrop();
     setupSearchBar();
+    setupRefreshShortcut();
     setupGallery();
 
     // Sidebar — wire renderers BEFORE setup so the first render finds the

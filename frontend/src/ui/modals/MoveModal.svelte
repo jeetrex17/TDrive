@@ -1,4 +1,7 @@
 <script lang="ts">
+    import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+    import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+    import FolderIcon from '@lucide/svelte/icons/folder';
     import ModalShell from './ModalShell.svelte';
     import { moveBrowse, moveModal, type MoveFolderEntry } from './move-modal-store';
 
@@ -58,9 +61,7 @@
             disabled={$browse.path.length === 0 || $view.busy}
             onclick={onBack}
         >
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-            </svg>
+            <ChevronLeftIcon size={16} strokeWidth={2} aria-hidden="true" />
         </button>
         <div id="move-breadcrumb" class="move-breadcrumb">
             <button
@@ -99,12 +100,10 @@
                     onclick={() => onOpenFolder(folder)}
                 >
                     <span class="move-item-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                        </svg>
+                        <FolderIcon size={16} strokeWidth={2} aria-hidden="true" />
                     </span>
                     <span class="move-item-name">{folder.name}</span>
-                    <span class="move-item-arrow" aria-hidden="true">&gt;</span>
+                    <ChevronRightIcon class="move-item-arrow" size={16} strokeWidth={2} aria-hidden="true" />
                 </button>
             {/each}
         {/if}

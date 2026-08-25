@@ -1,4 +1,10 @@
 <script lang="ts">
+    import EyeIcon from '@lucide/svelte/icons/eye';
+    import EyeOffIcon from '@lucide/svelte/icons/eye-off';
+    import KeyRoundIcon from '@lucide/svelte/icons/key-round';
+    import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
+    import MailIcon from '@lucide/svelte/icons/mail';
+    import SettingsIcon from '@lucide/svelte/icons/settings';
     import { tick } from 'svelte';
     import { authCodeReset, authHint, authPhone, authScreen } from './auth-store';
 
@@ -68,7 +74,7 @@
 {#if $authScreen === 'setup'}
     <div class="auth-box">
         <div class="auth-icon-box">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <SettingsIcon size={32} strokeWidth={1.5} aria-hidden="true" />
         </div>
         <h2>System Setup</h2>
         <p>Configure API Credentials</p>
@@ -79,7 +85,7 @@
 {:else if $authScreen === 'phone'}
     <div class="auth-box">
         <div class="auth-icon-box">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+            <LockKeyholeIcon size={32} strokeWidth={1.5} aria-hidden="true" />
         </div>
         <h2>Welcome Back</h2>
         <p>Login to your secure cloud</p>
@@ -89,7 +95,7 @@
 {:else if $authScreen === 'code'}
     <div class="auth-box">
         <div class="auth-icon-box">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+            <MailIcon size={32} strokeWidth={1.5} aria-hidden="true" />
         </div>
         <h2>Verify Identity</h2>
         <p class="auth-subtitle">Enter Telegram Code</p>
@@ -106,7 +112,7 @@
 {:else if $authScreen === 'password'}
     <div class="auth-box">
         <div class="auth-icon-box">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11.536 16.464a.5.5 0 00-.496.568l.1 1.15a.5.5 0 01-.037.24l-1.352 3.863a.5.5 0 01-.47.315H7.5a.5.5 0 01-.5-.5v-2.204a.5.5 0 01.146-.354l3.298-3.297A6 6 0 0115 7z"/></svg>
+            <KeyRoundIcon size={32} strokeWidth={1.5} aria-hidden="true" />
         </div>
         <h2>Two-Factor Auth</h2>
         <p class="auth-subtitle">Enter your Telegram password</p>
@@ -130,16 +136,8 @@
                 title={revealPassword ? 'Hide password' : 'Show password'}
                 onclick={() => { revealPassword = !revealPassword; passwordEl?.focus(); }}
             >
-                <svg class="input-action-icon icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                </svg>
-                <svg class="input-action-icon icon-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 3l18 18"/>
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M10.477 10.48a3 3 0 004.243 4.243"/>
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9.88 5.09A10.48 10.48 0 0112 5c4.477 0 8.268 2.943 9.542 7a10.53 10.53 0 01-2.36 3.95"/>
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M6.53 6.53A10.52 10.52 0 002.458 12c1.274 4.057 5.065 7 9.542 7 1.11 0 2.18-.18 3.19-.51"/>
-                </svg>
+                <EyeIcon class="input-action-icon icon-eye" size={20} strokeWidth={2} aria-hidden="true" />
+                <EyeOffIcon class="input-action-icon icon-eye-off" size={20} strokeWidth={2} aria-hidden="true" />
             </button>
         </div>
         <button class="primary-btn" type="button" onclick={() => onPassword(password)}>Unlock</button>

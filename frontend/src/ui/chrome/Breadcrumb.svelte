@@ -1,4 +1,5 @@
 <script lang="ts">
+    import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
     import { breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
 
     interface Props {
@@ -59,7 +60,7 @@
     style={`opacity: ${atRoot ? '0.35' : '1'}`}
     onclick={onBack}
 >
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+    <ChevronLeftIcon size={18} strokeWidth={2} aria-hidden="true" />
 </button>
 <div id="breadcrumb-path" class="breadcrumb-path">
     {#each items as item, idx (item.index === -1 ? 'root' : item.id)}

@@ -36,8 +36,9 @@ const (
 	finalChunkBit     = uint32(1) << 31
 	// Keep every raw chunk counter below finalChunkBit so setting that bit is
 	// an unambiguous final-chunk domain marker, including for the largest file.
-	maxPlaintextSize = int64(finalChunkBit)*int64(chunkSizePlain) - 1
-	hkdfInfo         = "tdrive/file/v1"
+	maxPlaintextSize         = int64(finalChunkBit)*int64(chunkSizePlain) - 1
+	maxConsecutiveEmptyReads = 100
+	hkdfInfo                 = "tdrive/file/v1"
 )
 
 var (
@@ -290,14 +291,19 @@ func buildNonce(prefix []byte, counter uint32, final bool) []byte {
 func ensureNoExtraPlaintext(src io.Reader) error {
 	var extra [1]byte
 	defer clear(extra[:])
-	n, err := src.Read(extra[:])
-	if n > 0 {
-		return ErrPlaintextSizeMismatch
+	for emptyReads := 0; emptyReads < maxConsecutiveEmptyReads; emptyReads++ {
+		n, err := src.Read(extra[:])
+		if n > 0 {
+			return ErrPlaintextSizeMismatch
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	return nil
+	return io.ErrNoProgress
 }
 
 func writeExact(dst io.Writer, buffer []byte) error {

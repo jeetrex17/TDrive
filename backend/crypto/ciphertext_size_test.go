@@ -113,3 +113,57 @@ func TestEncryptStreamRejectsSourceLengthMismatch(t *testing.T) {
 		})
 	}
 }
+
+func TestEncryptStreamRejectsTrailingDataAfterEmptyRead(t *testing.T) {
+	key := bytes.Repeat([]byte{1}, 32)
+	source := &emptyThenTrailingReader{
+		plaintext: []byte{0x12},
+		trailing:  []byte{0x34},
+	}
+
+	err := EncryptStream(source, io.Discard, key, int64(len(source.plaintext)))
+	if !errors.Is(err, ErrPlaintextSizeMismatch) {
+		t.Fatalf("EncryptStream length mismatch error = %v, want ErrPlaintextSizeMismatch", err)
+	}
+}
+
+func TestEncryptStreamRejectsUnendingEmptyTrailingSource(t *testing.T) {
+	key := bytes.Repeat([]byte{1}, 32)
+	source := &emptyThenTrailingReader{
+		plaintext: []byte{0x12},
+		stall:     true,
+	}
+
+	err := EncryptStream(source, io.Discard, key, int64(len(source.plaintext)))
+	if !errors.Is(err, io.ErrNoProgress) {
+		t.Fatalf("EncryptStream empty-read error = %v, want io.ErrNoProgress", err)
+	}
+}
+
+type emptyThenTrailingReader struct {
+	plaintext []byte
+	trailing  []byte
+	emitted   bool
+	stall     bool
+}
+
+func (r *emptyThenTrailingReader) Read(buffer []byte) (int, error) {
+	if len(r.plaintext) > 0 {
+		readCount := copy(buffer, r.plaintext)
+		r.plaintext = r.plaintext[readCount:]
+		return readCount, nil
+	}
+	if !r.emitted {
+		r.emitted = true
+		return 0, nil
+	}
+	if r.stall {
+		return 0, nil
+	}
+	if len(r.trailing) > 0 {
+		readCount := copy(buffer, r.trailing)
+		r.trailing = r.trailing[readCount:]
+		return readCount, io.EOF
+	}
+	return 0, io.EOF
+}

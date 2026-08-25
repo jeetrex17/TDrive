@@ -1,4 +1,6 @@
 <script lang="ts">
+    import ImageOffIcon from '@lucide/svelte/icons/image-off';
+    import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import type { FileItem } from '../../types';
     import { registerCell, unregisterCell, type CellPatch, type CellStatus } from './gallery-controller';
 
@@ -49,12 +51,12 @@
     <img class="gallery-thumb" alt="" decoding="async" src={src || undefined} />
     {#if item.encrypted}
         <span class="gallery-lock">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 018 0v4"/></svg>
+            <LockKeyholeIcon size={13} strokeWidth={2} aria-hidden="true" />
         </span>
     {/if}
     {#if status === 'failed'}
         <span class="gallery-broken">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path stroke-linecap="round" stroke-linejoin="round" d="M3 16l5-5 4 4 3-3 6 6"/></svg>
+            <ImageOffIcon size={34} strokeWidth={1.6} aria-hidden="true" />
         </span>
     {/if}
 </button>

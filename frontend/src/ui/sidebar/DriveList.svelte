@@ -1,4 +1,6 @@
 <script lang="ts">
+    import ClockIcon from '@lucide/svelte/icons/clock';
+    import FolderIcon from '@lucide/svelte/icons/folder';
     import { sidebarState, type SidebarChannel, type SidebarPendingJoin } from './sidebar-store';
 
     type DriveKind = 'personal' | 'shared';
@@ -18,9 +20,6 @@
         onPendingClick,
         onPendingContextMenu,
     }: Props = $props();
-
-    const folderPath = 'M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z';
-    const pendingPath = 'M12 8v4l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z';
 
     function titleFor(channel: SidebarChannel): string {
         return channel.title || 'Untitled';
@@ -61,9 +60,7 @@
                 title={titleFor(channel)}
                 onclick={() => onDriveClick(channel.id)}
             >
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d={folderPath} />
-                </svg>
+                <FolderIcon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
                 <span class="drive-item-title">{titleFor(channel)}</span>
             </button>
         {/each}
@@ -81,9 +78,7 @@
             onclick={() => onDriveClick(channel.id)}
             oncontextmenu={(event) => contextMenuForDrive(event, channel)}
         >
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" d={folderPath} />
-            </svg>
+            <FolderIcon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
             <span class="drive-item-title">{titleFor(channel)}</span>
         </button>
     {/each}
@@ -97,9 +92,7 @@
             onclick={() => onPendingClick?.(pending.invite_hash)}
             oncontextmenu={(event) => contextMenuForPending(event, pending)}
         >
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" d={pendingPath} />
-            </svg>
+            <ClockIcon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
             <span class="drive-item-title">{pendingTitleFor(pending)}</span>
             <span class="pending-drive-tag">pending</span>
         </button>

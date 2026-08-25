@@ -315,6 +315,22 @@ describe('EncryptionSettingsModal secret lifecycle', () => {
         return selectors.map((selector) => enter(host, selector, value));
     }
 
+    it('shows distinct icons for hidden and revealed passwords', () => {
+        const host = createHost('encryption-settings-modal');
+        mounted.push(mount(EncryptionSettingsModal, {
+            target: host,
+            props: { onCancel: vi.fn(), onSubmit: vi.fn() },
+        }));
+
+        encryptionSettingsModal.open({ hint: '' });
+        flushSync();
+
+        for (const button of host.querySelectorAll<HTMLButtonElement>('.reveal-on-hold')) {
+            expect(button.querySelector('.icon-eye')).not.toBeNull();
+            expect(button.querySelector('.icon-eye-off')).not.toBeNull();
+        }
+    });
+
     it('clears all passwords before cancel closes the form and on reopen', () => {
         const host = createHost('encryption-settings-modal');
         let passwordsAtCancel: string[] = [];

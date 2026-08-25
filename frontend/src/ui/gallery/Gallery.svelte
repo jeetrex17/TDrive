@@ -2,6 +2,7 @@
     // Renders the gallery view state. The scroll host (#gallery-view) stays in
     // index.html: it is the IntersectionObserver root and owns click
     // delegation, both wired by modules/gallery.ts against a stable element.
+    import ImageIcon from '@lucide/svelte/icons/image';
     import GalleryCell from './GalleryCell.svelte';
     import { galleryView } from './gallery-store';
 </script>
@@ -13,7 +14,7 @@
 {:else if $galleryView.status === 'empty'}
     <div class="gallery-empty">
         <div class="gallery-empty-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.6"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 15l-5-5L5 21"/></svg>
+            <ImageIcon size={48} strokeWidth={1.5} aria-hidden="true" />
         </div>
         <div class="gallery-empty-title">No photos yet</div>
         <div class="gallery-empty-sub">Images you upload to this drive show up here.</div>

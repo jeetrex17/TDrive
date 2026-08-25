@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -302,6 +303,50 @@ func TestDiskStagingStoreEncryptedLengthMismatchCleansCiphertext(t *testing.T) {
 			assertEmptyStagingRoot(t, store)
 		})
 	}
+}
+
+func TestDiskStagingStoreEncryptedRejectsTrailingDataAfterEmptyRead(t *testing.T) {
+	t.Parallel()
+
+	store := newEncryptedTestStore(t, 1024, 2048)
+	source := &emptyThenTrailingReader{
+		plaintext: []byte{0x12},
+		trailing:  []byte{0x34},
+	}
+	_, err := store.Stage(context.Background(), StageRequest{
+		OperationID:       "length-empty-read",
+		PlaintextSize:     int64(len(source.plaintext)),
+		EncryptionVersion: EncryptionTDE1,
+		MasterKey:         bytes.Repeat([]byte{0x44}, 32),
+	}, source)
+	if !errors.Is(err, ErrLengthMismatch) {
+		t.Fatalf("stage error = %v, want ErrLengthMismatch", err)
+	}
+	assertEmptyStagingRoot(t, store)
+}
+
+type emptyThenTrailingReader struct {
+	plaintext []byte
+	trailing  []byte
+	emitted   bool
+}
+
+func (r *emptyThenTrailingReader) Read(buffer []byte) (int, error) {
+	if len(r.plaintext) > 0 {
+		readCount := copy(buffer, r.plaintext)
+		r.plaintext = r.plaintext[readCount:]
+		return readCount, nil
+	}
+	if !r.emitted {
+		r.emitted = true
+		return 0, nil
+	}
+	if len(r.trailing) > 0 {
+		readCount := copy(buffer, r.trailing)
+		r.trailing = r.trailing[readCount:]
+		return readCount, io.EOF
+	}
+	return 0, io.EOF
 }
 
 func TestEncryptedDurableMetadataRejectsPlaintextBeyondTDE1Capacity(t *testing.T) {
