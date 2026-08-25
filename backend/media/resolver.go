@@ -50,11 +50,14 @@ func (r *Resolver) Resolve(ctx context.Context, channelID, fileID int64) (Logica
 		return out, nil
 	}
 
-	parts, err := projection.MultipartParts(r.db, channelID, fileID)
+	parts, err := projection.MultipartPartsContext(ctx, r.db, channelID, fileID)
 	if err != nil {
 		return LogicalFile{}, fmt.Errorf("media: load multipart parts: %w", err)
 	}
-	if err := projection.MultipartComplete(r.db, channelID, fileID, parts); err != nil {
+	if err := projection.MultipartCompleteContext(ctx, r.db, channelID, fileID, parts); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return LogicalFile{}, fmt.Errorf("media: validate multipart file: %w", err)
+		}
 		return LogicalFile{}, fmt.Errorf("%w: %v", ErrIncompleteMultipart, err)
 	}
 

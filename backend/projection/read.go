@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -37,26 +38,46 @@ type SearchHit struct {
 	PlaintextSize int64
 }
 
+// ErrInvalidContext reports a nil context passed to a context-aware projection
+// API. Callers can use errors.Is while retaining operation-specific context.
+var ErrInvalidContext = errors.New("context is nil")
+
+func validateContext(ctx context.Context, operation string) error {
+	if ctx == nil {
+		return fmt.Errorf("projection: %s: %w", operation, ErrInvalidContext)
+	}
+	return nil
+}
+
 func ListFolderContents(db *sql.DB, channelID int64, parentID string) ([]FolderSlim, []FileSlim, error) {
-	folders, err := listChildFolders(db, channelID, parentID)
+	return ListFolderContentsContext(context.Background(), db, channelID, parentID)
+}
+
+// ListFolderContentsContext returns the live direct children of parentID and
+// cancels the underlying SQLite work when ctx is done.
+func ListFolderContentsContext(ctx context.Context, db *sql.DB, channelID int64, parentID string) ([]FolderSlim, []FileSlim, error) {
+	if err := validateContext(ctx, "list folder contents"); err != nil {
+		return nil, nil, err
+	}
+	folders, err := listChildFoldersContext(ctx, db, channelID, parentID)
 	if err != nil {
 		return nil, nil, err
 	}
-	files, err := listChildFiles(db, channelID, parentID)
+	files, err := listChildFilesContext(ctx, db, channelID, parentID)
 	if err != nil {
 		return nil, nil, err
 	}
 	return folders, files, nil
 }
 
-func listChildFolders(db *sql.DB, channelID int64, parentID string) ([]FolderSlim, error) {
-	rows, err := db.Query(`
+func listChildFoldersContext(ctx context.Context, db *sql.DB, channelID int64, parentID string) ([]FolderSlim, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT id, name, parent_id FROM folders
 		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
 		ORDER BY name
 	`, channelID, parentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("projection: list child folders: %w", err)
 	}
 	defer rows.Close()
 
@@ -64,21 +85,24 @@ func listChildFolders(db *sql.DB, channelID int64, parentID string) ([]FolderSli
 	for rows.Next() {
 		var f FolderSlim
 		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("projection: scan child folder: %w", err)
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("projection: iterate child folders: %w", err)
+	}
+	return out, nil
 }
 
-func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, error) {
-	rows, err := db.Query(`
+func listChildFilesContext(ctx context.Context, db *sql.DB, channelID int64, parentID string) ([]FileSlim, error) {
+	rows, err := db.QueryContext(ctx, `
 		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
 		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
 		ORDER BY upload_time DESC
 	`, channelID, parentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("projection: list child files: %w", err)
 	}
 	defer rows.Close()
 
@@ -87,12 +111,15 @@ func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, e
 		var f FileSlim
 		var enc int
 		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("projection: scan child file: %w", err)
 		}
 		f.Encrypted = enc == 1
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("projection: iterate child files: %w", err)
+	}
+	return out, nil
 }
 
 // OrphanedFiles returns files whose path back to root is broken — that

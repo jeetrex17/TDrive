@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"TDrive/backend/core"
+	"TDrive/backend/mountcontent"
+	"TDrive/backend/mountdav"
 	"TDrive/backend/processlock"
 )
 
@@ -35,8 +37,14 @@ type ServerConfig struct {
 type Server struct {
 	engine *core.Engine
 	lock   *processlock.Lock
-	warnf  func(format string, args ...any)
-	state  *state
+	mount  *mountdav.Server
+	// mountMu serializes mount start/stop and owns the active content opener.
+	// WebDAV reads never take this lock, and mount operations never take the
+	// daemon-wide mutation lock.
+	mountMu      sync.Mutex
+	mountContent *mountcontent.Opener
+	warnf        func(format string, args ...any)
+	state        *state
 
 	mu        sync.Mutex
 	eventMu   sync.Mutex
@@ -63,6 +71,7 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 
 	s := &Server{
 		warnf: cfg.Warnf,
+		mount: mountdav.NewServer(),
 		stop:  cancel,
 	}
 	if s.warnf == nil {
@@ -94,6 +103,13 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 	s.engine = engine
 	defer s.engine.Close()
 	defer s.wg.Wait()
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		if err := s.stopMountServer(stopCtx); err != nil {
+			s.warnf("daemon: stop mount: %v\n", err)
+		}
+	}()
 
 	if err := s.loadState(); err != nil {
 		s.warnf("daemon: load cli state: %v\n", err)
@@ -688,6 +704,37 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 			return ErrorResponse(req.ID, err)
 		}
 		out, err := s.download(ctx, in.RemotePath, in.LocalPath)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandMountStart:
+		var in MountStartRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.startMount(ctx, in.Selector, in.WindowsDrive)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandMountStatus:
+		out := s.mountStatus()
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandMountStop:
+		out, err := s.stopMount(ctx)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}

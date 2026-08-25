@@ -50,7 +50,7 @@ func isHelpFlag(arg string) bool {
 
 func isHelpGroup(arg string) bool {
 	switch arg {
-	case "daemon", "drive", "vault":
+	case "daemon", "drive", "mount", "vault":
 		return true
 	default:
 		return false
@@ -88,6 +88,8 @@ func canonicalHelpKey(topic []string) string {
 		return "vault unlock"
 	case "drive reject":
 		return "drive deny"
+	case "mount":
+		return "mount start"
 	case "install":
 		return "install-cli"
 	case "uninstall":
@@ -345,6 +347,36 @@ The vault key is kept only in daemon memory.
 tdrive vault lock
 
 Forget the in-memory vault key from the daemon.
+`,
+	"mount start": `
+tdrive mount [start] [--drive <name|id>] [--windows-drive T:]
+
+Start a read-only WebDAV server pinned to one TDrive drive.
+
+Options:
+  --drive <name|id>       Pin this drive; defaults to the current active drive
+  --windows-drive T:      Windows Explorer drive letter hint, default T:
+
+Selecting --drive does not change the active drive used by other CLI or GUI
+commands. The daemon prints a private localhost URL and OS mount instructions.
+On Windows, run the printed net use command to map it as T:. Mapping is not
+automatic in this release.
+
+Only browsing and reading are supported. Creating, editing, renaming, and
+deleting through the mount are rejected.
+
+Close the TDrive GUI before starting this CLI-owned mount. Keep the daemon
+running until the OS is disconnected and tdrive mount stop has completed.
+`,
+	"mount status": `
+tdrive mount status
+
+Show the pinned drive, private WebDAV URL, and OS mount instructions.
+`,
+	"mount stop": `
+tdrive mount stop
+
+Stop the read-only WebDAV mount server.
 `,
 	"put": `
 tdrive put [-e|--encrypt] [--extract] <local> [remote-path]

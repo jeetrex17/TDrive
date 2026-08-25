@@ -1,6 +1,44 @@
 package projection
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+func TestListFolderContentsContextHonorsCanceledContext(t *testing.T) {
+	db := newTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	folders, files, err := ListFolderContentsContext(ctx, db, testChan, RootParent)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListFolderContentsContext error = %v, want context.Canceled", err)
+	}
+	if folders != nil || files != nil {
+		t.Fatalf("canceled listing = folders:%v files:%v, want nil results", folders, files)
+	}
+
+	files, err = listChildFilesContext(ctx, db, testChan, RootParent)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("listChildFilesContext error = %v, want context.Canceled", err)
+	}
+	if files != nil {
+		t.Fatalf("listChildFilesContext files = %v, want nil", files)
+	}
+}
+
+func TestListFolderContentsContextRejectsNilContext(t *testing.T) {
+	db := newTestDB(t)
+
+	folders, files, err := ListFolderContentsContext(nil, db, testChan, RootParent)
+	if !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("ListFolderContentsContext error = %v, want ErrInvalidContext", err)
+	}
+	if folders != nil || files != nil {
+		t.Fatalf("nil-context listing = folders:%v files:%v, want nil results", folders, files)
+	}
+}
 
 func TestOrphanedFilesSurfacesFilesUnderTombstonedFolder(t *testing.T) {
 	db := newTestDB(t)

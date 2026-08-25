@@ -32,15 +32,16 @@ This project is for **educational purposes only**. I’m not trying to harm Tele
 - **Shared drives** — invite friends with instant or approval-required links; everyone can upload, organize, and see who uploaded what.
 - **Cancellable transfers** — cancel uploads and downloads mid-flight, with live size and speed.
 - **CLI mode** — use TDrive from the terminal with a local daemon, Linux-like commands, folder/archive upload, shared drives, vault unlock, and progress output.
+- **Read-only WebDAV mount (beta)** — pin one selected drive to a private localhost WebDAV URL, with a Windows `T:` mapping command.
 
 ## Download
 
 Grab the latest build for your platform from the [**Releases**](https://github.com/jeetrex17/TDrive/releases/latest) page.
 
 - GUI builds: macOS, Windows, and Linux AppImage.
-- CLI builds: macOS and Linux `*-cli.tar.gz` assets.
+- CLI builds: macOS and Linux `*-cli.tar.gz` assets, plus a Windows amd64 beta in `*-windows-amd64-cli.zip`.
 
-Windows CLI support is not wired yet. Use the GUI on Windows for now. On first run, enter your Telegram API credentials (see [Telegram API ID + Hash](#telegram-api-id--hash-required) below).
+On first run, enter your Telegram API credentials (see [Telegram API ID + Hash](#telegram-api-id--hash-required) below).
 
 ### macOS installation note
 
@@ -111,9 +112,9 @@ The app stores these credentials locally after you enter them in the setup scree
 
 ## CLI
 
-The CLI is for macOS and Linux power users who want to use TDrive from a terminal.
+The CLI is available for macOS, Linux, and Windows amd64. The Windows build is a portable beta with no installer or background system service.
 
-Install from a release asset:
+On macOS or Linux, install from the `*-cli.tar.gz` release asset:
 
 ```bash
 tar -xzf TDrive-*-cli.tar.gz
@@ -127,13 +128,21 @@ If the installer updated your shell config, reload it:
 source ~/.zshrc   # or ~/.bashrc
 ```
 
-Set up Telegram credentials and log in:
+Then set up Telegram credentials and log in:
 
 ```bash
 tdrive setup --api-id YOUR_ID --api-hash YOUR_HASH
 tdrive login +15551234567
 tdrive whoami
 tdrive ls
+```
+
+On Windows, extract `*-windows-amd64-cli.zip`, open PowerShell in its `TDrive-<version>-windows-amd64-cli` folder, and run the executable directly:
+
+```powershell
+.\tdrive.exe setup --api-id YOUR_ID --api-hash YOUR_HASH
+.\tdrive.exe login +15551234567
+.\tdrive.exe whoami
 ```
 
 You can also run `tdrive setup` without flags and enter the API ID + Hash interactively.
@@ -167,9 +176,15 @@ tdrive rebuild
 tdrive vault status
 tdrive unlock
 tdrive vault lock
+
+tdrive mount
+tdrive mount status
+tdrive mount stop
 ```
 
 Folder and archive imports require the destination folder to already exist first. Single-file uploads can create or rename the final file path.
+
+The mount beta is read-only. It pins one selected drive without changing the GUI/CLI active drive, starts a private localhost WebDAV server, and prints OS-specific connection instructions. Close the GUI before starting the CLI-owned mount, and keep the daemon running while it is mounted. Windows mapping defaults to `T:` but is not automatic; run the printed `net use` command. Plaintext single-part and multipart files stream from Telegram as they are read. Encrypted-file reads are not supported in this first release.
 
 Shared drive commands:
 
@@ -183,7 +198,7 @@ tdrive drive deny <user-id>
 tdrive drive leave <name|id>
 ```
 
-Remove the installed CLI:
+Remove a CLI installed by the macOS/Linux installer:
 
 ```bash
 tdrive uninstall-cli
@@ -216,13 +231,13 @@ Files you’ll see there:
 - `daemon.log` → CLI daemon log
 - `backend.lock` → Prevents the GUI and CLI daemon from using the backend at the same time
 
-The CLI daemon socket is runtime-only and lives under `$XDG_RUNTIME_DIR` or `/tmp/tdrive-<uid>` on Unix-like systems, not in the config folder.
+The CLI daemon socket is runtime-only and lives under `$XDG_RUNTIME_DIR` or `/tmp/tdrive-<uid>` on Unix-like systems, not in the config folder. On Windows, the daemon instead uses a per-user named pipe with a protected access list restricted to the current Windows SID; there is no filesystem socket path.
 
 ## Notes & caveats
 
 **TDX metadata.** You will see `TDX1|...` messages in Telegram. They are silent but visible, and they are how TDrive remembers the drive structure. Don’t edit or delete them from the regular Telegram app. Changing them can desync what different members see.
 
-**CLI status.** The CLI is currently macOS/Linux only. The GUI and CLI daemon are mutually exclusive: close the GUI before using CLI commands. `tdrive unlock` keeps the vault key only in daemon memory, and `tdrive cat` may stage decrypted content through a temporary file before writing it to stdout. Folder/archive import is copy-style import, not sync/merge; importing the same folder again can create names like `folder (2)`.
+**CLI status.** Release assets support macOS, Linux, and Windows amd64; the Windows CLI is a portable beta zip without an installer or system service. The GUI and CLI daemon are mutually exclusive: close the GUI before using CLI commands. `tdrive unlock` keeps the vault key only in daemon memory, and `tdrive cat` may stage decrypted content through a temporary file before writing it to stdout. Folder/archive import is copy-style import, not sync/merge; importing the same folder again can create names like `folder (2)`.
 
 **Download counts.** The downloads badge shows total GitHub release asset downloads. For a per-release/per-OS breakdown:
 

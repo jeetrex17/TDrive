@@ -74,6 +74,8 @@ func run(args []string) error {
 		return runVault(args[1:])
 	case "unlock":
 		return runVaultUnlock(args[1:])
+	case "mount":
+		return runMount(args[1:])
 	case "put":
 		return runPut(args[1:])
 	case "get":
@@ -821,6 +823,9 @@ Usage:
   tdrive mkdir [-p] <path>  Create a remote folder
   tdrive rm [-r] <path>     Remove a remote file or folder
   tdrive mv <src> <dst>     Move or rename a remote file or folder
+  tdrive mount              Start read-only WebDAV mount server
+  tdrive mount status       Show mount server status
+  tdrive mount stop         Stop mount server
   tdrive vault status       Show vault state
   tdrive unlock             Unlock the vault in the daemon
   tdrive put [-e] [--extract] <local> [remote-path]

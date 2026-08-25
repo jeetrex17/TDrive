@@ -74,6 +74,15 @@ func (s *Service) StorageUsed(channelID int64) (int64, error) {
 }
 
 func (s *Service) FolderContents(channelID int64, parentID string) (FileSystem, error) {
+	return s.FolderContentsContext(context.Background(), channelID, parentID)
+}
+
+// FolderContentsContext is FolderContents with cancellation propagated to the
+// projection queries. Callers serving bounded requests should prefer it.
+func (s *Service) FolderContentsContext(ctx context.Context, channelID int64, parentID string) (FileSystem, error) {
+	if ctx == nil {
+		return FileSystem{}, fmt.Errorf("read: list folder contents: %w", projection.ErrInvalidContext)
+	}
 	if err := s.ready(); err != nil {
 		return FileSystem{}, err
 	}
@@ -81,9 +90,9 @@ func (s *Service) FolderContents(channelID int64, parentID string) (FileSystem, 
 		return FileSystem{Folders: []Folder{}, Files: []File{}}, nil
 	}
 
-	folders, files, err := projection.ListFolderContents(s.DB, channelID, parentID)
+	folders, files, err := projection.ListFolderContentsContext(ctx, s.DB, channelID, parentID)
 	if err != nil {
-		return FileSystem{}, err
+		return FileSystem{}, fmt.Errorf("read: list folder contents: %w", err)
 	}
 
 	out := FileSystem{

@@ -46,10 +46,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Run CLI, daemon, and mount tests
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav
+
+      - name: Vet platform-specific daemon and CLI code
+        run: go vet ./cmd/tdrive ./backend/daemon
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -70,6 +76,7 @@ jobs:
         run: choco install mpvio.install --no-progress -y
 
       - name: Install Wails
+        shell: bash
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
@@ -128,6 +135,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           ./scripts/package-mpv-windows.ps1 "build/bin/${{ matrix.output_name }}"
           Compress-Archive -Force -Path "build/bin/${{ matrix.output_name }}", "build/bin/media" -DestinationPath "dist/${{ matrix.asset_name }}"
+
+      - name: Package CLI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-cli-release-windows.ps1 -Version "${{ github.ref_name }}"
 
       - name: Package (macOS)
         if: runner.os == 'macOS'

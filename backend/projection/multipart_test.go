@@ -1,7 +1,9 @@
 package projection
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"testing"
 )
 
@@ -83,6 +85,64 @@ func TestManifestCommitsOneFileFromParts(t *testing.T) {
 	}
 	if parts, err := MultipartParts(db, testChan, 10); err != nil || parts != nil {
 		t.Fatalf("single file MultipartParts = %v, %v, want nil,nil", parts, err)
+	}
+}
+
+func TestMultipartReadContextsHonorCancellation(t *testing.T) {
+	db := newTestDB(t)
+	applyMultipartUpload(t, db, "u1", []int64{1, 2, 3}, 4, "movie.mkv", RootParent, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	parts, err := MultipartPartsContext(ctx, db, testChan, 4)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("MultipartPartsContext error = %v, want context.Canceled", err)
+	}
+	if parts != nil {
+		t.Fatalf("MultipartPartsContext parts = %v, want nil", parts)
+	}
+
+	parts, err = PartsForUUIDContext(ctx, db, testChan, "u1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("PartsForUUIDContext error = %v, want context.Canceled", err)
+	}
+	if parts != nil {
+		t.Fatalf("PartsForUUIDContext parts = %v, want nil", parts)
+	}
+
+	err = MultipartCompleteContext(ctx, db, testChan, 4, []FilePart{
+		{PartIndex: 0, MsgID: 1, Size: 100},
+		{PartIndex: 1, MsgID: 2, Size: 100},
+		{PartIndex: 2, MsgID: 3, Size: 100},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("MultipartCompleteContext error = %v, want context.Canceled", err)
+	}
+}
+
+func TestMultipartReadContextsRejectNilContext(t *testing.T) {
+	db := newTestDB(t)
+	applyMultipartUpload(t, db, "u1", []int64{1, 2, 3}, 4, "movie.mkv", RootParent, false)
+
+	parts, err := MultipartPartsContext(nil, db, testChan, 4)
+	if !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("MultipartPartsContext error = %v, want ErrInvalidContext", err)
+	}
+	if parts != nil {
+		t.Fatalf("MultipartPartsContext parts = %v, want nil", parts)
+	}
+
+	parts, err = PartsForUUIDContext(nil, db, testChan, "u1")
+	if !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("PartsForUUIDContext error = %v, want ErrInvalidContext", err)
+	}
+	if parts != nil {
+		t.Fatalf("PartsForUUIDContext parts = %v, want nil", parts)
+	}
+
+	err = MultipartCompleteContext(nil, db, testChan, 4, nil)
+	if !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("MultipartCompleteContext error = %v, want ErrInvalidContext", err)
 	}
 }
 

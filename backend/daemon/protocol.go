@@ -42,6 +42,9 @@ const (
 	CommandVaultLock          = "vault.lock"
 	CommandUpload             = "transfer.upload"
 	CommandDownload           = "transfer.download"
+	CommandMountStart         = "mount.start"
+	CommandMountStatus        = "mount.status"
+	CommandMountStop          = "mount.stop"
 )
 
 type Request struct {
@@ -302,6 +305,30 @@ type DownloadResponse struct {
 	Drive     Drive  `json:"drive"`
 	Entry     Entry  `json:"entry"`
 	SavedPath string `json:"saved_path"`
+}
+
+type MountStartRequest struct {
+	Selector     string `json:"selector,omitempty"`
+	WindowsDrive string `json:"windows_drive,omitempty"`
+}
+
+type MountResponse struct {
+	Running      bool          `json:"running"`
+	URL          string        `json:"url,omitempty"`
+	Mode         string        `json:"mode,omitempty"`
+	Error        string        `json:"error,omitempty"`
+	Drive        Drive         `json:"drive,omitempty"`
+	WindowsDrive string        `json:"windows_drive,omitempty"`
+	Commands     MountCommands `json:"commands,omitempty"`
+}
+
+type MountCommands struct {
+	WindowsMap    string `json:"windows_map,omitempty"`
+	WindowsUnmap  string `json:"windows_unmap,omitempty"`
+	MacFinder     string `json:"mac_finder,omitempty"`
+	LinuxMount    string `json:"linux_mount,omitempty"`
+	LinuxUnmount  string `json:"linux_unmount,omitempty"`
+	ActiveOSMount string `json:"active_os_mount,omitempty"`
 }
 
 type Event struct {
