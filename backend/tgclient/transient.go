@@ -7,6 +7,9 @@ import (
 	"net"
 	"strings"
 	"syscall"
+
+	"github.com/gotd/td/pool"
+	"github.com/gotd/td/rpc"
 )
 
 // transientTransportPatterns are lowercase substrings of transport-level
@@ -68,7 +71,9 @@ func IsTransientTransport(err error) bool {
 }
 
 func isTypedTransientTransport(err error) bool {
-	if errors.Is(err, io.ErrUnexpectedEOF) ||
+	if errors.Is(err, rpc.ErrEngineClosed) ||
+		errors.Is(err, pool.ErrConnDead) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, syscall.ECONNREFUSED) ||

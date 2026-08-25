@@ -13,18 +13,22 @@ import (
 type transientUploadPartClient struct {
 	calls      int
 	firstError error
+	smallParts []*tg.UploadSaveFilePartRequest
+	bigParts   []*tg.UploadSaveBigFilePartRequest
 }
 
-func (c *transientUploadPartClient) UploadSaveFilePart(context.Context, *tg.UploadSaveFilePartRequest) (bool, error) {
+func (c *transientUploadPartClient) UploadSaveFilePart(_ context.Context, request *tg.UploadSaveFilePartRequest) (bool, error) {
 	c.calls++
+	c.smallParts = append(c.smallParts, request)
 	if c.calls == 1 {
 		return false, c.firstError
 	}
 	return true, nil
 }
 
-func (c *transientUploadPartClient) UploadSaveBigFilePart(context.Context, *tg.UploadSaveBigFilePartRequest) (bool, error) {
+func (c *transientUploadPartClient) UploadSaveBigFilePart(_ context.Context, request *tg.UploadSaveBigFilePartRequest) (bool, error) {
 	c.calls++
+	c.bigParts = append(c.bigParts, request)
 	if c.calls == 1 {
 		return false, c.firstError
 	}
@@ -76,6 +80,22 @@ func TestRetryingUploadClientReacquiresAndRetriesSameTelegramPart(t *testing.T) 
 			}
 			if partClient.calls != 2 || acquires != 2 {
 				t.Fatalf("part calls=%d connection acquires=%d, want 2 and 2", partClient.calls, acquires)
+			}
+			switch test.name {
+			case "small part":
+				if len(partClient.smallParts) != 2 {
+					t.Fatalf("small-part request count = %d, want 2", len(partClient.smallParts))
+				}
+				if partClient.smallParts[0] != partClient.smallParts[1] {
+					t.Fatalf("small-part requests = %p and %p, want the exact retained request", partClient.smallParts[0], partClient.smallParts[1])
+				}
+			case "big part":
+				if len(partClient.bigParts) != 2 {
+					t.Fatalf("big-part request count = %d, want 2", len(partClient.bigParts))
+				}
+				if partClient.bigParts[0] != partClient.bigParts[1] {
+					t.Fatalf("big-part requests = %p and %p, want the exact retained request", partClient.bigParts[0], partClient.bigParts[1])
+				}
 			}
 		})
 	}

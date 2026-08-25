@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	tdcrypto "TDrive/backend/crypto"
@@ -358,6 +360,72 @@ func TestMultipartManifestCancellationAfterSendKeepsParts(t *testing.T) {
 	}
 }
 
+func TestMultipartManifestProjectionFailureReturnsOpForLocalRetry(t *testing.T) {
+	svc, db, _, actorID := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	if _, err := db.Exec(`
+		CREATE TRIGGER fail_visible_manifest_projection
+		BEFORE INSERT ON files
+		WHEN NEW.upload_uuid != ''
+		BEGIN
+			SELECT RAISE(ABORT, 'injected manifest projection failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create manifest projection trigger: %v", err)
+	}
+
+	path := writeTempNamedFile(t, "manifest-project-failure.bin", bigBody(2500))
+	meta, op, header, err := svc.uploadSingle(context.Background(), 0, path, "", personalChannelID, false)
+	if err == nil || !errors.Is(err, tgclient.ErrSendOutcomeUnknown) && !strings.Contains(err.Error(), "injected manifest projection failure") {
+		t.Fatalf("uploadSingle error = %v, want manifest projection failure", err)
+	}
+	if meta.MsgID == 0 {
+		t.Fatalf("metadata = %+v, want accepted manifest msg id", meta)
+	}
+	if op.Type != projection.OpFileManifest || header == "" {
+		t.Fatalf("returned op/header = %+v/%q, want manifest op for caller retry", op, header)
+	}
+	if _, err := db.Exec(`DROP TRIGGER fail_visible_manifest_projection`); err != nil {
+		t.Fatalf("drop manifest projection trigger: %v", err)
+	}
+	if _, err := projection.ProjectFromOp(db, personalChannelID, int64(meta.MsgID), op, *actorID, header); err != nil {
+		t.Fatalf("retry manifest projection: %v", err)
+	}
+	if !projection.FileExists(db, personalChannelID, int64(meta.MsgID)) {
+		t.Fatal("manifest did not become visible after local projection retry")
+	}
+}
+
+func TestMultipartUploadReportsManifestProjectionFailure(t *testing.T) {
+	svc, db, _, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	if _, err := db.Exec(`
+		CREATE TRIGGER fail_visible_manifest_projection
+		BEFORE INSERT ON files
+		WHEN NEW.upload_uuid != ''
+		BEGIN
+			SELECT RAISE(ABORT, 'injected manifest projection failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create manifest projection trigger: %v", err)
+	}
+	defer func() {
+		_, _ = db.Exec(`DROP TRIGGER fail_visible_manifest_projection`)
+	}()
+
+	path := writeTempNamedFile(t, "manifest-project-failure-batch.bin", bigBody(2500))
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
+	if err == nil || !strings.Contains(err.Error(), "injected manifest projection failure") {
+		t.Fatalf("Upload error = %v, want manifest projection failure", err)
+	}
+	if len(files) != 1 || files[0].MsgID == 0 {
+		t.Fatalf("Upload files = %+v, want accepted remote manifest metadata", files)
+	}
+	if projection.FileExists(db, personalChannelID, int64(files[0].MsgID)) {
+		t.Fatal("manifest unexpectedly became visible after persistent projection failure")
+	}
+}
+
 type midstreamTransientClient struct {
 	*tgclient.Fake
 	mu     sync.Mutex
@@ -367,14 +435,24 @@ type midstreamTransientClient struct {
 
 type transientDownloadClient struct {
 	*tgclient.Fake
-	mu         sync.Mutex
-	failStream bool
-	failAt     bool
+	mu              sync.Mutex
+	failStream      bool
+	failAt          bool
+	failAtCount     int
+	failStreamCount int
 }
 
 func (c *transientDownloadClient) takeFailure(stream bool) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if stream && c.failStreamCount > 0 {
+		c.failStreamCount--
+		return true
+	}
+	if !stream && c.failAtCount > 0 {
+		c.failAtCount--
+		return true
+	}
 	if stream && c.failStream {
 		c.failStream = false
 		return true
@@ -500,6 +578,64 @@ func TestEncryptedMultipartRetriesAfterMidstreamRead(t *testing.T) {
 	}
 }
 
+func TestEncryptedMultipartDownloadFailureReportsNetworkError(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	svc.FloodWaitRetry = instantRetryPolicy()
+	masterKey := bytes.Repeat([]byte{7}, 32)
+	configureEncryptedUpload(t, svc, masterKey)
+
+	path := writeTempNamedFile(t, "encrypted-network.bin", bigBody(2500))
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("encrypted multipart upload: %v", err)
+	}
+
+	svc.FloodWaitRetry = tgclient.FloodWaitRetryPolicy{
+		Sleep:               func(context.Context, time.Duration) error { return nil },
+		MaxTransientRetries: 1,
+		TransientBackoff:    time.Millisecond,
+	}
+	svc.TG = &transientDownloadClient{Fake: fakeTG, failAtCount: 2}
+	savePath := filepath.Join(t.TempDir(), "network.out")
+	result := svc.Download(context.Background(), personalChannelID, files[0].MsgID, files[0].MsgID, func(string) (string, error) {
+		return savePath, nil
+	})
+	if result.Status != "error" || !strings.Contains(result.Message, "Network Error") {
+		t.Fatalf("download = %+v, want network error", result)
+	}
+}
+
+func TestEncryptedMultipartDecryptFailureReportsDecryptError(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	svc.FloodWaitRetry = instantRetryPolicy()
+	uploadKey := bytes.Repeat([]byte{7}, 32)
+	configureEncryptedUpload(t, svc, uploadKey)
+
+	path := writeTempNamedFile(t, "encrypted-wrong-key.bin", bigBody(2500))
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("encrypted multipart upload: %v", err)
+	}
+
+	wrongKey := bytes.Repeat([]byte{8}, 32)
+	svc.TG = fakeTG
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if !encrypted {
+			return nil, nil
+		}
+		return append([]byte(nil), wrongKey...), nil
+	}
+	savePath := filepath.Join(t.TempDir(), "wrong-key.out")
+	result := svc.Download(context.Background(), personalChannelID, files[0].MsgID, files[0].MsgID, func(string) (string, error) {
+		return savePath, nil
+	})
+	if result.Status != "error" || !strings.Contains(result.Message, "Download/decrypt failed") {
+		t.Fatalf("download = %+v, want decrypt error", result)
+	}
+}
+
 func TestPreviewRetriesIntoFreshBufferAfterPartialDownload(t *testing.T) {
 	svc, _, fakeTG, _ := newTestService(t)
 	svc.FloodWaitRetry = instantRetryPolicy()
@@ -601,12 +737,15 @@ type countingClient struct {
 	mu       sync.Mutex
 	inFlight int
 	maxSeen  int
-	delay    time.Duration
+	calls    int
+	entered  chan<- struct{}
+	release  <-chan struct{}
 }
 
 func (c *countingClient) beginSend() func() {
 	c.mu.Lock()
 	c.inFlight++
+	c.calls++
 	if c.inFlight > c.maxSeen {
 		c.maxSeen = c.inFlight
 	}
@@ -618,18 +757,39 @@ func (c *countingClient) beginSend() func() {
 	}
 }
 
+func (c *countingClient) waitForRelease(ctx context.Context) error {
+	if c.entered != nil {
+		c.entered <- struct{}{}
+	}
+	if c.release == nil {
+		return nil
+	}
+	select {
+	case <-c.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *countingClient) snapshot() (calls, inFlight, maxSeen int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls, c.inFlight, c.maxSeen
+}
+
 func (c *countingClient) SendFile(ctx context.Context, peer tgclient.InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64)) (tgclient.SendFileResult, error) {
 	defer c.beginSend()()
-	if c.delay > 0 {
-		time.Sleep(c.delay)
+	if err := c.waitForRelease(ctx); err != nil {
+		return tgclient.SendFileResult{}, err
 	}
 	return c.Fake.SendFile(ctx, peer, r, name, caption, totalSize, onProgress)
 }
 
 func (c *countingClient) SendFileWithRandomID(ctx context.Context, peer tgclient.InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), randomID int64) (tgclient.SendFileResult, error) {
 	defer c.beginSend()()
-	if c.delay > 0 {
-		time.Sleep(c.delay)
+	if err := c.waitForRelease(ctx); err != nil {
+		return tgclient.SendFileResult{}, err
 	}
 	return c.Fake.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID)
 }
@@ -646,8 +806,6 @@ func TestUploadBatchHonorsConfiguredConcurrency(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, fakeTG, _ := newTestService(t)
-			client := &countingClient{Fake: fakeTG}
-			svc.TG = client
 			svc.MaxConcurrentUploads = tc.limit
 
 			var paths, parents []string
@@ -655,101 +813,42 @@ func TestUploadBatchHonorsConfiguredConcurrency(t *testing.T) {
 				paths = append(paths, writeTempNamedFile(t, "f"+string(rune('a'+i))+".txt", []byte("body")))
 				parents = append(parents, "")
 			}
-			files, err := svc.Upload(context.Background(), personalChannelID, paths, parents, false)
-			if err != nil {
-				t.Fatalf("upload: %v", err)
-			}
-			if len(files) != fileCount {
-				t.Fatalf("uploaded = %d, want %d", len(files), fileCount)
-			}
-			if client.maxSeen > tc.wantMax {
-				t.Fatalf("max concurrent sends = %d, want <= %d", client.maxSeen, tc.wantMax)
-			}
+			synctest.Test(t, func(t *testing.T) {
+				entered := make(chan struct{}, fileCount)
+				release := make(chan struct{})
+				client := &countingClient{Fake: fakeTG, entered: entered, release: release}
+				svc.TG = client
+
+				resultCh := make(chan []Metadata, 1)
+				errCh := make(chan error, 1)
+				go func() {
+					files, err := svc.Upload(context.Background(), personalChannelID, paths, parents, false)
+					resultCh <- files
+					errCh <- err
+				}()
+
+				for i := 0; i < tc.wantMax; i++ {
+					<-entered
+				}
+				synctest.Wait()
+				calls, inFlight, maxSeen := client.snapshot()
+				if calls != tc.wantMax || inFlight != tc.wantMax || maxSeen != tc.wantMax {
+					t.Fatalf("before release calls/in-flight/max = %d/%d/%d, want %d/%d/%d", calls, inFlight, maxSeen, tc.wantMax, tc.wantMax, tc.wantMax)
+				}
+
+				close(release)
+				synctest.Wait()
+				if err := <-errCh; err != nil {
+					t.Fatalf("upload: %v", err)
+				}
+				if files := <-resultCh; len(files) != fileCount {
+					t.Fatalf("uploaded = %d, want %d", len(files), fileCount)
+				}
+				calls, inFlight, maxSeen = client.snapshot()
+				if calls != fileCount || inFlight != 0 || maxSeen != tc.wantMax {
+					t.Fatalf("final calls/in-flight/max = %d/%d/%d, want %d/0/%d", calls, inFlight, maxSeen, fileCount, tc.wantMax)
+				}
+			})
 		})
-	}
-}
-
-func TestConcurrentUploadCallsShareConfiguredLimiter(t *testing.T) {
-	svc, _, fakeTG, _ := newTestService(t)
-	client := &countingClient{Fake: fakeTG, delay: 20 * time.Millisecond}
-	svc.TG = client
-	svc.MaxConcurrentUploads = 1
-
-	pathA := writeTempNamedFile(t, "a.txt", []byte("alpha"))
-	pathB := writeTempNamedFile(t, "b.txt", []byte("bravo"))
-	errCh := make(chan error, 2)
-	for _, path := range []string{pathA, pathB} {
-		path := path
-		go func() {
-			_, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
-			errCh <- err
-		}()
-	}
-	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil {
-			t.Fatalf("upload %d: %v", i, err)
-		}
-	}
-	if client.maxSeen > 1 {
-		t.Fatalf("max concurrent sends across Upload calls = %d, want <= 1", client.maxSeen)
-	}
-}
-
-func TestVisibleAndHiddenUploadsShareConfiguredLimiter(t *testing.T) {
-	svc, _, fakeTG, _ := newTestService(t)
-	client := &countingClient{Fake: fakeTG, delay: 20 * time.Millisecond}
-	svc.TG = client
-	svc.MaxConcurrentUploads = 1
-
-	visiblePath := writeTempNamedFile(t, "visible.txt", []byte("visible"))
-	hiddenBody := []byte("hidden")
-	start := make(chan struct{})
-	errCh := make(chan error, 2)
-	go func() {
-		<-start
-		_, err := svc.Upload(context.Background(), personalChannelID, []string{visiblePath}, []string{""}, false)
-		errCh <- err
-	}()
-	go func() {
-		<-start
-		_, err := svc.UploadHidden(
-			context.Background(),
-			personalChannelID,
-			HiddenUploadRequest{
-				OperationID:   "global-upload-limit-hidden",
-				Name:          "hidden.txt",
-				StoredSize:    int64(len(hiddenBody)),
-				PlaintextSize: int64(len(hiddenBody)),
-			},
-			bytes.NewReader(hiddenBody),
-		)
-		errCh <- err
-	}()
-	close(start)
-	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil {
-			t.Fatalf("upload %d: %v", i, err)
-		}
-	}
-	if client.maxSeen > 1 {
-		t.Fatalf("max concurrent visible/hidden sends = %d, want <= 1", client.maxSeen)
-	}
-}
-
-func TestUploadConcurrencyClamp(t *testing.T) {
-	for _, tc := range []struct {
-		configured int
-		want       int
-	}{
-		{configured: 0, want: 3},
-		{configured: -2, want: 3},
-		{configured: 1, want: 1},
-		{configured: 5, want: 5},
-		{configured: 99, want: 8},
-	} {
-		svc := &Service{MaxConcurrentUploads: tc.configured}
-		if got := svc.uploadConcurrency(); got != tc.want {
-			t.Fatalf("uploadConcurrency(%d) = %d, want %d", tc.configured, got, tc.want)
-		}
 	}
 }

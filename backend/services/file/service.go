@@ -378,8 +378,7 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		// uploadMultipart sends the parts, projects them, and emits the manifest
 		// (the commit point) itself. Returning an empty op tells the caller not
 		// to re-project this upload.
-		meta, err := s.uploadMultipart(ctx, uploadID, source, filename, plaintextSize, parent, channelID, wantEncrypted, masterKey, peer, storedSize)
-		return meta, projection.Op{}, "", err
+		return s.uploadMultipart(ctx, uploadID, source, filename, plaintextSize, parent, channelID, wantEncrypted, masterKey, peer, storedSize)
 	}
 
 	encrypted := wantEncrypted
@@ -533,22 +532,22 @@ func (plan uploadPartPlan) window(storedSize int64, partIndex int) (offset int64
 // projected before an idempotent manifest commits the logical file. Encrypted
 // data is staged one part at a time, which makes retries rewind-safe without
 // materializing a complete multi-gigabyte ciphertext file.
-func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile io.ReadSeeker, filename string, plaintextSize int64, parent string, channelID int64, encrypt bool, masterKey []byte, peer tgclient.InputPeer, storedSize int64) (Metadata, error) {
+func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile io.ReadSeeker, filename string, plaintextSize int64, parent string, channelID int64, encrypt bool, masterKey []byte, peer tgclient.InputPeer, storedSize int64) (Metadata, projection.Op, string, error) {
 	if s.ActorID == nil {
-		return Metadata{}, fmt.Errorf("actor resolver not ready")
+		return Metadata{}, projection.Op{}, "", fmt.Errorf("actor resolver not ready")
 	}
 	actorID, err := s.ActorID(ctx)
 	if err != nil {
-		return Metadata{}, err
+		return Metadata{}, projection.Op{}, "", err
 	}
 
 	plan, err := s.buildUploadPartPlan(storedSize)
 	if err != nil {
-		return Metadata{}, fmt.Errorf("%s: %w", filename, err)
+		return Metadata{}, projection.Op{}, "", fmt.Errorf("%s: %w", filename, err)
 	}
 	numParts := plan.partCount
 	if !supportsIdempotentSends(s.TG) {
-		return Metadata{}, fmt.Errorf("multipart upload requires Telegram idempotent sends")
+		return Metadata{}, projection.Op{}, "", fmt.Errorf("multipart upload requires Telegram idempotent sends")
 	}
 
 	uploadUUID := projection.NewUploadUUID()
@@ -557,9 +556,10 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 
 	var encryptedStream io.Reader
 	var finishEncryption func() error
+	stagingDir := uploadSourceTempDir(plainFile)
 	if encrypt {
 		if _, err := plainFile.Seek(0, io.SeekStart); err != nil {
-			return Metadata{}, fmt.Errorf("rewind source for encryption: %w", err)
+			return Metadata{}, projection.Op{}, "", fmt.Errorf("rewind source for encryption: %w", err)
 		}
 		reader, writer := io.Pipe()
 		done := make(chan error, 1)
@@ -607,12 +607,12 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 	for i := 0; i < numParts; i++ {
 		if err := ctx.Err(); err != nil {
 			abort()
-			return Metadata{}, err
+			return Metadata{}, projection.Op{}, "", err
 		}
 		partBase, partLen, err := plan.window(storedSize, i)
 		if err != nil {
 			abort()
-			return Metadata{}, err
+			return Metadata{}, projection.Op{}, "", err
 		}
 		partOp := projection.Op{
 			Type:       projection.OpFilePart,
@@ -625,10 +625,10 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		partOffset := partBase
 		var stagedPart *os.File
 		if encrypt {
-			stagedPart, err = stageUploadPart(ctx, encryptedStream, partLen)
+			stagedPart, err = stageUploadPart(ctx, stagingDir, encryptedStream, partLen)
 			if err != nil {
 				abort()
-				return Metadata{}, fmt.Errorf("stage encrypted part %d: %w", i, err)
+				return Metadata{}, projection.Op{}, "", fmt.Errorf("stage encrypted part %d: %w", i, err)
 			}
 			partReader = stagedPart
 			partOffset = 0
@@ -660,7 +660,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		if err != nil {
 			cleanupPart()
 			abort()
-			return Metadata{}, err
+			return Metadata{}, projection.Op{}, "", err
 		}
 		err = s.retryVisibleSend(ctx, true, func() error {
 			if _, serr := partReader.Seek(partOffset, io.SeekStart); serr != nil {
@@ -683,25 +683,25 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		cleanupPart()
 		if err != nil {
 			abort()
-			return Metadata{}, err
+			return Metadata{}, projection.Op{}, "", err
 		}
 		if result.MsgID == 0 {
 			abort()
-			return Metadata{}, fmt.Errorf("upload part %d: no msg id", i)
+			return Metadata{}, projection.Op{}, "", fmt.Errorf("upload part %d: no msg id", i)
 		}
 		// Track the sent part for cleanup before projecting it, so a projection
 		// failure here still deletes this part's body in abort().
 		partMsgIDs = append(partMsgIDs, result.MsgID)
 		if _, err := projection.ProjectFromOp(s.DB, channelID, result.MsgID, partOp, actorID, partCaption); err != nil {
 			abort()
-			return Metadata{}, err
+			return Metadata{}, projection.Op{}, "", err
 		}
 	}
 	if finishEncryption != nil {
 		if err := finishEncryption(); err != nil {
 			finishEncryption = nil
 			abort()
-			return Metadata{}, fmt.Errorf("encrypt multipart: %w", err)
+			return Metadata{}, projection.Op{}, "", fmt.Errorf("encrypt multipart: %w", err)
 		}
 		finishEncryption = nil
 	}
@@ -735,7 +735,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 	}
 	if err := ctx.Err(); err != nil {
 		abort()
-		return Metadata{}, err
+		return Metadata{}, projection.Op{}, "", err
 	}
 	manifestHeader := projection.Format(manifestOp)
 	manifestMsgID, commitAttempted, err := s.commitMultipartManifest(
@@ -753,16 +753,16 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			// cancellation during retry backoff hides the original transport error.
 			// Preserve every referenced part and let sync/retry reconcile the send.
 			if manifestMsgID > 0 {
-				return committedMeta(manifestMsgID), err
+				return committedMeta(manifestMsgID), manifestOp, manifestHeader, err
 			}
-			return Metadata{}, err
+			return Metadata{}, projection.Op{}, "", err
 		}
 		abort()
-		return Metadata{}, err
+		return Metadata{}, projection.Op{}, "", err
 	}
 
 	s.emitEvent("upload_progress", uploadID, 100.0)
-	return committedMeta(manifestMsgID), nil
+	return committedMeta(manifestMsgID), projection.Op{}, "", nil
 }
 
 // deleteMessagesChunked deletes Telegram messages in batches of 100 so a large
@@ -891,7 +891,7 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 		}
 	} else {
-		cipher, err := os.CreateTemp("", "tdrive-dl-*")
+		cipher, err := os.CreateTemp(filepath.Dir(savePath), ".tdrive-download-cipher-*")
 		if err != nil {
 			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 		}
@@ -929,8 +929,9 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 
 // downloadMultipart reassembles a multipart file by streaming its parts in
 // order. Plain files append each part to the output; encrypted files stream the
-// concatenated ciphertext through a pipe into DecryptStream, so the only disk
-// use is the final output (never a full ciphertext temp). Progress is aggregate
+// concatenated ciphertext through a pipe into DecryptStream. Retriable encrypted
+// downloads stage one part beside the destination, bounding temporary storage
+// to one TDrive part instead of the complete ciphertext. Progress is aggregate
 // across all parts.
 func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID int64, parts []projection.FilePart, peer tgclient.InputPeer, chooseSavePath ChooseSavePathFunc) DownloadResult {
 	// Refuse to reassemble an incomplete part set: a missing part would otherwise
@@ -988,7 +989,7 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 	downloadPartsOrdered := func(dst io.Writer) error {
 		var base int64
 		for _, p := range parts {
-			partTmp, err := os.CreateTemp("", "tdrive-download-part-*")
+			partTmp, err := os.CreateTemp(filepath.Dir(savePath), ".tdrive-download-part-*")
 			if err != nil {
 				return err
 			}
@@ -1119,16 +1120,23 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 		downloadDone := make(chan error, 1)
 		go func() {
 			downloadErr := downloadPartsOrdered(pw)
-			_ = pw.CloseWithError(downloadErr)
 			downloadDone <- downloadErr
+			_ = pw.CloseWithError(downloadErr)
 		}()
 		if _, err := tdcrypto.DecryptStream(pr, finalTmp, masterKey); err != nil {
-			_ = pr.CloseWithError(err)
-			<-downloadDone
+			select {
+			case downloadErr := <-downloadDone:
+				if downloadErr != nil {
+					return DownloadResult{Status: "error", Message: "Network Error: " + downloadErr.Error()}
+				}
+			default:
+				_ = pr.CloseWithError(err)
+				<-downloadDone
+			}
 			return DownloadResult{Status: "error", Message: "Download/decrypt failed: " + err.Error()}
 		}
-		if err := <-downloadDone; err != nil {
-			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
+		if downloadErr := <-downloadDone; downloadErr != nil {
+			return DownloadResult{Status: "error", Message: "Network Error: " + downloadErr.Error()}
 		}
 	}
 
@@ -1763,11 +1771,11 @@ func (s *Service) writeCiphertextTemp(plain io.Reader, plaintextSize int64, mast
 	return tmp, nil
 }
 
-func stageUploadPart(ctx context.Context, source io.Reader, size int64) (*os.File, error) {
+func stageUploadPart(ctx context.Context, dir string, source io.Reader, size int64) (*os.File, error) {
 	if ctx == nil || source == nil || size < 0 {
 		return nil, fmt.Errorf("invalid upload part staging input")
 	}
-	tmp, err := os.CreateTemp("", "tdrive-upload-part-*")
+	tmp, err := createTempWithFallback(dir, ".tdrive-upload-part-*")
 	if err != nil {
 		return nil, err
 	}
@@ -1789,6 +1797,30 @@ func stageUploadPart(ctx context.Context, source io.Reader, size int64) (*os.Fil
 		return nil, err
 	}
 	return tmp, nil
+}
+
+func createTempWithFallback(dir string, pattern string) (*os.File, error) {
+	if dir != "" {
+		if tmp, err := os.CreateTemp(dir, pattern); err == nil {
+			return tmp, nil
+		}
+	}
+	return os.CreateTemp("", pattern)
+}
+
+func uploadSourceTempDir(source io.ReadSeeker) string {
+	type named interface {
+		Name() string
+	}
+	n, ok := source.(named)
+	if !ok {
+		return ""
+	}
+	name := n.Name()
+	if name == "" {
+		return ""
+	}
+	return filepath.Dir(name)
 }
 
 type contextReader struct {
