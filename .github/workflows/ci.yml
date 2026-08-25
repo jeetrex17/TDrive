@@ -90,10 +90,10 @@ jobs:
           cache: true
 
       - name: Run daemon and mount tests
-        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos
 
       - name: Vet platform-specific daemon and CLI code
-        run: go vet ./cmd/tdrive ./backend/daemon
+        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos
 
       - name: Build CLI
         if: runner.os != 'Windows'

@@ -351,32 +351,31 @@ Forget the in-memory vault key from the daemon.
 	"mount start": `
 tdrive mount [start] [--drive <name|id>] [--windows-drive T:]
 
-Start a read-only WebDAV server pinned to one TDrive drive.
+Attach one TDrive as a read-only desktop drive.
 
 Options:
   --drive <name|id>       Pin this drive; defaults to the current active drive
-  --windows-drive T:      Windows Explorer drive letter hint, default T:
+  --windows-drive T:      Windows Explorer drive letter, default T:
 
-Selecting --drive does not change the active drive used by other CLI or GUI
-commands. The daemon prints a private localhost URL and OS mount instructions.
-On Windows, run the printed net use command to map it as T:. Mapping is not
-automatic in this release.
+Selecting --drive does not change the active drive used by other CLI commands.
+TDrive attaches the drive automatically: Finder on macOS, T: in Windows
+Explorer, or the current GVfs/GIO desktop session on Linux.
 
 Only browsing and reading are supported. Creating, editing, renaming, and
 deleting through the mount are rejected.
 
 Close the TDrive GUI before starting this CLI-owned mount. Keep the daemon
-running until the OS is disconnected and tdrive mount stop has completed.
+running until "tdrive mount stop" has completed.
 `,
 	"mount status": `
 tdrive mount status
 
-Show the pinned drive, private WebDAV URL, and OS mount instructions.
+Show the pinned drive and its safe OS location.
 `,
 	"mount stop": `
 tdrive mount stop
 
-Stop the read-only WebDAV mount server.
+Disconnect the OS drive, then stop the private read-only server.
 `,
 	"put": `
 tdrive put [-e|--encrypt] [--extract] <local> [remote-path]

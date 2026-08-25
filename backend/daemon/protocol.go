@@ -313,22 +313,15 @@ type MountStartRequest struct {
 }
 
 type MountResponse struct {
-	Running      bool          `json:"running"`
-	URL          string        `json:"url,omitempty"`
-	Mode         string        `json:"mode,omitempty"`
-	Error        string        `json:"error,omitempty"`
-	Drive        Drive         `json:"drive,omitempty"`
-	WindowsDrive string        `json:"windows_drive,omitempty"`
-	Commands     MountCommands `json:"commands,omitempty"`
-}
-
-type MountCommands struct {
-	WindowsMap    string `json:"windows_map,omitempty"`
-	WindowsUnmap  string `json:"windows_unmap,omitempty"`
-	MacFinder     string `json:"mac_finder,omitempty"`
-	LinuxMount    string `json:"linux_mount,omitempty"`
-	LinuxUnmount  string `json:"linux_unmount,omitempty"`
-	ActiveOSMount string `json:"active_os_mount,omitempty"`
+	Running      bool   `json:"running"`
+	Mounted      bool   `json:"mounted"`
+	Phase        string `json:"phase,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	Label        string `json:"label,omitempty"`
+	Location     string `json:"location,omitempty"`
+	Error        string `json:"error,omitempty"`
+	Drive        Drive  `json:"drive,omitempty"`
+	WindowsDrive string `json:"windows_drive,omitempty"`
 }
 
 type Event struct {

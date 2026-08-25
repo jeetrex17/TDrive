@@ -58,7 +58,6 @@ func TestOpenerResolutionLimitIsSharedAcrossOpensAndCloseCancelsWaiters(t *testi
 		})
 	}
 
-	peerCalls := make(chan struct{}, 5)
 	started := make(chan int64, 5)
 	var mu sync.Mutex
 	active, maximum, resolveCalls := 0, 0, 0
@@ -84,7 +83,7 @@ func TestOpenerResolutionLimitIsSharedAcrossOpensAndCloseCancelsWaiters(t *testi
 	}
 	opener, err := New(Config{
 		DB:     db,
-		Peers:  notifyingPeerResolver{peer: fake.peer, calls: peerCalls},
+		Peers:  staticPeerResolver{peer: fake.peer},
 		Ranges: fake,
 	})
 	if err != nil {
@@ -101,9 +100,6 @@ func TestOpenerResolutionLimitIsSharedAcrossOpensAndCloseCancelsWaiters(t *testi
 		}()
 	}
 	waitForResolveStarts(t, started, 4)
-	for range 4 {
-		waitForSignal(t, peerCalls, "peer resolution")
-	}
 	if got := cap(opener.resolveSlots); got != maxConcurrentDocumentResolutions {
 		t.Fatalf("resolution slot capacity = %d, want %d", got, maxConcurrentDocumentResolutions)
 	}
@@ -115,7 +111,6 @@ func TestOpenerResolutionLimitIsSharedAcrossOpensAndCloseCancelsWaiters(t *testi
 		_, openErr := opener.Open(context.Background(), testChannelID, 5)
 		results <- openErr
 	}()
-	waitForSignal(t, peerCalls, "fifth peer resolution")
 	opener.Close()
 
 	for range 5 {
@@ -244,20 +239,6 @@ type readerOpenResult struct {
 	err    error
 }
 
-type notifyingPeerResolver struct {
-	peer  tgclient.InputPeer
-	calls chan<- struct{}
-}
-
-func (r notifyingPeerResolver) ResolvePeer(ctx context.Context, _ int64) (tgclient.InputPeer, error) {
-	select {
-	case r.calls <- struct{}{}:
-		return r.peer, nil
-	case <-ctx.Done():
-		return tgclient.InputPeer{}, ctx.Err()
-	}
-}
-
 func waitForReaderOpen(t *testing.T, results <-chan readerOpenResult) readerOpenResult {
 	t.Helper()
 	select {
@@ -281,5 +262,3 @@ func waitForSignal(t *testing.T, signal <-chan struct{}, operation string) {
 func timeAfterResolverEvent() <-chan time.Time {
 	return time.After(resolverEventTimeout)
 }
-
-var _ PeerResolver = notifyingPeerResolver{}

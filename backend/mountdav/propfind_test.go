@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -51,6 +52,138 @@ func TestPropfindNeverAdvertisesWriteLocks(t *testing.T) {
 			}
 			if got := recorder.Header().Get("DAV"); got != "1" {
 				t.Fatalf("DAV = %q, want class 1", got)
+			}
+		})
+	}
+}
+
+func TestWindowsNoRootPropfindReturnsOnlyImmediateChildren(t *testing.T) {
+	opener := &memoryOpener{data: []byte("content must remain unopened")}
+	handler := newPropfindTestHandler(testFS(t, opener).fs)
+	for _, target := range []string{testCapability + "/", testCapability} {
+		t.Run(target, func(t *testing.T) {
+			body := bytes.NewBufferString(`<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`)
+			request := trustedRequest("PROPFIND", target, body)
+			request.Header.Set("Depth", "1,noroot")
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusMultiStatus {
+				t.Fatalf("PROPFIND Depth 1,noroot status = %d, want %d; body=%q", recorder.Code, http.StatusMultiStatus, recorder.Body.String())
+			}
+			wantHrefs := []string{testCapability + "/Docs/"}
+			if got := propfindResponseHrefs(t, recorder.Body.Bytes()); !slices.Equal(got, wantHrefs) {
+				t.Fatalf("PROPFIND Depth 1,noroot hrefs = %q, want %q", got, wantHrefs)
+			}
+			assertEmptySupportedLock(t, recorder.Body.Bytes())
+			if got := recorder.Header().Get("Allow"); got != allowedMethodsHeader {
+				t.Fatalf("Allow = %q, want %q", got, allowedMethodsHeader)
+			}
+			if recorder.Header().Get("DAV") != "1" || recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
+				t.Fatalf("protocol or security headers are missing: %#v", recorder.Header())
+			}
+		})
+	}
+	if opener.calls != 0 {
+		t.Fatalf("PROPFIND Depth 1,noroot opened content %d times", opener.calls)
+	}
+}
+
+func TestWindowsNoRootPropfindReturnsEmptyMultistatusForEmptyDirectory(t *testing.T) {
+	source := &sequencedSource{responses: []directoryResponse{{entries: nil}}}
+	opener := &rejectingOpener{}
+	handler := newPropfindTestHandler(newUncachedMountFS(t, source, opener))
+	request := trustedRequest(
+		"PROPFIND",
+		testCapability+"/",
+		bytes.NewBufferString(`<D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`),
+	)
+	request.Header.Set("Depth", windowsNoRootDepth)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMultiStatus {
+		t.Fatalf("empty PROPFIND Depth 1,noroot status = %d, want %d; body=%q", recorder.Code, http.StatusMultiStatus, recorder.Body.String())
+	}
+	if got := propfindResponseHrefs(t, recorder.Body.Bytes()); len(got) != 0 {
+		t.Fatalf("empty PROPFIND Depth 1,noroot hrefs = %q, want none", got)
+	}
+	if source.callCount() != 1 || opener.callCount() != 0 {
+		t.Fatalf("empty PROPFIND source/content calls = %d/%d, want 1/0", source.callCount(), opener.callCount())
+	}
+}
+
+func TestWindowsNoRootPropfindOmitsNestedCollectionAndKeepsChild(t *testing.T) {
+	opener := &memoryOpener{data: []byte("content must remain unopened")}
+	handler := newPropfindTestHandler(testFS(t, opener).fs)
+	request := trustedRequest(
+		"PROPFIND",
+		testCapability+"/Docs/",
+		bytes.NewBufferString(`<D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`),
+	)
+	request.Header.Set("Depth", windowsNoRootDepth)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMultiStatus {
+		t.Fatalf("nested PROPFIND Depth 1,noroot status = %d, want %d; body=%q", recorder.Code, http.StatusMultiStatus, recorder.Body.String())
+	}
+	wantHrefs := []string{testCapability + "/Docs/note.txt"}
+	if got := propfindResponseHrefs(t, recorder.Body.Bytes()); !slices.Equal(got, wantHrefs) {
+		t.Fatalf("nested PROPFIND Depth 1,noroot hrefs = %q, want %q", got, wantHrefs)
+	}
+	assertEmptySupportedLock(t, recorder.Body.Bytes())
+	if opener.calls != 0 {
+		t.Fatalf("nested PROPFIND Depth 1,noroot opened content %d times", opener.calls)
+	}
+}
+
+func TestPropfindFilterMatchesNoRootResponseByHref(t *testing.T) {
+	input := `<D:multistatus xmlns:D="DAV:">` +
+		`<D:response><D:href>/dav/child/</D:href><D:propstat><D:prop><D:supportedlock><D:lockentry/></D:supportedlock></D:prop></D:propstat></D:response>` +
+		`<D:response><D:href>/dav/</D:href><D:propstat><D:prop><D:supportedlock><D:lockentry/></D:supportedlock></D:prop></D:propstat></D:response>` +
+		`</D:multistatus>`
+	var output bytes.Buffer
+
+	if err := filterPropfindDocument(&output, strings.NewReader(input), "/dav/"); err != nil {
+		t.Fatalf("filterPropfindDocument: %v", err)
+	}
+
+	if got, want := propfindResponseHrefs(t, output.Bytes()), []string{"/dav/child/"}; !slices.Equal(got, want) {
+		t.Fatalf("filtered hrefs = %q, want %q", got, want)
+	}
+	assertEmptySupportedLock(t, output.Bytes())
+}
+
+func TestWindowsNoRootPropfindPreservesRequestProtection(t *testing.T) {
+	handler := newPropfindTestHandler(testFS(t, nil).fs)
+	newRequest := func(target string) *http.Request {
+		request := trustedRequest("PROPFIND", target, bytes.NewBufferString(`<D:propfind xmlns:D="DAV:"><D:allprop/></D:propfind>`))
+		request.Header.Set("Depth", "1,noroot")
+		return request
+	}
+
+	tests := []struct {
+		name    string
+		request *http.Request
+		status  int
+	}{
+		{name: "wrong capability", request: newRequest("/wrong/"), status: http.StatusNotFound},
+		{name: "browser origin", request: newRequest(testCapability + "/"), status: http.StatusForbidden},
+		{name: "write method", request: trustedRequest(http.MethodPut, testCapability+"/new.txt", strings.NewReader("write")), status: http.StatusMethodNotAllowed},
+	}
+	tests[1].request.Header.Set("Origin", "null")
+	tests[2].request.Header.Set("Depth", "1,noroot")
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, test.request)
+			if recorder.Code != test.status {
+				t.Fatalf("status = %d, want %d; body=%q", recorder.Code, test.status, recorder.Body.String())
 			}
 		})
 	}
@@ -248,6 +381,34 @@ func assertEmptySupportedLock(t *testing.T, body []byte) {
 	if supportedLockCount == 0 {
 		t.Fatalf("PROPFIND omitted supportedlock capability: %q", body)
 	}
+}
+
+func propfindResponseHrefs(t *testing.T, body []byte) []string {
+	t.Helper()
+	var multistatus struct {
+		XMLName   xml.Name `xml:"multistatus"`
+		Responses []struct {
+			XMLName xml.Name `xml:"response"`
+			Hrefs   []string `xml:"href"`
+		} `xml:"response"`
+	}
+	if err := xml.Unmarshal(body, &multistatus); err != nil {
+		t.Fatalf("PROPFIND returned invalid XML: %v\n%s", err, body)
+	}
+	if multistatus.XMLName.Space != webDAVNamespace {
+		t.Fatalf("multistatus namespace = %q, want %q", multistatus.XMLName.Space, webDAVNamespace)
+	}
+	hrefs := make([]string, 0, len(multistatus.Responses))
+	for _, response := range multistatus.Responses {
+		if response.XMLName.Space != webDAVNamespace {
+			t.Fatalf("response namespace = %q, want %q", response.XMLName.Space, webDAVNamespace)
+		}
+		if len(response.Hrefs) != 1 {
+			t.Fatalf("response hrefs = %q, want exactly one", response.Hrefs)
+		}
+		hrefs = append(hrefs, response.Hrefs[0])
+	}
+	return hrefs
 }
 
 var _ http.Handler = (*readApplication)(nil)

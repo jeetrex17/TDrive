@@ -162,6 +162,14 @@ export function Me() {
   return window['go']['main']['App']['Me']();
 }
 
+export function MountDrive() {
+  return window['go']['main']['App']['MountDrive']();
+}
+
+export function MountStatus() {
+  return window['go']['main']['App']['MountStatus']();
+}
+
 export function MoveFile(arg1, arg2) {
   return window['go']['main']['App']['MoveFile'](arg1, arg2);
 }
@@ -188,6 +196,10 @@ export function NativeMediaCommand(arg1, arg2) {
 
 export function OpenMedia(arg1) {
   return window['go']['main']['App']['OpenMedia'](arg1);
+}
+
+export function OpenMountedDrive() {
+  return window['go']['main']['App']['OpenMountedDrive']();
 }
 
 export function OpenNativeMedia(arg1, arg2) {
@@ -284,6 +296,10 @@ export function SyncChannel(arg1) {
 
 export function Thumbnail(arg1) {
   return window['go']['main']['App']['Thumbnail'](arg1);
+}
+
+export function UnmountDrive() {
+  return window['go']['main']['App']['UnmountDrive']();
 }
 
 export function UpdateMediaPlayback(arg1) {

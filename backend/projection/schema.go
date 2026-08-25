@@ -112,6 +112,13 @@ func EnsureSchema(db *sql.DB) error {
 }
 
 func ensureCompatibleIndexes(db *sql.DB) error {
+	if dbTableHasColumns(db, "files", "channel_id", "parent_id", "upload_time", "msg_id", "tombstoned") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_channel_parent_latest
+			ON files(channel_id, parent_id, upload_time DESC, msg_id DESC)
+			WHERE tombstoned = 0;`); err != nil {
+			return fmt.Errorf("projection: create files parent-order index: %w", err)
+		}
+	}
 	if dbTableHasColumns(db, "files", "channel_id", "uploader_user_id", "upload_time", "msg_id", "tombstoned") {
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_uploader_latest
 			ON files(channel_id, uploader_user_id, upload_time DESC, msg_id DESC)
@@ -138,6 +145,13 @@ func ensureCompatibleIndexes(db *sql.DB) error {
 			ON folders(channel_id, name COLLATE NOCASE)
 			WHERE tombstoned = 0;`); err != nil {
 			return fmt.Errorf("projection: create folders name index: %w", err)
+		}
+	}
+	if dbTableHasColumns(db, "folders", "channel_id", "parent_id", "name", "id", "tombstoned") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_folders_channel_parent_name
+			ON folders(channel_id, parent_id, name, id)
+			WHERE tombstoned = 0;`); err != nil {
+			return fmt.Errorf("projection: create folders parent-order index: %w", err)
 		}
 	}
 	return nil
@@ -258,6 +272,13 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("projection: commit migration: %w", err)
+	}
+	// Table-rebuild migrations can temporarily leave a same-named index attached
+	// to the renamed legacy table. Recreate compatible indexes after the old
+	// table is dropped so upgraded databases get the same query plan as fresh
+	// installs.
+	if err := ensureCompatibleIndexes(db); err != nil {
+		return err
 	}
 	return nil
 }
@@ -447,6 +468,8 @@ func createFreshFolders(tx *sql.Tx) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_folders_channel_parent
 			ON folders(channel_id, parent_id) WHERE tombstoned = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_folders_channel_parent_name
+			ON folders(channel_id, parent_id, name, id) WHERE tombstoned = 0;`,
 		`CREATE INDEX IF NOT EXISTS idx_folders_channel_name_nocase
 			ON folders(channel_id, name COLLATE NOCASE)
 			WHERE tombstoned = 0;`,
@@ -479,6 +502,9 @@ func createFreshFiles(tx *sql.Tx) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_channel_parent
 			ON files(channel_id, parent_id) WHERE tombstoned = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_files_channel_parent_latest
+			ON files(channel_id, parent_id, upload_time DESC, msg_id DESC)
+			WHERE tombstoned = 0;`,
 		`CREATE INDEX IF NOT EXISTS idx_files_uploader_latest
 			ON files(channel_id, uploader_user_id, upload_time DESC, msg_id DESC)
 			WHERE tombstoned = 0 AND uploader_user_id > 0;`,

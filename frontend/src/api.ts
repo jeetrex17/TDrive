@@ -13,15 +13,19 @@ import {
     GetMediaStats as rawGetMediaStats,
     HideNativeSeekThumbnail as rawHideNativeSeekThumbnail,
     ListMedia as rawListMedia,
+    MountDrive as rawMountDrive,
+    MountStatus as rawMountStatus,
     MoveNativeSeekThumbnail as rawMoveNativeSeekThumbnail,
     NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
+    OpenMountedDrive as rawOpenMountedDrive,
     OpenNativeMedia as rawOpenNativeMedia,
     OpenStream as rawOpenStream,
     ResizeNativeMedia as rawResizeNativeMedia,
     Search as rawSearch,
     ShowNativeSeekThumbnail as rawShowNativeSeekThumbnail,
     Thumbnail as rawThumbnail,
+    UnmountDrive as rawUnmountDrive,
     UpdateMediaPlayback as rawUpdateMediaPlayback,
 } from "../wailsjs/go/main/App";
 import type { backend, main, media } from "../wailsjs/go/models";
@@ -32,7 +36,115 @@ import type {
     RootFile,
     SearchHit,
     SearchHitType,
+    MountedDrive,
+    MountedDriveKind,
+    MountPhase,
+    MountStatusView,
 } from "./types";
+
+export const MOUNT_LABEL = 'Tdrive personal' as const;
+
+type UnknownRecord = Record<string, unknown>;
+
+const UNSAFE_MOUNT_DETAIL = /(?:https?:\/\/|webdav:\/\/|dav:\/\/|tdrive-[a-f\d]{8,}|mount_webdav|\bnet\s+use\b|\bgio\s+mount\b)/i;
+const LOOPBACK_LOCATION = /(?:127\.0\.0\.1|\blocalhost\b|\[::1\])/i;
+
+function asRecord(value: unknown): UnknownRecord {
+    return value !== null && typeof value === 'object' ? value as UnknownRecord : {};
+}
+
+function boundedText(value: unknown, maxLength: number): string {
+    if (typeof value !== 'string') return '';
+    return [...value]
+        .filter((character) => {
+            const codePoint = character.codePointAt(0) ?? 0;
+            return codePoint > 31 && codePoint !== 127;
+        })
+        .join('')
+        .trim()
+        .slice(0, maxLength);
+}
+
+function normalizeMountPhase(value: unknown, mounted: boolean, error: string): MountPhase {
+    if (error || value === 'error') return 'error';
+    if (value === 'disconnecting') return 'disconnecting';
+    if (mounted) return 'mounted';
+    return value === 'mounting' ? 'mounting' : 'idle';
+}
+
+function normalizeMountedDrive(value: unknown): MountedDrive | null {
+    const raw = asRecord(value);
+    const rawID = Number(raw.id ?? 0);
+    const id = Number.isSafeInteger(rawID) && rawID > 0 ? rawID : 0;
+    const title = boundedText(raw.title, 160);
+    const rawKind = boundedText(raw.kind, 24);
+    const kind: MountedDriveKind = rawKind === 'personal' || rawKind === 'shared'
+        ? rawKind
+        : 'unknown';
+    if (id === 0 && !title && rawKind === '') return null;
+    return { id, title, kind };
+}
+
+function normalizeWindowsDrive(value: unknown): string {
+    const drive = boundedText(value, 2).toUpperCase();
+    if (/^[A-Z]$/.test(drive)) return `${drive}:`;
+    return /^[A-Z]:$/.test(drive) ? drive : '';
+}
+
+function normalizeMountLocation(value: unknown): string {
+    const location = boundedText(value, 320);
+    if (UNSAFE_MOUNT_DETAIL.test(location) || LOOPBACK_LOCATION.test(location)) return '';
+    return location;
+}
+
+function normalizeMountLabel(value: unknown): string {
+    const label = boundedText(value, 96);
+    if (!label || UNSAFE_MOUNT_DETAIL.test(label) || LOOPBACK_LOCATION.test(label)) return MOUNT_LABEL;
+    return label;
+}
+
+/** Converts backend/bridge failures into endpoint-free user-facing text. */
+export function safeMountError(value: unknown, fallback = 'The mount operation failed. Try again.'): string {
+    const message = value instanceof Error
+        ? boundedText(value.message, 240)
+        : boundedText(value, 240);
+    if (!message || UNSAFE_MOUNT_DETAIL.test(message) || LOOPBACK_LOCATION.test(message)) return fallback;
+    return message;
+}
+
+/** Normalize the Go DTO and intentionally drop endpoint URLs and command hints. */
+export function normalizeMountStatus(value: unknown): MountStatusView {
+    const raw = asRecord(value);
+    const mounted = Boolean(raw.mounted);
+    const error = safeMountError(raw.error, 'The drive could not be mounted. Try again.');
+    const hasError = boundedText(raw.error, 1) !== '';
+    return {
+        phase: normalizeMountPhase(raw.phase, mounted, hasError ? error : ''),
+        mounted,
+        mode: 'read-only',
+        label: normalizeMountLabel(raw.label),
+        location: normalizeMountLocation(raw.location),
+        error: hasError ? error : '',
+        drive: normalizeMountedDrive(raw.drive),
+        windowsDrive: normalizeWindowsDrive(raw.windows_drive),
+    };
+}
+
+export async function mountDrive(): Promise<MountStatusView> {
+    return normalizeMountStatus(await rawMountDrive());
+}
+
+export async function getMountStatus(): Promise<MountStatusView> {
+    return normalizeMountStatus(await rawMountStatus());
+}
+
+export async function openMountedDrive(): Promise<void> {
+    await rawOpenMountedDrive();
+}
+
+export async function unmountDrive(): Promise<MountStatusView> {
+    return normalizeMountStatus(await rawUnmountDrive());
+}
 
 export interface MediaOpenInfo {
     channelId: number;

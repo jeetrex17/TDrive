@@ -1,5 +1,6 @@
 <script lang="ts">
     import { tick } from 'svelte';
+    import MountControl from '../mount/MountControl.svelte';
     import Avatar from './Avatar.svelte';
     import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
 
@@ -147,8 +148,9 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 018 0v4"/></svg>
             <span>Encryption settings</span>
         </button>
-        <div class="profile-menu-divider" role="separator"></div>
     {/if}
+    <MountControl mode="menu" onMenuAction={() => closeMenu()} />
+    <div class="profile-menu-divider" role="separator"></div>
     <button
         id="profile-menu-logout"
         class="profile-menu-item danger-text"

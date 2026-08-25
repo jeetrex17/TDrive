@@ -1,8 +1,7 @@
 package main
 
 import (
-	"io"
-	"os"
+	"bytes"
 	"strings"
 	"testing"
 
@@ -83,65 +82,92 @@ func TestRunMountRejectsInvalidCommandsBeforeConnecting(t *testing.T) {
 	}
 }
 
-func TestPrintMountResponse(t *testing.T) {
-	stopped := captureMountOutput(t, func() {
-		printMountResponse(daemon.MountResponse{Error: "WebDAV server stopped unexpectedly"})
-	})
-	if !strings.Contains(stopped, "mount: stopped") || !strings.Contains(stopped, "error: WebDAV server stopped unexpectedly") {
-		t.Fatalf("stopped output = %q", stopped)
+func TestPrintMountResponseIsConciseAndCapabilityFree(t *testing.T) {
+	t.Parallel()
+
+	response := daemon.MountResponse{
+		Running:  true,
+		Mounted:  true,
+		Mode:     "read-only",
+		Label:    "Tdrive personal",
+		Location: "/Users/test/Library/Caches/TDrive/mounts/personal",
+		Drive:    daemon.Drive{ID: 42, Title: "Private Drive"},
 	}
 
-	running := captureMountOutput(t, func() {
-		printMountResponse(daemon.MountResponse{
-			Running:      true,
-			Mode:         "read-only",
-			URL:          "http://127.0.0.1:7000/capability/",
-			Drive:        daemon.Drive{ID: 42, Title: "Pinned"},
-			WindowsDrive: "T:",
-			Commands: daemon.MountCommands{
-				ActiveOSMount: "active hint",
-				WindowsMap:    "windows hint",
-				MacFinder:     "finder hint",
-				LinuxMount:    "linux hint",
-			},
-		})
-	})
-	for _, want := range []string{
-		"mount: running (read-only)",
-		"drive: Pinned (42), pinned until stopped",
-		"url:   http://127.0.0.1:7000/capability/",
-		"letter: T:",
-		"run:   active hint",
-		"win:   windows hint",
-		"mac:   finder hint",
-		"linux: linux hint",
+	var output bytes.Buffer
+	printMountResponse(&output, response)
+	text := output.String()
+	for _, forbidden := range []string{"tdrive-", "127.0.0.1", "http://", "net use"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("output leaked %q: %q", forbidden, text)
+		}
+	}
+	for _, expected := range []string{
+		"mounted: Tdrive personal (read-only)",
+		"location: /Users/test/Library/Caches/TDrive/mounts/personal",
+		"drive: Private Drive (42), pinned until disconnected",
 	} {
-		if !strings.Contains(running, want) {
-			t.Fatalf("running output %q does not contain %q", running, want)
+		if !strings.Contains(text, expected) {
+			t.Fatalf("output %q does not contain %q", text, expected)
 		}
 	}
 }
 
-func captureMountOutput(t *testing.T, run func()) string {
-	t.Helper()
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	previous := os.Stdout
-	os.Stdout = writer
-	defer func() { os.Stdout = previous }()
+func TestSafeMountMessageRedactsCapabilities(t *testing.T) {
+	t.Parallel()
 
-	run()
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
+	secret := "http://127.0.0.1:49152/tdrive-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/"
+	if got := safeMountMessage("attach failed for " + secret); strings.Contains(got, secret) || strings.Contains(got, "tdrive-") {
+		t.Fatalf("safeMountMessage leaked capability: %q", got)
 	}
-	output, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatal(err)
+	if got := safeMountMessage("attach failed for HTTP://LOCALHOST:49152/TDRIVE-secret"); strings.Contains(strings.ToLower(got), "tdrive-") {
+		t.Fatalf("safeMountMessage leaked case-varied capability: %q", got)
 	}
-	if err := reader.Close(); err != nil {
-		t.Fatal(err)
+}
+
+func TestPrintMountResponseReportsStoppedAndSanitizedError(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	printMountResponse(&output, daemon.MountResponse{
+		Phase: "failed",
+		Error: "Could not attach the drive",
+	})
+
+	if got, want := output.String(), "mount: stopped\nerror: Could not attach the drive\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
-	return string(output)
+}
+
+func TestPrintMountResponseReportsLifecycleWithoutCallingItStopped(t *testing.T) {
+	t.Parallel()
+
+	var mounting bytes.Buffer
+	printMountResponse(&mounting, daemon.MountResponse{
+		Running: true,
+		Phase:   "attaching",
+		Mode:    "read-only",
+		Label:   "Tdrive personal",
+	})
+	if got, want := mounting.String(), "mount: mounting Tdrive personal (read-only)\n"; got != want {
+		t.Fatalf("mounting output = %q, want %q", got, want)
+	}
+
+	secret := "http://127.0.0.1:49152/tdrive-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/"
+	var stale bytes.Buffer
+	printMountResponse(&stale, daemon.MountResponse{
+		Mounted:  true,
+		Phase:    "failed",
+		Mode:     "read-only",
+		Label:    "Tdrive personal",
+		Location: secret,
+		Error:    "Disconnect failed for " + secret,
+	})
+	text := stale.String()
+	if !strings.Contains(text, "mounted: Tdrive personal (read-only)") || !strings.Contains(text, "error: Mount operation failed") {
+		t.Fatalf("stale mount output = %q", text)
+	}
+	if strings.Contains(text, secret) || strings.Contains(text, "127.0.0.1") || strings.Contains(text, "tdrive-") {
+		t.Fatalf("stale mount output leaked capability: %q", text)
+	}
 }

@@ -3,6 +3,7 @@ package projection
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +38,91 @@ func TestListFolderContentsContextRejectsNilContext(t *testing.T) {
 	}
 	if folders != nil || files != nil {
 		t.Fatalf("nil-context listing = folders:%v files:%v, want nil results", folders, files)
+	}
+}
+
+func TestListFolderContentsUsesDeterministicNewestFirstOrder(t *testing.T) {
+	db := newTestDB(t)
+	for _, messageID := range []int64{7, 9, 8} {
+		if _, err := db.Exec(`
+			INSERT INTO files (
+				channel_id, msg_id, name, size, parent_id, upload_time,
+				uploader_user_id, tombstoned
+			) VALUES (?, ?, ?, 1, ?, 100, 0, 0)
+		`, testChan, messageID, "same-time", RootParent); err != nil {
+			t.Fatalf("seed message %d: %v", messageID, err)
+		}
+	}
+
+	_, files, err := ListFolderContentsContext(context.Background(), db, testChan, RootParent)
+	if err != nil {
+		t.Fatalf("list folder: %v", err)
+	}
+	want := []int64{9, 8, 7}
+	if len(files) != len(want) {
+		t.Fatalf("file count = %d, want %d", len(files), len(want))
+	}
+	for index, messageID := range want {
+		if files[index].MsgID != messageID {
+			t.Fatalf("files[%d].MsgID = %d, want %d", index, files[index].MsgID, messageID)
+		}
+	}
+}
+
+func TestFolderListingQueriesUseCoveringParentOrderIndexes(t *testing.T) {
+	db := newTestDB(t)
+
+	tests := []struct {
+		name      string
+		query     string
+		indexName string
+	}{
+		{
+			name: "files newest first",
+			query: `SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size
+				FROM files
+				WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
+				ORDER BY upload_time DESC, msg_id DESC`,
+			indexName: "idx_files_channel_parent_latest",
+		},
+		{
+			name: "folders by name",
+			query: `SELECT id, name, parent_id
+				FROM folders
+				WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
+				ORDER BY name, id`,
+			indexName: "idx_folders_channel_parent_name",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rows, err := db.Query("EXPLAIN QUERY PLAN "+test.query, testChan, RootParent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+
+			var details []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					t.Fatal(err)
+				}
+				details = append(details, detail)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			plan := strings.Join(details, "\n")
+			if !strings.Contains(plan, test.indexName) {
+				t.Fatalf("query plan did not use %s:\n%s", test.indexName, plan)
+			}
+			if strings.Contains(plan, "USE TEMP B-TREE FOR ORDER BY") {
+				t.Fatalf("query plan sorts into a temporary b-tree:\n%s", plan)
+			}
+		})
 	}
 }
 

@@ -51,7 +51,28 @@ func (application *readApplication) servePropfind(response http.ResponseWriter, 
 		FileSystem: snapshot,
 		LockSystem: lockSystem,
 	}
-	serveReadOnlyPropfind(response, request, handler)
+	root, err := snapshot.Stat(request.Context(), name)
+	if err != nil {
+		serveFileError(response, err)
+		return
+	}
+	if root.IsDir() && !strings.HasSuffix(request.URL.Path, "/") {
+		request = cloneRequestWithTrailingPathSlash(request)
+	}
+	omitRootHref := ""
+	if propfindOmitsRoot(request) {
+		omitRootHref = propfindResponseHref(application.capabilityPath, name, root.IsDir())
+	}
+	serveReadOnlyPropfind(response, request, handler, omitRootHref)
+}
+
+func cloneRequestWithTrailingPathSlash(request *http.Request) *http.Request {
+	normalized := request.Clone(request.Context())
+	normalized.URL.Path += "/"
+	if normalized.URL.RawPath != "" && !strings.HasSuffix(normalized.URL.RawPath, "/") {
+		normalized.URL.RawPath += "/"
+	}
+	return normalized
 }
 
 func (application *readApplication) serveFile(response http.ResponseWriter, request *http.Request) {

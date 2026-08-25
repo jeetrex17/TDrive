@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"TDrive/backend"
 	"TDrive/backend/core"
+	"TDrive/backend/mountcontroller"
 	"TDrive/backend/processlock"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
@@ -27,6 +29,12 @@ type App struct {
 	engine      *core.Engine
 	Client      *telegram.Client
 	backendLock *processlock.Lock
+
+	// mountController is shared by the GUI mount API and the same backend
+	// implementation used by the CLI daemon. The process lock still guarantees
+	// that exactly one Engine/controller owns the Telegram session.
+	mountController    appMountController
+	mountDriveResolver func() (mountcontroller.Drive, error)
 
 	// fileDropEnabled tracks whether the native OS file-drop handler is
 	// registered. The frontend toggles it off during an internal drag-to-move so
@@ -537,6 +545,13 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 // shutdown runs on app exit. Tear down the shared Telegram connection so the
 // background Run scope's goroutine exits cleanly.
 func (a *App) shutdown(ctx context.Context) {
+	if a.mountController != nil {
+		mountCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		if err := a.mountController.Close(mountCtx); err != nil {
+			fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
+		}
+		cancel()
+	}
 	a.closeAllNativeMedia()
 	if a.engine != nil {
 		a.engine.Close()
@@ -623,6 +638,12 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
+	controller, err := mountcontroller.New(engine)
+	if err != nil {
+		fmt.Printf("Warning: Failed to initialize read-only mount: %v\n", err)
+	} else {
+		a.mountController = controller
+	}
 
 	fmt.Println("TDrive DB ready!")
 }

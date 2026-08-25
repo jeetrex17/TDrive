@@ -271,6 +271,66 @@ export namespace main {
 	        this.about = source["about"];
 	    }
 	}
+	export class MountDriveView {
+	    id?: number;
+	    title?: string;
+	    kind?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MountDriveView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.kind = source["kind"];
+	    }
+	}
+	export class MountView {
+	    phase: string;
+	    mounted: boolean;
+	    mode?: string;
+	    label?: string;
+	    location?: string;
+	    error?: string;
+	    drive?: MountDriveView;
+	    windows_drive?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MountView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.phase = source["phase"];
+	        this.mounted = source["mounted"];
+	        this.mode = source["mode"];
+	        this.label = source["label"];
+	        this.location = source["location"];
+	        this.error = source["error"];
+	        this.drive = this.convertValues(source["drive"], MountDriveView);
+	        this.windows_drive = source["windows_drive"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class NativeMediaResult {
 	    token: string;
 	    name: string;

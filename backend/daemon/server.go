@@ -17,8 +17,7 @@ import (
 	"time"
 
 	"TDrive/backend/core"
-	"TDrive/backend/mountcontent"
-	"TDrive/backend/mountdav"
+	"TDrive/backend/mountcontroller"
 	"TDrive/backend/processlock"
 )
 
@@ -27,6 +26,9 @@ const (
 	daemonReadTimeout   = 5 * time.Minute
 	daemonWriteTimeout  = 30 * time.Second
 	daemonDrainTimeout  = 10 * time.Second
+	// Platform detach may consume 20 seconds; keep another five seconds for
+	// the local WebDAV endpoint to drain after the OS no longer references it.
+	daemonMountShutdownTimeout = 25 * time.Second
 )
 
 type ServerConfig struct {
@@ -37,14 +39,12 @@ type ServerConfig struct {
 type Server struct {
 	engine *core.Engine
 	lock   *processlock.Lock
-	mount  *mountdav.Server
-	// mountMu serializes mount start/stop and owns the active content opener.
-	// WebDAV reads never take this lock, and mount operations never take the
-	// daemon-wide mutation lock.
-	mountMu      sync.Mutex
-	mountContent *mountcontent.Opener
-	warnf        func(format string, args ...any)
-	state        *state
+	// mountMu only protects lazy controller construction. The controller owns
+	// its own lifecycle state and never takes the daemon-wide write lock.
+	mountMu         sync.Mutex
+	mountController *mountcontroller.Controller
+	warnf           func(format string, args ...any)
+	state           *state
 
 	mu        sync.Mutex
 	eventMu   sync.Mutex
@@ -71,7 +71,6 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 
 	s := &Server{
 		warnf: cfg.Warnf,
-		mount: mountdav.NewServer(),
 		stop:  cancel,
 	}
 	if s.warnf == nil {
@@ -104,7 +103,7 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 	defer s.engine.Close()
 	defer s.wg.Wait()
 	defer func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), daemonMountShutdownTimeout)
 		defer stopCancel()
 		if err := s.stopMountServer(stopCtx); err != nil {
 			s.warnf("daemon: stop mount: %v\n", err)

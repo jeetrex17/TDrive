@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"strings"
+	"unicode"
 
 	"TDrive/backend/daemon"
 )
@@ -28,7 +31,7 @@ func runMount(args []string) error {
 		if err != nil {
 			return err
 		}
-		printMountResponse(out)
+		printMountResponse(os.Stdout, out)
 		return nil
 	case "status":
 		if len(args) != 0 {
@@ -42,7 +45,7 @@ func runMount(args []string) error {
 		if err != nil {
 			return err
 		}
-		printMountResponse(out)
+		printMountResponse(os.Stdout, out)
 		return nil
 	case "stop":
 		if len(args) != 0 {
@@ -56,7 +59,7 @@ func runMount(args []string) error {
 		if err != nil {
 			return err
 		}
-		printMountResponse(out)
+		printMountResponse(os.Stdout, out)
 		return nil
 	default:
 		return fmt.Errorf("unknown mount command %q\n\nRun: tdrive mount [start|status|stop]", action)
@@ -99,32 +102,74 @@ func normalizeWindowsDriveArg(value string) (string, error) {
 	return "", fmt.Errorf("invalid Windows drive %q: use a letter such as T:", value)
 }
 
-func printMountResponse(out daemon.MountResponse) {
-	if !out.Running {
-		fmt.Println("mount: stopped")
-		if out.Error != "" {
-			fmt.Printf("error: %s\n", out.Error)
-		}
+func printMountResponse(writer io.Writer, out daemon.MountResponse) {
+	if writer == nil {
 		return
 	}
-	fmt.Printf("mount: running (%s)\n", out.Mode)
+	label := strings.TrimSpace(out.Label)
+	if label == "" {
+		label = "TDrive"
+	}
+	mode := strings.TrimSpace(out.Mode)
+	if mode == "" {
+		mode = "read-only"
+	}
+
+	switch out.Phase {
+	case "preparing", "attaching":
+		fmt.Fprintf(writer, "mount: mounting %s (%s)\n", label, mode)
+		printMountError(writer, out.Error)
+		return
+	case "detaching":
+		fmt.Fprintf(writer, "mount: disconnecting %s\n", label)
+		printMountError(writer, out.Error)
+		return
+	}
+	if !out.Mounted {
+		fmt.Fprintln(writer, "mount: stopped")
+		printMountError(writer, out.Error)
+		return
+	}
+	fmt.Fprintf(writer, "mounted: %s (%s)\n", label, mode)
+	if out.Location != "" && !containsSensitiveMountDetail(out.Location) {
+		fmt.Fprintf(writer, "location: %s\n", out.Location)
+	}
 	if out.Drive.ID != 0 {
-		fmt.Printf("drive: %s (%d), pinned until stopped\n", out.Drive.Title, out.Drive.ID)
+		fmt.Fprintf(writer, "drive: %s (%d), pinned until disconnected\n", out.Drive.Title, out.Drive.ID)
 	}
-	fmt.Printf("url:   %s\n", out.URL)
-	if out.WindowsDrive != "" {
-		fmt.Printf("letter: %s (Windows mapping hint)\n", out.WindowsDrive)
+	printMountError(writer, out.Error)
+}
+
+func printMountError(writer io.Writer, raw string) {
+	if message := safeMountMessage(raw); message != "" {
+		fmt.Fprintf(writer, "error: %s\n", message)
 	}
-	if out.Commands.ActiveOSMount != "" {
-		fmt.Printf("run:   %s\n", out.Commands.ActiveOSMount)
+}
+
+func safeMountMessage(message string) string {
+	message = strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) {
+			return ' '
+		}
+		return character
+	}, message)
+	message = strings.Join(strings.Fields(message), " ")
+	if containsSensitiveMountDetail(message) {
+		return "Mount operation failed; retry or check the app logs"
 	}
-	if out.Commands.WindowsMap != "" {
-		fmt.Printf("win:   %s\n", out.Commands.WindowsMap)
+	runes := []rune(message)
+	if len(runes) > 240 {
+		message = string(runes[:240])
 	}
-	if out.Commands.MacFinder != "" {
-		fmt.Printf("mac:   %s\n", out.Commands.MacFinder)
-	}
-	if out.Commands.LinuxMount != "" {
-		fmt.Printf("linux: %s\n", out.Commands.LinuxMount)
-	}
+	return message
+}
+
+func containsSensitiveMountDetail(value string) bool {
+	lower := strings.ToLower(value)
+	return strings.Contains(lower, "tdrive-") ||
+		strings.Contains(lower, "http://") ||
+		strings.Contains(lower, "https://") ||
+		strings.Contains(lower, "dav://") ||
+		strings.Contains(lower, "localhost") ||
+		strings.Contains(lower, "127.0.0.1")
 }

@@ -32,6 +32,8 @@ type cachedSnapshot struct {
 
 type snapshotLoad struct {
 	done     chan struct{}
+	cancel   context.CancelFunc
+	waiters  int
 	snapshot directorySnapshot
 	err      error
 }
@@ -66,8 +68,9 @@ func (cache *snapshotCache) getOrLoad(
 		return snapshot, nil
 	}
 	if load, found := cache.loads[parentID]; found {
+		load.waiters++
 		cache.mu.Unlock()
-		return waitForSnapshotLoad(ctx, load)
+		return cache.waitForSnapshotLoad(ctx, parentID, load)
 	}
 	cache.mu.Unlock()
 
@@ -89,25 +92,50 @@ func (cache *snapshotCache) getOrLoad(
 		return snapshot, nil
 	}
 	if load, found := cache.loads[parentID]; found {
+		load.waiters++
 		cache.mu.Unlock()
 		cache.releaseLoadSlot()
-		return waitForSnapshotLoad(ctx, load)
+		return cache.waitForSnapshotLoad(ctx, parentID, load)
 	}
-	load := &snapshotLoad{done: make(chan struct{})}
+	loadContext, cancelLoad := context.WithCancel(context.WithoutCancel(ctx))
+	load := &snapshotLoad{
+		done:    make(chan struct{}),
+		cancel:  cancelLoad,
+		waiters: 1,
+	}
 	cache.loads[parentID] = load
-	loadContext := context.WithoutCancel(ctx)
 	go cache.runLoad(loadContext, parentID, load, loader)
 	cache.mu.Unlock()
-	return waitForSnapshotLoad(ctx, load)
+	return cache.waitForSnapshotLoad(ctx, parentID, load)
 }
 
-func waitForSnapshotLoad(ctx context.Context, load *snapshotLoad) (directorySnapshot, error) {
+func (cache *snapshotCache) waitForSnapshotLoad(
+	ctx context.Context,
+	parentID string,
+	load *snapshotLoad,
+) (directorySnapshot, error) {
 	select {
 	case <-ctx.Done():
+		cache.removeWaiter(parentID, load)
 		return directorySnapshot{}, ctx.Err()
 	case <-load.done:
 		return load.snapshot, load.err
 	}
+}
+
+func (cache *snapshotCache) removeWaiter(parentID string, load *snapshotLoad) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	if cache.loads[parentID] != load {
+		return
+	}
+	load.waiters--
+	if load.waiters > 0 {
+		return
+	}
+	delete(cache.loads, parentID)
+	load.cancel()
 }
 
 func (cache *snapshotCache) runLoad(
@@ -116,6 +144,7 @@ func (cache *snapshotCache) runLoad(
 	load *snapshotLoad,
 	loader directoryLoader,
 ) {
+	defer load.cancel()
 	loadContext, cancel := context.WithTimeout(baseContext, cache.loadTimeout)
 	defer cancel()
 	snapshot, err := loader(loadContext, parentID)
@@ -125,12 +154,14 @@ func (cache *snapshotCache) runLoad(
 	}
 
 	cache.mu.Lock()
-	if err == nil {
-		cache.insertLocked(parentID, snapshot)
+	if cache.loads[parentID] == load {
+		if err == nil {
+			cache.insertLocked(parentID, snapshot)
+		}
+		delete(cache.loads, parentID)
 	}
 	load.snapshot = snapshot
 	load.err = err
-	delete(cache.loads, parentID)
 	cache.releaseLoadSlot()
 	close(load.done)
 	cache.mu.Unlock()

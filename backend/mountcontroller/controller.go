@@ -1,0 +1,609 @@
+package mountcontroller
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"TDrive/backend/core"
+	"TDrive/backend/mountcontent"
+	"TDrive/backend/mountfs"
+	"TDrive/backend/mountos"
+	"TDrive/backend/tgclient"
+)
+
+const (
+	defaultMountSnapshotTTL = 15 * time.Second
+	cleanupTimeout          = 5 * time.Second
+)
+
+type operationKind uint8
+
+const (
+	operationStart operationKind = iota + 1
+	operationStop
+)
+
+type operation struct {
+	kind         operationKind
+	driveID      int64
+	windowsDrive string
+	done         chan struct{}
+	status       Status
+	err          error
+}
+
+type session struct {
+	drive        Drive
+	label        string
+	windowsDrive string
+	content      ContentLifetime
+	attachment   mountos.Attachment
+}
+
+// Controller serializes the lifecycle of one mounted drive. Expensive work is
+// performed without holding mu so Status remains responsive during OS calls.
+type Controller struct {
+	mu          sync.Mutex
+	filesystems FilesystemBuilder
+	endpoint    Endpoint
+	connector   mountos.Connector
+	fsOptions   mountfs.Options
+	status      Status
+	session     *session
+	operation   *operation
+	lastErr     error
+}
+
+// New creates a production controller around the Engine already owned by the
+// daemon or GUI process.
+func New(engine *core.Engine) (*Controller, error) {
+	return NewWithConnector(engine, mountos.New())
+}
+
+// NewWithConnector is a production constructor with an injectable OS boundary.
+// It is useful for application tests that still exercise the real filesystem
+// and WebDAV stack.
+func NewWithConnector(engine *core.Engine, connector mountos.Connector) (*Controller, error) {
+	if engine == nil {
+		return nil, fmt.Errorf("%w: engine is required", ErrInvalidConfiguration)
+	}
+	reads := engine.ReadService()
+	if reads == nil || reads.DB == nil {
+		return nil, fmt.Errorf("%w: database is not ready", ErrInvalidConfiguration)
+	}
+	ranges, ok := engine.Telegram().(tgclient.RangeClient)
+	if !ok || ranges == nil {
+		return nil, fmt.Errorf("%w: Telegram range reads are unavailable", ErrInvalidConfiguration)
+	}
+
+	return NewWithDependencies(Dependencies{
+		Filesystems: &engineFilesystemBuilder{
+			reads:  reads,
+			peers:  engine,
+			ranges: ranges,
+		},
+		Endpoint:  newWebDAVEndpoint(),
+		Connector: connector,
+	})
+}
+
+// NewWithDependencies constructs a controller from deterministic lifecycle
+// boundaries. Dependencies are never replaced after construction.
+func NewWithDependencies(dependencies Dependencies) (*Controller, error) {
+	if dependencies.Filesystems == nil || dependencies.Endpoint == nil || dependencies.Connector == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	options := dependencies.SnapshotOptions
+	if options.SnapshotTTL < 0 || options.MaxCachedDirectories < 0 || options.MaxCachedEntries < 0 || options.MaxConcurrentSnapshotLoads < 0 {
+		return nil, ErrInvalidConfiguration
+	}
+	if options.SnapshotTTL == 0 {
+		options.SnapshotTTL = defaultMountSnapshotTTL
+	}
+
+	return &Controller{
+		filesystems: dependencies.Filesystems,
+		endpoint:    dependencies.Endpoint,
+		connector:   dependencies.Connector,
+		fsOptions:   options,
+		status:      Status{Phase: PhaseStopped},
+	}, nil
+}
+
+// Start mounts drive without changing the Engine's active drive. Concurrent
+// equivalent requests share the in-flight result; a different drive or drive
+// letter receives ConflictError immediately.
+func (controller *Controller) Start(ctx context.Context, requested Drive, options StartOptions) (Status, error) {
+	if controller == nil {
+		return Status{Phase: PhaseFailed, Error: "TDrive mount is unavailable"}, ErrInvalidConfiguration
+	}
+	if ctx == nil {
+		return controller.Status(), ErrInvalidContext
+	}
+	if err := ctx.Err(); err != nil {
+		return controller.Status(), err
+	}
+	drive, err := normalizeDrive(requested)
+	if err != nil {
+		return controller.Status(), err
+	}
+	label, err := displayLabel(drive)
+	if err != nil {
+		return controller.Status(), err
+	}
+	windowsDrive, err := normalizeWindowsDrive(options.WindowsDrive)
+	if err != nil {
+		return controller.Status(), err
+	}
+
+	for {
+		controller.refreshHealth()
+		controller.mu.Lock()
+		if current := controller.operation; current != nil {
+			if current.kind == operationStart {
+				if err := conflictError(current.driveID, current.windowsDrive, drive.ID, windowsDrive); err != nil {
+					status := controller.status
+					controller.mu.Unlock()
+					return status, err
+				}
+				status, err := controller.waitLocked(ctx, current)
+				return status, err
+			}
+			status, err := controller.waitLocked(ctx, current)
+			if err != nil {
+				return status, err
+			}
+			continue
+		}
+
+		if controller.session != nil {
+			if err := conflictError(
+				controller.session.drive.ID,
+				controller.session.windowsDrive,
+				drive.ID,
+				windowsDrive,
+			); err != nil {
+				status := controller.status
+				controller.mu.Unlock()
+				return status, err
+			}
+			status, existingErr := controller.status, controller.lastErr
+			controller.mu.Unlock()
+			return status, existingErr
+		}
+
+		current := &operation{
+			kind:         operationStart,
+			driveID:      drive.ID,
+			windowsDrive: windowsDrive,
+			done:         make(chan struct{}),
+		}
+		active := &session{drive: drive, label: label, windowsDrive: windowsDrive}
+		controller.operation = current
+		controller.session = active
+		controller.lastErr = nil
+		controller.status = statusFor(active, PhasePreparing, false, false, "", "")
+		controller.mu.Unlock()
+
+		return controller.runStart(ctx, current, active)
+	}
+}
+
+func (controller *Controller) runStart(ctx context.Context, current *operation, active *session) (Status, error) {
+	filesystem, content, err := controller.filesystems.Build(ctx, active.drive.ID, controller.fsOptions)
+	if err != nil {
+		if content != nil {
+			content.Close()
+		}
+		return controller.failStart(current, active, "TDrive could not prepare the read-only mount", err)
+	}
+	if filesystem == nil || content == nil {
+		if content != nil {
+			content.Close()
+		}
+		return controller.failStart(
+			current,
+			active,
+			"TDrive could not prepare the read-only mount",
+			fmt.Errorf("%w: filesystem builder returned incomplete resources", ErrInvalidConfiguration),
+		)
+	}
+	active.content = content
+
+	endpointStatus, err := controller.endpoint.Start(ctx, EndpointConfig{
+		FS:           filesystem,
+		DriveID:      active.drive.ID,
+		DriveTitle:   active.label,
+		WindowsDrive: active.windowsDrive,
+	})
+	if err != nil {
+		content.Close()
+		return controller.failStart(current, active, "TDrive could not start the read-only mount", err)
+	}
+	controller.mu.Lock()
+	controller.status = statusFor(active, PhaseAttaching, true, false, readOnlyMode, "")
+	controller.mu.Unlock()
+
+	attachment, err := controller.connector.Attach(ctx, mountos.Config{
+		Endpoint:     endpointStatus.Endpoint,
+		Label:        active.label,
+		WindowsDrive: active.windowsDrive,
+	})
+	if err != nil {
+		cleanupErr := controller.stopEndpointForRollback(ctx)
+		content.Close()
+		return controller.failStart(
+			current,
+			active,
+			"TDrive could not attach the read-only mount",
+			errors.Join(err, cleanupErr),
+		)
+	}
+	active.attachment = attachment
+	if !controller.endpoint.Health().Running {
+		return controller.recoverFailedEndpointAfterAttach(ctx, current, active)
+	}
+
+	controller.mu.Lock()
+	controller.status = statusFor(active, PhaseMounted, true, true, readOnlyMode, "")
+	controller.lastErr = nil
+	status := controller.status
+	controller.completeLocked(current, status, nil)
+	controller.mu.Unlock()
+	return status, nil
+}
+
+func (controller *Controller) failStart(current *operation, active *session, message string, cause error) (Status, error) {
+	publicMessage := startFailureMessage(message, cause, active)
+	publicErr := &operationError{message: publicMessage, kind: classifyOperationError(cause, ErrStartFailed)}
+	controller.mu.Lock()
+	if controller.session == active {
+		controller.session = nil
+	}
+	controller.lastErr = publicErr
+	controller.status = statusFor(active, PhaseFailed, false, false, readOnlyMode, publicMessage)
+	status := controller.status
+	controller.completeLocked(current, status, publicErr)
+	controller.mu.Unlock()
+	return status, publicErr
+}
+
+// Stop detaches the OS mount before releasing the endpoint and content cache.
+// If detachment fails, those resources are intentionally kept alive so an OS
+// client never points at a dead local server.
+func (controller *Controller) Stop(ctx context.Context) (Status, error) {
+	if controller == nil {
+		return Status{Phase: PhaseStopped}, nil
+	}
+	if ctx == nil {
+		return controller.Status(), ErrInvalidContext
+	}
+	if err := ctx.Err(); err != nil {
+		return controller.Status(), err
+	}
+
+	for {
+		controller.refreshHealth()
+		controller.mu.Lock()
+		if current := controller.operation; current != nil {
+			status, err := controller.waitLocked(ctx, current)
+			if err != nil {
+				return status, err
+			}
+			if current.kind == operationStop {
+				return status, nil
+			}
+			continue
+		}
+		active := controller.session
+		if active == nil {
+			controller.session = nil
+			controller.lastErr = nil
+			controller.status = Status{Phase: PhaseStopped}
+			status := controller.status
+			controller.mu.Unlock()
+			return status, nil
+		}
+
+		current := &operation{kind: operationStop, done: make(chan struct{})}
+		controller.operation = current
+		controller.lastErr = nil
+		controller.status = statusFor(
+			active,
+			PhaseDetaching,
+			controller.status.Running,
+			controller.status.Mounted,
+			controller.status.Mode,
+			"",
+		)
+		controller.mu.Unlock()
+		return controller.runStop(ctx, current, active)
+	}
+}
+
+func (controller *Controller) runStop(ctx context.Context, current *operation, active *session) (Status, error) {
+	if err := controller.connector.Detach(ctx, active.attachment); err != nil {
+		controller.mu.Lock()
+		message := "TDrive could not disconnect the mount; it remains available"
+		if !controller.status.Running {
+			message = "TDrive could not disconnect the stale mount; retry disconnecting"
+		}
+		publicErr := &operationError{message: message, kind: classifyOperationError(err, ErrStopFailed)}
+		controller.lastErr = publicErr
+		controller.status = statusFor(
+			active,
+			PhaseFailed,
+			controller.status.Running,
+			true,
+			controller.status.Mode,
+			message,
+		)
+		status := controller.status
+		controller.completeLocked(current, status, publicErr)
+		controller.mu.Unlock()
+		return status, publicErr
+	}
+
+	controller.mu.Lock()
+	controller.status = statusFor(
+		active,
+		PhaseDetaching,
+		controller.status.Running,
+		false,
+		controller.status.Mode,
+		"",
+	)
+	controller.mu.Unlock()
+
+	stopErr := controller.endpoint.Stop(ctx)
+	if active.content != nil {
+		active.content.Close()
+	}
+
+	controller.mu.Lock()
+	controller.session = nil
+	if stopErr != nil {
+		const message = "TDrive disconnected, but local mount cleanup did not finish cleanly"
+		publicErr := &operationError{message: message, kind: classifyOperationError(stopErr, ErrStopFailed)}
+		controller.lastErr = publicErr
+		controller.status = Status{Phase: PhaseFailed, Mode: readOnlyMode, Error: message}
+		status := controller.status
+		controller.completeLocked(current, status, publicErr)
+		controller.mu.Unlock()
+		return status, publicErr
+	}
+	controller.lastErr = nil
+	controller.status = Status{Phase: PhaseStopped}
+	status := controller.status
+	controller.completeLocked(current, status, nil)
+	controller.mu.Unlock()
+	return status, nil
+}
+
+// Open asks the host file manager to reveal the verified attachment. It never
+// opens the capability URL directly.
+func (controller *Controller) Open(ctx context.Context) error {
+	if controller == nil {
+		return ErrNotMounted
+	}
+	if ctx == nil {
+		return ErrInvalidContext
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	controller.mu.Lock()
+	if controller.session == nil || !controller.status.Mounted {
+		controller.mu.Unlock()
+		return ErrNotMounted
+	}
+	attachment := controller.session.attachment
+	controller.mu.Unlock()
+
+	if err := controller.connector.Open(ctx, attachment); err != nil {
+		return &operationError{
+			message: "TDrive could not open the mounted drive",
+			kind:    classifyOperationError(err, ErrOpenFailed),
+		}
+	}
+	return nil
+}
+
+// Status returns an immutable, capability-free snapshot.
+func (controller *Controller) Status() Status {
+	if controller == nil {
+		return Status{Phase: PhaseStopped}
+	}
+	controller.refreshHealth()
+	controller.mu.Lock()
+	status := controller.status
+	controller.mu.Unlock()
+	return status
+}
+
+// Close applies the same safe detach-first lifecycle as Stop.
+func (controller *Controller) Close(ctx context.Context) error {
+	_, err := controller.Stop(ctx)
+	return err
+}
+
+func (controller *Controller) waitLocked(ctx context.Context, current *operation) (Status, error) {
+	status := controller.status
+	controller.mu.Unlock()
+	select {
+	case <-current.done:
+		return current.status, current.err
+	case <-ctx.Done():
+		return status, ctx.Err()
+	}
+}
+
+func (controller *Controller) completeLocked(current *operation, status Status, err error) {
+	current.status = status
+	current.err = err
+	if controller.operation == current {
+		controller.operation = nil
+	}
+	close(current.done)
+}
+
+func (controller *Controller) refreshHealth() {
+	controller.mu.Lock()
+	if controller.operation != nil || controller.session == nil || !controller.status.Running {
+		controller.mu.Unlock()
+		return
+	}
+	active := controller.session
+	controller.mu.Unlock()
+
+	if controller.endpoint.Health().Running {
+		return
+	}
+
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if controller.operation != nil || controller.session != active || !controller.status.Running {
+		return
+	}
+	const message = "TDrive local read server stopped unexpectedly; disconnect the mount before retrying"
+	publicErr := &operationError{message: message, kind: ErrEndpointUnavailable}
+	controller.lastErr = publicErr
+	controller.status = statusFor(
+		controller.session,
+		PhaseFailed,
+		false,
+		controller.status.Mounted,
+		controller.status.Mode,
+		message,
+	)
+}
+
+func (controller *Controller) recoverFailedEndpointAfterAttach(
+	ctx context.Context,
+	current *operation,
+	active *session,
+) (Status, error) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	if detachErr := controller.connector.Detach(cleanupCtx, active.attachment); detachErr != nil {
+		const message = "TDrive attached, but its local read server stopped; retry disconnecting the stale mount"
+		publicErr := &operationError{message: message, kind: classifyOperationError(detachErr, ErrStopFailed)}
+		controller.mu.Lock()
+		controller.lastErr = publicErr
+		controller.status = statusFor(active, PhaseFailed, false, true, readOnlyMode, message)
+		status := controller.status
+		controller.completeLocked(current, status, publicErr)
+		controller.mu.Unlock()
+		return status, publicErr
+	}
+	stopErr := controller.endpoint.Stop(cleanupCtx)
+	if active.content != nil {
+		active.content.Close()
+	}
+	return controller.failStart(
+		current,
+		active,
+		"TDrive local read server stopped during attachment",
+		stopErr,
+	)
+}
+
+func (controller *Controller) stopEndpointForRollback(ctx context.Context) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	return controller.endpoint.Stop(cleanupCtx)
+}
+
+func statusFor(active *session, phase Phase, running, mounted bool, mode, message string) Status {
+	status := Status{
+		Phase:        phase,
+		Running:      running,
+		Mounted:      mounted,
+		Mode:         mode,
+		WindowsDrive: active.windowsDrive,
+		Error:        message,
+	}
+	if active != nil {
+		status.DriveID = active.drive.ID
+		status.DriveTitle = active.drive.Title
+		status.DriveKind = active.drive.Kind
+		status.Label = active.label
+		if mounted {
+			status.Location = active.attachment.Location()
+			status.AttachmentKind = active.attachment.Kind()
+		}
+	}
+	return status
+}
+
+func conflictError(activeID int64, activeDrive string, requestedID int64, requestedDrive string) error {
+	if activeID == requestedID && activeDrive == requestedDrive {
+		return nil
+	}
+	return &ConflictError{
+		ActiveDriveID:         activeID,
+		RequestedDriveID:      requestedID,
+		ActiveWindowsDrive:    activeDrive,
+		RequestedWindowsDrive: requestedDrive,
+	}
+}
+
+func normalizeWindowsDrive(value string) (string, error) {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "" {
+		return defaultWindowsDrive, nil
+	}
+	if len(value) == 1 && value[0] >= 'A' && value[0] <= 'Z' {
+		return value + ":", nil
+	}
+	if len(value) == 2 && value[0] >= 'A' && value[0] <= 'Z' && value[1] == ':' {
+		return value, nil
+	}
+	return "", fmt.Errorf("%w: use a letter such as T:", ErrInvalidWindowsDrive)
+}
+
+func classifyOperationError(cause, fallback error) error {
+	switch {
+	case errors.Is(cause, ErrInvalidConfiguration):
+		return ErrInvalidConfiguration
+	case errors.Is(cause, mountos.ErrDriveOccupied):
+		return mountos.ErrDriveOccupied
+	case errors.Is(cause, mountos.ErrWindowsWebDAVUnavailable):
+		return mountos.ErrWindowsWebDAVUnavailable
+	case errors.Is(cause, mountos.ErrLinuxDesktopUnavailable):
+		return mountos.ErrLinuxDesktopUnavailable
+	case errors.Is(cause, mountos.ErrLinuxWebDAVUnavailable):
+		return mountos.ErrLinuxWebDAVUnavailable
+	case errors.Is(cause, context.Canceled):
+		return context.Canceled
+	case errors.Is(cause, context.DeadlineExceeded):
+		return context.DeadlineExceeded
+	default:
+		return fallback
+	}
+}
+
+func startFailureMessage(fallback string, cause error, active *session) string {
+	switch {
+	case errors.Is(cause, mountos.ErrDriveOccupied):
+		drive := defaultWindowsDrive
+		if active != nil && active.windowsDrive != "" {
+			drive = active.windowsDrive
+		}
+		return fmt.Sprintf("Windows drive %s is already in use. Free it and try again.", drive)
+	case errors.Is(cause, mountos.ErrWindowsWebDAVUnavailable):
+		return "Windows WebDAV is unavailable. Start or enable the WebClient service, then try again."
+	case errors.Is(cause, mountos.ErrLinuxDesktopUnavailable):
+		return "Linux desktop mounting is unavailable. Run TDrive inside a graphical desktop session with GIO and GVfs available, then try again."
+	case errors.Is(cause, mountos.ErrLinuxWebDAVUnavailable):
+		return "Linux WebDAV mounting is unavailable. Enable the GIO/GVfs WebDAV backend for your desktop session, then try again."
+	default:
+		return fallback
+	}
+}
+
+var _ mountcontent.PeerResolver = (*core.Engine)(nil)

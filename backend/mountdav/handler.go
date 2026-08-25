@@ -2,6 +2,7 @@ package mountdav
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
 	"errors"
 	"io"
@@ -12,10 +13,17 @@ import (
 
 const (
 	allowedMethodsHeader   = "OPTIONS, PROPFIND, HEAD, GET"
+	windowsNoRootDepth     = "1,noroot"
 	maxRequestBodyBytes    = int64(1 << 20)
 	defaultMaxConcurrent   = 32
 	serverBusyRetrySeconds = "1"
 )
+
+type propfindRequestOptions struct {
+	omitRoot bool
+}
+
+type propfindRequestOptionsKey struct{}
 
 type protectionConfig struct {
 	capabilityPath string
@@ -42,10 +50,6 @@ func newProtectedHandler(config protectionConfig, next http.Handler) http.Handle
 
 func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	setProtocolHeaders(response.Header())
-	if !matchesCapability(request, handler.config.capabilityPath) {
-		http.NotFound(response, request)
-		return
-	}
 	if request.Host != handler.config.authority ||
 		!isLoopbackPeer(request.RemoteAddr) ||
 		hasHeader(request.Header, "Origin") ||
@@ -53,15 +57,27 @@ func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request
 		writeHTTPError(response, http.StatusForbidden)
 		return
 	}
+	if trustedRootOptionsProbe(request) {
+		response.Header().Set("Content-Length", "0")
+		response.WriteHeader(http.StatusOK)
+		return
+	}
+	if !matchesCapability(request, handler.config.capabilityPath) {
+		http.NotFound(response, request)
+		return
+	}
 	if !allowedMethod(request.Method) {
 		writeHTTPError(response, http.StatusMethodNotAllowed)
 		return
 	}
 	if request.Method == "PROPFIND" {
-		if status := validateDepth(request.Header.Get("Depth")); status != 0 {
+		var status int
+		request, status = normalizePropfindDepth(request)
+		if status != 0 {
 			writeHTTPError(response, status)
 			return
 		}
+		request = canonicalizeRootPropfindPath(request, handler.config.capabilityPath)
 	}
 	select {
 	case handler.slots <- struct{}{}:
@@ -108,6 +124,14 @@ func matchesCapability(request *http.Request, capabilityPath string) bool {
 	return path == capabilityPath || strings.HasPrefix(path, capabilityPath+"/")
 }
 
+func trustedRootOptionsProbe(request *http.Request) bool {
+	if request.Method != http.MethodOptions {
+		return false
+	}
+	path := request.URL.EscapedPath()
+	return path == "/" || path == "*"
+}
+
 func isLoopbackPeer(remoteAddress string) bool {
 	host, _, err := net.SplitHostPort(remoteAddress)
 	if err != nil {
@@ -135,15 +159,42 @@ func allowedMethod(method string) bool {
 	}
 }
 
-func validateDepth(depth string) int {
-	switch depth {
+func normalizePropfindDepth(request *http.Request) (*http.Request, int) {
+	switch request.Header.Get("Depth") {
 	case "0", "1":
-		return 0
-	case "", "infinity":
-		return http.StatusForbidden
+		return request, 0
+	case windowsNoRootDepth:
+		ctx := context.WithValue(
+			request.Context(),
+			propfindRequestOptionsKey{},
+			propfindRequestOptions{omitRoot: true},
+		)
+		normalized := request.Clone(ctx)
+		normalized.Header = request.Header.Clone()
+		normalized.Header.Set("Depth", "1")
+		return normalized, 0
+	case "", "infinity", "infinity,noroot":
+		return request, http.StatusForbidden
 	default:
-		return http.StatusBadRequest
+		return request, http.StatusBadRequest
 	}
+}
+
+func propfindOmitsRoot(request *http.Request) bool {
+	options, ok := request.Context().Value(propfindRequestOptionsKey{}).(propfindRequestOptions)
+	return ok && options.omitRoot
+}
+
+func canonicalizeRootPropfindPath(request *http.Request, capabilityPath string) *http.Request {
+	if request.URL.EscapedPath() != capabilityPath {
+		return request
+	}
+	normalized := request.Clone(request.Context())
+	urlCopy := *request.URL
+	urlCopy.Path = capabilityPath + "/"
+	urlCopy.RawPath = ""
+	normalized.URL = &urlCopy
+	return normalized
 }
 
 func bufferBoundedBody(response http.ResponseWriter, request *http.Request) ([]byte, error) {

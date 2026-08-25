@@ -203,45 +203,258 @@ func TestSnapshotCacheCoalescesConcurrentLoads(t *testing.T) {
 func TestCancelledWaiterDoesNotPoisonSharedDirectoryLoad(t *testing.T) {
 	t.Parallel()
 
-	source := newCountingDirectorySource(map[string][]SourceEntry{
-		RootID: {
-			{ID: "f:survivor", ParentID: RootID, Name: "survivor.txt", Kind: KindFile},
-		},
-	})
-	source.block = make(chan struct{})
-	source.entered = make(chan struct{})
-	fs := mustNewFSWithOptions(t, 42, source, &fakeContentOpener{}, Options{
-		SnapshotTTL:          time.Minute,
-		MaxCachedDirectories: 4,
-	})
+	cache := newSnapshotCache(4, 10, 2, time.Minute, time.Now)
+	loadStarted := make(chan struct{})
+	inspectContext := make(chan struct{})
+	contextObserved := make(chan error, 1)
+	releaseLoad := make(chan struct{})
+	loader := func(ctx context.Context, _ string) (directorySnapshot, error) {
+		close(loadStarted)
+		<-inspectContext
+		contextObserved <- ctx.Err()
+		select {
+		case <-releaseLoad:
+			return snapshotWithName("survivor"), nil
+		case <-ctx.Done():
+			return directorySnapshot{}, ctx.Err()
+		}
+	}
 
 	cancelledContext, cancel := context.WithCancel(context.Background())
 	firstResult := make(chan error, 1)
 	go func() {
-		_, err := fs.Stat(cancelledContext, "/survivor.txt")
+		_, err := cache.getOrLoad(cancelledContext, RootID, loader)
 		firstResult <- err
 	}()
 	select {
-	case <-source.entered:
+	case <-loadStarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("directory load did not start")
 	}
-	cancel()
-	if err := <-firstResult; !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled Stat() error = %v, want context.Canceled", err)
-	}
 
+	survivorWaiting := make(chan struct{})
+	survivorContext := &waiterObservedContext{
+		Context: context.Background(),
+		waiting: survivorWaiting,
+	}
 	secondResult := make(chan error, 1)
 	go func() {
-		_, err := fs.Stat(context.Background(), "/survivor.txt")
+		_, err := cache.getOrLoad(survivorContext, RootID, loader)
 		secondResult <- err
 	}()
-	close(source.block)
-	if err := <-secondResult; err != nil {
-		t.Fatalf("second Stat() inherited cancellation: %v", err)
+	select {
+	case <-survivorWaiting:
+	case <-time.After(2 * time.Second):
+		t.Fatal("surviving waiter did not join the shared load")
 	}
-	if got := source.callsFor(RootID); got != 1 {
-		t.Fatalf("ListDirectory(root) calls = %d, want one healthy shared load", got)
+
+	cancel()
+	if err := <-firstResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled waiter error = %v, want context.Canceled", err)
+	}
+	close(inspectContext)
+	if err := <-contextObserved; err != nil {
+		t.Fatalf("shared loader context = %v, want it alive for the remaining waiter", err)
+	}
+	close(releaseLoad)
+	if err := <-secondResult; err != nil {
+		t.Fatalf("surviving waiter inherited cancellation: %v", err)
+	}
+}
+
+func TestSnapshotCacheCancelsAbandonedDistinctLoadsAndReusesSlots(t *testing.T) {
+	t.Parallel()
+
+	cache := newSnapshotCache(4, 10, 2, time.Minute, time.Now)
+	loadStarted := make(chan string, 2)
+	loader := func(ctx context.Context, parentID string) (directorySnapshot, error) {
+		if parentID == "reuse" {
+			return snapshotWithName("reused"), nil
+		}
+		loadStarted <- parentID
+		<-ctx.Done()
+		return directorySnapshot{}, ctx.Err()
+	}
+
+	contexts := make(map[string]context.CancelFunc, 2)
+	results := make(chan error, 2)
+	for _, parentID := range []string{"first", "second"} {
+		requestContext, cancel := context.WithCancel(context.Background())
+		contexts[parentID] = cancel
+		go func() {
+			_, err := cache.getOrLoad(requestContext, parentID, loader)
+			results <- err
+		}()
+	}
+	started := make(map[string]struct{}, 2)
+	for range 2 {
+		select {
+		case parentID := <-loadStarted:
+			started[parentID] = struct{}{}
+		case <-time.After(2 * time.Second):
+			t.Fatal("distinct directory load did not start")
+		}
+	}
+	if len(started) != 2 {
+		t.Fatalf("started loads = %v, want both distinct keys", started)
+	}
+
+	cache.mu.Lock()
+	firstLoad := cache.loads["first"]
+	secondLoad := cache.loads["second"]
+	cache.mu.Unlock()
+	if firstLoad == nil || secondLoad == nil {
+		t.Fatal("expected both admitted loads to be tracked")
+	}
+
+	contexts["first"]()
+	contexts["second"]()
+	for range 2 {
+		if err := <-results; !errors.Is(err, context.Canceled) {
+			t.Fatalf("abandoned waiter error = %v, want context.Canceled", err)
+		}
+	}
+	for _, load := range []*snapshotLoad{firstLoad, secondLoad} {
+		select {
+		case <-load.done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("abandoned loader did not return after its final waiter cancelled")
+		}
+	}
+
+	snapshot, err := cache.getOrLoad(context.Background(), "reuse", loader)
+	if err != nil {
+		t.Fatalf("load after abandoned-load cleanup error = %v", err)
+	}
+	if got := snapshot.entries[0].entry.Name; got != "reused" {
+		t.Fatalf("reused-slot snapshot name = %q, want %q", got, "reused")
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if len(cache.loads) != 0 || len(cache.loadSlots) != 0 {
+		t.Fatalf("abandoned-load bookkeeping leaked: loads=%d slots=%d", len(cache.loads), len(cache.loadSlots))
+	}
+}
+
+func TestSnapshotCacheStaleCompletionCannotReplaceNewLoad(t *testing.T) {
+	t.Parallel()
+
+	cache := newSnapshotCache(4, 10, 2, time.Minute, time.Now)
+	oldStarted := make(chan struct{})
+	oldCancelled := make(chan struct{})
+	releaseOld := make(chan struct{})
+	newStarted := make(chan struct{})
+	releaseNew := make(chan struct{})
+	var attemptsMu sync.Mutex
+	attempts := 0
+	loader := func(ctx context.Context, _ string) (directorySnapshot, error) {
+		attemptsMu.Lock()
+		attempts++
+		attempt := attempts
+		attemptsMu.Unlock()
+		switch attempt {
+		case 1:
+			close(oldStarted)
+			<-ctx.Done()
+			close(oldCancelled)
+			<-releaseOld
+			return snapshotWithName("stale"), nil
+		case 2:
+			close(newStarted)
+			<-releaseNew
+			return snapshotWithName("fresh"), nil
+		default:
+			return directorySnapshot{}, fmt.Errorf("unexpected loader attempt %d", attempt)
+		}
+	}
+
+	oldContext, cancelOld := context.WithCancel(context.Background())
+	oldResult := make(chan error, 1)
+	go func() {
+		_, err := cache.getOrLoad(oldContext, "shared", loader)
+		oldResult <- err
+	}()
+	select {
+	case <-oldStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("old load did not start")
+	}
+	cache.mu.Lock()
+	oldLoad := cache.loads["shared"]
+	cache.mu.Unlock()
+	if oldLoad == nil {
+		t.Fatal("old load was not tracked")
+	}
+
+	cancelOld()
+	if err := <-oldResult; !errors.Is(err, context.Canceled) {
+		t.Fatalf("old waiter error = %v, want context.Canceled", err)
+	}
+	select {
+	case <-oldCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("old loader context was not cancelled with its final waiter")
+	}
+
+	newResult := make(chan struct {
+		snapshot directorySnapshot
+		err      error
+	}, 1)
+	go func() {
+		snapshot, err := cache.getOrLoad(context.Background(), "shared", loader)
+		newResult <- struct {
+			snapshot directorySnapshot
+			err      error
+		}{snapshot: snapshot, err: err}
+	}()
+	select {
+	case <-newStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement load did not start while the stale loader was returning")
+	}
+	cache.mu.Lock()
+	newLoad := cache.loads["shared"]
+	cache.mu.Unlock()
+	if newLoad == nil || newLoad == oldLoad {
+		t.Fatal("replacement load was not tracked independently")
+	}
+
+	close(releaseOld)
+	select {
+	case <-oldLoad.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stale loader did not finish")
+	}
+	cache.mu.Lock()
+	trackedLoad := cache.loads["shared"]
+	_, staleCached := cache.entries["shared"]
+	cache.mu.Unlock()
+	if trackedLoad != newLoad {
+		t.Fatal("stale completion removed the replacement load")
+	}
+	if staleCached {
+		t.Fatal("stale completion populated the snapshot cache")
+	}
+
+	close(releaseNew)
+	result := <-newResult
+	if result.err != nil {
+		t.Fatalf("replacement load error = %v", result.err)
+	}
+	if got := result.snapshot.entries[0].entry.Name; got != "fresh" {
+		t.Fatalf("replacement snapshot name = %q, want %q", got, "fresh")
+	}
+	cached, err := cache.getOrLoad(context.Background(), "shared", loader)
+	if err != nil {
+		t.Fatalf("cached replacement lookup error = %v", err)
+	}
+	if got := cached.entries[0].entry.Name; got != "fresh" {
+		t.Fatalf("cached snapshot name = %q, want %q", got, "fresh")
+	}
+	attemptsMu.Lock()
+	defer attemptsMu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("loader attempts = %d, want 2", attempts)
 	}
 }
 
@@ -416,6 +629,10 @@ func snapshotWithEntries(count int) directorySnapshot {
 	return directorySnapshot{entries: make([]snapshotEntry, count)}
 }
 
+func snapshotWithName(name string) directorySnapshot {
+	return directorySnapshot{entries: []snapshotEntry{{entry: Entry{Name: name}}}}
+}
+
 func BenchmarkStatAndReadDir1000Entries(b *testing.B) {
 	children := make([]SourceEntry, 1000)
 	for index := range children {
@@ -530,6 +747,17 @@ func (source *countingDirectorySource) callsFor(parentID string) int {
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time
+}
+
+type waiterObservedContext struct {
+	context.Context
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func (ctx *waiterObservedContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.waiting) })
+	return ctx.Context.Done()
 }
 
 func newFakeClock(now time.Time) *fakeClock {

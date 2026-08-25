@@ -49,11 +49,15 @@ type Opener struct {
 	ranges   tgclient.RangeClient
 	reader   *media.RangeReader
 
-	mu             sync.RWMutex
-	closed         bool
-	lifetime       context.Context
-	cancelLifetime context.CancelFunc
-	resolveSlots   chan struct{}
+	mu                  sync.RWMutex
+	closed              bool
+	lifetime            context.Context
+	cancelLifetime      context.CancelFunc
+	resolveSlots        chan struct{}
+	peerCache           *resolvedPeerCache
+	peerResolutions     map[int64]*peerResolution
+	documentCache       *documentRefCache
+	documentResolutions map[documentRefKey]*documentResolution
 }
 
 // New constructs a shared content opener. Dependencies are validated here so
@@ -70,12 +74,16 @@ func New(cfg Config) (*Opener, error) {
 	lifetime, cancelLifetime := context.WithCancel(context.Background())
 
 	return &Opener{
-		resolver:       media.NewResolver(cfg.DB),
-		peers:          cfg.Peers,
-		ranges:         cfg.Ranges,
-		lifetime:       lifetime,
-		cancelLifetime: cancelLifetime,
-		resolveSlots:   make(chan struct{}, maxConcurrentDocumentResolutions),
+		resolver:            media.NewResolver(cfg.DB),
+		peers:               cfg.Peers,
+		ranges:              cfg.Ranges,
+		lifetime:            lifetime,
+		cancelLifetime:      cancelLifetime,
+		resolveSlots:        make(chan struct{}, maxConcurrentDocumentResolutions),
+		peerCache:           newResolvedPeerCache(maxCachedPeers),
+		peerResolutions:     make(map[int64]*peerResolution),
+		documentCache:       newDocumentRefCache(maxCachedDocumentRefs, documentRefCacheTTL, nil),
+		documentResolutions: make(map[documentRefKey]*documentResolution),
 		reader: media.NewRangeReader(media.RangeReaderConfig{
 			Client:         cfg.Ranges,
 			PrefetchBlocks: 1,
@@ -97,6 +105,20 @@ func (o *Opener) Close() {
 	o.closed = true
 	reader := o.reader
 	cancelLifetime := o.cancelLifetime
+	if o.peerCache != nil {
+		o.peerCache.clear()
+	}
+	for _, resolution := range o.peerResolutions {
+		resolution.abandoned = true
+	}
+	clear(o.peerResolutions)
+	if o.documentCache != nil {
+		o.documentCache.clear()
+	}
+	for _, resolution := range o.documentResolutions {
+		resolution.abandoned = true
+	}
+	clear(o.documentResolutions)
 	o.mu.Unlock()
 
 	if cancelLifetime != nil {
@@ -139,7 +161,7 @@ func (o *Opener) Open(ctx context.Context, channelID, fileID int64) (*Reader, er
 		return nil, err
 	}
 
-	peer, err := o.peers.ResolvePeer(openCtx, channelID)
+	peer, err := o.resolvePeer(openCtx, channelID)
 	if err != nil {
 		return nil, o.normalizeOpenError(fmt.Errorf("mount content: resolve drive: %w", err))
 	}
@@ -240,48 +262,28 @@ func (o *Opener) resolveDocuments(
 	return refs, nil
 }
 
-func (o *Opener) resolveDocument(
-	ctx context.Context,
-	peer tgclient.InputPeer,
-	projected media.Segment,
-) (tgclient.DocumentRef, error) {
-	select {
-	case o.resolveSlots <- struct{}{}:
-		defer func() { <-o.resolveSlots }()
-	case <-ctx.Done():
-		return tgclient.DocumentRef{}, ctx.Err()
-	}
-	if err := o.ensureOpen(); err != nil {
-		return tgclient.DocumentRef{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return tgclient.DocumentRef{}, err
-	}
-
-	ref, err := o.ranges.ResolveDocument(ctx, peer, projected.MsgID)
-	if err != nil {
-		return tgclient.DocumentRef{}, err
-	}
-	if err := validateDocumentIdentity(peer, projected.MsgID, ref); err != nil {
-		return tgclient.DocumentRef{}, err
-	}
-	return ref, nil
-}
-
 func validateDocumentIdentity(
 	expectedPeer tgclient.InputPeer,
-	expectedMsgID int64,
+	projected media.Segment,
 	ref tgclient.DocumentRef,
 ) error {
-	if ref.MsgID != expectedMsgID {
+	if ref.MsgID != projected.MsgID {
 		return fmt.Errorf(
 			"mount content: Telegram message identity mismatch: requested=%d resolved=%d",
-			expectedMsgID,
+			projected.MsgID,
 			ref.MsgID,
 		)
 	}
 	if ref.Peer != expectedPeer {
-		return fmt.Errorf("mount content: Telegram peer identity mismatch for message %d", expectedMsgID)
+		return fmt.Errorf("mount content: Telegram peer identity mismatch for message %d", projected.MsgID)
+	}
+	if ref.Size != projected.Size {
+		return fmt.Errorf(
+			"mount content: message %d size mismatch: projection=%d telegram=%d",
+			projected.MsgID,
+			projected.Size,
+			ref.Size,
+		)
 	}
 	return nil
 }

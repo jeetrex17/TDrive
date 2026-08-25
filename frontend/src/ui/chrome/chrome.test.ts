@@ -73,6 +73,7 @@ describe('ProfileMenu', () => {
 
         expect(body).toContain('Loading account…');
         expect(body).not.toContain('profile-menu-encryption-settings');
+        expect(body).toContain('Mount Tdrive personal');
         expect(body).toContain('Log out');
     });
 
@@ -86,6 +87,20 @@ describe('ProfileMenu', () => {
         expect(body).toContain('Ada L.');
         expect(body).toContain('@ada');
         expect(body).toContain('Encryption settings');
+    });
+
+    it('places the accessible mount action below encryption settings', () => {
+        encryptionEntryVisible.set(true);
+
+        const { body } = render(ProfileMenu, { props: profileProps });
+        const encryptionIndex = body.indexOf('id="profile-menu-encryption-settings"');
+        const mountIndex = body.indexOf('id="mount-drive-button"');
+        const logoutIndex = body.indexOf('id="profile-menu-logout"');
+
+        expect(encryptionIndex).toBeGreaterThanOrEqual(0);
+        expect(mountIndex).toBeGreaterThan(encryptionIndex);
+        expect(mountIndex).toBeLessThan(logoutIndex);
+        expect(body.slice(mountIndex, logoutIndex)).toContain('role="menuitem"');
     });
 });
 

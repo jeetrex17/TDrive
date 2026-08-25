@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { backend, main } from "../wailsjs/go/models";
-import { toFileItem, toFolderItem, toRootFile, toSearchHit } from "./api";
+import {
+    normalizeMountStatus,
+    toFileItem,
+    toFolderItem,
+    toRootFile,
+    toSearchHit,
+} from "./api";
 
 describe("api normalizers", () => {
     it("toFileItem maps snake_case to camelCase", () => {
@@ -35,5 +41,61 @@ describe("api normalizers", () => {
         expect(toSearchHit(backend.SearchResult.createFrom({ type: "folder", id: "d" })).type).toBe("folder");
         expect(toSearchHit(backend.SearchResult.createFrom({ type: "file", id: "5" })).type).toBe("file");
         expect(toSearchHit(backend.SearchResult.createFrom({ type: "weird", id: "5" })).type).toBe("file");
+    });
+
+    it("normalizes a capability-free mounted-drive view", () => {
+        const normalized = normalizeMountStatus({
+            phase: "mounted",
+            mounted: true,
+            mode: "read-only",
+            label: "Tdrive personal",
+            location: "/Volumes/Tdrive personal",
+            error: "",
+            drive: { id: 42, title: "Personal", kind: "personal" },
+            windows_drive: "t",
+            url: "http://127.0.0.1:7777/tdrive-secret",
+            commands: { mac_finder: "open http://127.0.0.1:7777/tdrive-secret" },
+        });
+
+        expect(normalized).toEqual({
+            phase: "mounted",
+            mounted: true,
+            mode: "read-only",
+            label: "Tdrive personal",
+            location: "/Volumes/Tdrive personal",
+            error: "",
+            drive: { id: 42, title: "Personal", kind: "personal" },
+            windowsDrive: "T:",
+        });
+        expect(normalized).not.toHaveProperty("url");
+        expect(normalized).not.toHaveProperty("commands");
+    });
+
+    it("rejects unsafe locations and endpoint-bearing error details", () => {
+        const normalized = normalizeMountStatus({
+            phase: "error",
+            mounted: false,
+            location: "http://127.0.0.1:9000/tdrive-deadbeef",
+            error: "mount_webdav http://127.0.0.1:9000/tdrive-deadbeef failed",
+            drive: { id: Number.MAX_SAFE_INTEGER + 1, title: "x", kind: "weird" },
+        });
+
+        expect(normalized.location).toBe("");
+        expect(normalized.error).toBe("The drive could not be mounted. Try again.");
+        expect(normalized.drive).toEqual({ id: 0, title: "x", kind: "unknown" });
+        expect(normalized.label).toBe("Tdrive personal");
+    });
+
+    it("keeps bounded safe mount labels for shared drives", () => {
+        expect(normalizeMountStatus({ label: "Tdrive - Family", mounted: true }).label).toBe("Tdrive - Family");
+        expect(normalizeMountStatus({ label: "http://127.0.0.1:7777/tdrive-secret", mounted: true }).label).toBe("Tdrive personal");
+    });
+
+    it("repairs contradictory mount phases at the API boundary", () => {
+        expect(normalizeMountStatus({ phase: "mounted", mounted: false }).phase).toBe("idle");
+        expect(normalizeMountStatus({ phase: "disconnecting", mounted: false }).phase).toBe("disconnecting");
+        expect(normalizeMountStatus({ phase: "mounting", mounted: false }).phase).toBe("mounting");
+        expect(normalizeMountStatus({ phase: "idle", mounted: true }).phase).toBe("mounted");
+        expect(normalizeMountStatus({ phase: "mounting", running: true }).mounted).toBe(false);
     });
 });

@@ -61,6 +61,13 @@ describe('AppShell behavior', () => {
         expect(openNewFolderModal).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps the mount action out of the header', () => {
+        setup();
+
+        expect(host?.querySelector('.header-actions #mount-drive-button')).toBeNull();
+        expect(host?.querySelector('#mount-control-root')).toBeNull();
+    });
+
     it('leaves selection bar contents owned by the Svelte SelectionBar island', () => {
         setup();
 

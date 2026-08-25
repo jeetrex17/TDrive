@@ -68,6 +68,60 @@ func TestProtectedHandlerAdvertisesOnlyReadMethods(t *testing.T) {
 	}
 }
 
+func TestProtectedHandlerAllowsTrustedRootOptionsProbe(t *testing.T) {
+	calls := 0
+	handler := protectedTestHandler(2, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		calls++
+		response.WriteHeader(http.StatusOK)
+	}))
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, trustedRequest(http.MethodOptions, "/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("trusted root OPTIONS status = %d, want 200", recorder.Code)
+	}
+	if recorder.Header().Get("DAV") != "1" || recorder.Header().Get("Allow") != allowedMethodsHeader {
+		t.Fatalf("trusted root OPTIONS headers = %#v", recorder.Header())
+	}
+	if calls != 0 {
+		t.Fatalf("trusted root OPTIONS reached application %d times", calls)
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, trustedRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("trusted root GET status = %d, want 404", recorder.Code)
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, trustedRequest(http.MethodOptions, "*", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("trusted server-wide OPTIONS status = %d, want 200", recorder.Code)
+	}
+	if recorder.Header().Get("DAV") != "1" || recorder.Header().Get("Allow") != allowedMethodsHeader {
+		t.Fatalf("trusted server-wide OPTIONS headers = %#v", recorder.Header())
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*http.Request)
+	}{
+		{name: "wrong host", mutate: func(request *http.Request) { request.Host = "localhost:7331" }},
+		{name: "remote peer", mutate: func(request *http.Request) { request.RemoteAddr = "192.0.2.10:54321" }},
+		{name: "browser origin", mutate: func(request *http.Request) { request.Header.Set("Origin", "null") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := trustedRequest(http.MethodOptions, "/", nil)
+			test.mutate(request)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("untrusted root OPTIONS status = %d, want 403", recorder.Code)
+			}
+		})
+	}
+}
+
 func TestProtectedHandlerRejectsUntrustedMetadata(t *testing.T) {
 	handler := protectedTestHandler(2, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusOK)
@@ -115,8 +169,13 @@ func TestProtectedHandlerValidatesDepthAndBody(t *testing.T) {
 	}{
 		{depth: "", status: http.StatusForbidden},
 		{depth: "infinity", status: http.StatusForbidden},
+		{depth: "infinity,noroot", status: http.StatusForbidden},
 		{depth: "2", status: http.StatusBadRequest},
 		{depth: " 1", status: http.StatusBadRequest},
+		{depth: "1, noroot", status: http.StatusBadRequest},
+		{depth: "1,NoRoot", status: http.StatusBadRequest},
+		{depth: "1,noroot,extra", status: http.StatusBadRequest},
+		{depth: "0,noroot", status: http.StatusBadRequest},
 	} {
 		request := trustedRequest("PROPFIND", testCapability+"/", nil)
 		if test.depth != "" {
@@ -144,6 +203,36 @@ func TestProtectedHandlerValidatesDepthAndBody(t *testing.T) {
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized body status = %d, want 413", recorder.Code)
+	}
+}
+
+func TestProtectedHandlerCarriesNoRootAsInternalRequestState(t *testing.T) {
+	var gotDepth string
+	var gotOmitRoot bool
+	var gotHeaders http.Header
+	handler := protectedTestHandler(2, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		gotDepth = request.Header.Get("Depth")
+		gotOmitRoot = propfindOmitsRoot(request)
+		gotHeaders = request.Header.Clone()
+		response.WriteHeader(http.StatusMultiStatus)
+	}))
+	request := trustedRequest("PROPFIND", testCapability+"/", nil)
+	request.Header.Set("Depth", windowsNoRootDepth)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMultiStatus {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMultiStatus)
+	}
+	if gotDepth != "1" || !gotOmitRoot {
+		t.Fatalf("application request depth/omit-root = %q/%t, want 1/true", gotDepth, gotOmitRoot)
+	}
+	if len(gotHeaders) != 1 || gotHeaders.Get("Depth") != "1" {
+		t.Fatalf("application request exposed internal state in headers: %#v", gotHeaders)
+	}
+	if request.Header.Get("Depth") != windowsNoRootDepth {
+		t.Fatalf("caller request Depth mutated to %q", request.Header.Get("Depth"))
 	}
 }
 

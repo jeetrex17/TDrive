@@ -74,7 +74,7 @@ func listChildFoldersContext(ctx context.Context, db *sql.DB, channelID int64, p
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, name, parent_id FROM folders
 		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
-		ORDER BY name
+		ORDER BY name, id
 	`, channelID, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("projection: list child folders: %w", err)
@@ -99,7 +99,7 @@ func listChildFilesContext(ctx context.Context, db *sql.DB, channelID int64, par
 	rows, err := db.QueryContext(ctx, `
 		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
 		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
-		ORDER BY upload_time DESC
+		ORDER BY upload_time DESC, msg_id DESC
 	`, channelID, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("projection: list child files: %w", err)

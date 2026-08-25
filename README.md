@@ -32,7 +32,7 @@ This project is for **educational purposes only**. I’m not trying to harm Tele
 - **Shared drives** — invite friends with instant or approval-required links; everyone can upload, organize, and see who uploaded what.
 - **Cancellable transfers** — cancel uploads and downloads mid-flight, with live size and speed.
 - **CLI mode** — use TDrive from the terminal with a local daemon, Linux-like commands, folder/archive upload, shared drives, vault unlock, and progress output.
-- **Read-only WebDAV mount (beta)** — pin one selected drive to a private localhost WebDAV URL, with a Windows `T:` mapping command.
+- **Read-only desktop mount (beta)** — mount the active TDrive from the app or with one CLI command in Finder, Explorer, or Linux Files.
 
 ## Download
 
@@ -184,7 +184,7 @@ tdrive mount stop
 
 Folder and archive imports require the destination folder to already exist first. Single-file uploads can create or rename the final file path.
 
-The mount beta is read-only. It pins one selected drive without changing the GUI/CLI active drive, starts a private localhost WebDAV server, and prints OS-specific connection instructions. Close the GUI before starting the CLI-owned mount, and keep the daemon running while it is mounted. Windows mapping defaults to `T:` but is not automatic; run the printed `net use` command. Plaintext single-part and multipart files stream from Telegram as they are read. Encrypted-file reads are not supported in this first release.
+The mount beta is read-only. Use the **Mount** button in the app, or close the GUI and run `tdrive mount`; TDrive starts its private localhost WebDAV endpoint, attaches it to the current OS, and pins that drive until you disconnect it. Personal drives appear as **Tdrive personal** on macOS, Windows defaults to `T:`, and Linux uses the current desktop GVfs/GIO session. Linux desktop mounts require GIO, GVfs, and the GVfs WebDAV backend, such as `gvfs-backends` on Debian/Ubuntu. Plaintext single-part and multipart files stream from Telegram as they are read. Creating, editing, deleting, and opening encrypted files through the mount are not supported yet. Windows' built-in WebDAV client defaults to a 50,000,000-byte file-size limit, so larger files require changing that OS setting.
 
 Shared drive commands:
 
