@@ -12,26 +12,56 @@ const (
 	defaultWriteFloodWaitRetries = 2
 	defaultWriteFloodWaitMax     = 30 * time.Second
 	defaultWriteFloodWaitTotal   = 60 * time.Second
+
+	// Moderate transient-transport budget: a dropped shared connection should
+	// recover transparently (#74/#73) without masking real outages.
+	defaultTransientRetries    = 4
+	defaultTransientBackoff    = 2 * time.Second
+	defaultTransientMaxBackoff = 30 * time.Second
 )
 
 var ErrInvalidFloodWaitRetryPolicy = errors.New("tgclient: invalid flood wait retry policy")
 
-// FloodWaitRetryPolicy retries only Telegram FLOOD_WAIT failures. MaxRetries
-// counts retries after the initial call. A zero-value policy performs one call
-// and no retries; callers that want the bounded production defaults should use
-// DefaultWriteFloodWaitRetryPolicy.
+// FloodWaitRetryPolicy bounds retries for long Telegram transfers. It covers
+// two failure classes:
+//
+//   - FLOOD_WAIT: Telegram rate limiting, retried after the server-requested
+//     wait under MaxRetries/MaxWait/MaxTotalWait budgets.
+//   - Transient transport failures (IsTransientTransport): the shared
+//     connection scope died or the TCP link was reset mid-transfer, which
+//     fails every in-flight RPC with "engine forcibly closed" style errors.
+//     These are retried after a capped doubling backoff that gives the
+//     liveConn scope time to re-establish before the next attempt.
+//
+// MaxRetries counts FLOOD_WAIT retries after the initial call and
+// MaxTransientRetries counts transport retries; both are independent budgets.
+// A zero-value policy performs one call and no retries; callers that want the
+// bounded production defaults should use DefaultWriteFloodWaitRetryPolicy.
 type FloodWaitRetryPolicy struct {
 	MaxRetries   int
 	MaxWait      time.Duration
 	MaxTotalWait time.Duration
 	Sleep        func(context.Context, time.Duration) error
+
+	// MaxTransientRetries bounds transport-failure retries after the initial
+	// attempt. Zero disables them.
+	MaxTransientRetries int
+	// TransientBackoff is the first backoff; it doubles each attempt up to
+	// MaxTransientBackoff. Required when MaxTransientRetries > 0.
+	TransientBackoff time.Duration
+	// MaxTransientBackoff caps the doubling backoff. When zero, backoff stays
+	// constant at TransientBackoff.
+	MaxTransientBackoff time.Duration
 }
 
 func DefaultWriteFloodWaitRetryPolicy() FloodWaitRetryPolicy {
 	return FloodWaitRetryPolicy{
-		MaxRetries:   defaultWriteFloodWaitRetries,
-		MaxWait:      defaultWriteFloodWaitMax,
-		MaxTotalWait: defaultWriteFloodWaitTotal,
+		MaxRetries:          defaultWriteFloodWaitRetries,
+		MaxWait:             defaultWriteFloodWaitMax,
+		MaxTotalWait:        defaultWriteFloodWaitTotal,
+		MaxTransientRetries: defaultTransientRetries,
+		TransientBackoff:    defaultTransientBackoff,
+		MaxTransientBackoff: defaultTransientMaxBackoff,
 	}
 }
 
@@ -48,13 +78,17 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 	if p.MaxRetries > 0 && (p.MaxWait == 0 || p.MaxTotalWait == 0) {
 		return fmt.Errorf("%w: retrying requires per-wait and total-wait limits", ErrInvalidFloodWaitRetryPolicy)
 	}
+	if p.MaxTransientRetries > 0 && p.TransientBackoff <= 0 {
+		return fmt.Errorf("%w: retrying transient failures requires a backoff", ErrInvalidFloodWaitRetryPolicy)
+	}
 
 	sleep := p.Sleep
 	if sleep == nil {
 		sleep = sleepContext
 	}
 	var totalWait time.Duration
-	for retries := 0; ; retries++ {
+	var floodRetries, transientRetries int
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -63,26 +97,50 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 			return nil
 		}
 		wait, floodWait := FloodWaitDuration(err)
-		if !floodWait || retries >= p.MaxRetries {
-			if floodWait {
-				slog.Warn("tgclient: FLOOD_WAIT retry budget exhausted, giving up", "retries", retries, "wait", wait, "max_retries", p.MaxRetries)
+		if floodWait {
+			if floodRetries >= p.MaxRetries || wait < 0 ||
+				(p.MaxWait > 0 && wait > p.MaxWait) ||
+				(p.MaxTotalWait > 0 && wait > p.MaxTotalWait-totalWait) {
+				slog.Warn("tgclient: FLOOD_WAIT retry budget exhausted, giving up", "retries", floodRetries, "wait", wait, "max_retries", p.MaxRetries)
+				return err
 			}
+			slog.Warn("tgclient: FLOOD_WAIT, sleeping before retry", "attempt", floodRetries+1, "wait", wait)
+			if err := sleep(ctx, wait); err != nil {
+				return err
+			}
+			totalWait += wait
+			floodRetries++
+			continue
+		}
+		if !IsTransientTransport(err) || transientRetries >= p.MaxTransientRetries {
 			return err
 		}
-		if wait < 0 || (p.MaxWait > 0 && wait > p.MaxWait) {
-			slog.Warn("tgclient: FLOOD_WAIT exceeds per-wait limit, giving up", "wait", wait, "max_wait", p.MaxWait)
+		backoff := p.transientBackoff(transientRetries)
+		slog.Warn(
+			"tgclient: transient transport failure, reconnecting before retry",
+			"attempt", transientRetries+1,
+			"max_retries", p.MaxTransientRetries,
+			"backoff", backoff,
+			"error", err,
+		)
+		if err := sleep(ctx, backoff); err != nil {
 			return err
 		}
-		if p.MaxTotalWait > 0 && (wait > p.MaxTotalWait-totalWait) {
-			slog.Warn("tgclient: FLOOD_WAIT would exceed total-wait budget, giving up", "wait", wait, "total_wait_so_far", totalWait, "max_total_wait", p.MaxTotalWait)
-			return err
-		}
-		slog.Warn("tgclient: FLOOD_WAIT, sleeping before retry", "attempt", retries+1, "wait", wait)
-		if err := sleep(ctx, wait); err != nil {
-			return err
-		}
-		totalWait += wait
+		transientRetries++
 	}
+}
+
+// transientBackoff returns the wait before the given zero-based transport
+// retry: TransientBackoff doubled per attempt, capped at MaxTransientBackoff.
+func (p FloodWaitRetryPolicy) transientBackoff(retry int) time.Duration {
+	backoff := p.TransientBackoff
+	for i := 0; i < retry; i++ {
+		backoff *= 2
+		if p.MaxTransientBackoff > 0 && backoff >= p.MaxTransientBackoff {
+			return p.MaxTransientBackoff
+		}
+	}
+	return backoff
 }
 
 func sleepContext(ctx context.Context, wait time.Duration) error {

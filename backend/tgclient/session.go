@@ -3,6 +3,7 @@ package tgclient
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 )
 
@@ -123,6 +124,12 @@ func (l *liveConn) start() {
 
 	go func() {
 		err := l.scopeFn(runCtx, ready)
+		if err != nil && !l.isClosed() {
+			// Surface why the shared connection died (dial failure, dropped
+			// link, auth loss) instead of leaving callers to guess from the
+			// "engine forcibly closed" errors their in-flight RPCs report.
+			slog.Warn("tgclient: connection scope exited", "error", err)
+		}
 		l.mu.Lock()
 		scope.err = err
 		scope.done = true
@@ -130,6 +137,12 @@ func (l *liveConn) start() {
 		cancel()
 		close(scope.doneCh)
 	}()
+}
+
+func (l *liveConn) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
 }
 
 // Close tears down the running scope (if any) and blocks until it exits.

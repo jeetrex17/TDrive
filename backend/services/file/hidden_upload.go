@@ -340,13 +340,9 @@ func (s *Service) sendHiddenFile(
 	if err != nil {
 		return tgclient.SendFileResult{}, err
 	}
-	policy := s.FloodWaitRetry
-	if policy.MaxRetries == 0 && policy.MaxWait == 0 && policy.MaxTotalWait == 0 && policy.Sleep == nil {
-		policy = tgclient.DefaultWriteFloodWaitRetryPolicy()
-	}
 
 	var result tgclient.SendFileResult
-	err = policy.Do(ctx, func() error {
+	err = s.sendRetryPolicy().Do(ctx, func() error {
 		if _, err := source.Seek(offset, io.SeekStart); err != nil {
 			return fmt.Errorf("seek staged upload: %w", err)
 		}

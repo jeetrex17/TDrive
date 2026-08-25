@@ -74,10 +74,14 @@ type Service struct {
 	// 2 GiB cap; it is raised to the 4 GiB Premium cap once the account is known
 	// to be Premium. See maxUploadBytes.
 	MaxUploadBytes int64
-	// FloodWaitRetry bounds FLOOD_WAIT retries for hidden writable-mount body
-	// uploads. The zero value uses tgclient's bounded production defaults.
+	// FloodWaitRetry bounds FLOOD_WAIT and transient-transport retries for
+	// direct Telegram transfers (uploads, downloads, deletes). The zero value
+	// uses tgclient's bounded production defaults.
 	FloodWaitRetry tgclient.FloodWaitRetryPolicy
-	previewMu      sync.Mutex
+	// MaxConcurrentUploads bounds how many files from one Upload batch upload
+	// in parallel. <= 0 uses defaultUploadConcurrency.
+	MaxConcurrentUploads int
+	previewMu            sync.Mutex
 	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
 	// package tests. It runs immediately after Telegram returns a positive
 	// message ID and before that receipt enters any local collection/projection.
@@ -179,7 +183,7 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 		Op        projection.Op
 	}
 
-	sem := make(chan struct{}, 3)
+	sem := make(chan struct{}, s.uploadConcurrency())
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
@@ -395,7 +399,7 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		lastProgress = time.Now()
 		progressMu   sync.Mutex
 	)
-	result, err := s.TG.SendFile(ctx, peer, uploadSource, filename, caption, uploadSize, func(sent, total int64) {
+	onProgress := func(sent, total int64) {
 		progressMu.Lock()
 		defer progressMu.Unlock()
 		if time.Since(lastProgress) <= 100*time.Millisecond {
@@ -410,6 +414,16 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		}
 		s.emitEvent("upload_progress", uploadID, percent)
 		lastProgress = time.Now()
+	}
+	var result tgclient.SendFileResult
+	err = s.sendRetryPolicy().Do(ctx, func() error {
+		// A retried attempt must resend the whole body from its start.
+		if _, ok := rewindSeeker(uploadSource, 0); !ok {
+			return fmt.Errorf("staged upload source is not rewindable")
+		}
+		var serr error
+		result, serr = s.TG.SendFile(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress)
+		return serr
 	})
 	if err != nil {
 		return Metadata{}, projection.Op{}, "", err
@@ -563,7 +577,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			FileSize:   partLen,
 		}
 		partCaption := projection.Format(partOp)
-		result, err := s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), partAttachmentName(filename, i, numParts), partCaption, partLen, func(sent, total int64) {
+		onProgress := func(sent, total int64) {
 			progressMu.Lock()
 			defer progressMu.Unlock()
 			if time.Since(lastProgress) <= 100*time.Millisecond {
@@ -578,7 +592,27 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			}
 			s.emitEvent("upload_progress", uploadID, percent)
 			lastProgress = time.Now()
-		})
+		}
+		sendPart := func() (tgclient.SendFileResult, error) {
+			return s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), partAttachmentName(filename, i, numParts), partCaption, partLen, onProgress)
+		}
+		var result tgclient.SendFileResult
+		if seeker, ok := storedReader.(io.Seeker); ok {
+			// Plaintext parts stream straight from the seekable source, so a
+			// transient transport failure retries from the part window start.
+			err = s.sendRetryPolicy().Do(ctx, func() error {
+				if _, serr := seeker.Seek(partBase, io.SeekStart); serr != nil {
+					return fmt.Errorf("rewind staged part %d: %w", i, serr)
+				}
+				var serr error
+				result, serr = sendPart()
+				return serr
+			})
+		} else {
+			// Encrypted parts stream through a pipe that cannot rewind; they
+			// stay single-attempt until ciphertext staging lands.
+			result, err = sendPart()
+		}
 		if err != nil {
 			abort()
 			return Metadata{}, err
@@ -656,9 +690,13 @@ func (s *Service) deleteMessagesChunked(ctx context.Context, peer tgclient.Input
 	}
 	const chunk = 100
 	var firstErr error
+	policy := s.sendRetryPolicy()
 	for start := 0; start < len(msgIDs); start += chunk {
 		end := min(start+chunk, len(msgIDs))
-		if err := s.TG.DeleteMessages(ctx, peer, msgIDs[start:end]); err != nil {
+		// Deleting already-deleted ids is a no-op, so transport retries are safe.
+		if err := policy.Do(ctx, func() error {
+			return s.TG.DeleteMessages(ctx, peer, msgIDs[start:end])
+		}); err != nil {
 			s.warnf("warn: delete %d message bodies failed: %v\n", end-start, err)
 			if firstErr == nil {
 				firstErr = err
@@ -760,7 +798,11 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 	}()
 
 	if !encrypted {
-		if err := s.TG.DownloadFileAt(ctx, peer, int64(msgID), finalTmp, 0, s.downloadProgress(doc.Size)); err != nil {
+		// DownloadFileAt writes through WriterAt, so a retried attempt
+		// overwrites the same offsets instead of appending.
+		if err := s.sendRetryPolicy().Do(ctx, func() error {
+			return s.TG.DownloadFileAt(ctx, peer, int64(msgID), finalTmp, 0, s.downloadProgress(doc.Size))
+		}); err != nil {
 			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 		}
 	} else {
@@ -772,7 +814,9 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 			_ = cipher.Close()
 			_ = os.Remove(cipher.Name())
 		}()
-		if err := s.TG.DownloadFileAt(ctx, peer, int64(msgID), cipher, 0, s.downloadProgress(doc.Size)); err != nil {
+		if err := s.sendRetryPolicy().Do(ctx, func() error {
+			return s.TG.DownloadFileAt(ctx, peer, int64(msgID), cipher, 0, s.downloadProgress(doc.Size))
+		}); err != nil {
 			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 		}
 		if _, err := cipher.Seek(0, io.SeekStart); err != nil {
@@ -920,8 +964,11 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 				}
 				defer func() { <-sem }()
 
-				if err := s.TG.DownloadFileAt(dlCtx, peer, part.MsgID, dst, partOffsets[i], func(partDone, _ int64) {
-					report(i, partDone)
+				// WriterAt at partOffsets[i] makes retries overwrite-safe.
+				if err := s.sendRetryPolicy().Do(dlCtx, func() error {
+					return s.TG.DownloadFileAt(dlCtx, peer, part.MsgID, dst, partOffsets[i], func(partDone, _ int64) {
+						report(i, partDone)
+					})
 				}); err != nil {
 					errCh <- err
 					cancel()
@@ -1038,12 +1085,21 @@ func (s *Service) PreviewThumbnail(ctx context.Context, channelID int64, msgID i
 			return errPreviewThumbMissing
 		}
 
-		var buf bytes.Buffer
-		if err := s.TG.DownloadFileThumbnail(ctx, peer, int64(msgID), thumbType, &buf); err != nil {
+		var payloadBytes []byte
+		if err := s.sendRetryPolicy().Do(ctx, func() error {
+			// A fresh buffer each attempt so a retry never appends to a
+			// partially downloaded thumbnail.
+			var buf bytes.Buffer
+			if err := s.TG.DownloadFileThumbnail(ctx, peer, int64(msgID), thumbType, &buf); err != nil {
+				return err
+			}
+			payloadBytes = buf.Bytes()
+			return nil
+		}); err != nil {
 			return errPreviewDownloadFailed
 		}
 
-		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
+		payload, err = previewPayloadFromBytes(payloadBytes, mimeType)
 		return err
 	})
 	if err != nil {
@@ -1413,6 +1469,45 @@ func (s *Service) validParent(channelID int64, parentID string, label string) (s
 		return "", fmt.Errorf("Target folder not found")
 	}
 	return parent, nil
+}
+
+const (
+	defaultUploadConcurrency = 3
+	maxUploadConcurrency     = 8
+)
+
+// sendRetryPolicy returns the bounded retry policy shared by direct Telegram
+// sends, deletes, and downloads. The zero-value FloodWaitRetry field selects
+// tgclient's production defaults.
+func (s *Service) sendRetryPolicy() tgclient.FloodWaitRetryPolicy {
+	p := s.FloodWaitRetry
+	if p.MaxRetries == 0 && p.MaxWait == 0 && p.MaxTotalWait == 0 && p.Sleep == nil &&
+		p.MaxTransientRetries == 0 && p.TransientBackoff == 0 && p.MaxTransientBackoff == 0 {
+		return tgclient.DefaultWriteFloodWaitRetryPolicy()
+	}
+	return p
+}
+
+// uploadConcurrency clamps MaxConcurrentUploads into [1, maxUploadConcurrency].
+func (s *Service) uploadConcurrency() int {
+	if s.MaxConcurrentUploads <= 0 {
+		return defaultUploadConcurrency
+	}
+	return min(s.MaxConcurrentUploads, maxUploadConcurrency)
+}
+
+// rewindSeeker seeks src to offset when it supports seeking. It reports
+// whether rewinding is possible so unseekable streams (the encrypted multipart
+// pipe) can skip retries instead of resending a consumed reader.
+func rewindSeeker(src io.Reader, offset int64) (io.Seeker, bool) {
+	seeker, ok := src.(io.Seeker)
+	if !ok {
+		return nil, false
+	}
+	if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
+		return nil, false
+	}
+	return seeker, true
 }
 
 func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) (int64, error) {
