@@ -375,6 +375,67 @@ func TestConcurrentEquivalentStartsCoalesceAndConflictIsTyped(t *testing.T) {
 	}
 }
 
+// TestConcurrentStatusAndOpenDuringWritableStartDoNotRaceSessionFields pauses
+// runStart right where it publishes active.writer and active.attachment while
+// other goroutines hammer Status/Open, so `go test -race` can catch any access
+// to those session fields that is not synchronized through controller.mu.
+func TestConcurrentStatusAndOpenDuringWritableStartDoNotRaceSessionFields(t *testing.T) {
+	t.Parallel()
+
+	writerEntered := make(chan struct{})
+	writerRelease := make(chan struct{})
+	writers := &fakeWriterBuilder{
+		session: &fakeWriterSession{},
+		entered: writerEntered,
+		release: writerRelease,
+	}
+	attachEntered := make(chan struct{})
+	attachRelease := make(chan struct{})
+	connector := &fakeConnector{attachEntered: attachEntered, attachRelease: attachRelease}
+	endpoint := &fakeEndpoint{endpoint: testEndpoint}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{content: &fakeContent{}},
+		Writers:     writers,
+		Endpoint:    endpoint,
+		Connector:   connector,
+	})
+
+	stop := make(chan struct{})
+	var pollers sync.WaitGroup
+	for range 8 {
+		pollers.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = controller.Status()
+					_ = controller.Open(context.Background())
+				}
+			}
+		})
+	}
+
+	started := make(chan startResult, 1)
+	go func() {
+		status, err := controller.Start(context.Background(), personalDrive(), StartOptions{})
+		started <- startResult{status: status, err: err}
+	}()
+
+	<-writerEntered
+	close(writerRelease)
+	<-attachEntered
+	close(attachRelease)
+
+	result := <-started
+	close(stop)
+	pollers.Wait()
+
+	if result.err != nil || result.status.Phase != PhaseMounted {
+		t.Fatalf("Start() = (%#v, %v), want a mounted status", result.status, result.err)
+	}
+}
+
 func TestStartAttachFailureRollsBackAndSanitizesPublicErrors(t *testing.T) {
 	t.Parallel()
 
@@ -1158,6 +1219,8 @@ type fakeWriterBuilder struct {
 	fs         *mountfs.FS
 	buildErr   error
 	buildCalls int
+	entered    chan struct{}
+	release    <-chan struct{}
 }
 
 type fakeMountKeyLeaser struct {
@@ -1187,13 +1250,23 @@ func (lease *fakeMountKeyLease) Close() {
 	clear(lease.key)
 }
 
-func (builder *fakeWriterBuilder) Build(_ context.Context, drive Drive, fs *mountfs.FS, _ MountKeyLease) (WriteSession, error) {
+func (builder *fakeWriterBuilder) Build(ctx context.Context, drive Drive, fs *mountfs.FS, _ MountKeyLease) (WriteSession, error) {
 	builder.mu.Lock()
-	defer builder.mu.Unlock()
-	builder.events.add("writer.build")
 	builder.drive = drive
 	builder.fs = fs
 	builder.buildCalls++
+	builder.mu.Unlock()
+	builder.events.add("writer.build")
+	if builder.entered != nil {
+		close(builder.entered)
+	}
+	if builder.release != nil {
+		select {
+		case <-builder.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return builder.session, builder.buildErr
 }
 

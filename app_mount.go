@@ -62,6 +62,10 @@ type appMountController interface {
 	Close(context.Context) error
 }
 
+type appAggregateMountController interface {
+	StartDrives(context.Context, []mountcontroller.Drive, mountcontroller.StartOptions) (mountcontroller.Status, error)
+}
+
 // MountView is the capability-free mount state exposed to the webview. The
 // private WebDAV endpoint never crosses the Go/Wails boundary.
 type MountView struct {
@@ -88,6 +92,32 @@ type MountDriveView struct {
 // pins this immutable drive record until the user disconnects it.
 func (a *App) MountDrive() (MountView, error) {
 	return a.mountDrive(mountcontroller.ModeAuto)
+}
+
+// MountDrives attaches an explicit selection inside one TDrive volume. The
+// client supplies IDs only; titles, kinds, and encryption state are resolved
+// from the authoritative local projection before the controller is called.
+func (a *App) MountDrives(channelIDs []int64) (MountView, error) {
+	release, err := a.acquireMountLifecycle(a.appContext())
+	if err != nil {
+		return MountView{}, fmt.Errorf("mount: wait for encryption transition: %w", err)
+	}
+	defer release()
+
+	controller, err := a.requireMountController()
+	if err != nil {
+		return MountView{}, err
+	}
+	aggregate, ok := controller.(appAggregateMountController)
+	if !ok {
+		return MountView{}, fmt.Errorf("mount: selected-drive mounting is unavailable")
+	}
+	drives, err := a.resolveMountDrives(channelIDs)
+	if err != nil {
+		return MountView{}, err
+	}
+	status, err := aggregate.StartDrives(a.appContext(), drives, mountcontroller.StartOptions{Mode: mountcontroller.ModeAuto})
+	return mountView(status), err
 }
 
 // MountDriveReadOnly is the explicit safety fallback for clients that do not
@@ -224,6 +254,55 @@ func (a *App) resolveActiveMountDrive() (mountcontroller.Drive, error) {
 		}
 	}
 	return mountcontroller.Drive{}, fmt.Errorf("mount: active drive is unavailable")
+}
+
+func (a *App) resolveMountDrives(channelIDs []int64) ([]mountcontroller.Drive, error) {
+	requested := append([]int64(nil), channelIDs...)
+	if a != nil && a.mountDrivesResolver != nil {
+		return a.mountDrivesResolver(requested)
+	}
+	if a == nil || a.engine == nil || a.engine.ChannelService() == nil {
+		return nil, fmt.Errorf("mount: backend is not ready")
+	}
+	if len(requested) == 0 || len(requested) > 256 {
+		return nil, fmt.Errorf("mount: select between 1 and 256 drives")
+	}
+	selected := make(map[int64]struct{}, len(requested))
+	for _, channelID := range requested {
+		if channelID <= 0 {
+			return nil, fmt.Errorf("mount: drive selection is invalid")
+		}
+		if _, exists := selected[channelID]; exists {
+			return nil, fmt.Errorf("mount: drive selection contains duplicates")
+		}
+		selected[channelID] = struct{}{}
+	}
+
+	channels, err := a.engine.ChannelService().ListChannels()
+	if err != nil {
+		return nil, fmt.Errorf("mount: list drives: %w", err)
+	}
+	drives := make([]mountcontroller.Drive, 0, len(selected))
+	for _, channel := range channels {
+		if _, exists := selected[channel.ChannelID]; !exists {
+			continue
+		}
+		encrypted, unlocked, err := a.mountDriveEncryptionStatus(channel.ChannelID, channel.Kind)
+		if err != nil {
+			return nil, err
+		}
+		drives = append(drives, mountcontroller.Drive{
+			ID:                 channel.ChannelID,
+			Title:              channel.Title,
+			Kind:               channel.Kind,
+			Encrypted:          encrypted,
+			EncryptionUnlocked: unlocked,
+		})
+	}
+	if len(drives) != len(selected) {
+		return nil, fmt.Errorf("mount: one or more selected drives are unavailable")
+	}
+	return drives, nil
 }
 
 func (a *App) mountDriveEncryptionStatus(channelID int64, kind string) (bool, bool, error) {

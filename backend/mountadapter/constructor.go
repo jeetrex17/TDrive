@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 
 	"TDrive/backend/mountfs"
 	"TDrive/backend/mountwrite"
@@ -81,12 +82,16 @@ func New(ctx context.Context, config Config) (*Session, error) {
 		encryptWrites:  config.Policy.Encrypted,
 		masterKeys:     config.MasterKeys,
 	}
+	slog.Info("mountadapter: session constructed, recovering journal", "drive_id", config.DriveID, "encrypted", config.Policy.Encrypted)
 	report, err := engine.Recover(ctx)
 	session.recoveryReport = report
 	if err != nil {
+		slog.Error("mountadapter: journal recovery failed", "drive_id", config.DriveID, "error", err)
 		_ = session.Close(context.Background())
 		return nil, err
 	}
+	slog.Info("mountadapter: journal recovery completed", "drive_id", config.DriveID,
+		"examined", report.Examined, "completed", report.Completed, "pending", report.Pending, "aborted", report.Aborted, "failed", report.Failed)
 	return session, nil
 }
 

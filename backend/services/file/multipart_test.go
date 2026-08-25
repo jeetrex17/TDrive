@@ -24,7 +24,7 @@ func bigBody(n int) []byte {
 }
 
 func TestMultipartRoundTripPlain(t *testing.T) {
-	svc, db, _, _ := newTestService(t)
+	svc, db, fakeTG, _ := newTestService(t)
 	svc.MaxUploadBytes = 1000 // force splitting above 1000 stored bytes
 
 	body := bigBody(3503) // -> 4 parts (1000,1000,1000,503)
@@ -43,6 +43,18 @@ func TestMultipartRoundTripPlain(t *testing.T) {
 	}
 	if len(parts) != 4 {
 		t.Fatalf("parts = %d, want 4", len(parts))
+	}
+
+	// Each part's Telegram attachment should show the original filename
+	// (suffixed for order, since 4 messages share it), not "part-00000".
+	sent := fakeTG.SentFiles()
+	if len(sent) != 4 {
+		t.Fatalf("sent files = %+v, want 4", sent)
+	}
+	for i, want := range []string{"movie.bin.part0", "movie.bin.part1", "movie.bin.part2", "movie.bin.part3"} {
+		if sent[i].Name != want {
+			t.Fatalf("part %d attachment name = %q, want %q", i, sent[i].Name, want)
+		}
 	}
 
 	savePath := filepath.Join(t.TempDir(), "out.bin")

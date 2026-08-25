@@ -157,6 +157,13 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.reads = e.newReadService()
 	e.media = e.newMediaService()
 	e.syncEngine = tdsync.NewEngine(backend.DB, e.tg, peerResolverFn(e.ResolvePeer))
+	e.syncEngine.EmitTomb = func(channelID int64, fileMsgID int64) error {
+		_, err := e.EmitAndProject(channelID, projection.Op{
+			Type: projection.OpTomb,
+			Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, fileMsgID),
+		})
+		return err
+	}
 	e.lifecycle = e.newLifecycleService()
 	e.users = e.newUserService()
 	e.startLiveSync(liveActivity)

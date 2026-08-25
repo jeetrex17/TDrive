@@ -63,6 +63,12 @@ export interface MountedDrive {
     kind: MountedDriveKind;
 }
 
+export interface MountableDrive {
+    id: number;
+    title: string;
+    kind: 'personal' | 'shared';
+}
+
 /** Capability-free mount state safe to render in the desktop UI. */
 export interface MountStatusView {
     phase: MountPhase;

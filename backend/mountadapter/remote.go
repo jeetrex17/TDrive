@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -98,14 +99,18 @@ func (remote *TelegramRemote) UploadHidden(ctx context.Context, request mountwri
 	if remote == nil || source == nil || request.DriveID != remote.driveID {
 		return mountwrite.RemoteBody{}, mountwrite.ErrInvalidRequest
 	}
+	slog.Debug("mountadapter: TelegramRemote.UploadHidden", "operation_id", request.OperationID, "plaintext_size", request.PlaintextSize, "stored_size", request.StoredSize, "encrypted", request.Encrypted)
 	body, err := remote.files.UploadHidden(ctx, request.DriveID, hiddenUploadRequest(request), source)
 	mapped := remoteBodyFromHidden(request, body)
 	if err != nil {
 		if errors.Is(err, tgclient.ErrSendOutcomeUnknown) || errors.Is(err, fileservice.ErrHiddenReceiptRecoveryRequired) {
+			slog.Warn("mountadapter: UploadHidden outcome unknown, will need reconciliation", "operation_id", request.OperationID, "error", err)
 			return mapped, errors.Join(mountwrite.ErrUploadOutcomeUnknown, err)
 		}
+		slog.Warn("mountadapter: UploadHidden failed", "operation_id", request.OperationID, "error", err)
 		return mapped, err
 	}
+	slog.Debug("mountadapter: UploadHidden succeeded", "operation_id", request.OperationID, "part_count", body.PartCount, "upload_uuid", body.UploadUUID)
 	return mapped, nil
 }
 
@@ -148,10 +153,15 @@ func (remote *TelegramRemote) DiscardHidden(ctx context.Context, operationID str
 	if remote == nil {
 		return mountwrite.ErrInvalidRequest
 	}
+	slog.Debug("mountadapter: TelegramRemote.DiscardHidden", "operation_id", operationID, "has_receipt", body != nil)
 	if body == nil {
-		return remote.files.DiscardHiddenOperation(ctx, remote.driveID, operationID)
+		err := remote.files.DiscardHiddenOperation(ctx, remote.driveID, operationID)
+		if err != nil {
+			slog.Warn("mountadapter: DiscardHiddenOperation failed", "operation_id", operationID, "error", err)
+		}
+		return err
 	}
-	return remote.files.DiscardHiddenReceipt(ctx, remote.driveID, operationID, fileservice.HiddenBody{
+	err := remote.files.DiscardHiddenReceipt(ctx, remote.driveID, operationID, fileservice.HiddenBody{
 		UploadUUID:    body.UploadUUID,
 		PartCount:     body.PartCount,
 		StoredSize:    body.StoredSize,
@@ -159,22 +169,33 @@ func (remote *TelegramRemote) DiscardHidden(ctx context.Context, operationID str
 		Encrypted:     body.Encrypted,
 		MessageIDs:    append([]int64(nil), body.MessageIDs...),
 	})
+	if errors.Is(err, fileservice.ErrHiddenReceiptInvalid) {
+		slog.Warn("mountadapter: DiscardHiddenReceipt found an invalid receipt", "operation_id", operationID, "error", err)
+		return errors.Join(mountwrite.ErrInvalidRequest, err)
+	}
+	if err != nil {
+		slog.Warn("mountadapter: DiscardHiddenReceipt failed", "operation_id", operationID, "error", err)
+	}
+	return err
 }
 
 func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.CommitRequest) (mountwrite.MutationResult, error) {
 	if remote == nil || request.Mutation.DriveID != remote.driveID {
 		return mountwrite.MutationResult{}, mountwrite.ErrInvalidRequest
 	}
+	slog.Debug("mountadapter: TelegramRemote.Commit starting", "operation_id", request.OperationID, "kind", request.Mutation.Kind, "content_length", request.Mutation.ContentLength)
 	now := request.CommitTime.UTC()
 	if now.IsZero() {
 		now = remote.now().UTC()
 	}
 	op, err := buildProjectionOperation(request, now)
 	if err != nil {
+		slog.Warn("mountadapter: Commit failed to build projection operation", "operation_id", request.OperationID, "error", err)
 		return mountwrite.MutationResult{}, err
 	}
 	peer, err := remote.peers.ResolvePeer(ctx, request.Mutation.DriveID)
 	if err != nil {
+		slog.Warn("mountadapter: Commit failed to resolve peer", "operation_id", request.OperationID, "error", err)
 		return mountwrite.MutationResult{}, err
 	}
 	randomID, err := tgclient.StableRandomID(request.OperationID, "commit")
@@ -193,14 +214,18 @@ func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.Com
 		uncertain.CommitRef = strconv.FormatInt(msgID, 10)
 	}
 	if err != nil {
+		slog.Warn("mountadapter: Commit send failed, outcome unknown", "operation_id", request.OperationID, "msg_id", msgID, "error", err)
 		return uncertain, mountwrite.ErrCommitOutcomeUnknown
 	}
+	slog.Debug("mountadapter: Commit control message sent", "operation_id", request.OperationID, "msg_id", msgID, "op_type", op.Type)
 	if request.PersistCommitRef != nil {
 		if err := request.PersistCommitRef(uncertain.CommitRef); err != nil {
+			slog.Error("mountadapter: Commit failed to persist commit ref", "operation_id", request.OperationID, "msg_id", msgID, "error", err)
 			return uncertain, mountwrite.ErrCommitOutcomeUnknown
 		}
 	}
 	if err := remote.project(ctx, request.Mutation.DriveID, msgID, op, header); err != nil {
+		slog.Warn("mountadapter: Commit failed to apply projection synchronously", "operation_id", request.OperationID, "msg_id", msgID, "error", err)
 		return uncertain, mountwrite.ErrCommitOutcomeUnknown
 	}
 	operation, found, err := projection.ProjectionOperationByID(remote.db, request.Mutation.DriveID, request.OperationID)
@@ -208,18 +233,22 @@ func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.Com
 		return uncertain, mountwrite.ErrCommitOutcomeUnknown
 	}
 	if !found {
+		slog.Warn("mountadapter: Commit projected but operation record not found afterward", "operation_id", request.OperationID, "msg_id", msgID)
 		return uncertain, mountwrite.ErrCommitOutcomeUnknown
 	}
 	if operation.Outcome == projection.OperationRejected {
+		slog.Warn("mountadapter: Commit rejected by projection", "operation_id", request.OperationID, "msg_id", msgID, "reason", operation.Error)
 		return mountwrite.MutationResult{}, mapRejectedProjectionError(operation.Error)
 	}
 	if operation.Outcome != projection.OperationApplied {
+		slog.Warn("mountadapter: Commit projection outcome inconclusive", "operation_id", request.OperationID, "msg_id", msgID, "outcome", operation.Outcome)
 		return uncertain, mountwrite.ErrCommitOutcomeUnknown
 	}
 	result, err := remote.resultFor(request, msgID)
 	if err != nil {
 		return uncertain, mountwrite.ErrCommitOutcomeUnknown
 	}
+	slog.Debug("mountadapter: Commit applied", "operation_id", request.OperationID, "msg_id", msgID, "object_id", result.ObjectID, "revision", result.Revision, "created", result.Created)
 	return result, nil
 }
 

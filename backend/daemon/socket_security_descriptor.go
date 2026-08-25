@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 )
@@ -30,9 +31,12 @@ func pipeSecurityDescriptorForSID(sid string) (string, error) {
 	return "D:P(A;;GA;;;" + sid + ")", nil
 }
 
+// validateSIDString never logs sid itself, only that validation failed --
+// a Windows SID identifies the local user/machine account.
 func validateSIDString(sid string) error {
 	parts := strings.Split(sid, "-")
 	if len(parts) < 4 || parts[0] != "S" {
+		slog.Warn("daemon: SID validation failed, malformed")
 		return fmt.Errorf("malformed SID")
 	}
 

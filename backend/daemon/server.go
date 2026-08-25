@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"TDrive/backend/applog"
 	"TDrive/backend/core"
 	"TDrive/backend/processlock"
 )
@@ -102,6 +104,8 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 			s.warnf("daemon: release lock: %v\n", err)
 		}
 	}()
+	applog.Init()
+	defer applog.Close()
 
 	engine, err := core.New(runCtx, cfg.CoreConfig)
 	if err != nil {
@@ -138,13 +142,16 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 		_ = ln.Close()
 	}()
 
+	slog.Info("daemon: listening")
 	s.warnf("TDrive daemon listening on %s\n", socketPath)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if runCtx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				slog.Info("daemon: listener closed, shutting down")
 				return nil
 			}
+			slog.Warn("daemon: accept failed", "error", err)
 			s.warnf("daemon: accept: %v\n", err)
 			continue
 		}
@@ -157,7 +164,11 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 }
 
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
-	defer func() { _ = conn.Close() }()
+	slog.Debug("daemon: client connection accepted")
+	defer func() {
+		slog.Debug("daemon: client connection closed")
+		_ = conn.Close()
+	}()
 
 	reader := bufio.NewReader(conn)
 	enc := json.NewEncoder(conn)
@@ -245,6 +256,7 @@ func (s *Server) handleStreamingRequest(ctx context.Context, req Request, writeF
 	if err := validateRequest(req); err != nil {
 		return writeFrame(ErrorResponse(req.ID, err))
 	}
+	slog.Debug("daemon: streaming command started", "command", req.Command)
 
 	events := s.subscribeEvents()
 	defer s.unsubscribeEvents(events)
@@ -290,6 +302,9 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 	if err := validateRequest(req); err != nil {
 		return ErrorResponse(req.ID, err)
 	}
+	// req.Payload is never logged: several commands (auth.setup, auth.submit_password,
+	// vault.unlock) carry credentials in it. Only the command name is safe to log.
+	slog.Debug("daemon: dispatching command", "command", req.Command)
 
 	switch req.Command {
 	case CommandStatus:
@@ -307,6 +322,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
+		slog.Info("daemon: shutdown requested")
 		go s.stopOnce.Do(s.stop)
 		return frame
 	case CommandAuthSetup:

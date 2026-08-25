@@ -5,6 +5,7 @@ package mountos
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -107,24 +108,31 @@ func (c *windowsConnector) Attach(parent context.Context, config Config) (Attach
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// validated.endpoint and the "remote" UNC strings returned by
+	// c.remoteFor/windowsRemoteFor embed the loopback capability token and
+	// must never be logged. Only validated.drive (e.g. "T:") is safe.
 	drives, err := c.logicalDrives()
 	if err != nil {
 		return Attachment{}, ErrAttachFailed
 	}
 	if drives&(uint32(1)<<uint(validated.drive[0]-'A')) != 0 {
+		slog.Warn("mountos: windows attach rejected, drive letter occupied", "drive", validated.drive)
 		return Attachment{}, ErrDriveOccupied
 	}
 	if err := c.prepareWebClient(ctx); err != nil {
 		if ctx.Err() != nil {
 			return Attachment{}, ctx.Err()
 		}
+		slog.Warn("mountos: windows WebClient service unavailable", "drive", validated.drive, "error", err)
 		return Attachment{}, ErrWindowsWebDAVUnavailable
 	}
 	netExecutable, _, err := c.systemPaths()
 	if err != nil {
 		return Attachment{}, ErrAttachFailed
 	}
+	slog.Debug("mountos: windows attaching", "drive", validated.drive, "mode", validated.mode)
 	if err := c.runner.Run(ctx, windowsAttachPlan(netExecutable, validated.drive, validated.endpoint)); err != nil {
+		slog.Warn("mountos: windows net use failed", "drive", validated.drive, "error", err)
 		c.rollbackUnknown(parent, netExecutable, validated.drive, validated.endpoint)
 		if ctx.Err() != nil {
 			return Attachment{}, ctx.Err()
@@ -141,8 +149,10 @@ func (c *windowsConnector) Attach(parent context.Context, config Config) (Attach
 		if errors.Is(err, ErrAttachmentChanged) {
 			// A concurrent actor or provider anomaly rebound the drive. It is not
 			// ours, so never attempt to remove it.
+			slog.Warn("mountos: windows drive was rebound by another actor during attach", "drive", validated.drive)
 			return Attachment{}, ErrAttachmentChanged
 		}
+		slog.Warn("mountos: windows attach verification failed", "drive", validated.drive, "error", err)
 		if remote != "" && windowsRemoteMatchesEndpoint(remote, validated.endpoint) {
 			c.rollback(parent, netExecutable, validated.drive, remote)
 		} else {
@@ -153,6 +163,7 @@ func (c *windowsConnector) Attach(parent context.Context, config Config) (Attach
 
 	id := c.nextID()
 	c.active[validated.drive] = windowsActive{id: id, remote: remote}
+	slog.Info("mountos: windows attached", "drive", validated.drive, "mode", validated.mode)
 	return Attachment{
 		owner:    c.owner,
 		id:       id,
@@ -221,6 +232,7 @@ func (c *windowsConnector) Detach(parent context.Context, attachment Attachment)
 		return ErrDetachFailed
 	}
 	if err := c.runner.Run(ctx, windowsDetachPlan(netExecutable, drive)); err != nil {
+		slog.Warn("mountos: windows net use delete failed", "drive", drive, "error", err)
 		return ErrDetachFailed
 	}
 	_, mapped, err = c.remoteFor(drive)
@@ -228,6 +240,7 @@ func (c *windowsConnector) Detach(parent context.Context, attachment Attachment)
 		return ErrVerificationFailed
 	}
 	delete(c.active, drive)
+	slog.Info("mountos: windows detached", "drive", drive)
 	return nil
 }
 

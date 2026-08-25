@@ -5,6 +5,7 @@ package mountos
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,17 +99,23 @@ func (c *darwinConnector) Attach(parent context.Context, config Config) (Attachm
 		}
 	}()
 
+	// Never log validated.endpoint/config.Endpoint or inspection.source: the
+	// endpoint is a loopback URL carrying this mount's bearer capability.
+	slog.Debug("mountos: darwin attaching", "label", validated.label, "mode", validated.mode, "target", target)
 	if err := c.runner.Run(ctx, darwinAttachPlan(validated.endpoint, validated.label, target, validated.mode)); err != nil {
+		slog.Warn("mountos: darwin mount_webdav failed", "target", target, "error", err)
 		return Attachment{}, ErrAttachFailed
 	}
 	inspection, err := c.inspectMount(target)
 	if err != nil || !inspection.mounted || !darwinModeMatchesInspection(validated.mode, inspection) || !darwinSourceMatchesEndpoint(inspection.source, validated.endpoint) {
+		slog.Warn("mountos: darwin attach verification failed", "target", target, "error", err)
 		return Attachment{}, ErrVerificationFailed
 	}
 
 	id := c.nextID()
 	c.active[target] = darwinActive{id: id, endpoint: validated.endpoint, mode: validated.mode}
 	succeeded = true
+	slog.Info("mountos: darwin attached", "target", target, "mode", validated.mode)
 	return Attachment{
 		owner:    c.owner,
 		id:       id,
@@ -140,6 +147,7 @@ func (c *darwinConnector) Detach(parent context.Context, attachment Attachment) 
 	}
 	if inspection.mounted {
 		if err := c.runner.Run(ctx, darwinDetachPlan(attachment.location)); err != nil {
+			slog.Warn("mountos: darwin diskutil unmount failed", "target", attachment.location, "error", err)
 			return ErrDetachFailed
 		}
 		inspection, err = c.inspectMount(attachment.location)
@@ -151,6 +159,7 @@ func (c *darwinConnector) Detach(parent context.Context, attachment Attachment) 
 		return ErrDetachFailed
 	}
 	delete(c.active, attachment.location)
+	slog.Info("mountos: darwin detached", "target", attachment.location)
 	return nil
 }
 

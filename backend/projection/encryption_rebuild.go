@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // ErrEncryptionConfigReplayInvalid means the canonical encryption-policy
@@ -30,6 +31,10 @@ func RebuildEncryptionConfigFromReplay(db *sql.DB, channelID int64) (bool, error
 	if db == nil || channelID <= 0 {
 		return false, fmt.Errorf("%w: database and channel are required", ErrEncryptionConfigReplayInvalid)
 	}
+	// Logging here deliberately never includes row.rawHeader or the parsed Op:
+	// an OpEncConfig header carries the same KDF salt / wrapped master key /
+	// key check fields as the encryption table row itself.
+	slog.Debug("projection: rebuilding encryption config from replay", "channel_id", channelID)
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -45,11 +50,13 @@ func RebuildEncryptionConfigFromReplay(db *sql.DB, channelID int64) (bool, error
 		// A derived row without canonical replay is not trustworthy, but it may
 		// be recoverable legacy state. Leave it intact and let the policy layer
 		// require an authoritative refresh rather than destructively erasing it.
+		slog.Debug("projection: no encryption-policy replay history found", "channel_id", channelID)
 		return false, nil
 	}
 	ops := make([]Op, 0, len(replay))
 	for _, row := range replay {
 		if row.tampered || HashHeader(row.rawHeader) != row.storedHash {
+			slog.Error("projection: encryption replay integrity check failed", "channel_id", channelID, "msg_id", row.msgID)
 			return false, fmt.Errorf("%w: integrity check failed for msg %d", ErrEncryptionConfigReplayInvalid, row.msgID)
 		}
 		op, parseErr := Parse(row.rawHeader)
@@ -70,6 +77,7 @@ func RebuildEncryptionConfigFromReplay(db *sql.DB, channelID int64) (bool, error
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("%w: commit: %v", ErrEncryptionConfigReplayInvalid, err)
 	}
+	slog.Info("projection: encryption config rebuilt from replay", "channel_id", channelID, "ops_replayed", len(ops))
 	return len(replay) > 0, nil
 }
 

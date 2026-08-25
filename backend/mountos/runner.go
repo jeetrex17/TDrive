@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os/exec"
 	"time"
 )
@@ -26,23 +27,33 @@ type commandOutputRunner interface {
 type execCommandRunner struct{}
 
 func (execCommandRunner) Run(ctx context.Context, plan commandPlan) error {
+	// Never log plan.Args: for the mount/unmount commands this package builds,
+	// they carry the loopback capability URL (see commandPlan.Args callers in
+	// plans.go), which is a bearer credential for this mount's endpoint.
+	slog.Debug("mountos: running command", "path", plan.Path)
 	command := exec.CommandContext(ctx, plan.Path, plan.Args...)
 	// OS command output can repeat the capability URL. It is neither retained
 	// nor surfaced, which also keeps output memory strictly bounded.
 	command.Stdout = io.Discard
 	command.Stderr = io.Discard
-	return command.Run()
+	err := command.Run()
+	if err != nil {
+		slog.Debug("mountos: command failed", "path", plan.Path, "error", err)
+	}
+	return err
 }
 
 func (execCommandRunner) Output(ctx context.Context, plan commandPlan, limit int) ([]byte, error) {
 	if limit <= 0 {
 		return nil, errors.New("invalid output limit")
 	}
+	slog.Debug("mountos: running command for output", "path", plan.Path, "limit", limit)
 	output := &limitedBuffer{remaining: limit}
 	command := exec.CommandContext(ctx, plan.Path, plan.Args...)
 	command.Stdout = output
 	command.Stderr = io.Discard
 	if err := command.Run(); err != nil {
+		slog.Debug("mountos: command for output failed", "path", plan.Path, "error", err)
 		return nil, err
 	}
 	return output.bytes(), nil

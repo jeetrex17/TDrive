@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -122,7 +123,11 @@ var (
 	// ErrHiddenReceiptRecoveryRequired means Telegram returned a positive send
 	// receipt but its local ownership projection could not be made durable.
 	// Mount cleanup must reconcile it from the unchanged staged source.
-	ErrHiddenReceiptRecoveryRequired     = errors.New("hidden upload receipt recovery required")
+	ErrHiddenReceiptRecoveryRequired = errors.New("hidden upload receipt recovery required")
+	// ErrHiddenReceiptInvalid marks a cleanup receipt that failed ownership or
+	// structural validation. Callers must fail closed instead of retrying it as
+	// a transient Telegram outage.
+	ErrHiddenReceiptInvalid              = errors.New("hidden upload cleanup receipt invalid")
 	errPreviewNotFound                   = errors.New("File not found")
 	errPreviewNotSupported               = errors.New("Not a supported image")
 	errPreviewTooLarge                   = errors.New("File too large")
@@ -142,6 +147,7 @@ var previewMimeTypes = map[string]string{
 }
 
 func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool) ([]Metadata, error) {
+	slog.Debug("file: upload batch starting", "channel_id", channelID, "files", len(filePaths), "encrypt", encrypt)
 	if len(filePaths) != len(parentIDs) {
 		return nil, fmt.Errorf("filepaths and parentIDs length mismatch")
 	}
@@ -269,8 +275,10 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	}
 
 	if failed > 0 {
+		slog.Warn("file: upload batch completed with failures", "channel_id", channelID, "succeeded", len(uploadedFiles), "failed", failed)
 		return uploadedFiles, fmt.Errorf("%d uploads failed", failed)
 	}
+	slog.Debug("file: upload batch completed", "channel_id", channelID, "succeeded", len(uploadedFiles))
 	return uploadedFiles, nil
 }
 
@@ -284,6 +292,7 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 
 	plainFile, err := os.Open(filePath)
 	if err != nil {
+		slog.Error("file: upload open source failed", "channel_id", channelID, "name", filename, "error", err)
 		return Metadata{}, projection.Op{}, "", err
 	}
 	defer plainFile.Close()
@@ -293,7 +302,14 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 		return Metadata{}, projection.Op{}, "", err
 	}
 	plaintextSize := info.Size()
-	return s.uploadVisibleSource(ctx, uploadID, plainFile, filename, plaintextSize, parentID, channelID, wantEncrypted)
+	slog.Debug("file: uploading", "channel_id", channelID, "name", filename, "size", plaintextSize, "encrypt", wantEncrypted, "parent_id", parentID)
+	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, plainFile, filename, plaintextSize, parentID, channelID, wantEncrypted)
+	if err != nil {
+		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
+	} else {
+		slog.Debug("file: upload succeeded", "channel_id", channelID, "name", filename, "msg_id", meta.MsgID, "stored_size", meta.Size)
+	}
+	return meta, op, header, err
 }
 
 // uploadVisibleSource is the compatibility path used by the existing GUI/CLI
@@ -509,7 +525,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		}
 		partCaption := projection.Format(partOp)
 		partBase := sentBytes
-		result, err := s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), fmt.Sprintf("part-%05d", i), partCaption, partLen, func(sent, total int64) {
+		result, err := s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), partAttachmentName(filename, i, numParts), partCaption, partLen, func(sent, total int64) {
 			progressMu.Lock()
 			defer progressMu.Unlock()
 			if time.Since(lastProgress) <= 100*time.Millisecond {
@@ -615,7 +631,15 @@ func (s *Service) deleteMessagesChunked(ctx context.Context, peer tgclient.Input
 	return firstErr
 }
 
-func (s *Service) Download(ctx context.Context, channelID int64, msgID int, lookupID int, chooseSavePath ChooseSavePathFunc) DownloadResult {
+func (s *Service) Download(ctx context.Context, channelID int64, msgID int, lookupID int, chooseSavePath ChooseSavePathFunc) (result DownloadResult) {
+	slog.Debug("file: download starting", "channel_id", channelID, "msg_id", msgID, "lookup_id", lookupID)
+	defer func() {
+		if result.Status == "error" {
+			slog.Error("file: download failed", "channel_id", channelID, "msg_id", msgID, "message", result.Message)
+		} else {
+			slog.Debug("file: download completed", "channel_id", channelID, "msg_id", msgID, "status", result.Status)
+		}
+	}()
 	if err := s.ready(); err != nil {
 		return DownloadResult{Status: "error", Message: err.Error()}
 	}
@@ -1110,7 +1134,14 @@ func (s *Service) requireEncryptedFileKey(channelID int64, msgID int) error {
 	return nil
 }
 
-func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newName string) error {
+func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newName string) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Error("file: rename failed", "channel_id", channelID, "msg_id", msgID, "error", err)
+		} else {
+			slog.Debug("file: renamed", "channel_id", channelID, "msg_id", msgID, "new_name", newName)
+		}
+	}()
 	if err := fileContextError(ctx); err != nil {
 		return err
 	}
@@ -1139,11 +1170,18 @@ func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newNam
 		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
 		Name: newName,
 	}
-	_, err := s.emit(ctx, channelID, op)
+	_, err = s.emit(ctx, channelID, op)
 	return err
 }
 
-func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParentID string) error {
+func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParentID string) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Error("file: move failed", "channel_id", channelID, "msg_id", msgID, "error", err)
+		} else {
+			slog.Debug("file: moved", "channel_id", channelID, "msg_id", msgID, "new_parent_id", newParentID)
+		}
+	}()
 	if err := fileContextError(ctx); err != nil {
 		return err
 	}
@@ -1179,7 +1217,14 @@ func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParen
 	return err
 }
 
-func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) error {
+func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Error("file: delete failed", "channel_id", channelID, "msg_id", msgID, "error", err)
+		} else {
+			slog.Debug("file: deleted (tombstoned)", "channel_id", channelID, "msg_id", msgID)
+		}
+	}()
 	if err := fileContextError(ctx); err != nil {
 		return err
 	}

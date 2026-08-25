@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 )
@@ -36,7 +37,19 @@ var (
 	ErrBadOp         = errors.New("projection: malformed op")
 )
 
-func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) error {
+// ApplyOp is the single writer to files/folders (see the package invariants
+// above). Every application result -- success or failure, for every op type
+// -- is logged here once rather than in each individual applyXxx helper, so
+// this one call site is where "what did projection do with this message"
+// is always visible.
+func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Warn("projection: apply op failed", "channel_id", channelID, "msg_id", msgID, "op_type", op.Type, "error", err)
+		} else {
+			slog.Debug("projection: applied op", "channel_id", channelID, "msg_id", msgID, "op_type", op.Type)
+		}
+	}()
 	if isVersionedWritableOp(op.Type) {
 		if err := validateVersionedWritableOp(op); err != nil {
 			return err
@@ -46,6 +59,7 @@ func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) err
 			return err
 		}
 		if seen {
+			slog.Debug("projection: op already applied, skipping (idempotent replay)", "channel_id", channelID, "msg_id", msgID, "op_type", op.Type)
 			return nil
 		}
 		var applyErr error

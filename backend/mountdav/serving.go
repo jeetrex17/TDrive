@@ -19,6 +19,8 @@ type readApplication struct {
 	fs             *FileSystem
 	lockSystem     webdav.LockSystem
 	writer         WriteCoordinator
+	resume         *resumeStore
+	pendingCreates *pendingCreateStore
 }
 
 func (application *readApplication) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -35,6 +37,8 @@ func (application *readApplication) ServeHTTP(response http.ResponseWriter, requ
 		application.serveWritable(response, request, application.serveMove)
 	case http.MethodDelete:
 		application.serveWritable(response, request, application.serveDelete)
+	case "PROPPATCH":
+		application.serveWritable(response, request, application.serveProppatch)
 	case "LOCK":
 		application.serveWritable(response, request, application.serveLock)
 	case "UNLOCK":
@@ -198,6 +202,14 @@ func (content *metadataReadSeeker) Seek(offset int64, whence int) (int64, error)
 }
 
 func serveFileError(response http.ResponseWriter, err error) {
+	status := fileErrorStatus(err)
+	if status == http.StatusServiceUnavailable {
+		response.Header().Set("Retry-After", serverBusyRetrySeconds)
+	}
+	writeHTTPError(response, status)
+}
+
+func fileErrorStatus(err error) int {
 	status := http.StatusInternalServerError
 	switch {
 	case os.IsNotExist(err):
@@ -205,12 +217,11 @@ func serveFileError(response http.ResponseWriter, err error) {
 	case errors.Is(err, os.ErrPermission), errors.Is(err, mountfs.ErrAccessDenied):
 		status = http.StatusForbidden
 	case errors.Is(err, mountfs.ErrContentUnavailable):
-		response.Header().Set("Retry-After", serverBusyRetrySeconds)
 		status = http.StatusServiceUnavailable
 	case errors.Is(err, os.ErrInvalid):
 		status = http.StatusBadRequest
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		status = http.StatusRequestTimeout
 	}
-	writeHTTPError(response, status)
+	return status
 }

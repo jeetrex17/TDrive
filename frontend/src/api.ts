@@ -12,8 +12,10 @@ import {
     GetFileList as rawGetFileList,
     GetMediaStats as rawGetMediaStats,
     HideNativeSeekThumbnail as rawHideNativeSeekThumbnail,
+    ListChannels as rawListChannels,
     ListMedia as rawListMedia,
     MountDrive as rawMountDrive,
+    MountDrives as rawMountDrives,
     MountStatus as rawMountStatus,
     MoveNativeSeekThumbnail as rawMoveNativeSeekThumbnail,
     NativeMediaCommand as rawNativeMediaCommand,
@@ -38,6 +40,7 @@ import type {
     SearchHitType,
     MountedDrive,
     MountedDriveKind,
+    MountableDrive,
     MountMode,
     MountPhase,
     MountStatusView,
@@ -155,8 +158,44 @@ export function normalizeMountStatus(value: unknown): MountStatusView {
     };
 }
 
+/** Normalize the channel list before exposing it to the mount picker. */
+export function normalizeMountableDrives(value: unknown): MountableDrive[] {
+    if (!Array.isArray(value)) return [];
+
+    const seen = new Set<number>();
+    const drives = value.flatMap((entry): MountableDrive[] => {
+        const raw = asRecord(entry);
+        const id = Number(raw.id ?? 0);
+        const kind = raw.kind === 'personal' || raw.kind === 'shared' ? raw.kind : null;
+        if (!Number.isSafeInteger(id) || id <= 0 || !kind || seen.has(id)) return [];
+
+        seen.add(id);
+        return [{
+            id,
+            title: boundedText(raw.title, 160) || (kind === 'personal' ? 'Personal' : 'Shared drive'),
+            kind,
+        }];
+    });
+
+    return [...drives].sort((left, right) => {
+        if (left.kind === right.kind) return 0;
+        return left.kind === 'personal' ? -1 : 1;
+    });
+}
+
 export async function mountDrive(): Promise<MountStatusView> {
     return normalizeMountStatus(await rawMountDrive());
+}
+
+export async function listMountableDrives(): Promise<MountableDrive[]> {
+    return normalizeMountableDrives(await rawListChannels());
+}
+
+export async function mountDrives(channelIds: readonly number[]): Promise<MountStatusView> {
+    const selected = [...new Set(channelIds)]
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
+    if (selected.length === 0) throw new Error('Select at least one drive to mount.');
+    return normalizeMountStatus(await rawMountDrives(selected));
 }
 
 export async function getMountStatus(): Promise<MountStatusView> {

@@ -2,6 +2,7 @@ import { get, writable, type Readable } from 'svelte/store';
 import {
     getMountStatus,
     mountDrive,
+    mountDrives,
     openMountedDrive,
     safeMountError,
     unmountDrive,
@@ -10,6 +11,7 @@ import type { MountPhase, MountStatusView } from '../../types';
 
 export interface MountApi {
     mountDrive(): Promise<MountStatusView>;
+    mountDrives?(channelIds: readonly number[]): Promise<MountStatusView>;
     mountStatus(): Promise<MountStatusView>;
     openMountedDrive(): Promise<void>;
     unmountDrive(): Promise<MountStatusView>;
@@ -27,7 +29,7 @@ export interface MountNotice {
 
 export interface MountController extends Readable<MountStatusView> {
     refresh(): Promise<void>;
-    mount(): Promise<void>;
+    mount(channelIds?: readonly number[]): Promise<void>;
     open(): Promise<void>;
     disconnect(): Promise<void>;
 }
@@ -36,6 +38,7 @@ export type MountNotifier = (notice: MountNotice) => unknown;
 
 export const defaultMountApi: MountApi = {
     mountDrive,
+    mountDrives,
     mountStatus: getMountStatus,
     openMountedDrive,
     unmountDrive,
@@ -119,6 +122,12 @@ function encryptionPasswordRequired(error: unknown): boolean {
     return /encryption password required/i.test(message);
 }
 
+function normalizeChannelIds(channelIds: readonly number[] | undefined): number[] | null {
+    if (channelIds === undefined) return null;
+    return [...new Set(channelIds)]
+        .filter((id) => Number.isSafeInteger(id) && id > 0);
+}
+
 export function createMountController(
     api: MountApi = defaultMountApi,
     notify: MountNotifier = () => undefined,
@@ -175,9 +184,10 @@ export function createMountController(
         return tracked;
     }
 
-    function startMount(): Promise<void> {
+    function startMount(channelIds?: readonly number[]): Promise<void> {
         if (mutation) return mutation;
         if (get(state).mounted) return Promise.resolve();
+        const selectedIds = normalizeChannelIds(channelIds);
         revision += 1;
         state.update((current) => withPhase(current, 'mounting'));
         notify({
@@ -189,9 +199,15 @@ export function createMountController(
         });
         return trackMutation(async () => {
             try {
+                const requestMount = (): Promise<MountStatusView> => {
+                    if (selectedIds === null) return api.mountDrive();
+                    if (selectedIds.length === 0) throw new Error('Select at least one drive to mount.');
+                    if (!api.mountDrives) throw new Error('Mounting multiple drives is unavailable.');
+                    return api.mountDrives([...selectedIds]);
+                };
                 let result: MountStatusView;
                 try {
-                    result = await api.mountDrive();
+                    result = await requestMount();
                 } catch (error) {
                     if (!encryptionPasswordRequired(error) || !api.unlockEncryption) throw error;
                     const unlocked = await api.unlockEncryption();
@@ -207,7 +223,7 @@ export function createMountController(
                         });
                         return;
                     }
-                    result = await api.mountDrive();
+                    result = await requestMount();
                 }
                 if (!result.mounted) throw new Error(result.error || 'The drive did not mount.');
                 replace(result);

@@ -3,6 +3,7 @@ package mountcontroller
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"TDrive/backend/mountdav"
 )
@@ -27,6 +28,7 @@ func (endpoint *webDAVEndpoint) Start(ctx context.Context, config EndpointConfig
 	} else if config.Writer != nil {
 		return EndpointStatus{}, fmt.Errorf("%w: writer supplied for read-only mount", ErrInvalidConfiguration)
 	}
+	slog.Debug("mountcontroller: starting WebDAV endpoint", "drive_id", config.DriveID, "drive_title", config.DriveTitle, "writable", writable)
 	status, err := endpoint.server.Start(ctx, mountdav.StartConfig{
 		FS:           config.FS,
 		DriveID:      config.DriveID,
@@ -36,8 +38,10 @@ func (endpoint *webDAVEndpoint) Start(ctx context.Context, config EndpointConfig
 		Writer:       writer,
 	})
 	if err != nil {
+		slog.Warn("mountcontroller: WebDAV endpoint start failed", "drive_id", config.DriveID, "error", err)
 		return EndpointStatus{}, err
 	}
+	// status.URL is never logged: it carries the loopback capability token.
 	return EndpointStatus{Endpoint: status.URL}, nil
 }
 
@@ -47,5 +51,6 @@ func (endpoint *webDAVEndpoint) Health() EndpointHealth {
 }
 
 func (endpoint *webDAVEndpoint) Stop(ctx context.Context) error {
+	slog.Debug("mountcontroller: stopping WebDAV endpoint")
 	return endpoint.server.Stop(ctx)
 }

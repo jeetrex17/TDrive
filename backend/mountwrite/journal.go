@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -129,10 +130,13 @@ func (j *SQLiteJournal) Create(ctx context.Context, record JournalRecord) error 
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
+			slog.Debug("mountwrite: journal create rejected, operation already exists", "operation_id", record.OperationID)
 			return ErrOperationExists
 		}
+		slog.Error("mountwrite: journal create failed", "operation_id", record.OperationID, "error", err)
 		return fmt.Errorf("create mount write journal record: %w", err)
 	}
+	slog.Debug("mountwrite: journal record created", "operation_id", record.OperationID, "kind", record.Mutation.Kind, "state", record.State)
 	return nil
 }
 
@@ -165,6 +169,7 @@ func (j *SQLiteJournal) Transition(
 		return JournalRecord{}, ErrNotFound
 	}
 	if record.State != expected {
+		slog.Warn("mountwrite: journal transition conflict", "operation_id", operationID, "actual_state", record.State, "expected_state", expected, "target_state", next)
 		return JournalRecord{}, ErrJournalConflict
 	}
 	if err := ValidateTransition(expected, next); err != nil {
@@ -201,6 +206,7 @@ func (j *SQLiteJournal) Transition(
 		expected,
 	)
 	if err != nil {
+		slog.Error("mountwrite: journal transition failed", "operation_id", operationID, "from", expected, "to", next, "error", err)
 		return JournalRecord{}, fmt.Errorf("transition mount write journal record: %w", err)
 	}
 	affected, err := result.RowsAffected()
@@ -208,8 +214,10 @@ func (j *SQLiteJournal) Transition(
 		return JournalRecord{}, fmt.Errorf("inspect journal transition: %w", err)
 	}
 	if affected != 1 {
+		slog.Warn("mountwrite: journal transition raced, no rows affected", "operation_id", operationID, "from", expected, "to", next)
 		return JournalRecord{}, ErrJournalConflict
 	}
+	slog.Debug("mountwrite: journal transitioned", "operation_id", operationID, "from", expected, "to", next)
 	return cloneRecord(updated), nil
 }
 
@@ -232,6 +240,11 @@ func (j *SQLiteJournal) ListRecoverable(ctx context.Context) ([]JournalRecord, e
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate recoverable mount writes: %w", err)
+	}
+	if len(records) > 0 {
+		slog.Info("mountwrite: found journal records needing recovery on startup", "count", len(records))
+	} else {
+		slog.Debug("mountwrite: no journal records need recovery")
 	}
 	return records, nil
 }

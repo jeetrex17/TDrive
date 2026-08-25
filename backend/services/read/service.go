@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"TDrive/backend/projection"
@@ -167,6 +168,7 @@ func (s *Service) Search(channelID int64, query string, limit int) ([]SearchResu
 			})
 		}
 	}
+	slog.Debug("read: search completed", "channel_id", channelID, "results", len(results))
 	return results, nil
 }
 

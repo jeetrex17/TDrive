@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"unicode/utf8"
@@ -16,10 +17,10 @@ import (
 // FileSystem adapts a protocol-neutral mountfs.FS to x/net/webdav's
 // filesystem contract. Every mutating operation is denied unconditionally.
 type FileSystem struct {
-	fs *mountfs.FS
+	fs mountfs.ReadFilesystem
 }
 
-func NewFileSystem(fs *mountfs.FS) *FileSystem {
+func NewFileSystem(fs mountfs.ReadFilesystem) *FileSystem {
 	return &FileSystem{fs: fs}
 }
 
@@ -123,6 +124,7 @@ func mapMountFSError(operation, name string, err error) error {
 	case errors.Is(err, mountfs.ErrInvalidPath), errors.Is(err, mountfs.ErrIsDirectory):
 		return pathError(operation, name, os.ErrInvalid)
 	default:
+		slog.Warn("mountdav: unexpected filesystem error", "operation", operation, "path", name, "error", err)
 		return pathError(operation, name, err)
 	}
 }

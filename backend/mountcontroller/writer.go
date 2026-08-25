@@ -3,6 +3,7 @@ package mountcontroller
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,6 +57,7 @@ func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, files
 	if !drive.Encrypted && lease != nil {
 		return nil, ErrInvalidConfiguration
 	}
+	slog.Debug("mountcontroller: building writer", "drive_id", drive.ID, "encrypted", drive.Encrypted)
 	var masterKeys mountadapter.MasterKeyProvider
 	if lease != nil {
 		masterKeys = lease
@@ -102,6 +104,7 @@ func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, files
 		MaxQueuedOperations:  defaultWriterQueuedOperations,
 	})
 	if err != nil {
+		slog.Warn("mountcontroller: writer construction failed", "drive_id", drive.ID, "error", err)
 		return nil, err
 	}
 	session, err := newAdapterSession(canonical)
@@ -109,6 +112,7 @@ func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, files
 		_ = canonical.Close(context.Background())
 		return nil, err
 	}
+	slog.Info("mountcontroller: writer built", "drive_id", drive.ID, "encrypted", drive.Encrypted)
 	return session, nil
 }
 

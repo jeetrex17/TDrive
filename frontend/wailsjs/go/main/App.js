@@ -170,6 +170,10 @@ export function MountDriveReadOnly() {
   return window['go']['main']['App']['MountDriveReadOnly']();
 }
 
+export function MountDrives(arg1) {
+  return window['go']['main']['App']['MountDrives'](arg1);
+}
+
 export function MountStatus() {
   return window['go']['main']['App']['MountStatus']();
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"TDrive/backend/mountcontroller"
@@ -56,6 +57,7 @@ func (s *Server) startMount(ctx context.Context, selector string, windowsDrive s
 		}
 	}
 
+	slog.Info("daemon: starting mount", "drive_id", drive.ID, "mode", mode, "encrypted", encrypted, "reuse_pinned", reusePinnedDrive)
 	status, err := controller.Start(ctx, mountcontroller.Drive{
 		ID:                 drive.ID,
 		Title:              drive.Title,
@@ -63,6 +65,11 @@ func (s *Server) startMount(ctx context.Context, selector string, windowsDrive s
 		Encrypted:          encrypted,
 		EncryptionUnlocked: encryptionUnlocked,
 	}, mountcontroller.StartOptions{WindowsDrive: windowsDrive, Mode: mountcontroller.Mode(mode)})
+	if err != nil {
+		slog.Warn("daemon: mount start failed", "drive_id", drive.ID, "error", err)
+	} else {
+		slog.Info("daemon: mount start finished", "drive_id", drive.ID, "phase", status.Phase, "mounted", status.Mounted)
+	}
 	return mountResponse(status, s.driveFromMountStatus(status)), err
 }
 
@@ -140,7 +147,13 @@ func (s *Server) stopMountLocked(ctx context.Context) (MountResponse, error) {
 	if controller == nil {
 		return MountResponse{Phase: string(mountcontroller.PhaseStopped)}, nil
 	}
+	slog.Info("daemon: stopping mount")
 	status, err := controller.Stop(ctx)
+	if err != nil {
+		slog.Warn("daemon: mount stop failed", "error", err)
+	} else {
+		slog.Info("daemon: mount stopped", "phase", status.Phase)
+	}
 	return mountResponse(status, s.driveFromMountStatus(status)), err
 }
 
@@ -178,8 +191,10 @@ func (s *Server) ensureMountController() (daemonMountController, error) {
 	}
 	controller, err := mountcontroller.New(s.engine)
 	if err != nil {
+		slog.Error("daemon: mount controller construction failed", "error", err)
 		return nil, err
 	}
+	slog.Debug("daemon: mount controller constructed")
 	s.mountController = controller
 	return controller, nil
 }

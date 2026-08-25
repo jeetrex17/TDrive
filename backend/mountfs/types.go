@@ -76,3 +76,14 @@ type RandomAccessContent interface {
 type ContentOpener interface {
 	OpenContent(ctx context.Context, channelID int64, entry SourceEntry) (RandomAccessContent, error)
 }
+
+// ReadFilesystem is the protocol-neutral surface consumed by desktop
+// adapters. Both a single drive and an aggregate of selected drives implement
+// it without exposing their cache or content-opening internals.
+type ReadFilesystem interface {
+	Stat(ctx context.Context, path string) (Entry, error)
+	ReadDir(ctx context.Context, path string) ([]Entry, error)
+	Open(ctx context.Context, path string) (*File, error)
+}
+
+var _ ReadFilesystem = (*FS)(nil)

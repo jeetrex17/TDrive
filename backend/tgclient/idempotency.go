@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -58,6 +59,7 @@ func randomID() int64 {
 
 	// random_id is an idempotency nonce, not a secret. A process-local counter
 	// prevents collisions between calls if the OS RNG temporarily fails.
+	slog.Warn("tgclient: OS RNG read failed for random_id, using process-local fallback")
 	fallback := sha256.Sum256([]byte(fmt.Sprintf("%d:%d", time.Now().UnixNano(), fallbackRandomCounter.Add(1))))
 	id := int64(binary.BigEndian.Uint64(fallback[:8]) & uint64(^uint64(0)>>1))
 	if id == 0 {

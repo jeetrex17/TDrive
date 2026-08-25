@@ -3,6 +3,7 @@ package mountadapter
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -40,17 +41,25 @@ func (resolver projectionResolver) Resolve(ctx context.Context, value string) (N
 	}
 	for _, component := range strings.Split(strings.TrimPrefix(value, "/"), "/") {
 		if current.Kind != mountfs.KindDirectory {
+			slog.Debug("mountadapter: resolve stopped, ancestor is not a directory", "path", value)
 			return Node{}, false, nil
 		}
 		dirent, found, err := projection.LiveDirentByName(resolver.db, resolver.driveID, current.ObjectID, component)
-		if err != nil || !found {
+		if err != nil {
+			slog.Warn("mountadapter: resolve lookup failed", "path", value, "error", err)
 			return Node{}, found, err
+		}
+		if !found {
+			slog.Debug("mountadapter: resolve not found", "path", value)
+			return Node{}, false, nil
 		}
 		current, err = resolver.nodeFromDirent(ctx, dirent)
 		if err != nil {
+			slog.Warn("mountadapter: resolve failed to load node", "path", value, "error", err)
 			return Node{}, false, err
 		}
 	}
+	slog.Debug("mountadapter: resolved", "path", value, "kind", current.Kind, "revision", current.Revision)
 	return current, true, ctx.Err()
 }
 

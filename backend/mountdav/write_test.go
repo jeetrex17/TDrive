@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"TDrive/backend/mountfs"
 )
 
 type recordingWriteCoordinator struct {
@@ -64,13 +66,24 @@ func (writer *recordingWriteCoordinator) Delete(_ context.Context, request Delet
 
 func newWritableTestHandler(t *testing.T, writer WriteCoordinator) http.Handler {
 	t.Helper()
+	return newWritableTestHandlerWithResume(t, writer, newTestResumeStore(t))
+}
+
+func newWritableTestHandlerWithResume(t *testing.T, writer WriteCoordinator, resume *resumeStore) http.Handler {
+	t.Helper()
+	return newWritableTestHandlerFull(t, writer, resume, testFS(t, nil))
+}
+
+func newWritableTestHandlerFull(t *testing.T, writer WriteCoordinator, resume *resumeStore, fs *FileSystem) http.Handler {
+	t.Helper()
 	locks := newBoundedLockSystem(defaultMaxActiveLocks)
 	application := &readApplication{
 		capabilityPath: testCapability,
-		fs:             testFS(t, nil),
+		fs:             fs,
 		lockSystem:     locks,
 		writer:         writer,
 		authority:      "127.0.0.1:7331",
+		resume:         resume,
 	}
 	return newProtectedHandler(protectionConfig{
 		capabilityPath:     testCapability,
@@ -79,6 +92,80 @@ func newWritableTestHandler(t *testing.T, writer WriteCoordinator) http.Handler 
 		maxConcurrentWrite: 2,
 		writable:           true,
 	}, application)
+}
+
+// testFSWithSeeds builds a *FileSystem whose /Docs directory contains one
+// file per name in names, all sharing content. Resume tests use this to make
+// application.fs agree with what the test's fake recordingWriteCoordinator
+// claims an earlier plain PUT already committed -- recordingWriteCoordinator
+// only records requests, it never actually writes through to fs, so fs must
+// be seeded to match by hand.
+func testFSWithSeeds(t *testing.T, content []byte, names ...string) *FileSystem {
+	t.Helper()
+	modTime := time.Unix(1700000000, 0)
+	docs := make([]mountfs.SourceEntry, len(names))
+	for index, name := range names {
+		docs[index] = mountfs.SourceEntry{
+			ID:         "f:seed:" + name,
+			ParentID:   "d:docs",
+			Name:       name,
+			Kind:       mountfs.KindFile,
+			Size:       int64(len(content)),
+			ModTime:    modTime,
+			ContentRef: "seed",
+		}
+	}
+	mfs, err := mountfs.New(42, memorySource{
+		mountfs.RootID: {
+			{ID: "d:docs", ParentID: mountfs.RootID, Name: "Docs", Kind: mountfs.KindDirectory, ModTime: modTime},
+		},
+		"d:docs": docs,
+	}, &threadSafeSeedOpener{data: content})
+	if err != nil {
+		t.Fatalf("mountfs.New: %v", err)
+	}
+	return NewFileSystem(mfs)
+}
+
+// threadSafeSeedOpener backs testFSWithSeeds. It's a separate type from
+// filesystem_test.go's memoryOpener, rather than a reuse of it, specifically
+// because that opener's plain int call counter (read by other tests'
+// assertions) is not safe for the concurrent OpenFile calls this file's
+// resume-sequence concurrency test performs against one shared *FileSystem;
+// this keeps that fix scoped to resume tests instead of touching a helper
+// several unrelated test files depend on. memoryContent is read-only once
+// constructed, so sharing it across goroutines here is race-free.
+type threadSafeSeedOpener struct {
+	data []byte
+}
+
+func (o *threadSafeSeedOpener) OpenContent(context.Context, int64, mountfs.SourceEntry) (mountfs.RandomAccessContent, error) {
+	return &memoryContent{data: o.data}, nil
+}
+
+// newTestResumeStore creates a resumeStore rooted in t.TempDir, closed
+// automatically via t.Cleanup. now defaults to a fixed, injectable clock
+// (see newTestResumeStoreWithClock) so idle-timeout tests do not need to
+// sleep out a production-length timeout.
+func newTestResumeStore(t *testing.T) *resumeStore {
+	t.Helper()
+	store, err := newResumeStore(t.TempDir(), defaultResumeIdleTimeout, defaultMaxResumeObjectBytes, defaultMaxResumeAggregateBytes)
+	if err != nil {
+		t.Fatalf("newResumeStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func newTestResumeStoreWithClock(t *testing.T, idleTimeout time.Duration, now func() time.Time) *resumeStore {
+	t.Helper()
+	store, err := newResumeStore(t.TempDir(), idleTimeout, defaultMaxResumeObjectBytes, defaultMaxResumeAggregateBytes)
+	if err != nil {
+		t.Fatalf("newResumeStore: %v", err)
+	}
+	store.now = now
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 func TestWritableProtectedHandlerAdvertisesExplicitSurface(t *testing.T) {
@@ -100,6 +187,106 @@ func TestWritableProtectedHandlerAdvertisesExplicitSurface(t *testing.T) {
 	}
 	if strings.Contains(recorder.Header().Get("Allow"), "COPY") {
 		t.Fatalf("COPY was advertised before it is implemented: %#v", recorder.Header())
+	}
+	if !strings.Contains(recorder.Header().Get("Allow"), "PROPPATCH") {
+		t.Fatalf("PROPPATCH is required for Windows Explorer uploads: %#v", recorder.Header())
+	}
+}
+
+func TestWindowsMiniRedirectorAcceptsMetadataPROPPATCH(t *testing.T) {
+	writer := &recordingWriteCoordinator{}
+	handler := newWritableTestHandler(t, writer)
+	lockBody := `<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>`
+	lock := trustedRequest("LOCK", testCapability+"/Docs/note.txt", strings.NewReader(lockBody))
+	lock.Header.Set("Depth", "0")
+	lock.Header.Set("User-Agent", "Microsoft-WebDAV-MiniRedir/10.0.26100")
+	lockRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(lockRecorder, lock)
+	if lockRecorder.Code != http.StatusOK {
+		t.Fatalf("LOCK status = %d, body=%q", lockRecorder.Code, lockRecorder.Body.String())
+	}
+	token := lockRecorder.Header().Get("Lock-Token")
+	if token == "" {
+		t.Fatal("LOCK omitted token")
+	}
+
+	body := `<?xml version="1.0" encoding="utf-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:">
+  <D:set><D:prop>
+    <Z:Win32CreationTime>Sun, 14 Sep 2018 12:50:00 GMT</Z:Win32CreationTime>
+    <Z:Win32LastModifiedTime>Sun, 14 Sep 2018 12:50:00 GMT</Z:Win32LastModifiedTime>
+    <Z:Win32FileAttributes>00000020</Z:Win32FileAttributes>
+  </D:prop></D:set>
+</D:propertyupdate>`
+	request := trustedRequest("PROPPATCH", testCapability+"/Docs/note.txt", strings.NewReader(body))
+	request.Header.Set("Content-Type", "text/xml; charset=utf-8")
+	request.Header.Set("User-Agent", "Microsoft-WebDAV-MiniRedir/10.0.26100")
+	request.Header.Set("If", "("+token+")")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMultiStatus {
+		t.Fatalf("PROPPATCH status = %d, body=%q, want 207", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Header().Get("Content-Type"), "application/xml") {
+		t.Fatalf("PROPPATCH Content-Type = %q", recorder.Header().Get("Content-Type"))
+	}
+	for _, property := range []string{"Win32CreationTime", "Win32LastModifiedTime", "Win32FileAttributes", "HTTP/1.1 200 OK"} {
+		if !strings.Contains(recorder.Body.String(), property) {
+			t.Fatalf("PROPPATCH response omitted %q: %s", property, recorder.Body.String())
+		}
+	}
+	if writer.putRequest.Path != "" || writer.deleteRequest.Path != "" {
+		t.Fatalf("metadata-only PROPPATCH reached content writer: %+v", writer)
+	}
+	unlock := trustedRequest("UNLOCK", testCapability+"/Docs/note.txt", nil)
+	unlock.Header.Set("Lock-Token", token)
+	unlockRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(unlockRecorder, unlock)
+	if unlockRecorder.Code != http.StatusNoContent {
+		t.Fatalf("UNLOCK status = %d, body=%q", unlockRecorder.Code, unlockRecorder.Body.String())
+	}
+}
+
+func TestWindowsMiniRedirectorAcceptsLockNullMetadataBeforePUT(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true, ETag: `"file-7-r1"`}}
+	handler := newWritableTestHandler(t, writer)
+	lockBody := `<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>`
+	lock := trustedRequest("LOCK", testCapability+"/Docs/new-upload.jpg", strings.NewReader(lockBody))
+	lock.Header.Set("Depth", "0")
+	lock.Header.Set("User-Agent", "Microsoft-WebDAV-MiniRedir/10.0.26100")
+	lockRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(lockRecorder, lock)
+	if lockRecorder.Code != http.StatusOK {
+		t.Fatalf("LOCK status = %d, body=%q", lockRecorder.Code, lockRecorder.Body.String())
+	}
+	token := lockRecorder.Header().Get("Lock-Token")
+	if token == "" {
+		t.Fatal("LOCK omitted token")
+	}
+
+	patchBody := `<D:propertyupdate xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:"><D:set><D:prop><Z:Win32LastModifiedTime>Sun, 14 Sep 2018 12:50:00 GMT</Z:Win32LastModifiedTime></D:prop></D:set></D:propertyupdate>`
+	patch := trustedRequest("PROPPATCH", testCapability+"/Docs/new-upload.jpg", strings.NewReader(patchBody))
+	patch.Header.Set("Content-Type", "text/xml; charset=utf-8")
+	patch.Header.Set("User-Agent", "Microsoft-WebDAV-MiniRedir/10.0.26100")
+	patch.Header.Set("If", "("+token+")")
+	patchRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(patchRecorder, patch)
+	if patchRecorder.Code != http.StatusMultiStatus {
+		t.Fatalf("lock-null PROPPATCH status = %d, body=%q", patchRecorder.Code, patchRecorder.Body.String())
+	}
+	if writer.putRequest.Path != "" || writer.deleteRequest.Path != "" {
+		t.Fatalf("lock-null PROPPATCH reached content writer: %+v", writer)
+	}
+
+	put := trustedRequest(http.MethodPut, testCapability+"/Docs/new-upload.jpg", strings.NewReader("jpeg"))
+	put.Header.Set("Content-Type", "image/jpeg")
+	put.Header.Set("If", "("+token+")")
+	putRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(putRecorder, put)
+	if putRecorder.Code != http.StatusCreated || writer.putRequest.Path != "/Docs/new-upload.jpg" || string(writer.putBody) != "jpeg" {
+		t.Fatalf("PUT after lock-null PROPPATCH = %d, request %+v, body %q", putRecorder.Code, writer.putRequest, writer.putBody)
 	}
 }
 
@@ -250,6 +437,25 @@ func TestWritableMKCOLMOVEDELETERequests(t *testing.T) {
 	}
 }
 
+func TestWindowsMiniRedirectorDeleteIgnoresDepthForFiles(t *testing.T) {
+	for _, depth := range []string{"0", "infinity,noroot"} {
+		t.Run(depth, func(t *testing.T) {
+			writer := &recordingWriteCoordinator{}
+			handler := newWritableTestHandler(t, writer)
+			request := trustedRequest(http.MethodDelete, testCapability+"/Docs/note.txt", nil)
+			request.Header.Set("Depth", depth)
+			request.Header.Set("User-Agent", "Microsoft-WebDAV-MiniRedir/10.0.26100")
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusNoContent || writer.deleteRequest.Path != "/Docs/note.txt" {
+				t.Fatalf("DELETE Depth %q = %d, request %+v, body=%q", depth, recorder.Code, writer.deleteRequest, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestWritableMOVEStrictlyValidatesDestination(t *testing.T) {
 	for _, test := range []struct {
 		name        string
@@ -284,6 +490,69 @@ func TestWritableMOVEStrictlyValidatesDestination(t *testing.T) {
 				t.Fatalf("invalid MOVE reached writer: %+v", writer.moveRequest)
 			}
 		})
+	}
+}
+
+// TestServePUTWithoutContentLengthBuffersToDetermineSize documents the fix
+// for a real, user-reported bug caught live via the heavy-logging feature:
+// macOS Finder's copy engine sends the real-content PUT of its two-step
+// create-then-write sequence via chunked Transfer-Encoding (no Content-Length
+// header) for at least some writes. Go reports that as ContentLength == -1.
+// Session.Put requires a known length for encrypted writes (the TDE1 stream
+// header embeds the plaintext size and cannot be back-filled afterward), so
+// this used to hard-reject with ErrWriteLengthRequired -- and because the
+// pending-empty-create placeholder is superseded the moment any PUT arrives
+// for the path, regardless of whether that PUT then succeeds, the net result
+// was nothing ever committed at all: a silent, total upload failure.
+// servePut now buffers an unknown-length body first to learn its real size,
+// so the coordinator always sees a normal, non-negative ContentLength.
+func TestServePUTWithoutContentLengthBuffersToDetermineSize(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+	handler := newWritableTestHandler(t, writer)
+
+	content := "the real file content, arriving with no Content-Length header"
+	request := trustedRequest(http.MethodPut, testCapability+"/Docs/photo.png", strings.NewReader(content))
+	request.ContentLength = -1 // simulate what net/http reports for chunked Transfer-Encoding
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%q", recorder.Code, recorder.Body.String())
+	}
+	if writer.putRequest.Path != "/Docs/photo.png" {
+		t.Fatalf("coordinator was never invoked: %+v", writer.putRequest)
+	}
+	if writer.putRequest.ContentLength != int64(len(content)) {
+		t.Fatalf("coordinator ContentLength = %d, want %d (the buffered real size, not -1)", writer.putRequest.ContentLength, len(content))
+	}
+	if string(writer.putBody) != content {
+		t.Fatalf("coordinator received %q, want %q", writer.putBody, content)
+	}
+}
+
+// TestServePUTKnownContentLengthIsNotBuffered proves the fix is scoped to
+// the unknown-length case only: a normal PUT that already declares
+// Content-Length must stream straight through exactly as before, not take
+// the buffering path.
+func TestServePUTKnownContentLengthIsNotBuffered(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+	handler := newWritableTestHandler(t, writer)
+
+	content := "ordinary content with a normal Content-Length header"
+	request := trustedRequest(http.MethodPut, testCapability+"/Docs/note.txt", strings.NewReader(content))
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", recorder.Code)
+	}
+	if writer.putRequest.ContentLength != int64(len(content)) {
+		t.Fatalf("coordinator ContentLength = %d, want %d", writer.putRequest.ContentLength, len(content))
+	}
+	if string(writer.putBody) != content {
+		t.Fatalf("coordinator received %q, want %q", writer.putBody, content)
 	}
 }
 
@@ -331,12 +600,12 @@ func TestWritableMethodSpecificValidationRunsBeforeCoordinator(t *testing.T) {
 		headers map[string]string
 		status  int
 	}{
-		{name: "PUT content range", method: http.MethodPut, target: "/Docs/note.txt", headers: map[string]string{"Content-Range": "bytes 0-1/2"}, status: http.StatusBadRequest},
+		{name: "PUT malformed content range", method: http.MethodPut, target: "/Docs/note.txt", headers: map[string]string{"Content-Range": "bytes not-a-range"}, status: http.StatusBadRequest},
 		{name: "MKCOL body", method: "MKCOL", target: "/Docs/New", body: "extension", status: http.StatusUnsupportedMediaType},
 		{name: "MOVE body", method: "MOVE", target: "/Docs/note.txt", body: "extension", headers: map[string]string{"Destination": testCapability + "/Docs/moved.txt"}, status: http.StatusUnsupportedMediaType},
 		{name: "MOVE bad depth", method: "MOVE", target: "/Docs/note.txt", headers: map[string]string{"Destination": testCapability + "/Docs/moved.txt", "Depth": "1"}, status: http.StatusBadRequest},
 		{name: "DELETE body", method: http.MethodDelete, target: "/Docs/note.txt", body: "extension", status: http.StatusUnsupportedMediaType},
-		{name: "DELETE bad depth", method: http.MethodDelete, target: "/Docs/note.txt", headers: map[string]string{"Depth": "0"}, status: http.StatusBadRequest},
+		{name: "DELETE collection bad depth", method: http.MethodDelete, target: "/Docs", headers: map[string]string{"Depth": "0"}, status: http.StatusBadRequest},
 		{name: "root delete", method: http.MethodDelete, target: "/", status: http.StatusForbidden},
 		{name: "encoded source separator", method: http.MethodPut, target: "/Docs%2Fnote.txt", status: http.StatusBadRequest},
 	} {
@@ -354,6 +623,381 @@ func TestWritableMethodSpecificValidationRunsBeforeCoordinator(t *testing.T) {
 			}
 			if writer.putRequest.Path != "" || writer.mkdirRequest.Path != "" || writer.moveRequest.SourcePath != "" || writer.deleteRequest.Path != "" {
 				t.Fatalf("invalid request reached writer: %+v", writer)
+			}
+		})
+	}
+}
+
+// TestPUTResumeContinuationAssemblesAndCommitsTheCompleteFile is the fixed
+// counterpart of the real, user-reported bug this documented: macOS's
+// built-in WebDAV client (mount_webdav) resumes an interrupted large-file
+// upload by sending a follow-up PUT carrying a Content-Range header for the
+// same resource, after an initial plain PUT already delivered however many
+// bytes it managed to send. servePut used to reject any Content-Range PUT
+// outright (see the removed "PUT content range" case that was in
+// TestWritableMethodSpecificValidationRunsBeforeCoordinator), leaving
+// whatever the first, truncated PUT committed standing as if it were a
+// complete file. It now buffers the continuation on disk (resumeStore) and,
+// once the final chunk arrives, assembles the full content and commits it
+// through the coordinator exactly once -- so the coordinator only ever sees
+// the complete, correct file, never the truncated intermediate state.
+func TestPUTResumeContinuationAssemblesAndCommitsTheCompleteFile(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+	fs := testFSWithSeeds(t, []byte("first-chunk-bytes"), "photo.png")
+	handler := newWritableTestHandlerFull(t, writer, newTestResumeStore(t), fs)
+
+	first := trustedRequest(http.MethodPut, testCapability+"/Docs/photo.png", strings.NewReader("first-chunk-bytes"))
+	firstRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(firstRecorder, first)
+	if firstRecorder.Code != http.StatusCreated {
+		t.Fatalf("first PUT status = %d, want 201", firstRecorder.Code)
+	}
+	if string(writer.putBody) != "first-chunk-bytes" {
+		t.Fatalf("coordinator received %q, want the first attempt's bytes", writer.putBody)
+	}
+
+	second := trustedRequest(http.MethodPut, testCapability+"/Docs/photo.png", strings.NewReader("rest-of-the-file"))
+	second.Header.Set("Content-Range", "bytes 17-32/33")
+	secondRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(secondRecorder, second)
+	if secondRecorder.Code != http.StatusCreated {
+		t.Fatalf("resume PUT status = %d, want 201, body=%q", secondRecorder.Code, secondRecorder.Body.String())
+	}
+
+	if string(writer.putBody) != "first-chunk-bytesrest-of-the-file" {
+		t.Fatalf("coordinator received %q, want the full 33-byte assembled content", writer.putBody)
+	}
+	if writer.putRequest.ContentLength != 33 {
+		t.Fatalf("coordinator ContentLength = %d, want 33", writer.putRequest.ContentLength)
+	}
+}
+
+// TestPUTResumeThreeChunkSequenceAssemblesInOrder covers a sequence longer
+// than two requests: a plain PUT, then two Content-Range continuations, only
+// the last of which completes and commits.
+func TestPUTResumeThreeChunkSequenceAssemblesInOrder(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+	resume := newTestResumeStore(t)
+	fs := testFSWithSeeds(t, []byte("AAAA"), "movie.mov")
+	handler := newWritableTestHandlerFull(t, writer, resume, fs)
+
+	first := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("AAAA"))
+	firstRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(firstRecorder, first)
+	if firstRecorder.Code != http.StatusCreated {
+		t.Fatalf("first PUT status = %d", firstRecorder.Code)
+	}
+
+	second := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("BBBB"))
+	second.Header.Set("Content-Range", "bytes 4-7/12")
+	secondRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(secondRecorder, second)
+	if secondRecorder.Code != http.StatusNoContent {
+		t.Fatalf("second (non-final) chunk status = %d, want 204, body=%q", secondRecorder.Code, secondRecorder.Body.String())
+	}
+	if writer.putRequest.Path != "/Docs/movie.mov" || len(writer.putBody) != 4 {
+		t.Fatalf("coordinator was invoked for a non-final chunk: %+v body=%q", writer.putRequest, writer.putBody)
+	}
+
+	third := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("CCCC"))
+	third.Header.Set("Content-Range", "bytes 8-11/12")
+	thirdRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(thirdRecorder, third)
+	if thirdRecorder.Code != http.StatusCreated {
+		t.Fatalf("final chunk status = %d, want 201, body=%q", thirdRecorder.Code, thirdRecorder.Body.String())
+	}
+	if string(writer.putBody) != "AAAABBBBCCCC" {
+		t.Fatalf("coordinator received %q, want the full 12-byte assembled content", writer.putBody)
+	}
+}
+
+// TestPUTResumeOffsetMismatchIsRejectedWithoutCorruptingTheBuffer covers a
+// continuation whose Content-Range start does not line up with what has
+// actually been accumulated: it must be rejected cleanly, and a subsequent,
+// correctly-aligned chunk must still be able to complete the original
+// sequence -- proving the mismatched request left the buffer untouched.
+func TestPUTResumeOffsetMismatchIsRejectedWithoutCorruptingTheBuffer(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+	resume := newTestResumeStore(t)
+	fs := testFSWithSeeds(t, []byte("AAAA"), "movie.mov")
+	handler := newWritableTestHandlerFull(t, writer, resume, fs)
+
+	first := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("AAAA"))
+	firstRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(firstRecorder, first)
+	if firstRecorder.Code != http.StatusCreated {
+		t.Fatalf("first PUT status = %d", firstRecorder.Code)
+	}
+
+	wrong := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("ZZZZ"))
+	wrong.Header.Set("Content-Range", "bytes 5-8/12")
+	wrongRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(wrongRecorder, wrong)
+	if wrongRecorder.Code != http.StatusConflict {
+		t.Fatalf("misaligned chunk status = %d, want 409, body=%q", wrongRecorder.Code, wrongRecorder.Body.String())
+	}
+	if writer.putRequest.Path == "/Docs/movie.mov" && len(writer.putBody) != 4 {
+		t.Fatalf("misaligned chunk reached the coordinator: %+v", writer.putRequest)
+	}
+
+	correct := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("BBBBBBBB"))
+	correct.Header.Set("Content-Range", "bytes 4-11/12")
+	correctRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(correctRecorder, correct)
+	if correctRecorder.Code != http.StatusCreated {
+		t.Fatalf("correctly-aligned final chunk status = %d, want 201, body=%q", correctRecorder.Code, correctRecorder.Body.String())
+	}
+	if string(writer.putBody) != "AAAABBBBBBBB" {
+		t.Fatalf("coordinator received %q, want the correctly assembled content unaffected by the rejected chunk", writer.putBody)
+	}
+}
+
+// TestPUTResumeChangedTotalDiscardsTheStaleSequence covers a client that
+// abandons a resume sequence and starts a new one (declaring a different
+// TOTAL) for the same path: the stale buffer must be discarded rather than
+// corrupting the new sequence.
+func TestPUTResumeChangedTotalDiscardsTheStaleSequence(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+	resume := newTestResumeStore(t)
+	fs := testFSWithSeeds(t, []byte("AAAA"), "movie.mov")
+	handler := newWritableTestHandlerFull(t, writer, resume, fs)
+
+	first := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("AAAA"))
+	firstRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(firstRecorder, first)
+	if firstRecorder.Code != http.StatusCreated {
+		t.Fatalf("first PUT status = %d", firstRecorder.Code)
+	}
+
+	stale := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("BBBB"))
+	stale.Header.Set("Content-Range", "bytes 4-7/100")
+	staleRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(staleRecorder, stale)
+	if staleRecorder.Code != http.StatusNoContent {
+		t.Fatalf("stale-sequence chunk status = %d, want 204, body=%q", staleRecorder.Code, staleRecorder.Body.String())
+	}
+
+	restarted := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("CCCC"))
+	restarted.Header.Set("Content-Range", "bytes 4-7/8")
+	restartedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(restartedRecorder, restarted)
+	if restartedRecorder.Code != http.StatusCreated {
+		t.Fatalf("restarted sequence final chunk status = %d, want 201, body=%q", restartedRecorder.Code, restartedRecorder.Body.String())
+	}
+	if string(writer.putBody) != "AAAACCCC" {
+		t.Fatalf("coordinator received %q, want the restarted (total=8) sequence, not a mix with the abandoned total=100 one", writer.putBody)
+	}
+}
+
+// TestPUTResumeAbandonedSequenceIsReaped covers cleanup of a resume sequence
+// whose final chunk never arrives: it must not hold its temp file and quota
+// reservation forever. Uses an injectable clock instead of a real sleep.
+func TestPUTResumeAbandonedSequenceIsReaped(t *testing.T) {
+	current := time.Unix(1_700_000_000, 0)
+	clock := func() time.Time { return current }
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+	resume := newTestResumeStoreWithClock(t, time.Minute, clock)
+	fs := testFSWithSeeds(t, []byte("AAAA"), "movie.mov")
+	handler := newWritableTestHandlerFull(t, writer, resume, fs)
+
+	first := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("AAAA"))
+	firstRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(firstRecorder, first)
+	if firstRecorder.Code != http.StatusCreated {
+		t.Fatalf("first PUT status = %d", firstRecorder.Code)
+	}
+
+	abandoned := trustedRequest(http.MethodPut, testCapability+"/Docs/movie.mov", strings.NewReader("BBBB"))
+	abandoned.Header.Set("Content-Range", "bytes 4-7/12")
+	abandonedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(abandonedRecorder, abandoned)
+	if abandonedRecorder.Code != http.StatusNoContent {
+		t.Fatalf("abandoned sequence's first chunk status = %d, want 204", abandonedRecorder.Code)
+	}
+
+	resume.mu.Lock()
+	_, exists := resume.entries["/Docs/movie.mov"]
+	entries := len(resume.entries)
+	resume.mu.Unlock()
+	if !exists || entries != 1 {
+		t.Fatalf("expected exactly one tracked in-progress sequence before the timeout, got %d (exists=%v)", entries, exists)
+	}
+
+	current = current.Add(2 * time.Minute)
+
+	// Any subsequent Content-Range request -- for an unrelated path here --
+	// is what actually gives the store a chance to reap; it happens lazily
+	// on the next access, the same no-background-goroutine approach
+	// boundedLockSystem already uses for lock expiry (see reapLocked).
+	unrelated := trustedRequest(http.MethodPut, testCapability+"/Docs/other.mov", strings.NewReader("x"))
+	unrelated.Header.Set("Content-Range", "bytes 0-0/1")
+	unrelatedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(unrelatedRecorder, unrelated)
+	if unrelatedRecorder.Code != http.StatusCreated {
+		t.Fatalf("unrelated resume PUT status = %d, want 201, body=%q", unrelatedRecorder.Code, unrelatedRecorder.Body.String())
+	}
+
+	resume.mu.Lock()
+	_, stillExists := resume.entries["/Docs/movie.mov"]
+	remainingEntries := len(resume.entries)
+	resume.mu.Unlock()
+	if stillExists {
+		t.Fatal("abandoned sequence was not reaped after its idle timeout elapsed")
+	}
+	if remainingEntries != 0 {
+		t.Fatalf("resume store retained %d entries after reaping, want 0", remainingEntries)
+	}
+}
+
+// TestPUTResumeConcurrentSequencesForDifferentPathsDoNotInterfere covers two
+// independent Content-Range resume sequences for different paths making
+// progress concurrently without corrupting each other's accumulator.
+func TestPUTResumeConcurrentSequencesForDifferentPathsDoNotInterfere(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+	resume := newTestResumeStore(t)
+	fs := testFSWithSeeds(t, []byte("AAAA"), "a.bin", "b.bin")
+	handler := newWritableTestHandlerFull(t, writer, resume, fs)
+
+	for _, path := range []string{"/Docs/a.bin", "/Docs/b.bin"} {
+		request := trustedRequest(http.MethodPut, testCapability+path, strings.NewReader("AAAA"))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("seed PUT %q status = %d", path, recorder.Code)
+		}
+	}
+
+	var group sync.WaitGroup
+	results := make([]int, 2)
+	paths := []string{"/Docs/a.bin", "/Docs/b.bin"}
+	for index, path := range paths {
+		group.Add(1)
+		go func(index int, path string) {
+			defer group.Done()
+			request := trustedRequest(http.MethodPut, testCapability+path, strings.NewReader("BBBB"))
+			request.Header.Set("Content-Range", "bytes 4-7/8")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			results[index] = recorder.Code
+		}(index, path)
+	}
+	group.Wait()
+
+	for _, code := range results {
+		if code != http.StatusCreated {
+			t.Fatalf("concurrent final chunk statuses = %v, want both 201", results)
+		}
+	}
+}
+
+// TestPUTWithoutContentRangeNeverTouchesTheResumeStore proves the fast path
+// for a normal (non-resumed) PUT is unchanged: it commits immediately with
+// no buffering, even when the resume store is unavailable (nil).
+func TestPUTWithoutContentRangeNeverTouchesTheResumeStore(t *testing.T) {
+	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true, ETag: `"r1"`}}
+	handler := newWritableTestHandlerWithResume(t, writer, nil)
+
+	request := trustedRequest(http.MethodPut, testCapability+"/Docs/plain.txt", strings.NewReader("payload"))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated || recorder.Header().Get("ETag") != `"r1"` {
+		t.Fatalf("plain PUT with nil resume store = %d/%#v", recorder.Code, recorder.Header())
+	}
+	if string(writer.putBody) != "payload" {
+		t.Fatalf("coordinator body = %q", writer.putBody)
+	}
+}
+
+// TestPUTContentRangeWithoutResumeStoreFailsCleanly covers a writable mount
+// somehow missing its resume store (should not happen outside tests, but
+// must fail safely rather than panic on a nil dereference).
+func TestPUTContentRangeWithoutResumeStoreFailsCleanly(t *testing.T) {
+	writer := &recordingWriteCoordinator{}
+	handler := newWritableTestHandlerWithResume(t, writer, nil)
+
+	request := trustedRequest(http.MethodPut, testCapability+"/Docs/photo.png", strings.NewReader("chunk"))
+	request.Header.Set("Content-Range", "bytes 0-4/10")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("Content-Range PUT without a resume store = %d, want 400", recorder.Code)
+	}
+	if writer.putRequest.Path != "" {
+		t.Fatalf("reached the coordinator: %+v", writer.putRequest)
+	}
+}
+
+// TestPUTContentRangeMalformedHeaderIsRejected covers syntactically invalid
+// Content-Range headers.
+func TestPUTContentRangeMalformedHeaderIsRejected(t *testing.T) {
+	for _, header := range []string{
+		"bytes 0-1",
+		"bytes -1-5/10",
+		"bytes 5-1/10",
+		"bytes 0-10/10",
+		"bytes abc-5/10",
+		"seconds 0-1/2",
+		"bytes 0-1/0",
+	} {
+		t.Run(header, func(t *testing.T) {
+			writer := &recordingWriteCoordinator{}
+			handler := newWritableTestHandler(t, writer)
+			request := trustedRequest(http.MethodPut, testCapability+"/Docs/note.txt", strings.NewReader("x"))
+			request.Header.Set("Content-Range", header)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest {
+				t.Errorf("Content-Range %q status = %d, want 400", header, recorder.Code)
+			}
+			if writer.putRequest.Path != "" {
+				t.Errorf("malformed Content-Range %q reached the coordinator", header)
+			}
+		})
+	}
+}
+
+// TestServeWriteMethodsFakeSuccessForMacOSJunkPaths covers the fix for a
+// second user-reported issue: macOS Finder writes .DS_Store/AppleDouble
+// metadata into any writable volume it mounts, including this one. An
+// earlier version of this fix rejected those writes at the path-cleaning
+// layer (400/403), which risked Finder's copy engine treating a rejected
+// AppleDouble sidecar write as failing the whole visible file copy -- the
+// same class of user-visible error this fix set out to reduce, not add to.
+// Instead these paths get a normal-looking success with nothing ever staged,
+// coordinated, or stored.
+func TestServeWriteMethodsFakeSuccessForMacOSJunkPaths(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		method     string
+		target     string
+		body       string
+		wantStatus int
+	}{
+		{name: "PUT .DS_Store", method: http.MethodPut, target: "/Docs/.DS_Store", body: "junk", wantStatus: http.StatusCreated},
+		{name: "PUT AppleDouble sidecar", method: http.MethodPut, target: "/Docs/._photo.png", body: "junk", wantStatus: http.StatusCreated},
+		{name: "MKCOL Spotlight index", method: "MKCOL", target: "/.Spotlight-V100", wantStatus: http.StatusCreated},
+		{name: "DELETE .DS_Store", method: http.MethodDelete, target: "/Docs/.DS_Store", wantStatus: http.StatusNoContent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
+			handler := newWritableTestHandler(t, writer)
+
+			var body io.Reader
+			if test.body != "" {
+				body = strings.NewReader(test.body)
+			}
+			request := trustedRequest(test.method, testCapability+test.target, body)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
+			}
+			if writer.putRequest.Path != "" || writer.mkdirRequest.Path != "" || writer.deleteRequest.Path != "" {
+				t.Fatalf("coordinator was invoked for a macOS junk path: put=%q mkdir=%q delete=%q",
+					writer.putRequest.Path, writer.mkdirRequest.Path, writer.deleteRequest.Path)
 			}
 		})
 	}
@@ -586,5 +1230,36 @@ func TestServerWiresExplicitWritableCoordinatorEndToEnd(t *testing.T) {
 	}
 	if writer.putRequest.Path != "/Docs/new.txt" || string(writer.putBody) != "committed" {
 		t.Fatalf("writer request/body = %+v/%q", writer.putRequest, writer.putBody)
+	}
+
+	patchBody := `<D:propertyupdate xmlns:D="DAV:" xmlns:Z="urn:schemas-microsoft-com:"><D:set><D:prop><Z:Win32LastModifiedTime>Sun, 14 Sep 2018 12:50:00 GMT</Z:Win32LastModifiedTime></D:prop></D:set></D:propertyupdate>`
+	request, err = http.NewRequest("PROPPATCH", status.URL+"Docs/note.txt", strings.NewReader(patchBody))
+	if err != nil {
+		t.Fatalf("New PROPPATCH request: %v", err)
+	}
+	request.Header.Set("Content-Type", "text/xml; charset=utf-8")
+	request.Header.Set("User-Agent", "Microsoft-WebDAV-MiniRedir/10.0.26100")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("PROPPATCH writable server: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("PROPPATCH response = %d/%#v", response.StatusCode, response.Header)
+	}
+
+	request, err = http.NewRequest(http.MethodDelete, status.URL+"Docs/note.txt", nil)
+	if err != nil {
+		t.Fatalf("New DELETE request: %v", err)
+	}
+	request.Header.Set("Depth", "0")
+	request.Header.Set("User-Agent", "Microsoft-WebDAV-MiniRedir/10.0.26100")
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("DELETE writable server: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNoContent || writer.deleteRequest.Path != "/Docs/note.txt" {
+		t.Fatalf("DELETE response/request = %d/%+v", response.StatusCode, writer.deleteRequest)
 	}
 }

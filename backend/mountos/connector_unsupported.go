@@ -2,7 +2,10 @@
 
 package mountos
 
-import "context"
+import (
+	"context"
+	"log/slog"
+)
 
 type unsupportedConnector struct{}
 
@@ -15,6 +18,7 @@ func (unsupportedConnector) Attach(ctx context.Context, config Config) (Attachme
 	if _, err := validateConfig(config); err != nil {
 		return Attachment{}, err
 	}
+	slog.Warn("mountos: attach requested on an unsupported platform")
 	return Attachment{}, ErrNotSupported
 }
 

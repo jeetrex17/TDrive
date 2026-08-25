@@ -1,8 +1,10 @@
+import { get } from 'svelte/store';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import type { MountStatusView } from '../../types';
 import MountControl from './MountControl.svelte';
 import { createMountController, type MountApi } from './mount-controller';
+import { mountSelection } from './mount-selection-store';
 
 interface Deferred<T> {
     promise: Promise<T>;
@@ -75,9 +77,78 @@ afterEach(async () => {
     host?.remove();
     component = null;
     host = null;
+    mountSelection.reset();
 });
 
 describe('MountControl', () => {
+    it('mounts the only known drive directly', async () => {
+        const mountDrives = vi.fn(async () => mountedStatus());
+        const controller = createMountController({
+            mountDrive: vi.fn(async () => mountedStatus()),
+            mountDrives,
+            mountStatus: vi.fn(async () => status()),
+            openMountedDrive: vi.fn(async () => undefined),
+            unmountDrive: vi.fn(async () => status()),
+        });
+        host = document.createElement('div');
+        document.body.appendChild(host);
+        component = mount(MountControl, {
+            target: host,
+            props: {
+                controller,
+                loadDrives: async () => [{ id: 42, title: 'Personal', kind: 'personal' }],
+            },
+        });
+        await settle();
+
+        click('#mount-drive-button');
+        await settle();
+
+        expect(mountDrives).toHaveBeenCalledWith([42]);
+        expect(get(mountSelection.state).open).toBe(false);
+    });
+
+    it('opens an all-selected picker instead of mounting immediately when multiple drives exist', async () => {
+        const mountDrives = vi.fn(async () => mountedStatus());
+        const controller = createMountController({
+            mountDrive: vi.fn(async () => mountedStatus()),
+            mountDrives,
+            mountStatus: vi.fn(async () => status()),
+            openMountedDrive: vi.fn(async () => undefined),
+            unmountDrive: vi.fn(async () => status()),
+        });
+        const onMenuAction = vi.fn();
+        host = document.createElement('div');
+        document.body.appendChild(host);
+        component = mount(MountControl, {
+            target: host,
+            props: {
+                controller,
+                mode: 'menu',
+                onMenuAction,
+                loadDrives: async () => [
+                    { id: 22, title: 'Project', kind: 'shared' },
+                    { id: 11, title: 'Personal', kind: 'personal' },
+                ],
+            },
+        });
+        await settle();
+
+        click('#mount-drive-button');
+        await settle();
+
+        expect(mountDrives).not.toHaveBeenCalled();
+        expect(onMenuAction).toHaveBeenCalledTimes(1);
+        expect(get(mountSelection.state)).toMatchObject({
+            open: true,
+            selectedIds: [11, 22],
+        });
+
+        mountSelection.confirm();
+        await settle();
+        expect(mountDrives).toHaveBeenCalledWith([11, 22]);
+    });
+
     it('reports a drained writable mount as paused after eject fails', async () => {
         const api: MountApi = {
             mountDrive: vi.fn(async () => writableMountedStatus()),

@@ -3,6 +3,7 @@ package mountwrite
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 )
@@ -38,11 +39,13 @@ func (l *KeyedLocker) Lock(ctx context.Context, keys ...string) (func(), error) 
 		case <-entry.token:
 			held = append(held, heldLock{key: key, entry: entry})
 		case <-ctx.Done():
+			slog.Warn("mountwrite: keyed lock acquisition canceled", "key", key, "held_count", len(held))
 			l.dropReference(key, entry)
 			l.releaseHeld(held)
 			return nil, ErrCanceled
 		}
 	}
+	slog.Debug("mountwrite: keyed locks acquired", "count", len(held))
 	var once sync.Once
 	return func() {
 		once.Do(func() { l.releaseHeld(held) })

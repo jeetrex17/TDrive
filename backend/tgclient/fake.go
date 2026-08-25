@@ -622,6 +622,26 @@ func (f *Fake) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 	return nil
 }
 
+// MissingMessages reports which of msgIDs are not present in history. Tests
+// simulate an out-of-band Telegram delete (bypassing TDrive's own delete
+// path) by calling DeleteMessages directly against the fake, which drops the
+// entry from history without anything tombstoning the local projection.
+func (f *Fake) MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	present := make(map[int64]struct{}, len(f.history))
+	for _, m := range f.history {
+		present[m.MsgID] = struct{}{}
+	}
+	var missing []int64
+	for _, id := range msgIDs {
+		if _, ok := present[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing, nil
+}
+
 func (f *Fake) CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

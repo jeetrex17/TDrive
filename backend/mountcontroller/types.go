@@ -126,6 +126,7 @@ type Status struct {
 type ConflictError struct {
 	ActiveDriveID         int64
 	RequestedDriveID      int64
+	SelectionChanged      bool
 	ActiveWindowsDrive    string
 	RequestedWindowsDrive string
 	ActiveMode            Mode
@@ -143,6 +144,9 @@ func (err *ConflictError) Error() string {
 			err.ActiveDriveID,
 			err.RequestedDriveID,
 		)
+	}
+	if err.SelectionChanged {
+		return fmt.Sprintf("%s: a different drive selection is already mounted; eject it first", ErrConflict)
 	}
 	if err.ActiveMode != err.RequestedMode {
 		return fmt.Sprintf(
@@ -191,7 +195,7 @@ type FilesystemBuilder interface {
 // EndpointConfig is private-by-convention backend data. Endpoint must never be
 // serialized or copied into Status.
 type EndpointConfig struct {
-	FS           *mountfs.FS
+	FS           mountfs.ReadFilesystem
 	DriveID      int64
 	DriveTitle   string
 	WindowsDrive string

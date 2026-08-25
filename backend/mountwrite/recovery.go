@@ -3,6 +3,7 @@ package mountwrite
 import (
 	"context"
 	"errors"
+	"log/slog"
 )
 
 type RecoveryReport struct {
@@ -21,13 +22,27 @@ func (c *Coordinator) Recover(ctx context.Context) (RecoveryReport, error) {
 	}
 	records, err := c.journal.ListRecoverable(ctx)
 	if err != nil {
+		slog.Error("mountwrite: recovery failed to list recoverable operations", "error", err)
 		return RecoveryReport{}, newOperationError("recovery", MutationPut, err)
 	}
+	slog.Info("mountwrite: recovery starting", "examined", len(records))
 	report := RecoveryReport{Examined: len(records)}
 	failures := make([]error, 0)
 	for _, listed := range records {
 		state, err := c.recoverOne(ctx, listed.OperationID)
 		if err != nil {
+			// Hidden-body cleanup cannot change the visible namespace. When its
+			// exact, durable receipt or local cleanup work is temporarily
+			// unavailable, retain the stage and retry on a later recovery without
+			// blocking the whole mount.
+			// Validation/corruption errors and every commit-state failure remain
+			// fatal so uncertain namespace changes still fail closed.
+			if state == StateCleanupPending && errors.Is(err, ErrUnavailable) {
+				slog.Warn("mountwrite: recovery cleanup temporarily unavailable, will retry later", "operation_id", listed.OperationID, "error", err)
+				report.Pending++
+				continue
+			}
+			slog.Error("mountwrite: recovery failed for operation", "operation_id", listed.OperationID, "state", state, "error", err)
 			report.Failed++
 			failures = append(failures, err)
 			continue
@@ -41,6 +56,8 @@ func (c *Coordinator) Recover(ctx context.Context) (RecoveryReport, error) {
 			report.Pending++
 		}
 	}
+	slog.Info("mountwrite: recovery complete", "examined", report.Examined, "completed", report.Completed,
+		"aborted", report.Aborted, "pending", report.Pending, "failed", report.Failed)
 	return report, errors.Join(failures...)
 }
 
@@ -79,6 +96,7 @@ func (c *Coordinator) recoverOne(ctx context.Context, operationID string) (Journ
 }
 
 func (c *Coordinator) resumeRecovery(ctx context.Context, record JournalRecord) error {
+	slog.Debug("mountwrite: resuming interrupted operation", "operation_id", record.OperationID, "state", record.State, "kind", record.Mutation.Kind)
 	switch record.State {
 	case StateReceiving, StateStaged, StateUploading, StateUploaded:
 		c.markAborted(ctx, record, ErrCanceled)

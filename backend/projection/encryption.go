@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	tdcrypto "TDrive/backend/crypto"
@@ -96,6 +97,9 @@ func putEncryptionConfig(exec sqlExecer, c EncryptionConfig) error {
 	if err != nil {
 		return fmt.Errorf("projection: put encryption: %w", err)
 	}
+	// Deliberately logs only policy metadata -- never kdf_salt, wrapped_master_key,
+	// key_check, or hint, all of which are security-sensitive or password-adjacent.
+	slog.Info("projection: encryption config written", "channel_id", c.ChannelID, "enabled", c.Enabled, "version", c.Version)
 	return nil
 }
 

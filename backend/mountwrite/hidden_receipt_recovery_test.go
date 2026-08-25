@@ -162,6 +162,23 @@ func TestCoordinatorPersistsRecoveredReceiptBeforeStageRemovalAndDelete(t *testi
 		t.Fatalf("calls after failed delete recovery=%d discard=%d", remote.recoveryCalls, remote.discardCalls)
 	}
 
+	// A restart sees the durable cleanup receipt directly. A transient Telegram
+	// delete failure must leave the receipt and stage pending without preventing
+	// the writable mount from starting; later recovery can retry the exact IDs.
+	report, err = coordinator.Recover(ctx)
+	if err != nil || report.Pending != 1 || report.Failed != 0 {
+		t.Fatalf("deferred Recover report=%#v err=%v", report, err)
+	}
+	if remote.recoveryCalls != 1 || remote.discardCalls != 2 {
+		t.Fatalf("deferred calls recovery=%d discard=%d", remote.recoveryCalls, remote.discardCalls)
+	}
+	if state := mustJournalRecord(t, journal, record.OperationID).State; state != StateCleanupPending {
+		t.Fatalf("deferred state = %s, want cleanup_pending", state)
+	}
+	if staging.UsedBytes() != int64(len(payload)) {
+		t.Fatalf("deferred cleanup removed stage: %d bytes", staging.UsedBytes())
+	}
+
 	base.mu.Lock()
 	base.discardErr = nil
 	base.mu.Unlock()
@@ -169,7 +186,7 @@ func TestCoordinatorPersistsRecoveredReceiptBeforeStageRemovalAndDelete(t *testi
 	if err != nil || report.Aborted != 1 || report.Failed != 0 {
 		t.Fatalf("second Recover report=%#v err=%v", report, err)
 	}
-	if remote.recoveryCalls != 1 || remote.discardCalls != 2 {
+	if remote.recoveryCalls != 1 || remote.discardCalls != 3 {
 		t.Fatalf("retry re-recovered receipt: recovery=%d discard=%d", remote.recoveryCalls, remote.discardCalls)
 	}
 	if state := mustJournalRecord(t, journal, record.OperationID).State; state != StateAborted {

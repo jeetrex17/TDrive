@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 )
 
 type migrationReplayRow struct {
@@ -38,6 +39,7 @@ func backfillLegacyRevisionsFromReplay(tx *sql.Tx) error {
 	if len(queue) == 0 {
 		return nil
 	}
+	slog.Info("projection: shadow-replaying history to derive CAS revision baseline", "ops", len(queue))
 
 	const savepoint = "tdrive_v8_revision_replay"
 	if _, err := tx.Exec(`SAVEPOINT ` + savepoint); err != nil {
@@ -105,6 +107,7 @@ func backfillLegacyRevisionsFromReplay(tx *sql.Tx) error {
 			return fmt.Errorf("projection: backfill %s revision: %w", object.kind, err)
 		}
 	}
+	slog.Info("projection: CAS revision baseline derived", "objects_updated", len(revisions))
 	return nil
 }
 

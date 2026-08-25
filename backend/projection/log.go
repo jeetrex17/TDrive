@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -73,6 +74,8 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 	}
 	if ok {
 		if existingHash != hash {
+			slog.Warn("projection: caption tamper detected, keeping original op canonical",
+				"channel_id", channelID, "msg_id", msgID)
 			if err := recordTamper(tx, channelID, msgID, existingHash, hash); err != nil {
 				return false, err
 			}
@@ -98,6 +101,8 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 
 	if err := ApplyOp(tx, channelID, msgID, op, actorID); err != nil {
 		if isSkippableApplyError(err) {
+			slog.Warn("projection: op rejected, continuing replay", "channel_id", channelID, "msg_id", msgID,
+				"op_type", op.Type, "error", err)
 			if recErr := recordProjectionOperationTx(tx, channelID, msgID, op, OperationRejected, err); recErr != nil {
 				return false, recErr
 			}

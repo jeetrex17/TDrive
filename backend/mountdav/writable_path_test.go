@@ -30,6 +30,67 @@ func TestCleanWritablePathRejectsUnicodeBidiControls(t *testing.T) {
 	}
 }
 
+// TestCleanWritablePathAcceptsMacOSJunkFilesAsLegalComponents: these names are
+// legal path components at the cleaning layer -- an earlier version of this
+// fix rejected them here instead, which risked Finder treating a rejected
+// AppleDouble sidecar write as failing the visible file copy. Callers now
+// detect and fake-success them separately (see isMacOSJunkPath and
+// TestServePUT/MkdirMoveDelete-FakesMacOSJunkPaths in write_test.go) rather
+// than having the path layer reject them outright.
+func TestCleanWritablePathAcceptsMacOSJunkFilesAsLegalComponents(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		"/Docs/.DS_Store",
+		"/.DS_Store",
+		"/Docs/._report.pdf",
+		"/Docs/._",
+		"/.Spotlight-V100",
+		"/.Trashes",
+		"/.fseventsd",
+		"/.TemporaryItems",
+		"/.apdisk",
+	} {
+		clean, err := cleanWritablePath(path)
+		if err != nil {
+			t.Errorf("cleanWritablePath(%q) error = %v, want nil", path, err)
+			continue
+		}
+		if !isMacOSJunkPath(clean) {
+			t.Errorf("isMacOSJunkPath(%q) = false, want true", clean)
+		}
+	}
+}
+
+func TestIsMacOSJunkPathIgnoresRootAndLegitimateNames(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"/", "/Docs", "/Docs/photo.png", "/Docs/.gitignore"} {
+		if isMacOSJunkPath(path) {
+			t.Errorf("isMacOSJunkPath(%q) = true, want false", path)
+		}
+	}
+}
+
+func TestCleanWritablePathPreservesLegitimateDotfiles(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		"/.gitignore",
+		"/Docs/.env",
+		"/Docs/.hidden-notes.txt",
+	} {
+		clean, err := cleanWritablePath(path)
+		if err != nil {
+			t.Errorf("cleanWritablePath(%q) error = %v", path, err)
+			continue
+		}
+		if clean != path {
+			t.Errorf("cleanWritablePath(%q) = %q, want unchanged", path, clean)
+		}
+	}
+}
+
 func TestCleanWritablePathPreservesUnicodeJoinControls(t *testing.T) {
 	t.Parallel()
 

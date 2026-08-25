@@ -71,6 +71,23 @@ function api(overrides: Partial<MountApi> = {}): MountApi {
 }
 
 describe('mount controller', () => {
+    it('mounts a sanitized immutable drive selection and retries that selection after unlock', async () => {
+        const selected = [7, 7, -1, 9];
+        const mountDrives = vi.fn()
+            .mockRejectedValueOnce(new Error('mount controller: encryption password required'))
+            .mockResolvedValueOnce(writableMountedStatus({ label: 'TDrive' }));
+        const unlockEncryption = vi.fn(async () => true);
+        const controller = createMountController(api({ mountDrives, unlockEncryption }));
+
+        await controller.mount(selected);
+
+        expect(selected).toEqual([7, 7, -1, 9]);
+        expect(mountDrives).toHaveBeenNthCalledWith(1, [7, 9]);
+        expect(mountDrives).toHaveBeenNthCalledWith(2, [7, 9]);
+        expect(unlockEncryption).toHaveBeenCalledTimes(1);
+        expect(get(controller)).toMatchObject({ mounted: true, label: 'TDrive' });
+    });
+
     it('prompts once and retries the same encrypted mount after unlock', async () => {
         const mountDrive = vi
             .fn<MountApi['mountDrive']>()

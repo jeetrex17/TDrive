@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -302,7 +303,12 @@ func (c *Coordinator) transition(
 	if patch.UpdatedAt.IsZero() {
 		patch.UpdatedAt = c.now().UTC()
 	}
-	return c.journal.Transition(ctx, record.OperationID, record.State, next, patch)
+	slog.Debug("mountwrite: journal transition", "operation_id", record.OperationID, "from", record.State, "to", next)
+	updated, err := c.journal.Transition(ctx, record.OperationID, record.State, next, patch)
+	if err != nil {
+		slog.Warn("mountwrite: journal transition failed", "operation_id", record.OperationID, "from", record.State, "to", next, "error", err)
+	}
+	return updated, err
 }
 
 func (c *Coordinator) maintenanceContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -315,6 +321,7 @@ func (c *Coordinator) markAborted(ctx context.Context, record JournalRecord, cau
 	if isTerminal(record.State) {
 		return
 	}
+	slog.Warn("mountwrite: aborting operation", "operation_id", record.OperationID, "state", record.State, "cause", cause)
 
 	current := record
 	// StateUploading is the sole boundary where Telegram may have accepted one

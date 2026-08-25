@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"TDrive/backend"
+	"TDrive/backend/applog"
 	"TDrive/backend/core"
 	"TDrive/backend/mountcontroller"
 	"TDrive/backend/processlock"
@@ -32,8 +33,9 @@ type App struct {
 	// mountController is shared by the GUI mount API and the same backend
 	// implementation used by the CLI daemon. The process lock still guarantees
 	// that exactly one Engine/controller owns the Telegram session.
-	mountController    appMountController
-	mountDriveResolver func() (mountcontroller.Drive, error)
+	mountController     appMountController
+	mountDriveResolver  func() (mountcontroller.Drive, error)
+	mountDrivesResolver func([]int64) ([]mountcontroller.Drive, error)
 	// mountEncryptionPolicyRefresh is a narrow test seam. Production uses the
 	// core authoritative sync path; tests can model offline and partial history
 	// without network access.
@@ -569,6 +571,7 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.engine != nil {
 		a.engine.Close()
 	}
+	applog.Close()
 	if a.backendLock != nil {
 		if err := a.backendLock.Release(); err != nil {
 			fmt.Printf("Warning: backend lock release failed: %v\n", err)
@@ -627,6 +630,7 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.backendLock = lock
+	applog.Init()
 
 	// Native file drop: hand the dropped absolute paths to the frontend, which
 	// resolves the target folder and runs the import flow. Drop zones opt in via
@@ -642,6 +646,7 @@ func (a *App) startup(ctx context.Context) {
 	})
 	if err != nil {
 		fmt.Printf("Warning: Failed to init TDrive backend: %v\n", err)
+		applog.Close()
 		if releaseErr := a.backendLock.Release(); releaseErr != nil {
 			fmt.Printf("Warning: backend lock release failed: %v\n", releaseErr)
 		}

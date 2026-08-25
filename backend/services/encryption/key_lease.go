@@ -3,6 +3,7 @@ package encryption
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"TDrive/backend/projection"
@@ -53,6 +54,8 @@ func (s *Service) AcquireMasterKeyLease() (*MasterKeyLease, error) {
 		s.masterKey = nil
 		return nil, ErrInvalidMasterKey
 	}
+	// Never logs key bytes -- only that a lease was granted, for which channel.
+	slog.Debug("encryption: master key lease acquired", "channel_id", channelID)
 	return &MasterKeyLease{key: append([]byte(nil), s.masterKey...)}, nil
 }
 
@@ -83,6 +86,7 @@ func (l *MasterKeyLease) Close() {
 		zeroBytes(l.key)
 		l.key = nil
 		l.closed = true
+		slog.Debug("encryption: master key lease released")
 	}
 	l.keyMu.Unlock()
 }

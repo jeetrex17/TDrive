@@ -5,6 +5,7 @@ package mountos
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -93,27 +94,37 @@ func (c *linuxConnector) Attach(parent context.Context, config Config) (Attachme
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// mountURI embeds the loopback capability token (see linuxWebDAVURI) and
+	// must never be logged; log validated.label (the Finder/GIO-visible name)
+	// and attachment IDs instead.
 	mountURI := linuxWebDAVURI(validated.endpoint)
 	if _, exists := c.byEndpoint[mountURI]; exists {
+		slog.Warn("mountos: linux attach rejected, endpoint already tracked", "label", validated.label)
 		return Attachment{}, ErrAttachFailed
 	}
 	mounted, err := c.inspectMount(ctx, mountURI)
 	if err != nil {
+		slog.Warn("mountos: linux desktop mount inspection failed", "label", validated.label, "error", err)
 		return Attachment{}, linuxUnavailableOrContext(ctx, ErrLinuxDesktopUnavailable)
 	}
 	if mounted {
+		slog.Warn("mountos: linux attach found an unexpected pre-existing mount", "label", validated.label)
 		return Attachment{}, ErrAttachmentChanged
 	}
+	slog.Debug("mountos: linux attaching", "label", validated.label, "mode", validated.mode)
 	if err := c.runner.Run(ctx, linuxAttachPlan(mountURI)); err != nil {
+		slog.Warn("mountos: linux gio mount failed", "label", validated.label, "error", err)
 		return Attachment{}, linuxUnavailableOrContext(ctx, ErrLinuxWebDAVUnavailable)
 	}
 	if err := c.verifyAttached(ctx, mountURI); err != nil {
+		slog.Warn("mountos: linux attach verification failed", "label", validated.label, "error", err)
 		c.rollback(parent, mountURI)
 		return Attachment{}, err
 	}
 	id := c.nextID()
 	c.active[id] = mountURI
 	c.byEndpoint[mountURI] = id
+	slog.Info("mountos: linux attached", "label", validated.label, "mode", validated.mode)
 	return Attachment{
 		owner:    c.owner,
 		id:       id,
@@ -168,6 +179,7 @@ func (c *linuxConnector) Detach(parent context.Context, attachment Attachment) e
 	}
 	if mounted {
 		if err := c.runner.Run(ctx, linuxDetachPlan(endpoint)); err != nil {
+			slog.Warn("mountos: linux gio unmount failed", "attachment_id", attachment.id, "error", err)
 			return ErrDetachFailed
 		}
 		mounted, err = c.inspectMount(ctx, endpoint)
@@ -177,6 +189,7 @@ func (c *linuxConnector) Detach(parent context.Context, attachment Attachment) e
 	}
 	delete(c.active, attachment.id)
 	delete(c.byEndpoint, endpoint)
+	slog.Info("mountos: linux detached", "attachment_id", attachment.id)
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -35,6 +36,11 @@ func (a *ActiveDrive) Set(id int64) {
 
 type Syncer interface {
 	Incremental(ctx context.Context, channelID int64) error
+
+	// ReconcileDeletions tombstones any locally-live file whose backing
+	// Telegram message(s) were deleted directly on Telegram, bypassing
+	// TDrive's own delete path. Returns how many files it tombstoned.
+	ReconcileDeletions(ctx context.Context, channelID int64) (int, error)
 }
 
 type Backfiller interface {
@@ -117,9 +123,11 @@ func (s *Service) UsePersonalChannel(ctx context.Context, channelID int64) error
 		return nil
 	}
 	if err := projection.MigratePersonalChannel(s.DB, channelID); err != nil {
+		slog.Error("lifecycle: migrate personal channel failed", "channel_id", channelID, "error", err)
 		return err
 	}
 	s.Active.Set(channelID)
+	slog.Info("lifecycle: active drive set", "channel_id", channelID)
 	s.kickoffPersonalBackfill(ctx, channelID)
 	return nil
 }
@@ -134,7 +142,22 @@ func (s *Service) SyncChannel(ctx context.Context, channelID int64) error {
 	if channelID == 0 {
 		return fmt.Errorf("no active channel")
 	}
-	return s.Sync.Incremental(ctx, channelID)
+	slog.Debug("lifecycle: incremental sync starting", "channel_id", channelID)
+	err := s.Sync.Incremental(ctx, channelID)
+	if err != nil {
+		slog.Warn("lifecycle: incremental sync failed", "channel_id", channelID, "error", err)
+		return err
+	}
+	slog.Debug("lifecycle: incremental sync complete", "channel_id", channelID)
+
+	// Best-effort: a failure here just means an external delete goes
+	// undetected until the next sync pass, not that this sync failed.
+	if n, err := s.Sync.ReconcileDeletions(ctx, channelID); err != nil {
+		slog.Warn("lifecycle: reconcile deletions failed", "channel_id", channelID, "error", err)
+	} else if n > 0 {
+		slog.Info("lifecycle: reconciled externally deleted files", "channel_id", channelID, "count", n)
+	}
+	return nil
 }
 
 func (s *Service) RebuildProjection(channelID int64) error {
@@ -147,7 +170,13 @@ func (s *Service) RebuildProjection(channelID int64) error {
 	if channelID == 0 {
 		return fmt.Errorf("no active channel")
 	}
-	return s.Rebuild(s.DB, channelID)
+	slog.Info("lifecycle: full projection rebuild starting", "channel_id", channelID)
+	if err := s.Rebuild(s.DB, channelID); err != nil {
+		slog.Error("lifecycle: projection rebuild failed", "channel_id", channelID, "error", err)
+		return err
+	}
+	slog.Info("lifecycle: full projection rebuild complete", "channel_id", channelID)
+	return nil
 }
 
 func (s *Service) kickoffPersonalBackfill(ctx context.Context, channelID int64) {
@@ -166,9 +195,11 @@ func (s *Service) kickoffPersonalBackfill(ctx context.Context, channelID int64) 
 	s.backfilling[channelID] = true
 	s.backfillMu.Unlock()
 
+	slog.Info("lifecycle: personal backfill starting", "channel_id", channelID)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				slog.Error("lifecycle: personal backfill panicked", "channel_id", channelID, "recovered", r)
 				s.warnf("backfill panic: %v\n", r)
 				s.emit("backfill_error", channelID, fmt.Sprintf("backfill panic: %v", r))
 			}
@@ -180,9 +211,12 @@ func (s *Service) kickoffPersonalBackfill(ctx context.Context, channelID int64) 
 			s.emit("backfill_progress", ev.ChannelID, ev.Done, ev.Total, ev.Phase)
 		})
 		if err != nil {
+			slog.Warn("lifecycle: personal backfill failed", "channel_id", channelID, "error", err)
 			s.warnf("backfill: %v\n", err)
 			s.emit("backfill_error", channelID, err.Error())
+			return
 		}
+		slog.Info("lifecycle: personal backfill complete", "channel_id", channelID)
 	}()
 }
 

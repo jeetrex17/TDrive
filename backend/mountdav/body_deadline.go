@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -28,6 +29,7 @@ func (body *idleDeadlineBody) Read(buffer []byte) (int, error) {
 	n, readErr := body.body.Read(buffer)
 	clearErr := body.setDeadline(time.Time{})
 	if isBodyReadTimeout(readErr) {
+		slog.Warn("mountdav: PUT body read idle timeout", "idle_timeout", body.idleTimeout)
 		readErr = fmt.Errorf("%w: %v", errBodyReadTimeout, readErr)
 	}
 	if readErr != nil {

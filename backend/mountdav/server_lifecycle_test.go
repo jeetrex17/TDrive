@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"TDrive/backend/mountfs"
 )
 
 func TestValidateWindowsDrive(t *testing.T) {
@@ -39,6 +41,15 @@ func TestValidateWindowsDrive(t *testing.T) {
 		if !test.ok && err == nil {
 			t.Errorf("validateWindowsDrive(%q) unexpectedly returned %q", test.input, got)
 		}
+	}
+}
+
+func TestValidateStartConfigRejectsTypedNilReadFilesystem(t *testing.T) {
+	t.Parallel()
+
+	var filesystem *mountfs.Aggregate
+	if _, err := validateStartConfig(context.Background(), StartConfig{FS: filesystem, DriveID: 1}); err == nil {
+		t.Fatal("validateStartConfig() accepted a typed nil filesystem")
 	}
 }
 

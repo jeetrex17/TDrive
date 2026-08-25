@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"TDrive/backend/projection"
@@ -90,8 +91,10 @@ func (s *Service) CreateContext(ctx context.Context, channelID int64, name strin
 		Name:   name,
 	}
 	if err := s.emit(ctx, channelID, op); err != nil {
+		slog.Error("folder: create failed", "channel_id", channelID, "name", name, "parent_id", parent, "error", err)
 		return Folder{}, fmt.Errorf("create folder failed: %w", err)
 	}
+	slog.Debug("folder: created", "channel_id", channelID, "folder_id", folderID, "name", name, "parent_id", parent)
 
 	return Folder{
 		ID:       folderID,
@@ -141,8 +144,10 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 		ops = append(ops, projection.Op{Type: projection.OpRmdir, Obj: folder.ID})
 	}
 	if err := s.emitMany(ctx, channelID, ops); err != nil {
+		slog.Error("folder: delete failed", "channel_id", channelID, "folder_id", folderID, "error", err)
 		return fmt.Errorf("delete folder failed: %w", err)
 	}
+	slog.Debug("folder: deleted", "channel_id", channelID, "folder_id", folderID, "files", len(files), "subfolders", len(folders))
 
 	// Body deletion is best effort and runs only after the whole subtree's
 	// metadata is locally tombstoned. If Telegram body cleanup fails, replayed
@@ -180,7 +185,12 @@ func (s *Service) RenameContext(ctx context.Context, channelID int64, folderID s
 		Obj:  folderID,
 		Name: newName,
 	}
-	return s.emit(ctx, channelID, op)
+	if err := s.emit(ctx, channelID, op); err != nil {
+		slog.Error("folder: rename failed", "channel_id", channelID, "folder_id", folderID, "error", err)
+		return err
+	}
+	slog.Debug("folder: renamed", "channel_id", channelID, "folder_id", folderID, "new_name", newName)
+	return nil
 }
 
 func (s *Service) Move(channelID int64, folderID string, newParentID string) error {
@@ -237,7 +247,12 @@ func (s *Service) MoveContext(ctx context.Context, channelID int64, folderID str
 		Obj:    folderID,
 		Parent: parent,
 	}
-	return s.emit(ctx, channelID, op)
+	if err := s.emit(ctx, channelID, op); err != nil {
+		slog.Error("folder: move failed", "channel_id", channelID, "folder_id", folderID, "new_parent_id", parent, "error", err)
+		return err
+	}
+	slog.Debug("folder: moved", "channel_id", channelID, "folder_id", folderID, "new_parent_id", parent)
+	return nil
 }
 
 func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) error {

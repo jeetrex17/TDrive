@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -479,6 +480,8 @@ func applyRelocate(tx *sql.Tx, channelID int64, op Op) error {
 		if op.PurgeAfter <= op.DeletedAt {
 			return fmt.Errorf("%w: overwrite requires later purge deadline", ErrBadOp)
 		}
+		slog.Info("projection: relocate overwriting existing destination, trashing victim",
+			"channel_id", channelID, "destination_object_id", destinationID)
 		if err := trashExactFile(tx, channelID, destinationID, op.OpID, op.DeletedAt, op.PurgeAfter); err != nil {
 			return err
 		}
@@ -695,6 +698,7 @@ func trashFolderTree(tx *sql.Tx, channelID int64, rootID string) error {
 	`, rootID, channelID, channelID); err != nil {
 		return fmt.Errorf("projection: trash descendant folders: %w", err)
 	}
+	slog.Info("projection: trashed folder tree", "channel_id", channelID, "root_object_id", rootID, "file_count", fileCount)
 	return nil
 }
 

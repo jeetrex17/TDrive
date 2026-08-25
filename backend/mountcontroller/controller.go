@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +33,7 @@ const (
 type operation struct {
 	kind         operationKind
 	driveID      int64
+	selection    string
 	windowsDrive string
 	mode         Mode
 	done         chan struct{}
@@ -40,6 +43,8 @@ type operation struct {
 
 type session struct {
 	drive        Drive
+	drives       []Drive
+	selection    string
 	label        string
 	windowsDrive string
 	mode         Mode
@@ -126,10 +131,19 @@ func NewWithDependencies(dependencies Dependencies) (*Controller, error) {
 	}, nil
 }
 
-// Start mounts drive without changing the Engine's active drive. Concurrent
-// equivalent requests share the in-flight result; a different drive or drive
-// letter receives ConflictError immediately.
+// Start mounts one drive without changing the Engine's active drive. It keeps
+// the existing single-drive layout used by the CLI.
 func (controller *Controller) Start(ctx context.Context, requested Drive, options StartOptions) (Status, error) {
+	return controller.startDrives(ctx, []Drive{requested}, options)
+}
+
+// StartDrives mounts an immutable selection below one virtual TDrive root.
+// A one-drive selection preserves the existing direct-root layout.
+func (controller *Controller) StartDrives(ctx context.Context, requested []Drive, options StartOptions) (Status, error) {
+	return controller.startDrives(ctx, requested, options)
+}
+
+func (controller *Controller) startDrives(ctx context.Context, requested []Drive, options StartOptions) (Status, error) {
 	if controller == nil {
 		return Status{Phase: PhaseFailed, Error: "TDrive mount is unavailable"}, ErrInvalidConfiguration
 	}
@@ -139,11 +153,12 @@ func (controller *Controller) Start(ctx context.Context, requested Drive, option
 	if err := ctx.Err(); err != nil {
 		return controller.Status(), err
 	}
-	drive, err := normalizeDrive(requested)
+	drives, err := normalizeDriveSelection(requested)
 	if err != nil {
 		return controller.Status(), err
 	}
-	label, err := displayLabel(drive)
+	drive := drives[0]
+	label, err := selectionLabel(drives)
 	if err != nil {
 		return controller.Status(), err
 	}
@@ -151,17 +166,27 @@ func (controller *Controller) Start(ctx context.Context, requested Drive, option
 	if err != nil {
 		return controller.Status(), err
 	}
-	mode, err := resolveMode(options.Mode, drive, controller.writers)
+	mode, err := resolveSelectionMode(options.Mode, drives, controller.writers)
 	if err != nil {
 		return controller.Status(), err
 	}
+	selection := driveSelectionSignature(drives)
 
 	for {
 		controller.refreshHealth()
 		controller.mu.Lock()
 		if current := controller.operation; current != nil {
 			if current.kind == operationStart {
-				if err := conflictError(current.driveID, current.windowsDrive, current.mode, drive.ID, windowsDrive, mode); err != nil {
+				if err := selectionConflictError(
+					current.selection,
+					selection,
+					current.driveID,
+					current.windowsDrive,
+					current.mode,
+					drive.ID,
+					windowsDrive,
+					mode,
+				); err != nil {
 					status := controller.status
 					controller.mu.Unlock()
 					return status, err
@@ -177,7 +202,9 @@ func (controller *Controller) Start(ctx context.Context, requested Drive, option
 		}
 
 		if controller.session != nil {
-			if err := conflictError(
+			if err := selectionConflictError(
+				controller.session.selection,
+				selection,
 				controller.session.drive.ID,
 				controller.session.windowsDrive,
 				controller.session.mode,
@@ -197,12 +224,15 @@ func (controller *Controller) Start(ctx context.Context, requested Drive, option
 		current := &operation{
 			kind:         operationStart,
 			driveID:      drive.ID,
+			selection:    selection,
 			windowsDrive: windowsDrive,
 			mode:         mode,
 			done:         make(chan struct{}),
 		}
 		active := &session{
 			drive:        drive,
+			drives:       append([]Drive(nil), drives...),
+			selection:    selection,
 			label:        label,
 			windowsDrive: windowsDrive,
 			mode:         mode,
@@ -219,56 +249,14 @@ func (controller *Controller) Start(ctx context.Context, requested Drive, option
 }
 
 func (controller *Controller) runStart(ctx context.Context, current *operation, active *session) (Status, error) {
-	if active.drive.Encrypted {
-		if controller.keys == nil {
-			return controller.failStart(current, active, prepareFailureMessage(active.mode), ErrEncryptionPasswordRequired)
-		}
-		lease, err := controller.keys.Acquire(ctx, active.drive)
-		if err != nil || lease == nil {
-			if err == nil {
-				err = ErrEncryptionPasswordRequired
-			}
-			return controller.failStart(current, active, prepareFailureMessage(active.mode), err)
-		}
-		active.key = lease
-	}
-	filesystem, content, err := controller.filesystems.Build(ctx, active.drive.ID, controller.fsOptions, active.key)
+	filesystem, err := controller.prepareSession(ctx, active)
 	if err != nil {
-		if content != nil {
-			content.Close()
-		}
 		_ = closeWriterForRollback(ctx, active.writer)
+		if active.content != nil {
+			active.content.Close()
+		}
 		closeSessionKey(active)
 		return controller.failStart(current, active, prepareFailureMessage(active.mode), err)
-	}
-	if filesystem == nil || content == nil {
-		if content != nil {
-			content.Close()
-		}
-		_ = closeWriterForRollback(ctx, active.writer)
-		closeSessionKey(active)
-		return controller.failStart(
-			current,
-			active,
-			prepareFailureMessage(active.mode),
-			fmt.Errorf("%w: filesystem builder returned incomplete resources", ErrInvalidConfiguration),
-		)
-	}
-	active.content = content
-	if active.mode == ModeReadWrite {
-		writer, writerErr := controller.writers.Build(ctx, active.drive, filesystem, active.key)
-		if writerErr != nil || writer == nil {
-			if writer != nil {
-				_ = closeWriterForRollback(ctx, writer)
-			}
-			content.Close()
-			closeSessionKey(active)
-			if writerErr == nil {
-				writerErr = fmt.Errorf("%w: writer builder returned no writer", ErrInvalidConfiguration)
-			}
-			return controller.failStart(current, active, "TDrive could not prepare the writable mount", writerErr)
-		}
-		active.writer = writer
 	}
 
 	endpointStatus, err := controller.endpoint.Start(ctx, EndpointConfig{
@@ -281,7 +269,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 	})
 	if err != nil {
 		_ = closeWriterForRollback(ctx, active.writer)
-		content.Close()
+		active.content.Close()
 		closeSessionKey(active)
 		return controller.failStart(current, active, startFailureText(active.mode), err)
 	}
@@ -298,7 +286,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 	if err != nil {
 		cleanupErr := controller.stopEndpointForRollback(ctx)
 		writerErr := closeWriterForRollback(ctx, active.writer)
-		content.Close()
+		active.content.Close()
 		closeSessionKey(active)
 		return controller.failStart(
 			current,
@@ -307,7 +295,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 			errors.Join(err, cleanupErr, writerErr),
 		)
 	}
-	active.attachment = attachment
+	controller.setAttachment(active, attachment)
 	if !controller.endpoint.Health().Running {
 		return controller.recoverFailedEndpointAfterAttach(ctx, current, active)
 	}
@@ -637,11 +625,13 @@ func statusFor(active *session, phase Phase, running, mounted bool, message stri
 		WindowsDrive: active.windowsDrive,
 		Error:        message,
 	}
-	status.DriveID = active.drive.ID
-	status.DriveTitle = active.drive.Title
-	status.DriveKind = active.drive.Kind
-	status.DriveEncrypted = active.drive.Encrypted
-	status.DriveEncryptionUnlocked = active.drive.EncryptionUnlocked
+	if len(active.drives) <= 1 {
+		status.DriveID = active.drive.ID
+		status.DriveTitle = active.drive.Title
+		status.DriveKind = active.drive.Kind
+		status.DriveEncrypted = active.drive.Encrypted
+		status.DriveEncryptionUnlocked = active.drive.EncryptionUnlocked
+	}
 	status.Label = active.label
 	status = withWriteStatus(status, active)
 	if mounted {
@@ -649,6 +639,23 @@ func statusFor(active *session, phase Phase, running, mounted bool, message stri
 		status.AttachmentKind = active.attachment.Kind()
 	}
 	return status
+}
+
+// setWriter and setAttachment publish these session fields under mu. Building
+// the writer or attaching the OS mount happens outside mu so Status stays
+// responsive during slow OS/network calls (see the Controller doc comment);
+// these short, separately locked setters are what let a concurrent Status or
+// Open call observe them safely once they exist instead of racing runStart.
+func (controller *Controller) setWriter(active *session, writer WriteSession) {
+	controller.mu.Lock()
+	active.writer = writer
+	controller.mu.Unlock()
+}
+
+func (controller *Controller) setAttachment(active *session, attachment mountos.Attachment) {
+	controller.mu.Lock()
+	active.attachment = attachment
+	controller.mu.Unlock()
 }
 
 func withWriteStatus(status Status, active *session) Status {
@@ -682,17 +689,46 @@ func conflictError(
 	}
 }
 
+func selectionConflictError(
+	activeSelection string,
+	requestedSelection string,
+	activeID int64,
+	activeDrive string,
+	activeMode Mode,
+	requestedID int64,
+	requestedDrive string,
+	requestedMode Mode,
+) error {
+	if activeSelection != requestedSelection {
+		return &ConflictError{
+			ActiveDriveID:         activeID,
+			RequestedDriveID:      requestedID,
+			SelectionChanged:      true,
+			ActiveWindowsDrive:    activeDrive,
+			RequestedWindowsDrive: requestedDrive,
+			ActiveMode:            activeMode,
+			RequestedMode:         requestedMode,
+		}
+	}
+	return conflictError(activeID, activeDrive, activeMode, requestedID, requestedDrive, requestedMode)
+}
+
 func resolveMode(requested Mode, drive Drive, writers WriterBuilder) (Mode, error) {
+	return resolveSelectionMode(requested, []Drive{drive}, writers)
+}
+
+func resolveSelectionMode(requested Mode, drives []Drive, writers WriterBuilder) (Mode, error) {
 	if requested != ModeAuto && requested != ModeReadOnly && requested != ModeReadWrite {
 		return "", ErrInvalidMode
 	}
-	if drive.Encrypted && !drive.EncryptionUnlocked {
+	personal, hasPersonal := personalDriveIn(drives)
+	if hasPersonal && personal.Encrypted && !personal.EncryptionUnlocked {
 		return "", ErrEncryptionPasswordRequired
 	}
 	if requested == ModeReadOnly {
 		return ModeReadOnly, nil
 	}
-	eligible := writers != nil && drive.Kind == DriveKindPersonal
+	eligible := writers != nil && hasPersonal
 	if requested == ModeReadWrite && !eligible {
 		return "", ErrWritableUnavailable
 	}
@@ -700,6 +736,62 @@ func resolveMode(requested Mode, drive Drive, writers WriterBuilder) (Mode, erro
 		return ModeReadWrite, nil
 	}
 	return ModeReadOnly, nil
+}
+
+func normalizeDriveSelection(requested []Drive) ([]Drive, error) {
+	if len(requested) == 0 || len(requested) > 256 {
+		return nil, fmt.Errorf("%w: select between 1 and 256 drives", ErrInvalidDrive)
+	}
+	drives := make([]Drive, len(requested))
+	seen := make(map[int64]struct{}, len(requested))
+	personalCount := 0
+	for index, candidate := range requested {
+		drive, err := normalizeDrive(candidate)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := seen[drive.ID]; exists {
+			return nil, fmt.Errorf("%w: duplicate drive %d", ErrInvalidDrive, drive.ID)
+		}
+		seen[drive.ID] = struct{}{}
+		if drive.Kind == DriveKindPersonal {
+			personalCount++
+			if personalCount > 1 {
+				return nil, fmt.Errorf("%w: multiple personal drives", ErrInvalidDrive)
+			}
+		}
+		drives[index] = drive
+	}
+	sort.Slice(drives, func(left, right int) bool {
+		if drives[left].Kind != drives[right].Kind {
+			return drives[left].Kind == DriveKindPersonal
+		}
+		leftTitle := mountfs.NameKey(drives[left].Title)
+		rightTitle := mountfs.NameKey(drives[right].Title)
+		if leftTitle != rightTitle {
+			return leftTitle < rightTitle
+		}
+		return drives[left].ID < drives[right].ID
+	})
+	return drives, nil
+}
+
+func selectionLabel(drives []Drive) (string, error) {
+	if len(drives) == 1 {
+		return displayLabel(drives[0])
+	}
+	return "Tdrive", nil
+}
+
+func driveSelectionSignature(drives []Drive) string {
+	var builder strings.Builder
+	for index, drive := range drives {
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteString(strconv.FormatInt(drive.ID, 10))
+	}
+	return builder.String()
 }
 
 func initialWriteState(mode Mode) WriteState {

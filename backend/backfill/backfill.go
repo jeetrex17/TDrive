@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -91,6 +92,8 @@ func (r *Runner) RunPersonal(ctx context.Context, channelID int64, onProgress fu
 
 	totalFolders := len(folders)
 	totalFiles := len(files)
+	slog.Info("backfill: personal channel backfill starting", "channel_id", channelID,
+		"folders", totalFolders, "files", totalFiles, "already_published", len(seen))
 
 	throttle := time.NewTicker(time.Second / time.Duration(OpsPerSec))
 	defer throttle.Stop()
@@ -144,6 +147,7 @@ func (r *Runner) RunPersonal(ctx context.Context, channelID int64, onProgress fu
 	if err := r.markDone(channelID); err != nil {
 		return err
 	}
+	slog.Info("backfill: personal channel backfill complete", "channel_id", channelID, "published", doneCount)
 	if onProgress != nil {
 		onProgress(ProgressEvent{ChannelID: channelID, Done: doneCount, Total: totalFolders + totalFiles, Phase: "done"})
 	}
@@ -168,6 +172,8 @@ func (r *Runner) publishOne(ctx context.Context, peer tgclient.InputPeer, channe
 			if wait <= 0 {
 				wait = time.Second
 			}
+			slog.Warn("backfill: FLOOD_WAIT, retrying", "channel_id", channelID, "op_type", op.Type,
+				"attempt", attempt+1, "wait", wait)
 			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():

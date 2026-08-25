@@ -289,7 +289,7 @@ func TestPropfindUsesOneCompleteMetadataSnapshot(t *testing.T) {
 	}
 }
 
-func newPropfindTestHandler(portable *mountfs.FS) http.Handler {
+func newPropfindTestHandler(portable mountfs.ReadFilesystem) http.Handler {
 	return protectedTestHandler(2, &readApplication{
 		capabilityPath: testCapability,
 		fs:             NewFileSystem(portable),

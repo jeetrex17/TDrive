@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"TDrive/backend/projection"
@@ -43,6 +44,11 @@ type Engine struct {
 	// FLOOD_WAIT. Optional progress/UI hook; nil is fine.
 	OnFloodWait func(channelID int64, wait time.Duration)
 
+	// EmitTomb persists a tomb op for a file whose backing message(s) were
+	// found deleted directly on Telegram, bypassing TDrive's own delete
+	// path. Required only for ReconcileDeletions; nil makes it a no-op.
+	EmitTomb func(channelID int64, fileMsgID int64) error
+
 	mu    stdsync.Mutex
 	locks map[int64]*stdsync.Mutex
 }
@@ -63,6 +69,7 @@ func (e *Engine) getHistory(ctx context.Context, channelID int64, peer tgclient.
 		if wait > maxFloodWaitSleep {
 			wait = maxFloodWaitSleep
 		}
+		slog.Warn("sync: FLOOD_WAIT on history read, retrying", "channel_id", channelID, "attempt", attempt+1, "wait", wait)
 		if e.OnFloodWait != nil {
 			e.OnFloodWait(channelID, wait)
 		}
@@ -107,7 +114,15 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 	lk := e.lockFor(channelID)
 	lk.Lock()
 	defer lk.Unlock()
-	return e.incrementalLocked(ctx, channelID)
+	start := time.Now()
+	slog.Debug("sync: incremental sync starting", "channel_id", channelID)
+	err := e.incrementalLocked(ctx, channelID)
+	if err != nil {
+		slog.Error("sync: incremental sync failed", "channel_id", channelID, "elapsed", time.Since(start), "error", err)
+		return err
+	}
+	slog.Info("sync: incremental sync completed", "channel_id", channelID, "elapsed", time.Since(start))
+	return nil
 }
 
 func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
@@ -135,6 +150,72 @@ func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
 	return e.applyHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
 }
 
+// ReconcileDeletions checks every locally-live file's backing Telegram
+// message(s) in channelID and tombstones any file for which at least one
+// backing message (its own, or for a multipart upload, any part) has been
+// deleted directly on Telegram, bypassing TDrive's own delete path. Missing
+// even one part makes a multipart file's content unrecoverable, so any one
+// missing backing message tombstones the whole file. Returns the number of
+// files tombstoned this pass. A nil EmitTomb makes this a no-op.
+func (e *Engine) ReconcileDeletions(ctx context.Context, channelID int64) (int, error) {
+	if e.EmitTomb == nil {
+		return 0, nil
+	}
+	lk := e.lockFor(channelID)
+	lk.Lock()
+	defer lk.Unlock()
+
+	refs, err := projection.LiveFileMessageIDs(e.db, channelID)
+	if err != nil {
+		return 0, fmt.Errorf("sync: list live files: %w", err)
+	}
+	if len(refs) == 0 {
+		return 0, nil
+	}
+
+	var allIDs []int64
+	for _, ref := range refs {
+		allIDs = append(allIDs, ref.BackingMsgIDs...)
+	}
+
+	peer, err := e.peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return 0, fmt.Errorf("sync: resolve peer: %w", err)
+	}
+	missing, err := e.tg.MissingMessages(ctx, peer, allIDs)
+	if err != nil {
+		return 0, fmt.Errorf("sync: check message existence: %w", err)
+	}
+	if len(missing) == 0 {
+		return 0, nil
+	}
+	missingSet := make(map[int64]struct{}, len(missing))
+	for _, id := range missing {
+		missingSet[id] = struct{}{}
+	}
+
+	tombstoned := 0
+	for _, ref := range refs {
+		gone := false
+		for _, id := range ref.BackingMsgIDs {
+			if _, ok := missingSet[id]; ok {
+				gone = true
+				break
+			}
+		}
+		if !gone {
+			continue
+		}
+		slog.Warn("sync: file's backing message deleted directly on Telegram, tombstoning", "channel_id", channelID, "file_msg_id", ref.FileMsgID)
+		if err := e.EmitTomb(channelID, ref.FileMsgID); err != nil {
+			slog.Error("sync: reconcile tombstone failed", "channel_id", channelID, "file_msg_id", ref.FileMsgID, "error", err)
+			continue
+		}
+		tombstoned++
+	}
+	return tombstoned, nil
+}
+
 // EnsureAuthoritative guarantees that the local projection has observed the
 // channel's complete Telegram history before returning successfully. It is
 // used for security decisions whose absence is meaningful, such as deciding
@@ -150,14 +231,17 @@ func (e *Engine) EnsureAuthoritative(ctx context.Context, channelID int64) error
 	lk := e.lockFor(channelID)
 	lk.Lock()
 	defer lk.Unlock()
+	start := time.Now()
 
 	channel, err := projection.GetChannel(e.db, channelID)
 	if err != nil {
 		return fmt.Errorf("sync: read channel authority: %w", err)
 	}
 	if channel.InitialSyncDone {
+		slog.Debug("sync: channel already authoritative, running incremental refresh", "channel_id", channelID)
 		return e.incrementalLocked(ctx, channelID)
 	}
+	slog.Info("sync: establishing authoritative full history scan", "channel_id", channelID)
 
 	parseOpts, err := parseOptionsForChannel(e.db, channelID)
 	if err != nil {
@@ -172,9 +256,16 @@ func (e *Engine) EnsureAuthoritative(ctx context.Context, channelID int64) error
 		return err
 	}
 	if len(plan.upperBounds) == 0 {
+		slog.Info("sync: authoritative scan found no history", "channel_id", channelID, "elapsed", time.Since(start))
 		return markInitialSyncDone(e.db, channelID, 0)
 	}
-	return e.applyInitialHistoryPlan(ctx, channelID, peer, 0, plan, parseOpts)
+	err = e.applyInitialHistoryPlan(ctx, channelID, peer, 0, plan, parseOpts)
+	if err != nil {
+		slog.Error("sync: authoritative scan failed", "channel_id", channelID, "elapsed", time.Since(start), "error", err)
+		return err
+	}
+	slog.Info("sync: authoritative scan completed", "channel_id", channelID, "elapsed", time.Since(start), "pages", len(plan.upperBounds), "highest_msg_id", plan.highestSeen)
+	return nil
 }
 
 // InitialSyncEmptyChannel paginates the full history of a channel that has
@@ -185,6 +276,8 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 	lk := e.lockFor(channelID)
 	lk.Lock()
 	defer lk.Unlock()
+	start := time.Now()
+	slog.Info("sync: initial sync of empty channel starting", "channel_id", channelID)
 
 	empty, err := projection.ChannelIsEmpty(e.db, channelID)
 	if err != nil {
@@ -209,9 +302,16 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 		return err
 	}
 	if len(plan.upperBounds) == 0 {
+		slog.Info("sync: initial sync found no history", "channel_id", channelID, "elapsed", time.Since(start))
 		return markInitialSyncDone(e.db, channelID, watermark)
 	}
-	return e.applyInitialHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
+	err = e.applyInitialHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
+	if err != nil {
+		slog.Error("sync: initial sync failed", "channel_id", channelID, "elapsed", time.Since(start), "error", err)
+		return err
+	}
+	slog.Info("sync: initial sync completed", "channel_id", channelID, "elapsed", time.Since(start), "pages", len(plan.upperBounds), "highest_msg_id", plan.highestSeen)
+	return nil
 }
 
 func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64) (historyPlan, error) {
@@ -278,6 +378,7 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 		}
 		parsed := ParseHistoryPageWithOptions(filtered, parseOpts)
 		SortAscending(parsed)
+		slog.Debug("sync: applying history page", "channel_id", channelID, "ops", len(parsed))
 
 		tx, err := e.db.Begin()
 		if err != nil {
@@ -286,6 +387,7 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 		for _, p := range parsed {
 			if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
 				_ = tx.Rollback()
+				slog.Error("sync: applying op failed, page rolled back", "channel_id", channelID, "msg_id", p.MsgID, "op_type", p.Op.Type, "error", err)
 				return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
 			}
 		}
@@ -327,8 +429,10 @@ func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, p
 		}
 		parsed := ParseHistoryPageWithOptions(filtered, parseOpts)
 		SortAscending(parsed)
+		slog.Debug("sync: applying initial-scan page", "channel_id", channelID, "ops", len(parsed))
 		for _, p := range parsed {
 			if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
+				slog.Error("sync: applying op failed during initial scan", "channel_id", channelID, "msg_id", p.MsgID, "op_type", p.Op.Type, "error", err)
 				return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
 			}
 		}
@@ -362,6 +466,7 @@ func (e *Engine) adoptRecentCaptionlessMedia(ctx context.Context, channelID int6
 	if len(adopted) == 0 {
 		return nil
 	}
+	slog.Debug("sync: adopting captionless media as root files", "channel_id", channelID, "count", len(adopted))
 
 	tx, err := e.db.Begin()
 	if err != nil {

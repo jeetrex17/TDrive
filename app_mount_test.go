@@ -221,24 +221,33 @@ func TestLockEncryptionSessionClosesMountBeforeClearingKey(t *testing.T) {
 }
 
 type fakeAppMountController struct {
-	startStatus  mountcontroller.Status
-	status       mountcontroller.Status
-	stopStatus   mountcontroller.Status
-	startErr     error
-	openErr      error
-	stopErr      error
-	closeErr     error
-	startedDrive mountcontroller.Drive
-	startOptions mountcontroller.StartOptions
-	startCalls   int
-	openCalls    int
-	stopCalls    int
-	closeCalls   int
+	startStatus      mountcontroller.Status
+	status           mountcontroller.Status
+	stopStatus       mountcontroller.Status
+	startErr         error
+	openErr          error
+	stopErr          error
+	closeErr         error
+	startedDrive     mountcontroller.Drive
+	startedDrives    []mountcontroller.Drive
+	startOptions     mountcontroller.StartOptions
+	startCalls       int
+	startDrivesCalls int
+	openCalls        int
+	stopCalls        int
+	closeCalls       int
 }
 
 func (fake *fakeAppMountController) Start(_ context.Context, drive mountcontroller.Drive, options mountcontroller.StartOptions) (mountcontroller.Status, error) {
 	fake.startCalls++
 	fake.startedDrive = drive
+	fake.startOptions = options
+	return fake.startStatus, fake.startErr
+}
+
+func (fake *fakeAppMountController) StartDrives(_ context.Context, drives []mountcontroller.Drive, options mountcontroller.StartOptions) (mountcontroller.Status, error) {
+	fake.startDrivesCalls++
+	fake.startedDrives = append([]mountcontroller.Drive(nil), drives...)
 	fake.startOptions = options
 	return fake.startStatus, fake.startErr
 }

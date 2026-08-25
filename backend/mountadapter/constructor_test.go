@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/mountdav"
@@ -174,6 +175,51 @@ func TestNewSupportsInjectedEngineAndRunsRecovery(t *testing.T) {
 	}
 }
 
+func TestNewStartsWithDeferredHiddenCleanupRecovery(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionDB(t)
+	if err := mountwrite.EnsureJournalSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureJournalSchema: %v", err)
+	}
+	journal, err := mountwrite.NewSQLiteJournal(db)
+	if err != nil {
+		t.Fatalf("NewSQLiteJournal: %v", err)
+	}
+	at := time.Unix(1_700_000_000, 0).UTC()
+	if err := journal.Create(ctx, mountwrite.JournalRecord{
+		OperationID: "deferred-cleanup",
+		Mutation: mountwrite.Mutation{
+			Kind: mountwrite.MutationPut, DriveID: testDriveID,
+			DestinationName: "interrupted.txt", ContentLength: 1,
+		},
+		State: mountwrite.StateCleanupPending,
+		Body: &mountwrite.RemoteBody{
+			UploadUUID: "cleanup-upload", PartCount: 1,
+			StoredSize: 1, PlaintextSize: 1, MessageIDs: []int64{71},
+		},
+		CreatedAt: at, UpdatedAt: at,
+	}); err != nil {
+		t.Fatalf("seed cleanup journal: %v", err)
+	}
+	remote := &constructorRemote{discardErr: mountwrite.ErrUnavailable}
+	session, err := New(ctx, Config{
+		DriveID: testDriveID,
+		Policy:  DrivePolicy{Kind: projection.KindPersonal, Online: true},
+		DB:      db, StagingRoot: filepath.Join(t.TempDir(), "stage"),
+		Resolver: newFakeResolver(), Remote: remote, Cache: &fakeSnapshotCache{},
+	})
+	if err != nil {
+		t.Fatalf("New with deferred cleanup: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	if report := session.RecoveryReport(); report.Examined != 1 || report.Pending != 1 || report.Failed != 0 {
+		t.Fatalf("recovery report = %+v", report)
+	}
+	if remote.discardCalls != 1 {
+		t.Fatalf("discard calls = %d, want 1", remote.discardCalls)
+	}
+}
+
 func TestSnapshotInvalidatorTargetsExactParentsAndSubtrees(t *testing.T) {
 	cache := &fakeSnapshotCache{}
 	invalidator, err := NewSnapshotInvalidator(testDriveID, cache)
@@ -210,9 +256,11 @@ func (c *fakeSnapshotCache) InvalidateSubtree(rootID string) {
 }
 
 type constructorRemote struct {
-	commit mountwrite.CommitRequest
-	upload mountwrite.HiddenUpload
-	stored []byte
+	commit       mountwrite.CommitRequest
+	upload       mountwrite.HiddenUpload
+	stored       []byte
+	discardErr   error
+	discardCalls int
 }
 
 func (r *constructorRemote) UploadHidden(_ context.Context, upload mountwrite.HiddenUpload, source io.ReadSeeker) (mountwrite.RemoteBody, error) {
@@ -248,8 +296,9 @@ func (*constructorRemote) Reconcile(context.Context, string) (mountwrite.Mutatio
 	return mountwrite.MutationResult{}, false, nil
 }
 
-func (*constructorRemote) DiscardHidden(context.Context, string, *mountwrite.RemoteBody) error {
-	return nil
+func (r *constructorRemote) DiscardHidden(context.Context, string, *mountwrite.RemoteBody) error {
+	r.discardCalls++
+	return r.discardErr
 }
 
 func equalStrings(left, right []string) bool {

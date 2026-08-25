@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
@@ -117,12 +118,18 @@ func (s *Service) CreatePasswordContext(ctx context.Context, password string, hi
 	defer zeroBytes(master)
 	cfg, err := s.buildConfig(channelID, password, hint, master, 0)
 	if err != nil {
+		slog.Error("encryption: build config for new password failed", "channel_id", channelID, "error", err)
 		return err
 	}
 	if err := s.publishConfig(channelID, cfg); err != nil {
+		slog.Error("encryption: publish new password config failed", "channel_id", channelID, "error", err)
 		return err
 	}
-	return s.StoreMasterKey(master)
+	if err := s.StoreMasterKey(master); err != nil {
+		return err
+	}
+	slog.Info("encryption: vault password created", "channel_id", channelID, "hint_set", strings.TrimSpace(hint) != "")
+	return nil
 }
 
 func (s *Service) UsePassword(password string) error {
@@ -144,7 +151,12 @@ func (s *Service) UsePassword(password string) error {
 	if err != nil {
 		return err
 	}
-	return s.RememberPassword(existing, password)
+	if err := s.RememberPassword(existing, password); err != nil {
+		slog.Warn("encryption: unlock vault failed", "channel_id", channelID, "error", err)
+		return err
+	}
+	slog.Info("encryption: vault unlocked", "channel_id", channelID)
+	return nil
 }
 
 func (s *Service) ChangePassword(currentPassword string, newPassword string, hint string) error {
@@ -171,17 +183,24 @@ func (s *Service) ChangePassword(currentPassword string, newPassword string, hin
 	}
 	master, err := s.unwrapMasterKey(existing, currentPassword)
 	if err != nil {
+		slog.Warn("encryption: change password rejected, current password did not unlock vault", "channel_id", channelID)
 		return err
 	}
 	defer zeroBytes(master)
 	cfg, err := s.buildConfig(channelID, newPassword, hint, master, existing.CreatedAt)
 	if err != nil {
+		slog.Error("encryption: build config for password change failed", "channel_id", channelID, "error", err)
 		return err
 	}
 	if err := s.publishConfig(channelID, cfg); err != nil {
+		slog.Error("encryption: publish changed password config failed", "channel_id", channelID, "error", err)
 		return err
 	}
-	return s.StoreMasterKey(master)
+	if err := s.StoreMasterKey(master); err != nil {
+		return err
+	}
+	slog.Info("encryption: vault password changed", "channel_id", channelID, "hint_set", strings.TrimSpace(hint) != "")
+	return nil
 }
 
 func (s *Service) MasterKeyForUpload(channelID int64, wantEncrypted bool) ([]byte, error) {
@@ -247,6 +266,7 @@ func (s *Service) hasLoadedMasterKey() bool {
 // anything other than one 32-byte key fails closed by locking the vault.
 func (s *Service) StoreMasterKey(key []byte) error {
 	if len(key) != masterKeySize {
+		slog.Warn("encryption: rejecting master key with wrong length, locking vault", "length", len(key))
 		s.Clear()
 		return ErrInvalidMasterKey
 	}
@@ -256,6 +276,7 @@ func (s *Service) StoreMasterKey(key []byte) error {
 	s.masterKey = cp
 	zeroBytes(previous)
 	s.masterKeyMu.Unlock()
+	slog.Debug("encryption: master key loaded into memory")
 	return nil
 }
 
@@ -265,6 +286,7 @@ func (s *Service) Clear() {
 	s.masterKey = nil
 	zeroBytes(previous)
 	s.masterKeyMu.Unlock()
+	slog.Debug("encryption: vault key cleared from memory")
 }
 
 func (s *Service) RememberPassword(cfg projection.EncryptionConfig, password string) error {

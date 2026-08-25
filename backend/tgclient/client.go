@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 )
 
@@ -182,6 +183,12 @@ type Client interface {
 	// follow-up and folder hard-delete. Best effort.
 	DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int64) error
 
+	// MissingMessages checks which of the given message IDs no longer exist
+	// in the channel (deleted by any client, not just TDrive). Used by
+	// external-delete reconciliation to detect a file whose backing message
+	// vanished from Telegram directly.
+	MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error)
+
 	CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error)
 	ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error)
 	CheckInvite(ctx context.Context, hash string) (InviteInfo, error)
@@ -213,7 +220,14 @@ func SendControlIdempotent(ctx context.Context, client Client, peer InputPeer, t
 	if !ok {
 		return 0, fmt.Errorf("tgclient: idempotent sends are not supported")
 	}
-	return sender.SendControlWithRandomID(ctx, peer, text, silent, randomID)
+	slog.Debug("tgclient: sending control message", "channel_id", peer.ChannelID, "silent", silent, "text_len", len(text))
+	msgID, err := sender.SendControlWithRandomID(ctx, peer, text, silent, randomID)
+	if err != nil {
+		slog.Error("tgclient: send control message failed", "channel_id", peer.ChannelID, "error", err)
+		return 0, err
+	}
+	slog.Debug("tgclient: control message sent", "channel_id", peer.ChannelID, "msg_id", msgID)
+	return msgID, nil
 }
 
 func SendFileIdempotent(ctx context.Context, client Client, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), randomID int64) (SendFileResult, error) {
@@ -224,5 +238,12 @@ func SendFileIdempotent(ctx context.Context, client Client, peer InputPeer, r io
 	if !ok {
 		return SendFileResult{}, fmt.Errorf("tgclient: idempotent sends are not supported")
 	}
-	return sender.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID)
+	slog.Debug("tgclient: sending file", "channel_id", peer.ChannelID, "name", name, "total_size", totalSize)
+	result, err := sender.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID)
+	if err != nil {
+		slog.Error("tgclient: send file failed", "channel_id", peer.ChannelID, "name", name, "error", err)
+		return SendFileResult{}, err
+	}
+	slog.Debug("tgclient: file sent", "channel_id", peer.ChannelID, "msg_id", result.MsgID, "total_size", totalSize)
+	return result, nil
 }

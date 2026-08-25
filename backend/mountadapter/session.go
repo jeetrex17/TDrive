@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -45,14 +46,17 @@ func (s *Session) Put(ctx context.Context, request mountdav.PutRequest, body io.
 	if s.encryptWrites && request.ContentLength < 0 {
 		return mountdav.MutationResult{}, mountdav.ErrWriteLengthRequired
 	}
+	slog.Debug("mountadapter: Session.Put", "path", request.Path, "content_length", request.ContentLength, "encrypt_writes", s.encryptWrites)
 	parent, name, target, found, err := s.resolveDestination(ctx, request.Path)
 	if err != nil {
 		return mountdav.MutationResult{}, err
 	}
 	if found && target.Kind != mountfs.KindFile {
+		slog.Debug("mountadapter: Put conflict, target is not a file", "path", request.Path)
 		return mountdav.MutationResult{}, mountdav.ErrWriteConflict
 	}
 	if found && target.Encrypted && !s.encryptWrites {
+		slog.Debug("mountadapter: Put forbidden, target is encrypted but this session cannot write encrypted content", "path", request.Path)
 		return mountdav.MutationResult{}, mountdav.ErrWriteForbidden
 	}
 	resource, err := resourceForNode(ctx, s.driveID, target, found)
@@ -87,7 +91,9 @@ func (s *Session) Put(ctx context.Context, request mountdav.PutRequest, body io.
 	}
 	result, err := s.engine.Put(ctx, domainRequest, body)
 	if err != nil {
-		return mountdav.MutationResult{}, mapWriteError(err)
+		mapped := mapWriteError(err)
+		slog.Debug("mountadapter: Put returned error", "path", request.Path, "error", mapped)
+		return mountdav.MutationResult{}, mapped
 	}
 	return davResult(ctx, s.driveID, result)
 }
@@ -96,6 +102,7 @@ func (s *Session) Mkdir(ctx context.Context, request mountdav.MkdirRequest) (mou
 	if err := s.ready(ctx); err != nil {
 		return mountdav.MutationResult{}, err
 	}
+	slog.Debug("mountadapter: Session.Mkdir", "path", request.Path)
 	parent, name, target, found, err := s.resolveDestination(ctx, request.Path)
 	if err != nil {
 		return mountdav.MutationResult{}, err
@@ -108,7 +115,17 @@ func (s *Session) Mkdir(ctx context.Context, request mountdav.MkdirRequest) (mou
 		return mountdav.MutationResult{}, err
 	}
 	if found {
-		return mountdav.MutationResult{}, mountdav.ErrWriteConflict
+		// mountdav mints a fresh OperationID per HTTP request, so the write
+		// coordinator's idempotency keying never sees a retried MKCOL as a
+		// retry (see mountwrite.Coordinator.createOrLoad). A directory
+		// already at this exact path is treated as that retry succeeding
+		// again rather than a collision; an explicit If-None-Match/If
+		// precondition above already rejects a client that asked for a
+		// strict create. A file at this path is a genuine naming conflict.
+		if target.Kind != mountfs.KindDirectory {
+			return mountdav.MutationResult{}, mountdav.ErrWriteConflict
+		}
+		return mountdav.MutationResult{}, nil
 	}
 	result, err := s.engine.Mkdir(ctx, mountwrite.MkdirRequest{
 		OperationID: request.OperationID,
@@ -126,6 +143,7 @@ func (s *Session) Move(ctx context.Context, request mountdav.MoveRequest) (mount
 	if err := s.ready(ctx); err != nil {
 		return mountdav.MutationResult{}, err
 	}
+	slog.Debug("mountadapter: Session.Move", "source", request.SourcePath, "destination", request.DestinationPath, "overwrite", request.Overwrite)
 	if err := validateAbsolutePath(request.SourcePath); err != nil {
 		return mountdav.MutationResult{}, err
 	}
@@ -202,6 +220,7 @@ func (s *Session) Delete(ctx context.Context, request mountdav.DeleteRequest) (m
 	if err := s.ready(ctx); err != nil {
 		return mountdav.MutationResult{}, err
 	}
+	slog.Debug("mountadapter: Session.Delete", "path", request.Path)
 	if err := validateAbsolutePath(request.Path); err != nil {
 		return mountdav.MutationResult{}, err
 	}

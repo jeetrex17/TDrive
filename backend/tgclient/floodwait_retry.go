@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -63,14 +64,20 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 		}
 		wait, floodWait := FloodWaitDuration(err)
 		if !floodWait || retries >= p.MaxRetries {
+			if floodWait {
+				slog.Warn("tgclient: FLOOD_WAIT retry budget exhausted, giving up", "retries", retries, "wait", wait, "max_retries", p.MaxRetries)
+			}
 			return err
 		}
 		if wait < 0 || (p.MaxWait > 0 && wait > p.MaxWait) {
+			slog.Warn("tgclient: FLOOD_WAIT exceeds per-wait limit, giving up", "wait", wait, "max_wait", p.MaxWait)
 			return err
 		}
 		if p.MaxTotalWait > 0 && (wait > p.MaxTotalWait-totalWait) {
+			slog.Warn("tgclient: FLOOD_WAIT would exceed total-wait budget, giving up", "wait", wait, "total_wait_so_far", totalWait, "max_total_wait", p.MaxTotalWait)
 			return err
 		}
+		slog.Warn("tgclient: FLOOD_WAIT, sleeping before retry", "attempt", retries+1, "wait", wait)
 		if err := sleep(ctx, wait); err != nil {
 			return err
 		}

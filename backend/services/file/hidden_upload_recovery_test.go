@@ -177,8 +177,8 @@ func TestDiscardHiddenReceiptRejectsMessageIDsWithoutProjectedOwnership(t *testi
 	tampered.MessageIDs = []int64{body.MessageIDs[0] + 1000}
 	if err := svc.DiscardHiddenReceipt(
 		context.Background(), personalChannelID, request.OperationID, tampered,
-	); err == nil {
-		t.Fatal("DiscardHiddenReceipt accepted an unowned message ID")
+	); !errors.Is(err, ErrHiddenReceiptInvalid) {
+		t.Fatalf("DiscardHiddenReceipt error = %v, want ErrHiddenReceiptInvalid", err)
 	}
 	if deleted := fakeTG.DeletedBatches(); len(deleted) != 0 {
 		t.Fatalf("unowned message ID reached Telegram delete: %+v", deleted)
@@ -204,8 +204,8 @@ func TestDiscardHiddenReceiptRejectsUploadUUIDFromAnotherOperation(t *testing.T)
 	body.UploadUUID = hiddenUploadUUID("different-operation")
 	if err := svc.DiscardHiddenReceipt(
 		context.Background(), personalChannelID, request.OperationID, body,
-	); err == nil {
-		t.Fatal("DiscardHiddenReceipt accepted another operation's upload UUID")
+	); !errors.Is(err, ErrHiddenReceiptInvalid) {
+		t.Fatalf("DiscardHiddenReceipt error = %v, want ErrHiddenReceiptInvalid", err)
 	}
 	if deleted := fakeTG.DeletedBatches(); len(deleted) != 0 {
 		t.Fatalf("wrong upload UUID reached Telegram delete: %+v", deleted)

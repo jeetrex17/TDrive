@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"TDrive/backend/media"
@@ -32,9 +33,12 @@ func (adapter contentAdapter) OpenContent(ctx context.Context, channelID int64, 
 	}
 	reader, err := adapter.opener.Open(ctx, channelID, messageID)
 	if err != nil {
+		slog.Warn("mountcontroller: content open failed", "channel_id", channelID, "message_id", messageID, "error", err)
 		return nil, mapContentOpenError(err)
 	}
 	if reader.Size() != entry.Size {
+		slog.Error("mountcontroller: content size mismatch, refusing to serve", "channel_id", channelID, "message_id", messageID,
+			"expected_size", entry.Size, "actual_size", reader.Size())
 		_ = reader.Close()
 		return nil, fmt.Errorf("%w: projected content size does not match the resolved body", mountfs.ErrContentUnavailable)
 	}

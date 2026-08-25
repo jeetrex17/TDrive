@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -14,7 +15,7 @@ import (
 
 const (
 	allowedMethodsHeader      = "OPTIONS, PROPFIND, HEAD, GET"
-	writableMethodsHeader     = "OPTIONS, PROPFIND, HEAD, GET, PUT, MKCOL, MOVE, DELETE, LOCK, UNLOCK"
+	writableMethodsHeader     = "OPTIONS, PROPFIND, PROPPATCH, HEAD, GET, PUT, MKCOL, MOVE, DELETE, LOCK, UNLOCK"
 	windowsNoRootDepth        = "1,noroot"
 	maxRequestBodyBytes       = int64(1 << 20)
 	defaultMaxConcurrent      = 32
@@ -95,7 +96,12 @@ func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request
 		http.NotFound(response, request)
 		return
 	}
+	// Log the path with the capability segment stripped: the full escaped
+	// path/URL is a bearer token for this mount and must never be logged.
+	slog.Debug("mountdav: request", "method", request.Method,
+		"path", strings.TrimPrefix(request.URL.EscapedPath(), handler.config.capabilityPath), "content_length", request.ContentLength)
 	if !allowedMethod(request.Method, handler.config.writable) {
+		slog.Debug("mountdav: method not allowed", "method", request.Method, "writable", handler.config.writable)
 		writeHTTPError(response, http.StatusMethodNotAllowed)
 		return
 	}
@@ -112,6 +118,7 @@ func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request
 	case handler.slots <- struct{}{}:
 		defer func() { <-handler.slots }()
 	default:
+		slog.Warn("mountdav: server busy, concurrent request limit reached", "max_concurrent", cap(handler.slots))
 		response.Header().Set("Retry-After", serverBusyRetrySeconds)
 		writeHTTPError(response, http.StatusServiceUnavailable)
 		return
@@ -121,6 +128,7 @@ func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request
 		case handler.writeSlots <- struct{}{}:
 			defer func() { <-handler.writeSlots }()
 		default:
+			slog.Warn("mountdav: server busy, concurrent write limit reached", "max_concurrent_write", cap(handler.writeSlots))
 			response.Header().Set("Retry-After", serverBusyRetrySeconds)
 			writeHTTPError(response, http.StatusServiceUnavailable)
 			return
@@ -166,7 +174,8 @@ func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request
 		writeHTTPError(response, http.StatusBadRequest)
 		return
 	}
-	if request.Method == "PROPFIND" && len(body) > 0 && !isWellFormedXMLDocument(body) {
+	if (request.Method == "PROPFIND" || request.Method == "PROPPATCH") &&
+		len(body) > 0 && !isWellFormedXMLDocument(body) {
 		writeHTTPError(response, http.StatusBadRequest)
 		return
 	}
@@ -229,7 +238,7 @@ func allowedMethod(method string, writable bool) bool {
 	switch method {
 	case http.MethodOptions, "PROPFIND", http.MethodHead, http.MethodGet:
 		return true
-	case http.MethodPut, "MKCOL", "MOVE", http.MethodDelete, "LOCK", "UNLOCK", "COPY":
+	case http.MethodPut, "MKCOL", "MOVE", http.MethodDelete, "LOCK", "UNLOCK", "PROPPATCH", "COPY":
 		return writable
 	default:
 		return false
@@ -238,7 +247,7 @@ func allowedMethod(method string, writable bool) bool {
 
 func isWriteMethod(method string) bool {
 	switch method {
-	case http.MethodPut, "MKCOL", "MOVE", http.MethodDelete, "LOCK", "UNLOCK", "COPY":
+	case http.MethodPut, "MKCOL", "MOVE", http.MethodDelete, "LOCK", "UNLOCK", "PROPPATCH", "COPY":
 		return true
 	default:
 		return false

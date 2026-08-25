@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 func migrateWritableProjection(tx *sql.Tx) error {
+	slog.Info("projection: writable schema migration starting")
 	if !tableExists(tx, "folders") {
 		if err := createFreshFolders(tx); err != nil {
 			return err
@@ -57,6 +59,7 @@ func migrateWritableProjection(tx *sql.Tx) error {
 	`); err != nil {
 		return fmt.Errorf("projection: backfill file revisions: %w", err)
 	}
+	slog.Info("projection: writable schema migration complete")
 	return nil
 }
 

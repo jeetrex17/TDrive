@@ -1,24 +1,31 @@
 <script lang="ts">
     import { onMount } from 'svelte';
+    import { safeMountError } from '../../api';
     import { notify } from '../../modules/notifications';
+    import type { MountableDrive } from '../../types';
     import Button from '../Button.svelte';
     import {
         createMountController,
         defaultMountApi,
         type MountController,
     } from './mount-controller';
+    import { mountSelection } from './mount-selection-store';
 
     interface Props {
         controller?: MountController;
         mode?: 'toolbar' | 'menu';
         onMenuAction?: () => void;
+        loadDrives?: () => Promise<readonly MountableDrive[]>;
     }
 
     let {
         controller = createMountController(defaultMountApi, notify),
         mode = 'toolbar',
         onMenuAction = () => undefined,
+        loadDrives,
     }: Props = $props();
+
+    let selecting = $state(false);
 
     onMount(() => {
         void controller.refresh();
@@ -44,6 +51,39 @@
         }
         return 'Ejecting Tdrive...';
     });
+
+    async function requestMount(): Promise<void> {
+        if (selecting || $controller.phase === 'mounting') return;
+        if (!loadDrives) {
+            onMenuAction();
+            void controller.mount();
+            return;
+        }
+
+        selecting = true;
+        try {
+            const drives = [...await loadDrives()];
+            if (drives.length === 0) throw new Error('No drives are available to mount.');
+
+            onMenuAction();
+            if (drives.length === 1) {
+                void controller.mount([drives[0].id]);
+                return;
+            }
+
+            mountSelection.open(drives, (channelIds) => {
+                void controller.mount(channelIds);
+            });
+        } catch (error) {
+            notify({
+                level: 'error',
+                title: 'Could not load drives',
+                body: safeMountError(error, 'The drive list could not be loaded.'),
+            });
+        } finally {
+            selecting = false;
+        }
+    }
 </script>
 
 <div
@@ -85,19 +125,18 @@
                 class="profile-menu-item mount-menu-item"
                 type="button"
                 role="menuitem"
-                disabled={$controller.phase === 'mounting'}
-                aria-busy={$controller.phase === 'mounting' ? 'true' : undefined}
+                disabled={selecting || $controller.phase === 'mounting'}
+                aria-busy={selecting || $controller.phase === 'mounting' ? 'true' : undefined}
                 aria-label={`Mount ${$controller.label}`}
                 onclick={() => {
-                    onMenuAction();
-                    void controller.mount();
+                    void requestMount();
                 }}
             >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 15h8m-4-4v8"/></svg>
                 <span class="mount-menu-title">
-                    {$controller.phase === 'mounting' ? `Mounting ${$controller.label}...` : 'Mount'}
+                    {selecting ? 'Loading drives...' : $controller.phase === 'mounting' ? `Mounting ${$controller.label}...` : 'Mount'}
                 </span>
-                {#if $controller.phase === 'mounting'}
+                {#if selecting || $controller.phase === 'mounting'}
                     <span class="mount-menu-spinner" aria-hidden="true"></span>
                 {/if}
             </button>
@@ -127,9 +166,10 @@
             variant="secondary"
             loading={$controller.phase === 'mounting'}
             aria-label={`Mount ${$controller.label}`}
-            onclick={() => void controller.mount()}
+            disabled={selecting}
+            onclick={() => void requestMount()}
         >
-            {$controller.phase === 'mounting' ? 'Mounting...' : 'Mount'}
+            {selecting ? 'Loading drives...' : $controller.phase === 'mounting' ? 'Mounting...' : 'Mount'}
         </Button>
     {/if}
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -123,12 +124,15 @@ func (s *DiskStagingStore) Stage(ctx context.Context, request StageRequest, sour
 		return StagedObject{}, fmt.Errorf("create staged file: %w", err)
 	}
 
+	slog.Debug("mountwrite: staging started", "operation_id", request.OperationID,
+		"plaintext_size", request.PlaintextSize, "encrypted", request.EncryptionVersion != EncryptionNone)
 	staged, reserved, stageErr := s.copyToStage(ctx, file, key, path, request, objectLimit, source)
 	closeErr := file.Close()
 	if stageErr == nil && closeErr != nil {
 		stageErr = fmt.Errorf("close staged file: %w", closeErr)
 	}
 	if stageErr != nil {
+		slog.Warn("mountwrite: staging failed", "operation_id", request.OperationID, "error", stageErr)
 		removeErr := os.Remove(path)
 		if removeErr == nil || errors.Is(removeErr, os.ErrNotExist) {
 			s.releaseBytes(reserved)
@@ -140,6 +144,8 @@ func (s *DiskStagingStore) Stage(ctx context.Context, request StageRequest, sour
 		stageErr = errors.Join(stageErr, fmt.Errorf("remove partial staged file: %w", removeErr))
 		return StagedObject{}, stageErr
 	}
+	slog.Debug("mountwrite: staging completed", "operation_id", request.OperationID,
+		"plaintext_size", staged.PlaintextSize, "stored_size", staged.StoredSize)
 	s.trackFile(key, staged.StoredSize)
 	return staged, nil
 }
@@ -207,6 +213,7 @@ func (s *DiskStagingStore) copyPlaintextToStage(
 		}
 	}
 	if contentLength >= 0 && size != contentLength {
+		slog.Warn("mountwrite: staged plaintext length mismatch", "operation_id", key, "declared_length", contentLength, "actual_bytes", size)
 		return StagedObject{}, reserved, ErrLengthMismatch
 	}
 	if err := ctx.Err(); err != nil {
@@ -257,9 +264,12 @@ func (s *DiskStagingStore) copyEncryptedToStage(
 		limit:  storedSize,
 	}
 	if err := tdcrypto.EncryptStream(exactSource, writer, privateKey, request.PlaintextSize); err != nil {
+		slog.Warn("mountwrite: encrypted staging failed", "operation_id", key, "declared_plaintext_size", request.PlaintextSize, "error", err)
 		return StagedObject{}, storedSize, classifyStageStreamError(key, err)
 	}
 	if writer.written != storedSize || exactSource.remaining != 0 {
+		slog.Warn("mountwrite: encrypted staged length mismatch", "operation_id", key,
+			"expected_stored_size", storedSize, "actual_written", writer.written, "plaintext_remaining", exactSource.remaining)
 		return StagedObject{}, storedSize, ErrLengthMismatch
 	}
 	if err := ctx.Err(); err != nil {
@@ -307,6 +317,7 @@ func (s *DiskStagingStore) Open(staged StagedObject) (ReadSeekCloser, error) {
 		return nil, fmt.Errorf("inspect staged file: %w", err)
 	}
 	if !info.Mode().IsRegular() || info.Size() != staged.StoredSize {
+		slog.Warn("mountwrite: staged file size mismatch on open", "key", staged.Key, "expected_size", staged.StoredSize, "actual_size", info.Size())
 		_ = file.Close()
 		return nil, ErrInvalidRequest
 	}
@@ -319,6 +330,7 @@ func (s *DiskStagingStore) Open(staged StagedObject) (ReadSeekCloser, error) {
 		digest := [sha256.Size]byte{}
 		copy(digest[:], hasher.Sum(nil))
 		if digest != staged.StoredSHA256 {
+			slog.Error("mountwrite: staged file hash mismatch on open, refusing to serve", "key", staged.Key)
 			_ = file.Close()
 			return nil, ErrInvalidRequest
 		}

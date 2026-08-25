@@ -66,6 +66,21 @@ func TestTelegramRemoteUploadAndCleanupAdapters(t *testing.T) {
 	}
 }
 
+func TestTelegramRemoteClassifiesInvalidCleanupReceipt(t *testing.T) {
+	store := &fakeHiddenStore{discardErr: fileservice.ErrHiddenReceiptInvalid}
+	remote := &TelegramRemote{driveID: testDriveID, files: store}
+	body := mountwrite.RemoteBody{
+		UploadUUID: "wrong-upload", PartCount: 1,
+		StoredSize: 1, PlaintextSize: 1, MessageIDs: []int64{99},
+	}
+
+	err := remote.DiscardHidden(context.Background(), "cleanup-op", &body)
+	if !errors.Is(err, mountwrite.ErrInvalidRequest) ||
+		!errors.Is(err, fileservice.ErrHiddenReceiptInvalid) {
+		t.Fatalf("DiscardHidden error = %v, want invalid receipt classification", err)
+	}
+}
+
 func TestTelegramRemotePreservesPartialHiddenReceiptsOnUploadError(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -514,6 +529,54 @@ func TestTelegramRemoteBuildsRetentionAndCASOperations(t *testing.T) {
 			}
 			test.assert(t, op)
 		})
+	}
+}
+
+func TestTelegramRemoteDeleteCommitImmediatelyHidesProjectedFile(t *testing.T) {
+	db := newProjectionDB(t)
+	project(t, db, 20, projection.Op{
+		Type: projection.OpFilePart, UploadUUID: "delete-u", PartIndex: 0, FileSize: 1,
+	})
+	project(t, db, 21, projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "put-before-delete",
+		Name: "delete-me.txt", UploadUUID: "delete-u", PartCount: 1,
+		FileSize: 1, PlaintextSize: 1,
+	})
+	fakeTG := tgclient.NewFake(7)
+	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: testDriveID}, "Personal")
+	remote := newTestTelegramRemote(t, db, fakeTG, time.Unix(5_000, 0))
+
+	result, err := remote.Commit(context.Background(), mountwrite.CommitRequest{
+		OperationID: "delete-from-explorer",
+		CommitTime:  time.Unix(5_000, 0),
+		Mutation: mountwrite.Mutation{
+			Kind:             mountwrite.MutationDelete,
+			DriveID:          testDriveID,
+			ObjectID:         "f:21",
+			ExpectedRevision: 1,
+			TrashRetention:   defaultTrashRetention,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Commit DELETE: %v", err)
+	}
+	if result.ObjectID != "f:21" || result.Revision != 2 {
+		t.Fatalf("DELETE result = %+v", result)
+	}
+	_, files, err := projection.ListFolderContents(db, testDriveID, projection.RootParent)
+	if err != nil {
+		t.Fatalf("ListFolderContents: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("deleted file remains visible: %+v", files)
+	}
+	controls := fakeTG.SentControls()
+	if len(controls) != 1 {
+		t.Fatalf("control messages = %+v", controls)
+	}
+	op, err := projection.Parse(controls[0].Text)
+	if err != nil || op.Type != projection.OpTrashTree || op.Obj != "f:21" {
+		t.Fatalf("delete control = %+v, err=%v", op, err)
 	}
 }
 
@@ -972,6 +1035,7 @@ type fakeHiddenStore struct {
 	recoveryPayload  []byte
 	discardBody      fileservice.HiddenBody
 	discardOperation string
+	discardErr       error
 }
 
 func (s *fakeHiddenStore) UploadHidden(_ context.Context, _ int64, request fileservice.HiddenUploadRequest, source io.ReadSeeker) (fileservice.HiddenBody, error) {
@@ -988,7 +1052,7 @@ func (s *fakeHiddenStore) RecoverHiddenUpload(_ context.Context, _ int64, reques
 
 func (s *fakeHiddenStore) DiscardHiddenReceipt(_ context.Context, _ int64, _ string, body fileservice.HiddenBody) error {
 	s.discardBody = body
-	return nil
+	return s.discardErr
 }
 
 func (s *fakeHiddenStore) DiscardHiddenOperation(_ context.Context, _ int64, operationID string) error {

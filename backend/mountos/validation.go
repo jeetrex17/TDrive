@@ -1,6 +1,7 @@
 package mountos
 
 import (
+	"log/slog"
 	"strconv"
 	"strings"
 	"unicode"
@@ -16,20 +17,26 @@ const (
 )
 
 func validateConfig(config Config) (validatedConfig, error) {
+	// config.Endpoint embeds the loopback capability token and must never be
+	// logged; only which validation step failed is logged, never the value.
 	endpoint, err := validateEndpoint(config.Endpoint)
 	if err != nil {
+		slog.Warn("mountos: config validation failed at endpoint")
 		return validatedConfig{}, err
 	}
 	label, err := validateLabel(config.Label)
 	if err != nil {
+		slog.Warn("mountos: config validation failed at label")
 		return validatedConfig{}, err
 	}
 	drive, err := normalizeWindowsDrive(config.WindowsDrive)
 	if err != nil {
+		slog.Warn("mountos: config validation failed at windows drive", "requested_drive", config.WindowsDrive)
 		return validatedConfig{}, err
 	}
 	mode, err := normalizeMode(config.Mode)
 	if err != nil {
+		slog.Warn("mountos: config validation failed at mode", "requested_mode", config.Mode)
 		return validatedConfig{}, err
 	}
 	return validatedConfig{endpoint: endpoint, label: label, drive: drive, mode: mode}, nil

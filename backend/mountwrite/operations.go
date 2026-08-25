@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 )
 
 func (c *Coordinator) Put(ctx context.Context, request PutRequest, source io.Reader) (MutationResult, error) {
@@ -11,21 +12,26 @@ func (c *Coordinator) Put(ctx context.Context, request PutRequest, source io.Rea
 		return MutationResult{}, newOperationError(request.OperationID, MutationPut, ErrInvalidRequest)
 	}
 	if err := request.Validate(); err != nil {
+		slog.Warn("mountwrite: Put rejected, invalid request", "name", request.Name, "content_length", request.ContentLength, "error", err)
 		return MutationResult{}, newOperationError(request.OperationID, MutationPut, err)
 	}
 	if source == nil {
 		return MutationResult{}, newOperationError(request.OperationID, MutationPut, ErrInvalidRequest)
 	}
+	slog.Debug("mountwrite: Put starting", "name", request.Name, "content_length", request.ContentLength,
+		"create_only", request.CreateOnly, "encrypted", request.EncryptionVersion != EncryptionNone)
 	operationID := c.operationID(request.OperationID)
 	mutation := request.mutation()
 	stageRequest := request.stageRequest(operationID)
 	defer clearBytes(stageRequest.MasterKey)
-	return c.withOperation(ctx, operationID, mutation, func(ctx context.Context, record JournalRecord) (MutationResult, error) {
+	result, err := c.withOperation(ctx, operationID, mutation, func(ctx context.Context, record JournalRecord) (MutationResult, error) {
 		staged, err := c.staging.Stage(ctx, stageRequest, source)
 		if err != nil {
+			slog.Warn("mountwrite: Put staging failed", "name", request.Name, "content_length", request.ContentLength, "error", err)
 			c.markAborted(ctx, record, err)
 			return MutationResult{}, operationError(record, err)
 		}
+		slog.Debug("mountwrite: Put staged", "name", request.Name, "stored_size", staged.StoredSize)
 		stagedRecord, err := c.transition(ctx, record, StateStaged, JournalPatch{Staged: &staged})
 		if err != nil {
 			maintenanceCtx, cancel := c.maintenanceContext(ctx)
@@ -36,6 +42,12 @@ func (c *Coordinator) Put(ctx context.Context, request PutRequest, source io.Rea
 		}
 		return c.uploadStaged(ctx, stagedRecord)
 	})
+	if err != nil {
+		slog.Warn("mountwrite: Put failed", "name", request.Name, "error", err)
+	} else {
+		slog.Debug("mountwrite: Put committed", "name", request.Name, "object_id", result.ObjectID, "revision", result.Revision, "created", result.Created, "size", result.Size)
+	}
+	return result, err
 }
 
 func (c *Coordinator) Mkdir(ctx context.Context, request MkdirRequest) (MutationResult, error) {
@@ -43,9 +55,17 @@ func (c *Coordinator) Mkdir(ctx context.Context, request MkdirRequest) (Mutation
 		return MutationResult{}, newOperationError(request.OperationID, MutationMkdir, ErrInvalidRequest)
 	}
 	if err := request.Validate(); err != nil {
+		slog.Warn("mountwrite: Mkdir rejected, invalid request", "name", request.Name, "error", err)
 		return MutationResult{}, newOperationError(request.OperationID, MutationMkdir, err)
 	}
-	return c.executeMetadata(ctx, c.operationID(request.OperationID), request.mutation())
+	slog.Debug("mountwrite: Mkdir starting", "name", request.Name)
+	result, err := c.executeMetadata(ctx, c.operationID(request.OperationID), request.mutation())
+	if err != nil {
+		slog.Warn("mountwrite: Mkdir failed", "name", request.Name, "error", err)
+	} else {
+		slog.Debug("mountwrite: Mkdir committed", "name", request.Name, "object_id", result.ObjectID)
+	}
+	return result, err
 }
 
 func (c *Coordinator) Move(ctx context.Context, request MoveRequest) (MutationResult, error) {
@@ -53,9 +73,17 @@ func (c *Coordinator) Move(ctx context.Context, request MoveRequest) (MutationRe
 		return MutationResult{}, newOperationError(request.OperationID, MutationMove, ErrInvalidRequest)
 	}
 	if err := request.Validate(); err != nil {
+		slog.Warn("mountwrite: Move rejected, invalid request", "error", err)
 		return MutationResult{}, newOperationError(request.OperationID, MutationMove, err)
 	}
-	return c.executeMetadata(ctx, c.operationID(request.OperationID), request.mutation())
+	slog.Debug("mountwrite: Move starting", "destination_name", request.DestinationName, "object_id", request.ObjectID, "overwrite", request.OverwriteTargetID != "")
+	result, err := c.executeMetadata(ctx, c.operationID(request.OperationID), request.mutation())
+	if err != nil {
+		slog.Warn("mountwrite: Move failed", "destination_name", request.DestinationName, "error", err)
+	} else {
+		slog.Debug("mountwrite: Move committed", "object_id", result.ObjectID, "created", result.Created)
+	}
+	return result, err
 }
 
 func (c *Coordinator) Delete(ctx context.Context, request DeleteRequest) (MutationResult, error) {
@@ -63,9 +91,17 @@ func (c *Coordinator) Delete(ctx context.Context, request DeleteRequest) (Mutati
 		return MutationResult{}, newOperationError(request.OperationID, MutationDelete, ErrInvalidRequest)
 	}
 	if err := request.Validate(); err != nil {
+		slog.Warn("mountwrite: Delete rejected, invalid request", "error", err)
 		return MutationResult{}, newOperationError(request.OperationID, MutationDelete, err)
 	}
-	return c.executeMetadata(ctx, c.operationID(request.OperationID), request.mutation())
+	slog.Debug("mountwrite: Delete starting", "object_id", request.ObjectID, "recursive", request.Recursive)
+	result, err := c.executeMetadata(ctx, c.operationID(request.OperationID), request.mutation())
+	if err != nil {
+		slog.Warn("mountwrite: Delete failed", "object_id", request.ObjectID, "error", err)
+	} else {
+		slog.Debug("mountwrite: Delete committed", "object_id", result.ObjectID)
+	}
+	return result, err
 }
 
 func (c *Coordinator) executeMetadata(

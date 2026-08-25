@@ -3,6 +3,7 @@ package projection
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 )
 
 const retainedFileRevisionCount = 5
@@ -56,6 +57,7 @@ func ListPrunableFileRevisions(db *sql.DB, now int64, limit int) ([]FileRevision
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("projection: iterate prunable revisions: %w", err)
 	}
+	slog.Debug("projection: listed prunable file revisions", "now", now, "limit", limit, "found", len(refs))
 	return refs, nil
 }
 

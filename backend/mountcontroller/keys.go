@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"TDrive/backend/core"
 	encservice "TDrive/backend/services/encryption"
@@ -25,11 +26,14 @@ func (provider engineMountKeyLeaser) Acquire(ctx context.Context, drive Drive) (
 	}
 	lease, err := provider.engine.EncryptionService().AcquireMasterKeyLease()
 	if errors.Is(err, encservice.ErrPasswordRequired) {
+		slog.Debug("mountcontroller: encrypted mount key lease requires the vault password", "drive_id", drive.ID)
 		return nil, ErrEncryptionPasswordRequired
 	}
 	if err != nil {
+		slog.Warn("mountcontroller: encrypted mount key lease failed", "drive_id", drive.ID, "error", err)
 		return nil, fmt.Errorf("%w: encrypted mount key is unavailable", ErrWritableUnavailable)
 	}
+	slog.Debug("mountcontroller: encrypted mount key lease acquired", "drive_id", drive.ID)
 	return lease, nil
 }
 

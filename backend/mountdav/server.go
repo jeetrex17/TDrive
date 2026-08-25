@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"reflect"
@@ -35,7 +36,7 @@ const (
 var ErrAlreadyRunning = errors.New("mountdav: server already running with different configuration")
 
 type StartConfig struct {
-	FS           *mountfs.FS
+	FS           mountfs.ReadFilesystem
 	DriveID      int64
 	DriveTitle   string
 	WindowsDrive string
@@ -64,7 +65,7 @@ type Commands struct {
 }
 
 type activeConfig struct {
-	fs           *mountfs.FS
+	fs           mountfs.ReadFilesystem
 	driveID      int64
 	driveTitle   string
 	windowsDrive string
@@ -79,6 +80,8 @@ type Server struct {
 	active          activeConfig
 	status          Status
 	shutdownTimeout time.Duration
+	resume          *resumeStore
+	pendingCreates  *pendingCreateStore
 }
 
 func NewServer() *Server {
@@ -112,8 +115,17 @@ func (server *Server) Start(ctx context.Context, config StartConfig) (Status, er
 	authority := listener.Addr().String()
 	filesystem := NewFileSystem(config.FS)
 	lockSystem := webdav.NewMemLS()
+	var resume *resumeStore
+	var pendingCreates *pendingCreateStore
 	if active.writable {
 		lockSystem = newBoundedLockSystem(defaultMaxActiveLocks)
+		var resumeErr error
+		resume, resumeErr = newResumeStoreInTemp()
+		if resumeErr != nil {
+			_ = listener.Close()
+			return Status{}, resumeErr
+		}
+		pendingCreates = newPendingCreateStore(defaultPendingCreateGrace, defaultPendingCreatePoll, nil)
 	}
 	application := &readApplication{
 		capabilityPath: capabilityPath,
@@ -121,6 +133,8 @@ func (server *Server) Start(ctx context.Context, config StartConfig) (Status, er
 		fs:             filesystem,
 		lockSystem:     lockSystem,
 		writer:         active.writer,
+		resume:         resume,
+		pendingCreates: pendingCreates,
 	}
 	handler := newProtectedHandler(protectionConfig{
 		capabilityPath:         capabilityPath,
@@ -151,7 +165,13 @@ func (server *Server) Start(ctx context.Context, config StartConfig) (Status, er
 	server.listener = listener
 	server.active = active
 	server.status = status
+	server.resume = resume
+	server.pendingCreates = pendingCreates
 	go server.serve(httpServer, listener)
+	// Never log url/status.URL or capabilityPath: the capability segment is a
+	// bearer token for this mount's loopback endpoint.
+	slog.Info("mountdav: server started", "drive_id", active.driveID, "drive_title", active.driveTitle,
+		"writable", active.writable, "windows_drive", active.windowsDrive, "authority", authority)
 	return status, nil
 }
 
@@ -177,11 +197,21 @@ func (server *Server) Stop(ctx context.Context) error {
 	server.mu.Lock()
 	httpServer := server.server
 	listener := server.listener
+	resume := server.resume
+	pendingCreates := server.pendingCreates
 	server.server = nil
 	server.listener = nil
 	server.active = activeConfig{}
 	server.status = Status{}
+	server.resume = nil
+	server.pendingCreates = nil
 	server.mu.Unlock()
+	if resume != nil {
+		_ = resume.Close()
+	}
+	if pendingCreates != nil {
+		pendingCreates.Close()
+	}
 	if httpServer == nil {
 		return nil
 	}
@@ -194,8 +224,10 @@ func (server *Server) Stop(ctx context.Context) error {
 		_ = listener.Close()
 	}
 	if shutdownErr != nil && !errors.Is(shutdownErr, http.ErrServerClosed) {
+		slog.Error("mountdav: server shutdown error", "error", shutdownErr)
 		return fmt.Errorf("mountdav: shutdown: %w", shutdownErr)
 	}
+	slog.Info("mountdav: server stopped")
 	return nil
 }
 
@@ -204,6 +236,7 @@ func (server *Server) serve(httpServer *http.Server, listener net.Listener) {
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		return
 	}
+	slog.Error("mountdav: server stopped unexpectedly", "error", err)
 	_ = listener.Close()
 	_ = httpServer.Close()
 	server.recordServeFailure(httpServer)
@@ -211,19 +244,30 @@ func (server *Server) serve(httpServer *http.Server, listener net.Listener) {
 
 func (server *Server) recordServeFailure(failed *http.Server) {
 	server.mu.Lock()
-	defer server.mu.Unlock()
 	if server.server != failed {
+		server.mu.Unlock()
 		return
 	}
+	resume := server.resume
+	pendingCreates := server.pendingCreates
 	server.server = nil
 	server.listener = nil
 	server.active = activeConfig{}
+	server.resume = nil
+	server.pendingCreates = nil
 	server.status = Status{
 		Mode:         server.status.Mode,
 		DriveID:      server.status.DriveID,
 		DriveTitle:   server.status.DriveTitle,
 		WindowsDrive: server.status.WindowsDrive,
 		Error:        sanitizedServeError,
+	}
+	server.mu.Unlock()
+	if resume != nil {
+		_ = resume.Close()
+	}
+	if pendingCreates != nil {
+		pendingCreates.Close()
 	}
 }
 
@@ -234,7 +278,7 @@ func validateStartConfig(ctx context.Context, config StartConfig) (activeConfig,
 	if err := ctx.Err(); err != nil {
 		return activeConfig{}, fmt.Errorf("mountdav: start canceled: %w", err)
 	}
-	if config.FS == nil {
+	if isNilReadFilesystem(config.FS) {
 		return activeConfig{}, fmt.Errorf("mountdav: filesystem required")
 	}
 	if config.DriveID <= 0 {
@@ -259,12 +303,39 @@ func validateStartConfig(ctx context.Context, config StartConfig) (activeConfig,
 }
 
 func sameActiveConfig(left, right activeConfig) bool {
-	return left.fs == right.fs &&
+	return sameReadFilesystem(left.fs, right.fs) &&
 		left.driveID == right.driveID &&
 		left.driveTitle == right.driveTitle &&
 		left.windowsDrive == right.windowsDrive &&
 		left.writable == right.writable &&
 		sameWriteCoordinator(left.writer, right.writer)
+}
+
+func sameReadFilesystem(left, right mountfs.ReadFilesystem) bool {
+	leftNil := isNilReadFilesystem(left)
+	rightNil := isNilReadFilesystem(right)
+	if leftNil || rightNil {
+		return leftNil && rightNil
+	}
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	if leftValue.Type() != rightValue.Type() || !leftValue.Type().Comparable() {
+		return false
+	}
+	return leftValue.Interface() == rightValue.Interface()
+}
+
+func isNilReadFilesystem(filesystem mountfs.ReadFilesystem) bool {
+	if filesystem == nil {
+		return true
+	}
+	value := reflect.ValueOf(filesystem)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func sameWriteCoordinator(left, right WriteCoordinator) bool {

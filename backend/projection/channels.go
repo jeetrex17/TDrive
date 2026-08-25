@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -39,8 +40,10 @@ func InsertChannel(db *sql.DB, c Channel) error {
 		  title = excluded.title
 	`, c.ChannelID, c.AccessHash, c.Title, c.Kind, nullable(c.InviteLink), joined, personalDone)
 	if err != nil {
+		slog.Error("projection: insert channel failed", "channel_id", c.ChannelID, "kind", c.Kind, "error", err)
 		return fmt.Errorf("projection: insert channel: %w", err)
 	}
+	slog.Info("projection: channel inserted", "channel_id", c.ChannelID, "kind", c.Kind)
 	return nil
 }
 
@@ -54,6 +57,7 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 	if channelID == 0 {
 		return fmt.Errorf("projection: delete channel: id is zero")
 	}
+	slog.Warn("projection: deleting channel and all scoped data", "channel_id", channelID)
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("projection: delete channel begin: %w", err)
@@ -79,7 +83,11 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 			return fmt.Errorf("projection: delete channel %q: %w", q, err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	slog.Info("projection: channel deleted", "channel_id", channelID)
+	return nil
 }
 
 // ListChannels returns all known channels. Personal first, then shared
@@ -166,6 +174,7 @@ func UpdateAccessHash(db *sql.DB, channelID, accessHash int64) error {
 	if err != nil {
 		return fmt.Errorf("projection: update access hash: %w", err)
 	}
+	slog.Debug("projection: channel access hash refreshed", "channel_id", channelID)
 	return nil
 }
 

@@ -17,6 +17,28 @@ type hiddenPartPlan struct {
 	partCount int
 }
 
+// partAttachmentName names a part's Telegram document attachment after the
+// original file it belongs to, rather than a meaningless-outside-TDrive
+// "part-NNNNN" label. The part index TDrive itself relies on for
+// reconstruction lives entirely in the TDX1 caption text (pix=), never in
+// this filename, so this is purely cosmetic -- it exists so a file browsed
+// directly in the Telegram channel, or downloaded straight from it, shows
+// its real name. A single-part upload (the common case) keeps the exact
+// original name; a multi-part upload suffixes the part index so parts stay
+// distinguishable and orderable when browsed that way, since the channel
+// view has no other way to show they belong together. An empty name (should
+// not happen; callers validate this upstream) falls back to the old scheme
+// rather than uploading a document with a blank filename.
+func partAttachmentName(originalName string, partIndex, partCount int) string {
+	if originalName == "" {
+		return fmt.Sprintf("part-%05d", partIndex)
+	}
+	if partCount <= 1 {
+		return originalName
+	}
+	return fmt.Sprintf("%s.part%d", originalName, partIndex)
+}
+
 // HiddenUploadRequest describes an immutable, already-staged stored
 // representation. OperationID must already be durable in the caller's journal;
 // it is used to derive Telegram's random_id so retries cannot publish duplicate
@@ -120,7 +142,7 @@ func (s *Service) uploadHiddenParts(ctx context.Context, channelID int64, reques
 			source,
 			partOffset,
 			partLength,
-			fmt.Sprintf("part-%05d", partIndex),
+			partAttachmentName(request.Name, partIndex, plan.partCount),
 			caption,
 			nil,
 		)
@@ -262,7 +284,7 @@ func (s *Service) recoverHiddenParts(
 			source,
 			offset,
 			length,
-			fmt.Sprintf("part-%05d", uncertainPart),
+			partAttachmentName(request.Name, uncertainPart, plan.partCount),
 			projection.Format(partOp),
 			nil,
 		)
@@ -436,31 +458,31 @@ func (s *Service) DiscardHiddenReceipt(
 		return err
 	}
 	if channelID == 0 {
-		return fmt.Errorf("drive channel id not found")
+		return fmt.Errorf("%w: drive channel id not found", ErrHiddenReceiptInvalid)
 	}
 	if _, err := tgclient.StableRandomID(operationID, "validate"); err != nil {
-		return err
+		return fmt.Errorf("%w: operation identity", ErrHiddenReceiptInvalid)
 	}
 	if s == nil || s.DB == nil {
 		return fmt.Errorf("local projection is not ready")
 	}
 	expectedUploadUUID := hiddenUploadUUID(operationID)
 	if body.UploadUUID != expectedUploadUUID {
-		return fmt.Errorf("hidden cleanup receipt does not belong to operation")
+		return fmt.Errorf("%w: receipt does not belong to operation", ErrHiddenReceiptInvalid)
 	}
 	if err := validateHiddenStoredMetadata(HiddenUploadRequest{
 		StoredSize:    body.StoredSize,
 		PlaintextSize: body.PlaintextSize,
 		Encrypted:     body.Encrypted,
 	}); err != nil {
-		return fmt.Errorf("validate hidden cleanup metadata: %w", err)
+		return fmt.Errorf("%w: metadata: %v", ErrHiddenReceiptInvalid, err)
 	}
 	plan, err := s.hiddenUploadPartPlan(body.StoredSize)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: part plan: %v", ErrHiddenReceiptInvalid, err)
 	}
 	if body.PartCount != plan.partCount || len(body.MessageIDs) > body.PartCount {
-		return fmt.Errorf("hidden cleanup receipt part count is invalid")
+		return fmt.Errorf("%w: part count", ErrHiddenReceiptInvalid)
 	}
 	parts, err := projection.PartsForUUIDContext(ctx, s.DB, channelID, expectedUploadUUID)
 	if err != nil {
@@ -471,10 +493,10 @@ func (s *Service) DiscardHiddenReceipt(
 	}
 	projectedIDs, err := validateHiddenPartPrefix(parts, plan, body.StoredSize)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: projected prefix: %v", ErrHiddenReceiptInvalid, err)
 	}
 	if !sameMessageIDs(projectedIDs, body.MessageIDs) {
-		return fmt.Errorf("hidden cleanup receipt does not match projected ownership")
+		return fmt.Errorf("%w: projected ownership mismatch", ErrHiddenReceiptInvalid)
 	}
 	return s.discardHiddenBody(ctx, channelID, body)
 }

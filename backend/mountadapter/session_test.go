@@ -355,6 +355,57 @@ func TestSessionMapsCoordinatorErrorsAndLifecycle(t *testing.T) {
 	}
 }
 
+// TestSessionMkdirRetryOntoExistingDirectorySucceeds covers a client retrying
+// an MKCOL whose response it lost. mountdav mints a fresh OperationID per HTTP
+// request (writes.go randomOperationID), so the retry carries no signal
+// linking it to the original, already-successful attempt, and the write
+// coordinator's OperationID-keyed idempotency machinery never sees it as a
+// retry (see mountwrite.Coordinator.createOrLoad). Session.Mkdir treats a
+// directory already at the exact requested path as that retry succeeding
+// again, without ever consulting the coordinator.
+func TestSessionMkdirRetryOntoExistingDirectorySucceeds(t *testing.T) {
+	resolver := newFakeResolver(
+		Node{ObjectID: "d:docs", Name: "Docs", Kind: mountfs.KindDirectory, Revision: 1},
+		Node{ObjectID: "d:new", Name: "New", ParentID: "d:docs", Kind: mountfs.KindDirectory, Revision: 1},
+	)
+	engine := &fakeEngine{}
+	session := newTestSession(resolver, engine)
+
+	_, err := session.Mkdir(context.Background(), mountdav.MkdirRequest{
+		OperationID: "retry-of-earlier-mkcol",
+		Path:        "/Docs/New",
+	})
+	if err != nil {
+		t.Fatalf("Mkdir retry error = %v, want nil", err)
+	}
+	if engine.callCount != 0 {
+		t.Fatalf("engine.Mkdir called %d times, want 0: the retry is resolved before the coordinator is ever consulted", engine.callCount)
+	}
+}
+
+// TestSessionMkdirOntoExistingFileStillConflicts ensures the retry tolerance
+// above stays narrow: a file already at the requested path is a genuine
+// naming collision, not a retry, and must still be rejected.
+func TestSessionMkdirOntoExistingFileStillConflicts(t *testing.T) {
+	resolver := newFakeResolver(
+		Node{ObjectID: "d:docs", Name: "Docs", Kind: mountfs.KindDirectory, Revision: 1},
+		Node{ObjectID: "f:new", Name: "New", ParentID: "d:docs", Kind: mountfs.KindFile, Revision: 1},
+	)
+	engine := &fakeEngine{}
+	session := newTestSession(resolver, engine)
+
+	_, err := session.Mkdir(context.Background(), mountdav.MkdirRequest{
+		OperationID: "genuine-collision",
+		Path:        "/Docs/New",
+	})
+	if !errors.Is(err, mountdav.ErrWriteConflict) {
+		t.Fatalf("Mkdir onto existing file error = %v, want conflict", err)
+	}
+	if engine.callCount != 0 {
+		t.Fatalf("engine.Mkdir called %d times, want 0", engine.callCount)
+	}
+}
+
 func TestWriteErrorMappingIsProtocolSafe(t *testing.T) {
 	tests := []struct {
 		name string

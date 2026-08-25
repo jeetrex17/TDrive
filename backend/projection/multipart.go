@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -116,7 +117,13 @@ func OrphanPartMessages(db *sql.DB, channelID int64) ([]int64, error) {
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) > 0 {
+		slog.Debug("projection: found orphan part messages for tombstoned uploads", "channel_id", channelID, "count", len(ids))
+	}
+	return ids, nil
 }
 
 // DeleteFileParts removes all file_parts rows for an upload uuid. Used by the
@@ -240,6 +247,7 @@ func MultipartCompleteContext(ctx context.Context, db *sql.DB, channelID, fileMs
 	if sum != size {
 		return fmt.Errorf("multipart file is incomplete: parts total %d bytes, expected %d", sum, size)
 	}
+	slog.Debug("projection: multipart file verified complete", "channel_id", channelID, "file_msg_id", fileMsgID, "parts", partCount, "size", size)
 	return nil
 }
 

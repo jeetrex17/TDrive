@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -303,9 +304,11 @@ func (application *readApplication) serveLock(response http.ResponseWriter, requ
 	}
 	token, err := application.lockSystem.Create(now, details)
 	if err != nil {
+		slog.Debug("mountdav: LOCK create rejected", "path", path, "zero_depth", details.ZeroDepth, "error", err)
 		serveLockError(response, err)
 		return
 	}
+	slog.Debug("mountdav: LOCK created", "path", path, "zero_depth", details.ZeroDepth, "duration", duration)
 	response.Header().Set("Lock-Token", "<"+token+">")
 	application.writeLockResponse(response, request, token, details, document.Owner)
 }
@@ -337,9 +340,11 @@ func (application *readApplication) refreshLock(
 		details, err = application.lockSystem.Refresh(now, condition.LockToken, duration)
 	}
 	if err != nil {
+		slog.Debug("mountdav: LOCK refresh rejected", "path", path, "error", err)
 		serveLockError(response, err)
 		return
 	}
+	slog.Debug("mountdav: LOCK refreshed", "path", path, "duration", duration)
 	application.writeLockResponse(response, request, condition.LockToken, details, nil)
 }
 
@@ -366,9 +371,11 @@ func (application *readApplication) serveUnlock(response http.ResponseWriter, re
 		err = application.lockSystem.Unlock(time.Now(), token)
 	}
 	if err != nil {
+		slog.Debug("mountdav: UNLOCK rejected", "path", path, "error", err)
 		serveUnlockError(response, err)
 		return
 	}
+	slog.Debug("mountdav: UNLOCK", "path", path)
 	response.WriteHeader(http.StatusNoContent)
 }
 

@@ -1,6 +1,8 @@
 package mountadapter
 
 import (
+	"log/slog"
+
 	"TDrive/backend/mountdav"
 )
 
@@ -23,6 +25,7 @@ func evaluateMutationConditions(
 ) error {
 	if !matchesIfMatch(conditions.IfMatch, requestResource) ||
 		!matchesIfNoneMatch(conditions.IfNoneMatch, requestResource) {
+		slog.Debug("mountadapter: precondition failed (If-Match/If-None-Match)", "resource_exists", requestResource.exists)
 		return mountdav.ErrWritePreconditionFailed
 	}
 	if len(conditions.DAVIf) == 0 {
@@ -37,6 +40,7 @@ func evaluateMutationConditions(
 	for _, list := range conditions.DAVIf {
 		resource, supported := allowedResources[list.ResourcePath]
 		if !supported {
+			slog.Debug("mountadapter: precondition failed, resource path not in the allowed set", "resource_path", list.ResourcePath)
 			return mountdav.ErrWritePreconditionFailed
 		}
 		if matchesDAVList(list, resource, lockTokens) {
@@ -47,6 +51,7 @@ func evaluateMutationConditions(
 	}
 	for _, matched := range groupMatches {
 		if !matched {
+			slog.Debug("mountadapter: precondition failed (DAV If header)")
 			return mountdav.ErrWritePreconditionFailed
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -322,6 +323,7 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	if limit <= 0 {
 		limit = 100
 	}
+	slog.Debug("tgclient: MessagesGetHistory", "channel_id", peer.ChannelID, "min_id", minID, "offset_id", offsetID, "limit", limit)
 	var out []HistoryMessage
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		req := &tg.MessagesGetHistoryRequest{
@@ -387,6 +389,11 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Error("tgclient: MessagesGetHistory failed", "channel_id", peer.ChannelID, "error", err)
+	} else {
+		slog.Debug("tgclient: MessagesGetHistory returned", "channel_id", peer.ChannelID, "messages", len(out))
+	}
 	return out, err
 }
 
@@ -405,11 +412,17 @@ func (g *Gotd) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Error("tgclient: GetFileDocument failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
+	} else {
+		slog.Debug("tgclient: GetFileDocument resolved", "channel_id", peer.ChannelID, "msg_id", msgID, "name", info.Name, "size", info.Size)
+	}
 	return info, err
 }
 
 func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error {
-	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+	slog.Debug("tgclient: DownloadFile starting", "channel_id", peer.ChannelID, "msg_id", msgID)
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
 		if err != nil {
 			return err
@@ -434,10 +447,17 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Error("tgclient: DownloadFile failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
+	} else {
+		slog.Debug("tgclient: DownloadFile completed", "channel_id", peer.ChannelID, "msg_id", msgID)
+	}
+	return err
 }
 
 func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, w io.WriterAt, baseOffset int64, onProgress func(done, total int64)) error {
-	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+	slog.Debug("tgclient: DownloadFileAt starting", "channel_id", peer.ChannelID, "msg_id", msgID, "base_offset", baseOffset)
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
 		if err != nil {
 			return err
@@ -467,6 +487,12 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Error("tgclient: DownloadFileAt failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
+	} else {
+		slog.Debug("tgclient: DownloadFileAt completed", "channel_id", peer.ChannelID, "msg_id", msgID)
+	}
+	return err
 }
 
 func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {
@@ -499,7 +525,8 @@ func (g *Gotd) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 	if len(msgIDs) == 0 {
 		return nil
 	}
-	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+	slog.Debug("tgclient: ChannelsDeleteMessages", "channel_id", peer.ChannelID, "count", len(msgIDs))
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		ids := make([]int, 0, len(msgIDs))
 		for _, id := range msgIDs {
 			ids = append(ids, int(id))
@@ -510,6 +537,62 @@ func (g *Gotd) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 		})
 		return err
 	})
+	if err != nil {
+		slog.Error("tgclient: ChannelsDeleteMessages failed", "channel_id", peer.ChannelID, "count", len(msgIDs), "error", err)
+	}
+	return err
+}
+
+// MissingMessages reports which of msgIDs no longer resolve to a real
+// message in the channel. Telegram returns a MessageEmpty placeholder (or
+// simply omits the id) for anything deleted, so presence is checked by
+// scanning the response for a real *tg.Message/*tg.MessageService with a
+// matching id rather than relying on response length or ordering.
+func (g *Gotd) MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error) {
+	if len(msgIDs) == 0 {
+		return nil, nil
+	}
+	const chunk = 100
+	var missing []int64
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		for start := 0; start < len(msgIDs); start += chunk {
+			end := min(start+chunk, len(msgIDs))
+			batch := msgIDs[start:end]
+			ids := make([]tg.InputMessageClass, 0, len(batch))
+			for _, id := range batch {
+				ids = append(ids, &tg.InputMessageID{ID: int(id)})
+			}
+			result, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+				Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
+				ID:      ids,
+			})
+			if err != nil {
+				return err
+			}
+			found := make(map[int64]struct{}, len(batch))
+			if mcm, ok := result.(*tg.MessagesChannelMessages); ok {
+				for _, m := range mcm.Messages {
+					switch msg := m.(type) {
+					case *tg.Message:
+						found[int64(msg.ID)] = struct{}{}
+					case *tg.MessageService:
+						found[int64(msg.ID)] = struct{}{}
+					}
+				}
+			}
+			for _, id := range batch {
+				if _, ok := found[id]; !ok {
+					missing = append(missing, id)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Error("tgclient: ChannelsGetMessages failed", "channel_id", peer.ChannelID, "count", len(msgIDs), "error", err)
+		return nil, err
+	}
+	return missing, nil
 }
 
 func (g *Gotd) CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error) {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { backend, main } from "../wailsjs/go/models";
 import {
+    normalizeMountableDrives,
     normalizeMountStatus,
     toFileItem,
     toFolderItem,
@@ -9,6 +10,19 @@ import {
 } from "./api";
 
 describe("api normalizers", () => {
+    it("normalizes mountable drives with personal first and rejects invalid rows", () => {
+        expect(normalizeMountableDrives([
+            { id: 22, title: "Project", kind: "shared" },
+            { id: -1, title: "Invalid", kind: "shared" },
+            { id: 11, title: "", kind: "personal" },
+            { id: 22, title: "Duplicate", kind: "shared" },
+            { id: 33, title: "Unknown", kind: "other" },
+        ])).toEqual([
+            { id: 11, title: "Personal", kind: "personal" },
+            { id: 22, title: "Project", kind: "shared" },
+        ]);
+    });
+
     it("toFileItem maps snake_case to camelCase", () => {
         const f = backend.FileMetaData.createFrom({
             name: "a.txt", size: 10, msg_id: 5, parent_id: "root",

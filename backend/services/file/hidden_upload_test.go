@@ -157,6 +157,99 @@ func TestUploadHiddenSingleIsNotVisibleBeforeCommit(t *testing.T) {
 	}
 }
 
+// TestPartAttachmentName covers partAttachmentName directly, including the
+// empty-name fallback: upstream validation should always reject an empty
+// name before it reaches this function, so integration tests through
+// UploadHidden/Upload can't naturally exercise that branch.
+func TestPartAttachmentName(t *testing.T) {
+	cases := []struct {
+		name      string
+		partIndex int
+		partCount int
+		want      string
+	}{
+		{name: "photo.png", partIndex: 0, partCount: 1, want: "photo.png"},
+		{name: "movie.bin", partIndex: 0, partCount: 4, want: "movie.bin.part0"},
+		{name: "movie.bin", partIndex: 3, partCount: 4, want: "movie.bin.part3"},
+		{name: "", partIndex: 0, partCount: 1, want: "part-00000"},
+		{name: "", partIndex: 7, partCount: 9, want: "part-00007"},
+	}
+	for _, testCase := range cases {
+		got := partAttachmentName(testCase.name, testCase.partIndex, testCase.partCount)
+		if got != testCase.want {
+			t.Errorf("partAttachmentName(%q, %d, %d) = %q, want %q",
+				testCase.name, testCase.partIndex, testCase.partCount, got, testCase.want)
+		}
+	}
+}
+
+// TestUploadHiddenSinglePartUsesOriginalFilename covers a user-requested
+// change: the Telegram document attachment for a single-part upload (the
+// common case) should show the real original filename when browsed directly
+// in the channel, not a generic "part-00000" label. The pix=/UploadUUID
+// reconstruction TDrive itself relies on lives entirely in the caption text
+// (verified by the existing TestUploadHiddenSingleIsNotVisibleBeforeCommit),
+// so this is purely a cosmetic-naming assertion, not a correctness one.
+func TestUploadHiddenSinglePartUsesOriginalFilename(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	body := []byte("hello from the mounted drive")
+
+	remote, err := svc.UploadHidden(
+		context.Background(),
+		personalChannelID,
+		plaintextHiddenRequest("op-name-single", "My Report.pdf", int64(len(body))),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("UploadHidden: %v", err)
+	}
+	if remote.PartCount != 1 {
+		t.Fatalf("PartCount = %d, want 1", remote.PartCount)
+	}
+
+	sent := fakeTG.SentFiles()
+	if len(sent) != 1 {
+		t.Fatalf("sent files = %+v, want one", sent)
+	}
+	if sent[0].Name != "My Report.pdf" {
+		t.Fatalf("attachment name = %q, want the original filename %q", sent[0].Name, "My Report.pdf")
+	}
+}
+
+// TestUploadHiddenMultipartSuffixesOriginalFilename covers the multi-part
+// case: each part keeps the original filename but gains a distinguishing
+// suffix, since several messages sharing one identical name would otherwise
+// be impossible to tell apart or order when browsing the raw channel.
+func TestUploadHiddenMultipartSuffixesOriginalFilename(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 4
+	body := []byte("0123456789")
+
+	remote, err := svc.UploadHidden(
+		context.Background(),
+		personalChannelID,
+		plaintextHiddenRequest("op-name-multi", "large.bin", int64(len(body))),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("UploadHidden: %v", err)
+	}
+	if remote.PartCount != 3 {
+		t.Fatalf("PartCount = %d, want 3", remote.PartCount)
+	}
+
+	sent := fakeTG.SentFiles()
+	if len(sent) != 3 {
+		t.Fatalf("sent files = %+v, want three", sent)
+	}
+	want := []string{"large.bin.part0", "large.bin.part1", "large.bin.part2"}
+	for i, name := range want {
+		if sent[i].Name != name {
+			t.Fatalf("part %d attachment name = %q, want %q", i, sent[i].Name, name)
+		}
+	}
+}
+
 func TestUploadHiddenMultipartProjectsOnlyInvisibleParts(t *testing.T) {
 	svc, db, fakeTG, _ := newTestService(t)
 	svc.MaxUploadBytes = 4

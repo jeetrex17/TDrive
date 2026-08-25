@@ -519,13 +519,14 @@ func TestCoordinatorDeleteCarriesTrashRetentionToCommit(t *testing.T) {
 	t.Parallel()
 
 	remote := &fakeRemote{}
-	coordinator, _, _ := newTestCoordinator(t, remote, &fakeInvalidator{})
+	invalidator := &fakeInvalidator{}
+	coordinator, _, _ := newTestCoordinator(t, remote, invalidator)
 	retention := 14 * 24 * time.Hour
 	_, err := coordinator.Delete(context.Background(), DeleteRequest{
 		OperationID:      "delete-1",
 		DriveID:          42,
 		ObjectID:         "file-1",
-		ParentID:         "",
+		ParentID:         "d:parent",
 		ExpectedRevision: 2,
 		TrashRetention:   retention,
 	})
@@ -535,6 +536,8 @@ func TestCoordinatorDeleteCarriesTrashRetentionToCommit(t *testing.T) {
 	if got := remote.lastCommit.Mutation.TrashRetention; got != retention {
 		t.Fatalf("retention = %s, want %s", got, retention)
 	}
+	assertStringsEqual(t, invalidator.last.ParentIDs, []string{"d:parent"})
+	assertStringsEqual(t, invalidator.last.ObjectIDs, []string{"file-1"})
 }
 
 func TestCoordinatorRejectsOperationIDReuseForDifferentMutation(t *testing.T) {
