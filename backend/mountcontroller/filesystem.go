@@ -20,6 +20,7 @@ func (builder *engineFilesystemBuilder) Build(
 	ctx context.Context,
 	channelID int64,
 	options mountfs.Options,
+	lease MountKeyLease,
 ) (*mountfs.FS, ContentLifetime, error) {
 	if ctx == nil {
 		return nil, nil, fmt.Errorf("mount: filesystem context is required")
@@ -34,10 +35,27 @@ func (builder *engineFilesystemBuilder) Build(
 		return nil, nil, fmt.Errorf("mount: Telegram range reads are unavailable")
 	}
 
+	var keys mountcontent.MasterKeyProvider
+	if lease != nil {
+		keys = mountcontent.MasterKeyProviderFunc(func(keyCtx context.Context, requestedChannelID int64) ([]byte, error) {
+			if keyCtx == nil || requestedChannelID != channelID {
+				return nil, mountcontent.ErrKeyUnavailable
+			}
+			if err := keyCtx.Err(); err != nil {
+				return nil, err
+			}
+			key, err := lease.Key()
+			if err != nil {
+				return nil, fmt.Errorf("%w: mount key lease is unavailable", mountcontent.ErrKeyUnavailable)
+			}
+			return key, nil
+		})
+	}
 	opener, err := mountcontent.New(mountcontent.Config{
 		DB:     builder.reads.DB,
 		Peers:  builder.peers,
 		Ranges: builder.ranges,
+		Keys:   keys,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("mount: initialize content reader: %w", err)

@@ -32,7 +32,7 @@ This project is for **educational purposes only**. I’m not trying to harm Tele
 - **Shared drives** — invite friends with instant or approval-required links; everyone can upload, organize, and see who uploaded what.
 - **Cancellable transfers** — cancel uploads and downloads mid-flight, with live size and speed.
 - **CLI mode** — use TDrive from the terminal with a local daemon, Linux-like commands, folder/archive upload, shared drives, vault unlock, and progress output.
-- **Read-only desktop mount (beta)** — mount the active TDrive from the app or with one CLI command in Finder, Explorer, or Linux Files.
+- **Desktop mount (beta)** — mount the active TDrive from the app or CLI in Finder, Explorer, or Linux Files; personal drives support read/write and shared drives remain read-only.
 
 ## Download
 
@@ -98,6 +98,7 @@ Important details:
 
 - Encryption is for **My Drive only** right now, not shared drives.
 - Only file contents are encrypted. File names, folder names, sizes, and metadata are still visible.
+- Encrypted streams detect modification and truncation, but v1 does not authenticate namespace/control metadata or bind a complete ciphertext object to one filename. Deletion, replay, or swapping whole valid encrypted objects inside the same drive is not detected yet.
 - One encryption password protects all encrypted personal files.
 - TDrive remembers the password only until you close the app.
 - Changing the password does not re-encrypt every file. It re-wraps the same master key, so old encrypted files still work with the new password.
@@ -184,7 +185,9 @@ tdrive mount stop
 
 Folder and archive imports require the destination folder to already exist first. Single-file uploads can create or rename the final file path.
 
-The mount beta is read-only. Use the **Mount** button in the app, or close the GUI and run `tdrive mount`; TDrive starts its private localhost WebDAV endpoint, attaches it to the current OS, and pins that drive until you disconnect it. Personal drives appear as **Tdrive personal** on macOS, Windows defaults to `T:`, and Linux uses the current desktop GVfs/GIO session. Linux desktop mounts require GIO, GVfs, and the GVfs WebDAV backend, such as `gvfs-backends` on Debian/Ubuntu. Plaintext single-part and multipart files stream from Telegram as they are read. Creating, editing, deleting, and opening encrypted files through the mount are not supported yet. Windows' built-in WebDAV client defaults to a 50,000,000-byte file-size limit, so larger files require changing that OS setting.
+Use the **Mount** button in the app, or close the GUI and run `tdrive mount`; TDrive starts a private localhost WebDAV endpoint, attaches it to the current OS, and pins that drive until you eject it. Personal drives mount read/write, while shared drives stay read-only. On encrypted personal drives, TDrive asks for the vault password when needed, decrypts authenticated ranges while reading, and encrypts every new or replaced file into ciphertext-only staging before Telegram commit. Rename, move, folder creation, and delete work without re-encrypting unchanged content.
+
+Personal drives appear as **Tdrive personal** on macOS, Windows defaults to `T:`, and Linux uses the current desktop GVfs/GIO session. Linux desktop mounts require GIO, GVfs, and the GVfs WebDAV backend, such as `gvfs-backends` on Debian/Ubuntu. Encrypted PUTs require a known content length. Windows' built-in WebDAV client defaults to a 50,000,000-byte file-size limit, so larger files require changing that OS setting. Native Linux smoke testing is still pending for this beta.
 
 Shared drive commands:
 

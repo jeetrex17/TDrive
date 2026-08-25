@@ -31,6 +31,8 @@ type Session struct {
 	engine         Engine
 	maxObjectBytes int64
 	recoveryReport mountwrite.RecoveryReport
+	encryptWrites  bool
+	masterKeys     MasterKeyProvider
 }
 
 func (s *Session) Put(ctx context.Context, request mountdav.PutRequest, body io.Reader) (mountdav.MutationResult, error) {
@@ -40,6 +42,9 @@ func (s *Session) Put(ctx context.Context, request mountdav.PutRequest, body io.
 		}
 		return mountdav.MutationResult{}, mountdav.ErrWriteInvalid
 	}
+	if s.encryptWrites && request.ContentLength < 0 {
+		return mountdav.MutationResult{}, mountdav.ErrWriteLengthRequired
+	}
 	parent, name, target, found, err := s.resolveDestination(ctx, request.Path)
 	if err != nil {
 		return mountdav.MutationResult{}, err
@@ -47,7 +52,7 @@ func (s *Session) Put(ctx context.Context, request mountdav.PutRequest, body io.
 	if found && target.Kind != mountfs.KindFile {
 		return mountdav.MutationResult{}, mountdav.ErrWriteConflict
 	}
-	if found && target.Encrypted {
+	if found && target.Encrypted && !s.encryptWrites {
 		return mountdav.MutationResult{}, mountdav.ErrWriteForbidden
 	}
 	resource, err := resourceForNode(ctx, s.driveID, target, found)
@@ -66,6 +71,15 @@ func (s *Session) Put(ctx context.Context, request mountdav.PutRequest, body io.
 		CreateOnly:    !found,
 		ContentLength: request.ContentLength,
 		MaxBytes:      s.maxObjectBytes,
+	}
+	if s.encryptWrites {
+		key, keyErr := s.masterKeys.Key()
+		if keyErr != nil {
+			return mountdav.MutationResult{}, mountdav.ErrWriteUnavailable
+		}
+		defer clearSensitiveBytes(key)
+		domainRequest.EncryptionVersion = mountwrite.EncryptionTDE1
+		domainRequest.MasterKey = key
 	}
 	if found {
 		domainRequest.ExistingObjectID = target.ObjectID
@@ -125,14 +139,14 @@ func (s *Session) Move(ctx context.Context, request mountdav.MoveRequest) (mount
 	if !found {
 		return mountdav.MutationResult{}, mountdav.ErrWriteNotFound
 	}
-	if source.Encrypted {
+	if source.Encrypted && !s.encryptWrites {
 		return mountdav.MutationResult{}, mountdav.ErrWriteForbidden
 	}
 	parent, name, destination, destinationFound, err := s.resolveDestination(ctx, request.DestinationPath)
 	if err != nil {
 		return mountdav.MutationResult{}, err
 	}
-	if destinationFound && destination.Encrypted {
+	if destinationFound && destination.Encrypted && !s.encryptWrites {
 		return mountdav.MutationResult{}, mountdav.ErrWriteForbidden
 	}
 	if destinationFound && destination.ObjectID != source.ObjectID {
@@ -202,7 +216,7 @@ func (s *Session) Delete(ctx context.Context, request mountdav.DeleteRequest) (m
 	if !found {
 		return mountdav.MutationResult{}, mountdav.ErrWriteNotFound
 	}
-	if target.Encrypted {
+	if target.Encrypted && !s.encryptWrites {
 		return mountdav.MutationResult{}, mountdav.ErrWriteForbidden
 	}
 	resource, err := resourceForNode(ctx, s.driveID, target, true)
@@ -257,6 +271,9 @@ func (s *Session) Close(ctx context.Context) error {
 
 func (s *Session) ready(ctx context.Context) error {
 	if s == nil || s.driveID == 0 || s.resolver == nil || s.engine == nil || s.maxObjectBytes <= 0 || ctx == nil {
+		return mountdav.ErrWriteUnavailable
+	}
+	if s.encryptWrites && s.masterKeys == nil {
 		return mountdav.ErrWriteUnavailable
 	}
 	if err := ctx.Err(); err != nil {
@@ -403,6 +420,12 @@ func normalizedPath(value string) string {
 		return value
 	}
 	return norm.NFC.String(value)
+}
+
+func clearSensitiveBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 func joinPath(parent, name string) string {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,6 @@ import (
 	"testing"
 
 	"TDrive/backend/mountcontroller"
-	"TDrive/backend/projection"
 )
 
 func TestAppMountDrivePinsResolvedActiveDrive(t *testing.T) {
@@ -103,16 +103,7 @@ func TestResolveActiveMountDrivePropagatesEncryptedEligibility(t *testing.T) {
 	app, db := setupEncryptionApp(t)
 	t.Cleanup(app.engine.Close)
 	app.engine.SetActiveChannelID(testEncryptionChannelID)
-	if err := projection.PutEncryptionConfig(db, projection.EncryptionConfig{
-		ChannelID:        testEncryptionChannelID,
-		Enabled:          true,
-		KDFSalt:          []byte("salt"),
-		KDFParamsJSON:    `{}`,
-		WrappedMasterKey: []byte("wrapped"),
-		KeyCheck:         []byte("check"),
-	}); err != nil {
-		t.Fatalf("seed encryption config: %v", err)
-	}
+	seedAppEncryptionReplay(t, db, testEncryptionChannelID)
 
 	drive, err := app.resolveActiveMountDrive()
 	if err != nil {
@@ -120,6 +111,18 @@ func TestResolveActiveMountDrivePropagatesEncryptedEligibility(t *testing.T) {
 	}
 	if !drive.Encrypted {
 		t.Fatalf("resolveActiveMountDrive() = %#v, want encrypted eligibility", drive)
+	}
+	if drive.EncryptionUnlocked {
+		t.Fatalf("resolveActiveMountDrive() = %#v, want locked encryption", drive)
+	}
+
+	app.engine.EncryptionService().StoreMasterKey(bytes.Repeat([]byte{7}, 32))
+	drive, err = app.resolveActiveMountDrive()
+	if err != nil {
+		t.Fatalf("resolveActiveMountDrive() after unlock error = %v", err)
+	}
+	if !drive.Encrypted || !drive.EncryptionUnlocked {
+		t.Fatalf("resolveActiveMountDrive() after unlock = %#v", drive)
 	}
 }
 
@@ -182,6 +185,38 @@ func TestAppShutdownClosesMountController(t *testing.T) {
 	}
 	if app.mountController != controller {
 		t.Fatal("shutdown replaced the immutable mount controller reference")
+	}
+}
+
+func TestLockEncryptionSessionRefusesToClearKeyWhenMountCannotClose(t *testing.T) {
+	app, _ := setupEncryptionApp(t)
+	t.Cleanup(app.engine.Close)
+	app.engine.EncryptionService().StoreMasterKey(bytes.Repeat([]byte{8}, 32))
+	app.mountController = &fakeAppMountController{closeErr: errors.New("eject failed")}
+
+	if err := app.lockEncryptionSession(); err == nil {
+		t.Fatal("lockEncryptionSession() error = nil")
+	}
+	if _, remembered := app.engine.EncryptionService().LoadedMasterKey(); !remembered {
+		t.Fatal("mount close failure cleared the encryption key")
+	}
+}
+
+func TestLockEncryptionSessionClosesMountBeforeClearingKey(t *testing.T) {
+	app, _ := setupEncryptionApp(t)
+	t.Cleanup(app.engine.Close)
+	app.engine.EncryptionService().StoreMasterKey(bytes.Repeat([]byte{8}, 32))
+	controller := &fakeAppMountController{}
+	app.mountController = controller
+
+	if err := app.lockEncryptionSession(); err != nil {
+		t.Fatalf("lockEncryptionSession() error = %v", err)
+	}
+	if controller.closeCalls != 1 {
+		t.Fatalf("mount close calls = %d", controller.closeCalls)
+	}
+	if _, remembered := app.engine.EncryptionService().LoadedMasterKey(); remembered {
+		t.Fatal("encryption key remains loaded after mount closed")
 	}
 }
 

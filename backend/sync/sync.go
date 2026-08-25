@@ -27,6 +27,8 @@ const (
 	maxFloodWaitSleep   = 60 * time.Second
 )
 
+var errHistoryPaginationNoProgress = errors.New("sync: history pagination made no progress")
+
 type historyPlan struct {
 	upperBounds []int64
 	highestSeen int64
@@ -105,7 +107,10 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 	lk := e.lockFor(channelID)
 	lk.Lock()
 	defer lk.Unlock()
+	return e.incrementalLocked(ctx, channelID)
+}
 
+func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
 	peer, err := e.peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("sync: resolve peer: %w", err)
@@ -128,6 +133,48 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 		return e.adoptRecentCaptionlessMedia(ctx, channelID, peer, parseOpts)
 	}
 	return e.applyHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
+}
+
+// EnsureAuthoritative guarantees that the local projection has observed the
+// channel's complete Telegram history before returning successfully. It is
+// used for security decisions whose absence is meaningful, such as deciding
+// that a personal drive has no encryption policy.
+//
+// A previously completed full scan only needs an incremental refresh. Older
+// databases without the persisted initial-sync marker are reconciled from
+// message zero through the same idempotent replay-log path, even when their
+// projection is already non-empty. The marker and all newly discovered ops
+// commit atomically, so cancellation or a partial history failure never turns
+// an unknown policy into an authoritative plaintext policy.
+func (e *Engine) EnsureAuthoritative(ctx context.Context, channelID int64) error {
+	lk := e.lockFor(channelID)
+	lk.Lock()
+	defer lk.Unlock()
+
+	channel, err := projection.GetChannel(e.db, channelID)
+	if err != nil {
+		return fmt.Errorf("sync: read channel authority: %w", err)
+	}
+	if channel.InitialSyncDone {
+		return e.incrementalLocked(ctx, channelID)
+	}
+
+	parseOpts, err := parseOptionsForChannel(e.db, channelID)
+	if err != nil {
+		return err
+	}
+	peer, err := e.peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return fmt.Errorf("sync: resolve peer: %w", err)
+	}
+	plan, err := e.planHistory(ctx, channelID, peer, 0)
+	if err != nil {
+		return err
+	}
+	if len(plan.upperBounds) == 0 {
+		return markInitialSyncDone(e.db, channelID, 0)
+	}
+	return e.applyInitialHistoryPlan(ctx, channelID, peer, 0, plan, parseOpts)
 }
 
 // InitialSyncEmptyChannel paginates the full history of a channel that has
@@ -192,8 +239,8 @@ func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient
 		if len(page) < defaultPageSize {
 			break
 		}
-		if offsetID == lowestInPage {
-			break
+		if offsetID != 0 && lowestInPage >= offsetID {
+			return historyPlan{}, errHistoryPaginationNoProgress
 		}
 		offsetID = lowestInPage
 	}

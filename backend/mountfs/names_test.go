@@ -53,6 +53,11 @@ func TestPortableNameBoundsLongNamesAndPreservesShortExtensions(t *testing.T) {
 	if !strings.HasSuffix(alias, ".txt") {
 		t.Fatalf("collisionAlias() = %q, want .txt extension preserved", alias)
 	}
+
+	truncationExposesSpaces := strings.Repeat("a", maxPortableNameBytes-2) + "  x"
+	if got := portableName(truncationExposesSpaces); strings.HasSuffix(got, " ") || strings.HasSuffix(got, ".") {
+		t.Fatalf("portableName() truncation exposed a forbidden suffix: %q", got)
+	}
 }
 
 func TestPortableNameHandlesWindowsDeviceNamesWithExtensions(t *testing.T) {
@@ -133,6 +138,59 @@ func TestPortableNameReplacesAllUnicodeControlCharacters(t *testing.T) {
 	if got := portableName("before\u0085after.txt"); got != "before_after.txt" {
 		t.Fatalf("portableName() = %q, want C1 control replaced", got)
 	}
+	if got := portableName("report\u202efdp.exe"); got != "report_fdp.exe" {
+		t.Fatalf("portableName() = %q, want bidi control replaced", got)
+	}
+	for _, name := range []string{
+		"family-\U0001f468\u200d\U0001f469\u200d\U0001f467.txt",
+		"Persian-می\u200cروم.txt",
+	} {
+		if got := portableName(name); got != name {
+			t.Fatalf("portableName(%q) = %q, want join controls preserved", name, got)
+		}
+	}
+}
+
+func TestBidiReplacementCollisionAliasesAreStable(t *testing.T) {
+	t.Parallel()
+
+	forward := []SourceEntry{
+		{ID: "f:bidi", ParentID: RootID, Name: "report\u202efdp.exe", Kind: KindFile},
+		{ID: "f:literal", ParentID: RootID, Name: "report_fdp.exe", Kind: KindFile},
+	}
+	reversed := []SourceEntry{forward[1], forward[0]}
+
+	aliasByID := func(entries []SourceEntry) map[string]string {
+		t.Helper()
+		snapshot, err := buildDirectorySnapshot(42, RootID, entries)
+		if err != nil {
+			t.Fatalf("buildDirectorySnapshot() error = %v", err)
+		}
+		aliases := make(map[string]string, len(snapshot.entries))
+		for _, entry := range snapshot.entries {
+			aliases[entry.entry.ID] = entry.entry.Name
+		}
+		return aliases
+	}
+
+	first := aliasByID(forward)
+	second := aliasByID(reversed)
+	if first["f:bidi"] != second["f:bidi"] || first["f:literal"] != second["f:literal"] {
+		t.Fatalf("aliases depend on input order: forward=%v reversed=%v", first, second)
+	}
+	if NameKey(first["f:bidi"]) == NameKey(first["f:literal"]) {
+		t.Fatalf("replacement collision was not disambiguated: %v", first)
+	}
+	for id, name := range first {
+		if !strings.Contains(name, "[td-f-") {
+			t.Errorf("collision alias for %s = %q, want stable token", id, name)
+		}
+		for _, character := range name {
+			if unicode.Is(unicode.Bidi_Control, character) {
+				t.Errorf("collision alias for %s retained bidi control U+%04X", id, character)
+			}
+		}
+	}
 }
 
 func FuzzPortableNameProperties(f *testing.F) {
@@ -140,6 +198,7 @@ func FuzzPortableNameProperties(f *testing.F) {
 		"report.txt",
 		"CON",
 		"bad<name>.txt",
+		"report\u202efdp.exe",
 		"trailing. ",
 		"Cafe\u0301.txt",
 		string([]byte{0xff, 'a'}),
@@ -163,8 +222,8 @@ func FuzzPortableNameProperties(f *testing.F) {
 			t.Fatalf("portableName() retained a forbidden character: %q", name)
 		}
 		for _, character := range name {
-			if unicode.IsControl(character) {
-				t.Fatalf("portableName() retained Unicode control U+%04X: %q", character, name)
+			if unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character) {
+				t.Fatalf("portableName() retained unsafe Unicode control U+%04X: %q", character, name)
 			}
 		}
 		if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {

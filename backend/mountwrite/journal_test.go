@@ -1,8 +1,10 @@
 package mountwrite
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -36,6 +38,7 @@ func TestSQLiteJournalPersistsRecordAndCompareAndSwapTransition(t *testing.T) {
 			DriveID:             42,
 			DestinationParentID: "",
 			DestinationName:     "notes.txt",
+			ContentLength:       12,
 		},
 		State:     StateReceiving,
 		CreatedAt: createdAt,
@@ -48,7 +51,7 @@ func TestSQLiteJournalPersistsRecordAndCompareAndSwapTransition(t *testing.T) {
 		t.Fatalf("duplicate create error = %v, want ErrOperationExists", err)
 	}
 
-	staged := StagedObject{Key: "stage-key", Path: "/private/stage", Size: 12}
+	staged := StagedObject{Key: "stage-key", Path: "/private/stage", PlaintextSize: 12, StoredSize: 12}
 	updatedAt := createdAt.Add(time.Second)
 	got, err := journal.Transition(ctx, "op-1", StateReceiving, StateStaged, JournalPatch{
 		Staged:    &staged,
@@ -238,6 +241,124 @@ func TestSQLiteJournalCopiesRemoteBodyAndDetectsCorruptRows(t *testing.T) {
 	}
 	if _, _, err := journal.Get(ctx, "corrupt"); err == nil {
 		t.Fatal("corrupt row should fail decoding")
+	}
+}
+
+func TestSQLiteJournalRejectsSemanticallyCorruptEncryptedMetadata(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openJournalDB(t, filepath.Join(t.TempDir(), "journal.db"))
+	if err := EnsureJournalSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	journal, err := NewSQLiteJournal(db)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	mutationJSON := `{"kind":"put","drive_id":42,"destination_name":"private.txt","content_length":1,"encryption_version":1}`
+	stagedJSON := `{"key":"safe.stage","path":"/private/safe.stage","plaintext_size":1,"stored_size":1,"encryption_version":1}`
+	_, err = db.ExecContext(ctx, `INSERT INTO mount_write_journal
+		(operation_id, kind, state, drive_id, mutation_json, staged_json, error_code, created_at_ns, updated_at_ns)
+		VALUES (?, 'put', 'staged', 42, ?, ?, '', 1, 1)`, "corrupt-encrypted", mutationJSON, stagedJSON)
+	if err != nil {
+		t.Fatalf("insert corrupt encrypted row: %v", err)
+	}
+	if _, _, err := journal.Get(ctx, "corrupt-encrypted"); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("corrupt encrypted metadata error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestSQLiteJournalRejectsZeroLengthMutationWithNonEmptyStage(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openJournalDB(t, filepath.Join(t.TempDir(), "journal.db"))
+	if err := EnsureJournalSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	journal, err := NewSQLiteJournal(db)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	mutationJSON := `{"kind":"put","drive_id":42,"destination_name":"empty.txt","content_length":0}`
+	stagedJSON := `{"key":"safe.stage","path":"/private/safe.stage","plaintext_size":1,"stored_size":1}`
+	_, err = db.ExecContext(ctx, `INSERT INTO mount_write_journal
+		(operation_id, kind, state, drive_id, mutation_json, staged_json, error_code, created_at_ns, updated_at_ns)
+		VALUES (?, 'put', 'staged', 42, ?, ?, '', 1, 1)`, "corrupt-empty", mutationJSON, stagedJSON)
+	if err != nil {
+		t.Fatalf("insert corrupt zero-length row: %v", err)
+	}
+	if _, _, err := journal.Get(ctx, "corrupt-empty"); !errors.Is(err, ErrLengthMismatch) {
+		t.Fatalf("corrupt zero-length metadata error = %v, want ErrLengthMismatch", err)
+	}
+}
+
+func TestStagedObjectReadsLegacyPlaintextJournalShape(t *testing.T) {
+	t.Parallel()
+
+	var staged StagedObject
+	if err := json.Unmarshal([]byte(`{"key":"legacy.stage","path":"/private/legacy.stage","size":12}`), &staged); err != nil {
+		t.Fatalf("decode legacy stage: %v", err)
+	}
+	if staged.PlaintextSize != 12 || staged.StoredSize != 12 || staged.EncryptionVersion != EncryptionNone {
+		t.Fatalf("legacy stage = %#v", staged)
+	}
+	encoded, err := json.Marshal(staged)
+	if err != nil {
+		t.Fatalf("encode current stage: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(`"size"`)) || !bytes.Contains(encoded, []byte(`"plaintext_size":12`)) || !bytes.Contains(encoded, []byte(`"stored_size":12`)) {
+		t.Fatalf("current stage JSON = %s", encoded)
+	}
+}
+
+func TestSQLiteJournalRejectsTamperedPersistedHiddenCleanupReceipt(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openJournalDB(t, filepath.Join(t.TempDir(), "journal.db"))
+	if err := EnsureJournalSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	journal, err := NewSQLiteJournal(db)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	at := time.Unix(1_700_000_000, 0).UTC()
+	record := JournalRecord{
+		OperationID: "tampered-hidden-cleanup",
+		Mutation: Mutation{
+			Kind: MutationPut, DriveID: 42, DestinationName: "receipt.bin", ContentLength: 1,
+		},
+		State: StateCleanupPending,
+		Body: &RemoteBody{
+			UploadUUID: "hu-valid", PartCount: 1, PlaintextSize: 1, StoredSize: 1,
+			MessageIDs: []int64{71},
+		},
+		CreatedAt: at,
+		UpdatedAt: at,
+	}
+	if err := journal.Create(ctx, record); err != nil {
+		t.Fatalf("create valid cleanup record: %v", err)
+	}
+	tamperedBody, err := json.Marshal(RemoteBody{
+		UploadUUID: "hu-valid", PartCount: 2, PlaintextSize: 1, StoredSize: 1,
+		MessageIDs: []int64{71, 71},
+	})
+	if err != nil {
+		t.Fatalf("encode tampered body: %v", err)
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE mount_write_journal SET body_json = ? WHERE operation_id = ?`,
+		tamperedBody,
+		record.OperationID,
+	); err != nil {
+		t.Fatalf("tamper persisted body: %v", err)
+	}
+	if _, _, err := journal.Get(ctx, record.OperationID); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Get error = %v, want invalid request", err)
 	}
 }
 

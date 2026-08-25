@@ -340,14 +340,11 @@ func applyTomb(tx *sql.Tx, channelID int64, op Op) error {
 }
 
 func applyEncConfig(tx *sql.Tx, channelID int64, op Op) error {
-	if len(op.KDFSalt) == 0 || op.KDFParamsJSON == "" || len(op.WrappedMasterKey) == 0 || len(op.KeyCheck) == 0 {
-		return fmt.Errorf("%w: encryption config missing key material", ErrBadOp)
-	}
 	version := op.ConfigVersion
 	if version == 0 {
 		version = 1
 	}
-	return PutEncryptionConfigTx(tx, EncryptionConfig{
+	err := PutEncryptionConfigTx(tx, EncryptionConfig{
 		ChannelID:        channelID,
 		Enabled:          true,
 		KDFSalt:          op.KDFSalt,
@@ -357,6 +354,10 @@ func applyEncConfig(tx *sql.Tx, channelID int64, op Op) error {
 		Hint:             strings.TrimSpace(op.Hint),
 		Version:          version,
 	})
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrBadOp, err)
+	}
+	return nil
 }
 
 func wouldCreateCycle(tx *sql.Tx, channelID int64, movingFolderID, newParentID string) (bool, error) {

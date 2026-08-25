@@ -119,21 +119,39 @@ func (c *Coordinator) recoverCommit(ctx context.Context, record JournalRecord) e
 func (c *Coordinator) recoverCleanup(ctx context.Context, record JournalRecord) error {
 	maintenanceCtx, cancel := c.maintenanceContext(ctx)
 	defer cancel()
-	if record.Staged != nil {
-		if err := c.staging.Remove(maintenanceCtx, *record.Staged); err != nil {
-			return operationError(record, err)
-		}
-	}
 	// A receipt-only result means the visibility commit was rejected and its
 	// hidden body still needs cleanup. Confirmed mutations always have a stable
 	// logical object identity.
 	if record.Result != nil && record.Result.ObjectID != "" {
+		if err := c.removeStagedForCleanup(maintenanceCtx, record); err != nil {
+			return operationError(record, err)
+		}
 		_, err := c.transition(maintenanceCtx, record, StateDone, JournalPatch{Result: record.Result})
 		return operationError(record, err)
 	}
-	if err := c.remote.DiscardHidden(maintenanceCtx, record.OperationID, record.Body); err != nil {
-		return operationError(record, err)
+
+	current := record
+	if current.Mutation.Kind == MutationPut && current.Body == nil && current.Staged != nil {
+		prepared, err := c.prepareHiddenCleanupReceipt(maintenanceCtx, current)
+		if err != nil {
+			return operationError(current, err)
+		}
+		current = prepared
 	}
-	_, err := c.transition(maintenanceCtx, record, StateAborted, JournalPatch{ErrorCode: "aborted during recovery"})
-	return operationError(record, err)
+	if current.Body != nil {
+		if err := c.remote.DiscardHidden(maintenanceCtx, current.OperationID, current.Body); err != nil {
+			return operationError(current, err)
+		}
+	} else if current.Mutation.Kind == MutationPut {
+		// Legacy/corrupt journals without staging cannot close the historical
+		// send-receipt gap, but can still delete every durably projected part.
+		if err := c.remote.DiscardHidden(maintenanceCtx, current.OperationID, nil); err != nil {
+			return operationError(current, err)
+		}
+	}
+	if err := c.removeStagedForCleanup(maintenanceCtx, current); err != nil {
+		return operationError(current, err)
+	}
+	_, err := c.transition(maintenanceCtx, current, StateAborted, JournalPatch{ErrorCode: "aborted during recovery"})
+	return operationError(current, err)
 }

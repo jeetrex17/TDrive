@@ -3,22 +3,32 @@ package mountwrite
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	tdcrypto "TDrive/backend/crypto"
 )
 
 type MutationKind string
+type EncryptionVersion int
 
 const (
 	MutationPut    MutationKind = "put"
 	MutationMkdir  MutationKind = "mkdir"
 	MutationMove   MutationKind = "move"
 	MutationDelete MutationKind = "delete"
+
+	EncryptionNone EncryptionVersion = 0
+	EncryptionTDE1 EncryptionVersion = 1
+
+	masterKeySize = 32
 )
 
 type JournalState string
@@ -38,20 +48,21 @@ const (
 )
 
 type Mutation struct {
-	Kind                   MutationKind  `json:"kind"`
-	DriveID                int64         `json:"drive_id"`
-	ObjectID               string        `json:"object_id,omitempty"`
-	SourceParentID         string        `json:"source_parent_id,omitempty"`
-	DestinationParentID    string        `json:"destination_parent_id,omitempty"`
-	DestinationName        string        `json:"destination_name,omitempty"`
-	ExpectedRevision       uint64        `json:"expected_revision,omitempty"`
-	CreateOnly             bool          `json:"create_only,omitempty"`
-	OverwriteTargetID      string        `json:"overwrite_target_id,omitempty"`
-	ExpectedTargetRevision uint64        `json:"expected_target_revision,omitempty"`
-	Recursive              bool          `json:"recursive,omitempty"`
-	TrashRetention         time.Duration `json:"trash_retention,omitempty"`
-	ContentLength          int64         `json:"content_length,omitempty"`
-	MaxBytes               int64         `json:"max_bytes,omitempty"`
+	Kind                   MutationKind      `json:"kind"`
+	DriveID                int64             `json:"drive_id"`
+	ObjectID               string            `json:"object_id,omitempty"`
+	SourceParentID         string            `json:"source_parent_id,omitempty"`
+	DestinationParentID    string            `json:"destination_parent_id,omitempty"`
+	DestinationName        string            `json:"destination_name,omitempty"`
+	ExpectedRevision       uint64            `json:"expected_revision,omitempty"`
+	CreateOnly             bool              `json:"create_only,omitempty"`
+	OverwriteTargetID      string            `json:"overwrite_target_id,omitempty"`
+	ExpectedTargetRevision uint64            `json:"expected_target_revision,omitempty"`
+	Recursive              bool              `json:"recursive,omitempty"`
+	TrashRetention         time.Duration     `json:"trash_retention,omitempty"`
+	ContentLength          int64             `json:"content_length,omitempty"`
+	MaxBytes               int64             `json:"max_bytes,omitempty"`
+	EncryptionVersion      EncryptionVersion `json:"encryption_version,omitempty"`
 }
 
 func (m Mutation) AffectedParents() []string {
@@ -83,23 +94,43 @@ func (m Mutation) lockKeys() []string {
 }
 
 type PutRequest struct {
-	OperationID      string
-	DriveID          int64
-	ParentID         string
-	Name             string
-	ExistingObjectID string
-	ExpectedRevision uint64
-	CreateOnly       bool
-	ContentLength    int64
-	MaxBytes         int64
+	OperationID       string
+	DriveID           int64
+	ParentID          string
+	Name              string
+	ExistingObjectID  string
+	ExpectedRevision  uint64
+	CreateOnly        bool
+	ContentLength     int64
+	MaxBytes          int64
+	EncryptionVersion EncryptionVersion
+
+	// MasterKey is transient input for encrypted staging. It is never copied
+	// into a Mutation, journal record, remote body, or public error.
+	MasterKey []byte
 }
 
 func (r PutRequest) Validate() error {
 	if !validOperationID(r.OperationID) || r.DriveID == 0 || !validName(r.Name) || r.ContentLength < -1 || r.MaxBytes < 0 {
 		return ErrInvalidRequest
 	}
-	if r.ContentLength >= 0 && r.MaxBytes > 0 && r.ContentLength > r.MaxBytes {
-		return ErrQuotaExceeded
+	if !validEncryptionVersion(r.EncryptionVersion) {
+		return ErrInvalidRequest
+	}
+	if r.EncryptionVersion == EncryptionNone && len(r.MasterKey) != 0 {
+		return ErrInvalidRequest
+	}
+	if r.EncryptionVersion == EncryptionTDE1 && (r.ContentLength < 0 || len(r.MasterKey) != masterKeySize) {
+		return ErrInvalidRequest
+	}
+	if r.ContentLength >= 0 && r.MaxBytes > 0 {
+		requiredBytes := r.ContentLength
+		if r.EncryptionVersion == EncryptionTDE1 {
+			requiredBytes = tdcrypto.CiphertextSize(r.ContentLength)
+		}
+		if requiredBytes == math.MaxInt64 || requiredBytes > r.MaxBytes {
+			return ErrQuotaExceeded
+		}
 	}
 	if r.CreateOnly && r.ExistingObjectID != "" {
 		return ErrInvalidRequest
@@ -118,6 +149,17 @@ func (r PutRequest) mutation() Mutation {
 		CreateOnly:          r.CreateOnly,
 		ContentLength:       r.ContentLength,
 		MaxBytes:            r.MaxBytes,
+		EncryptionVersion:   r.EncryptionVersion,
+	}
+}
+
+func (r PutRequest) stageRequest(operationID string) StageRequest {
+	return StageRequest{
+		OperationID:       operationID,
+		PlaintextSize:     r.ContentLength,
+		MaxBytes:          r.MaxBytes,
+		EncryptionVersion: r.EncryptionVersion,
+		MasterKey:         append([]byte(nil), r.MasterKey...),
 	}
 }
 
@@ -214,31 +256,90 @@ func (r DeleteRequest) mutation() Mutation {
 }
 
 type StagedObject struct {
-	Key    string            `json:"key"`
-	Path   string            `json:"path"`
-	Size   int64             `json:"size"`
+	Key           string `json:"key"`
+	Path          string `json:"path"`
+	PlaintextSize int64  `json:"plaintext_size"`
+	StoredSize    int64  `json:"stored_size"`
+	// SHA256 is the plaintext digest for unencrypted content and is zero for
+	// encrypted content so journal metadata cannot reveal content equality.
 	SHA256 [sha256.Size]byte `json:"sha256"`
+	// StoredSHA256 verifies the exact bytes handed to the remote uploader.
+	StoredSHA256      [sha256.Size]byte `json:"stored_sha256"`
+	EncryptionVersion EncryptionVersion `json:"encryption_version,omitempty"`
+}
+
+// UnmarshalJSON accepts size-only plaintext records written before encrypted
+// writable mounts. New records always use explicit plaintext and stored sizes.
+func (s *StagedObject) UnmarshalJSON(data []byte) error {
+	if s == nil {
+		return ErrInvalidRequest
+	}
+	var wire struct {
+		Key               string            `json:"key"`
+		Path              string            `json:"path"`
+		LegacySize        *int64            `json:"size"`
+		PlaintextSize     *int64            `json:"plaintext_size"`
+		StoredSize        *int64            `json:"stored_size"`
+		SHA256            [sha256.Size]byte `json:"sha256"`
+		StoredSHA256      [sha256.Size]byte `json:"stored_sha256"`
+		EncryptionVersion EncryptionVersion `json:"encryption_version"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	plaintextSize, storedSize := int64(0), int64(0)
+	if wire.PlaintextSize != nil {
+		plaintextSize = *wire.PlaintextSize
+	} else if wire.LegacySize != nil {
+		plaintextSize = *wire.LegacySize
+	}
+	if wire.StoredSize != nil {
+		storedSize = *wire.StoredSize
+	} else if wire.LegacySize != nil {
+		storedSize = *wire.LegacySize
+	}
+	storedDigest := wire.StoredSHA256
+	if storedDigest == ([sha256.Size]byte{}) && wire.EncryptionVersion == EncryptionNone {
+		storedDigest = wire.SHA256
+	}
+	*s = StagedObject{
+		Key:               wire.Key,
+		Path:              wire.Path,
+		PlaintextSize:     plaintextSize,
+		StoredSize:        storedSize,
+		SHA256:            wire.SHA256,
+		StoredSHA256:      storedDigest,
+		EncryptionVersion: wire.EncryptionVersion,
+	}
+	return nil
 }
 
 type HiddenUpload struct {
-	OperationID string
-	DriveID     int64
-	ParentID    string
-	Name        string
-	Size        int64
-	SHA256      [sha256.Size]byte
-	Encrypted   bool
+	OperationID   string
+	DriveID       int64
+	ParentID      string
+	Name          string
+	PlaintextSize int64
+	StoredSize    int64
+	// SHA256 follows StagedObject.SHA256 semantics.
+	SHA256            [sha256.Size]byte
+	StoredSHA256      [sha256.Size]byte
+	EncryptionVersion EncryptionVersion
+	Encrypted         bool
 }
 
 type RemoteBody struct {
-	ContentRef    string            `json:"content_ref,omitempty"`
-	UploadUUID    string            `json:"upload_uuid,omitempty"`
-	PartCount     int               `json:"part_count,omitempty"`
-	PlaintextSize int64             `json:"plaintext_size"`
-	StoredSize    int64             `json:"stored_size,omitempty"`
-	Encrypted     bool              `json:"encrypted,omitempty"`
-	SHA256        [sha256.Size]byte `json:"sha256"`
-	MessageIDs    []int64           `json:"message_ids,omitempty"`
+	ContentRef        string            `json:"content_ref,omitempty"`
+	UploadUUID        string            `json:"upload_uuid,omitempty"`
+	PartCount         int               `json:"part_count,omitempty"`
+	PlaintextSize     int64             `json:"plaintext_size"`
+	StoredSize        int64             `json:"stored_size,omitempty"`
+	Encrypted         bool              `json:"encrypted,omitempty"`
+	EncryptionVersion EncryptionVersion `json:"encryption_version,omitempty"`
+	// SHA256 is never populated with a plaintext digest for encrypted content.
+	SHA256       [sha256.Size]byte `json:"sha256"`
+	StoredSHA256 [sha256.Size]byte `json:"stored_sha256"`
+	MessageIDs   []int64           `json:"message_ids,omitempty"`
 }
 
 type CommitRequest struct {
@@ -285,19 +386,31 @@ type ReadSeekCloser interface {
 }
 
 type StagingStore interface {
-	Stage(ctx context.Context, operationID string, contentLength, maxBytes int64, source io.Reader) (StagedObject, error)
+	Stage(ctx context.Context, request StageRequest, source io.Reader) (StagedObject, error)
 	Open(staged StagedObject) (ReadSeekCloser, error)
 	Remove(ctx context.Context, staged StagedObject) error
 	RemoveOperation(ctx context.Context, operationID string) error
 }
 
+type StageRequest struct {
+	OperationID       string
+	PlaintextSize     int64
+	MaxBytes          int64
+	EncryptionVersion EncryptionVersion
+	MasterKey         []byte
+}
+
 // Remote implements hidden content upload and the single visibility commit.
-// UploadHidden must be idempotent for an OperationID. Commit may return
+// UploadHidden must be idempotent for an OperationID. RecoverHidden resolves
+// the at-most-one accepted-but-unprojected part from an unchanged staged source
+// and returns exact message receipts without deleting them; the coordinator
+// persists those receipts before removing staging. Commit may return
 // ErrCommitOutcomeUnknown only when visibility is uncertain; a definite error
-// promises that the mutation was not published. DiscardHidden must accept a
-// nil body and clean deterministic upload artifacts using operationID alone.
+// promises that the mutation was not published. DiscardHidden must accept a nil
+// body for legacy journals and clean projected deterministic artifacts only.
 type Remote interface {
 	UploadHidden(ctx context.Context, request HiddenUpload, source io.ReadSeeker) (RemoteBody, error)
+	RecoverHidden(ctx context.Context, request HiddenUpload, source io.ReadSeeker) (RemoteBody, error)
 	Commit(ctx context.Context, request CommitRequest) (MutationResult, error)
 	Reconcile(ctx context.Context, operationID string) (MutationResult, bool, error)
 	DiscardHidden(ctx context.Context, operationID string, body *RemoteBody) error
@@ -356,7 +469,9 @@ var allowedTransitions = map[JournalState][]JournalState{
 	StateReconciling:       {StateRemoteCommitted, StateCommitting, StateCleanupPending, StateAborted},
 	StateRemoteCommitted:   {StateProjectionPending, StateCleanupPending, StateDone},
 	StateProjectionPending: {StateCleanupPending, StateDone},
-	StateCleanupPending:    {StateDone, StateAborted},
+	// A cleanup-pending self-transition durably refines a receipt-unknown
+	// record with exact recovered body IDs before local staging is removed.
+	StateCleanupPending: {StateCleanupPending, StateDone, StateAborted},
 }
 
 func validName(name string) bool {
@@ -410,6 +525,9 @@ func validateMutation(m Mutation) error {
 	if m.DriveID == 0 {
 		return ErrInvalidRequest
 	}
+	if !validEncryptionVersion(m.EncryptionVersion) || (m.Kind != MutationPut && m.EncryptionVersion != EncryptionNone) {
+		return ErrInvalidRequest
+	}
 	switch m.Kind {
 	case MutationPut, MutationMkdir:
 		if !validName(m.DestinationName) {
@@ -427,6 +545,10 @@ func validateMutation(m Mutation) error {
 		return ErrInvalidRequest
 	}
 	return nil
+}
+
+func validEncryptionVersion(version EncryptionVersion) bool {
+	return version == EncryptionNone || version == EncryptionTDE1
 }
 
 func isTerminal(state JournalState) bool {

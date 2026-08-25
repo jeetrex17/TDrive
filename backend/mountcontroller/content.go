@@ -26,9 +26,6 @@ func (adapter contentAdapter) OpenContent(ctx context.Context, channelID int64, 
 	if adapter.opener == nil {
 		return nil, fmt.Errorf("%w: content reader is not ready", mountfs.ErrContentUnavailable)
 	}
-	if entry.Encrypted {
-		return nil, fmt.Errorf("%w: encrypted files are unavailable in this release", mountfs.ErrAccessDenied)
-	}
 	messageID, err := strconv.ParseInt(entry.ContentRef, 10, 64)
 	if err != nil || messageID <= 0 {
 		return nil, fmt.Errorf("%w: invalid content reference", mountfs.ErrContentUnavailable)
@@ -51,7 +48,9 @@ func mapContentOpenError(err error) error {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
 	case errors.Is(err, mountcontent.ErrEncryptedUnsupported), errors.Is(err, media.ErrEncryptedUnsupported):
-		return fmt.Errorf("%w: encrypted files are unavailable in this release", mountfs.ErrAccessDenied)
+		return fmt.Errorf("%w: encrypted file format is unsupported", mountfs.ErrAccessDenied)
+	case errors.Is(err, mountcontent.ErrKeyUnavailable):
+		return fmt.Errorf("%w: unlock encryption before opening this file", mountfs.ErrAccessDenied)
 	case errors.Is(err, media.ErrFileNotFound),
 		errors.Is(err, tgclient.ErrMessageNotFound),
 		errors.Is(err, tgclient.ErrNotFile),

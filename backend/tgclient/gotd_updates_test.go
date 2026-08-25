@@ -1,6 +1,7 @@
 package tgclient
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -46,5 +47,14 @@ func TestExtractMsgIDHandlesTelegramSendVariants(t *testing.T) {
 				t.Fatalf("extractMsgID = %d, want %d", got, test.want)
 			}
 		})
+	}
+}
+
+func TestRequiredSendMsgIDClassifiesAcceptedResponseWithoutReceiptAsUnknown(t *testing.T) {
+	t.Parallel()
+
+	msgID, err := requiredSendMsgID(&tg.Updates{}, 7003, "send control")
+	if msgID != 0 || !errors.Is(err, ErrSendOutcomeUnknown) {
+		t.Fatalf("requiredSendMsgID = (%d, %v), want unknown outcome", msgID, err)
 	}
 }

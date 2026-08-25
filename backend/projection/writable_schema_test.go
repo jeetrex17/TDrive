@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -334,7 +335,7 @@ func TestMigrateSanitizesInvalidAndOverlongLegacyNames(t *testing.T) {
 	if err := seedV7Projection(t, db); err != nil {
 		t.Fatal(err)
 	}
-	for index, name := range []string{"CON", "bad:name", "trailing. ", strings.Repeat("é", 130)} {
+	for index, name := range []string{"CON", "bad:name", "trailing. ", strings.Repeat("é", 130), "report\u202efdp.exe"} {
 		if _, err := db.Exec(`
 			INSERT INTO folders(channel_id,id,name,parent_id,tombstoned)
 			VALUES (?, ?, ?, '', 0)
@@ -358,6 +359,11 @@ func TestMigrateSanitizesInvalidAndOverlongLegacyNames(t *testing.T) {
 		canonical, err := CanonicalNameKey(name)
 		if err != nil || canonical != key || len([]byte(name)) > maxPortableNameBytes {
 			t.Fatalf("migrated name=%q key=%q canonical=%q err=%v", name, key, canonical, err)
+		}
+		for _, character := range name {
+			if unicode.Is(unicode.Bidi_Control, character) {
+				t.Fatalf("migrated name retained bidi control U+%04X: %q", character, name)
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {

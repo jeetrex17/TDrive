@@ -2,6 +2,7 @@ package mountwrite
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	tdcrypto "TDrive/backend/crypto"
 )
 
 type JournalRecord struct {
@@ -168,6 +171,9 @@ func (j *SQLiteJournal) Transition(
 		return JournalRecord{}, err
 	}
 	updated := applyPatch(record, next, patch)
+	if err := validateRecord(updated); err != nil {
+		return JournalRecord{}, err
+	}
 	stagedJSON, err := marshalOptional(updated.Staged)
 	if err != nil {
 		return JournalRecord{}, fmt.Errorf("encode staged object: %w", err)
@@ -271,6 +277,9 @@ func scanJournalRecord(row rowScanner) (JournalRecord, error) {
 	}
 	record.CreatedAt = time.Unix(0, createdAtNS).UTC()
 	record.UpdatedAt = time.Unix(0, updatedAtNS).UTC()
+	if err := validateRecord(record); err != nil {
+		return JournalRecord{}, err
+	}
 	return cloneRecord(record), nil
 }
 
@@ -329,6 +338,46 @@ func validateRecord(record JournalRecord) error {
 		return err
 	}
 	if !knownState(record.State) {
+		return ErrInvalidRequest
+	}
+	if record.Staged != nil {
+		if err := validateStagedMutation(record.Mutation, *record.Staged); err != nil {
+			return err
+		}
+	}
+	if record.Body != nil {
+		var err error
+		isHiddenReceipt := record.Body.UploadUUID != "" || record.Body.PartCount != 0 || len(record.Body.MessageIDs) != 0
+		if record.State == StateCleanupPending && isHiddenReceipt {
+			err = validateHiddenCleanupBody(record.Mutation, *record.Body, false)
+		} else {
+			err = validateRemoteBody(record.Mutation, *record.Body)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteBody(mutation Mutation, body RemoteBody) error {
+	if body.PlaintextSize < 0 || body.StoredSize < 0 || body.PartCount < 0 || !validEncryptionVersion(body.EncryptionVersion) {
+		return ErrInvalidRequest
+	}
+	if mutation.Kind != MutationPut || mutation.EncryptionVersion != body.EncryptionVersion {
+		return ErrInvalidRequest
+	}
+	if body.EncryptionVersion == EncryptionNone {
+		if body.Encrypted || (body.StoredSize != 0 && body.StoredSize != body.PlaintextSize) {
+			return ErrInvalidRequest
+		}
+		return nil
+	}
+	if err := tdcrypto.ValidatePlaintextSize(body.PlaintextSize); err != nil {
+		return ErrInvalidRequest
+	}
+	if !body.Encrypted || body.SHA256 != ([sha256.Size]byte{}) || body.StoredSHA256 == ([sha256.Size]byte{}) ||
+		tdcrypto.CiphertextSize(body.PlaintextSize) != body.StoredSize {
 		return ErrInvalidRequest
 	}
 	return nil

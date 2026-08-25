@@ -40,7 +40,8 @@ func portableWritableComponent(component string) bool {
 		return false
 	}
 	for _, character := range component {
-		if unicode.IsControl(character) || strings.ContainsRune(`<>:"/\|?*`, character) {
+		if unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character) ||
+			strings.ContainsRune(`<>:"/\|?*`, character) {
 			return false
 		}
 	}

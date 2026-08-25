@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -20,12 +22,15 @@ func TestTelegramRemoteUploadAndCleanupAdapters(t *testing.T) {
 	store := &fakeHiddenStore{uploadResult: fileservice.HiddenBody{
 		UploadUUID: "u-1", PartCount: 2, StoredSize: 7, PlaintextSize: 7,
 		MessageIDs: []int64{41, 42},
+	}, recoveryResult: fileservice.HiddenBody{
+		UploadUUID: "u-1", PartCount: 2, StoredSize: 7, PlaintextSize: 7,
+		MessageIDs: []int64{41, 42},
 	}}
 	remote := &TelegramRemote{driveID: testDriveID, files: store}
 	digest := sha256.Sum256([]byte("payload"))
 	body, err := remote.UploadHidden(context.Background(), mountwrite.HiddenUpload{
 		OperationID: "op-upload", DriveID: testDriveID, ParentID: "d:p",
-		Name: "x.txt", Size: 7, SHA256: digest,
+		Name: "x.txt", PlaintextSize: 7, StoredSize: 7, SHA256: digest,
 	}, bytes.NewReader([]byte("payload")))
 	if err != nil {
 		t.Fatalf("UploadHidden: %v", err)
@@ -35,6 +40,17 @@ func TestTelegramRemoteUploadAndCleanupAdapters(t *testing.T) {
 	}
 	if store.uploadRequest.OperationID != "op-upload" || store.uploadRequest.Name != "x.txt" {
 		t.Fatalf("service request = %+v", store.uploadRequest)
+	}
+	recovered, err := remote.RecoverHidden(context.Background(), mountwrite.HiddenUpload{
+		OperationID: "op-upload", DriveID: testDriveID, ParentID: "d:p",
+		Name: "x.txt", PlaintextSize: 7, StoredSize: 7, SHA256: digest,
+	}, bytes.NewReader([]byte("payload")))
+	if err != nil {
+		t.Fatalf("RecoverHidden: %v", err)
+	}
+	if recovered.UploadUUID != "u-1" || recovered.MessageIDs[1] != 42 ||
+		store.recoveryRequest.OperationID != "op-upload" || !bytes.Equal(store.recoveryPayload, []byte("payload")) {
+		t.Fatalf("recovered=%+v request=%+v payload=%q", recovered, store.recoveryRequest, store.recoveryPayload)
 	}
 	if err := remote.DiscardHidden(context.Background(), "op-upload", &body); err != nil {
 		t.Fatalf("DiscardHidden precise: %v", err)
@@ -48,6 +64,308 @@ func TestTelegramRemoteUploadAndCleanupAdapters(t *testing.T) {
 	if store.discardOperation != "op-crashed" {
 		t.Fatalf("operation cleanup = %q", store.discardOperation)
 	}
+}
+
+func TestTelegramRemotePreservesPartialHiddenReceiptsOnUploadError(t *testing.T) {
+	tests := []struct {
+		name        string
+		serviceErr  error
+		wantUnknown bool
+	}{
+		{name: "definite", serviceErr: errors.New("next part rejected")},
+		{name: "unknown", serviceErr: errors.Join(tgclient.ErrSendOutcomeUnknown, errors.New("response lost")), wantUnknown: true},
+		{name: "projection", serviceErr: errors.Join(fileservice.ErrHiddenReceiptRecoveryRequired, errors.New("projection unavailable")), wantUnknown: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeHiddenStore{
+				uploadResult: fileservice.HiddenBody{
+					UploadUUID: "partial-u", PartCount: 3, StoredSize: 10, PlaintextSize: 10,
+					MessageIDs: []int64{41},
+				},
+				uploadErr: test.serviceErr,
+			}
+			remote := &TelegramRemote{driveID: testDriveID, files: store}
+			body, err := remote.UploadHidden(context.Background(), mountwrite.HiddenUpload{
+				OperationID: "partial-op", DriveID: testDriveID, Name: "partial.bin",
+				PlaintextSize: 10, StoredSize: 10,
+			}, bytes.NewReader([]byte("0123456789")))
+			if !errors.Is(err, test.serviceErr) {
+				t.Fatalf("UploadHidden error = %v, want %v", err, test.serviceErr)
+			}
+			if errors.Is(err, mountwrite.ErrUploadOutcomeUnknown) != test.wantUnknown {
+				t.Fatalf("unknown classification = %v, want %v (err=%v)", errors.Is(err, mountwrite.ErrUploadOutcomeUnknown), test.wantUnknown, err)
+			}
+			if body.UploadUUID != "partial-u" || body.PartCount != 3 || len(body.MessageIDs) != 1 || body.MessageIDs[0] != 41 {
+				t.Fatalf("partial body was lost: %+v", body)
+			}
+		})
+	}
+}
+
+func TestCoordinatorMultipartUnknownOutcomeRecoversOnlyUncertainPart(t *testing.T) {
+	ctx := context.Background()
+	db := newProjectionDB(t)
+	if err := mountwrite.EnsureJournalSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureJournalSchema: %v", err)
+	}
+	journal, err := mountwrite.NewSQLiteJournal(db)
+	if err != nil {
+		t.Fatalf("NewSQLiteJournal: %v", err)
+	}
+	staging, err := mountwrite.NewDiskStagingStore(mountwrite.DiskStagingConfig{
+		Root: filepath.Join(t.TempDir(), "staging"), MaxObjectBytes: 1024,
+		MaxAggregateBytes: 2048, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewDiskStagingStore: %v", err)
+	}
+
+	fakeTG := tgclient.NewFake(7)
+	peer := tgclient.InputPeer{ChannelID: testDriveID, AccessHash: 91}
+	fakeTG.SeedChannel(peer, "Personal")
+	telegram := &loseSecondHiddenReceiptClient{Fake: fakeTG}
+	peers := testPeerResolver{peer: peer}
+	files := &fileservice.Service{
+		DB: db, TG: telegram, Peers: peers, ActorID: fakeTG.SelfID,
+		MaxUploadBytes: 4,
+	}
+	remote, err := NewTelegramRemote(TelegramRemoteConfig{
+		DB: db, DriveID: testDriveID, Files: files, Telegram: telegram,
+		Peers: peers, ActorID: fakeTG.SelfID,
+	})
+	if err != nil {
+		t.Fatalf("NewTelegramRemote: %v", err)
+	}
+	coordinator, err := mountwrite.NewCoordinator(mountwrite.CoordinatorConfig{
+		Journal: journal, Staging: staging, Remote: remote,
+		Invalidator:         mountwrite.SnapshotInvalidatorFunc(func(context.Context, mountwrite.SnapshotInvalidation) error { return nil }),
+		MaxActiveOperations: 1, MaxQueuedOperations: 0,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	payload := []byte("0123456789") // three 4-byte parts; part 2 is never attempted.
+	_, err = coordinator.Put(ctx, mountwrite.PutRequest{
+		OperationID: "multipart-unknown-e2e", DriveID: testDriveID,
+		Name: "unknown.bin", ContentLength: int64(len(payload)), MaxBytes: 1024,
+	}, bytes.NewReader(payload))
+	if !errors.Is(err, mountwrite.ErrUnavailable) {
+		t.Fatalf("Put error = %v, want unavailable", err)
+	}
+
+	sent := fakeTG.SentFiles()
+	if len(sent) != 2 {
+		t.Fatalf("sent files = %+v, want accepted part 0 and uncertain part 1 only", sent)
+	}
+	for index, message := range sent {
+		op, parseErr := projection.Parse(message.Caption)
+		if parseErr != nil || op.PartIndex != index {
+			t.Fatalf("sent[%d] op=%+v err=%v", index, op, parseErr)
+		}
+	}
+	deleted := fakeTG.DeletedBatches()
+	wantIDs := []int64{sent[0].MsgID, sent[1].MsgID}
+	if len(deleted) != 1 || !slices.Equal(deleted[0], wantIDs) {
+		t.Fatalf("deleted = %+v, want exact accepted receipts %v", deleted, wantIDs)
+	}
+	record, found, err := journal.Get(ctx, "multipart-unknown-e2e")
+	if err != nil || !found || record.State != mountwrite.StateAborted || record.Body == nil {
+		t.Fatalf("journal record=%+v found=%v err=%v", record, found, err)
+	}
+	if record.Body.PartCount != 3 || !slices.Equal(record.Body.MessageIDs, wantIDs) {
+		t.Fatalf("durable partial cleanup body = %+v", record.Body)
+	}
+	if staging.UsedBytes() != 0 {
+		t.Fatalf("staging retained after exact cleanup: %d", staging.UsedBytes())
+	}
+	parts, err := projection.PartsForUUID(db, testDriveID, record.Body.UploadUUID)
+	if err != nil || len(parts) != 0 {
+		t.Fatalf("hidden part pointers after cleanup = %+v, err=%v", parts, err)
+	}
+}
+
+func TestCoordinatorRecoveryFailsClosedOnPersistedHiddenReceiptTamper(t *testing.T) {
+	tests := []struct {
+		name   string
+		tamper func(*persistedHiddenCleanupHarness)
+	}{
+		{
+			name: "arbitrary unique message id",
+			tamper: func(harness *persistedHiddenCleanupHarness) {
+				harness.record.Body.MessageIDs[0] += 10_000
+			},
+		},
+		{
+			name: "another operation upload uuid",
+			tamper: func(harness *persistedHiddenCleanupHarness) {
+				harness.record.Body.UploadUUID = "hu-00000000000000000000000000000000"
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newPersistedHiddenCleanupHarness(t, "restart-tamper-"+test.name)
+			test.tamper(harness)
+			if err := harness.journal.Create(context.Background(), harness.record); err != nil {
+				t.Fatalf("persist tampered cleanup record: %v", err)
+			}
+
+			report, err := harness.coordinator.Recover(context.Background())
+			if err == nil || report.Failed != 1 {
+				t.Fatalf("Recover report=%+v err=%v, want fail-closed cleanup", report, err)
+			}
+			if harness.staging.UsedBytes() != harness.record.Staged.StoredSize {
+				t.Fatalf("stage removed before receipt ownership validation: %d", harness.staging.UsedBytes())
+			}
+			if deleted := harness.telegram.DeletedBatches(); len(deleted) != 0 {
+				t.Fatalf("tampered receipt reached Telegram deletion: %+v", deleted)
+			}
+			record, found, getErr := harness.journal.Get(context.Background(), harness.record.OperationID)
+			if getErr != nil || !found || record.State != mountwrite.StateCleanupPending {
+				t.Fatalf("cleanup record=%+v found=%v err=%v", record, found, getErr)
+			}
+		})
+	}
+}
+
+func TestCoordinatorRecoveryTreatsMissingHiddenProjectionAsCompletedCleanup(t *testing.T) {
+	harness := newPersistedHiddenCleanupHarness(t, "restart-after-pointer-cleanup")
+	if err := harness.journal.Create(context.Background(), harness.record); err != nil {
+		t.Fatalf("persist cleanup record: %v", err)
+	}
+	if err := projection.DeleteFileParts(
+		harness.db,
+		testDriveID,
+		harness.record.Body.UploadUUID,
+	); err != nil {
+		t.Fatalf("simulate completed pointer cleanup: %v", err)
+	}
+
+	report, err := harness.coordinator.Recover(context.Background())
+	if err != nil || report.Aborted != 1 || report.Failed != 0 {
+		t.Fatalf("Recover report=%+v err=%v", report, err)
+	}
+	if harness.staging.UsedBytes() != 0 {
+		t.Fatalf("stage retained after idempotent cleanup completion: %d", harness.staging.UsedBytes())
+	}
+	if deleted := harness.telegram.DeletedBatches(); len(deleted) != 0 {
+		t.Fatalf("missing projection triggered a second Telegram deletion: %+v", deleted)
+	}
+}
+
+type persistedHiddenCleanupHarness struct {
+	db          *sql.DB
+	journal     *mountwrite.SQLiteJournal
+	staging     *mountwrite.DiskStagingStore
+	coordinator *mountwrite.Coordinator
+	telegram    *tgclient.Fake
+	record      mountwrite.JournalRecord
+}
+
+func newPersistedHiddenCleanupHarness(t *testing.T, operationID string) *persistedHiddenCleanupHarness {
+	t.Helper()
+	ctx := context.Background()
+	payload := []byte("persisted hidden cleanup receipt")
+	db := newProjectionDB(t)
+	if err := mountwrite.EnsureJournalSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureJournalSchema: %v", err)
+	}
+	journal, err := mountwrite.NewSQLiteJournal(db)
+	if err != nil {
+		t.Fatalf("NewSQLiteJournal: %v", err)
+	}
+	staging, err := mountwrite.NewDiskStagingStore(mountwrite.DiskStagingConfig{
+		Root: filepath.Join(t.TempDir(), "staging"), MaxObjectBytes: 1024,
+		MaxAggregateBytes: 2048, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatalf("NewDiskStagingStore: %v", err)
+	}
+	staged, err := staging.Stage(ctx, mountwrite.StageRequest{
+		OperationID: operationID, PlaintextSize: int64(len(payload)), MaxBytes: 1024,
+	}, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	telegram := tgclient.NewFake(7)
+	peer := tgclient.InputPeer{ChannelID: testDriveID, AccessHash: 91}
+	telegram.SeedChannel(peer, "Personal")
+	peers := testPeerResolver{peer: peer}
+	files := &fileservice.Service{
+		DB: db, TG: telegram, Peers: peers, ActorID: telegram.SelfID,
+		MaxUploadBytes: 1024,
+	}
+	hidden, err := files.UploadHidden(ctx, testDriveID, fileservice.HiddenUploadRequest{
+		OperationID: operationID, Name: "receipt.bin",
+		StoredSize: int64(len(payload)), PlaintextSize: int64(len(payload)),
+	}, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("UploadHidden: %v", err)
+	}
+	remote, err := NewTelegramRemote(TelegramRemoteConfig{
+		DB: db, DriveID: testDriveID, Files: files, Telegram: telegram,
+		Peers: peers, ActorID: telegram.SelfID,
+	})
+	if err != nil {
+		t.Fatalf("NewTelegramRemote: %v", err)
+	}
+	coordinator, err := mountwrite.NewCoordinator(mountwrite.CoordinatorConfig{
+		Journal: journal, Staging: staging, Remote: remote,
+		Invalidator:         mountwrite.SnapshotInvalidatorFunc(func(context.Context, mountwrite.SnapshotInvalidation) error { return nil }),
+		MaxActiveOperations: 1, MaxQueuedOperations: 0,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	at := time.Unix(1_700_000_000, 0).UTC()
+	body := mountwrite.RemoteBody{
+		UploadUUID: hidden.UploadUUID, PartCount: hidden.PartCount,
+		PlaintextSize: hidden.PlaintextSize, StoredSize: hidden.StoredSize,
+		SHA256: staged.SHA256, StoredSHA256: staged.StoredSHA256,
+		MessageIDs: append([]int64(nil), hidden.MessageIDs...),
+	}
+	return &persistedHiddenCleanupHarness{
+		db: db, journal: journal, staging: staging, coordinator: coordinator, telegram: telegram,
+		record: mountwrite.JournalRecord{
+			OperationID: operationID,
+			Mutation: mountwrite.Mutation{
+				Kind: mountwrite.MutationPut, DriveID: testDriveID,
+				DestinationName: "receipt.bin", ContentLength: int64(len(payload)), MaxBytes: 1024,
+			},
+			State: mountwrite.StateCleanupPending, Staged: &staged, Body: &body,
+			CreatedAt: at, UpdatedAt: at,
+		},
+	}
+}
+
+type loseSecondHiddenReceiptClient struct {
+	*tgclient.Fake
+	calls int
+}
+
+func (c *loseSecondHiddenReceiptClient) SendFileWithRandomID(
+	ctx context.Context,
+	peer tgclient.InputPeer,
+	source io.Reader,
+	name string,
+	caption string,
+	size int64,
+	progress func(int64, int64),
+	randomID int64,
+) (tgclient.SendFileResult, error) {
+	c.calls++
+	result, err := c.Fake.SendFileWithRandomID(ctx, peer, source, name, caption, size, progress, randomID)
+	if err != nil {
+		return result, err
+	}
+	if c.calls == 2 {
+		return tgclient.SendFileResult{}, errors.Join(tgclient.ErrSendOutcomeUnknown, errors.New("lost accepted receipt"))
+	}
+	return result, nil
 }
 
 func TestTelegramRemoteCommitsAndReconcilesVisibleFileExactlyOnce(t *testing.T) {
@@ -95,6 +413,32 @@ func TestTelegramRemoteCommitsAndReconcilesVisibleFileExactlyOnce(t *testing.T) 
 	resolved, found, err := remote.Reconcile(context.Background(), request.OperationID)
 	if err != nil || !found || resolved != first {
 		t.Fatalf("Reconcile = %+v, found=%v, err=%v", resolved, found, err)
+	}
+}
+
+func TestBuildProjectionOperationEncryptedBodyPublishesOnlyCryptoMetadata(t *testing.T) {
+	request := mountwrite.CommitRequest{
+		OperationID: "encrypted-file",
+		Mutation: mountwrite.Mutation{
+			Kind: mountwrite.MutationPut, DriveID: testDriveID,
+			DestinationName: "secret.bin", CreateOnly: true,
+			EncryptionVersion: mountwrite.EncryptionTDE1,
+		},
+		Body: &mountwrite.RemoteBody{
+			UploadUUID: "hidden-encrypted", PartCount: 1,
+			PlaintextSize: 7, StoredSize: 73,
+			Encrypted: true, EncryptionVersion: mountwrite.EncryptionTDE1,
+		},
+	}
+	op, err := buildProjectionOperation(request, time.Unix(4_000, 0))
+	if err != nil {
+		t.Fatalf("buildProjectionOperation: %v", err)
+	}
+	if !op.Encrypted || op.EncryptionVersion != int(mountwrite.EncryptionTDE1) || op.PlaintextSize != 7 || op.FileSize != 73 {
+		t.Fatalf("encrypted projection metadata = %+v", op)
+	}
+	if op.ContentHash != "" {
+		t.Fatalf("encrypted projection exposed a plaintext hash: %q", op.ContentHash)
 	}
 }
 
@@ -622,6 +966,10 @@ func TestTelegramRemoteReconcileUsesOldestControlAndTelegramActor(t *testing.T) 
 type fakeHiddenStore struct {
 	uploadRequest    fileservice.HiddenUploadRequest
 	uploadResult     fileservice.HiddenBody
+	uploadErr        error
+	recoveryRequest  fileservice.HiddenUploadRequest
+	recoveryResult   fileservice.HiddenBody
+	recoveryPayload  []byte
 	discardBody      fileservice.HiddenBody
 	discardOperation string
 }
@@ -629,10 +977,16 @@ type fakeHiddenStore struct {
 func (s *fakeHiddenStore) UploadHidden(_ context.Context, _ int64, request fileservice.HiddenUploadRequest, source io.ReadSeeker) (fileservice.HiddenBody, error) {
 	s.uploadRequest = request
 	_, _ = io.Copy(io.Discard, source)
-	return s.uploadResult, nil
+	return s.uploadResult, s.uploadErr
 }
 
-func (s *fakeHiddenStore) DiscardHidden(_ context.Context, _ int64, body fileservice.HiddenBody) error {
+func (s *fakeHiddenStore) RecoverHiddenUpload(_ context.Context, _ int64, request fileservice.HiddenUploadRequest, source io.ReadSeeker) (fileservice.HiddenBody, error) {
+	s.recoveryRequest = request
+	s.recoveryPayload, _ = io.ReadAll(source)
+	return s.recoveryResult, nil
+}
+
+func (s *fakeHiddenStore) DiscardHiddenReceipt(_ context.Context, _ int64, _ string, body fileservice.HiddenBody) error {
 	s.discardBody = body
 	return nil
 }

@@ -329,3 +329,55 @@ func TestCanonicalNameKeyLengthControlAndNormalization(t *testing.T) {
 		t.Fatalf("normalized keys=%q/%q err=%v", first, second, err)
 	}
 }
+
+func TestCanonicalNameKeyRejectsUnicodeBidiControls(t *testing.T) {
+	for _, control := range []rune{
+		'\u061c', // ARABIC LETTER MARK
+		'\u200e', // LEFT-TO-RIGHT MARK
+		'\u200f', // RIGHT-TO-LEFT MARK
+		'\u202a', // LEFT-TO-RIGHT EMBEDDING
+		'\u202b', // RIGHT-TO-LEFT EMBEDDING
+		'\u202c', // POP DIRECTIONAL FORMATTING
+		'\u202d', // LEFT-TO-RIGHT OVERRIDE
+		'\u202e', // RIGHT-TO-LEFT OVERRIDE
+		'\u2066', // LEFT-TO-RIGHT ISOLATE
+		'\u2067', // RIGHT-TO-LEFT ISOLATE
+		'\u2068', // FIRST STRONG ISOLATE
+		'\u2069', // POP DIRECTIONAL ISOLATE
+	} {
+		name := "report" + string(control) + "fdp.exe"
+		if _, err := CanonicalNameKey(name); !errors.Is(err, ErrInvalidPortableName) {
+			t.Errorf("CanonicalNameKey(%q) error = %v, want ErrInvalidPortableName", name, err)
+		}
+	}
+}
+
+func TestCanonicalNameKeyPreservesUnicodeJoinControls(t *testing.T) {
+	for _, name := range []string{
+		"family-\U0001f468\u200d\U0001f469\u200d\U0001f467.txt",
+		"Persian-می\u200cروم.txt",
+	} {
+		key, err := CanonicalNameKey(name)
+		if err != nil {
+			t.Errorf("CanonicalNameKey(%q) error = %v", name, err)
+			continue
+		}
+		if !strings.ContainsRune(key, '\u200c') && !strings.ContainsRune(key, '\u200d') {
+			t.Errorf("CanonicalNameKey(%q) = %q, want join control preserved", name, key)
+		}
+	}
+}
+
+func TestLegacyPortableNameReplacesBidiControlsAndPreservesJoinControls(t *testing.T) {
+	if got := legacyPortableName("report\u202efdp.exe", "file", "f:7"); got != "report_fdp.exe" {
+		t.Fatalf("legacyPortableName() = %q, want bidi control replaced", got)
+	}
+	for _, name := range []string{
+		"family-\U0001f468\u200d\U0001f469\u200d\U0001f467.txt",
+		"Persian-می\u200cروم.txt",
+	} {
+		if got := legacyPortableName(name, "file", "f:7"); got != name {
+			t.Fatalf("legacyPortableName(%q) = %q, want join controls preserved", name, got)
+		}
+	}
+}

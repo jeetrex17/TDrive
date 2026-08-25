@@ -95,6 +95,7 @@ var (
 	ErrWriteNotFound            = errors.New("mountdav: write target not found")
 	ErrWriteConflict            = errors.New("mountdav: write conflict")
 	ErrWritePreconditionFailed  = errors.New("mountdav: write precondition failed")
+	ErrWriteLengthRequired      = errors.New("mountdav: write content length required")
 	ErrWriteTooLarge            = errors.New("mountdav: write payload too large")
 	ErrWriteLocked              = errors.New("mountdav: write target locked")
 	ErrWriteInsufficientStorage = errors.New("mountdav: insufficient write storage")

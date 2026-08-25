@@ -6,11 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	tdcrypto "TDrive/backend/crypto"
 )
 
 const (
@@ -76,23 +80,37 @@ func (s *DiskStagingStore) UsedBytes() int64 {
 	return s.usedBytes
 }
 
-func (s *DiskStagingStore) Stage(ctx context.Context, operationID string, contentLength, maxBytes int64, source io.Reader) (StagedObject, error) {
-	if operationID == "" || source == nil || contentLength < -1 || maxBytes < 0 {
+func (s *DiskStagingStore) Stage(ctx context.Context, request StageRequest, source io.Reader) (StagedObject, error) {
+	if ctx == nil || source == nil || request.OperationID == "" || !validOperationID(request.OperationID) ||
+		request.PlaintextSize < -1 || request.MaxBytes < 0 || !validEncryptionVersion(request.EncryptionVersion) {
 		return StagedObject{}, ErrInvalidRequest
 	}
-	objectLimit := s.maxObjectBytes
-	if maxBytes > 0 && maxBytes < objectLimit {
-		objectLimit = maxBytes
+	if request.EncryptionVersion == EncryptionNone && len(request.MasterKey) != 0 {
+		return StagedObject{}, ErrInvalidRequest
 	}
-	if contentLength > objectLimit {
+	if request.EncryptionVersion == EncryptionTDE1 && (request.PlaintextSize < 0 || len(request.MasterKey) != masterKeySize) {
+		return StagedObject{}, ErrInvalidRequest
+	}
+
+	objectLimit := s.maxObjectBytes
+	if request.MaxBytes > 0 && request.MaxBytes < objectLimit {
+		objectLimit = request.MaxBytes
+	}
+	if request.PlaintextSize > objectLimit {
 		return StagedObject{}, ErrTooLarge
+	}
+	if request.EncryptionVersion == EncryptionTDE1 {
+		storedSize := tdcrypto.CiphertextSize(request.PlaintextSize)
+		if storedSize == math.MaxInt64 || storedSize <= request.PlaintextSize || storedSize > objectLimit {
+			return StagedObject{}, ErrTooLarge
+		}
 	}
 	if err := s.acquireSlot(ctx); err != nil {
 		return StagedObject{}, err
 	}
 	defer s.releaseSlot()
 
-	key := stagingKey(operationID)
+	key := stagingKey(request.OperationID)
 	path, err := s.pathForKey(key)
 	if err != nil {
 		return StagedObject{}, err
@@ -105,21 +123,42 @@ func (s *DiskStagingStore) Stage(ctx context.Context, operationID string, conten
 		return StagedObject{}, fmt.Errorf("create staged file: %w", err)
 	}
 
-	staged, reserved, stageErr := s.copyToStage(ctx, file, key, path, contentLength, objectLimit, source)
+	staged, reserved, stageErr := s.copyToStage(ctx, file, key, path, request, objectLimit, source)
 	closeErr := file.Close()
 	if stageErr == nil && closeErr != nil {
 		stageErr = fmt.Errorf("close staged file: %w", closeErr)
 	}
 	if stageErr != nil {
-		_ = os.Remove(path)
-		s.releaseBytes(reserved)
+		removeErr := os.Remove(path)
+		if removeErr == nil || errors.Is(removeErr, os.ErrNotExist) {
+			s.releaseBytes(reserved)
+			return StagedObject{}, stageErr
+		}
+		// Keep the reservation tracked when cleanup fails so aggregate quota
+		// cannot be bypassed. Coordinator recovery retries by operation ID.
+		s.trackFile(key, reserved)
+		stageErr = errors.Join(stageErr, fmt.Errorf("remove partial staged file: %w", removeErr))
 		return StagedObject{}, stageErr
 	}
-	s.trackFile(key, staged.Size)
+	s.trackFile(key, staged.StoredSize)
 	return staged, nil
 }
 
 func (s *DiskStagingStore) copyToStage(
+	ctx context.Context,
+	file *os.File,
+	key, path string,
+	request StageRequest,
+	objectLimit int64,
+	source io.Reader,
+) (StagedObject, int64, error) {
+	if request.EncryptionVersion == EncryptionTDE1 {
+		return s.copyEncryptedToStage(ctx, file, key, path, request, source)
+	}
+	return s.copyPlaintextToStage(ctx, file, key, path, request.PlaintextSize, objectLimit, source)
+}
+
+func (s *DiskStagingStore) copyPlaintextToStage(
 	ctx context.Context,
 	file *os.File,
 	key, path string,
@@ -138,14 +177,15 @@ func (s *DiskStagingStore) copyToStage(
 		readCount, readErr := source.Read(buffer)
 		if readCount > 0 {
 			emptyReads = 0
-			nextSize := size + int64(readCount)
-			if nextSize > objectLimit {
+			increment := int64(readCount)
+			if increment > objectLimit || size > objectLimit-increment {
 				return StagedObject{}, reserved, ErrTooLarge
 			}
-			if err := s.reserveBytes(int64(readCount)); err != nil {
+			nextSize := size + increment
+			if err := s.reserveBytes(increment); err != nil {
 				return StagedObject{}, reserved, err
 			}
-			reserved += int64(readCount)
+			reserved += increment
 			if err := writeAll(file, buffer[:readCount]); err != nil {
 				return StagedObject{}, reserved, fmt.Errorf("write staged file: %w", err)
 			}
@@ -169,15 +209,81 @@ func (s *DiskStagingStore) copyToStage(
 	if contentLength >= 0 && size != contentLength {
 		return StagedObject{}, reserved, ErrLengthMismatch
 	}
+	if err := ctx.Err(); err != nil {
+		return StagedObject{}, reserved, ErrCanceled
+	}
 	if err := file.Sync(); err != nil {
 		return StagedObject{}, reserved, fmt.Errorf("sync staged file: %w", err)
 	}
 	digest := [sha256.Size]byte{}
 	copy(digest[:], hasher.Sum(nil))
-	return StagedObject{Key: key, Path: path, Size: size, SHA256: digest}, reserved, nil
+	return StagedObject{
+		Key:           key,
+		Path:          path,
+		PlaintextSize: size,
+		StoredSize:    size,
+		SHA256:        digest,
+		StoredSHA256:  digest,
+	}, reserved, nil
+}
+
+func (s *DiskStagingStore) copyEncryptedToStage(
+	ctx context.Context,
+	file *os.File,
+	key, path string,
+	request StageRequest,
+	source io.Reader,
+) (StagedObject, int64, error) {
+	storedSize := tdcrypto.CiphertextSize(request.PlaintextSize)
+	if storedSize == math.MaxInt64 || storedSize <= request.PlaintextSize {
+		return StagedObject{}, 0, ErrTooLarge
+	}
+	if err := s.reserveBytes(storedSize); err != nil {
+		return StagedObject{}, 0, err
+	}
+
+	privateKey := append([]byte(nil), request.MasterKey...)
+	defer clearBytes(privateKey)
+	exactSource := &exactLengthReader{
+		ctx:       ctx,
+		source:    source,
+		remaining: request.PlaintextSize,
+	}
+	storedHasher := sha256.New()
+	writer := &stageWriter{
+		ctx:    ctx,
+		file:   file,
+		hasher: storedHasher,
+		limit:  storedSize,
+	}
+	if err := tdcrypto.EncryptStream(exactSource, writer, privateKey, request.PlaintextSize); err != nil {
+		return StagedObject{}, storedSize, classifyStageStreamError(key, err)
+	}
+	if writer.written != storedSize || exactSource.remaining != 0 {
+		return StagedObject{}, storedSize, ErrLengthMismatch
+	}
+	if err := ctx.Err(); err != nil {
+		return StagedObject{}, storedSize, ErrCanceled
+	}
+	if err := file.Sync(); err != nil {
+		return StagedObject{}, storedSize, fmt.Errorf("sync staged file: %w", err)
+	}
+	digest := [sha256.Size]byte{}
+	copy(digest[:], storedHasher.Sum(nil))
+	return StagedObject{
+		Key:               key,
+		Path:              path,
+		PlaintextSize:     request.PlaintextSize,
+		StoredSize:        storedSize,
+		StoredSHA256:      digest,
+		EncryptionVersion: EncryptionTDE1,
+	}, storedSize, nil
 }
 
 func (s *DiskStagingStore) Open(staged StagedObject) (ReadSeekCloser, error) {
+	if err := validateStagedObject(staged); err != nil {
+		return nil, err
+	}
 	path, err := s.pathForKey(staged.Key)
 	if err != nil {
 		return nil, err
@@ -200,9 +306,26 @@ func (s *DiskStagingStore) Open(staged StagedObject) (ReadSeekCloser, error) {
 		_ = file.Close()
 		return nil, fmt.Errorf("inspect staged file: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Size() != staged.Size {
+	if !info.Mode().IsRegular() || info.Size() != staged.StoredSize {
 		_ = file.Close()
 		return nil, ErrInvalidRequest
+	}
+	if staged.StoredSHA256 != ([sha256.Size]byte{}) {
+		hasher := sha256.New()
+		if _, err := io.CopyBuffer(hasher, file, make([]byte, stagingBufferSize)); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("verify staged file: %w", err)
+		}
+		digest := [sha256.Size]byte{}
+		copy(digest[:], hasher.Sum(nil))
+		if digest != staged.StoredSHA256 {
+			_ = file.Close()
+			return nil, ErrInvalidRequest
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("rewind staged file: %w", err)
+		}
 	}
 	return file, nil
 }
@@ -330,10 +453,136 @@ func scanRegularFiles(root string) (int64, map[string]int64, error) {
 		if err != nil {
 			return 0, nil, fmt.Errorf("inspect staged file: %w", err)
 		}
+		if info.Size() < 0 || total > math.MaxInt64-info.Size() {
+			return 0, nil, ErrQuotaExceeded
+		}
 		total += info.Size()
 		tracked[entry.Name()] = info.Size()
 	}
 	return total, tracked, nil
+}
+
+type exactLengthReader struct {
+	ctx        context.Context
+	source     io.Reader
+	remaining  int64
+	emptyReads int
+}
+
+func (r *exactLengthReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, ErrCanceled
+	}
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if r.remaining == 0 {
+		var extra [1]byte
+		readCount, err := r.source.Read(extra[:])
+		if readCount > 0 {
+			return 0, ErrLengthMismatch
+		}
+		if errors.Is(err, io.EOF) {
+			return 0, io.EOF
+		}
+		if err != nil {
+			return 0, err
+		}
+		r.emptyReads++
+		if r.emptyReads >= 100 {
+			return 0, io.ErrNoProgress
+		}
+		return 0, nil
+	}
+	if int64(len(buffer)) > r.remaining {
+		buffer = buffer[:r.remaining]
+	}
+	readCount, err := r.source.Read(buffer)
+	if readCount < 0 || int64(readCount) > r.remaining || readCount > len(buffer) {
+		return 0, ErrLengthMismatch
+	}
+	if readCount > 0 {
+		r.emptyReads = 0
+		r.remaining -= int64(readCount)
+	}
+	if errors.Is(err, io.EOF) {
+		if r.remaining != 0 {
+			return readCount, ErrLengthMismatch
+		}
+		return readCount, io.EOF
+	}
+	if err != nil {
+		return readCount, err
+	}
+	if readCount == 0 {
+		r.emptyReads++
+		if r.emptyReads >= 100 {
+			return 0, io.ErrNoProgress
+		}
+	}
+	return readCount, nil
+}
+
+type stageWriter struct {
+	ctx     context.Context
+	file    *os.File
+	hasher  hash.Hash
+	limit   int64
+	written int64
+}
+
+func (w *stageWriter) Write(data []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, ErrCanceled
+	}
+	if int64(len(data)) > w.limit-w.written {
+		return 0, ErrTooLarge
+	}
+	if err := writeAll(w.file, data); err != nil {
+		return 0, err
+	}
+	_, _ = w.hasher.Write(data)
+	w.written += int64(len(data))
+	return len(data), nil
+}
+
+func classifyStageStreamError(operationID string, err error) error {
+	switch {
+	case errors.Is(err, ErrCanceled), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return ErrCanceled
+	case errors.Is(err, ErrLengthMismatch):
+		return ErrLengthMismatch
+	case errors.Is(err, ErrTooLarge):
+		return ErrTooLarge
+	default:
+		return newOperationError(operationID, MutationPut, err)
+	}
+}
+
+func validateStagedObject(staged StagedObject) error {
+	if staged.Key == "" || staged.PlaintextSize < 0 || staged.StoredSize < 0 || !validEncryptionVersion(staged.EncryptionVersion) {
+		return ErrInvalidRequest
+	}
+	if staged.EncryptionVersion == EncryptionNone {
+		if staged.PlaintextSize != staged.StoredSize {
+			return ErrInvalidRequest
+		}
+		return nil
+	}
+	if err := tdcrypto.ValidatePlaintextSize(staged.PlaintextSize); err != nil {
+		return ErrInvalidRequest
+	}
+	if staged.SHA256 != ([sha256.Size]byte{}) || staged.StoredSHA256 == ([sha256.Size]byte{}) ||
+		tdcrypto.CiphertextSize(staged.PlaintextSize) != staged.StoredSize {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func clearBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 func writeAll(writer io.Writer, data []byte) error {

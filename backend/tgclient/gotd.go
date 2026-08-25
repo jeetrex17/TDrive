@@ -248,13 +248,10 @@ func (g *Gotd) SendControlWithRandomID(ctx context.Context, peer InputPeer, text
 		}
 		updates, err := api.MessagesSendMessage(ctx, req)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: send message: %w", ErrSendOutcomeUnknown, err)
 		}
-		msgID = extractMsgID(updates, sendRandomID)
-		if msgID == 0 {
-			return fmt.Errorf("tgclient: send control returned no msg id")
-		}
-		return nil
+		msgID, err = requiredSendMsgID(updates, sendRandomID, "send control")
+		return err
 	})
 	return msgID, err
 }
@@ -310,13 +307,13 @@ func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 		}
 		updates, err := api.MessagesSendMedia(ctx, req)
 		if err != nil {
-			return fmt.Errorf("tgclient: send media: %w", err)
+			// Uploading the document precedes MessagesSendMedia. A transport error
+			// at this boundary can arrive after Telegram accepted the random_id,
+			// so callers must reconcile with the same id before cleanup.
+			return fmt.Errorf("%w: send media: %w", ErrSendOutcomeUnknown, err)
 		}
-		result.MsgID = extractMsgID(updates, sendRandomID)
-		if result.MsgID == 0 {
-			return fmt.Errorf("tgclient: send file returned no msg id")
-		}
-		return nil
+		result.MsgID, err = requiredSendMsgID(updates, sendRandomID, "send file")
+		return err
 	})
 	return result, err
 }
@@ -666,6 +663,14 @@ func extractMsgID(updates tg.UpdatesClass, randomID int64) int64 {
 		return extractMsgIDFromUpdates(u.Updates, randomID)
 	}
 	return 0
+}
+
+func requiredSendMsgID(updates tg.UpdatesClass, randomID int64, operation string) (int64, error) {
+	msgID := extractMsgID(updates, randomID)
+	if msgID <= 0 {
+		return 0, fmt.Errorf("%w: %s returned no msg id", ErrSendOutcomeUnknown, operation)
+	}
+	return msgID, nil
 }
 
 func extractMsgIDFromUpdates(updates []tg.UpdateClass, randomID int64) int64 {

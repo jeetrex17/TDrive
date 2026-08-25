@@ -395,18 +395,18 @@ func TestReaderUsesReaderAtEOFContract(t *testing.T) {
 	}
 }
 
-func TestOpenerRejectsEncryptedFilesUntilAuthenticatedReaderExists(t *testing.T) {
+func TestOpenerRejectsEncryptedFilesWithoutKeyProvider(t *testing.T) {
 	db := newTestDB(t)
 	projectFile(t, db, 10, projection.Op{
 		Type:              projection.OpFileUpload,
 		Name:              "private.txt",
-		FileSize:          100,
+		FileSize:          98,
 		Encrypted:         true,
 		PlaintextSize:     32,
 		EncryptionVersion: 1,
 	})
 
-	ranges := newRangeFake(map[int64][]byte{10: make([]byte, 100)})
+	ranges := newRangeFake(map[int64][]byte{10: make([]byte, 98)})
 	opener, err := New(Config{DB: db, Peers: staticPeerResolver{peer: ranges.peer}, Ranges: ranges})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -414,8 +414,8 @@ func TestOpenerRejectsEncryptedFilesUntilAuthenticatedReaderExists(t *testing.T)
 	t.Cleanup(opener.Close)
 
 	_, err = opener.Open(context.Background(), testChannelID, 10)
-	if !errors.Is(err, ErrEncryptedUnsupported) {
-		t.Fatalf("Open encrypted err = %v, want ErrEncryptedUnsupported", err)
+	if !errors.Is(err, ErrKeyUnavailable) {
+		t.Fatalf("Open encrypted err = %v, want ErrKeyUnavailable", err)
 	}
 }
 

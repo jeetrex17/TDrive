@@ -3,6 +3,7 @@ package mountadapter
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"TDrive/backend/mountfs"
 	"TDrive/backend/mountwrite"
@@ -10,9 +11,16 @@ import (
 )
 
 type DrivePolicy struct {
-	Kind      string
-	Encrypted bool
-	Online    bool
+	Kind               string
+	Encrypted          bool
+	EncryptionUnlocked bool
+	Online             bool
+}
+
+// MasterKeyProvider lends a caller-owned key copy for one encrypted write.
+// The provider remains owned by the mount controller and is never persisted.
+type MasterKeyProvider interface {
+	Key() ([]byte, error)
 }
 
 type SnapshotCache interface {
@@ -34,6 +42,7 @@ type Config struct {
 	MaxConcurrentStaging int
 	MaxActiveOperations  int
 	MaxQueuedOperations  int
+	MasterKeys           MasterKeyProvider
 }
 
 func New(ctx context.Context, config Config) (*Session, error) {
@@ -43,6 +52,12 @@ func New(ctx context.Context, config Config) (*Session, error) {
 	if err := validateDrivePolicy(config.Policy); err != nil {
 		return nil, err
 	}
+	if config.Policy.Encrypted && config.MasterKeys == nil {
+		return nil, mountwrite.ErrForbidden
+	}
+	if !config.Policy.Encrypted && config.MasterKeys != nil {
+		return nil, mountwrite.ErrInvalidRequest
+	}
 	if config.DriveID <= 0 || config.Resolver == nil {
 		return nil, mountwrite.ErrInvalidRequest
 	}
@@ -50,7 +65,7 @@ func New(ctx context.Context, config Config) (*Session, error) {
 	if engine == nil {
 		built, err := buildCoordinator(ctx, config)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("mount adapter: initialize coordinator: %w", err)
 		}
 		engine = built
 	}
@@ -63,6 +78,8 @@ func New(ctx context.Context, config Config) (*Session, error) {
 		resolver:       config.Resolver,
 		engine:         engine,
 		maxObjectBytes: maxObjectBytes,
+		encryptWrites:  config.Policy.Encrypted,
+		masterKeys:     config.MasterKeys,
 	}
 	report, err := engine.Recover(ctx)
 	session.recoveryReport = report
@@ -74,7 +91,10 @@ func New(ctx context.Context, config Config) (*Session, error) {
 }
 
 func validateDrivePolicy(policy DrivePolicy) error {
-	if policy.Kind != projection.KindPersonal || policy.Encrypted || !policy.Online {
+	if policy.Kind != projection.KindPersonal || !policy.Online {
+		return mountwrite.ErrForbidden
+	}
+	if policy.Encrypted != policy.EncryptionUnlocked {
 		return mountwrite.ErrForbidden
 	}
 	return nil
@@ -85,11 +105,11 @@ func buildCoordinator(ctx context.Context, config Config) (*mountwrite.Coordinat
 		return nil, mountwrite.ErrInvalidRequest
 	}
 	if err := mountwrite.EnsureJournalSchema(ctx, config.DB); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize journal schema: %w", err)
 	}
 	journal, err := mountwrite.NewSQLiteJournal(config.DB)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize journal: %w", err)
 	}
 	staging, err := mountwrite.NewDiskStagingStore(mountwrite.DiskStagingConfig{
 		Root:              config.StagingRoot,
@@ -98,11 +118,11 @@ func buildCoordinator(ctx context.Context, config Config) (*mountwrite.Coordinat
 		MaxConcurrent:     positiveInt(config.MaxConcurrentStaging, 1),
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize staging: %w", err)
 	}
 	invalidator, err := NewSnapshotInvalidator(config.DriveID, config.Cache)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialize cache invalidator: %w", err)
 	}
 	return mountwrite.NewCoordinator(mountwrite.CoordinatorConfig{
 		Journal:             journal,

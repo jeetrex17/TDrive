@@ -2,6 +2,7 @@ package encryption
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"testing"
 
@@ -29,6 +30,7 @@ func newTestService(t *testing.T) (*Service, *sql.DB) {
 		PersonalChannelID: func() int64 {
 			return testChannelID
 		},
+		EnsurePolicy: func(context.Context, int64) error { return nil },
 		EmitOp: func(channelID int64, op projection.Op) error {
 			msgID++
 			header := projection.Format(op)

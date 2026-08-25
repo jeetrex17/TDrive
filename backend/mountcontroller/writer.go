@@ -34,7 +34,7 @@ func newEngineWriterBuilder(engine *core.Engine) WriterBuilder {
 	return engineWriterBuilder{engine: engine}
 }
 
-func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, filesystem *mountfs.FS) (WriteSession, error) {
+func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, filesystem *mountfs.FS, lease MountKeyLease) (WriteSession, error) {
 	if ctx == nil {
 		return nil, ErrInvalidContext
 	}
@@ -44,8 +44,21 @@ func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, files
 	if builder.engine == nil || filesystem == nil || backend.DB == nil {
 		return nil, fmt.Errorf("%w: writable dependencies are not ready", ErrInvalidConfiguration)
 	}
-	if drive.ID <= 0 || drive.Kind != DriveKindPersonal || drive.Encrypted {
+	if drive.ID <= 0 || drive.Kind != DriveKindPersonal {
 		return nil, ErrWritableUnavailable
+	}
+	if drive.Encrypted && !drive.EncryptionUnlocked {
+		return nil, ErrEncryptionPasswordRequired
+	}
+	if drive.Encrypted && lease == nil {
+		return nil, ErrEncryptionPasswordRequired
+	}
+	if !drive.Encrypted && lease != nil {
+		return nil, ErrInvalidConfiguration
+	}
+	var masterKeys mountadapter.MasterKeyProvider
+	if lease != nil {
+		masterKeys = lease
 	}
 
 	resolver, err := mountadapter.NewProjectionResolver(backend.DB, drive.ID)
@@ -71,10 +84,12 @@ func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, files
 	canonical, err := mountadapter.New(ctx, mountadapter.Config{
 		DriveID: drive.ID,
 		Policy: mountadapter.DrivePolicy{
-			Kind:      drive.Kind,
-			Encrypted: drive.Encrypted,
-			Online:    true,
+			Kind:               drive.Kind,
+			Encrypted:          drive.Encrypted,
+			EncryptionUnlocked: drive.EncryptionUnlocked,
+			Online:             true,
 		},
+		MasterKeys:           masterKeys,
 		DB:                   backend.DB,
 		StagingRoot:          writerStagingRoot(cacheRoot, drive.ID),
 		Resolver:             resolver,

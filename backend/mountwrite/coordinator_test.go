@@ -702,12 +702,13 @@ func TestCoordinatorAbortsWhenPersistedStageCannotBeOpened(t *testing.T) {
 	at := time.Unix(1_700_000_000, 0).UTC()
 	record := JournalRecord{
 		OperationID: "missing-stage-file",
-		Mutation:    Mutation{Kind: MutationPut, DriveID: 42, DestinationName: "file.txt"},
+		Mutation:    Mutation{Kind: MutationPut, DriveID: 42, DestinationName: "file.txt", ContentLength: 1},
 		State:       StateStaged,
 		Staged: &StagedObject{
-			Key:  "missing.stage",
-			Path: filepath.Join(staging.Root(), "missing.stage"),
-			Size: 1,
+			Key:           "missing.stage",
+			Path:          filepath.Join(staging.Root(), "missing.stage"),
+			PlaintextSize: 1,
+			StoredSize:    1,
 		},
 		CreatedAt: at,
 		UpdatedAt: at,
@@ -778,7 +779,7 @@ func TestCoordinatorAbortsUploadedBodyWhenCommitPreparationCannotBeJournaled(t *
 	remote := &fakeRemote{}
 	coordinator := buildCoordinator(t, journal, disk, remote, &fakeInvalidator{})
 	payload := []byte("hidden")
-	staged, err := disk.Stage(ctx, "commit-prepare-failure", int64(len(payload)), 0, bytes.NewReader(payload))
+	staged, err := disk.Stage(ctx, plaintextStageRequest("commit-prepare-failure", int64(len(payload)), 0), bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("stage: %v", err)
 	}
@@ -786,7 +787,7 @@ func TestCoordinatorAbortsUploadedBodyWhenCommitPreparationCannotBeJournaled(t *
 	body := &RemoteBody{UploadUUID: "hidden-body", PlaintextSize: int64(len(payload))}
 	record := JournalRecord{
 		OperationID: "commit-prepare-failure",
-		Mutation:    Mutation{Kind: MutationPut, DriveID: 42, DestinationName: "file.txt"},
+		Mutation:    Mutation{Kind: MutationPut, DriveID: 42, DestinationName: "file.txt", ContentLength: int64(len(payload))},
 		State:       StateUploaded,
 		Staged:      &staged,
 		Body:        body,
@@ -889,7 +890,7 @@ func TestCoordinatorCapabilitiesDeclareNarrowWritableBeta(t *testing.T) {
 
 	coordinator, _, _ := newTestCoordinator(t, &fakeRemote{}, &fakeInvalidator{})
 	got := coordinator.Capabilities()
-	want := Capabilities{Writable: true, PersonalOnly: true, PlaintextOnly: true, OnlineOnly: true}
+	want := Capabilities{Writable: true, PersonalOnly: true, PlaintextOnly: false, OnlineOnly: true}
 	if got != want {
 		t.Fatalf("capabilities = %#v, want %#v", got, want)
 	}
@@ -1157,6 +1158,7 @@ type fakeRemote struct {
 	lastReceipt       string
 	discardCalls      int
 	discardErr        error
+	lastUpload        HiddenUpload
 	lastCommit        CommitRequest
 	commitStarted     chan struct{}
 	commitRelease     chan struct{}
@@ -1180,6 +1182,10 @@ func newConcurrencyRemote() *concurrencyRemote {
 
 func (r *concurrencyRemote) UploadHidden(context.Context, HiddenUpload, io.ReadSeeker) (RemoteBody, error) {
 	return RemoteBody{}, errors.New("unexpected upload")
+}
+
+func (r *concurrencyRemote) RecoverHidden(context.Context, HiddenUpload, io.ReadSeeker) (RemoteBody, error) {
+	return RemoteBody{}, errors.New("unexpected hidden recovery")
 }
 
 func (r *concurrencyRemote) Commit(_ context.Context, request CommitRequest) (MutationResult, error) {
@@ -1248,6 +1254,7 @@ func waitForStatus(t *testing.T, coordinator *Coordinator, want Status) {
 func (r *fakeRemote) UploadHidden(_ context.Context, request HiddenUpload, source io.ReadSeeker) (RemoteBody, error) {
 	r.mu.Lock()
 	r.uploadCalls++
+	r.lastUpload = request
 	err := r.uploadErr
 	r.mu.Unlock()
 	if r.events != nil {
@@ -1260,10 +1267,39 @@ func (r *fakeRemote) UploadHidden(_ context.Context, request HiddenUpload, sourc
 	if err != nil {
 		return RemoteBody{}, err
 	}
-	if int64(len(payload)) != request.Size {
+	if int64(len(payload)) != request.StoredSize {
 		return RemoteBody{}, errors.New("source size differs")
 	}
-	return RemoteBody{ContentRef: "hidden-body-1", PlaintextSize: request.Size, SHA256: request.SHA256}, nil
+	return RemoteBody{
+		ContentRef:        "hidden-body-1",
+		PlaintextSize:     request.PlaintextSize,
+		StoredSize:        request.StoredSize,
+		Encrypted:         request.Encrypted,
+		EncryptionVersion: request.EncryptionVersion,
+		SHA256:            request.SHA256,
+		StoredSHA256:      request.StoredSHA256,
+	}, nil
+}
+
+func (r *fakeRemote) RecoverHidden(_ context.Context, request HiddenUpload, source io.ReadSeeker) (RemoteBody, error) {
+	payload, err := io.ReadAll(source)
+	if err != nil {
+		return RemoteBody{}, err
+	}
+	if int64(len(payload)) != request.StoredSize {
+		return RemoteBody{}, errors.New("recovery source size differs")
+	}
+	return RemoteBody{
+		UploadUUID:        "recovered-" + request.OperationID,
+		PartCount:         1,
+		PlaintextSize:     request.PlaintextSize,
+		StoredSize:        request.StoredSize,
+		Encrypted:         request.Encrypted,
+		EncryptionVersion: request.EncryptionVersion,
+		SHA256:            request.SHA256,
+		StoredSHA256:      request.StoredSHA256,
+		MessageIDs:        []int64{700},
+	}, nil
 }
 
 func (r *fakeRemote) Commit(_ context.Context, request CommitRequest) (MutationResult, error) {
@@ -1432,7 +1468,7 @@ func (*stubJournal) ListRecoverable(context.Context) ([]JournalRecord, error) { 
 
 type stubStaging struct{}
 
-func (*stubStaging) Stage(context.Context, string, int64, int64, io.Reader) (StagedObject, error) {
+func (*stubStaging) Stage(context.Context, StageRequest, io.Reader) (StagedObject, error) {
 	return StagedObject{}, nil
 }
 func (*stubStaging) Open(StagedObject) (ReadSeekCloser, error)     { return nil, ErrNotFound }

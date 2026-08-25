@@ -10,28 +10,47 @@
     let { onCancel, onSubmit }: Props = $props();
     let password = $state('');
     let confirmPassword = $state('');
+    let passwordInput = $state<HTMLInputElement | null>(null);
+    let confirmPasswordInput = $state<HTMLInputElement | null>(null);
     let hint = $state('');
     let wasOpen = false;
 
     const view = encryptionSetupModal.state;
 
+    function clearPasswords(): void {
+        password = '';
+        confirmPassword = '';
+        if (passwordInput) passwordInput.value = '';
+        if (confirmPasswordInput) confirmPasswordInput.value = '';
+    }
+
     function cancel(): void {
         if ($view.busy) return;
+        clearPasswords();
         onCancel();
     }
 
     function submit(): void {
         if ($view.busy) return;
-        void onSubmit(password, confirmPassword, hint);
+        const submittedPassword = password;
+        const submittedConfirmation = confirmPassword;
+        const submittedHint = hint;
+        clearPasswords();
+        void onSubmit(submittedPassword, submittedConfirmation, submittedHint);
     }
 
-    $effect(() => {
-        if ($view.open && !wasOpen) {
-            password = '';
-            confirmPassword = '';
+    $effect.pre(() => {
+        if (!$view.open) {
+            clearPasswords();
+            hint = '';
+            wasOpen = false;
+            return;
+        }
+        if (!wasOpen) {
+            clearPasswords();
             hint = '';
         }
-        wasOpen = $view.open;
+        wasOpen = true;
     });
 </script>
 
@@ -53,6 +72,7 @@
         type="password"
         placeholder="Password"
         autocomplete="new-password"
+        bind:this={passwordInput}
         bind:value={password}
         disabled={$view.busy}
     />
@@ -61,6 +81,7 @@
         type="password"
         placeholder="Confirm password"
         autocomplete="new-password"
+        bind:this={confirmPasswordInput}
         bind:value={confirmPassword}
         disabled={$view.busy}
     />

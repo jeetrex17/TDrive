@@ -142,6 +142,15 @@ func project(t *testing.T, db *sql.DB, channelID int64, msgID int64, actorID int
 	}
 }
 
+func assertKeyZeroed(t *testing.T, key []byte) {
+	t.Helper()
+	for i, b := range key {
+		if b != 0 {
+			t.Fatalf("key byte %d = %#x, want all owned key bytes cleared", i, b)
+		}
+	}
+}
+
 func TestPreviewFilePlainReturnsBase64(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	path := writeTempNamedFile(t, "image.png", tinyPNG)
@@ -173,7 +182,7 @@ func TestPreviewFileEncryptedDecrypts(t *testing.T) {
 		if !wantEncrypted {
 			return nil, nil
 		}
-		return masterKey, nil
+		return append([]byte(nil), masterKey...), nil
 	}
 	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
 		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
@@ -192,9 +201,11 @@ func TestPreviewFileEncryptedDecrypts(t *testing.T) {
 		}
 		return tmp, nil
 	}
+	var previewKey []byte
 	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return masterKey, nil
+			previewKey = append([]byte(nil), masterKey...)
+			return previewKey, nil
 		}
 		return nil, nil
 	}
@@ -216,6 +227,7 @@ func TestPreviewFileEncryptedDecrypts(t *testing.T) {
 	if !bytes.Equal(got, tinyPNG) {
 		t.Fatalf("preview bytes = %x, want %x", got, tinyPNG)
 	}
+	assertKeyZeroed(t, previewKey)
 }
 
 func TestPreviewFileEncryptedRequiresPassword(t *testing.T) {
@@ -225,7 +237,7 @@ func TestPreviewFileEncryptedRequiresPassword(t *testing.T) {
 		if !wantEncrypted {
 			return nil, nil
 		}
-		return masterKey, nil
+		return append([]byte(nil), masterKey...), nil
 	}
 	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
 		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
@@ -250,9 +262,10 @@ func TestPreviewFileEncryptedRequiresPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
+	failedKey := bytes.Repeat([]byte{0x3c}, 32)
 	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return nil, errNeedPassword
+			return failedKey, errNeedPassword
 		}
 		return nil, nil
 	}
@@ -264,6 +277,7 @@ func TestPreviewFileEncryptedRequiresPassword(t *testing.T) {
 	if payload.DataBase64 != "" || payload.MimeType != "" {
 		t.Fatalf("payload = %+v, want empty", payload)
 	}
+	assertKeyZeroed(t, failedKey)
 }
 
 func TestPreviewFileTooLargeUsesPlaintextSize(t *testing.T) {
@@ -349,11 +363,12 @@ func TestUploadRejectsMissingParentBeforeSend(t *testing.T) {
 func TestUploadEncryptedUsesCiphertextAndPlaintextMetadata(t *testing.T) {
 	svc, db, fakeTG, _ := newTestService(t)
 	path := writeTempFile(t, "plain")
+	uploadKey := []byte("master-key")
 	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
 		if !wantEncrypted {
 			return nil, nil
 		}
-		return []byte("master-key"), nil
+		return uploadKey, nil
 	}
 	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
 		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
@@ -393,13 +408,15 @@ func TestUploadEncryptedUsesCiphertextAndPlaintextMetadata(t *testing.T) {
 	if sent := fakeTG.SentFiles(); len(sent) != 1 || sent[0].Size != 10 {
 		t.Fatalf("sent files = %+v, want ciphertext size 10", sent)
 	}
+	assertKeyZeroed(t, uploadKey)
 }
 
 func TestUploadEncryptedRequiresPasswordBeforeSend(t *testing.T) {
 	svc, _, fakeTG, _ := newTestService(t)
 	path := writeTempFile(t, "plain")
+	failedKey := bytes.Repeat([]byte{0x5a}, 32)
 	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
-		return nil, errNeedPassword
+		return failedKey, errNeedPassword
 	}
 
 	if _, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true); err == nil {
@@ -408,6 +425,7 @@ func TestUploadEncryptedRequiresPasswordBeforeSend(t *testing.T) {
 	if sent := fakeTG.SentFiles(); len(sent) != 0 {
 		t.Fatalf("sent files = %+v, want none", sent)
 	}
+	assertKeyZeroed(t, failedKey)
 }
 
 func TestDownloadPlainFileWritesBytes(t *testing.T) {
@@ -470,7 +488,7 @@ func TestDownloadEncryptedFileDecrypts(t *testing.T) {
 		if !wantEncrypted {
 			return nil, nil
 		}
-		return masterKey, nil
+		return append([]byte(nil), masterKey...), nil
 	}
 	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
 		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
@@ -489,9 +507,11 @@ func TestDownloadEncryptedFileDecrypts(t *testing.T) {
 		}
 		return tmp, nil
 	}
+	var downloadKey []byte
 	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return masterKey, nil
+			downloadKey = append([]byte(nil), masterKey...)
+			return downloadKey, nil
 		}
 		return nil, nil
 	}
@@ -516,6 +536,7 @@ func TestDownloadEncryptedFileDecrypts(t *testing.T) {
 	if string(got) != "secret" {
 		t.Fatalf("downloaded bytes = %q, want secret", string(got))
 	}
+	assertKeyZeroed(t, downloadKey)
 }
 
 func TestDownloadEncryptedDecryptFailurePreservesExistingFile(t *testing.T) {
@@ -526,7 +547,7 @@ func TestDownloadEncryptedDecryptFailurePreservesExistingFile(t *testing.T) {
 		if !wantEncrypted {
 			return nil, nil
 		}
-		return masterKey, nil
+		return append([]byte(nil), masterKey...), nil
 	}
 	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
 		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
@@ -545,9 +566,11 @@ func TestDownloadEncryptedDecryptFailurePreservesExistingFile(t *testing.T) {
 		}
 		return tmp, nil
 	}
+	var downloadKey []byte
 	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return wrongKey, nil
+			downloadKey = append([]byte(nil), wrongKey...)
+			return downloadKey, nil
 		}
 		return nil, nil
 	}
@@ -575,6 +598,7 @@ func TestDownloadEncryptedDecryptFailurePreservesExistingFile(t *testing.T) {
 	if string(got) != "keep me" {
 		t.Fatalf("existing file = %q, want preserved contents", string(got))
 	}
+	assertKeyZeroed(t, downloadKey)
 }
 
 func TestDownloadEncryptedRequiresPassword(t *testing.T) {
@@ -595,9 +619,10 @@ func TestDownloadEncryptedRequiresPassword(t *testing.T) {
 		MediaSize:    4,
 		DocumentName: "locked.bin",
 	})
+	failedKey := bytes.Repeat([]byte{0x6b}, 32)
 	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return nil, errNeedPassword
+			return failedKey, errNeedPassword
 		}
 		return nil, nil
 	}
@@ -613,6 +638,7 @@ func TestDownloadEncryptedRequiresPassword(t *testing.T) {
 	if called {
 		t.Fatalf("chooseSavePath was called before password check")
 	}
+	assertKeyZeroed(t, failedKey)
 }
 
 func TestMetaPublishesLegacyMetadata(t *testing.T) {
@@ -739,5 +765,43 @@ func TestDeleteEncryptedFileRequiresPassword(t *testing.T) {
 	}
 	if !projection.FileExists(db, personalChannelID, 70) {
 		t.Fatalf("file was tombstoned despite missing password")
+	}
+}
+
+func TestRequireEncryptedFileKeyClearsOwnedKey(t *testing.T) {
+	svc, db, _, _ := newTestService(t)
+	project(t, db, personalChannelID, 71, 7, projection.Op{
+		Type:              projection.OpFileUpload,
+		Parent:            "",
+		Name:              "owned-key.bin",
+		FileSize:          20,
+		FileUploadTime:    1,
+		Encrypted:         true,
+		PlaintextSize:     10,
+		EncryptionVersion: 1,
+	})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "success"},
+		{name: "provider error", err: errNeedPassword},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ownedKey := bytes.Repeat([]byte{0x73}, 32)
+			svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+				if !encrypted {
+					t.Fatal("encrypted mutation gate requested a plaintext key")
+				}
+				return ownedKey, tc.err
+			}
+
+			err := svc.requireEncryptedFileKey(personalChannelID, 71)
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("requireEncryptedFileKey() error = %v, want %v", err, tc.err)
+			}
+			assertKeyZeroed(t, ownedKey)
+		})
 	}
 }

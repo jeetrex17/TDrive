@@ -44,6 +44,7 @@ type session struct {
 	windowsDrive string
 	mode         Mode
 	writeState   WriteState
+	key          MountKeyLease
 	content      ContentLifetime
 	writer       WriteSession
 	attachment   mountos.Attachment
@@ -55,6 +56,7 @@ type Controller struct {
 	mu          sync.Mutex
 	filesystems FilesystemBuilder
 	writers     WriterBuilder
+	keys        MountKeyLeaser
 	endpoint    Endpoint
 	connector   mountos.Connector
 	fsOptions   mountfs.Options
@@ -93,6 +95,7 @@ func NewWithConnector(engine *core.Engine, connector mountos.Connector) (*Contro
 			ranges: ranges,
 		},
 		Writers:   newEngineWriterBuilder(engine),
+		Keys:      engineMountKeyLeaser{engine: engine},
 		Endpoint:  newWebDAVEndpoint(),
 		Connector: connector,
 	})
@@ -115,6 +118,7 @@ func NewWithDependencies(dependencies Dependencies) (*Controller, error) {
 	return &Controller{
 		filesystems: dependencies.Filesystems,
 		writers:     dependencies.Writers,
+		keys:        dependencies.Keys,
 		endpoint:    dependencies.Endpoint,
 		connector:   dependencies.Connector,
 		fsOptions:   options,
@@ -215,12 +219,26 @@ func (controller *Controller) Start(ctx context.Context, requested Drive, option
 }
 
 func (controller *Controller) runStart(ctx context.Context, current *operation, active *session) (Status, error) {
-	filesystem, content, err := controller.filesystems.Build(ctx, active.drive.ID, controller.fsOptions)
+	if active.drive.Encrypted {
+		if controller.keys == nil {
+			return controller.failStart(current, active, prepareFailureMessage(active.mode), ErrEncryptionPasswordRequired)
+		}
+		lease, err := controller.keys.Acquire(ctx, active.drive)
+		if err != nil || lease == nil {
+			if err == nil {
+				err = ErrEncryptionPasswordRequired
+			}
+			return controller.failStart(current, active, prepareFailureMessage(active.mode), err)
+		}
+		active.key = lease
+	}
+	filesystem, content, err := controller.filesystems.Build(ctx, active.drive.ID, controller.fsOptions, active.key)
 	if err != nil {
 		if content != nil {
 			content.Close()
 		}
 		_ = closeWriterForRollback(ctx, active.writer)
+		closeSessionKey(active)
 		return controller.failStart(current, active, prepareFailureMessage(active.mode), err)
 	}
 	if filesystem == nil || content == nil {
@@ -228,6 +246,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 			content.Close()
 		}
 		_ = closeWriterForRollback(ctx, active.writer)
+		closeSessionKey(active)
 		return controller.failStart(
 			current,
 			active,
@@ -237,12 +256,13 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 	}
 	active.content = content
 	if active.mode == ModeReadWrite {
-		writer, writerErr := controller.writers.Build(ctx, active.drive, filesystem)
+		writer, writerErr := controller.writers.Build(ctx, active.drive, filesystem, active.key)
 		if writerErr != nil || writer == nil {
 			if writer != nil {
 				_ = closeWriterForRollback(ctx, writer)
 			}
 			content.Close()
+			closeSessionKey(active)
 			if writerErr == nil {
 				writerErr = fmt.Errorf("%w: writer builder returned no writer", ErrInvalidConfiguration)
 			}
@@ -262,6 +282,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 	if err != nil {
 		_ = closeWriterForRollback(ctx, active.writer)
 		content.Close()
+		closeSessionKey(active)
 		return controller.failStart(current, active, startFailureText(active.mode), err)
 	}
 	controller.mu.Lock()
@@ -278,6 +299,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 		cleanupErr := controller.stopEndpointForRollback(ctx)
 		writerErr := closeWriterForRollback(ctx, active.writer)
 		content.Close()
+		closeSessionKey(active)
 		return controller.failStart(
 			current,
 			active,
@@ -443,6 +465,7 @@ func (controller *Controller) runStop(ctx context.Context, current *operation, a
 	if active.content != nil {
 		active.content.Close()
 	}
+	closeSessionKey(active)
 
 	controller.mu.Lock()
 	controller.session = nil
@@ -586,6 +609,7 @@ func (controller *Controller) recoverFailedEndpointAfterAttach(
 	if active.content != nil {
 		active.content.Close()
 	}
+	closeSessionKey(active)
 	return controller.failStart(
 		current,
 		active,
@@ -617,6 +641,7 @@ func statusFor(active *session, phase Phase, running, mounted bool, message stri
 	status.DriveTitle = active.drive.Title
 	status.DriveKind = active.drive.Kind
 	status.DriveEncrypted = active.drive.Encrypted
+	status.DriveEncryptionUnlocked = active.drive.EncryptionUnlocked
 	status.Label = active.label
 	status = withWriteStatus(status, active)
 	if mounted {
@@ -661,10 +686,13 @@ func resolveMode(requested Mode, drive Drive, writers WriterBuilder) (Mode, erro
 	if requested != ModeAuto && requested != ModeReadOnly && requested != ModeReadWrite {
 		return "", ErrInvalidMode
 	}
+	if drive.Encrypted && !drive.EncryptionUnlocked {
+		return "", ErrEncryptionPasswordRequired
+	}
 	if requested == ModeReadOnly {
 		return ModeReadOnly, nil
 	}
-	eligible := writers != nil && drive.Kind == DriveKindPersonal && !drive.Encrypted
+	eligible := writers != nil && drive.Kind == DriveKindPersonal
 	if requested == ModeReadWrite && !eligible {
 		return "", ErrWritableUnavailable
 	}
@@ -748,6 +776,8 @@ func normalizeWindowsDrive(value string) (string, error) {
 
 func classifyOperationError(cause, fallback error) error {
 	switch {
+	case errors.Is(cause, ErrEncryptionPasswordRequired):
+		return ErrEncryptionPasswordRequired
 	case errors.Is(cause, ErrInvalidConfiguration):
 		return ErrInvalidConfiguration
 	case errors.Is(cause, mountos.ErrDriveOccupied):
@@ -769,6 +799,8 @@ func classifyOperationError(cause, fallback error) error {
 
 func startFailureMessage(fallback string, cause error, active *session) string {
 	switch {
+	case errors.Is(cause, ErrEncryptionPasswordRequired):
+		return "TDrive encryption password required. Unlock encryption, then mount again."
 	case errors.Is(cause, mountos.ErrDriveOccupied):
 		drive := defaultWindowsDrive
 		if active != nil && active.windowsDrive != "" {

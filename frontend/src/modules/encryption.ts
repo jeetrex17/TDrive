@@ -31,8 +31,8 @@ export function renderEncryptionSettingsEntry() {
     encryptionEntryVisible.set(Boolean(state.encryption?.passwordSet));
 }
 
-// requireEncryptionPassword is the gate used by download/preview when an
-// encrypted file is touched. Resolves to true on success, false on cancel.
+// requireEncryptionPassword gates encrypted file access and encrypted mounts.
+// It resolves to true on success and false when the user cancels.
 export async function requireEncryptionPassword(): Promise<boolean> {
     if (state.encryption?.passwordRemembered) return true;
     return openEncryptionPasswordModal() as Promise<boolean>;

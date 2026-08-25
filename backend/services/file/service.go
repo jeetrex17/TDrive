@@ -30,9 +30,17 @@ type PeerResolver interface {
 type EmitOpFunc func(channelID int64, op projection.Op) (int64, error)
 type EmitOpContextFunc func(ctx context.Context, channelID int64, op projection.Op) (int64, error)
 type ActorIDFunc func(ctx context.Context) (int64, error)
+
+// RequireEncryptionKeyFunc returns a caller-owned key copy. Service clears a
+// non-nil key on every return path, including when err is non-nil.
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
+
+// MasterKeyForUploadFunc returns a caller-owned key copy. Service clears a
+// non-nil key on every return path, including when err is non-nil.
 type MasterKeyForUploadFunc func(channelID int64, wantEncrypted bool) ([]byte, error)
 type WriteCiphertextTempFunc func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error)
+type encryptStreamFunc func(plain io.Reader, ciphertext io.Writer, masterKey []byte, plaintextSize int64) error
+type thumbnailGeneratorFunc func(ctx context.Context, channelID int64, msgID int, cacheKey string, encrypted bool, masterKey []byte) ([]byte, error)
 type WarnFunc func(format string, args ...any)
 
 // CreateFolderFunc creates a folder and returns its new ID. It is injected so
@@ -54,6 +62,8 @@ type Service struct {
 	RequireEncryptionKey RequireEncryptionKeyFunc
 	MasterKeyForUpload   MasterKeyForUploadFunc
 	WriteCiphertextTemp  WriteCiphertextTempFunc
+	encryptStream        encryptStreamFunc
+	generateThumbnailFn  thumbnailGeneratorFunc
 	CreateFolder         CreateFolderFunc
 	Events               EventSink
 	Warnf                WarnFunc
@@ -66,6 +76,10 @@ type Service struct {
 	// uploads. The zero value uses tgclient's bounded production defaults.
 	FloodWaitRetry tgclient.FloodWaitRetryPolicy
 	previewMu      sync.Mutex
+	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
+	// package tests. It runs immediately after Telegram returns a positive
+	// message ID and before that receipt enters any local collection/projection.
+	afterHiddenPartSend func(partIndex int, msgID int64)
 
 	// Thumbs is the on-disk thumbnail cache. Nil disables caching (every
 	// Thumbnail call regenerates), which keeps the cache optional in tests.
@@ -105,6 +119,10 @@ type ChooseSavePathFunc func(defaultName string) (string, error)
 const maxPreviewPayloadBytes int64 = 10 * 1024 * 1024
 
 var (
+	// ErrHiddenReceiptRecoveryRequired means Telegram returned a positive send
+	// receipt but its local ownership projection could not be made durable.
+	// Mount cleanup must reconcile it from the unchanged staged source.
+	ErrHiddenReceiptRecoveryRequired     = errors.New("hidden upload receipt recovery required")
 	errPreviewNotFound                   = errors.New("File not found")
 	errPreviewNotSupported               = errors.New("Not a supported image")
 	errPreviewTooLarge                   = errors.New("File too large")
@@ -299,6 +317,7 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 	}
 
 	masterKey, err := s.masterKeyForUpload(channelID, wantEncrypted)
+	defer clearOwnedKey(masterKey)
 	if err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
@@ -431,11 +450,21 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 	var closeReader func()
 	if encrypt {
 		pr, pw := io.Pipe()
-		go func() {
-			_ = pw.CloseWithError(tdcrypto.EncryptStream(plainFile, pw, masterKey, plaintextSize))
-		}()
+		producerDone := make(chan struct{})
+		producerKey := append([]byte(nil), masterKey...)
+		go func(key []byte) {
+			defer close(producerDone)
+			defer clearOwnedKey(key)
+			_ = pw.CloseWithError(s.encryptStoredStream(plainFile, pw, key, plaintextSize))
+		}(producerKey)
 		storedReader = pr
-		closeReader = func() { _ = pr.Close() }
+		closeReader = func() {
+			// Closing the read end unblocks a producer whose consumer returned
+			// early. Waiting here guarantees its private key copy is no longer in
+			// use and has been cleared before uploadMultipart returns.
+			_ = pr.Close()
+			<-producerDone
+		}
 	}
 	if closeReader != nil {
 		defer closeReader()
@@ -643,6 +672,7 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 		encrypted = enc
 	}
 	masterKey, err := s.requireEncryptionKey(encrypted)
+	defer clearOwnedKey(masterKey)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: err.Error()}
 	}
@@ -730,6 +760,7 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 		encrypted = enc
 	}
 	masterKey, err := s.requireEncryptionKey(encrypted)
+	defer clearOwnedKey(masterKey)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: err.Error()}
 	}
@@ -987,6 +1018,7 @@ func (s *Service) PreviewFile(ctx context.Context, channelID int64, msgID int) (
 			return errPreviewTooLarge
 		}
 		masterKey, err := s.requireEncryptionKey(encrypted)
+		defer clearOwnedKey(masterKey)
 		if err != nil {
 			return errPreviewEncryptionPasswordRequired
 		}
@@ -1070,7 +1102,9 @@ func (s *Service) requireEncryptedFileKey(channelID int64, msgID int) error {
 	if err != nil {
 		return nil
 	}
-	if _, err := s.requireEncryptionKey(encrypted); err != nil {
+	masterKey, err := s.requireEncryptionKey(encrypted)
+	clearOwnedKey(masterKey)
+	if err != nil {
 		return err
 	}
 	return nil
@@ -1334,6 +1368,17 @@ func (s *Service) writeCiphertextTemp(plain io.Reader, plaintextSize int64, mast
 		return nil, fmt.Errorf("encryption upload not ready")
 	}
 	return s.WriteCiphertextTemp(plain, plaintextSize, masterKey)
+}
+
+func (s *Service) encryptStoredStream(plain io.Reader, ciphertext io.Writer, masterKey []byte, plaintextSize int64) error {
+	if s.encryptStream != nil {
+		return s.encryptStream(plain, ciphertext, masterKey, plaintextSize)
+	}
+	return tdcrypto.EncryptStream(plain, ciphertext, masterKey, plaintextSize)
+}
+
+func clearOwnedKey(key []byte) {
+	clear(key)
 }
 
 func (s *Service) emitEvent(name string, args ...any) {

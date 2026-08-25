@@ -12,6 +12,11 @@ import (
 
 const maintenanceTimeout = 30 * time.Second
 
+// maxHiddenCleanupParts mirrors the bounded hidden-upload protocol. It lives at
+// the Remote trust boundary so a malformed adapter cannot journal an unbounded
+// delete set.
+const maxHiddenCleanupParts = 32
+
 type CoordinatorConfig struct {
 	Journal             Journal
 	Staging             StagingStore
@@ -88,7 +93,7 @@ func (c *Coordinator) Capabilities() Capabilities {
 	return Capabilities{
 		Writable:      true,
 		PersonalOnly:  true,
-		PlaintextOnly: true,
+		PlaintextOnly: false,
 		OnlineOnly:    true,
 	}
 }
@@ -307,26 +312,127 @@ func (c *Coordinator) maintenanceContext(ctx context.Context) (context.Context, 
 func (c *Coordinator) markAborted(ctx context.Context, record JournalRecord, cause error) {
 	maintenanceCtx, cancel := c.maintenanceContext(ctx)
 	defer cancel()
-	var cleanupErr error
-	if record.Staged != nil {
-		cleanupErr = c.staging.Remove(maintenanceCtx, *record.Staged)
-	} else if record.Mutation.Kind == MutationPut {
-		cleanupErr = c.staging.RemoveOperation(maintenanceCtx, record.OperationID)
-	}
-	needsRemoteCleanup := record.Body != nil || record.State == StateUploading || record.State == StateUploaded
-	if cleanupErr == nil && needsRemoteCleanup {
-		cleanupErr = c.remote.DiscardHidden(maintenanceCtx, record.OperationID, record.Body)
-	}
 	if isTerminal(record.State) {
 		return
 	}
+
+	current := record
+	// StateUploading is the sole boundary where Telegram may have accepted one
+	// part whose MsgID is not yet in the journal. Recover it from the verified
+	// staged bytes and durably patch the exact body before staging can be
+	// removed. This also handles a locally-known body whose StateUploaded
+	// transition failed: it still must become durable first.
+	if current.State == StateUploading {
+		prepared, err := c.prepareHiddenCleanupReceipt(maintenanceCtx, current)
+		if err != nil {
+			// Never persist an adapter-supplied body that failed receipt-boundary
+			// validation. The verified stage remains the only recovery authority.
+			current.Body = nil
+			c.deferCleanup(maintenanceCtx, current, err)
+			return
+		}
+		current = prepared
+	}
+
+	needsRemoteCleanup := current.Body != nil || current.State == StateUploaded
+	var cleanupErr error
+	if needsRemoteCleanup {
+		cleanupErr = c.remote.DiscardHidden(maintenanceCtx, current.OperationID, current.Body)
+	}
+	if cleanupErr == nil {
+		cleanupErr = c.removeStagedForCleanup(maintenanceCtx, current)
+	}
 	if cleanupErr != nil {
-		_, _ = c.transition(maintenanceCtx, record, StateCleanupPending, JournalPatch{
-			ErrorCode: safeErrorLabel(classifyError(cleanupErr)),
-		})
+		// Before Uploading there cannot be a remote receipt. Leave the original
+		// state intact when only local stage removal failed, so recovery never
+		// invents and uploads a cleanup candidate for an operation that did not
+		// reach Telegram.
+		if current.Body == nil && (current.State == StateReceiving || current.State == StateStaged) {
+			return
+		}
+		c.deferCleanup(maintenanceCtx, current, cleanupErr)
 		return
 	}
-	_, _ = c.transition(maintenanceCtx, record, StateAborted, JournalPatch{ErrorCode: safeErrorLabel(classifyError(cause))})
+	_, _ = c.transition(maintenanceCtx, current, StateAborted, JournalPatch{ErrorCode: safeErrorLabel(classifyError(cause))})
+}
+
+func (c *Coordinator) prepareHiddenCleanupReceipt(ctx context.Context, record JournalRecord) (JournalRecord, error) {
+	if record.Mutation.Kind != MutationPut || record.Staged == nil {
+		return record, ErrNotFound
+	}
+	if err := validateStagedMutation(record.Mutation, *record.Staged); err != nil {
+		return record, err
+	}
+
+	body := record.Body
+	recoveredReceipt := body == nil
+	if body == nil {
+		source, err := c.staging.Open(*record.Staged)
+		if err != nil {
+			return record, err
+		}
+		recovered, recoverErr := c.remote.RecoverHidden(ctx, hiddenUploadFromRecord(record), source)
+		closeErr := source.Close()
+		if recoverErr != nil {
+			return record, recoverErr
+		}
+		if closeErr != nil {
+			return record, closeErr
+		}
+		recovered = withStagedMetadata(recovered, *record.Staged)
+		body = &recovered
+	} else {
+		copyOfBody := cloneBody(*body)
+		copyOfBody = withStagedMetadata(copyOfBody, *record.Staged)
+		body = &copyOfBody
+	}
+	if recoveredReceipt || body.UploadUUID != "" {
+		if err := validateHiddenCleanupBody(record.Mutation, *body, recoveredReceipt); err != nil {
+			return record, err
+		}
+	} else if err := validateRemoteBody(record.Mutation, *body); err != nil {
+		return record, err
+	}
+	return c.transition(ctx, record, StateCleanupPending, JournalPatch{Body: body})
+}
+
+func validateHiddenCleanupBody(mutation Mutation, body RemoteBody, requireReceipt bool) error {
+	if err := validateRemoteBody(mutation, body); err != nil {
+		return err
+	}
+	if !validCommitRef(body.UploadUUID) || body.ContentRef != "" || body.PartCount <= 0 ||
+		body.PartCount > maxHiddenCleanupParts || len(body.MessageIDs) > body.PartCount ||
+		(requireReceipt && len(body.MessageIDs) == 0) {
+		return ErrInvalidRequest
+	}
+	seen := make(map[int64]struct{}, len(body.MessageIDs))
+	for _, msgID := range body.MessageIDs {
+		if msgID <= 0 {
+			return ErrInvalidRequest
+		}
+		if _, duplicate := seen[msgID]; duplicate {
+			return ErrInvalidRequest
+		}
+		seen[msgID] = struct{}{}
+	}
+	return nil
+}
+
+func (c *Coordinator) removeStagedForCleanup(ctx context.Context, record JournalRecord) error {
+	if record.Staged != nil {
+		return c.staging.Remove(ctx, *record.Staged)
+	}
+	if record.Mutation.Kind == MutationPut {
+		return c.staging.RemoveOperation(ctx, record.OperationID)
+	}
+	return nil
+}
+
+func (c *Coordinator) deferCleanup(ctx context.Context, record JournalRecord, cause error) {
+	_, _ = c.transition(ctx, record, StateCleanupPending, JournalPatch{
+		Body:      record.Body,
+		ErrorCode: safeErrorLabel(classifyError(cause)),
+	})
 }
 
 func (c *Coordinator) exactInvalidation(record JournalRecord, result MutationResult) SnapshotInvalidation {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
@@ -50,7 +51,7 @@ func TestSessionPutMapsPortablePathAndRevision(t *testing.T) {
 		ContentLength:    3,
 		MaxBytes:         defaultMaxObjectBytes,
 	}
-	if engine.putRequest != want {
+	if !reflect.DeepEqual(engine.putRequest, want) {
 		t.Fatalf("Put request = %+v, want %+v", engine.putRequest, want)
 	}
 }
@@ -243,6 +244,78 @@ func TestSessionRejectsMutationsOfLegacyEncryptedEntries(t *testing.T) {
 	}
 }
 
+func TestUnlockedEncryptedSessionEncryptsPutsAndAllowsEncryptedMetadataMutations(t *testing.T) {
+	masterKey := bytes.Repeat([]byte{9}, 32)
+
+	t.Run("replace", func(t *testing.T) {
+		resolver := newFakeResolver(Node{
+			ObjectID: "f:1", Name: "secret.txt", Kind: mountfs.KindFile,
+			Revision: 4, Encrypted: true,
+		})
+		engine := &fakeEngine{putResult: mountwrite.MutationResult{ObjectID: "f:1", Revision: 5}}
+		session := newTestSession(resolver, engine)
+		session.encryptWrites = true
+		session.masterKeys = staticMountKeyProvider(masterKey)
+
+		_, err := session.Put(
+			context.Background(),
+			mountdav.PutRequest{Path: "/secret.txt", ContentLength: 5},
+			bytes.NewReader([]byte("plain")),
+		)
+		if err != nil {
+			t.Fatalf("encrypted Put() error = %v", err)
+		}
+		if engine.putRequest.EncryptionVersion != mountwrite.EncryptionTDE1 || engine.putRequest.ContentLength != 5 {
+			t.Fatalf("encrypted PutRequest = %#v", engine.putRequest)
+		}
+		if !bytes.Equal(engine.putRequest.MasterKey, masterKey) || &engine.putRequest.MasterKey[0] == &masterKey[0] {
+			t.Fatal("encrypted PutRequest does not own an independent mount-key copy")
+		}
+	})
+
+	t.Run("move and delete", func(t *testing.T) {
+		resolver := newFakeResolver(
+			Node{ObjectID: "d:dst", Name: "Dst", Kind: mountfs.KindDirectory, Revision: 1},
+			Node{ObjectID: "f:1", Name: "secret.txt", Kind: mountfs.KindFile, Revision: 4, Encrypted: true},
+		)
+		engine := &fakeEngine{
+			moveResult:   mountwrite.MutationResult{ObjectID: "f:1", Revision: 5},
+			deleteResult: mountwrite.MutationResult{ObjectID: "f:1", Revision: 6},
+		}
+		session := newTestSession(resolver, engine)
+		session.encryptWrites = true
+		session.masterKeys = staticMountKeyProvider(masterKey)
+
+		if _, err := session.Move(context.Background(), mountdav.MoveRequest{
+			SourcePath: "/secret.txt", DestinationPath: "/Dst/secret.txt",
+		}); err != nil {
+			t.Fatalf("encrypted Move() error = %v", err)
+		}
+		resolver.byPath["/secret.txt"] = Node{
+			ObjectID: "f:1", Name: "secret.txt", Kind: mountfs.KindFile,
+			Revision: 5, Encrypted: true,
+		}
+		if _, err := session.Delete(context.Background(), mountdav.DeleteRequest{Path: "/secret.txt"}); err != nil {
+			t.Fatalf("encrypted Delete() error = %v", err)
+		}
+		if engine.callCount != 2 {
+			t.Fatalf("metadata engine calls = %d, want 2", engine.callCount)
+		}
+	})
+
+	t.Run("unknown content length", func(t *testing.T) {
+		session := newTestSession(newFakeResolver(), &fakeEngine{})
+		session.encryptWrites = true
+		session.masterKeys = staticMountKeyProvider(masterKey)
+		_, err := session.Put(context.Background(), mountdav.PutRequest{
+			Path: "/unknown.bin", ContentLength: -1,
+		}, bytes.NewReader([]byte("plain")))
+		if !errors.Is(err, mountdav.ErrWriteLengthRequired) {
+			t.Fatalf("encrypted unknown-length Put error = %v, want length required", err)
+		}
+	})
+}
+
 func TestSessionDeleteUsesThirtyDayTrashAndRecursiveFolders(t *testing.T) {
 	resolver := newFakeResolver(
 		Node{ObjectID: "d:docs", Name: "Docs", Kind: mountfs.KindDirectory, Revision: 9},
@@ -404,8 +477,15 @@ type fakeEngine struct {
 func (e *fakeEngine) Put(_ context.Context, request mountwrite.PutRequest, body io.Reader) (mountwrite.MutationResult, error) {
 	e.callCount++
 	e.putRequest = request
+	e.putRequest.MasterKey = append([]byte(nil), request.MasterKey...)
 	_, _ = io.Copy(io.Discard, body)
 	return e.putResult, e.putErr
+}
+
+type staticMountKeyProvider []byte
+
+func (provider staticMountKeyProvider) Key() ([]byte, error) {
+	return append([]byte(nil), provider...), nil
 }
 
 func (e *fakeEngine) Mkdir(_ context.Context, request mountwrite.MkdirRequest) (mountwrite.MutationResult, error) {

@@ -18,8 +18,10 @@ func (c *Coordinator) Put(ctx context.Context, request PutRequest, source io.Rea
 	}
 	operationID := c.operationID(request.OperationID)
 	mutation := request.mutation()
+	stageRequest := request.stageRequest(operationID)
+	defer clearBytes(stageRequest.MasterKey)
 	return c.withOperation(ctx, operationID, mutation, func(ctx context.Context, record JournalRecord) (MutationResult, error) {
-		staged, err := c.staging.Stage(ctx, operationID, request.ContentLength, request.MaxBytes, source)
+		staged, err := c.staging.Stage(ctx, stageRequest, source)
 		if err != nil {
 			c.markAborted(ctx, record, err)
 			return MutationResult{}, operationError(record, err)
@@ -86,33 +88,39 @@ func (c *Coordinator) uploadStaged(ctx context.Context, record JournalRecord) (M
 		c.markAborted(ctx, record, ErrNotFound)
 		return MutationResult{}, operationError(record, ErrNotFound)
 	}
+	if err := validateStagedMutation(record.Mutation, *record.Staged); err != nil {
+		c.markAborted(ctx, record, err)
+		return MutationResult{}, operationError(record, err)
+	}
+	source, err := c.staging.Open(*record.Staged)
+	if err != nil {
+		c.markAborted(ctx, record, err)
+		return MutationResult{}, operationError(record, err)
+	}
 	current := record
-	var err error
 	if current.State == StateStaged {
 		current, err = c.transition(ctx, current, StateUploading, JournalPatch{})
 		if err != nil {
+			_ = source.Close()
 			c.markAborted(ctx, record, err)
 			return MutationResult{}, operationError(record, err)
 		}
 	}
-	source, err := c.staging.Open(*current.Staged)
-	if err != nil {
-		c.markAborted(ctx, current, err)
-		return MutationResult{}, operationError(current, err)
-	}
-	body, uploadErr := c.remote.UploadHidden(ctx, HiddenUpload{
-		OperationID: current.OperationID,
-		DriveID:     current.Mutation.DriveID,
-		ParentID:    current.Mutation.DestinationParentID,
-		Name:        current.Mutation.DestinationName,
-		Size:        current.Staged.Size,
-		SHA256:      current.Staged.SHA256,
-	}, source)
+	body, uploadErr := c.remote.UploadHidden(ctx, hiddenUploadFromRecord(current), source)
 	_ = source.Close()
 	if uploadErr != nil {
+		// Definite failures may still return exact receipts for the accepted
+		// prefix/current part (for example, local projection failed after a
+		// positive MsgID). Persist those before cleanup. Unknown outcomes omit
+		// the uncertain receipt and must be reconciled from the staged source.
+		if !errors.Is(uploadErr, ErrUploadOutcomeUnknown) && hasExactHiddenReceipt(body) {
+			body = withStagedMetadata(body, *current.Staged)
+			current.Body = &body
+		}
 		c.markAborted(ctx, current, uploadErr)
 		return MutationResult{}, operationError(current, uploadErr)
 	}
+	body = withStagedMetadata(body, *current.Staged)
 	uploaded, err := c.transition(ctx, current, StateUploaded, JournalPatch{Body: &body})
 	if err != nil {
 		current.Body = &body
@@ -120,6 +128,51 @@ func (c *Coordinator) uploadStaged(ctx context.Context, record JournalRecord) (M
 		return MutationResult{}, operationError(current, err)
 	}
 	return c.commitPrepared(ctx, uploaded)
+}
+
+func hasExactHiddenReceipt(body RemoteBody) bool {
+	return body.ContentRef != "" || (body.UploadUUID != "" && body.PartCount > 0)
+}
+
+func hiddenUploadFromRecord(record JournalRecord) HiddenUpload {
+	if record.Staged == nil {
+		return HiddenUpload{}
+	}
+	return HiddenUpload{
+		OperationID:       record.OperationID,
+		DriveID:           record.Mutation.DriveID,
+		ParentID:          record.Mutation.DestinationParentID,
+		Name:              record.Mutation.DestinationName,
+		PlaintextSize:     record.Staged.PlaintextSize,
+		StoredSize:        record.Staged.StoredSize,
+		SHA256:            record.Staged.SHA256,
+		StoredSHA256:      record.Staged.StoredSHA256,
+		EncryptionVersion: record.Staged.EncryptionVersion,
+		Encrypted:         record.Staged.EncryptionVersion != EncryptionNone,
+	}
+}
+
+func validateStagedMutation(mutation Mutation, staged StagedObject) error {
+	if err := validateStagedObject(staged); err != nil {
+		return err
+	}
+	if mutation.Kind != MutationPut || mutation.EncryptionVersion != staged.EncryptionVersion {
+		return ErrInvalidRequest
+	}
+	if mutation.ContentLength >= 0 && mutation.ContentLength != staged.PlaintextSize {
+		return ErrLengthMismatch
+	}
+	return nil
+}
+
+func withStagedMetadata(body RemoteBody, staged StagedObject) RemoteBody {
+	body.PlaintextSize = staged.PlaintextSize
+	body.StoredSize = staged.StoredSize
+	body.EncryptionVersion = staged.EncryptionVersion
+	body.Encrypted = staged.EncryptionVersion != EncryptionNone
+	body.SHA256 = staged.SHA256
+	body.StoredSHA256 = staged.StoredSHA256
+	return body
 }
 
 func (c *Coordinator) commitPrepared(ctx context.Context, record JournalRecord) (MutationResult, error) {

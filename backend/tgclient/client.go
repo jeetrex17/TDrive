@@ -20,6 +20,10 @@ var (
 	ErrMessageNotFound = errors.New("tgclient: message not found")
 	ErrNotFile         = errors.New("tgclient: message is not a file")
 	ErrEmptyDocument   = errors.New("tgclient: empty document")
+	// ErrSendOutcomeUnknown means Telegram may have accepted an idempotent
+	// write even though the client did not receive a usable receipt. Callers
+	// must retry with the same random_id before abandoning remote artifacts.
+	ErrSendOutcomeUnknown = errors.New("tgclient: send outcome unknown")
 )
 
 type FloodWaitError struct {

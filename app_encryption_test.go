@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 
@@ -17,6 +18,12 @@ import (
 const testEncryptionChannelID int64 = 424242
 
 func setupEncryptionApp(t *testing.T) (*App, *sql.DB) {
+	t.Helper()
+	app, db, _ := setupEncryptionAppWithPolicyRefresh(t, nil)
+	return app, db
+}
+
+func setupEncryptionAppWithPolicyRefresh(t *testing.T, refresh func(context.Context, int64) error) (*App, *sql.DB, *tgclient.Fake) {
 	t.Helper()
 
 	tempHome := t.TempDir()
@@ -50,8 +57,9 @@ func setupEncryptionApp(t *testing.T) (*App, *sql.DB) {
 	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: testEncryptionChannelID, AccessHash: 7}, "My Drive")
 
 	engine, err := core.New(t.Context(), core.Config{
-		TG:         fakeTG,
-		SkipDBInit: true,
+		TG:                      fakeTG,
+		SkipDBInit:              true,
+		EncryptionPolicyRefresh: refresh,
 		Connect: func() (nilClient *telegram.Client, err error) {
 			return nil, nil
 		},
@@ -61,7 +69,7 @@ func setupEncryptionApp(t *testing.T) (*App, *sql.DB) {
 	}
 
 	app := &App{engine: engine}
-	return app, db
+	return app, db, fakeTG
 }
 
 func TestEncryptionPasswordStoresHint(t *testing.T) {

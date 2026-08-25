@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"TDrive/backend/core"
-	"TDrive/backend/mountcontroller"
 	"TDrive/backend/processlock"
 )
 
@@ -43,9 +42,17 @@ type Server struct {
 	// mountMu only protects lazy controller construction. The controller owns
 	// its own lifecycle state and never takes the daemon-wide write lock.
 	mountMu         sync.Mutex
-	mountController *mountcontroller.Controller
-	warnf           func(format string, args ...any)
-	state           *state
+	mountController daemonMountController
+	// mountEncryptionPolicyRefresh is injected only by tests. Production uses
+	// Engine.EnsureEncryptionPolicy to establish full-history authority.
+	mountEncryptionPolicyRefresh func(context.Context, int64) error
+	// mountLifecycle serializes mount Start/Stop/Close with vault lock/logout.
+	// The gate must cover both controller shutdown and encryption-key erasure so
+	// a racing Start cannot observe a stale unlocked vault.
+	mountLifecycle         mountLifecycleGate
+	mountLifecycleTerminal bool // guarded by mountLifecycle
+	warnf                  func(format string, args ...any)
+	state                  *state
 
 	mu        sync.Mutex
 	eventMu   sync.Mutex
@@ -286,7 +293,11 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 
 	switch req.Command {
 	case CommandStatus:
-		frame, err := Response(req.ID, s.status(ctx))
+		out, err := s.status(ctx)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -651,7 +662,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		}
 		return frame
 	case CommandVaultStatus:
-		out, err := s.vaultStatus()
+		out, err := s.vaultStatus(ctx)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -665,7 +676,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.vaultUnlock(in.Password)
+		out, err := s.vaultUnlock(ctx, in.Password)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -675,7 +686,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		}
 		return frame
 	case CommandVaultLock:
-		out, err := s.vaultLock()
+		out, err := s.vaultLock(ctx)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -748,25 +759,27 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 	}
 }
 
-func (s *Server) status(ctx context.Context) Status {
+func (s *Server) status(ctx context.Context) (Status, error) {
 	out := Status{
 		PID:             os.Getpid(),
 		ActiveChannelID: s.engine.ActiveChannelID(),
 		CurrentPath:     s.currentPath(),
 	}
 	if enc := s.engine.EncryptionService(); enc != nil {
-		if st, err := enc.Status(); err == nil {
-			out.VaultAvailable = st.Available
-			out.VaultConfigured = st.PasswordSet
-			out.VaultUnlocked = st.PasswordRemembered
-			out.VaultHint = st.Hint
+		st, err := enc.StatusContext(ctx)
+		if err != nil {
+			return Status{}, err
 		}
+		out.VaultAvailable = st.Available
+		out.VaultConfigured = st.PasswordSet
+		out.VaultUnlocked = st.PasswordRemembered
+		out.VaultHint = st.Hint
 	}
-	return out
+	return out, nil
 }
 
-func (s *Server) vaultStatus() (VaultResponse, error) {
-	status, err := s.engine.EncryptionService().Status()
+func (s *Server) vaultStatus(ctx context.Context) (VaultResponse, error) {
+	status, err := s.engine.EncryptionService().StatusContext(ctx)
 	if err != nil {
 		return VaultResponse{}, err
 	}
@@ -778,22 +791,36 @@ func (s *Server) vaultStatus() (VaultResponse, error) {
 	}}, nil
 }
 
-func (s *Server) vaultUnlock(password string) (VaultResponse, error) {
+func (s *Server) vaultUnlock(ctx context.Context, password string) (VaultResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	release, err := s.acquireMountLifecycle(ctx)
+	if err != nil {
+		return VaultResponse{}, fmt.Errorf("vault unlock: wait for mount lifecycle: %w", err)
+	}
+	defer release()
 
 	if err := s.engine.EncryptionService().UsePassword(password); err != nil {
 		return VaultResponse{}, err
 	}
-	return s.vaultStatus()
+	return s.vaultStatus(ctx)
 }
 
-func (s *Server) vaultLock() (VaultResponse, error) {
+func (s *Server) vaultLock(ctx context.Context) (VaultResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
+	release, err := s.acquireMountLifecycle(ctx)
+	if err != nil {
+		return VaultResponse{}, fmt.Errorf("vault lock: wait for mount lifecycle: %w", err)
+	}
+	defer release()
+
+	if _, err := s.stopMountLocked(ctx); err != nil {
+		return VaultResponse{}, fmt.Errorf("vault lock: eject mounted drive: %w", err)
+	}
 	s.engine.ClearEncryptionSession()
-	return s.vaultStatus()
+	return s.vaultStatus(ctx)
 }
 
 func (s *Server) loadState() error {

@@ -27,7 +27,8 @@ const (
 
 type HiddenStore interface {
 	UploadHidden(context.Context, int64, fileservice.HiddenUploadRequest, io.ReadSeeker) (fileservice.HiddenBody, error)
-	DiscardHidden(context.Context, int64, fileservice.HiddenBody) error
+	RecoverHiddenUpload(context.Context, int64, fileservice.HiddenUploadRequest, io.ReadSeeker) (fileservice.HiddenBody, error)
+	DiscardHiddenReceipt(context.Context, int64, string, fileservice.HiddenBody) error
 	DiscardHiddenOperation(context.Context, int64, string) error
 }
 
@@ -97,24 +98,50 @@ func (remote *TelegramRemote) UploadHidden(ctx context.Context, request mountwri
 	if remote == nil || source == nil || request.DriveID != remote.driveID {
 		return mountwrite.RemoteBody{}, mountwrite.ErrInvalidRequest
 	}
-	body, err := remote.files.UploadHidden(ctx, request.DriveID, fileservice.HiddenUploadRequest{
-		OperationID: request.OperationID,
-		Name:        request.Name,
-		Size:        request.Size,
-		Encrypted:   request.Encrypted,
-	}, source)
+	body, err := remote.files.UploadHidden(ctx, request.DriveID, hiddenUploadRequest(request), source)
+	mapped := remoteBodyFromHidden(request, body)
+	if err != nil {
+		if errors.Is(err, tgclient.ErrSendOutcomeUnknown) || errors.Is(err, fileservice.ErrHiddenReceiptRecoveryRequired) {
+			return mapped, errors.Join(mountwrite.ErrUploadOutcomeUnknown, err)
+		}
+		return mapped, err
+	}
+	return mapped, nil
+}
+
+func (remote *TelegramRemote) RecoverHidden(ctx context.Context, request mountwrite.HiddenUpload, source io.ReadSeeker) (mountwrite.RemoteBody, error) {
+	if remote == nil || source == nil || request.DriveID != remote.driveID {
+		return mountwrite.RemoteBody{}, mountwrite.ErrInvalidRequest
+	}
+	body, err := remote.files.RecoverHiddenUpload(ctx, request.DriveID, hiddenUploadRequest(request), source)
 	if err != nil {
 		return mountwrite.RemoteBody{}, err
 	}
+	return remoteBodyFromHidden(request, body), nil
+}
+
+func hiddenUploadRequest(request mountwrite.HiddenUpload) fileservice.HiddenUploadRequest {
+	return fileservice.HiddenUploadRequest{
+		OperationID:   request.OperationID,
+		Name:          request.Name,
+		StoredSize:    request.StoredSize,
+		PlaintextSize: request.PlaintextSize,
+		Encrypted:     request.Encrypted,
+	}
+}
+
+func remoteBodyFromHidden(request mountwrite.HiddenUpload, body fileservice.HiddenBody) mountwrite.RemoteBody {
 	return mountwrite.RemoteBody{
-		UploadUUID:    body.UploadUUID,
-		PartCount:     body.PartCount,
-		PlaintextSize: body.PlaintextSize,
-		StoredSize:    body.StoredSize,
-		Encrypted:     body.Encrypted,
-		SHA256:        request.SHA256,
-		MessageIDs:    append([]int64(nil), body.MessageIDs...),
-	}, nil
+		UploadUUID:        body.UploadUUID,
+		PartCount:         body.PartCount,
+		PlaintextSize:     body.PlaintextSize,
+		StoredSize:        body.StoredSize,
+		Encrypted:         body.Encrypted,
+		EncryptionVersion: request.EncryptionVersion,
+		SHA256:            request.SHA256,
+		StoredSHA256:      request.StoredSHA256,
+		MessageIDs:        append([]int64(nil), body.MessageIDs...),
+	}
 }
 
 func (remote *TelegramRemote) DiscardHidden(ctx context.Context, operationID string, body *mountwrite.RemoteBody) error {
@@ -124,7 +151,7 @@ func (remote *TelegramRemote) DiscardHidden(ctx context.Context, operationID str
 	if body == nil {
 		return remote.files.DiscardHiddenOperation(ctx, remote.driveID, operationID)
 	}
-	return remote.files.DiscardHidden(ctx, remote.driveID, fileservice.HiddenBody{
+	return remote.files.DiscardHiddenReceipt(ctx, remote.driveID, operationID, fileservice.HiddenBody{
 		UploadUUID:    body.UploadUUID,
 		PartCount:     body.PartCount,
 		StoredSize:    body.StoredSize,
@@ -511,7 +538,10 @@ func applyBody(op *projection.Op, body mountwrite.RemoteBody, now time.Time) {
 	op.PlaintextSize = body.PlaintextSize
 	op.FileUploadTime = now.Unix()
 	op.Encrypted = body.Encrypted
-	op.ContentHash = hex.EncodeToString(body.SHA256[:])
+	op.EncryptionVersion = int(body.EncryptionVersion)
+	if !body.Encrypted {
+		op.ContentHash = hex.EncodeToString(body.SHA256[:])
+	}
 	if body.UploadUUID != "" {
 		op.UploadUUID = body.UploadUUID
 		op.PartCount = body.PartCount

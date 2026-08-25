@@ -172,42 +172,130 @@ func TestStartDefaultsToWritableOnlyForEligiblePersonalPlaintextDrive(t *testing
 	}
 }
 
-func TestStartFallsBackToReadOnlyForIneligibleDrive(t *testing.T) {
+func TestStartFallsBackToReadOnlyForSharedDrive(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name  string
-		drive Drive
-	}{
-		{name: "shared", drive: Drive{ID: 20, Title: "Shared", Kind: DriveKindShared}},
-		{name: "encrypted personal", drive: Drive{ID: 21, Title: "Private", Kind: DriveKindPersonal, Encrypted: true}},
-	}
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			builders := &fakeWriterBuilder{session: &fakeWriterSession{}}
-			endpoint := &fakeEndpoint{endpoint: testEndpoint}
-			connector := &fakeConnector{}
-			controller := newTestController(t, Dependencies{
-				Filesystems: &fakeFilesystemBuilder{content: &fakeContent{}},
-				Writers:     builders,
-				Endpoint:    endpoint,
-				Connector:   connector,
-			})
+	builders := &fakeWriterBuilder{session: &fakeWriterSession{}}
+	endpoint := &fakeEndpoint{endpoint: testEndpoint}
+	connector := &fakeConnector{}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{content: &fakeContent{}},
+		Writers:     builders,
+		Endpoint:    endpoint,
+		Connector:   connector,
+	})
 
-			status, err := controller.Start(context.Background(), test.drive, StartOptions{})
-			if err != nil {
-				t.Fatalf("Start() error = %v", err)
-			}
-			if status.Mode != ModeReadOnly || status.WriteState != WriteStateDisabled {
-				t.Fatalf("fallback status = %#v", status)
-			}
-			if builders.buildCalls != 0 || endpoint.config.Writer != nil || connector.config.Mode != mountos.ModeReadOnly {
-				t.Fatalf("read-only fallback built writer or attached writable: builds=%d endpoint=%#v connector=%#v", builders.buildCalls, endpoint.config, connector.config)
-			}
-		})
+	status, err := controller.Start(
+		context.Background(),
+		Drive{ID: 20, Title: "Shared", Kind: DriveKindShared},
+		StartOptions{},
+	)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
 	}
+	if status.Mode != ModeReadOnly || status.WriteState != WriteStateDisabled {
+		t.Fatalf("fallback status = %#v", status)
+	}
+	if builders.buildCalls != 0 || endpoint.config.Writer != nil || connector.config.Mode != mountos.ModeReadOnly {
+		t.Fatalf("read-only fallback built writer or attached writable: builds=%d endpoint=%#v connector=%#v", builders.buildCalls, endpoint.config, connector.config)
+	}
+}
+
+func TestStartEncryptedPersonalDriveIsWritableOnlyAfterUnlock(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unlocked", func(t *testing.T) {
+		t.Parallel()
+		lease := &fakeMountKeyLease{key: make([]byte, 32)}
+		builders := &fakeWriterBuilder{session: &fakeWriterSession{}}
+		endpoint := &fakeEndpoint{endpoint: testEndpoint}
+		connector := &fakeConnector{}
+		controller := newTestController(t, Dependencies{
+			Filesystems: &fakeFilesystemBuilder{content: &fakeContent{}},
+			Writers:     builders,
+			Keys:        &fakeMountKeyLeaser{lease: lease},
+			Endpoint:    endpoint,
+			Connector:   connector,
+		})
+		drive := Drive{
+			ID: 21, Title: "Private", Kind: DriveKindPersonal,
+			Encrypted: true, EncryptionUnlocked: true,
+		}
+
+		status, err := controller.Start(context.Background(), drive, StartOptions{})
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		if status.Mode != ModeReadWrite || status.WriteState != WriteStateReady || !status.AcceptingWrites {
+			t.Fatalf("encrypted writable status = %#v", status)
+		}
+		if builders.buildCalls != 1 || !builders.drive.Encrypted || !builders.drive.EncryptionUnlocked {
+			t.Fatalf("writer build = calls:%d drive:%#v", builders.buildCalls, builders.drive)
+		}
+		if endpoint.config.Mode != ModeReadWrite || connector.config.Mode != mountos.ModeReadWrite {
+			t.Fatalf("writable mode not propagated: endpoint=%#v connector=%#v", endpoint.config, connector.config)
+		}
+		if _, err := controller.Stop(context.Background()); err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+		if lease.closeCalls != 1 {
+			t.Fatalf("mount key close calls = %d", lease.closeCalls)
+		}
+	})
+
+	t.Run("locked", func(t *testing.T) {
+		t.Parallel()
+		filesystems := &fakeFilesystemBuilder{content: &fakeContent{}}
+		builders := &fakeWriterBuilder{session: &fakeWriterSession{}}
+		endpoint := &fakeEndpoint{endpoint: testEndpoint}
+		connector := &fakeConnector{}
+		controller := newTestController(t, Dependencies{
+			Filesystems: filesystems,
+			Writers:     builders,
+			Endpoint:    endpoint,
+			Connector:   connector,
+		})
+		drive := Drive{ID: 22, Title: "Locked", Kind: DriveKindPersonal, Encrypted: true}
+
+		status, err := controller.Start(context.Background(), drive, StartOptions{})
+		if !errors.Is(err, ErrEncryptionPasswordRequired) {
+			t.Fatalf("Start() error = %v, want ErrEncryptionPasswordRequired", err)
+		}
+		if status.Running || status.Mounted || filesystems.buildCalls != 0 || builders.buildCalls != 0 || endpoint.startCalls != 0 || connector.attachCalls != 0 {
+			t.Fatalf("locked mount caused side effects: status=%#v fs=%d writer=%d endpoint=%d attach=%d", status, filesystems.buildCalls, builders.buildCalls, endpoint.startCalls, connector.attachCalls)
+		}
+	})
+
+	t.Run("locks before lease acquisition", func(t *testing.T) {
+		t.Parallel()
+		filesystems := &fakeFilesystemBuilder{content: &fakeContent{}}
+		builders := &fakeWriterBuilder{session: &fakeWriterSession{}}
+		endpoint := &fakeEndpoint{endpoint: testEndpoint}
+		connector := &fakeConnector{}
+		keys := &fakeMountKeyLeaser{err: ErrEncryptionPasswordRequired}
+		controller := newTestController(t, Dependencies{
+			Filesystems: filesystems,
+			Writers:     builders,
+			Keys:        keys,
+			Endpoint:    endpoint,
+			Connector:   connector,
+		})
+		drive := Drive{
+			ID: 23, Title: "Private", Kind: DriveKindPersonal,
+			Encrypted: true, EncryptionUnlocked: true,
+		}
+
+		status, err := controller.Start(context.Background(), drive, StartOptions{})
+		if !errors.Is(err, ErrEncryptionPasswordRequired) {
+			t.Fatalf("Start() error = %v, want ErrEncryptionPasswordRequired", err)
+		}
+		if err == nil || !strings.Contains(err.Error(), "encryption password required") {
+			t.Fatalf("Start() error = %v, want safe password guidance", err)
+		}
+		if keys.calls != 1 || status.Running || status.Mounted || filesystems.buildCalls != 0 || builders.buildCalls != 0 || endpoint.startCalls != 0 || connector.attachCalls != 0 {
+			t.Fatalf("lease race caused side effects: status=%#v keys=%d fs=%d writer=%d endpoint=%d attach=%d", status, keys.calls, filesystems.buildCalls, builders.buildCalls, endpoint.startCalls, connector.attachCalls)
+		}
+	})
 }
 
 func TestStartHonorsReadOnlyOverrideAndRejectsUnavailableWritableRequest(t *testing.T) {
@@ -322,6 +410,37 @@ func TestStartAttachFailureRollsBackAndSanitizesPublicErrors(t *testing.T) {
 		t.Fatal(marshalErr)
 	}
 	assertCapabilityFree(t, string(payload))
+}
+
+func TestEncryptedStartAttachFailureClosesKeyLast(t *testing.T) {
+	t.Parallel()
+
+	events := &eventLog{}
+	lease := &fakeMountKeyLease{key: make([]byte, 32), events: events}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{events: events, content: &fakeContent{events: events}},
+		Writers:     &fakeWriterBuilder{events: events, session: &fakeWriterSession{events: events}},
+		Keys:        &fakeMountKeyLeaser{lease: lease},
+		Endpoint:    &fakeEndpoint{events: events, endpoint: testEndpoint},
+		Connector:   &fakeConnector{events: events, attachErr: errors.New("attach failed " + testEndpoint)},
+	})
+	drive := Drive{
+		ID: 25, Title: "Private", Kind: DriveKindPersonal,
+		Encrypted: true, EncryptionUnlocked: true,
+	}
+
+	status, err := controller.Start(context.Background(), drive, StartOptions{})
+	if err == nil || !errors.Is(err, ErrStartFailed) {
+		t.Fatalf("Start() error = %v, want ErrStartFailed", err)
+	}
+	assertCapabilityFree(t, err.Error())
+	assertCapabilityFree(t, status.Error)
+	if got := strings.Join(events.snapshot(), ","); got != "build,writer.build,endpoint.start,connector.attach,endpoint.stop,writer.close,content.close,key.close" {
+		t.Fatalf("encrypted rollback order = %s", got)
+	}
+	if lease.closeCalls != 1 {
+		t.Fatalf("mount key close calls = %d", lease.closeCalls)
+	}
 }
 
 func TestStartReturnsOnlySafePlatformAttachGuidance(t *testing.T) {
@@ -608,6 +727,40 @@ func TestWritableStopDrainsBeforeDetachAndPublishesDraining(t *testing.T) {
 	}
 }
 
+func TestEncryptedWritableStopClosesKeyAfterWriterAndContent(t *testing.T) {
+	t.Parallel()
+
+	events := &eventLog{}
+	lease := &fakeMountKeyLease{key: make([]byte, 32), events: events}
+	writes := &fakeWriterSession{events: events}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{events: events, content: &fakeContent{events: events}},
+		Writers:     &fakeWriterBuilder{events: events, session: writes},
+		Keys:        &fakeMountKeyLeaser{lease: lease},
+		Endpoint:    &fakeEndpoint{events: events, endpoint: testEndpoint},
+		Connector:   &fakeConnector{events: events},
+	})
+	drive := Drive{
+		ID: 24, Title: "Private", Kind: DriveKindPersonal,
+		Encrypted: true, EncryptionUnlocked: true,
+	}
+	if _, err := controller.Start(context.Background(), drive, StartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	events.reset()
+
+	status, err := controller.Stop(context.Background())
+	if err != nil || status.Phase != PhaseStopped {
+		t.Fatalf("Stop() = (%#v, %v)", status, err)
+	}
+	if got := strings.Join(events.snapshot(), ","); got != "writer.drain,connector.detach,endpoint.stop,writer.close,content.close,key.close" {
+		t.Fatalf("encrypted stop order = %s", got)
+	}
+	if lease.closeCalls != 1 {
+		t.Fatalf("mount key close calls = %d", lease.closeCalls)
+	}
+}
+
 func TestWritableDrainFailureKeepsMountedResourcesAndAllowsSafeRetry(t *testing.T) {
 	t.Parallel()
 
@@ -684,6 +837,37 @@ func TestDetachFailurePreservesRecoverableMountedSession(t *testing.T) {
 	}
 	if endpoint.stopCalls != 1 || !content.closed {
 		t.Fatalf("retry did not release resources: endpoint stops=%d content.closed=%v", endpoint.stopCalls, content.closed)
+	}
+}
+
+func TestEncryptedDetachFailureRetainsKeyUntilSuccessfulEject(t *testing.T) {
+	t.Parallel()
+
+	lease := &fakeMountKeyLease{key: make([]byte, 32)}
+	connector := &fakeConnector{detachErr: errors.New("cannot detach " + testEndpoint)}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{content: &fakeContent{}},
+		Writers:     &fakeWriterBuilder{session: &fakeWriterSession{}},
+		Keys:        &fakeMountKeyLeaser{lease: lease},
+		Endpoint:    &fakeEndpoint{endpoint: testEndpoint},
+		Connector:   connector,
+	})
+	drive := Drive{
+		ID: 26, Title: "Private", Kind: DriveKindPersonal,
+		Encrypted: true, EncryptionUnlocked: true,
+	}
+	if _, err := controller.Start(context.Background(), drive, StartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := controller.Stop(context.Background())
+	if err == nil || !status.Mounted || lease.closeCalls != 0 {
+		t.Fatalf("failed Stop() = (%#v, %v), key closes=%d", status, err, lease.closeCalls)
+	}
+	connector.detachErr = nil
+	status, err = controller.Stop(context.Background())
+	if err != nil || status.Phase != PhaseStopped || lease.closeCalls != 1 {
+		t.Fatalf("retry Stop() = (%#v, %v), key closes=%d", status, err, lease.closeCalls)
 	}
 }
 
@@ -887,20 +1071,22 @@ func (content *fakeContent) Close() {
 }
 
 type fakeFilesystemBuilder struct {
-	mu      sync.Mutex
-	events  *eventLog
-	entered chan struct{}
-	release <-chan struct{}
-	content ContentLifetime
-	fs      *mountfs.FS
-	nilFS   bool
-	options mountfs.Options
-	err     error
+	mu         sync.Mutex
+	events     *eventLog
+	entered    chan struct{}
+	release    <-chan struct{}
+	content    ContentLifetime
+	fs         *mountfs.FS
+	nilFS      bool
+	options    mountfs.Options
+	err        error
+	buildCalls int
 }
 
-func (builder *fakeFilesystemBuilder) Build(ctx context.Context, _ int64, options mountfs.Options) (*mountfs.FS, ContentLifetime, error) {
+func (builder *fakeFilesystemBuilder) Build(ctx context.Context, _ int64, options mountfs.Options, _ MountKeyLease) (*mountfs.FS, ContentLifetime, error) {
 	builder.mu.Lock()
 	builder.options = options
+	builder.buildCalls++
 	builder.mu.Unlock()
 	builder.events.add("build")
 	if builder.entered != nil {
@@ -974,7 +1160,34 @@ type fakeWriterBuilder struct {
 	buildCalls int
 }
 
-func (builder *fakeWriterBuilder) Build(_ context.Context, drive Drive, fs *mountfs.FS) (WriteSession, error) {
+type fakeMountKeyLeaser struct {
+	lease *fakeMountKeyLease
+	err   error
+	calls int
+}
+
+func (provider *fakeMountKeyLeaser) Acquire(context.Context, Drive) (MountKeyLease, error) {
+	provider.calls++
+	return provider.lease, provider.err
+}
+
+type fakeMountKeyLease struct {
+	key        []byte
+	events     *eventLog
+	closeCalls int
+}
+
+func (lease *fakeMountKeyLease) Key() ([]byte, error) {
+	return append([]byte(nil), lease.key...), nil
+}
+
+func (lease *fakeMountKeyLease) Close() {
+	lease.events.add("key.close")
+	lease.closeCalls++
+	clear(lease.key)
+}
+
+func (builder *fakeWriterBuilder) Build(_ context.Context, drive Drive, fs *mountfs.FS, _ MountKeyLease) (WriteSession, error) {
 	builder.mu.Lock()
 	defer builder.mu.Unlock()
 	builder.events.add("writer.build")

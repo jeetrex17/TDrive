@@ -133,12 +133,13 @@ func TestApplyFileUpload(t *testing.T) {
 
 func TestApplyEncryptionConfig(t *testing.T) {
 	db := newTestDB(t)
+	cfg := validEncryptionConfig()
 	op := Op{
 		Type:             OpEncConfig,
-		KDFSalt:          []byte("salt"),
-		KDFParamsJSON:    `{"memory":65536}`,
-		WrappedMasterKey: []byte("wrapped"),
-		KeyCheck:         []byte("check"),
+		KDFSalt:          cfg.KDFSalt,
+		KDFParamsJSON:    cfg.KDFParamsJSON,
+		WrappedMasterKey: cfg.WrappedMasterKey,
+		KeyCheck:         cfg.KeyCheck,
 		Hint:             "pet name",
 		ConfigVersion:    1,
 	}

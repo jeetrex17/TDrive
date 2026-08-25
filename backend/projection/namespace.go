@@ -43,7 +43,8 @@ func CanonicalNameKey(name string) (string, error) {
 		return "", fmt.Errorf("%w: trailing space or period", ErrInvalidPortableName)
 	}
 	for _, r := range normalized {
-		if r < 0x20 || unicode.IsControl(r) || strings.ContainsRune(`<>:"/\|?*`, r) {
+		if r < 0x20 || unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) ||
+			strings.ContainsRune(`<>:"/\|?*`, r) {
 			return "", fmt.Errorf("%w: forbidden character", ErrInvalidPortableName)
 		}
 	}
@@ -72,7 +73,8 @@ func legacyPortableName(name, kind, objectID string) string {
 	name = norm.NFC.String(strings.ToValidUTF8(name, "_"))
 	var b strings.Builder
 	for _, r := range name {
-		if r < 0x20 || unicode.IsControl(r) || strings.ContainsRune(`<>:"/\|?*`, r) {
+		if r < 0x20 || unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) ||
+			strings.ContainsRune(`<>:"/\|?*`, r) {
 			b.WriteRune('_')
 			continue
 		}

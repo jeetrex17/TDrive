@@ -13,6 +13,7 @@ export interface MountApi {
     mountStatus(): Promise<MountStatusView>;
     openMountedDrive(): Promise<void>;
     unmountDrive(): Promise<MountStatusView>;
+    unlockEncryption?(): Promise<boolean>;
 }
 
 export interface MountNotice {
@@ -38,6 +39,10 @@ export const defaultMountApi: MountApi = {
     mountStatus: getMountStatus,
     openMountedDrive,
     unmountDrive,
+    unlockEncryption: async () => {
+        const { requireEncryptionPassword } = await import('../../modules/encryption');
+        return requireEncryptionPassword();
+    },
 };
 
 const INITIAL_STATUS: MountStatusView = {
@@ -107,6 +112,11 @@ function markEjectFailed(current: MountStatusView, message: string): MountStatus
         activeWrites: writable ? 0 : current.activeWrites,
         error: message,
     };
+}
+
+function encryptionPasswordRequired(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    return /encryption password required/i.test(message);
 }
 
 export function createMountController(
@@ -179,7 +189,26 @@ export function createMountController(
         });
         return trackMutation(async () => {
             try {
-                const result = await api.mountDrive();
+                let result: MountStatusView;
+                try {
+                    result = await api.mountDrive();
+                } catch (error) {
+                    if (!encryptionPasswordRequired(error) || !api.unlockEncryption) throw error;
+                    const unlocked = await api.unlockEncryption();
+                    if (!unlocked) {
+                        revision += 1;
+                        state.update((current) => ({ ...current, phase: 'idle', mounted: false, error: '' }));
+                        notify({
+                            id: 'mount-drive',
+                            level: 'info',
+                            title: 'Mount cancelled',
+                            sticky: false,
+                            spinner: false,
+                        });
+                        return;
+                    }
+                    result = await api.mountDrive();
+                }
                 if (!result.mounted) throw new Error(result.error || 'The drive did not mount.');
                 replace(result);
                 notify({

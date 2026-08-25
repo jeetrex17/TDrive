@@ -317,6 +317,8 @@ func serveWriteError(response http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, ErrWritePreconditionFailed):
 		status = http.StatusPreconditionFailed
+	case errors.Is(err, ErrWriteLengthRequired):
+		status = http.StatusLengthRequired
 	case errors.Is(err, ErrWriteTooLarge):
 		status = http.StatusRequestEntityTooLarge
 	case errors.Is(err, ErrWriteLocked):

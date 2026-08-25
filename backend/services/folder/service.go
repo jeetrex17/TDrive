@@ -21,6 +21,9 @@ type EmitOpsFunc func(channelID int64, ops []projection.Op) error
 type EmitOpContextFunc func(ctx context.Context, channelID int64, op projection.Op) error
 type EmitOpsContextFunc func(ctx context.Context, channelID int64, ops []projection.Op) error
 type ActorIDFunc func(ctx context.Context) (int64, error)
+
+// RequireEncryptionKeyFunc returns a caller-owned key copy. Service clears a
+// non-nil key whether the provider succeeds or returns an error.
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
 type WarnFunc func(format string, args ...any)
 
@@ -306,7 +309,8 @@ func (s *Service) requireEncryptedKey(files []projection.FileSlim) error {
 	if !encrypted || s.RequireEncryptionKey == nil {
 		return nil
 	}
-	_, err := s.RequireEncryptionKey(true)
+	key, err := s.RequireEncryptionKey(true)
+	clear(key)
 	return err
 }
 

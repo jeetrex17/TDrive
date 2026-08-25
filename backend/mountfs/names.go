@@ -175,14 +175,12 @@ func portableName(sourceName string) string {
 	name := norm.NFC.String(strings.ToValidUTF8(sourceName, "�"))
 	runes := []rune(name)
 	for index, character := range runes {
-		if unicode.IsControl(character) || strings.ContainsRune(`<>:"/\\|?*`, character) {
+		if unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character) ||
+			strings.ContainsRune(`<>:"/\\|?*`, character) {
 			runes[index] = '_'
 		}
 	}
-	for index := len(runes) - 1; index >= 0 && (runes[index] == '.' || runes[index] == ' '); index-- {
-		runes[index] = '_'
-	}
-	name = string(runes)
+	name = replaceTrailingDotsAndSpaces(string(runes))
 	if name == "" {
 		name = "_unnamed"
 	}
@@ -193,7 +191,15 @@ func portableName(sourceName string) string {
 		return name
 	}
 	stem, extension := splitShortExtension(name, KindFile)
-	return truncateUTF8(stem, maxPortableNameBytes-len(extension)) + extension
+	return replaceTrailingDotsAndSpaces(truncateUTF8(stem, maxPortableNameBytes-len(extension)) + extension)
+}
+
+func replaceTrailingDotsAndSpaces(value string) string {
+	runes := []rune(value)
+	for index := len(runes) - 1; index >= 0 && (runes[index] == '.' || runes[index] == ' '); index-- {
+		runes[index] = '_'
+	}
+	return string(runes)
 }
 
 func isWindowsReservedName(name string) bool {

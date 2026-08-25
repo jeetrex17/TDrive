@@ -11,6 +11,9 @@
     let currentPassword = $state('');
     let newPassword = $state('');
     let confirmPassword = $state('');
+    let currentPasswordInput = $state<HTMLInputElement | null>(null);
+    let newPasswordInput = $state<HTMLInputElement | null>(null);
+    let confirmPasswordInput = $state<HTMLInputElement | null>(null);
     let hint = $state('');
     let revealCurrent = $state(false);
     let revealNew = $state(false);
@@ -18,14 +21,31 @@
 
     const view = encryptionSettingsModal.state;
 
+    function clearPasswords(): void {
+        currentPassword = '';
+        newPassword = '';
+        confirmPassword = '';
+        if (currentPasswordInput) currentPasswordInput.value = '';
+        if (newPasswordInput) newPasswordInput.value = '';
+        if (confirmPasswordInput) confirmPasswordInput.value = '';
+        revealCurrent = false;
+        revealNew = false;
+    }
+
     function cancel(): void {
         if ($view.busy) return;
+        clearPasswords();
         onCancel();
     }
 
     function submit(): void {
         if ($view.busy) return;
-        void onSubmit(currentPassword, newPassword, confirmPassword, hint);
+        const submittedCurrentPassword = currentPassword;
+        const submittedNewPassword = newPassword;
+        const submittedConfirmation = confirmPassword;
+        const submittedHint = hint;
+        clearPasswords();
+        void onSubmit(submittedCurrentPassword, submittedNewPassword, submittedConfirmation, submittedHint);
     }
 
     // Hold-to-show: the input stays masked except while the eye button is
@@ -53,16 +73,18 @@
     const currentHold = holdHandlers((visible) => (revealCurrent = visible));
     const newHold = holdHandlers((visible) => (revealNew = visible));
 
-    $effect(() => {
-        if ($view.open && !wasOpen) {
-            currentPassword = '';
-            newPassword = '';
-            confirmPassword = '';
-            hint = $view.payload?.hint ?? '';
-            revealCurrent = false;
-            revealNew = false;
+    $effect.pre(() => {
+        if (!$view.open) {
+            clearPasswords();
+            hint = '';
+            wasOpen = false;
+            return;
         }
-        wasOpen = $view.open;
+        if (!wasOpen) {
+            clearPasswords();
+            hint = $view.payload?.hint ?? '';
+        }
+        wasOpen = true;
     });
 </script>
 
@@ -82,6 +104,7 @@
             type={revealCurrent ? 'text' : 'password'}
             placeholder="Current password"
             autocomplete="current-password"
+            bind:this={currentPasswordInput}
             bind:value={currentPassword}
             disabled={$view.busy}
         />
@@ -89,6 +112,7 @@
             class="input-action-btn reveal-on-hold"
             type="button"
             data-state={revealCurrent ? 'visible' : undefined}
+            disabled={$view.busy}
             aria-label="Hold to show current password"
             title="Hold to show password"
             {...currentHold}
@@ -102,6 +126,7 @@
             type={revealNew ? 'text' : 'password'}
             placeholder="New password"
             autocomplete="new-password"
+            bind:this={newPasswordInput}
             bind:value={newPassword}
             disabled={$view.busy}
         />
@@ -109,6 +134,7 @@
             class="input-action-btn reveal-on-hold"
             type="button"
             data-state={revealNew ? 'visible' : undefined}
+            disabled={$view.busy}
             aria-label="Hold to show new password"
             title="Hold to show password"
             {...newHold}
@@ -121,6 +147,7 @@
         type="password"
         placeholder="Confirm new password"
         autocomplete="new-password"
+        bind:this={confirmPasswordInput}
         bind:value={confirmPassword}
         disabled={$view.busy}
     />

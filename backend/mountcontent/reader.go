@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/media"
 	"TDrive/backend/tgclient"
 
@@ -22,7 +23,8 @@ import (
 const maxConcurrentDocumentResolutions = 4
 
 var (
-	ErrEncryptedUnsupported = errors.New("mount content: encrypted files are not supported yet")
+	ErrEncryptedUnsupported = errors.New("mount content: encrypted file format is unsupported")
+	ErrKeyUnavailable       = errors.New("mount content: encryption key is unavailable")
 	ErrClosed               = errors.New("mount content: opener is closed")
 	ErrReaderClosed         = errors.New("mount content: reader is closed")
 	ErrNilContext           = errors.New("mount content: context is required")
@@ -33,11 +35,30 @@ type PeerResolver interface {
 	ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error)
 }
 
+// MasterKeyProvider supplies a caller-owned copy of the in-memory master key
+// for an encrypted personal-drive file. Open clears the returned bytes after
+// deriving the per-file subkey. Implementations must not prompt or perform
+// unbounded work after ctx is canceled.
+type MasterKeyProvider interface {
+	MasterKey(ctx context.Context, channelID int64) ([]byte, error)
+}
+
+// MasterKeyProviderFunc adapts a function to MasterKeyProvider.
+type MasterKeyProviderFunc func(ctx context.Context, channelID int64) ([]byte, error)
+
+func (provider MasterKeyProviderFunc) MasterKey(ctx context.Context, channelID int64) ([]byte, error) {
+	if provider == nil {
+		return nil, ErrKeyUnavailable
+	}
+	return provider(ctx, channelID)
+}
+
 // Config contains the dependencies shared by all files in one daemon.
 type Config struct {
 	DB     *sql.DB
 	Peers  PeerResolver
 	Ranges tgclient.RangeClient
+	Keys   MasterKeyProvider
 }
 
 // Opener owns the process-wide immutable block cache used by mounted files.
@@ -47,6 +68,7 @@ type Opener struct {
 	resolver *media.Resolver
 	peers    PeerResolver
 	ranges   tgclient.RangeClient
+	keys     MasterKeyProvider
 	reader   *media.RangeReader
 
 	mu                  sync.RWMutex
@@ -58,6 +80,7 @@ type Opener struct {
 	peerResolutions     map[int64]*peerResolution
 	documentCache       *documentRefCache
 	documentResolutions map[documentRefKey]*documentResolution
+	encryptedReaders    map[*Reader]struct{}
 }
 
 // New constructs a shared content opener. Dependencies are validated here so
@@ -77,6 +100,7 @@ func New(cfg Config) (*Opener, error) {
 		resolver:            media.NewResolver(cfg.DB),
 		peers:               cfg.Peers,
 		ranges:              cfg.Ranges,
+		keys:                cfg.Keys,
 		lifetime:            lifetime,
 		cancelLifetime:      cancelLifetime,
 		resolveSlots:        make(chan struct{}, maxConcurrentDocumentResolutions),
@@ -84,6 +108,7 @@ func New(cfg Config) (*Opener, error) {
 		peerResolutions:     make(map[int64]*peerResolution),
 		documentCache:       newDocumentRefCache(maxCachedDocumentRefs, documentRefCacheTTL, nil),
 		documentResolutions: make(map[documentRefKey]*documentResolution),
+		encryptedReaders:    make(map[*Reader]struct{}),
 		reader: media.NewRangeReader(media.RangeReaderConfig{
 			Client:         cfg.Ranges,
 			PrefetchBlocks: 1,
@@ -119,10 +144,18 @@ func (o *Opener) Close() {
 		resolution.abandoned = true
 	}
 	clear(o.documentResolutions)
+	readers := make([]*Reader, 0, len(o.encryptedReaders))
+	for reader := range o.encryptedReaders {
+		readers = append(readers, reader)
+	}
+	clear(o.encryptedReaders)
 	o.mu.Unlock()
 
 	if cancelLifetime != nil {
 		cancelLifetime()
+	}
+	for _, active := range readers {
+		active.closeFromOpener()
 	}
 	if reader != nil {
 		reader.Close()
@@ -154,9 +187,6 @@ func (o *Opener) Open(ctx context.Context, channelID, fileID int64) (*Reader, er
 	if err := o.ensureOpen(); err != nil {
 		return nil, err
 	}
-	if file.Encrypted {
-		return nil, ErrEncryptedUnsupported
-	}
 	if err := validateLogicalMetadata(file); err != nil {
 		return nil, err
 	}
@@ -178,12 +208,88 @@ func (o *Opener) Open(ctx context.Context, channelID, fileID int64) (*Reader, er
 		return nil, err
 	}
 
-	return &Reader{
+	reader := &Reader{
 		size:       file.PlaintextSize,
+		storedSize: file.StoredSize,
 		segments:   segments,
 		ranges:     sharedReader,
 		openerDone: openerDone,
-	}, nil
+	}
+	if !file.Encrypted {
+		return reader, nil
+	}
+	if o.keys == nil {
+		return nil, ErrKeyUnavailable
+	}
+	masterKey, err := o.keys.MasterKey(openCtx, channelID)
+	if len(masterKey) > 0 {
+		defer clear(masterKey)
+	}
+	if err != nil {
+		return nil, o.normalizeOpenError(fmt.Errorf("%w: %w", ErrKeyUnavailable, err))
+	}
+	if len(masterKey) == 0 {
+		return nil, ErrKeyUnavailable
+	}
+	if err := o.ensureOpen(); err != nil {
+		return nil, err
+	}
+
+	decryptor, err := tdcrypto.NewRandomAccessDecryptor(
+		openCtx,
+		storedContentReader{reader: reader},
+		file.StoredSize,
+		masterKey,
+	)
+	if err != nil {
+		return nil, o.normalizeOpenError(fmt.Errorf("mount content: open encrypted stream: %w", err))
+	}
+	if decryptor.Size() != file.PlaintextSize {
+		_ = decryptor.Close()
+		return nil, fmt.Errorf(
+			"mount content: encrypted plaintext size %d does not match projection %d: %w",
+			decryptor.Size(),
+			file.PlaintextSize,
+			tdcrypto.ErrCiphertextSize,
+		)
+	}
+	if err := openCtx.Err(); err != nil {
+		_ = decryptor.Close()
+		return nil, o.normalizeOpenError(err)
+	}
+	if err := o.ensureOpen(); err != nil {
+		_ = decryptor.Close()
+		return nil, err
+	}
+	reader.decryptor = decryptor
+	if err := o.registerEncryptedReader(reader); err != nil {
+		_ = decryptor.Close()
+		return nil, err
+	}
+	return reader, nil
+}
+
+func (o *Opener) registerEncryptedReader(reader *Reader) error {
+	if o == nil || reader == nil {
+		return ErrClosed
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed {
+		return ErrClosed
+	}
+	o.encryptedReaders[reader] = struct{}{}
+	reader.owner = o
+	return nil
+}
+
+func (o *Opener) releaseEncryptedReader(reader *Reader) {
+	if o == nil || reader == nil {
+		return
+	}
+	o.mu.Lock()
+	delete(o.encryptedReaders, reader)
+	o.mu.Unlock()
 }
 
 func (o *Opener) beginOpen(
@@ -292,7 +398,22 @@ func validateLogicalMetadata(file media.LogicalFile) error {
 	if file.PlaintextSize < 0 {
 		return errors.New("mount content: negative plaintext size")
 	}
-	if file.PlaintextSize != file.StoredSize {
+	if file.Encrypted {
+		if file.EncryptionVersion != 1 {
+			return fmt.Errorf("%w: version %d", ErrEncryptedUnsupported, file.EncryptionVersion)
+		}
+		if err := tdcrypto.ValidatePlaintextSize(file.PlaintextSize); err != nil {
+			return fmt.Errorf("mount content: invalid encrypted plaintext size: %w", err)
+		}
+		if tdcrypto.CiphertextSize(file.PlaintextSize) != file.StoredSize {
+			return fmt.Errorf(
+				"mount content: encrypted stored size %d does not match plaintext size %d: %w",
+				file.StoredSize,
+				file.PlaintextSize,
+				tdcrypto.ErrCiphertextSize,
+			)
+		}
+	} else if file.PlaintextSize != file.StoredSize {
 		return fmt.Errorf(
 			"mount content: plaintext size %d does not match stored size %d",
 			file.PlaintextSize,
@@ -395,9 +516,12 @@ type segment struct {
 // atomic, and RangeReader is concurrency-safe.
 type Reader struct {
 	size       int64
+	storedSize int64
 	segments   []segment
 	ranges     *media.RangeReader
 	openerDone <-chan struct{}
+	decryptor  *tdcrypto.RandomAccessDecryptor
+	owner      *Opener
 	closed     atomic.Bool
 }
 
@@ -411,22 +535,77 @@ func (r *Reader) Size() int64 {
 // Close invalidates only this logical handle. Reader does not own the shared
 // range cache, so closing one file never affects other readers or the Opener.
 func (r *Reader) Close() error {
-	if r != nil {
-		r.closed.Store(true)
+	if r == nil || !r.closed.CompareAndSwap(false, true) {
+		return nil
 	}
-	return nil
+	var closeErr error
+	if r.decryptor != nil {
+		closeErr = r.decryptor.Close()
+	}
+	if r.owner != nil {
+		r.owner.releaseEncryptedReader(r)
+	}
+	return closeErr
+}
+
+func (r *Reader) closeFromOpener() {
+	if r != nil && r.decryptor != nil {
+		_ = r.decryptor.Close()
+	}
 }
 
 // ReadAt follows io.ReaderAt's short-read and EOF contract while translating
 // logical offsets across multipart Telegram documents.
 func (r *Reader) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
+	if err := r.validateRead(ctx, off); err != nil {
+		return 0, err
+	}
+	if r.decryptor != nil {
+		n, err := r.decryptor.ReadAt(ctx, p, off)
+		if errors.Is(err, tdcrypto.ErrDecryptorClosed) {
+			select {
+			case <-r.openerDone:
+				return n, ErrClosed
+			default:
+			}
+			if r.closed.Load() {
+				return n, ErrReaderClosed
+			}
+		}
+		return n, err
+	}
+	return r.readStoredAt(ctx, p, off, r.storedSize)
+}
+
+func (r *Reader) validateRead(ctx context.Context, off int64) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
+	if r == nil || r.ranges == nil {
+		return ErrReaderClosed
+	}
+	if r.closed.Load() {
+		return ErrReaderClosed
+	}
+	select {
+	case <-r.openerDone:
+		return ErrClosed
+	default:
+	}
+	if off < 0 {
+		return errors.New("mount content: negative read offset")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Reader) readStoredAt(ctx context.Context, p []byte, off, size int64) (int, error) {
 	if ctx == nil {
 		return 0, ErrNilContext
 	}
 	if r == nil || r.ranges == nil {
-		return 0, ErrReaderClosed
-	}
-	if r.closed.Load() {
 		return 0, ErrReaderClosed
 	}
 	select {
@@ -443,12 +622,12 @@ func (r *Reader) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if off >= r.size {
+	if off >= size {
 		return 0, io.EOF
 	}
 
 	want := len(p)
-	if remaining := r.size - off; int64(want) > remaining {
+	if remaining := size - off; int64(want) > remaining {
 		want = int(remaining)
 	}
 
@@ -480,6 +659,22 @@ func (r *Reader) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
 	}
 	return done, nil
 }
+
+// storedContentReader deliberately bypasses the public plaintext dispatch. It
+// gives the crypto layer a context-aware view of the concatenated immutable
+// Telegram ciphertext segments.
+type storedContentReader struct {
+	reader *Reader
+}
+
+func (source storedContentReader) ReadAt(ctx context.Context, dst []byte, offset int64) (int, error) {
+	if source.reader == nil {
+		return 0, ErrReaderClosed
+	}
+	return source.reader.readStoredAt(ctx, dst, offset, source.reader.storedSize)
+}
+
+var _ tdcrypto.ContextReaderAt = storedContentReader{}
 
 func (r *Reader) segmentFor(offset int64) (segment, bool) {
 	index := sort.Search(len(r.segments), func(index int) bool {

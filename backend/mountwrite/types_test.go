@@ -1,6 +1,8 @@
 package mountwrite
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -84,6 +86,50 @@ func TestRequestsValidateFirstReleaseContract(t *testing.T) {
 	deleteRequest.TrashRetention = -time.Second
 	if err := deleteRequest.Validate(); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("negative retention error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestEncryptedPutRequestRequiresKnownLengthKeyAndCiphertextBudget(t *testing.T) {
+	t.Parallel()
+
+	key := bytes.Repeat([]byte("S"), masterKeySize)
+	valid := PutRequest{
+		DriveID:           42,
+		Name:              "private.txt",
+		ContentLength:     1,
+		MaxBytes:          67,
+		EncryptionVersion: EncryptionTDE1,
+		MasterKey:         key,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid encrypted PUT rejected: %v", err)
+	}
+	tooSmall := valid
+	tooSmall.MaxBytes = 66
+	if err := tooSmall.Validate(); !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("ciphertext budget error = %v, want ErrQuotaExceeded", err)
+	}
+	invalid := []PutRequest{
+		{DriveID: 42, Name: "private.txt", ContentLength: -1, EncryptionVersion: EncryptionTDE1, MasterKey: key},
+		{DriveID: 42, Name: "private.txt", ContentLength: 1, EncryptionVersion: EncryptionTDE1, MasterKey: key[:masterKeySize-1]},
+		{DriveID: 42, Name: "private.txt", ContentLength: 1, EncryptionVersion: EncryptionVersion(2), MasterKey: key},
+		{DriveID: 42, Name: "plain.txt", ContentLength: 1, MasterKey: key},
+	}
+	for _, request := range invalid {
+		if err := request.Validate(); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("invalid encrypted PUT %#v error = %v", request, err)
+		}
+	}
+
+	mutationJSON, err := json.Marshal(valid.mutation())
+	if err != nil {
+		t.Fatalf("marshal mutation: %v", err)
+	}
+	if bytes.Contains(mutationJSON, key) {
+		t.Fatalf("mutation JSON leaked key: %s", mutationJSON)
+	}
+	if !bytes.Contains(mutationJSON, []byte(`"encryption_version":1`)) {
+		t.Fatalf("mutation JSON omitted encryption version: %s", mutationJSON)
 	}
 }
 

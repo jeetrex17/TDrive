@@ -341,9 +341,10 @@ func TestDeleteFolderRequiresPasswordForEncryptedDescendantFiles(t *testing.T) {
 		t.Fatalf("seed encrypted file: %v", err)
 	}
 	needPassword := errors.New("encryption password required")
+	ownedKey := []byte("folder-mutation-owned-key")
 	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return nil, needPassword
+			return ownedKey, needPassword
 		}
 		return nil, nil
 	}
@@ -353,5 +354,10 @@ func TestDeleteFolderRequiresPasswordForEncryptedDescendantFiles(t *testing.T) {
 	}
 	if !projection.FolderExists(db, testChannelID, folder.ID) {
 		t.Fatalf("folder was deleted despite missing password")
+	}
+	for i, b := range ownedKey {
+		if b != 0 {
+			t.Fatalf("owned key byte %d = %#x, want cleared", i, b)
+		}
 	}
 }

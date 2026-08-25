@@ -1,6 +1,7 @@
 package mountcontroller
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"TDrive/backend"
+	"TDrive/backend/auth"
 	"TDrive/backend/core"
 	"TDrive/backend/media"
 	"TDrive/backend/mountadapter"
@@ -123,6 +125,63 @@ func TestProductionControllerAutoMountsPersonalPlaintextReadWrite(t *testing.T) 
 	}
 	if started.Mode != ModeReadWrite || started.WriteState != WriteStateReady || !started.AcceptingWrites {
 		t.Fatalf("personal plaintext mode = %#v, want ready read-write", started)
+	}
+}
+
+func TestProductionControllerAutoMountsUnlockedEncryptedPersonalReadWrite(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
+
+	const driveID int64 = 81_102
+	if err := auth.SaveConfig(driveID); err != nil {
+		t.Fatalf("save personal drive config: %v", err)
+	}
+	db := newControllerProjectionDB(t, driveID)
+	if err := projection.PutEncryptionConfig(db, projection.EncryptionConfig{
+		ChannelID: driveID, Enabled: true,
+		KDFSalt:          bytes.Repeat([]byte{0x11}, 16),
+		KDFParamsJSON:    `{"memory":65536,"time":3,"parallelism":4,"key_len":32,"salt_len":16}`,
+		WrappedMasterKey: bytes.Repeat([]byte{0x22}, 72),
+		KeyCheck:         bytes.Repeat([]byte{0x33}, 59),
+		Version:          1,
+	}); err != nil {
+		t.Fatalf("seed encryption config: %v", err)
+	}
+	previousDB := backend.DB
+	backend.DB = db
+	t.Cleanup(func() { backend.DB = previousDB })
+
+	fakeTelegram := tgclient.NewFake(1)
+	fakeTelegram.SeedChannel(tgclient.InputPeer{ChannelID: driveID, AccessHash: 42}, "Personal")
+	engine, err := core.New(context.Background(), core.Config{
+		TG: fakeTelegram, SkipDBInit: true,
+		Connect: func() (*telegram.Client, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("core.New() error = %v", err)
+	}
+	t.Cleanup(engine.Close)
+	engine.EncryptionService().StoreMasterKey(bytes.Repeat([]byte{6}, 32))
+
+	controller, err := NewWithConnector(engine, &fakeConnector{})
+	if err != nil {
+		t.Fatalf("NewWithConnector() error = %v", err)
+	}
+	t.Cleanup(func() { _ = controller.Close(context.Background()) })
+
+	started, err := controller.Start(context.Background(), Drive{
+		ID: driveID, Title: "Saved Messages", Kind: DriveKindPersonal,
+		Encrypted: true, EncryptionUnlocked: true,
+	}, StartOptions{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if started.Mode != ModeReadWrite || started.WriteState != WriteStateReady || !started.AcceptingWrites || !started.DriveEncrypted {
+		t.Fatalf("encrypted personal mode = %#v, want ready read-write", started)
+	}
+	if _, err := controller.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
 	}
 }
 
@@ -343,8 +402,8 @@ func TestContentAdapterOpensProjectedFileAndRejectsUnsafeEntries(t *testing.T) {
 	if _, err := adapter.OpenContent(context.Background(), channelID, entry); !errors.Is(err, mountfs.ErrContentUnavailable) {
 		t.Fatalf("stale-size error = %v", err)
 	}
-	if _, err := adapter.OpenContent(context.Background(), channelID, mountfs.SourceEntry{Encrypted: true}); !errors.Is(err, mountfs.ErrAccessDenied) {
-		t.Fatalf("encrypted error = %v", err)
+	if _, err := adapter.OpenContent(context.Background(), channelID, mountfs.SourceEntry{Encrypted: true}); !errors.Is(err, mountfs.ErrContentUnavailable) {
+		t.Fatalf("invalid encrypted entry error = %v", err)
 	}
 	if _, err := adapter.OpenContent(context.Background(), channelID, mountfs.SourceEntry{ContentRef: "bad"}); !errors.Is(err, mountfs.ErrContentUnavailable) {
 		t.Fatalf("bad reference error = %v", err)
@@ -374,6 +433,7 @@ func TestContentErrorsAreTypedAndSanitized(t *testing.T) {
 		{name: "canceled", err: context.Canceled, target: context.Canceled},
 		{name: "deadline", err: context.DeadlineExceeded, target: context.DeadlineExceeded},
 		{name: "encrypted", err: mountcontent.ErrEncryptedUnsupported, target: mountfs.ErrAccessDenied},
+		{name: "locked key", err: mountcontent.ErrKeyUnavailable, target: mountfs.ErrAccessDenied},
 		{name: "media encrypted", err: media.ErrEncryptedUnsupported, target: mountfs.ErrAccessDenied},
 		{name: "projection missing", err: media.ErrFileNotFound, target: mountfs.ErrNotFound},
 		{name: "message missing", err: tgclient.ErrMessageNotFound, target: mountfs.ErrNotFound},
@@ -405,15 +465,15 @@ func TestEngineFilesystemBuilderValidation(t *testing.T) {
 	t.Parallel()
 
 	builder := &engineFilesystemBuilder{}
-	if _, _, err := builder.Build(nil, 1, mountfs.Options{}); err == nil {
+	if _, _, err := builder.Build(nil, 1, mountfs.Options{}, nil); err == nil {
 		t.Fatal("Build(nil) error = nil")
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := builder.Build(canceled, 1, mountfs.Options{}); !errors.Is(err, context.Canceled) {
+	if _, _, err := builder.Build(canceled, 1, mountfs.Options{}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Build(canceled) error = %v", err)
 	}
-	if _, _, err := builder.Build(context.Background(), 1, mountfs.Options{}); err == nil {
+	if _, _, err := builder.Build(context.Background(), 1, mountfs.Options{}, nil); err == nil {
 		t.Fatal("Build() without dependencies error = nil")
 	}
 }

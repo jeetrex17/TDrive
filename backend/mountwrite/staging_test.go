@@ -29,15 +29,15 @@ func TestDiskStagingStoreStreamsHashesAndUsesPrivatePermissions(t *testing.T) {
 	}
 
 	payload := bytes.Repeat([]byte("tdrive"), 4096)
-	staged, err := store.Stage(context.Background(), "../../unsafe-operation-id", int64(len(payload)), int64(len(payload)), bytes.NewReader(payload))
+	staged, err := store.Stage(context.Background(), plaintextStageRequest("../../unsafe-operation-id", int64(len(payload)), int64(len(payload))), bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("stage: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Remove(context.Background(), staged) })
 
 	wantHash := sha256.Sum256(payload)
-	if staged.Size != int64(len(payload)) || staged.SHA256 != wantHash {
-		t.Fatalf("staged metadata = size %d hash %x", staged.Size, staged.SHA256)
+	if staged.PlaintextSize != int64(len(payload)) || staged.StoredSize != int64(len(payload)) || staged.SHA256 != wantHash {
+		t.Fatalf("staged metadata = plaintext %d stored %d hash %x", staged.PlaintextSize, staged.StoredSize, staged.SHA256)
 	}
 	if filepath.Dir(staged.Path) != root {
 		t.Fatalf("staged path escaped root: %q", staged.Path)
@@ -78,24 +78,24 @@ func TestDiskStagingStoreEnforcesObjectAndAggregateQuota(t *testing.T) {
 		t.Fatalf("new store: %v", err)
 	}
 
-	if _, err := store.Stage(context.Background(), "too-big", -1, 0, bytes.NewReader([]byte("123456789"))); !errors.Is(err, ErrTooLarge) {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("too-big", -1, 0), bytes.NewReader([]byte("123456789"))); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("object limit error = %v, want ErrTooLarge", err)
 	}
 	if entries, err := os.ReadDir(store.Root()); err != nil || len(entries) != 0 {
 		t.Fatalf("failed stage left data: entries=%v err=%v", entries, err)
 	}
 
-	first, err := store.Stage(context.Background(), "first", 7, 0, bytes.NewReader([]byte("1234567")))
+	first, err := store.Stage(context.Background(), plaintextStageRequest("first", 7, 0), bytes.NewReader([]byte("1234567")))
 	if err != nil {
 		t.Fatalf("first stage: %v", err)
 	}
-	if _, err := store.Stage(context.Background(), "second", 4, 0, bytes.NewReader([]byte("1234"))); !errors.Is(err, ErrQuotaExceeded) {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("second", 4, 0), bytes.NewReader([]byte("1234"))); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("aggregate limit error = %v, want ErrQuotaExceeded", err)
 	}
 	if err := store.Remove(context.Background(), first); err != nil {
 		t.Fatalf("remove first: %v", err)
 	}
-	if _, err := store.Stage(context.Background(), "second", 4, 0, bytes.NewReader([]byte("1234"))); err != nil {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("second", 4, 0), bytes.NewReader([]byte("1234"))); err != nil {
 		t.Fatalf("quota was not released: %v", err)
 	}
 }
@@ -113,7 +113,7 @@ func TestDiskStagingStoreRejectsLengthMismatchAndCleansPartialFile(t *testing.T)
 		t.Fatalf("new store: %v", err)
 	}
 
-	_, err = store.Stage(context.Background(), "wrong-length", 8, 0, bytes.NewReader([]byte("short")))
+	_, err = store.Stage(context.Background(), plaintextStageRequest("wrong-length", 8, 0), bytes.NewReader([]byte("short")))
 	if !errors.Is(err, ErrLengthMismatch) {
 		t.Fatalf("stage error = %v, want ErrLengthMismatch", err)
 	}
@@ -139,14 +139,14 @@ func TestDiskStagingStoreHonorsCancellationWhileWaitingForSlot(t *testing.T) {
 	blocking := newBlockingReader()
 	firstDone := make(chan error, 1)
 	go func() {
-		_, stageErr := store.Stage(context.Background(), "first", -1, 0, blocking)
+		_, stageErr := store.Stage(context.Background(), plaintextStageRequest("first", -1, 0), blocking)
 		firstDone <- stageErr
 	}()
 	blocking.waitUntilRead(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	_, err = store.Stage(ctx, "second", -1, 0, bytes.NewReader(nil))
+	_, err = store.Stage(ctx, plaintextStageRequest("second", -1, 0), bytes.NewReader(nil))
 	if !errors.Is(err, ErrCanceled) {
 		t.Fatalf("waiting stage error = %v, want ErrCanceled", err)
 	}
@@ -177,7 +177,7 @@ func TestDiskStagingStoreCountsExistingFilesOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	if _, err := store.Stage(context.Background(), "new", 4, 0, bytes.NewReader([]byte("1234"))); !errors.Is(err, ErrQuotaExceeded) {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("new", 4, 0), bytes.NewReader([]byte("1234"))); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("startup quota error = %v, want ErrQuotaExceeded", err)
 	}
 }
@@ -201,10 +201,10 @@ func TestDiskStagingStoreValidatesConfigurationAndPerRequestLimit(t *testing.T) 
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	if _, err := store.Stage(context.Background(), "per-request", 6, 5, bytes.NewReader([]byte("123456"))); !errors.Is(err, ErrTooLarge) {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("per-request", 6, 5), bytes.NewReader([]byte("123456"))); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("per-request limit error = %v, want ErrTooLarge", err)
 	}
-	if _, err := store.Stage(context.Background(), "invalid-length", -2, 0, bytes.NewReader(nil)); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("invalid-length", -2, 0), bytes.NewReader(nil)); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("invalid length error = %v, want ErrInvalidRequest", err)
 	}
 }
@@ -221,11 +221,11 @@ func TestDiskStagingStoreRejectsCollisionCorruptionAndUnsafeReferences(t *testin
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	staged, err := store.Stage(context.Background(), "collision", 4, 0, bytes.NewReader([]byte("data")))
+	staged, err := store.Stage(context.Background(), plaintextStageRequest("collision", 4, 0), bytes.NewReader([]byte("data")))
 	if err != nil {
 		t.Fatalf("stage: %v", err)
 	}
-	if _, err := store.Stage(context.Background(), "collision", 4, 0, bytes.NewReader([]byte("data"))); !errors.Is(err, ErrOperationExists) {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("collision", 4, 0), bytes.NewReader([]byte("data"))); !errors.Is(err, ErrOperationExists) {
 		t.Fatalf("collision error = %v, want ErrOperationExists", err)
 	}
 
@@ -242,7 +242,7 @@ func TestDiskStagingStoreRejectsCollisionCorruptionAndUnsafeReferences(t *testin
 	if _, err := store.Open(wrongPath); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("mismatched stage path error = %v, want ErrInvalidRequest", err)
 	}
-	missing := StagedObject{Key: "missing.stage", Size: 1}
+	missing := StagedObject{Key: "missing.stage", PlaintextSize: 1, StoredSize: 1}
 	if _, err := store.Open(missing); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing open error = %v, want ErrNotFound", err)
 	}
@@ -284,10 +284,10 @@ func TestDiskStagingStoreCleansReaderFailureAndNoProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	if _, err := store.Stage(context.Background(), "reader-error", -1, 0, &errorReader{}); !errors.Is(err, ErrUnavailable) {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("reader-error", -1, 0), &errorReader{}); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("reader error = %v, want ErrUnavailable", err)
 	}
-	if _, err := store.Stage(context.Background(), "no-progress", -1, 0, zeroReader{}); !errors.Is(err, ErrUnavailable) {
+	if _, err := store.Stage(context.Background(), plaintextStageRequest("no-progress", -1, 0), zeroReader{}); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("no-progress error = %v, want ErrUnavailable", err)
 	}
 	if store.UsedBytes() != 0 {
@@ -350,4 +350,8 @@ func (r *blockingReader) waitUntilRead(t *testing.T) {
 
 func (r *blockingReader) unblock() {
 	close(r.release)
+}
+
+func plaintextStageRequest(operationID string, plaintextSize, maxBytes int64) StageRequest {
+	return StageRequest{OperationID: operationID, PlaintextSize: plaintextSize, MaxBytes: maxBytes}
 }

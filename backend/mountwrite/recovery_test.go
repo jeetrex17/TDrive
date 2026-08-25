@@ -3,10 +3,13 @@ package mountwrite
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"path/filepath"
 	"testing"
 	"time"
+
+	tdcrypto "TDrive/backend/crypto"
 )
 
 func TestCoordinatorRecoveryAbortsStagedUploadWithFileBackedSQLite(t *testing.T) {
@@ -33,7 +36,7 @@ func TestCoordinatorRecoveryAbortsStagedUploadWithFileBackedSQLite(t *testing.T)
 		t.Fatalf("new staging: %v", err)
 	}
 	payload := []byte("resume after restart")
-	staged, err := staging.Stage(ctx, "recover-staged", int64(len(payload)), 0, bytes.NewReader(payload))
+	staged, err := staging.Stage(ctx, plaintextStageRequest("recover-staged", int64(len(payload)), 0), bytes.NewReader(payload))
 	if err != nil {
 		t.Fatalf("seed stage: %v", err)
 	}
@@ -76,6 +79,96 @@ func TestCoordinatorRecoveryAbortsStagedUploadWithFileBackedSQLite(t *testing.T)
 	}
 	if staging.UsedBytes() != 0 {
 		t.Fatalf("staging bytes = %d after recovery", staging.UsedBytes())
+	}
+}
+
+func TestCoordinatorRecoveryCleansEncryptedStageWithoutMasterKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	coordinator, journal, staging := newTestCoordinator(t, &fakeRemote{}, &fakeInvalidator{})
+	payload := []byte("encrypted stage cleaned after restart")
+	staged, err := staging.Stage(ctx, StageRequest{
+		OperationID:       "recover-encrypted-stage",
+		PlaintextSize:     int64(len(payload)),
+		EncryptionVersion: EncryptionTDE1,
+		MasterKey:         bytes.Repeat([]byte{0x72}, 32),
+	}, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("seed encrypted stage: %v", err)
+	}
+	at := time.Unix(1_700_000_000, 0).UTC()
+	record := JournalRecord{
+		OperationID: "recover-encrypted-stage",
+		Mutation: Mutation{
+			Kind:              MutationPut,
+			DriveID:           42,
+			DestinationName:   "private.txt",
+			ContentLength:     int64(len(payload)),
+			EncryptionVersion: EncryptionTDE1,
+		},
+		State:     StateStaged,
+		Staged:    &staged,
+		CreatedAt: at,
+		UpdatedAt: at,
+	}
+	if err := journal.Create(ctx, record); err != nil {
+		t.Fatalf("seed journal: %v", err)
+	}
+
+	report, err := coordinator.Recover(ctx)
+	if err != nil || report.Aborted != 1 || report.Failed != 0 {
+		t.Fatalf("recover report=%#v error=%v", report, err)
+	}
+	if staging.UsedBytes() != 0 {
+		t.Fatalf("encrypted stage retained %d bytes", staging.UsedBytes())
+	}
+	if state := mustJournalRecord(t, journal, record.OperationID).State; state != StateAborted {
+		t.Fatalf("state = %s, want aborted", state)
+	}
+}
+
+func TestCoordinatorRecoveryCommitsEncryptedBodyWithoutMasterKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	remote := &fakeRemote{commitResult: MutationResult{ObjectID: "encrypted-object", Revision: 1}}
+	coordinator, journal, _ := newTestCoordinator(t, remote, &fakeInvalidator{})
+	at := time.Unix(1_700_000_000, 0).UTC()
+	storedDigest := [sha256.Size]byte{1}
+	body := RemoteBody{
+		UploadUUID:        "encrypted-upload",
+		PartCount:         1,
+		PlaintextSize:     5,
+		StoredSize:        tdcrypto.CiphertextSize(5),
+		Encrypted:         true,
+		EncryptionVersion: EncryptionTDE1,
+		StoredSHA256:      storedDigest,
+	}
+	record := JournalRecord{
+		OperationID: "recover-encrypted-commit",
+		Mutation: Mutation{
+			Kind:              MutationPut,
+			DriveID:           42,
+			DestinationName:   "private.txt",
+			ContentLength:     5,
+			EncryptionVersion: EncryptionTDE1,
+		},
+		State:     StateCommitting,
+		Body:      &body,
+		CreatedAt: at,
+		UpdatedAt: at,
+	}
+	if err := journal.Create(ctx, record); err != nil {
+		t.Fatalf("seed encrypted commit: %v", err)
+	}
+	report, err := coordinator.Recover(ctx)
+	if err != nil || report.Completed != 1 || remote.commitCalls != 1 {
+		t.Fatalf("recover report=%#v commits=%d error=%v", report, remote.commitCalls, err)
+	}
+	result := mustJournalRecord(t, journal, record.OperationID).Result
+	if result == nil || result.Size != 5 || result.SHA256 != ([sha256.Size]byte{}) {
+		t.Fatalf("recovered result = %#v", result)
 	}
 }
 
@@ -345,7 +438,7 @@ func TestCoordinatorRecoveryRemovesOrphanStageFromReceivingBoundary(t *testing.T
 	ctx := context.Background()
 	coordinator, journal, staging := newTestCoordinator(t, &fakeRemote{}, &fakeInvalidator{})
 	payload := []byte("staged before journal transition")
-	if _, err := staging.Stage(ctx, "receiving-orphan", int64(len(payload)), 0, bytes.NewReader(payload)); err != nil {
+	if _, err := staging.Stage(ctx, plaintextStageRequest("receiving-orphan", int64(len(payload)), 0), bytes.NewReader(payload)); err != nil {
 		t.Fatalf("seed orphan stage: %v", err)
 	}
 	at := time.Unix(1_700_000_000, 0).UTC()
@@ -417,14 +510,18 @@ func TestCoordinatorRecoveryResumesEveryDurableBoundary(t *testing.T) {
 			}
 			if test.withStage {
 				payload := []byte("recovery boundary")
-				staged, err := staging.Stage(ctx, record.OperationID, int64(len(payload)), 0, bytes.NewReader(payload))
+				staged, err := staging.Stage(ctx, plaintextStageRequest(record.OperationID, int64(len(payload)), 0), bytes.NewReader(payload))
 				if err != nil {
 					t.Fatalf("stage: %v", err)
 				}
 				record.Staged = &staged
+				record.Mutation.ContentLength = int64(len(payload))
 			}
 			if test.withBody {
-				record.Body = &RemoteBody{UploadUUID: "upload-boundary", PlaintextSize: 17}
+				record.Body = &RemoteBody{
+					UploadUUID: "upload-boundary", PartCount: 1,
+					PlaintextSize: 17, StoredSize: 17, MessageIDs: []int64{701},
+				}
 			}
 			if test.withResult {
 				record.Result = &MutationResult{OperationID: record.OperationID, ObjectID: mutation.ObjectID, Revision: 2}

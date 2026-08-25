@@ -58,18 +58,19 @@ const (
 )
 
 var (
-	ErrInvalidConfiguration = errors.New("mount controller: invalid configuration")
-	ErrInvalidContext       = errors.New("mount controller: context is required")
-	ErrInvalidDrive         = errors.New("mount controller: invalid drive")
-	ErrInvalidWindowsDrive  = errors.New("mount controller: invalid Windows drive")
-	ErrInvalidMode          = errors.New("mount controller: invalid access mode")
-	ErrWritableUnavailable  = errors.New("mount controller: writable mount is unavailable")
-	ErrConflict             = errors.New("mount controller: conflicting mount")
-	ErrNotMounted           = errors.New("mount controller: drive is not mounted")
-	ErrStartFailed          = errors.New("mount controller: start failed")
-	ErrStopFailed           = errors.New("mount controller: stop failed")
-	ErrOpenFailed           = errors.New("mount controller: open failed")
-	ErrEndpointUnavailable  = errors.New("mount controller: local endpoint unavailable")
+	ErrInvalidConfiguration       = errors.New("mount controller: invalid configuration")
+	ErrInvalidContext             = errors.New("mount controller: context is required")
+	ErrInvalidDrive               = errors.New("mount controller: invalid drive")
+	ErrInvalidWindowsDrive        = errors.New("mount controller: invalid Windows drive")
+	ErrInvalidMode                = errors.New("mount controller: invalid access mode")
+	ErrWritableUnavailable        = errors.New("mount controller: writable mount is unavailable")
+	ErrEncryptionPasswordRequired = errors.New("mount controller: encryption password required")
+	ErrConflict                   = errors.New("mount controller: conflicting mount")
+	ErrNotMounted                 = errors.New("mount controller: drive is not mounted")
+	ErrStartFailed                = errors.New("mount controller: start failed")
+	ErrStopFailed                 = errors.New("mount controller: stop failed")
+	ErrOpenFailed                 = errors.New("mount controller: open failed")
+	ErrEndpointUnavailable        = errors.New("mount controller: local endpoint unavailable")
 )
 
 // Phase is the externally observable lifecycle phase. Transitional phases are
@@ -84,12 +85,15 @@ type Drive struct {
 	Title string `json:"title"`
 	Kind  string `json:"kind"`
 	// Encrypted is true when the personal drive has encryption configured.
-	// Writable mounts currently support plaintext drive content only.
-	Encrypted bool `json:"encrypted,omitempty"`
+	// EncryptionUnlocked is a transient capability captured at mount start; it
+	// never contains or identifies key material.
+	Encrypted          bool `json:"encrypted,omitempty"`
+	EncryptionUnlocked bool `json:"encryption_unlocked,omitempty"`
 }
 
 // StartOptions contains safe mount choices. ModeAuto selects writable only
-// when a complete writer is supplied for an eligible personal plaintext drive.
+// when a complete writer is supplied for an eligible personal drive; an
+// encrypted drive must also have an unlocked mount key lease.
 type StartOptions struct {
 	WindowsDrive string `json:"windows_drive,omitempty"`
 	Mode         Mode   `json:"mode,omitempty"`
@@ -98,22 +102,23 @@ type StartOptions struct {
 // Status is safe to return through daemon IPC or Wails. It deliberately has
 // no endpoint URL, capability token, command line, or opaque attachment data.
 type Status struct {
-	Phase           Phase      `json:"phase"`
-	Running         bool       `json:"running"`
-	Mounted         bool       `json:"mounted"`
-	DriveID         int64      `json:"drive_id,omitempty"`
-	DriveTitle      string     `json:"drive_title,omitempty"`
-	DriveKind       string     `json:"drive_kind,omitempty"`
-	DriveEncrypted  bool       `json:"drive_encrypted,omitempty"`
-	Label           string     `json:"label,omitempty"`
-	Location        string     `json:"location,omitempty"`
-	AttachmentKind  string     `json:"attachment_kind,omitempty"`
-	Mode            Mode       `json:"mode,omitempty"`
-	WriteState      WriteState `json:"write_state,omitempty"`
-	AcceptingWrites bool       `json:"accepting_writes,omitempty"`
-	ActiveWrites    int        `json:"active_writes,omitempty"`
-	WindowsDrive    string     `json:"windows_drive,omitempty"`
-	Error           string     `json:"error,omitempty"`
+	Phase                   Phase      `json:"phase"`
+	Running                 bool       `json:"running"`
+	Mounted                 bool       `json:"mounted"`
+	DriveID                 int64      `json:"drive_id,omitempty"`
+	DriveTitle              string     `json:"drive_title,omitempty"`
+	DriveKind               string     `json:"drive_kind,omitempty"`
+	DriveEncrypted          bool       `json:"drive_encrypted,omitempty"`
+	DriveEncryptionUnlocked bool       `json:"drive_encryption_unlocked,omitempty"`
+	Label                   string     `json:"label,omitempty"`
+	Location                string     `json:"location,omitempty"`
+	AttachmentKind          string     `json:"attachment_kind,omitempty"`
+	Mode                    Mode       `json:"mode,omitempty"`
+	WriteState              WriteState `json:"write_state,omitempty"`
+	AcceptingWrites         bool       `json:"accepting_writes,omitempty"`
+	ActiveWrites            int        `json:"active_writes,omitempty"`
+	WindowsDrive            string     `json:"windows_drive,omitempty"`
+	Error                   string     `json:"error,omitempty"`
 }
 
 // ConflictError reports the safe identity fields that disagree with the
@@ -164,11 +169,23 @@ type ContentLifetime interface {
 	Close()
 }
 
+// MountKeyLease is the sole long-lived key capability for one mounted
+// encrypted drive. Consumers receive defensive copies through Key; only the
+// controller closes the lease after writers, readers, and the endpoint stop.
+type MountKeyLease interface {
+	Key() ([]byte, error)
+	Close()
+}
+
+type MountKeyLeaser interface {
+	Acquire(context.Context, Drive) (MountKeyLease, error)
+}
+
 // FilesystemBuilder is the injection boundary for the projection/content
 // stack. Production uses mountcontent and mountfs; tests can use a deterministic
 // fake without opening SQLite or Telegram.
 type FilesystemBuilder interface {
-	Build(context.Context, int64, mountfs.Options) (*mountfs.FS, ContentLifetime, error)
+	Build(context.Context, int64, mountfs.Options, MountKeyLease) (*mountfs.FS, ContentLifetime, error)
 }
 
 // EndpointConfig is private-by-convention backend data. Endpoint must never be
@@ -207,6 +224,7 @@ type Endpoint interface {
 type Dependencies struct {
 	Filesystems     FilesystemBuilder
 	Writers         WriterBuilder
+	Keys            MountKeyLeaser
 	Endpoint        Endpoint
 	Connector       mountos.Connector
 	SnapshotOptions mountfs.Options
@@ -231,7 +249,7 @@ type WriteSession interface {
 // WriterBuilder creates one non-reusable writer per mounted drive. A drained
 // writer is never reused on a later mount.
 type WriterBuilder interface {
-	Build(context.Context, Drive, *mountfs.FS) (WriteSession, error)
+	Build(context.Context, Drive, *mountfs.FS, MountKeyLease) (WriteSession, error)
 }
 
 type operationError struct {

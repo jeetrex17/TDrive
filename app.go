@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"TDrive/backend"
 	"TDrive/backend/core"
@@ -35,6 +34,20 @@ type App struct {
 	// that exactly one Engine/controller owns the Telegram session.
 	mountController    appMountController
 	mountDriveResolver func() (mountcontroller.Drive, error)
+	// mountEncryptionPolicyRefresh is a narrow test seam. Production uses the
+	// core authoritative sync path; tests can model offline and partial history
+	// without network access.
+	mountEncryptionPolicyRefresh func(context.Context, int64) error
+	// mountLifecycle serializes mount Start/Stop/Close with encryption policy
+	// transitions. It is deliberately separate from the controller's internal
+	// mutex because a vault lock must cover both controller shutdown and key
+	// erasure as one indivisible operation.
+	mountLifecycle         mountLifecycleGate
+	mountLifecycleTerminal bool // guarded by mountLifecycle
+
+	// encryptionServiceOverride is a narrow test seam for deterministic
+	// key-state race tests. Production always uses Engine.EncryptionService.
+	encryptionServiceOverride appEncryptionService
 
 	// fileDropEnabled tracks whether the native OS file-drop handler is
 	// registered. The frontend toggles it off during an internal drag-to-move so
@@ -546,8 +559,8 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 // background Run scope's goroutine exits cleanly.
 func (a *App) shutdown(ctx context.Context) {
 	if a.mountController != nil {
-		mountCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		if err := a.mountController.Close(mountCtx); err != nil {
+		mountCtx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
+		if err := a.shutdownMountController(mountCtx); err != nil {
 			fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
 		}
 		cancel()

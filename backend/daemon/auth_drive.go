@@ -86,7 +86,20 @@ func (s *Server) authLogout(ctx context.Context, mode string) (AuthLogoutRespons
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
+	release, err := s.acquireMountLifecycle(ctx)
+	if err != nil {
+		return AuthLogoutResponse{}, fmt.Errorf("logout: wait for mount lifecycle: %w", err)
+	}
+	defer release()
+
+	if _, err := s.stopMountLocked(ctx); err != nil {
+		return AuthLogoutResponse{}, fmt.Errorf("logout: eject mounted drive: %w", err)
+	}
 	s.engine.ClearEncryptionSession()
+	// Logout is terminal for this daemon instance. Queued mount starts acquire
+	// the gate only after this bit is set and therefore fail before resolution or
+	// controller access, including for plaintext drives.
+	s.mountLifecycleTerminal = true
 	s.engine.ClearUserCache()
 	if m == coreauth.LogoutFull {
 		s.revokeTelegramSession(ctx)

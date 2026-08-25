@@ -1,6 +1,7 @@
 package mountadapter
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/mountdav"
 	"TDrive/backend/mountwrite"
 	"TDrive/backend/projection"
@@ -57,7 +59,7 @@ func TestNewBuildsAndOwnsDurableCoordinator(t *testing.T) {
 func TestNewRejectsUnsupportedDrivePoliciesBeforeSideEffects(t *testing.T) {
 	policies := []DrivePolicy{
 		{Kind: projection.KindShared, Online: true},
-		{Kind: projection.KindPersonal, Online: true, Encrypted: true},
+		{Kind: projection.KindPersonal, Online: true, Encrypted: true}, // locked
 		{Kind: projection.KindPersonal, Online: false},
 	}
 	for _, policy := range policies {
@@ -74,6 +76,86 @@ func TestNewRejectsUnsupportedDrivePoliciesBeforeSideEffects(t *testing.T) {
 				t.Fatalf("unsupported policy created staging root: %v", statErr)
 			}
 		})
+	}
+}
+
+func TestNewAcceptsUnlockedEncryptedPersonalPolicy(t *testing.T) {
+	key := bytes.Repeat([]byte{4}, 32)
+	engine := &fakeEngine{}
+	session, err := New(context.Background(), Config{
+		DriveID: testDriveID,
+		Policy: DrivePolicy{
+			Kind: projection.KindPersonal, Online: true,
+			Encrypted: true, EncryptionUnlocked: true,
+		},
+		MasterKeys: staticMountKeyProvider(append([]byte(nil), key...)),
+		Engine:     engine, Resolver: newFakeResolver(), MaxObjectBytes: 100,
+	})
+	if err != nil {
+		t.Fatalf("New encrypted: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+	if !session.encryptWrites || session.masterKeys == nil {
+		t.Fatalf("encrypted session policy/provider = %t/%T", session.encryptWrites, session.masterKeys)
+	}
+	owned, err := session.masterKeys.Key()
+	if err != nil || !bytes.Equal(owned, key) {
+		t.Fatalf("encrypted session key = %x, %v", owned, err)
+	}
+	key[0] ^= 0xff
+	again, err := session.masterKeys.Key()
+	if err != nil || bytes.Equal(again, key) {
+		t.Fatal("session provider retained caller-owned master key memory")
+	}
+}
+
+func TestEncryptedSessionStagesCiphertextAndCommitsPlaintextMetadata(t *testing.T) {
+	db := newProjectionDB(t)
+	cache := &fakeSnapshotCache{}
+	remote := &constructorRemote{}
+	root := filepath.Join(t.TempDir(), "encrypted-stage")
+	key := bytes.Repeat([]byte{3}, 32)
+	session, err := New(context.Background(), Config{
+		DriveID: testDriveID,
+		Policy: DrivePolicy{
+			Kind: projection.KindPersonal, Online: true,
+			Encrypted: true, EncryptionUnlocked: true,
+		},
+		MasterKeys: staticMountKeyProvider(key),
+		DB:         db, StagingRoot: root, Resolver: newFakeResolver(), Remote: remote, Cache: cache,
+		MaxObjectBytes: 1024, MaxAggregateBytes: 4096,
+		MaxConcurrentStaging: 1, MaxActiveOperations: 1, MaxQueuedOperations: 1,
+	})
+	if err != nil {
+		t.Fatalf("New encrypted session: %v", err)
+	}
+	t.Cleanup(func() { _ = session.Close(context.Background()) })
+
+	plaintext := []byte("mounted secret")
+	if _, err := session.Put(context.Background(), mountdav.PutRequest{
+		OperationID: "encrypted-put", Path: "/secret.txt", ContentLength: int64(len(plaintext)),
+	}, bytes.NewReader(plaintext)); err != nil {
+		t.Fatalf("encrypted Put: %v", err)
+	}
+	if remote.upload.EncryptionVersion != mountwrite.EncryptionTDE1 || remote.upload.PlaintextSize != int64(len(plaintext)) {
+		t.Fatalf("hidden upload metadata = %+v", remote.upload)
+	}
+	if bytes.Equal(remote.stored, plaintext) || int64(len(remote.stored)) != tdcrypto.CiphertextSize(int64(len(plaintext))) {
+		t.Fatalf("stored body is not exact TDE1 ciphertext: %d bytes", len(remote.stored))
+	}
+	var decrypted bytes.Buffer
+	if _, err := tdcrypto.DecryptStream(bytes.NewReader(remote.stored), &decrypted, key); err != nil {
+		t.Fatalf("decrypt staged body: %v", err)
+	}
+	if !bytes.Equal(decrypted.Bytes(), plaintext) {
+		t.Fatalf("decrypted body = %q", decrypted.Bytes())
+	}
+	if remote.commit.Body == nil || !remote.commit.Body.Encrypted || remote.commit.Body.SHA256 != ([32]byte{}) {
+		t.Fatalf("committed encrypted metadata = %+v", remote.commit.Body)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("staging cleanup entries=%d error=%v", len(entries), err)
 	}
 }
 
@@ -129,10 +211,27 @@ func (c *fakeSnapshotCache) InvalidateSubtree(rootID string) {
 
 type constructorRemote struct {
 	commit mountwrite.CommitRequest
+	upload mountwrite.HiddenUpload
+	stored []byte
 }
 
-func (*constructorRemote) UploadHidden(context.Context, mountwrite.HiddenUpload, io.ReadSeeker) (mountwrite.RemoteBody, error) {
-	return mountwrite.RemoteBody{}, nil
+func (r *constructorRemote) UploadHidden(_ context.Context, upload mountwrite.HiddenUpload, source io.ReadSeeker) (mountwrite.RemoteBody, error) {
+	stored, err := io.ReadAll(source)
+	if err != nil {
+		return mountwrite.RemoteBody{}, err
+	}
+	r.upload = upload
+	r.stored = append([]byte(nil), stored...)
+	return mountwrite.RemoteBody{
+		UploadUUID: "constructor-upload", PartCount: 1,
+		PlaintextSize: upload.PlaintextSize, StoredSize: upload.StoredSize,
+		Encrypted: upload.Encrypted, EncryptionVersion: upload.EncryptionVersion,
+		SHA256: upload.SHA256, StoredSHA256: upload.StoredSHA256,
+	}, nil
+}
+
+func (*constructorRemote) RecoverHidden(context.Context, mountwrite.HiddenUpload, io.ReadSeeker) (mountwrite.RemoteBody, error) {
+	return mountwrite.RemoteBody{}, errors.New("unexpected hidden recovery")
 }
 
 func (r *constructorRemote) Commit(_ context.Context, request mountwrite.CommitRequest) (mountwrite.MutationResult, error) {

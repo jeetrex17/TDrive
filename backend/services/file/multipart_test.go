@@ -3,9 +3,12 @@ package file
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"TDrive/backend/projection"
 )
@@ -61,7 +64,8 @@ func TestMultipartRoundTripPlain(t *testing.T) {
 func TestMultipartRoundTripEncrypted(t *testing.T) {
 	svc, db, _, _ := newTestService(t)
 	svc.MaxUploadBytes = 1000
-	wireEncryption(svc, bytes.Repeat([]byte{5}, 32))
+	masterKey := bytes.Repeat([]byte{5}, 32)
+	wireEncryption(svc, masterKey)
 
 	body := bigBody(5000) // ciphertext ~5066 -> 6 parts
 	path := writeTempNamedFile(t, "secret.bin", body)
@@ -78,6 +82,14 @@ func TestMultipartRoundTripEncrypted(t *testing.T) {
 		t.Fatalf("encrypted parts = %d, want >= 2", len(parts))
 	}
 
+	var downloadKey []byte
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if !encrypted {
+			return nil, nil
+		}
+		downloadKey = append([]byte(nil), masterKey...)
+		return downloadKey, nil
+	}
 	savePath := filepath.Join(t.TempDir(), "secret.out")
 	result := svc.Download(context.Background(), personalChannelID, files[0].MsgID, files[0].MsgID, func(string) (string, error) {
 		return savePath, nil
@@ -92,6 +104,82 @@ func TestMultipartRoundTripEncrypted(t *testing.T) {
 	if !bytes.Equal(got, body) {
 		t.Fatalf("encrypted round-trip mismatch: got %d bytes, want %d", len(got), len(body))
 	}
+	assertKeyZeroed(t, downloadKey)
+}
+
+func TestMultipartEncryptedUploadCopiesClearsAndJoinsProducerKey(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 32
+
+	uploadKey := bytes.Repeat([]byte{0x4d}, 32)
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		if !wantEncrypted {
+			return nil, nil
+		}
+		return uploadKey, nil
+	}
+
+	producerStarted := make(chan struct{})
+	releaseProducer := make(chan struct{})
+	producerErr := errors.New("test producer stopped")
+	var (
+		producerKey       []byte
+		sharesCallerKey   bool
+		producerKeyActive bool
+	)
+	svc.encryptStream = func(_ io.Reader, _ io.Writer, key []byte, _ int64) error {
+		producerKey = key
+		sharesCallerKey = len(key) > 0 && len(uploadKey) > 0 && &key[0] == &uploadKey[0]
+		producerKeyActive = bytes.Equal(key, bytes.Repeat([]byte{0x4d}, 32))
+		close(producerStarted)
+		<-releaseProducer
+		return producerErr
+	}
+
+	// The send fails without draining the pipe. uploadMultipart must close the
+	// reader and still join the blocked producer before its caller can wipe the
+	// caller-owned key and return.
+	fakeTG.FailNextSend()
+	path := writeTempNamedFile(t, "joined.bin", bigBody(64))
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+		done <- err
+	}()
+
+	select {
+	case <-producerStarted:
+	case <-time.After(2 * time.Second):
+		close(releaseProducer)
+		t.Fatal("encrypted multipart producer did not start")
+	}
+
+	select {
+	case err := <-done:
+		close(releaseProducer)
+		t.Fatalf("upload returned before its encryption producer stopped: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	if sharesCallerKey {
+		close(releaseProducer)
+		t.Fatal("multipart encryption producer received the caller-owned key buffer")
+	}
+	if !producerKeyActive {
+		close(releaseProducer)
+		t.Fatal("multipart encryption producer did not receive an active key copy")
+	}
+	if !bytes.Equal(uploadKey, bytes.Repeat([]byte{0x4d}, 32)) {
+		close(releaseProducer)
+		t.Fatal("caller-owned key was cleared while uploadMultipart was still using its producer")
+	}
+
+	close(releaseProducer)
+	if err := <-done; err == nil {
+		t.Fatal("upload unexpectedly succeeded after injected send failure")
+	}
+	assertKeyZeroed(t, producerKey)
+	assertKeyZeroed(t, uploadKey)
 }
 
 func TestMultipartDeleteDropsParts(t *testing.T) {

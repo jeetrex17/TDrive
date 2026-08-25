@@ -70,6 +70,48 @@ func TestNormalizeWritableNameRejectsNonPortableWindowsNames(t *testing.T) {
 	}
 }
 
+func TestNormalizeWritableNameRejectsUnicodeBidiControls(t *testing.T) {
+	t.Parallel()
+
+	for _, control := range []rune{
+		'\u061c', // ARABIC LETTER MARK
+		'\u200e', // LEFT-TO-RIGHT MARK
+		'\u200f', // RIGHT-TO-LEFT MARK
+		'\u202a', // LEFT-TO-RIGHT EMBEDDING
+		'\u202b', // RIGHT-TO-LEFT EMBEDDING
+		'\u202c', // POP DIRECTIONAL FORMATTING
+		'\u202d', // LEFT-TO-RIGHT OVERRIDE
+		'\u202e', // RIGHT-TO-LEFT OVERRIDE
+		'\u2066', // LEFT-TO-RIGHT ISOLATE
+		'\u2067', // RIGHT-TO-LEFT ISOLATE
+		'\u2068', // FIRST STRONG ISOLATE
+		'\u2069', // POP DIRECTIONAL ISOLATE
+	} {
+		name := "report" + string(control) + "fdp.exe"
+		if _, err := NormalizeWritableName(name); !errors.Is(err, ErrInvalidName) {
+			t.Errorf("NormalizeWritableName(%q) error = %v, want ErrInvalidName", name, err)
+		}
+	}
+}
+
+func TestNormalizeWritableNamePreservesUnicodeJoinControls(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"family-\U0001f468\u200d\U0001f469\u200d\U0001f467.txt",
+		"Persian-می\u200cروم.txt",
+	} {
+		normalized, err := NormalizeWritableName(name)
+		if err != nil {
+			t.Errorf("NormalizeWritableName(%q) error = %v", name, err)
+			continue
+		}
+		if normalized != name {
+			t.Errorf("NormalizeWritableName(%q) = %q, want join controls preserved", name, normalized)
+		}
+	}
+}
+
 func TestWritableNameValidationDoesNotChangeLegacyReadAliases(t *testing.T) {
 	t.Parallel()
 
@@ -87,6 +129,7 @@ func FuzzNormalizeWritableNameProperties(f *testing.F) {
 		"Cafe\u0301.txt",
 		"CON",
 		"bad<name>.txt",
+		"report\u202efdp.exe",
 		"trailing. ",
 		string([]byte{0xff, 'a'}),
 	} {

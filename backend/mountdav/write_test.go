@@ -262,6 +262,7 @@ func TestWritableMOVEStrictlyValidatesDestination(t *testing.T) {
 		{name: "wrong capability", destination: "http://127.0.0.1:7331/wrong/x", status: http.StatusBadGateway},
 		{name: "https escalation", destination: "https://127.0.0.1:7331" + testCapability + "/x", status: http.StatusBadGateway},
 		{name: "encoded separator", destination: "http://127.0.0.1:7331" + testCapability + "/Docs%2Fx", status: http.StatusBadRequest},
+		{name: "bidi override", destination: "http://127.0.0.1:7331" + testCapability + "/Docs/report%E2%80%AEfdp.exe", status: http.StatusBadRequest},
 		{name: "invalid overwrite", destination: "http://127.0.0.1:7331" + testCapability + "/x", overwrite: "yes", status: http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -296,6 +297,7 @@ func TestWritablePathsUseOnePortableNamespace(t *testing.T) {
 		"/Docs/trailing.%20",
 		"/Docs/has%3F.txt",
 		"/Docs/control%0A.txt",
+		"/Docs/report%E2%80%AEfdp.exe",
 	} {
 		writer := &recordingWriteCoordinator{}
 		handler := newWritableTestHandler(t, writer)
@@ -433,6 +435,7 @@ func TestWritableCoordinatorErrorsUseSanitizedHTTPMapping(t *testing.T) {
 		{err: ErrWriteNotFound, status: http.StatusNotFound},
 		{err: ErrWriteConflict, status: http.StatusConflict},
 		{err: ErrWritePreconditionFailed, status: http.StatusPreconditionFailed},
+		{err: ErrWriteLengthRequired, status: http.StatusLengthRequired},
 		{err: ErrWriteTooLarge, status: http.StatusRequestEntityTooLarge},
 		{err: ErrWriteLocked, status: statusLocked},
 		{err: ErrWriteInsufficientStorage, status: statusInsufficientStorage},

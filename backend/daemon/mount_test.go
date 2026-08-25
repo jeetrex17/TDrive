@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"TDrive/backend"
+	"TDrive/backend/auth"
 	"TDrive/backend/core"
 	"TDrive/backend/mountcontroller"
 	"TDrive/backend/mountos"
@@ -136,16 +138,7 @@ func TestStartMountPropagatesEncryptedPersonalEligibility(t *testing.T) {
 		sharedDriveID   int64 = 8_200_002
 	)
 	engine := newDaemonMountEngine(t, personalDriveID, sharedDriveID)
-	if err := projection.PutEncryptionConfig(engine.ReadService().DB, projection.EncryptionConfig{
-		ChannelID:        personalDriveID,
-		Enabled:          true,
-		KDFSalt:          []byte("salt"),
-		KDFParamsJSON:    `{}`,
-		WrappedMasterKey: []byte("wrapped"),
-		KeyCheck:         []byte("check"),
-	}); err != nil {
-		t.Fatalf("seed encryption config: %v", err)
-	}
+	seedDaemonEncryptionPolicy(t, engine.ReadService().DB, personalDriveID)
 
 	controller, err := mountcontroller.NewWithConnector(engine, &daemonMountConnector{})
 	if err != nil {
@@ -154,11 +147,16 @@ func TestStartMountPropagatesEncryptedPersonalEligibility(t *testing.T) {
 	server := &Server{engine: engine, mountController: controller}
 	t.Cleanup(func() { _ = server.stopMountServer(context.Background()) })
 
-	if _, err := server.startMount(context.Background(), "", "", string(mountcontroller.ModeReadOnly)); err != nil {
-		t.Fatalf("start encrypted personal mount: %v", err)
+	if _, err := server.startMount(context.Background(), "", "", string(mountcontroller.ModeReadOnly)); !errors.Is(err, mountcontroller.ErrEncryptionPasswordRequired) {
+		t.Fatalf("locked encrypted personal mount error = %v, want password required", err)
 	}
-	if status := controller.Status(); !status.DriveEncrypted {
-		t.Fatalf("controller status = %#v, want encrypted drive eligibility", status)
+	engine.EncryptionService().StoreMasterKey(bytes.Repeat([]byte{6}, 32))
+
+	if _, err := server.startMount(context.Background(), "", "", ""); err != nil {
+		t.Fatalf("start unlocked encrypted personal mount: %v", err)
+	}
+	if status := controller.Status(); !status.DriveEncrypted || !status.DriveEncryptionUnlocked || status.Mode != mountcontroller.ModeReadWrite {
+		t.Fatalf("controller status = %#v, want unlocked encrypted writable drive eligibility", status)
 	}
 }
 
@@ -216,6 +214,10 @@ func TestMountResponseMapsOnlySafeControllerFields(t *testing.T) {
 }
 
 func newDaemonMountEngine(t *testing.T, activeDriveID, selectedDriveID int64) *core.Engine {
+	return newDaemonMountEngineWithPolicyRefresh(t, activeDriveID, selectedDriveID, nil)
+}
+
+func newDaemonMountEngineWithPolicyRefresh(t *testing.T, activeDriveID, selectedDriveID int64, refresh func(context.Context, int64) error) *core.Engine {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -232,6 +234,9 @@ func newDaemonMountEngine(t *testing.T, activeDriveID, selectedDriveID int64) *c
 	if err := projection.MigratePersonalChannel(db, activeDriveID); err != nil {
 		t.Fatalf("migrate active drive: %v", err)
 	}
+	if err := auth.SaveConfig(activeDriveID); err != nil {
+		t.Fatalf("save personal drive config: %v", err)
+	}
 	if err := projection.InsertChannel(db, projection.Channel{
 		ChannelID:            selectedDriveID,
 		AccessHash:           42,
@@ -246,8 +251,9 @@ func newDaemonMountEngine(t *testing.T, activeDriveID, selectedDriveID int64) *c
 	telegramClient.SeedChannel(tgclient.InputPeer{ChannelID: activeDriveID, AccessHash: 41}, "Active Drive")
 	telegramClient.SeedChannel(tgclient.InputPeer{ChannelID: selectedDriveID, AccessHash: 42}, "Pinned Drive")
 	engine, err := core.New(context.Background(), core.Config{
-		TG:         telegramClient,
-		SkipDBInit: true,
+		TG:                      telegramClient,
+		SkipDBInit:              true,
+		EncryptionPolicyRefresh: refresh,
 		Connect: func() (*telegram.Client, error) {
 			return nil, nil
 		},

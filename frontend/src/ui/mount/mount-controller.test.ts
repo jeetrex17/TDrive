@@ -65,11 +65,61 @@ function api(overrides: Partial<MountApi> = {}): MountApi {
         mountStatus: vi.fn(async () => status()),
         openMountedDrive: vi.fn(async () => undefined),
         unmountDrive: vi.fn(async () => status()),
+        unlockEncryption: vi.fn(async () => false),
         ...overrides,
     };
 }
 
 describe('mount controller', () => {
+    it('prompts once and retries the same encrypted mount after unlock', async () => {
+        const mountDrive = vi
+            .fn<MountApi['mountDrive']>()
+            .mockRejectedValueOnce(new Error('mount controller: encryption password required'))
+            .mockResolvedValueOnce(writableMountedStatus());
+        const unlockEncryption = vi.fn(async () => true);
+        const controller = createMountController(api({ mountDrive, unlockEncryption }));
+
+        await controller.mount();
+
+        expect(unlockEncryption).toHaveBeenCalledTimes(1);
+        expect(mountDrive).toHaveBeenCalledTimes(2);
+        expect(get(controller)).toEqual(writableMountedStatus());
+    });
+
+    it('returns to Mount without a retry or error when encryption unlock is cancelled', async () => {
+        const mountDrive = vi.fn<MountApi['mountDrive']>()
+            .mockRejectedValue(new Error('encryption password required'));
+        const unlockEncryption = vi.fn(async () => false);
+        const notices: MountNotice[] = [];
+        const controller = createMountController(
+            api({ mountDrive, unlockEncryption }),
+            (notice) => notices.push(notice),
+        );
+
+        const first = controller.mount();
+        const duplicate = controller.mount();
+        await first;
+
+        expect(duplicate).toBe(first);
+        expect(unlockEncryption).toHaveBeenCalledTimes(1);
+        expect(mountDrive).toHaveBeenCalledTimes(1);
+        expect(get(controller)).toMatchObject({ phase: 'idle', mounted: false, error: '' });
+        expect(notices[notices.length - 1]).toMatchObject({ id: 'mount-drive', level: 'info', spinner: false });
+    });
+
+    it('does not prompt for unrelated mount failures', async () => {
+        const unlockEncryption = vi.fn(async () => true);
+        const controller = createMountController(api({
+            mountDrive: vi.fn(async () => { throw new Error('drive letter unavailable'); }),
+            unlockEncryption,
+        }));
+
+        await controller.mount();
+
+        expect(unlockEncryption).not.toHaveBeenCalled();
+        expect(get(controller)).toMatchObject({ phase: 'error', mounted: false });
+    });
+
     it('preserves an honest writable status from the backend', async () => {
         const result = writableMountedStatus({ activeWrites: 1 });
         const controller = createMountController(api({ mountDrive: vi.fn(async () => result) }));

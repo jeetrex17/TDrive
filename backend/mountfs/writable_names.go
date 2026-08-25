@@ -32,7 +32,8 @@ func NormalizeWritableName(name string) (string, error) {
 		return "", fmt.Errorf("%w: trailing dots and spaces are not portable", ErrInvalidName)
 	}
 	for _, character := range name {
-		if unicode.IsControl(character) || strings.ContainsRune(forbiddenWritableNameCharacters, character) {
+		if unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character) ||
+			strings.ContainsRune(forbiddenWritableNameCharacters, character) {
 			return "", fmt.Errorf("%w: name contains a non-portable character", ErrInvalidName)
 		}
 	}
