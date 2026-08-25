@@ -3,6 +3,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,6 +97,47 @@ func TestConcurrentUploadCallsShareConfiguredLimiter(t *testing.T) {
 		}
 		if calls, inFlight, maxSeen := client.snapshot(); calls != 2 || inFlight != 0 || maxSeen != 1 {
 			t.Fatalf("final calls/in-flight/max = %d/%d/%d, want 2/0/1", calls, inFlight, maxSeen)
+		}
+	})
+}
+
+func TestUploadLimiterHonorsCancellationWhileQueued(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxConcurrentUploads = 1
+	pathA := writeTempNamedFile(t, "active.txt", []byte("active"))
+	pathB := writeTempNamedFile(t, "queued.txt", []byte("queued"))
+
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{}, 2)
+		release := make(chan struct{})
+		client := &countingClient{Fake: fakeTG, entered: entered, release: release}
+		svc.TG = client
+		firstErr := make(chan error, 1)
+		go func() {
+			_, err := svc.Upload(context.Background(), personalChannelID, []string{pathA}, []string{""}, false)
+			firstErr <- err
+		}()
+		<-entered
+
+		queuedCtx, cancelQueued := context.WithCancel(context.Background())
+		queuedErr := make(chan error, 1)
+		go func() {
+			_, err := svc.Upload(queuedCtx, personalChannelID, []string{pathB}, []string{""}, false)
+			queuedErr <- err
+		}()
+		cancelQueued()
+		synctest.Wait()
+		if err := <-queuedErr; !errors.Is(err, context.Canceled) {
+			t.Fatalf("queued upload error = %v, want context canceled", err)
+		}
+		if calls, inFlight, maxSeen := client.snapshot(); calls != 1 || inFlight != 1 || maxSeen != 1 {
+			t.Fatalf("after queued cancellation calls/in-flight/max = %d/%d/%d, want 1/1/1", calls, inFlight, maxSeen)
+		}
+
+		close(release)
+		synctest.Wait()
+		if err := <-firstErr; err != nil {
+			t.Fatalf("active upload: %v", err)
 		}
 	})
 }
