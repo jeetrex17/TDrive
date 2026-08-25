@@ -264,6 +264,78 @@ func TestTransientRetryPolicyBacksOffDoublingUpToCap(t *testing.T) {
 	}
 }
 
+func TestTransientRetryPolicyKeepsConstantBackoffWithoutCap(t *testing.T) {
+	t.Parallel()
+
+	engineClosed := errors.New("engine forcibly closed")
+	var attempts int
+	var slept []time.Duration
+	policy := FloodWaitRetryPolicy{
+		MaxTransientRetries: 3,
+		TransientBackoff:    2 * time.Second,
+		Sleep: func(ctx context.Context, wait time.Duration) error {
+			slept = append(slept, wait)
+			return nil
+		},
+	}
+	err := policy.Do(context.Background(), func() error {
+		attempts++
+		return engineClosed
+	})
+	if !errors.Is(err, engineClosed) {
+		t.Fatalf("Do error = %v, want original", err)
+	}
+	if attempts != 4 {
+		t.Fatalf("attempts = %d, want 4 (1 initial + 3 retries)", attempts)
+	}
+	want := []time.Duration{2 * time.Second, 2 * time.Second, 2 * time.Second}
+	if len(slept) != len(want) {
+		t.Fatalf("sleeps = %v, want %v", slept, want)
+	}
+	for i := range want {
+		if slept[i] != want[i] {
+			t.Fatalf("sleeps = %v, want %v", slept, want)
+		}
+	}
+}
+
+func TestTransientBackoffHonorsCapWithoutOverflow(t *testing.T) {
+	t.Parallel()
+
+	const maxDuration = time.Duration(1<<63 - 1)
+	tests := []struct {
+		name   string
+		policy FloodWaitRetryPolicy
+		retry  int
+		want   time.Duration
+	}{
+		{
+			name: "initial delay above cap",
+			policy: FloodWaitRetryPolicy{
+				TransientBackoff:    8 * time.Second,
+				MaxTransientBackoff: 6 * time.Second,
+			},
+			want: 6 * time.Second,
+		},
+		{
+			name: "doubling would overflow duration",
+			policy: FloodWaitRetryPolicy{
+				TransientBackoff:    maxDuration/2 + 1,
+				MaxTransientBackoff: maxDuration,
+			},
+			retry: 1,
+			want:  maxDuration,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.policy.transientBackoff(test.retry); got != test.want {
+				t.Fatalf("transientBackoff(%d) = %s, want %s", test.retry, got, test.want)
+			}
+		})
+	}
+}
+
 func TestTransientRetryPolicyCallerCancellationWinsOverEngineClose(t *testing.T) {
 	t.Parallel()
 

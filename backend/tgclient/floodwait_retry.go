@@ -65,6 +65,21 @@ func DefaultWriteFloodWaitRetryPolicy() FloodWaitRetryPolicy {
 	}
 }
 
+// Validate reports whether p has bounded, non-negative retry settings.
+func (p FloodWaitRetryPolicy) Validate() error {
+	if p.MaxRetries < 0 || p.MaxWait < 0 || p.MaxTotalWait < 0 ||
+		p.MaxTransientRetries < 0 || p.TransientBackoff < 0 || p.MaxTransientBackoff < 0 {
+		return fmt.Errorf("%w: limits must be non-negative", ErrInvalidFloodWaitRetryPolicy)
+	}
+	if p.MaxRetries > 0 && (p.MaxWait == 0 || p.MaxTotalWait == 0) {
+		return fmt.Errorf("%w: retrying requires per-wait and total-wait limits", ErrInvalidFloodWaitRetryPolicy)
+	}
+	if p.MaxTransientRetries > 0 && p.TransientBackoff == 0 {
+		return fmt.Errorf("%w: retrying transient failures requires a backoff", ErrInvalidFloodWaitRetryPolicy)
+	}
+	return nil
+}
+
 func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error {
 	if ctx == nil {
 		return fmt.Errorf("%w: context is required", ErrInvalidFloodWaitRetryPolicy)
@@ -72,14 +87,8 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 	if action == nil {
 		return fmt.Errorf("%w: action is required", ErrInvalidFloodWaitRetryPolicy)
 	}
-	if p.MaxRetries < 0 || p.MaxWait < 0 || p.MaxTotalWait < 0 {
-		return fmt.Errorf("%w: limits must be non-negative", ErrInvalidFloodWaitRetryPolicy)
-	}
-	if p.MaxRetries > 0 && (p.MaxWait == 0 || p.MaxTotalWait == 0) {
-		return fmt.Errorf("%w: retrying requires per-wait and total-wait limits", ErrInvalidFloodWaitRetryPolicy)
-	}
-	if p.MaxTransientRetries > 0 && p.TransientBackoff <= 0 {
-		return fmt.Errorf("%w: retrying transient failures requires a backoff", ErrInvalidFloodWaitRetryPolicy)
+	if err := p.Validate(); err != nil {
+		return err
 	}
 
 	sleep := p.Sleep
@@ -134,11 +143,18 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 // retry: TransientBackoff doubled per attempt, capped at MaxTransientBackoff.
 func (p FloodWaitRetryPolicy) transientBackoff(retry int) time.Duration {
 	backoff := p.TransientBackoff
+	maxBackoff := p.MaxTransientBackoff
+	if maxBackoff == 0 {
+		return backoff
+	}
+	if backoff >= maxBackoff {
+		return maxBackoff
+	}
 	for i := 0; i < retry; i++ {
-		backoff *= 2
-		if p.MaxTransientBackoff > 0 && backoff >= p.MaxTransientBackoff {
-			return p.MaxTransientBackoff
+		if backoff > maxBackoff-backoff {
+			return maxBackoff
 		}
+		backoff *= 2
 	}
 	return backoff
 }

@@ -81,6 +81,50 @@ func TestTelegramRemoteClassifiesInvalidCleanupReceipt(t *testing.T) {
 	}
 }
 
+func TestNewTelegramRemotePreservesTransientOnlyRetryPolicy(t *testing.T) {
+	db := newProjectionDB(t)
+	telegram := tgclient.NewFake(1)
+	policy := tgclient.FloodWaitRetryPolicy{
+		MaxTransientRetries: 1,
+		TransientBackoff:    time.Millisecond,
+	}
+
+	remote, err := NewTelegramRemote(TelegramRemoteConfig{
+		DB: db, DriveID: testDriveID, Files: &fakeHiddenStore{}, Telegram: telegram,
+		Peers:   testPeerResolver{peer: tgclient.InputPeer{ChannelID: testDriveID}},
+		ActorID: telegram.SelfID, FloodWaitRetry: policy,
+	})
+	if err != nil {
+		t.Fatalf("NewTelegramRemote: %v", err)
+	}
+	if remote.floodWaitRetry.MaxRetries != 0 ||
+		remote.floodWaitRetry.MaxWait != 0 ||
+		remote.floodWaitRetry.MaxTotalWait != 0 ||
+		remote.floodWaitRetry.MaxTransientRetries != policy.MaxTransientRetries ||
+		remote.floodWaitRetry.TransientBackoff != policy.TransientBackoff ||
+		remote.floodWaitRetry.MaxTransientBackoff != 0 {
+		t.Fatalf("FloodWaitRetry = %+v, want transient-only policy %+v", remote.floodWaitRetry, policy)
+	}
+}
+
+func TestNewTelegramRemoteRejectsInvalidTransientRetryPolicy(t *testing.T) {
+	db := newProjectionDB(t)
+	telegram := tgclient.NewFake(1)
+
+	remote, err := NewTelegramRemote(TelegramRemoteConfig{
+		DB: db, DriveID: testDriveID, Files: &fakeHiddenStore{}, Telegram: telegram,
+		Peers:          testPeerResolver{peer: tgclient.InputPeer{ChannelID: testDriveID}},
+		ActorID:        telegram.SelfID,
+		FloodWaitRetry: tgclient.FloodWaitRetryPolicy{MaxTransientRetries: 1},
+	})
+	if !errors.Is(err, mountwrite.ErrInvalidRequest) {
+		t.Fatalf("NewTelegramRemote error = %v, want invalid request", err)
+	}
+	if remote != nil {
+		t.Fatalf("NewTelegramRemote remote = %#v, want nil", remote)
+	}
+}
+
 func TestTelegramRemotePreservesPartialHiddenReceiptsOnUploadError(t *testing.T) {
 	tests := []struct {
 		name        string

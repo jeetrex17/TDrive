@@ -132,7 +132,11 @@ var (
 	// ErrHiddenReceiptInvalid marks a cleanup receipt that failed ownership or
 	// structural validation. Callers must fail closed instead of retrying it as
 	// a transient Telegram outage.
-	ErrHiddenReceiptInvalid              = errors.New("hidden upload cleanup receipt invalid")
+	ErrHiddenReceiptInvalid = errors.New("hidden upload cleanup receipt invalid")
+	// errVisibleSendOutcomeUnknownNoRetry stops FloodWaitRetryPolicy from
+	// treating an unknown outcome as a retryable transport failure when a
+	// legacy client cannot preserve Telegram's random_id across attempts.
+	errVisibleSendOutcomeUnknownNoRetry  = errors.New("visible upload outcome unknown without idempotency")
 	errPreviewNotFound                   = errors.New("File not found")
 	errPreviewNotSupported               = errors.New("Not a supported image")
 	errPreviewTooLarge                   = errors.New("File too large")
@@ -416,13 +420,29 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		lastProgress = time.Now()
 	}
 	var result tgclient.SendFileResult
-	err = s.sendRetryPolicy().Do(ctx, func() error {
+	idempotentSend := supportsIdempotentFileSends(s.TG)
+	sendRandomID := int64(0)
+	if idempotentSend {
+		// Visible uploads have no durable operation journal, but this fresh
+		// operation ID remains stable for every automatic retry in this call.
+		sendRandomID, err = tgclient.StableRandomID(projection.NewUploadUUID(), "body")
+		if err != nil {
+			return Metadata{}, projection.Op{}, "", err
+		}
+	}
+	err = s.retryVisibleSend(ctx, idempotentSend, func() error {
 		// A retried attempt must resend the whole body from its start.
 		if _, ok := rewindSeeker(uploadSource, 0); !ok {
 			return fmt.Errorf("staged upload source is not rewindable")
 		}
 		var serr error
-		result, serr = s.TG.SendFile(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress)
+		if idempotentSend {
+			result, serr = tgclient.SendFileIdempotent(
+				ctx, s.TG, peer, uploadSource, filename, caption, uploadSize, onProgress, sendRandomID,
+			)
+		} else {
+			result, serr = s.TG.SendFile(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress)
+		}
 		return serr
 	})
 	if err != nil {
@@ -540,6 +560,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 	}
 
 	partMsgIDs := make([]int64, 0, numParts)
+	idempotentPartSends := supportsIdempotentFileSends(s.TG)
 	abort := func() {
 		// Clean-up-and-fail: drop the parts already sent + their rows, using a
 		// fresh context since ctx may itself be canceled.
@@ -600,12 +621,34 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		if seeker, ok := storedReader.(io.Seeker); ok {
 			// Plaintext parts stream straight from the seekable source, so a
 			// transient transport failure retries from the part window start.
-			err = s.sendRetryPolicy().Do(ctx, func() error {
+			sendRandomID := int64(0)
+			if idempotentPartSends {
+				sendRandomID, err = tgclient.StableRandomID(uploadUUID, fmt.Sprintf("part:%d", i))
+				if err != nil {
+					abort()
+					return Metadata{}, err
+				}
+			}
+			err = s.retryVisibleSend(ctx, idempotentPartSends, func() error {
 				if _, serr := seeker.Seek(partBase, io.SeekStart); serr != nil {
 					return fmt.Errorf("rewind staged part %d: %w", i, serr)
 				}
 				var serr error
-				result, serr = sendPart()
+				if idempotentPartSends {
+					result, serr = tgclient.SendFileIdempotent(
+						ctx,
+						s.TG,
+						peer,
+						io.LimitReader(storedReader, partLen),
+						partAttachmentName(filename, i, numParts),
+						partCaption,
+						partLen,
+						onProgress,
+						sendRandomID,
+					)
+				} else {
+					result, serr = sendPart()
+				}
 				return serr
 			})
 		} else {
@@ -1486,6 +1529,30 @@ func (s *Service) sendRetryPolicy() tgclient.FloodWaitRetryPolicy {
 		return tgclient.DefaultWriteFloodWaitRetryPolicy()
 	}
 	return p
+}
+
+func supportsIdempotentFileSends(client tgclient.Client) bool {
+	_, ok := client.(tgclient.IdempotentSender)
+	return ok
+}
+
+// retryVisibleSend uses Telegram random_id idempotency whenever the client
+// supports it. A legacy client still retries failures known to precede a send,
+// but must surface a lost receipt rather than risk publishing a duplicate.
+func (s *Service) retryVisibleSend(ctx context.Context, idempotent bool, action func() error) error {
+	var outcomeUnknown error
+	err := s.sendRetryPolicy().Do(ctx, func() error {
+		err := action()
+		if !idempotent && errors.Is(err, tgclient.ErrSendOutcomeUnknown) {
+			outcomeUnknown = err
+			return errVisibleSendOutcomeUnknownNoRetry
+		}
+		return err
+	})
+	if errors.Is(err, errVisibleSendOutcomeUnknownNoRetry) {
+		return outcomeUnknown
+	}
+	return err
 }
 
 // uploadConcurrency clamps MaxConcurrentUploads into [1, maxUploadConcurrency].

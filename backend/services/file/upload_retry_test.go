@@ -3,6 +3,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -95,6 +96,155 @@ func TestUploadFailsWhenTransientBudgetExhausted(t *testing.T) {
 	}
 }
 
+// visibleAcceptThenLoseReceiptClient simulates MessagesSendMedia accepting a
+// document before its response is lost with a retryable transport error.
+// SendFile deliberately creates a fresh id on each call, matching a legacy
+// non-idempotent client. SendFileWithRandomID lets the fake deduplicate a
+// retry made through the idempotent extension.
+type visibleAcceptThenLoseReceiptClient struct {
+	*tgclient.Fake
+	failAt    int
+	calls     int
+	randomIDs []int64
+}
+
+func (c *visibleAcceptThenLoseReceiptClient) SendFile(
+	ctx context.Context,
+	peer tgclient.InputPeer,
+	source io.Reader,
+	name string,
+	caption string,
+	size int64,
+	progress func(int64, int64),
+) (tgclient.SendFileResult, error) {
+	return c.SendFileWithRandomID(ctx, peer, source, name, caption, size, progress, int64(c.calls+1))
+}
+
+func (c *visibleAcceptThenLoseReceiptClient) SendFileWithRandomID(
+	ctx context.Context,
+	peer tgclient.InputPeer,
+	source io.Reader,
+	name string,
+	caption string,
+	size int64,
+	progress func(int64, int64),
+	randomID int64,
+) (tgclient.SendFileResult, error) {
+	c.calls++
+	c.randomIDs = append(c.randomIDs, randomID)
+	result, err := c.Fake.SendFileWithRandomID(ctx, peer, source, name, caption, size, progress, randomID)
+	if err != nil {
+		return result, err
+	}
+	if c.calls == c.failAt {
+		return tgclient.SendFileResult{}, errors.Join(tgclient.ErrSendOutcomeUnknown, tgclient.ErrInjectedTransport)
+	}
+	return result, nil
+}
+
+func TestSingleUploadRetriesLostAcceptedReceiptIdempotently(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.FloodWaitRetry = instantRetryPolicy()
+	client := &visibleAcceptThenLoseReceiptClient{Fake: fakeTG, failAt: 1}
+	svc.TG = client
+
+	path := writeTempNamedFile(t, "receipt-lost.txt", []byte("one accepted body"))
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
+	if err != nil {
+		t.Fatalf("upload after lost accepted receipt: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("uploaded files = %+v, want one", files)
+	}
+	if client.calls != 2 {
+		t.Fatalf("send attempts = %d, want two", client.calls)
+	}
+	if len(client.randomIDs) != 2 || client.randomIDs[0] <= 0 || client.randomIDs[0] != client.randomIDs[1] {
+		t.Fatalf("retry random ids = %v, want the same positive id", client.randomIDs)
+	}
+	sent := fakeTG.SentFiles()
+	if len(sent) != 1 {
+		t.Fatalf("accepted sends = %+v, want exactly one", sent)
+	}
+	if files[0].MsgID != int(sent[0].MsgID) {
+		t.Fatalf("uploaded msg id = %d, want original receipt %d", files[0].MsgID, sent[0].MsgID)
+	}
+}
+
+func TestPlaintextMultipartRetriesLostAcceptedReceiptIdempotently(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	svc.FloodWaitRetry = instantRetryPolicy()
+	client := &visibleAcceptThenLoseReceiptClient{Fake: fakeTG, failAt: 2}
+	svc.TG = client
+
+	path := writeTempNamedFile(t, "receipt-lost.bin", bigBody(2500))
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
+	if err != nil {
+		t.Fatalf("multipart upload after lost accepted receipt: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("uploaded files = %+v, want one", files)
+	}
+	if client.calls != 4 {
+		t.Fatalf("send attempts = %d, want four", client.calls)
+	}
+	if len(client.randomIDs) != 4 || client.randomIDs[1] <= 0 || client.randomIDs[1] != client.randomIDs[2] {
+		t.Fatalf("second part retry random ids = %v, want the same positive id", client.randomIDs)
+	}
+	sent := fakeTG.SentFiles()
+	if len(sent) != 3 {
+		t.Fatalf("accepted sends = %+v, want exactly three parts", sent)
+	}
+	parts, err := projection.MultipartParts(db, personalChannelID, int64(files[0].MsgID))
+	if err != nil {
+		t.Fatalf("MultipartParts: %v", err)
+	}
+	if len(parts) != 3 {
+		t.Fatalf("projected parts = %d, want three", len(parts))
+	}
+}
+
+func TestVisibleUploadDoesNotRetryUnknownOutcomeForLegacyClient(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.FloodWaitRetry = instantRetryPolicy()
+	client := &visibleAcceptThenLoseReceiptClient{Fake: fakeTG, failAt: 1}
+	// Hide the idempotent extension to emulate an older Client implementation.
+	svc.TG = struct{ tgclient.Client }{Client: client}
+
+	path := writeTempNamedFile(t, "legacy-receipt-lost.txt", []byte("accepted legacy body"))
+	_, _, _, err := svc.uploadSingle(context.Background(), 0, path, "", personalChannelID, false)
+	if !errors.Is(err, tgclient.ErrSendOutcomeUnknown) {
+		t.Fatalf("upload error = %v, want unknown send outcome", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("legacy send attempts = %d, want one", client.calls)
+	}
+	if sent := fakeTG.SentFiles(); len(sent) != 1 {
+		t.Fatalf("legacy accepted sends = %+v, want exactly one", sent)
+	}
+}
+
+func TestVisibleUploadRetriesPreSendTransientFailureForLegacyClient(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.FloodWaitRetry = instantRetryPolicy()
+	// Hide the idempotent extension while retaining the legacy SendFile path.
+	svc.TG = struct{ tgclient.Client }{Client: fakeTG}
+	fakeTG.InjectTransientFailures(1)
+
+	path := writeTempNamedFile(t, "legacy-transient.txt", []byte("retry before send"))
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
+	if err != nil {
+		t.Fatalf("legacy upload after pre-send transient failure: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("uploaded files = %+v, want one", files)
+	}
+	if sent := fakeTG.SentFiles(); len(sent) != 1 {
+		t.Fatalf("legacy accepted sends = %+v, want exactly one", sent)
+	}
+}
+
 // countingClient tracks concurrent SendFile calls while delegating to Fake.
 type countingClient struct {
 	*tgclient.Fake
@@ -103,19 +253,28 @@ type countingClient struct {
 	maxSeen  int
 }
 
-func (c *countingClient) SendFile(ctx context.Context, peer tgclient.InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64)) (tgclient.SendFileResult, error) {
+func (c *countingClient) beginSend() func() {
 	c.mu.Lock()
 	c.inFlight++
 	if c.inFlight > c.maxSeen {
 		c.maxSeen = c.inFlight
 	}
 	c.mu.Unlock()
-	defer func() {
+	return func() {
 		c.mu.Lock()
 		c.inFlight--
 		c.mu.Unlock()
-	}()
+	}
+}
+
+func (c *countingClient) SendFile(ctx context.Context, peer tgclient.InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64)) (tgclient.SendFileResult, error) {
+	defer c.beginSend()()
 	return c.Fake.SendFile(ctx, peer, r, name, caption, totalSize, onProgress)
+}
+
+func (c *countingClient) SendFileWithRandomID(ctx context.Context, peer tgclient.InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), randomID int64) (tgclient.SendFileResult, error) {
+	defer c.beginSend()()
+	return c.Fake.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID)
 }
 
 func TestUploadBatchHonorsConfiguredConcurrency(t *testing.T) {
