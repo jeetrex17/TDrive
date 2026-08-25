@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	coreauth "TDrive/backend/auth"
@@ -39,10 +40,11 @@ func NewService(events EventSink) *Service {
 }
 
 func (s *Service) StartLogin(ctx context.Context, phoneNumber string) error {
+	slog.Info("auth: login attempt starting")
 	s.resetAttempt(stageStarted)
 	client, err := coreauth.Connect()
 	if err != nil {
-		fmt.Println("Could not connect to Telegram:", err)
+		slog.Warn("auth: telegram connect failed", "error", err)
 		s.finishAttempt()
 		s.emit("login-error", err.Error())
 		return err
@@ -51,19 +53,20 @@ func (s *Service) StartLogin(ctx context.Context, phoneNumber string) error {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
+				slog.Error("auth: login flow panicked", "recovered", r)
 				s.finishAttempt()
 				s.emit("login-error", fmt.Sprintf("login panic: %v", r))
 			}
 		}()
 		err := coreauth.StartLogin(ctx, client, s, phoneNumber)
 		if err != nil {
-			fmt.Println("Login failed:", err)
+			slog.Warn("auth: login attempt failed", "error", err)
 			s.finishAttempt()
 			s.emit("login-error", err.Error())
 			return
 		}
 
-		fmt.Println("Login Flow Complete. Emitting Success Event.")
+		slog.Info("auth: login succeeded")
 		s.finishAttempt()
 		s.emit("login-success", true)
 	}()
@@ -92,24 +95,30 @@ func (s *Service) SystemStatus() string {
 
 func (s *Service) SaveSetup(apiID int, apiHash string) string {
 	if err := coreauth.SaveImpCredentials(apiID, apiHash); err != nil {
+		slog.Error("auth: save API credentials failed", "error", err)
 		return "Error: " + err.Error()
 	}
+	slog.Info("auth: API credentials saved")
 	return "Success"
 }
 
 func (s *Service) SubmitCode(code string) {
 	if !s.accepts(stageStarted, stageWaitingCode) {
+		slog.Warn("auth: login code submitted while not awaiting one")
 		s.emit("login-error", "Not waiting for a login code. Start login again.")
 		return
 	}
+	slog.Debug("auth: login code submitted")
 	sendLatest(s.codech, code)
 }
 
 func (s *Service) SubmitPassword(password string) {
 	if !s.accepts(stageWaitingPassword) {
+		slog.Warn("auth: 2FA password submitted while not awaiting one")
 		s.emit("login-error", "Not waiting for a password.")
 		return
 	}
+	slog.Debug("auth: 2FA password submitted")
 	sendLatest(s.passch, password)
 }
 
@@ -126,23 +135,27 @@ func (s *Service) CodeRejected() {
 
 func (s *Service) WaitCode(ctx context.Context) (string, error) {
 	s.setStage(stageWaitingCode)
+	slog.Debug("auth: waiting for login code")
 	s.emit("login-code-required", true)
 	select {
 	case code := <-s.codech:
 		return code, nil
 	case <-ctx.Done():
+		slog.Debug("auth: wait for login code canceled", "error", ctx.Err())
 		return "", ctx.Err()
 	}
 }
 
 func (s *Service) WaitPassword(ctx context.Context, hint string) (string, error) {
 	s.setStage(stageWaitingPassword)
+	slog.Debug("auth: waiting for 2FA password")
 	s.emit("login-password-required", true)
 	s.SendHint(hint)
 	select {
 	case password := <-s.passch:
 		return password, nil
 	case <-ctx.Done():
+		slog.Debug("auth: wait for 2FA password canceled", "error", ctx.Err())
 		return "", ctx.Err()
 	}
 }

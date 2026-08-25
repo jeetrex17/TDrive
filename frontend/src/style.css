@@ -861,8 +861,6 @@ header {
 .header-actions { display: flex; gap: 12px; align-items: center; }
 .upload-btn { width: auto; padding: 8px 20px; font-size: 0.9rem; }
 .btn-icon { width: 16px; height: 16px; }
-.folder-btn { padding: 8px 14px; font-size: 0.9rem; }
-
 /* BREADCRUMB */
 .drive-breadcrumb {
     height: 48px; display: flex; align-items: center; gap: 10px;

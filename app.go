@@ -7,7 +7,10 @@ import (
 	"sync"
 
 	"TDrive/backend"
+	"TDrive/backend/applog"
 	"TDrive/backend/core"
+	"TDrive/backend/mountcontroller"
+	"TDrive/backend/mountlifecycle"
 	"TDrive/backend/processlock"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
@@ -27,6 +30,28 @@ type App struct {
 	engine      *core.Engine
 	Client      *telegram.Client
 	backendLock *processlock.Lock
+
+	// mountMu protects lazy controller construction. A transient construction
+	// failure stays retryable for a later mount request.
+	mountMu                sync.Mutex
+	mountController        appMountController
+	mountControllerFactory func(*core.Engine) (appMountController, error)
+	mountDriveResolver     func() (mountcontroller.Drive, error)
+	mountDrivesResolver    func([]int64) ([]mountcontroller.Drive, error)
+	// mountEncryptionPolicyRefresh is a narrow test seam. Production uses the
+	// core authoritative sync path; tests can model offline and partial history
+	// without network access.
+	mountEncryptionPolicyRefresh func(context.Context, int64) error
+	// mountLifecycle serializes mount Start/Stop/Close with encryption policy
+	// transitions. It is deliberately separate from the controller's internal
+	// mutex because a vault lock must cover both controller shutdown and key
+	// erasure as one indivisible operation.
+	mountLifecycle         mountlifecycle.Gate
+	mountLifecycleTerminal bool // guarded by mountLifecycle
+
+	// encryptionServiceOverride is a narrow test seam for deterministic
+	// key-state race tests. Production always uses Engine.EncryptionService.
+	encryptionServiceOverride appEncryptionService
 
 	// fileDropEnabled tracks whether the native OS file-drop handler is
 	// registered. The frontend toggles it off during an internal drag-to-move so
@@ -537,10 +562,16 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 // shutdown runs on app exit. Tear down the shared Telegram connection so the
 // background Run scope's goroutine exits cleanly.
 func (a *App) shutdown(ctx context.Context) {
+	mountCtx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
+	if err := a.shutdownMountController(mountCtx); err != nil {
+		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
+	}
+	cancel()
 	a.closeAllNativeMedia()
 	if a.engine != nil {
 		a.engine.Close()
 	}
+	applog.Close()
 	if a.backendLock != nil {
 		if err := a.backendLock.Release(); err != nil {
 			fmt.Printf("Warning: backend lock release failed: %v\n", err)
@@ -599,6 +630,7 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.backendLock = lock
+	applog.Init()
 
 	// Native file drop: hand the dropped absolute paths to the frontend, which
 	// resolves the target folder and runs the import flow. Drop zones opt in via
@@ -614,6 +646,7 @@ func (a *App) startup(ctx context.Context) {
 	})
 	if err != nil {
 		fmt.Printf("Warning: Failed to init TDrive backend: %v\n", err)
+		applog.Close()
 		if releaseErr := a.backendLock.Release(); releaseErr != nil {
 			fmt.Printf("Warning: backend lock release failed: %v\n", releaseErr)
 		}
@@ -623,6 +656,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
+	if _, err := a.ensureMountController(); err != nil {
+		fmt.Printf("Warning: Failed to initialize TDrive mount: %v\n", err)
+	}
 
 	fmt.Println("TDrive DB ready!")
 }

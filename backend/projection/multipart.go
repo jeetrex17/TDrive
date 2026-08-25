@@ -1,9 +1,11 @@
 package projection
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -21,8 +23,17 @@ type FilePart struct {
 // file, i.e. one whose files row carries no upload_uuid — callers treat a nil
 // result as "not multipart, use the single-message path".
 func MultipartParts(db *sql.DB, channelID int64, fileMsgID int64) ([]FilePart, error) {
+	return MultipartPartsContext(context.Background(), db, channelID, fileMsgID)
+}
+
+// MultipartPartsContext is MultipartParts with cancellation propagated to all
+// SQLite queries used to resolve the manifest and its ordered parts.
+func MultipartPartsContext(ctx context.Context, db *sql.DB, channelID int64, fileMsgID int64) ([]FilePart, error) {
+	if err := validateContext(ctx, "resolve multipart parts"); err != nil {
+		return nil, err
+	}
 	var uuid string
-	err := db.QueryRow(`
+	err := db.QueryRowContext(ctx, `
 		SELECT upload_uuid FROM files
 		WHERE channel_id = ? AND msg_id = ?
 	`, channelID, fileMsgID).Scan(&uuid)
@@ -30,35 +41,46 @@ func MultipartParts(db *sql.DB, channelID int64, fileMsgID int64) ([]FilePart, e
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("projection: load multipart upload id: %w", err)
 	}
 	if uuid == "" {
 		return nil, nil
 	}
-	return PartsForUUID(db, channelID, uuid)
+	return PartsForUUIDContext(ctx, db, channelID, uuid)
 }
 
 // PartsForUUID returns the parts of an upload grouped by upload_uuid, ordered by
 // part_index ascending.
 func PartsForUUID(db *sql.DB, channelID int64, uuid string) ([]FilePart, error) {
-	rows, err := db.Query(`
+	return PartsForUUIDContext(context.Background(), db, channelID, uuid)
+}
+
+// PartsForUUIDContext is PartsForUUID with cancellation propagated to SQLite.
+func PartsForUUIDContext(ctx context.Context, db *sql.DB, channelID int64, uuid string) ([]FilePart, error) {
+	if err := validateContext(ctx, "list multipart parts"); err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `
 		SELECT part_index, msg_id, size FROM file_parts
 		WHERE channel_id = ? AND upload_uuid = ?
 		ORDER BY part_index ASC
 	`, channelID, uuid)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("projection: list multipart parts: %w", err)
 	}
 	defer rows.Close()
 	var out []FilePart
 	for rows.Next() {
 		var p FilePart
 		if err := rows.Scan(&p.PartIndex, &p.MsgID, &p.Size); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("projection: scan multipart part: %w", err)
 		}
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("projection: iterate multipart parts: %w", err)
+	}
+	return out, nil
 }
 
 // OrphanPartMessages returns Telegram msg_ids of multipart parts whose manifest
@@ -95,7 +117,13 @@ func OrphanPartMessages(db *sql.DB, channelID int64) ([]int64, error) {
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) > 0 {
+		slog.Debug("projection: found orphan part messages for tombstoned uploads", "channel_id", channelID, "count", len(ids))
+	}
+	return ids, nil
 }
 
 // DeleteFileParts removes all file_parts rows for an upload uuid. Used by the
@@ -188,12 +216,23 @@ func deleteByMsgIDs(db *sql.DB, table string, channelID int64, msgIDs []int64) e
 // part can't yield a silently-truncated download. parts must be ordered by
 // part_index ascending (as PartsForUUID returns them).
 func MultipartComplete(db *sql.DB, channelID, fileMsgID int64, parts []FilePart) error {
+	return MultipartCompleteContext(context.Background(), db, channelID, fileMsgID, parts)
+}
+
+// MultipartCompleteContext is MultipartComplete with cancellation propagated
+// to the manifest metadata lookup.
+func MultipartCompleteContext(ctx context.Context, db *sql.DB, channelID, fileMsgID int64, parts []FilePart) error {
+	if err := validateContext(ctx, "validate multipart completeness"); err != nil {
+		return err
+	}
 	var (
 		partCount int
 		size      int64
 	)
-	if err := db.QueryRow(`SELECT part_count, size FROM files WHERE channel_id = ? AND msg_id = ?`, channelID, fileMsgID).Scan(&partCount, &size); err != nil {
-		return err
+	if err := db.QueryRowContext(ctx, `
+		SELECT part_count, size FROM files WHERE channel_id = ? AND msg_id = ?
+	`, channelID, fileMsgID).Scan(&partCount, &size); err != nil {
+		return fmt.Errorf("projection: load multipart manifest: %w", err)
 	}
 	if len(parts) != partCount {
 		return fmt.Errorf("multipart file is incomplete: have %d of %d parts", len(parts), partCount)
@@ -208,6 +247,7 @@ func MultipartComplete(db *sql.DB, channelID, fileMsgID int64, parts []FilePart)
 	if sum != size {
 		return fmt.Errorf("multipart file is incomplete: parts total %d bytes, expected %d", sum, size)
 	}
+	slog.Debug("projection: multipart file verified complete", "channel_id", channelID, "file_msg_id", fileMsgID, "parts", partCount, "size", size)
 	return nil
 }
 

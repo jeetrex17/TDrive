@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 7
+const currentSchemaVersion = 8
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -98,6 +98,71 @@ func EnsureSchema(db *sql.DB) error {
 				msg_id      INTEGER NOT NULL,
 				PRIMARY KEY (channel_id, msg_id)
 			);`,
+		`CREATE TABLE IF NOT EXISTS dirents (
+			channel_id   INTEGER NOT NULL,
+			object_id    TEXT NOT NULL,
+			object_kind  TEXT NOT NULL CHECK (object_kind IN ('file', 'folder')),
+			parent_id    TEXT NOT NULL DEFAULT '',
+			display_name TEXT NOT NULL,
+			name_key     TEXT NOT NULL,
+			revision     INTEGER NOT NULL DEFAULT 1,
+			tombstoned   INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (channel_id, object_id)
+		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_dirents_live_sibling_name
+			ON dirents(channel_id, parent_id, name_key)
+			WHERE tombstoned = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_dirents_live_parent
+			ON dirents(channel_id, parent_id, display_name, object_id)
+			WHERE tombstoned = 0;`,
+		`CREATE TABLE IF NOT EXISTS file_revisions (
+			channel_id         INTEGER NOT NULL,
+			file_msg_id        INTEGER NOT NULL,
+			revision           INTEGER NOT NULL,
+			content_msg_id     INTEGER NOT NULL DEFAULT 0,
+			upload_uuid        TEXT NOT NULL DEFAULT '',
+			part_count         INTEGER NOT NULL DEFAULT 0,
+			size               INTEGER NOT NULL DEFAULT 0,
+			plaintext_size     INTEGER NOT NULL DEFAULT 0,
+			content_hash       TEXT NOT NULL DEFAULT '',
+			encrypted          INTEGER NOT NULL DEFAULT 0,
+			encryption_version INTEGER NOT NULL DEFAULT 0,
+			committed_msg_id   INTEGER NOT NULL,
+			actor_user_id      INTEGER NOT NULL DEFAULT 0,
+			op_id              TEXT NOT NULL DEFAULT '',
+			retained_until     INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (channel_id, file_msg_id, revision)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_file_revisions_content_msg
+			ON file_revisions(channel_id, content_msg_id)
+			WHERE content_msg_id > 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_file_revisions_upload_uuid
+			ON file_revisions(channel_id, upload_uuid)
+			WHERE upload_uuid != '';`,
+		`CREATE INDEX IF NOT EXISTS idx_file_revisions_retention
+			ON file_revisions(retained_until, channel_id, file_msg_id, revision)
+			WHERE retained_until > 0;`,
+		`CREATE TABLE IF NOT EXISTS projection_operations (
+			channel_id INTEGER NOT NULL,
+			op_id      TEXT NOT NULL,
+			msg_id     INTEGER NOT NULL,
+			op_type    TEXT NOT NULL,
+			outcome    TEXT NOT NULL CHECK (outcome IN ('applied', 'rejected')),
+			error      TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (channel_id, op_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS trash_entries (
+			channel_id        INTEGER NOT NULL,
+			object_id         TEXT NOT NULL,
+			object_kind       TEXT NOT NULL CHECK (object_kind IN ('file', 'folder')),
+			original_parent_id TEXT NOT NULL,
+			original_name     TEXT NOT NULL,
+			original_revision INTEGER NOT NULL,
+			deleted_at        INTEGER NOT NULL,
+			purge_after       INTEGER NOT NULL,
+			op_id             TEXT NOT NULL,
+			PRIMARY KEY (channel_id, object_id)
+		);`,
 	}
 
 	for _, s := range stmts {
@@ -112,6 +177,13 @@ func EnsureSchema(db *sql.DB) error {
 }
 
 func ensureCompatibleIndexes(db *sql.DB) error {
+	if dbTableHasColumns(db, "files", "channel_id", "parent_id", "upload_time", "msg_id", "tombstoned") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_channel_parent_latest
+			ON files(channel_id, parent_id, upload_time DESC, msg_id DESC)
+			WHERE tombstoned = 0;`); err != nil {
+			return fmt.Errorf("projection: create files parent-order index: %w", err)
+		}
+	}
 	if dbTableHasColumns(db, "files", "channel_id", "uploader_user_id", "upload_time", "msg_id", "tombstoned") {
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_uploader_latest
 			ON files(channel_id, uploader_user_id, upload_time DESC, msg_id DESC)
@@ -138,6 +210,13 @@ func ensureCompatibleIndexes(db *sql.DB) error {
 			ON folders(channel_id, name COLLATE NOCASE)
 			WHERE tombstoned = 0;`); err != nil {
 			return fmt.Errorf("projection: create folders name index: %w", err)
+		}
+	}
+	if dbTableHasColumns(db, "folders", "channel_id", "parent_id", "name", "id", "tombstoned") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_folders_channel_parent_name
+			ON folders(channel_id, parent_id, name, id)
+			WHERE tombstoned = 0;`); err != nil {
+			return fmt.Errorf("projection: create folders parent-order index: %w", err)
 		}
 	}
 	return nil
@@ -248,6 +327,11 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 			return err
 		}
 	}
+	if v < 8 {
+		if err := migrateWritableProjection(tx); err != nil {
+			return err
+		}
+	}
 
 	if _, err := tx.Exec(`DELETE FROM schema_version`); err != nil {
 		return fmt.Errorf("projection: clear schema version: %w", err)
@@ -258,6 +342,13 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("projection: commit migration: %w", err)
+	}
+	// Table-rebuild migrations can temporarily leave a same-named index attached
+	// to the renamed legacy table. Recreate compatible indexes after the old
+	// table is dropped so upgraded databases get the same query plan as fresh
+	// installs.
+	if err := ensureCompatibleIndexes(db); err != nil {
+		return err
 	}
 	return nil
 }
@@ -443,10 +534,13 @@ func createFreshFolders(tx *sql.Tx) error {
 			name        TEXT NOT NULL,
 			parent_id   TEXT NOT NULL DEFAULT '',
 			tombstoned  INTEGER NOT NULL DEFAULT 0,
+			revision    INTEGER NOT NULL DEFAULT 1,
 			PRIMARY KEY (channel_id, id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_folders_channel_parent
 			ON folders(channel_id, parent_id) WHERE tombstoned = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_folders_channel_parent_name
+			ON folders(channel_id, parent_id, name, id) WHERE tombstoned = 0;`,
 		`CREATE INDEX IF NOT EXISTS idx_folders_channel_name_nocase
 			ON folders(channel_id, name COLLATE NOCASE)
 			WHERE tombstoned = 0;`,
@@ -475,10 +569,16 @@ func createFreshFiles(tx *sql.Tx) error {
 			encryption_version  INTEGER NOT NULL DEFAULT 0,
 			upload_uuid         TEXT NOT NULL DEFAULT '',
 			part_count          INTEGER NOT NULL DEFAULT 0,
+			content_msg_id      INTEGER NOT NULL DEFAULT 0,
+			content_hash        TEXT NOT NULL DEFAULT '',
+			revision            INTEGER NOT NULL DEFAULT 1,
 			PRIMARY KEY (channel_id, msg_id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_files_channel_parent
 			ON files(channel_id, parent_id) WHERE tombstoned = 0;`,
+		`CREATE INDEX IF NOT EXISTS idx_files_channel_parent_latest
+			ON files(channel_id, parent_id, upload_time DESC, msg_id DESC)
+			WHERE tombstoned = 0;`,
 		`CREATE INDEX IF NOT EXISTS idx_files_uploader_latest
 			ON files(channel_id, uploader_user_id, upload_time DESC, msg_id DESC)
 			WHERE tombstoned = 0 AND uploader_user_id > 0;`,

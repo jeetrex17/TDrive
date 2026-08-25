@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path"
@@ -16,7 +17,9 @@ import (
 	"sync"
 	"time"
 
+	"TDrive/backend/applog"
 	"TDrive/backend/core"
+	"TDrive/backend/mountlifecycle"
 	"TDrive/backend/processlock"
 )
 
@@ -25,6 +28,10 @@ const (
 	daemonReadTimeout   = 5 * time.Minute
 	daemonWriteTimeout  = 30 * time.Second
 	daemonDrainTimeout  = 10 * time.Second
+	// Writable shutdown may spend 30 seconds finishing accepted mutations.
+	// Preserve the platform's 20-second detach budget and another five seconds
+	// for local endpoint/writer cleanup after the OS releases the mount.
+	daemonMountShutdownTimeout = 55 * time.Second
 )
 
 type ServerConfig struct {
@@ -35,8 +42,20 @@ type ServerConfig struct {
 type Server struct {
 	engine *core.Engine
 	lock   *processlock.Lock
-	warnf  func(format string, args ...any)
-	state  *state
+	// mountMu only protects lazy controller construction. The controller owns
+	// its own lifecycle state and never takes the daemon-wide write lock.
+	mountMu         sync.Mutex
+	mountController daemonMountController
+	// mountEncryptionPolicyRefresh is injected only by tests. Production uses
+	// Engine.EnsureEncryptionPolicy to establish full-history authority.
+	mountEncryptionPolicyRefresh func(context.Context, int64) error
+	// mountLifecycle serializes mount Start/Stop/Close with vault lock/logout.
+	// The gate must cover both controller shutdown and encryption-key erasure so
+	// a racing Start cannot observe a stale unlocked vault.
+	mountLifecycle         mountlifecycle.Gate
+	mountLifecycleTerminal bool // guarded by mountLifecycle
+	warnf                  func(format string, args ...any)
+	state                  *state
 
 	mu        sync.Mutex
 	eventMu   sync.Mutex
@@ -86,6 +105,8 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 			s.warnf("daemon: release lock: %v\n", err)
 		}
 	}()
+	applog.Init()
+	defer applog.Close()
 
 	engine, err := core.New(runCtx, cfg.CoreConfig)
 	if err != nil {
@@ -94,6 +115,13 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 	s.engine = engine
 	defer s.engine.Close()
 	defer s.wg.Wait()
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), daemonMountShutdownTimeout)
+		defer stopCancel()
+		if err := s.stopMountServer(stopCtx); err != nil {
+			s.warnf("daemon: stop mount: %v\n", err)
+		}
+	}()
 
 	if err := s.loadState(); err != nil {
 		s.warnf("daemon: load cli state: %v\n", err)
@@ -115,13 +143,16 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 		_ = ln.Close()
 	}()
 
+	slog.Info("daemon: listening")
 	s.warnf("TDrive daemon listening on %s\n", socketPath)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if runCtx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				slog.Info("daemon: listener closed, shutting down")
 				return nil
 			}
+			slog.Warn("daemon: accept failed", "error", err)
 			s.warnf("daemon: accept: %v\n", err)
 			continue
 		}
@@ -134,7 +165,11 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 }
 
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
-	defer func() { _ = conn.Close() }()
+	slog.Debug("daemon: client connection accepted")
+	defer func() {
+		slog.Debug("daemon: client connection closed")
+		_ = conn.Close()
+	}()
 
 	reader := bufio.NewReader(conn)
 	enc := json.NewEncoder(conn)
@@ -222,6 +257,7 @@ func (s *Server) handleStreamingRequest(ctx context.Context, req Request, writeF
 	if err := validateRequest(req); err != nil {
 		return writeFrame(ErrorResponse(req.ID, err))
 	}
+	slog.Debug("daemon: streaming command started", "command", req.Command)
 
 	events := s.subscribeEvents()
 	defer s.unsubscribeEvents(events)
@@ -267,10 +303,17 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 	if err := validateRequest(req); err != nil {
 		return ErrorResponse(req.ID, err)
 	}
+	// req.Payload is never logged: several commands (auth.setup, auth.submit_password,
+	// vault.unlock) carry credentials in it. Only the command name is safe to log.
+	slog.Debug("daemon: dispatching command", "command", req.Command)
 
 	switch req.Command {
 	case CommandStatus:
-		frame, err := Response(req.ID, s.status(ctx))
+		out, err := s.status(ctx)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -280,6 +323,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
+		slog.Info("daemon: shutdown requested")
 		go s.stopOnce.Do(s.stop)
 		return frame
 	case CommandAuthSetup:
@@ -635,7 +679,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		}
 		return frame
 	case CommandVaultStatus:
-		out, err := s.vaultStatus()
+		out, err := s.vaultStatus(ctx)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -649,7 +693,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.vaultUnlock(in.Password)
+		out, err := s.vaultUnlock(ctx, in.Password)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -659,7 +703,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		}
 		return frame
 	case CommandVaultLock:
-		out, err := s.vaultLock()
+		out, err := s.vaultLock(ctx)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -696,30 +740,63 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 			return ErrorResponse(req.ID, err)
 		}
 		return frame
+	case CommandMountStart:
+		var in MountStartRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.startMount(ctx, in.Selector, in.WindowsDrive, in.Mode)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandMountStatus:
+		out := s.mountStatus()
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandMountStop:
+		out, err := s.stopMount(ctx)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
 	default:
 		return ErrorResponse(req.ID, fmt.Errorf("unknown command %q", req.Command))
 	}
 }
 
-func (s *Server) status(ctx context.Context) Status {
+func (s *Server) status(ctx context.Context) (Status, error) {
 	out := Status{
 		PID:             os.Getpid(),
 		ActiveChannelID: s.engine.ActiveChannelID(),
 		CurrentPath:     s.currentPath(),
 	}
 	if enc := s.engine.EncryptionService(); enc != nil {
-		if st, err := enc.Status(); err == nil {
-			out.VaultAvailable = st.Available
-			out.VaultConfigured = st.PasswordSet
-			out.VaultUnlocked = st.PasswordRemembered
-			out.VaultHint = st.Hint
+		st, err := enc.StatusContext(ctx)
+		if err != nil {
+			return Status{}, err
 		}
+		out.VaultAvailable = st.Available
+		out.VaultConfigured = st.PasswordSet
+		out.VaultUnlocked = st.PasswordRemembered
+		out.VaultHint = st.Hint
 	}
-	return out
+	return out, nil
 }
 
-func (s *Server) vaultStatus() (VaultResponse, error) {
-	status, err := s.engine.EncryptionService().Status()
+func (s *Server) vaultStatus(ctx context.Context) (VaultResponse, error) {
+	status, err := s.engine.EncryptionService().StatusContext(ctx)
 	if err != nil {
 		return VaultResponse{}, err
 	}
@@ -731,22 +808,36 @@ func (s *Server) vaultStatus() (VaultResponse, error) {
 	}}, nil
 }
 
-func (s *Server) vaultUnlock(password string) (VaultResponse, error) {
+func (s *Server) vaultUnlock(ctx context.Context, password string) (VaultResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	release, err := s.acquireMountLifecycle(ctx)
+	if err != nil {
+		return VaultResponse{}, fmt.Errorf("vault unlock: wait for mount lifecycle: %w", err)
+	}
+	defer release()
 
 	if err := s.engine.EncryptionService().UsePassword(password); err != nil {
 		return VaultResponse{}, err
 	}
-	return s.vaultStatus()
+	return s.vaultStatus(ctx)
 }
 
-func (s *Server) vaultLock() (VaultResponse, error) {
+func (s *Server) vaultLock(ctx context.Context) (VaultResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
+	release, err := s.acquireMountLifecycle(ctx)
+	if err != nil {
+		return VaultResponse{}, fmt.Errorf("vault lock: wait for mount lifecycle: %w", err)
+	}
+	defer release()
+
+	if _, err := s.stopMountLocked(ctx); err != nil {
+		return VaultResponse{}, fmt.Errorf("vault lock: eject mounted drive: %w", err)
+	}
 	s.engine.ClearEncryptionSession()
-	return s.vaultStatus()
+	return s.vaultStatus(ctx)
 }
 
 func (s *Server) loadState() error {

@@ -1,4 +1,9 @@
 <script lang="ts">
+    import DownloadIcon from '@lucide/svelte/icons/download';
+    import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
+    import FolderIcon from '@lucide/svelte/icons/folder';
+    import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
+    import PlayIcon from '@lucide/svelte/icons/play';
     import FileState from './FileState.svelte';
     import { sortFileListRows } from './file-sort';
     import { fileListView } from './file-list-store';
@@ -55,9 +60,7 @@
             >
                 <div class="row-name" title={row.name}>
                     <span class="folder-chip" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                        </svg>
+                        <FolderIcon size={18} strokeWidth={2} aria-hidden="true" />
                     </span>
                     <span class="row-label">{row.name}</span>
                     <span class="pending-indicator" aria-hidden="true"></span>
@@ -95,19 +98,14 @@
                 <div class="row-name" draggable="true" title={row.name}>
                     {#if row.kind === 'folder'}
                         <span class="folder-chip" aria-hidden="true">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-                            </svg>
+                            <FolderIcon size={18} strokeWidth={2} aria-hidden="true" />
                         </span>
                         <span class="row-label">{row.name}</span>
                     {:else}
                         <span class="file-ext-text" aria-hidden="true">{row.ext}</span>
                         {#if row.encrypted}
                             <span class="file-lock-badge" title="Encrypted" aria-label="Encrypted">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 11h14a1 1 0 011 1v8a1 1 0 01-1 1H5a1 1 0 01-1-1v-8a1 1 0 011-1z" />
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 118 0v4" />
-                                </svg>
+                                <LockKeyholeIcon size={12} strokeWidth={2} aria-hidden="true" />
                             </span>
                         {/if}
                         <span class="row-label">{row.baseName}</span>
@@ -128,19 +126,11 @@
                             onclick={(event) => onActionClick(event, row, action)}
                         >
                             {#if action.kind === 'open'}
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2" />
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M14 3h7v7" />
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 14L21 3" />
-                                </svg>
+                                <ExternalLinkIcon size={16} strokeWidth={2} aria-hidden="true" />
                             {:else if action.kind === 'play'}
-                                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                                    <path d="M8 5.8c0-.9.98-1.45 1.74-.98l9.08 5.67a1.15 1.15 0 010 1.96l-9.08 5.67A1.15 1.15 0 018 17.14V5.8z" />
-                                </svg>
+                                <PlayIcon size={16} strokeWidth={2} aria-hidden="true" />
                             {:else}
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                                    <path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                </svg>
+                                <DownloadIcon size={16} strokeWidth={2} aria-hidden="true" />
                             {/if}
                         </button>
                     {/each}

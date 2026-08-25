@@ -3,7 +3,11 @@ package crypto
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
+	"math"
 	"testing"
 )
 
@@ -129,6 +133,84 @@ func TestEncryptStreamRejectsCounterOverflow(t *testing.T) {
 	if err == nil {
 		t.Fatal("EncryptStream accepted plaintext beyond the stream counter capacity")
 	}
+}
+
+func TestStreamRejectsInvalidMasterKeyLengths(t *testing.T) {
+	t.Parallel()
+
+	for _, size := range []int{0, 31, 33, 128} {
+		t.Run(fmt.Sprintf("key-%d", size), func(t *testing.T) {
+			t.Parallel()
+			key := bytes.Repeat([]byte{1}, size)
+			var ciphertext bytes.Buffer
+			if err := EncryptStream(bytes.NewReader(nil), &ciphertext, key, 0); !errors.Is(err, ErrInvalidMasterKey) {
+				t.Fatalf("EncryptStream key length %d error = %v, want ErrInvalidMasterKey", size, err)
+			}
+			if _, err := DecryptStream(bytes.NewReader(make([]byte, streamHeaderLen)), io.Discard, key); !errors.Is(err, ErrInvalidMasterKey) {
+				t.Fatalf("DecryptStream key length %d error = %v, want ErrInvalidMasterKey", size, err)
+			}
+		})
+	}
+}
+
+func TestStreamRejectsShortWrites(t *testing.T) {
+	t.Parallel()
+
+	key := bytes.Repeat([]byte{1}, 32)
+	if err := EncryptStream(bytes.NewReader(nil), shortNilWriter{}, key, 0); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("EncryptStream short header write error = %v, want io.ErrShortWrite", err)
+	}
+
+	plaintext := []byte("secret")
+	var ciphertext bytes.Buffer
+	if err := EncryptStream(bytes.NewReader(plaintext), &ciphertext, key, int64(len(plaintext))); err != nil {
+		t.Fatalf("EncryptStream fixture: %v", err)
+	}
+	if _, err := DecryptStream(bytes.NewReader(ciphertext.Bytes()), shortNilWriter{}, key); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("DecryptStream short plaintext write error = %v, want io.ErrShortWrite", err)
+	}
+}
+
+func TestDecryptStreamRejectsUnsupportedFlagsAndImpossibleSize(t *testing.T) {
+	t.Parallel()
+
+	key := bytes.Repeat([]byte{2}, 32)
+	var encrypted bytes.Buffer
+	if err := EncryptStream(bytes.NewReader(nil), &encrypted, key, 0); err != nil {
+		t.Fatalf("EncryptStream fixture: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func([]byte)
+	}{
+		{name: "reserved flags", mutate: func(stream []byte) { stream[4] = 1 }},
+		{name: "uint64 size", mutate: func(stream []byte) { binary.LittleEndian.PutUint64(stream[42:50], math.MaxUint64) }},
+		{name: "counter capacity", mutate: func(stream []byte) { binary.LittleEndian.PutUint64(stream[42:50], uint64(maxPlaintextSize)+1) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			stream := append([]byte(nil), encrypted.Bytes()...)
+			test.mutate(stream)
+			var plaintext bytes.Buffer
+			if _, err := DecryptStream(bytes.NewReader(stream), &plaintext, key); !errors.Is(err, ErrUnsupported) {
+				t.Fatalf("DecryptStream error = %v, want ErrUnsupported", err)
+			}
+			if plaintext.Len() != 0 {
+				t.Fatalf("DecryptStream wrote %d bytes before metadata rejection", plaintext.Len())
+			}
+		})
+	}
+}
+
+type shortNilWriter struct{}
+
+func (shortNilWriter) Write(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	return len(buffer) - 1, nil
 }
 
 type zeroReader struct{}

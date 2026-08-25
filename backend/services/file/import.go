@@ -265,7 +265,9 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 		return err
 	}
 	if encrypt {
-		if _, err := s.masterKeyForUpload(channelID, true); err != nil {
+		masterKey, err := s.masterKeyForUpload(channelID, true)
+		clearOwnedKey(masterKey)
+		if err != nil {
 			return err
 		}
 		if s.WriteCiphertextTemp == nil {

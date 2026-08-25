@@ -24,15 +24,16 @@ type ResolvedParent struct {
 }
 
 type ResolvedEntry struct {
-	Type       string `json:"type"`
-	ID         string `json:"id,omitempty"`
-	MsgID      int64  `json:"msg_id,omitempty"`
-	Name       string `json:"name"`
-	ParentID   string `json:"parent_id"`
-	Path       string `json:"path"`
-	Size       int64  `json:"size,omitempty"`
-	UploadTime int64  `json:"upload_time,omitempty"`
-	Encrypted  bool   `json:"encrypted,omitempty"`
+	Type          string `json:"type"`
+	ID            string `json:"id,omitempty"`
+	MsgID         int64  `json:"msg_id,omitempty"`
+	Name          string `json:"name"`
+	ParentID      string `json:"parent_id"`
+	Path          string `json:"path"`
+	Size          int64  `json:"size,omitempty"`
+	UploadTime    int64  `json:"upload_time,omitempty"`
+	Encrypted     bool   `json:"encrypted,omitempty"`
+	PlaintextSize int64  `json:"plaintext_size,omitempty"`
 }
 
 func NormalizeRemotePath(cwd string, input string) (string, error) {
@@ -221,15 +222,16 @@ func (e *Engine) ResolveEntryPath(channelID int64, cwd string, input string) (Re
 	for _, file := range fs.Files {
 		if file.Name == name {
 			files = append(files, ResolvedEntry{
-				Type:       "file",
-				ID:         fmt.Sprintf("%d", file.MsgID),
-				MsgID:      file.MsgID,
-				Name:       file.Name,
-				ParentID:   file.ParentID,
-				Path:       abs,
-				Size:       file.Size,
-				UploadTime: file.UploadTime,
-				Encrypted:  file.Encrypted,
+				Type:          "file",
+				ID:            fmt.Sprintf("%d", file.MsgID),
+				MsgID:         file.MsgID,
+				Name:          file.Name,
+				ParentID:      file.ParentID,
+				Path:          abs,
+				Size:          file.Size,
+				UploadTime:    file.UploadTime,
+				Encrypted:     file.Encrypted,
+				PlaintextSize: file.PlaintextSize,
 			})
 		}
 	}

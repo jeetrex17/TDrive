@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 )
 
@@ -20,6 +21,10 @@ var (
 	ErrMessageNotFound = errors.New("tgclient: message not found")
 	ErrNotFile         = errors.New("tgclient: message is not a file")
 	ErrEmptyDocument   = errors.New("tgclient: empty document")
+	// ErrSendOutcomeUnknown means Telegram may have accepted an idempotent
+	// write even though the client did not receive a usable receipt. Callers
+	// must retry with the same random_id before abandoning remote artifacts.
+	ErrSendOutcomeUnknown = errors.New("tgclient: send outcome unknown")
 )
 
 type FloodWaitError struct {
@@ -178,6 +183,12 @@ type Client interface {
 	// follow-up and folder hard-delete. Best effort.
 	DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int64) error
 
+	// MissingMessages checks which of the given message IDs no longer exist
+	// in the channel (deleted by any client, not just TDrive). Used by
+	// external-delete reconciliation to detect a file whose backing message
+	// vanished from Telegram directly.
+	MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error)
+
 	CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error)
 	ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error)
 	CheckInvite(ctx context.Context, hash string) (InviteInfo, error)
@@ -191,4 +202,48 @@ type Client interface {
 
 	// Close releases the shared connection. Called once at app shutdown.
 	Close()
+}
+
+// IdempotentSender is the write extension used by durable mutation journals.
+// Retrying a call with the same positive randomID returns the original Telegram
+// message instead of creating a duplicate.
+type IdempotentSender interface {
+	SendControlWithRandomID(ctx context.Context, peer InputPeer, text string, silent bool, randomID int64) (msgID int64, err error)
+	SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), randomID int64) (SendFileResult, error)
+}
+
+func SendControlIdempotent(ctx context.Context, client Client, peer InputPeer, text string, silent bool, randomID int64) (int64, error) {
+	if randomID <= 0 {
+		return 0, fmt.Errorf("tgclient: random id must be positive")
+	}
+	sender, ok := client.(IdempotentSender)
+	if !ok {
+		return 0, fmt.Errorf("tgclient: idempotent sends are not supported")
+	}
+	slog.Debug("tgclient: sending control message", "channel_id", peer.ChannelID, "silent", silent, "text_len", len(text))
+	msgID, err := sender.SendControlWithRandomID(ctx, peer, text, silent, randomID)
+	if err != nil {
+		slog.Error("tgclient: send control message failed", "channel_id", peer.ChannelID, "error", err)
+		return 0, err
+	}
+	slog.Debug("tgclient: control message sent", "channel_id", peer.ChannelID, "msg_id", msgID)
+	return msgID, nil
+}
+
+func SendFileIdempotent(ctx context.Context, client Client, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), randomID int64) (SendFileResult, error) {
+	if randomID <= 0 {
+		return SendFileResult{}, fmt.Errorf("tgclient: random id must be positive")
+	}
+	sender, ok := client.(IdempotentSender)
+	if !ok {
+		return SendFileResult{}, fmt.Errorf("tgclient: idempotent sends are not supported")
+	}
+	slog.Debug("tgclient: sending file", "channel_id", peer.ChannelID, "name", name, "total_size", totalSize)
+	result, err := sender.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID)
+	if err != nil {
+		slog.Error("tgclient: send file failed", "channel_id", peer.ChannelID, "name", name, "error", err)
+		return SendFileResult{}, err
+	}
+	slog.Debug("tgclient: file sent", "channel_id", peer.ChannelID, "msg_id", result.MsgID, "total_size", totalSize)
+	return result, nil
 }

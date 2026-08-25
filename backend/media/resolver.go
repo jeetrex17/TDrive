@@ -46,15 +46,22 @@ func (r *Resolver) Resolve(ctx context.Context, channelID, fileID int64) (Logica
 	}
 
 	if row.uploadUUID == "" {
-		out.Segments = []Segment{{MsgID: fileID, Size: row.size}}
+		msgID := row.contentMsgID
+		if msgID <= 0 {
+			msgID = fileID
+		}
+		out.Segments = []Segment{{MsgID: msgID, Size: row.size}}
 		return out, nil
 	}
 
-	parts, err := projection.MultipartParts(r.db, channelID, fileID)
+	parts, err := projection.MultipartPartsContext(ctx, r.db, channelID, fileID)
 	if err != nil {
 		return LogicalFile{}, fmt.Errorf("media: load multipart parts: %w", err)
 	}
-	if err := projection.MultipartComplete(r.db, channelID, fileID, parts); err != nil {
+	if err := projection.MultipartCompleteContext(ctx, r.db, channelID, fileID, parts); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return LogicalFile{}, fmt.Errorf("media: validate multipart file: %w", err)
+		}
 		return LogicalFile{}, fmt.Errorf("%w: %v", ErrIncompleteMultipart, err)
 	}
 
@@ -72,6 +79,7 @@ type fileRow struct {
 	encrypted         bool
 	plaintextSize     int64
 	encryptionVersion int
+	contentMsgID      int64
 	uploadUUID        string
 }
 
@@ -79,7 +87,7 @@ func (r *Resolver) lookupFile(ctx context.Context, channelID, fileID int64) (fil
 	var row fileRow
 	var encrypted int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT name, size, encrypted, plaintext_size, encryption_version, upload_uuid
+		SELECT name, size, encrypted, plaintext_size, encryption_version, content_msg_id, upload_uuid
 		FROM files
 		WHERE channel_id = ? AND msg_id = ? AND tombstoned = 0
 	`, channelID, fileID).Scan(
@@ -88,6 +96,7 @@ func (r *Resolver) lookupFile(ctx context.Context, channelID, fileID int64) (fil
 		&encrypted,
 		&row.plaintextSize,
 		&row.encryptionVersion,
+		&row.contentMsgID,
 		&row.uploadUUID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

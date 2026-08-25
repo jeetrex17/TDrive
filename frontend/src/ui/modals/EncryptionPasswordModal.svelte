@@ -9,19 +9,28 @@
 
     let { onCancel, onSubmit }: Props = $props();
     let password = $state('');
+    let passwordInput = $state<HTMLInputElement | null>(null);
     let wasOpen = false;
 
     const view = encryptionPasswordModal.state;
     const hint = $derived(($view.payload?.hint ?? '').trim());
 
+    function clearPassword(): void {
+        password = '';
+        if (passwordInput) passwordInput.value = '';
+    }
+
     function cancel(): void {
         if ($view.busy) return;
+        clearPassword();
         onCancel();
     }
 
     function submit(): void {
         if ($view.busy) return;
-        void onSubmit(password);
+        const submittedPassword = password;
+        clearPassword();
+        void onSubmit(submittedPassword);
     }
 
     function onInputKeydown(event: KeyboardEvent): void {
@@ -31,11 +40,14 @@
         }
     }
 
-    $effect(() => {
-        if ($view.open && !wasOpen) {
-            password = '';
+    $effect.pre(() => {
+        if (!$view.open) {
+            clearPassword();
+            wasOpen = false;
+            return;
         }
-        wasOpen = $view.open;
+        if (!wasOpen) clearPassword();
+        wasOpen = true;
     });
 </script>
 
@@ -59,6 +71,7 @@
         type="password"
         placeholder="Password"
         autocomplete="current-password"
+        bind:this={passwordInput}
         bind:value={password}
         disabled={$view.busy}
         onkeydown={onInputKeydown}

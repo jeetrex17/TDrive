@@ -73,6 +73,8 @@ describe('ProfileMenu', () => {
 
         expect(body).toContain('Loading account…');
         expect(body).not.toContain('profile-menu-encryption-settings');
+        expect(body).not.toContain('id="mount-drive-button"');
+        expect(body).not.toContain('id="mount-selection-modal"');
         expect(body).toContain('Log out');
     });
 
@@ -86,6 +88,18 @@ describe('ProfileMenu', () => {
         expect(body).toContain('Ada L.');
         expect(body).toContain('@ada');
         expect(body).toContain('Encryption settings');
+    });
+
+    it('does not render mount controls below encryption settings', () => {
+        encryptionEntryVisible.set(true);
+
+        const { body } = render(ProfileMenu, { props: profileProps });
+        const encryptionIndex = body.indexOf('id="profile-menu-encryption-settings"');
+        const logoutIndex = body.indexOf('id="profile-menu-logout"');
+
+        expect(encryptionIndex).toBeGreaterThanOrEqual(0);
+        expect(logoutIndex).toBeGreaterThan(encryptionIndex);
+        expect(body).not.toContain('id="mount-drive-button"');
     });
 });
 

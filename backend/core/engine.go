@@ -63,6 +63,10 @@ type Config struct {
 	// SkipDBInit is for tests that already installed backend.DB. Normal GUI and
 	// daemon startup should leave this false.
 	SkipDBInit bool
+
+	// EncryptionPolicyRefresh is a narrow test seam for authoritative
+	// policy failures. Production leaves it nil and uses the sync engine.
+	EncryptionPolicyRefresh func(context.Context, int64) error
 }
 
 // Engine owns the reusable, headless TDrive backend. The Wails app and daemon
@@ -89,6 +93,7 @@ type Engine struct {
 	active     *lifecycleservice.ActiveDrive
 	selfUserID atomic.Int64
 	thumbs     *thumbnail.Cache
+	policySync func(context.Context, int64) error
 }
 
 // New initializes storage, Telegram adapters, and all service dependencies.
@@ -109,13 +114,14 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	}
 
 	e := &Engine{
-		ctx:     ctx,
-		connect: cfg.Connect,
-		events:  cfg.Events,
-		warnf:   cfg.Warnf,
-		tg:      cfg.TG,
-		active:  lifecycleservice.NewActiveDrive(),
-		thumbs:  cfg.Thumbs,
+		ctx:        ctx,
+		connect:    cfg.Connect,
+		events:     cfg.Events,
+		warnf:      cfg.Warnf,
+		tg:         cfg.TG,
+		active:     lifecycleservice.NewActiveDrive(),
+		thumbs:     cfg.Thumbs,
+		policySync: cfg.EncryptionPolicyRefresh,
 	}
 	var liveActivity *livesync.TelegramActivity
 	if e.tg == nil {
@@ -151,6 +157,13 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.reads = e.newReadService()
 	e.media = e.newMediaService()
 	e.syncEngine = tdsync.NewEngine(backend.DB, e.tg, peerResolverFn(e.ResolvePeer))
+	e.syncEngine.EmitTomb = func(channelID int64, fileMsgID int64) error {
+		_, err := e.EmitAndProject(channelID, projection.Op{
+			Type: projection.OpTomb,
+			Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, fileMsgID),
+		})
+		return err
+	}
 	e.lifecycle = e.newLifecycleService()
 	e.users = e.newUserService()
 	e.startLiveSync(liveActivity)
@@ -204,6 +217,9 @@ func (e *Engine) Close() {
 	}
 	if e != nil && e.tg != nil {
 		e.tg.Close()
+	}
+	if e != nil {
+		e.ClearEncryptionSession()
 	}
 }
 
@@ -432,6 +448,20 @@ func (e *Engine) ChannelService() *channelservice.Service {
 	}
 }
 
+// EnsureEncryptionPolicy synchronizes enough channel history to make a
+// missing personal-drive encryption configuration authoritative. Mount entry
+// and password-setup entry points call this only after both the derived config
+// and canonical local replay lack a policy.
+func (e *Engine) EnsureEncryptionPolicy(ctx context.Context, channelID int64) error {
+	if e != nil && e.policySync != nil {
+		return e.policySync(ctx, channelID)
+	}
+	if e == nil || e.syncEngine == nil {
+		return fmt.Errorf("encryption policy sync is unavailable")
+	}
+	return e.syncEngine.EnsureAuthoritative(ctx, channelID)
+}
+
 func (e *Engine) ClearEncryptionSession() {
 	if e != nil && e.enc != nil {
 		e.enc.Clear()
@@ -448,6 +478,7 @@ func (e *Engine) newEncryptionService() *encservice.Service {
 	return encservice.NewService(encservice.Config{
 		DB:                backend.DB,
 		PersonalChannelID: PersonalChannelID,
+		EnsurePolicy:      e.EnsureEncryptionPolicy,
 		EmitOp: func(channelID int64, op projection.Op) error {
 			_, err := e.EmitAndProject(channelID, op)
 			return err

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -37,20 +38,25 @@ func ParseHistoryPage(msgs []tgclient.HistoryMessage) []ParsedMessage {
 
 func ParseHistoryPageWithOptions(msgs []tgclient.HistoryMessage, opts ParseOptions) []ParsedMessage {
 	out := make([]ParsedMessage, 0, len(msgs))
+	skipped := 0
+	adopted := 0
 	for _, m := range msgs {
 		header := projection.ExtractHeaderLine(m.Text)
 		op, err := projection.Parse(header)
 		adoptedCaptionless := false
 		if err != nil {
 			if !opts.AdoptCaptionlessMedia || tdriveHeaderCandidate(header) {
+				skipped++
 				continue
 			}
 			var ok bool
 			op, header, ok = captionlessMediaOp(m)
 			if !ok {
+				skipped++
 				continue
 			}
 			adoptedCaptionless = true
+			adopted++
 		}
 		if op.Type == projection.OpFileUpload || op.Type == projection.OpMeta {
 			if op.FileSize == 0 && m.MediaSize > 0 {
@@ -68,6 +74,8 @@ func ParseHistoryPageWithOptions(msgs []tgclient.HistoryMessage, opts ParseOptio
 			AdoptedCaptionless: adoptedCaptionless,
 		})
 	}
+	slog.Debug("sync: parsed history page", "input", len(msgs), "parsed", len(out), "skipped", skipped,
+		"adopted_captionless", adopted, "adopt_captionless_enabled", opts.AdoptCaptionlessMedia)
 	return out
 }
 

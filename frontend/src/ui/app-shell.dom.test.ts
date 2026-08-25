@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import AppShell from './AppShell.svelte';
 import { resetFileSortState } from './file-list/file-sort-store';
@@ -22,8 +22,6 @@ function click(selector: string): void {
 
 afterEach(async () => {
     resetFileSortState();
-    delete (window as unknown as { triggerRefresh?: unknown }).triggerRefresh;
-    delete (window as unknown as { openNewFolderModal?: unknown }).openNewFolderModal;
     if (app) await unmount(app);
     host?.remove();
     app = null;
@@ -42,23 +40,33 @@ describe('AppShell behavior', () => {
             'context-menu',
             'preview-modal',
             'video-modal',
+            'mount-selection-modal',
         ]) {
             expect(host?.querySelector(`#${id}`)).not.toBeNull();
         }
     });
 
-    it('routes header actions through the existing app controller hooks', () => {
-        const triggerRefresh = vi.fn();
-        const openNewFolderModal = vi.fn();
-        (window as unknown as { triggerRefresh: () => void }).triggerRefresh = triggerRefresh;
-        (window as unknown as { openNewFolderModal: () => void }).openNewFolderModal = openNewFolderModal;
+    it('keeps manual refresh and folder creation out of the header', () => {
         setup();
 
-        click('.header-actions .icon-btn');
-        click('#new-folder-btn');
+        expect(host?.querySelector('.header-actions .icon-btn')).toBeNull();
+        expect(host?.querySelector('#new-folder-btn')).toBeNull();
+    });
 
-        expect(triggerRefresh).toHaveBeenCalledTimes(1);
-        expect(openNewFolderModal).toHaveBeenCalledTimes(1);
+    it('places the mount action alongside shared-drive actions, not in the header', () => {
+        setup();
+
+        expect(host?.querySelector('.header-actions #mount-drive-button')).toBeNull();
+        const actions = host?.querySelector('.drives-actions');
+        const join = host?.querySelector('#open-join-drive');
+        const mount = actions?.querySelector<HTMLButtonElement>('#mount-drive-button');
+
+        expect(mount).not.toBeNull();
+        expect(mount?.classList.contains('drive-action-btn')).toBe(true);
+        expect(mount?.classList.contains('mount-sidebar-action')).toBe(true);
+        expect(mount?.getAttribute('role')).toBeNull();
+        if (!join || !mount) throw new Error('missing sidebar drive action');
+        expect(join.compareDocumentPosition(mount) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it('leaves selection bar contents owned by the Svelte SelectionBar island', () => {
@@ -77,11 +85,11 @@ describe('AppShell behavior', () => {
         expect(name?.classList.contains('active')).toBe(true);
         expect(name?.getAttribute('aria-pressed')).toBe('true');
         expect(name?.getAttribute('aria-label')).toContain('descending');
-        expect(name?.textContent).toContain('↑');
+        expect(name?.querySelector('.sort-direction-up')).not.toBeNull();
 
         click('.file-sort-button.col-name');
         name = host?.querySelector<HTMLButtonElement>('.file-sort-button.col-name');
         expect(name?.getAttribute('aria-label')).toContain('ascending');
-        expect(name?.textContent).toContain('↓');
+        expect(name?.querySelector('.sort-direction-down')).not.toBeNull();
     });
 });

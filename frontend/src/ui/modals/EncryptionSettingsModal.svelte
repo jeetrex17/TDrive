@@ -1,4 +1,6 @@
 <script lang="ts">
+    import EyeIcon from '@lucide/svelte/icons/eye';
+    import EyeOffIcon from '@lucide/svelte/icons/eye-off';
     import ModalShell from './ModalShell.svelte';
     import { encryptionSettingsModal } from './encryption-settings-modal-store';
 
@@ -11,6 +13,9 @@
     let currentPassword = $state('');
     let newPassword = $state('');
     let confirmPassword = $state('');
+    let currentPasswordInput = $state<HTMLInputElement | null>(null);
+    let newPasswordInput = $state<HTMLInputElement | null>(null);
+    let confirmPasswordInput = $state<HTMLInputElement | null>(null);
     let hint = $state('');
     let revealCurrent = $state(false);
     let revealNew = $state(false);
@@ -18,14 +23,31 @@
 
     const view = encryptionSettingsModal.state;
 
+    function clearPasswords(): void {
+        currentPassword = '';
+        newPassword = '';
+        confirmPassword = '';
+        if (currentPasswordInput) currentPasswordInput.value = '';
+        if (newPasswordInput) newPasswordInput.value = '';
+        if (confirmPasswordInput) confirmPasswordInput.value = '';
+        revealCurrent = false;
+        revealNew = false;
+    }
+
     function cancel(): void {
         if ($view.busy) return;
+        clearPasswords();
         onCancel();
     }
 
     function submit(): void {
         if ($view.busy) return;
-        void onSubmit(currentPassword, newPassword, confirmPassword, hint);
+        const submittedCurrentPassword = currentPassword;
+        const submittedNewPassword = newPassword;
+        const submittedConfirmation = confirmPassword;
+        const submittedHint = hint;
+        clearPasswords();
+        void onSubmit(submittedCurrentPassword, submittedNewPassword, submittedConfirmation, submittedHint);
     }
 
     // Hold-to-show: the input stays masked except while the eye button is
@@ -53,16 +75,18 @@
     const currentHold = holdHandlers((visible) => (revealCurrent = visible));
     const newHold = holdHandlers((visible) => (revealNew = visible));
 
-    $effect(() => {
-        if ($view.open && !wasOpen) {
-            currentPassword = '';
-            newPassword = '';
-            confirmPassword = '';
-            hint = $view.payload?.hint ?? '';
-            revealCurrent = false;
-            revealNew = false;
+    $effect.pre(() => {
+        if (!$view.open) {
+            clearPasswords();
+            hint = '';
+            wasOpen = false;
+            return;
         }
-        wasOpen = $view.open;
+        if (!wasOpen) {
+            clearPasswords();
+            hint = $view.payload?.hint ?? '';
+        }
+        wasOpen = true;
     });
 </script>
 
@@ -82,6 +106,7 @@
             type={revealCurrent ? 'text' : 'password'}
             placeholder="Current password"
             autocomplete="current-password"
+            bind:this={currentPasswordInput}
             bind:value={currentPassword}
             disabled={$view.busy}
         />
@@ -89,11 +114,13 @@
             class="input-action-btn reveal-on-hold"
             type="button"
             data-state={revealCurrent ? 'visible' : undefined}
+            disabled={$view.busy}
             aria-label="Hold to show current password"
             title="Hold to show password"
             {...currentHold}
         >
-            <svg class="input-action-icon icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <EyeIcon class="input-action-icon icon-eye" size={18} strokeWidth={2} aria-hidden="true" />
+            <EyeOffIcon class="input-action-icon icon-eye-off" size={18} strokeWidth={2} aria-hidden="true" />
         </button>
     </div>
     <div class="input-with-action">
@@ -102,6 +129,7 @@
             type={revealNew ? 'text' : 'password'}
             placeholder="New password"
             autocomplete="new-password"
+            bind:this={newPasswordInput}
             bind:value={newPassword}
             disabled={$view.busy}
         />
@@ -109,11 +137,13 @@
             class="input-action-btn reveal-on-hold"
             type="button"
             data-state={revealNew ? 'visible' : undefined}
+            disabled={$view.busy}
             aria-label="Hold to show new password"
             title="Hold to show password"
             {...newHold}
         >
-            <svg class="input-action-icon icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+            <EyeIcon class="input-action-icon icon-eye" size={18} strokeWidth={2} aria-hidden="true" />
+            <EyeOffIcon class="input-action-icon icon-eye-off" size={18} strokeWidth={2} aria-hidden="true" />
         </button>
     </div>
     <input
@@ -121,6 +151,7 @@
         type="password"
         placeholder="Confirm new password"
         autocomplete="new-password"
+        bind:this={confirmPasswordInput}
         bind:value={confirmPassword}
         disabled={$view.busy}
     />

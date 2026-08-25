@@ -10,6 +10,9 @@ const (
 const (
 	KindPersonal = "personal"
 	KindShared   = "shared"
+
+	ObjectKindFile   = "file"
+	ObjectKindFolder = "folder"
 )
 
 type OpType string
@@ -30,14 +33,49 @@ const (
 	// files table, so they never surface as files or orphans.
 	OpFilePart     OpType = "part"
 	OpFileManifest OpType = "manifest"
+
+	// Writable-mount operations are versioned, carry a durable operation id,
+	// and project as one SQLite transaction. Telegram body messages stay
+	// hidden; OpFileCommit is the visibility boundary for a new logical file.
+	OpFileCommit   OpType = "fcommit"
+	OpFileReplace  OpType = "freplace"
+	OpFolderCommit OpType = "dcommit"
+	OpRelocate     OpType = "relocate"
+	OpTrashTree    OpType = "trash"
 )
 
 type Op struct {
 	Type OpType
 
+	// ProtocolVersion versions the payload of atomic writable operations. It
+	// is intentionally independent of the outer TDX wire envelope.
+	ProtocolVersion int
+	// OpID is the durable idempotency key. Retries may be different Telegram
+	// messages, but the same operation is applied at most once per channel.
+	OpID string
+
 	Obj    string
 	Parent string
 	Name   string
+
+	// ExpectedRevision provides compare-and-swap semantics for mutations of
+	// existing objects. New file commits always start at revision one.
+	ExpectedRevision            int64
+	ExpectedDestinationRevision int64
+
+	// A committed file references either one hidden Telegram body message or
+	// the existing UploadUUID/PartCount multipart representation.
+	ContentMsgID int64
+	ContentHash  string
+
+	// Relocate may atomically replace one exact destination object. DeletedAt
+	// is also used by TrashTree and is supplied on the wire for deterministic
+	// replay (the projector never reads the local clock for domain state).
+	Overwrite      bool
+	DestinationObj string
+	DeletedAt      int64
+	PurgeAfter     int64
+	RetainedUntil  int64
 
 	FileSize       int64
 	FileUploadTime int64
@@ -88,6 +126,17 @@ type Folder struct {
 	Tombstoned bool
 }
 
+type Dirent struct {
+	ChannelID   int64
+	ObjectID    string
+	ObjectKind  string
+	ParentID    string
+	DisplayName string
+	NameKey     string
+	Revision    int64
+	Tombstoned  bool
+}
+
 type File struct {
 	ChannelID         int64
 	MsgID             int64
@@ -100,6 +149,39 @@ type File struct {
 	Encrypted         bool
 	PlaintextSize     int64
 	EncryptionVersion int
+	ContentMsgID      int64
+	ContentHash       string
+	Revision          int64
+	UploadUUID        string
+	PartCount         int
+}
+
+const (
+	OperationApplied  = "applied"
+	OperationRejected = "rejected"
+)
+
+// ProjectionOperation is the durable result of a versioned operation. It is
+// useful to reconcile an uncertain Telegram send without applying it twice.
+type ProjectionOperation struct {
+	ChannelID int64
+	OpID      string
+	MsgID     int64
+	OpType    OpType
+	Outcome   string
+	Error     string
+}
+
+// FileRevisionRef identifies an immutable Telegram-backed file body that is
+// no longer among the retained latest revisions and may be physically purged.
+type FileRevisionRef struct {
+	ChannelID     int64
+	FileMsgID     int64
+	Revision      int64
+	ContentMsgID  int64
+	UploadUUID    string
+	PartCount     int
+	RetainedUntil int64
 }
 
 type ReplayLogRow struct {

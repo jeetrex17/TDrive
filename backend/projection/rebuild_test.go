@@ -142,12 +142,13 @@ func TestRebuildHandlesTombstones(t *testing.T) {
 
 func TestRebuildReplaysEncryptionConfig(t *testing.T) {
 	db := newRebuildDB(t)
+	cfg := validEncryptionConfig()
 	want := Op{
 		Type:             OpEncConfig,
-		KDFSalt:          []byte("salt"),
-		KDFParamsJSON:    `{"memory":65536}`,
-		WrappedMasterKey: []byte("wrapped"),
-		KeyCheck:         []byte("check"),
+		KDFSalt:          cfg.KDFSalt,
+		KDFParamsJSON:    cfg.KDFParamsJSON,
+		WrappedMasterKey: cfg.WrappedMasterKey,
+		KeyCheck:         cfg.KeyCheck,
 		Hint:             "pet name",
 		ConfigVersion:    1,
 	}

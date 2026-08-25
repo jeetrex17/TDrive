@@ -31,7 +31,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -89,10 +89,41 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Run daemon and mount tests
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos
+
+      - name: Vet platform-specific daemon and CLI code
+        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos
+
+      - name: Build CLI
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ci-bin
+          go build -trimpath -o .ci-bin/tdrive ./cmd/tdrive
+
+      - name: Build and verify Windows CLI package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/package-cli-release-windows.ps1 -Version ci
+
+          $archive = "dist/TDrive-ci-windows-amd64-cli.zip"
+          $extractDirectory = Join-Path $env:RUNNER_TEMP "tdrive-cli-package"
+          Expand-Archive -Path $archive -DestinationPath $extractDirectory -Force
+
+          $packageDirectory = Join-Path $extractDirectory "TDrive-ci-windows-amd64-cli"
+          foreach ($file in @("tdrive.exe", "README.txt")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $packageDirectory $file) -PathType Leaf)) {
+              throw "Windows CLI package is missing $file"
+            }
+          }
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -107,6 +138,7 @@ jobs:
         run: brew install mpv
 
       - name: Install Wails
+        shell: bash
         run: |
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"

@@ -1,4 +1,7 @@
 <script lang="ts">
+    import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+    import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
+    import LogOutIcon from '@lucide/svelte/icons/log-out';
     import { tick } from 'svelte';
     import Avatar from './Avatar.svelte';
     import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
@@ -113,7 +116,7 @@
     }}
 >
     <Avatar user={$profileUser} />
-    <svg class="profile-chevron" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" /></svg>
+    <ChevronDownIcon class="profile-chevron" size={16} strokeWidth={2} aria-hidden="true" />
 </button>
 
 <div
@@ -144,11 +147,11 @@
             role="menuitem"
             onclick={() => activate(onEncryptionSettings)}
         >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 11V7a4 4 0 018 0v4"/></svg>
+            <LockKeyholeIcon size={20} strokeWidth={2} aria-hidden="true" />
             <span>Encryption settings</span>
         </button>
-        <div class="profile-menu-divider" role="separator"></div>
     {/if}
+    <div class="profile-menu-divider" role="separator"></div>
     <button
         id="profile-menu-logout"
         class="profile-menu-item danger-text"
@@ -156,7 +159,7 @@
         role="menuitem"
         onclick={() => activate(onLogout)}
     >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+        <LogOutIcon size={20} strokeWidth={2} aria-hidden="true" />
         <span>Log out</span>
     </button>
 </div>

@@ -86,6 +86,12 @@ export function Logout(arg1:string):Promise<void>;
 
 export function Me():Promise<main.SelfUser>;
 
+export function MountDrive():Promise<main.MountView>;
+
+export function MountDrives(arg1:Array<number>):Promise<main.MountView>;
+
+export function MountStatus():Promise<main.MountView>;
+
 export function MoveFile(arg1:number,arg2:string):Promise<string>;
 
 export function MoveFolder(arg1:string,arg2:string):Promise<string>;
@@ -99,6 +105,8 @@ export function MyUserID():Promise<number>;
 export function NativeMediaCommand(arg1:string,arg2:Array<string>):Promise<void>;
 
 export function OpenMedia(arg1:number):Promise<media.OpenResult>;
+
+export function OpenMountedDrive():Promise<void>;
 
 export function OpenNativeMedia(arg1:number,arg2:nativeplayer.Rect):Promise<main.NativeMediaResult>;
 
@@ -147,6 +155,8 @@ export function SumbitPassword(arg1:string):Promise<void>;
 export function SyncChannel(arg1:number):Promise<void>;
 
 export function Thumbnail(arg1:number):Promise<main.PreviewPayload>;
+
+export function UnmountDrive():Promise<main.MountView>;
 
 export function UpdateMediaPlayback(arg1:media.PlaybackUpdate):Promise<void>;
 

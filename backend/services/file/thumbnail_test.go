@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
@@ -144,6 +147,184 @@ func TestThumbnailEncryptedStoresCiphertextOnDisk(t *testing.T) {
 	}
 }
 
+func TestThumbnailEncryptedCacheHitClearsOwnedKey(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	svc.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	masterKey := bytes.Repeat([]byte{0x41}, 32)
+	wireEncryption(svc, masterKey)
+
+	path := writeTempNamedFile(t, "cached-secret.png", makePNG(t, 160, 80))
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+	if _, err := svc.Thumbnail(context.Background(), personalChannelID, files[0].MsgID); err != nil {
+		t.Fatalf("populate thumbnail cache: %v", err)
+	}
+
+	var (
+		cacheKeyCalls int
+		cacheReadKey  []byte
+	)
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if !encrypted {
+			t.Fatal("encrypted cache hit requested a plaintext key")
+		}
+		cacheKeyCalls++
+		cacheReadKey = append([]byte(nil), masterKey...)
+		return cacheReadKey, nil
+	}
+	if _, err := svc.Thumbnail(context.Background(), personalChannelID, files[0].MsgID); err != nil {
+		t.Fatalf("cached thumbnail: %v", err)
+	}
+	if cacheKeyCalls != 1 {
+		t.Fatalf("key provider calls = %d, want one cache-read key", cacheKeyCalls)
+	}
+	assertKeyZeroed(t, cacheReadKey)
+}
+
+func TestThumbnailEncryptedGenerationClearsCacheAndFlightKeys(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	svc.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	masterKey := bytes.Repeat([]byte{0x42}, 32)
+	wireEncryption(svc, masterKey)
+
+	path := writeTempNamedFile(t, "generated-secret.png", makePNG(t, 180, 90))
+	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, true)
+	if err != nil {
+		t.Fatalf("upload: %v", err)
+	}
+
+	var (
+		keysMu sync.Mutex
+		keys   [][]byte
+	)
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if !encrypted {
+			t.Fatal("encrypted generation requested a plaintext key")
+		}
+		key := append([]byte(nil), masterKey...)
+		keysMu.Lock()
+		keys = append(keys, key)
+		keysMu.Unlock()
+		return key, nil
+	}
+	if _, err := svc.Thumbnail(context.Background(), personalChannelID, files[0].MsgID); err != nil {
+		t.Fatalf("thumbnail: %v", err)
+	}
+
+	keysMu.Lock()
+	ownedKeys := append([][]byte(nil), keys...)
+	keysMu.Unlock()
+	if len(ownedKeys) != 2 {
+		t.Fatalf("key provider calls = %d, want cache-read and background-flight keys", len(ownedKeys))
+	}
+	for i, key := range ownedKeys {
+		t.Run(fmt.Sprintf("owned-key-%d", i), func(t *testing.T) {
+			assertKeyZeroed(t, key)
+		})
+	}
+}
+
+func TestThumbnailCanceledCallerDoesNotClearBackgroundFlightKey(t *testing.T) {
+	svc, db, _, _ := newTestService(t)
+	project(t, db, personalChannelID, 93, 7, projection.Op{
+		Type:              projection.OpFileUpload,
+		Parent:            "",
+		Name:              "background.png",
+		FileSize:          128,
+		FileUploadTime:    1,
+		Encrypted:         true,
+		PlaintextSize:     64,
+		EncryptionVersion: 1,
+	})
+
+	providedKeys := make(chan []byte, 4)
+	var providerMu sync.Mutex
+	providerCall := byte(0)
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if !encrypted {
+			t.Error("encrypted background flight requested a plaintext key")
+		}
+		providerMu.Lock()
+		providerCall++
+		value := providerCall
+		providerMu.Unlock()
+		key := bytes.Repeat([]byte{value}, 32)
+		providedKeys <- key
+		return key, nil
+	}
+
+	flightStarted := make(chan struct{})
+	releaseFlight := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseFlight) }) }
+	t.Cleanup(release)
+	var flightKey []byte
+	svc.generateThumbnailFn = func(_ context.Context, _ int64, _ int, _ string, _ bool, key []byte) ([]byte, error) {
+		flightKey = key
+		close(flightStarted)
+		<-releaseFlight
+		return []byte{0xff, 0xd8, 0xff, 0xd9}, nil
+	}
+
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Thumbnail(callerCtx, personalChannelID, 93)
+		firstDone <- err
+	}()
+	select {
+	case <-flightStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background thumbnail flight did not start")
+	}
+
+	cacheReadKey := <-providedKeys
+	backgroundKey := <-providedKeys
+	if len(flightKey) == 0 || &flightKey[0] != &backgroundKey[0] {
+		t.Fatal("background generator did not receive the flight-owned key")
+	}
+
+	waiterDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Thumbnail(context.Background(), personalChannelID, 93)
+		waiterDone <- err
+	}()
+	var waiterCacheKey []byte
+	select {
+	case waiterCacheKey = <-providedKeys:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second thumbnail caller did not complete its cache-key lookup")
+	}
+
+	cancelCaller()
+	select {
+	case err := <-firstDone:
+		if err == nil {
+			t.Fatal("canceled thumbnail caller unexpectedly succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled thumbnail caller did not return")
+	}
+	assertKeyZeroed(t, cacheReadKey)
+	if !bytes.Equal(backgroundKey, bytes.Repeat([]byte{2}, 32)) {
+		t.Fatal("background-flight key was cleared while detached generation was still running")
+	}
+
+	release()
+	select {
+	case err := <-waiterDone:
+		if err != nil {
+			t.Fatalf("waiting thumbnail caller: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiting thumbnail caller did not receive background result")
+	}
+	assertKeyZeroed(t, backgroundKey)
+	assertKeyZeroed(t, waiterCacheKey)
+}
+
 func TestThumbnailEncryptedLockedRequiresPassword(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	svc.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
@@ -157,9 +338,10 @@ func TestThumbnailEncryptedLockedRequiresPassword(t *testing.T) {
 	}
 
 	// Lock the vault.
+	failedKey := bytes.Repeat([]byte{0x5c}, 32)
 	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return nil, errNeedPassword
+			return failedKey, errNeedPassword
 		}
 		return nil, nil
 	}
@@ -167,6 +349,41 @@ func TestThumbnailEncryptedLockedRequiresPassword(t *testing.T) {
 	if _, err := svc.Thumbnail(context.Background(), personalChannelID, files[0].MsgID); !errors.Is(err, errPreviewEncryptionPasswordRequired) {
 		t.Fatalf("thumbnail err = %v, want password required", err)
 	}
+	assertKeyZeroed(t, failedKey)
+}
+
+func TestThumbnailEncryptedFlightProviderErrorClearsOwnedKeys(t *testing.T) {
+	svc, db, _, _ := newTestService(t)
+	project(t, db, personalChannelID, 94, 7, projection.Op{
+		Type:              projection.OpFileUpload,
+		Parent:            "",
+		Name:              "flight-error.png",
+		FileSize:          128,
+		FileUploadTime:    1,
+		Encrypted:         true,
+		PlaintextSize:     64,
+		EncryptionVersion: 1,
+	})
+
+	cacheReadKey := bytes.Repeat([]byte{0x61}, 32)
+	flightKey := bytes.Repeat([]byte{0x62}, 32)
+	calls := 0
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return cacheReadKey, nil
+		}
+		return flightKey, errNeedPassword
+	}
+
+	if _, err := svc.Thumbnail(context.Background(), personalChannelID, 94); !errors.Is(err, errPreviewEncryptionPasswordRequired) {
+		t.Fatalf("thumbnail err = %v, want password required", err)
+	}
+	if calls != 2 {
+		t.Fatalf("key provider calls = %d, want cache-read and flight attempts", calls)
+	}
+	assertKeyZeroed(t, cacheReadKey)
+	assertKeyZeroed(t, flightKey)
 }
 
 func TestThumbnailRejectsNonImage(t *testing.T) {
@@ -257,7 +474,7 @@ func wireEncryption(svc *Service, masterKey []byte) {
 		if !wantEncrypted {
 			return nil, nil
 		}
-		return masterKey, nil
+		return append([]byte(nil), masterKey...), nil
 	}
 	svc.WriteCiphertextTemp = func(plain io.Reader, plaintextSize int64, key []byte) (*os.File, error) {
 		tmp, err := os.CreateTemp("", "tdrive-test-cipher-*")
@@ -278,7 +495,7 @@ func wireEncryption(svc *Service, masterKey []byte) {
 	}
 	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
 		if encrypted {
-			return masterKey, nil
+			return append([]byte(nil), masterKey...), nil
 		}
 		return nil, nil
 	}

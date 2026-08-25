@@ -1,4 +1,7 @@
 <script lang="ts">
+    import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
+    import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+    import XIcon from '@lucide/svelte/icons/x';
     import { formatBytes } from '../../utils';
     import type { TransferEvent } from './notif-store';
 
@@ -50,9 +53,9 @@
 <div class={`notif-row notif-row-transfer ${statusClass}`}>
     <span class="notif-row-icon" data-kind={direction} aria-hidden="true">
         {#if transfer.direction === 'up'}
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+            <ArrowUpIcon size={14} strokeWidth={2} aria-hidden="true" />
         {:else}
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12l7 7 7-7"/></svg>
+            <ArrowDownIcon size={14} strokeWidth={2} aria-hidden="true" />
         {/if}
     </span>
     <div class="notif-row-body">
@@ -83,7 +86,7 @@
             onpointerdown={onCancelPointerDown}
             onkeydown={onCancelKeydown}
         >
-            &times;
+            <XIcon size={12} strokeWidth={2} aria-hidden="true" />
         </button>
     {/if}
 </div>

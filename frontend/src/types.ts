@@ -51,3 +51,34 @@ export interface SearchHit {
     uploaderId: number;
     path: string;
 }
+
+export type MountPhase = 'idle' | 'mounting' | 'mounted' | 'disconnecting' | 'error';
+export type MountedDriveKind = 'personal' | 'shared' | 'unknown';
+export type MountMode = 'read-only' | 'read-write';
+export type MountWriteState = 'disabled' | 'starting' | 'ready' | 'draining' | 'drained';
+
+export interface MountedDrive {
+    id: number;
+    title: string;
+    kind: MountedDriveKind;
+}
+
+export interface MountableDrive {
+    id: number;
+    title: string;
+    kind: 'personal' | 'shared';
+}
+
+/** Capability-free mount state safe to render in the desktop UI. */
+export interface MountStatusView {
+    phase: MountPhase;
+    mounted: boolean;
+    mode: MountMode;
+    writeState: MountWriteState;
+    acceptingWrites: boolean;
+    activeWrites: number;
+    label: string;
+    location: string;
+    error: string;
+    drive: MountedDrive | null;
+}

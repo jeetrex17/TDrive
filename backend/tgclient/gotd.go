@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math/rand"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -231,29 +231,40 @@ func (g *Gotd) ResolveUsersFromMessages(ctx context.Context, peer InputPeer, ref
 }
 
 func (g *Gotd) SendControl(ctx context.Context, peer InputPeer, text string, silent bool) (int64, error) {
+	return g.SendControlWithRandomID(ctx, peer, text, silent, randomID())
+}
+
+func (g *Gotd) SendControlWithRandomID(ctx context.Context, peer InputPeer, text string, silent bool, sendRandomID int64) (int64, error) {
+	if sendRandomID <= 0 {
+		return 0, fmt.Errorf("tgclient: random id must be positive")
+	}
 	var msgID int64
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		req := &tg.MessagesSendMessageRequest{
 			Peer:      toPeer(peer),
 			Message:   text,
-			RandomID:  rand.Int63(),
+			RandomID:  sendRandomID,
 			Silent:    silent,
 			NoWebpage: true,
 		}
 		updates, err := api.MessagesSendMessage(ctx, req)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: send message: %w", ErrSendOutcomeUnknown, err)
 		}
-		msgID = extractMsgID(updates)
-		if msgID == 0 {
-			return fmt.Errorf("tgclient: send control returned no msg id")
-		}
-		return nil
+		msgID, err = requiredSendMsgID(updates, sendRandomID, "send control")
+		return err
 	})
 	return msgID, err
 }
 
 func (g *Gotd) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64)) (SendFileResult, error) {
+	return g.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID())
+}
+
+func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), sendRandomID int64) (SendFileResult, error) {
+	if sendRandomID <= 0 {
+		return SendFileResult{}, fmt.Errorf("tgclient: random id must be positive")
+	}
 	var result SendFileResult
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		// Telegram rejects uploads beyond ~4000 parts, so the part size sets the
@@ -292,18 +303,18 @@ func (g *Gotd) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 					&tg.DocumentAttributeFilename{FileName: name},
 				},
 			},
-			RandomID: rand.Int63(),
+			RandomID: sendRandomID,
 			Message:  caption,
 		}
 		updates, err := api.MessagesSendMedia(ctx, req)
 		if err != nil {
-			return fmt.Errorf("tgclient: send media: %w", err)
+			// Uploading the document precedes MessagesSendMedia. A transport error
+			// at this boundary can arrive after Telegram accepted the random_id,
+			// so callers must reconcile with the same id before cleanup.
+			return fmt.Errorf("%w: send media: %w", ErrSendOutcomeUnknown, err)
 		}
-		result.MsgID = extractMsgID(updates)
-		if result.MsgID == 0 {
-			return fmt.Errorf("tgclient: send file returned no msg id")
-		}
-		return nil
+		result.MsgID, err = requiredSendMsgID(updates, sendRandomID, "send file")
+		return err
 	})
 	return result, err
 }
@@ -312,6 +323,7 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	if limit <= 0 {
 		limit = 100
 	}
+	slog.Debug("tgclient: MessagesGetHistory", "channel_id", peer.ChannelID, "min_id", minID, "offset_id", offsetID, "limit", limit)
 	var out []HistoryMessage
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		req := &tg.MessagesGetHistoryRequest{
@@ -377,6 +389,11 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Error("tgclient: MessagesGetHistory failed", "channel_id", peer.ChannelID, "error", err)
+	} else {
+		slog.Debug("tgclient: MessagesGetHistory returned", "channel_id", peer.ChannelID, "messages", len(out))
+	}
 	return out, err
 }
 
@@ -395,11 +412,17 @@ func (g *Gotd) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Error("tgclient: GetFileDocument failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
+	} else {
+		slog.Debug("tgclient: GetFileDocument resolved", "channel_id", peer.ChannelID, "msg_id", msgID, "name", info.Name, "size", info.Size)
+	}
 	return info, err
 }
 
 func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error {
-	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+	slog.Debug("tgclient: DownloadFile starting", "channel_id", peer.ChannelID, "msg_id", msgID)
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
 		if err != nil {
 			return err
@@ -424,10 +447,17 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Error("tgclient: DownloadFile failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
+	} else {
+		slog.Debug("tgclient: DownloadFile completed", "channel_id", peer.ChannelID, "msg_id", msgID)
+	}
+	return err
 }
 
 func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, w io.WriterAt, baseOffset int64, onProgress func(done, total int64)) error {
-	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+	slog.Debug("tgclient: DownloadFileAt starting", "channel_id", peer.ChannelID, "msg_id", msgID, "base_offset", baseOffset)
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
 		if err != nil {
 			return err
@@ -457,6 +487,12 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Error("tgclient: DownloadFileAt failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
+	} else {
+		slog.Debug("tgclient: DownloadFileAt completed", "channel_id", peer.ChannelID, "msg_id", msgID)
+	}
+	return err
 }
 
 func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {
@@ -489,7 +525,8 @@ func (g *Gotd) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 	if len(msgIDs) == 0 {
 		return nil
 	}
-	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+	slog.Debug("tgclient: ChannelsDeleteMessages", "channel_id", peer.ChannelID, "count", len(msgIDs))
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		ids := make([]int, 0, len(msgIDs))
 		for _, id := range msgIDs {
 			ids = append(ids, int(id))
@@ -500,6 +537,62 @@ func (g *Gotd) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 		})
 		return err
 	})
+	if err != nil {
+		slog.Error("tgclient: ChannelsDeleteMessages failed", "channel_id", peer.ChannelID, "count", len(msgIDs), "error", err)
+	}
+	return err
+}
+
+// MissingMessages reports which of msgIDs no longer resolve to a real
+// message in the channel. Telegram returns a MessageEmpty placeholder (or
+// simply omits the id) for anything deleted, so presence is checked by
+// scanning the response for a real *tg.Message/*tg.MessageService with a
+// matching id rather than relying on response length or ordering.
+func (g *Gotd) MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error) {
+	if len(msgIDs) == 0 {
+		return nil, nil
+	}
+	const chunk = 100
+	var missing []int64
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		for start := 0; start < len(msgIDs); start += chunk {
+			end := min(start+chunk, len(msgIDs))
+			batch := msgIDs[start:end]
+			ids := make([]tg.InputMessageClass, 0, len(batch))
+			for _, id := range batch {
+				ids = append(ids, &tg.InputMessageID{ID: int(id)})
+			}
+			result, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+				Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
+				ID:      ids,
+			})
+			if err != nil {
+				return err
+			}
+			found := make(map[int64]struct{}, len(batch))
+			if mcm, ok := result.(*tg.MessagesChannelMessages); ok {
+				for _, m := range mcm.Messages {
+					switch msg := m.(type) {
+					case *tg.Message:
+						found[int64(msg.ID)] = struct{}{}
+					case *tg.MessageService:
+						found[int64(msg.ID)] = struct{}{}
+					}
+				}
+			}
+			for _, id := range batch {
+				if _, ok := found[id]; !ok {
+					missing = append(missing, id)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Error("tgclient: ChannelsGetMessages failed", "channel_id", peer.ChannelID, "count", len(msgIDs), "error", err)
+		return nil, err
+	}
+	return missing, nil
 }
 
 func (g *Gotd) CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error) {
@@ -643,27 +736,40 @@ func toPeer(p InputPeer) *tg.InputPeerChannel {
 	return &tg.InputPeerChannel{ChannelID: p.ChannelID, AccessHash: p.AccessHash}
 }
 
-func extractMsgID(updates tg.UpdatesClass) int64 {
+func extractMsgID(updates tg.UpdatesClass, randomID int64) int64 {
 	switch u := updates.(type) {
+	case *tg.UpdateShortSentMessage:
+		return int64(u.ID)
 	case *tg.Updates:
-		for _, update := range u.Updates {
-			if msg, ok := update.(*tg.UpdateNewMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return int64(m.ID)
-				}
-			}
-			if msg, ok := update.(*tg.UpdateNewChannelMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return int64(m.ID)
-				}
-			}
-		}
+		return extractMsgIDFromUpdates(u.Updates, randomID)
 	case *tg.UpdatesCombined:
-		for _, update := range u.Updates {
-			if msg, ok := update.(*tg.UpdateNewChannelMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return int64(m.ID)
-				}
+		return extractMsgIDFromUpdates(u.Updates, randomID)
+	}
+	return 0
+}
+
+func requiredSendMsgID(updates tg.UpdatesClass, randomID int64, operation string) (int64, error) {
+	msgID := extractMsgID(updates, randomID)
+	if msgID <= 0 {
+		return 0, fmt.Errorf("%w: %s returned no msg id", ErrSendOutcomeUnknown, operation)
+	}
+	return msgID, nil
+}
+
+func extractMsgIDFromUpdates(updates []tg.UpdateClass, randomID int64) int64 {
+	for _, update := range updates {
+		switch value := update.(type) {
+		case *tg.UpdateMessageID:
+			if value.RandomID == randomID {
+				return int64(value.ID)
+			}
+		case *tg.UpdateNewMessage:
+			if message, ok := value.Message.(*tg.Message); ok {
+				return int64(message.ID)
+			}
+		case *tg.UpdateNewChannelMessage:
+			if message, ok := value.Message.(*tg.Message); ok {
+				return int64(message.ID)
 			}
 		}
 	}

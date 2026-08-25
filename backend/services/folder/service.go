@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"TDrive/backend/projection"
+	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 
 	"github.com/google/uuid"
@@ -18,7 +20,12 @@ type PeerResolver interface {
 
 type EmitOpFunc func(channelID int64, op projection.Op) error
 type EmitOpsFunc func(channelID int64, ops []projection.Op) error
+type EmitOpContextFunc func(ctx context.Context, channelID int64, op projection.Op) error
+type EmitOpsContextFunc func(ctx context.Context, channelID int64, ops []projection.Op) error
 type ActorIDFunc func(ctx context.Context) (int64, error)
+
+// RequireEncryptionKeyFunc returns a caller-owned key copy. Service clears a
+// non-nil key whether the provider succeeds or returns an error.
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
 type WarnFunc func(format string, args ...any)
 
@@ -28,6 +35,8 @@ type Service struct {
 	Peers                PeerResolver
 	EmitOp               EmitOpFunc
 	EmitOps              EmitOpsFunc
+	EmitOpContext        EmitOpContextFunc
+	EmitOpsContext       EmitOpsContextFunc
 	ActorID              ActorIDFunc
 	RequireEncryptionKey RequireEncryptionKeyFunc
 	Warnf                WarnFunc
@@ -40,6 +49,13 @@ type Folder struct {
 }
 
 func (s *Service) Create(channelID int64, name string, parentID string) (Folder, error) {
+	return s.CreateContext(context.Background(), channelID, name, parentID)
+}
+
+func (s *Service) CreateContext(ctx context.Context, channelID int64, name string, parentID string) (Folder, error) {
+	if err := servicecontext.Check(ctx, "folder: create"); err != nil {
+		return Folder{}, err
+	}
 	if err := s.ready(); err != nil {
 		return Folder{}, err
 	}
@@ -75,9 +91,11 @@ func (s *Service) Create(channelID int64, name string, parentID string) (Folder,
 		Parent: parent,
 		Name:   name,
 	}
-	if err := s.emit(channelID, op); err != nil {
+	if err := s.emit(ctx, channelID, op); err != nil {
+		slog.Error("folder: create failed", "channel_id", channelID, "name", name, "parent_id", parent, "error", err)
 		return Folder{}, fmt.Errorf("create folder failed: %w", err)
 	}
+	slog.Debug("folder: created", "channel_id", channelID, "folder_id", folderID, "name", name, "parent_id", parent)
 
 	return Folder{
 		ID:       folderID,
@@ -87,6 +105,9 @@ func (s *Service) Create(channelID int64, name string, parentID string) (Folder,
 }
 
 func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) error {
+	if err := servicecontext.Check(ctx, "folder: delete"); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -123,9 +144,11 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 	for _, folder := range folders {
 		ops = append(ops, projection.Op{Type: projection.OpRmdir, Obj: folder.ID})
 	}
-	if err := s.emitMany(channelID, ops); err != nil {
+	if err := s.emitMany(ctx, channelID, ops); err != nil {
+		slog.Error("folder: delete failed", "channel_id", channelID, "folder_id", folderID, "error", err)
 		return fmt.Errorf("delete folder failed: %w", err)
 	}
+	slog.Debug("folder: deleted", "channel_id", channelID, "folder_id", folderID, "files", len(files), "subfolders", len(folders))
 
 	// Body deletion is best effort and runs only after the whole subtree's
 	// metadata is locally tombstoned. If Telegram body cleanup fails, replayed
@@ -135,6 +158,13 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 }
 
 func (s *Service) Rename(channelID int64, folderID string, newName string) error {
+	return s.RenameContext(context.Background(), channelID, folderID, newName)
+}
+
+func (s *Service) RenameContext(ctx context.Context, channelID int64, folderID string, newName string) error {
+	if err := servicecontext.Check(ctx, "folder: rename"); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -156,10 +186,22 @@ func (s *Service) Rename(channelID int64, folderID string, newName string) error
 		Obj:  folderID,
 		Name: newName,
 	}
-	return s.emit(channelID, op)
+	if err := s.emit(ctx, channelID, op); err != nil {
+		slog.Error("folder: rename failed", "channel_id", channelID, "folder_id", folderID, "error", err)
+		return err
+	}
+	slog.Debug("folder: renamed", "channel_id", channelID, "folder_id", folderID, "new_name", newName)
+	return nil
 }
 
 func (s *Service) Move(channelID int64, folderID string, newParentID string) error {
+	return s.MoveContext(context.Background(), channelID, folderID, newParentID)
+}
+
+func (s *Service) MoveContext(ctx context.Context, channelID int64, folderID string, newParentID string) error {
+	if err := servicecontext.Check(ctx, "folder: move"); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -206,19 +248,36 @@ func (s *Service) Move(channelID int64, folderID string, newParentID string) err
 		Obj:    folderID,
 		Parent: parent,
 	}
-	return s.emit(channelID, op)
+	if err := s.emit(ctx, channelID, op); err != nil {
+		slog.Error("folder: move failed", "channel_id", channelID, "folder_id", folderID, "new_parent_id", parent, "error", err)
+		return err
+	}
+	slog.Debug("folder: moved", "channel_id", channelID, "folder_id", folderID, "new_parent_id", parent)
+	return nil
 }
 
-func (s *Service) emit(channelID int64, op projection.Op) error {
+func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) error {
+	if err := servicecontext.Check(ctx, "folder: emit operation"); err != nil {
+		return err
+	}
+	if s.EmitOpContext != nil {
+		return s.EmitOpContext(ctx, channelID, op)
+	}
 	if s.EmitOp == nil {
 		return fmt.Errorf("folder emitter not ready")
 	}
 	return s.EmitOp(channelID, op)
 }
 
-func (s *Service) emitMany(channelID int64, ops []projection.Op) error {
+func (s *Service) emitMany(ctx context.Context, channelID int64, ops []projection.Op) error {
 	if len(ops) == 0 {
 		return nil
+	}
+	if err := servicecontext.Check(ctx, "folder: emit operations"); err != nil {
+		return err
+	}
+	if s.EmitOpsContext != nil {
+		return s.EmitOpsContext(ctx, channelID, ops)
 	}
 	if s.EmitOps == nil {
 		return fmt.Errorf("folder batch emitter not ready")
@@ -266,7 +325,8 @@ func (s *Service) requireEncryptedKey(files []projection.FileSlim) error {
 	if !encrypted || s.RequireEncryptionKey == nil {
 		return nil
 	}
-	_, err := s.RequireEncryptionKey(true)
+	key, err := s.RequireEncryptionKey(true)
+	clear(key)
 	return err
 }
 

@@ -3,6 +3,7 @@ package livesync
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -98,6 +99,7 @@ func (c *Coordinator) Start(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.done = make(chan struct{})
+	slog.Info("livesync: coordinator starting", "debounce", c.debounce, "backstop_interval", c.backstopInterval)
 	go c.loop(runCtx, c.done)
 }
 
@@ -117,6 +119,7 @@ func (c *Coordinator) Stop() {
 	}
 	if done != nil {
 		<-done
+		slog.Info("livesync: coordinator stopped")
 	}
 }
 
@@ -199,12 +202,14 @@ func (c *Coordinator) flush(ctx context.Context, pending map[int64]string) {
 
 func (c *Coordinator) syncOne(ctx context.Context, channelID int64, reason string) {
 	payload := map[string]any{"channel_id": channelID, "reason": reason}
+	slog.Debug("livesync: sync starting", "channel_id", channelID, "reason", reason)
 	c.emit(EventStarted, payload)
 
 	syncCtx, cancel := context.WithTimeout(ctx, c.syncTimeout)
 	defer cancel()
 	err := c.syncer.SyncChannel(syncCtx, channelID)
 	if err != nil {
+		slog.Warn("livesync: sync failed", "channel_id", channelID, "reason", reason, "error", err)
 		c.warnf("live sync: channel=%d reason=%s: %v\n", channelID, reason, err)
 		c.emit(EventFailed, map[string]any{
 			"channel_id": channelID,
@@ -213,6 +218,7 @@ func (c *Coordinator) syncOne(ctx context.Context, channelID int64, reason strin
 		})
 		return
 	}
+	slog.Debug("livesync: sync complete", "channel_id", channelID, "reason", reason)
 	c.emit(EventCompleted, payload)
 }
 

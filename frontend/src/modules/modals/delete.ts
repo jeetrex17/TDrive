@@ -203,6 +203,10 @@ async function confirmDelete(): Promise<void> {
                     title: failureTitle(target),
                     body: res.replace(/^Error:?\s*/i, ''),
                 });
+                // A failed delete can mean the backend already considers this
+                // row gone (e.g. "File not found"). Refresh so a stale/ghost
+                // row doesn't sit there re-clickable forever.
+                window.refreshFiles();
                 return;
             }
             if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));

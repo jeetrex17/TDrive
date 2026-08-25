@@ -27,6 +27,8 @@ type Fake struct {
 	sentControls  []SentControl
 	sentFiles     []SentFile
 	deletedBatch  [][]int64
+	controlSends  map[sendDedupeKey]int64
+	fileSends     map[sendDedupeKey]SendFileResult
 	floodWait     int // counter; pre-injects ErrFloodWait this many times before succeeding
 	readFloodWait int // counter; pre-injects ErrFloodWait on GetHistory this many times
 	failNextSend  bool
@@ -43,18 +45,25 @@ type Fake struct {
 }
 
 type SentControl struct {
-	Peer   InputPeer
-	Text   string
-	Silent bool
-	MsgID  int64
+	Peer     InputPeer
+	Text     string
+	Silent   bool
+	MsgID    int64
+	RandomID int64
 }
 
 type SentFile struct {
-	Peer    InputPeer
-	Name    string
-	Caption string
-	Size    int64
-	MsgID   int64
+	Peer     InputPeer
+	Name     string
+	Caption  string
+	Size     int64
+	MsgID    int64
+	RandomID int64
+}
+
+type sendDedupeKey struct {
+	ChannelID int64
+	RandomID  int64
 }
 
 type HiddenJoinRequest struct {
@@ -79,6 +88,8 @@ func NewFake(selfID int64) *Fake {
 		nextMsgID:     100,
 		nextChannelID: 10000,
 		fileBodies:    make(map[int64][]byte),
+		controlSends:  make(map[sendDedupeKey]int64),
+		fileSends:     make(map[sendDedupeKey]SendFileResult),
 		channels:      make(map[int64]fakeChannel),
 		invites:       make(map[string]InviteInfo),
 		joinRequests:  make(map[int64][]JoinRequest),
@@ -285,8 +296,19 @@ func (f *Fake) ResolveUsersFromMessages(ctx context.Context, peer InputPeer, ref
 }
 
 func (f *Fake) SendControl(ctx context.Context, peer InputPeer, text string, silent bool) (int64, error) {
+	return f.SendControlWithRandomID(ctx, peer, text, silent, randomID())
+}
+
+func (f *Fake) SendControlWithRandomID(ctx context.Context, peer InputPeer, text string, silent bool, sendRandomID int64) (int64, error) {
+	if sendRandomID <= 0 {
+		return 0, fmt.Errorf("tgclient.Fake: random id must be positive")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	key := sendDedupeKey{ChannelID: peer.ChannelID, RandomID: sendRandomID}
+	if msgID, ok := f.controlSends[key]; ok {
+		return msgID, nil
+	}
 	if f.failNextSend {
 		f.failNextSend = false
 		return 0, ErrInjectedSend
@@ -297,7 +319,8 @@ func (f *Fake) SendControl(ctx context.Context, peer InputPeer, text string, sil
 	}
 	id := f.nextMsgID
 	f.nextMsgID++
-	f.sentControls = append(f.sentControls, SentControl{Peer: peer, Text: text, Silent: silent, MsgID: id})
+	f.controlSends[key] = id
+	f.sentControls = append(f.sentControls, SentControl{Peer: peer, Text: text, Silent: silent, MsgID: id, RandomID: sendRandomID})
 	f.history = append(f.history, HistoryMessage{
 		MsgID:     id,
 		Date:      0,
@@ -310,7 +333,19 @@ func (f *Fake) SendControl(ctx context.Context, peer InputPeer, text string, sil
 }
 
 func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64)) (SendFileResult, error) {
+	return f.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID())
+}
+
+func (f *Fake) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), sendRandomID int64) (SendFileResult, error) {
+	if sendRandomID <= 0 {
+		return SendFileResult{}, fmt.Errorf("tgclient.Fake: random id must be positive")
+	}
 	f.mu.Lock()
+	key := sendDedupeKey{ChannelID: peer.ChannelID, RandomID: sendRandomID}
+	if result, ok := f.fileSends[key]; ok {
+		f.mu.Unlock()
+		return result, nil
+	}
 	if f.failNextSend {
 		f.failNextSend = false
 		f.mu.Unlock()
@@ -348,9 +383,14 @@ func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if result, ok := f.fileSends[key]; ok {
+		return result, nil
+	}
 	id := f.nextMsgID
 	f.nextMsgID++
-	f.sentFiles = append(f.sentFiles, SentFile{Peer: peer, Name: name, Caption: caption, Size: totalSize, MsgID: id})
+	result := SendFileResult{MsgID: id}
+	f.fileSends[key] = result
+	f.sentFiles = append(f.sentFiles, SentFile{Peer: peer, Name: name, Caption: caption, Size: totalSize, MsgID: id, RandomID: sendRandomID})
 	f.fileBodies[id] = append([]byte(nil), body.Bytes()...)
 	f.history = append(f.history, HistoryMessage{
 		MsgID:        id,
@@ -361,7 +401,7 @@ func (f *Fake) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 		MediaSize:    totalSize,
 		DocumentName: name,
 	})
-	return SendFileResult{MsgID: id}, nil
+	return result, nil
 }
 
 func (f *Fake) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error) {
@@ -580,6 +620,26 @@ func (f *Fake) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 	}
 	f.history = kept
 	return nil
+}
+
+// MissingMessages reports which of msgIDs are not present in history. Tests
+// simulate an out-of-band Telegram delete (bypassing TDrive's own delete
+// path) by calling DeleteMessages directly against the fake, which drops the
+// entry from history without anything tombstoning the local projection.
+func (f *Fake) MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	present := make(map[int64]struct{}, len(f.history))
+	for _, m := range f.history {
+		present[m.MsgID] = struct{}{}
+	}
+	var missing []int64
+	for _, id := range msgIDs {
+		if _, ok := present[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing, nil
 }
 
 func (f *Fake) CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error) {

@@ -1,4 +1,13 @@
 <script lang="ts">
+    import DownloadIcon from '@lucide/svelte/icons/download';
+    import FileIcon from '@lucide/svelte/icons/file';
+    import FileTextIcon from '@lucide/svelte/icons/file-text';
+    import Music2Icon from '@lucide/svelte/icons/music-2';
+    import PauseIcon from '@lucide/svelte/icons/pause';
+    import PlayIcon from '@lucide/svelte/icons/play';
+    import Volume2Icon from '@lucide/svelte/icons/volume-2';
+    import VolumeXIcon from '@lucide/svelte/icons/volume-x';
+    import XIcon from '@lucide/svelte/icons/x';
     import ModalShell from '../modals/ModalShell.svelte';
     import { isPdfFrameMessage, pdfViewerFrameSrc } from './pdf-frame';
     import { fileViewerState } from './file-viewer-store';
@@ -334,21 +343,11 @@
         <div class="file-viewer-identity">
             <div class={`file-viewer-kind-mark is-${$fileViewerState.kind || 'file'}`} aria-hidden="true">
                 {#if $fileViewerState.kind === 'audio'}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 18V5l11-2v13" />
-                        <circle cx="6" cy="18" r="3" />
-                        <circle cx="17" cy="16" r="3" />
-                    </svg>
+                    <Music2Icon strokeWidth={1.9} />
                 {:else if $fileViewerState.kind === 'text'}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                        <path stroke-linejoin="round" d="M7 3h10v18H7z" />
-                        <path stroke-linecap="round" d="M10 8h4M10 12h4M10 16h3" />
-                    </svg>
+                    <FileTextIcon strokeWidth={1.8} />
                 {:else}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                        <path stroke-linejoin="round" d="M7 3h7l4 4v14H7z" />
-                        <path stroke-linecap="round" d="M14 3v5h5" />
-                    </svg>
+                    <FileIcon strokeWidth={1.8} />
                 {/if}
             </div>
             <div class="file-viewer-title-group">
@@ -390,14 +389,10 @@
                 </div>
             {/if}
             <button class="file-viewer-action" type="button" onclick={onDownload} aria-label="Download" title="Download">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" />
-                </svg>
+                <DownloadIcon aria-hidden="true" />
             </button>
             <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
-                    <path stroke-linecap="round" d="M6 6l12 12M18 6L6 18" />
-                </svg>
+                <XIcon strokeWidth={2.2} aria-hidden="true" />
             </button>
         </div>
     </div>
@@ -436,11 +431,7 @@
                 ></audio>
                 <div class="audio-hero">
                     <div class="audio-art" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 18V5l11-2v13" />
-                            <circle cx="6" cy="18" r="3" />
-                            <circle cx="17" cy="16" r="3" />
-                        </svg>
+                        <Music2Icon strokeWidth={1.8} />
                     </div>
                     <div class="audio-copy">
                         <div class="audio-title" title={$fileViewerState.title}>{$fileViewerState.title}</div>
@@ -455,21 +446,18 @@
                 <div class="audio-controls" aria-label="Audio controls">
                     <button class="audio-play" type="button" onclick={() => void toggleAudio()} aria-label={audioPaused ? 'Play audio' : 'Pause audio'}>
                         {#if audioPaused}
-                            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.8c0-.9.98-1.45 1.74-.98l9.08 5.67a1.15 1.15 0 010 1.96l-9.08 5.67A1.15 1.15 0 018 17.14V5.8z" /></svg>
+                            <PlayIcon fill="currentColor" aria-hidden="true" />
                         {:else}
-                            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5h3.4v14H7V5zm6.6 0H17v14h-3.4V5z" /></svg>
+                            <PauseIcon fill="currentColor" aria-hidden="true" />
                         {/if}
                     </button>
                     <div class="audio-volume-group">
                         <button class="audio-mute" type="button" onclick={toggleAudioMute} aria-label={audioEl?.muted ? 'Unmute' : 'Mute'}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 10v4h4l5 4V6l-5 4H4z" />
-                                {#if audioEl?.muted || audioVolume <= 0}
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M18 9l-5 6m0-6l5 6" />
-                                {:else}
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M16 9.5a4 4 0 010 5" />
-                                {/if}
-                            </svg>
+                            {#if audioEl?.muted || audioVolume <= 0}
+                                <VolumeXIcon aria-hidden="true" />
+                            {:else}
+                                <Volume2Icon aria-hidden="true" />
+                            {/if}
                         </button>
                         <input class="audio-volume" type="range" min="0" max="1" step="0.01" value={audioVolume} oninput={setAudioVolume} aria-label="Volume" />
                     </div>

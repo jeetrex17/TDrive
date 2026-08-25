@@ -286,6 +286,30 @@ func (c *Client) Download(remotePath string, localPath string, onEvent EventHand
 	return out, nil
 }
 
+func (c *Client) MountStart(selector string, windowsDrive string, mode string) (MountResponse, error) {
+	var out MountResponse
+	if err := c.call(CommandMountStart, MountStartRequest{Selector: selector, WindowsDrive: windowsDrive, Mode: mode}, &out); err != nil {
+		return MountResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) MountStatus() (MountResponse, error) {
+	var out MountResponse
+	if err := c.call(CommandMountStatus, nil, &out); err != nil {
+		return MountResponse{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) MountStop() (MountResponse, error) {
+	var out MountResponse
+	if err := c.call(CommandMountStop, nil, &out); err != nil {
+		return MountResponse{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) call(command string, payload any, out any) error {
 	req, err := NewRequest(command, payload)
 	if err != nil {

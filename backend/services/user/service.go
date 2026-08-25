@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -38,6 +39,7 @@ type SelfUser struct {
 
 func (s *Service) Me(ctx context.Context) (SelfUser, error) {
 	if cached := s.selfCache.Load(); cached != nil {
+		slog.Debug("user: self profile served from cache")
 		return *cached, nil
 	}
 	if s.TG == nil {
@@ -46,6 +48,7 @@ func (s *Service) Me(ctx context.Context) (SelfUser, error) {
 
 	profile, err := s.TG.SelfProfile(ctx)
 	if err != nil {
+		slog.Warn("user: fetch self profile failed", "error", err)
 		return SelfUser{}, err
 	}
 	out := SelfUser{
@@ -58,6 +61,7 @@ func (s *Service) Me(ctx context.Context) (SelfUser, error) {
 	}
 
 	s.selfCache.Store(&out)
+	slog.Debug("user: self profile fetched", "user_id", out.UserID, "has_photo", out.PhotoBase64 != "")
 	return out, nil
 }
 
@@ -125,6 +129,7 @@ func (s *Service) ResolveUsernames(ctx context.Context, userIDs []int64) (map[st
 	}
 	resolved, err := s.TG.ResolveUsersFromMessages(ctx, peer, refs)
 	if err != nil {
+		slog.Warn("user: resolve usernames failed", "channel_id", channelID, "requested", len(refs), "error", err)
 		return out, err
 	}
 	for _, profile := range resolved {
@@ -133,6 +138,7 @@ func (s *Service) ResolveUsernames(ctx context.Context, userIDs []int64) (map[st
 		}
 		out[strconv.FormatInt(profile.ID, 10)] = pickDisplayName(profile)
 	}
+	slog.Debug("user: resolved usernames", "channel_id", channelID, "requested", len(refs), "resolved", len(resolved))
 	return out, nil
 }
 

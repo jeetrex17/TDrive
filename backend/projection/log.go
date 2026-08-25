@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -73,6 +74,8 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 	}
 	if ok {
 		if existingHash != hash {
+			slog.Warn("projection: caption tamper detected, keeping original op canonical",
+				"channel_id", channelID, "msg_id", msgID)
 			if err := recordTamper(tx, channelID, msgID, existingHash, hash); err != nil {
 				return false, err
 			}
@@ -98,7 +101,9 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 
 	if err := ApplyOp(tx, channelID, msgID, op, actorID); err != nil {
 		if isSkippableApplyError(err) {
-			if recErr := recordReject(tx, channelID, msgID, err); recErr != nil {
+			slog.Warn("projection: op rejected, continuing replay", "channel_id", channelID, "msg_id", msgID,
+				"op_type", op.Type, "error", err)
+			if recErr := recordSkippedOp(tx, channelID, msgID, op, err); recErr != nil {
 				return false, recErr
 			}
 			return false, nil
@@ -109,7 +114,15 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 }
 
 func isSkippableApplyError(err error) bool {
-	return errors.Is(err, ErrCycleRejected) || errors.Is(err, ErrBadOp)
+	return errors.Is(err, ErrCycleRejected) ||
+		errors.Is(err, ErrBadOp) ||
+		errors.Is(err, ErrNameConflict) ||
+		errors.Is(err, ErrRevisionConflict) ||
+		errors.Is(err, ErrObjectNotFound) ||
+		errors.Is(err, ErrObjectExists) ||
+		errors.Is(err, ErrDestinationMismatch) ||
+		errors.Is(err, ErrContentIncomplete) ||
+		errors.Is(err, ErrContentAlreadyCommitted)
 }
 
 func existingHash(tx *sql.Tx, channelID, msgID int64) (string, bool, error) {
@@ -153,6 +166,13 @@ func recordReject(tx *sql.Tx, channelID, msgID int64, applyErr error) error {
 		return fmt.Errorf("projection: record rejected op: %w", err)
 	}
 	return nil
+}
+
+func recordSkippedOp(tx *sql.Tx, channelID, msgID int64, op Op, applyErr error) error {
+	if err := recordProjectionOperationTx(tx, channelID, msgID, op, OperationRejected, applyErr); err != nil {
+		return err
+	}
+	return recordReject(tx, channelID, msgID, applyErr)
 }
 
 // ChannelIsEmpty returns true when there are no replay_log rows AND no

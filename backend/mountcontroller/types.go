@@ -1,0 +1,276 @@
+// Package mountcontroller owns the transactional lifecycle of one desktop
+// mount. It keeps the capability-bearing WebDAV endpoint inside the Go backend
+// and exposes only safe, OS-facing mount status.
+package mountcontroller
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"TDrive/backend/mountfs"
+	"TDrive/backend/mountos"
+)
+
+const (
+	DriveKindPersonal = "personal"
+	DriveKindShared   = "shared"
+)
+
+const (
+	PhaseStopped   Phase = "stopped"
+	PhasePreparing Phase = "preparing"
+	PhaseAttaching Phase = "attaching"
+	PhaseMounted   Phase = "mounted"
+	PhaseDraining  Phase = "draining"
+	PhaseDetaching Phase = "detaching"
+	PhaseFailed    Phase = "failed"
+)
+
+const (
+	defaultWindowsDrive = "T:"
+)
+
+// Mode controls the mount's externally observable access contract. An empty
+// requested mode means automatic selection; status never returns an empty mode
+// for a running mount.
+type Mode string
+
+const (
+	ModeAuto      Mode = ""
+	ModeReadOnly  Mode = "read-only"
+	ModeReadWrite Mode = "read-write"
+
+	readOnlyMode = ModeReadOnly
+)
+
+// WriteState refines Mode while a writable session is starting or draining.
+// It prevents a writable OS attachment that no longer accepts new mutations
+// from being reported as ready.
+type WriteState string
+
+const (
+	WriteStateDisabled WriteState = "disabled"
+	WriteStateStarting WriteState = "starting"
+	WriteStateReady    WriteState = "ready"
+	WriteStateDraining WriteState = "draining"
+	WriteStateDrained  WriteState = "drained"
+)
+
+var (
+	ErrInvalidConfiguration       = errors.New("mount controller: invalid configuration")
+	ErrInvalidContext             = errors.New("mount controller: context is required")
+	ErrInvalidDrive               = errors.New("mount controller: invalid drive")
+	ErrInvalidWindowsDrive        = errors.New("mount controller: invalid Windows drive")
+	ErrInvalidMode                = errors.New("mount controller: invalid access mode")
+	ErrWritableUnavailable        = errors.New("mount controller: writable mount is unavailable")
+	ErrEncryptionPasswordRequired = errors.New("mount controller: encryption password required")
+	ErrConflict                   = errors.New("mount controller: conflicting mount")
+	ErrNotMounted                 = errors.New("mount controller: drive is not mounted")
+	ErrStartFailed                = errors.New("mount controller: start failed")
+	ErrStopFailed                 = errors.New("mount controller: stop failed")
+	ErrOpenFailed                 = errors.New("mount controller: open failed")
+	ErrEndpointUnavailable        = errors.New("mount controller: local endpoint unavailable")
+)
+
+// Phase is the externally observable lifecycle phase. Transitional phases are
+// intentionally explicit so the GUI can disable duplicate actions without
+// guessing from booleans.
+type Phase string
+
+// Drive is an immutable projection record pinned for the lifetime of a mount.
+// Starting a mount never changes core.Engine.ActiveChannelID.
+type Drive struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	Kind  string `json:"kind"`
+	// Encrypted is true when the personal drive has encryption configured.
+	// EncryptionUnlocked is a transient capability captured at mount start; it
+	// never contains or identifies key material.
+	Encrypted          bool `json:"encrypted,omitempty"`
+	EncryptionUnlocked bool `json:"encryption_unlocked,omitempty"`
+}
+
+// StartOptions contains safe mount choices. ModeAuto selects writable only
+// when a complete writer is supplied for an eligible personal drive; an
+// encrypted drive must also have an unlocked mount key lease.
+type StartOptions struct {
+	WindowsDrive string `json:"windows_drive,omitempty"`
+	Mode         Mode   `json:"mode,omitempty"`
+}
+
+// Status is safe to return through daemon IPC or Wails. It deliberately has
+// no endpoint URL, capability token, command line, or opaque attachment data.
+type Status struct {
+	Phase                   Phase      `json:"phase"`
+	Running                 bool       `json:"running"`
+	Mounted                 bool       `json:"mounted"`
+	DriveID                 int64      `json:"drive_id,omitempty"`
+	DriveTitle              string     `json:"drive_title,omitempty"`
+	DriveKind               string     `json:"drive_kind,omitempty"`
+	DriveEncrypted          bool       `json:"drive_encrypted,omitempty"`
+	DriveEncryptionUnlocked bool       `json:"drive_encryption_unlocked,omitempty"`
+	Label                   string     `json:"label,omitempty"`
+	Location                string     `json:"location,omitempty"`
+	AttachmentKind          string     `json:"attachment_kind,omitempty"`
+	Mode                    Mode       `json:"mode,omitempty"`
+	WriteState              WriteState `json:"write_state,omitempty"`
+	AcceptingWrites         bool       `json:"accepting_writes,omitempty"`
+	ActiveWrites            int        `json:"active_writes,omitempty"`
+	WindowsDrive            string     `json:"windows_drive,omitempty"`
+	Error                   string     `json:"error,omitempty"`
+}
+
+// ConflictError reports the safe identity fields that disagree with the
+// currently preparing or mounted session.
+type ConflictError struct {
+	ActiveDriveID         int64
+	RequestedDriveID      int64
+	SelectionChanged      bool
+	ActiveWindowsDrive    string
+	RequestedWindowsDrive string
+	ActiveMode            Mode
+	RequestedMode         Mode
+}
+
+func (err *ConflictError) Error() string {
+	if err == nil {
+		return ErrConflict.Error()
+	}
+	if err.ActiveDriveID != err.RequestedDriveID {
+		return fmt.Sprintf(
+			"%s: drive %d is already mounted; stop it before mounting drive %d",
+			ErrConflict,
+			err.ActiveDriveID,
+			err.RequestedDriveID,
+		)
+	}
+	if err.SelectionChanged {
+		return fmt.Sprintf("%s: a different drive selection is already mounted; eject it first", ErrConflict)
+	}
+	if err.ActiveMode != err.RequestedMode {
+		return fmt.Sprintf(
+			"%s: drive %d is mounted %s; stop it before changing to %s",
+			ErrConflict,
+			err.ActiveDriveID,
+			err.ActiveMode,
+			err.RequestedMode,
+		)
+	}
+	return fmt.Sprintf(
+		"%s: drive %d already uses %s; stop it before changing to %s",
+		ErrConflict,
+		err.ActiveDriveID,
+		err.ActiveWindowsDrive,
+		err.RequestedWindowsDrive,
+	)
+}
+
+func (err *ConflictError) Is(target error) bool { return target == ErrConflict }
+
+// ContentLifetime owns resources shared by all opened files in one mount.
+type ContentLifetime interface {
+	Close()
+}
+
+// MountKeyLease is the sole long-lived key capability for one mounted
+// encrypted drive. Consumers receive defensive copies through Key; only the
+// controller closes the lease after writers, readers, and the endpoint stop.
+type MountKeyLease interface {
+	Key() ([]byte, error)
+	Close()
+}
+
+type MountKeyLeaser interface {
+	Acquire(context.Context, Drive) (MountKeyLease, error)
+}
+
+// FilesystemBuilder is the injection boundary for the projection/content
+// stack. Production uses mountcontent and mountfs; tests can use a deterministic
+// fake without opening SQLite or Telegram.
+type FilesystemBuilder interface {
+	Build(context.Context, int64, mountfs.Options, MountKeyLease) (*mountfs.FS, ContentLifetime, error)
+}
+
+// EndpointConfig is private-by-convention backend data. Endpoint must never be
+// serialized or copied into Status.
+type EndpointConfig struct {
+	FS           mountfs.ReadFilesystem
+	DriveID      int64
+	DriveTitle   string
+	WindowsDrive string
+	Mode         Mode
+	Writer       WriteSession
+}
+
+// EndpointStatus contains the capability URL only long enough to hand it to
+// the trusted OS connector.
+type EndpointStatus struct {
+	Endpoint string
+}
+
+// EndpointHealth is capability-free liveness information.
+type EndpointHealth struct {
+	Running bool
+}
+
+// Endpoint abstracts the loopback WebDAV server for deterministic lifecycle
+// tests.
+type Endpoint interface {
+	Start(context.Context, EndpointConfig) (EndpointStatus, error)
+	Health() EndpointHealth
+	Stop(context.Context) error
+}
+
+// Dependencies are validated and retained as immutable interfaces by a
+// Controller. SnapshotOptions with a zero TTL selects the mount-specific TTL,
+// while the remaining zero fields retain mountfs production defaults.
+type Dependencies struct {
+	Filesystems     FilesystemBuilder
+	Writers         WriterBuilder
+	Keys            MountKeyLeaser
+	Endpoint        Endpoint
+	Connector       mountos.Connector
+	SnapshotOptions mountfs.Options
+}
+
+// WriteStatus is a cheap, capability-free snapshot used during eject. Active
+// is informational and must never include operation IDs or paths.
+type WriteStatus struct {
+	Accepting bool
+	Active    int
+}
+
+// WriteSession is the lifecycle surface needed by the mount controller. The
+// production endpoint additionally validates that it implements the complete
+// WebDAV write-coordinator interface before enabling write methods.
+type WriteSession interface {
+	WriteStatus() WriteStatus
+	Drain(context.Context) error
+	Close(context.Context) error
+}
+
+// WriterBuilder creates one non-reusable writer per mounted drive. A drained
+// writer is never reused on a later mount.
+type WriterBuilder interface {
+	Build(context.Context, Drive, *mountfs.FS, MountKeyLease) (WriteSession, error)
+}
+
+type operationError struct {
+	message string
+	kind    error
+}
+
+func (err *operationError) Error() string {
+	if err == nil {
+		return "mount operation failed"
+	}
+	return err.message
+}
+
+func (err *operationError) Is(target error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err.kind, target)
+}

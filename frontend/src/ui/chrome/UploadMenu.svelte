@@ -1,4 +1,7 @@
 <script lang="ts">
+    import FileUpIcon from '@lucide/svelte/icons/file-up';
+    import FolderUpIcon from '@lucide/svelte/icons/folder-up';
+    import UploadIcon from '@lucide/svelte/icons/upload';
     import { tick } from 'svelte';
 
     interface Props {
@@ -70,7 +73,7 @@
         else void openMenu();
     }}
 >
-    <svg class="btn-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+    <UploadIcon class="btn-icon" size={16} strokeWidth={2} aria-hidden="true" />
     Upload
 </button>
 <div
@@ -83,11 +86,11 @@
     onkeydown={onMenuKeydown}
 >
     <button bind:this={filesEl} id="upload-menu-files" class="upload-menu-item" type="button" role="menuitem" onclick={() => activate(onFiles)}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 13h6m-6 4h6m2 4H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z"/></svg>
+        <FileUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
         Files
     </button>
     <button bind:this={folderEl} id="upload-menu-folder" class="upload-menu-item" type="button" role="menuitem" onclick={() => activate(onFolder)}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+        <FolderUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
         Folder
     </button>
 </div>

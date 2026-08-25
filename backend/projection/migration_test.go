@@ -227,6 +227,17 @@ func TestMigrateRepairsBuggyV1FoldersPK(t *testing.T) {
 			tombstoned  INTEGER NOT NULL DEFAULT 0
 		);`,
 		`INSERT INTO folders (id, channel_id, name, parent_id) VALUES ('d:goa', 12345, 'Goa', '');`,
+		`CREATE TABLE files (
+			channel_id       INTEGER NOT NULL,
+			msg_id           INTEGER NOT NULL,
+			name             TEXT NOT NULL,
+			size             INTEGER NOT NULL,
+			parent_id        TEXT NOT NULL DEFAULT '',
+			upload_time      INTEGER NOT NULL,
+			uploader_user_id INTEGER NOT NULL DEFAULT 0,
+			tombstoned       INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (channel_id, msg_id)
+		);`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -261,6 +272,21 @@ func TestMigrateRepairsBuggyV1FoldersPK(t *testing.T) {
 	}
 	if v != currentSchemaVersion {
 		t.Fatalf("version = %d want %d", v, currentSchemaVersion)
+	}
+
+	for indexName, tableName := range map[string]string{
+		"idx_files_channel_parent_latest": "files",
+		"idx_folders_channel_parent_name": "folders",
+	} {
+		var indexedTable string
+		if err := db.QueryRow(`
+			SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?
+		`, indexName).Scan(&indexedTable); err != nil {
+			t.Fatalf("final index %s missing: %v", indexName, err)
+		}
+		if indexedTable != tableName {
+			t.Fatalf("index %s targets %q, want %q", indexName, indexedTable, tableName)
+		}
 	}
 }
 

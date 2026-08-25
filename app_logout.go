@@ -25,8 +25,6 @@ import (
 // instead of tearing them down mid-process while goroutines may still be
 // touching backend.DB.
 func (a *App) Logout(mode string) error {
-	a.clearEncryptionSession()
-
 	m := auth.LogoutMode(mode)
 	if mode == "" {
 		// Empty arg defaults to the safer choice: a no-arg call shouldn't
@@ -36,21 +34,27 @@ func (a *App) Logout(mode string) error {
 	if m != auth.LogoutSoft && m != auth.LogoutFull {
 		return fmt.Errorf("logout: unknown mode %q", mode)
 	}
+	if err := a.runWithClosedMountForLogout(func() error {
+		if m == auth.LogoutFull {
+			a.revokeTelegramSession()
+		}
 
-	if m == auth.LogoutFull {
-		a.revokeTelegramSession()
+		// Drop the cached self user so a re-login (without re-launching, in
+		// dev mode) doesn't show the previous account's avatar.
+		if users := a.userService(); users != nil {
+			users.ClearCache()
+		}
+
+		if err := auth.ClearUserData(m); err != nil {
+			return err
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("logout: %w", err)
 	}
-
-	// Drop the cached self user so a re-login (without re-launching, in
-	// dev mode) doesn't show the previous account's avatar.
-	if users := a.userService(); users != nil {
-		users.ClearCache()
-	}
-
-	if err := auth.ClearUserData(m); err != nil {
-		return err
-	}
-
+	// Quit may synchronously invoke shutdown. The terminal lifecycle bit was set
+	// under the gate above, so shutdown observes it without re-closing the mount.
 	runtime.Quit(a.ctx)
 	return nil
 }

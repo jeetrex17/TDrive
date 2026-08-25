@@ -1,15 +1,18 @@
 package encryption
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
-	"sync/atomic"
+	"sync"
 
 	tdcrypto "TDrive/backend/crypto"
+	"TDrive/backend/mountpolicy"
 	"TDrive/backend/projection"
 )
 
@@ -22,19 +25,32 @@ type Status struct {
 
 var ErrPasswordRequired = errors.New("encryption password required")
 
+var ErrPasswordAlreadySet = errors.New("encryption password already exists")
+
+const masterKeySize = 32
+
 type EmitOpFunc func(channelID int64, op projection.Op) error
+type deriveKEKFunc func(password, salt []byte, params tdcrypto.Params) ([]byte, error)
 
 type Config struct {
 	DB                *sql.DB
 	PersonalChannelID func() int64
 	EmitOp            EmitOpFunc
+	// EnsurePolicy must establish authoritative personal-channel history when
+	// the local encryption config is absent. It prevents stale projections from
+	// creating an unrelated replacement master key.
+	EnsurePolicy mountpolicy.RefreshFunc
 }
 
 type Service struct {
 	db                *sql.DB
 	personalChannelID func() int64
 	emitOp            EmitOpFunc
-	masterKey         atomic.Pointer[[]byte]
+	ensurePolicy      mountpolicy.RefreshFunc
+	masterKeyMu       sync.RWMutex
+	masterKey         []byte
+	kdfMu             sync.Mutex
+	deriveKEK         deriveKEKFunc
 }
 
 func NewService(cfg Config) *Service {
@@ -42,10 +58,16 @@ func NewService(cfg Config) *Service {
 		db:                cfg.DB,
 		personalChannelID: cfg.PersonalChannelID,
 		emitOp:            cfg.EmitOp,
+		ensurePolicy:      cfg.EnsurePolicy,
+		deriveKEK:         tdcrypto.DeriveKEK,
 	}
 }
 
 func (s *Service) Status() (Status, error) {
+	return s.StatusContext(context.Background())
+}
+
+func (s *Service) StatusContext(ctx context.Context) (Status, error) {
 	if err := s.ready(); err != nil {
 		return Status{}, err
 	}
@@ -53,12 +75,11 @@ func (s *Service) Status() (Status, error) {
 	if channelID == 0 {
 		return Status{Available: false}, nil
 	}
-	cfg, err := projection.GetEncryptionConfig(s.db, channelID)
-	exists := err == nil
-	if err != nil && !errors.Is(err, projection.ErrEncryptionConfigNotFound) {
+	cfg, exists, err := mountpolicy.EnsurePersonalConfig(ctx, s.db, channelID, s.ensurePolicy)
+	if err != nil {
 		return Status{}, err
 	}
-	_, remembered := s.LoadedMasterKey()
+	remembered := s.hasLoadedMasterKey()
 	return Status{
 		Available:          true,
 		PasswordSet:        exists,
@@ -68,6 +89,10 @@ func (s *Service) Status() (Status, error) {
 }
 
 func (s *Service) CreatePassword(password string, hint string) error {
+	return s.CreatePasswordContext(context.Background(), password, hint)
+}
+
+func (s *Service) CreatePasswordContext(ctx context.Context, password string, hint string) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -79,25 +104,31 @@ func (s *Service) CreatePassword(password string, hint string) error {
 		return err
 	}
 
-	_, err = projection.GetEncryptionConfig(s.db, channelID)
-	if err != nil && !errors.Is(err, projection.ErrEncryptionConfigNotFound) {
+	_, exists, err := mountpolicy.EnsurePersonalConfig(ctx, s.db, channelID, s.ensurePolicy)
+	if err != nil {
 		return err
 	}
-	if err == nil {
-		return fmt.Errorf("encryption password already exists")
+	if exists {
+		return ErrPasswordAlreadySet
 	}
 	master, err := tdcrypto.NewMasterKey()
 	if err != nil {
 		return err
 	}
-	cfg, err := buildConfig(channelID, password, hint, master, 0)
+	defer zeroBytes(master)
+	cfg, err := s.buildConfig(channelID, password, hint, master, 0)
 	if err != nil {
+		slog.Error("encryption: build config for new password failed", "channel_id", channelID, "error", err)
 		return err
 	}
 	if err := s.publishConfig(channelID, cfg); err != nil {
+		slog.Error("encryption: publish new password config failed", "channel_id", channelID, "error", err)
 		return err
 	}
-	s.StoreMasterKey(master)
+	if err := s.StoreMasterKey(master); err != nil {
+		return err
+	}
+	slog.Info("encryption: vault password created", "channel_id", channelID, "hint_set", strings.TrimSpace(hint) != "")
 	return nil
 }
 
@@ -120,7 +151,12 @@ func (s *Service) UsePassword(password string) error {
 	if err != nil {
 		return err
 	}
-	return s.RememberPassword(existing, password)
+	if err := s.RememberPassword(existing, password); err != nil {
+		slog.Warn("encryption: unlock vault failed", "channel_id", channelID, "error", err)
+		return err
+	}
+	slog.Info("encryption: vault unlocked", "channel_id", channelID)
+	return nil
 }
 
 func (s *Service) ChangePassword(currentPassword string, newPassword string, hint string) error {
@@ -145,18 +181,25 @@ func (s *Service) ChangePassword(currentPassword string, newPassword string, hin
 	if err != nil {
 		return err
 	}
-	master, err := unwrapMasterKey(existing, currentPassword)
+	master, err := s.unwrapMasterKey(existing, currentPassword)
 	if err != nil {
+		slog.Warn("encryption: change password rejected, current password did not unlock vault", "channel_id", channelID)
 		return err
 	}
-	cfg, err := buildConfig(channelID, newPassword, hint, master, existing.CreatedAt)
+	defer zeroBytes(master)
+	cfg, err := s.buildConfig(channelID, newPassword, hint, master, existing.CreatedAt)
 	if err != nil {
+		slog.Error("encryption: build config for password change failed", "channel_id", channelID, "error", err)
 		return err
 	}
 	if err := s.publishConfig(channelID, cfg); err != nil {
+		slog.Error("encryption: publish changed password config failed", "channel_id", channelID, "error", err)
 		return err
 	}
-	s.StoreMasterKey(master)
+	if err := s.StoreMasterKey(master); err != nil {
+		return err
+	}
+	slog.Info("encryption: vault password changed", "channel_id", channelID, "hint_set", strings.TrimSpace(hint) != "")
 	return nil
 }
 
@@ -202,29 +245,57 @@ func (s *Service) WriteCiphertextTemp(plain io.Reader, plaintextSize int64, mast
 }
 
 func (s *Service) LoadedMasterKey() ([]byte, bool) {
-	p := s.masterKey.Load()
-	if p == nil {
+	s.masterKeyMu.RLock()
+	defer s.masterKeyMu.RUnlock()
+	if s.masterKey == nil {
 		return nil, false
 	}
-	return append([]byte(nil), (*p)...), true
+	if len(s.masterKey) != masterKeySize {
+		return nil, false
+	}
+	return append([]byte(nil), s.masterKey...), true
 }
 
-func (s *Service) StoreMasterKey(key []byte) {
+func (s *Service) hasLoadedMasterKey() bool {
+	s.masterKeyMu.RLock()
+	defer s.masterKeyMu.RUnlock()
+	return len(s.masterKey) == masterKeySize
+}
+
+// StoreMasterKey replaces the unlocked vault key with an owned copy. Passing
+// anything other than one 32-byte key fails closed by locking the vault.
+func (s *Service) StoreMasterKey(key []byte) error {
+	if len(key) != masterKeySize {
+		slog.Warn("encryption: rejecting master key with wrong length, locking vault", "length", len(key))
+		s.Clear()
+		return ErrInvalidMasterKey
+	}
 	cp := append([]byte(nil), key...)
-	s.masterKey.Store(&cp)
+	s.masterKeyMu.Lock()
+	previous := s.masterKey
+	s.masterKey = cp
+	zeroBytes(previous)
+	s.masterKeyMu.Unlock()
+	slog.Debug("encryption: master key loaded into memory")
+	return nil
 }
 
 func (s *Service) Clear() {
-	s.masterKey.Store(nil)
+	s.masterKeyMu.Lock()
+	previous := s.masterKey
+	s.masterKey = nil
+	zeroBytes(previous)
+	s.masterKeyMu.Unlock()
+	slog.Debug("encryption: vault key cleared from memory")
 }
 
 func (s *Service) RememberPassword(cfg projection.EncryptionConfig, password string) error {
-	master, err := unwrapMasterKey(cfg, password)
+	master, err := s.unwrapMasterKey(cfg, password)
 	if err != nil {
 		return err
 	}
-	s.StoreMasterKey(master)
-	return nil
+	defer zeroBytes(master)
+	return s.StoreMasterKey(master)
 }
 
 func (s *Service) publishConfig(channelID int64, cfg projection.EncryptionConfig) error {
@@ -267,12 +338,28 @@ func validateNewPassword(password string) error {
 }
 
 func buildConfig(channelID int64, password string, hint string, master []byte, createdAt int64) (projection.EncryptionConfig, error) {
+	return buildConfigWithKDF(channelID, password, hint, master, createdAt, tdcrypto.DeriveKEK)
+}
+
+func (s *Service) buildConfig(channelID int64, password string, hint string, master []byte, createdAt int64) (projection.EncryptionConfig, error) {
+	s.kdfMu.Lock()
+	defer s.kdfMu.Unlock()
+	return buildConfigWithKDF(channelID, password, hint, master, createdAt, s.kdfFunction())
+}
+
+func buildConfigWithKDF(channelID int64, password string, hint string, master []byte, createdAt int64, derive deriveKEKFunc) (projection.EncryptionConfig, error) {
 	params := tdcrypto.DefaultParams()
 	salt, err := tdcrypto.NewSalt(params)
 	if err != nil {
 		return projection.EncryptionConfig{}, err
 	}
-	kek := tdcrypto.DeriveKEK([]byte(password), salt, params)
+	passwordBytes := []byte(password)
+	defer zeroBytes(passwordBytes)
+	kek, err := derive(passwordBytes, salt, params)
+	if err != nil {
+		return projection.EncryptionConfig{}, err
+	}
+	defer zeroBytes(kek)
 	wrapped, err := tdcrypto.WrapMasterKey(master, kek)
 	if err != nil {
 		return projection.EncryptionConfig{}, err
@@ -315,20 +402,55 @@ func configOp(cfg projection.EncryptionConfig) projection.Op {
 }
 
 func unwrapMasterKey(cfg projection.EncryptionConfig, password string) ([]byte, error) {
+	return unwrapMasterKeyWithKDF(cfg, password, tdcrypto.DeriveKEK)
+}
+
+func (s *Service) unwrapMasterKey(cfg projection.EncryptionConfig, password string) ([]byte, error) {
+	s.kdfMu.Lock()
+	defer s.kdfMu.Unlock()
+	return unwrapMasterKeyWithKDF(cfg, password, s.kdfFunction())
+}
+
+func unwrapMasterKeyWithKDF(cfg projection.EncryptionConfig, password string, derive deriveKEKFunc) ([]byte, error) {
+	if cfg.Version != 1 {
+		return nil, fmt.Errorf("%w: %w", projection.ErrInvalidEncryptionConfig, projection.ErrUnsupportedEncryptionConfigVersion)
+	}
 	params, err := tdcrypto.UnmarshalParams(cfg.KDFParamsJSON)
 	if err != nil {
 		return nil, err
 	}
-	kek := tdcrypto.DeriveKEK([]byte(password), cfg.KDFSalt, params)
+	if err := tdcrypto.ValidateVaultMaterial(cfg.KDFSalt, params, cfg.WrappedMasterKey, cfg.KeyCheck); err != nil {
+		return nil, err
+	}
+	passwordBytes := []byte(password)
+	defer zeroBytes(passwordBytes)
+	kek, err := derive(passwordBytes, cfg.KDFSalt, params)
+	if err != nil {
+		return nil, err
+	}
+	defer zeroBytes(kek)
 	master, err := tdcrypto.UnwrapMasterKey(cfg.WrappedMasterKey, kek)
 	if err != nil {
+		zeroBytes(master)
 		if errors.Is(err, tdcrypto.ErrWrongPassword) {
 			return nil, fmt.Errorf("wrong password")
 		}
 		return nil, err
 	}
 	if err := tdcrypto.VerifyKeyCheck(master, cfg.KeyCheck); err != nil {
+		zeroBytes(master)
 		return nil, fmt.Errorf("wrong password")
 	}
 	return master, nil
+}
+
+func (s *Service) kdfFunction() deriveKEKFunc {
+	if s.deriveKEK == nil {
+		return tdcrypto.DeriveKEK
+	}
+	return s.deriveKEK
+}
+
+func zeroBytes(buffer []byte) {
+	clear(buffer)
 }

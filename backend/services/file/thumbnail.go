@@ -62,18 +62,19 @@ func (s *Service) Thumbnail(ctx context.Context, channelID int64, msgID int) (Pr
 		encrypted = enc
 	}
 
-	var masterKey []byte
+	cacheKey := thumbCacheKey(channelID, msgID)
+	var cacheReadKey []byte
 	if encrypted {
 		key, err := s.requireEncryptionKey(true)
+		cacheReadKey = key
 		if err != nil {
+			clearOwnedKey(cacheReadKey)
 			return PreviewPayload{}, errPreviewEncryptionPasswordRequired
 		}
-		masterKey = key
 	}
-
-	cacheKey := thumbCacheKey(channelID, msgID)
-
-	if jpegBytes, ok := s.readThumbCache(cacheKey, encrypted, masterKey); ok {
+	jpegBytes, cached := s.readThumbCache(cacheKey, encrypted, cacheReadKey)
+	clearOwnedKey(cacheReadKey)
+	if cached {
 		return previewPayloadFromBytes(jpegBytes, "image/jpeg")
 	}
 
@@ -84,12 +85,21 @@ func (s *Service) Thumbnail(ctx context.Context, channelID int64, msgID int) (Pr
 	// observes its own ctx via the select below. An abandoned flight still
 	// finishes and populates the cache for the next view.
 	ch := s.thumbGroup.DoChan(cacheKey, func() (any, error) {
-		if jpegBytes, ok := s.readThumbCache(cacheKey, encrypted, masterKey); ok {
+		var flightKey []byte
+		if encrypted {
+			key, err := s.requireEncryptionKey(true)
+			flightKey = key
+			defer clearOwnedKey(flightKey)
+			if err != nil {
+				return nil, errPreviewEncryptionPasswordRequired
+			}
+		}
+		if jpegBytes, ok := s.readThumbCache(cacheKey, encrypted, flightKey); ok {
 			return jpegBytes, nil
 		}
 		genCtx, cancel := context.WithTimeout(context.Background(), thumbGenTimeout)
 		defer cancel()
-		return s.generateThumbnail(genCtx, channelID, msgID, cacheKey, encrypted, masterKey)
+		return s.runThumbnailGenerator(genCtx, channelID, msgID, cacheKey, encrypted, flightKey)
 	})
 
 	select {
@@ -102,6 +112,13 @@ func (s *Service) Thumbnail(ctx context.Context, channelID int64, msgID int) (Pr
 		jpegBytes, _ := res.Val.([]byte)
 		return previewPayloadFromBytes(jpegBytes, "image/jpeg")
 	}
+}
+
+func (s *Service) runThumbnailGenerator(ctx context.Context, channelID int64, msgID int, cacheKey string, encrypted bool, masterKey []byte) ([]byte, error) {
+	if s.generateThumbnailFn != nil {
+		return s.generateThumbnailFn(ctx, channelID, msgID, cacheKey, encrypted, masterKey)
+	}
+	return s.generateThumbnail(ctx, channelID, msgID, cacheKey, encrypted, masterKey)
 }
 
 func (s *Service) generateThumbnail(ctx context.Context, channelID int64, msgID int, cacheKey string, encrypted bool, masterKey []byte) ([]byte, error) {

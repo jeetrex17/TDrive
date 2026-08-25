@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
+	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 	"TDrive/backend/thumbnail"
 
@@ -28,10 +30,19 @@ type PeerResolver interface {
 }
 
 type EmitOpFunc func(channelID int64, op projection.Op) (int64, error)
+type EmitOpContextFunc func(ctx context.Context, channelID int64, op projection.Op) (int64, error)
 type ActorIDFunc func(ctx context.Context) (int64, error)
+
+// RequireEncryptionKeyFunc returns a caller-owned key copy. Service clears a
+// non-nil key on every return path, including when err is non-nil.
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
+
+// MasterKeyForUploadFunc returns a caller-owned key copy. Service clears a
+// non-nil key on every return path, including when err is non-nil.
 type MasterKeyForUploadFunc func(channelID int64, wantEncrypted bool) ([]byte, error)
 type WriteCiphertextTempFunc func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error)
+type encryptStreamFunc func(plain io.Reader, ciphertext io.Writer, masterKey []byte, plaintextSize int64) error
+type thumbnailGeneratorFunc func(ctx context.Context, channelID int64, msgID int, cacheKey string, encrypted bool, masterKey []byte) ([]byte, error)
 type WarnFunc func(format string, args ...any)
 
 // CreateFolderFunc creates a folder and returns its new ID. It is injected so
@@ -48,10 +59,13 @@ type Service struct {
 	TG                   tgclient.Client
 	Peers                PeerResolver
 	EmitOp               EmitOpFunc
+	EmitOpContext        EmitOpContextFunc
 	ActorID              ActorIDFunc
 	RequireEncryptionKey RequireEncryptionKeyFunc
 	MasterKeyForUpload   MasterKeyForUploadFunc
 	WriteCiphertextTemp  WriteCiphertextTempFunc
+	encryptStream        encryptStreamFunc
+	generateThumbnailFn  thumbnailGeneratorFunc
 	CreateFolder         CreateFolderFunc
 	Events               EventSink
 	Warnf                WarnFunc
@@ -60,7 +74,14 @@ type Service struct {
 	// 2 GiB cap; it is raised to the 4 GiB Premium cap once the account is known
 	// to be Premium. See maxUploadBytes.
 	MaxUploadBytes int64
+	// FloodWaitRetry bounds FLOOD_WAIT retries for hidden writable-mount body
+	// uploads. The zero value uses tgclient's bounded production defaults.
+	FloodWaitRetry tgclient.FloodWaitRetryPolicy
 	previewMu      sync.Mutex
+	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
+	// package tests. It runs immediately after Telegram returns a positive
+	// message ID and before that receipt enters any local collection/projection.
+	afterHiddenPartSend func(partIndex int, msgID int64)
 
 	// Thumbs is the on-disk thumbnail cache. Nil disables caching (every
 	// Thumbnail call regenerates), which keeps the cache optional in tests.
@@ -100,6 +121,14 @@ type ChooseSavePathFunc func(defaultName string) (string, error)
 const maxPreviewPayloadBytes int64 = 10 * 1024 * 1024
 
 var (
+	// ErrHiddenReceiptRecoveryRequired means Telegram returned a positive send
+	// receipt but its local ownership projection could not be made durable.
+	// Mount cleanup must reconcile it from the unchanged staged source.
+	ErrHiddenReceiptRecoveryRequired = errors.New("hidden upload receipt recovery required")
+	// ErrHiddenReceiptInvalid marks a cleanup receipt that failed ownership or
+	// structural validation. Callers must fail closed instead of retrying it as
+	// a transient Telegram outage.
+	ErrHiddenReceiptInvalid              = errors.New("hidden upload cleanup receipt invalid")
 	errPreviewNotFound                   = errors.New("File not found")
 	errPreviewNotSupported               = errors.New("Not a supported image")
 	errPreviewTooLarge                   = errors.New("File too large")
@@ -119,6 +148,7 @@ var previewMimeTypes = map[string]string{
 }
 
 func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool) ([]Metadata, error) {
+	slog.Debug("file: upload batch starting", "channel_id", channelID, "files", len(filePaths), "encrypt", encrypt)
 	if len(filePaths) != len(parentIDs) {
 		return nil, fmt.Errorf("filepaths and parentIDs length mismatch")
 	}
@@ -246,8 +276,10 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	}
 
 	if failed > 0 {
+		slog.Warn("file: upload batch completed with failures", "channel_id", channelID, "succeeded", len(uploadedFiles), "failed", failed)
 		return uploadedFiles, fmt.Errorf("%d uploads failed", failed)
 	}
+	slog.Debug("file: upload batch completed", "channel_id", channelID, "succeeded", len(uploadedFiles))
 	return uploadedFiles, nil
 }
 
@@ -261,6 +293,7 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 
 	plainFile, err := os.Open(filePath)
 	if err != nil {
+		slog.Error("file: upload open source failed", "channel_id", channelID, "name", filename, "error", err)
 		return Metadata{}, projection.Op{}, "", err
 	}
 	defer plainFile.Close()
@@ -270,6 +303,23 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 		return Metadata{}, projection.Op{}, "", err
 	}
 	plaintextSize := info.Size()
+	slog.Debug("file: uploading", "channel_id", channelID, "name", filename, "size", plaintextSize, "encrypt", wantEncrypted, "parent_id", parentID)
+	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, plainFile, filename, plaintextSize, parentID, channelID, wantEncrypted)
+	if err != nil {
+		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
+	} else {
+		slog.Debug("file: upload succeeded", "channel_id", channelID, "name", filename, "msg_id", meta.MsgID, "stored_size", meta.Size)
+	}
+	return meta, op, header, err
+}
+
+// uploadVisibleSource is the compatibility path used by the existing GUI/CLI
+// uploader. Keeping the source boundary seekable lets staged-file callers use
+// the same single/multipart planning without coupling the core to local paths.
+func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool) (Metadata, projection.Op, string, error) {
+	if err := validateSeekableSize(source, plaintextSize); err != nil {
+		return Metadata{}, projection.Op{}, "", err
+	}
 	parent, err := s.validParent(channelID, parentID, "parent")
 	if err != nil {
 		return Metadata{}, projection.Op{}, "", err
@@ -284,6 +334,7 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	}
 
 	masterKey, err := s.masterKeyForUpload(channelID, wantEncrypted)
+	defer clearOwnedKey(masterKey)
 	if err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
@@ -297,15 +348,15 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 		// uploadMultipart sends the parts, projects them, and emits the manifest
 		// (the commit point) itself. Returning an empty op tells the caller not
 		// to re-project this upload.
-		meta, err := s.uploadMultipart(ctx, uploadID, plainFile, filename, plaintextSize, parent, channelID, wantEncrypted, masterKey, peer, storedSize)
+		meta, err := s.uploadMultipart(ctx, uploadID, source, filename, plaintextSize, parent, channelID, wantEncrypted, masterKey, peer, storedSize)
 		return meta, projection.Op{}, "", err
 	}
 
 	encrypted := wantEncrypted
-	var uploadSource *os.File = plainFile
+	var uploadSource io.Reader = source
 	uploadSize := plaintextSize
 	if encrypted {
-		tempCipher, err := s.writeCiphertextTemp(plainFile, plaintextSize, masterKey)
+		tempCipher, err := s.writeCiphertextTemp(source, plaintextSize, masterKey)
 		if err != nil {
 			return Metadata{}, projection.Op{}, "", fmt.Errorf("encrypt: %w", err)
 		}
@@ -379,6 +430,47 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 	}, op, header, nil
 }
 
+type uploadPartPlan struct {
+	partSize  int64
+	partCount int
+}
+
+func (s *Service) buildUploadPartPlan(storedSize int64) (uploadPartPlan, error) {
+	partSize := s.maxPartBytes()
+	if storedSize < 0 || partSize <= 0 {
+		return uploadPartPlan{}, fmt.Errorf("invalid upload part sizing")
+	}
+
+	partCount := storedSize / partSize
+	if storedSize%partSize != 0 {
+		partCount++
+	}
+	if partCount == 0 {
+		partCount = 1
+	}
+	if partCount > MaxParts {
+		return uploadPartPlan{}, fmt.Errorf(
+			"stored upload would split into %d parts (max %d): %w",
+			partCount,
+			MaxParts,
+			ErrFileTooLarge,
+		)
+	}
+	return uploadPartPlan{partSize: partSize, partCount: int(partCount)}, nil
+}
+
+func (plan uploadPartPlan) window(storedSize int64, partIndex int) (offset int64, length int64, err error) {
+	if storedSize < 0 || plan.partSize <= 0 || plan.partCount <= 0 || partIndex < 0 || partIndex >= plan.partCount {
+		return 0, 0, fmt.Errorf("invalid upload part %d", partIndex)
+	}
+	index := int64(partIndex)
+	if index > 0 && plan.partSize > storedSize/index {
+		return 0, 0, fmt.Errorf("invalid upload part %d offset", partIndex)
+	}
+	offset = index * plan.partSize
+	return offset, min(plan.partSize, storedSize-offset), nil
+}
+
 // uploadMultipart stores a file too big for one Telegram message as N part
 // documents plus a manifest. The stored byte stream (ciphertext when encrypting,
 // else the plaintext file) is produced once and sliced into <= MaxPartBytes
@@ -387,7 +479,7 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 // are deleted and no manifest is emitted, so a failed upload leaves nothing
 // visible. Disk use stays bounded — the ciphertext is streamed through a pipe,
 // never materialized whole.
-func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *os.File, filename string, plaintextSize int64, parent string, channelID int64, encrypt bool, masterKey []byte, peer tgclient.InputPeer, storedSize int64) (Metadata, error) {
+func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile io.ReadSeeker, filename string, plaintextSize int64, parent string, channelID int64, encrypt bool, masterKey []byte, peer tgclient.InputPeer, storedSize int64) (Metadata, error) {
 	if s.ActorID == nil {
 		return Metadata{}, fmt.Errorf("actor resolver not ready")
 	}
@@ -396,14 +488,11 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 		return Metadata{}, err
 	}
 
-	partSize := s.maxPartBytes()
-	numParts := int((storedSize + partSize - 1) / partSize)
-	if numParts < 1 {
-		numParts = 1
+	plan, err := s.buildUploadPartPlan(storedSize)
+	if err != nil {
+		return Metadata{}, fmt.Errorf("%s: %w", filename, err)
 	}
-	if numParts > MaxParts {
-		return Metadata{}, fmt.Errorf("%s would split into %d parts (max %d): %w", filename, numParts, MaxParts, ErrFileTooLarge)
-	}
+	numParts := plan.partCount
 
 	uploadUUID := projection.NewUploadUUID()
 	s.warnf("Starting multipart upload: %s (%d parts)\n", filename, numParts)
@@ -416,11 +505,21 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 	var closeReader func()
 	if encrypt {
 		pr, pw := io.Pipe()
-		go func() {
-			_ = pw.CloseWithError(tdcrypto.EncryptStream(plainFile, pw, masterKey, plaintextSize))
-		}()
+		producerDone := make(chan struct{})
+		producerKey := append([]byte(nil), masterKey...)
+		go func(key []byte) {
+			defer close(producerDone)
+			defer clearOwnedKey(key)
+			_ = pw.CloseWithError(s.encryptStoredStream(plainFile, pw, key, plaintextSize))
+		}(producerKey)
 		storedReader = pr
-		closeReader = func() { _ = pr.Close() }
+		closeReader = func() {
+			// Closing the read end unblocks a producer whose consumer returned
+			// early. Waiting here guarantees its private key copy is no longer in
+			// use and has been cleared before uploadMultipart returns.
+			_ = pr.Close()
+			<-producerDone
+		}
 	}
 	if closeReader != nil {
 		defer closeReader()
@@ -444,7 +543,6 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 	}
 
 	var (
-		sentBytes    int64
 		progressMu   sync.Mutex
 		lastProgress = time.Now()
 	)
@@ -453,9 +551,10 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 			abort()
 			return Metadata{}, err
 		}
-		partLen := partSize
-		if remaining := storedSize - sentBytes; remaining < partLen {
-			partLen = remaining
+		partBase, partLen, err := plan.window(storedSize, i)
+		if err != nil {
+			abort()
+			return Metadata{}, err
 		}
 		partOp := projection.Op{
 			Type:       projection.OpFilePart,
@@ -464,8 +563,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 			FileSize:   partLen,
 		}
 		partCaption := projection.Format(partOp)
-		partBase := sentBytes
-		result, err := s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), fmt.Sprintf("part-%05d", i), partCaption, partLen, func(sent, total int64) {
+		result, err := s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), partAttachmentName(filename, i, numParts), partCaption, partLen, func(sent, total int64) {
 			progressMu.Lock()
 			defer progressMu.Unlock()
 			if time.Since(lastProgress) <= 100*time.Millisecond {
@@ -496,7 +594,6 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 			abort()
 			return Metadata{}, err
 		}
-		sentBytes += partLen
 	}
 
 	// Commit: the manifest is a text op whose own msg_id becomes the file id.
@@ -530,7 +627,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile *
 		abort()
 		return Metadata{}, err
 	}
-	manifestMsgID, err := s.emit(channelID, manifestOp)
+	manifestMsgID, err := s.emit(ctx, channelID, manifestOp)
 	if err != nil {
 		if manifestMsgID == 0 {
 			// The manifest never reached Telegram: nothing is committed, so clean
@@ -571,7 +668,15 @@ func (s *Service) deleteMessagesChunked(ctx context.Context, peer tgclient.Input
 	return firstErr
 }
 
-func (s *Service) Download(ctx context.Context, channelID int64, msgID int, lookupID int, chooseSavePath ChooseSavePathFunc) DownloadResult {
+func (s *Service) Download(ctx context.Context, channelID int64, msgID int, lookupID int, chooseSavePath ChooseSavePathFunc) (result DownloadResult) {
+	slog.Debug("file: download starting", "channel_id", channelID, "msg_id", msgID, "lookup_id", lookupID)
+	defer func() {
+		if result.Status == "error" {
+			slog.Error("file: download failed", "channel_id", channelID, "msg_id", msgID, "message", result.Message)
+		} else {
+			slog.Debug("file: download completed", "channel_id", channelID, "msg_id", msgID, "status", result.Status)
+		}
+	}()
 	if err := s.ready(); err != nil {
 		return DownloadResult{Status: "error", Message: err.Error()}
 	}
@@ -628,6 +733,7 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 		encrypted = enc
 	}
 	masterKey, err := s.requireEncryptionKey(encrypted)
+	defer clearOwnedKey(masterKey)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: err.Error()}
 	}
@@ -715,6 +821,7 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 		encrypted = enc
 	}
 	masterKey, err := s.requireEncryptionKey(encrypted)
+	defer clearOwnedKey(masterKey)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: err.Error()}
 	}
@@ -972,6 +1079,7 @@ func (s *Service) PreviewFile(ctx context.Context, channelID int64, msgID int) (
 			return errPreviewTooLarge
 		}
 		masterKey, err := s.requireEncryptionKey(encrypted)
+		defer clearOwnedKey(masterKey)
 		if err != nil {
 			return errPreviewEncryptionPasswordRequired
 		}
@@ -1004,6 +1112,13 @@ func (s *Service) PreviewFile(ctx context.Context, channelID int64, msgID int) (
 }
 
 func (s *Service) Meta(channelID int64, msgID int, name string, size int64, parentID string) error {
+	return s.MetaContext(context.Background(), channelID, msgID, name, size, parentID)
+}
+
+func (s *Service) MetaContext(ctx context.Context, channelID int64, msgID int, name string, size int64, parentID string) error {
+	if err := servicecontext.Check(ctx, "file: metadata"); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -1035,7 +1150,7 @@ func (s *Service) Meta(channelID int64, msgID int, name string, size int64, pare
 		FileSize:       size,
 		FileUploadTime: s.now().Unix(),
 	}
-	_, err = s.emit(channelID, op)
+	_, err = s.emit(ctx, channelID, op)
 	return err
 }
 
@@ -1048,13 +1163,25 @@ func (s *Service) requireEncryptedFileKey(channelID int64, msgID int) error {
 	if err != nil {
 		return nil
 	}
-	if _, err := s.requireEncryptionKey(encrypted); err != nil {
+	masterKey, err := s.requireEncryptionKey(encrypted)
+	clearOwnedKey(masterKey)
+	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newName string) error {
+func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newName string) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Error("file: rename failed", "channel_id", channelID, "msg_id", msgID, "error", err)
+		} else {
+			slog.Debug("file: renamed", "channel_id", channelID, "msg_id", msgID, "new_name", newName)
+		}
+	}()
+	if err := servicecontext.Check(ctx, "file: rename"); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -1080,11 +1207,21 @@ func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newNam
 		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
 		Name: newName,
 	}
-	_, err := s.emit(channelID, op)
+	_, err = s.emit(ctx, channelID, op)
 	return err
 }
 
-func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParentID string) error {
+func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParentID string) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Error("file: move failed", "channel_id", channelID, "msg_id", msgID, "error", err)
+		} else {
+			slog.Debug("file: moved", "channel_id", channelID, "msg_id", msgID, "new_parent_id", newParentID)
+		}
+	}()
+	if err := servicecontext.Check(ctx, "file: move"); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -1113,11 +1250,21 @@ func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParen
 		Obj:    fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
 		Parent: parent,
 	}
-	_, err = s.emit(channelID, op)
+	_, err = s.emit(ctx, channelID, op)
 	return err
 }
 
-func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) error {
+func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Error("file: delete failed", "channel_id", channelID, "msg_id", msgID, "error", err)
+		} else {
+			slog.Debug("file: deleted (tombstoned)", "channel_id", channelID, "msg_id", msgID)
+		}
+	}()
+	if err := servicecontext.Check(ctx, "file: delete"); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -1152,7 +1299,7 @@ func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) error 
 		Type: projection.OpTomb,
 		Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, msgID),
 	}
-	if _, err := s.emit(channelID, tombOp); err != nil {
+	if _, err := s.emit(ctx, channelID, tombOp); err != nil {
 		return err
 	}
 
@@ -1268,7 +1415,13 @@ func (s *Service) validParent(channelID int64, parentID string, label string) (s
 	return parent, nil
 }
 
-func (s *Service) emit(channelID int64, op projection.Op) (int64, error) {
+func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) (int64, error) {
+	if err := servicecontext.Check(ctx, "file: emit operation"); err != nil {
+		return 0, err
+	}
+	if s.EmitOpContext != nil {
+		return s.EmitOpContext(ctx, channelID, op)
+	}
 	if s.EmitOp == nil {
 		return 0, fmt.Errorf("file emitter not ready")
 	}
@@ -1297,6 +1450,17 @@ func (s *Service) writeCiphertextTemp(plain io.Reader, plaintextSize int64, mast
 		return nil, fmt.Errorf("encryption upload not ready")
 	}
 	return s.WriteCiphertextTemp(plain, plaintextSize, masterKey)
+}
+
+func (s *Service) encryptStoredStream(plain io.Reader, ciphertext io.Writer, masterKey []byte, plaintextSize int64) error {
+	if s.encryptStream != nil {
+		return s.encryptStream(plain, ciphertext, masterKey, plaintextSize)
+	}
+	return tdcrypto.EncryptStream(plain, ciphertext, masterKey, plaintextSize)
+}
+
+func clearOwnedKey(key []byte) {
+	clear(key)
 }
 
 func (s *Service) emitEvent(name string, args ...any) {

@@ -3,7 +3,9 @@ package file
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -223,9 +225,10 @@ func TestRunImportRejectsMissingParentBeforeCreatingFolders(t *testing.T) {
 func TestRunImportChecksEncryptionBeforeCreatingFolders(t *testing.T) {
 	svc, db, _, _ := newTestService(t)
 	svc.CreateFolder = testFolderCreator(db)
+	failedKey := []byte("preflight-owned-key")
 	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
 		if wantEncrypted {
-			return nil, fmt.Errorf("missing key")
+			return failedKey, fmt.Errorf("missing key")
 		}
 		return nil, nil
 	}
@@ -240,6 +243,27 @@ func TestRunImportChecksEncryptionBeforeCreatingFolders(t *testing.T) {
 	if names := childFolderNames(t, db, personalChannelID, ""); len(names) != 0 {
 		t.Fatalf("created folders despite encryption preflight failure: %v", names)
 	}
+	assertKeyZeroed(t, failedKey)
+}
+
+func TestRunImportClearsSuccessfulEncryptionPreflightKey(t *testing.T) {
+	svc, db, _, _ := newTestService(t)
+	svc.CreateFolder = testFolderCreator(db)
+	svc.WriteCiphertextTemp = func(io.Reader, int64, []byte) (*os.File, error) {
+		return nil, errors.New("unexpected encryption: empty import has no files")
+	}
+	preflightKey := []byte("successful-preflight-owned-key")
+	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
+		if !wantEncrypted {
+			t.Fatal("encryption preflight requested a plaintext key")
+		}
+		return preflightKey, nil
+	}
+
+	if err := svc.RunImport(context.Background(), personalChannelID, nil, "", true, false); err != nil {
+		t.Fatalf("RunImport(empty): %v", err)
+	}
+	assertKeyZeroed(t, preflightKey)
 }
 
 func TestRunImportNameCollisionSuffixes(t *testing.T) {
@@ -271,7 +295,7 @@ func TestRunImportSkipsOversize(t *testing.T) {
 	hardCap := int64(5) * int64(MaxParts)
 
 	root := filepath.Join(t.TempDir(), "Mix")
-	mkfile(t, filepath.Join(root, "small.txt"), "hello")                           // 5 bytes: single upload
+	mkfile(t, filepath.Join(root, "small.txt"), "hello")                            // 5 bytes: single upload
 	mkfile(t, filepath.Join(root, "big.txt"), strings.Repeat("x", int(hardCap)+50)) // over the hard cap: skipped
 
 	if err := svc.RunImport(context.Background(), personalChannelID, []string{root}, "", false, false); err != nil {

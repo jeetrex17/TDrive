@@ -13,6 +13,7 @@ import { setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } fro
 import { setupFileListWindowBindings, refreshFiles } from './modules/file-list';
 import { setupGallery } from './modules/gallery';
 import { setupSearchBar, runGlobalSearch } from './modules/search';
+import { setupRefreshShortcut } from './modules/refresh-shortcut';
 
 // Import modal setup functions
 import { setupDeleteModal, openDeleteModal } from './modules/modals/delete';
@@ -33,6 +34,7 @@ import { setupEncryptionSettingsModal } from './modules/modals/encryption-settin
 import { setupUploadOptionsModal } from './modules/modals/upload-options';
 import { setupImportOptionsModal } from './modules/modals/import-options';
 import { setupLogoutModal } from './modules/modals/logout';
+import { setupMountSelectionModal } from './modules/modals/mount-selection';
 
 // Sidebar / drives
 import { setupSidebar, renderSidebar } from './modules/sidebar';
@@ -118,6 +120,7 @@ window.onload = async function() {
     setupUploadOptionsModal();
     setupImportOptionsModal();
     setupLogoutModal();
+    setupMountSelectionModal();
     setupProfileMenu();
 
     // Setup UI components
@@ -129,6 +132,7 @@ window.onload = async function() {
     setupUploadMenu();
     setupFileDrop();
     setupSearchBar();
+    setupRefreshShortcut();
     setupGallery();
 
     // Sidebar — wire renderers BEFORE setup so the first render finds the

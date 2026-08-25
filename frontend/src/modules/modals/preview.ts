@@ -664,16 +664,12 @@ function hideLockedState() {
     if (lockedEl) lockedEl.style.display = "none";
 }
 
-const EYE_OPEN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M2.5 12S6 5.5 12 5.5s9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3.2"/></svg>';
-const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9.9 5.7A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.3 16.3 0 0 1-2.9 3.6M6.2 7.2A15.9 15.9 0 0 0 2.5 12S6 18.5 12 18.5c1.4 0 2.6-.2 3.7-.7M3 3l18 18M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
-
 // Show/hide the typed password. A ghost toggle inside the pill (a polish
 // hallmark for password fields); resets to hidden whenever the state reopens.
 function toggleLockedReveal() {
     if (!lockedInputEl || !lockedEyeEl) return;
     const reveal = lockedInputEl.type === "password";
     lockedInputEl.type = reveal ? "text" : "password";
-    lockedEyeEl.innerHTML = reveal ? EYE_OFF_SVG : EYE_OPEN_SVG;
     lockedEyeEl.setAttribute("aria-pressed", reveal ? "true" : "false");
     lockedEyeEl.setAttribute("aria-label", reveal ? "Hide password" : "Show password");
     try { lockedInputEl.focus(); } catch { /* focus is best-effort */ }
@@ -682,7 +678,6 @@ function toggleLockedReveal() {
 function resetLockedReveal() {
     if (lockedInputEl) lockedInputEl.type = "password";
     if (lockedEyeEl) {
-        lockedEyeEl.innerHTML = EYE_OPEN_SVG;
         lockedEyeEl.setAttribute("aria-pressed", "false");
         lockedEyeEl.setAttribute("aria-label", "Show password");
     }

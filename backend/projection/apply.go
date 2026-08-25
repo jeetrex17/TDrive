@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 )
@@ -36,7 +37,49 @@ var (
 	ErrBadOp         = errors.New("projection: malformed op")
 )
 
-func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) error {
+// ApplyOp is the single writer to files/folders (see the package invariants
+// above). Every application result -- success or failure, for every op type
+// -- is logged here once rather than in each individual applyXxx helper, so
+// this one call site is where "what did projection do with this message"
+// is always visible.
+func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) (err error) {
+	defer func() {
+		if err != nil {
+			slog.Warn("projection: apply op failed", "channel_id", channelID, "msg_id", msgID, "op_type", op.Type, "error", err)
+		} else {
+			slog.Debug("projection: applied op", "channel_id", channelID, "msg_id", msgID, "op_type", op.Type)
+		}
+	}()
+	if isVersionedWritableOp(op.Type) {
+		if err := validateVersionedWritableOp(op); err != nil {
+			return err
+		}
+		seen, err := projectionOperationExistsTx(tx, channelID, op.OpID)
+		if err != nil {
+			return err
+		}
+		if seen {
+			slog.Debug("projection: op already applied, skipping (idempotent replay)", "channel_id", channelID, "msg_id", msgID, "op_type", op.Type)
+			return nil
+		}
+		var applyErr error
+		switch op.Type {
+		case OpFileCommit:
+			applyErr = applyFileCommit(tx, channelID, msgID, op, actorID)
+		case OpFileReplace:
+			applyErr = applyFileReplace(tx, channelID, msgID, op, actorID)
+		case OpFolderCommit:
+			applyErr = applyFolderCommit(tx, channelID, op)
+		case OpRelocate:
+			applyErr = applyRelocate(tx, channelID, op)
+		case OpTrashTree:
+			applyErr = applyTrashTree(tx, channelID, op)
+		}
+		if applyErr != nil {
+			return applyErr
+		}
+		return recordProjectionOperationTx(tx, channelID, msgID, op, OperationApplied, nil)
+	}
 	switch op.Type {
 	case OpMkdir:
 		return applyMkdir(tx, channelID, op)
@@ -79,7 +122,10 @@ func applyMkdir(tx *sql.Tx, channelID int64, op Op) error {
 		VALUES (?, ?, ?, ?, 0)
 		ON CONFLICT(channel_id, id) DO NOTHING
 	`, channelID, op.Obj, op.Name, op.Parent)
-	return err
+	if err != nil {
+		return err
+	}
+	return syncLegacyFolderDirent(tx, channelID, op.Obj)
 }
 
 func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) error {
@@ -118,8 +164,8 @@ func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 		encryptionVersion = 1
 	}
 	_, err := tx.Exec(`
-		INSERT INTO files (channel_id, msg_id, name, size, parent_id, upload_time, uploader_user_id, tombstoned, encrypted, plaintext_size, encryption_version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+		INSERT INTO files (channel_id, msg_id, name, size, parent_id, upload_time, uploader_user_id, tombstoned, encrypted, plaintext_size, encryption_version, content_msg_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
 		ON CONFLICT(channel_id, msg_id) DO UPDATE SET
 			name = excluded.name,
 			parent_id = excluded.parent_id,
@@ -130,8 +176,14 @@ func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 			plaintext_size = CASE WHEN excluded.plaintext_size > 0 THEN excluded.plaintext_size ELSE files.plaintext_size END,
 			encryption_version = CASE WHEN excluded.encryption_version > 0 THEN excluded.encryption_version ELSE files.encryption_version END
 	`, channelID, fileMsgID, op.Name, op.FileSize, op.Parent, op.FileUploadTime, actorID,
-		encryptedFlag, op.PlaintextSize, encryptionVersion)
-	return err
+		encryptedFlag, op.PlaintextSize, encryptionVersion, fileMsgID)
+	if err != nil {
+		return err
+	}
+	if err := syncLegacyFileDirent(tx, channelID, fileMsgID); err != nil {
+		return err
+	}
+	return ensureLegacyFileRevision(tx, channelID, fileMsgID, actorID)
 }
 
 // applyFilePart records one part of a multipart file in file_parts. Parts never
@@ -205,7 +257,13 @@ func applyManifest(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 			part_count = excluded.part_count
 	`, channelID, msgID, op.Name, op.FileSize, op.Parent, op.FileUploadTime, actorID,
 		encryptedFlag, op.PlaintextSize, encryptionVersion, op.UploadUUID, op.PartCount)
-	return err
+	if err != nil {
+		return err
+	}
+	if err := syncLegacyFileDirent(tx, channelID, msgID); err != nil {
+		return err
+	}
+	return ensureLegacyFileRevision(tx, channelID, msgID, actorID)
 }
 
 func applyRename(tx *sql.Tx, channelID int64, op Op) error {
@@ -218,17 +276,16 @@ func applyRename(tx *sql.Tx, channelID int64, op Op) error {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`
-			UPDATE files SET name = ?
-			WHERE channel_id = ? AND msg_id = ? AND tombstoned = 0
-		`, op.Name, channelID, fileMsgID)
-		return err
+		return applyLegacyFileRename(tx, channelID, fileMsgID, op.Name)
 	case IsFolderID(op.Obj):
 		_, err := tx.Exec(`
-			UPDATE folders SET name = ?
+			UPDATE folders SET name = ?, revision = revision + 1
 			WHERE id = ? AND channel_id = ? AND tombstoned = 0
 		`, op.Name, op.Obj, channelID)
-		return err
+		if err != nil {
+			return err
+		}
+		return syncLegacyFolderDirent(tx, channelID, op.Obj)
 	default:
 		return fmt.Errorf("%w: rename obj must be f: or d:", ErrBadOp)
 	}
@@ -244,11 +301,7 @@ func applyMove(tx *sql.Tx, channelID int64, op Op) error {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`
-			UPDATE files SET parent_id = ?
-			WHERE channel_id = ? AND msg_id = ? AND tombstoned = 0
-		`, op.Parent, channelID, fileMsgID)
-		return err
+		return applyLegacyFileMove(tx, channelID, fileMsgID, op.Parent)
 	case IsFolderID(op.Obj):
 		if op.Parent != RootParent {
 			if op.Parent == op.Obj {
@@ -263,10 +316,13 @@ func applyMove(tx *sql.Tx, channelID int64, op Op) error {
 			}
 		}
 		_, err := tx.Exec(`
-			UPDATE folders SET parent_id = ?
+			UPDATE folders SET parent_id = ?, revision = revision + 1
 			WHERE id = ? AND channel_id = ? AND tombstoned = 0
 		`, op.Parent, op.Obj, channelID)
-		return err
+		if err != nil {
+			return err
+		}
+		return syncLegacyFolderDirent(tx, channelID, op.Obj)
 	default:
 		return fmt.Errorf("%w: move obj must be f: or d:", ErrBadOp)
 	}
@@ -277,10 +333,13 @@ func applyRmdir(tx *sql.Tx, channelID int64, op Op) error {
 		return fmt.Errorf("%w: rmdir requires d: obj", ErrBadOp)
 	}
 	_, err := tx.Exec(`
-		UPDATE folders SET tombstoned = 1
-		WHERE id = ? AND channel_id = ?
+		UPDATE folders SET tombstoned = 1, revision = revision + 1
+		WHERE id = ? AND channel_id = ? AND tombstoned = 0
 	`, op.Obj, channelID)
-	return err
+	if err != nil {
+		return err
+	}
+	return syncLegacyFolderDirent(tx, channelID, op.Obj)
 }
 
 func applyTomb(tx *sql.Tx, channelID int64, op Op) error {
@@ -291,22 +350,15 @@ func applyTomb(tx *sql.Tx, channelID int64, op Op) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(`
-		UPDATE files SET tombstoned = 1
-		WHERE channel_id = ? AND msg_id = ?
-	`, channelID, fileMsgID)
-	return err
+	return applyLegacyFileTomb(tx, channelID, fileMsgID)
 }
 
 func applyEncConfig(tx *sql.Tx, channelID int64, op Op) error {
-	if len(op.KDFSalt) == 0 || op.KDFParamsJSON == "" || len(op.WrappedMasterKey) == 0 || len(op.KeyCheck) == 0 {
-		return fmt.Errorf("%w: encryption config missing key material", ErrBadOp)
-	}
 	version := op.ConfigVersion
 	if version == 0 {
 		version = 1
 	}
-	return PutEncryptionConfigTx(tx, EncryptionConfig{
+	err := PutEncryptionConfigTx(tx, EncryptionConfig{
 		ChannelID:        channelID,
 		Enabled:          true,
 		KDFSalt:          op.KDFSalt,
@@ -316,6 +368,10 @@ func applyEncConfig(tx *sql.Tx, channelID int64, op Op) error {
 		Hint:             strings.TrimSpace(op.Hint),
 		Version:          version,
 	})
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrBadOp, err)
+	}
+	return nil
 }
 
 func wouldCreateCycle(tx *sql.Tx, channelID int64, movingFolderID, newParentID string) (bool, error) {

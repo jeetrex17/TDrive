@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 )
 
 func (s *Server) authSetup(apiID int, apiHash string) (AuthStatusResponse, error) {
+	// Never log apiID/apiHash: these are Telegram API credentials.
 	if apiID <= 0 {
 		return AuthStatusResponse{}, fmt.Errorf("api id required")
 	}
@@ -23,8 +25,10 @@ func (s *Server) authSetup(apiID int, apiHash string) (AuthStatusResponse, error
 	defer s.writeMu.Unlock()
 
 	if err := coreauth.SaveImpCredentials(apiID, strings.TrimSpace(apiHash)); err != nil {
+		slog.Warn("daemon: auth setup failed to save credentials", "error", err)
 		return AuthStatusResponse{}, err
 	}
+	slog.Info("daemon: auth credentials saved")
 	return s.authStatus(context.Background())
 }
 
@@ -37,6 +41,8 @@ func (s *Server) authStatus(ctx context.Context) (AuthStatusResponse, error) {
 }
 
 func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse, error) {
+	// phone is not logged: treat it as PII. Login codes/2FA passwords arrive
+	// via separate submit calls and must never be logged either.
 	phone = strings.TrimSpace(phone)
 	if phone == "" {
 		return AuthLoginResponse{}, fmt.Errorf("phone number required")
@@ -45,7 +51,9 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 	events := s.subscribeEvents()
 	defer s.unsubscribeEvents(events)
 
+	slog.Info("daemon: login started")
 	if err := s.engine.AuthService().StartLogin(ctx, phone); err != nil {
+		slog.Warn("daemon: login start failed", "error", err)
 		return AuthLoginResponse{}, err
 	}
 
@@ -54,8 +62,10 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 		case event := <-events:
 			switch event.Name {
 			case "login-success":
+				slog.Info("daemon: login succeeded, initializing drive")
 				result := s.engine.LifecycleService().InitDrive(ctx)
 				if strings.HasPrefix(result, "Error:") {
+					slog.Warn("daemon: drive init after login failed", "result", result)
 					return AuthLoginResponse{}, fmt.Errorf("%s", result)
 				}
 				active := s.engine.ActiveChannelID()
@@ -66,6 +76,7 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 				}
 				return AuthLoginResponse{LoggedIn: true, InitDriveResult: result, ActiveChannelID: active}, nil
 			case "login-error":
+				slog.Warn("daemon: login failed")
 				return AuthLoginResponse{}, fmt.Errorf("%s", firstEventArg(event))
 			}
 		case <-ctx.Done():
@@ -86,7 +97,21 @@ func (s *Server) authLogout(ctx context.Context, mode string) (AuthLogoutRespons
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
+	release, err := s.acquireMountLifecycle(ctx)
+	if err != nil {
+		return AuthLogoutResponse{}, fmt.Errorf("logout: wait for mount lifecycle: %w", err)
+	}
+	defer release()
+
+	slog.Info("daemon: logout started", "mode", m)
+	if _, err := s.stopMountLocked(ctx); err != nil {
+		return AuthLogoutResponse{}, fmt.Errorf("logout: eject mounted drive: %w", err)
+	}
 	s.engine.ClearEncryptionSession()
+	// Logout is terminal for this daemon instance. Queued mount starts acquire
+	// the gate only after this bit is set and therefore fail before resolution or
+	// controller access, including for plaintext drives.
+	s.mountLifecycleTerminal = true
 	s.engine.ClearUserCache()
 	if m == coreauth.LogoutFull {
 		s.revokeTelegramSession(ctx)

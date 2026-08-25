@@ -3,6 +3,7 @@ package read
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 
 	"TDrive/backend/projection"
@@ -73,6 +74,13 @@ func TestFolderContentsStorageIDsAndSize(t *testing.T) {
 		FileSize:       8,
 		FileUploadTime: 112,
 	})
+	if _, err := db.Exec(`
+		UPDATE files
+		SET content_hash = ?, revision = ?, upload_uuid = ?, part_count = ?
+		WHERE channel_id = ? AND msg_id = ?
+	`, "sha256:root-v3", 3, "upload-root-v3", 2, testChannelID, 21); err != nil {
+		t.Fatalf("seed immutable file identity: %v", err)
+	}
 
 	root, err := svc.FolderContents(testChannelID, projection.RootParent)
 	if err != nil {
@@ -83,6 +91,9 @@ func TestFolderContentsStorageIDsAndSize(t *testing.T) {
 	}
 	if len(root.Files) != 1 || root.Files[0].Name != "root.txt" {
 		t.Fatalf("root files = %+v", root.Files)
+	}
+	if file := root.Files[0]; file.ContentHash != "sha256:root-v3" || file.Revision != 3 || file.UploadUUID != "upload-root-v3" || file.PartCount != 2 {
+		t.Fatalf("root file immutable identity = %+v", file)
 	}
 
 	used, err := svc.StorageUsed(testChannelID)
@@ -107,6 +118,32 @@ func TestFolderContentsStorageIDsAndSize(t *testing.T) {
 	}
 	if size != 12 {
 		t.Fatalf("folder size = %d, want 12", size)
+	}
+}
+
+func TestFolderContentsContextHonorsCanceledContext(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	contents, err := svc.FolderContentsContext(ctx, testChannelID, projection.RootParent)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("FolderContentsContext error = %v, want context.Canceled", err)
+	}
+	if len(contents.Folders) != 0 || len(contents.Files) != 0 {
+		t.Fatalf("canceled contents = %+v, want empty result", contents)
+	}
+}
+
+func TestFolderContentsContextRejectsNilContext(t *testing.T) {
+	svc, _, _ := newTestService(t)
+
+	contents, err := svc.FolderContentsContext(nil, testChannelID, projection.RootParent)
+	if !errors.Is(err, projection.ErrInvalidContext) {
+		t.Fatalf("FolderContentsContext error = %v, want projection.ErrInvalidContext", err)
+	}
+	if len(contents.Folders) != 0 || len(contents.Files) != 0 {
+		t.Fatalf("nil-context contents = %+v, want empty result", contents)
 	}
 }
 

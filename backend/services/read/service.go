@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"TDrive/backend/projection"
+	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 )
 
@@ -24,10 +26,16 @@ type Folder struct {
 	ID       string
 	Name     string
 	ParentID string
+	Revision int64
 }
 
 type File struct {
 	MsgID         int64
+	ContentMsgID  int64
+	ContentHash   string
+	Revision      int64
+	UploadUUID    string
+	PartCount     int
 	Name          string
 	Size          int64
 	ParentID      string
@@ -74,6 +82,15 @@ func (s *Service) StorageUsed(channelID int64) (int64, error) {
 }
 
 func (s *Service) FolderContents(channelID int64, parentID string) (FileSystem, error) {
+	return s.FolderContentsContext(context.Background(), channelID, parentID)
+}
+
+// FolderContentsContext is FolderContents with cancellation propagated to the
+// projection queries. Callers serving bounded requests should prefer it.
+func (s *Service) FolderContentsContext(ctx context.Context, channelID int64, parentID string) (FileSystem, error) {
+	if err := servicecontext.Check(ctx, "read: list folder contents"); err != nil {
+		return FileSystem{}, err
+	}
 	if err := s.ready(); err != nil {
 		return FileSystem{}, err
 	}
@@ -81,9 +98,9 @@ func (s *Service) FolderContents(channelID int64, parentID string) (FileSystem, 
 		return FileSystem{Folders: []Folder{}, Files: []File{}}, nil
 	}
 
-	folders, files, err := projection.ListFolderContents(s.DB, channelID, parentID)
+	folders, files, err := projection.ListFolderContentsContext(ctx, s.DB, channelID, parentID)
 	if err != nil {
-		return FileSystem{}, err
+		return FileSystem{}, fmt.Errorf("read: list folder contents: %w", err)
 	}
 
 	out := FileSystem{
@@ -152,6 +169,7 @@ func (s *Service) Search(channelID int64, query string, limit int) ([]SearchResu
 			})
 		}
 	}
+	slog.Debug("read: search completed", "channel_id", channelID, "results", len(results))
 	return results, nil
 }
 
@@ -291,12 +309,17 @@ func (s *Service) ready() error {
 }
 
 func folderFromProjection(f projection.FolderSlim) Folder {
-	return Folder{ID: f.ID, Name: f.Name, ParentID: f.ParentID}
+	return Folder{ID: f.ID, Name: f.Name, ParentID: f.ParentID, Revision: f.Revision}
 }
 
 func fileFromProjection(f projection.FileSlim) File {
 	return File{
 		MsgID:         f.MsgID,
+		ContentMsgID:  f.ContentMsgID,
+		ContentHash:   f.ContentHash,
+		Revision:      f.Revision,
+		UploadUUID:    f.UploadUUID,
+		PartCount:     f.PartCount,
 		Name:          f.Name,
 		Size:          f.Size,
 		ParentID:      f.ParentID,

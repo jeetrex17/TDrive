@@ -1,4 +1,5 @@
 <script lang="ts">
+    import BellIcon from '@lucide/svelte/icons/bell';
     import EventRow from './EventRow.svelte';
     import TransferRow from './TransferRow.svelte';
     import { portal } from './portal';
@@ -133,7 +134,7 @@
     onmouseleave={onBellLeave}
 >
     <span class="notif-bell-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 003.4 0"/></svg>
+        <BellIcon size={18} strokeWidth={1.8} aria-hidden="true" />
     </span>
     <span class="notif-bell-dot" data-mode={$bellMode} aria-hidden="true"></span>
 </button>
@@ -214,7 +215,7 @@
             {:else if $activeTransfers.length === 0}
                 <div class="notif-empty">
                     <div class="notif-empty-glyph">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 1112 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 003.4 0"/></svg>
+                        <BellIcon size={48} strokeWidth={1.8} aria-hidden="true" />
                     </div>
                     <div class="notif-empty-title">All caught up</div>
                     <div class="notif-empty-body">Folder activity, uploads, and shared-drive events will show up here.</div>

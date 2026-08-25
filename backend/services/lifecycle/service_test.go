@@ -18,12 +18,21 @@ type fakeSyncer struct {
 	called    int
 	channelID int64
 	err       error
+
+	reconcileCalled int
+	reconcileCount  int
+	reconcileErr    error
 }
 
 func (f *fakeSyncer) Incremental(ctx context.Context, channelID int64) error {
 	f.called++
 	f.channelID = channelID
 	return f.err
+}
+
+func (f *fakeSyncer) ReconcileDeletions(ctx context.Context, channelID int64) (int, error) {
+	f.reconcileCalled++
+	return f.reconcileCount, f.reconcileErr
 }
 
 type fakeBackfiller struct {
@@ -189,6 +198,44 @@ func TestSyncChannelDelegates(t *testing.T) {
 	}
 	if syncer.called != 1 || syncer.channelID != 99 {
 		t.Fatalf("sync called=%d channel=%d, want called=1 channel=99", syncer.called, syncer.channelID)
+	}
+	if syncer.reconcileCalled != 1 {
+		t.Fatalf("reconcile called=%d, want 1", syncer.reconcileCalled)
+	}
+}
+
+func TestSyncChannelSkipsReconcileWhenIncrementalFails(t *testing.T) {
+	active := NewActiveDrive()
+	active.Set(99)
+	syncer := &fakeSyncer{err: fmt.Errorf("boom")}
+	svc := NewService(Config{
+		Active: active,
+		Sync:   syncer,
+	})
+
+	if err := svc.SyncChannel(context.Background(), 0); err == nil {
+		t.Fatal("sync: want error")
+	}
+	if syncer.reconcileCalled != 0 {
+		t.Fatalf("reconcile called=%d, want 0 (incremental failed first)", syncer.reconcileCalled)
+	}
+}
+
+func TestSyncChannelSucceedsWhenReconcileFails(t *testing.T) {
+	active := NewActiveDrive()
+	active.Set(99)
+	syncer := &fakeSyncer{reconcileErr: fmt.Errorf("boom")}
+	svc := NewService(Config{
+		Active: active,
+		Sync:   syncer,
+	})
+
+	// Reconcile failing is best-effort: it must not fail the overall sync.
+	if err := svc.SyncChannel(context.Background(), 0); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if syncer.reconcileCalled != 1 {
+		t.Fatalf("reconcile called=%d, want 1", syncer.reconcileCalled)
 	}
 }
 

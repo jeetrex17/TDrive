@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -11,10 +12,16 @@ type FolderSlim struct {
 	ID       string
 	Name     string
 	ParentID string
+	Revision int64
 }
 
 type FileSlim struct {
 	MsgID         int64
+	ContentMsgID  int64
+	ContentHash   string
+	Revision      int64
+	UploadUUID    string
+	PartCount     int
 	Name          string
 	Size          int64
 	ParentID      string
@@ -37,62 +44,96 @@ type SearchHit struct {
 	PlaintextSize int64
 }
 
+// ErrInvalidContext reports a nil context passed to a context-aware projection
+// API. Callers can use errors.Is while retaining operation-specific context.
+var ErrInvalidContext = errors.New("context is nil")
+
+func validateContext(ctx context.Context, operation string) error {
+	if ctx == nil {
+		return fmt.Errorf("projection: %s: %w", operation, ErrInvalidContext)
+	}
+	return nil
+}
+
 func ListFolderContents(db *sql.DB, channelID int64, parentID string) ([]FolderSlim, []FileSlim, error) {
-	folders, err := listChildFolders(db, channelID, parentID)
+	return ListFolderContentsContext(context.Background(), db, channelID, parentID)
+}
+
+// ListFolderContentsContext returns the live direct children of parentID and
+// cancels the underlying SQLite work when ctx is done.
+func ListFolderContentsContext(ctx context.Context, db *sql.DB, channelID int64, parentID string) ([]FolderSlim, []FileSlim, error) {
+	if err := validateContext(ctx, "list folder contents"); err != nil {
+		return nil, nil, err
+	}
+	folders, err := listChildFoldersContext(ctx, db, channelID, parentID)
 	if err != nil {
 		return nil, nil, err
 	}
-	files, err := listChildFiles(db, channelID, parentID)
+	files, err := listChildFilesContext(ctx, db, channelID, parentID)
 	if err != nil {
 		return nil, nil, err
 	}
 	return folders, files, nil
 }
 
-func listChildFolders(db *sql.DB, channelID int64, parentID string) ([]FolderSlim, error) {
-	rows, err := db.Query(`
-		SELECT id, name, parent_id FROM folders
-		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
-		ORDER BY name
+func listChildFoldersContext(ctx context.Context, db *sql.DB, channelID int64, parentID string) ([]FolderSlim, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT f.id, d.display_name, f.parent_id, d.revision
+		FROM dirents d
+		JOIN folders f ON f.channel_id = d.channel_id AND f.id = d.object_id
+		WHERE d.channel_id = ? AND d.parent_id = ? AND d.object_kind = 'folder'
+		  AND d.tombstoned = 0 AND f.tombstoned = 0
+		ORDER BY d.display_name, d.object_id
 	`, channelID, parentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("projection: list child folders: %w", err)
 	}
 	defer rows.Close()
 
 	var out []FolderSlim
 	for rows.Next() {
 		var f FolderSlim
-		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID); err != nil {
-			return nil, err
+		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID, &f.Revision); err != nil {
+			return nil, fmt.Errorf("projection: scan child folder: %w", err)
 		}
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("projection: iterate child folders: %w", err)
+	}
+	return out, nil
 }
 
-func listChildFiles(db *sql.DB, channelID int64, parentID string) ([]FileSlim, error) {
-	rows, err := db.Query(`
-		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
-		WHERE channel_id = ? AND parent_id = ? AND tombstoned = 0
-		ORDER BY upload_time DESC
+func listChildFilesContext(ctx context.Context, db *sql.DB, channelID int64, parentID string) ([]FileSlim, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT f.msg_id, f.content_msg_id, f.content_hash, f.revision, f.upload_uuid, f.part_count,
+		       d.display_name, f.size, f.parent_id, f.upload_time, f.uploader_user_id,
+		       f.encrypted, f.plaintext_size
+		FROM files f
+		JOIN dirents d
+		  ON d.channel_id = f.channel_id
+		 AND d.object_id = 'f:' || f.msg_id
+		WHERE f.channel_id = ? AND f.parent_id = ? AND f.tombstoned = 0
+		  AND d.tombstoned = 0
+		ORDER BY upload_time DESC, msg_id DESC
 	`, channelID, parentID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("projection: list child files: %w", err)
 	}
 	defer rows.Close()
 
 	var out []FileSlim
 	for rows.Next() {
-		var f FileSlim
-		var enc int
-		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
-			return nil, err
+		f, err := scanFileSlim(rows)
+		if err != nil {
+			return nil, fmt.Errorf("projection: scan child file: %w", err)
 		}
-		f.Encrypted = enc == 1
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("projection: iterate child files: %w", err)
+	}
+	return out, nil
 }
 
 // OrphanedFiles returns files whose path back to root is broken — that
@@ -137,8 +178,12 @@ WITH RECURSIVE chain(file_msg_id, cur_id, broken) AS (
       ON p.channel_id = ?1 AND p.id = c.cur_id
     WHERE c.cur_id != ''
 )
-SELECT f.msg_id, f.name, f.size, f.parent_id, f.upload_time, f.uploader_user_id, f.encrypted, f.plaintext_size
+SELECT f.msg_id, f.content_msg_id, f.content_hash, f.revision, f.upload_uuid, f.part_count,
+       COALESCE(d.display_name, f.name), f.size, f.parent_id, f.upload_time,
+       f.uploader_user_id, f.encrypted, f.plaintext_size
 FROM files f
+LEFT JOIN dirents d
+  ON d.channel_id=f.channel_id AND d.object_id='f:' || f.msg_id
 WHERE f.channel_id = ?1
   AND f.tombstoned = 0
   AND f.parent_id != ''
@@ -155,12 +200,10 @@ ORDER BY f.upload_time DESC
 
 	var out []FileSlim
 	for rows.Next() {
-		var f FileSlim
-		var enc int
-		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
+		f, err := scanFileSlim(rows)
+		if err != nil {
 			return nil, err
 		}
-		f.Encrypted = enc == 1
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -171,19 +214,24 @@ ORDER BY f.upload_time DESC
 // every document in large drives just to discard most of them in Go.
 func MediaFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
 	rows, err := db.Query(`
-		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
-		WHERE channel_id = ?
-		  AND tombstoned = 0
-		  AND upload_uuid = ''
+		SELECT f.msg_id, f.content_msg_id, f.content_hash, f.revision, f.upload_uuid, f.part_count,
+		       COALESCE(d.display_name, f.name), f.size, f.parent_id, f.upload_time,
+		       f.uploader_user_id, f.encrypted, f.plaintext_size
+		FROM files f
+		LEFT JOIN dirents d
+		  ON d.channel_id=f.channel_id AND d.object_id='f:' || f.msg_id
+		WHERE f.channel_id = ?
+		  AND f.tombstoned = 0
+		  AND f.upload_uuid = ''
 		  AND (
-		      name LIKE '%.jpg' COLLATE NOCASE
-		   OR name LIKE '%.jpeg' COLLATE NOCASE
-		   OR name LIKE '%.png' COLLATE NOCASE
-		   OR name LIKE '%.gif' COLLATE NOCASE
-		   OR name LIKE '%.webp' COLLATE NOCASE
-		   OR name LIKE '%.bmp' COLLATE NOCASE
+		      COALESCE(d.display_name, f.name) LIKE '%.jpg' COLLATE NOCASE
+		   OR COALESCE(d.display_name, f.name) LIKE '%.jpeg' COLLATE NOCASE
+		   OR COALESCE(d.display_name, f.name) LIKE '%.png' COLLATE NOCASE
+		   OR COALESCE(d.display_name, f.name) LIKE '%.gif' COLLATE NOCASE
+		   OR COALESCE(d.display_name, f.name) LIKE '%.webp' COLLATE NOCASE
+		   OR COALESCE(d.display_name, f.name) LIKE '%.bmp' COLLATE NOCASE
 		  )
-		ORDER BY upload_time DESC, msg_id DESC
+		ORDER BY f.upload_time DESC, f.msg_id DESC
 	`, channelID)
 	if err != nil {
 		return nil, err
@@ -192,12 +240,10 @@ func MediaFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
 
 	var out []FileSlim
 	for rows.Next() {
-		var f FileSlim
-		var enc int
-		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
+		f, err := scanFileSlim(rows)
+		if err != nil {
 			return nil, err
 		}
-		f.Encrypted = enc == 1
 		out = append(out, f)
 	}
 	return out, rows.Err()
@@ -205,8 +251,12 @@ func MediaFiles(db *sql.DB, channelID int64) ([]FileSlim, error) {
 
 func ListAllFolders(db *sql.DB, channelID int64) ([]FolderSlim, error) {
 	rows, err := db.Query(`
-		SELECT id, name, parent_id FROM folders
-		WHERE channel_id = ? AND tombstoned = 0
+		SELECT f.id, COALESCE(d.display_name, f.name), f.parent_id,
+		       COALESCE(d.revision, f.revision)
+		FROM folders f
+		LEFT JOIN dirents d
+		  ON d.channel_id=f.channel_id AND d.object_id=f.id
+		WHERE f.channel_id = ? AND f.tombstoned = 0
 	`, channelID)
 	if err != nil {
 		return nil, err
@@ -216,7 +266,7 @@ func ListAllFolders(db *sql.DB, channelID int64) ([]FolderSlim, error) {
 	var out []FolderSlim
 	for rows.Next() {
 		var f FolderSlim
-		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.ParentID, &f.Revision); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -231,9 +281,13 @@ func FolderByID(db *sql.DB, channelID int64, folderID string) (FolderSlim, bool,
 	}
 	var f FolderSlim
 	err := db.QueryRow(`
-		SELECT id, name, parent_id FROM folders
-		WHERE channel_id = ? AND id = ? AND tombstoned = 0
-	`, channelID, folderID).Scan(&f.ID, &f.Name, &f.ParentID)
+		SELECT f.id, COALESCE(d.display_name, f.name), f.parent_id,
+		       COALESCE(d.revision, f.revision)
+		FROM folders f
+		LEFT JOIN dirents d
+		  ON d.channel_id=f.channel_id AND d.object_id=f.id
+		WHERE f.channel_id = ? AND f.id = ? AND f.tombstoned = 0
+	`, channelID, folderID).Scan(&f.ID, &f.Name, &f.ParentID, &f.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return FolderSlim{}, false, nil
 	}
@@ -312,7 +366,8 @@ WITH RECURSIVE descendants(id, path) AS (
       AND f.tombstoned = 0
       AND instr(d.path, ',' || f.id || ',') = 0
 )
-SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size
+SELECT msg_id, content_msg_id, content_hash, revision, upload_uuid, part_count,
+       name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size
 FROM files
 WHERE channel_id = ?1
   AND tombstoned = 0
@@ -327,15 +382,66 @@ ORDER BY upload_time DESC, msg_id DESC
 
 	var out []FileSlim
 	for rows.Next() {
-		var f FileSlim
-		var enc int
-		if err := rows.Scan(&f.MsgID, &f.Name, &f.Size, &f.ParentID, &f.UploadTime, &f.UploaderID, &enc, &f.PlaintextSize); err != nil {
+		f, err := scanFileSlim(rows)
+		if err != nil {
 			return nil, err
 		}
-		f.Encrypted = enc == 1
 		out = append(out, f)
 	}
 	return out, rows.Err()
+}
+
+type sqlScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanFileSlim(scanner sqlScanner) (FileSlim, error) {
+	var file FileSlim
+	var encrypted int
+	err := scanner.Scan(
+		&file.MsgID, &file.ContentMsgID, &file.ContentHash, &file.Revision,
+		&file.UploadUUID, &file.PartCount, &file.Name, &file.Size,
+		&file.ParentID, &file.UploadTime, &file.UploaderID, &encrypted,
+		&file.PlaintextSize,
+	)
+	file.Encrypted = encrypted == 1
+	return file, err
+}
+
+// FileByID returns one live logical file including the immutable body reference
+// for its current revision. The logical MsgID may identify a control message;
+// callers must use ContentMsgID or UploadUUID/PartCount to read bytes.
+func FileByID(db *sql.DB, channelID, msgID int64) (File, bool, error) {
+	if db == nil {
+		return File{}, false, fmt.Errorf("projection: file by id: db is nil")
+	}
+	if channelID == 0 || msgID <= 0 {
+		return File{}, false, fmt.Errorf("projection: file by id: invalid identity")
+	}
+	var file File
+	var tombstoned, encrypted int
+	err := db.QueryRow(`
+		SELECT channel_id, msg_id, name, size, parent_id, upload_time,
+		       uploader_user_id, tombstoned, encrypted, plaintext_size,
+		       encryption_version, content_msg_id, content_hash, revision,
+		       upload_uuid, part_count
+		FROM files
+		WHERE channel_id=? AND msg_id=? AND tombstoned=0
+	`, channelID, msgID).Scan(
+		&file.ChannelID, &file.MsgID, &file.Name, &file.Size, &file.ParentID,
+		&file.UploadTime, &file.UploaderUserID, &tombstoned, &encrypted,
+		&file.PlaintextSize, &file.EncryptionVersion, &file.ContentMsgID,
+		&file.ContentHash, &file.Revision, &file.UploadUUID, &file.PartCount,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return File{}, false, nil
+	}
+	if err != nil {
+		return File{}, false, fmt.Errorf("projection: file by id: %w", err)
+	}
+	file.Tombstoned = tombstoned != 0
+	file.Encrypted = encrypted != 0
+	return file, true, nil
 }
 
 func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, error) {
@@ -350,9 +456,13 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 	results := make([]SearchHit, 0, limit*2)
 
 	folderRows, err := db.Query(`
-		SELECT id, name, parent_id FROM folders
-		WHERE channel_id = ? AND tombstoned = 0 AND name LIKE ? COLLATE NOCASE
-		ORDER BY name LIMIT ?
+		SELECT f.id, COALESCE(d.display_name, f.name), f.parent_id
+		FROM folders f
+		LEFT JOIN dirents d
+		  ON d.channel_id=f.channel_id AND d.object_id=f.id
+		WHERE f.channel_id = ? AND f.tombstoned = 0
+		  AND COALESCE(d.display_name, f.name) LIKE ? COLLATE NOCASE
+		ORDER BY COALESCE(d.display_name, f.name) LIMIT ?
 	`, channelID, pattern, limit)
 	if err != nil {
 		return nil, err
@@ -373,9 +483,14 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 	_ = folderRows.Close()
 
 	fileRows, err := db.Query(`
-		SELECT msg_id, name, size, parent_id, upload_time, uploader_user_id, encrypted, plaintext_size FROM files
-		WHERE channel_id = ? AND tombstoned = 0 AND name LIKE ? COLLATE NOCASE
-		ORDER BY upload_time DESC LIMIT ?
+		SELECT f.msg_id, COALESCE(d.display_name, f.name), f.size, f.parent_id,
+		       f.upload_time, f.uploader_user_id, f.encrypted, f.plaintext_size
+		FROM files f
+		LEFT JOIN dirents d
+		  ON d.channel_id=f.channel_id AND d.object_id='f:' || f.msg_id
+		WHERE f.channel_id = ? AND f.tombstoned = 0
+		  AND COALESCE(d.display_name, f.name) LIKE ? COLLATE NOCASE
+		ORDER BY f.upload_time DESC LIMIT ?
 	`, channelID, pattern, limit)
 	if err != nil {
 		return nil, err
