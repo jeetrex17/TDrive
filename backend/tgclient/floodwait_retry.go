@@ -2,6 +2,8 @@ package tgclient
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,6 +20,7 @@ const (
 	defaultTransientRetries    = 4
 	defaultTransientBackoff    = 2 * time.Second
 	defaultTransientMaxBackoff = 30 * time.Second
+	defaultTransientJitter     = 750 * time.Millisecond
 )
 
 var ErrInvalidFloodWaitRetryPolicy = errors.New("tgclient: invalid flood wait retry policy")
@@ -52,6 +55,10 @@ type FloodWaitRetryPolicy struct {
 	// MaxTransientBackoff caps the doubling backoff. When zero, backoff stays
 	// constant at TransientBackoff.
 	MaxTransientBackoff time.Duration
+	// TransientJitter adds a random [0, TransientJitter] delay to transient
+	// retries, capped by MaxTransientBackoff when that cap is set. Zero keeps
+	// deterministic backoff for tests and explicit callers.
+	TransientJitter time.Duration
 }
 
 func DefaultWriteFloodWaitRetryPolicy() FloodWaitRetryPolicy {
@@ -62,13 +69,14 @@ func DefaultWriteFloodWaitRetryPolicy() FloodWaitRetryPolicy {
 		MaxTransientRetries: defaultTransientRetries,
 		TransientBackoff:    defaultTransientBackoff,
 		MaxTransientBackoff: defaultTransientMaxBackoff,
+		TransientJitter:     defaultTransientJitter,
 	}
 }
 
 // Validate reports whether p has bounded, non-negative retry settings.
 func (p FloodWaitRetryPolicy) Validate() error {
 	if p.MaxRetries < 0 || p.MaxWait < 0 || p.MaxTotalWait < 0 ||
-		p.MaxTransientRetries < 0 || p.TransientBackoff < 0 || p.MaxTransientBackoff < 0 {
+		p.MaxTransientRetries < 0 || p.TransientBackoff < 0 || p.MaxTransientBackoff < 0 || p.TransientJitter < 0 {
 		return fmt.Errorf("%w: limits must be non-negative", ErrInvalidFloodWaitRetryPolicy)
 	}
 	if p.MaxRetries > 0 && (p.MaxWait == 0 || p.MaxTotalWait == 0) {
@@ -140,12 +148,12 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 }
 
 // transientBackoff returns the wait before the given zero-based transport
-// retry: TransientBackoff doubled per attempt, capped at MaxTransientBackoff.
+// retry: TransientBackoff doubles per attempt and then receives bounded jitter.
 func (p FloodWaitRetryPolicy) transientBackoff(retry int) time.Duration {
 	backoff := p.TransientBackoff
 	maxBackoff := p.MaxTransientBackoff
 	if maxBackoff == 0 {
-		return backoff
+		return saturatingDurationAdd(backoff, randomJitter(p.TransientJitter))
 	}
 	if backoff >= maxBackoff {
 		return maxBackoff
@@ -156,7 +164,33 @@ func (p FloodWaitRetryPolicy) transientBackoff(retry int) time.Duration {
 		}
 		backoff *= 2
 	}
-	return backoff
+	jitterRoom := maxBackoff - backoff
+	if p.TransientJitter < jitterRoom {
+		jitterRoom = p.TransientJitter
+	}
+	return backoff + randomJitter(jitterRoom)
+}
+
+func saturatingDurationAdd(base, extra time.Duration) time.Duration {
+	const maxDuration = time.Duration(1<<63 - 1)
+	if extra <= 0 {
+		return base
+	}
+	if base > maxDuration-extra {
+		return maxDuration
+	}
+	return base + extra
+}
+
+func randomJitter(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return 0
+	}
+	return time.Duration(binary.BigEndian.Uint64(raw[:]) % (uint64(max) + 1))
 }
 
 func sleepContext(ctx context.Context, wait time.Duration) error {

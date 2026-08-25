@@ -78,9 +78,12 @@ type Service struct {
 	// direct Telegram transfers (uploads, downloads, deletes). The zero value
 	// uses tgclient's bounded production defaults.
 	FloodWaitRetry tgclient.FloodWaitRetryPolicy
-	// MaxConcurrentUploads bounds how many files from one Upload batch upload
-	// in parallel. <= 0 uses defaultUploadConcurrency.
+	// MaxConcurrentUploads bounds active uploads across this Service, including
+	// GUI/import/daemon calls and hidden mount writes. Set it before the first
+	// upload; <= 0 uses defaultUploadConcurrency.
 	MaxConcurrentUploads int
+	uploadOnce           sync.Once
+	uploadSem            chan struct{}
 	previewMu            sync.Mutex
 	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
 	// package tests. It runs immediately after Telegram returns a positive
@@ -187,27 +190,40 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 		Op        projection.Op
 	}
 
-	sem := make(chan struct{}, s.uploadConcurrency())
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
 	uploaded := make([]uploadedResult, 0, len(filePaths))
 	failed := 0
+	var firstErr error
 
 	for i := 0; i < len(filePaths); i++ {
 		path := filePaths[i]
 		pid := parentIDs[i]
 		uploadID := i
+		release, slotErr := s.acquireUploadSlot(ctx)
+		if slotErr != nil {
+			mu.Lock()
+			failed++
+			if firstErr == nil {
+				firstErr = slotErr
+			}
+			mu.Unlock()
+			s.emitEvent("upload_error", uploadID, filepath.Base(path), slotErr.Error())
+			continue
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 
-		go func(uploadID int, path string, pid string) {
+		go func(uploadID int, path string, pid string, release func()) {
 			defer wg.Done()
-			defer func() { <-sem }()
+			defer release()
 			defer func() {
 				if r := recover(); r != nil {
 					mu.Lock()
 					failed++
+					if firstErr == nil {
+						firstErr = fmt.Errorf("upload panic: %v", r)
+					}
 					mu.Unlock()
 					s.emitEvent("upload_error", uploadID, filepath.Base(path), fmt.Sprintf("upload panic: %v", r))
 				}
@@ -229,6 +245,9 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 				}
 				mu.Lock()
 				failed++
+				if firstErr == nil {
+					firstErr = err
+				}
 				mu.Unlock()
 				s.warnf("warn: upload failed for %q: %v\n", filepath.Base(path), err)
 				s.emitEvent("upload_error", uploadID, filepath.Base(path), err.Error())
@@ -243,7 +262,7 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 				Op:        op,
 			})
 			mu.Unlock()
-		}(uploadID, path, pid)
+		}(uploadID, path, pid, release)
 	}
 
 	wg.Wait()
@@ -285,6 +304,9 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 
 	if failed > 0 {
 		slog.Warn("file: upload batch completed with failures", "channel_id", channelID, "succeeded", len(uploadedFiles), "failed", failed)
+		if firstErr != nil {
+			return uploadedFiles, fmt.Errorf("%d uploads failed: %w", failed, firstErr)
+		}
 		return uploadedFiles, fmt.Errorf("%d uploads failed", failed)
 	}
 	slog.Debug("file: upload batch completed", "channel_id", channelID, "succeeded", len(uploadedFiles))
@@ -420,7 +442,7 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		lastProgress = time.Now()
 	}
 	var result tgclient.SendFileResult
-	idempotentSend := supportsIdempotentFileSends(s.TG)
+	idempotentSend := supportsIdempotentSends(s.TG)
 	sendRandomID := int64(0)
 	if idempotentSend {
 		// Visible uploads have no durable operation journal, but this fresh
@@ -507,12 +529,10 @@ func (plan uploadPartPlan) window(storedSize int64, partIndex int) (offset int64
 
 // uploadMultipart stores a file too big for one Telegram message as N part
 // documents plus a manifest. The stored byte stream (ciphertext when encrypting,
-// else the plaintext file) is produced once and sliced into <= MaxPartBytes
-// parts; each part is sent and projected, then a manifest op commits the logical
-// file (its msg_id becomes the file id). On any failure the already-sent parts
-// are deleted and no manifest is emitted, so a failed upload leaves nothing
-// visible. Disk use stays bounded — the ciphertext is streamed through a pipe,
-// never materialized whole.
+// else plaintext) is sliced into <= MaxPartBytes parts. Each part is sent and
+// projected before an idempotent manifest commits the logical file. Encrypted
+// data is staged one part at a time, which makes retries rewind-safe without
+// materializing a complete multi-gigabyte ciphertext file.
 func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile io.ReadSeeker, filename string, plaintextSize int64, parent string, channelID int64, encrypt bool, masterKey []byte, peer tgclient.InputPeer, storedSize int64) (Metadata, error) {
 	if s.ActorID == nil {
 		return Metadata{}, fmt.Errorf("actor resolver not ready")
@@ -527,40 +547,43 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		return Metadata{}, fmt.Errorf("%s: %w", filename, err)
 	}
 	numParts := plan.partCount
+	if !supportsIdempotentSends(s.TG) {
+		return Metadata{}, fmt.Errorf("multipart upload requires Telegram idempotent sends")
+	}
 
 	uploadUUID := projection.NewUploadUUID()
 	s.warnf("Starting multipart upload: %s (%d parts)\n", filename, numParts)
 	s.emitEvent("upload_start", uploadID, filename, storedSize, parent)
 
-	// Produce the stored byte stream. Encrypting streams the ciphertext through
-	// a pipe so the whole ciphertext is never written to disk; plaintext reads
-	// straight from the seekable source file.
-	var storedReader io.Reader = plainFile
-	var closeReader func()
+	var encryptedStream io.Reader
+	var finishEncryption func() error
 	if encrypt {
-		pr, pw := io.Pipe()
-		producerDone := make(chan struct{})
-		producerKey := append([]byte(nil), masterKey...)
-		go func(key []byte) {
-			defer close(producerDone)
-			defer clearOwnedKey(key)
-			_ = pw.CloseWithError(s.encryptStoredStream(plainFile, pw, key, plaintextSize))
-		}(producerKey)
-		storedReader = pr
-		closeReader = func() {
-			// Closing the read end unblocks a producer whose consumer returned
-			// early. Waiting here guarantees its private key copy is no longer in
-			// use and has been cleared before uploadMultipart returns.
-			_ = pr.Close()
-			<-producerDone
+		if _, err := plainFile.Seek(0, io.SeekStart); err != nil {
+			return Metadata{}, fmt.Errorf("rewind source for encryption: %w", err)
 		}
-	}
-	if closeReader != nil {
-		defer closeReader()
+		reader, writer := io.Pipe()
+		done := make(chan error, 1)
+		producerKey := append([]byte(nil), masterKey...)
+		go func() {
+			err := s.encryptStoredStream(plainFile, writer, producerKey, plaintextSize)
+			clearOwnedKey(producerKey)
+			_ = writer.CloseWithError(err)
+			done <- err
+			close(done)
+		}()
+		encryptedStream = reader
+		finishEncryption = func() error {
+			_ = reader.Close()
+			return <-done
+		}
+		defer func() {
+			if finishEncryption != nil {
+				_ = finishEncryption()
+			}
+		}()
 	}
 
 	partMsgIDs := make([]int64, 0, numParts)
-	idempotentPartSends := supportsIdempotentFileSends(s.TG)
 	abort := func() {
 		// Clean-up-and-fail: drop the parts already sent + their rows, using a
 		// fresh context since ctx may itself be canceled.
@@ -598,6 +621,24 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			FileSize:   partLen,
 		}
 		partCaption := projection.Format(partOp)
+		partReader := plainFile
+		partOffset := partBase
+		var stagedPart *os.File
+		if encrypt {
+			stagedPart, err = stageUploadPart(ctx, encryptedStream, partLen)
+			if err != nil {
+				abort()
+				return Metadata{}, fmt.Errorf("stage encrypted part %d: %w", i, err)
+			}
+			partReader = stagedPart
+			partOffset = 0
+		}
+		cleanupPart := func() {
+			if stagedPart != nil {
+				_ = stagedPart.Close()
+				_ = os.Remove(stagedPart.Name())
+			}
+		}
 		onProgress := func(sent, total int64) {
 			progressMu.Lock()
 			defer progressMu.Unlock()
@@ -614,48 +655,32 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			s.emitEvent("upload_progress", uploadID, percent)
 			lastProgress = time.Now()
 		}
-		sendPart := func() (tgclient.SendFileResult, error) {
-			return s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), partAttachmentName(filename, i, numParts), partCaption, partLen, onProgress)
-		}
 		var result tgclient.SendFileResult
-		if seeker, ok := storedReader.(io.Seeker); ok {
-			// Plaintext parts stream straight from the seekable source, so a
-			// transient transport failure retries from the part window start.
-			sendRandomID := int64(0)
-			if idempotentPartSends {
-				sendRandomID, err = tgclient.StableRandomID(uploadUUID, fmt.Sprintf("part:%d", i))
-				if err != nil {
-					abort()
-					return Metadata{}, err
-				}
-			}
-			err = s.retryVisibleSend(ctx, idempotentPartSends, func() error {
-				if _, serr := seeker.Seek(partBase, io.SeekStart); serr != nil {
-					return fmt.Errorf("rewind staged part %d: %w", i, serr)
-				}
-				var serr error
-				if idempotentPartSends {
-					result, serr = tgclient.SendFileIdempotent(
-						ctx,
-						s.TG,
-						peer,
-						io.LimitReader(storedReader, partLen),
-						partAttachmentName(filename, i, numParts),
-						partCaption,
-						partLen,
-						onProgress,
-						sendRandomID,
-					)
-				} else {
-					result, serr = sendPart()
-				}
-				return serr
-			})
-		} else {
-			// Encrypted parts stream through a pipe that cannot rewind; they
-			// stay single-attempt until ciphertext staging lands.
-			result, err = sendPart()
+		sendRandomID, err := tgclient.StableRandomID(uploadUUID, fmt.Sprintf("part:%d", i))
+		if err != nil {
+			cleanupPart()
+			abort()
+			return Metadata{}, err
 		}
+		err = s.retryVisibleSend(ctx, true, func() error {
+			if _, serr := partReader.Seek(partOffset, io.SeekStart); serr != nil {
+				return fmt.Errorf("rewind staged part %d: %w", i, serr)
+			}
+			var serr error
+			result, serr = tgclient.SendFileIdempotent(
+				ctx,
+				s.TG,
+				peer,
+				io.LimitReader(partReader, partLen),
+				partAttachmentName(filename, i, numParts),
+				partCaption,
+				partLen,
+				onProgress,
+				sendRandomID,
+			)
+			return serr
+		})
+		cleanupPart()
 		if err != nil {
 			abort()
 			return Metadata{}, err
@@ -671,6 +696,14 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			abort()
 			return Metadata{}, err
 		}
+	}
+	if finishEncryption != nil {
+		if err := finishEncryption(); err != nil {
+			finishEncryption = nil
+			abort()
+			return Metadata{}, fmt.Errorf("encrypt multipart: %w", err)
+		}
+		finishEncryption = nil
 	}
 
 	// Commit: the manifest is a text op whose own msg_id becomes the file id.
@@ -704,19 +737,28 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		abort()
 		return Metadata{}, err
 	}
-	manifestMsgID, err := s.emit(ctx, channelID, manifestOp)
+	manifestHeader := projection.Format(manifestOp)
+	manifestMsgID, commitAttempted, err := s.commitMultipartManifest(
+		ctx,
+		channelID,
+		manifestOp,
+		manifestHeader,
+		actorID,
+		peer,
+		uploadUUID,
+	)
 	if err != nil {
-		if manifestMsgID == 0 {
-			// The manifest never reached Telegram: nothing is committed, so clean
-			// up the parts and fail.
-			abort()
+		if commitAttempted {
+			// Once the send starts, Telegram may have accepted the manifest even if
+			// cancellation during retry backoff hides the original transport error.
+			// Preserve every referenced part and let sync/retry reconcile the send.
+			if manifestMsgID > 0 {
+				return committedMeta(manifestMsgID), err
+			}
 			return Metadata{}, err
 		}
-		// The manifest IS in Telegram (only the local projection failed): the file
-		// is committed and the next sync will project it. Deleting the parts now
-		// would corrupt that committed file, so leave Telegram intact and surface
-		// the error.
-		return committedMeta(manifestMsgID), err
+		abort()
+		return Metadata{}, err
 	}
 
 	s.emitEvent("upload_progress", uploadID, 100.0)
@@ -940,18 +982,53 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 	}
 	progress := s.downloadProgress(totalStored)
 
-	// downloadPartsOrdered streams every part in order into dst. The encrypted
-	// path depends on this exact ordering because DecryptStream consumes one
-	// concatenated ciphertext stream.
+	// Encrypted decryption requires strict ordering. Stage only one ciphertext
+	// part at a time so DownloadFileAt can overwrite partial retry attempts
+	// without keeping the whole encrypted file on disk.
 	downloadPartsOrdered := func(dst io.Writer) error {
 		var base int64
 		for _, p := range parts {
-			startBase := base
-			if err := s.TG.DownloadFile(ctx, peer, p.MsgID, dst, func(partDone, _ int64) {
-				progress(startBase+partDone, totalStored)
-			}); err != nil {
+			partTmp, err := os.CreateTemp("", "tdrive-download-part-*")
+			if err != nil {
 				return err
 			}
+			partPath := partTmp.Name()
+			cleanup := func() {
+				_ = partTmp.Close()
+				_ = os.Remove(partPath)
+			}
+			if err := partTmp.Truncate(p.Size); err != nil {
+				cleanup()
+				return err
+			}
+
+			startBase := base
+			var reported int64
+			var reportedMu sync.Mutex
+			err = s.sendRetryPolicy().Do(ctx, func() error {
+				return s.TG.DownloadFileAt(ctx, peer, p.MsgID, partTmp, 0, func(partDone, _ int64) {
+					partDone = min(max(partDone, 0), p.Size)
+					reportedMu.Lock()
+					defer reportedMu.Unlock()
+					if partDone > reported {
+						reported = partDone
+						progress(startBase+partDone, totalStored)
+					}
+				})
+			})
+			if err != nil {
+				cleanup()
+				return err
+			}
+			if _, err := partTmp.Seek(0, io.SeekStart); err != nil {
+				cleanup()
+				return err
+			}
+			if _, err := io.CopyN(dst, partTmp, p.Size); err != nil {
+				cleanup()
+				return err
+			}
+			cleanup()
 			base += p.Size
 		}
 		return nil
@@ -1039,12 +1116,19 @@ func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID
 		}
 	} else {
 		pr, pw := io.Pipe()
+		downloadDone := make(chan error, 1)
 		go func() {
-			_ = pw.CloseWithError(downloadPartsOrdered(pw))
+			downloadErr := downloadPartsOrdered(pw)
+			_ = pw.CloseWithError(downloadErr)
+			downloadDone <- downloadErr
 		}()
 		if _, err := tdcrypto.DecryptStream(pr, finalTmp, masterKey); err != nil {
 			_ = pr.CloseWithError(err)
+			<-downloadDone
 			return DownloadResult{Status: "error", Message: "Download/decrypt failed: " + err.Error()}
+		}
+		if err := <-downloadDone; err != nil {
+			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
 		}
 	}
 
@@ -1183,24 +1267,30 @@ func (s *Service) PreviewFile(ctx context.Context, channelID int64, msgID int) (
 			return errPreviewEncryptionPasswordRequired
 		}
 
-		var buf bytes.Buffer
-		if err := s.TG.DownloadFile(ctx, peer, int64(msgID), &buf, s.previewProgress(msgID, doc.Size)); err != nil {
+		var downloaded []byte
+		if err := s.sendRetryPolicy().Do(ctx, func() error {
+			var attempt bytes.Buffer
+			if err := s.TG.DownloadFile(ctx, peer, int64(msgID), &attempt, s.previewProgress(msgID, doc.Size)); err != nil {
+				return err
+			}
+			downloaded = append(downloaded[:0], attempt.Bytes()...)
+			return nil
+		}); err != nil {
 			return errPreviewDownloadFailed
 		}
 
 		if encrypted {
 			var plain bytes.Buffer
-			if _, err := tdcrypto.DecryptStream(&buf, &plain, masterKey); err != nil {
+			if _, err := tdcrypto.DecryptStream(bytes.NewReader(downloaded), &plain, masterKey); err != nil {
 				return errPreviewDownloadFailed
 			}
-			buf = bytes.Buffer{}
 			s.emitEvent("preview_progress", msgID, 100.0)
 			payload, err = previewPayloadFromBytes(plain.Bytes(), mimeType)
 			return err
 		}
 
 		s.emitEvent("preview_progress", msgID, 100.0)
-		payload, err = previewPayloadFromBytes(buf.Bytes(), mimeType)
+		payload, err = previewPayloadFromBytes(downloaded, mimeType)
 		return err
 	})
 	if err != nil {
@@ -1525,13 +1615,13 @@ const (
 func (s *Service) sendRetryPolicy() tgclient.FloodWaitRetryPolicy {
 	p := s.FloodWaitRetry
 	if p.MaxRetries == 0 && p.MaxWait == 0 && p.MaxTotalWait == 0 && p.Sleep == nil &&
-		p.MaxTransientRetries == 0 && p.TransientBackoff == 0 && p.MaxTransientBackoff == 0 {
+		p.MaxTransientRetries == 0 && p.TransientBackoff == 0 && p.MaxTransientBackoff == 0 && p.TransientJitter == 0 {
 		return tgclient.DefaultWriteFloodWaitRetryPolicy()
 	}
 	return p
 }
 
-func supportsIdempotentFileSends(client tgclient.Client) bool {
+func supportsIdempotentSends(client tgclient.Client) bool {
 	_, ok := client.(tgclient.IdempotentSender)
 	return ok
 }
@@ -1563,6 +1653,21 @@ func (s *Service) uploadConcurrency() int {
 	return min(s.MaxConcurrentUploads, maxUploadConcurrency)
 }
 
+func (s *Service) acquireUploadSlot(ctx context.Context) (func(), error) {
+	limit := s.uploadConcurrency()
+	s.uploadOnce.Do(func() {
+		s.uploadSem = make(chan struct{}, limit)
+	})
+	sem := s.uploadSem
+
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // rewindSeeker seeks src to offset when it supports seeking. It reports
 // whether rewinding is possible so unseekable streams (the encrypted multipart
 // pipe) can skip retries instead of resending a consumed reader.
@@ -1590,6 +1695,34 @@ func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) (
 	return s.EmitOp(channelID, op)
 }
 
+func (s *Service) commitMultipartManifest(
+	ctx context.Context,
+	channelID int64,
+	op projection.Op,
+	header string,
+	actorID int64,
+	peer tgclient.InputPeer,
+	uploadUUID string,
+) (msgID int64, attempted bool, err error) {
+	randomID, err := tgclient.StableRandomID(uploadUUID, "manifest")
+	if err != nil {
+		return 0, false, err
+	}
+	err = s.retryVisibleSend(ctx, true, func() error {
+		attempted = true
+		var sendErr error
+		msgID, sendErr = tgclient.SendControlIdempotent(ctx, s.TG, peer, header, true, randomID)
+		return sendErr
+	})
+	if err != nil {
+		return msgID, attempted, err
+	}
+	if _, err := projection.ProjectFromOp(s.DB, channelID, msgID, op, actorID, header); err != nil {
+		return msgID, true, err
+	}
+	return msgID, true, nil
+}
+
 func (s *Service) requireEncryptionKey(encrypted bool) ([]byte, error) {
 	if s.RequireEncryptionKey == nil {
 		return nil, nil
@@ -1608,10 +1741,66 @@ func (s *Service) masterKeyForUpload(channelID int64, wantEncrypted bool) ([]byt
 }
 
 func (s *Service) writeCiphertextTemp(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
-	if s.WriteCiphertextTemp == nil {
-		return nil, fmt.Errorf("encryption upload not ready")
+	if s.WriteCiphertextTemp != nil {
+		return s.WriteCiphertextTemp(plain, plaintextSize, masterKey)
 	}
-	return s.WriteCiphertextTemp(plain, plaintextSize, masterKey)
+	keyCopy := append([]byte(nil), masterKey...)
+	defer clearOwnedKey(keyCopy)
+	tmp, err := os.CreateTemp("", "tdrive-upload-*")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.encryptStoredStream(plain, tmp, keyCopy, plaintextSize); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return nil, err
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return nil, err
+	}
+	return tmp, nil
+}
+
+func stageUploadPart(ctx context.Context, source io.Reader, size int64) (*os.File, error) {
+	if ctx == nil || source == nil || size < 0 {
+		return nil, fmt.Errorf("invalid upload part staging input")
+	}
+	tmp, err := os.CreateTemp("", "tdrive-upload-part-*")
+	if err != nil {
+		return nil, err
+	}
+	remove := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}
+	written, err := io.CopyN(tmp, &contextReader{ctx: ctx, source: source}, size)
+	if err != nil {
+		remove()
+		return nil, err
+	}
+	if written != size {
+		remove()
+		return nil, io.ErrUnexpectedEOF
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		remove()
+		return nil, err
+	}
+	return tmp, nil
+}
+
+type contextReader struct {
+	ctx    context.Context
+	source io.Reader
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.source.Read(p)
 }
 
 func (s *Service) encryptStoredStream(plain io.Reader, ciphertext io.Writer, masterKey []byte, plaintextSize int64) error {

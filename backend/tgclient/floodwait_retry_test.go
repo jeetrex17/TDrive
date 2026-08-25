@@ -96,6 +96,9 @@ func TestDefaultWriteFloodWaitRetryPolicyIsBounded(t *testing.T) {
 	if policy.MaxTransientRetries <= 0 || policy.TransientBackoff <= 0 {
 		t.Fatalf("default policy has no transient budget: %+v", policy)
 	}
+	if policy.TransientJitter <= 0 {
+		t.Fatalf("default policy has no transient jitter: %+v", policy)
+	}
 }
 
 func TestFloodWaitRetryPolicyReturnsNonFloodErrorWithoutRetry(t *testing.T) {
@@ -182,6 +185,9 @@ func TestFloodWaitRetryPolicyRejectsUnboundedOrMissingInputs(t *testing.T) {
 		},
 		"transient retries without backoff": func() error {
 			return (FloodWaitRetryPolicy{MaxTransientRetries: 3}).Do(context.Background(), validAction)
+		},
+		"negative transient jitter": func() error {
+			return (FloodWaitRetryPolicy{TransientJitter: -1}).Do(context.Background(), validAction)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -333,6 +339,34 @@ func TestTransientBackoffHonorsCapWithoutOverflow(t *testing.T) {
 				t.Fatalf("transientBackoff(%d) = %s, want %s", test.retry, got, test.want)
 			}
 		})
+	}
+}
+
+func TestTransientBackoffJitterStaysBounded(t *testing.T) {
+	t.Parallel()
+
+	policy := FloodWaitRetryPolicy{
+		TransientBackoff:    2 * time.Second,
+		MaxTransientBackoff: 2500 * time.Millisecond,
+		TransientJitter:     time.Second,
+	}
+	for i := 0; i < 100; i++ {
+		got := policy.transientBackoff(0)
+		if got < 2*time.Second || got > 2500*time.Millisecond {
+			t.Fatalf("jittered backoff = %s, want [2s, 2.5s]", got)
+		}
+	}
+}
+
+func TestSaturatingDurationAdd(t *testing.T) {
+	t.Parallel()
+
+	const maxDuration = time.Duration(1<<63 - 1)
+	if got := saturatingDurationAdd(maxDuration-time.Second, 2*time.Second); got != maxDuration {
+		t.Fatalf("saturating add = %s, want %s", got, maxDuration)
+	}
+	if got := saturatingDurationAdd(time.Second, time.Second); got != 2*time.Second {
+		t.Fatalf("regular add = %s, want 2s", got)
 	}
 }
 

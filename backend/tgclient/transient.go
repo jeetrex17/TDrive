@@ -1,7 +1,12 @@
 package tgclient
 
 import (
+	"context"
+	"errors"
+	"io"
+	"net"
 	"strings"
+	"syscall"
 )
 
 // transientTransportPatterns are lowercase substrings of transport-level
@@ -17,10 +22,11 @@ import (
 // ctx.Err() first and then use this classifier.
 var transientTransportPatterns = []string{
 	"engine forcibly closed",
-	"connection scope closed",
+	"engine was closed",
 	"use of closed network connection",
 	"connection reset",
 	"connection refused",
+	"connection dead",
 	"broken pipe",
 	"unexpected eof",
 	"i/o timeout",
@@ -43,10 +49,37 @@ func IsTransientTransport(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
+	if errors.Is(err, errScopeClosed) {
+		return false
+	}
+	if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) &&
+		!strings.Contains(msg, "engine forcibly closed") {
+		return false
+	}
+	if isTypedTransientTransport(err) {
+		return true
+	}
 	for _, pattern := range transientTransportPatterns {
 		if strings.Contains(msg, pattern) {
 			return true
 		}
 	}
 	return false
+}
+
+func isTypedTransientTransport(err error) bool {
+	if errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ETIMEDOUT) ||
+		errors.Is(err, syscall.ENETRESET) ||
+		errors.Is(err, syscall.ENETDOWN) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
 }

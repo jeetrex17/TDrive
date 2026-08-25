@@ -391,7 +391,8 @@ func isZeroFloodWaitRetryPolicy(policy tgclient.FloodWaitRetryPolicy) bool {
 		policy.Sleep == nil &&
 		policy.MaxTransientRetries == 0 &&
 		policy.TransientBackoff == 0 &&
-		policy.MaxTransientBackoff == 0
+		policy.MaxTransientBackoff == 0 &&
+		policy.TransientJitter == 0
 }
 
 func (remote *TelegramRemote) reconcileProjected(operationID string) (mountwrite.MutationResult, bool, error) {

@@ -69,6 +69,11 @@ func (s *Service) UploadHidden(ctx context.Context, channelID int64, request Hid
 	if err != nil {
 		return HiddenBody{}, err
 	}
+	release, err := s.acquireUploadSlot(ctx)
+	if err != nil {
+		return HiddenBody{}, err
+	}
+	defer release()
 	return s.uploadHiddenParts(ctx, channelID, request, source, peer)
 }
 
@@ -196,6 +201,11 @@ func (s *Service) RecoverHiddenUpload(
 	if err != nil {
 		return HiddenBody{}, err
 	}
+	release, err := s.acquireUploadSlot(ctx)
+	if err != nil {
+		return HiddenBody{}, err
+	}
+	defer release()
 	return s.recoverHiddenParts(ctx, channelID, request, source, peer)
 }
 
