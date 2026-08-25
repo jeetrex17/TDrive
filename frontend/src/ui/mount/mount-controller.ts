@@ -44,6 +44,9 @@ const INITIAL_STATUS: MountStatusView = {
     phase: 'idle',
     mounted: false,
     mode: 'read-only',
+    writeState: 'disabled',
+    acceptingWrites: false,
+    activeWrites: 0,
     label: 'Tdrive personal',
     location: '',
     error: '',
@@ -60,7 +63,10 @@ function copyStatus(status: MountStatusView): MountStatusView {
     return {
         phase,
         mounted,
-        mode: 'read-only',
+        mode: status.mode,
+        writeState: status.mode === 'read-only' ? 'disabled' : status.writeState,
+        acceptingWrites: status.mode === 'read-write' && status.writeState === 'ready' && Boolean(status.acceptingWrites),
+        activeWrites: status.mode === 'read-write' ? Math.max(0, status.activeWrites) : 0,
         label: status.label || 'Tdrive personal',
         location: status.location,
         error,
@@ -73,6 +79,14 @@ function withPhase(current: MountStatusView, phase: MountPhase): MountStatusView
     return { ...current, phase, error: '' };
 }
 
+function beginDisconnect(current: MountStatusView): MountStatusView {
+    return {
+        ...withPhase(current, 'disconnecting'),
+        writeState: current.mode === 'read-write' ? 'draining' : 'disabled',
+        acceptingWrites: false,
+    };
+}
+
 function safeEjectError(value: unknown): string {
     const message = safeMountError(value, 'The drive could not be ejected. Try again.');
     return message.replace(/\bdisconnect(?:ed|ing)?\b/gi, (word) => {
@@ -80,6 +94,19 @@ function safeEjectError(value: unknown): string {
         if (word.toLowerCase() === 'disconnecting') return 'ejecting';
         return 'eject';
     });
+}
+
+function markEjectFailed(current: MountStatusView, message: string): MountStatusView {
+    const writable = current.mode === 'read-write';
+    return {
+        ...current,
+        phase: 'error',
+        mounted: current.mounted,
+        writeState: writable ? 'drained' : current.writeState,
+        acceptingWrites: writable ? false : current.acceptingWrites,
+        activeWrites: writable ? 0 : current.activeWrites,
+        error: message,
+    };
 }
 
 export function createMountController(
@@ -199,7 +226,7 @@ export function createMountController(
         if (mutation) return mutation;
         if (!get(state).mounted) return Promise.resolve();
         revision += 1;
-        state.update((current) => withPhase(current, 'disconnecting'));
+        state.update(beginDisconnect);
         notify({
             id: 'mount-drive',
             level: 'info',
@@ -218,8 +245,19 @@ export function createMountController(
                     title: 'Tdrive ejected',
                 });
             } catch (error) {
+                try {
+                    // Eject errors do not carry the controller's updated
+                    // lifecycle. Re-read it so drained/paused write state and
+                    // OS-detach outcomes remain truthful in the UI.
+                    replace(await api.mountStatus());
+                } catch {
+                    // Preserve the last known mounted state when status is
+                    // temporarily unavailable; the eject error remains the
+                    // actionable failure reported below.
+                }
                 const message = safeEjectError(error);
-                fail(message, message, true);
+                revision += 1;
+                state.update((current) => markEjectFailed(current, message));
                 notify({
                     id: 'mount-drive',
                     level: 'error',

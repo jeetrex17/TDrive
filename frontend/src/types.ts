@@ -54,6 +54,8 @@ export interface SearchHit {
 
 export type MountPhase = 'idle' | 'mounting' | 'mounted' | 'disconnecting' | 'error';
 export type MountedDriveKind = 'personal' | 'shared' | 'unknown';
+export type MountMode = 'read-only' | 'read-write';
+export type MountWriteState = 'disabled' | 'starting' | 'ready' | 'draining' | 'drained';
 
 export interface MountedDrive {
     id: number;
@@ -65,7 +67,10 @@ export interface MountedDrive {
 export interface MountStatusView {
     phase: MountPhase;
     mounted: boolean;
-    mode: 'read-only';
+    mode: MountMode;
+    writeState: MountWriteState;
+    acceptingWrites: boolean;
+    activeWrites: number;
     label: string;
     location: string;
     error: string;

@@ -25,7 +25,9 @@ import (
 func TestDaemonMountShutdownBudgetCoversDetachAndEndpointCleanup(t *testing.T) {
 	t.Parallel()
 
-	const minimumGracefulCleanup = 25 * time.Second
+	// Controller shutdown may spend 30 seconds draining accepted writes,
+	// followed by a 20-second platform detach and 5-second local cleanup.
+	const minimumGracefulCleanup = 55 * time.Second
 	if daemonMountShutdownTimeout < minimumGracefulCleanup {
 		t.Fatalf(
 			"daemon mount shutdown timeout = %s, want at least %s",
@@ -57,7 +59,7 @@ func TestStartMountPinsSelectedDriveAndReturnsCapabilityFreeStatus(t *testing.T)
 		}
 	})
 
-	started, err := server.startMount(context.Background(), fmt.Sprint(selectedDriveID), "q")
+	started, err := server.startMount(context.Background(), fmt.Sprint(selectedDriveID), "q", "")
 	if err != nil {
 		t.Fatalf("start selected mount: %v (cause: %v)", err, errors.Unwrap(err))
 	}
@@ -74,7 +76,7 @@ func TestStartMountPinsSelectedDriveAndReturnsCapabilityFreeStatus(t *testing.T)
 		t.Fatalf("active drive changed to %d, want %d", got, activeDriveID)
 	}
 
-	repeated, err := server.startMount(context.Background(), "", "")
+	repeated, err := server.startMount(context.Background(), "", "", "")
 	if err != nil {
 		t.Fatalf("repeat mount start: %v", err)
 	}
@@ -85,7 +87,7 @@ func TestStartMountPinsSelectedDriveAndReturnsCapabilityFreeStatus(t *testing.T)
 		t.Fatalf("Attach calls = %d, want 1", got)
 	}
 
-	if _, err := server.startMount(context.Background(), fmt.Sprint(activeDriveID), ""); !errors.Is(err, mountcontroller.ErrConflict) {
+	if _, err := server.startMount(context.Background(), fmt.Sprint(activeDriveID), "", ""); !errors.Is(err, mountcontroller.ErrConflict) {
 		t.Fatalf("change pinned drive error = %v, want conflict", err)
 	}
 	if got := engine.ActiveChannelID(); got != activeDriveID {
@@ -124,6 +126,42 @@ func TestMountStatusWithoutControllerIsStopped(t *testing.T) {
 	}
 }
 
+func TestStartMountPropagatesEncryptedPersonalEligibility(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
+
+	const (
+		personalDriveID int64 = 8_200_001
+		sharedDriveID   int64 = 8_200_002
+	)
+	engine := newDaemonMountEngine(t, personalDriveID, sharedDriveID)
+	if err := projection.PutEncryptionConfig(engine.ReadService().DB, projection.EncryptionConfig{
+		ChannelID:        personalDriveID,
+		Enabled:          true,
+		KDFSalt:          []byte("salt"),
+		KDFParamsJSON:    `{}`,
+		WrappedMasterKey: []byte("wrapped"),
+		KeyCheck:         []byte("check"),
+	}); err != nil {
+		t.Fatalf("seed encryption config: %v", err)
+	}
+
+	controller, err := mountcontroller.NewWithConnector(engine, &daemonMountConnector{})
+	if err != nil {
+		t.Fatalf("create mount controller: %v", err)
+	}
+	server := &Server{engine: engine, mountController: controller}
+	t.Cleanup(func() { _ = server.stopMountServer(context.Background()) })
+
+	if _, err := server.startMount(context.Background(), "", "", string(mountcontroller.ModeReadOnly)); err != nil {
+		t.Fatalf("start encrypted personal mount: %v", err)
+	}
+	if status := controller.Status(); !status.DriveEncrypted {
+		t.Fatalf("controller status = %#v, want encrypted drive eligibility", status)
+	}
+}
+
 func TestMountStatusOwnsPinnedDriveDuringLifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -137,6 +175,8 @@ func TestMountStatusOwnsPinnedDriveDuringLifecycle(t *testing.T) {
 		{name: "preparing", status: mountcontroller.Status{Phase: mountcontroller.PhasePreparing, DriveID: 1}, want: true},
 		{name: "attaching", status: mountcontroller.Status{Phase: mountcontroller.PhaseAttaching, Running: true, DriveID: 1}, want: true},
 		{name: "mounted", status: mountcontroller.Status{Phase: mountcontroller.PhaseMounted, Running: true, Mounted: true, DriveID: 1}, want: true},
+		{name: "draining", status: mountcontroller.Status{Phase: mountcontroller.PhaseDraining, Running: true, Mounted: true, DriveID: 1}, want: true},
+		{name: "detaching", status: mountcontroller.Status{Phase: mountcontroller.PhaseDetaching, Running: true, Mounted: true, DriveID: 1}, want: true},
 		{name: "stale OS mount", status: mountcontroller.Status{Phase: mountcontroller.PhaseFailed, Mounted: true, DriveID: 1}, want: true},
 	}
 	for _, test := range tests {
@@ -155,7 +195,9 @@ func TestMountResponseMapsOnlySafeControllerFields(t *testing.T) {
 		Phase:        mountcontroller.PhaseFailed,
 		Running:      true,
 		Mounted:      true,
-		Mode:         "read-only",
+		Mode:         mountcontroller.ModeReadWrite,
+		WriteState:   mountcontroller.WriteStateDraining,
+		ActiveWrites: 2,
 		Label:        "Tdrive personal",
 		Location:     "/Volumes/Tdrive personal",
 		WindowsDrive: "T:",
@@ -167,6 +209,9 @@ func TestMountResponseMapsOnlySafeControllerFields(t *testing.T) {
 	}
 	if response.Drive.ID != 42 || response.Error != "safe error" || response.Location != "/Volumes/Tdrive personal" {
 		t.Fatalf("mountResponse() = %#v", response)
+	}
+	if response.Mode != "read-write" || response.WriteState != "draining" || response.ActiveWrites != 2 || response.AcceptingWrites {
+		t.Fatalf("mountResponse() lost writable lifecycle = %#v", response)
 	}
 }
 

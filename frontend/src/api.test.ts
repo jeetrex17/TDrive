@@ -61,6 +61,9 @@ describe("api normalizers", () => {
             phase: "mounted",
             mounted: true,
             mode: "read-only",
+            writeState: "disabled",
+            acceptingWrites: false,
+            activeWrites: 0,
             label: "Tdrive personal",
             location: "/Volumes/Tdrive personal",
             error: "",
@@ -69,6 +72,37 @@ describe("api normalizers", () => {
         });
         expect(normalized).not.toHaveProperty("url");
         expect(normalized).not.toHaveProperty("commands");
+    });
+
+    it("normalizes writable lifecycle without trusting contradictory fields", () => {
+        const ready = normalizeMountStatus({
+            phase: "mounted",
+            mounted: true,
+            mode: "read-write",
+            write_state: "ready",
+            accepting_writes: true,
+            active_writes: 2,
+        });
+        expect(ready).toMatchObject({
+            mode: "read-write",
+            writeState: "ready",
+            acceptingWrites: true,
+            activeWrites: 2,
+        });
+
+        const contradictory = normalizeMountStatus({
+            mounted: true,
+            mode: "read-only",
+            write_state: "ready",
+            accepting_writes: true,
+            active_writes: Number.MAX_SAFE_INTEGER,
+        });
+        expect(contradictory).toMatchObject({
+            mode: "read-only",
+            writeState: "disabled",
+            acceptingWrites: false,
+            activeWrites: 0,
+        });
     });
 
     it("rejects unsafe locations and endpoint-bearing error details", () => {

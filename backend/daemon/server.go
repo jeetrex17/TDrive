@@ -26,9 +26,10 @@ const (
 	daemonReadTimeout   = 5 * time.Minute
 	daemonWriteTimeout  = 30 * time.Second
 	daemonDrainTimeout  = 10 * time.Second
-	// Platform detach may consume 20 seconds; keep another five seconds for
-	// the local WebDAV endpoint to drain after the OS no longer references it.
-	daemonMountShutdownTimeout = 25 * time.Second
+	// Writable shutdown may spend 30 seconds finishing accepted mutations.
+	// Preserve the platform's 20-second detach budget and another five seconds
+	// for local endpoint/writer cleanup after the OS releases the mount.
+	daemonMountShutdownTimeout = 55 * time.Second
 )
 
 type ServerConfig struct {
@@ -716,7 +717,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.startMount(ctx, in.Selector, in.WindowsDrive)
+		out, err := s.startMount(ctx, in.Selector, in.WindowsDrive, in.Mode)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}

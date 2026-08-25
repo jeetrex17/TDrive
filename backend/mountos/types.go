@@ -16,11 +16,21 @@ const (
 	KindLinux   = "linux"
 )
 
+// Mode is the access mode requested from the host OS. Its zero value is
+// deliberately read-only so older callers cannot accidentally enable writes.
+type Mode string
+
+const (
+	ModeReadOnly  Mode = "read-only"
+	ModeReadWrite Mode = "read-write"
+)
+
 var (
 	ErrInvalidContext           = errors.New("mount OS: invalid context")
 	ErrInvalidEndpoint          = errors.New("mount OS: invalid endpoint")
 	ErrInvalidLabel             = errors.New("mount OS: invalid label")
 	ErrInvalidDrive             = errors.New("mount OS: invalid Windows drive")
+	ErrInvalidMode              = errors.New("mount OS: invalid access mode")
 	ErrInvalidAttachment        = errors.New("mount OS: invalid attachment")
 	ErrDriveOccupied            = errors.New("mount OS: Windows drive is occupied")
 	ErrWindowsWebDAVUnavailable = errors.New("mount OS: Windows WebDAV is unavailable")
@@ -40,6 +50,7 @@ type Config struct {
 	Endpoint     string
 	Label        string
 	WindowsDrive string
+	Mode         Mode
 }
 
 // Attachment is an opaque receipt for an OS attachment. Its zero value is not
@@ -85,4 +96,5 @@ type validatedConfig struct {
 	endpoint string
 	label    string
 	drive    string
+	mode     Mode
 }

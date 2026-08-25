@@ -86,10 +86,16 @@ func TestCommandPlansUseFixedExecutablesAndSeparateArguments(t *testing.T) {
 		args []string
 	}{
 		{
-			name: "darwin attach",
-			got:  darwinAttachPlan(testEndpoint, "Tdrive personal", "/tmp/tdrive-mount"),
+			name: "darwin read-only attach",
+			got:  darwinAttachPlan(testEndpoint, "Tdrive personal", "/tmp/tdrive-mount", ModeReadOnly),
 			path: "/sbin/mount_webdav",
 			args: []string{"-S", "-v", "Tdrive personal", "-o", "rdonly,noexec,nosuid,nodev", testEndpoint, "/tmp/tdrive-mount"},
+		},
+		{
+			name: "darwin writable attach retains hardening options",
+			got:  darwinAttachPlan(testEndpoint, "Tdrive personal", "/tmp/tdrive-mount", ModeReadWrite),
+			path: "/sbin/mount_webdav",
+			args: []string{"-S", "-v", "Tdrive personal", "-o", "noexec,nosuid,nodev", testEndpoint, "/tmp/tdrive-mount"},
 		},
 		{
 			name: "darwin detach",
@@ -197,6 +203,19 @@ func TestValidateConfigReportsBoundaryErrors(t *testing.T) {
 	}
 	if _, err := validateConfig(Config{Endpoint: testEndpoint, Label: "Tdrive personal", WindowsDrive: "bad"}); !errors.Is(err, ErrInvalidDrive) {
 		t.Fatalf("validateConfig(drive) = %v", err)
+	}
+	if _, err := validateConfig(Config{Endpoint: testEndpoint, Label: "Tdrive personal", Mode: "unsafe"}); !errors.Is(err, ErrInvalidMode) {
+		t.Fatalf("validateConfig(mode) = %v", err)
+	}
+	for input, want := range map[Mode]Mode{
+		"":            ModeReadOnly,
+		ModeReadOnly:  ModeReadOnly,
+		ModeReadWrite: ModeReadWrite,
+	} {
+		got, err := normalizeMode(input)
+		if err != nil || got != want {
+			t.Fatalf("normalizeMode(%q) = %q, %v; want %q", input, got, err, want)
+		}
 	}
 	if New() == nil {
 		t.Fatal("New() returned nil")

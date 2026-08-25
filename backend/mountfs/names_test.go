@@ -27,7 +27,7 @@ func TestPortableNamesNormalizeUnicodeBeforeCollisionDetection(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("ReadDir() entries = %d, want 2", len(entries))
 	}
-	if nameKey(entries[0].Name) == nameKey(entries[1].Name) {
+	if NameKey(entries[0].Name) == NameKey(entries[1].Name) {
 		t.Fatalf("normalized Unicode names still collide: %#v", entries)
 	}
 	for _, entry := range entries {

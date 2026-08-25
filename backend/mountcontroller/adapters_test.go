@@ -12,6 +12,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/core"
 	"TDrive/backend/media"
+	"TDrive/backend/mountadapter"
 	"TDrive/backend/mountcontent"
 	"TDrive/backend/mountfs"
 	"TDrive/backend/projection"
@@ -81,6 +82,50 @@ func TestProductionControllerPinsDriveWithoutChangingEngineActiveDrive(t *testin
 	}
 }
 
+func TestProductionControllerAutoMountsPersonalPlaintextReadWrite(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
+
+	const driveID int64 = 81_101
+	db := newControllerProjectionDB(t, driveID)
+	previousDB := backend.DB
+	backend.DB = db
+	t.Cleanup(func() { backend.DB = previousDB })
+
+	fakeTelegram := tgclient.NewFake(1)
+	fakeTelegram.SeedChannel(tgclient.InputPeer{ChannelID: driveID, AccessHash: 42}, "Personal")
+	engine, err := core.New(context.Background(), core.Config{
+		TG:         fakeTelegram,
+		SkipDBInit: true,
+		Connect: func() (*telegram.Client, error) {
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("core.New() error = %v", err)
+	}
+	t.Cleanup(engine.Close)
+
+	controller, err := NewWithConnector(engine, &fakeConnector{})
+	if err != nil {
+		t.Fatalf("NewWithConnector() error = %v", err)
+	}
+	t.Cleanup(func() { _ = controller.Close(context.Background()) })
+
+	started, err := controller.Start(context.Background(), Drive{
+		ID:    driveID,
+		Title: "Saved Messages",
+		Kind:  DriveKindPersonal,
+	}, StartOptions{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if started.Mode != ModeReadWrite || started.WriteState != WriteStateReady || !started.AcceptingWrites {
+		t.Fatalf("personal plaintext mode = %#v, want ready read-write", started)
+	}
+}
+
 func TestNewAndDependencyValidation(t *testing.T) {
 	t.Parallel()
 
@@ -119,6 +164,13 @@ func TestDirectorySourcePreservesProjectionMetadata(t *testing.T) {
 		FileSize:       12,
 		FileUploadTime: 1_700_000_000,
 	})
+	if _, err := db.Exec(`
+		UPDATE files
+		SET content_hash = ?, revision = ?, upload_uuid = ?, part_count = ?
+		WHERE channel_id = ? AND msg_id = ?
+	`, "sha256:plain-v4", 4, "upload-plain-v4", 2, channelID, 2); err != nil {
+		t.Fatalf("seed immutable file identity: %v", err)
+	}
 	applyControllerProjectionOp(t, db, channelID, 3, projection.Op{
 		Type:              projection.OpFileUpload,
 		Parent:            "d:photos",
@@ -139,7 +191,8 @@ func TestDirectorySourcePreservesProjectionMetadata(t *testing.T) {
 	if got := byID["d:photos"]; got.Kind != mountfs.KindDirectory || got.ParentID != mountfs.RootID {
 		t.Fatalf("folder entry = %#v", got)
 	}
-	if got := byID["f:2"]; got.Size != 12 || got.ContentRef != "2" || !got.ModTime.Equal(time.Unix(1_700_000_000, 0)) {
+	if got := byID["f:2"]; got.Size != 12 || got.ContentRef != "2" || !got.ModTime.Equal(time.Unix(1_700_000_000, 0)) ||
+		got.ContentHash != "sha256:plain-v4" || got.Revision != 4 || got.UploadUUID != "upload-plain-v4" {
 		t.Fatalf("plain entry = %#v", got)
 	}
 
@@ -152,6 +205,59 @@ func TestDirectorySourcePreservesProjectionMetadata(t *testing.T) {
 	}
 	if _, err := source.ListDirectory(context.Background(), channelID, "f:2"); !errors.Is(err, mountfs.ErrContentUnavailable) {
 		t.Fatalf("invalid parent error = %v", err)
+	}
+}
+
+func TestDirectoryListingRoundTripsLegacyCrossKindCollisionThroughWriteResolver(t *testing.T) {
+	t.Parallel()
+
+	const channelID int64 = 72_101
+	db := newControllerProjectionDB(t, channelID)
+	applyControllerProjectionOp(t, db, channelID, 1, projection.Op{
+		Type:   projection.OpMkdir,
+		Obj:    "d:report",
+		Parent: projection.RootParent,
+		Name:   "Report",
+	})
+	applyControllerProjectionOp(t, db, channelID, 2, projection.Op{
+		Type:           projection.OpFileUpload,
+		Parent:         projection.RootParent,
+		Name:           "report",
+		FileSize:       12,
+		FileUploadTime: 1_700_000_000,
+	})
+
+	source := directorySource{reads: &readservice.Service{DB: db}}
+	listed, err := source.ListDirectory(context.Background(), channelID, mountfs.RootID)
+	if err != nil {
+		t.Fatalf("ListDirectory(root) error = %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("listed entries = %#v", listed)
+	}
+	resolver, err := mountadapter.NewProjectionResolver(db, channelID)
+	if err != nil {
+		t.Fatalf("NewProjectionResolver() error = %v", err)
+	}
+
+	seen := make(map[string]struct{}, len(listed))
+	for _, entry := range listed {
+		nameKey, keyErr := projection.CanonicalNameKey(entry.Name)
+		if keyErr != nil {
+			t.Fatalf("listed name %q is not portable: %v", entry.Name, keyErr)
+		}
+		if _, exists := seen[nameKey]; exists {
+			t.Fatalf("listing exposed a case-fold collision for %q", entry.Name)
+		}
+		seen[nameKey] = struct{}{}
+
+		resolved, found, resolveErr := resolver.Resolve(context.Background(), "/"+entry.Name)
+		if resolveErr != nil || !found {
+			t.Fatalf("Resolve(%q) = (%#v, %v, %v)", entry.Name, resolved, found, resolveErr)
+		}
+		if resolved.ObjectID != entry.ID {
+			t.Fatalf("Resolve(%q).ObjectID = %q, want listed ID %q", entry.Name, resolved.ObjectID, entry.ID)
+		}
 	}
 }
 

@@ -19,7 +19,7 @@ func runMount(args []string) error {
 
 	switch action {
 	case "start":
-		selector, windowsDrive, err := parseMountStartArgs(args)
+		selector, windowsDrive, mode, err := parseMountStartArgs(args)
 		if err != nil {
 			return err
 		}
@@ -27,7 +27,7 @@ func runMount(args []string) error {
 		if err != nil {
 			return err
 		}
-		out, err := client.MountStart(selector, windowsDrive)
+		out, err := client.MountStart(selector, windowsDrive, mode)
 		if err != nil {
 			return err
 		}
@@ -66,29 +66,31 @@ func runMount(args []string) error {
 	}
 }
 
-func parseMountStartArgs(args []string) (selector string, windowsDrive string, err error) {
+func parseMountStartArgs(args []string) (selector string, windowsDrive string, mode string, err error) {
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
 		case "--drive":
 			index++
 			if index >= len(args) || strings.TrimSpace(args[index]) == "" {
-				return "", "", fmt.Errorf("usage: tdrive mount start [--drive <name|id>] [--windows-drive T:]")
+				return "", "", "", fmt.Errorf("usage: tdrive mount start [--drive <name|id>] [--windows-drive T:] [--read-only]")
 			}
 			selector = strings.TrimSpace(args[index])
 		case "--windows-drive":
 			index++
 			if index >= len(args) || strings.TrimSpace(args[index]) == "" {
-				return "", "", fmt.Errorf("usage: tdrive mount start [--drive <name|id>] [--windows-drive T:]")
+				return "", "", "", fmt.Errorf("usage: tdrive mount start [--drive <name|id>] [--windows-drive T:] [--read-only]")
 			}
 			windowsDrive, err = normalizeWindowsDriveArg(args[index])
 			if err != nil {
-				return "", "", err
+				return "", "", "", err
 			}
+		case "--read-only":
+			mode = "read-only"
 		default:
-			return "", "", fmt.Errorf("unknown mount option %q", args[index])
+			return "", "", "", fmt.Errorf("unknown mount option %q", args[index])
 		}
 	}
-	return selector, windowsDrive, nil
+	return selector, windowsDrive, mode, nil
 }
 
 func normalizeWindowsDriveArg(value string) (string, error) {
@@ -120,6 +122,16 @@ func printMountResponse(writer io.Writer, out daemon.MountResponse) {
 		fmt.Fprintf(writer, "mount: mounting %s (%s)\n", label, mode)
 		printMountError(writer, out.Error)
 		return
+	case "draining":
+		if out.ActiveWrites == 1 {
+			fmt.Fprintf(writer, "mount: finishing 1 active write before ejecting %s\n", label)
+		} else if out.ActiveWrites > 1 {
+			fmt.Fprintf(writer, "mount: finishing %d active writes before ejecting %s\n", out.ActiveWrites, label)
+		} else {
+			fmt.Fprintf(writer, "mount: finishing pending changes before ejecting %s\n", label)
+		}
+		printMountError(writer, out.Error)
+		return
 	case "detaching":
 		fmt.Fprintf(writer, "mount: disconnecting %s\n", label)
 		printMountError(writer, out.Error)
@@ -136,6 +148,9 @@ func printMountResponse(writer io.Writer, out daemon.MountResponse) {
 	}
 	if out.Drive.ID != 0 {
 		fmt.Fprintf(writer, "drive: %s (%d), pinned until disconnected\n", out.Drive.Title, out.Drive.ID)
+	}
+	if out.Mode == "read-write" && !out.AcceptingWrites {
+		fmt.Fprintln(writer, "writes: paused")
 	}
 	printMountError(writer, out.Error)
 }

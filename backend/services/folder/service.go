@@ -18,6 +18,8 @@ type PeerResolver interface {
 
 type EmitOpFunc func(channelID int64, op projection.Op) error
 type EmitOpsFunc func(channelID int64, ops []projection.Op) error
+type EmitOpContextFunc func(ctx context.Context, channelID int64, op projection.Op) error
+type EmitOpsContextFunc func(ctx context.Context, channelID int64, ops []projection.Op) error
 type ActorIDFunc func(ctx context.Context) (int64, error)
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
 type WarnFunc func(format string, args ...any)
@@ -28,6 +30,8 @@ type Service struct {
 	Peers                PeerResolver
 	EmitOp               EmitOpFunc
 	EmitOps              EmitOpsFunc
+	EmitOpContext        EmitOpContextFunc
+	EmitOpsContext       EmitOpsContextFunc
 	ActorID              ActorIDFunc
 	RequireEncryptionKey RequireEncryptionKeyFunc
 	Warnf                WarnFunc
@@ -40,6 +44,13 @@ type Folder struct {
 }
 
 func (s *Service) Create(channelID int64, name string, parentID string) (Folder, error) {
+	return s.CreateContext(context.Background(), channelID, name, parentID)
+}
+
+func (s *Service) CreateContext(ctx context.Context, channelID int64, name string, parentID string) (Folder, error) {
+	if err := contextError(ctx); err != nil {
+		return Folder{}, err
+	}
 	if err := s.ready(); err != nil {
 		return Folder{}, err
 	}
@@ -75,7 +86,7 @@ func (s *Service) Create(channelID int64, name string, parentID string) (Folder,
 		Parent: parent,
 		Name:   name,
 	}
-	if err := s.emit(channelID, op); err != nil {
+	if err := s.emit(ctx, channelID, op); err != nil {
 		return Folder{}, fmt.Errorf("create folder failed: %w", err)
 	}
 
@@ -87,6 +98,9 @@ func (s *Service) Create(channelID int64, name string, parentID string) (Folder,
 }
 
 func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -123,7 +137,7 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 	for _, folder := range folders {
 		ops = append(ops, projection.Op{Type: projection.OpRmdir, Obj: folder.ID})
 	}
-	if err := s.emitMany(channelID, ops); err != nil {
+	if err := s.emitMany(ctx, channelID, ops); err != nil {
 		return fmt.Errorf("delete folder failed: %w", err)
 	}
 
@@ -135,6 +149,13 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 }
 
 func (s *Service) Rename(channelID int64, folderID string, newName string) error {
+	return s.RenameContext(context.Background(), channelID, folderID, newName)
+}
+
+func (s *Service) RenameContext(ctx context.Context, channelID int64, folderID string, newName string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -156,10 +177,17 @@ func (s *Service) Rename(channelID int64, folderID string, newName string) error
 		Obj:  folderID,
 		Name: newName,
 	}
-	return s.emit(channelID, op)
+	return s.emit(ctx, channelID, op)
 }
 
 func (s *Service) Move(channelID int64, folderID string, newParentID string) error {
+	return s.MoveContext(context.Background(), channelID, folderID, newParentID)
+}
+
+func (s *Service) MoveContext(ctx context.Context, channelID int64, folderID string, newParentID string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -206,19 +234,31 @@ func (s *Service) Move(channelID int64, folderID string, newParentID string) err
 		Obj:    folderID,
 		Parent: parent,
 	}
-	return s.emit(channelID, op)
+	return s.emit(ctx, channelID, op)
 }
 
-func (s *Service) emit(channelID int64, op projection.Op) error {
+func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s.EmitOpContext != nil {
+		return s.EmitOpContext(ctx, channelID, op)
+	}
 	if s.EmitOp == nil {
 		return fmt.Errorf("folder emitter not ready")
 	}
 	return s.EmitOp(channelID, op)
 }
 
-func (s *Service) emitMany(channelID int64, ops []projection.Op) error {
+func (s *Service) emitMany(ctx context.Context, channelID int64, ops []projection.Op) error {
 	if len(ops) == 0 {
 		return nil
+	}
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s.EmitOpsContext != nil {
+		return s.EmitOpsContext(ctx, channelID, ops)
 	}
 	if s.EmitOps == nil {
 		return fmt.Errorf("folder batch emitter not ready")
@@ -350,4 +390,11 @@ func normalizeParent(p string) string {
 		return projection.RootParent
 	}
 	return p
+}
+
+func contextError(ctx context.Context) error {
+	if ctx == nil {
+		return fmt.Errorf("context is required")
+	}
+	return ctx.Err()
 }

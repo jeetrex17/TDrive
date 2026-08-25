@@ -166,7 +166,7 @@ func TestFileSystemPathAndErrorMapping(t *testing.T) {
 
 func TestFileInfoStableMetadata(t *testing.T) {
 	modTime := time.Date(2026, time.August, 19, 1, 2, 3, 4, time.UTC)
-	entry := mountfs.Entry{ChannelID: 7, ID: "f:1", Name: "blob.unknown-extension", Kind: mountfs.KindFile, Size: 8, ModTime: modTime, ContentRef: "telegram:1"}
+	entry := mountfs.Entry{ChannelID: 7, ID: "f:1", Name: "blob.unknown-extension", Kind: mountfs.KindFile, Size: 8, ModTime: modTime, ContentRef: "telegram:1", Revision: 1, ContentHash: "sha256:one"}
 	info := newFileInfo(entry)
 	if info.Name() != entry.Name || info.Size() != 8 || info.Mode() != 0o444 || info.IsDir() || info.Sys() != nil || !info.ModTime().Equal(modTime) {
 		t.Fatalf("fileInfo = %+v", info)
@@ -180,8 +180,14 @@ func TestFileInfoStableMetadata(t *testing.T) {
 	}
 	entry.ContentRef = "telegram:2"
 	secondETag, _ := newFileInfo(entry).ETag(context.Background())
-	if firstETag == secondETag {
-		t.Fatal("ETag did not change with immutable content revision")
+	if firstETag != secondETag {
+		t.Fatal("ETag changed after private content reference changed")
+	}
+	entry.ContentHash = "sha256:two"
+	entry.Revision = 2
+	thirdETag, _ := newFileInfo(entry).ETag(context.Background())
+	if firstETag == thirdETag {
+		t.Fatal("ETag did not change with immutable content identity")
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()

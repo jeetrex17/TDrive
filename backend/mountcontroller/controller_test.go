@@ -132,6 +132,109 @@ func TestStartPublishesTransitionsAndMountSpecificCacheOptions(t *testing.T) {
 	if connector.config.Endpoint != testEndpoint || connector.config.Label != "Tdrive personal" || connector.config.WindowsDrive != defaultWindowsDrive {
 		t.Fatalf("connector config = %#v", connector.config)
 	}
+	if connector.config.Mode != mountos.ModeReadOnly {
+		t.Fatalf("connector mode = %q, want read-only", connector.config.Mode)
+	}
+}
+
+func TestStartDefaultsToWritableOnlyForEligiblePersonalPlaintextDrive(t *testing.T) {
+	t.Parallel()
+
+	writes := &fakeWriterSession{}
+	builders := &fakeWriterBuilder{session: writes}
+	endpoint := &fakeEndpoint{endpoint: testEndpoint}
+	connector := &fakeConnector{}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{content: &fakeContent{}},
+		Writers:     builders,
+		Endpoint:    endpoint,
+		Connector:   connector,
+	})
+
+	status, err := controller.Start(context.Background(), personalDrive(), StartOptions{})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if status.Mode != ModeReadWrite || status.WriteState != WriteStateReady {
+		t.Fatalf("writable status = %#v", status)
+	}
+	if builders.buildCalls != 1 || builders.drive.ID != personalDrive().ID {
+		t.Fatalf("writer build = calls:%d drive:%#v", builders.buildCalls, builders.drive)
+	}
+	if builders.fs == nil || builders.fs != endpoint.config.FS {
+		t.Fatal("writer builder did not receive the mounted filesystem instance")
+	}
+	if endpoint.config.Writer != writes || endpoint.config.Mode != ModeReadWrite {
+		t.Fatalf("endpoint config = %#v", endpoint.config)
+	}
+	if connector.config.Mode != mountos.ModeReadWrite {
+		t.Fatalf("connector mode = %q, want read-write", connector.config.Mode)
+	}
+}
+
+func TestStartFallsBackToReadOnlyForIneligibleDrive(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		drive Drive
+	}{
+		{name: "shared", drive: Drive{ID: 20, Title: "Shared", Kind: DriveKindShared}},
+		{name: "encrypted personal", drive: Drive{ID: 21, Title: "Private", Kind: DriveKindPersonal, Encrypted: true}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			builders := &fakeWriterBuilder{session: &fakeWriterSession{}}
+			endpoint := &fakeEndpoint{endpoint: testEndpoint}
+			connector := &fakeConnector{}
+			controller := newTestController(t, Dependencies{
+				Filesystems: &fakeFilesystemBuilder{content: &fakeContent{}},
+				Writers:     builders,
+				Endpoint:    endpoint,
+				Connector:   connector,
+			})
+
+			status, err := controller.Start(context.Background(), test.drive, StartOptions{})
+			if err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			if status.Mode != ModeReadOnly || status.WriteState != WriteStateDisabled {
+				t.Fatalf("fallback status = %#v", status)
+			}
+			if builders.buildCalls != 0 || endpoint.config.Writer != nil || connector.config.Mode != mountos.ModeReadOnly {
+				t.Fatalf("read-only fallback built writer or attached writable: builds=%d endpoint=%#v connector=%#v", builders.buildCalls, endpoint.config, connector.config)
+			}
+		})
+	}
+}
+
+func TestStartHonorsReadOnlyOverrideAndRejectsUnavailableWritableRequest(t *testing.T) {
+	t.Parallel()
+
+	builders := &fakeWriterBuilder{session: &fakeWriterSession{}}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{content: &fakeContent{}},
+		Writers:     builders,
+		Endpoint:    &fakeEndpoint{endpoint: testEndpoint},
+		Connector:   &fakeConnector{},
+	})
+	status, err := controller.Start(context.Background(), personalDrive(), StartOptions{Mode: ModeReadOnly})
+	if err != nil || status.Mode != ModeReadOnly || builders.buildCalls != 0 {
+		t.Fatalf("read-only override = (%#v, %v), builds=%d", status, err, builders.buildCalls)
+	}
+	if _, err := controller.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	shared := Drive{ID: 33, Title: "Shared", Kind: DriveKindShared}
+	if _, err := controller.Start(context.Background(), shared, StartOptions{Mode: ModeReadWrite}); !errors.Is(err, ErrWritableUnavailable) {
+		t.Fatalf("explicit ineligible writable error = %v, want ErrWritableUnavailable", err)
+	}
+	if _, err := controller.Start(context.Background(), personalDrive(), StartOptions{Mode: "invalid"}); !errors.Is(err, ErrInvalidMode) {
+		t.Fatalf("invalid mode error = %v, want ErrInvalidMode", err)
+	}
 }
 
 func TestConcurrentEquivalentStartsCoalesceAndConflictIsTyped(t *testing.T) {
@@ -464,6 +567,84 @@ func TestStopDetachesBeforeEndpointAndContent(t *testing.T) {
 	}
 }
 
+func TestWritableStopDrainsBeforeDetachAndPublishesDraining(t *testing.T) {
+	t.Parallel()
+
+	events := &eventLog{}
+	drainEntered := make(chan struct{})
+	drainRelease := make(chan struct{})
+	writes := &fakeWriterSession{events: events, drainEntered: drainEntered, drainRelease: drainRelease}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{events: events, content: &fakeContent{events: events}},
+		Writers:     &fakeWriterBuilder{events: events, session: writes},
+		Endpoint:    &fakeEndpoint{events: events, endpoint: testEndpoint},
+		Connector:   &fakeConnector{events: events},
+	})
+	if _, err := controller.Start(context.Background(), personalDrive(), StartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	events.reset()
+
+	result := make(chan startResult, 1)
+	go func() {
+		status, err := controller.Stop(context.Background())
+		result <- startResult{status: status, err: err}
+	}()
+	<-drainEntered
+	status := controller.Status()
+	if status.Phase != PhaseDraining || status.WriteState != WriteStateDraining || !status.Mounted {
+		t.Fatalf("draining status = %#v", status)
+	}
+	if writes.statusCalls == 0 {
+		t.Fatal("writer status was not consulted while draining")
+	}
+	close(drainRelease)
+	stopped := <-result
+	if stopped.err != nil || stopped.status.Phase != PhaseStopped {
+		t.Fatalf("Stop() = (%#v, %v)", stopped.status, stopped.err)
+	}
+	if got := strings.Join(events.snapshot(), ","); got != "writer.drain,connector.detach,endpoint.stop,writer.close,content.close" {
+		t.Fatalf("writable stop order = %s", got)
+	}
+}
+
+func TestWritableDrainFailureKeepsMountedResourcesAndAllowsSafeRetry(t *testing.T) {
+	t.Parallel()
+
+	events := &eventLog{}
+	writes := &fakeWriterSession{events: events, drainErr: errors.New("Telegram commit pending " + testEndpoint)}
+	endpoint := &fakeEndpoint{events: events, endpoint: testEndpoint}
+	connector := &fakeConnector{events: events}
+	content := &fakeContent{events: events}
+	controller := newTestController(t, Dependencies{
+		Filesystems: &fakeFilesystemBuilder{content: content},
+		Writers:     &fakeWriterBuilder{session: writes},
+		Endpoint:    endpoint,
+		Connector:   connector,
+	})
+	if _, err := controller.Start(context.Background(), personalDrive(), StartOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	events.reset()
+
+	status, err := controller.Stop(context.Background())
+	if err == nil || !errors.Is(err, ErrStopFailed) {
+		t.Fatalf("Stop() error = %v, want ErrStopFailed", err)
+	}
+	if status.Phase != PhaseFailed || !status.Mounted || status.WriteState != WriteStateDraining {
+		t.Fatalf("failed drain status = %#v", status)
+	}
+	assertCapabilityFree(t, status.Error)
+	if connector.detachCalls != 0 || endpoint.stopCalls != 0 || content.closed || writes.closeCalls != 0 {
+		t.Fatalf("failed drain released mounted resources")
+	}
+
+	writes.drainErr = nil
+	if status, err = controller.Stop(context.Background()); err != nil || status.Phase != PhaseStopped {
+		t.Fatalf("retry Stop() = (%#v, %v)", status, err)
+	}
+}
+
 func TestDetachFailurePreservesRecoverableMountedSession(t *testing.T) {
 	t.Parallel()
 
@@ -767,18 +948,88 @@ type fakeEndpoint struct {
 	running    bool
 	startCalls int
 	stopCalls  int
+	config     EndpointConfig
 }
 
-func (endpoint *fakeEndpoint) Start(_ context.Context, _ EndpointConfig) (EndpointStatus, error) {
+func (endpoint *fakeEndpoint) Start(_ context.Context, config EndpointConfig) (EndpointStatus, error) {
 	endpoint.mu.Lock()
 	defer endpoint.mu.Unlock()
 	endpoint.events.add("endpoint.start")
 	endpoint.startCalls++
+	endpoint.config = config
 	if endpoint.startErr != nil {
 		return EndpointStatus{}, endpoint.startErr
 	}
 	endpoint.running = true
 	return EndpointStatus{Endpoint: endpoint.endpoint}, nil
+}
+
+type fakeWriterBuilder struct {
+	mu         sync.Mutex
+	events     *eventLog
+	session    WriteSession
+	drive      Drive
+	fs         *mountfs.FS
+	buildErr   error
+	buildCalls int
+}
+
+func (builder *fakeWriterBuilder) Build(_ context.Context, drive Drive, fs *mountfs.FS) (WriteSession, error) {
+	builder.mu.Lock()
+	defer builder.mu.Unlock()
+	builder.events.add("writer.build")
+	builder.drive = drive
+	builder.fs = fs
+	builder.buildCalls++
+	return builder.session, builder.buildErr
+}
+
+type fakeWriterSession struct {
+	mu           sync.Mutex
+	events       *eventLog
+	drainEntered chan struct{}
+	drainRelease <-chan struct{}
+	drainErr     error
+	closeErr     error
+	drainCalls   int
+	closeCalls   int
+	statusCalls  int
+}
+
+func (writer *fakeWriterSession) Drain(ctx context.Context) error {
+	writer.mu.Lock()
+	writer.events.add("writer.drain")
+	writer.drainCalls++
+	if writer.drainEntered != nil {
+		close(writer.drainEntered)
+		writer.drainEntered = nil
+	}
+	release := writer.drainRelease
+	err := writer.drainErr
+	writer.mu.Unlock()
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
+}
+
+func (writer *fakeWriterSession) Close(context.Context) error {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	writer.events.add("writer.close")
+	writer.closeCalls++
+	return writer.closeErr
+}
+
+func (writer *fakeWriterSession) WriteStatus() WriteStatus {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	writer.statusCalls++
+	return WriteStatus{Accepting: writer.drainCalls == 0, Active: 1}
 }
 
 func (endpoint *fakeEndpoint) Health() EndpointHealth {
@@ -849,5 +1100,7 @@ func (connector *fakeConnector) Open(_ context.Context, _ mountos.Attachment) er
 }
 
 var _ FilesystemBuilder = (*fakeFilesystemBuilder)(nil)
+var _ WriterBuilder = (*fakeWriterBuilder)(nil)
+var _ WriteSession = (*fakeWriterSession)(nil)
 var _ Endpoint = (*fakeEndpoint)(nil)
 var _ mountos.Connector = (*fakeConnector)(nil)

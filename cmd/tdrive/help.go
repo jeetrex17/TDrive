@@ -349,20 +349,22 @@ tdrive vault lock
 Forget the in-memory vault key from the daemon.
 `,
 	"mount start": `
-tdrive mount [start] [--drive <name|id>] [--windows-drive T:]
+tdrive mount [start] [--drive <name|id>] [--windows-drive T:] [--read-only]
 
-Attach one TDrive as a read-only desktop drive.
+Attach one TDrive as a desktop drive. Eligible personal plaintext drives use
+read/write mode when the installed backend supports safe writes.
 
 Options:
   --drive <name|id>       Pin this drive; defaults to the current active drive
   --windows-drive T:      Windows Explorer drive letter, default T:
+  --read-only             Always mount without write access
 
 Selecting --drive does not change the active drive used by other CLI commands.
 TDrive attaches the drive automatically: Finder on macOS, T: in Windows
 Explorer, or the current GVfs/GIO desktop session on Linux.
 
-Only browsing and reading are supported. Creating, editing, renaming, and
-deleting through the mount are rejected.
+Shared or encrypted drives fall back to read-only mode. Mount status always
+reports the mode actually attached by the operating system.
 
 Close the TDrive GUI before starting this CLI-owned mount. Keep the daemon
 running until "tdrive mount stop" has completed.
@@ -375,7 +377,7 @@ Show the pinned drive and its safe OS location.
 	"mount stop": `
 tdrive mount stop
 
-Disconnect the OS drive, then stop the private read-only server.
+Finish in-flight commits, disconnect the OS drive, then stop the private server.
 `,
 	"put": `
 tdrive put [-e|--encrypt] [--extract] <local> [remote-path]

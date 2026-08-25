@@ -16,6 +16,7 @@ func TestParseMountStartArgs(t *testing.T) {
 		args         []string
 		wantSelector string
 		wantDrive    string
+		wantMode     string
 		wantErr      bool
 	}{
 		{name: "server applies default", wantDrive: ""},
@@ -26,10 +27,11 @@ func TestParseMountStartArgs(t *testing.T) {
 			wantDrive:    "Q:",
 		},
 		{
-			name:         "options can be reordered",
-			args:         []string{"--windows-drive", "s:", "--drive", "42"},
+			name:         "options can be reordered with read-only override",
+			args:         []string{"--windows-drive", "s:", "--read-only", "--drive", "42"},
 			wantSelector: "42",
 			wantDrive:    "S:",
+			wantMode:     "read-only",
 		},
 		{name: "missing selected drive", args: []string{"--drive"}, wantErr: true},
 		{name: "missing Windows letter", args: []string{"--windows-drive"}, wantErr: true},
@@ -42,7 +44,7 @@ func TestParseMountStartArgs(t *testing.T) {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			selector, drive, err := parseMountStartArgs(test.args)
+			selector, drive, mode, err := parseMountStartArgs(test.args)
 			if test.wantErr {
 				if err == nil {
 					t.Fatalf("parseMountStartArgs(%q) error = nil", test.args)
@@ -52,14 +54,16 @@ func TestParseMountStartArgs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseMountStartArgs(%q): %v", test.args, err)
 			}
-			if selector != test.wantSelector || drive != test.wantDrive {
+			if selector != test.wantSelector || drive != test.wantDrive || mode != test.wantMode {
 				t.Fatalf(
-					"parseMountStartArgs(%q) = (%q, %q), want (%q, %q)",
+					"parseMountStartArgs(%q) = (%q, %q, %q), want (%q, %q, %q)",
 					test.args,
 					selector,
 					drive,
+					mode,
 					test.wantSelector,
 					test.wantDrive,
+					test.wantMode,
 				)
 			}
 		})
@@ -169,5 +173,50 @@ func TestPrintMountResponseReportsLifecycleWithoutCallingItStopped(t *testing.T)
 	}
 	if strings.Contains(text, secret) || strings.Contains(text, "127.0.0.1") || strings.Contains(text, "tdrive-") {
 		t.Fatalf("stale mount output leaked capability: %q", text)
+	}
+}
+
+func TestPrintMountResponseReportsWritableDrainHonestly(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	printMountResponse(&output, daemon.MountResponse{
+		Running:      true,
+		Mounted:      true,
+		Phase:        "draining",
+		Mode:         "read-write",
+		WriteState:   "draining",
+		ActiveWrites: 2,
+		Label:        "Tdrive personal",
+	})
+	got := output.String()
+	if !strings.Contains(got, "mount: finishing 2 active writes before ejecting Tdrive personal") {
+		t.Fatalf("draining output = %q", got)
+	}
+	if strings.Contains(got, "stopped") || strings.Contains(got, "read-only") {
+		t.Fatalf("draining output was misleading: %q", got)
+	}
+}
+
+func TestPrintMountResponseReportsPausedWritesAfterFailedDrain(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	printMountResponse(&output, daemon.MountResponse{
+		Running:         true,
+		Mounted:         true,
+		Phase:           "failed",
+		Mode:            "read-write",
+		WriteState:      "draining",
+		AcceptingWrites: false,
+		Label:           "Tdrive personal",
+		Error:           "TDrive could not finish pending changes; the drive remains mounted",
+	})
+	got := output.String()
+	if !strings.Contains(got, "writes: paused") {
+		t.Fatalf("failed drain output = %q", got)
+	}
+	if strings.Contains(got, "writes: ready") {
+		t.Fatalf("failed drain output was misleading: %q", got)
 	}
 }

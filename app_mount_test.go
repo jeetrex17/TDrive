@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"TDrive/backend/mountcontroller"
+	"TDrive/backend/projection"
 )
 
 func TestAppMountDrivePinsResolvedActiveDrive(t *testing.T) {
@@ -15,16 +16,18 @@ func TestAppMountDrivePinsResolvedActiveDrive(t *testing.T) {
 
 	controller := &fakeAppMountController{
 		startStatus: mountcontroller.Status{
-			Phase:        mountcontroller.PhaseMounted,
-			Running:      true,
-			Mounted:      true,
-			DriveID:      42,
-			DriveTitle:   "My Drive",
-			DriveKind:    mountcontroller.DriveKindPersonal,
-			Label:        "Tdrive personal",
-			Location:     "/safe/mount",
-			Mode:         "read-only",
-			WindowsDrive: "T:",
+			Phase:           mountcontroller.PhaseMounted,
+			Running:         true,
+			Mounted:         true,
+			DriveID:         42,
+			DriveTitle:      "My Drive",
+			DriveKind:       mountcontroller.DriveKindPersonal,
+			Label:           "Tdrive personal",
+			Location:        "/safe/mount",
+			Mode:            mountcontroller.ModeReadWrite,
+			WriteState:      mountcontroller.WriteStateReady,
+			AcceptingWrites: true,
+			WindowsDrive:    "T:",
 		},
 	}
 	app := &App{
@@ -46,11 +49,17 @@ func TestAppMountDrivePinsResolvedActiveDrive(t *testing.T) {
 	if controller.startCalls != 1 || controller.startedDrive.ID != 42 {
 		t.Fatalf("controller start = calls:%d drive:%#v", controller.startCalls, controller.startedDrive)
 	}
+	if controller.startOptions.Mode != mountcontroller.ModeAuto {
+		t.Fatalf("default app mount mode = %q, want auto", controller.startOptions.Mode)
+	}
 	if view.Phase != "mounted" || !view.Mounted || view.Label != "Tdrive personal" || view.Location != "/safe/mount" {
 		t.Fatalf("MountDrive() = %#v", view)
 	}
 	if view.Drive.ID != 42 || view.Drive.Kind != mountcontroller.DriveKindPersonal {
 		t.Fatalf("MountDrive().Drive = %#v", view.Drive)
+	}
+	if view.Mode != "read-write" || view.WriteState != "ready" || !view.AcceptingWrites {
+		t.Fatalf("MountDrive() writable state = %#v", view)
 	}
 
 	payload, err := json.Marshal(view)
@@ -61,6 +70,56 @@ func TestAppMountDrivePinsResolvedActiveDrive(t *testing.T) {
 		if strings.Contains(strings.ToLower(string(payload)), forbidden) {
 			t.Fatalf("MountView leaked %q: %s", forbidden, payload)
 		}
+	}
+}
+
+func TestAppMountDriveReadOnlyIsExplicitFallback(t *testing.T) {
+	t.Parallel()
+
+	controller := &fakeAppMountController{startStatus: mountcontroller.Status{
+		Phase:      mountcontroller.PhaseMounted,
+		Mounted:    true,
+		Mode:       mountcontroller.ModeReadOnly,
+		WriteState: mountcontroller.WriteStateDisabled,
+	}}
+	app := &App{
+		ctx:             context.Background(),
+		mountController: controller,
+		mountDriveResolver: func() (mountcontroller.Drive, error) {
+			return mountcontroller.Drive{ID: 42, Title: "My Drive", Kind: mountcontroller.DriveKindPersonal}, nil
+		},
+	}
+
+	view, err := app.MountDriveReadOnly()
+	if err != nil || view.Mode != "read-only" {
+		t.Fatalf("MountDriveReadOnly() = (%#v, %v)", view, err)
+	}
+	if controller.startOptions.Mode != mountcontroller.ModeReadOnly {
+		t.Fatalf("read-only app mode = %q", controller.startOptions.Mode)
+	}
+}
+
+func TestResolveActiveMountDrivePropagatesEncryptedEligibility(t *testing.T) {
+	app, db := setupEncryptionApp(t)
+	t.Cleanup(app.engine.Close)
+	app.engine.SetActiveChannelID(testEncryptionChannelID)
+	if err := projection.PutEncryptionConfig(db, projection.EncryptionConfig{
+		ChannelID:        testEncryptionChannelID,
+		Enabled:          true,
+		KDFSalt:          []byte("salt"),
+		KDFParamsJSON:    `{}`,
+		WrappedMasterKey: []byte("wrapped"),
+		KeyCheck:         []byte("check"),
+	}); err != nil {
+		t.Fatalf("seed encryption config: %v", err)
+	}
+
+	drive, err := app.resolveActiveMountDrive()
+	if err != nil {
+		t.Fatalf("resolveActiveMountDrive() error = %v", err)
+	}
+	if !drive.Encrypted {
+		t.Fatalf("resolveActiveMountDrive() = %#v, want encrypted eligibility", drive)
 	}
 }
 
@@ -135,15 +194,17 @@ type fakeAppMountController struct {
 	stopErr      error
 	closeErr     error
 	startedDrive mountcontroller.Drive
+	startOptions mountcontroller.StartOptions
 	startCalls   int
 	openCalls    int
 	stopCalls    int
 	closeCalls   int
 }
 
-func (fake *fakeAppMountController) Start(_ context.Context, drive mountcontroller.Drive, _ mountcontroller.StartOptions) (mountcontroller.Status, error) {
+func (fake *fakeAppMountController) Start(_ context.Context, drive mountcontroller.Drive, options mountcontroller.StartOptions) (mountcontroller.Status, error) {
 	fake.startCalls++
 	fake.startedDrive = drive
+	fake.startOptions = options
 	return fake.startStatus, fake.startErr
 }
 

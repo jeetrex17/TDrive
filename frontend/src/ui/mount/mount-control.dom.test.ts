@@ -22,6 +22,9 @@ function status(overrides: Partial<MountStatusView> = {}): MountStatusView {
         phase: 'idle',
         mounted: false,
         mode: 'read-only',
+        writeState: 'disabled',
+        acceptingWrites: false,
+        activeWrites: 0,
         label: 'Tdrive personal',
         location: '',
         error: '',
@@ -31,13 +34,23 @@ function status(overrides: Partial<MountStatusView> = {}): MountStatusView {
     };
 }
 
-function mountedStatus(): MountStatusView {
+function mountedStatus(overrides: Partial<MountStatusView> = {}): MountStatusView {
     return status({
         phase: 'mounted',
         mounted: true,
         label: 'Tdrive personal',
         location: '/Volumes/Tdrive personal',
         drive: { id: 42, title: 'Personal', kind: 'personal' },
+        ...overrides,
+    });
+}
+
+function writableMountedStatus(overrides: Partial<MountStatusView> = {}): MountStatusView {
+    return mountedStatus({
+        mode: 'read-write',
+        writeState: 'ready',
+        acceptingWrites: true,
+        ...overrides,
     });
 }
 
@@ -65,6 +78,52 @@ afterEach(async () => {
 });
 
 describe('MountControl', () => {
+    it('reports a drained writable mount as paused after eject fails', async () => {
+        const api: MountApi = {
+            mountDrive: vi.fn(async () => writableMountedStatus()),
+            mountStatus: vi.fn(async () => writableMountedStatus()),
+            openMountedDrive: vi.fn(async () => undefined),
+            unmountDrive: vi.fn(async () => {
+                throw new Error('pending commits could not finish');
+            }),
+        };
+        const controller = createMountController(api);
+        host = document.createElement('div');
+        document.body.appendChild(host);
+        component = mount(MountControl, { target: host, props: { controller, mode: 'menu' } });
+        await settle();
+
+        click('#disconnect-mounted-drive-button');
+        await settle();
+
+        expect(host.textContent).toContain('Writes paused');
+        const eject = host.querySelector<HTMLButtonElement>('#disconnect-mounted-drive-button');
+        expect(eject?.textContent).toContain('Eject Tdrive');
+        expect(eject?.textContent).not.toContain('Retry');
+    });
+
+    it('shows the actual writable mode and active-write drain state', async () => {
+        const pending = deferred<MountStatusView>();
+        const api: MountApi = {
+            mountDrive: vi.fn(async () => writableMountedStatus({ activeWrites: 2 })),
+            mountStatus: vi.fn(async () => writableMountedStatus({ activeWrites: 2 })),
+            openMountedDrive: vi.fn(async () => undefined),
+            unmountDrive: vi.fn(() => pending.promise),
+        };
+        const controller = createMountController(api);
+        host = document.createElement('div');
+        document.body.appendChild(host);
+        component = mount(MountControl, { target: host, props: { controller, mode: 'menu' } });
+        await settle();
+
+        expect(host.textContent).toContain('Read/write');
+        click('#disconnect-mounted-drive-button');
+        await settle();
+        expect(host.textContent).toContain('Finishing 2 changes...');
+
+        pending.resolve(status());
+        await settle();
+    });
     it('renders a full-width menu item with accessible menu semantics', async () => {
         const api: MountApi = {
             mountDrive: vi.fn(async () => mountedStatus()),

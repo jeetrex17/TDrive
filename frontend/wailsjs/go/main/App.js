@@ -166,6 +166,10 @@ export function MountDrive() {
   return window['go']['main']['App']['MountDrive']();
 }
 
+export function MountDriveReadOnly() {
+  return window['go']['main']['App']['MountDriveReadOnly']();
+}
+
 export function MountStatus() {
   return window['go']['main']['App']['MountStatus']();
 }

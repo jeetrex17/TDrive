@@ -1,6 +1,6 @@
-// Package mountcontroller owns the transactional lifecycle of one read-only
-// desktop mount. It keeps the capability-bearing WebDAV endpoint inside the Go
-// backend and exposes only safe, OS-facing mount status.
+// Package mountcontroller owns the transactional lifecycle of one desktop
+// mount. It keeps the capability-bearing WebDAV endpoint inside the Go backend
+// and exposes only safe, OS-facing mount status.
 package mountcontroller
 
 import (
@@ -22,13 +22,39 @@ const (
 	PhasePreparing Phase = "preparing"
 	PhaseAttaching Phase = "attaching"
 	PhaseMounted   Phase = "mounted"
+	PhaseDraining  Phase = "draining"
 	PhaseDetaching Phase = "detaching"
 	PhaseFailed    Phase = "failed"
 )
 
 const (
-	readOnlyMode        = "read-only"
 	defaultWindowsDrive = "T:"
+)
+
+// Mode controls the mount's externally observable access contract. An empty
+// requested mode means automatic selection; status never returns an empty mode
+// for a running mount.
+type Mode string
+
+const (
+	ModeAuto      Mode = ""
+	ModeReadOnly  Mode = "read-only"
+	ModeReadWrite Mode = "read-write"
+
+	readOnlyMode = ModeReadOnly
+)
+
+// WriteState refines Mode while a writable session is starting or draining.
+// It prevents a writable OS attachment that no longer accepts new mutations
+// from being reported as ready.
+type WriteState string
+
+const (
+	WriteStateDisabled WriteState = "disabled"
+	WriteStateStarting WriteState = "starting"
+	WriteStateReady    WriteState = "ready"
+	WriteStateDraining WriteState = "draining"
+	WriteStateDrained  WriteState = "drained"
 )
 
 var (
@@ -36,6 +62,8 @@ var (
 	ErrInvalidContext       = errors.New("mount controller: context is required")
 	ErrInvalidDrive         = errors.New("mount controller: invalid drive")
 	ErrInvalidWindowsDrive  = errors.New("mount controller: invalid Windows drive")
+	ErrInvalidMode          = errors.New("mount controller: invalid access mode")
+	ErrWritableUnavailable  = errors.New("mount controller: writable mount is unavailable")
 	ErrConflict             = errors.New("mount controller: conflicting mount")
 	ErrNotMounted           = errors.New("mount controller: drive is not mounted")
 	ErrStartFailed          = errors.New("mount controller: start failed")
@@ -55,28 +83,37 @@ type Drive struct {
 	ID    int64  `json:"id"`
 	Title string `json:"title"`
 	Kind  string `json:"kind"`
+	// Encrypted is true when the personal drive has encryption configured.
+	// Writable mounts currently support plaintext drive content only.
+	Encrypted bool `json:"encrypted,omitempty"`
 }
 
-// StartOptions contains the only platform-specific user choice in v1.
+// StartOptions contains safe mount choices. ModeAuto selects writable only
+// when a complete writer is supplied for an eligible personal plaintext drive.
 type StartOptions struct {
 	WindowsDrive string `json:"windows_drive,omitempty"`
+	Mode         Mode   `json:"mode,omitempty"`
 }
 
 // Status is safe to return through daemon IPC or Wails. It deliberately has
 // no endpoint URL, capability token, command line, or opaque attachment data.
 type Status struct {
-	Phase          Phase  `json:"phase"`
-	Running        bool   `json:"running"`
-	Mounted        bool   `json:"mounted"`
-	DriveID        int64  `json:"drive_id,omitempty"`
-	DriveTitle     string `json:"drive_title,omitempty"`
-	DriveKind      string `json:"drive_kind,omitempty"`
-	Label          string `json:"label,omitempty"`
-	Location       string `json:"location,omitempty"`
-	AttachmentKind string `json:"attachment_kind,omitempty"`
-	Mode           string `json:"mode,omitempty"`
-	WindowsDrive   string `json:"windows_drive,omitempty"`
-	Error          string `json:"error,omitempty"`
+	Phase           Phase      `json:"phase"`
+	Running         bool       `json:"running"`
+	Mounted         bool       `json:"mounted"`
+	DriveID         int64      `json:"drive_id,omitempty"`
+	DriveTitle      string     `json:"drive_title,omitempty"`
+	DriveKind       string     `json:"drive_kind,omitempty"`
+	DriveEncrypted  bool       `json:"drive_encrypted,omitempty"`
+	Label           string     `json:"label,omitempty"`
+	Location        string     `json:"location,omitempty"`
+	AttachmentKind  string     `json:"attachment_kind,omitempty"`
+	Mode            Mode       `json:"mode,omitempty"`
+	WriteState      WriteState `json:"write_state,omitempty"`
+	AcceptingWrites bool       `json:"accepting_writes,omitempty"`
+	ActiveWrites    int        `json:"active_writes,omitempty"`
+	WindowsDrive    string     `json:"windows_drive,omitempty"`
+	Error           string     `json:"error,omitempty"`
 }
 
 // ConflictError reports the safe identity fields that disagree with the
@@ -86,6 +123,8 @@ type ConflictError struct {
 	RequestedDriveID      int64
 	ActiveWindowsDrive    string
 	RequestedWindowsDrive string
+	ActiveMode            Mode
+	RequestedMode         Mode
 }
 
 func (err *ConflictError) Error() string {
@@ -98,6 +137,15 @@ func (err *ConflictError) Error() string {
 			ErrConflict,
 			err.ActiveDriveID,
 			err.RequestedDriveID,
+		)
+	}
+	if err.ActiveMode != err.RequestedMode {
+		return fmt.Sprintf(
+			"%s: drive %d is mounted %s; stop it before changing to %s",
+			ErrConflict,
+			err.ActiveDriveID,
+			err.ActiveMode,
+			err.RequestedMode,
 		)
 	}
 	return fmt.Sprintf(
@@ -130,6 +178,8 @@ type EndpointConfig struct {
 	DriveID      int64
 	DriveTitle   string
 	WindowsDrive string
+	Mode         Mode
+	Writer       WriteSession
 }
 
 // EndpointStatus contains the capability URL only long enough to hand it to
@@ -156,9 +206,32 @@ type Endpoint interface {
 // while the remaining zero fields retain mountfs production defaults.
 type Dependencies struct {
 	Filesystems     FilesystemBuilder
+	Writers         WriterBuilder
 	Endpoint        Endpoint
 	Connector       mountos.Connector
 	SnapshotOptions mountfs.Options
+}
+
+// WriteStatus is a cheap, capability-free snapshot used during eject. Active
+// is informational and must never include operation IDs or paths.
+type WriteStatus struct {
+	Accepting bool
+	Active    int
+}
+
+// WriteSession is the lifecycle surface needed by the mount controller. The
+// production endpoint additionally validates that it implements the complete
+// WebDAV write-coordinator interface before enabling write methods.
+type WriteSession interface {
+	WriteStatus() WriteStatus
+	Drain(context.Context) error
+	Close(context.Context) error
+}
+
+// WriterBuilder creates one non-reusable writer per mounted drive. A drained
+// writer is never reused on a later mount.
+type WriterBuilder interface {
+	Build(context.Context, Drive, *mountfs.FS) (WriteSession, error)
 }
 
 type operationError struct {

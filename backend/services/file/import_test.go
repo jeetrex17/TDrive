@@ -271,7 +271,7 @@ func TestRunImportSkipsOversize(t *testing.T) {
 	hardCap := int64(5) * int64(MaxParts)
 
 	root := filepath.Join(t.TempDir(), "Mix")
-	mkfile(t, filepath.Join(root, "small.txt"), "hello")                           // 5 bytes: single upload
+	mkfile(t, filepath.Join(root, "small.txt"), "hello")                            // 5 bytes: single upload
 	mkfile(t, filepath.Join(root, "big.txt"), strings.Repeat("x", int(hardCap)+50)) // over the hard cap: skipped
 
 	if err := svc.RunImport(context.Background(), personalChannelID, []string{root}, "", false, false); err != nil {

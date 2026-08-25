@@ -20,6 +20,16 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := rebuildProjectionTx(tx, channelID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("projection: rebuild commit: %w", err)
+	}
+	return nil
+}
+
+func rebuildProjectionTx(tx *sql.Tx, channelID int64) error {
 	if _, err := tx.Exec(`DELETE FROM files WHERE channel_id = ?`, channelID); err != nil {
 		return fmt.Errorf("projection: rebuild clear files: %w", err)
 	}
@@ -34,6 +44,16 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 	}
 	if _, err := tx.Exec(`DELETE FROM replay_log_rejects WHERE channel_id = ?`, channelID); err != nil {
 		return fmt.Errorf("projection: rebuild clear replay_log_rejects: %w", err)
+	}
+	for table, label := range map[string]string{
+		"dirents":               "dirents",
+		"file_revisions":        "file revisions",
+		"projection_operations": "projection operations",
+		"trash_entries":         "trash entries",
+	} {
+		if _, err := tx.Exec(`DELETE FROM `+table+` WHERE channel_id = ?`, channelID); err != nil {
+			return fmt.Errorf("projection: rebuild clear %s: %w", label, err)
+		}
 	}
 
 	rows, err := tx.Query(`
@@ -71,6 +91,9 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 		}
 		if err := ApplyOp(tx, channelID, r.msgID, op, r.actorUserID); err != nil {
 			if isSkippableApplyError(err) {
+				if recErr := recordProjectionOperationTx(tx, channelID, r.msgID, op, OperationRejected, err); recErr != nil {
+					return recErr
+				}
 				if recErr := recordReject(tx, channelID, r.msgID, err); recErr != nil {
 					return recErr
 				}
@@ -78,10 +101,6 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 			}
 			return fmt.Errorf("projection: rebuild apply msg=%d: %w", r.msgID, err)
 		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("projection: rebuild commit: %w", err)
 	}
 	return nil
 }

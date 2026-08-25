@@ -46,7 +46,11 @@ func (r *Resolver) Resolve(ctx context.Context, channelID, fileID int64) (Logica
 	}
 
 	if row.uploadUUID == "" {
-		out.Segments = []Segment{{MsgID: fileID, Size: row.size}}
+		msgID := row.contentMsgID
+		if msgID <= 0 {
+			msgID = fileID
+		}
+		out.Segments = []Segment{{MsgID: msgID, Size: row.size}}
 		return out, nil
 	}
 
@@ -75,6 +79,7 @@ type fileRow struct {
 	encrypted         bool
 	plaintextSize     int64
 	encryptionVersion int
+	contentMsgID      int64
 	uploadUUID        string
 }
 
@@ -82,7 +87,7 @@ func (r *Resolver) lookupFile(ctx context.Context, channelID, fileID int64) (fil
 	var row fileRow
 	var encrypted int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT name, size, encrypted, plaintext_size, encryption_version, upload_uuid
+		SELECT name, size, encrypted, plaintext_size, encryption_version, content_msg_id, upload_uuid
 		FROM files
 		WHERE channel_id = ? AND msg_id = ? AND tombstoned = 0
 	`, channelID, fileID).Scan(
@@ -91,6 +96,7 @@ func (r *Resolver) lookupFile(ctx context.Context, channelID, fileID int64) (fil
 		&encrypted,
 		&row.plaintextSize,
 		&row.encryptionVersion,
+		&row.contentMsgID,
 		&row.uploadUUID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {

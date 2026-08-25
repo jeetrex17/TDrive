@@ -144,6 +144,27 @@ func (fs *FS) Open(ctx context.Context, path string) (*File, error) {
 	return &File{entry: entry.entry, content: content}, nil
 }
 
+// InvalidateDirectories evicts snapshots for mutated parent directories.
+// Passing both the source and destination parent after a move makes the
+// committed namespace visible immediately without flushing unrelated cache
+// entries. Duplicate IDs are harmless.
+func (fs *FS) InvalidateDirectories(parentIDs ...string) {
+	if fs == nil || fs.cache == nil {
+		return
+	}
+	fs.cache.invalidateDirectories(parentIDs...)
+}
+
+// InvalidateSubtree evicts a directory snapshot and all of its descendants
+// that are currently discoverable in the bounded cache. Callers should also
+// invalidate the directory's parent when its name or membership changed.
+func (fs *FS) InvalidateSubtree(rootID string) {
+	if fs == nil || fs.cache == nil {
+		return
+	}
+	fs.cache.invalidateSubtree(rootID)
+}
+
 func (fs *FS) ready(ctx context.Context) error {
 	if fs == nil || fs.source == nil || fs.opener == nil || fs.channelID <= 0 {
 		return ErrInvalidConfiguration
@@ -181,7 +202,7 @@ func (fs *FS) resolve(ctx context.Context, value string) (snapshotEntry, error) 
 		if err != nil {
 			return snapshotEntry{}, err
 		}
-		childIndex, ok := snapshot.byName[nameKey(part)]
+		childIndex, ok := snapshot.byName[NameKey(part)]
 		if !ok {
 			return snapshotEntry{}, ErrNotFound
 		}

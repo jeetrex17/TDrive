@@ -126,6 +126,63 @@ func TestDarwinAttachConfirmOpenAndDetach(t *testing.T) {
 	}
 }
 
+func TestDarwinWritableAttachConfirmsWritableMount(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingRunner{}
+	probe := &sequenceProbe{results: []probeResult{
+		{mounted: true, readOnly: false},
+		{mounted: true, readOnly: false},
+		{mounted: true, readOnly: false},
+		{mounted: false},
+	}}
+	connector := newTestDarwinConnector(t.TempDir(), runner, probe)
+
+	attachment, err := connector.Attach(context.Background(), Config{
+		Endpoint: testEndpoint,
+		Label:    "Tdrive personal",
+		Mode:     ModeReadWrite,
+	})
+	if err != nil {
+		t.Fatalf("Attach(writable) error = %v", err)
+	}
+	if err := connector.Open(context.Background(), attachment); err != nil {
+		t.Fatalf("Open(writable) error = %v", err)
+	}
+	if err := connector.Detach(context.Background(), attachment); err != nil {
+		t.Fatalf("Detach(writable) error = %v", err)
+	}
+
+	plans := runner.snapshot()
+	if len(plans) != 3 {
+		t.Fatalf("commands = %#v; want attach, open, detach", plans)
+	}
+	options := strings.Join(plans[0].Args, "\x00")
+	if strings.Contains(options, "rdonly") || !strings.Contains(options, "noexec,nosuid,nodev") {
+		t.Fatalf("writable attach arguments = %#v", plans[0].Args)
+	}
+}
+
+func TestDarwinWritableAttachRejectsReadOnlyVerification(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingRunner{}
+	probe := &sequenceProbe{results: []probeResult{
+		{mounted: true, readOnly: true},
+		{mounted: true, readOnly: true},
+	}}
+	connector := newTestDarwinConnector(t.TempDir(), runner, probe)
+
+	_, err := connector.Attach(context.Background(), Config{
+		Endpoint: testEndpoint,
+		Label:    "Tdrive personal",
+		Mode:     ModeReadWrite,
+	})
+	if !errors.Is(err, ErrVerificationFailed) {
+		t.Fatalf("Attach(writable verified read-only) error = %v, want ErrVerificationFailed", err)
+	}
+}
+
 func TestDarwinAttachOpenAndDetachAcceptVerifiedLegacySourceTruncation(t *testing.T) {
 	t.Parallel()
 

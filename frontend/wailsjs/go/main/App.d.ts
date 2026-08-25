@@ -88,6 +88,8 @@ export function Me():Promise<main.SelfUser>;
 
 export function MountDrive():Promise<main.MountView>;
 
+export function MountDriveReadOnly():Promise<main.MountView>;
+
 export function MountStatus():Promise<main.MountView>;
 
 export function MoveFile(arg1:number,arg2:string):Promise<string>;

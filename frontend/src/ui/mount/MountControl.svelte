@@ -27,8 +27,23 @@
     const mountedTitle = $derived(
         $controller.location
             ? `${$controller.label} - ${$controller.location}`
-            : `${$controller.label} - read only`,
+            : `${$controller.label} - ${$controller.mode}`,
     );
+    const modeLabel = $derived.by(() => {
+        if ($controller.mode === 'read-only') return 'Read only';
+        if ($controller.writeState === 'ready' && $controller.acceptingWrites) return 'Read/write';
+        if ($controller.writeState === 'draining' || $controller.writeState === 'drained') return 'Writes paused';
+        return 'Preparing writes';
+    });
+    const ejectLabel = $derived.by(() => {
+        if ($controller.phase !== 'disconnecting') return 'Eject Tdrive';
+        if ($controller.mode === 'read-write' && $controller.writeState === 'draining') {
+            if ($controller.activeWrites === 1) return 'Finishing 1 change...';
+            if ($controller.activeWrites > 1) return `Finishing ${$controller.activeWrites} changes...`;
+            return 'Finishing changes...';
+        }
+        return 'Ejecting Tdrive...';
+    });
 </script>
 
 <div
@@ -54,7 +69,12 @@
                 }}
             >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h8m-4-4l4 4-4 4"/><path stroke-linecap="round" stroke-linejoin="round" d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
-                <span>{$controller.phase === 'disconnecting' ? 'Ejecting Tdrive...' : 'Eject Tdrive'}</span>
+                <span class="mount-menu-copy">
+                    <span>{ejectLabel}</span>
+                    {#if $controller.mode === 'read-write' && $controller.phase !== 'disconnecting'}
+                        <span class="mount-mode-label">{modeLabel}</span>
+                    {/if}
+                </span>
                 {#if $controller.phase === 'disconnecting'}
                     <span class="mount-menu-spinner" aria-hidden="true"></span>
                 {/if}
@@ -87,7 +107,7 @@
             <span class="mounted-label" title={mountedTitle}>
                 <span class="mounted-dot" aria-hidden="true"></span>
                 <span>{$controller.label}</span>
-                <span class="read-only-label">Read only</span>
+                <span class="mount-mode-label">{modeLabel}</span>
             </span>
             <Button
                 id="disconnect-mounted-drive-button"
@@ -97,7 +117,7 @@
                 aria-label="Eject Tdrive"
                 onclick={() => void controller.disconnect()}
             >
-                {$controller.phase === 'disconnecting' ? 'Ejecting Tdrive...' : 'Eject Tdrive'}
+                {ejectLabel}
             </Button>
         </div>
     {:else}
@@ -151,6 +171,14 @@
         min-width: 0;
     }
 
+    .mount-menu-copy {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
     .mount-menu-title {
         flex: 1;
     }
@@ -199,7 +227,7 @@
         box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
     }
 
-    .read-only-label {
+    .mount-mode-label {
         color: var(--text-muted);
         font-size: 0.66rem;
         font-weight: 700;
@@ -220,7 +248,7 @@
     }
 
     @media (max-width: 1120px) {
-        .read-only-label {
+        .mount-mode-label {
             display: none;
         }
 

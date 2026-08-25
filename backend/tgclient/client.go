@@ -192,3 +192,33 @@ type Client interface {
 	// Close releases the shared connection. Called once at app shutdown.
 	Close()
 }
+
+// IdempotentSender is the write extension used by durable mutation journals.
+// Retrying a call with the same positive randomID returns the original Telegram
+// message instead of creating a duplicate.
+type IdempotentSender interface {
+	SendControlWithRandomID(ctx context.Context, peer InputPeer, text string, silent bool, randomID int64) (msgID int64, err error)
+	SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), randomID int64) (SendFileResult, error)
+}
+
+func SendControlIdempotent(ctx context.Context, client Client, peer InputPeer, text string, silent bool, randomID int64) (int64, error) {
+	if randomID <= 0 {
+		return 0, fmt.Errorf("tgclient: random id must be positive")
+	}
+	sender, ok := client.(IdempotentSender)
+	if !ok {
+		return 0, fmt.Errorf("tgclient: idempotent sends are not supported")
+	}
+	return sender.SendControlWithRandomID(ctx, peer, text, silent, randomID)
+}
+
+func SendFileIdempotent(ctx context.Context, client Client, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), randomID int64) (SendFileResult, error) {
+	if randomID <= 0 {
+		return SendFileResult{}, fmt.Errorf("tgclient: random id must be positive")
+	}
+	sender, ok := client.(IdempotentSender)
+	if !ok {
+		return SendFileResult{}, fmt.Errorf("tgclient: idempotent sends are not supported")
+	}
+	return sender.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID)
+}

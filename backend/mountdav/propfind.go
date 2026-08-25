@@ -16,10 +16,28 @@ const webDAVNamespace = "DAV:"
 // Windows extension, the requested collection response. The pipe provides
 // bounded-memory streaming and backpressure for large directories.
 func serveReadOnlyPropfind(response http.ResponseWriter, request *http.Request, next http.Handler, omitRootHref string) {
+	serveFilteredPropfind(response, request, next, omitRootHref, true)
+}
+
+func serveWritablePropfind(response http.ResponseWriter, request *http.Request, next http.Handler, omitRootHref string) {
+	if omitRootHref == "" {
+		next.ServeHTTP(response, request)
+		return
+	}
+	serveFilteredPropfind(response, request, next, omitRootHref, false)
+}
+
+func serveFilteredPropfind(
+	response http.ResponseWriter,
+	request *http.Request,
+	next http.Handler,
+	omitRootHref string,
+	stripSupportedLock bool,
+) {
 	reader, writer := io.Pipe()
 	filterDone := make(chan error, 1)
 	go func() {
-		err := filterPropfindDocument(response, reader, omitRootHref)
+		err := filterPropfindDocumentMode(response, reader, omitRootHref, stripSupportedLock)
 		_ = reader.CloseWithError(err)
 		filterDone <- err
 	}()
@@ -63,6 +81,10 @@ func (response *filterResponseWriter) Write(body []byte) (int, error) {
 }
 
 func filterPropfindDocument(destination io.Writer, source io.Reader, omitRootHref string) error {
+	return filterPropfindDocumentMode(destination, source, omitRootHref, true)
+}
+
+func filterPropfindDocumentMode(destination io.Writer, source io.Reader, omitRootHref string, stripSupportedLock bool) error {
 	decoder := xml.NewDecoder(source)
 	encoder := xml.NewEncoder(destination)
 	stack := make([]xml.Name, 0, 8)
@@ -90,7 +112,7 @@ func filterPropfindDocument(destination io.Writer, source io.Reader, omitRootHre
 				}
 				continue
 			}
-			if isDAVElement(token.Name, "supportedlock") {
+			if stripSupportedLock && isDAVElement(token.Name, "supportedlock") {
 				if err := encoder.EncodeToken(token); err != nil {
 					return err
 				}

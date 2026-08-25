@@ -50,6 +50,7 @@ func (source directorySource) ListDirectory(ctx context.Context, channelID int64
 			ParentID: parentID,
 			Name:     folder.Name,
 			Kind:     mountfs.KindDirectory,
+			Revision: folder.Revision,
 		})
 	}
 	for _, file := range contents.Files {
@@ -69,14 +70,18 @@ func (source directorySource) ListDirectory(ctx context.Context, channelID int64
 		}
 		messageID := strconv.FormatInt(file.MsgID, 10)
 		entries = append(entries, mountfs.SourceEntry{
-			ID:         "f:" + messageID,
-			ParentID:   parentID,
-			Name:       file.Name,
-			Kind:       mountfs.KindFile,
-			Size:       logicalSize,
-			ModTime:    modTime,
-			Encrypted:  file.Encrypted,
-			ContentRef: messageID,
+			ID:          "f:" + messageID,
+			ParentID:    parentID,
+			Name:        file.Name,
+			Kind:        mountfs.KindFile,
+			Size:        logicalSize,
+			ModTime:     modTime,
+			Encrypted:   file.Encrypted,
+			ContentRef:  messageID,
+			ContentHash: file.ContentHash,
+			Revision:    file.Revision,
+			UploadUUID:  file.UploadUUID,
+			PartCount:   file.PartCount,
 		})
 	}
 	return entries, nil

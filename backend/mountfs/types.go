@@ -23,30 +23,38 @@ const (
 // ContentRef is opaque to mountfs and may identify a Telegram message,
 // multipart manifest, or another content revision understood by ContentOpener.
 type SourceEntry struct {
-	ID         string
-	ParentID   string
-	Name       string
-	Kind       Kind
-	Size       int64
-	ModTime    time.Time
-	Encrypted  bool
-	ContentRef string
+	ID          string
+	ParentID    string
+	Name        string
+	Kind        Kind
+	Size        int64
+	ModTime     time.Time
+	Encrypted   bool
+	ContentRef  string
+	ContentHash string
+	Revision    int64
+	UploadUUID  string
+	PartCount   int
 }
 
 // Entry is the portable metadata exposed to filesystem adapters. Name is the
 // exported, collision-free component; SourceName preserves projection data for
 // diagnostics and future platform metadata.
 type Entry struct {
-	ChannelID  int64
-	ID         string
-	ParentID   string
-	Name       string
-	SourceName string
-	Kind       Kind
-	Size       int64
-	ModTime    time.Time
-	Encrypted  bool
-	ContentRef string
+	ChannelID   int64
+	ID          string
+	ParentID    string
+	Name        string
+	SourceName  string
+	Kind        Kind
+	Size        int64
+	ModTime     time.Time
+	Encrypted   bool
+	ContentRef  string
+	ContentHash string
+	Revision    int64
+	UploadUUID  string
+	PartCount   int
 }
 
 // DirectorySource lists the direct children of one projected directory.

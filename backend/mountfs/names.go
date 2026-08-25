@@ -48,19 +48,23 @@ func buildDirectorySnapshot(channelID int64, parentID string, sourceEntries []So
 
 		base := portableName(sourceEntry.Name)
 		bases[index] = base
-		baseGroups[nameKey(base)] = append(baseGroups[nameKey(base)], index)
+		baseGroups[NameKey(base)] = append(baseGroups[NameKey(base)], index)
 		entries[index] = snapshotEntry{
 			source: sourceEntry,
 			entry: Entry{
-				ChannelID:  channelID,
-				ID:         sourceEntry.ID,
-				ParentID:   sourceEntry.ParentID,
-				SourceName: sourceEntry.Name,
-				Kind:       sourceEntry.Kind,
-				Size:       sourceEntry.Size,
-				ModTime:    sourceEntry.ModTime,
-				Encrypted:  sourceEntry.Encrypted,
-				ContentRef: sourceEntry.ContentRef,
+				ChannelID:   channelID,
+				ID:          sourceEntry.ID,
+				ParentID:    sourceEntry.ParentID,
+				SourceName:  sourceEntry.Name,
+				Kind:        sourceEntry.Kind,
+				Size:        sourceEntry.Size,
+				ModTime:     sourceEntry.ModTime,
+				Encrypted:   sourceEntry.Encrypted,
+				ContentRef:  sourceEntry.ContentRef,
+				ContentHash: sourceEntry.ContentHash,
+				Revision:    sourceEntry.Revision,
+				UploadUUID:  sourceEntry.UploadUUID,
+				PartCount:   sourceEntry.PartCount,
 			},
 		}
 	}
@@ -72,7 +76,7 @@ func buildDirectorySnapshot(channelID int64, parentID string, sourceEntries []So
 
 	byName := make(map[string]int, len(entries))
 	for index, entry := range entries {
-		byName[nameKey(entry.entry.Name)] = index
+		byName[NameKey(entry.entry.Name)] = index
 	}
 	return directorySnapshot{entries: entries, byName: byName}, nil
 }
@@ -115,8 +119,8 @@ func assignUniqueNames(entries []snapshotEntry, bases []string, baseGroups map[s
 	sort.Slice(aliasIndexes, func(left, right int) bool {
 		leftIndex := aliasIndexes[left]
 		rightIndex := aliasIndexes[right]
-		leftKey := nameKey(bases[leftIndex])
-		rightKey := nameKey(bases[rightIndex])
+		leftKey := NameKey(bases[leftIndex])
+		rightKey := NameKey(bases[rightIndex])
 		if leftKey != rightKey {
 			return leftKey < rightKey
 		}
@@ -131,7 +135,7 @@ func assignUniqueNames(entries []snapshotEntry, bases []string, baseGroups map[s
 		allocated := false
 		for round := 1; round <= maxRounds; round++ {
 			candidate := collisionAlias(bases[index], entries[index].source.Kind, entries[index].source.ID, round)
-			key := nameKey(candidate)
+			key := NameKey(candidate)
 			if _, exists := reserved[key]; exists {
 				continue
 			}
@@ -152,8 +156,8 @@ func assignUniqueNames(entries []snapshotEntry, bases []string, baseGroups map[s
 
 func sortSnapshotEntries(entries []snapshotEntry) {
 	sort.Slice(entries, func(left, right int) bool {
-		leftKey := nameKey(entries[left].entry.Name)
-		rightKey := nameKey(entries[right].entry.Name)
+		leftKey := NameKey(entries[left].entry.Name)
+		rightKey := NameKey(entries[right].entry.Name)
 		if leftKey != rightKey {
 			return leftKey < rightKey
 		}
@@ -241,10 +245,6 @@ func splitShortExtension(name string, kind Kind) (stem string, extension string)
 		return name, ""
 	}
 	return name[:index], name[index:]
-}
-
-func nameKey(name string) string {
-	return portableFold.String(norm.NFC.String(name))
 }
 
 func truncateUTF8(value string, maxBytes int) string {

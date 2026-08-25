@@ -28,6 +28,9 @@ function status(overrides: Partial<MountStatusView> = {}): MountStatusView {
         phase: 'idle',
         mounted: false,
         mode: 'read-only',
+        writeState: 'disabled',
+        acceptingWrites: false,
+        activeWrites: 0,
         label: 'Tdrive personal',
         location: '',
         error: '',
@@ -47,6 +50,15 @@ function mountedStatus(overrides: Partial<MountStatusView> = {}): MountStatusVie
     });
 }
 
+function writableMountedStatus(overrides: Partial<MountStatusView> = {}): MountStatusView {
+    return mountedStatus({
+        mode: 'read-write',
+        writeState: 'ready',
+        acceptingWrites: true,
+        ...overrides,
+    });
+}
+
 function api(overrides: Partial<MountApi> = {}): MountApi {
     return {
         mountDrive: vi.fn(async () => mountedStatus()),
@@ -58,6 +70,14 @@ function api(overrides: Partial<MountApi> = {}): MountApi {
 }
 
 describe('mount controller', () => {
+    it('preserves an honest writable status from the backend', async () => {
+        const result = writableMountedStatus({ activeWrites: 1 });
+        const controller = createMountController(api({ mountDrive: vi.fn(async () => result) }));
+
+        await controller.mount();
+
+        expect(get(controller)).toEqual(result);
+    });
     it('coalesces mount requests and pins the mounted drive', async () => {
         const pending = deferred<MountStatusView>();
         const mountDrive = vi.fn(() => pending.promise);
@@ -213,6 +233,39 @@ describe('mount controller', () => {
             body: 'diskutil could not eject the volume',
         });
         expect(JSON.stringify(notices)).not.toMatch(/disconnect/i);
+    });
+
+    it('resynchronizes the writable lifecycle after eject fails', async () => {
+        const mounted = writableMountedStatus({ activeWrites: 2 });
+        const drained = writableMountedStatus({
+            writeState: 'drained',
+            acceptingWrites: false,
+            activeWrites: 0,
+        });
+        const mountStatus = vi
+            .fn<MountApi['mountStatus']>()
+            .mockResolvedValueOnce(mounted)
+            .mockResolvedValueOnce(drained);
+        const controller = createMountController(api({
+            mountStatus,
+            unmountDrive: vi.fn(async () => {
+                throw new Error('The OS still owns the mount');
+            }),
+        }));
+        await controller.refresh();
+
+        await controller.disconnect();
+
+        expect(mountStatus).toHaveBeenCalledTimes(2);
+        expect(get(controller)).toMatchObject({
+            phase: 'error',
+            mounted: true,
+            mode: 'read-write',
+            writeState: 'drained',
+            acceptingWrites: false,
+            activeWrites: 0,
+            error: 'The OS still owns the mount',
+        });
     });
 
     it('opens only a mounted drive and coalesces duplicate open requests', async () => {

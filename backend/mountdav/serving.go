@@ -15,8 +15,10 @@ import (
 
 type readApplication struct {
 	capabilityPath string
+	authority      string
 	fs             *FileSystem
 	lockSystem     webdav.LockSystem
+	writer         WriteCoordinator
 }
 
 func (application *readApplication) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -25,9 +27,41 @@ func (application *readApplication) ServeHTTP(response http.ResponseWriter, requ
 		application.serveFile(response, request)
 	case "PROPFIND":
 		application.servePropfind(response, request)
+	case http.MethodPut:
+		application.serveWritable(response, request, application.servePut)
+	case "MKCOL":
+		application.serveWritable(response, request, application.serveMkdir)
+	case "MOVE":
+		application.serveWritable(response, request, application.serveMove)
+	case http.MethodDelete:
+		application.serveWritable(response, request, application.serveDelete)
+	case "LOCK":
+		application.serveWritable(response, request, application.serveLock)
+	case "UNLOCK":
+		application.serveWritable(response, request, application.serveUnlock)
+	case "COPY":
+		if application.writer == nil {
+			writeHTTPError(response, http.StatusMethodNotAllowed)
+			return
+		}
+		// Deliberate first-release policy: never emulate COPY as GET+PUT and
+		// never report success for a capability the coordinator cannot commit.
+		writeHTTPError(response, http.StatusNotImplemented)
 	default:
 		writeHTTPError(response, http.StatusMethodNotAllowed)
 	}
+}
+
+func (application *readApplication) serveWritable(
+	response http.ResponseWriter,
+	request *http.Request,
+	next func(http.ResponseWriter, *http.Request),
+) {
+	if application.writer == nil || application.lockSystem == nil {
+		writeHTTPError(response, http.StatusMethodNotAllowed)
+		return
+	}
+	next(response, request)
 }
 
 func (application *readApplication) servePropfind(response http.ResponseWriter, request *http.Request) {
@@ -63,7 +97,11 @@ func (application *readApplication) servePropfind(response http.ResponseWriter, 
 	if propfindOmitsRoot(request) {
 		omitRootHref = propfindResponseHref(application.capabilityPath, name, root.IsDir())
 	}
-	serveReadOnlyPropfind(response, request, handler, omitRootHref)
+	if application.writer == nil {
+		serveReadOnlyPropfind(response, request, handler, omitRootHref)
+		return
+	}
+	serveWritablePropfind(response, request, handler, omitRootHref)
 }
 
 func cloneRequestWithTrailingPathSlash(request *http.Request) *http.Request {

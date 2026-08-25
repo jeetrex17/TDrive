@@ -153,6 +153,103 @@ func Parse(raw string) (Op, error) {
 		} else {
 			op.ConfigVersion = 1
 		}
+	case OpFileCommit:
+		if err := setWritableEnvelope(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setParent(&op, kv["p"]); err != nil {
+			return Op{}, err
+		}
+		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setContentReference(&op, kv); err != nil {
+			return Op{}, err
+		}
+	case OpFolderCommit:
+		if err := setWritableEnvelope(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setObj(&op, kv["obj"], FolderIDPrefix); err != nil {
+			return Op{}, err
+		}
+		if err := setParent(&op, kv["p"]); err != nil {
+			return Op{}, err
+		}
+		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+	case OpFileReplace:
+		if err := setWritableEnvelope(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setObj(&op, kv["obj"], FileIDPrefix); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
+			return Op{}, err
+		}
+		if err := setContentReference(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.RetainedUntil, kv["retain"]); err != nil {
+			return Op{}, err
+		}
+	case OpRelocate:
+		if err := setWritableEnvelope(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setObjAny(&op, kv["obj"]); err != nil {
+			return Op{}, err
+		}
+		if err := setParent(&op, kv["p"]); err != nil {
+			return Op{}, err
+		}
+		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
+			return Op{}, err
+		}
+		if kv["ow"] == "1" {
+			op.Overwrite = true
+		}
+		if raw := kv["dst"]; raw != "" {
+			if err := setObjAnyValue(&op.DestinationObj, raw); err != nil {
+				return Op{}, err
+			}
+		}
+		if raw := kv["drev"]; raw != "" {
+			if err := setPositiveInt64(&op.ExpectedDestinationRevision, raw); err != nil {
+				return Op{}, err
+			}
+		}
+		if raw := kv["del"]; raw != "" {
+			if err := setPositiveInt64(&op.DeletedAt, raw); err != nil {
+				return Op{}, err
+			}
+		}
+		if raw := kv["purge"]; raw != "" {
+			if err := setPositiveInt64(&op.PurgeAfter, raw); err != nil {
+				return Op{}, err
+			}
+		}
+	case OpTrashTree:
+		if err := setWritableEnvelope(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setObjAny(&op, kv["obj"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.DeletedAt, kv["del"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.PurgeAfter, kv["purge"]); err != nil {
+			return Op{}, err
+		}
 	default:
 		return Op{}, ErrWireBadOpType
 	}
@@ -272,9 +369,164 @@ func Format(op Op) string {
 			b.WriteString("|cv=")
 			b.WriteString(strconv.Itoa(op.ConfigVersion))
 		}
+	case OpFileCommit:
+		appendWritableEnvelope(&b, op)
+		b.WriteString("|p=")
+		b.WriteString(op.Parent)
+		b.WriteString("|n=")
+		b.WriteString(url.QueryEscape(op.Name))
+		appendContentReference(&b, op)
+		appendFileAttrs(&b, op)
+	case OpFolderCommit:
+		appendWritableEnvelope(&b, op)
+		b.WriteString("|obj=")
+		b.WriteString(op.Obj)
+		b.WriteString("|p=")
+		b.WriteString(op.Parent)
+		b.WriteString("|n=")
+		b.WriteString(url.QueryEscape(op.Name))
+	case OpFileReplace:
+		appendWritableEnvelope(&b, op)
+		b.WriteString("|obj=")
+		b.WriteString(op.Obj)
+		b.WriteString("|rev=")
+		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
+		appendContentReference(&b, op)
+		b.WriteString("|retain=")
+		b.WriteString(strconv.FormatInt(op.RetainedUntil, 10))
+		appendFileAttrs(&b, op)
+	case OpRelocate:
+		appendWritableEnvelope(&b, op)
+		b.WriteString("|obj=")
+		b.WriteString(op.Obj)
+		b.WriteString("|p=")
+		b.WriteString(op.Parent)
+		b.WriteString("|n=")
+		b.WriteString(url.QueryEscape(op.Name))
+		b.WriteString("|rev=")
+		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
+		if op.Overwrite {
+			b.WriteString("|ow=1")
+		}
+		if op.DestinationObj != "" {
+			b.WriteString("|dst=")
+			b.WriteString(op.DestinationObj)
+		}
+		if op.ExpectedDestinationRevision > 0 {
+			b.WriteString("|drev=")
+			b.WriteString(strconv.FormatInt(op.ExpectedDestinationRevision, 10))
+		}
+		if op.DeletedAt > 0 {
+			b.WriteString("|del=")
+			b.WriteString(strconv.FormatInt(op.DeletedAt, 10))
+		}
+		if op.PurgeAfter > 0 {
+			b.WriteString("|purge=")
+			b.WriteString(strconv.FormatInt(op.PurgeAfter, 10))
+		}
+	case OpTrashTree:
+		appendWritableEnvelope(&b, op)
+		b.WriteString("|obj=")
+		b.WriteString(op.Obj)
+		b.WriteString("|rev=")
+		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
+		b.WriteString("|del=")
+		b.WriteString(strconv.FormatInt(op.DeletedAt, 10))
+		b.WriteString("|purge=")
+		b.WriteString(strconv.FormatInt(op.PurgeAfter, 10))
 	}
 
 	return b.String()
+}
+
+func setWritableEnvelope(op *Op, kv map[string]string) error {
+	version, err := strconv.Atoi(kv["v"])
+	if err != nil || version != 1 {
+		return ErrWireMalformed
+	}
+	rawID := kv["oid"]
+	if rawID == "" {
+		return ErrWireMalformed
+	}
+	opID, err := url.QueryUnescape(rawID)
+	if err != nil || opID == "" {
+		return ErrWireMalformed
+	}
+	op.ProtocolVersion = version
+	op.OpID = opID
+	return nil
+}
+
+func appendWritableEnvelope(b *strings.Builder, op Op) {
+	b.WriteString("|v=")
+	b.WriteString(strconv.Itoa(op.ProtocolVersion))
+	b.WriteString("|oid=")
+	b.WriteString(url.QueryEscape(op.OpID))
+}
+
+func setContentReference(op *Op, kv map[string]string) error {
+	if raw := kv["cmid"]; raw != "" {
+		if err := setPositiveInt64(&op.ContentMsgID, raw); err != nil {
+			return err
+		}
+	}
+	if raw := kv["u"]; raw != "" {
+		if err := setUUID(op, raw); err != nil {
+			return err
+		}
+	}
+	if raw := kv["pc"]; raw != "" {
+		if err := setPartCount(op, raw); err != nil {
+			return err
+		}
+	}
+	if raw := kv["hash"]; raw != "" {
+		hash, err := url.QueryUnescape(raw)
+		if err != nil {
+			return ErrWireMalformed
+		}
+		op.ContentHash = hash
+	}
+	if op.ContentMsgID <= 0 && (op.UploadUUID == "" || op.PartCount <= 0) {
+		return ErrWireMalformed
+	}
+	if op.ContentMsgID > 0 && (op.UploadUUID != "" || op.PartCount != 0) {
+		return ErrWireMalformed
+	}
+	return nil
+}
+
+func appendContentReference(b *strings.Builder, op Op) {
+	if op.ContentMsgID > 0 {
+		b.WriteString("|cmid=")
+		b.WriteString(strconv.FormatInt(op.ContentMsgID, 10))
+	} else {
+		b.WriteString("|u=")
+		b.WriteString(op.UploadUUID)
+		b.WriteString("|pc=")
+		b.WriteString(strconv.Itoa(op.PartCount))
+	}
+	if op.ContentHash != "" {
+		b.WriteString("|hash=")
+		b.WriteString(url.QueryEscape(op.ContentHash))
+	}
+}
+
+func setPositiveInt64(dst *int64, raw string) error {
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		return ErrWireMalformed
+	}
+	*dst = n
+	return nil
+}
+
+func setObjAnyValue(dst *string, raw string) error {
+	if raw == "" || (!strings.HasPrefix(raw, FolderIDPrefix) && !strings.HasPrefix(raw, FileIDPrefix)) {
+		return ErrWireBadObject
+	}
+	*dst = raw
+	return nil
 }
 
 func setRequiredRaw(dst *string, raw string) error {

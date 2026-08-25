@@ -5,6 +5,7 @@ import "errors"
 var (
 	ErrInvalidConfiguration = errors.New("mountfs: invalid configuration")
 	ErrInvalidPath          = errors.New("mountfs: invalid path")
+	ErrInvalidName          = errors.New("mountfs: invalid name")
 	ErrInvalidEntry         = errors.New("mountfs: invalid source entry")
 	ErrNotFound             = errors.New("mountfs: entry not found")
 	ErrNotDirectory         = errors.New("mountfs: not a directory")

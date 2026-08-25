@@ -98,6 +98,9 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 
 	if err := ApplyOp(tx, channelID, msgID, op, actorID); err != nil {
 		if isSkippableApplyError(err) {
+			if recErr := recordProjectionOperationTx(tx, channelID, msgID, op, OperationRejected, err); recErr != nil {
+				return false, recErr
+			}
 			if recErr := recordReject(tx, channelID, msgID, err); recErr != nil {
 				return false, recErr
 			}
@@ -109,7 +112,15 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 }
 
 func isSkippableApplyError(err error) bool {
-	return errors.Is(err, ErrCycleRejected) || errors.Is(err, ErrBadOp)
+	return errors.Is(err, ErrCycleRejected) ||
+		errors.Is(err, ErrBadOp) ||
+		errors.Is(err, ErrNameConflict) ||
+		errors.Is(err, ErrRevisionConflict) ||
+		errors.Is(err, ErrObjectNotFound) ||
+		errors.Is(err, ErrObjectExists) ||
+		errors.Is(err, ErrDestinationMismatch) ||
+		errors.Is(err, ErrContentIncomplete) ||
+		errors.Is(err, ErrContentAlreadyCommitted)
 }
 
 func existingHash(tx *sql.Tx, channelID, msgID int64) (string, bool, error) {

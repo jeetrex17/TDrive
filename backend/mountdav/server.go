@@ -1,5 +1,6 @@
-// Package mountdav exposes one pinned TDrive as a local, read-only WebDAV
-// endpoint. It deliberately does not implement write verbs or disk caching.
+// Package mountdav exposes one pinned TDrive as a capability-protected local
+// WebDAV endpoint. Read-only remains the default; writes require an explicit
+// coordinator and opt-in flag.
 package mountdav
 
 import (
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -37,6 +39,8 @@ type StartConfig struct {
 	DriveID      int64
 	DriveTitle   string
 	WindowsDrive string
+	Writable     bool
+	Writer       WriteCoordinator
 }
 
 type Status struct {
@@ -64,6 +68,8 @@ type activeConfig struct {
 	driveID      int64
 	driveTitle   string
 	windowsDrive string
+	writable     bool
+	writer       WriteCoordinator
 }
 
 type Server struct {
@@ -88,7 +94,7 @@ func (server *Server) Start(ctx context.Context, config StartConfig) (Status, er
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	if server.server != nil {
-		if server.active == active {
+		if sameActiveConfig(server.active, active) {
 			return server.status, nil
 		}
 		return Status{}, ErrAlreadyRunning
@@ -105,20 +111,29 @@ func (server *Server) Start(ctx context.Context, config StartConfig) (Status, er
 	}
 	authority := listener.Addr().String()
 	filesystem := NewFileSystem(config.FS)
+	lockSystem := webdav.NewMemLS()
+	if active.writable {
+		lockSystem = newBoundedLockSystem(defaultMaxActiveLocks)
+	}
 	application := &readApplication{
 		capabilityPath: capabilityPath,
+		authority:      authority,
 		fs:             filesystem,
-		lockSystem:     webdav.NewMemLS(),
+		lockSystem:     lockSystem,
+		writer:         active.writer,
 	}
 	handler := newProtectedHandler(protectionConfig{
-		capabilityPath: capabilityPath,
-		authority:      authority,
-		maxConcurrent:  defaultMaxConcurrent,
+		capabilityPath:         capabilityPath,
+		authority:              authority,
+		maxConcurrent:          defaultMaxConcurrent,
+		maxConcurrentWrite:     defaultMaxWriteConcurrent,
+		writable:               active.writable,
+		enforceBodyReadTimeout: active.writable,
 	}, application)
 	httpServer := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: defaultReadHeaderTimeout,
-		ReadTimeout:       defaultReadTimeout,
+		ReadTimeout:       serverReadTimeout(active.writable),
 		IdleTimeout:       defaultIdleTimeout,
 		MaxHeaderBytes:    defaultMaxHeaderBytes,
 	}
@@ -126,7 +141,7 @@ func (server *Server) Start(ctx context.Context, config StartConfig) (Status, er
 	status := Status{
 		Running:      true,
 		URL:          url,
-		Mode:         "read-only",
+		Mode:         mountMode(active.writable),
 		DriveID:      active.driveID,
 		DriveTitle:   active.driveTitle,
 		WindowsDrive: active.windowsDrive,
@@ -229,12 +244,70 @@ func validateStartConfig(ctx context.Context, config StartConfig) (activeConfig,
 	if err != nil {
 		return activeConfig{}, err
 	}
+	hasWriter := !isNilWriteCoordinator(config.Writer)
+	if config.Writable != hasWriter {
+		return activeConfig{}, fmt.Errorf("mountdav: writable mode requires an explicit writer and flag")
+	}
 	return activeConfig{
 		fs:           config.FS,
 		driveID:      config.DriveID,
 		driveTitle:   config.DriveTitle,
 		windowsDrive: drive,
+		writable:     config.Writable,
+		writer:       config.Writer,
 	}, nil
+}
+
+func sameActiveConfig(left, right activeConfig) bool {
+	return left.fs == right.fs &&
+		left.driveID == right.driveID &&
+		left.driveTitle == right.driveTitle &&
+		left.windowsDrive == right.windowsDrive &&
+		left.writable == right.writable &&
+		sameWriteCoordinator(left.writer, right.writer)
+}
+
+func sameWriteCoordinator(left, right WriteCoordinator) bool {
+	leftNil := isNilWriteCoordinator(left)
+	rightNil := isNilWriteCoordinator(right)
+	if leftNil || rightNil {
+		return leftNil && rightNil
+	}
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	if leftValue.Type() != rightValue.Type() || !leftValue.Type().Comparable() {
+		return false
+	}
+	return leftValue.Interface() == rightValue.Interface()
+}
+
+func isNilWriteCoordinator(writer WriteCoordinator) bool {
+	if writer == nil {
+		return true
+	}
+	value := reflect.ValueOf(writer)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func mountMode(writable bool) string {
+	if writable {
+		return "read-write"
+	}
+	return "read-only"
+}
+
+func serverReadTimeout(writable bool) time.Duration {
+	if writable {
+		// PUT bodies are streamed under a separate bounded concurrency budget.
+		// A whole-request deadline would reject valid large saves mid-commit.
+		return 0
+	}
+	return defaultReadTimeout
 }
 
 func validateWindowsDrive(value string) (string, error) {

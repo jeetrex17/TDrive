@@ -24,10 +24,16 @@ type Folder struct {
 	ID       string
 	Name     string
 	ParentID string
+	Revision int64
 }
 
 type File struct {
 	MsgID         int64
+	ContentMsgID  int64
+	ContentHash   string
+	Revision      int64
+	UploadUUID    string
+	PartCount     int
 	Name          string
 	Size          int64
 	ParentID      string
@@ -300,12 +306,17 @@ func (s *Service) ready() error {
 }
 
 func folderFromProjection(f projection.FolderSlim) Folder {
-	return Folder{ID: f.ID, Name: f.Name, ParentID: f.ParentID}
+	return Folder{ID: f.ID, Name: f.Name, ParentID: f.ParentID, Revision: f.Revision}
 }
 
 func fileFromProjection(f projection.FileSlim) File {
 	return File{
 		MsgID:         f.MsgID,
+		ContentMsgID:  f.ContentMsgID,
+		ContentHash:   f.ContentHash,
+		Revision:      f.Revision,
+		UploadUUID:    f.UploadUUID,
+		PartCount:     f.PartCount,
 		Name:          f.Name,
 		Size:          f.Size,
 		ParentID:      f.ParentID,

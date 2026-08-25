@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -231,12 +230,19 @@ func (g *Gotd) ResolveUsersFromMessages(ctx context.Context, peer InputPeer, ref
 }
 
 func (g *Gotd) SendControl(ctx context.Context, peer InputPeer, text string, silent bool) (int64, error) {
+	return g.SendControlWithRandomID(ctx, peer, text, silent, randomID())
+}
+
+func (g *Gotd) SendControlWithRandomID(ctx context.Context, peer InputPeer, text string, silent bool, sendRandomID int64) (int64, error) {
+	if sendRandomID <= 0 {
+		return 0, fmt.Errorf("tgclient: random id must be positive")
+	}
 	var msgID int64
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		req := &tg.MessagesSendMessageRequest{
 			Peer:      toPeer(peer),
 			Message:   text,
-			RandomID:  rand.Int63(),
+			RandomID:  sendRandomID,
 			Silent:    silent,
 			NoWebpage: true,
 		}
@@ -244,7 +250,7 @@ func (g *Gotd) SendControl(ctx context.Context, peer InputPeer, text string, sil
 		if err != nil {
 			return err
 		}
-		msgID = extractMsgID(updates)
+		msgID = extractMsgID(updates, sendRandomID)
 		if msgID == 0 {
 			return fmt.Errorf("tgclient: send control returned no msg id")
 		}
@@ -254,6 +260,13 @@ func (g *Gotd) SendControl(ctx context.Context, peer InputPeer, text string, sil
 }
 
 func (g *Gotd) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64)) (SendFileResult, error) {
+	return g.SendFileWithRandomID(ctx, peer, r, name, caption, totalSize, onProgress, randomID())
+}
+
+func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), sendRandomID int64) (SendFileResult, error) {
+	if sendRandomID <= 0 {
+		return SendFileResult{}, fmt.Errorf("tgclient: random id must be positive")
+	}
 	var result SendFileResult
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		// Telegram rejects uploads beyond ~4000 parts, so the part size sets the
@@ -292,14 +305,14 @@ func (g *Gotd) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 					&tg.DocumentAttributeFilename{FileName: name},
 				},
 			},
-			RandomID: rand.Int63(),
+			RandomID: sendRandomID,
 			Message:  caption,
 		}
 		updates, err := api.MessagesSendMedia(ctx, req)
 		if err != nil {
 			return fmt.Errorf("tgclient: send media: %w", err)
 		}
-		result.MsgID = extractMsgID(updates)
+		result.MsgID = extractMsgID(updates, sendRandomID)
 		if result.MsgID == 0 {
 			return fmt.Errorf("tgclient: send file returned no msg id")
 		}
@@ -643,27 +656,32 @@ func toPeer(p InputPeer) *tg.InputPeerChannel {
 	return &tg.InputPeerChannel{ChannelID: p.ChannelID, AccessHash: p.AccessHash}
 }
 
-func extractMsgID(updates tg.UpdatesClass) int64 {
+func extractMsgID(updates tg.UpdatesClass, randomID int64) int64 {
 	switch u := updates.(type) {
+	case *tg.UpdateShortSentMessage:
+		return int64(u.ID)
 	case *tg.Updates:
-		for _, update := range u.Updates {
-			if msg, ok := update.(*tg.UpdateNewMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return int64(m.ID)
-				}
-			}
-			if msg, ok := update.(*tg.UpdateNewChannelMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return int64(m.ID)
-				}
-			}
-		}
+		return extractMsgIDFromUpdates(u.Updates, randomID)
 	case *tg.UpdatesCombined:
-		for _, update := range u.Updates {
-			if msg, ok := update.(*tg.UpdateNewChannelMessage); ok {
-				if m, ok := msg.Message.(*tg.Message); ok {
-					return int64(m.ID)
-				}
+		return extractMsgIDFromUpdates(u.Updates, randomID)
+	}
+	return 0
+}
+
+func extractMsgIDFromUpdates(updates []tg.UpdateClass, randomID int64) int64 {
+	for _, update := range updates {
+		switch value := update.(type) {
+		case *tg.UpdateMessageID:
+			if value.RandomID == randomID {
+				return int64(value.ID)
+			}
+		case *tg.UpdateNewMessage:
+			if message, ok := value.Message.(*tg.Message); ok {
+				return int64(message.ID)
+			}
+		case *tg.UpdateNewChannelMessage:
+			if message, ok := value.Message.(*tg.Message); ok {
+				return int64(message.ID)
 			}
 		}
 	}

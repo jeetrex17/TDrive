@@ -28,7 +28,22 @@ func validateConfig(config Config) (validatedConfig, error) {
 	if err != nil {
 		return validatedConfig{}, err
 	}
-	return validatedConfig{endpoint: endpoint, label: label, drive: drive}, nil
+	mode, err := normalizeMode(config.Mode)
+	if err != nil {
+		return validatedConfig{}, err
+	}
+	return validatedConfig{endpoint: endpoint, label: label, drive: drive, mode: mode}, nil
+}
+
+func normalizeMode(mode Mode) (Mode, error) {
+	switch mode {
+	case "", ModeReadOnly:
+		return ModeReadOnly, nil
+	case ModeReadWrite:
+		return ModeReadWrite, nil
+	default:
+		return "", ErrInvalidMode
+	}
 }
 
 // validateEndpoint intentionally uses a narrow canonical grammar instead of a

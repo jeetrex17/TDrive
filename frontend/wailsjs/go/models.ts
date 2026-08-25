@@ -291,6 +291,9 @@ export namespace main {
 	    phase: string;
 	    mounted: boolean;
 	    mode?: string;
+	    write_state?: string;
+	    accepting_writes?: boolean;
+	    active_writes?: number;
 	    label?: string;
 	    location?: string;
 	    error?: string;
@@ -306,6 +309,9 @@ export namespace main {
 	        this.phase = source["phase"];
 	        this.mounted = source["mounted"];
 	        this.mode = source["mode"];
+	        this.write_state = source["write_state"];
+	        this.accepting_writes = source["accepting_writes"];
+	        this.active_writes = source["active_writes"];
 	        this.label = source["label"];
 	        this.location = source["location"];
 	        this.error = source["error"];

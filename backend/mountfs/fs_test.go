@@ -85,7 +85,7 @@ func TestReadDirExportsPortableUniqueNamesDeterministically(t *testing.T) {
 
 	seenKeys := make(map[string]string, len(first))
 	for _, entry := range first {
-		key := nameKey(entry.Name)
+		key := NameKey(entry.Name)
 		if previous, exists := seenKeys[key]; exists {
 			t.Errorf("exported names are not case-insensitively unique: %q and %q", previous, entry.Name)
 		}
@@ -123,7 +123,7 @@ func TestCollisionAliasDoesNotCollideWithLegacyAliasLikeName(t *testing.T) {
 	}
 	seen := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
-		key := nameKey(entry.Name)
+		key := NameKey(entry.Name)
 		if _, exists := seen[key]; exists {
 			t.Fatalf("generated alias collided with an existing source name: %#v", entries)
 		}
@@ -140,7 +140,11 @@ func TestStatResolvesExportedPathsCaseInsensitively(t *testing.T) {
 			{ID: "d:docs-two", ParentID: RootID, Name: "DOCS", Kind: KindDirectory},
 		},
 		"d:docs-one": {
-			{ID: "f:guide", ParentID: "d:docs-one", Name: "Guide.PDF", Kind: KindFile, Size: 1234, Encrypted: true},
+			{
+				ID: "f:guide", ParentID: "d:docs-one", Name: "Guide.PDF",
+				Kind: KindFile, Size: 1234, Encrypted: true,
+				ContentHash: "sha256:guide-v7", Revision: 7, UploadUUID: "upload-guide-v7",
+			},
 		},
 	})
 	fs := mustNewFS(t, 99, source, &fakeContentOpener{})
@@ -167,6 +171,9 @@ func TestStatResolvesExportedPathsCaseInsensitively(t *testing.T) {
 	}
 	if got.Size != 1234 || !got.Encrypted || got.ChannelID != 99 {
 		t.Fatalf("Stat(nested) metadata = %#v", got)
+	}
+	if got.ContentHash != "sha256:guide-v7" || got.Revision != 7 || got.UploadUUID != "upload-guide-v7" {
+		t.Fatalf("Stat(nested) immutable identity = %#v", got)
 	}
 }
 

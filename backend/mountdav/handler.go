@@ -9,14 +9,19 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const (
-	allowedMethodsHeader   = "OPTIONS, PROPFIND, HEAD, GET"
-	windowsNoRootDepth     = "1,noroot"
-	maxRequestBodyBytes    = int64(1 << 20)
-	defaultMaxConcurrent   = 32
-	serverBusyRetrySeconds = "1"
+	allowedMethodsHeader      = "OPTIONS, PROPFIND, HEAD, GET"
+	writableMethodsHeader     = "OPTIONS, PROPFIND, HEAD, GET, PUT, MKCOL, MOVE, DELETE, LOCK, UNLOCK"
+	windowsNoRootDepth        = "1,noroot"
+	maxRequestBodyBytes       = int64(1 << 20)
+	defaultMaxConcurrent      = 32
+	defaultMaxWriteConcurrent = 4
+	defaultPUTBodyIdleTimeout = 30 * time.Second
+	defaultControlBodyTimeout = 15 * time.Second
+	serverBusyRetrySeconds    = "1"
 )
 
 type propfindRequestOptions struct {
@@ -26,30 +31,54 @@ type propfindRequestOptions struct {
 type propfindRequestOptionsKey struct{}
 
 type protectionConfig struct {
-	capabilityPath string
-	authority      string
-	maxConcurrent  int
+	capabilityPath         string
+	authority              string
+	maxConcurrent          int
+	maxConcurrentWrite     int
+	writable               bool
+	enforceBodyReadTimeout bool
+	putBodyIdleTimeout     time.Duration
+	controlBodyReadTimeout time.Duration
+	bodyReadNow            func() time.Time
 }
 
 type protectedHandler struct {
-	config protectionConfig
-	next   http.Handler
-	slots  chan struct{}
+	config     protectionConfig
+	next       http.Handler
+	slots      chan struct{}
+	writeSlots chan struct{}
 }
 
 func newProtectedHandler(config protectionConfig, next http.Handler) http.Handler {
 	if config.maxConcurrent <= 0 {
 		config.maxConcurrent = defaultMaxConcurrent
 	}
+	if config.maxConcurrentWrite <= 0 {
+		config.maxConcurrentWrite = defaultMaxWriteConcurrent
+	}
+	if config.putBodyIdleTimeout <= 0 {
+		config.putBodyIdleTimeout = defaultPUTBodyIdleTimeout
+	}
+	if config.controlBodyReadTimeout <= 0 {
+		config.controlBodyReadTimeout = defaultControlBodyTimeout
+	}
+	if config.bodyReadNow == nil {
+		config.bodyReadNow = time.Now
+	}
+	var writeSlots chan struct{}
+	if config.writable {
+		writeSlots = make(chan struct{}, config.maxConcurrentWrite)
+	}
 	return &protectedHandler{
-		config: config,
-		next:   next,
-		slots:  make(chan struct{}, config.maxConcurrent),
+		config:     config,
+		next:       next,
+		slots:      make(chan struct{}, config.maxConcurrent),
+		writeSlots: writeSlots,
 	}
 }
 
 func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	setProtocolHeaders(response.Header())
+	setProtocolHeaders(response.Header(), handler.config.writable)
 	if request.Host != handler.config.authority ||
 		!isLoopbackPeer(request.RemoteAddr) ||
 		hasHeader(request.Header, "Origin") ||
@@ -66,7 +95,7 @@ func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request
 		http.NotFound(response, request)
 		return
 	}
-	if !allowedMethod(request.Method) {
+	if !allowedMethod(request.Method, handler.config.writable) {
 		writeHTTPError(response, http.StatusMethodNotAllowed)
 		return
 	}
@@ -87,8 +116,48 @@ func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request
 		writeHTTPError(response, http.StatusServiceUnavailable)
 		return
 	}
-	body, err := bufferBoundedBody(response, request)
+	if handler.config.writable && isWriteMethod(request.Method) {
+		select {
+		case handler.writeSlots <- struct{}{}:
+			defer func() { <-handler.writeSlots }()
+		default:
+			response.Header().Set("Retry-After", serverBusyRetrySeconds)
+			writeHTTPError(response, http.StatusServiceUnavailable)
+			return
+		}
+	}
+	var (
+		body []byte
+		err  error
+	)
+	if handler.config.writable && request.Method == http.MethodPut {
+		if handler.config.enforceBodyReadTimeout {
+			request = wrapPUTBodyWithIdleDeadline(
+				response,
+				request,
+				handler.config.putBodyIdleTimeout,
+				handler.config.bodyReadNow,
+			)
+		}
+	} else if handler.config.writable && handler.config.enforceBodyReadTimeout {
+		body, err = bufferBodyWithAbsoluteDeadline(
+			response,
+			request,
+			handler.config.controlBodyReadTimeout,
+			handler.config.bodyReadNow,
+		)
+	} else {
+		body, err = bufferBoundedBody(response, request)
+	}
 	if err != nil {
+		if isBodyReadTimeout(err) {
+			writeHTTPError(response, http.StatusRequestTimeout)
+			return
+		}
+		if errors.Is(err, errBodyDeadlineUnavailable) {
+			writeHTTPError(response, http.StatusInternalServerError)
+			return
+		}
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeHTTPError(response, http.StatusRequestEntityTooLarge)
@@ -109,9 +178,15 @@ func (handler *protectedHandler) ServeHTTP(response http.ResponseWriter, request
 	handler.next.ServeHTTP(response, request)
 }
 
-func setProtocolHeaders(header http.Header) {
-	header.Set("Allow", allowedMethodsHeader)
-	header.Set("DAV", "1")
+func setProtocolHeaders(header http.Header, writable bool) {
+	allow := allowedMethodsHeader
+	dav := "1"
+	if writable {
+		allow = writableMethodsHeader
+		dav = "1, 2"
+	}
+	header.Set("Allow", allow)
+	header.Set("DAV", dav)
 	header.Set("MS-Author-Via", "DAV")
 	header.Set("Accept-Ranges", "bytes")
 	header.Set("X-Content-Type-Options", "nosniff")
@@ -150,9 +225,20 @@ func hasHeader(header http.Header, name string) bool {
 	return false
 }
 
-func allowedMethod(method string) bool {
+func allowedMethod(method string, writable bool) bool {
 	switch method {
 	case http.MethodOptions, "PROPFIND", http.MethodHead, http.MethodGet:
+		return true
+	case http.MethodPut, "MKCOL", "MOVE", http.MethodDelete, "LOCK", "UNLOCK", "COPY":
+		return writable
+	default:
+		return false
+	}
+}
+
+func isWriteMethod(method string) bool {
+	switch method {
+	case http.MethodPut, "MKCOL", "MOVE", http.MethodDelete, "LOCK", "UNLOCK", "COPY":
 		return true
 	default:
 		return false

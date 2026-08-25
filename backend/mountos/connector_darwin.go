@@ -38,6 +38,7 @@ type darwinConnector struct {
 type darwinActive struct {
 	id       uint64
 	endpoint string
+	mode     Mode
 }
 
 // macOS exposes a legacy f_mntfromname[90] value for WebDAV mounts: at most
@@ -97,16 +98,16 @@ func (c *darwinConnector) Attach(parent context.Context, config Config) (Attachm
 		}
 	}()
 
-	if err := c.runner.Run(ctx, darwinAttachPlan(validated.endpoint, validated.label, target)); err != nil {
+	if err := c.runner.Run(ctx, darwinAttachPlan(validated.endpoint, validated.label, target, validated.mode)); err != nil {
 		return Attachment{}, ErrAttachFailed
 	}
 	inspection, err := c.inspectMount(target)
-	if err != nil || !inspection.mounted || !inspection.readOnly || !darwinSourceMatchesEndpoint(inspection.source, validated.endpoint) {
+	if err != nil || !inspection.mounted || !darwinModeMatchesInspection(validated.mode, inspection) || !darwinSourceMatchesEndpoint(inspection.source, validated.endpoint) {
 		return Attachment{}, ErrVerificationFailed
 	}
 
 	id := c.nextID()
-	c.active[target] = darwinActive{id: id, endpoint: validated.endpoint}
+	c.active[target] = darwinActive{id: id, endpoint: validated.endpoint, mode: validated.mode}
 	succeeded = true
 	return Attachment{
 		owner:    c.owner,
@@ -134,7 +135,7 @@ func (c *darwinConnector) Detach(parent context.Context, attachment Attachment) 
 	if err != nil {
 		return ErrVerificationFailed
 	}
-	if inspection.mounted && (!inspection.readOnly || !darwinSourceMatchesEndpoint(inspection.source, active.endpoint)) {
+	if inspection.mounted && (!darwinModeMatchesInspection(active.mode, inspection) || !darwinSourceMatchesEndpoint(inspection.source, active.endpoint)) {
 		return ErrAttachmentChanged
 	}
 	if inspection.mounted {
@@ -170,13 +171,20 @@ func (c *darwinConnector) Open(parent context.Context, attachment Attachment) er
 	if err != nil {
 		return ErrVerificationFailed
 	}
-	if !inspection.mounted || !inspection.readOnly || !darwinSourceMatchesEndpoint(inspection.source, active.endpoint) {
+	if !inspection.mounted || !darwinModeMatchesInspection(active.mode, inspection) || !darwinSourceMatchesEndpoint(inspection.source, active.endpoint) {
 		return ErrAttachmentChanged
 	}
 	if err := c.runner.Run(ctx, darwinOpenPlan(attachment.location)); err != nil {
 		return ErrOpenFailed
 	}
 	return nil
+}
+
+func darwinModeMatchesInspection(mode Mode, inspection darwinMountInspection) bool {
+	if mode == ModeReadWrite {
+		return !inspection.readOnly
+	}
+	return inspection.readOnly
 }
 
 func (c *darwinConnector) owns(attachment Attachment) bool {

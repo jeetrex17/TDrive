@@ -9,12 +9,16 @@ func newCommandPlan(path string, args ...string) commandPlan {
 	return commandPlan{Path: path, Args: append([]string(nil), args...)}
 }
 
-func darwinAttachPlan(endpoint, label, target string) commandPlan {
+func darwinAttachPlan(endpoint, label, target string, mode Mode) commandPlan {
+	options := "rdonly,noexec,nosuid,nodev"
+	if mode == ModeReadWrite {
+		options = "noexec,nosuid,nodev"
+	}
 	return newCommandPlan(
 		"/sbin/mount_webdav",
 		"-S",
 		"-v", label,
-		"-o", "rdonly,noexec,nosuid,nodev",
+		"-o", options,
 		endpoint,
 		target,
 	)

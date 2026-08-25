@@ -3,8 +3,10 @@ package mountdav
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
-	"fmt"
+	"errors"
+	"hash"
 	"mime"
 	"os"
 	"path/filepath"
@@ -16,6 +18,8 @@ import (
 type fileInfo struct {
 	entry mountfs.Entry
 }
+
+const resourceETagDomain = "tdrive.mount.resource-etag.v1\x00"
 
 func newFileInfo(entry mountfs.Entry) fileInfo {
 	return fileInfo{entry: entry}
@@ -71,19 +75,42 @@ func (info fileInfo) ContentType(ctx context.Context) (string, error) {
 }
 
 func (info fileInfo) ETag(ctx context.Context) (string, error) {
+	return EntryETag(ctx, info.entry)
+}
+
+// EntryETag returns the strong entity tag used by WebDAV responses for one
+// projected mount entry. Writable adapters use the same function when checking
+// OS-provided preconditions before building a mutation.
+func EntryETag(ctx context.Context, entry mountfs.Entry) (string, error) {
+	return ResourceETag(ctx, entry.ChannelID, entry.ID, entry.Revision, entry.ContentHash)
+}
+
+// ResourceETag returns a domain-separated strong entity tag from the stable
+// projection identity of a mounted resource. It intentionally excludes private
+// Telegram references and mutable display metadata; revision is authoritative.
+func ResourceETag(ctx context.Context, channelID int64, objectID string, revision int64, contentHash string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("mountdav: nil context")
+	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	hash := sha256.New()
-	_, _ = fmt.Fprintf(
-		hash,
-		"%d\x00%s\x00%s\x00%d\x00%d\x00%t",
-		info.entry.ChannelID,
-		info.entry.ID,
-		info.entry.ContentRef,
-		info.Size(),
-		info.ModTime().UnixNano(),
-		info.entry.Encrypted,
-	)
-	return `"` + hex.EncodeToString(hash.Sum(nil)) + `"`, nil
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(resourceETagDomain))
+	writeETagInt64(digest, channelID)
+	writeETagField(digest, objectID)
+	writeETagInt64(digest, revision)
+	writeETagField(digest, contentHash)
+	return `"tdrive-` + hex.EncodeToString(digest.Sum(nil)) + `"`, nil
+}
+
+func writeETagInt64(digest hash.Hash, value int64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], uint64(value))
+	_, _ = digest.Write(encoded[:])
+}
+
+func writeETagField(digest hash.Hash, value string) {
+	writeETagInt64(digest, int64(len(value)))
+	_, _ = digest.Write([]byte(value))
 }

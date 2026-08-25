@@ -38,8 +38,10 @@ import type {
     SearchHitType,
     MountedDrive,
     MountedDriveKind,
+    MountMode,
     MountPhase,
     MountStatusView,
+    MountWriteState,
 } from "./types";
 
 export const MOUNT_LABEL = 'Tdrive personal' as const;
@@ -103,6 +105,24 @@ function normalizeMountLabel(value: unknown): string {
     return label;
 }
 
+function normalizeMountMode(value: unknown): MountMode {
+    return value === 'read-write' ? 'read-write' : 'read-only';
+}
+
+function normalizeMountWriteState(value: unknown, mode: MountMode): MountWriteState {
+    if (mode === 'read-only') return 'disabled';
+    if (value === 'starting' || value === 'ready' || value === 'draining' || value === 'drained') {
+        return value;
+    }
+    return 'starting';
+}
+
+function normalizeActiveWrites(value: unknown, mode: MountMode): number {
+    if (mode === 'read-only') return 0;
+    const count = Number(value ?? 0);
+    return Number.isSafeInteger(count) && count >= 0 && count <= 1024 ? count : 0;
+}
+
 /** Converts backend/bridge failures into endpoint-free user-facing text. */
 export function safeMountError(value: unknown, fallback = 'The mount operation failed. Try again.'): string {
     const message = value instanceof Error
@@ -118,10 +138,15 @@ export function normalizeMountStatus(value: unknown): MountStatusView {
     const mounted = Boolean(raw.mounted);
     const error = safeMountError(raw.error, 'The drive could not be mounted. Try again.');
     const hasError = boundedText(raw.error, 1) !== '';
+    const mode = normalizeMountMode(raw.mode);
+    const writeState = normalizeMountWriteState(raw.write_state, mode);
     return {
         phase: normalizeMountPhase(raw.phase, mounted, hasError ? error : ''),
         mounted,
-        mode: 'read-only',
+        mode,
+        writeState,
+        acceptingWrites: mounted && mode === 'read-write' && writeState === 'ready' && raw.accepting_writes === true,
+        activeWrites: normalizeActiveWrites(raw.active_writes, mode),
         label: normalizeMountLabel(raw.label),
         location: normalizeMountLocation(raw.location),
         error: hasError ? error : '',
