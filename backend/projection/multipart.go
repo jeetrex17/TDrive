@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"strings"
 )
 
@@ -249,13 +248,12 @@ func MultipartCompleteContext(ctx context.Context, db *sql.DB, channelID, fileMs
 		if p.Size < 0 {
 			return fmt.Errorf("multipart file is invalid: part %d has negative size %d", i, p.Size)
 		}
-		if p.Size > math.MaxInt64-sum {
+		// sum is kept in [0, size], so this subtraction cannot overflow and
+		// rejects both an oversized part and an overflowing aggregate.
+		if p.Size > size-sum {
 			return fmt.Errorf("multipart file is invalid: parts exceed expected size %d", size)
 		}
 		sum += p.Size
-		if sum > size {
-			return fmt.Errorf("multipart file is invalid: parts exceed expected size %d", size)
-		}
 	}
 	if sum != size {
 		return fmt.Errorf("multipart file is incomplete: parts total %d bytes, expected %d", sum, size)

@@ -37,6 +37,7 @@ func TestIsTransientTransport(t *testing.T) {
 		{"typed gotd pooled connection dead", fmt.Errorf("pool: %w", pool.ErrConnDead), true},
 		{"typed connection reset", fmt.Errorf("read tcp: %w", syscall.ECONNRESET), true},
 		{"typed broken pipe", fmt.Errorf("write tcp: %w", syscall.EPIPE), true},
+		{"typed connection aborted", fmt.Errorf("read tcp: %w", syscall.ECONNABORTED), true},
 		{"typed unexpected eof", fmt.Errorf("save part: %w", io.ErrUnexpectedEOF), true},
 		{"typed net closed", fmt.Errorf("read: %w", net.ErrClosed), true},
 		{"connection reset by peer", errors.New("read tcp 1.2.3.4:5->6.7.8.9:443: connection reset by peer"), true},
@@ -47,6 +48,7 @@ func TestIsTransientTransport(t *testing.T) {
 		{"io timeout", errors.New("read tcp 1.2.3.4:5->6.7.8.9:443: i/o timeout"), true},
 		{"flood wait is not transient", fmt.Errorf("send media: %w", floodWaitErr), false},
 		{"plain caller cancellation is not transient", callerCtx.Err(), false},
+		{"plain deadline is not transient", context.DeadlineExceeded, false},
 		{"definitive rpc error", errors.New("rpc error code 400: FILE_PARTS_INVALID"), false},
 		{"generic send failure", ErrInjectedSend, false},
 	}

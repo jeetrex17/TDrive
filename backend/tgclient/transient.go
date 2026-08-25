@@ -28,6 +28,7 @@ var transientTransportPatterns = []string{
 	"engine was closed",
 	"use of closed network connection",
 	"connection reset",
+	"connection aborted",
 	"connection refused",
 	"connection dead",
 	"broken pipe",
@@ -55,10 +56,6 @@ func IsTransientTransport(err error) bool {
 	if errors.Is(err, errScopeClosed) {
 		return false
 	}
-	if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) &&
-		!strings.Contains(msg, "engine forcibly closed") {
-		return false
-	}
 	if isTypedTransientTransport(err) {
 		return true
 	}
@@ -67,7 +64,15 @@ func IsTransientTransport(err error) bool {
 			return true
 		}
 	}
-	return false
+	// Bare caller cancellation is not a transport failure. Wrapped transport
+	// errors were deliberately recognized above because gotd cancels internal
+	// contexts when its engine or socket dies; FloodWaitRetryPolicy separately
+	// checks the caller's ctx before retrying.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
 }
 
 func isTypedTransientTransport(err error) bool {
@@ -76,6 +81,7 @@ func isTypedTransientTransport(err error) bool {
 		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNABORTED) ||
 		errors.Is(err, syscall.ECONNREFUSED) ||
 		errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, syscall.ETIMEDOUT) ||
@@ -85,6 +91,5 @@ func isTypedTransientTransport(err error) bool {
 		errors.Is(err, syscall.EHOSTUNREACH) {
 		return true
 	}
-	var netErr net.Error
-	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+	return false
 }

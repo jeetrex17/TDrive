@@ -376,8 +376,9 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 
 	if multipart {
 		// uploadMultipart sends the parts, projects them, and emits the manifest
-		// (the commit point) itself. Returning an empty op tells the caller not
-		// to re-project this upload.
+		// (the commit point) itself. Success returns an empty op; if Telegram
+		// commits but the local manifest projection fails, it returns that exact
+		// op/header so Upload can retry the local-only step.
 		return s.uploadMultipart(ctx, uploadID, source, filename, plaintextSize, parent, channelID, wantEncrypted, masterKey, peer, storedSize)
 	}
 
@@ -751,7 +752,8 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		if commitAttempted {
 			// Once the send starts, Telegram may have accepted the manifest even if
 			// cancellation during retry backoff hides the original transport error.
-			// Preserve every referenced part and let sync/retry reconcile the send.
+			// Preserve every referenced part. Sync can project an accepted manifest;
+			// cleanup would instead corrupt it.
 			if manifestMsgID > 0 {
 				return committedMeta(manifestMsgID), manifestOp, manifestHeader, err
 			}
@@ -1676,9 +1678,8 @@ func (s *Service) acquireUploadSlot(ctx context.Context) (func(), error) {
 	}
 }
 
-// rewindSeeker seeks src to offset when it supports seeking. It reports
-// whether rewinding is possible so unseekable streams (the encrypted multipart
-// pipe) can skip retries instead of resending a consumed reader.
+// rewindSeeker seeks src to offset when it supports seeking. Callers refuse to
+// retry a consumed, non-seekable reader rather than silently send a suffix.
 func rewindSeeker(src io.Reader, offset int64) (io.Seeker, bool) {
 	seeker, ok := src.(io.Seeker)
 	if !ok {
@@ -1800,6 +1801,10 @@ func stageUploadPart(ctx context.Context, dir string, source io.Reader, size int
 }
 
 func createTempWithFallback(dir string, pattern string) (*os.File, error) {
+	// Prefer the source filesystem for multi-gigabyte ciphertext so an upload
+	// from an external volume does not unexpectedly exhaust the system temp
+	// volume. Read-only or otherwise unsuitable source directories fall back to
+	// the OS temp directory.
 	if dir != "" {
 		if tmp, err := os.CreateTemp(dir, pattern); err == nil {
 			return tmp, nil
