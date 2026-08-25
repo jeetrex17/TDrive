@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"testing"
 )
 
@@ -273,6 +274,64 @@ func TestMultipartCompleteValidatesParts(t *testing.T) {
 	short[1].Size = 1
 	if err := MultipartComplete(db, testChan, 4, short); err == nil {
 		t.Fatal("size mismatch should be rejected")
+	}
+	negative := append([]FilePart(nil), parts...)
+	negative[1].Size = -1
+	if err := MultipartComplete(db, testChan, 4, negative); err == nil {
+		t.Fatal("negative part size should be rejected")
+	}
+	oversized := []FilePart{
+		{PartIndex: 0, MsgID: 1, Size: math.MaxInt64},
+		{PartIndex: 1, MsgID: 2, Size: 1},
+		{PartIndex: 2, MsgID: 3, Size: 0},
+	}
+	if err := MultipartComplete(db, testChan, 4, oversized); err == nil {
+		t.Fatal("part sizes exceeding manifest size should be rejected")
+	}
+}
+
+func TestMultipartCompleteRejectsPartSizeOverflow(t *testing.T) {
+	db := newTestDB(t)
+	if err := runOp(t, db, testChan, 1, Op{
+		Type:       OpFileManifest,
+		UploadUUID: "overflow",
+		Parent:     RootParent,
+		Name:       "too-large.bin",
+		FileSize:   math.MaxInt64,
+		PartCount:  2,
+	}); err != nil {
+		t.Fatalf("apply manifest: %v", err)
+	}
+	parts := []FilePart{
+		{PartIndex: 0, MsgID: 10, Size: math.MaxInt64},
+		{PartIndex: 1, MsgID: 11, Size: 1},
+	}
+	if err := MultipartComplete(db, testChan, 1, parts); err == nil {
+		t.Fatal("overflowing part sizes should be rejected")
+	}
+}
+
+func TestMultipartCompleteRejectsNegativeManifestSize(t *testing.T) {
+	db := newTestDB(t)
+	if err := runOp(t, db, testChan, 1, Op{Type: OpFilePart, UploadUUID: "u1", PartIndex: 0, FileSize: 0}); err != nil {
+		t.Fatalf("apply part: %v", err)
+	}
+	if err := runOp(t, db, testChan, 2, Op{
+		Type:       OpFileManifest,
+		UploadUUID: "u1",
+		Parent:     RootParent,
+		Name:       "bad.bin",
+		FileSize:   -1,
+		PartCount:  1,
+	}); err != nil {
+		t.Fatalf("apply manifest: %v", err)
+	}
+	parts, err := MultipartParts(db, testChan, 2)
+	if err != nil {
+		t.Fatalf("MultipartParts: %v", err)
+	}
+	if err := MultipartComplete(db, testChan, 2, parts); err == nil {
+		t.Fatal("negative manifest size should be rejected")
 	}
 }
 

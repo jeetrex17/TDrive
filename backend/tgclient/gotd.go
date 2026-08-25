@@ -265,34 +265,40 @@ func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 	if sendRandomID <= 0 {
 		return SendFileResult{}, fmt.Errorf("tgclient: random id must be positive")
 	}
-	var result SendFileResult
-	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		// Telegram rejects uploads beyond ~4000 parts, so the part size sets the
-		// per-file ceiling: gotd's 128 KiB default tops out near 500 MiB, while
-		// the 512 KiB maximum covers the full 2 GiB document limit and keeps a
-		// 1900 MiB multipart piece at 3800 parts. Passing the known size (instead
-		// of FromReader's unknown-size streaming) lets gotd pick the mode and
-		// part count up front rather than failing mid-stream on a large file.
-		u := uploader.NewUploader(api).WithPartSize(uploader.MaximumPartSize)
-		var src io.Reader = r
-		if onProgress != nil {
-			src = &progressReader{
-				r:          r,
-				total:      totalSize,
-				onProgress: onProgress,
-			}
+	// The uploader keeps each 512 KiB request buffer alive until its RPC
+	// returns. Reacquiring inside retryingUploadClient therefore retries only
+	// the failed Telegram part after a connection restart, rather than rereading
+	// the complete ~1.9 GiB TDrive segment.
+	partClient := &retryingUploadClient{
+		policy: DefaultWriteFloodWaitRetryPolicy(),
+		run: func(ctx context.Context, action func(uploader.Client) error) error {
+			return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+				return action(api)
+			})
+		},
+	}
+	u := uploader.NewUploader(partClient).WithPartSize(uploader.MaximumPartSize)
+	var src io.Reader = r
+	if onProgress != nil {
+		src = &progressReader{
+			r:          r,
+			total:      totalSize,
+			onProgress: onProgress,
 		}
-		var uploadResult tg.InputFileClass
-		var err error
-		if totalSize > 0 {
-			uploadResult, err = u.Upload(ctx, uploader.NewUpload(name, src, totalSize))
-		} else {
-			uploadResult, err = u.FromReader(ctx, name, src)
-		}
-		if err != nil {
-			return fmt.Errorf("tgclient: upload: %w", err)
-		}
+	}
+	var uploadResult tg.InputFileClass
+	var err error
+	if totalSize > 0 {
+		uploadResult, err = u.Upload(ctx, uploader.NewUpload(name, src, totalSize))
+	} else {
+		uploadResult, err = u.FromReader(ctx, name, src)
+	}
+	if err != nil {
+		return SendFileResult{}, fmt.Errorf("tgclient: upload: %w", err)
+	}
 
+	var result SendFileResult
+	err = g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		req := &tg.MessagesSendMediaRequest{
 			Peer: toPeer(peer),
 			Media: &tg.InputMediaUploadedDocument{

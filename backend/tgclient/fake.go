@@ -19,19 +19,20 @@ import (
 type Fake struct {
 	mu sync.Mutex
 
-	self          int64
-	nextMsgID     int64
-	nextChannelID int64
-	history       []HistoryMessage // ordered by msg_id ascending
-	fileBodies    map[int64][]byte
-	sentControls  []SentControl
-	sentFiles     []SentFile
-	deletedBatch  [][]int64
-	controlSends  map[sendDedupeKey]int64
-	fileSends     map[sendDedupeKey]SendFileResult
-	floodWait     int // counter; pre-injects ErrFloodWait this many times before succeeding
-	readFloodWait int // counter; pre-injects ErrFloodWait on GetHistory this many times
-	failNextSend  bool
+	self           int64
+	nextMsgID      int64
+	nextChannelID  int64
+	history        []HistoryMessage // ordered by msg_id ascending
+	fileBodies     map[int64][]byte
+	sentControls   []SentControl
+	sentFiles      []SentFile
+	deletedBatch   [][]int64
+	controlSends   map[sendDedupeKey]int64
+	fileSends      map[sendDedupeKey]SendFileResult
+	floodWait      int // counter; pre-injects ErrFloodWait this many times before succeeding
+	readFloodWait  int // counter; pre-injects ErrFloodWait on GetHistory this many times
+	failNextSend   bool
+	transientFails int // counter; pre-injects ErrInjectedTransport this many times before succeeding
 
 	channels       map[int64]fakeChannel
 	invites        map[string]InviteInfo
@@ -80,6 +81,10 @@ type fakeChannel struct {
 
 var (
 	ErrInjectedSend = errors.New("tgclient.Fake: injected send failure")
+	// ErrInjectedTransport mimics gotd's wrapped engine-close failure so
+	// callers can exercise their transient-retry paths without a real
+	// Telegram connection.
+	ErrInjectedTransport = errors.New("tgclient.Fake: engine forcibly closed: connection lost")
 )
 
 func NewFake(selfID int64) *Fake {
@@ -95,6 +100,14 @@ func NewFake(selfID int64) *Fake {
 		joinRequests:  make(map[int64][]JoinRequest),
 		users:         make(map[int64]UserProfile),
 	}
+}
+
+// InjectTransientFailures makes the next n send attempts fail with
+// ErrInjectedTransport before succeeding, one failure per attempt.
+func (f *Fake) InjectTransientFailures(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.transientFails += n
 }
 
 func (f *Fake) SetSelfID(id int64) {
@@ -313,6 +326,10 @@ func (f *Fake) SendControlWithRandomID(ctx context.Context, peer InputPeer, text
 		f.failNextSend = false
 		return 0, ErrInjectedSend
 	}
+	if f.transientFails > 0 {
+		f.transientFails--
+		return 0, ErrInjectedTransport
+	}
 	if f.floodWait > 0 {
 		f.floodWait--
 		return 0, NewFloodWaitError(10 * time.Millisecond)
@@ -350,6 +367,11 @@ func (f *Fake) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 		f.failNextSend = false
 		f.mu.Unlock()
 		return SendFileResult{}, ErrInjectedSend
+	}
+	if f.transientFails > 0 {
+		f.transientFails--
+		f.mu.Unlock()
+		return SendFileResult{}, ErrInjectedTransport
 	}
 	if f.floodWait > 0 {
 		f.floodWait--

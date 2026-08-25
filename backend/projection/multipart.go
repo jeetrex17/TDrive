@@ -237,10 +237,21 @@ func MultipartCompleteContext(ctx context.Context, db *sql.DB, channelID, fileMs
 	if len(parts) != partCount {
 		return fmt.Errorf("multipart file is incomplete: have %d of %d parts", len(parts), partCount)
 	}
+	if size < 0 {
+		return fmt.Errorf("multipart file is invalid: negative size %d", size)
+	}
 	var sum int64
 	for i, p := range parts {
 		if p.PartIndex != i {
 			return fmt.Errorf("multipart file is incomplete: missing part %d", i)
+		}
+		if p.Size < 0 {
+			return fmt.Errorf("multipart file is invalid: part %d has negative size %d", i, p.Size)
+		}
+		// sum is kept in [0, size], so this subtraction cannot overflow and
+		// rejects both an oversized part and an overflowing aggregate.
+		if p.Size > size-sum {
+			return fmt.Errorf("multipart file is invalid: parts exceed expected size %d", size)
 		}
 		sum += p.Size
 	}

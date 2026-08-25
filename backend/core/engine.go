@@ -60,6 +60,11 @@ type Config struct {
 	// Thumbs is optional. Nil disables thumbnail caching for this engine.
 	Thumbs *thumbnail.Cache
 
+	// MaxConcurrentUploads caps active Telegram uploads across GUI/import,
+	// daemon, and mount writers owned by this engine. <= 0 uses the file
+	// service default.
+	MaxConcurrentUploads int
+
 	// SkipDBInit is for tests that already installed backend.DB. Normal GUI and
 	// daemon startup should leave this false.
 	SkipDBInit bool
@@ -93,6 +98,7 @@ type Engine struct {
 	active     *lifecycleservice.ActiveDrive
 	selfUserID atomic.Int64
 	thumbs     *thumbnail.Cache
+	maxUploads int
 	policySync func(context.Context, int64) error
 }
 
@@ -121,6 +127,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		tg:         cfg.TG,
 		active:     lifecycleservice.NewActiveDrive(),
 		thumbs:     cfg.Thumbs,
+		maxUploads: cfg.MaxConcurrentUploads,
 		policySync: cfg.EncryptionPolicyRefresh,
 	}
 	var liveActivity *livesync.TelegramActivity
@@ -546,7 +553,8 @@ func (e *Engine) newFileService() *fileservice.Service {
 		Warnf: func(format string, args ...any) {
 			e.warnf(format, args...)
 		},
-		Thumbs: e.thumbs,
+		Thumbs:               e.thumbs,
+		MaxConcurrentUploads: e.maxUploads,
 	}
 }
 

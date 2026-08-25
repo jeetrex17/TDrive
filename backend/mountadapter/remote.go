@@ -78,7 +78,7 @@ func NewTelegramRemote(config TelegramRemoteConfig) (*TelegramRemote, error) {
 	if isZeroFloodWaitRetryPolicy(config.FloodWaitRetry) {
 		config.FloodWaitRetry = tgclient.DefaultWriteFloodWaitRetryPolicy()
 	}
-	if err := validateFloodWaitRetryPolicy(config.FloodWaitRetry); err != nil {
+	if err := config.FloodWaitRetry.Validate(); err != nil {
 		return nil, mountwrite.ErrInvalidRequest
 	}
 	return &TelegramRemote{
@@ -385,17 +385,14 @@ func projectionOperationMatchesCommit(request mountwrite.CommitRequest, actual p
 }
 
 func isZeroFloodWaitRetryPolicy(policy tgclient.FloodWaitRetryPolicy) bool {
-	return policy.MaxRetries == 0 && policy.MaxWait == 0 && policy.MaxTotalWait == 0 && policy.Sleep == nil
-}
-
-func validateFloodWaitRetryPolicy(policy tgclient.FloodWaitRetryPolicy) error {
-	if policy.MaxRetries < 0 || policy.MaxWait < 0 || policy.MaxTotalWait < 0 {
-		return tgclient.ErrInvalidFloodWaitRetryPolicy
-	}
-	if policy.MaxRetries > 0 && (policy.MaxWait == 0 || policy.MaxTotalWait == 0) {
-		return tgclient.ErrInvalidFloodWaitRetryPolicy
-	}
-	return nil
+	return policy.MaxRetries == 0 &&
+		policy.MaxWait == 0 &&
+		policy.MaxTotalWait == 0 &&
+		policy.Sleep == nil &&
+		policy.MaxTransientRetries == 0 &&
+		policy.TransientBackoff == 0 &&
+		policy.MaxTransientBackoff == 0 &&
+		policy.TransientJitter == 0
 }
 
 func (remote *TelegramRemote) reconcileProjected(operationID string) (mountwrite.MutationResult, bool, error) {
