@@ -452,13 +452,7 @@ func waitForDocumentWaiters(t *testing.T, opener *Opener, key documentRefKey, wa
 	t.Helper()
 	deadline := timeAfterResolverEvent()
 	for {
-		opener.mu.RLock()
-		resolution := opener.documentResolutions[key]
-		got := 0
-		if resolution != nil {
-			got = resolution.waiters
-		}
-		opener.mu.RUnlock()
+		got := opener.documentResolutions.Waiters(key)
 		if got == want {
 			return
 		}
@@ -478,7 +472,5 @@ func cachedDocumentCount(opener *Opener) int {
 }
 
 func inFlightDocumentCount(opener *Opener) int {
-	opener.mu.RLock()
-	defer opener.mu.RUnlock()
-	return len(opener.documentResolutions)
+	return opener.documentResolutions.Len()
 }

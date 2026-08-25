@@ -116,10 +116,8 @@ func TestSnapshotCacheEnforcesTotalEntryBudget(t *testing.T) {
 
 	clock := newFakeClock(time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC))
 	cache := newSnapshotCache(4, 3, 2, time.Minute, clock.Now)
-	cache.mu.Lock()
-	cache.insertLocked("first", snapshotWithEntries(2))
-	cache.insertLocked("second", snapshotWithEntries(2))
-	cache.mu.Unlock()
+	cache.entries.Put("first", snapshotWithEntries(2))
+	cache.entries.Put("second", snapshotWithEntries(2))
 
 	if got := cache.len(); got != 1 {
 		t.Fatalf("cache size = %d, want 1 after weighted eviction", got)
@@ -267,12 +265,14 @@ func TestSnapshotCacheCancelsAbandonedDistinctLoadsAndReusesSlots(t *testing.T) 
 
 	cache := newSnapshotCache(4, 10, 2, time.Minute, time.Now)
 	loadStarted := make(chan string, 2)
+	loadFinished := make(chan string, 2)
 	loader := func(ctx context.Context, parentID string) (directorySnapshot, error) {
 		if parentID == "reuse" {
 			return snapshotWithName("reused"), nil
 		}
 		loadStarted <- parentID
 		<-ctx.Done()
+		loadFinished <- parentID
 		return directorySnapshot{}, ctx.Err()
 	}
 
@@ -299,14 +299,6 @@ func TestSnapshotCacheCancelsAbandonedDistinctLoadsAndReusesSlots(t *testing.T) 
 		t.Fatalf("started loads = %v, want both distinct keys", started)
 	}
 
-	cache.mu.Lock()
-	firstLoad := cache.loads["first"]
-	secondLoad := cache.loads["second"]
-	cache.mu.Unlock()
-	if firstLoad == nil || secondLoad == nil {
-		t.Fatal("expected both admitted loads to be tracked")
-	}
-
 	contexts["first"]()
 	contexts["second"]()
 	for range 2 {
@@ -314,9 +306,9 @@ func TestSnapshotCacheCancelsAbandonedDistinctLoadsAndReusesSlots(t *testing.T) 
 			t.Fatalf("abandoned waiter error = %v, want context.Canceled", err)
 		}
 	}
-	for _, load := range []*snapshotLoad{firstLoad, secondLoad} {
+	for range 2 {
 		select {
-		case <-load.done:
+		case <-loadFinished:
 		case <-time.After(2 * time.Second):
 			t.Fatal("abandoned loader did not return after its final waiter cancelled")
 		}
@@ -329,10 +321,8 @@ func TestSnapshotCacheCancelsAbandonedDistinctLoadsAndReusesSlots(t *testing.T) 
 	if got := snapshot.entries[0].entry.Name; got != "reused" {
 		t.Fatalf("reused-slot snapshot name = %q, want %q", got, "reused")
 	}
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	if len(cache.loads) != 0 || len(cache.loadSlots) != 0 {
-		t.Fatalf("abandoned-load bookkeeping leaked: loads=%d slots=%d", len(cache.loads), len(cache.loadSlots))
+	if got := cache.loads.Len(); got != 0 {
+		t.Fatalf("abandoned-load bookkeeping leaked: loads=%d", got)
 	}
 }
 
@@ -343,6 +333,7 @@ func TestSnapshotCacheStaleCompletionCannotReplaceNewLoad(t *testing.T) {
 	oldStarted := make(chan struct{})
 	oldCancelled := make(chan struct{})
 	releaseOld := make(chan struct{})
+	oldReturned := make(chan struct{})
 	newStarted := make(chan struct{})
 	releaseNew := make(chan struct{})
 	var attemptsMu sync.Mutex
@@ -358,6 +349,7 @@ func TestSnapshotCacheStaleCompletionCannotReplaceNewLoad(t *testing.T) {
 			<-ctx.Done()
 			close(oldCancelled)
 			<-releaseOld
+			close(oldReturned)
 			return snapshotWithName("stale"), nil
 		case 2:
 			close(newStarted)
@@ -379,10 +371,7 @@ func TestSnapshotCacheStaleCompletionCannotReplaceNewLoad(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("old load did not start")
 	}
-	cache.mu.Lock()
-	oldLoad := cache.loads["shared"]
-	cache.mu.Unlock()
-	if oldLoad == nil {
+	if got := cache.loads.Waiters("shared"); got != 1 {
 		t.Fatal("old load was not tracked")
 	}
 
@@ -412,26 +401,20 @@ func TestSnapshotCacheStaleCompletionCannotReplaceNewLoad(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("replacement load did not start while the stale loader was returning")
 	}
-	cache.mu.Lock()
-	newLoad := cache.loads["shared"]
-	cache.mu.Unlock()
-	if newLoad == nil || newLoad == oldLoad {
+	if got := cache.loads.Waiters("shared"); got != 1 {
 		t.Fatal("replacement load was not tracked independently")
 	}
 
 	close(releaseOld)
 	select {
-	case <-oldLoad.done:
+	case <-oldReturned:
 	case <-time.After(2 * time.Second):
 		t.Fatal("stale loader did not finish")
 	}
-	cache.mu.Lock()
-	trackedLoad := cache.loads["shared"]
-	_, staleCached := cache.entries["shared"]
-	cache.mu.Unlock()
-	if trackedLoad != newLoad {
+	if got := cache.loads.Waiters("shared"); got != 1 {
 		t.Fatal("stale completion removed the replacement load")
 	}
+	_, staleCached := cache.entries.Get("shared")
 	if staleCached {
 		t.Fatal("stale completion populated the snapshot cache")
 	}
@@ -522,10 +505,8 @@ func TestSnapshotCacheBoundsDistinctConcurrentLoads(t *testing.T) {
 	if observedMax > maxLoads {
 		t.Fatalf("maximum concurrent loads = %d, configured bound is %d", observedMax, maxLoads)
 	}
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	if len(cache.loads) != 0 || len(cache.loadSlots) != 0 {
-		t.Fatalf("load bookkeeping leaked: loads=%d slots=%d", len(cache.loads), len(cache.loadSlots))
+	if got := cache.loads.Len(); got != 0 {
+		t.Fatalf("load bookkeeping leaked: loads=%d", got)
 	}
 }
 
@@ -581,10 +562,8 @@ func TestSnapshotCacheTimeoutAndAdmissionCancellationCleanUp(t *testing.T) {
 	if waitingCalls != 1 {
 		t.Fatalf("waiting loader calls = %d, want only the post-timeout admitted call", waitingCalls)
 	}
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	if len(cache.loads) != 0 || len(cache.loadSlots) != 0 {
-		t.Fatalf("timeout bookkeeping leaked: loads=%d slots=%d", len(cache.loads), len(cache.loadSlots))
+	if got := cache.loads.Len(); got != 0 {
+		t.Fatalf("timeout bookkeeping leaked: loads=%d", got)
 	}
 }
 

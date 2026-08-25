@@ -38,8 +38,8 @@ afterEach(async () => {
 describe('MountSelectionModal', () => {
     it('renders an accessible all-selected checklist with shared drives marked read only', async () => {
         mountSelection.open([
-            { id: 20, title: 'Project', kind: 'shared' },
             { id: 10, title: 'Personal', kind: 'personal' },
+            { id: 20, title: 'Project', kind: 'shared' },
         ], vi.fn());
         await renderModal();
 

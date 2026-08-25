@@ -15,7 +15,7 @@ func TestAdapterSessionMapsStatusAndDelegatesLifecycle(t *testing.T) {
 
 	drainErr := errors.New("drain failed")
 	canonical := &fakeCanonicalWriteSession{
-		status:   mountwrite.Status{Accepting: true, Active: 3, Executing: 2, Queued: 1},
+		status:   mountwrite.Status{Accepting: true, Active: 3},
 		drainErr: drainErr,
 	}
 	session, err := newAdapterSession(canonical)

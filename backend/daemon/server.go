@@ -19,6 +19,7 @@ import (
 
 	"TDrive/backend/applog"
 	"TDrive/backend/core"
+	"TDrive/backend/mountlifecycle"
 	"TDrive/backend/processlock"
 )
 
@@ -51,7 +52,7 @@ type Server struct {
 	// mountLifecycle serializes mount Start/Stop/Close with vault lock/logout.
 	// The gate must cover both controller shutdown and encryption-key erasure so
 	// a racing Start cannot observe a stale unlocked vault.
-	mountLifecycle         mountLifecycleGate
+	mountLifecycle         mountlifecycle.Gate
 	mountLifecycleTerminal bool // guarded by mountLifecycle
 	warnf                  func(format string, args ...any)
 	state                  *state

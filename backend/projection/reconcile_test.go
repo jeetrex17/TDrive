@@ -38,6 +38,36 @@ func TestLiveFileMessageIDsSingleFile(t *testing.T) {
 	}
 }
 
+func TestLiveFileMessageIDsIncludesWritableContentMessage(t *testing.T) {
+	db := newTestDB(t)
+	mustOp(t, db, 101, Op{
+		Type: OpFileCommit, ProtocolVersion: 1, OpID: "reconcile-create",
+		Name: "draft.txt", ContentMsgID: 9001,
+	})
+
+	refs, err := LiveFileMessageIDs(db, testChan)
+	if err != nil {
+		t.Fatalf("LiveFileMessageIDs after commit: %v", err)
+	}
+	if len(refs) != 1 || !slices.Equal(refs[0].BackingMsgIDs, []int64{101, 9001}) {
+		t.Fatalf("refs after commit = %+v, want backing messages [101 9001]", refs)
+	}
+
+	mustOp(t, db, 102, Op{
+		Type: OpFileReplace, ProtocolVersion: 1, OpID: "reconcile-replace",
+		Obj: "f:101", ExpectedRevision: 1, RetainedUntil: 1,
+		ContentMsgID: 9002,
+	})
+
+	refs, err = LiveFileMessageIDs(db, testChan)
+	if err != nil {
+		t.Fatalf("LiveFileMessageIDs after replace: %v", err)
+	}
+	if len(refs) != 1 || !slices.Equal(refs[0].BackingMsgIDs, []int64{101, 9002}) {
+		t.Fatalf("refs after replace = %+v, want backing messages [101 9002]", refs)
+	}
+}
+
 func TestLiveFileMessageIDsMultipartFile(t *testing.T) {
 	db := newTestDB(t)
 	applyMultipartUpload(t, db, "uuid-1", []int64{1, 2, 3}, 4, "movie.bin", RootParent, false)

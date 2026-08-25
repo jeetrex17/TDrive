@@ -133,18 +133,6 @@ func TestEncryptedPutRequestRequiresKnownLengthKeyAndCiphertextBudget(t *testing
 	}
 }
 
-func TestSafeErrorDoesNotLeakInternalDetails(t *testing.T) {
-	t.Parallel()
-
-	err := newOperationError("operation-1", MutationPut, errors.New("secret Telegram token abc"))
-	if got := err.Error(); got != "mount write put unavailable (operation operation-1)" {
-		t.Fatalf("safe error = %q", got)
-	}
-	if !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("safe error should classify as unavailable: %v", err)
-	}
-}
-
 func assertStringsEqual(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {

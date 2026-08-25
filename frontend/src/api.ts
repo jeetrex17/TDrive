@@ -20,7 +20,6 @@ import {
     MoveNativeSeekThumbnail as rawMoveNativeSeekThumbnail,
     NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
-    OpenMountedDrive as rawOpenMountedDrive,
     OpenNativeMedia as rawOpenNativeMedia,
     OpenStream as rawOpenStream,
     ResizeNativeMedia as rawResizeNativeMedia,
@@ -90,12 +89,6 @@ function normalizeMountedDrive(value: unknown): MountedDrive | null {
     return { id, title, kind };
 }
 
-function normalizeWindowsDrive(value: unknown): string {
-    const drive = boundedText(value, 2).toUpperCase();
-    if (/^[A-Z]$/.test(drive)) return `${drive}:`;
-    return /^[A-Z]:$/.test(drive) ? drive : '';
-}
-
 function normalizeMountLocation(value: unknown): string {
     const location = boundedText(value, 320);
     if (UNSAFE_MOUNT_DETAIL.test(location) || LOOPBACK_LOCATION.test(location)) return '';
@@ -154,7 +147,6 @@ export function normalizeMountStatus(value: unknown): MountStatusView {
         location: normalizeMountLocation(raw.location),
         error: hasError ? error : '',
         drive: normalizeMountedDrive(raw.drive),
-        windowsDrive: normalizeWindowsDrive(raw.windows_drive),
     };
 }
 
@@ -200,10 +192,6 @@ export async function mountDrives(channelIds: readonly number[]): Promise<MountS
 
 export async function getMountStatus(): Promise<MountStatusView> {
     return normalizeMountStatus(await rawMountStatus());
-}
-
-export async function openMountedDrive(): Promise<void> {
-    await rawOpenMountedDrive();
 }
 
 export async function unmountDrive(): Promise<MountStatusView> {

@@ -5,9 +5,9 @@ import (
 	"io"
 	"os"
 	"strings"
-	"unicode"
 
 	"TDrive/backend/daemon"
+	"TDrive/backend/mountsafe"
 )
 
 func runMount(args []string) error {
@@ -162,29 +162,9 @@ func printMountError(writer io.Writer, raw string) {
 }
 
 func safeMountMessage(message string) string {
-	message = strings.Map(func(character rune) rune {
-		if unicode.IsControl(character) {
-			return ' '
-		}
-		return character
-	}, message)
-	message = strings.Join(strings.Fields(message), " ")
-	if containsSensitiveMountDetail(message) {
-		return "Mount operation failed; retry or check the app logs"
-	}
-	runes := []rune(message)
-	if len(runes) > 240 {
-		message = string(runes[:240])
-	}
-	return message
+	return mountsafe.Message(message)
 }
 
 func containsSensitiveMountDetail(value string) bool {
-	lower := strings.ToLower(value)
-	return strings.Contains(lower, "tdrive-") ||
-		strings.Contains(lower, "http://") ||
-		strings.Contains(lower, "https://") ||
-		strings.Contains(lower, "dav://") ||
-		strings.Contains(lower, "localhost") ||
-		strings.Contains(lower, "127.0.0.1")
+	return mountsafe.ContainsSensitive(value)
 }

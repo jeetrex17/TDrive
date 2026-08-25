@@ -325,13 +325,7 @@ func waitForPeerWaiters(t *testing.T, opener *Opener, channelID int64, want int)
 	t.Helper()
 	deadline := timeAfterResolverEvent()
 	for {
-		opener.mu.RLock()
-		resolution := opener.peerResolutions[channelID]
-		got := 0
-		if resolution != nil {
-			got = resolution.waiters
-		}
-		opener.mu.RUnlock()
+		got := opener.peerResolutions.Waiters(channelID)
 		if got == want {
 			return
 		}

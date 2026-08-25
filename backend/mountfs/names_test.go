@@ -7,6 +7,8 @@ import (
 	"testing"
 	"unicode"
 	"unicode/utf8"
+
+	"TDrive/backend/mountpath"
 )
 
 func TestPortableNamesNormalizeUnicodeBeforeCollisionDetection(t *testing.T) {
@@ -229,7 +231,7 @@ func FuzzPortableNameProperties(f *testing.F) {
 		if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
 			t.Fatalf("portableName() retained a forbidden trailing character: %q", name)
 		}
-		if isWindowsReservedName(name) {
+		if mountpath.IsWindowsReservedComponent(name) {
 			t.Fatalf("portableName() retained a Windows device name: %q", name)
 		}
 	})

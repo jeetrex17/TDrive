@@ -159,5 +159,6 @@
 <div id="encryption-setup-modal" class="modal-overlay" style="display: none;"></div>
 <div id="encryption-password-modal" class="modal-overlay" style="display: none;"></div>
 <div id="encryption-settings-modal" class="modal-overlay" style="display: none;"></div>
+<div id="mount-selection-modal" class="modal-overlay" style="display: none;" aria-hidden="true"></div>
 <div id="logout-modal" class="modal-overlay" style="display: none;"></div>
 <div id="leave-drive-modal" class="modal-overlay" style="display: none;"></div>

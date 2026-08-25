@@ -44,7 +44,6 @@ func (s *Service) StartLogin(ctx context.Context, phoneNumber string) error {
 	s.resetAttempt(stageStarted)
 	client, err := coreauth.Connect()
 	if err != nil {
-		fmt.Println("Could not connect to Telegram:", err)
 		slog.Warn("auth: telegram connect failed", "error", err)
 		s.finishAttempt()
 		s.emit("login-error", err.Error())
@@ -61,14 +60,12 @@ func (s *Service) StartLogin(ctx context.Context, phoneNumber string) error {
 		}()
 		err := coreauth.StartLogin(ctx, client, s, phoneNumber)
 		if err != nil {
-			fmt.Println("Login failed:", err)
 			slog.Warn("auth: login attempt failed", "error", err)
 			s.finishAttempt()
 			s.emit("login-error", err.Error())
 			return
 		}
 
-		fmt.Println("Login Flow Complete. Emitting Success Event.")
 		slog.Info("auth: login succeeded")
 		s.finishAttempt()
 		s.emit("login-success", true)

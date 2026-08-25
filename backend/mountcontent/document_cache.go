@@ -1,10 +1,10 @@
 package mountcontent
 
 import (
-	"container/list"
 	"time"
 
 	"TDrive/backend/media"
+	"TDrive/backend/mountcache"
 	"TDrive/backend/tgclient"
 )
 
@@ -32,31 +32,22 @@ func newDocumentRefKey(peer tgclient.InputPeer, projected media.Segment) documen
 }
 
 type documentRefCache struct {
-	capacity int
-	ttl      time.Duration
-	now      func() time.Time
-	entries  map[documentRefKey]*list.Element
-	recent   list.List
-}
-
-type documentRefEntry struct {
-	key       documentRefKey
-	ref       tgclient.DocumentRef
-	expiresAt time.Time
+	entries *mountcache.LRU[documentRefKey, tgclient.DocumentRef]
 }
 
 func newDocumentRefCache(capacity int, ttl time.Duration, now func() time.Time) *documentRefCache {
-	if capacity < 0 {
+	if ttl <= 0 {
 		capacity = 0
 	}
-	if now == nil {
-		now = time.Now
-	}
 	return &documentRefCache{
-		capacity: capacity,
-		ttl:      ttl,
-		now:      now,
-		entries:  make(map[documentRefKey]*list.Element, capacity),
+		entries: mountcache.NewLRU[documentRefKey, tgclient.DocumentRef](
+			mountcache.LRUConfig[tgclient.DocumentRef]{
+				Capacity: capacity,
+				TTL:      ttl,
+				Now:      now,
+				Clone:    cloneDocumentRef,
+			},
+		),
 	}
 }
 
@@ -64,58 +55,28 @@ func (cache *documentRefCache) get(key documentRefKey) (tgclient.DocumentRef, bo
 	if cache == nil {
 		return tgclient.DocumentRef{}, false
 	}
-	element := cache.entries[key]
-	if element == nil {
-		return tgclient.DocumentRef{}, false
-	}
-	entry := element.Value.(documentRefEntry)
-	if !entry.expiresAt.IsZero() && !cache.now().Before(entry.expiresAt) {
-		delete(cache.entries, key)
-		cache.recent.Remove(element)
-		return tgclient.DocumentRef{}, false
-	}
-	cache.recent.MoveToFront(element)
-	return cloneDocumentRef(entry.ref), true
+	return cache.entries.Get(key)
 }
 
 func (cache *documentRefCache) put(key documentRefKey, ref tgclient.DocumentRef) {
-	if cache == nil || cache.capacity <= 0 || cache.ttl <= 0 {
+	if cache == nil {
 		return
 	}
-	entry := documentRefEntry{
-		key:       key,
-		ref:       cloneDocumentRef(ref),
-		expiresAt: cache.now().Add(cache.ttl),
-	}
-	if element := cache.entries[key]; element != nil {
-		element.Value = entry
-		cache.recent.MoveToFront(element)
-		return
-	}
-	element := cache.recent.PushFront(entry)
-	cache.entries[key] = element
-	if cache.recent.Len() <= cache.capacity {
-		return
-	}
-	lru := cache.recent.Back()
-	lruEntry := lru.Value.(documentRefEntry)
-	delete(cache.entries, lruEntry.key)
-	cache.recent.Remove(lru)
+	cache.entries.Put(key, ref)
 }
 
 func (cache *documentRefCache) clear() {
 	if cache == nil {
 		return
 	}
-	cache.entries = make(map[documentRefKey]*list.Element, cache.capacity)
-	cache.recent.Init()
+	cache.entries.Clear()
 }
 
 func (cache *documentRefCache) len() int {
 	if cache == nil {
 		return 0
 	}
-	return len(cache.entries)
+	return cache.entries.Len()
 }
 
 func cloneDocumentRef(ref tgclient.DocumentRef) tgclient.DocumentRef {

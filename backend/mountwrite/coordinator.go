@@ -45,7 +45,6 @@ type Coordinator struct {
 	lifecycleMu sync.Mutex
 	accepting   bool
 	active      int
-	executing   int
 	idle        chan struct{}
 }
 
@@ -87,20 +86,8 @@ func (UUIDGenerator) NewID() string {
 	return uuid.NewString()
 }
 
-func (c *Coordinator) Capabilities() Capabilities {
-	if c == nil {
-		return Capabilities{}
-	}
-	return Capabilities{
-		Writable:      true,
-		PersonalOnly:  true,
-		PlaintextOnly: false,
-		OnlineOnly:    true,
-	}
-}
-
-// Status returns a concurrency-safe lifecycle snapshot. Active includes both
-// executing and queued work.
+// Status returns a concurrency-safe lifecycle snapshot. Active is the total
+// admitted work, including operations waiting for an execution slot.
 func (c *Coordinator) Status() Status {
 	if c == nil {
 		return Status{}
@@ -110,8 +97,6 @@ func (c *Coordinator) Status() Status {
 	return Status{
 		Accepting: c.accepting,
 		Active:    c.active,
-		Executing: c.executing,
-		Queued:    c.active - c.executing,
 	}
 }
 
@@ -160,31 +145,25 @@ func (c *Coordinator) begin(ctx context.Context) (func(), error) {
 
 	select {
 	case c.slots <- struct{}{}:
-		c.lifecycleMu.Lock()
-		c.executing++
-		c.lifecycleMu.Unlock()
 		var once sync.Once
 		return func() {
 			once.Do(func() {
 				<-c.slots
 				<-c.admission
-				c.finishActive(true)
+				c.finishActive()
 			})
 		}, nil
 	case <-ctx.Done():
 		<-c.admission
-		c.finishActive(false)
+		c.finishActive()
 		return nil, ErrCanceled
 	}
 }
 
-func (c *Coordinator) finishActive(wasExecuting bool) {
+func (c *Coordinator) finishActive() {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
 	c.active--
-	if wasExecuting {
-		c.executing--
-	}
 	if c.active == 0 {
 		close(c.idle)
 	}
@@ -248,13 +227,18 @@ func (c *Coordinator) loadAfterCreateRace(
 }
 
 func (c *Coordinator) existingResult(ctx context.Context, record JournalRecord) (MutationResult, bool, error) {
-	if record.Result == nil {
-		return MutationResult{}, false, nil
-	}
 	switch record.State {
+	case StateAborted:
+		return MutationResult{}, true, operationError(record, errorFromSafeLabel(record.ErrorCode))
 	case StateDone, StateCleanupPending:
+		if record.Result == nil {
+			return MutationResult{}, false, nil
+		}
 		return *record.Result, true, nil
 	case StateProjectionPending, StateRemoteCommitted:
+		if record.Result == nil {
+			return MutationResult{}, false, nil
+		}
 		result, err := c.finalizeCommitted(ctx, record)
 		return result, true, err
 	default:

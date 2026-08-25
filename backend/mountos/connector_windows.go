@@ -80,7 +80,9 @@ func newWindowsConnector(dependencies windowsDependencies) *windowsConnector {
 	}
 	verificationDelay := dependencies.verificationDelay
 	if verificationDelay == nil {
-		verificationDelay = waitForWindowsVerification
+		verificationDelay = func(ctx context.Context) error {
+			return waitForPoll(ctx, 100*time.Millisecond)
+		}
 	}
 	return &windowsConnector{
 		owner:             &ownerMarker{},
@@ -189,17 +191,6 @@ func (c *windowsConnector) waitForVerifiedMapping(ctx context.Context, drive, en
 		if err := c.verificationDelay(ctx); err != nil {
 			return lastOwnedRemote, ErrVerificationFailed
 		}
-	}
-}
-
-func waitForWindowsVerification(ctx context.Context) error {
-	timer := time.NewTimer(100 * time.Millisecond)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
 	}
 }
 

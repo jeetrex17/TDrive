@@ -1,11 +1,12 @@
 import { get } from 'svelte/store';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MountStatusView } from '../../types';
 import {
     createMountController,
     type MountApi,
     type MountNotice,
 } from './mount-controller';
+import { mountSelection } from './mount-selection-store';
 
 interface Deferred<T> {
     promise: Promise<T>;
@@ -35,7 +36,6 @@ function status(overrides: Partial<MountStatusView> = {}): MountStatusView {
         location: '',
         error: '',
         drive: null,
-        windowsDrive: '',
         ...overrides,
     };
 }
@@ -63,14 +63,60 @@ function api(overrides: Partial<MountApi> = {}): MountApi {
     return {
         mountDrive: vi.fn(async () => mountedStatus()),
         mountStatus: vi.fn(async () => status()),
-        openMountedDrive: vi.fn(async () => undefined),
         unmountDrive: vi.fn(async () => status()),
         unlockEncryption: vi.fn(async () => false),
         ...overrides,
     };
 }
 
+afterEach(() => {
+    mountSelection.reset();
+});
+
 describe('mount controller', () => {
+    it('loads and mounts the only available drive through the controller', async () => {
+        const mountDrives = vi.fn(async () => mountedStatus());
+        const loadDrives = vi.fn(async () => [
+            { id: 42, title: 'Personal', kind: 'personal' as const },
+        ]);
+        const onAction = vi.fn();
+        const controller = createMountController(api({ mountDrives }));
+
+        await controller.requestMount({ loadDrives, onAction });
+
+        expect(loadDrives).toHaveBeenCalledTimes(1);
+        expect(onAction).toHaveBeenCalledTimes(1);
+        expect(mountDrives).toHaveBeenCalledWith([42]);
+        expect(get(controller.loadingDrives)).toBe(false);
+    });
+
+    it('opens the picker from one coalesced drive-list request', async () => {
+        const pending = deferred<readonly [
+            { id: number; title: string; kind: 'personal' },
+            { id: number; title: string; kind: 'shared' },
+        ]>();
+        const loadDrives = vi.fn(() => pending.promise);
+        const controller = createMountController(api());
+
+        const first = controller.requestMount({ loadDrives });
+        const duplicate = controller.requestMount({ loadDrives });
+
+        expect(duplicate).toBe(first);
+        expect(get(controller.loadingDrives)).toBe(true);
+        pending.resolve([
+            { id: 10, title: 'Personal', kind: 'personal' },
+            { id: 20, title: 'Project', kind: 'shared' },
+        ]);
+        await first;
+
+        expect(loadDrives).toHaveBeenCalledTimes(1);
+        expect(get(controller.loadingDrives)).toBe(false);
+        expect(get(mountSelection.state)).toMatchObject({
+            open: true,
+            selectedIds: [10, 20],
+        });
+    });
+
     it('mounts a sanitized immutable drive selection and retries that selection after unlock', async () => {
         const selected = [7, 7, -1, 9];
         const mountDrives = vi.fn()
@@ -335,26 +381,4 @@ describe('mount controller', () => {
         });
     });
 
-    it('opens only a mounted drive and coalesces duplicate open requests', async () => {
-        const pending = deferred<void>();
-        const openMountedDrive = vi.fn(() => pending.promise);
-        const controller = createMountController(api({ openMountedDrive }));
-
-        await controller.open();
-        expect(openMountedDrive).not.toHaveBeenCalled();
-
-        const mountedController = createMountController(api({
-            openMountedDrive,
-            mountStatus: vi.fn(async () => mountedStatus()),
-        }));
-        await mountedController.refresh();
-        const first = mountedController.open();
-        const duplicate = mountedController.open();
-
-        expect(first).toBe(duplicate);
-        expect(openMountedDrive).toHaveBeenCalledTimes(1);
-
-        pending.resolve();
-        await first;
-    });
 });

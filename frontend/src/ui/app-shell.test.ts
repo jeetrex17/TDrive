@@ -22,6 +22,7 @@ describe('AppShell', () => {
             'context-menu',
             'preview-modal',
             'video-modal',
+            'mount-selection-modal',
             'logout-modal',
         ]) {
             expect(body).toContain(`id="${id}"`);

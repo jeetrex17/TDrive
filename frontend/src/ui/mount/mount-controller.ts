@@ -3,19 +3,23 @@ import {
     getMountStatus,
     mountDrive,
     mountDrives,
-    openMountedDrive,
     safeMountError,
     unmountDrive,
 } from '../../api';
-import type { MountPhase, MountStatusView } from '../../types';
+import type { MountableDrive, MountPhase, MountStatusView } from '../../types';
+import { mountSelection } from './mount-selection-store';
 
 export interface MountApi {
     mountDrive(): Promise<MountStatusView>;
     mountDrives?(channelIds: readonly number[]): Promise<MountStatusView>;
     mountStatus(): Promise<MountStatusView>;
-    openMountedDrive(): Promise<void>;
     unmountDrive(): Promise<MountStatusView>;
     unlockEncryption?(): Promise<boolean>;
+}
+
+export interface MountRequestOptions {
+    loadDrives?: () => Promise<readonly MountableDrive[]>;
+    onAction?: () => void;
 }
 
 export interface MountNotice {
@@ -28,9 +32,10 @@ export interface MountNotice {
 }
 
 export interface MountController extends Readable<MountStatusView> {
+    loadingDrives: Readable<boolean>;
     refresh(): Promise<void>;
+    requestMount(options?: MountRequestOptions): Promise<void>;
     mount(channelIds?: readonly number[]): Promise<void>;
-    open(): Promise<void>;
     disconnect(): Promise<void>;
 }
 
@@ -40,7 +45,6 @@ export const defaultMountApi: MountApi = {
     mountDrive,
     mountDrives,
     mountStatus: getMountStatus,
-    openMountedDrive,
     unmountDrive,
     unlockEncryption: async () => {
         const { requireEncryptionPassword } = await import('../../modules/encryption');
@@ -59,29 +63,7 @@ const INITIAL_STATUS: MountStatusView = {
     location: '',
     error: '',
     drive: null,
-    windowsDrive: '',
 };
-
-function copyStatus(status: MountStatusView): MountStatusView {
-    const mounted = Boolean(status.mounted);
-    const error = status.error ? safeMountError(status.error) : '';
-    const phase: MountPhase = status.phase === 'error' || error
-        ? (error ? 'error' : status.phase)
-        : status.phase;
-    return {
-        phase,
-        mounted,
-        mode: status.mode,
-        writeState: status.mode === 'read-only' ? 'disabled' : status.writeState,
-        acceptingWrites: status.mode === 'read-write' && status.writeState === 'ready' && Boolean(status.acceptingWrites),
-        activeWrites: status.mode === 'read-write' ? Math.max(0, status.activeWrites) : 0,
-        label: status.label || 'Tdrive personal',
-        location: status.location,
-        error,
-        drive: status.drive ? { ...status.drive } : null,
-        windowsDrive: status.windowsDrive,
-    };
-}
 
 function withPhase(current: MountStatusView, phase: MountPhase): MountStatusView {
     return { ...current, phase, error: '' };
@@ -132,15 +114,19 @@ export function createMountController(
     api: MountApi = defaultMountApi,
     notify: MountNotifier = () => undefined,
 ): MountController {
-    const state = writable<MountStatusView>(copyStatus(INITIAL_STATUS));
+    const state = writable<MountStatusView>({ ...INITIAL_STATUS });
+    const loadingDrives = writable(false);
     let revision = 0;
     let mutation: Promise<void> | null = null;
     let refreshRequest: Promise<void> | null = null;
-    let openRequest: Promise<void> | null = null;
+    let driveListRequest: Promise<void> | null = null;
 
     function replace(status: MountStatusView): void {
         revision += 1;
-        state.set(copyStatus(status));
+        state.set({
+            ...status,
+            drive: status.drive ? { ...status.drive } : null,
+        });
     }
 
     function fail(error: unknown, fallback: string, preserveMounted: boolean): void {
@@ -244,26 +230,45 @@ export function createMountController(
         });
     }
 
-    function open(): Promise<void> {
-        if (!get(state).mounted) return Promise.resolve();
-        if (openRequest) return openRequest;
+    function requestMount(options: MountRequestOptions = {}): Promise<void> {
+        if (driveListRequest) return driveListRequest;
+        if (get(state).phase === 'mounting') return mutation ?? Promise.resolve();
+
+        const { loadDrives, onAction = () => undefined } = options;
+        if (!loadDrives) {
+            onAction();
+            return startMount();
+        }
+
+        loadingDrives.set(true);
         const request = (async () => {
             try {
-                await api.openMountedDrive();
+                const drives = [...await loadDrives()];
+                if (drives.length === 0) throw new Error('No drives are available to mount.');
+
+                onAction();
+                if (drives.length === 1) {
+                    loadingDrives.set(false);
+                    void startMount([drives[0].id]);
+                    return;
+                }
+
+                mountSelection.open(drives, (channelIds) => {
+                    void startMount(channelIds);
+                });
             } catch (error) {
-                const message = safeMountError(error, `Could not open ${get(state).label}. Try again.`);
-                state.update((current) => ({ ...current, error: message }));
                 notify({
                     level: 'error',
-                    title: `Could not open ${get(state).label}`,
-                    body: message,
+                    title: 'Could not load drives',
+                    body: safeMountError(error, 'The drive list could not be loaded.'),
                 });
             }
         })();
         const tracked = request.finally(() => {
-            if (openRequest === tracked) openRequest = null;
+            if (driveListRequest === tracked) driveListRequest = null;
+            loadingDrives.set(false);
         });
-        openRequest = tracked;
+        driveListRequest = tracked;
         return tracked;
     }
 
@@ -315,9 +320,10 @@ export function createMountController(
 
     return {
         subscribe: state.subscribe,
+        loadingDrives: { subscribe: loadingDrives.subscribe },
         refresh,
+        requestMount,
         mount: startMount,
-        open,
         disconnect,
     };
 }

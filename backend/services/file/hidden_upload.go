@@ -9,13 +9,9 @@ import (
 
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
+	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 )
-
-type hiddenPartPlan struct {
-	partSize  int64
-	partCount int
-}
 
 // partAttachmentName names a part's Telegram document attachment after the
 // original file it belongs to, rather than a meaningless-outside-TDrive
@@ -69,32 +65,41 @@ type HiddenBody struct {
 // file row. The caller retains ownership of source and must not mutate it while
 // this method is running.
 func (s *Service) UploadHidden(ctx context.Context, channelID int64, request HiddenUploadRequest, source io.ReadSeeker) (HiddenBody, error) {
-	if err := validateHiddenUpload(ctx, channelID, request, source); err != nil {
-		return HiddenBody{}, err
-	}
-	if err := validateHiddenStoredMetadata(request); err != nil {
-		return HiddenBody{}, err
-	}
-	if _, _, err := s.planUpload(request.Name, request.PlaintextSize, request.Encrypted); err != nil {
-		return HiddenBody{}, err
-	}
-	if err := validateSeekableSize(source, request.StoredSize); err != nil {
-		return HiddenBody{}, err
-	}
-	if err := s.ready(); err != nil {
-		return HiddenBody{}, err
-	}
-	if s.TG == nil {
-		return HiddenBody{}, fmt.Errorf("tg client not ready")
-	}
-	if s.Peers == nil {
-		return HiddenBody{}, fmt.Errorf("peer resolver not ready")
-	}
-	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	peer, err := s.prepareHiddenUpload(ctx, channelID, request, source)
 	if err != nil {
 		return HiddenBody{}, err
 	}
 	return s.uploadHiddenParts(ctx, channelID, request, source, peer)
+}
+
+func (s *Service) prepareHiddenUpload(
+	ctx context.Context,
+	channelID int64,
+	request HiddenUploadRequest,
+	source io.ReadSeeker,
+) (tgclient.InputPeer, error) {
+	if err := validateHiddenUpload(ctx, channelID, request, source); err != nil {
+		return tgclient.InputPeer{}, err
+	}
+	if err := validateHiddenStoredMetadata(request); err != nil {
+		return tgclient.InputPeer{}, err
+	}
+	if _, _, err := s.planUpload(request.Name, request.PlaintextSize, request.Encrypted); err != nil {
+		return tgclient.InputPeer{}, err
+	}
+	if err := validateSeekableSize(source, request.StoredSize); err != nil {
+		return tgclient.InputPeer{}, err
+	}
+	if err := s.ready(); err != nil {
+		return tgclient.InputPeer{}, err
+	}
+	if s.TG == nil {
+		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
+	}
+	if s.Peers == nil {
+		return tgclient.InputPeer{}, fmt.Errorf("peer resolver not ready")
+	}
+	return s.Peers.ResolvePeer(ctx, channelID)
 }
 
 func (s *Service) uploadHiddenParts(ctx context.Context, channelID int64, request HiddenUploadRequest, source io.ReadSeeker, peer tgclient.InputPeer) (HiddenBody, error) {
@@ -106,7 +111,7 @@ func (s *Service) uploadHiddenParts(ctx context.Context, channelID int64, reques
 		return HiddenBody{}, err
 	}
 
-	plan, err := s.hiddenUploadPartPlan(request.StoredSize)
+	plan, err := s.buildUploadPartPlan(request.StoredSize)
 	if err != nil {
 		return HiddenBody{}, err
 	}
@@ -123,7 +128,7 @@ func (s *Service) uploadHiddenParts(ctx context.Context, channelID int64, reques
 		if err := ctx.Err(); err != nil {
 			return remote, err
 		}
-		partOffset, partLength, err := hiddenPartWindow(plan, request.StoredSize, partIndex)
+		partOffset, partLength, err := plan.window(request.StoredSize, partIndex)
 		if err != nil {
 			return remote, err
 		}
@@ -144,7 +149,6 @@ func (s *Service) uploadHiddenParts(ctx context.Context, channelID int64, reques
 			partLength,
 			partAttachmentName(request.Name, partIndex, plan.partCount),
 			caption,
-			nil,
 		)
 		if err != nil {
 			// The coordinator still owns the staged source and is in
@@ -188,28 +192,7 @@ func (s *Service) RecoverHiddenUpload(
 	request HiddenUploadRequest,
 	source io.ReadSeeker,
 ) (HiddenBody, error) {
-	if err := validateHiddenUpload(ctx, channelID, request, source); err != nil {
-		return HiddenBody{}, err
-	}
-	if err := validateHiddenStoredMetadata(request); err != nil {
-		return HiddenBody{}, err
-	}
-	if _, _, err := s.planUpload(request.Name, request.PlaintextSize, request.Encrypted); err != nil {
-		return HiddenBody{}, err
-	}
-	if err := validateSeekableSize(source, request.StoredSize); err != nil {
-		return HiddenBody{}, err
-	}
-	if err := s.ready(); err != nil {
-		return HiddenBody{}, err
-	}
-	if s.TG == nil {
-		return HiddenBody{}, fmt.Errorf("tg client not ready")
-	}
-	if s.Peers == nil {
-		return HiddenBody{}, fmt.Errorf("peer resolver not ready")
-	}
-	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	peer, err := s.prepareHiddenUpload(ctx, channelID, request, source)
 	if err != nil {
 		return HiddenBody{}, err
 	}
@@ -240,7 +223,7 @@ func (s *Service) recoverHiddenParts(
 	source io.ReadSeeker,
 	peer tgclient.InputPeer,
 ) (HiddenBody, error) {
-	plan, err := s.hiddenUploadPartPlan(request.StoredSize)
+	plan, err := s.buildUploadPartPlan(request.StoredSize)
 	if err != nil {
 		return HiddenBody{}, err
 	}
@@ -266,7 +249,7 @@ func (s *Service) recoverHiddenParts(
 		if err != nil {
 			return HiddenBody{}, err
 		}
-		offset, length, err := hiddenPartWindow(plan, request.StoredSize, uncertainPart)
+		offset, length, err := plan.window(request.StoredSize, uncertainPart)
 		if err != nil {
 			return HiddenBody{}, err
 		}
@@ -286,7 +269,6 @@ func (s *Service) recoverHiddenParts(
 			length,
 			partAttachmentName(request.Name, uncertainPart, plan.partCount),
 			projection.Format(partOp),
-			nil,
 		)
 		if err != nil {
 			return HiddenBody{}, fmt.Errorf("recover hidden upload part %d receipt: %w", uncertainPart, err)
@@ -316,38 +298,9 @@ func (s *Service) recoverHiddenParts(
 	}, nil
 }
 
-func (s *Service) hiddenUploadPartPlan(storedSize int64) (hiddenPartPlan, error) {
-	partSize := s.maxPartBytes()
-	if storedSize < 0 || partSize <= 0 {
-		return hiddenPartPlan{}, fmt.Errorf("invalid hidden upload part sizing")
-	}
-	partCount := storedSize / partSize
-	if storedSize%partSize != 0 {
-		partCount++
-	}
-	if partCount == 0 {
-		partCount = 1
-	}
-	if partCount > MaxParts {
-		return hiddenPartPlan{}, fmt.Errorf("invalid multipart part count %d", partCount)
-	}
-	return hiddenPartPlan{partSize: partSize, partCount: int(partCount)}, nil
-}
-
-func hiddenPartWindow(plan hiddenPartPlan, storedSize int64, partIndex int) (int64, int64, error) {
-	if plan.partSize <= 0 || plan.partCount <= 0 || partIndex < 0 || partIndex >= plan.partCount {
-		return 0, 0, fmt.Errorf("invalid hidden upload part %d", partIndex)
-	}
-	offset := int64(partIndex) * plan.partSize
-	if offset < 0 || offset > storedSize {
-		return 0, 0, fmt.Errorf("invalid hidden upload part %d offset", partIndex)
-	}
-	return offset, min(plan.partSize, storedSize-offset), nil
-}
-
 func validateHiddenPartPrefix(
 	parts []projection.FilePart,
-	plan hiddenPartPlan,
+	plan uploadPartPlan,
 	storedSize int64,
 ) ([]int64, error) {
 	if len(parts) > plan.partCount {
@@ -356,7 +309,7 @@ func validateHiddenPartPrefix(
 	messageIDs := make([]int64, 0, len(parts)+1)
 	seen := make(map[int64]struct{}, len(parts)+1)
 	for index, part := range parts {
-		_, expectedSize, err := hiddenPartWindow(plan, storedSize, index)
+		_, expectedSize, err := plan.window(storedSize, index)
 		if err != nil {
 			return nil, err
 		}
@@ -382,7 +335,6 @@ func (s *Service) sendHiddenFile(
 	length int64,
 	name string,
 	caption string,
-	onProgress func(sent, total int64),
 ) (tgclient.SendFileResult, error) {
 	randomID, err := tgclient.StableRandomID(operationID, step)
 	if err != nil {
@@ -406,7 +358,7 @@ func (s *Service) sendHiddenFile(
 			name,
 			caption,
 			length,
-			onProgress,
+			nil,
 			randomID,
 		)
 		return err
@@ -418,10 +370,7 @@ func (s *Service) sendHiddenFile(
 // caller has already bound to an operation. Public callers must use
 // DiscardHiddenReceipt or DiscardHiddenOperation so ownership is validated.
 func (s *Service) discardHiddenBody(ctx context.Context, channelID int64, body HiddenBody) error {
-	if ctx == nil {
-		return fmt.Errorf("context is required")
-	}
-	if err := ctx.Err(); err != nil {
+	if err := servicecontext.Check(ctx, "file: discard hidden body"); err != nil {
 		return err
 	}
 	if channelID == 0 {
@@ -451,10 +400,7 @@ func (s *Service) DiscardHiddenReceipt(
 	operationID string,
 	body HiddenBody,
 ) error {
-	if ctx == nil {
-		return fmt.Errorf("context is required")
-	}
-	if err := ctx.Err(); err != nil {
+	if err := servicecontext.Check(ctx, "file: discard hidden receipt"); err != nil {
 		return err
 	}
 	if channelID == 0 {
@@ -477,7 +423,7 @@ func (s *Service) DiscardHiddenReceipt(
 	}); err != nil {
 		return fmt.Errorf("%w: metadata: %v", ErrHiddenReceiptInvalid, err)
 	}
-	plan, err := s.hiddenUploadPartPlan(body.StoredSize)
+	plan, err := s.buildUploadPartPlan(body.StoredSize)
 	if err != nil {
 		return fmt.Errorf("%w: part plan: %v", ErrHiddenReceiptInvalid, err)
 	}
@@ -518,10 +464,7 @@ func sameMessageIDs(left, right []int64) bool {
 // the same deterministic upload UUID used by UploadHidden; only projected
 // parts owned by that operation are eligible for deletion.
 func (s *Service) DiscardHiddenOperation(ctx context.Context, channelID int64, operationID string) error {
-	if ctx == nil {
-		return fmt.Errorf("context is required")
-	}
-	if err := ctx.Err(); err != nil {
+	if err := servicecontext.Check(ctx, "file: discard hidden operation"); err != nil {
 		return err
 	}
 	if channelID == 0 {
@@ -568,10 +511,7 @@ func (s *Service) discardHidden(ctx context.Context, channelID int64, peer tgcli
 }
 
 func validateHiddenUpload(ctx context.Context, channelID int64, request HiddenUploadRequest, source io.ReadSeeker) error {
-	if ctx == nil {
-		return fmt.Errorf("context is required")
-	}
-	if err := ctx.Err(); err != nil {
+	if err := servicecontext.Check(ctx, "file: upload hidden"); err != nil {
 		return err
 	}
 	if channelID == 0 {

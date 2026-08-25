@@ -53,9 +53,8 @@ func putEmpty(t *testing.T, handler http.Handler, target string) int {
 
 // TestServePUTDefersEmptyCreateOfNewPath is the core behavior: an empty PUT
 // creating a brand-new path is accepted (matching what the client expects --
-// see TestPUTResumeContinuationCannotUndoAnEarlierAcceptedPUT's sibling
-// finding that macOS routinely does exactly this before writing real
-// content) but not yet committed to the coordinator.
+// macOS routinely does exactly this before writing real content) but not yet
+// committed to the coordinator.
 func TestServePUTDefersEmptyCreateOfNewPath(t *testing.T) {
 	writer := &recordingWriteCoordinator{putResult: MutationResult{Created: true}}
 	pendingCreates := newTestPendingCreateStore(t, time.Minute, time.Now)

@@ -3,10 +3,40 @@ package file
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"TDrive/backend/projection"
 )
+
+func TestMutationMethodsRejectNilContext(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	tests := map[string]func() error{
+		"metadata": func() error {
+			return svc.MetaContext(nil, personalChannelID, 1, "file.txt", 1, "")
+		},
+		"rename": func() error {
+			return svc.Rename(nil, personalChannelID, 1, "renamed.txt")
+		},
+		"move": func() error {
+			return svc.Move(nil, personalChannelID, 1, "")
+		},
+		"delete": func() error {
+			return svc.Delete(nil, personalChannelID, 1)
+		},
+	}
+	for operation, call := range tests {
+		t.Run(operation, func(t *testing.T) {
+			err := call()
+			if !errors.Is(err, projection.ErrInvalidContext) {
+				t.Fatalf("error = %v, want projection.ErrInvalidContext", err)
+			}
+			if !strings.Contains(err.Error(), operation) {
+				t.Fatalf("error = %q, want %q operation context", err, operation)
+			}
+		})
+	}
+}
 
 func TestRenameStopsBeforeEmitWhenContextCanceled(t *testing.T) {
 	svc, db, _, _ := newTestService(t)

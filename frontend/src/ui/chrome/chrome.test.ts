@@ -74,6 +74,7 @@ describe('ProfileMenu', () => {
         expect(body).toContain('Loading account…');
         expect(body).not.toContain('profile-menu-encryption-settings');
         expect(body).toContain('Mount Tdrive personal');
+        expect(body).not.toContain('id="mount-selection-modal"');
         expect(body).toContain('Log out');
     });
 

@@ -70,12 +70,6 @@ func Init() {
 	})
 }
 
-// Path returns the log file path once Init has run, or "" if logging to a
-// file was unavailable (still logs to stderr in that case).
-func Path() string {
-	return logPath
-}
-
 func openLogFile() (string, *os.File, error) {
 	configDir, err := os.UserConfigDir()
 	if err != nil {

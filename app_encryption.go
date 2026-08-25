@@ -116,17 +116,11 @@ func (a *App) runWithClosedMountForLogout(action func() error) error {
 // password, and whether that password has already been accepted for the
 // current app session.
 func (a *App) EncryptionStatus() (EncryptionStatus, error) {
-	if a.encryptionService() == nil {
+	service := a.encryptionService()
+	if service == nil {
 		return EncryptionStatus{}, fmt.Errorf("backend not ready")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
-	defer cancel()
-	release, err := a.acquireMountLifecycle(ctx)
-	if err != nil {
-		return EncryptionStatus{}, fmt.Errorf("check encryption status: %w", err)
-	}
-	defer release()
-	status, err := a.encryptionService().StatusContext(ctx)
+	status, err := service.StatusContext(a.appContext())
 	if err != nil {
 		return EncryptionStatus{}, err
 	}

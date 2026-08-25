@@ -1,7 +1,6 @@
 package projection
 
 import (
-	"database/sql"
 	"errors"
 	"testing"
 )
@@ -511,12 +510,5 @@ func TestRebuildReplaysWritableProjectionDeterministically(t *testing.T) {
 		if err != nil || !ok || operation.Outcome != OperationApplied {
 			t.Fatalf("rebuilt operation %q = %+v ok=%v err=%v", item.op.OpID, operation, ok, err)
 		}
-	}
-}
-
-func requireNoRow(t *testing.T, err error) {
-	t.Helper()
-	if !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("error = %v, want sql.ErrNoRows", err)
 	}
 }

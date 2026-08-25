@@ -634,8 +634,15 @@ func TestUploadHiddenRejectsInvalidRequestsBeforeSend(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, fakeTG, _ := newTestService(t)
-			if _, err := svc.UploadHidden(tc.ctx, tc.channelID, tc.request, tc.source); err == nil {
+			_, err := svc.UploadHidden(tc.ctx, tc.channelID, tc.request, tc.source)
+			if err == nil {
 				t.Fatal("UploadHidden unexpectedly accepted invalid request")
+			}
+			if tc.name == "nil context" && !errors.Is(err, projection.ErrInvalidContext) {
+				t.Fatalf("error = %v, want projection.ErrInvalidContext", err)
+			}
+			if tc.name == "canceled context" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v, want context.Canceled", err)
 			}
 			if sent := fakeTG.SentFiles(); len(sent) != 0 {
 				t.Fatalf("sent files = %+v, want none", sent)
@@ -708,6 +715,32 @@ func TestDiscardHiddenOperationValidatesBeforeLookup(t *testing.T) {
 	}
 }
 
+func TestHiddenCleanupRejectsNilContext(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	tests := map[string]func() error{
+		"body": func() error {
+			return svc.discardHiddenBody(nil, personalChannelID, HiddenBody{MessageIDs: []int64{1}})
+		},
+		"receipt": func() error {
+			return svc.DiscardHiddenReceipt(nil, personalChannelID, "operation", HiddenBody{})
+		},
+		"operation": func() error {
+			return svc.DiscardHiddenOperation(nil, personalChannelID, "operation")
+		},
+	}
+	for operation, call := range tests {
+		t.Run(operation, func(t *testing.T) {
+			err := call()
+			if !errors.Is(err, projection.ErrInvalidContext) {
+				t.Fatalf("error = %v, want projection.ErrInvalidContext", err)
+			}
+			if !strings.Contains(err.Error(), operation) {
+				t.Fatalf("error = %q, want %q operation context", err, operation)
+			}
+		})
+	}
+}
+
 func TestUploadHiddenReportsUnavailableDependencies(t *testing.T) {
 	body := []byte("a")
 	request := plaintextHiddenRequest("op-deps", "a.txt", 1)
@@ -777,6 +810,49 @@ func TestUploadHiddenReportsPlanningAndMessageErrors(t *testing.T) {
 			t.Fatalf("error = %v, want actor resolver error", err)
 		}
 	})
+}
+
+func TestUploadPartPlanClassifiesTooManyParts(t *testing.T) {
+	svc := &Service{MaxUploadBytes: 1}
+
+	_, err := svc.buildUploadPartPlan(MaxParts + 1)
+	if !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("error = %v, want ErrFileTooLarge", err)
+	}
+}
+
+func TestUploadPartPlanWindows(t *testing.T) {
+	svc := &Service{MaxUploadBytes: 4}
+	tests := []struct {
+		name        string
+		storedSize  int64
+		wantWindows [][2]int64
+	}{
+		{name: "empty", storedSize: 0, wantWindows: [][2]int64{{0, 0}}},
+		{name: "exact part", storedSize: 4, wantWindows: [][2]int64{{0, 4}}},
+		{name: "partial final part", storedSize: 9, wantWindows: [][2]int64{{0, 4}, {4, 4}, {8, 1}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := svc.buildUploadPartPlan(tc.storedSize)
+			if err != nil {
+				t.Fatalf("buildUploadPartPlan: %v", err)
+			}
+			if plan.partCount != len(tc.wantWindows) {
+				t.Fatalf("partCount = %d, want %d", plan.partCount, len(tc.wantWindows))
+			}
+			for index, want := range tc.wantWindows {
+				offset, length, err := plan.window(tc.storedSize, index)
+				if err != nil {
+					t.Fatalf("window(%d): %v", index, err)
+				}
+				if offset != want[0] || length != want[1] {
+					t.Fatalf("window(%d) = (%d, %d), want (%d, %d)", index, offset, length, want[0], want[1])
+				}
+			}
+		})
+	}
 }
 
 func TestUploadHiddenMultipartFailureReturnsPartialReceiptWithoutDeleting(t *testing.T) {

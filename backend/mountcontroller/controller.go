@@ -256,7 +256,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 			active.content.Close()
 		}
 		closeSessionKey(active)
-		return controller.failStart(current, active, prepareFailureMessage(active.mode), err)
+		return controller.failStart(current, active, mountFailureMessage("prepare", active.mode), err)
 	}
 
 	endpointStatus, err := controller.endpoint.Start(ctx, EndpointConfig{
@@ -271,7 +271,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 		_ = closeWriterForRollback(ctx, active.writer)
 		active.content.Close()
 		closeSessionKey(active)
-		return controller.failStart(current, active, startFailureText(active.mode), err)
+		return controller.failStart(current, active, mountFailureMessage("start", active.mode), err)
 	}
 	controller.mu.Lock()
 	controller.status = statusFor(active, PhaseAttaching, true, false, "")
@@ -291,7 +291,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 		return controller.failStart(
 			current,
 			active,
-			attachFailureMessage(active.mode),
+			mountFailureMessage("attach", active.mode),
 			errors.Join(err, cleanupErr, writerErr),
 		)
 	}
@@ -389,21 +389,7 @@ func (controller *Controller) runStop(ctx context.Context, current *operation, a
 		cancel()
 		if drainErr != nil {
 			const message = "TDrive could not finish pending changes; the drive remains mounted"
-			publicErr := &operationError{message: message, kind: classifyOperationError(drainErr, ErrStopFailed)}
-			controller.mu.Lock()
-			controller.lastErr = publicErr
-			active.writeState = WriteStateDraining
-			controller.status = statusFor(
-				active,
-				PhaseFailed,
-				controller.status.Running,
-				true,
-				message,
-			)
-			status := controller.status
-			controller.completeLocked(current, status, publicErr)
-			controller.mu.Unlock()
-			return status, publicErr
+			return controller.failStop(current, active, message, drainErr, true)
 		}
 		controller.mu.Lock()
 		active.writeState = WriteStateDrained
@@ -419,23 +405,13 @@ func (controller *Controller) runStop(ctx context.Context, current *operation, a
 
 	if err := controller.connector.Detach(ctx, active.attachment); err != nil {
 		controller.mu.Lock()
+		running := controller.status.Running
+		controller.mu.Unlock()
 		message := "TDrive could not disconnect the mount; it remains available"
-		if !controller.status.Running {
+		if !running {
 			message = "TDrive could not disconnect the stale mount; retry disconnecting"
 		}
-		publicErr := &operationError{message: message, kind: classifyOperationError(err, ErrStopFailed)}
-		controller.lastErr = publicErr
-		controller.status = statusFor(
-			active,
-			PhaseFailed,
-			controller.status.Running,
-			true,
-			message,
-		)
-		status := controller.status
-		controller.completeLocked(current, status, publicErr)
-		controller.mu.Unlock()
-		return status, publicErr
+		return controller.failStop(current, active, message, err, true)
 	}
 
 	controller.mu.Lock()
@@ -455,24 +431,47 @@ func (controller *Controller) runStop(ctx context.Context, current *operation, a
 	}
 	closeSessionKey(active)
 
-	controller.mu.Lock()
-	controller.session = nil
 	if stopErr != nil || writerErr != nil {
 		const message = "TDrive disconnected, but local mount cleanup did not finish cleanly"
-		publicErr := &operationError{message: message, kind: classifyOperationError(errors.Join(stopErr, writerErr), ErrStopFailed)}
-		controller.lastErr = publicErr
-		controller.status = Status{Phase: PhaseFailed, Mode: active.mode, WriteState: active.writeState, Error: message}
-		status := controller.status
-		controller.completeLocked(current, status, publicErr)
-		controller.mu.Unlock()
-		return status, publicErr
+		return controller.failStop(current, active, message, errors.Join(stopErr, writerErr), false)
 	}
+	controller.mu.Lock()
+	controller.session = nil
 	controller.lastErr = nil
 	controller.status = Status{Phase: PhaseStopped}
 	status := controller.status
 	controller.completeLocked(current, status, nil)
 	controller.mu.Unlock()
 	return status, nil
+}
+
+func (controller *Controller) failStop(
+	current *operation,
+	active *session,
+	message string,
+	cause error,
+	keepMounted bool,
+) (Status, error) {
+	publicErr := &operationError{message: message, kind: classifyOperationError(cause, ErrStopFailed)}
+	controller.mu.Lock()
+	if keepMounted {
+		controller.status = statusFor(active, PhaseFailed, controller.status.Running, true, message)
+	} else {
+		if controller.session == active {
+			controller.session = nil
+		}
+		controller.status = Status{
+			Phase:      PhaseFailed,
+			Mode:       active.mode,
+			WriteState: active.writeState,
+			Error:      message,
+		}
+	}
+	controller.lastErr = publicErr
+	status := controller.status
+	controller.completeLocked(current, status, publicErr)
+	controller.mu.Unlock()
+	return status, publicErr
 }
 
 // Open asks the host file manager to reveal the verified attachment. It never
@@ -713,10 +712,6 @@ func selectionConflictError(
 	return conflictError(activeID, activeDrive, activeMode, requestedID, requestedDrive, requestedMode)
 }
 
-func resolveMode(requested Mode, drive Drive, writers WriterBuilder) (Mode, error) {
-	return resolveSelectionMode(requested, []Drive{drive}, writers)
-}
-
 func resolveSelectionMode(requested Mode, drives []Drive, writers WriterBuilder) (Mode, error) {
 	if requested != ModeAuto && requested != ModeReadOnly && requested != ModeReadWrite {
 		return "", ErrInvalidMode
@@ -815,25 +810,11 @@ func mountOSMode(mode Mode) mountos.Mode {
 	return mountos.ModeReadOnly
 }
 
-func prepareFailureMessage(mode Mode) string {
+func mountFailureMessage(action string, mode Mode) string {
 	if mode == ModeReadWrite {
-		return "TDrive could not prepare the writable mount"
+		return fmt.Sprintf("TDrive could not %s the writable mount", action)
 	}
-	return "TDrive could not prepare the read-only mount"
-}
-
-func startFailureText(mode Mode) string {
-	if mode == ModeReadWrite {
-		return "TDrive could not start the writable mount"
-	}
-	return "TDrive could not start the read-only mount"
-}
-
-func attachFailureMessage(mode Mode) string {
-	if mode == ModeReadWrite {
-		return "TDrive could not attach the writable mount"
-	}
-	return "TDrive could not attach the read-only mount"
+	return fmt.Sprintf("TDrive could not %s the read-only mount", action)
 }
 
 func closeWriterForRollback(ctx context.Context, writer WriteSession) error {

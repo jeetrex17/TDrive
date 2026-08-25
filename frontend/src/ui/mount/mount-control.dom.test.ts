@@ -31,7 +31,6 @@ function status(overrides: Partial<MountStatusView> = {}): MountStatusView {
         location: '',
         error: '',
         drive: null,
-        windowsDrive: '',
         ...overrides,
     };
 }
@@ -87,7 +86,6 @@ describe('MountControl', () => {
             mountDrive: vi.fn(async () => mountedStatus()),
             mountDrives,
             mountStatus: vi.fn(async () => status()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(async () => status()),
         });
         host = document.createElement('div');
@@ -114,7 +112,6 @@ describe('MountControl', () => {
             mountDrive: vi.fn(async () => mountedStatus()),
             mountDrives,
             mountStatus: vi.fn(async () => status()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(async () => status()),
         });
         const onMenuAction = vi.fn();
@@ -124,11 +121,10 @@ describe('MountControl', () => {
             target: host,
             props: {
                 controller,
-                mode: 'menu',
                 onMenuAction,
                 loadDrives: async () => [
-                    { id: 22, title: 'Project', kind: 'shared' },
                     { id: 11, title: 'Personal', kind: 'personal' },
+                    { id: 22, title: 'Project', kind: 'shared' },
                 ],
             },
         });
@@ -153,7 +149,6 @@ describe('MountControl', () => {
         const api: MountApi = {
             mountDrive: vi.fn(async () => writableMountedStatus()),
             mountStatus: vi.fn(async () => writableMountedStatus()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(async () => {
                 throw new Error('pending commits could not finish');
             }),
@@ -161,7 +156,7 @@ describe('MountControl', () => {
         const controller = createMountController(api);
         host = document.createElement('div');
         document.body.appendChild(host);
-        component = mount(MountControl, { target: host, props: { controller, mode: 'menu' } });
+        component = mount(MountControl, { target: host, props: { controller } });
         await settle();
 
         click('#disconnect-mounted-drive-button');
@@ -178,13 +173,12 @@ describe('MountControl', () => {
         const api: MountApi = {
             mountDrive: vi.fn(async () => writableMountedStatus({ activeWrites: 2 })),
             mountStatus: vi.fn(async () => writableMountedStatus({ activeWrites: 2 })),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(() => pending.promise),
         };
         const controller = createMountController(api);
         host = document.createElement('div');
         document.body.appendChild(host);
-        component = mount(MountControl, { target: host, props: { controller, mode: 'menu' } });
+        component = mount(MountControl, { target: host, props: { controller } });
         await settle();
 
         expect(host.textContent).toContain('Read/write');
@@ -199,7 +193,6 @@ describe('MountControl', () => {
         const api: MountApi = {
             mountDrive: vi.fn(async () => mountedStatus()),
             mountStatus: vi.fn(async () => status()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(async () => status()),
         };
         const controller = createMountController(api);
@@ -207,7 +200,7 @@ describe('MountControl', () => {
         document.body.appendChild(host);
         component = mount(MountControl, {
             target: host,
-            props: { controller, mode: 'menu' },
+            props: { controller },
         });
         await settle();
 
@@ -223,7 +216,6 @@ describe('MountControl', () => {
         await settle();
 
         expect(api.mountDrive).toHaveBeenCalledTimes(1);
-        expect(host.querySelector('#open-mounted-drive-button')).toBeNull();
         const ejectButton = host.querySelector<HTMLButtonElement>('#disconnect-mounted-drive-button');
         expect(ejectButton?.getAttribute('role')).toBe('menuitem');
         expect(ejectButton?.getAttribute('aria-label')).toBe('Eject Tdrive');
@@ -235,7 +227,6 @@ describe('MountControl', () => {
         const api: MountApi = {
             mountDrive: vi.fn(async () => mountedStatus()),
             mountStatus: vi.fn(async () => status()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(async () => status()),
         };
         const controller = createMountController(api);
@@ -243,7 +234,7 @@ describe('MountControl', () => {
         document.body.appendChild(host);
         component = mount(MountControl, {
             target: host,
-            props: { controller, mode: 'menu', onMenuAction },
+            props: { controller, onMenuAction },
         });
         await settle();
 
@@ -261,7 +252,6 @@ describe('MountControl', () => {
         const api: MountApi = {
             mountDrive: vi.fn(async () => mountedStatus()),
             mountStatus: vi.fn(async () => mountedStatus()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive,
         };
         const controller = createMountController(api);
@@ -269,11 +259,10 @@ describe('MountControl', () => {
         document.body.appendChild(host);
         component = mount(MountControl, {
             target: host,
-            props: { controller, mode: 'menu', onMenuAction },
+            props: { controller, onMenuAction },
         });
         await settle();
 
-        expect(host.querySelector('#open-mounted-drive-button')).toBeNull();
         click('#disconnect-mounted-drive-button');
 
         const ejectButton = host.querySelector<HTMLButtonElement>('#disconnect-mounted-drive-button');
@@ -297,7 +286,6 @@ describe('MountControl', () => {
         const api: MountApi = {
             mountDrive: vi.fn(() => pending.promise),
             mountStatus: vi.fn(async () => status()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(async () => status()),
         };
         const controller = createMountController(api);
@@ -310,26 +298,23 @@ describe('MountControl', () => {
         click('#mount-drive-button');
 
         const mounting = host.querySelector<HTMLButtonElement>('#mount-drive-button');
-        expect(mounting?.textContent).toContain('Mounting...');
+        expect(mounting?.textContent).toContain('Mounting Tdrive personal...');
         expect(mounting?.disabled).toBe(true);
         expect(mounting?.getAttribute('aria-busy')).toBe('true');
 
         pending.resolve(mountedStatus());
         await settle();
 
-        expect(host.textContent).toContain('Tdrive personal');
-        expect(host.querySelector('#open-mounted-drive-button')).toBeNull();
         const ejectButton = host.querySelector<HTMLButtonElement>('#disconnect-mounted-drive-button');
         expect(ejectButton?.getAttribute('aria-label')).toBe('Eject Tdrive');
         expect(ejectButton?.textContent?.trim()).toBe('Eject Tdrive');
     });
 
-    it('shows Ejecting Tdrive... while retaining the mounted label', async () => {
+    it('shows Ejecting Tdrive... while the eject is pending', async () => {
         const pending = deferred<MountStatusView>();
         const api: MountApi = {
             mountDrive: vi.fn(async () => mountedStatus()),
             mountStatus: vi.fn(async () => mountedStatus()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(() => pending.promise),
         };
         const controller = createMountController(api);
@@ -340,7 +325,6 @@ describe('MountControl', () => {
 
         click('#disconnect-mounted-drive-button');
 
-        expect(host.textContent).toContain('Tdrive personal');
         expect(host.textContent).toContain('Ejecting Tdrive...');
         const ejectButton = host.querySelector<HTMLButtonElement>('#disconnect-mounted-drive-button');
         expect(ejectButton?.getAttribute('aria-label')).toBe('Eject Tdrive');
@@ -361,7 +345,6 @@ describe('MountControl', () => {
         const api: MountApi = {
             mountDrive,
             mountStatus: vi.fn(async () => status()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(async () => status()),
         };
         const controller = createMountController(api);
@@ -382,7 +365,6 @@ describe('MountControl', () => {
         await settle();
 
         expect(mountDrive).toHaveBeenCalledTimes(2);
-        expect(host.querySelector('#open-mounted-drive-button')).toBeNull();
         expect(host.querySelector('#disconnect-mounted-drive-button')?.textContent?.trim()).toBe('Eject Tdrive');
     });
 
@@ -392,7 +374,6 @@ describe('MountControl', () => {
                 throw new Error('mount failed');
             }),
             mountStatus: vi.fn(async () => status()),
-            openMountedDrive: vi.fn(async () => undefined),
             unmountDrive: vi.fn(async () => status()),
         };
         const controller = createMountController(api);
@@ -400,7 +381,7 @@ describe('MountControl', () => {
         document.body.appendChild(host);
         component = mount(MountControl, {
             target: host,
-            props: { controller, mode: 'menu' },
+            props: { controller },
         });
         await settle();
 

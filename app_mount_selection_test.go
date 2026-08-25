@@ -62,7 +62,7 @@ func TestResolveMountDrivesUsesCanonicalRowsAndSkipsUnselectedPersonalPolicy(t *
 		}
 	}
 
-	drives, err := app.resolveMountDrives([]int64{202, 101})
+	drives, err := app.resolveMountDrivesContext(context.Background(), []int64{202, 101})
 	if err != nil {
 		t.Fatalf("resolveMountDrives() error = %v", err)
 	}
@@ -86,7 +86,7 @@ func TestResolveMountDrivesRejectsInvalidSelections(t *testing.T) {
 		"unknown":   {999999},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := app.resolveMountDrives(ids); err == nil {
+			if _, err := app.resolveMountDrivesContext(context.Background(), ids); err == nil {
 				t.Fatalf("resolveMountDrives(%v) error = nil", ids)
 			}
 		})

@@ -40,7 +40,9 @@ type windowsServiceOpener interface {
 // mapping is still attempted because the network provider can trigger the
 // service in the interactive logon session.
 func ensureWindowsWebClient(parent context.Context) error {
-	return ensureWindowsWebClientService(parent, scmServiceOpener{}, waitForWindowsService)
+	return ensureWindowsWebClientService(parent, scmServiceOpener{}, func(ctx context.Context) error {
+		return waitForPoll(ctx, windowsServicePollInterval)
+	})
 }
 
 // ensureWindowsWebClientService holds the actual state machine, parameterized
@@ -153,15 +155,4 @@ func (h scmServiceHandle) Start() error {
 
 func (h scmServiceHandle) Close() {
 	_ = windows.CloseServiceHandle(h.handle)
-}
-
-func waitForWindowsService(ctx context.Context) error {
-	timer := time.NewTimer(windowsServicePollInterval)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }

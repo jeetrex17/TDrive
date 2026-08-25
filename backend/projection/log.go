@@ -103,10 +103,7 @@ func ProjectFromOpTx(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID in
 		if isSkippableApplyError(err) {
 			slog.Warn("projection: op rejected, continuing replay", "channel_id", channelID, "msg_id", msgID,
 				"op_type", op.Type, "error", err)
-			if recErr := recordProjectionOperationTx(tx, channelID, msgID, op, OperationRejected, err); recErr != nil {
-				return false, recErr
-			}
-			if recErr := recordReject(tx, channelID, msgID, err); recErr != nil {
+			if recErr := recordSkippedOp(tx, channelID, msgID, op, err); recErr != nil {
 				return false, recErr
 			}
 			return false, nil
@@ -169,6 +166,13 @@ func recordReject(tx *sql.Tx, channelID, msgID int64, applyErr error) error {
 		return fmt.Errorf("projection: record rejected op: %w", err)
 	}
 	return nil
+}
+
+func recordSkippedOp(tx *sql.Tx, channelID, msgID int64, op Op, applyErr error) error {
+	if err := recordProjectionOperationTx(tx, channelID, msgID, op, OperationRejected, applyErr); err != nil {
+		return err
+	}
+	return recordReject(tx, channelID, msgID, applyErr)
 }
 
 // ChannelIsEmpty returns true when there are no replay_log rows AND no

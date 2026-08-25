@@ -103,10 +103,7 @@ func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, er
 		if err := ApplyOp(tx, channelID, r.msgID, op, r.actorUserID); err != nil {
 			if isSkippableApplyError(err) {
 				slog.Warn("projection: rebuild rejected op, continuing", "channel_id", channelID, "msg_id", r.msgID, "op_type", op.Type, "error", err)
-				if recErr := recordProjectionOperationTx(tx, channelID, r.msgID, op, OperationRejected, err); recErr != nil {
-					return applied, rejected, recErr
-				}
-				if recErr := recordReject(tx, channelID, r.msgID, err); recErr != nil {
+				if recErr := recordSkippedOp(tx, channelID, r.msgID, op, err); recErr != nil {
 					return applied, rejected, recErr
 				}
 				rejected++

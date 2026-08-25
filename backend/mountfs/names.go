@@ -8,12 +8,14 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"TDrive/backend/mountpath"
+
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
 const (
-	maxPortableNameBytes = 240
+	maxPortableNameBytes = mountpath.MaxComponentBytes
 	aliasTokenBytes      = 8
 )
 
@@ -184,7 +186,7 @@ func portableName(sourceName string) string {
 	if name == "" {
 		name = "_unnamed"
 	}
-	if isWindowsReservedName(name) {
+	if mountpath.IsWindowsReservedComponent(name) {
 		name = "_" + name
 	}
 	if len(name) <= maxPortableNameBytes {
@@ -200,26 +202,6 @@ func replaceTrailingDotsAndSpaces(value string) string {
 		runes[index] = '_'
 	}
 	return string(runes)
-}
-
-func isWindowsReservedName(name string) bool {
-	stem := name
-	if index := strings.IndexByte(stem, '.'); index >= 0 {
-		stem = stem[:index]
-	}
-	stem = strings.ToUpper(stem)
-	switch stem {
-	case "CON", "PRN", "AUX", "NUL", "CLOCK$":
-		return true
-	}
-	characters := []rune(stem)
-	if len(characters) == 4 && (string(characters[:3]) == "COM" || string(characters[:3]) == "LPT") {
-		switch characters[3] {
-		case '1', '2', '3', '4', '5', '6', '7', '8', '9', '\u00b9', '\u00b2', '\u00b3':
-			return true
-		}
-	}
-	return false
 }
 
 func collisionAlias(base string, kind Kind, id string, round int) string {

@@ -33,6 +33,7 @@ import { setupEncryptionSettingsModal } from './modules/modals/encryption-settin
 import { setupUploadOptionsModal } from './modules/modals/upload-options';
 import { setupImportOptionsModal } from './modules/modals/import-options';
 import { setupLogoutModal } from './modules/modals/logout';
+import { setupMountSelectionModal } from './modules/modals/mount-selection';
 
 // Sidebar / drives
 import { setupSidebar, renderSidebar } from './modules/sidebar';
@@ -118,6 +119,7 @@ window.onload = async function() {
     setupUploadOptionsModal();
     setupImportOptionsModal();
     setupLogoutModal();
+    setupMountSelectionModal();
     setupProfileMenu();
 
     // Setup UI components

@@ -18,6 +18,7 @@ import (
 
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/projection"
+	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 	"TDrive/backend/thumbnail"
 
@@ -429,6 +430,47 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 	}, op, header, nil
 }
 
+type uploadPartPlan struct {
+	partSize  int64
+	partCount int
+}
+
+func (s *Service) buildUploadPartPlan(storedSize int64) (uploadPartPlan, error) {
+	partSize := s.maxPartBytes()
+	if storedSize < 0 || partSize <= 0 {
+		return uploadPartPlan{}, fmt.Errorf("invalid upload part sizing")
+	}
+
+	partCount := storedSize / partSize
+	if storedSize%partSize != 0 {
+		partCount++
+	}
+	if partCount == 0 {
+		partCount = 1
+	}
+	if partCount > MaxParts {
+		return uploadPartPlan{}, fmt.Errorf(
+			"stored upload would split into %d parts (max %d): %w",
+			partCount,
+			MaxParts,
+			ErrFileTooLarge,
+		)
+	}
+	return uploadPartPlan{partSize: partSize, partCount: int(partCount)}, nil
+}
+
+func (plan uploadPartPlan) window(storedSize int64, partIndex int) (offset int64, length int64, err error) {
+	if storedSize < 0 || plan.partSize <= 0 || plan.partCount <= 0 || partIndex < 0 || partIndex >= plan.partCount {
+		return 0, 0, fmt.Errorf("invalid upload part %d", partIndex)
+	}
+	index := int64(partIndex)
+	if index > 0 && plan.partSize > storedSize/index {
+		return 0, 0, fmt.Errorf("invalid upload part %d offset", partIndex)
+	}
+	offset = index * plan.partSize
+	return offset, min(plan.partSize, storedSize-offset), nil
+}
+
 // uploadMultipart stores a file too big for one Telegram message as N part
 // documents plus a manifest. The stored byte stream (ciphertext when encrypting,
 // else the plaintext file) is produced once and sliced into <= MaxPartBytes
@@ -446,14 +488,11 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		return Metadata{}, err
 	}
 
-	partSize := s.maxPartBytes()
-	numParts := int((storedSize + partSize - 1) / partSize)
-	if numParts < 1 {
-		numParts = 1
+	plan, err := s.buildUploadPartPlan(storedSize)
+	if err != nil {
+		return Metadata{}, fmt.Errorf("%s: %w", filename, err)
 	}
-	if numParts > MaxParts {
-		return Metadata{}, fmt.Errorf("%s would split into %d parts (max %d): %w", filename, numParts, MaxParts, ErrFileTooLarge)
-	}
+	numParts := plan.partCount
 
 	uploadUUID := projection.NewUploadUUID()
 	s.warnf("Starting multipart upload: %s (%d parts)\n", filename, numParts)
@@ -504,7 +543,6 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 	}
 
 	var (
-		sentBytes    int64
 		progressMu   sync.Mutex
 		lastProgress = time.Now()
 	)
@@ -513,9 +551,10 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			abort()
 			return Metadata{}, err
 		}
-		partLen := partSize
-		if remaining := storedSize - sentBytes; remaining < partLen {
-			partLen = remaining
+		partBase, partLen, err := plan.window(storedSize, i)
+		if err != nil {
+			abort()
+			return Metadata{}, err
 		}
 		partOp := projection.Op{
 			Type:       projection.OpFilePart,
@@ -524,7 +563,6 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			FileSize:   partLen,
 		}
 		partCaption := projection.Format(partOp)
-		partBase := sentBytes
 		result, err := s.TG.SendFile(ctx, peer, io.LimitReader(storedReader, partLen), partAttachmentName(filename, i, numParts), partCaption, partLen, func(sent, total int64) {
 			progressMu.Lock()
 			defer progressMu.Unlock()
@@ -556,7 +594,6 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			abort()
 			return Metadata{}, err
 		}
-		sentBytes += partLen
 	}
 
 	// Commit: the manifest is a text op whose own msg_id becomes the file id.
@@ -1079,7 +1116,7 @@ func (s *Service) Meta(channelID int64, msgID int, name string, size int64, pare
 }
 
 func (s *Service) MetaContext(ctx context.Context, channelID int64, msgID int, name string, size int64, parentID string) error {
-	if err := fileContextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "file: metadata"); err != nil {
 		return err
 	}
 	if err := s.ready(); err != nil {
@@ -1142,7 +1179,7 @@ func (s *Service) Rename(ctx context.Context, channelID int64, msgID int, newNam
 			slog.Debug("file: renamed", "channel_id", channelID, "msg_id", msgID, "new_name", newName)
 		}
 	}()
-	if err := fileContextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "file: rename"); err != nil {
 		return err
 	}
 	if err := s.ready(); err != nil {
@@ -1182,7 +1219,7 @@ func (s *Service) Move(ctx context.Context, channelID int64, msgID int, newParen
 			slog.Debug("file: moved", "channel_id", channelID, "msg_id", msgID, "new_parent_id", newParentID)
 		}
 	}()
-	if err := fileContextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "file: move"); err != nil {
 		return err
 	}
 	if err := s.ready(); err != nil {
@@ -1225,7 +1262,7 @@ func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) (err e
 			slog.Debug("file: deleted (tombstoned)", "channel_id", channelID, "msg_id", msgID)
 		}
 	}()
-	if err := fileContextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "file: delete"); err != nil {
 		return err
 	}
 	if err := s.ready(); err != nil {
@@ -1379,7 +1416,7 @@ func (s *Service) validParent(channelID int64, parentID string, label string) (s
 }
 
 func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) (int64, error) {
-	if err := fileContextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "file: emit operation"); err != nil {
 		return 0, err
 	}
 	if s.EmitOpContext != nil {
@@ -1707,11 +1744,4 @@ func normalizeParent(p string) string {
 		return projection.RootParent
 	}
 	return p
-}
-
-func fileContextError(ctx context.Context) error {
-	if ctx == nil {
-		return fmt.Errorf("context is required")
-	}
-	return ctx.Err()
 }

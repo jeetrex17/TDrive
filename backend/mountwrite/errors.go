@@ -123,3 +123,36 @@ func safeErrorLabel(err error) string {
 		return "unavailable"
 	}
 }
+
+func errorFromSafeLabel(label string) error {
+	switch label {
+	case "invalid":
+		return ErrInvalidRequest
+	case "forbidden":
+		return ErrForbidden
+	case "not found":
+		return ErrNotFound
+	case "conflicted":
+		return ErrConflict
+	case "precondition failed":
+		return ErrPreconditionFailed
+	case "too large":
+		return ErrTooLarge
+	case "locked":
+		return ErrLocked
+	case "out of space":
+		return ErrQuotaExceeded
+	case "canceled":
+		return ErrCanceled
+	case "length mismatch":
+		return ErrLengthMismatch
+	case "draining":
+		return ErrDraining
+	case "busy":
+		return ErrBusy
+	case "already active":
+		return ErrOperationInProgress
+	default:
+		return ErrUnavailable
+	}
+}

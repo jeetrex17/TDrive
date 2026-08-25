@@ -7,7 +7,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"TDrive/backend/core"
 	"TDrive/backend/mountcontroller"
 )
 
@@ -73,39 +75,13 @@ func TestAppMountDrivePinsResolvedActiveDrive(t *testing.T) {
 	}
 }
 
-func TestAppMountDriveReadOnlyIsExplicitFallback(t *testing.T) {
-	t.Parallel()
-
-	controller := &fakeAppMountController{startStatus: mountcontroller.Status{
-		Phase:      mountcontroller.PhaseMounted,
-		Mounted:    true,
-		Mode:       mountcontroller.ModeReadOnly,
-		WriteState: mountcontroller.WriteStateDisabled,
-	}}
-	app := &App{
-		ctx:             context.Background(),
-		mountController: controller,
-		mountDriveResolver: func() (mountcontroller.Drive, error) {
-			return mountcontroller.Drive{ID: 42, Title: "My Drive", Kind: mountcontroller.DriveKindPersonal}, nil
-		},
-	}
-
-	view, err := app.MountDriveReadOnly()
-	if err != nil || view.Mode != "read-only" {
-		t.Fatalf("MountDriveReadOnly() = (%#v, %v)", view, err)
-	}
-	if controller.startOptions.Mode != mountcontroller.ModeReadOnly {
-		t.Fatalf("read-only app mode = %q", controller.startOptions.Mode)
-	}
-}
-
 func TestResolveActiveMountDrivePropagatesEncryptedEligibility(t *testing.T) {
 	app, db := setupEncryptionApp(t)
 	t.Cleanup(app.engine.Close)
 	app.engine.SetActiveChannelID(testEncryptionChannelID)
 	seedAppEncryptionReplay(t, db, testEncryptionChannelID)
 
-	drive, err := app.resolveActiveMountDrive()
+	drive, err := app.resolveActiveMountDriveContext(context.Background())
 	if err != nil {
 		t.Fatalf("resolveActiveMountDrive() error = %v", err)
 	}
@@ -117,7 +93,7 @@ func TestResolveActiveMountDrivePropagatesEncryptedEligibility(t *testing.T) {
 	}
 
 	app.engine.EncryptionService().StoreMasterKey(bytes.Repeat([]byte{7}, 32))
-	drive, err = app.resolveActiveMountDrive()
+	drive, err = app.resolveActiveMountDriveContext(context.Background())
 	if err != nil {
 		t.Fatalf("resolveActiveMountDrive() after unlock error = %v", err)
 	}
@@ -174,6 +150,96 @@ func TestAppMountActionsDelegateAndMapPhases(t *testing.T) {
 	}
 }
 
+func TestAppMountMutationsUseBoundedContexts(t *testing.T) {
+	t.Parallel()
+
+	assertBounded := func(t *testing.T, ctx context.Context) {
+		t.Helper()
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("mount operation context has no deadline")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 50*time.Second || remaining > encryptionMountTransitionTimeout {
+			t.Fatalf("mount operation deadline remaining = %s", remaining)
+		}
+	}
+
+	t.Run("single drive", func(t *testing.T) {
+		controller := &fakeAppMountController{startContext: func(ctx context.Context) { assertBounded(t, ctx) }}
+		app := &App{
+			ctx:             context.Background(),
+			mountController: controller,
+			mountDriveResolver: func() (mountcontroller.Drive, error) {
+				return mountcontroller.Drive{ID: 1, Kind: mountcontroller.DriveKindShared}, nil
+			},
+		}
+		if _, err := app.MountDrive(); err != nil {
+			t.Fatalf("MountDrive() error = %v", err)
+		}
+	})
+
+	t.Run("selected drives", func(t *testing.T) {
+		controller := &fakeAppMountController{startDrivesContext: func(ctx context.Context) { assertBounded(t, ctx) }}
+		app := &App{
+			ctx:             context.Background(),
+			mountController: controller,
+			mountDrivesResolver: func([]int64) ([]mountcontroller.Drive, error) {
+				return []mountcontroller.Drive{{ID: 1, Kind: mountcontroller.DriveKindShared}}, nil
+			},
+		}
+		if _, err := app.MountDrives([]int64{1}); err != nil {
+			t.Fatalf("MountDrives() error = %v", err)
+		}
+	})
+
+	t.Run("unmount", func(t *testing.T) {
+		controller := &fakeAppMountController{stopContext: func(ctx context.Context) { assertBounded(t, ctx) }}
+		app := &App{ctx: context.Background(), mountController: controller}
+		if _, err := app.UnmountDrive(); err != nil {
+			t.Fatalf("UnmountDrive() error = %v", err)
+		}
+	})
+}
+
+func TestAppMountFailureMessageRedactsCapabilities(t *testing.T) {
+	t.Parallel()
+
+	secret := "http://127.0.0.1:49152/tdrive-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/"
+	controller := &fakeAppMountController{startStatus: mountcontroller.Status{
+		Phase: mountcontroller.PhaseFailed,
+		Error: "attach failed for " + secret,
+	}, startErr: errors.New("attach failed for " + secret)}
+	app := &App{
+		ctx:             context.Background(),
+		mountController: controller,
+		mountDriveResolver: func() (mountcontroller.Drive, error) {
+			return mountcontroller.Drive{ID: 42, Kind: mountcontroller.DriveKindPersonal}, nil
+		},
+	}
+
+	view, err := app.MountDrive()
+	if err == nil || !strings.Contains(err.Error(), "Mount operation failed") {
+		t.Fatalf("MountDrive() error = %v, want safe fallback", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "tdrive-") {
+		t.Fatalf("MountDrive() error leaked capability: %v", err)
+	}
+	payload, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.ToLower(string(payload))
+	for _, forbidden := range []string{"tdrive-", "127.0.0.1", "http://", "localhost"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("MountView leaked %q: %s", forbidden, payload)
+		}
+	}
+	if !strings.Contains(view.Error, "Mount operation failed") {
+		t.Fatalf("MountView error = %q, want safe fallback", view.Error)
+	}
+}
+
 func TestAppShutdownClosesMountController(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +251,37 @@ func TestAppShutdownClosesMountController(t *testing.T) {
 	}
 	if app.mountController != controller {
 		t.Fatal("shutdown replaced the immutable mount controller reference")
+	}
+}
+
+func TestAppMountControllerConstructionRetriesAfterFailure(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("controller dependencies unavailable")
+	controller := &fakeAppMountController{startStatus: mountcontroller.Status{Phase: mountcontroller.PhaseMounted}}
+	constructionCalls := 0
+	app := &App{
+		ctx: context.Background(),
+		mountControllerFactory: func(*core.Engine) (appMountController, error) {
+			constructionCalls++
+			if constructionCalls == 1 {
+				return nil, sentinel
+			}
+			return controller, nil
+		},
+		mountDriveResolver: func() (mountcontroller.Drive, error) {
+			return mountcontroller.Drive{ID: 1, Kind: mountcontroller.DriveKindShared}, nil
+		},
+	}
+
+	if _, err := app.ensureMountController(); !errors.Is(err, sentinel) {
+		t.Fatalf("startup controller construction error = %v, want sentinel", err)
+	}
+	if _, err := app.MountDrive(); err != nil {
+		t.Fatalf("second MountDrive() error = %v", err)
+	}
+	if constructionCalls != 2 || controller.startCalls != 1 {
+		t.Fatalf("construction calls = %d, start calls = %d", constructionCalls, controller.startCalls)
 	}
 }
 
@@ -221,31 +318,40 @@ func TestLockEncryptionSessionClosesMountBeforeClearingKey(t *testing.T) {
 }
 
 type fakeAppMountController struct {
-	startStatus      mountcontroller.Status
-	status           mountcontroller.Status
-	stopStatus       mountcontroller.Status
-	startErr         error
-	openErr          error
-	stopErr          error
-	closeErr         error
-	startedDrive     mountcontroller.Drive
-	startedDrives    []mountcontroller.Drive
-	startOptions     mountcontroller.StartOptions
-	startCalls       int
-	startDrivesCalls int
-	openCalls        int
-	stopCalls        int
-	closeCalls       int
+	startStatus        mountcontroller.Status
+	status             mountcontroller.Status
+	stopStatus         mountcontroller.Status
+	startErr           error
+	openErr            error
+	stopErr            error
+	closeErr           error
+	startedDrive       mountcontroller.Drive
+	startedDrives      []mountcontroller.Drive
+	startOptions       mountcontroller.StartOptions
+	startCalls         int
+	startDrivesCalls   int
+	openCalls          int
+	stopCalls          int
+	closeCalls         int
+	startContext       func(context.Context)
+	startDrivesContext func(context.Context)
+	stopContext        func(context.Context)
 }
 
-func (fake *fakeAppMountController) Start(_ context.Context, drive mountcontroller.Drive, options mountcontroller.StartOptions) (mountcontroller.Status, error) {
+func (fake *fakeAppMountController) Start(ctx context.Context, drive mountcontroller.Drive, options mountcontroller.StartOptions) (mountcontroller.Status, error) {
+	if fake.startContext != nil {
+		fake.startContext(ctx)
+	}
 	fake.startCalls++
 	fake.startedDrive = drive
 	fake.startOptions = options
 	return fake.startStatus, fake.startErr
 }
 
-func (fake *fakeAppMountController) StartDrives(_ context.Context, drives []mountcontroller.Drive, options mountcontroller.StartOptions) (mountcontroller.Status, error) {
+func (fake *fakeAppMountController) StartDrives(ctx context.Context, drives []mountcontroller.Drive, options mountcontroller.StartOptions) (mountcontroller.Status, error) {
+	if fake.startDrivesContext != nil {
+		fake.startDrivesContext(ctx)
+	}
 	fake.startDrivesCalls++
 	fake.startedDrives = append([]mountcontroller.Drive(nil), drives...)
 	fake.startOptions = options
@@ -261,7 +367,10 @@ func (fake *fakeAppMountController) Open(context.Context) error {
 	return fake.openErr
 }
 
-func (fake *fakeAppMountController) Stop(context.Context) (mountcontroller.Status, error) {
+func (fake *fakeAppMountController) Stop(ctx context.Context) (mountcontroller.Status, error) {
+	if fake.stopContext != nil {
+		fake.stopContext(ctx)
+	}
 	fake.stopCalls++
 	return fake.stopStatus, fake.stopErr
 }

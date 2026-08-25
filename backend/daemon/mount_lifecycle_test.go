@@ -33,8 +33,8 @@ func TestVaultLockSerializesKeyClearWithRacingMountStart(t *testing.T) {
 		lockDone <- err
 	}()
 	waitDaemonLifecycleSignal(t, controller.stopEntered, "vault mount stop")
-	if server.mountLifecycle.tryLock() {
-		server.mountLifecycle.unlock()
+	if server.mountLifecycle.TryLock() {
+		server.mountLifecycle.Unlock()
 		t.Fatal("vault lock did not hold the daemon mount lifecycle gate")
 	}
 
@@ -80,8 +80,8 @@ func TestAuthLogoutMakesMountLifecycleTerminal(t *testing.T) {
 		logoutDone <- err
 	}()
 	waitDaemonLifecycleSignal(t, controller.stopEntered, "logout mount stop")
-	if server.mountLifecycle.tryLock() {
-		server.mountLifecycle.unlock()
+	if server.mountLifecycle.TryLock() {
+		server.mountLifecycle.Unlock()
 		t.Fatal("logout did not hold the daemon mount lifecycle gate")
 	}
 
@@ -121,8 +121,8 @@ func TestDaemonMountCloseMakesLifecycleTerminal(t *testing.T) {
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- server.stopMountServer(context.Background()) }()
 	waitDaemonLifecycleSignal(t, controller.closeEntered, "mount server close")
-	if server.mountLifecycle.tryLock() {
-		server.mountLifecycle.unlock()
+	if server.mountLifecycle.TryLock() {
+		server.mountLifecycle.Unlock()
 		t.Fatal("mount Close did not hold the daemon mount lifecycle gate")
 	}
 
@@ -149,10 +149,10 @@ func TestVaultUnlockHonorsLifecycleGateAndCanceledContext(t *testing.T) {
 	prepareDaemonLifecycleTest(t)
 	engine := newDaemonMountEngine(t, 8_550_001, 8_550_002)
 	server := &Server{engine: engine, mountController: newBarrierDaemonMountController()}
-	if err := server.mountLifecycle.lock(context.Background()); err != nil {
+	if err := server.mountLifecycle.Lock(context.Background()); err != nil {
 		t.Fatalf("lock lifecycle gate: %v", err)
 	}
-	defer server.mountLifecycle.unlock()
+	defer server.mountLifecycle.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -176,10 +176,10 @@ func TestMountStartAndVaultUnlockRejectAlreadyCanceledContext(t *testing.T) {
 			t.Fatalf("vaultUnlock() iteration %d error = %v, want context canceled", iteration, err)
 		}
 	}
-	if !server.mountLifecycle.tryLock() {
+	if !server.mountLifecycle.TryLock() {
 		t.Fatal("canceled lifecycle acquisition leaked the gate token")
 	}
-	server.mountLifecycle.unlock()
+	server.mountLifecycle.Unlock()
 }
 
 func TestVaultLockAndLogoutRetainKeyWhenEjectFails(t *testing.T) {

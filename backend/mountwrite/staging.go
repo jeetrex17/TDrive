@@ -13,16 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	tdcrypto "TDrive/backend/crypto"
+	"TDrive/backend/mountscratch"
 )
 
-const (
-	privateDirMode    os.FileMode = 0o700
-	privateFileMode   os.FileMode = 0o600
-	stagingBufferSize             = 256 * 1024
-)
+const stagingBufferSize = 256 * 1024
 
 type DiskStagingConfig struct {
 	Root              string
@@ -32,13 +28,9 @@ type DiskStagingConfig struct {
 }
 
 type DiskStagingStore struct {
-	root           string
 	maxObjectBytes int64
-	maxBytes       int64
 	slots          chan struct{}
-	mu             sync.Mutex
-	usedBytes      int64
-	trackedBytes   map[string]int64
+	scratch        *mountscratch.Store
 }
 
 // NewDiskStagingStore creates a private, quota-bounded staging store and
@@ -47,38 +39,27 @@ func NewDiskStagingStore(config DiskStagingConfig) (*DiskStagingStore, error) {
 	if config.Root == "" || config.MaxObjectBytes <= 0 || config.MaxAggregateBytes <= 0 || config.MaxConcurrent <= 0 {
 		return nil, ErrInvalidRequest
 	}
-	root, err := filepath.Abs(config.Root)
+	scratch, err := mountscratch.NewStore(mountscratch.Config{
+		Root:            config.Root,
+		MaxBytes:        config.MaxAggregateBytes,
+		AccountExisting: true,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("resolve staging root: %w", err)
-	}
-	if err := os.MkdirAll(root, privateDirMode); err != nil {
-		return nil, fmt.Errorf("create staging root: %w", err)
-	}
-	if err := os.Chmod(root, privateDirMode); err != nil {
-		return nil, fmt.Errorf("protect staging root: %w", err)
-	}
-	usedBytes, trackedBytes, err := scanRegularFiles(root)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create staging scratch store: %w", err)
 	}
 	return &DiskStagingStore{
-		root:           root,
 		maxObjectBytes: config.MaxObjectBytes,
-		maxBytes:       config.MaxAggregateBytes,
 		slots:          make(chan struct{}, config.MaxConcurrent),
-		usedBytes:      usedBytes,
-		trackedBytes:   trackedBytes,
+		scratch:        scratch,
 	}, nil
 }
 
 func (s *DiskStagingStore) Root() string {
-	return s.root
+	return s.scratch.Root()
 }
 
 func (s *DiskStagingStore) UsedBytes() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.usedBytes
+	return s.scratch.UsedBytes()
 }
 
 func (s *DiskStagingStore) Stage(ctx context.Context, request StageRequest, source io.Reader) (StagedObject, error) {
@@ -112,17 +93,17 @@ func (s *DiskStagingStore) Stage(ctx context.Context, request StageRequest, sour
 	defer s.releaseSlot()
 
 	key := stagingKey(request.OperationID)
-	path, err := s.pathForKey(key)
-	if err != nil {
-		return StagedObject{}, err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, privateFileMode)
+	file, err := s.scratch.CreateExclusive(key, os.O_WRONLY)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return StagedObject{}, ErrOperationExists
 		}
+		if errors.Is(err, mountscratch.ErrInvalidName) {
+			return StagedObject{}, ErrInvalidRequest
+		}
 		return StagedObject{}, fmt.Errorf("create staged file: %w", err)
 	}
+	path := file.Name()
 
 	slog.Debug("mountwrite: staging started", "operation_id", request.OperationID,
 		"plaintext_size", request.PlaintextSize, "encrypted", request.EncryptionVersion != EncryptionNone)
@@ -396,50 +377,33 @@ func (s *DiskStagingStore) releaseSlot() {
 }
 
 func (s *DiskStagingStore) reserveBytes(size int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if size < 0 || s.usedBytes > s.maxBytes-size {
+	if err := s.scratch.Reserve(size); err != nil {
+		if !errors.Is(err, mountscratch.ErrQuotaExceeded) && !errors.Is(err, mountscratch.ErrInvalidSize) {
+			return fmt.Errorf("reserve staging bytes: %w", err)
+		}
 		return ErrQuotaExceeded
 	}
-	s.usedBytes += size
 	return nil
 }
 
 func (s *DiskStagingStore) releaseBytes(size int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.usedBytes -= size
-	if s.usedBytes < 0 {
-		s.usedBytes = 0
-	}
+	s.scratch.Release(size)
 }
 
 func (s *DiskStagingStore) trackFile(key string, size int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.trackedBytes[key] = size
+	s.scratch.Track(key, size)
 }
 
 func (s *DiskStagingStore) releaseFile(key string, fallbackSize int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	size, found := s.trackedBytes[key]
-	if !found {
-		size = fallbackSize
-	}
-	delete(s.trackedBytes, key)
-	s.usedBytes -= size
-	if s.usedBytes < 0 {
-		s.usedBytes = 0
-	}
+	s.scratch.ReleaseTracked(key, fallbackSize)
 }
 
 func (s *DiskStagingStore) pathForKey(key string) (string, error) {
 	if key == "" || filepath.Base(key) != key || strings.ContainsAny(key, `/\\`) {
 		return "", ErrInvalidRequest
 	}
-	path := filepath.Join(s.root, key)
-	if filepath.Dir(path) != s.root {
+	path := filepath.Join(s.scratch.Root(), key)
+	if filepath.Dir(path) != s.scratch.Root() {
 		return "", ErrInvalidRequest
 	}
 	return path, nil
@@ -448,30 +412,6 @@ func (s *DiskStagingStore) pathForKey(key string) (string, error) {
 func stagingKey(operationID string) string {
 	digest := sha256.Sum256([]byte(operationID))
 	return hex.EncodeToString(digest[:]) + ".stage"
-}
-
-func scanRegularFiles(root string) (int64, map[string]int64, error) {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return 0, nil, fmt.Errorf("scan staging root: %w", err)
-	}
-	var total int64
-	tracked := make(map[string]int64)
-	for _, entry := range entries {
-		if !entry.Type().IsRegular() {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return 0, nil, fmt.Errorf("inspect staged file: %w", err)
-		}
-		if info.Size() < 0 || total > math.MaxInt64-info.Size() {
-			return 0, nil, ErrQuotaExceeded
-		}
-		total += info.Size()
-		tracked[entry.Name()] = info.Size()
-	}
-	return total, tracked, nil
 }
 
 type exactLengthReader struct {
@@ -581,11 +521,12 @@ func validateStagedObject(staged StagedObject) error {
 		}
 		return nil
 	}
-	if err := tdcrypto.ValidatePlaintextSize(staged.PlaintextSize); err != nil {
-		return ErrInvalidRequest
-	}
-	if staged.SHA256 != ([sha256.Size]byte{}) || staged.StoredSHA256 == ([sha256.Size]byte{}) ||
-		tdcrypto.CiphertextSize(staged.PlaintextSize) != staged.StoredSize {
+	if !validTDE1Metadata(
+		staged.PlaintextSize,
+		staged.StoredSize,
+		staged.SHA256,
+		staged.StoredSHA256,
+	) {
 		return ErrInvalidRequest
 	}
 	return nil

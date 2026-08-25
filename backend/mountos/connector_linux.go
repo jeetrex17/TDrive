@@ -64,7 +64,7 @@ func newLinuxConnector(dependencies linuxDependencies) *linuxConnector {
 	}
 	delay := dependencies.delay
 	if delay == nil {
-		delay = delayWithContext
+		delay = waitForPoll
 	}
 	verificationTimeout := dependencies.verificationTimeout
 	if verificationTimeout <= 0 {
@@ -243,17 +243,6 @@ func (c *linuxConnector) rollback(parent context.Context, endpoint string) {
 	ctx, cancel := context.WithTimeout(cleanupParent, detachTimeout)
 	defer cancel()
 	_ = c.runner.Run(ctx, linuxDetachPlan(endpoint))
-}
-
-func delayWithContext(ctx context.Context, duration time.Duration) error {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func linuxUnavailableOrContext(ctx context.Context, unavailable error) error {

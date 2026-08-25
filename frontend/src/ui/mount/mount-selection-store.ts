@@ -15,21 +15,6 @@ const EMPTY_STATE: MountSelectionState = {
     selectedIds: [],
 };
 
-function normalizeDrives(drives: readonly MountableDrive[]): MountableDrive[] {
-    const seen = new Set<number>();
-    return drives
-        .filter((drive) => {
-            if (!Number.isSafeInteger(drive.id) || drive.id <= 0 || seen.has(drive.id)) return false;
-            seen.add(drive.id);
-            return drive.kind === 'personal' || drive.kind === 'shared';
-        })
-        .map((drive) => ({ ...drive }))
-        .sort((left, right) => {
-            if (left.kind === right.kind) return 0;
-            return left.kind === 'personal' ? -1 : 1;
-        });
-}
-
 function createMountSelection() {
     const store = writable<MountSelectionState>({ ...EMPTY_STATE });
     let rememberedIds: number[] | null = null;
@@ -41,17 +26,17 @@ function createMountSelection() {
     }
 
     function open(drives: readonly MountableDrive[], confirm: ConfirmSelection): void {
-        const normalized = normalizeDrives(drives);
-        const availableIds = new Set(normalized.map((drive) => drive.id));
+        const availableDrives = drives.map((drive) => ({ ...drive }));
+        const availableIds = new Set(availableDrives.map((drive) => drive.id));
         const remembered = rememberedIds?.filter((id) => availableIds.has(id)) ?? [];
         const selectedIds = remembered.length > 0
             ? remembered
-            : normalized.map((drive) => drive.id);
+            : availableDrives.map((drive) => drive.id);
 
         onConfirm = confirm;
         store.set({
             open: true,
-            drives: normalized,
+            drives: availableDrives,
             selectedIds: [...selectedIds],
         });
     }

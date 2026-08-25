@@ -81,5 +81,4 @@ export interface MountStatusView {
     location: string;
     error: string;
     drive: MountedDrive | null;
-    windowsDrive: string;
 }

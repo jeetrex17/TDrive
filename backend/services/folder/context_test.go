@@ -111,13 +111,26 @@ func TestDeletePropagatesContextToBatchEmitter(t *testing.T) {
 
 func TestContextMethodsRejectNilContext(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
-	if _, err := svc.CreateContext(nil, testChannelID, "No context", ""); err == nil {
-		t.Fatal("CreateContext accepted nil context")
+	tests := map[string]func() error{
+		"create": func() error {
+			_, err := svc.CreateContext(nil, testChannelID, "No context", "")
+			return err
+		},
+		"delete": func() error {
+			return svc.Delete(nil, testChannelID, "d:missing")
+		},
+		"rename": func() error {
+			return svc.RenameContext(nil, testChannelID, "d:missing", "Name")
+		},
+		"move": func() error {
+			return svc.MoveContext(nil, testChannelID, "d:missing", "")
+		},
 	}
-	if err := svc.RenameContext(nil, testChannelID, "d:missing", "Name"); err == nil {
-		t.Fatal("RenameContext accepted nil context")
-	}
-	if err := svc.MoveContext(nil, testChannelID, "d:missing", ""); err == nil {
-		t.Fatal("MoveContext accepted nil context")
+	for name, call := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); !errors.Is(err, projection.ErrInvalidContext) {
+				t.Fatalf("error = %v, want projection.ErrInvalidContext", err)
+			}
+		})
 	}
 }

@@ -661,6 +661,31 @@ func TestCoordinatorReturnsInProgressForDurableNonterminalOperation(t *testing.T
 	}
 }
 
+func TestCoordinatorRetryReturnsRecordedErrorForAbortedOperation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	coordinator, journal, _ := newTestCoordinator(t, &fakeRemote{}, &fakeInvalidator{})
+	request := PutRequest{
+		OperationID:   "retry-aborted",
+		DriveID:       42,
+		Name:          "incomplete.txt",
+		ContentLength: 10,
+	}
+
+	if _, err := coordinator.Put(ctx, request, bytes.NewReader([]byte("short"))); !errors.Is(err, ErrLengthMismatch) {
+		t.Fatalf("first put error = %v, want ErrLengthMismatch", err)
+	}
+	record := mustJournalRecord(t, journal, request.OperationID)
+	if record.State != StateAborted || record.ErrorCode != "length mismatch" {
+		t.Fatalf("aborted record = %#v, want recorded length mismatch", record)
+	}
+
+	if _, err := coordinator.Put(ctx, request, bytes.NewReader([]byte("short"))); !errors.Is(err, ErrLengthMismatch) {
+		t.Fatalf("retried put error = %v, want recorded ErrLengthMismatch", err)
+	}
+}
+
 func TestCoordinatorDefensivelyRejectsCorruptDurableRecords(t *testing.T) {
 	t.Parallel()
 
@@ -888,17 +913,6 @@ func TestCoordinatorRejectsNewWorkAfterDrainAndWaitsForActiveOperation(t *testin
 	}
 }
 
-func TestCoordinatorCapabilitiesDeclareNarrowWritableBeta(t *testing.T) {
-	t.Parallel()
-
-	coordinator, _, _ := newTestCoordinator(t, &fakeRemote{}, &fakeInvalidator{})
-	got := coordinator.Capabilities()
-	want := Capabilities{Writable: true, PersonalOnly: true, PlaintextOnly: false, OnlineOnly: true}
-	if got != want {
-		t.Fatalf("capabilities = %#v, want %#v", got, want)
-	}
-}
-
 func TestCoordinatorConstructorAndCloseValidation(t *testing.T) {
 	t.Parallel()
 
@@ -983,9 +997,6 @@ func TestNilCoordinatorIsSafelyUnavailable(t *testing.T) {
 	if got := coordinator.Status(); got != (Status{}) {
 		t.Fatalf("nil status = %#v", got)
 	}
-	if got := coordinator.Capabilities(); got != (Capabilities{}) {
-		t.Fatalf("nil capabilities = %#v", got)
-	}
 	payload := []byte("data")
 	tests := []func() error{
 		func() error {
@@ -1018,7 +1029,7 @@ func TestNilCoordinatorIsSafelyUnavailable(t *testing.T) {
 	}
 }
 
-func TestCoordinatorBoundsExecutingAndQueuedOperations(t *testing.T) {
+func TestCoordinatorBoundsAdmittedAndConcurrentOperations(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1074,7 +1085,7 @@ func TestCoordinatorBoundsExecutingAndQueuedOperations(t *testing.T) {
 	startMove(2)
 	startMove(3)
 	startMove(4)
-	waitForStatus(t, coordinator, Status{Accepting: true, Active: 5, Executing: 2, Queued: 3})
+	waitForStatus(t, coordinator, Status{Accepting: true, Active: 5})
 
 	_, err = coordinator.Move(ctx, MoveRequest{
 		OperationID:         "rejected-sixth",

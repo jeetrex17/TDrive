@@ -1,8 +1,12 @@
 package mountdav
 
 import (
+	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 // blockingReader signals started once Read is first called, then blocks
@@ -110,7 +114,7 @@ func TestResumeStoreConflictingTotalCannotCorruptARacingReplacementEntry(t *test
 	// the time G1 got back to the lock, path no longer belonged to it.
 	store.mu.Lock()
 	_, stillTracked := store.entries[path]
-	usedBytes := store.usedBytes
+	usedBytes := store.scratch.UsedBytes()
 	store.mu.Unlock()
 	if stillTracked {
 		t.Fatalf("store still tracks %q after G2's sequence completed and was removed on completion; G1's stale cleanup must not have resurrected or left a dangling entry", path)
@@ -174,7 +178,7 @@ func TestResumeStoreConflictingTotalDuringFinalChunkFailsCleanly(t *testing.T) {
 
 	store.mu.Lock()
 	live, exists := store.entries[path]
-	usedBytes := store.usedBytes
+	usedBytes := store.scratch.UsedBytes()
 	store.mu.Unlock()
 	if !exists {
 		t.Fatalf("G2's live, in-progress entry for %q must survive G1's stale cleanup", path)
@@ -189,4 +193,81 @@ func TestResumeStoreConflictingTotalDuringFinalChunkFailsCleanly(t *testing.T) {
 	store.mu.Lock()
 	store.discardLocked(path, live)
 	store.mu.Unlock()
+}
+
+func TestResumeStoreMapsAggregateQuotaAndReleasesCompletedReservation(t *testing.T) {
+	store, err := newResumeStore(t.TempDir(), time.Minute, 100, 10)
+	if err != nil {
+		t.Fatalf("new resume store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	assembled, complete, err := store.appendResumeChunk(
+		"/first.bin",
+		contentRange{start: 0, end: 0, total: 8},
+		nil,
+		noSeedOpenCurrent,
+		&sliceReader{data: []byte("a")},
+	)
+	if err != nil || complete || assembled != nil {
+		t.Fatalf("first chunk = file %v, complete %v, error %v", assembled, complete, err)
+	}
+	if got := store.scratch.UsedBytes(); got != 8 {
+		t.Fatalf("used bytes = %d, want 8", got)
+	}
+
+	_, _, err = store.appendResumeChunk(
+		"/second.bin",
+		contentRange{start: 0, end: 0, total: 3},
+		nil,
+		noSeedOpenCurrent,
+		&sliceReader{data: []byte("b")},
+	)
+	if !errors.Is(err, ErrResumeTooLarge) {
+		t.Fatalf("second sequence error = %v, want ErrResumeTooLarge", err)
+	}
+	if got := store.scratch.UsedBytes(); got != 8 {
+		t.Fatalf("failed reservation changed used bytes to %d, want 8", got)
+	}
+
+	assembled, complete, err = store.appendResumeChunk(
+		"/first.bin",
+		contentRange{start: 1, end: 7, total: 8},
+		nil,
+		noSeedOpenCurrent,
+		&sliceReader{data: []byte("bcdefgh")},
+	)
+	if err != nil || !complete || assembled == nil {
+		t.Fatalf("final chunk = file %v, complete %v, error %v", assembled, complete, err)
+	}
+	closeAndRemoveResumeFile(assembled)
+	if got := store.scratch.UsedBytes(); got != 0 {
+		t.Fatalf("completed sequence retained %d bytes", got)
+	}
+}
+
+func TestResumeStoreRollsBackQuotaWhenExclusiveCreateFails(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "1.resume"), []byte("collision"), 0o600); err != nil {
+		t.Fatalf("seed colliding file: %v", err)
+	}
+	store, err := newResumeStore(root, time.Minute, 100, 10)
+	if err != nil {
+		t.Fatalf("new resume store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	_, _, err = store.appendResumeChunk(
+		"/file.bin",
+		contentRange{start: 0, end: 0, total: 8},
+		nil,
+		noSeedOpenCurrent,
+		&sliceReader{data: []byte("a")},
+	)
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("create collision error = %v, want os.ErrExist", err)
+	}
+	if got := store.scratch.UsedBytes(); got != 0 {
+		t.Fatalf("create failure retained %d reserved bytes", got)
+	}
 }

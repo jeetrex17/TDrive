@@ -66,7 +66,6 @@ describe("api normalizers", () => {
             location: "/Volumes/Tdrive personal",
             error: "",
             drive: { id: 42, title: "Personal", kind: "personal" },
-            windows_drive: "t",
             url: "http://127.0.0.1:7777/tdrive-secret",
             commands: { mac_finder: "open http://127.0.0.1:7777/tdrive-secret" },
         });
@@ -82,7 +81,6 @@ describe("api normalizers", () => {
             location: "/Volumes/Tdrive personal",
             error: "",
             drive: { id: 42, title: "Personal", kind: "personal" },
-            windowsDrive: "T:",
         });
         expect(normalized).not.toHaveProperty("url");
         expect(normalized).not.toHaveProperty("commands");

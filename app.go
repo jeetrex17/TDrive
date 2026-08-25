@@ -10,6 +10,7 @@ import (
 	"TDrive/backend/applog"
 	"TDrive/backend/core"
 	"TDrive/backend/mountcontroller"
+	"TDrive/backend/mountlifecycle"
 	"TDrive/backend/processlock"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
@@ -30,12 +31,13 @@ type App struct {
 	Client      *telegram.Client
 	backendLock *processlock.Lock
 
-	// mountController is shared by the GUI mount API and the same backend
-	// implementation used by the CLI daemon. The process lock still guarantees
-	// that exactly one Engine/controller owns the Telegram session.
-	mountController     appMountController
-	mountDriveResolver  func() (mountcontroller.Drive, error)
-	mountDrivesResolver func([]int64) ([]mountcontroller.Drive, error)
+	// mountMu protects lazy controller construction. A transient construction
+	// failure stays retryable for a later mount request.
+	mountMu                sync.Mutex
+	mountController        appMountController
+	mountControllerFactory func(*core.Engine) (appMountController, error)
+	mountDriveResolver     func() (mountcontroller.Drive, error)
+	mountDrivesResolver    func([]int64) ([]mountcontroller.Drive, error)
 	// mountEncryptionPolicyRefresh is a narrow test seam. Production uses the
 	// core authoritative sync path; tests can model offline and partial history
 	// without network access.
@@ -44,7 +46,7 @@ type App struct {
 	// transitions. It is deliberately separate from the controller's internal
 	// mutex because a vault lock must cover both controller shutdown and key
 	// erasure as one indivisible operation.
-	mountLifecycle         mountLifecycleGate
+	mountLifecycle         mountlifecycle.Gate
 	mountLifecycleTerminal bool // guarded by mountLifecycle
 
 	// encryptionServiceOverride is a narrow test seam for deterministic
@@ -560,13 +562,11 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 // shutdown runs on app exit. Tear down the shared Telegram connection so the
 // background Run scope's goroutine exits cleanly.
 func (a *App) shutdown(ctx context.Context) {
-	if a.mountController != nil {
-		mountCtx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
-		if err := a.shutdownMountController(mountCtx); err != nil {
-			fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
-		}
-		cancel()
+	mountCtx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
+	if err := a.shutdownMountController(mountCtx); err != nil {
+		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
 	}
+	cancel()
 	a.closeAllNativeMedia()
 	if a.engine != nil {
 		a.engine.Close()
@@ -656,11 +656,8 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
-	controller, err := mountcontroller.New(engine)
-	if err != nil {
-		fmt.Printf("Warning: Failed to initialize read-only mount: %v\n", err)
-	} else {
-		a.mountController = controller
+	if _, err := a.ensureMountController(); err != nil {
+		fmt.Printf("Warning: Failed to initialize TDrive mount: %v\n", err)
 	}
 
 	fmt.Println("TDrive DB ready!")

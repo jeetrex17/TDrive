@@ -6,20 +6,19 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"TDrive/backend/mountscratch"
 )
 
 const (
-	defaultResumeIdleTimeout                   = 2 * time.Minute
-	defaultMaxResumeObjectBytes                = 8 << 30
-	defaultMaxResumeAggregateBytes             = 16 << 30
-	resumeDirMode                  os.FileMode = 0o700
-	resumeFileMode                 os.FileMode = 0o600
+	defaultResumeIdleTimeout       = 2 * time.Minute
+	defaultMaxResumeObjectBytes    = 8 << 30
+	defaultMaxResumeAggregateBytes = 16 << 30
 )
 
 var (
@@ -101,31 +100,32 @@ type resumeEntry struct {
 // the normal write coordinator. It never talks to the coordinator itself
 // and mountwrite/mountadapter have no awareness this chunking happened.
 type resumeStore struct {
-	mu                sync.Mutex
-	root              string
-	entries           map[string]*resumeEntry
-	idleTimeout       time.Duration
-	maxObjectBytes    int64
-	maxAggregateBytes int64
-	usedBytes         int64
-	serial            uint64
-	now               func() time.Time
+	mu             sync.Mutex
+	scratch        *mountscratch.Store
+	entries        map[string]*resumeEntry
+	idleTimeout    time.Duration
+	maxObjectBytes int64
+	serial         uint64
+	now            func() time.Time
 }
 
 func newResumeStore(root string, idleTimeout time.Duration, maxObjectBytes, maxAggregateBytes int64) (*resumeStore, error) {
 	if root == "" || idleTimeout <= 0 || maxObjectBytes <= 0 || maxAggregateBytes <= 0 {
 		return nil, fmt.Errorf("mountdav: invalid resume store configuration")
 	}
-	if err := os.MkdirAll(root, resumeDirMode); err != nil {
-		return nil, fmt.Errorf("mountdav: create resume root: %w", err)
+	scratch, err := mountscratch.NewStore(mountscratch.Config{
+		Root:     root,
+		MaxBytes: maxAggregateBytes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mountdav: create resume scratch store: %w", err)
 	}
 	return &resumeStore{
-		root:              root,
-		entries:           make(map[string]*resumeEntry),
-		idleTimeout:       idleTimeout,
-		maxObjectBytes:    maxObjectBytes,
-		maxAggregateBytes: maxAggregateBytes,
-		now:               time.Now,
+		scratch:        scratch,
+		entries:        make(map[string]*resumeEntry),
+		idleTimeout:    idleTimeout,
+		maxObjectBytes: maxObjectBytes,
+		now:            time.Now,
 	}, nil
 }
 
@@ -156,7 +156,7 @@ func (s *resumeStore) Close() error {
 	for _, entry := range entries {
 		_ = entry.file.Close()
 	}
-	return os.RemoveAll(s.root)
+	return os.RemoveAll(s.scratch.Root())
 }
 
 // appendResumeChunk validates and applies rng's bytes (read from source) to
@@ -282,9 +282,6 @@ func (s *resumeStore) claim(
 		existing.busy = true
 		return existing, nil
 	}
-	if s.usedBytes+rng.total > s.maxAggregateBytes {
-		return nil, ErrResumeTooLarge
-	}
 	created, err := s.createLocked(path, rng.total, lockTokens, current, size)
 	if err != nil {
 		return nil, err
@@ -294,12 +291,25 @@ func (s *resumeStore) claim(
 }
 
 func (s *resumeStore) createLocked(path string, total int64, lockTokens []string, seed io.Reader, seedSize int64) (*resumeEntry, error) {
+	if err := s.scratch.Reserve(total); err != nil {
+		if errors.Is(err, mountscratch.ErrQuotaExceeded) || errors.Is(err, mountscratch.ErrInvalidSize) {
+			return nil, ErrResumeTooLarge
+		}
+		return nil, fmt.Errorf("mountdav: reserve resume buffer: %w", err)
+	}
+	reserved := true
+	defer func() {
+		if reserved {
+			s.scratch.Release(total)
+		}
+	}()
+
 	s.serial++
-	diskPath := filepath.Join(s.root, strconv.FormatUint(s.serial, 10)+".resume")
-	file, err := os.OpenFile(diskPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, resumeFileMode)
+	file, err := s.scratch.CreateExclusive(strconv.FormatUint(s.serial, 10)+".resume", os.O_RDWR)
 	if err != nil {
 		return nil, fmt.Errorf("mountdav: create resume buffer: %w", err)
 	}
+	diskPath := file.Name()
 	if seed != nil && seedSize > 0 {
 		if _, err := io.CopyN(file, seed, seedSize); err != nil {
 			_ = file.Close()
@@ -316,7 +326,7 @@ func (s *resumeStore) createLocked(path string, total int64, lockTokens []string
 		lastActive:  s.now(),
 	}
 	s.entries[path] = entry
-	s.usedBytes += total
+	reserved = false
 	slog.Debug("mountdav: resume sequence started", "path", path, "total", total, "seed_size", seedSize)
 	return entry, nil
 }
@@ -334,7 +344,7 @@ func (s *resumeStore) removeIfCurrentLocked(path string, entry *resumeEntry) boo
 		return false
 	}
 	delete(s.entries, path)
-	s.usedBytes -= entry.total
+	s.scratch.Release(entry.total)
 	return true
 }
 

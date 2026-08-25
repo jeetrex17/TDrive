@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"TDrive/backend/projection"
+	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 )
 
@@ -87,8 +88,8 @@ func (s *Service) FolderContents(channelID int64, parentID string) (FileSystem, 
 // FolderContentsContext is FolderContents with cancellation propagated to the
 // projection queries. Callers serving bounded requests should prefer it.
 func (s *Service) FolderContentsContext(ctx context.Context, channelID int64, parentID string) (FileSystem, error) {
-	if ctx == nil {
-		return FileSystem{}, fmt.Errorf("read: list folder contents: %w", projection.ErrInvalidContext)
+	if err := servicecontext.Check(ctx, "read: list folder contents"); err != nil {
+		return FileSystem{}, err
 	}
 	if err := s.ready(); err != nil {
 		return FileSystem{}, err

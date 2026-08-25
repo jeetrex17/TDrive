@@ -1,41 +1,31 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { safeMountError } from '../../api';
     import { notify } from '../../modules/notifications';
     import type { MountableDrive } from '../../types';
-    import Button from '../Button.svelte';
     import {
         createMountController,
         defaultMountApi,
         type MountController,
     } from './mount-controller';
-    import { mountSelection } from './mount-selection-store';
 
     interface Props {
         controller?: MountController;
-        mode?: 'toolbar' | 'menu';
         onMenuAction?: () => void;
         loadDrives?: () => Promise<readonly MountableDrive[]>;
     }
 
     let {
         controller = createMountController(defaultMountApi, notify),
-        mode = 'toolbar',
         onMenuAction = () => undefined,
         loadDrives,
     }: Props = $props();
 
-    let selecting = $state(false);
+    let loadingDrives = $derived(controller.loadingDrives);
 
     onMount(() => {
         void controller.refresh();
     });
 
-    const mountedTitle = $derived(
-        $controller.location
-            ? `${$controller.label} - ${$controller.location}`
-            : `${$controller.label} - ${$controller.mode}`,
-    );
     const modeLabel = $derived.by(() => {
         if ($controller.mode === 'read-only') return 'Read only';
         if ($controller.writeState === 'ready' && $controller.acceptingWrites) return 'Read/write';
@@ -51,126 +41,60 @@
         }
         return 'Ejecting Tdrive...';
     });
-
-    async function requestMount(): Promise<void> {
-        if (selecting || $controller.phase === 'mounting') return;
-        if (!loadDrives) {
-            onMenuAction();
-            void controller.mount();
-            return;
-        }
-
-        selecting = true;
-        try {
-            const drives = [...await loadDrives()];
-            if (drives.length === 0) throw new Error('No drives are available to mount.');
-
-            onMenuAction();
-            if (drives.length === 1) {
-                void controller.mount([drives[0].id]);
-                return;
-            }
-
-            mountSelection.open(drives, (channelIds) => {
-                void controller.mount(channelIds);
-            });
-        } catch (error) {
-            notify({
-                level: 'error',
-                title: 'Could not load drives',
-                body: safeMountError(error, 'The drive list could not be loaded.'),
-            });
-        } finally {
-            selecting = false;
-        }
-    }
 </script>
 
 <div
     class="mount-control"
-    class:menu-mode={mode === 'menu'}
-    role={mode === 'menu' ? 'group' : undefined}
-    aria-label={mode === 'menu' ? `${$controller.label} mount controls` : undefined}
+    role="group"
+    aria-label={`${$controller.label} mount controls`}
     aria-live="polite"
 >
-    {#if mode === 'menu'}
-        {#if $controller.mounted}
-            <button
-                id="disconnect-mounted-drive-button"
-                class="profile-menu-item mount-menu-item"
-                type="button"
-                role="menuitem"
-                disabled={$controller.phase === 'disconnecting'}
-                aria-busy={$controller.phase === 'disconnecting' ? 'true' : undefined}
-                aria-label="Eject Tdrive"
-                onclick={() => {
-                    onMenuAction();
-                    void controller.disconnect();
-                }}
-            >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h8m-4-4l4 4-4 4"/><path stroke-linecap="round" stroke-linejoin="round" d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
-                <span class="mount-menu-copy">
-                    <span>{ejectLabel}</span>
-                    {#if $controller.mode === 'read-write' && $controller.phase !== 'disconnecting'}
-                        <span class="mount-mode-label">{modeLabel}</span>
-                    {/if}
-                </span>
-                {#if $controller.phase === 'disconnecting'}
-                    <span class="mount-menu-spinner" aria-hidden="true"></span>
-                {/if}
-            </button>
-        {:else}
-            <button
-                id="mount-drive-button"
-                class="profile-menu-item mount-menu-item"
-                type="button"
-                role="menuitem"
-                disabled={selecting || $controller.phase === 'mounting'}
-                aria-busy={selecting || $controller.phase === 'mounting' ? 'true' : undefined}
-                aria-label={`Mount ${$controller.label}`}
-                onclick={() => {
-                    void requestMount();
-                }}
-            >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 15h8m-4-4v8"/></svg>
-                <span class="mount-menu-title">
-                    {selecting ? 'Loading drives...' : $controller.phase === 'mounting' ? `Mounting ${$controller.label}...` : 'Mount'}
-                </span>
-                {#if selecting || $controller.phase === 'mounting'}
-                    <span class="mount-menu-spinner" aria-hidden="true"></span>
-                {/if}
-            </button>
-        {/if}
-    {:else if $controller.mounted}
-        <div class="mounted-actions" role="group" aria-label={`${$controller.label} mount controls`}>
-            <span class="mounted-label" title={mountedTitle}>
-                <span class="mounted-dot" aria-hidden="true"></span>
-                <span>{$controller.label}</span>
-                <span class="mount-mode-label">{modeLabel}</span>
-            </span>
-            <Button
-                id="disconnect-mounted-drive-button"
-                size="sm"
-                variant="secondary"
-                loading={$controller.phase === 'disconnecting'}
-                aria-label="Eject Tdrive"
-                onclick={() => void controller.disconnect()}
-            >
-                {ejectLabel}
-            </Button>
-        </div>
-    {:else}
-        <Button
-            id="mount-drive-button"
-            size="sm"
-            variant="secondary"
-            loading={$controller.phase === 'mounting'}
-            aria-label={`Mount ${$controller.label}`}
-            disabled={selecting}
-            onclick={() => void requestMount()}
+    {#if $controller.mounted}
+        <button
+            id="disconnect-mounted-drive-button"
+            class="profile-menu-item mount-menu-item"
+            type="button"
+            role="menuitem"
+            disabled={$controller.phase === 'disconnecting'}
+            aria-busy={$controller.phase === 'disconnecting' ? 'true' : undefined}
+            aria-label="Eject Tdrive"
+            onclick={() => {
+                onMenuAction();
+                void controller.disconnect();
+            }}
         >
-            {selecting ? 'Loading drives...' : $controller.phase === 'mounting' ? 'Mounting...' : 'Mount'}
-        </Button>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M8 12h8m-4-4l4 4-4 4"/><path stroke-linecap="round" stroke-linejoin="round" d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z"/></svg>
+            <span class="mount-menu-copy">
+                <span>{ejectLabel}</span>
+                {#if $controller.mode === 'read-write' && $controller.phase !== 'disconnecting'}
+                    <span class="mount-mode-label">{modeLabel}</span>
+                {/if}
+            </span>
+            {#if $controller.phase === 'disconnecting'}
+                <span class="mount-menu-spinner" aria-hidden="true"></span>
+            {/if}
+        </button>
+    {:else}
+        <button
+            id="mount-drive-button"
+            class="profile-menu-item mount-menu-item"
+            type="button"
+            role="menuitem"
+            disabled={$loadingDrives || $controller.phase === 'mounting'}
+            aria-busy={$loadingDrives || $controller.phase === 'mounting' ? 'true' : undefined}
+            aria-label={`Mount ${$controller.label}`}
+            onclick={() => {
+                void controller.requestMount({ loadDrives, onAction: onMenuAction });
+            }}
+        >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 15h8m-4-4v8"/></svg>
+            <span class="mount-menu-title">
+                {$loadingDrives ? 'Loading drives...' : $controller.phase === 'mounting' ? `Mounting ${$controller.label}...` : 'Mount'}
+            </span>
+            {#if $loadingDrives || $controller.phase === 'mounting'}
+                <span class="mount-menu-spinner" aria-hidden="true"></span>
+            {/if}
+        </button>
     {/if}
 
     {#if $controller.phase === 'error'}
@@ -181,19 +105,8 @@
 </div>
 
 <style>
-    .mount-control,
-    .mounted-actions,
-    .mounted-label {
-        display: inline-flex;
-        align-items: center;
-    }
-
     .mount-control {
         position: relative;
-        flex: 0 0 auto;
-    }
-
-    .mount-control.menu-mode {
         display: block;
         width: 100%;
     }
@@ -209,6 +122,10 @@
 
     .mount-menu-title {
         min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .mount-menu-copy {
@@ -217,16 +134,6 @@
         flex: 1;
         flex-direction: column;
         align-items: flex-start;
-    }
-
-    .mount-menu-title {
-        flex: 1;
-    }
-
-    .mount-menu-title {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .mount-menu-spinner {
@@ -238,33 +145,6 @@
         border-top-color: transparent;
         border-radius: var(--radius-pill);
         animation: mount-menu-spin 720ms linear infinite;
-    }
-
-    .mounted-actions {
-        gap: var(--space-2);
-    }
-
-    .mounted-label {
-        min-height: 32px;
-        max-width: 190px;
-        gap: 6px;
-        padding: 0 10px;
-        border: 1px solid color-mix(in srgb, var(--success) 34%, var(--border));
-        border-radius: var(--radius-md);
-        color: var(--text-main);
-        background: color-mix(in srgb, var(--success) 8%, transparent);
-        font-size: var(--font-size-xs);
-        font-weight: 800;
-        white-space: nowrap;
-    }
-
-    .mounted-dot {
-        width: 7px;
-        height: 7px;
-        flex: 0 0 auto;
-        border-radius: var(--radius-pill);
-        background: var(--success);
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
     }
 
     .mount-mode-label {
@@ -285,16 +165,6 @@
         clip: rect(0, 0, 0, 0);
         white-space: nowrap;
         border: 0;
-    }
-
-    @media (max-width: 1120px) {
-        .mount-mode-label {
-            display: none;
-        }
-
-        .mounted-label {
-            max-width: 132px;
-        }
     }
 
     @keyframes mount-menu-spin {

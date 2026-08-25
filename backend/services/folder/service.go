@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"TDrive/backend/projection"
+	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 
 	"github.com/google/uuid"
@@ -52,7 +53,7 @@ func (s *Service) Create(channelID int64, name string, parentID string) (Folder,
 }
 
 func (s *Service) CreateContext(ctx context.Context, channelID int64, name string, parentID string) (Folder, error) {
-	if err := contextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "folder: create"); err != nil {
 		return Folder{}, err
 	}
 	if err := s.ready(); err != nil {
@@ -104,7 +105,7 @@ func (s *Service) CreateContext(ctx context.Context, channelID int64, name strin
 }
 
 func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) error {
-	if err := contextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "folder: delete"); err != nil {
 		return err
 	}
 	if err := s.ready(); err != nil {
@@ -161,7 +162,7 @@ func (s *Service) Rename(channelID int64, folderID string, newName string) error
 }
 
 func (s *Service) RenameContext(ctx context.Context, channelID int64, folderID string, newName string) error {
-	if err := contextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "folder: rename"); err != nil {
 		return err
 	}
 	if err := s.ready(); err != nil {
@@ -198,7 +199,7 @@ func (s *Service) Move(channelID int64, folderID string, newParentID string) err
 }
 
 func (s *Service) MoveContext(ctx context.Context, channelID int64, folderID string, newParentID string) error {
-	if err := contextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "folder: move"); err != nil {
 		return err
 	}
 	if err := s.ready(); err != nil {
@@ -256,7 +257,7 @@ func (s *Service) MoveContext(ctx context.Context, channelID int64, folderID str
 }
 
 func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) error {
-	if err := contextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "folder: emit operation"); err != nil {
 		return err
 	}
 	if s.EmitOpContext != nil {
@@ -272,7 +273,7 @@ func (s *Service) emitMany(ctx context.Context, channelID int64, ops []projectio
 	if len(ops) == 0 {
 		return nil
 	}
-	if err := contextError(ctx); err != nil {
+	if err := servicecontext.Check(ctx, "folder: emit operations"); err != nil {
 		return err
 	}
 	if s.EmitOpsContext != nil {
@@ -409,11 +410,4 @@ func normalizeParent(p string) string {
 		return projection.RootParent
 	}
 	return p
-}
-
-func contextError(ctx context.Context) error {
-	if ctx == nil {
-		return fmt.Errorf("context is required")
-	}
-	return ctx.Err()
 }

@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	"TDrive/backend/mountdav"
 	"TDrive/backend/mountfs"
+	"TDrive/backend/mountpath"
 	"TDrive/backend/projection"
 
 	_ "modernc.org/sqlite"
@@ -67,7 +69,13 @@ func TestProjectionResolverHonorsCancellationAndValidation(t *testing.T) {
 	if _, _, err := resolver.Resolve(canceled, "/"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled error = %v", err)
 	}
-	for _, value := range []string{"relative", "/a//b", "/a/../b", "/a\\b"} {
+	for _, value := range []string{
+		"relative",
+		"/a//b",
+		"/a/../b",
+		"/a\\b",
+		"/" + strings.Repeat("a", mountpath.MaxComponentBytes+1),
+	} {
 		if _, _, err := resolver.Resolve(context.Background(), value); !errors.Is(err, mountdav.ErrWriteInvalid) {
 			t.Fatalf("path %q error = %v", value, err)
 		}

@@ -4,55 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
+	"TDrive/backend/core"
 	"TDrive/backend/mountcontroller"
-	"TDrive/backend/mountpolicy"
+	"TDrive/backend/mountsafe"
 )
 
 var errAppMountLifecycleTerminal = errors.New("TDrive is shutting down")
-
-// mountLifecycleGate is a zero-value, context-aware binary gate. Unlike a
-// sync.Mutex, a shutdown or vault transition can abandon a queued acquisition
-// when its deadline expires instead of freezing the UI indefinitely.
-type mountLifecycleGate struct {
-	once  sync.Once
-	token chan struct{}
-}
-
-func (gate *mountLifecycleGate) lock(ctx context.Context) error {
-	if ctx == nil {
-		return fmt.Errorf("mount lifecycle: context is required")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	gate.once.Do(func() { gate.token = make(chan struct{}, 1) })
-	select {
-	case gate.token <- struct{}{}:
-		if err := ctx.Err(); err != nil {
-			<-gate.token
-			return err
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (gate *mountLifecycleGate) tryLock() bool {
-	gate.once.Do(func() { gate.token = make(chan struct{}, 1) })
-	select {
-	case gate.token <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (gate *mountLifecycleGate) unlock() {
-	<-gate.token
-}
 
 type appMountController interface {
 	Start(context.Context, mountcontroller.Drive, mountcontroller.StartOptions) (mountcontroller.Status, error)
@@ -91,14 +49,33 @@ type MountDriveView struct {
 // MountDrive attaches the active drive without changing it. The controller
 // pins this immutable drive record until the user disconnects it.
 func (a *App) MountDrive() (MountView, error) {
-	return a.mountDrive(mountcontroller.ModeAuto)
+	ctx, cancel := a.mountMutationContext()
+	defer cancel()
+	release, err := a.acquireMountLifecycle(ctx)
+	if err != nil {
+		return MountView{}, fmt.Errorf("mount: wait for encryption transition: %w", err)
+	}
+	defer release()
+
+	controller, err := a.requireMountController()
+	if err != nil {
+		return MountView{}, mountsafe.SanitizeError(err)
+	}
+	drive, err := a.resolveActiveMountDriveContext(ctx)
+	if err != nil {
+		return MountView{}, mountsafe.SanitizeError(err)
+	}
+	status, err := controller.Start(ctx, drive, mountcontroller.StartOptions{Mode: mountcontroller.ModeAuto})
+	return mountView(status), mountsafe.SanitizeError(err)
 }
 
 // MountDrives attaches an explicit selection inside one TDrive volume. The
 // client supplies IDs only; titles, kinds, and encryption state are resolved
 // from the authoritative local projection before the controller is called.
 func (a *App) MountDrives(channelIDs []int64) (MountView, error) {
-	release, err := a.acquireMountLifecycle(a.appContext())
+	ctx, cancel := a.mountMutationContext()
+	defer cancel()
+	release, err := a.acquireMountLifecycle(ctx)
 	if err != nil {
 		return MountView{}, fmt.Errorf("mount: wait for encryption transition: %w", err)
 	}
@@ -106,62 +83,40 @@ func (a *App) MountDrives(channelIDs []int64) (MountView, error) {
 
 	controller, err := a.requireMountController()
 	if err != nil {
-		return MountView{}, err
+		return MountView{}, mountsafe.SanitizeError(err)
 	}
 	aggregate, ok := controller.(appAggregateMountController)
 	if !ok {
 		return MountView{}, fmt.Errorf("mount: selected-drive mounting is unavailable")
 	}
-	drives, err := a.resolveMountDrives(channelIDs)
+	drives, err := a.resolveMountDrivesContext(ctx, channelIDs)
 	if err != nil {
-		return MountView{}, err
+		return MountView{}, mountsafe.SanitizeError(err)
 	}
-	status, err := aggregate.StartDrives(a.appContext(), drives, mountcontroller.StartOptions{Mode: mountcontroller.ModeAuto})
-	return mountView(status), err
-}
-
-// MountDriveReadOnly is the explicit safety fallback for clients that do not
-// want write access even when the active personal drive is eligible.
-func (a *App) MountDriveReadOnly() (MountView, error) {
-	return a.mountDrive(mountcontroller.ModeReadOnly)
-}
-
-func (a *App) mountDrive(mode mountcontroller.Mode) (MountView, error) {
-	release, err := a.acquireMountLifecycle(a.appContext())
-	if err != nil {
-		return MountView{}, fmt.Errorf("mount: wait for encryption transition: %w", err)
-	}
-	defer release()
-
-	controller, err := a.requireMountController()
-	if err != nil {
-		return MountView{}, err
-	}
-	drive, err := a.resolveActiveMountDrive()
-	if err != nil {
-		return MountView{}, err
-	}
-	status, err := controller.Start(a.appContext(), drive, mountcontroller.StartOptions{Mode: mode})
-	return mountView(status), err
+	status, err := aggregate.StartDrives(ctx, drives, mountcontroller.StartOptions{Mode: mountcontroller.ModeAuto})
+	return mountView(status), mountsafe.SanitizeError(err)
 }
 
 func (a *App) MountStatus() MountView {
-	if a == nil || a.mountController == nil {
+	controller := a.currentMountController()
+	if controller == nil {
 		return MountView{Phase: "idle"}
 	}
-	return mountView(a.mountController.Status())
+	return mountView(controller.Status())
 }
 
 func (a *App) OpenMountedDrive() error {
 	controller, err := a.requireMountController()
 	if err != nil {
-		return err
+		return mountsafe.SanitizeError(err)
 	}
-	return controller.Open(a.appContext())
+	return mountsafe.SanitizeError(controller.Open(a.appContext()))
 }
 
 func (a *App) UnmountDrive() (MountView, error) {
-	release, err := a.acquireMountLifecycle(a.appContext())
+	ctx, cancel := a.mountMutationContext()
+	defer cancel()
+	release, err := a.acquireMountLifecycle(ctx)
 	if err != nil {
 		return MountView{}, fmt.Errorf("mount: wait for encryption transition: %w", err)
 	}
@@ -169,24 +124,28 @@ func (a *App) UnmountDrive() (MountView, error) {
 
 	controller, err := a.requireMountController()
 	if err != nil {
-		return MountView{}, err
+		return MountView{}, mountsafe.SanitizeError(err)
 	}
-	status, err := controller.Stop(a.appContext())
-	return mountView(status), err
+	status, err := controller.Stop(ctx)
+	return mountView(status), mountsafe.SanitizeError(err)
+}
+
+func (a *App) mountMutationContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(a.appContext(), encryptionMountTransitionTimeout)
 }
 
 func (a *App) acquireMountLifecycle(ctx context.Context) (func(), error) {
 	if a == nil {
 		return nil, fmt.Errorf("mount: backend is not ready")
 	}
-	if err := a.mountLifecycle.lock(ctx); err != nil {
+	if err := a.mountLifecycle.Lock(ctx); err != nil {
 		return nil, err
 	}
 	if a.mountLifecycleTerminal {
-		a.mountLifecycle.unlock()
+		a.mountLifecycle.Unlock()
 		return nil, errAppMountLifecycleTerminal
 	}
-	return a.mountLifecycle.unlock, nil
+	return a.mountLifecycle.Unlock, nil
 }
 
 // shutdownMountController makes the lifecycle terminal before closing the
@@ -197,10 +156,10 @@ func (a *App) shutdownMountController(ctx context.Context) error {
 	if a == nil {
 		return nil
 	}
-	if err := a.mountLifecycle.lock(ctx); err != nil {
+	if err := a.mountLifecycle.Lock(ctx); err != nil {
 		return err
 	}
-	defer a.mountLifecycle.unlock()
+	defer a.mountLifecycle.Unlock()
 	if a.mountLifecycleTerminal {
 		return nil
 	}
@@ -210,20 +169,53 @@ func (a *App) shutdownMountController(ctx context.Context) error {
 
 // closeMountControllerLocked requires mountLifecycle to be held by the caller.
 func (a *App) closeMountControllerLocked(ctx context.Context) error {
-	if a == nil || a.mountController == nil {
+	controller := a.currentMountController()
+	if controller == nil {
 		return nil
 	}
-	return a.mountController.Close(ctx)
+	return controller.Close(ctx)
 }
 
 func (a *App) requireMountController() (appMountController, error) {
-	if a == nil || a.mountController == nil {
-		return nil, fmt.Errorf("mount: backend is not ready")
-	}
-	return a.mountController, nil
+	return a.ensureMountController()
 }
 
-func (a *App) resolveActiveMountDrive() (mountcontroller.Drive, error) {
+func (a *App) ensureMountController() (appMountController, error) {
+	if a == nil {
+		return nil, fmt.Errorf("mount: backend is not ready")
+	}
+	a.mountMu.Lock()
+	defer a.mountMu.Unlock()
+	if a.mountController != nil {
+		return a.mountController, nil
+	}
+	factory := a.mountControllerFactory
+	if factory == nil {
+		factory = func(engine *core.Engine) (appMountController, error) {
+			return mountcontroller.New(engine)
+		}
+	}
+	controller, err := factory(a.engine)
+	if err != nil {
+		return nil, err
+	}
+	if controller == nil {
+		return nil, fmt.Errorf("mount: backend is not ready")
+	}
+	a.mountController = controller
+	return controller, nil
+}
+
+func (a *App) currentMountController() appMountController {
+	if a == nil {
+		return nil
+	}
+	a.mountMu.Lock()
+	defer a.mountMu.Unlock()
+	return a.mountController
+}
+
+func (a *App) resolveActiveMountDriveContext(ctx context.Context) (mountcontroller.Drive, error) {
 	if a != nil && a.mountDriveResolver != nil {
 		return a.mountDriveResolver()
 	}
@@ -240,7 +232,7 @@ func (a *App) resolveActiveMountDrive() (mountcontroller.Drive, error) {
 	}
 	for _, channel := range channels {
 		if channel.ChannelID == activeID {
-			encrypted, unlocked, err := a.mountDriveEncryptionStatus(channel.ChannelID, channel.Kind)
+			encrypted, unlocked, err := a.mountDriveEncryptionStatus(ctx, channel.ChannelID, channel.Kind)
 			if err != nil {
 				return mountcontroller.Drive{}, err
 			}
@@ -256,7 +248,7 @@ func (a *App) resolveActiveMountDrive() (mountcontroller.Drive, error) {
 	return mountcontroller.Drive{}, fmt.Errorf("mount: active drive is unavailable")
 }
 
-func (a *App) resolveMountDrives(channelIDs []int64) ([]mountcontroller.Drive, error) {
+func (a *App) resolveMountDrivesContext(ctx context.Context, channelIDs []int64) ([]mountcontroller.Drive, error) {
 	requested := append([]int64(nil), channelIDs...)
 	if a != nil && a.mountDrivesResolver != nil {
 		return a.mountDrivesResolver(requested)
@@ -287,7 +279,7 @@ func (a *App) resolveMountDrives(channelIDs []int64) ([]mountcontroller.Drive, e
 		if _, exists := selected[channel.ChannelID]; !exists {
 			continue
 		}
-		encrypted, unlocked, err := a.mountDriveEncryptionStatus(channel.ChannelID, channel.Kind)
+		encrypted, unlocked, err := a.mountDriveEncryptionStatus(ctx, channel.ChannelID, channel.Kind)
 		if err != nil {
 			return nil, err
 		}
@@ -305,45 +297,24 @@ func (a *App) resolveMountDrives(channelIDs []int64) ([]mountcontroller.Drive, e
 	return drives, nil
 }
 
-func (a *App) mountDriveEncryptionStatus(channelID int64, kind string) (bool, bool, error) {
-	if kind != mountcontroller.DriveKindPersonal {
-		return false, false, nil
+func (a *App) mountDriveEncryptionStatus(ctx context.Context, channelID int64, kind string) (bool, bool, error) {
+	var engine *core.Engine
+	var refresh func(context.Context, int64) error
+	if a != nil {
+		engine = a.engine
+		refresh = a.mountEncryptionPolicyRefresh
 	}
-	if a == nil || a.engine == nil {
-		return false, false, fmt.Errorf("mount: encryption eligibility is unavailable")
-	}
-	reads := a.engine.ReadService()
-	if reads == nil || reads.DB == nil {
-		return false, false, fmt.Errorf("mount: encryption eligibility is unavailable")
-	}
-	policy, err := mountpolicy.ResolvePersonal(
-		a.appContext(),
-		reads.DB,
+	policy, err := engine.ResolveMountEncryptionPolicy(
+		ctx,
 		channelID,
-		a.refreshMountEncryptionPolicy,
-		func() (bool, error) {
-			status, err := a.engine.EncryptionService().StatusContext(a.appContext())
-			return status.PasswordRemembered, err
-		},
+		kind,
+		refresh,
+		func(format string, args ...any) { fmt.Printf(format, args...) },
 	)
 	if err != nil {
 		return false, false, err
 	}
 	return policy.Encrypted, policy.Unlocked, nil
-}
-
-func (a *App) refreshMountEncryptionPolicy(ctx context.Context, channelID int64) error {
-	if a != nil && a.mountEncryptionPolicyRefresh != nil {
-		return a.mountEncryptionPolicyRefresh(ctx, channelID)
-	}
-	if a == nil || a.engine == nil {
-		return mountpolicy.ErrEncryptionPolicyUnavailable
-	}
-	if err := a.engine.EnsureEncryptionPolicy(ctx, channelID); err != nil {
-		fmt.Printf("mount: refresh personal-drive encryption policy: %v\n", err)
-		return err
-	}
-	return nil
 }
 
 func (a *App) appContext() context.Context {
@@ -354,6 +325,10 @@ func (a *App) appContext() context.Context {
 }
 
 func mountView(status mountcontroller.Status) MountView {
+	location := status.Location
+	if mountsafe.ContainsSensitive(location) {
+		location = ""
+	}
 	return MountView{
 		Phase:           mountViewPhase(status.Phase),
 		Mounted:         status.Mounted,
@@ -362,8 +337,8 @@ func mountView(status mountcontroller.Status) MountView {
 		AcceptingWrites: status.AcceptingWrites,
 		ActiveWrites:    status.ActiveWrites,
 		Label:           status.Label,
-		Location:        status.Location,
-		Error:           status.Error,
+		Location:        location,
+		Error:           mountsafe.Message(status.Error),
 		Drive: MountDriveView{
 			ID:    status.DriveID,
 			Title: status.DriveTitle,

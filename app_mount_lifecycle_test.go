@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"TDrive/backend/core"
 	"TDrive/backend/mountcontroller"
 	encservice "TDrive/backend/services/encryption"
 )
@@ -29,8 +30,8 @@ func TestEncryptionLockWaitsForInFlightMountStart(t *testing.T) {
 		mountDone <- err
 	}()
 	waitLifecycleSignal(t, controller.startEntered, "mount start")
-	if app.mountLifecycle.tryLock() {
-		app.mountLifecycle.unlock()
+	if app.mountLifecycle.TryLock() {
+		app.mountLifecycle.Unlock()
 		t.Fatal("mount start did not hold the app lifecycle gate")
 	}
 
@@ -76,8 +77,8 @@ func TestCreateEncryptionPasswordSerializesPolicyChangeWithMountStart(t *testing
 		createDone <- app.CreateEncryptionPassword("correct horse battery staple", "hint")
 	}()
 	waitLifecycleSignal(t, controller.closeEntered, "mount close before password creation")
-	if app.mountLifecycle.tryLock() {
-		app.mountLifecycle.unlock()
+	if app.mountLifecycle.TryLock() {
+		app.mountLifecycle.Unlock()
 		t.Fatal("password creation did not hold the app lifecycle gate")
 	}
 
@@ -101,6 +102,41 @@ func TestCreateEncryptionPasswordSerializesPolicyChangeWithMountStart(t *testing
 	if !status.PasswordSet || !status.PasswordRemembered {
 		t.Fatalf("encryption status = %#v, want configured policy before mount start", status)
 	}
+}
+
+func TestEncryptionStatusDoesNotWaitForMountLifecycle(t *testing.T) {
+	app, _ := setupEncryptionApp(t)
+	t.Cleanup(app.engine.Close)
+	app.ctx = context.Background()
+	if err := app.mountLifecycle.Lock(context.Background()); err != nil {
+		t.Fatalf("lock lifecycle gate: %v", err)
+	}
+	locked := true
+	defer func() {
+		if locked {
+			app.mountLifecycle.Unlock()
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := app.EncryptionStatus()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("EncryptionStatus() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		app.mountLifecycle.Unlock()
+		locked = false
+		<-done
+		t.Fatal("EncryptionStatus() waited for the mount lifecycle gate")
+	}
+	app.mountLifecycle.Unlock()
+	locked = false
 }
 
 func TestLogoutLifecyclePermanentlyRejectsQueuedMountStart(t *testing.T) {
@@ -127,8 +163,8 @@ func TestLogoutLifecyclePermanentlyRejectsQueuedMountStart(t *testing.T) {
 		})
 	}()
 	waitLifecycleSignal(t, cleanupEntered, "logout cleanup")
-	if app.mountLifecycle.tryLock() {
-		app.mountLifecycle.unlock()
+	if app.mountLifecycle.TryLock() {
+		app.mountLifecycle.Unlock()
 		t.Fatal("logout cleanup did not hold the app lifecycle gate")
 	}
 
@@ -193,8 +229,8 @@ func TestPasswordKeyWritersSerializeBeforeLockAndLogout(t *testing.T) {
 			go func() { writeDone <- test.writeKey(app) }()
 			entered, release := service.activeBarrier()
 			waitLifecycleSignal(t, entered, "password key writer")
-			if app.mountLifecycle.tryLock() {
-				app.mountLifecycle.unlock()
+			if app.mountLifecycle.TryLock() {
+				app.mountLifecycle.Unlock()
 				t.Fatal("password key writer did not hold the app lifecycle gate")
 			}
 
@@ -233,6 +269,26 @@ func TestAppShutdownMakesMountLifecycleTerminal(t *testing.T) {
 	case <-controller.startEntered:
 		t.Fatal("controller Start was called after shutdown")
 	default:
+	}
+}
+
+func TestAppShutdownWithoutControllerMakesMountLifecycleTerminal(t *testing.T) {
+	constructionCalls := 0
+	app := &App{
+		ctx: context.Background(),
+		mountControllerFactory: func(*core.Engine) (appMountController, error) {
+			constructionCalls++
+			return newBarrierAppMountController(), nil
+		},
+		mountDriveResolver: unlockedEncryptedDrive,
+	}
+
+	app.shutdown(context.Background())
+	if _, err := app.MountDrive(); !errors.Is(err, errAppMountLifecycleTerminal) {
+		t.Fatalf("MountDrive() after shutdown error = %v, want terminal lifecycle", err)
+	}
+	if constructionCalls != 0 {
+		t.Fatalf("shutdown allowed %d controller constructions", constructionCalls)
 	}
 }
 

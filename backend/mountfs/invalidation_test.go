@@ -213,11 +213,9 @@ func TestInvalidateSubtreeInvalidatesInFlightCachedChild(t *testing.T) {
 	t.Parallel()
 
 	cache := newSnapshotCache(8, 20, 2, time.Hour, time.Now)
-	cache.mu.Lock()
-	cache.insertLocked("d:tree", directorySnapshot{entries: []snapshotEntry{
+	cache.entries.Put("d:tree", directorySnapshot{entries: []snapshotEntry{
 		{source: SourceEntry{ID: "d:child", ParentID: "d:tree", Kind: KindDirectory}},
 	}})
-	cache.mu.Unlock()
 
 	childStarted := make(chan struct{})
 	childCancelled := make(chan struct{})

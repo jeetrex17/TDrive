@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"TDrive/backend/mountcontroller"
-	"TDrive/backend/mountpolicy"
 )
 
 type daemonMountController interface {
@@ -51,10 +50,19 @@ func (s *Server) startMount(ctx context.Context, selector string, windowsDrive s
 		return MountResponse{}, err
 	}
 	if !reusePinnedDrive {
-		encrypted, encryptionUnlocked, err = s.mountDriveEncryptionStatus(ctx, drive)
+		policy, policyErr := s.engine.ResolveMountEncryptionPolicy(
+			ctx,
+			drive.ID,
+			drive.Kind,
+			s.mountEncryptionPolicyRefresh,
+			s.warnf,
+		)
+		err = policyErr
 		if err != nil {
 			return MountResponse{}, err
 		}
+		encrypted = policy.Encrypted
+		encryptionUnlocked = policy.Unlocked
 	}
 
 	slog.Info("daemon: starting mount", "drive_id", drive.ID, "mode", mode, "encrypted", encrypted, "reuse_pinned", reusePinnedDrive)
@@ -71,49 +79,6 @@ func (s *Server) startMount(ctx context.Context, selector string, windowsDrive s
 		slog.Info("daemon: mount start finished", "drive_id", drive.ID, "phase", status.Phase, "mounted", status.Mounted)
 	}
 	return mountResponse(status, s.driveFromMountStatus(status)), err
-}
-
-func (s *Server) mountDriveEncryptionStatus(ctx context.Context, drive Drive) (bool, bool, error) {
-	if drive.Kind != mountcontroller.DriveKindPersonal {
-		return false, false, nil
-	}
-	if s == nil || s.engine == nil {
-		return false, false, fmt.Errorf("mount: encryption eligibility is unavailable")
-	}
-	reads := s.engine.ReadService()
-	if reads == nil || reads.DB == nil {
-		return false, false, fmt.Errorf("mount: encryption eligibility is unavailable")
-	}
-	policy, err := mountpolicy.ResolvePersonal(
-		ctx,
-		reads.DB,
-		drive.ID,
-		s.refreshMountEncryptionPolicy,
-		func() (bool, error) {
-			status, err := s.engine.EncryptionService().StatusContext(ctx)
-			return status.PasswordRemembered, err
-		},
-	)
-	if err != nil {
-		return false, false, err
-	}
-	return policy.Encrypted, policy.Unlocked, nil
-}
-
-func (s *Server) refreshMountEncryptionPolicy(ctx context.Context, channelID int64) error {
-	if s != nil && s.mountEncryptionPolicyRefresh != nil {
-		return s.mountEncryptionPolicyRefresh(ctx, channelID)
-	}
-	if s == nil || s.engine == nil {
-		return mountpolicy.ErrEncryptionPolicyUnavailable
-	}
-	if err := s.engine.EnsureEncryptionPolicy(ctx, channelID); err != nil {
-		if s.warnf != nil {
-			s.warnf("mount: refresh personal-drive encryption policy: %v\n", err)
-		}
-		return err
-	}
-	return nil
 }
 
 func mountStatusOwnsPinnedDrive(status mountcontroller.Status) bool {
@@ -161,10 +126,10 @@ func (s *Server) stopMountServer(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	if err := s.mountLifecycle.lock(ctx); err != nil {
+	if err := s.mountLifecycle.Lock(ctx); err != nil {
 		return err
 	}
-	defer s.mountLifecycle.unlock()
+	defer s.mountLifecycle.Unlock()
 	if s.mountLifecycleTerminal {
 		return nil
 	}

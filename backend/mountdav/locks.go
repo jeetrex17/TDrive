@@ -128,18 +128,7 @@ func (locks *boundedLockSystem) refreshPath(now time.Time, path, token string, d
 }
 
 func (locks *boundedLockSystem) Unlock(now time.Time, token string) error {
-	locks.mu.Lock()
-	defer locks.mu.Unlock()
-	locks.collectExpired(now)
-	tracked, exists := locks.byToken[token]
-	if !exists {
-		return webdav.ErrNoSuchLock
-	}
-	if err := locks.delegate.Unlock(now, tracked.internalToken); err != nil {
-		return err
-	}
-	delete(locks.byToken, token)
-	return nil
+	return locks.unlockPath(now, "", token)
 }
 
 func (locks *boundedLockSystem) unlockPath(now time.Time, path, token string) error {
@@ -150,7 +139,7 @@ func (locks *boundedLockSystem) unlockPath(now time.Time, path, token string) er
 	if !exists {
 		return webdav.ErrNoSuchLock
 	}
-	if tracked.details.Root != path {
+	if path != "" && tracked.details.Root != path {
 		return webdav.ErrForbidden
 	}
 	if err := locks.delegate.Unlock(now, tracked.internalToken); err != nil {

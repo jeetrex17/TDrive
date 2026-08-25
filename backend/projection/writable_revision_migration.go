@@ -66,9 +66,7 @@ func backfillLegacyRevisionsFromReplay(tx *sql.Tx) error {
 			if !isSkippableApplyError(err) {
 				return fmt.Errorf("projection: replay legacy revision op msg=%d: %w", row.msgID, err)
 			}
-			if recErr := recordProjectionOperationTx(
-				tx, row.channelID, row.msgID, op, OperationRejected, err,
-			); recErr != nil {
+			if recErr := recordSkippedOp(tx, row.channelID, row.msgID, op, err); recErr != nil {
 				return fmt.Errorf("projection: record legacy revision rejection: %w", recErr)
 			}
 		}

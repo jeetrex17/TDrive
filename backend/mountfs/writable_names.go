@@ -2,45 +2,24 @@ package mountfs
 
 import (
 	"fmt"
-	"strings"
-	"unicode"
-	"unicode/utf8"
+
+	"TDrive/backend/mountpath"
 
 	"golang.org/x/text/unicode/norm"
 )
-
-const forbiddenWritableNameCharacters = `<>:"/\\|?*`
 
 // NormalizeWritableName validates a new file or folder name against TDrive's
 // cross-platform namespace and returns its NFC display spelling. Legacy read
 // entries continue to use portableName aliases and are not rejected.
 func NormalizeWritableName(name string) (string, error) {
-	if !utf8.ValidString(name) {
-		return "", fmt.Errorf("%w: name is not valid UTF-8", ErrInvalidName)
+	normalized, err := mountpath.NormalizeComponent(name, mountpath.ComponentOptions{
+		Portable:              true,
+		RejectWindowsReserved: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidName, err)
 	}
-	name = norm.NFC.String(name)
-	if name == "" {
-		return "", fmt.Errorf("%w: name is empty", ErrInvalidName)
-	}
-	if name == "." || name == ".." {
-		return "", fmt.Errorf("%w: traversal names are not allowed", ErrInvalidName)
-	}
-	if len(name) > maxPortableNameBytes {
-		return "", fmt.Errorf("%w: name exceeds %d bytes", ErrInvalidName, maxPortableNameBytes)
-	}
-	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
-		return "", fmt.Errorf("%w: trailing dots and spaces are not portable", ErrInvalidName)
-	}
-	for _, character := range name {
-		if unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character) ||
-			strings.ContainsRune(forbiddenWritableNameCharacters, character) {
-			return "", fmt.Errorf("%w: name contains a non-portable character", ErrInvalidName)
-		}
-	}
-	if isWindowsReservedName(name) {
-		return "", fmt.Errorf("%w: Windows device names are not allowed", ErrInvalidName)
-	}
-	return name, nil
+	return normalized, nil
 }
 
 // ValidateWritableName reports whether a new file or folder name belongs to

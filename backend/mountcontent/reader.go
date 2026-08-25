@@ -15,6 +15,7 @@ import (
 
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/media"
+	"TDrive/backend/mountcache"
 	"TDrive/backend/tgclient"
 
 	"golang.org/x/sync/errgroup"
@@ -77,9 +78,9 @@ type Opener struct {
 	cancelLifetime      context.CancelFunc
 	resolveSlots        chan struct{}
 	peerCache           *resolvedPeerCache
-	peerResolutions     map[int64]*peerResolution
+	peerResolutions     *mountcache.Coalescer[int64, tgclient.InputPeer]
 	documentCache       *documentRefCache
-	documentResolutions map[documentRefKey]*documentResolution
+	documentResolutions *mountcache.Coalescer[documentRefKey, tgclient.DocumentRef]
 	encryptedReaders    map[*Reader]struct{}
 }
 
@@ -105,9 +106,9 @@ func New(cfg Config) (*Opener, error) {
 		cancelLifetime:      cancelLifetime,
 		resolveSlots:        make(chan struct{}, maxConcurrentDocumentResolutions),
 		peerCache:           newResolvedPeerCache(maxCachedPeers),
-		peerResolutions:     make(map[int64]*peerResolution),
+		peerResolutions:     mountcache.NewCoalescer[int64, tgclient.InputPeer](0),
 		documentCache:       newDocumentRefCache(maxCachedDocumentRefs, documentRefCacheTTL, nil),
-		documentResolutions: make(map[documentRefKey]*documentResolution),
+		documentResolutions: mountcache.NewCoalescer[documentRefKey, tgclient.DocumentRef](0),
 		encryptedReaders:    make(map[*Reader]struct{}),
 		reader: media.NewRangeReader(media.RangeReaderConfig{
 			Client:         cfg.Ranges,
@@ -130,20 +131,18 @@ func (o *Opener) Close() {
 	o.closed = true
 	reader := o.reader
 	cancelLifetime := o.cancelLifetime
+	if o.peerResolutions != nil {
+		o.peerResolutions.Close(ErrClosed)
+	}
 	if o.peerCache != nil {
 		o.peerCache.clear()
 	}
-	for _, resolution := range o.peerResolutions {
-		resolution.abandoned = true
+	if o.documentResolutions != nil {
+		o.documentResolutions.Close(ErrClosed)
 	}
-	clear(o.peerResolutions)
 	if o.documentCache != nil {
 		o.documentCache.clear()
 	}
-	for _, resolution := range o.documentResolutions {
-		resolution.abandoned = true
-	}
-	clear(o.documentResolutions)
 	readers := make([]*Reader, 0, len(o.encryptedReaders))
 	for reader := range o.encryptedReaders {
 		readers = append(readers, reader)

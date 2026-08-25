@@ -31,15 +31,15 @@ func (resolver projectionResolver) Resolve(ctx context.Context, value string) (N
 	if err := ctx.Err(); err != nil {
 		return Node{}, false, err
 	}
-	value = normalizedPath(value)
-	if err := validateAbsolutePath(value); err != nil {
+	value, components, err := parseAbsolutePath(value)
+	if err != nil {
 		return Node{}, false, err
 	}
 	current := Node{ObjectID: projection.RootParent, Kind: mountfs.KindDirectory}
 	if value == "/" {
 		return current, true, nil
 	}
-	for _, component := range strings.Split(strings.TrimPrefix(value, "/"), "/") {
+	for _, component := range components {
 		if current.Kind != mountfs.KindDirectory {
 			slog.Debug("mountadapter: resolve stopped, ancestor is not a directory", "path", value)
 			return Node{}, false, nil

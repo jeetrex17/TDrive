@@ -42,6 +42,7 @@ describe('AppShell behavior', () => {
             'context-menu',
             'preview-modal',
             'video-modal',
+            'mount-selection-modal',
         ]) {
             expect(host?.querySelector(`#${id}`)).not.toBeNull();
         }

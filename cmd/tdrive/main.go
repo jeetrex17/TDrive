@@ -823,7 +823,7 @@ Usage:
   tdrive mkdir [-p] <path>  Create a remote folder
   tdrive rm [-r] <path>     Remove a remote file or folder
   tdrive mv <src> <dst>     Move or rename a remote file or folder
-  tdrive mount              Start read-only WebDAV mount server
+  tdrive mount              Start WebDAV mount server
   tdrive mount status       Show mount server status
   tdrive mount stop         Stop mount server
   tdrive vault status       Show vault state

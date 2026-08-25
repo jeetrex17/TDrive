@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mountSelection } from './mount-selection-store';
 
 const drives = [
-    { id: 20, title: 'Project', kind: 'shared' as const },
     { id: 10, title: 'My files', kind: 'personal' as const },
+    { id: 20, title: 'Project', kind: 'shared' as const },
     { id: 30, title: 'Family', kind: 'shared' as const },
 ];
 
@@ -28,12 +28,12 @@ afterEach(() => {
 });
 
 describe('mount selection store', () => {
-    it('orders personal first and selects every drive on first open', () => {
+    it('preserves API order and selects every drive on first open', () => {
         mountSelection.open(drives, vi.fn());
 
         expect(get(mountSelection.state)).toEqual({
             open: true,
-            drives: [drives[1], drives[0], drives[2]],
+            drives,
             selectedIds: [10, 20, 30],
         });
     });
@@ -73,7 +73,7 @@ describe('mount selection store', () => {
 
     it('does not confirm an empty selection and cancel has no side effects', () => {
         const confirm = vi.fn();
-        mountSelection.open([drives[1]], confirm);
+        mountSelection.open([drives[0]], confirm);
         mountSelection.toggle(10);
 
         mountSelection.confirm();

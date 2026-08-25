@@ -6,11 +6,13 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"TDrive/backend/mountdav"
 	"TDrive/backend/mountfs"
+	"TDrive/backend/mountpath"
 	"TDrive/backend/mountwrite"
 )
 
@@ -111,6 +113,12 @@ func TestSessionRejectsInvalidWritePathsBeforeEngine(t *testing.T) {
 		}},
 		{"relative", func() error {
 			_, err := session.Delete(context.Background(), mountdav.DeleteRequest{Path: "Docs"})
+			return err
+		}},
+		{"component too long", func() error {
+			_, err := session.Delete(context.Background(), mountdav.DeleteRequest{
+				Path: "/" + strings.Repeat("a", mountpath.MaxComponentBytes+1),
+			})
 			return err
 		}},
 	}
@@ -341,7 +349,7 @@ func TestSessionMapsCoordinatorErrorsAndLifecycle(t *testing.T) {
 		t.Fatalf("Mkdir error = %v, want conflict", err)
 	}
 
-	if status := session.Status(); status != (mountwrite.Status{Accepting: true, Active: 2, Executing: 1, Queued: 1}) {
+	if status := session.Status(); status != (mountwrite.Status{Accepting: true, Active: 2}) {
 		t.Fatalf("Status = %+v", status)
 	}
 	if err := session.Drain(context.Background()); err != nil {
@@ -563,7 +571,7 @@ func (e *fakeEngine) Recover(context.Context) (mountwrite.RecoveryReport, error)
 }
 
 func (e *fakeEngine) Status() mountwrite.Status {
-	return mountwrite.Status{Accepting: true, Active: 2, Executing: 1, Queued: 1}
+	return mountwrite.Status{Accepting: true, Active: 2}
 }
 
 func (e *fakeEngine) Drain(context.Context) error {

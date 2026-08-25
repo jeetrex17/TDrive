@@ -3,57 +3,31 @@ package mountdav
 import (
 	"os"
 	"strings"
-	"unicode"
 
-	"golang.org/x/text/unicode/norm"
+	"TDrive/backend/mountpath"
 )
 
-const (
-	maxWritablePathBytes      = 4096
-	maxWritableComponentBytes = 240
-)
+const maxWritableComponentBytes = mountpath.MaxComponentBytes
 
 func cleanWritablePath(value string) (string, error) {
-	clean, err := cleanWebDAVName(value)
+	clean, _, err := mountpath.ParseAbsolute(value, mountpath.Options{
+		AllowEmptyRoot:        true,
+		TrimTrailingSlash:     true,
+		PortableComponents:    true,
+		RejectWindowsReserved: true,
+	})
 	if err != nil {
-		return "", err
-	}
-	clean = norm.NFC.String(clean)
-	if len(clean) > maxWritablePathBytes {
 		return "", os.ErrInvalid
 	}
-	if clean == "/" {
-		return clean, nil
-	}
-	for _, component := range strings.Split(strings.TrimPrefix(clean, "/"), "/") {
-		if !portableWritableComponent(component) {
-			return "", os.ErrInvalid
-		}
-	}
 	return clean, nil
-}
-
-func portableWritableComponent(component string) bool {
-	if component == "" || len(component) > maxWritableComponentBytes ||
-		strings.HasSuffix(component, ".") || strings.HasSuffix(component, " ") ||
-		windowsReservedComponent(component) {
-		return false
-	}
-	for _, character := range component {
-		if unicode.IsControl(character) || unicode.Is(unicode.Bidi_Control, character) ||
-			strings.ContainsRune(`<>:"/\|?*`, character) {
-			return false
-		}
-	}
-	return true
 }
 
 // isMacOSJunkPath reports whether path's final component is metadata macOS
 // itself writes to any mounted volume: Finder's per-directory .DS_Store, its
 // per-file AppleDouble ._ sidecars carrying resource forks/xattrs WebDAV has
 // nowhere to store, and Spotlight/Trash/FSEvents' volume-root bookkeeping.
-// These are legal path components -- portableWritableComponent accepts them
-// -- but callers use this to fake success without ever staging or committing
+// These are legal portable path components, but callers use this to fake
+// success without ever staging or committing
 // anything for them. A hard rejection was tried first and reverted: Finder's
 // copy engine can treat a rejected AppleDouble sidecar write as making the
 // visible file copy itself fail, which is worse than silently discarding
@@ -80,26 +54,4 @@ func isMacOSJunkPath(path string) bool {
 		return macOSJunkComponent(path[index+1:])
 	}
 	return macOSJunkComponent(path)
-}
-
-func windowsReservedComponent(component string) bool {
-	stem := component
-	if index := strings.IndexByte(stem, '.'); index >= 0 {
-		stem = stem[:index]
-	}
-	stem = strings.ToUpper(stem)
-	switch stem {
-	case "CON", "PRN", "AUX", "NUL", "CLOCK$":
-		return true
-	}
-	characters := []rune(stem)
-	if len(characters) != 4 || (string(characters[:3]) != "COM" && string(characters[:3]) != "LPT") {
-		return false
-	}
-	switch characters[3] {
-	case '1', '2', '3', '4', '5', '6', '7', '8', '9', '\u00b9', '\u00b2', '\u00b3':
-		return true
-	default:
-		return false
-	}
 }

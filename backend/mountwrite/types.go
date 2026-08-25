@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"io"
 	"math"
 	"slices"
@@ -439,18 +438,9 @@ type IDGenerator interface {
 	NewID() string
 }
 
-type Capabilities struct {
-	Writable      bool
-	PersonalOnly  bool
-	PlaintextOnly bool
-	OnlineOnly    bool
-}
-
 type Status struct {
 	Accepting bool
 	Active    int
-	Executing int
-	Queued    int
 }
 
 func ValidateTransition(from, to JournalState) error {
@@ -551,8 +541,20 @@ func validEncryptionVersion(version EncryptionVersion) bool {
 	return version == EncryptionNone || version == EncryptionTDE1
 }
 
+func validTDE1Metadata(
+	plaintextSize int64,
+	storedSize int64,
+	plaintextHash [sha256.Size]byte,
+	storedHash [sha256.Size]byte,
+) bool {
+	if tdcrypto.ValidatePlaintextSize(plaintextSize) != nil {
+		return false
+	}
+	return plaintextHash == ([sha256.Size]byte{}) &&
+		storedHash != ([sha256.Size]byte{}) &&
+		tdcrypto.CiphertextSize(plaintextSize) == storedSize
+}
+
 func isTerminal(state JournalState) bool {
 	return state == StateDone || state == StateAborted
 }
-
-var _ = errors.Is

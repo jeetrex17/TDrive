@@ -2,7 +2,6 @@ package mountwrite
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -11,8 +10,6 @@ import (
 	"reflect"
 	"strings"
 	"time"
-
-	tdcrypto "TDrive/backend/crypto"
 )
 
 type JournalRecord struct {
@@ -386,11 +383,12 @@ func validateRemoteBody(mutation Mutation, body RemoteBody) error {
 		}
 		return nil
 	}
-	if err := tdcrypto.ValidatePlaintextSize(body.PlaintextSize); err != nil {
-		return ErrInvalidRequest
-	}
-	if !body.Encrypted || body.SHA256 != ([sha256.Size]byte{}) || body.StoredSHA256 == ([sha256.Size]byte{}) ||
-		tdcrypto.CiphertextSize(body.PlaintextSize) != body.StoredSize {
+	if !body.Encrypted || !validTDE1Metadata(
+		body.PlaintextSize,
+		body.StoredSize,
+		body.SHA256,
+		body.StoredSHA256,
+	) {
 		return ErrInvalidRequest
 	}
 	return nil

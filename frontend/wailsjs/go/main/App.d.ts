@@ -88,8 +88,6 @@ export function Me():Promise<main.SelfUser>;
 
 export function MountDrive():Promise<main.MountView>;
 
-export function MountDriveReadOnly():Promise<main.MountView>;
-
 export function MountDrives(arg1:Array<number>):Promise<main.MountView>;
 
 export function MountStatus():Promise<main.MountView>;

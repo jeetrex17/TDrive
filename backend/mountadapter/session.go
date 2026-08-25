@@ -9,19 +9,16 @@ import (
 	"math"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"TDrive/backend/mountdav"
 	"TDrive/backend/mountfs"
+	"TDrive/backend/mountpath"
 	"TDrive/backend/mountwrite"
-
-	"golang.org/x/text/unicode/norm"
 )
 
 const (
 	defaultMaxObjectBytes int64 = 4 << 30
 	defaultTrashRetention       = 30 * 24 * time.Hour
-	maxMutationPathBytes        = 4096
 )
 
 // Session adapts path-based WebDAV mutations to stable projection identities.
@@ -144,13 +141,14 @@ func (s *Session) Move(ctx context.Context, request mountdav.MoveRequest) (mount
 		return mountdav.MutationResult{}, err
 	}
 	slog.Debug("mountadapter: Session.Move", "source", request.SourcePath, "destination", request.DestinationPath, "overwrite", request.Overwrite)
-	if err := validateAbsolutePath(request.SourcePath); err != nil {
+	sourcePath, _, err := parseAbsolutePath(request.SourcePath)
+	if err != nil {
 		return mountdav.MutationResult{}, err
 	}
-	if request.SourcePath == "/" {
+	if sourcePath == "/" {
 		return mountdav.MutationResult{}, mountdav.ErrWriteForbidden
 	}
-	source, found, err := s.resolver.Resolve(ctx, normalizedPath(request.SourcePath))
+	source, found, err := s.resolver.Resolve(ctx, sourcePath)
 	if err != nil {
 		return mountdav.MutationResult{}, mapResolveError(err)
 	}
@@ -221,10 +219,10 @@ func (s *Session) Delete(ctx context.Context, request mountdav.DeleteRequest) (m
 		return mountdav.MutationResult{}, err
 	}
 	slog.Debug("mountadapter: Session.Delete", "path", request.Path)
-	if err := validateAbsolutePath(request.Path); err != nil {
+	path, _, err := parseAbsolutePath(request.Path)
+	if err != nil {
 		return mountdav.MutationResult{}, err
 	}
-	path := normalizedPath(request.Path)
 	if path == "/" {
 		return mountdav.MutationResult{}, mountdav.ErrWriteForbidden
 	}
@@ -401,15 +399,9 @@ func mapWriteError(err error) error {
 }
 
 func splitParentPath(value string) (string, string, error) {
-	value = normalizedPath(value)
-	if err := validateAbsolutePath(value); err != nil || value == "/" {
+	value, components, err := parseAbsolutePath(value)
+	if err != nil || len(components) == 0 {
 		return "", "", mountdav.ErrWriteInvalid
-	}
-	components := strings.Split(value[1:], "/")
-	for _, component := range components {
-		if component == "" || component == "." || component == ".." {
-			return "", "", mountdav.ErrWriteInvalid
-		}
 	}
 	name := components[len(components)-1]
 	if len(components) == 1 {
@@ -418,27 +410,12 @@ func splitParentPath(value string) (string, string, error) {
 	return "/" + strings.Join(components[:len(components)-1], "/"), name, nil
 }
 
-func validateAbsolutePath(value string) error {
-	value = normalizedPath(value)
-	if value == "" || value[0] != '/' || len(value) > maxMutationPathBytes || !utf8.ValidString(value) || strings.ContainsRune(value, '\x00') || strings.ContainsRune(value, '\\') {
-		return mountdav.ErrWriteInvalid
+func parseAbsolutePath(value string) (string, []string, error) {
+	normalized, components, err := mountpath.ParseAbsolute(value, mountpath.Options{})
+	if err != nil {
+		return "", nil, mountdav.ErrWriteInvalid
 	}
-	if value == "/" {
-		return nil
-	}
-	for _, component := range strings.Split(value[1:], "/") {
-		if component == "" || component == "." || component == ".." {
-			return mountdav.ErrWriteInvalid
-		}
-	}
-	return nil
-}
-
-func normalizedPath(value string) string {
-	if !utf8.ValidString(value) {
-		return value
-	}
-	return norm.NFC.String(value)
+	return normalized, components, nil
 }
 
 func clearSensitiveBytes(value []byte) {
