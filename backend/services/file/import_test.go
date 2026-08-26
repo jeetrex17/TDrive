@@ -19,7 +19,10 @@ import (
 // NextFreeFolderName sees created folders) and hands back a unique id.
 func testFolderCreator(db *sql.DB) CreateFolderFunc {
 	var n, msgID int64 = 0, 50000
-	return func(channelID int64, name, parentID string) (string, error) {
+	return func(ctx context.Context, channelID int64, name, parentID string) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		n++
 		id := fmt.Sprintf("%simp%d", projection.FolderIDPrefix, n)
 		op := projection.Op{Type: projection.OpMkdir, Obj: id, Parent: parentID, Name: name}
@@ -272,7 +275,7 @@ func TestRunImportNameCollisionSuffixes(t *testing.T) {
 	svc.CreateFolder = create
 
 	// A folder named "Photos" already exists at the root.
-	if _, err := create(personalChannelID, "Photos", ""); err != nil {
+	if _, err := create(context.Background(), personalChannelID, "Photos", ""); err != nil {
 		t.Fatal(err)
 	}
 

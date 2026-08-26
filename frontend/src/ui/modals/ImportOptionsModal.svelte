@@ -46,13 +46,22 @@
     const note = $derived.by(() => {
         const plan = $view.payload?.plan;
         if (!plan) return '';
-        const errors = Array.isArray(plan.errors) ? plan.errors.length : 0;
+        const reportedErrors = Number(plan.errorCount);
+        const errors = Number.isFinite(reportedErrors)
+            ? Math.max(0, Math.floor(reportedErrors))
+            : (Array.isArray(plan.errors) ? plan.errors.length : 0);
         const notes: string[] = [];
         if (plan.oversize > 0) {
             notes.push(`${plural(plan.oversize, 'file', 'files')} over ${humanBytes(plan.maxBytes)} will be skipped (Telegram's per-file limit).`);
         }
+        if (plan.ignored > 0) {
+            notes.push(`${plural(plan.ignored, 'generated/cache entry', 'generated/cache entries')} will be skipped.`);
+        }
         if (errors > 0) {
             notes.push(`${plural(errors, 'item', 'items')} could not be scanned and may be skipped or uploaded as-is.`);
+        }
+        if (plan.limitExceeded) {
+            notes.push(`Keep it under ${plan.maxItems.toLocaleString()} items by removing generated/cache folders or splitting it into smaller batches.`);
         }
         return notes.join(' ');
     });
@@ -108,9 +117,11 @@
             id="import-options-confirm"
             class="primary-btn"
             type="button"
+            disabled={$view.payload?.plan.limitExceeded || $view.payload?.replanning}
+            aria-busy={$view.payload?.replanning}
             onclick={() => onConfirm({ encrypt, extract })}
         >
-            Import
+            {$view.payload?.replanning ? 'Checking…' : 'Import'}
         </button>
     {/snippet}
 </ModalShell>

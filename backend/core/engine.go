@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync/atomic"
 
 	"TDrive/backend"
@@ -310,19 +311,28 @@ func (e *Engine) ActorID(ctx context.Context) (int64, error) {
 // local projection. If local projection fails after the send, the op remains in
 // Telegram and the next sync can replay it.
 func (e *Engine) EmitAndProject(channelID int64, op projection.Op) (int64, error) {
+	return e.EmitAndProjectContext(e.ctx, channelID, op)
+}
+
+// EmitAndProjectContext is the request-scoped form used by imports and other
+// cancellable operations. Idempotent Telegram retries reuse one random_id, so
+// a lost response cannot create duplicate control messages.
+func (e *Engine) EmitAndProjectContext(ctx context.Context, channelID int64, op projection.Op) (int64, error) {
 	if e == nil || e.tg == nil {
 		return 0, fmt.Errorf("tg client not ready")
 	}
-	actorID, err := e.ActorID(e.ctx)
-	if err != nil {
+	if ctx == nil {
+		return 0, fmt.Errorf("control write requires a context")
+	}
+	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	peer, err := e.ChannelPeer(e.ctx, channelID)
+	actorID, err := e.ActorID(ctx)
 	if err != nil {
 		return 0, err
 	}
 	header := projection.Format(op)
-	msgID, err := e.tg.SendControl(e.ctx, peer, header, true)
+	msgID, err := e.sendControlContext(ctx, channelID, header)
 	if err != nil {
 		return 0, err
 	}
@@ -344,17 +354,23 @@ type projectedOp struct {
 // the UI-facing cache must be: if a later send fails, the already-sent ops will
 // converge through the next sync instead of locally half-applying a subtree.
 func (e *Engine) EmitAndProjectBatch(channelID int64, ops []projection.Op) error {
+	return e.EmitAndProjectBatchContext(e.ctx, channelID, ops)
+}
+
+func (e *Engine) EmitAndProjectBatchContext(ctx context.Context, channelID int64, ops []projection.Op) error {
 	if len(ops) == 0 {
 		return nil
 	}
 	if e == nil || e.tg == nil {
 		return fmt.Errorf("tg client not ready")
 	}
-	actorID, err := e.ActorID(e.ctx)
-	if err != nil {
+	if ctx == nil {
+		return fmt.Errorf("control write requires a context")
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	peer, err := e.ChannelPeer(e.ctx, channelID)
+	actorID, err := e.ActorID(ctx)
 	if err != nil {
 		return err
 	}
@@ -362,7 +378,7 @@ func (e *Engine) EmitAndProjectBatch(channelID int64, ops []projection.Op) error
 	sent := make([]projectedOp, 0, len(ops))
 	for _, op := range ops {
 		header := projection.Format(op)
-		msgID, err := e.tg.SendControl(e.ctx, peer, header, true)
+		msgID, err := e.sendControlContext(ctx, channelID, header)
 		if err != nil {
 			return err
 		}
@@ -387,6 +403,73 @@ func (e *Engine) EmitAndProjectBatch(channelID int64, ops []projection.Op) error
 		return fmt.Errorf("projection: commit batch tx: %w", err)
 	}
 	return nil
+}
+
+func (e *Engine) sendControlContext(ctx context.Context, channelID int64, header string) (int64, error) {
+	peer, cached, err := e.controlPeer(ctx, channelID)
+	if err != nil {
+		return 0, err
+	}
+	randomID, err := tgclient.StableRandomID(projection.NewUploadUUID(), "control")
+	if err != nil {
+		return 0, err
+	}
+
+	msgID, err := e.sendControlWithRetry(ctx, peer, header, randomID)
+	if err == nil || !cached || !isStalePeerError(err) {
+		return msgID, err
+	}
+
+	// Access hashes can rotate. Refresh once and retry with the same random_id;
+	// Telegram can therefore deduplicate an accepted send whose response was
+	// lost while the local cache was stale.
+	fresh, resolveErr := e.ChannelPeer(ctx, channelID)
+	if resolveErr != nil {
+		return 0, err
+	}
+	if backend.DB != nil {
+		if updateErr := projection.UpdateAccessHash(backend.DB, channelID, fresh.AccessHash); updateErr != nil {
+			e.warnf("warn: could not refresh channel access hash %d: %v\n", channelID, updateErr)
+		}
+	}
+	return e.sendControlWithRetry(ctx, fresh, header, randomID)
+}
+
+func (e *Engine) sendControlWithRetry(ctx context.Context, peer tgclient.InputPeer, header string, randomID int64) (int64, error) {
+	if _, ok := e.tg.(tgclient.IdempotentSender); !ok {
+		// A legacy client cannot safely retry an unknown send outcome.
+		return e.tg.SendControl(ctx, peer, header, true)
+	}
+
+	var msgID int64
+	policy := tgclient.DefaultWriteFloodWaitRetryPolicy()
+	err := policy.Do(ctx, func() error {
+		var sendErr error
+		msgID, sendErr = tgclient.SendControlIdempotent(ctx, e.tg, peer, header, true, randomID)
+		return sendErr
+	})
+	return msgID, err
+}
+
+func (e *Engine) controlPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, bool, error) {
+	if backend.DB != nil {
+		if channel, err := projection.GetChannel(backend.DB, channelID); err == nil && channel.AccessHash != 0 {
+			return tgclient.InputPeer{ChannelID: channelID, AccessHash: channel.AccessHash}, true, nil
+		}
+	}
+	peer, err := e.ChannelPeer(ctx, channelID)
+	return peer, false, err
+}
+
+func isStalePeerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToUpper(err.Error())
+	return strings.Contains(message, "CHANNEL_INVALID") ||
+		strings.Contains(message, "CHANNEL_PRIVATE") ||
+		strings.Contains(message, "PEER_ID_INVALID") ||
+		strings.Contains(message, "ACCESS_HASH")
 }
 
 func (e *Engine) AuthService() *authsvc.Service {
@@ -502,8 +585,15 @@ func (e *Engine) newFolderService() *folderservice.Service {
 			_, err := e.EmitAndProject(channelID, op)
 			return err
 		},
+		EmitOpContext: func(ctx context.Context, channelID int64, op projection.Op) error {
+			_, err := e.EmitAndProjectContext(ctx, channelID, op)
+			return err
+		},
 		EmitOps: func(channelID int64, ops []projection.Op) error {
 			return e.EmitAndProjectBatch(channelID, ops)
+		},
+		EmitOpsContext: func(ctx context.Context, channelID int64, ops []projection.Op) error {
+			return e.EmitAndProjectBatchContext(ctx, channelID, ops)
 		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return e.ActorID(ctx)
@@ -529,6 +619,9 @@ func (e *Engine) newFileService() *fileservice.Service {
 		EmitOp: func(channelID int64, op projection.Op) (int64, error) {
 			return e.EmitAndProject(channelID, op)
 		},
+		EmitOpContext: func(ctx context.Context, channelID int64, op projection.Op) (int64, error) {
+			return e.EmitAndProjectContext(ctx, channelID, op)
+		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return e.ActorID(ctx)
 		},
@@ -545,8 +638,8 @@ func (e *Engine) newFileService() *fileservice.Service {
 		WriteCiphertextTemp: func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
 			return e.EncryptionService().WriteCiphertextTemp(plain, plaintextSize, masterKey)
 		},
-		CreateFolder: func(channelID int64, name, parentID string) (string, error) {
-			f, err := e.FolderService().Create(channelID, name, parentID)
+		CreateFolder: func(ctx context.Context, channelID int64, name, parentID string) (string, error) {
+			f, err := e.FolderService().CreateContext(ctx, channelID, name, parentID)
 			return f.ID, err
 		},
 		Events: e.events,
