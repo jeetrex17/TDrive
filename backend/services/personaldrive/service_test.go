@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
 
+	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
 	"TDrive/backend/projection"
 	tdsync "TDrive/backend/sync"
@@ -103,7 +105,7 @@ func TestPrepareUsesSavedDriveWithoutDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if state.Status != StatusReady || state.ChannelID != 8200 || len(state.Candidates) != 0 {
+	if state.Status != StatusReady || state.ChannelID != 8200 {
 		t.Fatalf("state = %#v", state)
 	}
 	if used != 8200 {
@@ -135,7 +137,7 @@ func TestPrepareRejectsUnavailableSavedActivation(t *testing.T) {
 	}
 }
 
-func TestPrepareValidatesConfigurationAndDependencies(t *testing.T) {
+func TestPrepareValidatesConfiguration(t *testing.T) {
 	wantErr := errors.New("config unavailable")
 	service := NewService(Config{
 		LoadConfig: func() (int64, error) { return 0, wantErr },
@@ -150,16 +152,66 @@ func TestPrepareValidatesConfigurationAndDependencies(t *testing.T) {
 	if _, err := service.Prepare(context.Background()); err == nil {
 		t.Fatal("negative configured channel unexpectedly succeeded")
 	}
+}
 
-	service = NewService(Config{
+func TestPrepareMissingConfigRequiresSelectionWithoutTelegram(t *testing.T) {
+	telegram := &fakeTelegram{channels: []tgclient.OwnedBroadcastChannel{{ID: 1, Title: "TDrive"}}}
+	service := NewService(Config{
+		Telegram:   telegram,
 		LoadConfig: func() (int64, error) { return 0, nil },
 	})
-	if _, err := service.Prepare(context.Background()); err == nil {
-		t.Fatal("Prepare unexpectedly succeeded without Telegram")
+
+	state, err := service.Prepare(context.Background())
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if state.Status != StatusSelectionRequired || state.ChannelID != 0 {
+		t.Fatalf("state = %#v, want selection required", state)
+	}
+	if list, create := telegram.counts(); list != 0 || create != 0 {
+		t.Fatalf("Prepare touched Telegram: list=%d create=%d", list, create)
 	}
 }
 
-func TestPrepareMissingConfigListsSortedCandidatesWithoutCreating(t *testing.T) {
+// An unparseable config.json (for example one edited by hand) must lead to
+// the explicit picker, not a dead end, and must never create a channel.
+func TestUnreadableConfigIsTreatedAsUnconfigured(t *testing.T) {
+	loadInvalid := func() (int64, error) {
+		return 0, fmt.Errorf("%w: unexpected token", auth.ErrConfigInvalid)
+	}
+	telegram := &fakeTelegram{channels: []tgclient.OwnedBroadcastChannel{{
+		ID: 1001, AccessHash: 8001, Title: "TDrive", HasActivity: true,
+	}}}
+	var saved, active int64
+	service := NewService(Config{
+		DB:         newServiceDB(t),
+		Telegram:   telegram,
+		Sync:       &fakeAuthoritativeSync{},
+		LoadConfig: loadInvalid,
+		SaveConfig: func(id int64) error { saved = id; return nil },
+		UseSaved:   func(context.Context, int64) error { t.Fatal("activated an unreadable config"); return nil },
+		SetActive:  func(id int64) { active = id },
+	})
+
+	state, err := service.Prepare(context.Background())
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if state.Status != StatusSelectionRequired {
+		t.Fatalf("status = %q, want %q", state.Status, StatusSelectionRequired)
+	}
+	if err := service.Select(context.Background(), 1001); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if saved != 1001 || active != 1001 {
+		t.Fatalf("saved=%d active=%d, want 1001", saved, active)
+	}
+	if _, creates := telegram.counts(); creates != 0 {
+		t.Fatalf("create calls = %d, want 0", creates)
+	}
+}
+
+func TestDiscoverListsSortedCandidatesWithoutCreating(t *testing.T) {
 	telegram := &fakeTelegram{channels: []tgclient.OwnedBroadcastChannel{
 		{ID: 9, Title: "Work", CreatedAt: 1, HasActivity: true},
 		{ID: 4, Title: "tdrive", CreatedAt: 40, HasActivity: false},
@@ -170,52 +222,45 @@ func TestPrepareMissingConfigListsSortedCandidatesWithoutCreating(t *testing.T) 
 		{ID: 0, Title: "Invalid", CreatedAt: 1, HasActivity: true},
 	}}
 	original := append([]tgclient.OwnedBroadcastChannel(nil), telegram.channels...)
-	service := NewService(Config{
-		DB:         newServiceDB(t),
-		Telegram:   telegram,
-		LoadConfig: func() (int64, error) { return 0, nil },
-	})
+	service := NewService(Config{Telegram: telegram})
 
-	state, err := service.Prepare(context.Background())
+	candidates, err := service.Discover(context.Background())
 	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	if state.Status != StatusSelectionRequired {
-		t.Fatalf("status = %q, want %q", state.Status, StatusSelectionRequired)
+		t.Fatalf("Discover: %v", err)
 	}
 	var ids []int64
-	for _, candidate := range state.Candidates {
+	for _, candidate := range candidates {
 		ids = append(ids, candidate.ID)
 	}
 	if want := []int64{2, 3, 4, 9, 8}; !reflect.DeepEqual(ids, want) {
 		t.Fatalf("candidate ids = %v, want %v", ids, want)
 	}
-	if !reflect.DeepEqual(telegram.channels, original) {
-		t.Fatalf("Prepare mutated Telegram candidates: %#v", telegram.channels)
+	if !candidates[0].Recommended || candidates[1].Recommended {
+		t.Fatalf("only the first default-titled candidate may be recommended: %#v", candidates)
 	}
-	listCalls, createCalls := telegram.counts()
-	if listCalls != 1 || createCalls != 0 {
-		t.Fatalf("Telegram calls = list:%d create:%d, want 1 and 0", listCalls, createCalls)
+	if candidates[1].Title != "TDrive" {
+		t.Fatalf("title not trimmed: %q", candidates[1].Title)
+	}
+	if !reflect.DeepEqual(telegram.channels, original) {
+		t.Fatalf("Discover mutated Telegram candidates: %#v", telegram.channels)
+	}
+	if list, create := telegram.counts(); list != 1 || create != 0 {
+		t.Fatalf("Telegram calls = list:%d create:%d, want 1 and 0", list, create)
 	}
 }
 
-func TestPrepareEmptyAndDiscoveryFailureNeverCreate(t *testing.T) {
+func TestDiscoverEmptyAndFailureNeverCreate(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		telegram := &fakeTelegram{}
-		service := NewService(Config{
-			DB:         newServiceDB(t),
-			Telegram:   telegram,
-			LoadConfig: func() (int64, error) { return 0, nil },
-		})
-		state, err := service.Prepare(context.Background())
+		service := NewService(Config{Telegram: telegram})
+		candidates, err := service.Discover(context.Background())
 		if err != nil {
-			t.Fatalf("Prepare: %v", err)
+			t.Fatalf("Discover: %v", err)
 		}
-		if state.Status != StatusSelectionRequired || len(state.Candidates) != 0 {
-			t.Fatalf("state = %#v", state)
+		if len(candidates) != 0 {
+			t.Fatalf("candidates = %#v, want none", candidates)
 		}
-		_, creates := telegram.counts()
-		if creates != 0 {
+		if _, creates := telegram.counts(); creates != 0 {
 			t.Fatalf("create calls = %d, want 0", creates)
 		}
 	})
@@ -223,17 +268,18 @@ func TestPrepareEmptyAndDiscoveryFailureNeverCreate(t *testing.T) {
 	t.Run("lookup error", func(t *testing.T) {
 		wantErr := errors.New("offline")
 		telegram := &fakeTelegram{listErr: wantErr}
-		service := NewService(Config{
-			DB:         newServiceDB(t),
-			Telegram:   telegram,
-			LoadConfig: func() (int64, error) { return 0, nil },
-		})
-		if _, err := service.Prepare(context.Background()); !errors.Is(err, wantErr) {
-			t.Fatalf("Prepare error = %v, want %v", err, wantErr)
+		service := NewService(Config{Telegram: telegram})
+		if _, err := service.Discover(context.Background()); !errors.Is(err, wantErr) {
+			t.Fatalf("Discover error = %v, want %v", err, wantErr)
 		}
-		_, creates := telegram.counts()
-		if creates != 0 {
+		if _, creates := telegram.counts(); creates != 0 {
 			t.Fatalf("create calls = %d, want 0", creates)
+		}
+	})
+
+	t.Run("no telegram", func(t *testing.T) {
+		if _, err := NewService(Config{}).Discover(context.Background()); err == nil {
+			t.Fatal("Discover unexpectedly succeeded without Telegram")
 		}
 	})
 }
@@ -411,6 +457,51 @@ func TestFailedSelectionDoesNotPolluteLaterSelection(t *testing.T) {
 	}
 	if len(channels) != 1 || channels[0].ChannelID != 1002 || channels[0].Kind != projection.KindPersonal {
 		t.Fatalf("channels after replacement selection = %#v", channels)
+	}
+}
+
+// A user who already launched a version that auto-created an empty channel
+// has that channel registered as personal. Recovering the real drive must
+// retire it so the sidebar and mount picker never show two personal drives.
+func TestSelectRetiresStalePersonalChannelAndKeepsSharedDrives(t *testing.T) {
+	db := newServiceDB(t)
+	const stale, shared, recovered int64 = 4000, 5000, 1001
+	if err := projection.MigratePersonalChannel(db, stale); err != nil {
+		t.Fatalf("register stale personal channel: %v", err)
+	}
+	if err := projection.InsertChannel(db, projection.Channel{
+		ChannelID: shared, AccessHash: 1, Title: "Team", Kind: projection.KindShared,
+	}); err != nil {
+		t.Fatalf("register shared channel: %v", err)
+	}
+	service := NewService(Config{
+		DB: db,
+		Telegram: &fakeTelegram{channels: []tgclient.OwnedBroadcastChannel{{
+			ID: recovered, AccessHash: 8001, Title: "TDrive", CreatedAt: 10, HasActivity: true,
+		}}},
+		Sync:       &fakeAuthoritativeSync{},
+		LoadConfig: func() (int64, error) { return 0, nil },
+		SaveConfig: func(int64) error { return nil },
+		SetActive:  func(int64) {},
+	})
+
+	if err := service.Select(context.Background(), recovered); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	channels, err := projection.ListChannels(db)
+	if err != nil {
+		t.Fatalf("ListChannels: %v", err)
+	}
+	var ids []int64
+	var personal int
+	for _, channel := range channels {
+		ids = append(ids, channel.ChannelID)
+		if channel.Kind == projection.KindPersonal {
+			personal++
+		}
+	}
+	if want := []int64{recovered, shared}; !reflect.DeepEqual(ids, want) || personal != 1 {
+		t.Fatalf("channels after recovery = %v (personal=%d), want %v with one personal", ids, personal, want)
 	}
 }
 

@@ -1,5 +1,11 @@
 // Package personaldrive coordinates explicit selection or creation of the
 // Telegram broadcast channel used as the user's personal drive.
+//
+// Setup is split into a local step and a remote step so callers can show the
+// right UI for each: Prepare only reads config.json and activates a saved
+// drive, Discover walks the user's Telegram dialogs for channels they own.
+// Select and Create are the only paths that change local state, and Create is
+// the only path that writes to Telegram.
 package personaldrive
 
 import (
@@ -23,11 +29,14 @@ const (
 
 	defaultChannelTitle = "TDrive"
 	defaultChannelAbout = "TDrive personal storage"
+	untitledChannel     = "Untitled channel"
 )
 
 var (
 	ErrInvalidSelection = errors.New("personaldrive: invalid channel selection")
 	ErrCandidateMissing = errors.New("personaldrive: selected channel is no longer available")
+
+	errTelegramUnavailable = errors.New("personaldrive: Telegram client is unavailable")
 )
 
 type Telegram interface {
@@ -47,10 +56,11 @@ type Candidate struct {
 	Recommended bool
 }
 
+// State is the outcome of Prepare: a saved drive is active, or the user has
+// to choose one.
 type State struct {
-	Status     string
-	ChannelID  int64
-	Candidates []Candidate
+	Status    string
+	ChannelID int64
 }
 
 type Config struct {
@@ -96,34 +106,32 @@ func NewService(config Config) *Service {
 	}
 }
 
-// Prepare takes the saved-config fast path when available. Otherwise it
-// performs read-only discovery and returns an explicit selection state.
+// Prepare activates the saved drive when config.json names one. It never
+// touches Telegram: without a usable config it reports that the user must
+// choose a drive, and the caller runs Discover to list the options.
 func (s *Service) Prepare(ctx context.Context) (State, error) {
 	channelID, err := s.loadConfiguredChannel()
 	if err != nil {
 		return State{}, err
 	}
-	if channelID != 0 {
-		if s.useSaved == nil {
-			return State{}, fmt.Errorf("personaldrive: saved-channel activation is unavailable")
-		}
-		if err := s.useSaved(ctx, channelID); err != nil {
-			return State{}, fmt.Errorf("personaldrive: activate saved channel: %w", err)
-		}
-		return State{Status: StatusReady, ChannelID: channelID}, nil
+	if channelID == 0 {
+		return State{Status: StatusSelectionRequired}, nil
 	}
-	if s.telegram == nil {
-		return State{}, fmt.Errorf("personaldrive: Telegram client is unavailable")
+	if err := s.activateConfigured(ctx, channelID); err != nil {
+		return State{}, err
 	}
-	channels, err := s.telegram.ListOwnedBroadcastChannels(ctx)
+	return State{Status: StatusReady, ChannelID: channelID}, nil
+}
+
+// Discover lists the broadcast channels the user created, ordered so the
+// most likely TDrive channel comes first. It is read-only.
+func (s *Service) Discover(ctx context.Context) ([]Candidate, error) {
+	channels, err := s.listOwnedChannels(ctx)
 	if err != nil {
-		return State{}, fmt.Errorf("personaldrive: discover channels: %w", err)
+		return nil, err
 	}
 	slog.Info("personaldrive: channel discovery completed", "candidate_count", len(channels))
-	return State{
-		Status:     StatusSelectionRequired,
-		Candidates: candidatesFromOwned(channels),
-	}, nil
+	return candidatesFromOwned(channels), nil
 }
 
 // Select revalidates the ID against a fresh creator-owned channel list before
@@ -140,14 +148,13 @@ func (s *Service) Select(ctx context.Context, channelID int64) error {
 		return err
 	}
 	if configured != 0 {
+		// A drive was configured after the picker was shown; keep it rather
+		// than overwrite it with a stale choice.
 		return s.activateConfigured(ctx, configured)
 	}
-	if s.telegram == nil {
-		return fmt.Errorf("personaldrive: Telegram client is unavailable")
-	}
-	channels, err := s.telegram.ListOwnedBroadcastChannels(ctx)
+	channels, err := s.listOwnedChannels(ctx)
 	if err != nil {
-		return fmt.Errorf("personaldrive: revalidate channels: %w", err)
+		return err
 	}
 	for _, channel := range channels {
 		if channel.ID == channelID {
@@ -158,8 +165,8 @@ func (s *Service) Select(ctx context.Context, channelID int64) error {
 }
 
 // Create is the only path that creates a remote channel. A successful remote
-// creation is retained in memory until local recovery commits, preventing a
-// retry after a sync/config failure from creating duplicate channels.
+// creation is retained in memory until local recovery commits, so a retry
+// after a sync/config failure adopts it instead of creating a duplicate.
 func (s *Service) Create(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,7 +179,7 @@ func (s *Service) Create(ctx context.Context) error {
 		return s.activateConfigured(ctx, configured)
 	}
 	if s.telegram == nil {
-		return fmt.Errorf("personaldrive: Telegram client is unavailable")
+		return errTelegramUnavailable
 	}
 	if s.pendingCreated == nil {
 		created, err := s.telegram.CreateBroadcastChannel(ctx, defaultChannelTitle, defaultChannelAbout)
@@ -182,8 +189,7 @@ func (s *Service) Create(ctx context.Context) error {
 		if created.ID <= 0 {
 			return fmt.Errorf("personaldrive: create channel returned an invalid id")
 		}
-		copy := created
-		s.pendingCreated = &copy
+		s.pendingCreated = &created
 	}
 	if err := s.recover(ctx, *s.pendingCreated); err != nil {
 		return err
@@ -202,6 +208,21 @@ func (s *Service) activateConfigured(ctx context.Context, channelID int64) error
 	return nil
 }
 
+func (s *Service) listOwnedChannels(ctx context.Context) ([]tgclient.OwnedBroadcastChannel, error) {
+	if s.telegram == nil {
+		return nil, errTelegramUnavailable
+	}
+	channels, err := s.telegram.ListOwnedBroadcastChannels(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("personaldrive: list owned channels: %w", err)
+	}
+	return channels, nil
+}
+
+// recover makes channel the personal drive: it registers the channel
+// locally, rebuilds the projection from Telegram history, retires any other
+// personal registration, and only then persists config and activates. A
+// failure before the config write leaves no provisional channel behind.
 func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastChannel) (returnErr error) {
 	if s.db == nil || s.syncer == nil || s.saveConfig == nil || s.setActive == nil {
 		return fmt.Errorf("personaldrive: recovery dependencies are unavailable")
@@ -209,29 +230,14 @@ func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastCh
 	if channel.ID <= 0 {
 		return ErrInvalidSelection
 	}
-	title := strings.TrimSpace(channel.Title)
-	if title == "" {
-		title = "Untitled channel"
-	}
 	wasRegistered, err := projection.ChannelExists(s.db, channel.ID)
 	if err != nil {
 		return fmt.Errorf("personaldrive: inspect channel registration: %w", err)
 	}
 	if !wasRegistered {
 		defer func() {
-			if returnErr == nil {
-				return
-			}
-			exists, existsErr := projection.ChannelExists(s.db, channel.ID)
-			if existsErr != nil {
-				returnErr = errors.Join(returnErr, fmt.Errorf("personaldrive: inspect provisional channel for rollback: %w", existsErr))
-				return
-			}
-			if !exists {
-				return
-			}
-			if cleanupErr := projection.DeleteChannel(s.db, channel.ID); cleanupErr != nil {
-				returnErr = errors.Join(returnErr, fmt.Errorf("personaldrive: roll back provisional channel: %w", cleanupErr))
+			if returnErr != nil {
+				returnErr = errors.Join(returnErr, s.dropProvisionalChannel(channel.ID))
 			}
 		}()
 	}
@@ -243,7 +249,7 @@ func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastCh
 	if err := projection.InsertChannel(s.db, projection.Channel{
 		ChannelID:  channel.ID,
 		AccessHash: channel.AccessHash,
-		Title:      title,
+		Title:      displayTitle(channel.Title),
 		Kind:       projection.KindPersonal,
 		JoinedAt:   channel.CreatedAt,
 	}); err != nil {
@@ -255,6 +261,9 @@ func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastCh
 	if err := projection.MarkPersonalBackfillDone(s.db, channel.ID); err != nil {
 		return err
 	}
+	if err := s.retirePersonalChannelsExcept(channel.ID); err != nil {
+		return err
+	}
 	if err := s.saveConfig(channel.ID); err != nil {
 		return fmt.Errorf("personaldrive: save channel config: %w", err)
 	}
@@ -263,20 +272,80 @@ func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastCh
 	return nil
 }
 
+// dropProvisionalChannel removes a channel row that recovery registered but
+// could not commit, so a later attempt starts from a clean slate.
+func (s *Service) dropProvisionalChannel(channelID int64) error {
+	exists, err := projection.ChannelExists(s.db, channelID)
+	if err != nil {
+		return fmt.Errorf("personaldrive: inspect provisional channel for rollback: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	if err := projection.DeleteChannel(s.db, channelID); err != nil {
+		return fmt.Errorf("personaldrive: roll back provisional channel: %w", err)
+	}
+	return nil
+}
+
+// retirePersonalChannelsExcept drops any other channel still registered as
+// personal. Only one personal drive exists; a stale row, typically the empty
+// channel an earlier version created before the user recovered the real one,
+// would otherwise appear as a second drive in the sidebar and mount picker.
+// Telegram is untouched; the local projection can be recovered again later.
+func (s *Service) retirePersonalChannelsExcept(keep int64) error {
+	channels, err := projection.ListChannels(s.db)
+	if err != nil {
+		return fmt.Errorf("personaldrive: list registered channels: %w", err)
+	}
+	for _, existing := range channels {
+		if existing.Kind != projection.KindPersonal || existing.ChannelID == keep {
+			continue
+		}
+		slog.Info("personaldrive: retiring stale personal channel", "channel_id", existing.ChannelID, "replacement", keep)
+		if err := projection.DeleteChannel(s.db, existing.ChannelID); err != nil {
+			return fmt.Errorf("personaldrive: retire stale personal channel %d: %w", existing.ChannelID, err)
+		}
+	}
+	return nil
+}
+
+// loadConfiguredChannel returns 0 when no usable config exists. An
+// unparseable config.json must not block recovery: the user picks a drive
+// explicitly and the next SaveConfig replaces the bad file. Read failures
+// still surface, since they may hide a valid configuration.
 func (s *Service) loadConfiguredChannel() (int64, error) {
 	if s.loadConfig == nil {
 		return 0, fmt.Errorf("personaldrive: config loader is unavailable")
 	}
 	channelID, err := s.loadConfig()
-	if err != nil {
+	switch {
+	case errors.Is(err, auth.ErrConfigInvalid):
+		slog.Warn("personaldrive: ignoring unreadable drive config; explicit setup required", "error", err)
+		return 0, nil
+	case err != nil:
 		return 0, fmt.Errorf("personaldrive: load channel config: %w", err)
-	}
-	if channelID < 0 {
+	case channelID < 0:
 		return 0, fmt.Errorf("personaldrive: invalid configured channel id %d", channelID)
 	}
 	return channelID, nil
 }
 
+func displayTitle(title string) string {
+	if trimmed := strings.TrimSpace(title); trimmed != "" {
+		return trimmed
+	}
+	return untitledChannel
+}
+
+func isDefaultTitle(title string) bool {
+	return strings.EqualFold(strings.TrimSpace(title), defaultChannelTitle)
+}
+
+// candidatesFromOwned de-duplicates and orders channels so the most likely
+// TDrive channel comes first: default title, then channels with content,
+// then oldest. Only the first candidate can be marked recommended, and only
+// when it carries the default title.
 func candidatesFromOwned(channels []tgclient.OwnedBroadcastChannel) []Candidate {
 	seen := make(map[int64]struct{}, len(channels))
 	ordered := make([]tgclient.OwnedBroadcastChannel, 0, len(channels))
@@ -293,10 +362,8 @@ func candidatesFromOwned(channels []tgclient.OwnedBroadcastChannel) []Candidate 
 	}
 	sort.SliceStable(ordered, func(i, j int) bool {
 		left, right := ordered[i], ordered[j]
-		leftTDrive := strings.EqualFold(strings.TrimSpace(left.Title), defaultChannelTitle)
-		rightTDrive := strings.EqualFold(strings.TrimSpace(right.Title), defaultChannelTitle)
-		if leftTDrive != rightTDrive {
-			return leftTDrive
+		if leftDefault, rightDefault := isDefaultTitle(left.Title), isDefaultTitle(right.Title); leftDefault != rightDefault {
+			return leftDefault
 		}
 		if left.HasActivity != right.HasActivity {
 			return left.HasActivity
@@ -304,9 +371,7 @@ func candidatesFromOwned(channels []tgclient.OwnedBroadcastChannel) []Candidate 
 		if left.CreatedAt != right.CreatedAt {
 			return left.CreatedAt < right.CreatedAt
 		}
-		leftTitle := strings.ToLower(strings.TrimSpace(left.Title))
-		rightTitle := strings.ToLower(strings.TrimSpace(right.Title))
-		if leftTitle != rightTitle {
+		if leftTitle, rightTitle := strings.ToLower(left.Title), strings.ToLower(right.Title); leftTitle != rightTitle {
 			return leftTitle < rightTitle
 		}
 		return left.ID < right.ID
@@ -316,10 +381,10 @@ func candidatesFromOwned(channels []tgclient.OwnedBroadcastChannel) []Candidate 
 	for i, channel := range ordered {
 		result[i] = Candidate{
 			ID:          channel.ID,
-			Title:       strings.TrimSpace(channel.Title),
+			Title:       channel.Title,
 			CreatedAt:   channel.CreatedAt,
 			HasActivity: channel.HasActivity,
-			Recommended: i == 0 && strings.EqualFold(strings.TrimSpace(channel.Title), defaultChannelTitle),
+			Recommended: i == 0 && isDefaultTitle(channel.Title),
 		}
 	}
 	return result

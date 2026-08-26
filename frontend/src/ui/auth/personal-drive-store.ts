@@ -13,14 +13,24 @@ export interface PersonalDriveCandidate {
 export interface PersonalDriveSetupState {
     phase: PersonalDrivePhase;
     candidates: PersonalDriveCandidate[];
+    /** Short, user-facing headline for the current error, if any. */
     error: string;
+    /** Underlying error text, shown muted under the headline. */
+    detail: string;
+    /** A channel was created remotely but local setup did not finish. */
     createRetry: boolean;
+}
+
+export interface PersonalDriveErrorOptions {
+    detail?: string;
+    createRetry?: boolean;
 }
 
 const initialState = (): PersonalDriveSetupState => ({
     phase: 'loading',
     candidates: [],
     error: '',
+    detail: '',
     createRetry: false,
 });
 
@@ -36,28 +46,29 @@ function createPersonalDriveSetupStore() {
         reset: () => set(initialState()),
         loading: () => set(initialState()),
         showCandidates: (candidates: PersonalDriveCandidate[]) => set({
+            ...initialState(),
             phase: 'ready',
             candidates: copyCandidates(candidates),
-            error: '',
-            createRetry: false,
         }),
         recovering: (options: { createRetry?: boolean } = {}) => update((state) => ({
             ...state,
             phase: 'recovering',
             error: '',
+            detail: '',
             createRetry: options.createRetry ?? state.createRetry,
         })),
-        discoveryError: (error: string) => set({
+        discoveryError: (error: string, detail = '') => set({
+            ...initialState(),
             phase: 'discovery-error',
-            candidates: [],
             error,
-            createRetry: false,
+            detail,
         }),
-        recoveryError: (error: string, createRetry = false) => update((state) => ({
+        recoveryError: (error: string, options: PersonalDriveErrorOptions = {}) => update((state) => ({
             ...state,
             phase: 'ready',
             error,
-            createRetry,
+            detail: options.detail ?? '',
+            createRetry: options.createRetry ?? false,
         })),
     };
 }

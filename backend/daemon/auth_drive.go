@@ -92,12 +92,27 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 	}
 }
 
+// preparePersonalDrive composes the local and remote setup steps for the
+// CLI: activate a saved drive, or list the channels the user may recover.
 func (s *Server) preparePersonalDrive(ctx context.Context) (PersonalDriveSetup, error) {
-	state, err := s.engine.PersonalDriveService().Prepare(ctx)
+	service := s.engine.PersonalDriveService()
+	state, err := service.Prepare(ctx)
 	if err != nil {
 		return PersonalDriveSetup{}, err
 	}
-	return personalDriveSetupFromService(state), nil
+	setup := PersonalDriveSetup{Status: state.Status, Candidates: []PersonalDriveCandidate{}}
+	if state.ChannelID > 0 {
+		setup.ActiveChannelID = strconv.FormatInt(state.ChannelID, 10)
+	}
+	if state.Status != personaldriveservice.StatusSelectionRequired {
+		return setup, nil
+	}
+	candidates, err := service.Discover(ctx)
+	if err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	setup.Candidates = personalDriveCandidatesFromService(candidates)
+	return setup, nil
 }
 
 func (s *Server) selectPersonalDrive(ctx context.Context, rawChannelID string) (PersonalDriveSetup, error) {
@@ -136,16 +151,10 @@ func (s *Server) commitPersonalDrive(channelID int64) (PersonalDriveSetup, error
 	}, nil
 }
 
-func personalDriveSetupFromService(state personaldriveservice.State) PersonalDriveSetup {
-	result := PersonalDriveSetup{
-		Status:     state.Status,
-		Candidates: make([]PersonalDriveCandidate, len(state.Candidates)),
-	}
-	if state.ChannelID > 0 {
-		result.ActiveChannelID = strconv.FormatInt(state.ChannelID, 10)
-	}
-	for i, candidate := range state.Candidates {
-		result.Candidates[i] = PersonalDriveCandidate{
+func personalDriveCandidatesFromService(candidates []personaldriveservice.Candidate) []PersonalDriveCandidate {
+	result := make([]PersonalDriveCandidate, len(candidates))
+	for i, candidate := range candidates {
+		result[i] = PersonalDriveCandidate{
 			ID:          strconv.FormatInt(candidate.ID, 10),
 			Title:       candidate.Title,
 			CreatedAt:   candidate.CreatedAt,

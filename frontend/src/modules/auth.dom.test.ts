@@ -10,6 +10,7 @@ const bindings = vi.hoisted(() => ({
     SumbitPassword: vi.fn(),
     CheckLoginStatus: vi.fn(),
     PreparePersonalDrive: vi.fn(),
+    DiscoverPersonalDrives: vi.fn(),
     SelectPersonalDrive: vi.fn(),
     CreatePersonalDrive: vi.fn(),
     MyUserID: vi.fn(),
@@ -78,33 +79,32 @@ afterEach(() => {
 
 describe('personal drive startup gate', () => {
     it('takes the saved-config fast path directly to the dashboard', async () => {
-        bindings.PreparePersonalDrive.mockResolvedValue({
-            status: 'ready',
-            active_channel_id: '8200',
-            candidates: [],
-        });
+        bindings.PreparePersonalDrive.mockResolvedValue({ status: 'ready', active_channel_id: '8200' });
+        const screens: unknown[] = [];
+        const unsubscribe = authScreen.subscribe((screen) => screens.push(screen));
 
         await preparePersonalDriveAndContinue();
+        unsubscribe();
 
         expect(bindings.PreparePersonalDrive).toHaveBeenCalledOnce();
+        expect(bindings.DiscoverPersonalDrives).not.toHaveBeenCalled();
+        expect(screens).not.toContain('drive');
         expect(get(authScreen)).toBeNull();
         expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('flex');
         expect(collaborators.loadChannels).toHaveBeenCalledOnce();
     });
 
     it('keeps the dashboard hidden and shows candidates when selection is required', async () => {
-        bindings.PreparePersonalDrive.mockResolvedValue({
-            status: 'selection_required',
-            active_channel_id: '',
-            candidates: [{
-                id: '8200', title: 'TDrive', created_at: 100,
-                has_activity: true, recommended: true,
-            }],
-        });
+        bindings.PreparePersonalDrive.mockResolvedValue({ status: 'selection_required', active_channel_id: '' });
+        bindings.DiscoverPersonalDrives.mockResolvedValue([{
+            id: '8200', title: 'TDrive', created_at: 100,
+            has_activity: true, recommended: true,
+        }]);
 
         await preparePersonalDriveAndContinue();
         flushSync();
 
+        expect(bindings.DiscoverPersonalDrives).toHaveBeenCalledOnce();
         expect(get(authScreen)).toBe('drive');
         expect(get(personalDriveSetup).candidates).toHaveLength(1);
         expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
@@ -112,41 +112,54 @@ describe('personal drive startup gate', () => {
         expect(collaborators.loadChannels).not.toHaveBeenCalled();
     });
 
-    it('surfaces discovery failure with Retry and never creates', async () => {
-        bindings.PreparePersonalDrive.mockRejectedValue(new Error('offline'));
+    it('surfaces discovery failure with its cause and never creates', async () => {
+        bindings.PreparePersonalDrive.mockResolvedValue({ status: 'selection_required', active_channel_id: '' });
+        bindings.DiscoverPersonalDrives.mockRejectedValue('rpc error code 420: FLOOD_WAIT_30');
 
         await preparePersonalDriveAndContinue();
 
         expect(get(authScreen)).toBe('drive');
         expect(get(personalDriveSetup)).toMatchObject({
             phase: 'discovery-error',
-            error: 'Could not look up your Telegram channels. Check your connection and try again.',
+            error: 'Could not look up your Telegram channels.',
+            detail: 'rpc error code 420: FLOOD_WAIT_30',
         });
         expect(bindings.CreatePersonalDrive).not.toHaveBeenCalled();
         expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
     });
 
+    it('surfaces a failed saved-drive activation instead of a connection hint', async () => {
+        bindings.PreparePersonalDrive.mockRejectedValue(new Error('read config: permission denied'));
+
+        await preparePersonalDriveAndContinue();
+
+        expect(get(authScreen)).toBe('drive');
+        expect(get(personalDriveSetup)).toMatchObject({
+            phase: 'discovery-error',
+            error: 'Could not open your saved drive.',
+            detail: 'read config: permission denied',
+        });
+        expect(bindings.DiscoverPersonalDrives).not.toHaveBeenCalled();
+    });
+
     it('ignores an older discovery response after a newer request finishes', async () => {
-        const older = deferred<{ status: string; active_channel_id: string; candidates: unknown[] }>();
-        const newer = deferred<{ status: string; active_channel_id: string; candidates: unknown[] }>();
+        const older = deferred<{ status: string; active_channel_id: string }>();
+        const newer = deferred<{ status: string; active_channel_id: string }>();
         bindings.PreparePersonalDrive
             .mockImplementationOnce(() => older.promise)
             .mockImplementationOnce(() => newer.promise);
+        bindings.DiscoverPersonalDrives.mockResolvedValue([{
+            id: '8300', title: 'Current choice', created_at: 100,
+            has_activity: false, recommended: false,
+        }]);
 
         const olderRequest = preparePersonalDriveAndContinue();
         const newerRequest = preparePersonalDriveAndContinue();
 
-        newer.resolve({
-            status: 'selection_required',
-            active_channel_id: '',
-            candidates: [{
-                id: '8300', title: 'Current choice', created_at: 100,
-                has_activity: false, recommended: false,
-            }],
-        });
+        newer.resolve({ status: 'selection_required', active_channel_id: '' });
         await newerRequest;
 
-        older.resolve({ status: 'ready', active_channel_id: '8200', candidates: [] });
+        older.resolve({ status: 'ready', active_channel_id: '8200' });
         await olderRequest;
         flushSync();
 
@@ -183,6 +196,7 @@ describe('personal drive startup gate', () => {
         expect(get(authScreen)).toBe('drive');
         expect(get(personalDriveSetup).phase).toBe('ready');
         expect(get(personalDriveSetup).error).toContain('Could not recover');
+        expect(get(personalDriveSetup).detail).toBe('sync failed');
         expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
     });
 

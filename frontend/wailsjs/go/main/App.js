@@ -78,6 +78,10 @@ export function DeleteFolder(arg1) {
   return window['go']['main']['App']['DeleteFolder'](arg1);
 }
 
+export function DiscoverPersonalDrives() {
+  return window['go']['main']['App']['DiscoverPersonalDrives']();
+}
+
 export function DownloadFile(arg1, arg2) {
   return window['go']['main']['App']['DownloadFile'](arg1, arg2);
 }
@@ -144,10 +148,6 @@ export function HideNativeSeekThumbnail(arg1) {
 
 export function ImportPaths(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ImportPaths'](arg1, arg2, arg3, arg4);
-}
-
-export function InitDrive() {
-  return window['go']['main']['App']['InitDrive']();
 }
 
 export function InstallUpdateAndRestart() {

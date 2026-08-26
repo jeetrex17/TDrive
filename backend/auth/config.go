@@ -2,10 +2,16 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+// ErrConfigInvalid marks a config.json that exists but cannot be parsed.
+// Callers that can ask the user for an explicit drive choice may treat it as
+// "not configured"; nothing may create or overwrite a drive silently on it.
+var ErrConfigInvalid = errors.New("invalid personal drive config")
 
 type ChannelS struct {
 	ChannelID int64 `json:"channel_id"`
@@ -82,13 +88,8 @@ func LoadConfig() (int64, error) {
 	}
 
 	channels := ChannelS{}
-
-	err = json.Unmarshal(file, &channels)
-	if err != nil {
-		return 0, fmt.Errorf("parse config: %w", err)
+	if err := json.Unmarshal(file, &channels); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrConfigInvalid, err)
 	}
-
-	cid := channels.ChannelID
-
-	return cid, nil
+	return channels.ChannelID, nil
 }

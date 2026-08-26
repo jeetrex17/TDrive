@@ -130,7 +130,7 @@ func testDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func TestInitDriveMigratesAndSetsActive(t *testing.T) {
+func TestUsePersonalChannelMigratesAndSetsActive(t *testing.T) {
 	db := testDB(t)
 	active := NewActiveDrive()
 	backfiller := newFakeBackfiller()
@@ -140,14 +140,10 @@ func TestInitDriveMigratesAndSetsActive(t *testing.T) {
 		DB:       db,
 		Active:   active,
 		Backfill: backfiller,
-		PersonalChannel: func(ctx context.Context) (int64, error) {
-			return 12345, nil
-		},
 	})
 
-	got := svc.InitDrive(context.Background())
-	if got != "Success , channel ID: 12345" {
-		t.Fatalf("InitDrive = %q", got)
+	if err := svc.UsePersonalChannel(context.Background(), 12345); err != nil {
+		t.Fatalf("UsePersonalChannel: %v", err)
 	}
 	if active.ID() != 12345 {
 		t.Fatalf("active = %d, want 12345", active.ID())

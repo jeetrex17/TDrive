@@ -7,25 +7,20 @@ import (
 	personaldriveservice "TDrive/backend/services/personaldrive"
 )
 
-func TestPersonalDriveSetupFromServiceUsesStringIDs(t *testing.T) {
-	got := personalDriveSetupFromService(personaldriveservice.State{
-		Status:    personaldriveservice.StatusSelectionRequired,
-		ChannelID: 9_007_199_254_740_993,
-		Candidates: []personaldriveservice.Candidate{{
-			ID: 9_007_199_254_740_993, Title: "TDrive", CreatedAt: 100,
-			HasActivity: true, Recommended: true,
-		}},
-	})
-	want := PersonalDriveSetup{
-		Status:          personaldriveservice.StatusSelectionRequired,
-		ActiveChannelID: "9007199254740993",
-		Candidates: []PersonalDriveCandidate{{
-			ID: "9007199254740993", Title: "TDrive", CreatedAt: 100,
-			HasActivity: true, Recommended: true,
-		}},
-	}
+func TestPersonalDriveCandidatesFromServiceUseStringIDs(t *testing.T) {
+	got := personalDriveCandidatesFromService([]personaldriveservice.Candidate{{
+		ID: 9_007_199_254_740_993, Title: "TDrive", CreatedAt: 100,
+		HasActivity: true, Recommended: true,
+	}})
+	want := []PersonalDriveCandidate{{
+		ID: "9007199254740993", Title: "TDrive", CreatedAt: 100,
+		HasActivity: true, Recommended: true,
+	}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("setup = %#v, want %#v", got, want)
+		t.Fatalf("candidates = %#v, want %#v", got, want)
+	}
+	if empty := personalDriveCandidatesFromService(nil); empty == nil || len(empty) != 0 {
+		t.Fatalf("nil candidates = %#v, want empty non-nil slice", empty)
 	}
 }
 

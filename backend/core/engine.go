@@ -689,9 +689,6 @@ func (e *Engine) newLifecycleService() *lifecycleservice.Service {
 		Backfill: backfill.NewRunner(backend.DB, e.tg, peerResolverFn(e.ResolvePeer)),
 		Active:   e.active,
 		Events:   e.events,
-		PersonalChannel: func(ctx context.Context) (int64, error) {
-			return auth.GetTDriveChannel(ctx, nil)
-		},
 		Warnf: func(format string, args ...any) {
 			e.warnf(format, args...)
 		},

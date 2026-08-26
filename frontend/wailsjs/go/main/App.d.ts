@@ -45,6 +45,8 @@ export function DeleteFile(arg1:number):Promise<string>;
 
 export function DeleteFolder(arg1:string):Promise<string>;
 
+export function DiscoverPersonalDrives():Promise<Array<main.PersonalDriveCandidate>>;
+
 export function DownloadFile(arg1:number,arg2:number):Promise<main.DownloadResult>;
 
 export function DownloadUpdate():Promise<void>;
@@ -78,8 +80,6 @@ export function GetUpdateState():Promise<updater.State>;
 export function HideNativeSeekThumbnail(arg1:string):Promise<void>;
 
 export function ImportPaths(arg1:Array<string>,arg2:string,arg3:boolean,arg4:boolean):Promise<void>;
-
-export function InitDrive():Promise<string>;
 
 export function InstallUpdateAndRestart():Promise<void>;
 

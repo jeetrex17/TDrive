@@ -9,8 +9,8 @@ import { state } from '../state';
 import {
     CheckSystemStatus, SaveSetup,
     LoginPhoneNumber, SumbitCode, SumbitPassword,
-    CheckLoginStatus, PreparePersonalDrive, SelectPersonalDrive,
-    CreatePersonalDrive, MyUserID, SyncChannel,
+    CheckLoginStatus, PreparePersonalDrive, DiscoverPersonalDrives,
+    SelectPersonalDrive, CreatePersonalDrive, MyUserID, SyncChannel,
 } from '../../wailsjs/go/main/App';
 import { renderBreadcrumb } from './navigation';
 import { loadChannels } from './channels';
@@ -32,6 +32,13 @@ function startPersonalDriveFlow(): number {
 
 function isCurrentPersonalDriveFlow(version: number): boolean {
     return version === personalDriveFlowVersion;
+}
+
+// Wails rejects bindings with a plain string; keep whatever text we get so
+// the user sees the real cause instead of a guess.
+function errorText(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    return String(err ?? '').trim();
 }
 
 function successScreen(): HTMLElement | null {
@@ -146,21 +153,40 @@ export async function showDashboard(): Promise<void> {
     await showDashboardForFlow(startPersonalDriveFlow());
 }
 
-export async function preparePersonalDriveAndContinue(): Promise<void> {
-    const flowVersion = startPersonalDriveFlow();
+function showDriveSetupScreen(): void {
     showAuthWrapper();
     authScreen.set('drive');
     personalDriveSetup.loading();
+}
+
+async function discoverPersonalDrives(flowVersion: number): Promise<void> {
+    let candidates;
+    try {
+        candidates = await DiscoverPersonalDrives();
+    } catch (err) {
+        if (!isCurrentPersonalDriveFlow(flowVersion)) return;
+        console.error('Personal drive discovery failed:', err);
+        personalDriveSetup.discoveryError('Could not look up your Telegram channels.', errorText(err));
+        return;
+    }
+    if (!isCurrentPersonalDriveFlow(flowVersion)) return;
+    personalDriveSetup.showCandidates(Array.isArray(candidates) ? candidates : []);
+}
+
+// Activates the saved drive without touching the screen: the common case
+// goes straight to the dashboard. Only when the user actually has to choose
+// does the drive picker appear, and only then does discovery hit Telegram.
+export async function preparePersonalDriveAndContinue(): Promise<void> {
+    const flowVersion = startPersonalDriveFlow();
 
     let setup;
     try {
         setup = await PreparePersonalDrive();
     } catch (err) {
         if (!isCurrentPersonalDriveFlow(flowVersion)) return;
-        console.error('Personal drive discovery failed:', err);
-        personalDriveSetup.discoveryError(
-            'Could not look up your Telegram channels. Check your connection and try again.',
-        );
+        console.error('Personal drive preparation failed:', err);
+        showDriveSetupScreen();
+        personalDriveSetup.discoveryError('Could not open your saved drive.', errorText(err));
         return;
     }
     if (!isCurrentPersonalDriveFlow(flowVersion)) return;
@@ -169,12 +195,15 @@ export async function preparePersonalDriveAndContinue(): Promise<void> {
         await showDashboardForFlow(flowVersion);
         return;
     }
+    showDriveSetupScreen();
     if (setup?.status === 'selection_required') {
-        personalDriveSetup.showCandidates(Array.isArray(setup.candidates) ? setup.candidates : []);
+        await discoverPersonalDrives(flowVersion);
         return;
     }
-
-    personalDriveSetup.discoveryError('TDrive could not prepare your personal drive. Please try again.');
+    personalDriveSetup.discoveryError(
+        'TDrive could not prepare your personal drive.',
+        `Unexpected setup status "${String(setup?.status ?? '')}".`,
+    );
 }
 
 export async function selectPersonalDrive(channelID: string): Promise<void> {
@@ -190,7 +219,8 @@ export async function selectPersonalDrive(channelID: string): Promise<void> {
         if (!isCurrentPersonalDriveFlow(flowVersion)) return;
         console.error('Personal drive recovery failed:', err);
         personalDriveSetup.recoveryError(
-            'Could not recover this channel. Nothing was changed on Telegram; please try again.',
+            'Could not recover this channel. Nothing was changed on Telegram.',
+            { detail: errorText(err) },
         );
         return;
     }
@@ -207,8 +237,8 @@ export async function createPersonalDrive(): Promise<void> {
         if (!isCurrentPersonalDriveFlow(flowVersion)) return;
         console.error('Personal drive creation failed:', err);
         personalDriveSetup.recoveryError(
-            'Could not finish TDrive setup. Retry will continue the previous attempt without creating a duplicate channel.',
-            true,
+            'Could not finish TDrive setup. Retry continues the previous attempt without creating a duplicate channel.',
+            { detail: errorText(err), createRetry: true },
         );
         return;
     }

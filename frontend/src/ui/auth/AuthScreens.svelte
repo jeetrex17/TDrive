@@ -255,6 +255,7 @@
         phase={$personalDriveSetup.phase}
         candidates={$personalDriveSetup.candidates}
         error={$personalDriveSetup.error}
+        detail={$personalDriveSetup.detail}
         createRetry={$personalDriveSetup.createRetry}
         onSelect={onDriveSelect}
         onCreate={onDriveCreate}

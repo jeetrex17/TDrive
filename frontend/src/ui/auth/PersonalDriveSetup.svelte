@@ -1,6 +1,5 @@
 <script lang="ts">
     import CheckIcon from '@lucide/svelte/icons/check';
-    import CloudIcon from '@lucide/svelte/icons/cloud';
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
@@ -10,17 +9,36 @@
         phase: PersonalDrivePhase;
         candidates: PersonalDriveCandidate[];
         error: string;
+        detail?: string;
         createRetry?: boolean;
         onSelect: (channelID: string) => void;
         onCreate: () => void;
         onRetry: () => void;
     }
 
-    let { phase, candidates, error, createRetry = false, onSelect, onCreate, onRetry }: Props = $props();
+    let {
+        phase,
+        candidates,
+        error,
+        detail = '',
+        createRetry = false,
+        onSelect,
+        onCreate,
+        onRetry,
+    }: Props = $props();
+
     let selectedID = $state('');
     let confirmingCreate = $state(false);
 
     const busy = $derived(phase === 'loading' || phase === 'recovering');
+    const recovering = $derived(phase === 'recovering');
+
+    // Channel IDs are noise unless two channels share a title — typically the
+    // real drive next to an empty one an earlier version created.
+    const duplicateTitles = $derived.by(() => {
+        const keys = candidates.map((candidate) => candidateTitle(candidate).toLowerCase());
+        return keys.filter((key, index) => keys.indexOf(key) !== index);
+    });
 
     $effect(() => {
         if (selectedID && !candidates.some((candidate) => candidate.id === selectedID)) {
@@ -29,49 +47,61 @@
         if (phase !== 'ready' || createRetry) confirmingCreate = false;
     });
 
+    const createdFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
+
+    function candidateTitle(candidate: PersonalDriveCandidate): string {
+        return candidate.title || 'Untitled channel';
+    }
+
+    function showsID(candidate: PersonalDriveCandidate): boolean {
+        return duplicateTitles.includes(candidateTitle(candidate).toLowerCase());
+    }
+
     function formatCreated(timestamp: number): string {
-        if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Creation date unavailable';
-        return `Created ${new Intl.DateTimeFormat('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-            timeZone: 'UTC',
-        }).format(new Date(timestamp * 1000))}`;
+        if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+        return `Created ${createdFormat.format(new Date(timestamp * 1000))}`;
     }
 
     function submitSelection(): void {
         if (!selectedID || busy) return;
         onSelect(selectedID);
     }
+
+    function onChoiceKeydown(event: KeyboardEvent): void {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        submitSelection();
+    }
 </script>
 
-<section class="drive-setup" aria-labelledby="drive-setup-title">
-    <div class="drive-setup-icon" aria-hidden="true">
-        <HardDriveIcon size={28} strokeWidth={1.7} />
+<section class="auth-box drive-setup" aria-labelledby="drive-setup-title">
+    <div class="auth-icon-box">
+        <HardDriveIcon size={32} strokeWidth={1.5} aria-hidden="true" />
     </div>
-    <header>
-        <h2 id="drive-setup-title">Choose your TDrive</h2>
-        <p>Pick a Telegram channel you created, or start with a new empty drive.</p>
-    </header>
+    <h2 id="drive-setup-title">Choose your TDrive</h2>
+    <p>No saved drive was found on this device. Pick the Telegram channel that holds your files, or start a new empty drive.</p>
 
     {#if phase === 'loading'}
-        <div class="drive-state" role="status" aria-live="polite">
+        <div class="drive-panel" role="status" aria-live="polite">
             <span class="drive-spinner" aria-hidden="true"></span>
-            <strong>Looking for your drives...</strong>
-            <span>Checking your Telegram channels</span>
+            <strong>Looking for your drives…</strong>
+            <span>Checking the channels you created on Telegram</span>
         </div>
     {:else if phase === 'discovery-error'}
-        <div class="drive-error" role="alert">
-            <strong>Couldn't load your channels</strong>
-            <span>{error}</span>
+        <div class="drive-alert" role="alert">
+            <strong>{error}</strong>
+            {#if detail}<span>{detail}</span>{/if}
         </div>
-        <button class="drive-primary" data-drive-retry type="button" onclick={onRetry}>
-            <RotateCwIcon size={17} aria-hidden="true" />
+        <button class="primary-btn drive-primary" data-drive-retry type="button" onclick={onRetry}>
+            <RotateCwIcon size={16} strokeWidth={2.2} aria-hidden="true" />
             Retry
         </button>
     {:else}
         {#if error}
-            <div class="drive-inline-error" role="alert">{error}</div>
+            <div class="drive-alert" role="alert">
+                <strong>{error}</strong>
+                {#if detail}<span>{detail}</span>{/if}
+            </div>
         {/if}
 
         {#if candidates.length > 0}
@@ -85,72 +115,69 @@
                             value={candidate.id}
                             bind:group={selectedID}
                             disabled={busy}
+                            onkeydown={onChoiceKeydown}
                         />
-                        <span class="drive-choice-icon" aria-hidden="true">
-                            <CloudIcon size={20} strokeWidth={1.8} />
-                        </span>
                         <span class="drive-choice-copy">
                             <span class="drive-choice-title">
-                                <span class="drive-title-text" title={candidate.title || 'Untitled channel'}>
-                                    {candidate.title || 'Untitled channel'}
+                                <span class="drive-title-text" title={candidateTitle(candidate)}>
+                                    {candidateTitle(candidate)}
                                 </span>
                                 {#if candidate.recommended}
                                     <span class="drive-badge">Recommended</span>
                                 {/if}
                             </span>
                             <span class="drive-choice-meta">
-                                <span>{formatCreated(candidate.created_at)}</span>
-                                <span aria-hidden="true">/</span>
-                                <span>Channel ID {candidate.id}</span>
-                            </span>
-                            <span class:active={candidate.has_activity} class="drive-activity">
-                                {candidate.has_activity ? 'Has activity' : 'Empty'}
+                                <span class:in-use={candidate.has_activity}>
+                                    {candidate.has_activity ? 'In use' : 'Empty'}
+                                </span>
+                                {#if formatCreated(candidate.created_at)}
+                                    <span>{formatCreated(candidate.created_at)}</span>
+                                {/if}
+                                {#if showsID(candidate)}
+                                    <span>ID {candidate.id}</span>
+                                {/if}
                             </span>
                         </span>
                         <span class="drive-check" aria-hidden="true">
-                            <CheckIcon size={14} strokeWidth={2.5} />
+                            <CheckIcon size={13} strokeWidth={3} />
                         </span>
                     </label>
                 {/each}
             </fieldset>
 
             <button
-                class="drive-primary"
+                class="primary-btn drive-primary"
                 data-drive-continue
                 type="button"
                 disabled={!selectedID || busy}
                 onclick={submitSelection}
             >
-                {phase === 'recovering' ? 'Recovering...' : 'Continue'}
+                {#if recovering}
+                    <span class="drive-spinner drive-spinner-on-accent" aria-hidden="true"></span>
+                    Recovering…
+                {:else}
+                    Continue
+                {/if}
             </button>
+            {#if recovering}
+                <span class="drive-hint" role="status" aria-live="polite">
+                    Recovering your files from Telegram. Large drives can take a minute.
+                </span>
+            {/if}
         {:else}
-            <div class="drive-empty">
-                <CloudIcon size={25} strokeWidth={1.6} aria-hidden="true" />
-                <strong>No personal channels found</strong>
-                <span>You can create a new private home for TDrive.</span>
-            </div>
-        {/if}
-
-        {#if phase === 'recovering'}
-            <div class="drive-progress" role="status" aria-live="polite">
-                <span class="drive-spinner" aria-hidden="true"></span>
-                Recovering your TDrive history...
+            <div class="drive-panel">
+                <strong>No channels found</strong>
+                <span>You haven't created any Telegram channels, so there is nothing to recover yet.</span>
             </div>
         {/if}
 
         {#if createRetry}
-            <div class="drive-create-retry">
-                <button
-                    class="drive-create"
-                    data-drive-create-retry
-                    type="button"
-                    disabled={busy}
-                    onclick={onCreate}
-                >
-                    <RotateCwIcon size={17} strokeWidth={2} aria-hidden="true" />
+            <div class="drive-secondary drive-secondary-stack">
+                <button class="drive-ghost" data-drive-create-retry type="button" disabled={busy} onclick={onCreate}>
+                    <RotateCwIcon size={16} strokeWidth={2.2} aria-hidden="true" />
                     Retry TDrive Setup
                 </button>
-                <span>Continues the previous attempt without creating a duplicate channel.</span>
+                <span class="drive-hint">Continues the previous attempt without creating a duplicate channel.</span>
             </div>
         {:else if confirmingCreate}
             <div class="drive-confirm" role="group" aria-label="Confirm new TDrive">
@@ -159,19 +186,23 @@
                     <span>This creates one new Telegram channel.</span>
                 </div>
                 <div class="drive-confirm-actions">
-                    <button type="button" disabled={busy} onclick={() => { confirmingCreate = false; }}>Cancel</button>
-                    <button data-drive-create-confirm type="button" disabled={busy} onclick={onCreate}>Create</button>
+                    <button class="drive-ghost" type="button" disabled={busy} onclick={() => { confirmingCreate = false; }}>
+                        Cancel
+                    </button>
+                    <button class="drive-confirm-create" data-drive-create-confirm type="button" disabled={busy} onclick={onCreate}>
+                        Create
+                    </button>
                 </div>
             </div>
         {:else}
             <button
-                class="drive-create"
+                class="drive-ghost drive-secondary"
                 data-drive-create-request
                 type="button"
                 disabled={busy}
                 onclick={() => { confirmingCreate = true; }}
             >
-                <PlusIcon size={17} strokeWidth={2} aria-hidden="true" />
+                <PlusIcon size={16} strokeWidth={2.2} aria-hidden="true" />
                 Create New TDrive
             </button>
         {/if}
@@ -179,156 +210,175 @@
 </section>
 
 <style>
+    /* Extends the shared .auth-box card: same surface, border, radius and
+       shadow as the login screens, just wide enough for a channel list. */
     .drive-setup {
-        width: min(620px, calc(100vw - 32px));
-        max-height: calc(100vh - 64px);
-        padding: 32px;
+        width: min(460px, calc(100vw - 32px));
+        max-height: calc(100vh - 48px);
+        padding: 2.25rem 2rem;
         overflow: auto;
-        color: var(--color-text);
-        text-align: center;
-        background: color-mix(in srgb, var(--bg-sidebar) 94%, transparent);
-        border: 1px solid var(--border);
-        border-radius: 22px;
-        box-shadow: var(--shadow-lg), 0 1px 0 var(--glass-highlight) inset;
-        -webkit-backdrop-filter: blur(24px) saturate(145%);
-        backdrop-filter: blur(24px) saturate(145%);
     }
-
-    .drive-setup-icon {
-        display: grid;
-        width: 56px;
-        height: 56px;
-        margin: 0 auto 18px;
-        color: var(--color-accent);
-        background: var(--overlay-accent-1);
-        border: 1px solid color-mix(in srgb, var(--color-accent) 24%, transparent);
-        border-radius: 16px;
-        place-items: center;
+    .drive-setup > p {
+        max-width: 380px;
+        margin-right: auto;
+        margin-left: auto;
+        line-height: 1.5;
     }
-
-    header h2 { margin: 0; font-size: 1.55rem; font-weight: 680; letter-spacing: 0; }
-    header p { max-width: 440px; margin: 8px auto 22px; color: var(--color-text-muted); font-size: 0.91rem; line-height: 1.5; }
 
     .drive-list {
         display: grid;
-        max-height: min(342px, 42vh);
+        max-height: min(320px, 40vh);
         padding: 0;
         margin: 0 0 16px;
         overflow: auto;
         text-align: left;
         border: 1px solid var(--border);
-        border-radius: 14px;
+        border-radius: var(--radius-md);
     }
 
     .drive-choice {
         position: relative;
         display: grid;
-        grid-template-columns: 34px minmax(0, 1fr) 24px;
+        grid-template-columns: minmax(0, 1fr) 20px;
         gap: 12px;
         align-items: center;
-        min-height: 74px;
         padding: 12px 14px;
         cursor: pointer;
         background: var(--color-surface-1);
-        border-bottom: 1px solid var(--border);
         transition: background var(--motion-fast) var(--ease-standard);
     }
-
-    .drive-choice:first-of-type { border-radius: 13px 13px 0 0; }
-    .drive-choice:last-of-type { border-bottom: 0; border-radius: 0 0 13px 13px; }
+    .drive-choice + .drive-choice { border-top: 1px solid var(--border); }
     .drive-choice:hover { background: var(--color-surface-2); }
     .drive-choice.selected { background: var(--overlay-accent-1); }
     .drive-choice:has(input:focus-visible) { box-shadow: var(--focus-ring) inset; }
-    .drive-choice input { position: absolute; width: 1px; height: 1px; margin: -1px; opacity: 0; }
-
-    .drive-choice-icon {
-        display: grid;
-        width: 34px;
-        height: 34px;
-        color: var(--color-text-soft);
-        background: var(--overlay-white-1);
-        border-radius: 10px;
-        place-items: center;
+    .drive-choice input {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        opacity: 0;
+        pointer-events: none;
     }
 
-    .drive-choice-copy { display: grid; min-width: 0; gap: 4px; }
-    .drive-choice-title { display: flex; gap: 7px; align-items: center; min-width: 0; overflow: hidden; font-size: 0.94rem; font-weight: 650; }
+    .drive-choice-copy { display: grid; gap: 3px; min-width: 0; }
+    .drive-choice-title {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        min-width: 0;
+        color: var(--color-text);
+        font-size: 0.92rem;
+        font-weight: 600;
+    }
     .drive-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .drive-badge { flex: 0 0 auto; padding: 3px 7px; color: var(--color-accent); font-size: 0.66rem; font-weight: 700; background: var(--overlay-accent-1); border-radius: 999px; }
-    .drive-choice-meta { display: flex; flex-wrap: wrap; gap: 5px; color: var(--color-text-muted); font-size: 0.72rem; }
-    .drive-activity { width: fit-content; color: var(--color-text-muted); font-size: 0.69rem; }
-    .drive-activity.active { color: var(--color-success, #34c759); }
+    .drive-badge {
+        flex: 0 0 auto;
+        padding: 2px 7px;
+        color: var(--accent);
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        background: var(--overlay-accent-1);
+        border-radius: 999px;
+    }
+    .drive-choice-meta { display: flex; flex-wrap: wrap; color: var(--text-muted); font-size: 0.76rem; }
+    .drive-choice-meta > span + span::before { margin: 0 6px; content: '·'; }
+    .drive-choice-meta .in-use { color: var(--color-success); font-weight: 600; }
 
     .drive-check {
         display: grid;
         width: 20px;
         height: 20px;
         color: transparent;
-        border: 1.5px solid var(--border-strong, var(--border));
+        border: 1.5px solid color-mix(in srgb, var(--text-muted) 55%, transparent);
         border-radius: 50%;
         place-items: center;
+        transition:
+            background var(--motion-fast) var(--ease-standard),
+            border-color var(--motion-fast) var(--ease-standard);
     }
-    .selected .drive-check { color: white; background: var(--color-accent); border-color: var(--color-accent); }
-
-    .drive-primary,
-    .drive-create,
-    .drive-confirm-actions button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        min-height: 42px;
-        padding: 0 18px;
-        font: inherit;
-        font-size: 0.88rem;
-        font-weight: 650;
-        border-radius: 11px;
-        cursor: pointer;
-        transition: transform var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+    .selected .drive-check {
+        color: var(--color-on-accent);
+        background: var(--accent);
+        border-color: var(--accent);
     }
-    .drive-primary { width: 100%; color: white; background: var(--color-accent); border: 1px solid transparent; }
-    .drive-primary:not(:disabled):hover { filter: brightness(1.06); }
-    .drive-primary:not(:disabled):active, .drive-create:not(:disabled):active { transform: scale(0.985); }
-    button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-    button:disabled { cursor: default; opacity: 0.48; }
 
-    .drive-create { margin-top: 12px; color: var(--color-text-soft); background: transparent; border: 0; }
-    .drive-create:not(:disabled):hover { color: var(--color-accent); background: var(--overlay-accent-1); }
-    .drive-create-retry { display: grid; justify-items: center; gap: 2px; }
-    .drive-create-retry span { max-width: 360px; color: var(--color-text-muted); font-size: 0.72rem; line-height: 1.4; }
+    .drive-primary { display: inline-flex; gap: 8px; align-items: center; justify-content: center; }
+    .drive-primary:disabled { opacity: 0.5; cursor: default; transform: none; }
+    .drive-primary:disabled:hover { background: var(--accent); }
 
-    .drive-state,
-    .drive-empty {
+    .drive-hint {
+        display: block;
+        margin-top: 10px;
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        line-height: 1.45;
+    }
+
+    .drive-panel {
         display: grid;
+        gap: 6px;
         justify-items: center;
-        gap: 7px;
-        padding: 34px 20px;
-        margin-bottom: 15px;
-        color: var(--color-text-muted);
+        padding: 28px 20px;
+        margin-bottom: 16px;
+        color: var(--text-muted);
+        font-size: 0.8rem;
         background: var(--color-surface-1);
         border: 1px solid var(--border);
-        border-radius: 14px;
+        border-radius: var(--radius-md);
     }
-    .drive-state strong, .drive-empty strong { color: var(--color-text); font-size: 0.93rem; }
-    .drive-state span, .drive-empty span { font-size: 0.78rem; }
+    .drive-panel strong { color: var(--color-text); font-size: 0.92rem; }
 
-    .drive-error,
-    .drive-inline-error {
+    .drive-alert {
         display: grid;
-        gap: 5px;
-        padding: 13px 14px;
+        gap: 4px;
+        padding: 12px 14px;
         margin-bottom: 14px;
-        color: var(--color-danger, #ff453a);
+        color: var(--color-danger);
+        font-size: 0.82rem;
         text-align: left;
-        background: color-mix(in srgb, var(--color-danger, #ff453a) 9%, transparent);
-        border: 1px solid color-mix(in srgb, var(--color-danger, #ff453a) 24%, transparent);
-        border-radius: 11px;
-        font-size: 0.8rem;
+        background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+        border: 1px solid color-mix(in srgb, var(--color-danger) 22%, transparent);
+        border-radius: var(--radius-md);
     }
-    .drive-error span { color: var(--color-text-muted); }
+    .drive-alert span { color: var(--text-muted); font-size: 0.76rem; overflow-wrap: anywhere; }
 
-    .drive-progress { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 10px; color: var(--color-text-muted); font-size: 0.78rem; }
-    .drive-spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--color-accent); border-radius: 50%; animation: drive-spin 800ms linear infinite; }
+    .drive-spinner {
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: drive-spin 800ms linear infinite;
+    }
+    .drive-spinner-on-accent {
+        border-color: color-mix(in srgb, var(--color-on-accent) 35%, transparent);
+        border-top-color: var(--color-on-accent);
+    }
+
+    .drive-ghost {
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+        justify-content: center;
+        min-height: 36px;
+        padding: 0 12px;
+        color: var(--color-text-soft);
+        font: inherit;
+        font-size: 0.85rem;
+        font-weight: 600;
+        background: transparent;
+        border: 0;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition:
+            color var(--motion-fast) var(--ease-standard),
+            background var(--motion-fast) var(--ease-standard);
+    }
+    .drive-ghost:not(:disabled):hover { color: var(--accent); background: var(--overlay-accent-1); }
+    .drive-secondary { margin-top: 12px; }
+    .drive-secondary-stack { display: grid; gap: 2px; justify-items: center; }
+    .drive-secondary-stack .drive-hint { margin-top: 0; }
 
     .drive-confirm {
         display: flex;
@@ -340,28 +390,50 @@
         text-align: left;
         background: var(--color-surface-1);
         border: 1px solid var(--border);
-        border-radius: 12px;
+        border-radius: var(--radius-md);
     }
-    .drive-confirm > div:first-child { display: grid; gap: 3px; }
-    .drive-confirm strong { font-size: 0.82rem; }
-    .drive-confirm span { color: var(--color-text-muted); font-size: 0.72rem; }
-    .drive-confirm-actions { display: flex; gap: 7px; }
-    .drive-confirm-actions button { min-height: 34px; padding: 0 11px; color: var(--color-text-soft); background: var(--color-surface-2); border: 1px solid var(--border); font-size: 0.76rem; }
-    .drive-confirm-actions button:last-child { color: white; background: var(--color-accent); border-color: transparent; }
+    .drive-confirm > div:first-child { display: grid; gap: 2px; }
+    .drive-confirm strong { color: var(--color-text); font-size: 0.84rem; }
+    .drive-confirm span { color: var(--text-muted); font-size: 0.74rem; }
+    .drive-confirm-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+    .drive-confirm-create {
+        min-height: 34px;
+        padding: 0 14px;
+        color: var(--color-on-accent);
+        font: inherit;
+        font-size: 0.8rem;
+        font-weight: 700;
+        background: var(--accent);
+        border: 0;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+    }
 
-    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
 
     @keyframes drive-spin { to { transform: rotate(360deg); } }
 
-    @media (max-width: 560px) {
-        .drive-setup { max-height: calc(100vh - 24px); padding: 24px 18px; border-radius: 18px; }
-        .drive-choice { grid-template-columns: 32px minmax(0, 1fr) 22px; gap: 10px; padding: 11px; }
-        .drive-confirm { align-items: stretch; flex-direction: column; }
+    @media (max-width: 520px) {
+        .drive-setup { padding: 1.75rem 1.25rem; }
+        .drive-confirm { flex-direction: column; align-items: stretch; }
         .drive-confirm-actions button { flex: 1; }
     }
 
     @media (prefers-reduced-motion: reduce) {
         .drive-spinner { animation-duration: 1.5s; }
-        .drive-choice, button { transition: none; }
+        .drive-choice, .drive-check, .drive-ghost { transition: none; }
     }
 </style>

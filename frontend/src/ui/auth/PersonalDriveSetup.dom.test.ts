@@ -61,6 +61,19 @@ describe('PersonalDriveSetup interactions', () => {
         expect(onSelect).toHaveBeenCalledWith('8300');
     });
 
+    it('submits the highlighted choice on Enter', () => {
+        const choice = host.querySelector<HTMLInputElement>('input[value="8200"]');
+        choice?.click();
+        flushSync();
+
+        choice?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        expect(onSelect).toHaveBeenCalledOnce();
+        expect(onSelect).toHaveBeenCalledWith('8200');
+
+        choice?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+        expect(onSelect).toHaveBeenCalledOnce();
+    });
+
     it('requires confirmation before creating a new Telegram channel', () => {
         host.querySelector<HTMLButtonElement>('[data-drive-create-request]')?.click();
         flushSync();
