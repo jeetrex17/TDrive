@@ -46,8 +46,14 @@ function q(selector: string): HTMLElement | null {
 }
 
 function byText(text: string): HTMLElement | null {
-    const nodes = Array.from(host?.querySelectorAll<HTMLElement>('button, .updates-line, .updates-headline') ?? []);
-    return nodes.find((n) => n.textContent?.includes(text)) ?? null;
+    const buttons = Array.from(host?.querySelectorAll<HTMLElement>('button') ?? []);
+    const button = buttons.find((node) => node.textContent?.includes(text));
+    if (button) return button;
+
+    const statuses = Array.from(host?.querySelectorAll<HTMLElement>(
+        '[role="status"], .updates-line, .updates-headline, .updates-message-title',
+    ) ?? []);
+    return statuses.find((node) => node.textContent?.includes(text)) ?? null;
 }
 
 beforeEach(() => {
@@ -65,10 +71,13 @@ afterEach(async () => {
 });
 
 describe('UpdatesPanel', () => {
-    it('shows the current version and platform', () => {
+    it('shows concise build details without clipboard controls', () => {
         setup();
         expect(host?.textContent).toContain('Version 1.6.0');
-        expect(host?.textContent).toContain('macOS arm64');
+        expect(host?.textContent).toContain('macOS · Apple silicon');
+        expect(host?.querySelector('.updates-summary')).not.toBeNull();
+        expect(host?.querySelector('[aria-label="Copy build information"]')).toBeNull();
+        expect(host?.textContent).not.toContain('Copy');
     });
 
     it('offers a download for an available release and can skip it', async () => {
@@ -141,7 +150,21 @@ describe('UpdatesPanel', () => {
     it('confirms an up-to-date state', () => {
         setState({ phase: 'up_to_date', checked_at: Date.now() });
         setup();
-        expect(host?.textContent).toContain("You're on the latest version.");
+
+        const status = q('.updates-status');
+        expect(status?.textContent?.trim()).toBe('TDrive is up to date.');
+        expect(status?.getAttribute('role')).toBe('status');
+        expect(status?.getAttribute('aria-live')).toBe('polite');
+        expect(status?.querySelector('svg')).toBeNull();
+        expect(host?.querySelector('.updates-line.ok')).toBeNull();
+    });
+
+    it('announces checking and disables repeated checks', () => {
+        setState({ phase: 'checking' });
+        setup();
+
+        expect(q('[role="status"]')?.textContent).toContain('Checking for updates');
+        expect((byText('Checking…') as HTMLButtonElement).disabled).toBe(true);
     });
 
     it('surfaces a check error', () => {
@@ -159,14 +182,29 @@ describe('UpdatesPanel', () => {
         expect(actions.openReleasePage).toHaveBeenCalledOnce();
     });
 
-    it('toggles auto-download through preferences', () => {
+    it('renders and toggles an accessible automatic-updates switch', () => {
         setState({ phase: 'up_to_date' });
         setup();
-        const toggle = host?.querySelector<HTMLInputElement>('.updates-toggle input');
-        expect(toggle?.checked).toBe(true);
+        expect(q('#updates-auto-title')?.textContent).toBe('Automatic updates');
+        expect(q('#updates-auto-description')?.textContent).toContain('Download updates in the background');
+
+        const toggle = host?.querySelector<HTMLButtonElement>(
+            '[role="switch"][aria-labelledby="updates-auto-title"]',
+        );
+        expect(toggle?.getAttribute('aria-checked')).toBe('true');
         toggle!.click();
         flushSync();
         expect(get(updatePrefs).autoDownload).toBe(false);
+        expect(toggle?.getAttribute('aria-checked')).toBe('false');
+    });
+
+    it('checks again from the single footer action', () => {
+        setState({ phase: 'up_to_date', checked_at: Date.now() });
+        setup();
+
+        byText('Check Again')!.click();
+        flushSync();
+        expect(actions.checkForUpdates).toHaveBeenCalledWith({ explicit: true });
     });
 
     it('hides update actions for a development build', () => {

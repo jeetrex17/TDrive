@@ -1,11 +1,8 @@
 <script lang="ts">
-    import CheckIcon from '@lucide/svelte/icons/check';
     import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
-    import CopyIcon from '@lucide/svelte/icons/copy';
     import DownloadIcon from '@lucide/svelte/icons/download';
     import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
     import LoaderIcon from '@lucide/svelte/icons/loader-circle';
-    import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
     import { formatBytes } from '../../utils';
     import {
@@ -30,13 +27,16 @@
         updateState,
     } from './update-store';
 
-    let copied = $state(false);
     let confirming = $state(false);
     let risks = $state<string[]>([]);
     let preparingRestart = $state(false);
 
     const version = $derived($updateState.current_version || $appVersionInfo?.version || '');
-    const platform = $derived(formatPlatform($appVersionInfo));
+    const platform = $derived(
+        formatPlatform($appVersionInfo)
+            .replace('macOS arm64', 'macOS · Apple silicon')
+            .replace('macOS amd64', 'macOS · Intel'),
+    );
     const latest = $derived($updateState.latest);
     const phase = $derived($updateState.phase);
     const percent = $derived(progressPercent($updateState.downloaded_bytes, $updateState.total_bytes));
@@ -44,24 +44,15 @@
         latest ? isVersionSkipped(latest.version, $updatePrefs.skippedVersion) : false,
     );
     const lastChecked = $derived(formatChecked($updateState.checked_at));
+    const checkLabel = $derived(
+        phase === 'checking' ? 'Checking…' : $updateState.checked_at ? 'Check Again' : 'Check Now',
+    );
 
     function formatChecked(ms: number): string {
         if (!ms) return 'Not checked yet';
         const date = new Date(ms);
         if (Number.isNaN(date.getTime())) return 'Not checked yet';
-        return `Last checked ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
-    }
-
-    async function copyBuildInfo(): Promise<void> {
-        const info = $appVersionInfo;
-        const text = `TDrive ${version}${info ? ` · ${info.os} ${info.arch}` : ''}`;
-        try {
-            await navigator.clipboard?.writeText(text);
-            copied = true;
-            setTimeout(() => (copied = false), 1600);
-        } catch {
-            // Clipboard can be blocked in the webview; failing quietly is fine.
-        }
+        return `Checked at ${date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
     }
 
     async function beginRestart(): Promise<void> {
@@ -95,39 +86,37 @@
 
 <section class="updates-panel" aria-labelledby="updates-title">
     <header class="updates-header">
-        <h2 id="updates-title">Software update</h2>
+        <h2 id="updates-title" tabindex="-1">Software Update</h2>
     </header>
 
-    <div class="updates-identity">
+    <div class="updates-summary">
         <div class="updates-app-name">TDrive</div>
         <div class="updates-app-meta">
             <span>{version ? `Version ${version}` : 'Version unknown'}</span>
             {#if platform}<span class="dot-sep">·</span><span>{platform}</span>{/if}
         </div>
-        <button
-            class="updates-copy"
-            type="button"
-            onclick={copyBuildInfo}
-            aria-label="Copy build information"
-            title="Copy build information"
-        >
-            {#if copied}<CheckIcon size={13} strokeWidth={2.5} aria-hidden="true" /><span>Copied</span>
-            {:else}<CopyIcon size={13} strokeWidth={2} aria-hidden="true" /><span>Copy</span>{/if}
-        </button>
     </div>
 
     <div class="updates-body">
         {#if phase === 'disabled'}
-            <p class="updates-line muted">This is a development build, so automatic updates are turned off.</p>
+            <p class="updates-status muted" role="status" aria-live="polite">
+                Automatic updates are unavailable for this development build.
+            </p>
         {:else if phase === 'checking'}
-            <div class="updates-line"><LoaderIcon class="spin" size={16} aria-hidden="true" /> Checking for updates…</div>
+            <div class="updates-status" role="status" aria-live="polite">
+                <LoaderIcon class="spin" size={15} aria-hidden="true" /> Checking for updates…
+            </div>
         {:else if phase === 'installing'}
-            <div class="updates-line"><LoaderIcon class="spin" size={16} aria-hidden="true" /> Installing update…</div>
+            <div class="updates-status" role="status" aria-live="polite">
+                <LoaderIcon class="spin" size={15} aria-hidden="true" /> Installing update…
+            </div>
         {:else if phase === 'installed'}
-            <div class="updates-line"><LoaderIcon class="spin" size={16} aria-hidden="true" /> Update installed — restarting…</div>
+            <div class="updates-status" role="status" aria-live="polite">
+                <LoaderIcon class="spin" size={15} aria-hidden="true" /> Update installed. Restarting…
+            </div>
         {:else if phase === 'downloading'}
             <div class="updates-status-row">
-                <span class="updates-line">Downloading {latest?.version ?? ''}…</span>
+                <span class="updates-message-title">Downloading {latest?.version ?? ''}…</span>
                 <button class="updates-link" type="button" onclick={cancelUpdateDownload}>Cancel</button>
             </div>
             <div class="updates-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
@@ -138,9 +127,9 @@
                 <span>{percent}%</span>
             </div>
         {:else if phase === 'ready'}
-            <div class="updates-headline">
-                <span class="ready-dot" aria-hidden="true"></span>
-                {latest?.version ?? 'Update'} is ready to install
+            <div class="updates-message" role="status" aria-live="polite">
+                <div class="updates-message-title">Ready to install</div>
+                <div class="updates-message-detail">TDrive {latest?.version ?? ''} will finish updating after a restart.</div>
             </div>
             <div class="updates-actions">
                 {#if confirming}
@@ -168,7 +157,10 @@
             {/if}
         {:else if phase === 'available'}
             {#if $updateState.installable && !skipped}
-                <div class="updates-headline">{latest?.version ?? 'An update'} is available</div>
+                <div class="updates-message" role="status" aria-live="polite">
+                    <div class="updates-message-title">TDrive {latest?.version ?? ''} is available.</div>
+                    <div class="updates-message-detail">Download it now and restart when you're ready.</div>
+                </div>
                 <div class="updates-actions">
                     <button class="updates-btn primary" type="button" onclick={() => void downloadUpdate()}>
                         <DownloadIcon size={15} strokeWidth={2} aria-hidden="true" /> Download
@@ -184,18 +176,24 @@
                     <button class="updates-link subtle" type="button" onclick={onSkip}>Skip this version</button>
                 </div>
             {:else if skipped}
-                <p class="updates-line muted">{latest?.version ?? 'A newer version'} is available but skipped.</p>
+                <p class="updates-status muted" role="status" aria-live="polite">
+                    TDrive {latest?.version ?? ''} is available, but this version is skipped.
+                </p>
                 <button class="updates-link" type="button" onclick={clearSkippedVersion}>Undo skip</button>
             {:else}
-                <p class="updates-line muted">{$updateState.install_hint || 'A newer version is available.'}</p>
+                <p class="updates-status muted" role="status" aria-live="polite">
+                    {$updateState.install_hint || 'A newer version is available.'}
+                </p>
                 <button class="updates-link" type="button" onclick={openReleasePage}>
                     Get it from GitHub <ExternalLinkIcon size={12} strokeWidth={2} aria-hidden="true" />
                 </button>
             {/if}
         {:else if phase === 'up_to_date'}
-            <div class="updates-line ok"><CheckIcon size={16} strokeWidth={2.5} aria-hidden="true" /> You're on the latest version.</div>
+            <p class="updates-status" role="status" aria-live="polite">TDrive is up to date.</p>
         {:else}
-            <p class="updates-line muted">Check whether a newer version of TDrive is available.</p>
+            <p class="updates-status muted" role="status" aria-live="polite">
+                Check for updates to keep TDrive current.
+            </p>
         {/if}
 
         {#if $updateState.error && phase !== 'checking'}
@@ -207,116 +205,113 @@
     </div>
 
     {#if phase !== 'disabled'}
-        <div class="updates-footer">
-            <label class="updates-toggle">
-                <input
-                    type="checkbox"
-                    checked={$updatePrefs.autoDownload}
-                    onchange={(e) => setAutoDownload((e.currentTarget as HTMLInputElement).checked)}
-                />
-                <span>Download updates automatically</span>
-            </label>
-            <div class="updates-footer-row">
-                <span class="updates-checked">{lastChecked}</span>
+        <div class="updates-preferences">
+            <div class="updates-preference">
+                <div class="updates-preference-copy">
+                    <div id="updates-auto-title" class="updates-preference-title">Automatic updates</div>
+                    <div id="updates-auto-description" class="updates-preference-description">
+                        Download updates in the background.
+                    </div>
+                </div>
                 <button
-                    class="updates-link"
+                    class="updates-switch"
                     type="button"
-                    onclick={() => void checkForUpdates({ explicit: true })}
-                    disabled={phase === 'checking'}
+                    role="switch"
+                    aria-checked={$updatePrefs.autoDownload}
+                    aria-labelledby="updates-auto-title"
+                    aria-describedby="updates-auto-description"
+                    onclick={() => setAutoDownload(!$updatePrefs.autoDownload)}
                 >
-                    <RefreshCwIcon size={12} strokeWidth={2} aria-hidden="true" /> Check now
+                    <span class="updates-switch-thumb" aria-hidden="true"></span>
                 </button>
             </div>
         </div>
+        <footer class="updates-footer">
+            <span class="updates-checked">{lastChecked}</span>
+            <button
+                class="updates-check"
+                type="button"
+                onclick={() => void checkForUpdates({ explicit: true })}
+                disabled={phase === 'checking'}
+            >
+                {checkLabel}
+            </button>
+        </footer>
     {/if}
 </section>
 
 <style>
     .updates-panel {
-        width: min(360px, calc(100vw - 32px));
+        width: min(336px, calc(100vw - 44px));
         color: var(--color-text);
     }
 
+    .updates-panel,
+    .updates-panel :global(*) {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+    }
+
     .updates-header {
-        padding: 8px 8px 14px;
+        padding: 11px 12px 12px;
         border-bottom: 1px solid var(--color-border-soft);
     }
     .updates-header h2 {
         margin: 0;
-        font-size: 1.05rem;
-        font-weight: 800;
+        font-size: 0.94rem;
+        font-weight: 650;
+        letter-spacing: 0;
         color: var(--color-text);
     }
+    .updates-header h2:focus { outline: none; }
 
-    .updates-identity {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        align-items: center;
-        gap: 4px 8px;
-        padding: 14px 8px 12px;
+    .updates-summary {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        padding: 14px 12px 13px;
+        border-bottom: 1px solid var(--color-border-soft);
     }
     .updates-app-name {
-        grid-column: 1;
-        font-size: 0.95rem;
-        font-weight: 800;
+        font-size: 0.9rem;
+        font-weight: 650;
+        letter-spacing: 0;
     }
     .updates-app-meta {
-        grid-column: 1;
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 5px;
+        gap: 4px;
         color: var(--color-text-muted);
-        font-size: 0.78rem;
+        font-size: 0.72rem;
+        line-height: 1.35;
     }
     .dot-sep { opacity: 0.6; }
-    .updates-copy {
-        grid-column: 2;
-        grid-row: 1 / span 2;
-        display: inline-flex;
+
+    .updates-body { padding: 13px 12px 12px; }
+
+    .updates-status {
+        display: flex;
         align-items: center;
-        gap: 5px;
-        padding: 5px 9px;
+        gap: 7px;
+        margin: 0;
+        color: var(--color-text-soft);
+        font-size: 0.82rem;
+        font-weight: 550;
+        line-height: 1.38;
+    }
+    .updates-status.muted { color: var(--color-text-muted); font-weight: 450; }
+
+    .updates-message { display: flex; flex-direction: column; gap: 3px; }
+    .updates-message-title {
+        color: var(--color-text-soft);
+        font-size: 0.84rem;
+        font-weight: 650;
+        line-height: 1.35;
+    }
+    .updates-message-detail {
         color: var(--color-text-muted);
-        background: var(--overlay-white-1);
-        border: 1px solid var(--color-border-soft);
-        border-radius: 8px;
-        font-size: 0.72rem;
-        font-weight: 700;
-        cursor: pointer;
-        transition: color var(--motion-fast) var(--ease-standard),
-            background var(--motion-fast) var(--ease-standard);
-    }
-    .updates-copy:hover { color: var(--color-text); background: var(--overlay-white-2); }
-    .updates-copy:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-
-    .updates-body { padding: 4px 8px 8px; }
-
-    .updates-line {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 0.86rem;
+        font-size: 0.73rem;
         line-height: 1.4;
-    }
-    .updates-line.muted { color: var(--color-text-muted); }
-    .updates-line.ok { color: var(--color-success); font-weight: 650; }
-
-    .updates-headline {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 0.92rem;
-        font-weight: 750;
-        margin-bottom: 12px;
-    }
-    .ready-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: var(--color-accent);
-        box-shadow: 0 0 0 4px var(--overlay-accent-1);
-        flex-shrink: 0;
     }
 
     .updates-status-row {
@@ -348,17 +343,18 @@
         font-variant-numeric: tabular-nums;
     }
 
-    .updates-actions { margin-bottom: 10px; }
+    .updates-actions { margin: 12px 0 9px; }
     .updates-btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
         gap: 7px;
-        padding: 9px 14px;
+        min-height: 31px;
+        padding: 7px 12px;
         border: 1px solid transparent;
-        border-radius: 10px;
-        font-size: 0.84rem;
-        font-weight: 750;
+        border-radius: 8px;
+        font-size: 0.78rem;
+        font-weight: 650;
         cursor: pointer;
         transition: background var(--motion-fast) var(--ease-standard),
             transform var(--motion-fast) var(--ease-standard),
@@ -432,33 +428,87 @@
     }
     :global(.updates-error svg) { flex-shrink: 0; margin-top: 1px; }
 
-    .updates-footer {
-        margin-top: 4px;
-        padding: 12px 8px 8px;
-        border-top: 1px solid var(--color-border-soft);
-    }
-    .updates-toggle {
-        display: flex;
-        align-items: center;
-        gap: 9px;
-        font-size: 0.8rem;
-        color: var(--color-text-soft);
-        cursor: pointer;
-    }
-    .updates-toggle input { accent-color: var(--color-accent); cursor: pointer; }
-    .updates-footer-row {
+    .updates-preferences { padding: 0 8px 8px; }
+    .updates-preference {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin-top: 10px;
+        gap: 14px;
+        padding: 10px 10px 10px 11px;
+        background: var(--overlay-white-1);
+        border: 1px solid var(--color-border-soft);
+        border-radius: 10px;
     }
-    .updates-checked { color: var(--color-text-subtle); font-size: 0.74rem; }
+    .updates-preference-copy { min-width: 0; }
+    .updates-preference-title {
+        color: var(--color-text-soft);
+        font-size: 0.76rem;
+        font-weight: 600;
+        line-height: 1.3;
+    }
+    .updates-preference-description {
+        margin-top: 2px;
+        color: var(--color-text-muted);
+        font-size: 0.68rem;
+        line-height: 1.35;
+    }
+    .updates-switch {
+        position: relative;
+        flex: 0 0 auto;
+        width: 36px;
+        height: 22px;
+        padding: 2px;
+        background: var(--color-surface-3);
+        border: none;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background var(--motion-fast) var(--ease-standard);
+    }
+    .updates-switch[aria-checked='true'] { background: var(--color-accent); }
+    .updates-switch:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .updates-switch-thumb {
+        display: block;
+        width: 18px;
+        height: 18px;
+        background: #fff;
+        border-radius: 50%;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+        transform: translateX(0);
+        transition: transform var(--motion-med) var(--ease-standard);
+    }
+    .updates-switch[aria-checked='true'] .updates-switch-thumb { transform: translateX(14px); }
+
+    .updates-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 0 9px 6px 12px;
+    }
+    .updates-checked { color: var(--color-text-subtle); font-size: 0.68rem; }
+    .updates-check {
+        padding: 5px 7px;
+        color: var(--color-accent);
+        background: transparent;
+        border: none;
+        border-radius: 7px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background var(--motion-fast) var(--ease-standard),
+            color var(--motion-fast) var(--ease-standard);
+    }
+    .updates-check:hover:not(:disabled) { background: var(--overlay-accent-1); }
+    .updates-check:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .updates-check:disabled { color: var(--color-text-subtle); cursor: default; }
 
     :global(.updates-panel .spin) { animation: updates-spin 0.9s linear infinite; }
     @keyframes updates-spin { to { transform: rotate(360deg); } }
 
     @media (prefers-reduced-motion: reduce) {
         :global(.updates-panel .spin) { animation: none; }
-        .updates-progress-fill { transition: none; }
+        .updates-progress-fill,
+        .updates-switch,
+        .updates-switch-thumb { transition: none; }
     }
 </style>

@@ -4145,7 +4145,7 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     font-weight: 800;
     letter-spacing: 0.02em;
 }
-.profile-menu.updates-view { min-width: min(360px, calc(100vw - 32px)); }
+.profile-menu.updates-view { min-width: min(348px, calc(100vw - 32px)); }
 
 /* Login-screen update hint. */
 .auth-update-footer {
