@@ -3,6 +3,7 @@ package updater
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -80,7 +81,9 @@ func TestCopyFilePreservesContentAndMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o100 == 0 {
+	// Windows has no Unix execute bit; os.Chmod can't set it there. The exec
+	// bit only matters for the Linux AppImage path this helper serves.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o100 == 0 {
 		t.Fatalf("dst should be executable, mode = %v", info.Mode())
 	}
 }

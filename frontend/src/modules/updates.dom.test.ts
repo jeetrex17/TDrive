@@ -40,6 +40,14 @@ function available(version = '1.7.0'): UpdateState {
 // so grab that same instance to drive transfer/vault conditions.
 async function loadModule() {
     vi.resetModules();
+    // The updater store reads prefs from localStorage at import time; clearing
+    // it keeps each fresh load starting from defaults (CI persists it, unlike
+    // the local no-op stub, so leakage between tests only shows up on CI).
+    try {
+        window.localStorage.clear();
+    } catch {
+        // localStorage may be unavailable; defaults apply anyway.
+    }
     const { state } = await import('../state');
     state.activeTransfer = null;
     state.encryption = { available: false, passwordSet: false, passwordRemembered: false, hint: '', loaded: true };
