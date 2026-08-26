@@ -38,6 +38,7 @@ export interface ThemeControllerEnvironment {
     readonly document?: Document;
     readonly storage?: ThemeStorage;
     readonly reducedMotion?: MediaQueryList;
+    readonly userAgent?: string;
 }
 
 export interface ThemeController {
@@ -56,6 +57,7 @@ interface ResolvedEnvironment {
     readonly document?: Document;
     readonly storage?: ThemeStorage;
     readonly reducedMotion?: MediaQueryList;
+    readonly userAgent?: string;
 }
 
 export function createThemeController(
@@ -114,6 +116,10 @@ export function createThemeController(
         const targetDocument = activeEnvironment?.document;
         const startViewTransition = targetDocument?.startViewTransition;
         if (!targetDocument || typeof startViewTransition !== 'function') return false;
+        // WebKitGTK exposes the API, but a root view transition forces the
+        // page into accelerated compositing that the Wails Linux webview does
+        // not have: the view paints black or the transition never settles.
+        if (isLinuxWebKit(activeEnvironment?.userAgent)) return false;
 
         const generation = beginTransition(targetDocument, THEME_TRANSITION_CLASS, origin);
         let stateApplied = false;
@@ -254,7 +260,21 @@ function resolveEnvironment(environment: ThemeControllerEnvironment): ResolvedEn
         document: targetDocument,
         storage: environment.storage ?? getBrowserStorage(targetWindow),
         reducedMotion: environment.reducedMotion ?? queryMedia(targetWindow, REDUCED_MOTION_QUERY),
+        userAgent: environment.userAgent ?? targetWindow?.navigator?.userAgent,
     };
+}
+
+/**
+ * True for WebKitGTK/WPE (Wails and Tauri on Linux, Epiphany), which report
+ * `Linux` + `AppleWebKit` + `Safari` without a Chromium token. Chromium and
+ * test DOMs (happy-dom, jsdom) never carry the `Safari/` product token.
+ */
+export function isLinuxWebKit(userAgent: string | undefined): boolean {
+    if (!userAgent) return false;
+    return /\bLinux\b/.test(userAgent)
+        && /AppleWebKit\//.test(userAgent)
+        && /\bSafari\//.test(userAgent)
+        && !/\b(?:Chrome|Chromium|CriOS|Edg|OPR)\//.test(userAgent);
 }
 
 function getBrowserDocument(): Document | undefined {
