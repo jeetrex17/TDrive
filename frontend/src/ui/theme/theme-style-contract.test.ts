@@ -13,10 +13,14 @@ function sectionBetween(startMarker: string, endMarker: string): string {
 }
 
 function ruleFor(selector: string): string {
-    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const rule = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`).exec(globalCss)?.[1];
-    if (!rule) throw new Error(`missing CSS rule: ${selector}`);
-    return rule;
+    const start = globalCss.indexOf(`${selector} {`);
+    if (start < 0) throw new Error(`missing CSS rule: ${selector}`);
+
+    const bodyStart = globalCss.indexOf('{', start);
+    const bodyEnd = globalCss.indexOf('\n}', bodyStart);
+    if (bodyStart < 0 || bodyEnd < 0) throw new Error(`unterminated CSS rule: ${selector}`);
+
+    return globalCss.slice(bodyStart + 1, bodyEnd);
 }
 
 describe('global theme style contract', () => {
@@ -33,7 +37,9 @@ describe('global theme style contract', () => {
             '/* ----- File viewers: audio / PDF / text ----- */',
             '/* Profile (avatar) dropdown in the top-right header. */',
         );
-        const appPaletteReferences = viewer.match(appPaletteReference);
+        const textPreview = ruleFor('.file-viewer-shell.is-text');
+        const fixedViewer = viewer.replace(textPreview, '');
+        const appPaletteReferences = fixedViewer.match(appPaletteReference);
 
         expect(appPaletteReferences ?? []).toEqual([]);
         expect(viewer).toContain('var(--viewer-text)');
@@ -46,7 +52,8 @@ describe('global theme style contract', () => {
         const textPreview = ruleFor('.file-viewer-shell.is-text');
 
         expect(textPreview).toContain('--viewer-text: var(--color-text)');
-        expect(textPreview).toContain('--viewer-text-muted: var(--color-text-muted)');
+        expect(textPreview).toContain('--viewer-text-muted: var(--color-text-soft)');
+        expect(textPreview).toContain('--viewer-text-subtle: var(--color-text-muted)');
         expect(textPreview).toContain('--viewer-surface-0: var(--color-canvas)');
         expect(textPreview).toContain('--viewer-surface-2: var(--color-surface-1)');
         expect(textPreview).toContain('--viewer-border: var(--color-border)');

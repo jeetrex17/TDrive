@@ -7,6 +7,7 @@
     import PaletteIcon from '@lucide/svelte/icons/palette';
     import SettingsIcon from '@lucide/svelte/icons/settings';
     import { tick } from 'svelte';
+    import { eventOccurredWithin } from '../event-path';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
     import { authCodeReset, authHint, authPhone, authScreen } from './auth-store';
 
@@ -93,7 +94,7 @@
     }
 
     function onDocumentClick(event: MouseEvent): void {
-        if (!appearanceOpen || appearanceRoot?.contains(event.target as Node)) return;
+        if (!appearanceOpen || eventOccurredWithin(event, appearanceRoot)) return;
         closeAppearance();
     }
 </script>

@@ -153,6 +153,9 @@ describe('theme palettes', () => {
                 ['--color-text-subtle', '--color-surface-0'],
                 ['--color-text-subtle', '--color-surface-1'],
                 ['--color-text-subtle', '--color-surface-2'],
+                ['--color-accent', '--color-surface-1'],
+                ['--color-warning', '--color-surface-1'],
+                ['--color-success', '--color-surface-1'],
                 ['--color-on-accent', '--color-accent'],
                 ['--color-on-danger', '--color-danger'],
             ] as const;

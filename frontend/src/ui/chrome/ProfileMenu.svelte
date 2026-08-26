@@ -4,6 +4,7 @@
     import LogOutIcon from '@lucide/svelte/icons/log-out';
     import PaletteIcon from '@lucide/svelte/icons/palette';
     import { tick } from 'svelte';
+    import { eventOccurredWithin } from '../event-path';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
     import Avatar from './Avatar.svelte';
     import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
@@ -117,8 +118,7 @@
 
     function onDocumentClick(event: MouseEvent): void {
         if (!open) return;
-        const target = event.target as Node;
-        if (menuEl?.contains(target) || triggerEl?.contains(target)) return;
+        if (eventOccurredWithin(event, menuEl) || eventOccurredWithin(event, triggerEl)) return;
         closeMenu();
     }
 </script>

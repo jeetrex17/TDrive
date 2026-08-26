@@ -52,13 +52,13 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         id: 'catppuccin-latte',
         name: 'Catppuccin Latte',
         appearance: 'light',
-        preview: ['#eff1f5', '#dfe3eb', '#1d61ea', '#4c4f69'],
+        preview: ['#eff1f5', '#dfe3eb', '#1c60e8', '#4c4f69'],
     }),
     defineTheme({
         id: 'solarized-light',
         name: 'Solarized Light',
         appearance: 'light',
-        preview: ['#fdf6e3', '#eee8d5', '#1676ad', '#073642'],
+        preview: ['#fdf6e3', '#eee8d5', '#126d9f', '#073642'],
     }),
     defineTheme({
         id: 'gruvbox-light',

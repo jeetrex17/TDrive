@@ -1302,6 +1302,33 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     box-shadow: var(--viewer-shadow);
 }
 
+/* Text, Markdown, and structured-data previews belong to the app workspace,
+   so their shell follows the selected palette. Media/PDF viewers keep the
+   fixed-dark defaults declared by the shared --viewer-* contract. */
+.file-viewer-shell.is-text {
+    --viewer-text: var(--color-text);
+    --viewer-text-muted: var(--color-text-soft);
+    --viewer-text-subtle: var(--color-text-muted);
+    --viewer-surface-0: var(--color-canvas);
+    --viewer-surface-1: var(--color-surface-0);
+    --viewer-surface-2: var(--color-surface-1);
+    --viewer-control-hover: var(--color-surface-2);
+    --viewer-border: var(--color-border);
+    --viewer-border-soft: var(--color-border-soft);
+    --viewer-accent: var(--color-accent);
+    --viewer-on-accent: var(--color-on-accent);
+    --viewer-danger: var(--color-danger);
+    --viewer-on-danger: var(--color-on-danger);
+    --viewer-overlay-1: var(--overlay-white-1);
+    --viewer-overlay-2: var(--overlay-white-2);
+    --viewer-overlay-3: var(--overlay-white-3);
+    --viewer-shadow: var(--shadow-lg);
+    --viewer-focus-ring: var(--focus-ring);
+    --viewer-syntax-key: var(--color-accent);
+    --viewer-syntax-string: var(--color-warning);
+    --viewer-syntax-value: var(--color-success);
+}
+
 .file-viewer-topbar {
     display: flex;
     align-items: center;
@@ -1813,20 +1840,20 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .text-viewer-body.is-code .hljs-title,
 .text-viewer-body.is-code .hljs-name,
 .text-viewer-body.is-code .hljs-selector-tag {
-    color: #9db8ff;
+    color: var(--viewer-syntax-key);
 }
 
 .text-viewer-body.is-code .hljs-string,
 .text-viewer-body.is-code .hljs-template-variable,
 .text-viewer-body.is-code .hljs-symbol,
 .text-viewer-body.is-code .hljs-bullet {
-    color: #d4c38a;
+    color: var(--viewer-syntax-string);
 }
 
 .text-viewer-body.is-code .hljs-number,
 .text-viewer-body.is-code .hljs-literal,
 .text-viewer-body.is-code .hljs-boolean {
-    color: #8fd3a8;
+    color: var(--viewer-syntax-value);
 }
 
 .text-viewer-body.is-code .hljs-comment,
