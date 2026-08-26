@@ -105,6 +105,18 @@ func TestMediaCORSPolicyAllowsOnlyConfiguredWailsDevOrigins(t *testing.T) {
 			wantAllow:      true,
 		},
 		{
+			name:           "browser proxy without external frontend",
+			wailsDevServer: "localhost:34115",
+			origin:         "http://localhost:34115",
+			wantAllow:      true,
+		},
+		{
+			name:           "desktop proxy without external frontend",
+			wailsDevServer: "localhost:34115",
+			origin:         "wails://wails.localhost:34115",
+			wantAllow:      true,
+		},
+		{
 			name:           "IPv4 browser proxy",
 			frontendDevURL: "http://127.0.0.1:5173/app",
 			wailsDevServer: "127.0.0.1:34115",
@@ -157,10 +169,11 @@ func TestMediaCORSPolicyAllowsOnlyConfiguredWailsDevOrigins(t *testing.T) {
 			origin:         "http://127.0.0.1:34115",
 		},
 		{
-			name:           "remote frontend disables proxy origins",
+			name:           "remote frontend does not disable valid proxy",
 			frontendDevURL: "https://example.com:5173",
 			wailsDevServer: "localhost:34115",
 			origin:         "http://localhost:34115",
+			wantAllow:      true,
 		},
 		{
 			name:           "remote proxy host",
@@ -175,34 +188,39 @@ func TestMediaCORSPolicyAllowsOnlyConfiguredWailsDevOrigins(t *testing.T) {
 			origin:         "http://wails.localhost:34115",
 		},
 		{
-			name:           "localhost lookalike frontend",
+			name:           "localhost lookalike frontend does not disable valid proxy",
 			frontendDevURL: "http://localhost.example.com:5173",
 			wailsDevServer: "localhost:34115",
 			origin:         "http://localhost:34115",
+			wantAllow:      true,
 		},
 		{
-			name:           "frontend URL credentials",
+			name:           "frontend URL credentials do not disable valid proxy",
 			frontendDevURL: "http://developer@localhost:5173",
 			wailsDevServer: "localhost:34115",
 			origin:         "http://localhost:34115",
+			wantAllow:      true,
 		},
 		{
-			name:           "non HTTP frontend scheme",
+			name:           "non HTTP frontend does not disable valid proxy",
 			frontendDevURL: "ftp://localhost:5173",
 			wailsDevServer: "localhost:34115",
 			origin:         "http://localhost:34115",
+			wantAllow:      true,
 		},
 		{
-			name:           "malformed frontend port",
+			name:           "malformed frontend port does not disable valid proxy",
 			frontendDevURL: "http://localhost:not-a-port",
 			wailsDevServer: "localhost:34115",
 			origin:         "http://localhost:34115",
+			wantAllow:      true,
 		},
 		{
-			name:           "frontend URL missing host",
+			name:           "frontend URL missing host does not disable valid proxy",
 			frontendDevURL: "http:///app",
 			wailsDevServer: "localhost:34115",
 			origin:         "http://localhost:34115",
+			wantAllow:      true,
 		},
 		{
 			name:           "proxy address credentials",
@@ -247,12 +265,28 @@ func TestMediaCORSPolicyAllowsOnlyConfiguredWailsDevOrigins(t *testing.T) {
 	}
 }
 
+func TestLoopbackHTTPOriginRejectsUnsafeFrontendURLs(t *testing.T) {
+	for _, raw := range []string{
+		"https://example.com:5173",
+		"http://localhost.example.com:5173",
+		"http://developer@localhost:5173",
+		"ftp://localhost:5173",
+		"http://localhost:not-a-port",
+		"http:///app",
+	} {
+		if got := loopbackHTTPOrigin(raw); got != "" {
+			t.Fatalf("loopbackHTTPOrigin(%q) = %q, want empty", raw, got)
+		}
+	}
+}
+
 func TestMediaCORSPolicyRejectsArbitraryLoopbackOriginsOutsideDev(t *testing.T) {
 	t.Setenv(mediaAllowedOriginsEnv, "")
 	t.Setenv(mediaWailsFrontendEnv, "")
 	t.Setenv(mediaWailsDevServerEnv, "")
 
 	for _, origin := range []string{
+		"",
 		"http://localhost:34115",
 		"http://127.0.0.1:5173",
 		"https://[::1]:5173",

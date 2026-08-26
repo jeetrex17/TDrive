@@ -358,17 +358,21 @@ func applyMediaCORS(w http.ResponseWriter, r *http.Request, exposeRangeHeaders b
 }
 
 func isAllowedMediaOrigin(origin string) bool {
+	if origin == "" {
+		return false
+	}
 	switch origin {
 	case "wails://wails", "http://wails.localhost":
 		return true
 	}
-	if frontendOrigin := loopbackHTTPOrigin(os.Getenv(mediaWailsFrontendEnv)); frontendOrigin != "" {
-		// Wails proxies the external frontend server through its own dev server.
-		// Accept both exact origins because browser and desktop development use
-		// different sides of that proxy depending on the platform.
-		if origin == frontendOrigin || isWailsDevProxyOrigin(origin, os.Getenv(mediaWailsDevServerEnv)) {
-			return true
-		}
+	if frontendOrigin := loopbackHTTPOrigin(os.Getenv(mediaWailsFrontendEnv)); frontendOrigin != "" && origin == frontendOrigin {
+		return true
+	}
+	// Wails' internal dev server may proxy an external frontend or serve local
+	// assets itself. Validate its exact loopback address independently so both
+	// development modes work without allowing arbitrary localhost origins.
+	if isWailsDevProxyOrigin(origin, os.Getenv(mediaWailsDevServerEnv)) {
+		return true
 	}
 	for _, allowed := range strings.Split(os.Getenv(mediaAllowedOriginsEnv), ",") {
 		if strings.TrimSpace(allowed) == origin {
