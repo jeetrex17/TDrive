@@ -24,7 +24,7 @@ function click(selector: string): void {
 afterEach(async () => {
     setPreferredTheme('light', 'tdrive-light');
     setPreferredTheme('dark', 'tokyo-night');
-    setThemeMode('system');
+    setThemeMode('dark');
     themeController.destroy();
     if (component) await unmount(component);
     host?.remove();
@@ -33,25 +33,27 @@ afterEach(async () => {
 });
 
 describe('AppearancePanel behavior', () => {
-    it('keeps System mode free of nested palette controls', () => {
+    it('shows only Light and Dark modes with the selected palette', () => {
         setup();
 
-        expect(host?.textContent).toContain('System');
+        expect(host?.textContent).not.toContain('System');
+        expect(host?.querySelectorAll('[data-appearance-mode]')).toHaveLength(2);
         expect(host?.textContent).not.toContain('Automatic pair');
         expect(host?.querySelector('.appearance-toggle')).toBeNull();
-        expect(host?.querySelector('.palette-section')).toBeNull();
+        expect(host?.querySelector('.palette-section')).not.toBeNull();
     });
 
     it('supports arrow-key navigation through appearance modes', () => {
         setup();
-        const system = host?.querySelector<HTMLElement>('#appearance-mode-system');
-        if (!system) throw new Error('missing system mode');
+        click('#appearance-mode-light');
+        const light = host?.querySelector<HTMLElement>('#appearance-mode-light');
+        if (!light) throw new Error('missing light mode');
 
-        system.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+        light.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
         flushSync();
 
-        expect(get(themeState).preference.mode).toBe('light');
-        expect(host?.querySelector('#appearance-mode-light')?.getAttribute('aria-checked')).toBe('true');
+        expect(get(themeState).preference.mode).toBe('dark');
+        expect(host?.querySelector('#appearance-mode-dark')?.getAttribute('aria-checked')).toBe('true');
     });
 
     it('uses roving keyboard selection across the visible palette cards', () => {
@@ -69,14 +71,15 @@ describe('AppearancePanel behavior', () => {
 
     it('supports keyboard boundaries without changing selection for unrelated keys', () => {
         setup();
-        const system = host?.querySelector<HTMLElement>('#appearance-mode-system');
-        if (!system) throw new Error('missing system mode');
+        click('#appearance-mode-light');
+        const light = host?.querySelector<HTMLElement>('#appearance-mode-light');
+        if (!light) throw new Error('missing light mode');
 
-        system.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+        light.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
         flushSync();
-        expect(get(themeState).preference.mode).toBe('system');
+        expect(get(themeState).preference.mode).toBe('light');
 
-        system.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+        light.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
         flushSync();
         expect(get(themeState).preference.mode).toBe('dark');
 
@@ -106,21 +109,21 @@ describe('AppearancePanel behavior', () => {
         expect(get(themeState).preference.darkThemeId).toBe('gruvbox-dark');
     });
 
-    it('remembers Light and Dark choices when returning to System', () => {
+    it('remembers palette choices while switching between Light and Dark', () => {
         setup();
 
         click('#appearance-mode-light');
         click('#appearance-theme-catppuccin-latte');
         click('#appearance-mode-dark');
         click('#appearance-theme-dracula');
-        click('#appearance-mode-system');
+        click('#appearance-mode-light');
 
         expect(get(themeState).preference).toMatchObject({
-            mode: 'system',
+            mode: 'light',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'dracula',
         });
-        expect(host?.querySelector('.palette-section')).toBeNull();
+        expect(host?.querySelector('#appearance-theme-catppuccin-latte')?.getAttribute('aria-checked')).toBe('true');
     });
 
     it('shows palette names without descriptions or auxiliary footer copy', () => {
@@ -143,6 +146,6 @@ describe('AppearancePanel behavior', () => {
         await tick();
         await Promise.resolve();
 
-        expect(host?.querySelector('#appearance-mode-system')).toBe(document.activeElement);
+        expect(host?.querySelector('#appearance-mode-dark')).toBe(document.activeElement);
     });
 });

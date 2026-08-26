@@ -4,21 +4,18 @@ import {
     WindowSetBackgroundColour,
     WindowSetDarkTheme,
     WindowSetLightTheme,
-    WindowSetSystemDefaultTheme,
 } from '../../../wailsjs/runtime/runtime';
 import { themeState, type ThemeState } from './theme-controller';
 import { getThemeDefinition } from './theme-model';
 
 export interface NativeThemeRuntime {
     setBackgroundColour(red: number, green: number, blue: number, alpha: number): void;
-    setSystemTheme(): void;
     setLightTheme(): void;
     setDarkTheme(): void;
 }
 
 const wailsThemeRuntime: NativeThemeRuntime = {
     setBackgroundColour: WindowSetBackgroundColour,
-    setSystemTheme: WindowSetSystemDefaultTheme,
     setLightTheme: WindowSetLightTheme,
     setDarkTheme: WindowSetDarkTheme,
 };
@@ -26,7 +23,7 @@ const wailsThemeRuntime: NativeThemeRuntime = {
 /**
  * Mirrors web theme state into the native Wails window. The backdrop update is
  * cross-platform; titlebar theme calls are intentionally limited to Windows,
- * where Wails exposes explicit light/dark/system controls.
+ * where Wails exposes explicit light/dark controls.
  */
 export function connectNativeTheme(
     state: Readable<ThemeState>,
@@ -40,9 +37,7 @@ export function connectNativeTheme(
         safely(() => runtime.setBackgroundColour(red, green, blue, 255));
         if (platform !== 'windows') return;
 
-        if (themeState.preference.mode === 'system') {
-            safely(runtime.setSystemTheme);
-        } else if (themeState.resolvedAppearance === 'light') {
+        if (themeState.preference.mode === 'light') {
             safely(runtime.setLightTheme);
         } else {
             safely(runtime.setDarkTheme);

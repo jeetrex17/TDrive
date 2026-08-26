@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import ProfileMenu from './ProfileMenu.svelte';
+import { setPreferredTheme, setThemeMode, themeController } from '../theme/theme-controller';
 import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
 
 let component: Record<string, unknown> | null = null;
@@ -28,6 +29,10 @@ function click(selector: string): void {
 }
 
 afterEach(async () => {
+    setPreferredTheme('light', 'tdrive-light');
+    setPreferredTheme('dark', 'tokyo-night');
+    setThemeMode('dark');
+    themeController.destroy();
     if (component) await unmount(component);
     host?.remove();
     component = null;
@@ -48,10 +53,10 @@ describe('ProfileMenu appearance navigation', () => {
         const menu = host?.querySelector<HTMLElement>('#profile-menu');
         expect(menu?.getAttribute('role')).toBe('dialog');
         expect(menu?.getAttribute('aria-labelledby')).toBe('appearance-title');
-        expect(host?.textContent).toContain('System');
+        expect(host?.textContent).not.toContain('System');
         expect(host?.textContent).not.toContain('Automatic pair');
         expect(host?.querySelector('.appearance-back')).toBeNull();
-        const selectedMode = host?.querySelector('[data-appearance-mode="system"]');
+        const selectedMode = host?.querySelector('[data-appearance-mode="dark"]');
         expect(selectedMode).toBe(document.activeElement);
 
         menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -62,5 +67,23 @@ describe('ProfileMenu appearance navigation', () => {
         expect(menu?.hidden).toBe(false);
         expect(menu?.getAttribute('role')).toBe('menu');
         expect(host?.querySelector('#profile-menu-appearance')).toBe(document.activeElement);
+    });
+
+    it('stays open while previewing multiple palettes', async () => {
+        setup();
+        click('#profile-trigger');
+        click('#profile-menu-appearance');
+        await tick();
+
+        click('#appearance-theme-dracula');
+        await tick();
+        click('#appearance-theme-nord');
+        await tick();
+
+        const menu = host?.querySelector<HTMLElement>('#profile-menu');
+        expect(menu?.hidden).toBe(false);
+        expect(menu?.getAttribute('role')).toBe('dialog');
+        expect(host?.querySelector('#appearance-theme-nord')?.getAttribute('aria-checked')).toBe('true');
+        expect(host?.textContent).toContain('Nord is active.');
     });
 });

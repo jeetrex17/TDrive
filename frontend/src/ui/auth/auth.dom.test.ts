@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import AuthScreens from './AuthScreens.svelte';
+import { setPreferredTheme, setThemeMode, themeController } from '../theme/theme-controller';
 import { authCodeReset, authPhone, authScreen } from './auth-store';
 
 let host: HTMLElement;
@@ -35,6 +36,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+    setPreferredTheme('light', 'tdrive-light');
+    setPreferredTheme('dark', 'tokyo-night');
+    setThemeMode('dark');
+    themeController.destroy();
     authScreen.set(null);
     flushSync();
     await unmount(app);
@@ -54,7 +59,16 @@ describe('AuthScreens field reset', () => {
         expect(host.querySelector('#auth-appearance-popover')).not.toBeNull();
         expect(trigger?.getAttribute('aria-expanded')).toBe('true');
         expect(host.querySelector('.appearance-back')).toBeNull();
-        expect(host.querySelector('#appearance-mode-system')).toBe(document.activeElement);
+        expect(host.querySelector('[data-appearance-mode="dark"]')).toBe(document.activeElement);
+
+        host.querySelector<HTMLButtonElement>('#appearance-theme-dracula')?.click();
+        flushSync();
+        await tick();
+        host.querySelector<HTMLButtonElement>('#appearance-theme-nord')?.click();
+        flushSync();
+        await tick();
+        expect(host.querySelector('#auth-appearance-popover')).not.toBeNull();
+        expect(host.querySelector('#appearance-theme-nord')?.getAttribute('aria-checked')).toBe('true');
 
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
         flushSync();

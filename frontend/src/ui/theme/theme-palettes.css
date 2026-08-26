@@ -5,10 +5,8 @@
  * mapping its visual language onto this contract. Keeping every theme here
  * makes palette changes cheap, predictable, and independent of layout CSS.
  *
- * The unscoped fallback is Tokyo Night, TDrive's original palette. Before the
- * theme controller starts, light-mode operating systems receive TDrive Light
- * through the media-query fallback at the end of this file. This prevents a
- * bright or dark flash without making JavaScript part of first paint.
+ * The unscoped fallback is Tokyo Night, TDrive's original palette, so first
+ * paint remains deterministic before the theme controller starts.
  */
 
 /*
@@ -659,72 +657,4 @@
     --overlay-success-soft: var(--overlay-success-1);
     --overlay-success-strong: var(--overlay-success-2);
 
-}
-
-/*
- * First-paint fallback for system light mode. This selector only applies
- * before the controller has selected an explicit data-theme value.
- */
-@media (prefers-color-scheme: light) {
-    :root:not([data-theme]) {
-        color-scheme: light;
-
-        --color-canvas: #f3f5f9;
-        --color-surface-0: #ffffff;
-        --color-surface-1: #f8f9fc;
-        --color-surface-2: #eceff5;
-        --color-surface-3: #dfe4ed;
-        --color-text: #101828;
-        --color-text-soft: #344054;
-        --color-text-muted: #526078;
-        --color-text-subtle: #626c80;
-        --color-border: #c8d0dc;
-        --color-border-soft: #dce1e9;
-        --color-accent: #315fc4;
-        --color-accent-hover: #2552ae;
-        --color-accent-strong: #1d4699;
-        --color-on-accent: #ffffff;
-        --color-danger: #c52d48;
-        --color-on-danger: #ffffff;
-        --color-warning: #945500;
-        --color-success: #167348;
-
-        --shadow-sm: 0 8px 24px rgba(40, 51, 73, 0.10);
-        --shadow-md: 0 18px 48px rgba(40, 51, 73, 0.14);
-        --shadow-lg: 0 28px 80px rgba(40, 51, 73, 0.18);
-        --focus-ring: 0 0 0 3px rgba(49, 95, 196, 0.24);
-        --glass-bg: rgba(255, 255, 255, 0.84);
-        --glass-border: rgba(16, 24, 40, 0.10);
-        --glass-highlight: rgba(255, 255, 255, 0.72);
-        --scrim: rgba(31, 41, 55, 0.42);
-
-        --overlay-neutral-1: rgba(16, 24, 40, 0.04);
-        --overlay-neutral-2: rgba(16, 24, 40, 0.07);
-        --overlay-neutral-3: rgba(16, 24, 40, 0.12);
-        --overlay-white-1: rgba(16, 24, 40, 0.04);
-        --overlay-white-2: rgba(16, 24, 40, 0.07);
-        --overlay-white-3: rgba(16, 24, 40, 0.12);
-        --overlay-accent-1: rgba(49, 95, 196, 0.09);
-        --overlay-accent-2: rgba(49, 95, 196, 0.15);
-        --overlay-accent-3: rgba(49, 95, 196, 0.27);
-        --overlay-danger-1: rgba(197, 45, 72, 0.09);
-        --overlay-danger-2: rgba(197, 45, 72, 0.22);
-        --overlay-warning-1: rgba(148, 85, 0, 0.10);
-        --overlay-warning-2: rgba(148, 85, 0, 0.23);
-        --overlay-success-1: rgba(22, 115, 72, 0.09);
-        --overlay-success-2: rgba(22, 115, 72, 0.22);
-
-        --overlay-neutral-soft: var(--overlay-neutral-1);
-        --overlay-neutral-hover: var(--overlay-neutral-2);
-        --overlay-neutral-strong: var(--overlay-neutral-3);
-        --overlay-accent-soft: var(--overlay-accent-1);
-        --overlay-accent-strong: var(--overlay-accent-3);
-        --overlay-danger-soft: var(--overlay-danger-1);
-        --overlay-danger-strong: var(--overlay-danger-2);
-        --overlay-warning-soft: var(--overlay-warning-1);
-        --overlay-warning-strong: var(--overlay-warning-2);
-        --overlay-success-soft: var(--overlay-success-1);
-        --overlay-success-strong: var(--overlay-success-2);
-
-    }
 }

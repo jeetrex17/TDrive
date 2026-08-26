@@ -1,10 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { writable } from 'svelte/store';
 import { describe, expect, it, vi } from 'vitest';
 import type { ThemeState } from './theme-controller';
 import { connectNativeTheme, type NativeThemeRuntime } from './native-theme';
-import { getThemeDefinition, normalizeThemePreference } from './theme-model';
+import { getThemeDefinition, normalizeThemePreference, type ThemeMode } from './theme-model';
 
-function state(mode: 'system' | 'light' | 'dark', resolvedThemeId: ThemeState['resolvedThemeId']): ThemeState {
+const nativeThemeSource = readFileSync(new URL('./native-theme.ts', import.meta.url), 'utf8');
+
+function state(mode: ThemeMode, resolvedThemeId: ThemeState['resolvedThemeId']): ThemeState {
     const activeTheme = getThemeDefinition(resolvedThemeId);
     return {
         preference: normalizeThemePreference({
@@ -12,7 +15,6 @@ function state(mode: 'system' | 'light' | 'dark', resolvedThemeId: ThemeState['r
             lightThemeId: 'tdrive-light',
             darkThemeId: resolvedThemeId === 'dracula' ? 'dracula' : 'tokyo-night',
         }),
-        systemAppearance: activeTheme.appearance,
         resolvedAppearance: activeTheme.appearance,
         resolvedThemeId,
     };
@@ -21,7 +23,6 @@ function state(mode: 'system' | 'light' | 'dark', resolvedThemeId: ThemeState['r
 function runtime() {
     return {
         setBackgroundColour: vi.fn<NativeThemeRuntime['setBackgroundColour']>(),
-        setSystemTheme: vi.fn<NativeThemeRuntime['setSystemTheme']>(),
         setLightTheme: vi.fn<NativeThemeRuntime['setLightTheme']>(),
         setDarkTheme: vi.fn<NativeThemeRuntime['setDarkTheme']>(),
     } satisfies NativeThemeRuntime;
@@ -39,12 +40,12 @@ describe('native theme bridge', () => {
         disconnect();
     });
 
-    it('synchronizes the Windows titlebar without overriding System mode', () => {
-        const theme = writable(state('system', 'tdrive-light'));
+    it('synchronizes the Windows titlebar from explicit light and dark modes', () => {
+        const theme = writable(state('light', 'tdrive-light'));
         const native = runtime();
         const disconnect = connectNativeTheme(theme, 'windows', native);
 
-        expect(native.setSystemTheme).toHaveBeenCalledOnce();
+        expect(native.setLightTheme).toHaveBeenCalledOnce();
 
         theme.set(state('dark', 'dracula'));
         expect(native.setDarkTheme).toHaveBeenCalledOnce();
@@ -59,15 +60,18 @@ describe('native theme bridge', () => {
         const disconnect = connectNativeTheme(theme, 'windows', native);
 
         expect(native.setLightTheme).toHaveBeenCalledOnce();
-        expect(native.setSystemTheme).not.toHaveBeenCalled();
         disconnect();
+    });
+
+    it('does not retain the removed native System-theme runtime surface', () => {
+        expect(nativeThemeSource).not.toContain('WindowSetSystemDefaultTheme');
+        expect(nativeThemeSource).not.toContain('setSystemTheme');
     });
 
     it('isolates native-window teardown errors from frontend theme state', () => {
         const theme = writable(state('dark', 'tokyo-night'));
         const native: NativeThemeRuntime = {
             setBackgroundColour: () => { throw new Error('window closed'); },
-            setSystemTheme: () => { throw new Error('window closed'); },
             setLightTheme: () => { throw new Error('window closed'); },
             setDarkTheme: () => { throw new Error('window closed'); },
         };

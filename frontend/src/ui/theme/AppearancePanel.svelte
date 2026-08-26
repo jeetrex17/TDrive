@@ -1,6 +1,5 @@
 <script lang="ts">
     import CheckIcon from '@lucide/svelte/icons/check';
-    import LaptopIcon from '@lucide/svelte/icons/laptop';
     import MoonIcon from '@lucide/svelte/icons/moon';
     import SunIcon from '@lucide/svelte/icons/sun';
     import { onMount, tick } from 'svelte';
@@ -25,28 +24,23 @@
     interface ModeOption {
         id: ThemeMode;
         label: string;
-        icon: typeof LaptopIcon;
+        icon: typeof SunIcon;
     }
 
     let { autofocus = false }: Props = $props();
     let panel = $state<HTMLElement | null>(null);
 
     const modeOptions: readonly ModeOption[] = [
-        { id: 'system', label: 'System', icon: LaptopIcon },
         { id: 'light', label: 'Light', icon: SunIcon },
         { id: 'dark', label: 'Dark', icon: MoonIcon },
     ];
 
-    const activeAppearance = $derived<ThemeAppearance | null>(
-        $themeState.preference.mode === 'system' ? null : $themeState.preference.mode,
-    );
-    const visibleThemes = $derived(activeAppearance ? themesForAppearance(activeAppearance) : []);
+    const activeAppearance = $derived<ThemeAppearance>($themeState.preference.mode);
+    const visibleThemes = $derived(themesForAppearance(activeAppearance));
     const selectedThemeId = $derived(
         activeAppearance === 'light'
             ? $themeState.preference.lightThemeId
-            : activeAppearance === 'dark'
-                ? $themeState.preference.darkThemeId
-                : null,
+            : $themeState.preference.darkThemeId,
     );
     const resolvedThemeName = $derived(getThemeDefinition($themeState.resolvedThemeId).name);
 
@@ -139,49 +133,47 @@
         </div>
     </div>
 
-    {#if activeAppearance}
-        <div id="appearance-palette-panel" class="appearance-section palette-section">
-            <div class="section-heading">
-                <span>{activeAppearance === 'light' ? 'Light palettes' : 'Dark palettes'}</span>
-                <span class="theme-count">{visibleThemes.length}</span>
-            </div>
-            <div class="theme-grid" role="radiogroup" aria-label="Theme palette">
-                {#each visibleThemes as theme, index (theme.id)}
-                    {@const selected = selectedThemeId === theme.id}
-                    <button
-                        id={`appearance-theme-${theme.id}`}
-                        class:selected
-                        class="theme-card"
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        aria-label={theme.name}
-                        tabindex={selected ? 0 : -1}
-                        style={previewStyle(theme)}
-                        onclick={(event) => selectTheme(event, theme)}
-                        onkeydown={(event) => void moveThemeFocus(event, index)}
-                    >
-                        <span class="theme-preview" aria-hidden="true">
-                            <span class="preview-sidebar">
-                                <span></span><span></span><span></span>
-                            </span>
-                            <span class="preview-content">
-                                <span class="preview-topline"></span>
-                                <span class="preview-row"><i></i><b></b></span>
-                                <span class="preview-row short"><i></i><b></b></span>
-                            </span>
-                        </span>
-                        <span class="theme-label">
-                            <span class="theme-name">{theme.name}</span>
-                        </span>
-                        <span class="theme-check" aria-hidden="true">
-                            {#if selected}<CheckIcon size={13} strokeWidth={3} />{/if}
-                        </span>
-                    </button>
-                {/each}
-            </div>
+    <div id="appearance-palette-panel" class="appearance-section palette-section">
+        <div class="section-heading">
+            <span>{activeAppearance === 'light' ? 'Light palettes' : 'Dark palettes'}</span>
+            <span class="theme-count">{visibleThemes.length}</span>
         </div>
-    {/if}
+        <div class="theme-grid" role="radiogroup" aria-label="Theme palette">
+            {#each visibleThemes as theme, index (theme.id)}
+                {@const selected = selectedThemeId === theme.id}
+                <button
+                    id={`appearance-theme-${theme.id}`}
+                    class:selected
+                    class="theme-card"
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    aria-label={theme.name}
+                    tabindex={selected ? 0 : -1}
+                    style={previewStyle(theme)}
+                    onclick={(event) => selectTheme(event, theme)}
+                    onkeydown={(event) => void moveThemeFocus(event, index)}
+                >
+                    <span class="theme-preview" aria-hidden="true">
+                        <span class="preview-sidebar">
+                            <span></span><span></span><span></span>
+                        </span>
+                        <span class="preview-content">
+                            <span class="preview-topline"></span>
+                            <span class="preview-row"><i></i><b></b></span>
+                            <span class="preview-row short"><i></i><b></b></span>
+                        </span>
+                    </span>
+                    <span class="theme-label">
+                        <span class="theme-name">{theme.name}</span>
+                    </span>
+                    <span class="theme-check" aria-hidden="true">
+                        {#if selected}<CheckIcon size={13} strokeWidth={3} />{/if}
+                    </span>
+                </button>
+            {/each}
+        </div>
+    </div>
 
     <p class="appearance-status" aria-live="polite">{resolvedThemeName} is active.</p>
 </section>
@@ -200,7 +192,11 @@
     .appearance-header {
         display: flex;
         align-items: center;
+        justify-content: flex-start;
+        height: auto;
+        min-height: 54px;
         padding: 8px 8px 16px;
+        border-bottom: 1px solid var(--color-border-soft);
     }
 
     .appearance-header h2 {
@@ -212,7 +208,7 @@
     }
 
     .appearance-section { padding: 0 8px 14px; }
-    .mode-section { padding-bottom: 19px; }
+    .mode-section { padding: 14px 8px 19px; }
 
     .section-heading {
         display: flex;
@@ -229,7 +225,7 @@
 
     .mode-grid {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 7px;
     }
 

@@ -7,14 +7,13 @@ import { THEME_DEFINITIONS } from './theme-model';
 const html = readFileSync(new URL('../../../index.html', import.meta.url), 'utf8');
 const bootstrap = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
 
-function runBootstrap(saved: string | null, systemIsDark: boolean): Record<string, string> {
+function runBootstrap(saved: string | null): Record<string, string> {
     if (!bootstrap) throw new Error('missing pre-paint appearance bootstrap');
     const dataset: Record<string, string> = {};
 
     runInNewContext(bootstrap, {
         document: { documentElement: { dataset } },
         localStorage: { getItem: () => saved },
-        matchMedia: () => ({ matches: systemIsDark }),
     });
 
     return dataset;
@@ -33,21 +32,22 @@ describe('pre-paint theme bootstrap', () => {
         }
     });
 
-    it('resolves the saved System pair from the OS before application boot', () => {
+    it('migrates a saved System pair to its explicit dark palette before application boot', () => {
         const saved = JSON.stringify({
             mode: 'system',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'nord',
         });
 
-        expect(runBootstrap(saved, true)).toEqual({ theme: 'nord', themeAppearance: 'dark' });
-        expect(runBootstrap(saved, false)).toEqual({ theme: 'catppuccin-latte', themeAppearance: 'light' });
+        expect(runBootstrap(saved)).toEqual({ theme: 'nord', themeAppearance: 'dark' });
     });
 
-    it('normalizes unknown persisted values to a valid default palette', () => {
+    it('normalizes missing and unknown persisted values to the dark default without OS lookup', () => {
         const invalid = JSON.stringify({ mode: 'sepia', lightThemeId: 'dracula', darkThemeId: 'missing' });
 
-        expect(runBootstrap(invalid, false)).toEqual({ theme: 'tdrive-light', themeAppearance: 'light' });
-        expect(runBootstrap(invalid, true)).toEqual({ theme: 'tokyo-night', themeAppearance: 'dark' });
+        expect(runBootstrap(null)).toEqual({ theme: 'tokyo-night', themeAppearance: 'dark' });
+        expect(runBootstrap(invalid)).toEqual({ theme: 'tokyo-night', themeAppearance: 'dark' });
+        expect(bootstrap).not.toContain('matchMedia');
+        expect(bootstrap).not.toContain('prefers-color-scheme');
     });
 });

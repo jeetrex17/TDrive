@@ -112,6 +112,11 @@ function expectReadablePair(
 }
 
 describe('theme palettes', () => {
+    it('uses Tokyo Night as the deterministic pre-controller fallback', () => {
+        expect(paletteSource).toContain(':root:not([data-theme])');
+        expect(paletteSource).not.toContain('prefers-color-scheme');
+    });
+
     it('defines the complete semantic color contract for every theme', () => {
         for (const theme of THEME_DEFINITIONS) {
             const block = paletteBlock(theme.id);

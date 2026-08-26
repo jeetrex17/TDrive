@@ -1,7 +1,7 @@
 import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createThemeController, THEME_STORAGE_KEY } from './theme-controller';
-import type { ThemeAppearance, ThemeId, ThemeMode } from './theme-model';
+import type { ThemeAppearance, ThemeId } from './theme-model';
 
 type MediaChangeListener = (event: MediaQueryListEvent) => void;
 let storage: Storage;
@@ -25,7 +25,7 @@ function createMediaQuery(initialMatches: boolean): MediaQueryList & { setMatche
     const listeners = new Set<MediaChangeListener>();
 
     return {
-        media: '(prefers-color-scheme: dark)',
+        media: '(prefers-reduced-motion: reduce)',
         onchange: null,
         get matches() {
             return matches;
@@ -60,23 +60,44 @@ afterEach(() => {
 });
 
 describe('theme controller', () => {
-    it('applies the system theme immediately and follows later OS changes', () => {
-        const colorScheme = createMediaQuery(false);
+    it('applies the explicit dark default without exposing OS appearance state', () => {
         const controller = createThemeController({
             document,
             storage,
-            colorScheme,
             reducedMotion: createMediaQuery(true),
         });
 
         controller.start();
-        expect(document.documentElement.dataset.theme).toBe('tdrive-light');
-        expect(document.documentElement.dataset.themeAppearance).toBe('light');
-
-        colorScheme.setMatches(true);
         expect(document.documentElement.dataset.theme).toBe('tokyo-night');
         expect(document.documentElement.dataset.themeAppearance).toBe('dark');
+        expect(get(controller.state)).not.toHaveProperty('systemAppearance');
 
+        controller.destroy();
+    });
+
+    it('migrates a persisted System preference to explicit dark', () => {
+        storage.setItem(THEME_STORAGE_KEY, JSON.stringify({
+            mode: 'system',
+            lightThemeId: 'catppuccin-latte',
+            darkThemeId: 'nord',
+        }));
+        const controller = createThemeController({
+            document,
+            storage,
+            reducedMotion: createMediaQuery(true),
+        });
+
+        controller.start();
+
+        expect(get(controller.state).preference).toEqual({
+            mode: 'dark',
+            lightThemeId: 'catppuccin-latte',
+            darkThemeId: 'nord',
+        });
+        expect(document.documentElement.dataset.theme).toBe('nord');
+        expect(JSON.parse(storage.getItem(THEME_STORAGE_KEY) ?? '')).toEqual(
+            get(controller.state).preference,
+        );
         controller.destroy();
     });
 
@@ -84,7 +105,6 @@ describe('theme controller', () => {
         const environment = {
             document,
             storage,
-            colorScheme: createMediaQuery(true),
             reducedMotion: createMediaQuery(true),
         };
         const first = createThemeController(environment);
@@ -125,7 +145,6 @@ describe('theme controller', () => {
         const controller = createThemeController({
             document,
             storage,
-            colorScheme: createMediaQuery(true),
             reducedMotion: createMediaQuery(false),
         });
         controller.start();
@@ -151,7 +170,6 @@ describe('theme controller', () => {
         const controller = createThemeController({
             document,
             storage,
-            colorScheme: createMediaQuery(true),
             reducedMotion: createMediaQuery(true),
         });
         controller.start();
@@ -168,7 +186,6 @@ describe('theme controller', () => {
         const controller = createThemeController({
             document,
             storage,
-            colorScheme: createMediaQuery(true),
             reducedMotion: createMediaQuery(false),
         });
         controller.start();
@@ -195,19 +212,19 @@ describe('theme controller', () => {
         const controller = createThemeController({
             document,
             storage: unavailableStorage,
-            colorScheme: createMediaQuery(false),
             reducedMotion: createMediaQuery(true),
         });
 
         expect(() => controller.start()).not.toThrow();
         const initial = get(controller.state);
         (controller.setMode as (mode: string) => void)('sepia');
+        (controller.setMode as (mode: string) => void)('system');
         controller.setPreferredTheme('light', 'dracula' as ThemeId);
         controller.setPreferredTheme('sepia' as ThemeAppearance, 'tdrive-light');
         expect(get(controller.state)).toBe(initial);
 
-        expect(() => controller.setMode('dark' as ThemeMode)).not.toThrow();
-        expect(get(controller.state).preference.mode).toBe('dark');
+        expect(() => controller.setMode('light')).not.toThrow();
+        expect(get(controller.state).preference.mode).toBe('light');
         controller.destroy();
     });
 
@@ -223,7 +240,6 @@ describe('theme controller', () => {
         const controller = createThemeController({
             document,
             storage,
-            colorScheme: createMediaQuery(true),
             reducedMotion: createMediaQuery(false),
         });
         controller.start();

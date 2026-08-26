@@ -13,7 +13,7 @@ export const THEME_IDS = [
 
 export type ThemeId = (typeof THEME_IDS)[number];
 export type ThemeAppearance = 'light' | 'dark';
-export type ThemeMode = 'system' | ThemeAppearance;
+export type ThemeMode = ThemeAppearance;
 export type ThemePreview = readonly [canvas: string, surface: string, accent: string, text: string];
 
 export interface ThemeDefinition {
@@ -105,7 +105,7 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
 ]);
 
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = Object.freeze({
-    mode: 'system',
+    mode: 'dark',
     lightThemeId: 'tdrive-light',
     darkThemeId: 'tokyo-night',
 });
@@ -124,7 +124,7 @@ export function isThemeAppearance(value: unknown): value is ThemeAppearance {
 }
 
 export function isThemeMode(value: unknown): value is ThemeMode {
-    return value === 'system' || isThemeAppearance(value);
+    return isThemeAppearance(value);
 }
 
 export function isThemeId(value: unknown): value is ThemeId {
@@ -158,18 +158,8 @@ export function normalizeThemePreference(value: unknown): ThemePreference {
     return Object.freeze({ mode, lightThemeId, darkThemeId });
 }
 
-export function resolveThemeAppearance(
-    preference: ThemePreference,
-    systemAppearance: ThemeAppearance,
-): ThemeAppearance {
-    return preference.mode === 'system' ? systemAppearance : preference.mode;
-}
-
-export function resolveThemeId(
-    preference: ThemePreference,
-    systemAppearance: ThemeAppearance,
-): ThemeId {
-    return resolveThemeAppearance(preference, systemAppearance) === 'light'
+export function resolveThemeId(preference: ThemePreference): ThemeId {
+    return preference.mode === 'light'
         ? preference.lightThemeId
         : preference.darkThemeId;
 }

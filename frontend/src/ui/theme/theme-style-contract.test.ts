@@ -12,6 +12,13 @@ function sectionBetween(startMarker: string, endMarker: string): string {
     return globalCss.slice(start, end);
 }
 
+function ruleFor(selector: string): string {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rule = new RegExp(`${escaped}\\s*\\{([\\s\\S]*?)\\n\\}`).exec(globalCss)?.[1];
+    if (!rule) throw new Error(`missing CSS rule: ${selector}`);
+    return rule;
+}
+
 describe('global theme style contract', () => {
     it('keeps palette colors out of the lower-specificity bare root', () => {
         const root = /:root\s*\{([\s\S]*?)\n\}/.exec(globalCss)?.[1];
@@ -33,6 +40,20 @@ describe('global theme style contract', () => {
         expect(viewer).toContain('var(--viewer-border)');
         expect(viewer).toContain('var(--viewer-surface-0)');
         expect(viewer).toContain('var(--viewer-focus-ring)');
+    });
+
+    it('maps text-preview chrome back onto the active app palette', () => {
+        const textPreview = ruleFor('.file-viewer-shell.is-text');
+
+        expect(textPreview).toContain('--viewer-text: var(--color-text)');
+        expect(textPreview).toContain('--viewer-text-muted: var(--color-text-muted)');
+        expect(textPreview).toContain('--viewer-surface-0: var(--color-canvas)');
+        expect(textPreview).toContain('--viewer-surface-2: var(--color-surface-1)');
+        expect(textPreview).toContain('--viewer-border: var(--color-border)');
+        expect(textPreview).toContain('--viewer-accent: var(--color-accent)');
+        expect(textPreview).toContain('--viewer-syntax-key: var(--color-accent)');
+        expect(textPreview).toContain('--viewer-syntax-string: var(--color-warning)');
+        expect(textPreview).toContain('--viewer-syntax-value: var(--color-success)');
     });
 
     it('keeps fixed-dark preview and video controls independent from app palettes', () => {

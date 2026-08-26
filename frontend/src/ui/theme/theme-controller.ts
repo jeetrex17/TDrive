@@ -5,7 +5,6 @@ import {
     isThemeForAppearance,
     isThemeMode,
     normalizeThemePreference,
-    resolveThemeAppearance,
     resolveThemeId,
     type ThemeAppearance,
     type ThemeId,
@@ -17,12 +16,10 @@ export const THEME_STORAGE_KEY = 'tdrive.appearance.v1';
 export const THEME_TRANSITION_CLASS = 'theme-transition-active';
 export const THEME_FALLBACK_CLASS = 'theme-transition-fallback';
 
-const COLOR_SCHEME_QUERY = '(prefers-color-scheme: dark)';
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 const FALLBACK_CLEANUP_DELAY_MS = 1050;
 
 type ThemeStorage = Pick<Storage, 'getItem' | 'setItem'>;
-type MediaChangeHandler = (event: MediaQueryListEvent) => void;
 
 export interface ThemeChangeOrigin {
     readonly x: number;
@@ -31,7 +28,6 @@ export interface ThemeChangeOrigin {
 
 export interface ThemeState {
     readonly preference: ThemePreference;
-    readonly systemAppearance: ThemeAppearance;
     readonly resolvedAppearance: ThemeAppearance;
     readonly resolvedThemeId: ThemeId;
 }
@@ -39,7 +35,6 @@ export interface ThemeState {
 export interface ThemeControllerEnvironment {
     readonly document?: Document;
     readonly storage?: ThemeStorage;
-    readonly colorScheme?: MediaQueryList;
     readonly reducedMotion?: MediaQueryList;
 }
 
@@ -58,7 +53,6 @@ export interface ThemeController {
 interface ResolvedEnvironment {
     readonly document?: Document;
     readonly storage?: ThemeStorage;
-    readonly colorScheme?: MediaQueryList;
     readonly reducedMotion?: MediaQueryList;
 }
 
@@ -66,13 +60,12 @@ export function createThemeController(
     environment: ThemeControllerEnvironment = {},
 ): ThemeController {
     let activeEnvironment: ResolvedEnvironment | undefined;
-    let currentState = createThemeState(DEFAULT_THEME_PREFERENCE, 'light');
+    let currentState = createThemeState(DEFAULT_THEME_PREFERENCE);
     // View Transition callbacks may run a frame after the user's click. Keep
     // the latest intended preference separately so a second quick selection
     // composes with, rather than overwrites, the first pending selection.
     let latestPreference = currentState.preference;
     let started = false;
-    let unsubscribeColorScheme: (() => void) | undefined;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let transitionGeneration = 0;
     const store = writable<ThemeState>(currentState);
@@ -170,23 +163,11 @@ export function createThemeController(
         activeEnvironment = resolved;
         started = true;
         const preference = readPreference(resolved.storage);
-        const systemAppearance = readSystemAppearance(resolved.colorScheme);
         latestPreference = preference;
-        applyInstantly(createThemeState(preference, systemAppearance));
-        unsubscribeColorScheme = listenForMediaChanges(resolved.colorScheme, () => {
-            const nextAppearance = readSystemAppearance(resolved.colorScheme);
-            if (nextAppearance === currentState.systemAppearance) return;
-            applyInstantly(createThemeState(latestPreference, nextAppearance));
-        });
+        applyInstantly(createThemeState(preference));
     }
 
     function destroy(): void {
-        try {
-            unsubscribeColorScheme?.();
-        } catch {
-            // A torn-down webview can invalidate MediaQueryList before cleanup.
-        }
-        unsubscribeColorScheme = undefined;
         stopTransition();
         activeEnvironment = undefined;
         started = false;
@@ -197,7 +178,7 @@ export function createThemeController(
 
         latestPreference = preference;
         writePreference(activeEnvironment?.storage, preference);
-        transitionTo(createThemeState(preference, currentState.systemAppearance), origin);
+        transitionTo(createThemeState(preference), origin);
     }
 
     function setMode(mode: ThemeMode, origin?: ThemeChangeOrigin): void {
@@ -249,15 +230,11 @@ export function createThemeController(
     }
 }
 
-function createThemeState(
-    preference: ThemePreference,
-    systemAppearance: ThemeAppearance,
-): ThemeState {
+function createThemeState(preference: ThemePreference): ThemeState {
     return Object.freeze({
         preference,
-        systemAppearance,
-        resolvedAppearance: resolveThemeAppearance(preference, systemAppearance),
-        resolvedThemeId: resolveThemeId(preference, systemAppearance),
+        resolvedAppearance: preference.mode,
+        resolvedThemeId: resolveThemeId(preference),
     });
 }
 
@@ -268,7 +245,6 @@ function resolveEnvironment(environment: ThemeControllerEnvironment): ResolvedEn
     return {
         document: targetDocument,
         storage: environment.storage ?? getBrowserStorage(targetWindow),
-        colorScheme: environment.colorScheme ?? queryMedia(targetWindow, COLOR_SCHEME_QUERY),
         reducedMotion: environment.reducedMotion ?? queryMedia(targetWindow, REDUCED_MOTION_QUERY),
     };
 }
@@ -299,13 +275,23 @@ function queryMedia(targetWindow: Window | undefined, query: string): MediaQuery
 }
 
 function hasRuntimeEnvironment(environment: ResolvedEnvironment): boolean {
-    return Boolean(environment.document || environment.storage || environment.colorScheme);
+    return Boolean(environment.document || environment.storage || environment.reducedMotion);
 }
 
 function readPreference(storage?: ThemeStorage): ThemePreference {
+    let serialized: string | null | undefined;
     try {
-        const serialized = storage?.getItem(THEME_STORAGE_KEY);
-        return serialized ? normalizeThemePreference(JSON.parse(serialized) as unknown) : normalizeThemePreference(null);
+        serialized = storage?.getItem(THEME_STORAGE_KEY);
+    } catch {
+        return normalizeThemePreference(null);
+    }
+
+    if (!serialized) return normalizeThemePreference(null);
+
+    try {
+        const preference = normalizeThemePreference(JSON.parse(serialized) as unknown);
+        if (serialized !== JSON.stringify(preference)) writePreference(storage, preference);
+        return preference;
     } catch {
         return normalizeThemePreference(null);
     }
@@ -319,47 +305,12 @@ function writePreference(storage: ThemeStorage | undefined, preference: ThemePre
     }
 }
 
-function readSystemAppearance(colorScheme?: MediaQueryList): ThemeAppearance {
-    try {
-        // Some older Linux WebKitGTK builds do not expose this media query.
-        // Preserve TDrive's established dark appearance when the OS signal is
-        // unavailable instead of treating "unknown" as an explicit light UI.
-        if (!colorScheme) return 'dark';
-        return colorScheme.matches ? 'dark' : 'light';
-    } catch {
-        return 'dark';
-    }
-}
-
 function prefersReducedMotion(reducedMotion?: MediaQueryList): boolean {
     try {
         return reducedMotion?.matches === true;
     } catch {
         return true;
     }
-}
-
-function listenForMediaChanges(
-    mediaQuery: MediaQueryList | undefined,
-    listener: MediaChangeHandler,
-): (() => void) | undefined {
-    if (!mediaQuery) return undefined;
-
-    if (typeof mediaQuery.addEventListener === 'function') {
-        try {
-            mediaQuery.addEventListener('change', listener);
-            return () => mediaQuery.removeEventListener('change', listener);
-        } catch {
-            // Older Safari exposes the modern methods but only supports addListener.
-        }
-    }
-
-    if (typeof mediaQuery.addListener === 'function') {
-        mediaQuery.addListener(listener);
-        return () => mediaQuery.removeListener(listener);
-    }
-
-    return undefined;
 }
 
 function applyThemeAttributes(targetDocument: Document | undefined, state: ThemeState): void {

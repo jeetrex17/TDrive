@@ -887,7 +887,7 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 
 .main-content { flex: 1; padding: 0; display: flex; flex-direction: column; background: var(--bg-dark); }
 
-header {
+.main-content > header {
     height: 70px; display: flex; justify-content: space-between; align-items: center;
     padding: 0 30px; border-bottom: 1px solid var(--border);
 }

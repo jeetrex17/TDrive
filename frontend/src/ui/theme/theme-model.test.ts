@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     DEFAULT_THEME_PREFERENCE,
     THEME_DEFINITIONS,
+    isThemeMode,
     normalizeThemePreference,
     resolveThemeId,
     themesForAppearance,
@@ -18,7 +19,8 @@ describe('theme model', () => {
         expect(THEME_DEFINITIONS.every((theme) => !('description' in theme))).toBe(true);
     });
 
-    it('normalizes unknown or appearance-incompatible persisted values', () => {
+    it('defaults unknown or appearance-incompatible persisted values to dark', () => {
+        expect(DEFAULT_THEME_PREFERENCE.mode).toBe('dark');
         expect(
             normalizeThemePreference({
                 mode: 'neon',
@@ -28,9 +30,24 @@ describe('theme model', () => {
         ).toEqual(DEFAULT_THEME_PREFERENCE);
     });
 
+    it('migrates the removed System mode to explicit dark without losing valid palettes', () => {
+        expect(
+            normalizeThemePreference({
+                mode: 'system',
+                lightThemeId: 'catppuccin-latte',
+                darkThemeId: 'nord',
+            }),
+        ).toEqual({
+            mode: 'dark',
+            lightThemeId: 'catppuccin-latte',
+            darkThemeId: 'nord',
+        });
+        expect(isThemeMode('system')).toBe(false);
+    });
+
     it('preserves valid preferences without mutating the source value', () => {
         const persisted = {
-            mode: 'system',
+            mode: 'light',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'catppuccin-mocha',
         } as const;
@@ -41,25 +58,14 @@ describe('theme model', () => {
         expect(normalized).not.toBe(persisted);
     });
 
-    it('resolves system mode from the operating-system appearance', () => {
+    it('resolves the selected palette from explicit light or dark mode', () => {
         const preference = {
-            mode: 'system',
+            mode: 'light',
             lightThemeId: 'solarized-light',
             darkThemeId: 'nord',
         } as const;
 
-        expect(resolveThemeId(preference, 'light')).toBe('solarized-light');
-        expect(resolveThemeId(preference, 'dark')).toBe('nord');
-    });
-
-    it('lets an explicit light or dark mode override the operating system', () => {
-        const preference = {
-            mode: 'light',
-            lightThemeId: 'gruvbox-light',
-            darkThemeId: 'dracula',
-        } as const;
-
-        expect(resolveThemeId(preference, 'dark')).toBe('gruvbox-light');
-        expect(resolveThemeId({ ...preference, mode: 'dark' }, 'light')).toBe('dracula');
+        expect(resolveThemeId(preference)).toBe('solarized-light');
+        expect(resolveThemeId({ ...preference, mode: 'dark' })).toBe('nord');
     });
 });

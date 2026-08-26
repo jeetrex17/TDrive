@@ -3,14 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { createThemeController } from './theme-controller';
 
 describe('theme controller without a browser runtime', () => {
-    it('preserves the dark default when an OS color-scheme signal is unavailable', () => {
+    it('preserves the explicit dark default without a browser document', () => {
         const controller = createThemeController({
             storage: { getItem: () => null, setItem: () => {} },
         });
 
         controller.start();
 
-        expect(get(controller.state).systemAppearance).toBe('dark');
+        expect(get(controller.state).preference.mode).toBe('dark');
+        expect(get(controller.state).resolvedAppearance).toBe('dark');
         expect(get(controller.state).resolvedThemeId).toBe('tokyo-night');
         controller.destroy();
     });
