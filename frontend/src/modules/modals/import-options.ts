@@ -39,13 +39,21 @@ function finish(result: ImportChoice | null): void {
 async function refreshPlan(encrypt: boolean, extract: boolean): Promise<void> {
     if (!currentReplan) return;
     const seq = ++replanSeq;
+    if (currentPayload) {
+        currentPayload = { ...currentPayload, replanning: true };
+        importOptionsModal.setPayload(currentPayload);
+    }
     try {
         const next = await currentReplan(encrypt, extract);
         if (seq !== replanSeq || !currentPayload) return; // ignore out-of-order responses
-        currentPayload = { ...currentPayload, plan: next };
+        currentPayload = { ...currentPayload, plan: next, replanning: false };
         importOptionsModal.setPayload(currentPayload);
     } catch {
-        // Keep the last good summary if a re-plan fails.
+        // Keep the last good summary if a re-plan fails, but never leave the
+        // confirmation action stuck in its pending state.
+        if (seq !== replanSeq || !currentPayload) return;
+        currentPayload = { ...currentPayload, replanning: false };
+        importOptionsModal.setPayload(currentPayload);
     }
 }
 
@@ -87,6 +95,7 @@ export function openImportOptionsModal(opts: {
             plan: opts.plan,
             personal: opts.personal,
             hasArchives: opts.hasArchives,
+            replanning: false,
         };
         importOptionsModal.open(currentPayload);
     });

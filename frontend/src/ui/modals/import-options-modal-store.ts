@@ -6,7 +6,11 @@ export interface ImportOptionsPlan {
     bytes: number;
     oversize: number;
     archives: number;
+    ignored: number;
+    maxItems: number;
+    limitExceeded: boolean;
     maxBytes: number;
+    errorCount?: number;
     errors?: string[];
 }
 
@@ -14,6 +18,7 @@ export interface ImportOptionsPayload {
     plan: ImportOptionsPlan;
     personal: boolean;
     hasArchives: boolean;
+    replanning?: boolean;
 }
 
 export const importOptionsModal = createModalController<ImportOptionsPayload>();

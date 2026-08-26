@@ -116,7 +116,11 @@ export namespace file {
 	    bytes: number;
 	    oversize: number;
 	    archives: number;
+	    ignored: number;
 	    maxBytes: number;
+	    maxItems: number;
+	    limitExceeded: boolean;
+	    errorCount: number;
 	    errors: string[];
 	
 	    static createFrom(source: any = {}) {
@@ -130,7 +134,11 @@ export namespace file {
 	        this.bytes = source["bytes"];
 	        this.oversize = source["oversize"];
 	        this.archives = source["archives"];
+	        this.ignored = source["ignored"];
 	        this.maxBytes = source["maxBytes"];
+	        this.maxItems = source["maxItems"];
+	        this.limitExceeded = source["limitExceeded"];
+	        this.errorCount = source["errorCount"];
 	        this.errors = source["errors"];
 	    }
 	}
