@@ -47,10 +47,10 @@ jobs:
           cache: true
 
       - name: Run CLI, daemon, and mount tests
-        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater
 
       - name: Vet platform-specific daemon and CLI code
-        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos
+        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -81,10 +81,20 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Stamp release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          tmp="$(mktemp)"
+          jq --arg v "$version" '.info.productVersion = $v' wails.json > "$tmp"
+          mv "$tmp" wails.json
+
       - name: Build
         shell: bash
         run: |
-          wails build -clean -platform "${{ matrix.platform }}" -o "${{ matrix.output_name }}"
+          wails build -clean -platform "${{ matrix.platform }}" -o "${{ matrix.output_name }}" \
+            -ldflags "-X main.appVersion=${{ github.ref_name }}"
 
       - name: Package (Linux AppImage)
         if: matrix.os == 'ubuntu-22.04'
@@ -192,6 +202,17 @@ jobs:
         run: |
           mkdir -p dist
           git archive --format=zip --output "dist/TDrive-${{ github.ref_name }}-source.zip" HEAD
+
+      # The in-app updater verifies every download against this manifest and
+      # refuses to install a release that does not carry it. Names only, so the
+      # checked-out file matches the uploaded asset name.
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > checksums.txt.tmp
+          mv checksums.txt.tmp checksums.txt
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2

@@ -66,6 +66,17 @@ This is what it looks like in **Privacy & Security**:
 
 *(You only need to do this once. Future opens will work normally).*
 
+## Updating
+
+TDrive keeps itself up to date from GitHub releases — no need to watch the repo.
+
+- A check runs shortly after launch and once a day; new builds download in the background and are verified against the release `checksums.txt` before anything is installed.
+- **Check for updates** in the account menu (top-right avatar) shows **Ready** when a build is waiting — click **Restart to update**. On macOS it's also under **Help → Check for Updates…**.
+- **What's new** opens that version's GitHub release page. You can turn off automatic downloads, or skip a version, from the same panel.
+- Updates replace the app in place, so the macOS "unverified developer" prompt above only ever applies to your first manual install.
+
+Update checks contact only `api.github.com` with an anonymous request that carries no account data. Development builds (`wails dev`) don't check.
+
 ## How it works
 
 - You login with your Telegram account (phone → code → optional 2FA password).

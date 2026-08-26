@@ -139,6 +139,24 @@ export namespace file {
 
 export namespace main {
 	
+	export class AppVersionInfo {
+	    version: string;
+	    os: string;
+	    arch: string;
+	    dev_build: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppVersionInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.os = source["os"];
+	        this.arch = source["arch"];
+	        this.dev_build = source["dev_build"];
+	    }
+	}
 	export class ChannelInfo {
 	    id: number;
 	    title: string;
@@ -626,6 +644,81 @@ export namespace nativeplayer {
 	        this.width = source["width"];
 	        this.height = source["height"];
 	    }
+	}
+
+}
+
+export namespace updater {
+	
+	export class ReleaseInfo {
+	    version: string;
+	    tag: string;
+	    page_url: string;
+	    published_at: string;
+	    asset_name: string;
+	    asset_size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReleaseInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.version = source["version"];
+	        this.tag = source["tag"];
+	        this.page_url = source["page_url"];
+	        this.published_at = source["published_at"];
+	        this.asset_name = source["asset_name"];
+	        this.asset_size = source["asset_size"];
+	    }
+	}
+	export class State {
+	    phase: string;
+	    current_version: string;
+	    latest?: ReleaseInfo;
+	    installable: boolean;
+	    install_hint: string;
+	    downloaded_bytes: number;
+	    total_bytes: number;
+	    checked_at: number;
+	    error: string;
+	    error_stage: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new State(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.phase = source["phase"];
+	        this.current_version = source["current_version"];
+	        this.latest = this.convertValues(source["latest"], ReleaseInfo);
+	        this.installable = source["installable"];
+	        this.install_hint = source["install_hint"];
+	        this.downloaded_bytes = source["downloaded_bytes"];
+	        this.total_bytes = source["total_bytes"];
+	        this.checked_at = source["checked_at"];
+	        this.error = source["error"];
+	        this.error_stage = source["error_stage"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

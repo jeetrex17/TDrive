@@ -4121,3 +4121,60 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 
 /* Mark the file area as a native file-drop target (folders + files). */
 #file-list { --wails-drop-target: drop; }
+
+/* In-app updater: account-menu badge + panel width. */
+.profile-trigger { position: relative; }
+.profile-update-dot {
+    position: absolute;
+    top: 2px;
+    left: 24px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    border: 2px solid var(--bg-dark);
+    pointer-events: none;
+}
+.profile-menu-tag {
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--overlay-accent-1);
+    color: var(--color-accent);
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+}
+.profile-menu.updates-view { min-width: min(360px, calc(100vw - 32px)); }
+
+/* Login-screen update hint. */
+.auth-update-footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 16px;
+    display: flex;
+    justify-content: center;
+    z-index: var(--z-popover);
+}
+.auth-update-footer button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px;
+    color: var(--color-text-muted);
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    box-shadow: var(--shadow-sm);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    font-size: 0.78rem;
+    font-weight: 650;
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-standard),
+        border-color var(--motion-fast) var(--ease-standard);
+}
+.auth-update-footer button:hover { color: var(--color-text); border-color: var(--color-accent); }
+.auth-update-footer button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.auth-update-footer .auth-update-accent { color: var(--color-accent); font-weight: 800; }

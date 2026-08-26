@@ -20,6 +20,7 @@ import (
 	readservice "TDrive/backend/services/read"
 	userservice "TDrive/backend/services/user"
 	"TDrive/backend/tgclient"
+	"TDrive/backend/updater"
 
 	"github.com/gotd/td/telegram"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -30,6 +31,12 @@ type App struct {
 	engine      *core.Engine
 	Client      *telegram.Client
 	backendLock *processlock.Lock
+
+	// version is the build stamp from main.appVersion ("dev" for local builds).
+	version string
+	// updates drives the release check/download/install lifecycle. It is
+	// created in startup so its state events can reach the webview.
+	updates *updater.Service
 
 	// mountMu protects lazy controller construction. A transient construction
 	// failure stays retryable for a later mount request.
@@ -631,6 +638,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.backendLock = lock
 	applog.Init()
+	a.initUpdater()
 
 	// Native file drop: hand the dropped absolute paths to the frontend, which
 	// resolves the target folder and runs the import flow. Drop zones opt in via
@@ -661,6 +669,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	fmt.Println("TDrive DB ready!")
+	a.finishUpdateCleanup()
 }
 
 // SyncChannel triggers an incremental sync for the given channel. Wails-bound
