@@ -37,6 +37,11 @@
 
         <div id="video-skip-feedback" class="video-skip-feedback" aria-hidden="true"><span></span></div>
 
+        <div id="video-standalone" class="video-standalone" role="status" aria-live="polite" hidden>
+            <strong>Playing in a separate window</strong>
+            <span>Use the player window for playback controls. Closing this preview stops the video.</span>
+        </div>
+
         <div id="video-loading" class="video-loading" aria-hidden="true" style="display: none;">
             <div class="video-spinner"></div>
             <div id="video-loading-status" class="video-loading-status" role="status" aria-live="polite" aria-atomic="true">Opening video</div>

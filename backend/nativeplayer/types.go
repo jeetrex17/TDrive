@@ -1,15 +1,19 @@
 package nativeplayer
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"strings"
+	"time"
 )
 
 var ErrUnsupported = errors.New("native player is not supported on this platform")
 var ErrDecoderUnsafe = errors.New("native player decoder preflight failed")
 var ErrPlayerExited = errors.New("native media player exited unexpectedly")
+var errIPCWriteTimeout = errors.New("native player: mpv IPC write timed out")
 
 type PlaybackStatus string
 
@@ -30,6 +34,13 @@ const (
 	TrackTypeSubtitle TrackType = "subtitle"
 )
 
+type Presentation string
+
+const (
+	PresentationEmbedded   Presentation = "embedded"
+	PresentationStandalone Presentation = "standalone"
+)
+
 // Track is the small, cross-platform subset of mpv track metadata needed by
 // the player UI. Video tracks are intentionally omitted: aid/sid are the only
 // selectable tracks exposed at this boundary.
@@ -45,8 +56,8 @@ type Track struct {
 }
 
 type BufferedRange struct {
-	Start float64
-	End   float64
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
 }
 
 type State struct {
@@ -193,18 +204,107 @@ func terminalState(status PlaybackStatus) State {
 	state := State{Status: status, Paused: true, Rate: 1}
 	if status == StatusFailed {
 		state.Error = ErrPlayerExited.Error()
+	} else if status == StatusEnded {
+		state.EOF = true
 	}
 	return normalizeState(state)
 }
 
-func sidecarExitStatus(closed bool, lastState State) PlaybackStatus {
+func sidecarExitStatus(closed, standalone bool, err error) PlaybackStatus {
 	if closed {
 		return StatusClosed
 	}
-	if lastState.EOF || lastState.Status == StatusEnded {
-		return StatusEnded
+	if standalone && err == nil {
+		return StatusClosed
 	}
 	return StatusFailed
+}
+
+func endedState(previous State) State {
+	next := previous
+	next.Status = StatusEnded
+	next.Error = ""
+	next.EOF = true
+	next.Paused = true
+	next.Loading = false
+	return normalizeState(next)
+}
+
+type mpvIPCEvent struct {
+	Event  string `json:"event"`
+	Reason string `json:"reason"`
+	Error  string `json:"error"`
+}
+
+func mpvEventStatus(event mpvIPCEvent) (PlaybackStatus, bool) {
+	if event.Event != "end-file" {
+		return "", false
+	}
+	switch event.Reason {
+	case "eof":
+		return StatusEnded, true
+	case "error", "unknown":
+		return StatusFailed, true
+	case "quit":
+		return StatusClosed, true
+	default:
+		return "", false
+	}
+}
+
+func scanMPVEvents(reader io.Reader, onEvent func(mpvIPCEvent)) error {
+	if reader == nil || onEvent == nil {
+		return nil
+	}
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	for scanner.Scan() {
+		var event mpvIPCEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil || event.Event == "" {
+			continue
+		}
+		onEvent(event)
+	}
+	return scanner.Err()
+}
+
+type stoppableTimer interface {
+	Stop() bool
+}
+
+type closeTimerScheduler func(time.Duration, func()) stoppableTimer
+
+func writeAndCloseWithTimeout(writer io.WriteCloser, payload []byte, timeout time.Duration) error {
+	return writeAndCloseWithTimer(writer, payload, timeout, func(delay time.Duration, callback func()) stoppableTimer {
+		return time.AfterFunc(delay, callback)
+	})
+}
+
+func writeAndCloseWithTimer(writer io.WriteCloser, payload []byte, timeout time.Duration, schedule closeTimerScheduler) error {
+	if writer == nil {
+		return errors.New("native player: mpv IPC writer is required")
+	}
+	if schedule == nil {
+		return errors.New("native player: mpv IPC timeout scheduler is required")
+	}
+	timeoutDone := make(chan struct{})
+	timer := schedule(timeout, func() {
+		_ = writer.Close()
+		close(timeoutDone)
+	})
+	written, writeErr := writer.Write(payload)
+	if !timer.Stop() {
+		<-timeoutDone
+		return errIPCWriteTimeout
+	}
+	closeErr := writer.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if written != len(payload) {
+		return io.ErrShortWrite
+	}
+	return closeErr
 }
 
 func mpvCommandPayload(command ...string) []byte {

@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strconv"
@@ -25,6 +26,8 @@ const (
 	mediaSessionSweepEvery = 5 * time.Minute
 	mediaStreamChunkSize   = 256 * 1024
 	mediaAllowedOriginsEnv = "TDRIVE_MEDIA_ALLOWED_ORIGINS"
+	mediaWailsFrontendEnv  = "frontenddevserverurl"
+	mediaWailsDevServerEnv = "devserver"
 )
 
 var mediaStreamBufferPool = sync.Pool{
@@ -359,12 +362,96 @@ func isAllowedMediaOrigin(origin string) bool {
 	case "wails://wails", "http://wails.localhost":
 		return true
 	}
+	if frontendOrigin := loopbackHTTPOrigin(os.Getenv(mediaWailsFrontendEnv)); frontendOrigin != "" {
+		// Wails proxies the external frontend server through its own dev server.
+		// Accept both exact origins because browser and desktop development use
+		// different sides of that proxy depending on the platform.
+		if origin == frontendOrigin || isWailsDevProxyOrigin(origin, os.Getenv(mediaWailsDevServerEnv)) {
+			return true
+		}
+	}
 	for _, allowed := range strings.Split(os.Getenv(mediaAllowedOriginsEnv), ",") {
 		if strings.TrimSpace(allowed) == origin {
 			return true
 		}
 	}
 	return false
+}
+
+func loopbackHTTPOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.ParseRequestURI(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return ""
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+
+	hostname, ok := canonicalLoopbackHostname(parsed.Hostname())
+	if !ok {
+		return ""
+	}
+
+	port := parsed.Port()
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		port = ""
+	}
+	host := hostname
+	if port != "" {
+		host = net.JoinHostPort(hostname, port)
+	} else if strings.Contains(hostname, ":") {
+		host = "[" + hostname + "]"
+	}
+	return scheme + "://" + host
+}
+
+func isWailsDevProxyOrigin(origin, rawAddress string) bool {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(rawAddress))
+	if err != nil {
+		return false
+	}
+	host, ok := canonicalLoopbackHostname(host)
+	if !ok {
+		return false
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return false
+	}
+	port = strconv.Itoa(portNumber)
+
+	// Wails v2.11 uses the first origin in browser mode, the second on Windows,
+	// and the custom-scheme origin on macOS and Linux.
+	return origin == canonicalHTTPOrigin(host, port) ||
+		origin == canonicalHTTPOrigin("wails.localhost", port) ||
+		origin == "wails://"+net.JoinHostPort("wails.localhost", port)
+}
+
+func canonicalLoopbackHostname(raw string) (string, bool) {
+	hostname := strings.ToLower(strings.TrimSpace(raw))
+	if hostname == "localhost" {
+		return hostname, true
+	}
+	ip := net.ParseIP(hostname)
+	if ip == nil || !ip.IsLoopback() {
+		return "", false
+	}
+	return ip.String(), true
+}
+
+func canonicalHTTPOrigin(host, port string) string {
+	if port == "80" {
+		if strings.Contains(host, ":") {
+			return "http://[" + host + "]"
+		}
+		return "http://" + host
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func addVaryOrigin(header http.Header) {

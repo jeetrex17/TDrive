@@ -3140,6 +3140,51 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     display: none;
 }
 
+.video-standalone {
+    display: grid;
+    gap: 6px;
+    max-width: min(420px, calc(100vw - 48px));
+    padding: 14px 18px;
+    border-radius: 8px;
+    color: #dce7ff;
+    background: rgba(9, 13, 24, 0.88);
+    border: 1px solid rgba(145, 164, 206, 0.26);
+    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.34);
+    font-size: 14px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.video-standalone span {
+    color: rgba(220, 231, 255, 0.74);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.45;
+}
+
+.video-standalone[hidden] {
+    display: none;
+}
+
+.video-overlay.is-video-native-standalone .video-native-viewport,
+.video-overlay.is-video-native-standalone .video-center-controls,
+.video-overlay.is-video-native-standalone .video-skip-feedback,
+.video-overlay.is-video-native-standalone .video-controls {
+    display: none;
+}
+
+.video-overlay.is-video-native-standalone,
+.video-overlay.is-video-native-standalone .video-shell,
+.video-overlay.is-video-native-standalone .video-stage {
+    background: rgba(4, 6, 11, 0.96);
+}
+
+.video-overlay.is-video-native-standalone .video-topbar {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+}
+
 .video-topbar,
 .video-controls {
     position: absolute;

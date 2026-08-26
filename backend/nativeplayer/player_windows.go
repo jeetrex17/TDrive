@@ -87,13 +87,13 @@ type Player struct {
 	job         syscall.Handle
 	stateCancel context.CancelFunc
 	stateDone   chan struct{}
+	eventConn   *os.File
+	eventDone   chan struct{}
 	onState     StateHandler
 	lastState   State
 
-	destroyOnce     sync.Once
-	jobOnce         sync.Once
-	failureOnce     sync.Once
-	closedStateOnce sync.Once
+	destroyOnce sync.Once
+	jobOnce     sync.Once
 }
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
@@ -188,29 +188,48 @@ func (p *Player) startProcess(ctx context.Context, url string, opts Options) err
 		return err
 	}
 	p.proc = proc
+	p.onState = opts.OnState
+	if opts.OnState != nil {
+		p.emitState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
+	}
+	eventConn, err := openMPVIPCReadWriteWithAttempts(p.ipcPath, 80)
+	if err != nil {
+		proc.kill()
+		_ = proc.wait()
+		p.proc = nil
+		p.closeJob()
+		return err
+	}
+	stateCtx, cancel := context.WithCancel(ctx)
+	p.stateCancel = cancel
+	p.eventConn = eventConn
+	p.eventDone = make(chan struct{})
+	go p.observeEvents(stateCtx, eventConn, p.eventDone)
+	if opts.OnState != nil {
+		p.stateDone = make(chan struct{})
+		go p.pollState(stateCtx)
+	}
 	if err := writeMPVIPCWithAttempts(p.ipcPath, mpvCommandPayload("loadfile", url, "replace"), 80); err != nil {
+		cancel()
+		_ = eventConn.Close()
 		proc.kill()
 		_ = proc.wait()
 		p.proc = nil
 		p.closeJob()
 		return fmt.Errorf("native player: initialize mpv IPC: %w", err)
 	}
-	p.onState = opts.OnState
-	if opts.OnState != nil {
-		p.emitState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
-		stateCtx, cancel := context.WithCancel(ctx)
-		p.stateCancel = cancel
-		p.stateDone = make(chan struct{})
-		go p.pollState(stateCtx)
-	}
 	go func() {
 		err := proc.wait()
-		p.handleProcessExit()
+		p.handleProcessExit(err)
 		p.done <- err
 		p.destroyChild()
 		p.closeJob()
 	}()
 	return nil
+}
+
+func (p *Player) Presentation() Presentation {
+	return PresentationEmbedded
 }
 
 func randomPipeSuffix() (string, error) {
@@ -334,13 +353,18 @@ func (p *Player) Close() error {
 	done := p.done
 	stateCancel := p.stateCancel
 	stateDone := p.stateDone
+	eventConn := p.eventConn
+	eventDone := p.eventDone
 	p.mu.Unlock()
 
+	if ipcPath != "" {
+		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
+	}
 	if stateCancel != nil {
 		stateCancel()
 	}
-	if ipcPath != "" {
-		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
+	if eventConn != nil {
+		_ = eventConn.Close()
 	}
 	if proc != nil {
 		select {
@@ -356,6 +380,12 @@ func (p *Player) Close() error {
 	if stateDone != nil {
 		select {
 		case <-stateDone:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if eventDone != nil {
+		select {
+		case <-eventDone:
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
@@ -412,14 +442,7 @@ func writeMPVIPCWithAttempts(path string, payload []byte, attempts int) error {
 		file, err := os.OpenFile(path, os.O_WRONLY, 0)
 		if err == nil {
 			_ = file.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
-			timer := time.AfterFunc(600*time.Millisecond, func() { _ = file.Close() })
-			_, writeErr := file.Write(payload)
-			timer.Stop()
-			closeErr := file.Close()
-			if writeErr != nil {
-				return writeErr
-			}
-			return closeErr
+			return writeAndCloseWithTimeout(file, payload, 600*time.Millisecond)
 		}
 		lastErr = err
 		time.Sleep(25 * time.Millisecond)
@@ -443,37 +466,36 @@ func (p *Player) emitState(state State) {
 }
 
 func (p *Player) emitTerminal(status PlaybackStatus) {
-	once := &p.failureOnce
-	if status == StatusClosed {
-		once = &p.closedStateOnce
-	}
-	once.Do(func() {
-		state := terminalState(status)
-		p.mu.Lock()
-		p.terminal = true
-		p.lastState = state
-		onState := p.onState
+	state := terminalState(status)
+	p.mu.Lock()
+	if p.terminal {
 		p.mu.Unlock()
-		if onState != nil {
-			onState(state)
-		}
-	})
+		return
+	}
+	p.terminal = true
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
 }
 
-func (p *Player) handleProcessExit() {
+func (p *Player) handleProcessExit(err error) {
 	p.mu.Lock()
 	closed := p.closed
-	lastState := p.lastState
 	stateCancel := p.stateCancel
+	eventConn := p.eventConn
 	p.mu.Unlock()
 	if stateCancel != nil {
 		stateCancel()
 	}
-	switch sidecarExitStatus(closed, lastState) {
+	if eventConn != nil {
+		_ = eventConn.Close()
+	}
+	switch sidecarExitStatus(closed, false, err) {
 	case StatusClosed:
 		p.emitTerminal(StatusClosed)
-	case StatusEnded:
-		p.emitState(lastState)
 	default:
 		p.emitTerminal(StatusFailed)
 	}
@@ -503,6 +525,38 @@ func (p *Player) pollState(ctx context.Context) {
 			p.emitState(state)
 		}
 	}
+}
+
+func (p *Player) observeEvents(ctx context.Context, file *os.File, done chan<- struct{}) {
+	defer close(done)
+	defer file.Close()
+	stopClose := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+		case <-stopClose:
+		}
+	}()
+	defer close(stopClose)
+	_ = scanMPVEvents(file, func(event mpvIPCEvent) {
+		p.handleMPVEvent(event)
+	})
+}
+
+func (p *Player) handleMPVEvent(event mpvIPCEvent) {
+	status, ok := mpvEventStatus(event)
+	if !ok {
+		return
+	}
+	if status == StatusEnded {
+		p.mu.Lock()
+		lastState := p.lastState
+		p.mu.Unlock()
+		p.emitState(endedState(lastState))
+		return
+	}
+	p.emitTerminal(status)
 }
 
 func readWindowsMPVState(ipcPath string) (State, bool) {
@@ -573,8 +627,12 @@ func queryMPVProperties(path string, names []string) (map[string]any, error) {
 }
 
 func openMPVIPCReadWrite(path string) (*os.File, error) {
+	return openMPVIPCReadWriteWithAttempts(path, 4)
+}
+
+func openMPVIPCReadWriteWithAttempts(path string, attempts int) (*os.File, error) {
 	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		file, err := os.OpenFile(path, os.O_RDWR, 0)
 		if err == nil {
 			return file, nil

@@ -318,14 +318,15 @@ type Player struct {
 	ipcDir      string
 	cmd         *exec.Cmd
 	done        chan error
+	standalone  bool
 	stateCancel context.CancelFunc
 	stateDone   chan struct{}
+	eventConn   net.Conn
+	eventDone   chan struct{}
 	onState     StateHandler
 	lastState   State
 
-	closeOnce       sync.Once
-	failureOnce     sync.Once
-	closedStateOnce sync.Once
+	closeOnce sync.Once
 }
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
@@ -376,8 +377,9 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 	}
 
 	player := &Player{
-		view: unsafe.Pointer(view),
-		done: make(chan error, 1),
+		view:       unsafe.Pointer(view),
+		done:       make(chan error, 1),
+		standalone: displayMode == linuxDisplayWaylandStandalone,
 	}
 	if err := player.startProcess(ctx, url, child, opts); err != nil {
 		player.destroyView()
@@ -457,7 +459,31 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		return fmt.Errorf("native player: start mpv: %w", err)
 	}
 	p.cmd = cmd
+	p.onState = opts.OnState
+	if opts.OnState != nil {
+		p.emitState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
+	}
+	eventConn, err := dialLinuxMPVIPCWithAttempts(p.ipcPath, 80)
+	if err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		p.cmd = nil
+		_ = os.RemoveAll(p.ipcDir)
+		return err
+	}
+	stateCtx, cancel := context.WithCancel(ctx)
+	p.stateCancel = cancel
+	p.eventConn = eventConn
+	p.eventDone = make(chan struct{})
+	go p.observeEvents(stateCtx, eventConn, p.eventDone)
+	if opts.OnState != nil {
+		p.stateDone = make(chan struct{})
+		go p.pollState(stateCtx)
+	}
 	if err := writeMPVIPCWithAttempts(p.ipcPath, mpvCommandPayload("loadfile", url, "replace"), 80); err != nil {
+		cancel()
+		_ = eventConn.Close()
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -465,23 +491,22 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		_ = os.RemoveAll(p.ipcDir)
 		return fmt.Errorf("native player: initialize mpv IPC: %w", err)
 	}
-	p.onState = opts.OnState
-	if opts.OnState != nil {
-		p.emitState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
-		stateCtx, cancel := context.WithCancel(ctx)
-		p.stateCancel = cancel
-		p.stateDone = make(chan struct{})
-		go p.pollState(stateCtx)
-	}
 	go func() {
 		err := cmd.Wait()
 		linuxNativeLogf("mpv process exited")
-		p.handleProcessExit()
+		p.handleProcessExit(err)
 		p.done <- err
 		p.destroyView()
 		_ = os.RemoveAll(p.ipcDir)
 	}()
 	return nil
+}
+
+func (p *Player) Presentation() Presentation {
+	if p != nil && p.standalone {
+		return PresentationStandalone
+	}
+	return PresentationEmbedded
 }
 
 func (p *Player) Resize(rect Rect) error {
@@ -546,14 +571,19 @@ func (p *Player) Close() error {
 	done := p.done
 	stateCancel := p.stateCancel
 	stateDone := p.stateDone
+	eventConn := p.eventConn
+	eventDone := p.eventDone
 	p.mu.Unlock()
 
 	linuxNativeLogf("close requested")
+	if ipcPath != "" {
+		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
+	}
 	if stateCancel != nil {
 		stateCancel()
 	}
-	if ipcPath != "" {
-		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
+	if eventConn != nil {
+		_ = eventConn.Close()
 	}
 	if cmd != nil && cmd.Process != nil {
 		select {
@@ -571,6 +601,12 @@ func (p *Player) Close() error {
 	if stateDone != nil {
 		select {
 		case <-stateDone:
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	if eventDone != nil {
+		select {
+		case <-eventDone:
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
@@ -607,12 +643,7 @@ func writeMPVIPCWithAttempts(path string, payload []byte, attempts int) error {
 		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
 		if err == nil {
 			_ = conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
-			_, writeErr := conn.Write(payload)
-			closeErr := conn.Close()
-			if writeErr != nil {
-				return writeErr
-			}
-			return closeErr
+			return writeAndCloseWithTimeout(conn, payload, 600*time.Millisecond)
 		}
 		lastErr = err
 		time.Sleep(25 * time.Millisecond)
@@ -636,37 +667,37 @@ func (p *Player) emitState(state State) {
 }
 
 func (p *Player) emitTerminal(status PlaybackStatus) {
-	once := &p.failureOnce
-	if status == StatusClosed {
-		once = &p.closedStateOnce
-	}
-	once.Do(func() {
-		state := terminalState(status)
-		p.mu.Lock()
-		p.terminal = true
-		p.lastState = state
-		onState := p.onState
+	state := terminalState(status)
+	p.mu.Lock()
+	if p.terminal {
 		p.mu.Unlock()
-		if onState != nil {
-			onState(state)
-		}
-	})
+		return
+	}
+	p.terminal = true
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
 }
 
-func (p *Player) handleProcessExit() {
+func (p *Player) handleProcessExit(err error) {
 	p.mu.Lock()
 	closed := p.closed
-	lastState := p.lastState
+	standalone := p.standalone
 	stateCancel := p.stateCancel
+	eventConn := p.eventConn
 	p.mu.Unlock()
 	if stateCancel != nil {
 		stateCancel()
 	}
-	switch sidecarExitStatus(closed, lastState) {
+	if eventConn != nil {
+		_ = eventConn.Close()
+	}
+	switch sidecarExitStatus(closed, standalone, err) {
 	case StatusClosed:
 		p.emitTerminal(StatusClosed)
-	case StatusEnded:
-		p.emitState(lastState)
 	default:
 		p.emitTerminal(StatusFailed)
 	}
@@ -696,6 +727,53 @@ func (p *Player) pollState(ctx context.Context) {
 			p.emitState(state)
 		}
 	}
+}
+
+func (p *Player) observeEvents(ctx context.Context, conn net.Conn, done chan<- struct{}) {
+	defer close(done)
+	defer conn.Close()
+	stopClose := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-stopClose:
+		}
+	}()
+	defer close(stopClose)
+	if err := scanMPVEvents(conn, func(event mpvIPCEvent) {
+		p.handleMPVEvent(event)
+	}); err != nil && ctx.Err() == nil {
+		linuxNativeLogf("mpv event observer stopped: %v", err)
+	}
+}
+
+func (p *Player) handleMPVEvent(event mpvIPCEvent) {
+	status, ok := mpvEventStatus(event)
+	if !ok {
+		return
+	}
+	if status == StatusEnded {
+		p.mu.Lock()
+		lastState := p.lastState
+		p.mu.Unlock()
+		p.emitState(endedState(lastState))
+		return
+	}
+	p.emitTerminal(status)
+}
+
+func dialLinuxMPVIPCWithAttempts(path string, attempts int) (net.Conn, error) {
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		time.Sleep(25 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
 }
 
 func readLinuxMPVState(ipcPath string) (State, bool) {

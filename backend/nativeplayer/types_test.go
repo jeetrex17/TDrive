@@ -2,6 +2,7 @@ package nativeplayer
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"reflect"
@@ -148,14 +149,91 @@ func TestTerminalStateUsesSafeFixedDiagnostics(t *testing.T) {
 }
 
 func TestSidecarExitStatus(t *testing.T) {
-	if got := sidecarExitStatus(false, State{}); got != StatusFailed {
+	if got := sidecarExitStatus(false, false, nil); got != StatusFailed {
 		t.Fatalf("unexpected sidecar exit status = %q, want failed", got)
 	}
-	if got := sidecarExitStatus(false, State{EOF: true}); got != StatusEnded {
-		t.Fatalf("EOF sidecar exit status = %q, want ended", got)
+	if got := sidecarExitStatus(false, false, nil); got != StatusFailed {
+		t.Fatalf("clean embedded exit status = %q, want failed", got)
 	}
-	if got := sidecarExitStatus(true, State{}); got != StatusClosed {
+	if got := sidecarExitStatus(true, false, errors.New("killed")); got != StatusClosed {
 		t.Fatalf("requested sidecar exit status = %q, want closed", got)
+	}
+	if got := sidecarExitStatus(false, true, nil); got != StatusClosed {
+		t.Fatalf("clean standalone exit status = %q, want closed", got)
+	}
+	if got := sidecarExitStatus(false, true, errors.New("exit 2")); got != StatusFailed {
+		t.Fatalf("failed standalone exit status = %q, want failed", got)
+	}
+}
+
+func TestEndedStateCanResumeAfterSeek(t *testing.T) {
+	ended := endedState(State{
+		Status:      StatusPlaying,
+		CurrentTime: 9,
+		Duration:    10,
+		Volume:      0.8,
+		Rate:        1.25,
+	})
+	if ended.Status != StatusEnded || !ended.EOF || !ended.Paused || ended.CurrentTime != 10 {
+		t.Fatalf("endedState() = %#v", ended)
+	}
+
+	resumed := normalizeState(State{
+		Status:      StatusPlaying,
+		CurrentTime: 4,
+		Duration:    ended.Duration,
+		Volume:      ended.Volume,
+		Rate:        ended.Rate,
+	})
+	if resumed.Status != StatusPlaying || resumed.EOF || resumed.Paused || resumed.CurrentTime != 4 {
+		t.Fatalf("resumed state = %#v", resumed)
+	}
+}
+
+func TestMPVEventStatusClassifiesEndFileReasons(t *testing.T) {
+	tests := []struct {
+		name   string
+		event  mpvIPCEvent
+		status PlaybackStatus
+		ok     bool
+	}{
+		{name: "load failure", event: mpvIPCEvent{Event: "end-file", Reason: "error"}, status: StatusFailed, ok: true},
+		{name: "ordinary eof", event: mpvIPCEvent{Event: "end-file", Reason: "eof"}, status: StatusEnded, ok: true},
+		{name: "unknown end", event: mpvIPCEvent{Event: "end-file", Reason: "unknown"}, status: StatusFailed, ok: true},
+		{name: "user quit", event: mpvIPCEvent{Event: "end-file", Reason: "quit"}, status: StatusClosed, ok: true},
+		{name: "replacement stop", event: mpvIPCEvent{Event: "end-file", Reason: "stop"}},
+		{name: "unrelated event", event: mpvIPCEvent{Event: "file-loaded"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, ok := mpvEventStatus(tt.event)
+			if status != tt.status || ok != tt.ok {
+				t.Fatalf("mpvEventStatus(%#v) = (%q, %t), want (%q, %t)", tt.event, status, ok, tt.status, tt.ok)
+			}
+		})
+	}
+}
+
+func TestScanMPVEventsIgnoresRepliesAndMalformedMessages(t *testing.T) {
+	input := strings.Join([]string{
+		`{"request_id":1,"error":"success","data":false}`,
+		`not json`,
+		`{"event":"file-loaded"}`,
+		`{"event":"end-file","reason":"error","error":"loading failed"}`,
+	}, "\n") + "\n"
+	var events []mpvIPCEvent
+	if err := scanMPVEvents(strings.NewReader(input), func(event mpvIPCEvent) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatalf("scanMPVEvents: %v", err)
+	}
+	want := []mpvIPCEvent{
+		{Event: "file-loaded"},
+		{Event: "end-file", Reason: "error", Error: "loading failed"},
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
 	}
 }
 

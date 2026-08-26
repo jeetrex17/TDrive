@@ -232,8 +232,27 @@ export interface NativeMediaOpenResult {
     token: string;
     thumbnailUrl: string;
     htmlControls: boolean;
+    presentation: "embedded" | "standalone";
+    initialState: NativeMediaStatePayload | null;
     name: string;
     info: MediaOpenInfo;
+}
+
+export interface NativeMediaStatePayload {
+    token?: string;
+    sequence?: number;
+    status?: string;
+    error?: unknown;
+    eof?: boolean;
+    paused?: boolean;
+    current_time?: number;
+    duration?: number;
+    buffered?: Array<{ start?: number; end?: number }>;
+    volume?: number;
+    muted?: boolean;
+    rate?: number;
+    loading?: boolean;
+    tracks?: unknown;
 }
 
 export interface MediaPlaybackUpdate {
@@ -397,10 +416,17 @@ export async function attachNativeMedia(token: string, rect: NativeMediaRect): P
 }
 
 function normalizeNativeMediaOpenResult(opened?: main.NativeMediaResult): NativeMediaOpenResult {
+    const token = String(opened?.token ?? "");
+    const rawInitialState = opened?.initial_state;
+    const initialState: NativeMediaStatePayload | null = rawInitialState
+        ? { ...rawInitialState, token: String(rawInitialState.token || token) }
+        : null;
     return {
-        token: String(opened?.token ?? ""),
+        token,
         thumbnailUrl: String(opened?.thumbnail_url ?? ""),
         htmlControls: Boolean(opened?.html_controls),
+        presentation: opened?.presentation === "standalone" ? "standalone" : "embedded",
+        initialState,
         name: String(opened?.name ?? ""),
         info: normalizeMediaOpenInfo(opened?.info, opened?.name),
     };

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+readonly EXIT_DEPLOYMENT_TARGET_INCOMPATIBLE=78
+
+if [ "${1:-}" = "--deployment-incompatible-exit-code" ]; then
+  printf '%s\n' "$EXIT_DEPLOYMENT_TARGET_INCOMPATIBLE"
+  exit 0
+fi
+
 APP_PATH="${1:-build/bin/TDrive.app}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_FILE="$SCRIPT_DIR/package-mpv-version.txt"
@@ -55,6 +62,11 @@ log() {
 die() {
   echo "package-mpv-darwin: $*" >&2
   exit 1
+}
+
+deployment_target_incompatible() {
+  echo "package-mpv-darwin: $*" >&2
+  exit "$EXIT_DEPLOYMENT_TARGET_INCOMPATIBLE"
 }
 
 otool_deps() {
@@ -232,7 +244,7 @@ assert_deployment_compatible() {
     [ -n "$app_minimum" ] || die "could not read the app's minimum macOS version for $arch"
     [ -n "$target_minimum" ] || die "could not read $label's minimum macOS version for $arch: $target"
     if ! version_at_most "$target_minimum" "$app_minimum"; then
-      die "$label requires macOS $target_minimum for $arch, but the app promises macOS $app_minimum. Supply a compatible pinned runtime or raise the app deployment target explicitly"
+      deployment_target_incompatible "$label requires macOS $target_minimum for $arch, but the app promises macOS $app_minimum. Supply a compatible pinned runtime or raise the app deployment target explicitly"
     fi
   done
 }

@@ -15,6 +15,7 @@ import {
     type MediaOpenResult,
     type NativeMediaOpenResult,
     type NativeMediaRect,
+    type NativeMediaStatePayload,
 } from "../../api";
 import { EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from "../../../wailsjs/runtime/runtime";
 import { formatBytes } from "../../utils";
@@ -80,22 +81,6 @@ interface PlayerState {
     tracks: NativeMediaTrack[];
 }
 
-interface NativeMediaStatePayload {
-    token?: string;
-    status?: string;
-    error?: unknown;
-    eof?: boolean;
-    paused?: boolean;
-    current_time?: number;
-    duration?: number;
-    buffered?: BufferedRange[];
-    volume?: number;
-    muted?: boolean;
-    rate?: number;
-    loading?: boolean;
-    tracks?: unknown;
-}
-
 interface PlayerAdapter {
     subscribe(callback: (state: PlayerState) => void): () => void;
     playPause(): void;
@@ -117,6 +102,8 @@ interface VideoOpenAttempt {
 
 type HtmlMediaErrorHandler = (code: number | undefined, state: PlayerState) => void;
 type NativeMediaErrorHandler = (detail: string) => void;
+type NativeMediaClosedHandler = () => void;
+type NativeLayout = "none" | "embedded-overlay" | "embedded-fallback" | "standalone";
 
 const EMPTY_STATE: PlayerState = {
     paused: true,
@@ -295,32 +282,65 @@ class NativeMpvAdapter implements PlayerAdapter {
     private subscribers = new Set<(state: PlayerState) => void>();
     private state: PlayerState;
     private closed = false;
-    private unsubscribeRuntime: (() => void) | null = null;
     private commandFlushFrame = 0;
     private pendingSeek: { mode: "absolute" | "relative"; value: number } | null = null;
     private pendingLatestCommands = new Map<string, string[]>();
     private lastAudibleVolume = 1;
     private failureReported = false;
+    private closeReported = false;
+    private lastSequence = 0;
 
     constructor(
         private readonly opened: NativeMediaOpenResult,
         private readonly onMediaError: NativeMediaErrorHandler,
+        private readonly onMediaClosed: NativeMediaClosedHandler,
     ) {
         this.state = { ...EMPTY_STATE, paused: false, loading: true };
-        this.unsubscribeRuntime = EventsOn("native_media_state", (payload: NativeMediaStatePayload) => {
-            if (this.closed || payload?.token !== this.opened.token) return;
-            const failure = nativeFailureDetail(payload);
-            if (failure) {
-                if (!this.failureReported) {
-                    this.failureReported = true;
-                    this.onMediaError(failure);
-                }
-                return;
+    }
+
+    start(pending: NativeMediaStatePayload | null) {
+        if (this.opened.initialState) {
+            this.applyPayload(this.opened.initialState);
+        }
+        if (pending) this.applyPayload(pending);
+    }
+
+    accepts(payload: NativeMediaStatePayload) {
+        return !this.closed && payload.token === this.opened.token;
+    }
+
+    receive(payload: NativeMediaStatePayload) {
+        if (this.accepts(payload)) this.applyPayload(payload);
+    }
+
+    isTerminal() {
+        return this.failureReported || this.closeReported;
+    }
+
+    private applyPayload(payload: NativeMediaStatePayload) {
+        const sequence = Number(payload.sequence ?? 0);
+        if (sequence > 0) {
+            if (sequence <= this.lastSequence) return;
+            this.lastSequence = sequence;
+        }
+        const failure = nativeFailureDetail(payload);
+        if (failure) {
+            if (!this.failureReported) {
+                this.failureReported = true;
+                this.onMediaError(failure);
             }
-            this.state = nativePayloadToState(payload, this.state);
-            if (!this.state.muted && this.state.volume > 0) this.lastAudibleVolume = this.state.volume;
-            this.emit();
-        });
+            return;
+        }
+        if (payload.status === "closed") {
+            if (!this.closeReported) {
+                this.closeReported = true;
+                this.onMediaClosed();
+            }
+            return;
+        }
+        this.state = nativePayloadToState(payload, this.state);
+        if (!this.state.muted && this.state.volume > 0) this.lastAudibleVolume = this.state.volume;
+        this.emit();
     }
 
     subscribe(callback: (state: PlayerState) => void) {
@@ -393,10 +413,13 @@ class NativeMpvAdapter implements PlayerAdapter {
         if (this.closed) return;
         this.closed = true;
         this.clearScheduledCommands();
-        this.unsubscribeRuntime?.();
-        this.unsubscribeRuntime = null;
+        if (activeNativeStateAdapter === this) activeNativeStateAdapter = null;
         this.subscribers.clear();
-        await closeNativeMedia(this.opened.token);
+        try {
+            await closeNativeMedia(this.opened.token);
+        } finally {
+            pendingNativeMediaStates.delete(this.opened.token);
+        }
     }
 
     private emit() {
@@ -477,6 +500,7 @@ let filenameEl: HTMLElement | null = null;
 let metaEl: HTMLElement | null = null;
 let closeBtnEl: HTMLButtonElement | null = null;
 let nativeViewportEl: HTMLElement | null = null;
+let standaloneEl: HTMLElement | null = null;
 let videoEl: HTMLVideoElement | null = null;
 let loadingEl: HTMLElement | null = null;
 let loadingStatusEl: HTMLElement | null = null;
@@ -512,6 +536,7 @@ let subtitleControlEl: HTMLElement | null = null;
 let subtitleSelectEl: HTMLSelectElement | null = null;
 
 let activeAdapter: PlayerAdapter | null = null;
+let activeNativeStateAdapter: NativeMpvAdapter | null = null;
 let activeNative: NativeMediaOpenResult | null = null;
 let activeMediaToken = "";
 let activeMediaEncrypted = false;
@@ -520,6 +545,8 @@ let currentState: PlayerState = { ...EMPTY_STATE };
 let activeOpenAttempt: VideoOpenAttempt | null = null;
 const playbackTransitions = new SerialPlaybackTransitions();
 let unsubscribeEncryptedMediaSessionsClosed: (() => void) | null = null;
+let unsubscribeNativeMediaState: (() => void) | null = null;
+const pendingNativeMediaStates = new Map<string, NativeMediaStatePayload>();
 let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
 let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 let loadingStatusOverride = "";
@@ -635,6 +662,60 @@ function nativeFailureDetail(payload: NativeMediaStatePayload): string | null {
     return detail || "native media player exited unexpectedly";
 }
 
+function normalizeNativeMediaStatePayload(value: unknown): NativeMediaStatePayload | null {
+    if (!value || typeof value !== "object") return null;
+    const raw = value as NativeMediaStatePayload;
+    const token = typeof raw.token === "string" ? raw.token : "";
+    if (!token || token.length > 512 || token.trim() !== token) return null;
+    const sequence = Number(raw.sequence ?? 0);
+    return {
+        ...raw,
+        token,
+        sequence: Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0,
+    };
+}
+
+function nativeStateSequence(payload: NativeMediaStatePayload | null | undefined) {
+    const sequence = Number(payload?.sequence ?? 0);
+    return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0;
+}
+
+function cachePendingNativeMediaState(payload: NativeMediaStatePayload) {
+    const token = payload.token!;
+    const previous = pendingNativeMediaStates.get(token);
+    const sequence = nativeStateSequence(payload);
+    const previousSequence = nativeStateSequence(previous);
+    if (previous && previousSequence > 0 && (sequence === 0 || sequence <= previousSequence)) return;
+    pendingNativeMediaStates.delete(token);
+    pendingNativeMediaStates.set(token, payload);
+    while (pendingNativeMediaStates.size > 16) {
+        const oldest = pendingNativeMediaStates.keys().next().value;
+        if (typeof oldest !== "string") break;
+        pendingNativeMediaStates.delete(oldest);
+    }
+}
+
+function routeNativeMediaState(value: unknown) {
+    const payload = normalizeNativeMediaStatePayload(value);
+    if (!payload) return;
+    if (activeNativeStateAdapter?.accepts(payload)) {
+        activeNativeStateAdapter.receive(payload);
+        return;
+    }
+    cachePendingNativeMediaState(payload);
+}
+
+function takePendingNativeMediaState(token: string) {
+    const payload = pendingNativeMediaStates.get(token) ?? null;
+    pendingNativeMediaStates.delete(token);
+    return payload;
+}
+
+function bindNativeMediaStateLifecycle() {
+    if (unsubscribeNativeMediaState) return;
+    unsubscribeNativeMediaState = EventsOn("native_media_state", routeNativeMediaState);
+}
+
 // coalesceRanges clamps ranges to the known duration and merges any whose gap is
 // within BUFFERED_MERGE_GAP_SECONDS, returning a sorted, disjoint set ready to
 // paint. The native adapter can feed the same shape later from mpv's cache state.
@@ -677,7 +758,7 @@ function errorMessage(err: unknown, fallback: string) {
 }
 
 function isNativeFallbackActive() {
-    return Boolean(activeNative && !activeNative.htmlControls);
+    return Boolean(activeNative && !activeNative.htmlControls && activeNative.presentation !== "standalone");
 }
 
 function setChromeVisible(visible: boolean) {
@@ -685,10 +766,15 @@ function setChromeVisible(visible: boolean) {
     modalEl?.classList.toggle("is-video-cursor-hidden", !visible && !hasError && !isNativeFallbackActive());
 }
 
-function setNativeMode(visible: boolean, fallback = false) {
+function setNativeLayout(layout: NativeLayout) {
+    const visible = layout !== "none";
+    const fallback = layout === "embedded-fallback";
+    const standalone = layout === "standalone";
     modalEl?.classList.toggle("is-video-native", visible);
-    modalEl?.classList.toggle("is-video-native-fallback", visible && fallback);
-    document.body.classList.toggle("native-video-active", visible && !fallback);
+    modalEl?.classList.toggle("is-video-native-fallback", fallback);
+    modalEl?.classList.toggle("is-video-native-standalone", standalone);
+    if (standaloneEl) standaloneEl.hidden = !standalone;
+    document.body.classList.toggle("native-video-active", layout === "embedded-overlay");
     syncFallbackNativeViewportInsets();
 }
 
@@ -708,7 +794,12 @@ function fullscreenRuntimeAvailable() {
 }
 
 function canUseFullscreen() {
-    return Boolean(fullscreenRuntimeAvailable() && activeAdapter && !hasError);
+    return Boolean(
+        fullscreenRuntimeAvailable()
+        && activeAdapter
+        && activeNative?.presentation !== "standalone"
+        && !hasError
+    );
 }
 
 function applyFullscreenState(isFullscreen: boolean) {
@@ -806,10 +897,11 @@ function currentNativeRect(): NativeMediaRect | null {
 }
 
 function scheduleNativeResize() {
-    if (!activeNative) return;
+    if (!activeNative || activeNative.presentation === "standalone") return;
     if (nativeResizeFrame) cancelAnimationFrame(nativeResizeFrame);
     nativeResizeFrame = requestAnimationFrame(() => {
         nativeResizeFrame = 0;
+        if (activeNative?.presentation === "standalone") return;
         const token = activeNative?.token || "";
         const rect = currentNativeRect();
         if (!token || !rect) return;
@@ -820,7 +912,7 @@ function scheduleNativeResize() {
 }
 
 function scheduleNativeResizeAfterWindowTransition() {
-    if (!activeNative) return;
+    if (!activeNative || activeNative.presentation === "standalone") return;
     scheduleNativeResize();
     requestAnimationFrame(scheduleNativeResize);
     window.setTimeout(scheduleNativeResize, 180);
@@ -1182,7 +1274,7 @@ function syncSpeed(state: PlayerState) {
 }
 
 function syncNativeTrackControls(tracks: NativeMediaTrack[]) {
-    if (!activeNative) {
+    if (!activeNative || activeNative.presentation === "standalone") {
         resetNativeTrackControls();
         return;
     }
@@ -1827,7 +1919,9 @@ async function releaseActive() {
 
 function detachActiveReferences(): PlayerAdapter | null {
     const adapter = activeAdapter;
+    const nativeToken = activeNative?.token ?? "";
     activeAdapter = null;
+    if (adapter === activeNativeStateAdapter) activeNativeStateAdapter = null;
     activeNative = null;
     activeMediaToken = "";
     activeMediaEncrypted = false;
@@ -1839,7 +1933,8 @@ function detachActiveReferences(): PlayerAdapter | null {
     clearSkipFeedback();
     resetThumbnailPreview();
     setSpeedMenuOpen(false);
-    setNativeMode(false);
+    setNativeLayout("none");
+    if (nativeToken) pendingNativeMediaStates.delete(nativeToken);
     currentState = { ...EMPTY_STATE };
     applyState(currentState);
     return adapter;
@@ -1868,6 +1963,8 @@ async function safelyCloseNativeMedia(token: string) {
         await closeNativeMedia(token);
     } catch (err) {
         console.warn("Close native media session failed:", err);
+    } finally {
+        pendingNativeMediaStates.delete(token);
     }
 }
 
@@ -1887,12 +1984,12 @@ async function prepareNativeRect(isCurrent: () => boolean): Promise<NativeMediaR
     const measureFallback = shouldMeasureNativeFallbackBeforeOpen();
     // macOS can overlay the HTML controls above libmpv. Windows/Linux reserve
     // their HTML chrome before creating the native child surface.
-    setNativeMode(measureFallback, measureFallback);
+    setNativeLayout(measureFallback ? "embedded-fallback" : "none");
     await nextFrame();
     if (!isCurrent() || !isOpen()) return null;
     const rect = currentNativeRect();
     if (rect) return rect;
-    setNativeMode(false);
+    setNativeLayout("none");
     setError("Could not prepare the native video surface.");
     return null;
 }
@@ -2016,19 +2113,19 @@ async function openNativePlayback(
             : await openNativeMedia(attempt.target.id, rect);
         opened = result;
         owner = "native";
-        if (existing && result.token !== existing.token) {
+        if (existing && opened.token !== existing.token) {
             throw new Error("native media attachment returned a different session token");
         }
 
-        if (!result.token) {
+        if (!opened.token) {
             throw new Error("native media session did not return a token");
         }
         if (!isCurrent() || !isOpen()) {
-            await safelyCloseNativeMedia(result.token);
+            await safelyCloseNativeMedia(opened.token);
             return;
         }
 
-        activateNativePlayback(attempt, result, intent);
+        activateNativePlayback(attempt, opened, intent);
         owner = "adapter";
     } catch (err: unknown) {
         const cleanupToken = opened?.token || existing?.token || "";
@@ -2045,7 +2142,7 @@ async function openNativePlayback(
         }
         if (!isCurrent()) return;
         console.error(existing ? "AttachNativeMedia failed:" : "OpenNativeMedia failed:", err);
-        setNativeMode(false);
+        setNativeLayout("none");
         setError(errorMessage(err, existing
             ? "This video could not be opened by the compatible player."
             : "Could not open this video."));
@@ -2064,11 +2161,23 @@ function handleNativeMediaError(attempt: VideoOpenAttempt, token: string, detail
     console.error("Native media player failed:", detail);
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         if (!isCurrent() || activeNative?.token !== token) return;
-        await releaseActive();
-        if (isCurrent() && isOpen()) {
+        if (isOpen()) {
             setError("The compatible player stopped unexpectedly. Try opening the video again.");
         }
+        await releaseActive();
     });
+}
+
+function handleNativeMediaClosed(attempt: VideoOpenAttempt, token: string) {
+    if (
+        activeOpenAttempt !== attempt
+        || !playbackTransitions.isCurrent(attempt.generation)
+        || activeNative?.token !== token
+        || !(activeAdapter instanceof NativeMpvAdapter)
+    ) {
+        return;
+    }
+    void closeVideoModal();
 }
 
 function activateNativePlayback(
@@ -2076,7 +2185,8 @@ function activateNativePlayback(
     opened: NativeMediaOpenResult,
     intent: PlaybackIntent | null,
 ) {
-    setNativeMode(true, !opened.htmlControls);
+    const standalone = opened.presentation === "standalone";
+    setNativeLayout(standalone ? "standalone" : opened.htmlControls ? "embedded-overlay" : "embedded-fallback");
     activeNative = opened;
     activeMediaToken = opened.token;
     activeMediaEncrypted = Boolean(opened.info.encrypted);
@@ -2088,8 +2198,13 @@ function activateNativePlayback(
 
     const adapter = new NativeMpvAdapter(opened, (detail) => {
         handleNativeMediaError(attempt, opened.token, detail);
+    }, () => {
+        handleNativeMediaClosed(attempt, opened.token);
     });
     activeAdapter = adapter;
+    activeNativeStateAdapter = adapter;
+    adapter.start(takePendingNativeMediaState(opened.token));
+    if (adapter.isTerminal()) return;
     if (intent) {
         adapter.setVolume(intent.volume);
         adapter.setMuted(intent.muted);
@@ -2107,7 +2222,7 @@ function activateNativePlayback(
         }
     });
     setChromeVisible(true);
-    scheduleNativeResize();
+    if (!standalone) scheduleNativeResize();
 }
 
 export async function openVideoModal(target: VideoOpenTarget) {
@@ -2430,6 +2545,7 @@ function targetShouldUseOwnKeyboard(target: HTMLElement | null, event: KeyboardE
 
 function handleVideoShortcut(event: KeyboardEvent) {
     if (!isOpen()) return;
+    if (activeNative?.presentation === "standalone") return;
     const target = event.target as HTMLElement | null;
     if (targetShouldUseOwnKeyboard(target, event)) return;
     const key = event.key.toLowerCase();
@@ -2470,12 +2586,13 @@ function targetIsVideoChrome(target: EventTarget | null) {
 }
 
 function handleStageClick(event: MouseEvent) {
+    if (activeNative?.presentation === "standalone") return;
     if (targetIsVideoChrome(event.target)) return;
     togglePlayback();
 }
 
 function handleWindowResize() {
-    scheduleNativeResize();
+    if (activeNative?.presentation !== "standalone") scheduleNativeResize();
     void syncFullscreenState();
 }
 
@@ -2537,6 +2654,7 @@ export function setupVideoModal() {
     metaEl = byID("video-meta");
     closeBtnEl = byID("video-close");
     nativeViewportEl = byID("video-native-viewport");
+    standaloneEl = byID("video-standalone");
     videoEl = byID("video-player");
     loadingEl = byID("video-loading");
     loadingStatusEl = byID("video-loading-status");
@@ -2588,6 +2706,7 @@ export function setupVideoModal() {
         restoreFocus: "#file-list",
     });
     bindEncryptedMediaLifecycle();
+    bindNativeMediaStateLifecycle();
     renderSpeedOptions();
     bindControls();
     applyState(EMPTY_STATE);

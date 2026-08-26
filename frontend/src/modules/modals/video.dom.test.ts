@@ -67,6 +67,16 @@ function nativeOpenResult(id: number, token: string) {
         ...opened,
         name: `movie-${id}.mkv`,
         htmlControls: false,
+        presentation: "embedded",
+        initialState: {
+            token,
+            sequence: 1,
+            status: "opening",
+            paused: true,
+            loading: true,
+            volume: 1,
+            rate: 1,
+        },
         info: { ...opened.info, name: `movie-${id}.mkv` },
     };
 }
@@ -256,7 +266,7 @@ describe("video HTML-to-native fallback", () => {
         expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith("stale-token");
         expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
         expect(apiMocks.openMedia).toHaveBeenLastCalledWith(10);
-        expect(runtimeMocks.events.has("native_media_state")).toBe(false);
+        expect(runtimeMocks.events.has("native_media_state")).toBe(true);
         expect(document.querySelector("#video-filename")?.textContent).toBe("clip-10.mp4");
 
         await videoModule.closeVideoModal();
@@ -429,6 +439,32 @@ describe("encrypted media lifecycle", () => {
 });
 
 describe("native player failures", () => {
+    it("replays a newer failure emitted before the open call resolves", async () => {
+        const opened = nativeOpenResult(39, "early-failed-native-session");
+        apiMocks.openNativeMedia.mockImplementation(async () => {
+            const listener = runtimeMocks.events.get("native_media_state");
+            expect(listener).toBeTypeOf("function");
+            listener?.({
+                token: opened.token,
+                sequence: 2,
+                status: "failed",
+                error: "native media player exited unexpectedly",
+                paused: true,
+            });
+            return opened;
+        });
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 39, name: "early-failed.mkv", size: 1024 });
+
+        await vi.waitFor(() => expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith(opened.token));
+        expect(apiMocks.closeNativeMedia).toHaveBeenCalledOnce();
+        expect(document.querySelector("#video-error")?.textContent).toContain("compatible player stopped unexpectedly");
+        expect(document.querySelector<HTMLElement>("#video-loading")?.style.display).toBe("none");
+        expect(document.querySelector<HTMLElement>("#video-modal")?.classList.contains("is-video-loading")).toBe(false);
+    });
+
     it("surfaces an asynchronous native failure once and releases its session", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(40, FAILED_NATIVE_SESSION_ID));
 
@@ -454,5 +490,43 @@ describe("native player failures", () => {
         expect(apiMocks.closeNativeMedia).toHaveBeenCalledOnce();
         expect(document.querySelector<HTMLElement>("#video-modal")?.style.display).toBe("flex");
         expect(document.querySelector("#video-error")?.textContent).toContain("compatible player stopped unexpectedly");
+    });
+
+    it("shows honest standalone playback UX and treats a normal window close as user intent", async () => {
+        const opened = nativeOpenResult(41, "wayland-standalone-session");
+        opened.presentation = "standalone";
+        opened.initialState = {
+            token: opened.token,
+            sequence: 1,
+            status: "playing",
+            paused: false,
+            loading: false,
+            volume: 1,
+            rate: 1,
+        };
+        apiMocks.openNativeMedia.mockResolvedValue(opened);
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 41, name: "wayland.mkv", size: 1024 });
+        await nextTasks();
+
+        const modal = document.querySelector<HTMLElement>("#video-modal");
+        const standalone = document.querySelector<HTMLElement>("#video-standalone");
+        expect(modal?.classList.contains("is-video-native-standalone")).toBe(true);
+        expect(standalone?.hidden).toBe(false);
+        expect(standalone?.textContent).toContain("separate window");
+        expect(apiMocks.resizeNativeMedia).not.toHaveBeenCalled();
+
+        runtimeMocks.events.get("native_media_state")?.({
+            token: opened.token,
+            sequence: 2,
+            status: "closed",
+            paused: true,
+        });
+
+        await vi.waitFor(() => expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith(opened.token));
+        expect(document.querySelector<HTMLElement>("#video-modal")?.style.display).toBe("none");
+        expect(document.querySelector("#video-error")?.textContent ?? "").not.toContain("stopped unexpectedly");
     });
 });

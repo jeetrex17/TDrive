@@ -2,6 +2,9 @@ package media
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -804,11 +807,37 @@ func (t *videoThumbnailer) cacheKey(bucket int) string {
 }
 
 func videoThumbnailCacheKeyPrefix(file LogicalFile) string {
-	return "video-thumb-v2-ch" + strconv.FormatInt(file.ChannelID, 10) +
-		"-file" + strconv.FormatInt(file.FileID, 10) +
-		"-rev" + strconv.FormatInt(file.Revision, 10) +
-		"-size" + strconv.FormatInt(file.StoredSize, 10) +
-		"-t"
+	digest := sha256.New()
+	var encoded [8]byte
+	writeInt64 := func(value int64) {
+		binary.BigEndian.PutUint64(encoded[:], uint64(value))
+		_, _ = digest.Write(encoded[:])
+	}
+
+	writeInt64(file.ChannelID)
+	writeInt64(file.StoredSize)
+	writeInt64(file.PlaintextSize)
+	writeInt64(int64(file.EncryptionVersion))
+	if file.Encrypted {
+		_, _ = digest.Write([]byte{1})
+	} else {
+		_, _ = digest.Write([]byte{0})
+	}
+	if len(file.Segments) == 0 {
+		// Resolved production files always carry segments. FileID preserves safe
+		// isolation for partial LogicalFile values used by callers and tests.
+		_, _ = digest.Write([]byte{0})
+		writeInt64(file.FileID)
+	} else {
+		_, _ = digest.Write([]byte{1})
+		writeInt64(int64(len(file.Segments)))
+		for _, segment := range file.Segments {
+			writeInt64(segment.MsgID)
+			writeInt64(segment.Size)
+		}
+	}
+
+	return "video-thumb-v3-" + hex.EncodeToString(digest.Sum(nil)) + "-t"
 }
 
 func thumbnailBucket(seconds, duration float64) int {

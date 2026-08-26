@@ -12,6 +12,10 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 	return nil, ErrUnsupported
 }
 
+func (p *Player) Presentation() Presentation {
+	return PresentationEmbedded
+}
+
 func (p *Player) Resize(rect Rect) error {
 	return nil
 }

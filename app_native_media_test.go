@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"TDrive/backend/media"
 	"TDrive/backend/nativeplayer"
 )
 
@@ -47,6 +49,74 @@ func TestNativeHTMLControlsEnabledHonorsFallbackEnv(t *testing.T) {
 	t.Setenv("TDRIVE_NATIVE_VIDEO_FALLBACK", "1")
 	if nativeHTMLControlsEnabled() {
 		t.Fatal("nativeHTMLControlsEnabled returned true with fallback env")
+	}
+}
+
+func TestValidateNativeMediaOpenResultRejectsNonVideo(t *testing.T) {
+	sessionID := "opaque-session-id"
+	valid := media.OpenResult{Token: sessionID, URL: "http://127.0.0.1/media", Kind: media.StreamKindVideo}
+	if err := validateNativeMediaOpenResult(valid); err != nil {
+		t.Fatalf("video result rejected: %v", err)
+	}
+
+	for _, kind := range []media.StreamKind{
+		media.StreamKindAudio,
+		media.StreamKindPDF,
+		media.StreamKindText,
+		media.StreamKindUnknown,
+	} {
+		opened := valid
+		opened.Kind = kind
+		if err := validateNativeMediaOpenResult(opened); !errors.Is(err, media.ErrUnsupportedMediaType) {
+			t.Fatalf("kind %q error = %v, want ErrUnsupportedMediaType", kind, err)
+		}
+	}
+}
+
+func TestNativeMediaReservationRetainsSequencedStateBeforeCompletion(t *testing.T) {
+	app := &App{}
+	reservation, err := app.reserveNativeMediaSession("opaque-session-token", false)
+	if err != nil {
+		t.Fatalf("reserveNativeMediaSession: %v", err)
+	}
+
+	failed := nativeplayer.State{Status: nativeplayer.StatusFailed, Error: nativeplayer.ErrPlayerExited.Error(), Paused: true}
+	snapshot, emit := app.recordNativeMediaState("opaque-session-token", reservation, failed)
+	if emit {
+		t.Fatal("state emitted while native attachment was still in progress")
+	}
+	if snapshot.Sequence != 1 || snapshot.Status != nativeplayer.StatusFailed {
+		t.Fatalf("recorded state = %#v, want sequence 1 failed", snapshot)
+	}
+	if !app.completeNativeMediaSession("opaque-session-token", reservation, new(nativeplayer.Player)) {
+		t.Fatal("reservation could not be completed")
+	}
+
+	initial, ok := app.nativeMediaStateSnapshot("opaque-session-token", reservation)
+	if !ok || initial.Sequence != 1 || initial.Status != nativeplayer.StatusFailed {
+		t.Fatalf("initial state = %#v, %t; want retained sequence 1 failure", initial, ok)
+	}
+
+	playing := nativeplayer.State{Status: nativeplayer.StatusPlaying, Rate: 1, Volume: 1}
+	next, emit := app.recordNativeMediaState("opaque-session-token", reservation, playing)
+	if emit || next.Sequence != 1 || next.Status != nativeplayer.StatusFailed {
+		t.Fatalf("state after terminal failure = %#v, emit=%t; want retained sequence 1 failure", next, emit)
+	}
+
+	active, err := app.reserveNativeMediaSession("active-session-token", false)
+	if err != nil {
+		t.Fatalf("reserve active session: %v", err)
+	}
+	opening := nativeplayer.State{Status: nativeplayer.StatusOpening, Paused: true, Loading: true, Rate: 1, Volume: 1}
+	if snapshot, emit := app.recordNativeMediaState("active-session-token", active, opening); emit || snapshot.Sequence != 1 {
+		t.Fatalf("opening state = %#v, emit=%t; want retained sequence 1", snapshot, emit)
+	}
+	if !app.completeNativeMediaSession("active-session-token", active, new(nativeplayer.Player)) {
+		t.Fatal("active reservation could not be completed")
+	}
+	next, emit = app.recordNativeMediaState("active-session-token", active, playing)
+	if !emit || next.Sequence != 2 || next.Status != nativeplayer.StatusPlaying {
+		t.Fatalf("active state = %#v, emit=%t; want emitted sequence 2 playing", next, emit)
 	}
 }
 

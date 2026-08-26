@@ -49,15 +49,103 @@ func TestVideoThumbnailerPrioritizesLatestRequest(t *testing.T) {
 	}
 }
 
-func TestVideoThumbnailCacheKeyIncludesContentRevision(t *testing.T) {
-	base := LogicalFile{ChannelID: 7, FileID: 11, Revision: 1, StoredSize: 4096}
-	replaced := base
-	replaced.Revision = 2
-	if first, second := videoThumbnailCacheKeyPrefix(base), videoThumbnailCacheKeyPrefix(replaced); first == second {
-		t.Fatalf("same-size replacement reused thumbnail prefix %q", first)
+func TestVideoThumbnailCacheKeyUsesStableContentIdentity(t *testing.T) {
+	base := LogicalFile{
+		ChannelID:     7,
+		FileID:        11,
+		Revision:      1,
+		Name:          "movie.mkv",
+		StoredSize:    4096,
+		PlaintextSize: 4096,
+		Segments:      []Segment{{MsgID: 9001, Size: 4096}},
+	}
+	renamed := base
+	renamed.Revision = 2
+	renamed.Name = "renamed.mkv"
+	if first, second := videoThumbnailCacheKeyPrefix(base), videoThumbnailCacheKeyPrefix(renamed); first != second {
+		t.Fatalf("metadata-only revision changed thumbnail prefix from %q to %q", first, second)
+	}
+
+	replaced := renamed
+	replaced.Revision = 3
+	replaced.Segments = append([]Segment(nil), renamed.Segments...)
+	replaced.Segments[0].MsgID = 9002
+	if first, second := videoThumbnailCacheKeyPrefix(renamed), videoThumbnailCacheKeyPrefix(replaced); first == second {
+		t.Fatalf("content replacement reused thumbnail prefix %q", first)
 	}
 	if got := videoThumbnailCacheKeyPrefix(base); got != videoThumbnailCacheKeyPrefix(base) {
 		t.Fatal("thumbnail cache key is not deterministic")
+	}
+}
+
+func TestVideoThumbnailCacheKeyIncludesByteAndEncryptionIdentity(t *testing.T) {
+	base := LogicalFile{
+		ChannelID:         7,
+		FileID:            11,
+		StoredSize:        4200,
+		PlaintextSize:     4096,
+		Encrypted:         true,
+		EncryptionVersion: 1,
+		Segments: []Segment{
+			{MsgID: 100, Size: 2100},
+			{MsgID: 101, Size: 2100},
+		},
+	}
+	baseKey := videoThumbnailCacheKeyPrefix(base)
+
+	tests := []struct {
+		name   string
+		mutate func(LogicalFile) LogicalFile
+	}{
+		{name: "channel", mutate: func(file LogicalFile) LogicalFile { file.ChannelID++; return file }},
+		{name: "stored size", mutate: func(file LogicalFile) LogicalFile { file.StoredSize++; return file }},
+		{name: "plaintext size", mutate: func(file LogicalFile) LogicalFile { file.PlaintextSize++; return file }},
+		{name: "encryption flag", mutate: func(file LogicalFile) LogicalFile { file.Encrypted = false; return file }},
+		{name: "encryption version", mutate: func(file LogicalFile) LogicalFile { file.EncryptionVersion++; return file }},
+		{name: "segment order", mutate: func(file LogicalFile) LogicalFile {
+			file.Segments = []Segment{file.Segments[1], file.Segments[0]}
+			return file
+		}},
+		{name: "segment size", mutate: func(file LogicalFile) LogicalFile {
+			file.Segments = append([]Segment(nil), file.Segments...)
+			file.Segments[0].Size++
+			return file
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := videoThumbnailCacheKeyPrefix(tt.mutate(base)); got == baseKey {
+				t.Fatalf("%s change reused thumbnail prefix %q", tt.name, got)
+			}
+		})
+	}
+}
+
+func TestVideoThumbnailCacheKeyLengthIsBoundedForMultipartFiles(t *testing.T) {
+	segments := make([]Segment, 4096)
+	for i := range segments {
+		segments[i] = Segment{MsgID: int64(1000 + i), Size: 2 << 20}
+	}
+	file := LogicalFile{
+		ChannelID:     7,
+		FileID:        11,
+		StoredSize:    int64(len(segments)) * (2 << 20),
+		PlaintextSize: int64(len(segments)) * (2 << 20),
+		Multipart:     true,
+		Segments:      segments,
+	}
+
+	if got := len(videoThumbnailCacheKeyPrefix(file)); got > 100 {
+		t.Fatalf("multipart thumbnail prefix length = %d, want at most 100", got)
+	}
+}
+
+func TestVideoThumbnailCacheKeyIsolatesUnresolvedFiles(t *testing.T) {
+	first := LogicalFile{ChannelID: 7, FileID: 11, StoredSize: 4096, PlaintextSize: 4096}
+	second := LogicalFile{ChannelID: 7, FileID: 12, StoredSize: 4096, PlaintextSize: 4096}
+	if firstKey, secondKey := videoThumbnailCacheKeyPrefix(first), videoThumbnailCacheKeyPrefix(second); firstKey == secondKey {
+		t.Fatalf("partial logical files reused thumbnail prefix %q", firstKey)
 	}
 }
 

@@ -168,6 +168,9 @@ static void tdrive_mpv_render_update(void *ctx) {
 	mpv_set_option_string(_mpv, "demuxer-readahead-secs", "20");
 	mpv_set_option_string(_mpv, "demuxer-max-bytes", "67108864");
 	mpv_set_option_string(_mpv, "demuxer-max-back-bytes", "33554432");
+	mpv_set_option_string(_mpv, "idle", "yes");
+	mpv_set_option_string(_mpv, "keep-open", "yes");
+	mpv_set_option_string(_mpv, "keep-open-pause", "yes");
 	mpv_set_option_string(_mpv, "osc", htmlControls ? "no" : "yes");
 	mpv_set_option_string(_mpv, "osd-bar", htmlControls ? "no" : "yes");
 
@@ -512,16 +515,14 @@ import (
 const statePollInterval = 250 * time.Millisecond
 
 type Player struct {
-	mu              sync.Mutex
-	view            unsafe.Pointer
-	closed          bool
-	terminal        bool
-	cancel          context.CancelFunc
-	done            chan struct{}
-	onState         StateHandler
-	lastState       State
-	failureOnce     sync.Once
-	closedStateOnce sync.Once
+	mu        sync.Mutex
+	view      unsafe.Pointer
+	closed    bool
+	terminal  bool
+	cancel    context.CancelFunc
+	done      chan struct{}
+	onState   StateHandler
+	lastState State
 }
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
@@ -552,6 +553,10 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 		close(p.done)
 	}
 	return p, nil
+}
+
+func (p *Player) Presentation() Presentation {
+	return PresentationEmbedded
 }
 
 func (p *Player) Resize(rect Rect) error {
@@ -681,21 +686,19 @@ func (p *Player) publishState(state State) {
 }
 
 func (p *Player) emitTerminal(status PlaybackStatus) {
-	once := &p.failureOnce
-	if status == StatusClosed {
-		once = &p.closedStateOnce
-	}
-	once.Do(func() {
-		state := terminalState(status)
-		p.mu.Lock()
-		p.terminal = true
-		p.lastState = state
-		onState := p.onState
+	state := terminalState(status)
+	p.mu.Lock()
+	if p.terminal {
 		p.mu.Unlock()
-		if onState != nil {
-			onState(state)
-		}
-	})
+		return
+	}
+	p.terminal = true
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
 }
 
 func (p *Player) State() (State, bool) {
