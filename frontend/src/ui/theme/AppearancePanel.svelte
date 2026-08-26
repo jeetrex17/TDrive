@@ -25,7 +25,6 @@
     interface ModeOption {
         id: ThemeMode;
         label: string;
-        description: string;
         icon: typeof LaptopIcon;
     }
 
@@ -33,9 +32,9 @@
     let panel = $state<HTMLElement | null>(null);
 
     const modeOptions: readonly ModeOption[] = [
-        { id: 'system', label: 'System', description: 'Follow your system', icon: LaptopIcon },
-        { id: 'light', label: 'Light', description: 'Always bright', icon: SunIcon },
-        { id: 'dark', label: 'Dark', description: 'Always dim', icon: MoonIcon },
+        { id: 'system', label: 'System', icon: LaptopIcon },
+        { id: 'light', label: 'Light', icon: SunIcon },
+        { id: 'dark', label: 'Dark', icon: MoonIcon },
     ];
 
     const activeAppearance = $derived<ThemeAppearance | null>(
@@ -116,13 +115,7 @@
         <h2 id="appearance-title">Appearance</h2>
     </header>
 
-    <div class="appearance-section">
-        <div class="section-heading">
-            <span>Mode</span>
-            <span class="section-value">
-                {modeOptions.find((option) => option.id === $themeState.preference.mode)?.description}
-            </span>
-        </div>
+    <div class="appearance-section mode-section">
         <div class="mode-grid" role="radiogroup" aria-label="Appearance mode">
             {#each modeOptions as option, index (option.id)}
                 {@const Icon = option.icon}
@@ -177,7 +170,7 @@
                                 <span class="preview-row short"><i></i><b></b></span>
                             </span>
                         </span>
-                        <span class="theme-meta">
+                        <span class="theme-label">
                             <span class="theme-name">{theme.name}</span>
                         </span>
                         <span class="theme-check" aria-hidden="true">
@@ -218,6 +211,7 @@
     }
 
     .appearance-section { padding: 0 8px 14px; }
+    .mode-section { padding-bottom: 19px; }
 
     .section-heading {
         display: flex;
@@ -230,14 +224,6 @@
         font-weight: 800;
         letter-spacing: 0.07em;
         text-transform: uppercase;
-    }
-
-    .section-value {
-        color: var(--color-text-subtle);
-        font-size: 0.68rem;
-        font-weight: 700;
-        letter-spacing: 0;
-        text-transform: none;
     }
 
     .mode-grid {
@@ -308,8 +294,8 @@
 
     .theme-card {
         position: relative;
-        display: grid;
-        grid-template-rows: 62px auto;
+        display: flex;
+        flex-direction: column;
         gap: 8px;
         min-width: 0;
         padding: 7px;
@@ -337,7 +323,10 @@
 
     .theme-preview {
         display: grid;
+        flex: 0 0 62px;
         grid-template-columns: 32px 1fr;
+        width: 100%;
+        height: 62px;
         overflow: hidden;
         background: var(--preview-canvas);
         border: 1px solid color-mix(in srgb, var(--preview-text) 13%, transparent);
@@ -364,8 +353,20 @@
     .preview-row b { width: 64%; height: 3px; background: color-mix(in srgb, var(--preview-text) 28%, transparent); border-radius: 4px; }
     .preview-row.short b { width: 42%; }
 
-    .theme-meta { display: flex; flex-direction: column; min-width: 0; padding: 0 2px 2px; }
-    .theme-name { overflow: hidden; font-size: 0.75rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .theme-label {
+        display: block;
+        min-width: 0;
+        padding: 0 3px 2px;
+    }
+    .theme-name {
+        display: block;
+        overflow: hidden;
+        font-size: 0.75rem;
+        font-weight: 800;
+        line-height: 1.25;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 
     .theme-check {
         position: absolute;

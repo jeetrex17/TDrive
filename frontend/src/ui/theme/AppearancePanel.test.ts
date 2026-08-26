@@ -8,9 +8,12 @@ describe('AppearancePanel', () => {
 
         expect(body).toContain('Appearance');
         expect(body).toContain('System');
-        expect(body).toContain('Follow your system');
         expect(body).toContain('Light');
         expect(body).toContain('Dark');
+        expect(body).not.toContain('>Mode<');
+        expect(body).not.toContain('Follow your system');
+        expect(body).not.toContain('Always bright');
+        expect(body).not.toContain('Always dim');
         expect(body).not.toContain('Personalize');
         expect(body).not.toContain('Automatic pair');
         expect(body).not.toContain('System appearance palette');

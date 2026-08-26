@@ -110,14 +110,14 @@ body { background-color: var(--bg-dark); color: var(--text-main); height: 100vh;
    it. Older WebView2/WebKitGTK builds receive the quieter app-settle fallback
    below, while reduced-motion users always get an immediate palette swap. */
 ::view-transition-old(root) {
-    animation: theme-old-fade 260ms var(--ease-standard) both;
+    animation: theme-old-fade 300ms var(--ease-standard) both;
 }
 ::view-transition-new(root) {
-    animation: theme-new-reveal 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: theme-new-reveal 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
     clip-path: circle(150vmax at var(--theme-origin-x, 50vw) var(--theme-origin-y, 50vh));
 }
 html.theme-transition-fallback #app {
-    animation: theme-app-settle 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: theme-app-settle 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 @keyframes theme-old-fade {
     to { opacity: 0.84; filter: saturate(0.92); }

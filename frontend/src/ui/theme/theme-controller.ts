@@ -19,7 +19,7 @@ export const THEME_FALLBACK_CLASS = 'theme-transition-fallback';
 
 const COLOR_SCHEME_QUERY = '(prefers-color-scheme: dark)';
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
-const FALLBACK_CLEANUP_DELAY_MS = 420;
+const FALLBACK_CLEANUP_DELAY_MS = 500;
 
 type ThemeStorage = Pick<Storage, 'getItem' | 'setItem'>;
 type MediaChangeHandler = (event: MediaQueryListEvent) => void;

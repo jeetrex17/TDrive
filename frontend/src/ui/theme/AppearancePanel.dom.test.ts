@@ -127,7 +127,11 @@ describe('AppearancePanel behavior', () => {
         setup();
         click('#appearance-mode-dark');
 
+        const tokyoNight = host?.querySelector('#appearance-theme-tokyo-night');
+        const preview = tokyoNight?.querySelector('.theme-preview');
+        const label = tokyoNight?.querySelector('.theme-label');
         expect(host?.textContent).toContain('Tokyo Night');
+        expect(label?.previousElementSibling).toBe(preview);
         expect(host?.textContent).not.toContain('TDrive’s original midnight-blue glow.');
         expect(host?.textContent).not.toContain('Changes are previewed instantly and saved on this device.');
         expect(host?.querySelector('.theme-description')).toBeNull();
