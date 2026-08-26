@@ -8,6 +8,26 @@ const transferMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./transfers', () => transferMocks);
+vi.mock('./selection', () => ({
+    clearSelection: vi.fn(),
+    ensureRowSelectedForContextMenu: vi.fn(),
+    getSelectionPayload: vi.fn(() => []),
+}));
+vi.mock('./modals/delete', () => ({ openDeleteModal: vi.fn() }));
+vi.mock('./modals/rename', () => ({ openRenameModal: vi.fn() }));
+vi.mock('./modals/move', () => ({ openMoveModal: vi.fn() }));
+vi.mock('./navigation', () => ({ navigateToFolder: vi.fn() }));
+vi.mock('./media-types', () => ({ isVideoFile: vi.fn(() => false) }));
+vi.mock('./modals/file-viewer', () => ({
+    canOpenFileViewer: vi.fn(() => false),
+    openFileViewer: vi.fn(),
+}));
+vi.mock('../ui/menus/ContextMenu.svelte', () => ({ default: {} }));
+vi.mock('../ui/menus/context-menu-store', () => ({
+    hideContextMenu: vi.fn(),
+    showContextMenu: vi.fn(),
+}));
+vi.mock('../ui', () => ({ mountSvelte: vi.fn() }));
 
 beforeEach(() => {
     vi.clearAllMocks();

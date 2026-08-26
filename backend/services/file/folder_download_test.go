@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -262,6 +263,133 @@ func TestBuildFolderDownloadPlanRejectsCanonicalPathCollisions(t *testing.T) {
 	_, err := buildFolderDownloadPlan(manifest)
 	if err == nil || !strings.Contains(err.Error(), "duplicate path") {
 		t.Fatalf("buildFolderDownloadPlan error = %v, want duplicate path", err)
+	}
+}
+
+func TestFolderDownloadPathValidation(t *testing.T) {
+	directory := t.TempDir()
+	if err := validateDestinationParent(directory); err != nil {
+		t.Fatalf("validate directory: %v", err)
+	}
+	file, err := os.CreateTemp(directory, "destination-file-*")
+	if err != nil {
+		t.Fatalf("create destination file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close destination file: %v", err)
+	}
+	if err := validateDestinationParent(file.Name()); err == nil {
+		t.Fatal("regular file accepted as a destination parent")
+	}
+	if err := validateDestinationParent(filepath.Join(directory, "missing")); err == nil {
+		t.Fatal("missing destination parent accepted")
+	}
+
+	if err := validateRelativeDownloadPath(filepath.Join("nested", "file.txt")); err != nil {
+		t.Fatalf("validate safe relative path: %v", err)
+	}
+	for _, unsafe := range []string{"", "..", filepath.Join("..", "escape"), filepath.Join(directory, "absolute")} {
+		if err := validateRelativeDownloadPath(unsafe); err == nil {
+			t.Fatalf("unsafe relative path %q accepted", unsafe)
+		}
+	}
+
+	upperKey, err := canonicalDownloadPathKey(filepath.Join("Docs", "Report.TXT"))
+	if err != nil {
+		t.Fatalf("canonical path key: %v", err)
+	}
+	lowerKey, err := canonicalDownloadPathKey(filepath.Join("docs", "report.txt"))
+	if err != nil || upperKey != lowerKey {
+		t.Fatalf("canonical keys = %q and %q, err=%v", upperKey, lowerKey, err)
+	}
+	if _, err := canonicalDownloadPathKey("../escape"); err == nil {
+		t.Fatal("unsafe canonical path accepted")
+	}
+
+	joined, err := joinWithinRoot(directory, filepath.Join("nested", "file.txt"))
+	if err != nil || joined != filepath.Join(directory, "nested", "file.txt") {
+		t.Fatalf("joinWithinRoot = %q, %v", joined, err)
+	}
+	if _, err := joinWithinRoot(directory, filepath.Join("..", "escape")); err == nil {
+		t.Fatal("escaping path joined within root")
+	}
+}
+
+func TestFileDownloadVerificationAndErrorClassification(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "verify-*")
+	if err != nil {
+		t.Fatalf("create verification file: %v", err)
+	}
+	defer file.Close()
+	if _, err := file.Write([]byte("abc")); err != nil {
+		t.Fatalf("write verification file: %v", err)
+	}
+	if err := verifyOpenFileSize(file, 3); err != nil {
+		t.Fatalf("verify exact size: %v", err)
+	}
+	if err := verifyOpenFileSize(file, 2); err == nil {
+		t.Fatal("size mismatch was accepted")
+	}
+	if err := verifyOpenFileSize(file, -1); err == nil {
+		t.Fatal("negative expected size was accepted")
+	}
+
+	diskFailure := downloadDiskError{err: errors.New("disk full")}
+	if diskFailure.Error() != "disk full" || !errors.Is(diskFailure, diskFailure.err) {
+		t.Fatalf("downloadDiskError contract failed: %v", diskFailure)
+	}
+	tests := []struct {
+		name        string
+		err         error
+		wantIs      error
+		wantMessage string
+	}{
+		{name: "disk", err: fmt.Errorf("wrapped: %w", diskFailure), wantMessage: "Disk Error"},
+		{name: "canceled", err: context.Canceled, wantIs: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded, wantIs: context.DeadlineExceeded},
+		{name: "missing", err: tgclient.ErrMessageNotFound, wantMessage: "Message deleted or not found"},
+		{name: "not file", err: tgclient.ErrNotFile, wantMessage: "This is not a file"},
+		{name: "empty", err: tgclient.ErrEmptyDocument, wantMessage: "Empty document"},
+		{name: "network", err: errors.New("offline"), wantMessage: "Network Error"},
+	}
+	if err := classifyFileDownloadError(nil); err != nil {
+		t.Fatalf("classify nil: %v", err)
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyFileDownloadError(tt.err)
+			if tt.wantIs != nil && !errors.Is(got, tt.wantIs) {
+				t.Fatalf("classified error = %v, want errors.Is(%v)", got, tt.wantIs)
+			}
+			if tt.wantMessage != "" && !strings.Contains(got.Error(), tt.wantMessage) {
+				t.Fatalf("classified error = %v, want %q", got, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestDownloadFolderRejectsInvalidServiceInputsAndPickerFailure(t *testing.T) {
+	if result := (&Service{}).DownloadFolder(context.Background(), 1, "d:root", func(string) (string, error) { return "", nil }); result.Status != "error" {
+		t.Fatalf("nil database result = %+v", result)
+	}
+	svc, db, _, _ := newTestService(t)
+	project(t, db, personalChannelID, 10, 7, projection.Op{
+		Type: projection.OpMkdir, Obj: "d:project", Parent: projection.RootParent, Name: "Project",
+	})
+	if result := svc.DownloadFolder(nil, personalChannelID, "d:project", func(string) (string, error) { return "", nil }); result.Status != "error" {
+		t.Fatalf("nil context result = %+v", result)
+	}
+	if result := svc.DownloadFolder(context.Background(), 0, "d:project", func(string) (string, error) { return "", nil }); result.Status != "error" {
+		t.Fatalf("invalid channel result = %+v", result)
+	}
+	if result := svc.DownloadFolder(context.Background(), personalChannelID, "d:project", nil); result.Status != "error" {
+		t.Fatalf("nil picker result = %+v", result)
+	}
+	result := svc.DownloadFolder(context.Background(), personalChannelID, "d:project", func(string) (string, error) {
+		return "", errors.New("picker unavailable")
+	})
+	if result.Status != "error" || !strings.Contains(result.Message, "picker unavailable") {
+		t.Fatalf("picker failure result = %+v", result)
 	}
 }
 

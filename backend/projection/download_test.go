@@ -3,6 +3,7 @@ package projection
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 )
 
@@ -158,6 +159,63 @@ func TestFileDownloadRefContextUsesPortableNameAndCurrentRevision(t *testing.T) 
 	}
 	if file.Name != "renamed.txt" || file.ContentMsgID != 9001 || file.Revision != 2 {
 		t.Fatalf("file = %+v, want current portable revision", file)
+	}
+}
+
+func TestDownloadManifestValidationRejectsCorruptStructureAndOverflow(t *testing.T) {
+	tests := []struct {
+		name    string
+		folders []DownloadDirectory
+	}{
+		{
+			name:    "invalid identity",
+			folders: []DownloadDirectory{{ID: "root", Name: "Root"}},
+		},
+		{
+			name: "duplicate identity",
+			folders: []DownloadDirectory{
+				{ID: "d:root", Name: "Root"},
+				{ID: "d:root", Name: "Again", ParentID: "d:root", Depth: 1},
+			},
+		},
+		{
+			name: "missing parent",
+			folders: []DownloadDirectory{
+				{ID: "d:root", Name: "Root"},
+				{ID: "d:child", Name: "Child", ParentID: "d:missing", Depth: 1},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateDownloadDirectories(tt.folders); !errors.Is(err, ErrInvalidFolderDownload) {
+				t.Fatalf("validation error = %v, want ErrInvalidFolderDownload", err)
+			}
+		})
+	}
+
+	if total, err := checkedDownloadSize(10, 20); err != nil || total != 30 {
+		t.Fatalf("checkedDownloadSize success = %d, %v", total, err)
+	}
+	for _, pair := range [][2]int64{{-1, 1}, {1, -1}, {math.MaxInt64, 1}} {
+		if _, err := checkedDownloadSize(pair[0], pair[1]); !errors.Is(err, ErrInvalidFolderDownload) {
+			t.Fatalf("checkedDownloadSize(%d, %d) = %v, want ErrInvalidFolderDownload", pair[0], pair[1], err)
+		}
+	}
+}
+
+func TestFileDownloadRefContextRejectsInvalidAndMissingFiles(t *testing.T) {
+	db := newTestDB(t)
+	if _, _, err := FileDownloadRefContext(context.Background(), nil, testChan, 1); !errors.Is(err, ErrInvalidFileDownload) {
+		t.Fatalf("nil db error = %v, want ErrInvalidFileDownload", err)
+	}
+	if _, found, err := FileDownloadRefContext(context.Background(), db, testChan, 999); err != nil || found {
+		t.Fatalf("missing file = found %v, error %v", found, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := FileDownloadRefContext(ctx, db, testChan, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled lookup error = %v, want context.Canceled", err)
 	}
 }
 
