@@ -39,7 +39,7 @@
 
         <div id="video-loading" class="video-loading" aria-hidden="true" style="display: none;">
             <div class="video-spinner"></div>
-            <div id="video-loading-status" class="video-loading-status" role="status" aria-live="polite">Opening video</div>
+            <div id="video-loading-status" class="video-loading-status" role="status" aria-live="polite" aria-atomic="true">Opening video</div>
         </div>
 
         <div id="video-error" class="video-error" role="alert" style="display: none;"></div>
@@ -75,6 +75,17 @@
                 <button id="video-skip-forward" class="video-icon-btn video-skip-btn" type="button" aria-label="Forward 10 seconds" title="Forward 10 seconds">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 5h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17.4 8.3A7 7 0 1012 19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><text x="12" y="15.2" text-anchor="middle" fill="currentColor" font-size="6.2" font-weight="800">10</text></svg>
                 </button>
+            </div>
+
+            <div id="video-track-controls" class="video-track-controls" aria-label="Media tracks" hidden>
+                <label id="video-audio-control" class="video-track-control" for="video-audio-select" hidden>
+                    <span class="video-track-label">Audio</span>
+                    <select id="video-audio-select" class="video-track-select" aria-label="Audio track"></select>
+                </label>
+                <label id="video-subtitle-control" class="video-track-control" for="video-subtitle-select" hidden>
+                    <span class="video-track-label">Subtitles</span>
+                    <select id="video-subtitle-select" class="video-track-select" aria-label="Subtitle track"></select>
+                </label>
             </div>
 
             <div class="video-command-cluster video-secondary-cluster">

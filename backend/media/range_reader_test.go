@@ -337,15 +337,20 @@ type rangeCall struct {
 }
 
 type strictRangeFake struct {
-	mu         sync.Mutex
-	data       []byte
-	callLog    []rangeCall
-	delay      time.Duration
-	floodWaits int
-	floodWait  time.Duration
-	entered    chan struct{}
-	release    chan struct{}
-	enterOnce  sync.Once
+	mu                        sync.Mutex
+	data                      []byte
+	callLog                   []rangeCall
+	delay                     time.Duration
+	floodWaits                int
+	floodWait                 time.Duration
+	transientFailures         int
+	transientFailuresByOffset map[int64]int
+	shortReadFailures         int
+	fullReadEOFFailures       int
+	failErr                   error
+	entered                   chan struct{}
+	release                   chan struct{}
+	enterOnce                 sync.Once
 }
 
 func newStrictRangeFake(data []byte) *strictRangeFake {
@@ -381,6 +386,29 @@ func (f *strictRangeFake) ReadDocumentRange(ctx context.Context, ref tgclient.Do
 		f.mu.Unlock()
 		return 0, tgclient.NewFloodWaitError(wait)
 	}
+	if failures := f.transientFailuresByOffset[offset]; failures > 0 {
+		f.transientFailuresByOffset[offset] = failures - 1
+		f.mu.Unlock()
+		return 0, strictRangeTransientError()
+	}
+	if f.transientFailures > 0 {
+		f.transientFailures--
+		f.mu.Unlock()
+		return 0, strictRangeTransientError()
+	}
+	if f.failErr != nil {
+		err := f.failErr
+		f.mu.Unlock()
+		return 0, err
+	}
+	shortRead := f.shortReadFailures > 0
+	if shortRead {
+		f.shortReadFailures--
+	}
+	fullReadEOF := f.fullReadEOFFailures > 0
+	if fullReadEOF {
+		f.fullReadEOFFailures--
+	}
 	delay := f.delay
 	f.mu.Unlock()
 
@@ -403,6 +431,16 @@ func (f *strictRangeFake) ReadDocumentRange(ctx context.Context, ref tgclient.Do
 	}
 	if offset < 0 || offset+int64(len(dst)) > int64(len(f.data)) {
 		return 0, io.ErrUnexpectedEOF
+	}
+	if shortRead {
+		n := len(dst) / 2
+		if n == 0 {
+			return 0, nil
+		}
+		return copy(dst[:n], f.data[offset:offset+int64(n)]), nil
+	}
+	if fullReadEOF {
+		return copy(dst, f.data[offset:offset+int64(len(dst))]), io.EOF
 	}
 	return copy(dst, f.data[offset:offset+int64(len(dst))]), nil
 }

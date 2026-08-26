@@ -468,6 +468,7 @@ export namespace media {
 	export class LogicalFile {
 	    channel_id: number;
 	    file_id: number;
+	    revision: number;
 	    name: string;
 	    stored_size: number;
 	    plaintext_size: number;
@@ -484,6 +485,7 @@ export namespace media {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.channel_id = source["channel_id"];
 	        this.file_id = source["file_id"];
+	        this.revision = source["revision"];
 	        this.name = source["name"];
 	        this.stored_size = source["stored_size"];
 	        this.plaintext_size = source["plaintext_size"];

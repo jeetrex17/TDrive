@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 
+	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/tgclient"
 	"TDrive/backend/thumbnail"
 )
@@ -14,31 +16,44 @@ type PeerResolver interface {
 }
 
 type Config struct {
-	DB             *sql.DB
-	Peers          PeerResolver
-	Ranges         tgclient.RangeClient
-	Thumbs         *thumbnail.Cache
-	ThumbGenerator VideoThumbnailGenerator
+	DB     *sql.DB
+	Peers  PeerResolver
+	Ranges tgclient.RangeClient
+	Keys   MasterKeyProvider
+	// EncryptionOpenGate is held only while publishing an encrypted session.
+	// EncryptionOpenGeneration changes across each vault-lock transition, which
+	// lets slow network authentication happen outside the gate without allowing
+	// a session derived before the transition to be published afterward.
+	EncryptionOpenGate       sync.Locker
+	EncryptionOpenGeneration func() uint64
+	Thumbs                   *thumbnail.Cache
+	ThumbGenerator           VideoThumbnailGenerator
 }
 
 // Service is the app-facing media entry point. It owns logical file resolution
 // and loopback sessions; UI-specific players sit above it.
 type Service struct {
-	peers    PeerResolver
-	ranges   tgclient.RangeClient
-	thumbs   *thumbnail.Cache
-	thumbGen VideoThumbnailGenerator
-	resolver *Resolver
-	server   *Server
+	peers         PeerResolver
+	ranges        tgclient.RangeClient
+	keys          MasterKeyProvider
+	encGate       sync.Locker
+	encGeneration func() uint64
+	thumbs        *thumbnail.Cache
+	thumbGen      VideoThumbnailGenerator
+	resolver      *Resolver
+	server        *Server
 }
 
 func NewService(cfg Config) *Service {
 	s := &Service{
-		peers:    cfg.Peers,
-		ranges:   cfg.Ranges,
-		thumbs:   cfg.Thumbs,
-		thumbGen: cfg.ThumbGenerator,
-		resolver: NewResolver(cfg.DB),
+		peers:         cfg.Peers,
+		ranges:        cfg.Ranges,
+		keys:          cfg.Keys,
+		encGate:       cfg.EncryptionOpenGate,
+		encGeneration: cfg.EncryptionOpenGeneration,
+		thumbs:        cfg.Thumbs,
+		thumbGen:      cfg.ThumbGenerator,
+		resolver:      NewResolver(cfg.DB),
 	}
 	if s.thumbGen == nil {
 		s.thumbGen = NewMPVThumbnailGenerator()
@@ -82,7 +97,15 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		return OpenResult{}, err
 	}
 	if file.Encrypted {
-		return OpenResult{}, ErrEncryptedUnsupported
+		if file.EncryptionVersion != 1 {
+			return OpenResult{}, fmt.Errorf("%w: version %d", ErrEncryptedUnsupported, file.EncryptionVersion)
+		}
+		if err := tdcrypto.ValidatePlaintextSize(file.PlaintextSize); err != nil {
+			return OpenResult{}, fmt.Errorf("media: invalid encrypted plaintext size: %w", err)
+		}
+		if tdcrypto.CiphertextSize(file.PlaintextSize) != file.StoredSize {
+			return OpenResult{}, fmt.Errorf("media: encrypted stored size mismatch: %w", tdcrypto.ErrCiphertextSize)
+		}
 	}
 	kind := streamKindForName(file.Name)
 	if kind == StreamKindUnknown || (requiredKind != StreamKindUnknown && kind != requiredKind) {
@@ -114,13 +137,57 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		return OpenResult{}, fmt.Errorf("media: logical size mismatch: segments=%d file=%d", start, file.StoredSize)
 	}
 
+	var encryptionGeneration uint64
+	legacyGate := file.Encrypted && s.encGate != nil && s.encGeneration == nil
+	if legacyGate {
+		s.encGate.Lock()
+		defer s.encGate.Unlock()
+	} else if file.Encrypted && s.encGeneration != nil {
+		encryptionGeneration = s.encGeneration()
+		if encryptionGeneration%2 != 0 {
+			return OpenResult{}, ErrKeyUnavailable
+		}
+	}
+
+	var masterKey []byte
+	if file.Encrypted {
+		if s.keys == nil {
+			return OpenResult{}, ErrKeyUnavailable
+		}
+		masterKey, err = s.keys.MasterKey(ctx, channelID)
+		if len(masterKey) > 0 {
+			defer clear(masterKey)
+		}
+		if err != nil {
+			return OpenResult{}, fmt.Errorf("%w: %w", ErrKeyUnavailable, err)
+		}
+		if len(masterKey) == 0 {
+			return OpenResult{}, ErrKeyUnavailable
+		}
+	}
+
 	session, err := newSession(file, segments, s.ranges, s.thumbs, s.thumbGen, SessionOptions{
+		Context:               ctx,
 		EnableVideoThumbnails: kind == StreamKindVideo,
+		MasterKey:             masterKey,
 	})
 	if err != nil {
 		return OpenResult{}, err
 	}
-	if err := s.server.Add(session); err != nil {
+	if file.Encrypted && s.encGate != nil && s.encGeneration != nil {
+		s.encGate.Lock()
+		currentGeneration := s.encGeneration()
+		if currentGeneration != encryptionGeneration || currentGeneration%2 != 0 {
+			s.encGate.Unlock()
+			session.Close()
+			return OpenResult{}, ErrKeyUnavailable
+		}
+		err = s.server.Add(session)
+		s.encGate.Unlock()
+	} else {
+		err = s.server.Add(session)
+	}
+	if err != nil {
 		session.Close()
 		return OpenResult{}, err
 	}
@@ -136,11 +203,61 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 	}, nil
 }
 
+// OpenResultForToken safely snapshots an active loopback session without
+// transferring ownership or exposing the mutable Session.
+func (s *Service) OpenResultForToken(token string) (OpenResult, error) {
+	if s == nil || s.server == nil || token == "" {
+		return OpenResult{}, ErrSessionNotFound
+	}
+	session := s.server.session(token)
+	if session == nil {
+		return OpenResult{}, ErrSessionNotFound
+	}
+	token, url, thumbnailURL, file, ok := session.openSnapshot()
+	if !ok {
+		return OpenResult{}, ErrSessionNotFound
+	}
+	kind := streamKindForName(file.Name)
+	return OpenResult{
+		Token:         token,
+		URL:           url,
+		ThumbnailURL:  thumbnailURL,
+		Name:          file.Name,
+		Kind:          kind,
+		MimeType:      contentTypeFor(file.Name),
+		SupportsRange: true,
+		Info:          file,
+	}, nil
+}
+
 func (s *Service) CloseSession(token string) error {
 	if s == nil || s.server == nil {
 		return ErrSessionNotFound
 	}
 	return s.server.CloseSession(token)
+}
+
+// CloseEncryptedSessions closes only active encrypted sessions. It is used when
+// the vault locks so decryptors wipe retained derived keys and loopback URLs
+// stop serving private plaintext.
+func (s *Service) CloseEncryptedSessions() {
+	if s == nil || s.server == nil {
+		return
+	}
+	s.server.mu.Lock()
+	sessions := make([]*Session, 0)
+	for token, session := range s.server.sessions {
+		if session == nil || !session.Encrypted() {
+			continue
+		}
+		delete(s.server.sessions, token)
+		sessions = append(sessions, session)
+	}
+	s.server.mu.Unlock()
+
+	for _, session := range sessions {
+		session.Close()
+	}
 }
 
 func (s *Service) UpdatePlayback(update PlaybackUpdate) error {

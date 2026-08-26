@@ -14,6 +14,10 @@ export function ApproveJoinRequest(arg1, arg2) {
   return window['go']['main']['App']['ApproveJoinRequest'](arg1, arg2);
 }
 
+export function AttachNativeMedia(arg1, arg2) {
+  return window['go']['main']['App']['AttachNativeMedia'](arg1, arg2);
+}
+
 export function CancelDownload() {
   return window['go']['main']['App']['CancelDownload']();
 }

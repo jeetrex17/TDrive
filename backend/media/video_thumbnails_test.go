@@ -49,6 +49,18 @@ func TestVideoThumbnailerPrioritizesLatestRequest(t *testing.T) {
 	}
 }
 
+func TestVideoThumbnailCacheKeyIncludesContentRevision(t *testing.T) {
+	base := LogicalFile{ChannelID: 7, FileID: 11, Revision: 1, StoredSize: 4096}
+	replaced := base
+	replaced.Revision = 2
+	if first, second := videoThumbnailCacheKeyPrefix(base), videoThumbnailCacheKeyPrefix(replaced); first == second {
+		t.Fatalf("same-size replacement reused thumbnail prefix %q", first)
+	}
+	if got := videoThumbnailCacheKeyPrefix(base); got != videoThumbnailCacheKeyPrefix(base) {
+		t.Fatal("thumbnail cache key is not deterministic")
+	}
+}
+
 func TestVideoThumbnailerKeepsPersistentOnTimeout(t *testing.T) {
 	gen := &statefulVideoThumbGenerator{
 		session: &fakeVideoThumbSession{err: context.DeadlineExceeded},

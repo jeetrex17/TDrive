@@ -29,6 +29,9 @@ func TestResolverResolveNormalFile(t *testing.T) {
 	if got.ChannelID != testChannelID || got.FileID != 10 || got.Name != "clip.mp4" {
 		t.Fatalf("identity = %+v", got)
 	}
+	if got.Revision != 1 {
+		t.Fatalf("revision = %d, want 1", got.Revision)
+	}
 	if got.StoredSize != 1234 || got.PlaintextSize != 1234 {
 		t.Fatalf("sizes stored=%d plain=%d, want 1234/1234", got.StoredSize, got.PlaintextSize)
 	}
@@ -36,6 +39,28 @@ func TestResolverResolveNormalFile(t *testing.T) {
 		t.Fatalf("flags = encrypted:%v version:%d multipart:%v", got.Encrypted, got.EncryptionVersion, got.Multipart)
 	}
 	assertSegments(t, got.Segments, []Segment{{MsgID: 10, Size: 1234}})
+}
+
+func TestResolverCarriesReplacementRevisionIntoContentIdentity(t *testing.T) {
+	db := newResolverTestDB(t)
+	mustApplyOp(t, db, 20, projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "media-create",
+		Name: "same-size.mkv", ContentMsgID: 9001, ContentHash: "old", FileSize: 1024,
+	})
+	mustApplyOp(t, db, 21, projection.Op{
+		Type: projection.OpFileReplace, ProtocolVersion: 1, OpID: "media-replace",
+		Obj: projection.FileIDPrefix + "20", ExpectedRevision: 1,
+		ContentMsgID: 9002, ContentHash: "new", FileSize: 1024, RetainedUntil: 500,
+	})
+
+	got, err := NewResolver(db).Resolve(context.Background(), testChannelID, 20)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Revision != 2 {
+		t.Fatalf("revision = %d, want 2", got.Revision)
+	}
+	assertSegments(t, got.Segments, []Segment{{MsgID: 9002, Size: 1024}})
 }
 
 func TestResolverResolveEncryptedFile(t *testing.T) {

@@ -73,7 +73,12 @@ jobs:
       - name: Install Windows media dependencies
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install mpvio.install --no-progress -y
+        run: |
+          $mpvVersion = (Get-Content -LiteralPath scripts/package-mpv-version.txt -Raw).Trim()
+          choco install mpvio.install --version $mpvVersion --no-progress -y
+          if ($LASTEXITCODE -ne 0) {
+            throw "could not install pinned mpvio.install $mpvVersion"
+          }
 
       - name: Install Wails
         shell: bash
@@ -95,6 +100,93 @@ jobs:
         run: |
           wails build -clean -platform "${{ matrix.platform }}" -o "${{ matrix.output_name }}" \
             -ldflags "-X main.appVersion=${{ github.ref_name }}"
+
+      - name: Acquire checksum-pinned Linux media runtime
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RUNTIME_URL: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_URL }}
+          RUNTIME_SHA256: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ]; then
+            echo "Linux releases require repository variables TDRIVE_LINUX_MPV_RUNTIME_URL and TDRIVE_LINUX_MPV_RUNTIME_SHA256." >&2
+            echo "The approved tar.gz must contain mpv, SOURCE.txt, THIRD_PARTY_NOTICES.txt at its root, with private shared libraries under lib/." >&2
+            exit 1
+          fi
+          runtime_sha256="$(printf '%s' "$RUNTIME_SHA256" | tr '[:upper:]' '[:lower:]')"
+          case "$runtime_sha256" in
+            *[!0-9a-f]*|'') echo "TDRIVE_LINUX_MPV_RUNTIME_SHA256 must be a lowercase or uppercase SHA-256 value" >&2; exit 1 ;;
+          esac
+          if [ "${#runtime_sha256}" -ne 64 ]; then
+            echo "TDRIVE_LINUX_MPV_RUNTIME_SHA256 must contain exactly 64 hexadecimal characters" >&2
+            exit 1
+          fi
+
+          runtime_root="$RUNNER_TEMP/tdrive-linux-mpv-runtime"
+          runtime_archive="$RUNNER_TEMP/tdrive-linux-mpv-runtime.tar.gz"
+          rm -rf "$runtime_root"
+          mkdir -p "$runtime_root"
+          curl --fail --location --silent --show-error "$RUNTIME_URL" --output "$runtime_archive"
+          actual_sha256="$(sha256sum "$runtime_archive" | awk '{print $1}')"
+          if [ "$actual_sha256" != "$runtime_sha256" ]; then
+            echo "Linux media runtime checksum mismatch: expected $runtime_sha256, got $actual_sha256" >&2
+            exit 1
+          fi
+          if tar -tzf "$runtime_archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+            echo "Linux media runtime archive contains an unsafe path" >&2
+            exit 1
+          fi
+          if tar -tvzf "$runtime_archive" | awk '
+            substr($1, 1, 1) == "l" || substr($1, 1, 1) == "h" { found = 1 }
+            END { exit(found ? 0 : 1) }
+          '; then
+            echo "Linux media runtime archive must not contain symbolic or hard links" >&2
+            exit 1
+          fi
+          tar -xzf "$runtime_archive" -C "$runtime_root"
+          for required in mpv SOURCE.txt THIRD_PARTY_NOTICES.txt; do
+            if [ ! -s "$runtime_root/$required" ]; then
+              echo "Linux media runtime archive is missing non-empty root file: $required" >&2
+              exit 1
+            fi
+          done
+          chmod 755 "$runtime_root/mpv"
+          {
+            echo "TDRIVE_MPV_RUNTIME_DIR=$runtime_root"
+            echo "TDRIVE_MPV_ARCHIVE_SHA256=$runtime_sha256"
+            echo "TDRIVE_MPV_PACKAGE_SOURCE=$RUNTIME_URL"
+          } >> "$GITHUB_ENV"
+
+      - name: Acquire checksum-pinned AppImage tool
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          APPIMAGETOOL_URL: ${{ vars.TDRIVE_APPIMAGETOOL_URL }}
+          APPIMAGETOOL_SHA256: ${{ vars.TDRIVE_APPIMAGETOOL_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$APPIMAGETOOL_URL" ] || [ -z "$APPIMAGETOOL_SHA256" ]; then
+            echo "Linux releases require repository variables TDRIVE_APPIMAGETOOL_URL and TDRIVE_APPIMAGETOOL_SHA256." >&2
+            exit 1
+          fi
+          expected_sha256="$(printf '%s' "$APPIMAGETOOL_SHA256" | tr '[:upper:]' '[:lower:]')"
+          case "$expected_sha256" in
+            *[!0-9a-f]*|'') echo "TDRIVE_APPIMAGETOOL_SHA256 must be a SHA-256 value" >&2; exit 1 ;;
+          esac
+          if [ "${#expected_sha256}" -ne 64 ]; then
+            echo "TDRIVE_APPIMAGETOOL_SHA256 must contain exactly 64 hexadecimal characters" >&2
+            exit 1
+          fi
+          appimagetool="$RUNNER_TEMP/tdrive-appimagetool"
+          curl --fail --location --silent --show-error "$APPIMAGETOOL_URL" --output "$appimagetool"
+          actual_sha256="$(sha256sum "$appimagetool" | awk '{print $1}')"
+          if [ "$actual_sha256" != "$expected_sha256" ]; then
+            echo "appimagetool checksum mismatch: expected $expected_sha256, got $actual_sha256" >&2
+            exit 1
+          fi
+          chmod 755 "$appimagetool"
+          echo "TDRIVE_APPIMAGETOOL=$appimagetool" >> "$GITHUB_ENV"
 
       - name: Package (Linux AppImage)
         if: matrix.os == 'ubuntu-22.04'
@@ -130,19 +222,22 @@ jobs:
           SH
           chmod +x "$APPDIR/AppRun"
 
-          # appimagetool — GitHub runners have no FUSE, so extract-and-run.
-          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
+          # The runtime archive is an explicit, checksum-pinned release input.
+          # package-mpv-linux validates its version, architecture, license/source
+          # metadata, and a deterministic headless decode before it is included.
+          ./scripts/package-mpv-linux.sh "$APPDIR"
 
           mkdir -p dist
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
-            ./appimagetool-x86_64.AppImage "$APPDIR" "dist/${{ matrix.asset_name }}"
+            "$TDRIVE_APPIMAGETOOL" "$APPDIR" "dist/${{ matrix.asset_name }}"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $mpvVersion = (Get-Content -LiteralPath scripts/package-mpv-version.txt -Raw).Trim()
+          $env:TDRIVE_MPV_PACKAGE_SOURCE = "chocolatey:mpvio.install/$mpvVersion"
           ./scripts/package-mpv-windows.ps1 "build/bin/${{ matrix.output_name }}"
           Compress-Archive -Force -Path "build/bin/${{ matrix.output_name }}", "build/bin/media" -DestinationPath "dist/${{ matrix.asset_name }}"
 
@@ -165,6 +260,9 @@ jobs:
           fi
           
           echo "Packaging application from: $APP_PATH"
+          export TDRIVE_MPV_BIN="$(command -v mpv)"
+          export TDRIVE_MPV_LIB="$(pkg-config --variable=libdir mpv)/libmpv.2.dylib"
+          export TDRIVE_MPV_PACKAGE_SOURCE="homebrew:mpv/$(brew list --versions mpv | awk 'NR == 1 { print $2 }')"
           ./scripts/package-mpv-darwin.sh "$APP_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "dist/${{ matrix.asset_name }}"
 

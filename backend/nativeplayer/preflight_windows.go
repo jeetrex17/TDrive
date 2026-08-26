@@ -22,7 +22,7 @@ func PreflightDecode(ctx context.Context, url string) error {
 	if !windowsNativePlayerEnabled() {
 		return nil
 	}
-	if os.Getenv("TDRIVE_ENABLE_MPV_PREFLIGHT") != "1" {
+	if !sidecarPreflightEnabled(os.Getenv("TDRIVE_ENABLE_MPV_PREFLIGHT"), os.Getenv("TDRIVE_SKIP_MPV_PREFLIGHT")) {
 		return nil
 	}
 	mpvPath, err := findWindowsMPV()
@@ -32,28 +32,15 @@ func PreflightDecode(ctx context.Context, url string) error {
 
 	runCtx, cancel := context.WithTimeout(ctx, preflightTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, mpvPath,
-		"--no-config",
-		"--really-quiet",
-		"--terminal=no",
-		"--force-window=no",
-		"--vo=null",
-		"--ao=null",
-		"--frames=1",
-		"--demuxer-readahead-secs=0.5",
-		"--demuxer-max-bytes=2097152",
-		"--",
-		url,
-	)
+	args, stdin := mpvPreflightInvocation(url)
+	cmd := exec.CommandContext(runCtx, mpvPath, args...)
+	cmd.Stdin = stdin
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if err := cmd.Run(); err != nil {
 		if runCtx.Err() != nil {
-			return fmt.Errorf("%w: timed out", ErrDecoderUnsafe)
+			return nil
 		}
-		if len(output) > 0 {
-			return fmt.Errorf("%w: %v: %s", ErrDecoderUnsafe, err, string(output))
-		}
-		return fmt.Errorf("%w: %v", ErrDecoderUnsafe, err)
+		return fmt.Errorf("%w", ErrDecoderUnsafe)
 	}
 	return nil
 }

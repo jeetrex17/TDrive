@@ -38,11 +38,39 @@ describe('VideoModal', () => {
             'video-volume-slider',
             'video-volume-fill',
             'video-volume-thumb',
+            'video-track-controls',
+            'video-audio-control',
+            'video-audio-select',
+            'video-subtitle-control',
+            'video-subtitle-select',
             'video-speed-button',
             'video-speed-menu',
             'video-fullscreen',
         ]) {
             expect(body).toContain(`id="${id}"`);
         }
+    });
+
+    it('announces buffering and fallback status updates atomically', () => {
+        const { body } = render(VideoModal);
+
+        expect(body).toContain('id="video-loading-status"');
+        expect(body).toContain('role="status"');
+        expect(body).toContain('aria-live="polite"');
+        expect(body).toContain('aria-atomic="true"');
+    });
+
+    it('renders labelled native track selectors hidden by default', () => {
+        const { body } = render(VideoModal);
+
+        expect(body).toContain('<label id="video-audio-control"');
+        expect(body).toContain('for="video-audio-select"');
+        expect(body).toContain('>Audio</span>');
+        expect(body).toContain('aria-label="Audio track"');
+        expect(body).toContain('<label id="video-subtitle-control"');
+        expect(body).toContain('for="video-subtitle-select"');
+        expect(body).toContain('>Subtitles</span>');
+        expect(body).toContain('aria-label="Subtitle track"');
+        expect(body).toContain('id="video-track-controls" class="video-track-controls" aria-label="Media tracks" hidden');
     });
 });

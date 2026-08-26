@@ -1,4 +1,5 @@
 import {
+    attachNativeMedia,
     closeMedia,
     closeNativeMedia,
     getMediaStats,
@@ -18,6 +19,17 @@ import {
 import { EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from "../../../wailsjs/runtime/runtime";
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
+import {
+    SerialPlaybackTransitions,
+    capturePlaybackIntent,
+    shouldFallbackFromHtmlMediaError,
+    type PlaybackIntent,
+} from "../video/playback-lifecycle";
+import {
+    nativeTrackLabel,
+    normalizeNativeTracks,
+    type NativeMediaTrack,
+} from "../video/media-tracks";
 import { installModalA11y } from "../../ui/modals/modal-a11y";
 import VideoModal from "../../ui/video/VideoModal.svelte";
 import { mountSvelte, type SvelteMountHandle } from "../../ui/mount";
@@ -65,10 +77,14 @@ interface PlayerState {
     muted: boolean;
     rate: number;
     loading: boolean;
+    tracks: NativeMediaTrack[];
 }
 
 interface NativeMediaStatePayload {
     token?: string;
+    status?: string;
+    error?: unknown;
+    eof?: boolean;
     paused?: boolean;
     current_time?: number;
     duration?: number;
@@ -77,6 +93,7 @@ interface NativeMediaStatePayload {
     muted?: boolean;
     rate?: number;
     loading?: boolean;
+    tracks?: unknown;
 }
 
 interface PlayerAdapter {
@@ -90,6 +107,17 @@ interface PlayerAdapter {
     close(): Promise<void>;
 }
 
+interface VideoOpenAttempt {
+    generation: number;
+    target: VideoOpenTarget;
+    htmlFailureHandled: boolean;
+    nativeFallbackRequested: boolean;
+    pausedByUser: boolean;
+}
+
+type HtmlMediaErrorHandler = (code: number | undefined, state: PlayerState) => void;
+type NativeMediaErrorHandler = (detail: string) => void;
+
 const EMPTY_STATE: PlayerState = {
     paused: true,
     currentTime: 0,
@@ -99,6 +127,7 @@ const EMPTY_STATE: PlayerState = {
     muted: false,
     rate: 1,
     loading: false,
+    tracks: [],
 };
 
 class HtmlVideoAdapter implements PlayerAdapter {
@@ -107,7 +136,11 @@ class HtmlVideoAdapter implements PlayerAdapter {
     private closed = false;
     private lastAudibleVolume: number;
 
-    constructor(private readonly video: HTMLVideoElement, private readonly opened: MediaOpenResult) {
+    constructor(
+        private readonly video: HTMLVideoElement,
+        private readonly opened: MediaOpenResult,
+        private readonly onMediaError: HtmlMediaErrorHandler,
+    ) {
         this.lastAudibleVolume = video.volume > 0 ? video.volume : 1;
         const events = [
             "loadstart",
@@ -129,6 +162,12 @@ class HtmlVideoAdapter implements PlayerAdapter {
             video.addEventListener(event, listener);
             this.listeners.push(() => video.removeEventListener(event, listener));
         }
+        const errorListener = () => {
+            if (this.closed) return;
+            this.onMediaError(this.video.error?.code, this.snapshot());
+        };
+        video.addEventListener("error", errorListener);
+        this.listeners.push(() => video.removeEventListener("error", errorListener));
     }
 
     load() {
@@ -198,13 +237,35 @@ class HtmlVideoAdapter implements PlayerAdapter {
 
     async close() {
         if (this.closed) return;
+        try {
+            this.detach();
+        } finally {
+            await closeMedia(this.opened.token);
+        }
+    }
+
+    detachForNative(): MediaOpenResult | null {
+        return this.detach() ? this.opened : null;
+    }
+
+    private detach(): boolean {
+        if (this.closed) return false;
         this.closed = true;
         for (const remove of this.listeners.splice(0)) remove();
         this.subscribers.clear();
-        this.video.pause();
+        try {
+            this.video.pause();
+        } catch {
+            // The token still has to be released if a platform media element is
+            // already torn down and rejects a final pause/reset.
+        }
         this.video.removeAttribute("src");
-        this.video.load();
-        await closeMedia(this.opened.token);
+        try {
+            this.video.load();
+        } catch {
+            // Removing src is sufficient to detach ownership for native handoff.
+        }
+        return true;
     }
 
     private snapshot(): PlayerState {
@@ -219,6 +280,7 @@ class HtmlVideoAdapter implements PlayerAdapter {
             muted: this.video.muted || this.video.volume === 0,
             rate: this.video.playbackRate || 1,
             loading: this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !this.video.paused,
+            tracks: [],
         };
     }
 
@@ -238,11 +300,23 @@ class NativeMpvAdapter implements PlayerAdapter {
     private pendingSeek: { mode: "absolute" | "relative"; value: number } | null = null;
     private pendingLatestCommands = new Map<string, string[]>();
     private lastAudibleVolume = 1;
+    private failureReported = false;
 
-    constructor(private readonly opened: NativeMediaOpenResult) {
+    constructor(
+        private readonly opened: NativeMediaOpenResult,
+        private readonly onMediaError: NativeMediaErrorHandler,
+    ) {
         this.state = { ...EMPTY_STATE, paused: false, loading: true };
         this.unsubscribeRuntime = EventsOn("native_media_state", (payload: NativeMediaStatePayload) => {
             if (this.closed || payload?.token !== this.opened.token) return;
+            const failure = nativeFailureDetail(payload);
+            if (failure) {
+                if (!this.failureReported) {
+                    this.failureReported = true;
+                    this.onMediaError(failure);
+                }
+                return;
+            }
             this.state = nativePayloadToState(payload, this.state);
             if (!this.state.muted && this.state.volume > 0) this.lastAudibleVolume = this.state.volume;
             this.emit();
@@ -303,6 +377,16 @@ class NativeMpvAdapter implements PlayerAdapter {
         const next = clampPlaybackRate(value);
         this.scheduleLatestCommand("speed", ["set", "speed", String(next)]);
         this.updateFallbackState((state) => ({ ...state, rate: next }));
+    }
+
+    setAudioTrack(id: number) {
+        if (!Number.isSafeInteger(id) || id <= 0) return;
+        void this.sendCommand(["set", "aid", String(id)]);
+    }
+
+    setSubtitleTrack(id: number | null) {
+        if (id !== null && (!Number.isSafeInteger(id) || id <= 0)) return;
+        void this.sendCommand(["set", "sid", id === null ? "no" : String(id)]);
     }
 
     async close() {
@@ -421,15 +505,24 @@ let timeEl: HTMLElement | null = null;
 let durationEl: HTMLElement | null = null;
 let speedBtnEl: HTMLButtonElement | null = null;
 let speedMenuEl: HTMLElement | null = null;
+let trackControlsEl: HTMLElement | null = null;
+let audioControlEl: HTMLElement | null = null;
+let audioSelectEl: HTMLSelectElement | null = null;
+let subtitleControlEl: HTMLElement | null = null;
+let subtitleSelectEl: HTMLSelectElement | null = null;
 
 let activeAdapter: PlayerAdapter | null = null;
 let activeNative: NativeMediaOpenResult | null = null;
 let activeMediaToken = "";
+let activeMediaEncrypted = false;
 let unsubscribeState: (() => void) | null = null;
 let currentState: PlayerState = { ...EMPTY_STATE };
-let openSeq = 0;
+let activeOpenAttempt: VideoOpenAttempt | null = null;
+const playbackTransitions = new SerialPlaybackTransitions();
+let unsubscribeEncryptedMediaSessionsClosed: (() => void) | null = null;
 let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
 let loadingTimer: ReturnType<typeof setTimeout> | null = null;
+let loadingStatusOverride = "";
 let skipFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
 let nativeResizeFrame = 0;
 let seekingWithPointer = false;
@@ -439,6 +532,7 @@ let volumeCommandFrame = 0;
 let hasError = false;
 let isWindowFullscreen = false;
 let lastBufferedSignature = "";
+let lastTrackSignature = "";
 let activeThumbnailURL = "";
 let currentPreviewBucket = -1;
 let lastPreviewRatio = 0;
@@ -466,6 +560,7 @@ const pendingThumbnails = new Set<number>();
 const failedThumbnails = new Map<number, number>();
 let a11y: ReturnType<typeof installModalA11y> | null = null;
 let videoMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let videoSetupComplete = false;
 
 // Gap between the native video and the chrome strips. Kept small so the picture
 // is as large as possible; the chrome itself is measured, so this is the only
@@ -530,7 +625,14 @@ function nativePayloadToState(payload: NativeMediaStatePayload, previous: Player
         muted: Boolean(payload.muted ?? previous.muted),
         rate: clamp(rate, 0.25, 4),
         loading: Boolean(payload.loading ?? false),
+        tracks: Array.isArray(payload.tracks) ? normalizeNativeTracks(payload.tracks) : previous.tracks,
     };
+}
+
+function nativeFailureDetail(payload: NativeMediaStatePayload): string | null {
+    const detail = typeof payload.error === "string" ? payload.error.trim().slice(0, 256) : "";
+    if (payload.status !== "failed" && !detail) return null;
+    return detail || "native media player exited unexpectedly";
 }
 
 // coalesceRanges clamps ranges to the known duration and merges any whose gap is
@@ -774,6 +876,10 @@ function setLoading(visible: boolean) {
 
 function updateLoadingStatus() {
     if (!loadingStatusEl) return;
+    if (loadingStatusOverride) {
+        loadingStatusEl.textContent = loadingStatusOverride;
+        return;
+    }
     if (!activeAdapter) {
         loadingStatusEl.textContent = "Opening video";
         return;
@@ -787,6 +893,11 @@ function updateLoadingStatus() {
         return;
     }
     loadingStatusEl.textContent = "Buffering";
+}
+
+function setLoadingStatusOverride(message: string) {
+    loadingStatusOverride = message;
+    updateLoadingStatus();
 }
 
 function syncMediaStatsPolling() {
@@ -911,6 +1022,7 @@ function clearSkipFeedback() {
 
 function setError(message: string) {
     hasError = true;
+    loadingStatusOverride = "";
     setLoading(false);
     clearMediaStatsPolling();
     if (!errorEl) return;
@@ -1069,6 +1181,124 @@ function syncSpeed(state: PlayerState) {
     });
 }
 
+function syncNativeTrackControls(tracks: NativeMediaTrack[]) {
+    if (!activeNative) {
+        resetNativeTrackControls();
+        return;
+    }
+
+    const audioTracks = tracks.filter((track) => track.type === "audio");
+    const subtitleTracks = tracks.filter((track) => track.type === "subtitle");
+    const showAudio = audioTracks.length > 1;
+    const showSubtitles = subtitleTracks.length > 0;
+    const showControls = showAudio || showSubtitles;
+    const visibilityChanged = trackControlsEl?.hidden === showControls
+        || audioControlEl?.hidden === showAudio
+        || subtitleControlEl?.hidden === showSubtitles;
+
+    if (trackControlsEl) trackControlsEl.hidden = !showControls;
+    if (audioControlEl) audioControlEl.hidden = !showAudio;
+    if (subtitleControlEl) subtitleControlEl.hidden = !showSubtitles;
+    if (audioSelectEl) audioSelectEl.disabled = !showAudio;
+    if (subtitleSelectEl) subtitleSelectEl.disabled = !showSubtitles;
+
+    const signature = JSON.stringify({ token: activeNative.token, audioTracks, subtitleTracks });
+    if (signature !== lastTrackSignature) {
+        lastTrackSignature = signature;
+        renderTrackOptions(audioSelectEl, audioTracks, false);
+        renderTrackOptions(subtitleSelectEl, subtitleTracks, true);
+    }
+    syncTrackSelection(audioSelectEl, audioTracks, false);
+    syncTrackSelection(subtitleSelectEl, subtitleTracks, true);
+
+    if (visibilityChanged) scheduleNativeResize();
+}
+
+function renderTrackOptions(
+    select: HTMLSelectElement | null,
+    tracks: NativeMediaTrack[],
+    includeOff: boolean,
+) {
+    if (!select) return;
+    const options: HTMLOptionElement[] = [];
+    if (includeOff) options.push(trackOption("no", "Off"));
+    tracks.forEach((track, index) => {
+        options.push(trackOption(String(track.id), nativeTrackLabel(track, index)));
+    });
+    select.replaceChildren(...options);
+}
+
+function trackOption(value: string, label: string) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    option.title = label;
+    return option;
+}
+
+function syncTrackSelection(
+    select: HTMLSelectElement | null,
+    tracks: NativeMediaTrack[],
+    includeOff: boolean,
+) {
+    if (!select) return;
+    const selected = tracks.find((track) => track.selected);
+    const fallback = tracks.find((track) => track.default) ?? tracks[0];
+    select.value = selected ? String(selected.id) : includeOff ? "no" : fallback ? String(fallback.id) : "";
+}
+
+function resetNativeTrackControls() {
+    const hadVisibleControls = Boolean(trackControlsEl && !trackControlsEl.hidden);
+    const needsReset = hadVisibleControls
+        || Boolean(audioControlEl && !audioControlEl.hidden)
+        || Boolean(subtitleControlEl && !subtitleControlEl.hidden)
+        || Boolean(audioSelectEl && (!audioSelectEl.disabled || audioSelectEl.options.length > 0))
+        || Boolean(subtitleSelectEl && (!subtitleSelectEl.disabled || subtitleSelectEl.options.length > 0))
+        || lastTrackSignature !== "";
+    if (!needsReset) return;
+    lastTrackSignature = "";
+    trackControlsEl?.setAttribute("hidden", "");
+    audioControlEl?.setAttribute("hidden", "");
+    subtitleControlEl?.setAttribute("hidden", "");
+    if (audioSelectEl) {
+        audioSelectEl.disabled = true;
+        audioSelectEl.replaceChildren();
+    }
+    if (subtitleSelectEl) {
+        subtitleSelectEl.disabled = true;
+        subtitleSelectEl.replaceChildren();
+    }
+    if (hadVisibleControls) scheduleNativeResize();
+}
+
+function selectedTrackID(select: HTMLSelectElement | null, type: NativeMediaTrack["type"]): number | null {
+    if (!select) return null;
+    const id = Number(select.value);
+    if (!Number.isSafeInteger(id) || id <= 0) return null;
+    return currentState.tracks.some((track) => track.type === type && track.id === id) ? id : null;
+}
+
+function selectAudioTrack() {
+    if (!(activeAdapter instanceof NativeMpvAdapter)) return;
+    const id = selectedTrackID(audioSelectEl, "audio");
+    if (id === null) return;
+    activeAdapter.setAudioTrack(id);
+    revealChrome();
+}
+
+function selectSubtitleTrack() {
+    if (!(activeAdapter instanceof NativeMpvAdapter) || !subtitleSelectEl) return;
+    if (subtitleSelectEl.value === "no") {
+        activeAdapter.setSubtitleTrack(null);
+        revealChrome();
+        return;
+    }
+    const id = selectedTrackID(subtitleSelectEl, "subtitle");
+    if (id === null) return;
+    activeAdapter.setSubtitleTrack(id);
+    revealChrome();
+}
+
 function nextPlaybackRate(currentRate: number) {
     const current = Number.isFinite(currentRate) && currentRate > 0 ? currentRate : 1;
     const currentIndex = RATE_OPTIONS.findIndex((rate) => Math.abs(rate - current) < 0.001);
@@ -1098,11 +1328,15 @@ function cycleFallbackPlaybackRate() {
 function applyState(state: PlayerState) {
     const wasPaused = currentState.paused;
     currentState = state;
+    if (!state.loading && loadingStatusOverride) {
+        loadingStatusOverride = "";
+    }
     schedulePlaybackHint(state);
     syncButtonState(state);
     syncTimeline(state);
     syncVolume(state);
     syncSpeed(state);
+    syncNativeTrackControls(state.tracks);
     syncTransportAvailability(state);
     syncCenterPlay(state);
     setLoading(state.loading);
@@ -1581,19 +1815,7 @@ function clearVolumeCommandFrame() {
 }
 
 async function releaseActive() {
-    const adapter = activeAdapter;
-    activeAdapter = null;
-    activeNative = null;
-    activeMediaToken = "";
-    unsubscribeState?.();
-    unsubscribeState = null;
-    clearPlaybackHintTimer();
-    clearMediaStatsPolling();
-    clearVolumeCommandFrame();
-    clearSkipFeedback();
-    resetThumbnailPreview();
-    setSpeedMenuOpen(false);
-    setNativeMode(false);
+    const adapter = detachActiveReferences();
     if (adapter) {
         try {
             await adapter.close();
@@ -1601,15 +1823,14 @@ async function releaseActive() {
             console.warn("Close media failed:", err);
         }
     }
-    currentState = { ...EMPTY_STATE };
-    applyState(currentState);
 }
 
-function releaseActiveSoon() {
+function detachActiveReferences(): PlayerAdapter | null {
     const adapter = activeAdapter;
     activeAdapter = null;
     activeNative = null;
     activeMediaToken = "";
+    activeMediaEncrypted = false;
     unsubscribeState?.();
     unsubscribeState = null;
     clearPlaybackHintTimer();
@@ -1619,13 +1840,35 @@ function releaseActiveSoon() {
     resetThumbnailPreview();
     setSpeedMenuOpen(false);
     setNativeMode(false);
-    if (adapter) {
-        void adapter.close().catch((err) => {
-            console.warn("Close media failed:", err);
-        });
-    }
     currentState = { ...EMPTY_STATE };
     applyState(currentState);
+    return adapter;
+}
+
+function detachHtmlForNative(adapter: HtmlVideoAdapter): MediaOpenResult | null {
+    if (activeAdapter !== adapter) return null;
+    const detached = detachActiveReferences();
+    const opened = detached === adapter ? adapter.detachForNative() : null;
+    activeMediaEncrypted = Boolean(opened?.info.encrypted);
+    return opened;
+}
+
+async function safelyCloseMedia(token: string) {
+    if (!token) return;
+    try {
+        await closeMedia(token);
+    } catch (err) {
+        console.warn("Close media session failed:", err);
+    }
+}
+
+async function safelyCloseNativeMedia(token: string) {
+    if (!token) return;
+    try {
+        await closeNativeMedia(token);
+    } catch (err) {
+        console.warn("Close native media session failed:", err);
+    }
 }
 
 function updateMediaText(name: string, size: number) {
@@ -1640,16 +1883,250 @@ function renderMediaMeta() {
     metaEl.textContent = streamActivityText ? `${mediaMetaBaseText} · ${streamActivityText}` : mediaMetaBaseText;
 }
 
+async function prepareNativeRect(isCurrent: () => boolean): Promise<NativeMediaRect | null> {
+    const measureFallback = shouldMeasureNativeFallbackBeforeOpen();
+    // macOS can overlay the HTML controls above libmpv. Windows/Linux reserve
+    // their HTML chrome before creating the native child surface.
+    setNativeMode(measureFallback, measureFallback);
+    await nextFrame();
+    if (!isCurrent() || !isOpen()) return null;
+    const rect = currentNativeRect();
+    if (rect) return rect;
+    setNativeMode(false);
+    setError("Could not prepare the native video surface.");
+    return null;
+}
+
+async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => boolean) {
+    let opened: MediaOpenResult | null = null;
+    let adapter: HtmlVideoAdapter | null = null;
+    try {
+        opened = await openMedia(attempt.target.id);
+        if (!isCurrent() || !isOpen()) {
+            await safelyCloseMedia(opened.token);
+            return;
+        }
+        if (!opened.url || !opened.token) {
+            await safelyCloseMedia(opened.token);
+            opened = null;
+            throw new Error("media session did not return a playable URL");
+        }
+
+        const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
+        const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
+        updateMediaText(displayName, displaySize);
+        activeThumbnailURL = opened.thumbnailUrl;
+        activeMediaToken = opened.token;
+        activeMediaEncrypted = Boolean(opened.info.encrypted);
+        thumbnailRequestSeq += 1;
+
+        adapter = new HtmlVideoAdapter(videoEl!, opened, (code, state) => {
+            handleHtmlMediaError(attempt, adapter!, code, state);
+        });
+        activeAdapter = adapter;
+        unsubscribeState = adapter.subscribe((state) => {
+            if (!isCurrent() || activeAdapter !== adapter) return;
+            applyState(state);
+        });
+        adapter.load();
+    } catch (err: unknown) {
+        if (adapter && activeAdapter === adapter) {
+            await releaseActive();
+        } else if (opened?.token) {
+            if (activeMediaToken === opened.token) detachActiveReferences();
+            await safelyCloseMedia(opened.token);
+        }
+        if (!isCurrent()) return;
+        console.error("OpenMedia failed:", err);
+        setError(errorMessage(err, "Could not open this video."));
+    }
+}
+
+function handleHtmlMediaError(
+    attempt: VideoOpenAttempt,
+    adapter: HtmlVideoAdapter,
+    code: number | undefined,
+    state: PlayerState,
+) {
+    if (
+        attempt.htmlFailureHandled ||
+        activeOpenAttempt !== attempt ||
+        !playbackTransitions.isCurrent(attempt.generation) ||
+        activeAdapter !== adapter
+    ) {
+        return;
+    }
+    attempt.htmlFailureHandled = true;
+
+    if (shouldFallbackFromHtmlMediaError(code)) {
+        attempt.nativeFallbackRequested = true;
+        const intent = capturePlaybackIntent(state, attempt.pausedByUser);
+        setLoadingStatusOverride("Switching to a compatible player...");
+        setLoading(true);
+        void promoteHtmlToNative(attempt, adapter, intent);
+        return;
+    }
+
+    const message = code === 2
+        ? "The video stream was interrupted. Check your connection and try again."
+        : "The embedded player could not continue playing this video.";
+    void playbackTransitions.run(attempt.generation, async (isCurrent) => {
+        await releaseActive();
+        if (isCurrent()) setError(message);
+    });
+}
+
+async function promoteHtmlToNative(
+    attempt: VideoOpenAttempt,
+    adapter: HtmlVideoAdapter,
+    intent: PlaybackIntent,
+) {
+    await playbackTransitions.run(attempt.generation, async (isCurrent) => {
+        if (!isCurrent() || activeAdapter !== adapter || !attempt.nativeFallbackRequested) return;
+        const existing = detachHtmlForNative(adapter);
+        if (!existing) return;
+
+        setLoadingStatusOverride("Switching to a compatible player...");
+        setLoading(true);
+        if (!isCurrent() || !isOpen()) {
+            await safelyCloseMedia(existing.token);
+            return;
+        }
+        const rect = await prepareNativeRect(isCurrent);
+        if (!rect || !isCurrent()) {
+            await safelyCloseMedia(existing.token);
+            return;
+        }
+        await openNativePlayback(attempt, rect, isCurrent, existing, intent);
+    });
+}
+
+async function openNativePlayback(
+    attempt: VideoOpenAttempt,
+    rect: NativeMediaRect,
+    isCurrent: () => boolean,
+    existing: MediaOpenResult | null = null,
+    intent: PlaybackIntent | null = null,
+) {
+    let opened: NativeMediaOpenResult | null = null;
+    let owner: "none" | "html" | "native" | "adapter" = existing ? "html" : "none";
+    try {
+        const result = existing
+            ? await attachNativeMedia(existing.token, rect)
+            : await openNativeMedia(attempt.target.id, rect);
+        opened = result;
+        owner = "native";
+        if (existing && result.token !== existing.token) {
+            throw new Error("native media attachment returned a different session token");
+        }
+
+        if (!result.token) {
+            throw new Error("native media session did not return a token");
+        }
+        if (!isCurrent() || !isOpen()) {
+            await safelyCloseNativeMedia(result.token);
+            return;
+        }
+
+        activateNativePlayback(attempt, result, intent);
+        owner = "adapter";
+    } catch (err: unknown) {
+        const cleanupToken = opened?.token || existing?.token || "";
+        if (cleanupToken && activeMediaToken === cleanupToken && activeAdapter) {
+            await releaseActive();
+        } else if (owner === "native") {
+            if (cleanupToken && activeMediaToken === cleanupToken) detachActiveReferences();
+            await safelyCloseNativeMedia(cleanupToken);
+            if (existing && opened?.token && opened.token !== existing.token) {
+                await safelyCloseMedia(existing.token);
+            }
+        } else if (owner === "html") {
+            await safelyCloseMedia(existing?.token || "");
+        }
+        if (!isCurrent()) return;
+        console.error(existing ? "AttachNativeMedia failed:" : "OpenNativeMedia failed:", err);
+        setNativeMode(false);
+        setError(errorMessage(err, existing
+            ? "This video could not be opened by the compatible player."
+            : "Could not open this video."));
+    }
+}
+
+function handleNativeMediaError(attempt: VideoOpenAttempt, token: string, detail: string) {
+    if (
+        activeOpenAttempt !== attempt
+        || !playbackTransitions.isCurrent(attempt.generation)
+        || activeNative?.token !== token
+        || !(activeAdapter instanceof NativeMpvAdapter)
+    ) {
+        return;
+    }
+    console.error("Native media player failed:", detail);
+    void playbackTransitions.run(attempt.generation, async (isCurrent) => {
+        if (!isCurrent() || activeNative?.token !== token) return;
+        await releaseActive();
+        if (isCurrent() && isOpen()) {
+            setError("The compatible player stopped unexpectedly. Try opening the video again.");
+        }
+    });
+}
+
+function activateNativePlayback(
+    attempt: VideoOpenAttempt,
+    opened: NativeMediaOpenResult,
+    intent: PlaybackIntent | null,
+) {
+    setNativeMode(true, !opened.htmlControls);
+    activeNative = opened;
+    activeMediaToken = opened.token;
+    activeMediaEncrypted = Boolean(opened.info.encrypted);
+    const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
+    const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
+    updateMediaText(displayName, displaySize);
+    activeThumbnailURL = opened.thumbnailUrl;
+    thumbnailRequestSeq += 1;
+
+    const adapter = new NativeMpvAdapter(opened, (detail) => {
+        handleNativeMediaError(attempt, opened.token, detail);
+    });
+    activeAdapter = adapter;
+    if (intent) {
+        adapter.setVolume(intent.volume);
+        adapter.setMuted(intent.muted);
+        adapter.setSpeed(intent.rate);
+        if (intent.paused) adapter.playPause();
+    }
+
+    let positionRestored = !intent || intent.currentTime <= 0;
+    unsubscribeState = adapter.subscribe((state) => {
+        if (!playbackTransitions.isCurrent(attempt.generation) || activeAdapter !== adapter) return;
+        applyState(state);
+        if (!positionRestored && state.duration > 0) {
+            positionRestored = true;
+            adapter.seekAbsolute(intent!.currentTime);
+        }
+    });
+    setChromeVisible(true);
+    scheduleNativeResize();
+}
+
 export async function openVideoModal(target: VideoOpenTarget) {
     if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
     const id = Number(target.id || 0);
     if (!id) return;
 
-    const seq = ++openSeq;
-    releaseActiveSoon();
+    const attempt: VideoOpenAttempt = {
+        generation: playbackTransitions.begin(),
+        target: { ...target, id },
+        htmlFailureHandled: false,
+        nativeFallbackRequested: false,
+        pausedByUser: false,
+    };
+    activeOpenAttempt = attempt;
 
     updateMediaText(target.name || "Video", target.size || 0);
     clearError();
+    setLoadingStatusOverride("");
     setLoading(true);
     setChromeVisible(true);
     modalEl.style.display = "flex";
@@ -1657,95 +2134,43 @@ export async function openVideoModal(target: VideoOpenTarget) {
     a11y?.activate();
     void syncFullscreenState();
 
-    if (target.encrypted) {
-        setError("Encrypted videos can't be played yet.");
-        return;
-    }
-    if (!isWebviewDirectVideo(target.name)) {
-        const measureFallback = shouldMeasureNativeFallbackBeforeOpen();
-        // macOS stays opaque until libmpv exists underneath the transparent stage.
-        // Windows/Linux must enter fallback layout first so the native child HWND/X11
-        // window is never created over the close button or transport controls.
-        setNativeMode(measureFallback, measureFallback);
-        await nextFrame();
-        const rect = currentNativeRect();
-        if (seq !== openSeq || !isOpen()) return;
-        if (!rect) {
-            setNativeMode(false);
-            setError("Could not prepare the native video surface.");
+    return playbackTransitions.run(attempt.generation, async (isCurrent) => {
+        await releaseActive();
+        if (!isCurrent() || !isOpen()) return;
+        setLoadingStatusOverride("");
+        setLoading(true);
+        if (isWebviewDirectVideo(attempt.target.name)) {
+            await openHtmlPlayback(attempt, isCurrent);
             return;
         }
-        try {
-            const opened = await openNativeMedia(id, rect);
-            if (seq !== openSeq || !isOpen()) {
-                await closeNativeMedia(opened.token);
-                return;
-            }
-            if (!opened.token) {
-                throw new Error("native media session did not return a token");
-            }
-            setNativeMode(true, !opened.htmlControls);
-            activeNative = opened;
-            activeMediaToken = opened.token;
-            const displayName = opened.info.name || opened.name || target.name || "Video";
-            const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
-            updateMediaText(displayName, displaySize);
-            const adapter = new NativeMpvAdapter(opened);
-            activeAdapter = adapter;
-            activeThumbnailURL = opened.thumbnailUrl;
-            thumbnailRequestSeq += 1;
-            unsubscribeState = adapter.subscribe(applyState);
-            setChromeVisible(true);
-            scheduleNativeResize();
-        } catch (err: unknown) {
-            console.error("OpenNativeMedia failed:", err);
-            setNativeMode(false);
-            setError(errorMessage(err, "Could not open this video."));
-        }
-        return;
-    }
-    setNativeMode(false);
-
-    try {
-        const opened = await openMedia(id);
-        if (seq !== openSeq || !isOpen()) {
-            await closeMedia(opened.token);
-            return;
-        }
-        if (!opened.url || !opened.token) {
-            throw new Error("media session did not return a playable URL");
-        }
-        const displayName = opened.info.name || opened.name || target.name || "Video";
-        const displaySize = opened.info.plaintextSize || opened.info.storedSize || target.size || 0;
-        updateMediaText(displayName, displaySize);
-        activeThumbnailURL = opened.thumbnailUrl;
-        activeMediaToken = opened.token;
-        thumbnailRequestSeq += 1;
-        const adapter = new HtmlVideoAdapter(videoEl, opened);
-        activeAdapter = adapter;
-        unsubscribeState = adapter.subscribe(applyState);
-		adapter.load();
-    } catch (err: unknown) {
-        console.error("OpenMedia failed:", err);
-        setError(errorMessage(err, "Could not open this video."));
-    }
+        const rect = await prepareNativeRect(isCurrent);
+        if (!rect || !isCurrent()) return;
+        await openNativePlayback(attempt, rect, isCurrent);
+    });
 }
 
 export async function closeVideoModal() {
     if (!modalEl) return;
-    openSeq += 1;
+    const generation = playbackTransitions.begin();
+    activeOpenAttempt = null;
     clearChromeTimer();
     await exitVideoFullscreen();
+    if (!playbackTransitions.isCurrent(generation)) return;
     modalEl.style.display = "none";
     modalEl.setAttribute("aria-hidden", "true");
     a11y?.deactivate();
-    await releaseActive();
+    await playbackTransitions.run(generation, async () => releaseActive());
+    if (!playbackTransitions.isCurrent(generation)) return;
     clearError();
+    setLoadingStatusOverride("");
     setLoading(false);
 }
 
 function togglePlayback() {
     if (!activeAdapter || hasError) return;
+    if (activeOpenAttempt) {
+        activeOpenAttempt.pausedByUser = !currentState.paused;
+    }
     activeAdapter.playPause();
     revealChrome();
 }
@@ -1755,16 +2180,6 @@ function seekBy(delta: number) {
     activeAdapter.seekRelative(delta);
     showSkipFeedback(delta);
     revealChrome();
-}
-
-function bindVideoEvents() {
-    if (!videoEl) return;
-    videoEl.addEventListener("error", () => {
-        const code = videoEl?.error?.code;
-        const hint = code ? ` (media error ${code})` : "";
-        setError(`This format could not be decoded by the embedded webview${hint}.`);
-        void releaseActive();
-    });
 }
 
 function bindScrubber() {
@@ -2064,6 +2479,14 @@ function handleWindowResize() {
     void syncFullscreenState();
 }
 
+function bindEncryptedMediaLifecycle() {
+    if (unsubscribeEncryptedMediaSessionsClosed) return;
+    unsubscribeEncryptedMediaSessionsClosed = EventsOn("encrypted_media_sessions_closed", () => {
+        if (!activeOpenAttempt || (!activeOpenAttempt.target.encrypted && !activeMediaEncrypted)) return;
+        void closeVideoModal();
+    });
+}
+
 function bindControls() {
     closeBtnEl?.addEventListener("click", () => void closeVideoModal());
     centerPlayBtnEl?.addEventListener("click", togglePlayback);
@@ -2072,6 +2495,8 @@ function bindControls() {
     skipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
     skipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
     playBtnEl?.addEventListener("click", togglePlayback);
+    audioSelectEl?.addEventListener("change", selectAudioTrack);
+    subtitleSelectEl?.addEventListener("change", selectSubtitleTrack);
     fullscreenBtnEl?.addEventListener("click", () => void toggleFullscreen());
     bindScrubber();
     bindVolume();
@@ -2097,6 +2522,7 @@ function customSpeedMarkup() {
 }
 
 export function setupVideoModal() {
+    if (videoSetupComplete) return;
     const host = byID<HTMLElement>("video-modal");
     if (host && !videoMarkupHandle) {
         host.replaceChildren();
@@ -2139,11 +2565,17 @@ export function setupVideoModal() {
     durationEl = byID("video-duration");
     speedBtnEl = byID("video-speed-button");
     speedMenuEl = byID("video-speed-menu");
+    trackControlsEl = byID("video-track-controls");
+    audioControlEl = byID("video-audio-control");
+    audioSelectEl = byID("video-audio-select");
+    subtitleControlEl = byID("video-subtitle-control");
+    subtitleSelectEl = byID("video-subtitle-select");
 
     if (!modalEl || !videoEl || !stageEl) {
         console.error("Video modal setup failed. Missing #video-modal, #video-stage, or #video-player.");
         return;
     }
+    videoSetupComplete = true;
     a11y = installModalA11y(modalEl, {
         requestClose: () => {
             if (isSpeedMenuOpen()) {
@@ -2155,8 +2587,8 @@ export function setupVideoModal() {
         initialFocus: () => playBtnEl || closeBtnEl,
         restoreFocus: "#file-list",
     });
+    bindEncryptedMediaLifecycle();
     renderSpeedOptions();
-    bindVideoEvents();
     bindControls();
     applyState(EMPTY_STATE);
 }

@@ -13,6 +13,8 @@ export function AppVersion():Promise<main.AppVersionInfo>;
 
 export function ApproveJoinRequest(arg1:number,arg2:number):Promise<void>;
 
+export function AttachNativeMedia(arg1:string,arg2:nativeplayer.Rect):Promise<main.NativeMediaResult>;
+
 export function CancelDownload():Promise<void>;
 
 export function CancelUpdateDownload():Promise<void>;

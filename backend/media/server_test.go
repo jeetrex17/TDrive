@@ -69,8 +69,8 @@ func TestMediaServerServesTokenizedRanges(t *testing.T) {
 	if !bytes.Equal(got, body[100:200]) {
 		t.Fatal("range body mismatch")
 	}
-	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
-		t.Fatalf("Access-Control-Allow-Origin = %q, want *", resp.Header.Get("Access-Control-Allow-Origin"))
+	if resp.Header.Get("Access-Control-Allow-Origin") == "*" {
+		t.Fatal("Access-Control-Allow-Origin unexpectedly allows every origin")
 	}
 	if !strings.Contains(resp.Header.Get("Access-Control-Expose-Headers"), "Content-Range") {
 		t.Fatalf("Access-Control-Expose-Headers = %q, want Content-Range exposed", resp.Header.Get("Access-Control-Expose-Headers"))
@@ -156,6 +156,7 @@ func TestMediaServiceOpenStreamSupportsViewerFileTypes(t *testing.T) {
 }
 
 func TestMediaStreamPreflightAllowsRangeFetches(t *testing.T) {
+	t.Setenv("TDRIVE_MEDIA_ALLOWED_ORIGINS", "http://localhost:5173")
 	db := newResolverTestDB(t)
 	body := testBytes(256)
 	mustApplyOp(t, db, 10, projection.Op{
@@ -194,14 +195,90 @@ func TestMediaStreamPreflightAllowsRangeFetches(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", resp.StatusCode)
 	}
-	if resp.Header.Get("Access-Control-Allow-Origin") != "*" {
-		t.Fatalf("Access-Control-Allow-Origin = %q, want *", resp.Header.Get("Access-Control-Allow-Origin"))
+	if resp.Header.Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want localhost dev origin echoed", resp.Header.Get("Access-Control-Allow-Origin"))
 	}
 	if resp.Header.Get("Access-Control-Allow-Methods") != "GET, HEAD, OPTIONS" {
 		t.Fatalf("Access-Control-Allow-Methods = %q, want GET, HEAD, OPTIONS", resp.Header.Get("Access-Control-Allow-Methods"))
 	}
 	if resp.Header.Get("Access-Control-Allow-Headers") != "Range" {
 		t.Fatalf("Access-Control-Allow-Headers = %q, want Range", resp.Header.Get("Access-Control-Allow-Headers"))
+	}
+}
+
+func TestMediaServerCORSAllowsOnlyAppAndLocalDevOrigins(t *testing.T) {
+	t.Setenv("TDRIVE_MEDIA_ALLOWED_ORIGINS", "http://localhost:5173, http://127.0.0.1:34115, http://[::1]:5173")
+	db := newResolverTestDB(t)
+	body := testBytes(256)
+	mustApplyOp(t, db, 10, projection.Op{
+		Type:     projection.OpFileUpload,
+		Parent:   projection.RootParent,
+		Name:     "clip.mp4",
+		FileSize: int64(len(body)),
+	})
+	ranges := newMediaRangeFake(map[int64][]byte{10: body})
+	svc := NewService(Config{DB: db, Peers: staticPeerResolver{peer: ranges.peer}, Ranges: ranges})
+	defer svc.Close()
+	opened, err := svc.Open(context.Background(), testChannelID, 10)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	for _, origin := range []string{
+		"wails://wails",
+		"http://wails.localhost",
+		"http://localhost:5173",
+		"http://127.0.0.1:34115",
+		"http://[::1]:5173",
+	} {
+		req, _ := http.NewRequest(http.MethodGet, opened.URL, nil)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Range", "bytes=0-7")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s GET: %v", origin, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusPartialContent {
+			t.Fatalf("%s status = %d, want 206", origin, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != origin {
+			t.Fatalf("%s Access-Control-Allow-Origin = %q, want echo", origin, got)
+		}
+		if !strings.Contains(resp.Header.Get("Vary"), "Origin") {
+			t.Fatalf("%s Vary = %q, want Origin", origin, resp.Header.Get("Vary"))
+		}
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, opened.URL, nil)
+	req.Header.Set("Range", "bytes=0-7")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("originless GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent {
+		t.Fatalf("originless status = %d, want 206", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("originless Access-Control-Allow-Origin = %q, want empty", got)
+	}
+
+	for _, origin := range []string{"https://example.com", "http://localhost:9999"} {
+		req, _ = http.NewRequest(http.MethodGet, opened.URL, nil)
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Range", "bytes=0-7")
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s disallowed GET: %v", origin, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("%s disallowed status = %d, want 403", origin, resp.StatusCode)
+		}
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
+			t.Fatalf("%s disallowed Access-Control-Allow-Origin = %q, want empty", origin, got)
+		}
 	}
 }
 
@@ -420,23 +497,37 @@ func TestMediaServerThumbnailUnavailableWithoutGenerator(t *testing.T) {
 	}
 }
 
-func TestMediaOpenRejectsEncryptedFiles(t *testing.T) {
+func TestMediaServerRejectsNonFiniteThumbnailTimes(t *testing.T) {
 	db := newResolverTestDB(t)
+	body := testBytes(256)
 	mustApplyOp(t, db, 10, projection.Op{
-		Type:          projection.OpFileUpload,
-		Parent:        projection.RootParent,
-		Name:          "secret.mp4",
-		FileSize:      200,
-		Encrypted:     true,
-		PlaintextSize: 100,
+		Type:     projection.OpFileUpload,
+		Parent:   projection.RootParent,
+		Name:     "clip.mp4",
+		FileSize: int64(len(body)),
 	})
-	ranges := newMediaRangeFake(map[int64][]byte{10: testBytes(200)})
-	svc := NewService(Config{DB: db, Peers: staticPeerResolver{peer: ranges.peer}, Ranges: ranges})
+	ranges := newMediaRangeFake(map[int64][]byte{10: body})
+	svc := NewService(Config{
+		DB:             db,
+		Peers:          staticPeerResolver{peer: ranges.peer},
+		Ranges:         ranges,
+		ThumbGenerator: &fakeVideoThumbGenerator{available: true},
+	})
 	defer svc.Close()
+	opened, err := svc.Open(context.Background(), testChannelID, 10)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
 
-	_, err := svc.Open(context.Background(), testChannelID, 10)
-	if !errors.Is(err, ErrEncryptedUnsupported) {
-		t.Fatalf("err = %v, want ErrEncryptedUnsupported", err)
+	for _, rawTime := range []string{"NaN", "+Inf", "-Inf"} {
+		resp, err := http.Get(opened.ThumbnailURL + "?t=" + rawTime)
+		if err != nil {
+			t.Fatalf("%s thumbnail GET: %v", rawTime, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400", rawTime, resp.StatusCode)
+		}
 	}
 }
 

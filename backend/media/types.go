@@ -6,7 +6,10 @@
 // build on this stable model.
 package media
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 var (
 	ErrDBNotReady           = errors.New("media: db not ready")
@@ -14,12 +17,30 @@ var (
 	ErrIncompleteMultipart  = errors.New("media: multipart file is incomplete")
 	ErrRangeClientNotReady  = errors.New("media: range client not ready")
 	ErrPeerResolverNotReady = errors.New("media: peer resolver not ready")
-	ErrEncryptedUnsupported = errors.New("media: encrypted playback is not implemented yet")
+	ErrEncryptedUnsupported = errors.New("media: encrypted playback format is unsupported")
+	ErrKeyUnavailable       = errors.New("media: encryption key is unavailable")
 	ErrUnsupportedMediaType = errors.New("media: unsupported media type")
 	ErrSessionNotFound      = errors.New("media: session not found")
 	ErrThumbnailPending     = errors.New("media: thumbnail pending")
 	ErrThumbnailUnavailable = errors.New("media: thumbnail unavailable")
 )
+
+// MasterKeyProvider supplies a caller-owned copy of the in-memory master key
+// for encrypted media. Service clears returned key bytes after creating the
+// per-session decryptors.
+type MasterKeyProvider interface {
+	MasterKey(ctx context.Context, channelID int64) ([]byte, error)
+}
+
+// MasterKeyProviderFunc adapts a function to MasterKeyProvider.
+type MasterKeyProviderFunc func(ctx context.Context, channelID int64) ([]byte, error)
+
+func (provider MasterKeyProviderFunc) MasterKey(ctx context.Context, channelID int64) ([]byte, error) {
+	if provider == nil {
+		return nil, ErrKeyUnavailable
+	}
+	return provider(ctx, channelID)
+}
 
 type StreamKind string
 
@@ -50,6 +71,7 @@ type Segment struct {
 type LogicalFile struct {
 	ChannelID         int64     `json:"channel_id"`
 	FileID            int64     `json:"file_id"`
+	Revision          int64     `json:"revision"`
 	Name              string    `json:"name"`
 	StoredSize        int64     `json:"stored_size"`
 	PlaintextSize     int64     `json:"plaintext_size"`

@@ -1,11 +1,14 @@
 package main
 
 import (
-	"TDrive/backend/core"
-	encservice "TDrive/backend/services/encryption"
 	"context"
 	"fmt"
 	"time"
+
+	"TDrive/backend/core"
+	encservice "TDrive/backend/services/encryption"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const encryptionMountTransitionTimeout = 55 * time.Second
@@ -52,8 +55,18 @@ func (a *App) encryptionService() appEncryptionService {
 }
 
 func (a *App) clearEncryptionSession() {
+	if a == nil {
+		return
+	}
+	a.closeEncryptedNativeMedia()
 	if a.engine != nil {
 		a.engine.ClearEncryptionSession()
+	}
+	// Wails stores its event bus in the lifecycle context. Tests and early
+	// shutdown paths may use an ordinary context, which runtime.EventsEmit treats
+	// as a fatal programming error rather than a no-op.
+	if a.ctx != nil && a.ctx.Value("events") != nil {
+		runtime.EventsEmit(a.ctx, "encrypted_media_sessions_closed")
 	}
 }
 

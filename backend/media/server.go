@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ const (
 	mediaSessionIdleTTL    = 2 * time.Hour
 	mediaSessionSweepEvery = 5 * time.Minute
 	mediaStreamChunkSize   = 256 * 1024
+	mediaAllowedOriginsEnv = "TDRIVE_MEDIA_ALLOWED_ORIGINS"
 )
 
 var mediaStreamBufferPool = sync.Pool{
@@ -217,6 +220,10 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !applyMediaCORS(w, r, true) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
 	token := strings.TrimPrefix(path.Clean(r.URL.Path), prefix)
 	if token == "" || strings.Contains(token, "/") {
 		http.NotFound(w, r)
@@ -231,10 +238,6 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 	size := session.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", contentTypeFor(session.Name()))
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Range")
-	w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -271,8 +274,10 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 }
 
 func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	if !applyMediaCORS(w, r, false) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -292,7 +297,7 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seconds, err := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	if err != nil || seconds < 0 {
+	if err != nil || seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		http.Error(w, "invalid thumbnail time", http.StatusBadRequest)
 		return
 	}
@@ -314,6 +319,48 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "thumbnail error", http.StatusInternalServerError)
 	}
+}
+
+func applyMediaCORS(w http.ResponseWriter, r *http.Request, exposeRangeHeaders bool) bool {
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Range")
+	if exposeRangeHeaders {
+		w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
+	}
+
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	addVaryOrigin(w.Header())
+	if !isAllowedMediaOrigin(origin) {
+		return false
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	return true
+}
+
+func isAllowedMediaOrigin(origin string) bool {
+	switch origin {
+	case "wails://wails", "http://wails.localhost":
+		return true
+	}
+	for _, allowed := range strings.Split(os.Getenv(mediaAllowedOriginsEnv), ",") {
+		if strings.TrimSpace(allowed) == origin {
+			return true
+		}
+	}
+	return false
+}
+
+func addVaryOrigin(header http.Header) {
+	const varyOrigin = "Origin"
+	for _, part := range strings.Split(header.Get("Vary"), ",") {
+		if strings.EqualFold(strings.TrimSpace(part), varyOrigin) {
+			return
+		}
+	}
+	header.Add("Vary", varyOrigin)
 }
 
 func (s *Server) session(token string) *Session {

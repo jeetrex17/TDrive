@@ -804,8 +804,9 @@ func (t *videoThumbnailer) cacheKey(bucket int) string {
 }
 
 func videoThumbnailCacheKeyPrefix(file LogicalFile) string {
-	return "video-thumb-v1-ch" + strconv.FormatInt(file.ChannelID, 10) +
+	return "video-thumb-v2-ch" + strconv.FormatInt(file.ChannelID, 10) +
 		"-file" + strconv.FormatInt(file.FileID, 10) +
+		"-rev" + strconv.FormatInt(file.Revision, 10) +
 		"-size" + strconv.FormatInt(file.StoredSize, 10) +
 		"-t"
 }
