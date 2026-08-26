@@ -155,6 +155,32 @@ func TestPlanImportFlagsOversize(t *testing.T) {
 	}
 }
 
+func TestPlanArchiveDoesNotReserveDirectoriesForOversizeMembers(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	svc.MaxUploadBytes = 1
+	archivePath := buildZip(t, map[string]string{
+		"nested/huge.bin": strings.Repeat("x", MaxParts+1),
+	}, nil, nil)
+	plan := ImportPlan{
+		MaxBytes: svc.largeFileMaxBytes(),
+		MaxItems: 1, // only the archive-named folder should be admitted
+	}
+
+	err := svc.planArchive(context.Background(), archivePath, false, &plan)
+	if err != nil {
+		t.Fatalf("planArchive: %v", err)
+	}
+	if plan.LimitExceeded {
+		t.Fatal("oversized member directories falsely exceeded the item limit")
+	}
+	if plan.Files != 0 || plan.Oversize != 1 {
+		t.Fatalf("plan files/oversize = %d/%d, want 0/1", plan.Files, plan.Oversize)
+	}
+	if plan.Folders != 1 {
+		t.Fatalf("plan folders = %d, want only the archive-named folder", plan.Folders)
+	}
+}
+
 func TestPlanImportCorruptArchiveDoesNotCountExtractFolder(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	p := filepath.Join(t.TempDir(), "bad.zip")

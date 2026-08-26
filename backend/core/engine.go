@@ -338,7 +338,7 @@ func (e *Engine) EmitAndProjectContext(ctx context.Context, channelID int64, op 
 	}
 	if _, err := projection.ProjectFromOp(backend.DB, channelID, msgID, op, actorID, header); err != nil {
 		e.warnf("warn: projection failed after send msg=%d op=%s: %v\n", msgID, op.Type, err)
-		return msgID, err
+		return msgID, fmt.Errorf("%w: msg=%d op=%s: %w", projection.ErrControlProjection, msgID, op.Type, err)
 	}
 	return msgID, nil
 }
@@ -387,7 +387,7 @@ func (e *Engine) EmitAndProjectBatchContext(ctx context.Context, channelID int64
 
 	tx, err := backend.DB.Begin()
 	if err != nil {
-		return fmt.Errorf("projection: begin batch tx: %w", err)
+		return fmt.Errorf("%w: begin batch tx: %w", projection.ErrControlProjection, err)
 	}
 	defer func() {
 		if err != nil {
@@ -396,11 +396,11 @@ func (e *Engine) EmitAndProjectBatchContext(ctx context.Context, channelID int64
 	}()
 	for _, item := range sent {
 		if _, err = projection.ProjectFromOpTx(tx, channelID, item.msgID, item.op, actorID, item.header); err != nil {
-			return fmt.Errorf("projection: project batch msg=%d op=%s: %w", item.msgID, item.op.Type, err)
+			return fmt.Errorf("%w: batch msg=%d op=%s: %w", projection.ErrControlProjection, item.msgID, item.op.Type, err)
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("projection: commit batch tx: %w", err)
+		return fmt.Errorf("%w: commit batch tx: %w", projection.ErrControlProjection, err)
 	}
 	return nil
 }

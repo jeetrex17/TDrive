@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"TDrive/backend"
@@ -123,6 +126,111 @@ func TestNewFileServicePropagatesImportContextToFolderCreation(t *testing.T) {
 	}
 	if emittedContext != nil {
 		t.Fatal("canceled folder creation reached the emitter")
+	}
+}
+
+func TestRunImportStopsAfterControlProjectionFailure(t *testing.T) {
+	db := openEngineWriteTestDB(t)
+	previousDB := backend.DB
+	backend.DB = db
+	t.Cleanup(func() { backend.DB = previousDB })
+
+	if _, err := db.Exec(`
+		CREATE TRIGGER fail_import_folder_projection
+		BEFORE INSERT ON folders
+		BEGIN
+			SELECT RAISE(ABORT, 'injected folder projection failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create projection trigger: %v", err)
+	}
+
+	peer := tgclient.InputPeer{ChannelID: engineWriteTestChannelID, AccessHash: 91}
+	fake := tgclient.NewFake(7)
+	fake.SeedChannel(peer, "Test drive")
+	engine := &Engine{
+		ctx:   context.Background(),
+		tg:    fake,
+		warnf: func(string, ...any) {},
+	}
+	engine.selfUserID.Store(7)
+
+	selectionRoot := t.TempDir()
+	folder := filepath.Join(selectionRoot, "Broken folder")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatalf("create import folder: %v", err)
+	}
+	laterFile := filepath.Join(selectionRoot, "later.txt")
+	if err := os.WriteFile(laterFile, []byte("must not upload"), 0o600); err != nil {
+		t.Fatalf("create later file: %v", err)
+	}
+
+	err := engine.newFileService().RunImport(
+		context.Background(),
+		engineWriteTestChannelID,
+		[]string{folder, laterFile},
+		projection.RootParent,
+		false,
+		false,
+	)
+	if !errors.Is(err, projection.ErrControlProjection) {
+		t.Fatalf("RunImport error = %v, want ErrControlProjection", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "injected folder projection failure") {
+		t.Fatalf("RunImport error = %v, want injected root cause", err)
+	}
+	if controls := fake.SentControls(); len(controls) != 1 {
+		t.Fatalf("sent controls = %d, want the accepted mkdir only", len(controls))
+	}
+	if files := fake.SentFiles(); len(files) != 0 {
+		t.Fatalf("sent files after projection failure = %d, want 0", len(files))
+	}
+}
+
+func TestEmitAndProjectBatchMarksPostSendProjectionFailure(t *testing.T) {
+	db := openEngineWriteTestDB(t)
+	previousDB := backend.DB
+	backend.DB = db
+	t.Cleanup(func() { backend.DB = previousDB })
+
+	if _, err := db.Exec(`
+		CREATE TRIGGER fail_control_batch_projection
+		BEFORE INSERT ON folders
+		BEGIN
+			SELECT RAISE(ABORT, 'injected batch projection failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create projection trigger: %v", err)
+	}
+
+	peer := tgclient.InputPeer{ChannelID: engineWriteTestChannelID, AccessHash: 91}
+	fake := tgclient.NewFake(7)
+	fake.SeedChannel(peer, "Test drive")
+	engine := &Engine{
+		ctx:   context.Background(),
+		tg:    fake,
+		warnf: func(string, ...any) {},
+	}
+	engine.selfUserID.Store(7)
+	ops := []projection.Op{
+		{Type: projection.OpMkdir, Obj: projection.FolderIDPrefix + "batch-a", Name: "A"},
+		{Type: projection.OpMkdir, Obj: projection.FolderIDPrefix + "batch-b", Name: "B"},
+	}
+
+	err := engine.EmitAndProjectBatchContext(context.Background(), engineWriteTestChannelID, ops)
+	if !errors.Is(err, projection.ErrControlProjection) {
+		t.Fatalf("EmitAndProjectBatchContext error = %v, want ErrControlProjection", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "injected batch projection failure") {
+		t.Fatalf("EmitAndProjectBatchContext error = %v, want injected root cause", err)
+	}
+	if controls := fake.SentControls(); len(controls) != len(ops) {
+		t.Fatalf("sent controls = %d, want %d accepted controls", len(controls), len(ops))
+	}
+	for _, op := range ops {
+		if projection.FolderExists(db, engineWriteTestChannelID, op.Obj) {
+			t.Fatalf("folder %q projected despite batch rollback", op.Obj)
+		}
 	}
 }
 

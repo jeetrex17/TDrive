@@ -151,7 +151,7 @@ func (s *Service) planImport(ctx context.Context, paths []string, encrypt, extra
 			if IsArchive(p) {
 				plan.Archives++
 			}
-			planErr = s.planFile(info.Size(), encrypt, &plan)
+			_, planErr = s.planFile(info.Size(), encrypt, &plan)
 		}
 		if errors.Is(planErr, errImportItemLimit) {
 			break
@@ -186,14 +186,14 @@ func (p *ImportPlan) addFolder() error {
 	return p.checkItemLimit()
 }
 
-func (s *Service) planFile(size int64, encrypt bool, plan *ImportPlan) error {
+func (s *Service) planFile(size int64, encrypt bool, plan *ImportPlan) (bool, error) {
 	if uploadByteSize(size, encrypt) > s.largeFileMaxBytes() {
 		plan.Oversize++
-		return nil
+		return false, nil
 	}
 	plan.Files++
 	plan.Bytes += size
-	return plan.checkItemLimit()
+	return true, plan.checkItemLimit()
 }
 
 func (s *Service) planFolder(ctx context.Context, root string, encrypt bool, plan *ImportPlan) error {
@@ -213,7 +213,8 @@ func (s *Service) planFolder(ctx context.Context, root string, encrypt bool, pla
 			plan.addError(d.Name(), err)
 			return false, nil
 		}
-		return false, s.planFile(info.Size(), encrypt, plan)
+		_, planErr := s.planFile(info.Size(), encrypt, plan)
+		return false, planErr
 	}, func(p string, err error) error {
 		plan.addError(filepath.Base(p), err)
 		return nil
@@ -235,7 +236,8 @@ func (s *Service) planArchive(ctx context.Context, p string, encrypt bool, plan 
 		// Corrupt or unreadable: RunImport falls back to uploading it as a file.
 		plan.addError(filepath.Base(p), fmt.Errorf("cannot read archive (%v), will upload as a file", err))
 		if info, statErr := os.Stat(p); statErr == nil {
-			return s.planFile(info.Size(), encrypt, plan)
+			_, planErr := s.planFile(info.Size(), encrypt, plan)
+			return planErr
 		}
 		return nil
 	}
@@ -252,8 +254,12 @@ func (s *Service) planArchive(ctx context.Context, p string, encrypt bool, plan 
 		if rel == "" {
 			continue
 		}
-		if err := s.planFile(e.Size, encrypt, plan); err != nil {
+		uploadable, err := s.planFile(e.Size, encrypt, plan)
+		if err != nil {
 			return err
+		}
+		if !uploadable {
+			continue
 		}
 		for d := path.Dir(rel); d != "."; d = path.Dir(d) {
 			if _, exists := dirs[d]; exists {
@@ -403,6 +409,7 @@ func isFatalImportError(err error) bool {
 		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, errImportItemLimit) ||
+		errors.Is(err, projection.ErrControlProjection) ||
 		errors.Is(err, errUploadProjection) ||
 		errors.Is(err, tgclient.ErrFloodWait) ||
 		errors.Is(err, tgclient.ErrSendOutcomeUnknown)
@@ -524,7 +531,8 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 			s.emitEvent("import_progress", map[string]any{"label": "Extracting " + filepath.Base(p)})
 			root, err := ensureTmp()
 			if err != nil {
-				return fmt.Errorf("create temp dir: %w", err)
+				fatalErr = fmt.Errorf("create temp dir: %w", err)
+				break
 			}
 			dir, stats, err := s.extractArchiveToTemp(ctx, p, root, encrypt)
 			tasks.oversize += stats.oversize
@@ -566,7 +574,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 		}
 	}
 	uploaded, observerFailed, uploadReasons := observer.Summary()
-	failed := max(plan.Files-uploaded, observerFailed)
+	failed := max(0, tasks.files-uploaded, observerFailed)
 	errorsOut := append([]string(nil), tasks.errors...)
 	for _, reason := range uploadReasons {
 		if len(errorsOut) >= maxImportErrorDetails {
@@ -574,14 +582,26 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 		}
 		errorsOut = append(errorsOut, reason)
 	}
+	status := "done"
+	fatalMessage := ""
+	if fatalErr != nil {
+		status = "failed"
+		fatalMessage = fatalErr.Error()
+		if errors.Is(fatalErr, context.Canceled) {
+			status = "canceled"
+		}
+	}
 	s.emitEvent("import_complete", map[string]any{
 		"uploaded":   uploaded,
 		"failed":     failed,
+		"scheduled":  tasks.files,
 		"folders":    tasks.folders,
 		"oversize":   tasks.oversize,
 		"ignored":    tasks.ignored,
 		"errorCount": tasks.errorCount,
 		"errors":     errorsOut,
+		"status":     status,
+		"error":      fatalMessage,
 	})
 	if fatalErr != nil {
 		return fatalErr
@@ -639,6 +659,9 @@ func (s *Service) importTree(ctx context.Context, channelID int64, root, topName
 			}
 			id, err := s.CreateFolder(ctx, channelID, d.Name(), parentID)
 			if err != nil {
+				if isFatalImportError(err) {
+					return false, err
+				}
 				tasks.addError(rel, err)
 				return true, nil
 			}

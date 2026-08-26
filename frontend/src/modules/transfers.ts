@@ -352,26 +352,34 @@ export function setupUploadProgress() {
         const failedUploads = Math.max(Number(info?.failed) || 0, state.importBatch?.failed || 0);
         const uploaded = Number(info?.uploaded) || 0;
         const oversize = Number(info?.oversize) || 0;
+        const backendStatus = String(info?.status ?? '').toLowerCase();
+        const fatalError = String(info?.error ?? '').trim();
         const reportedErrors = Number(info?.errorCount);
         const errorCount = Number.isFinite(reportedErrors)
             ? Math.max(0, Math.floor(reportedErrors))
             : (Array.isArray(info?.errors) ? info.errors.length : 0);
-        const canceled = state.cancelingUpload;
-        const status = canceled ? 'canceled' : (failedUploads > 0 ? 'failed' : 'done');
+        const canceled = state.cancelingUpload || backendStatus === 'canceled';
+        const status = canceled
+            ? 'canceled'
+            : (backendStatus === 'failed' || failedUploads > 0 ? 'failed' : 'done');
         if (!state.importBatch) {
             pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import completed', total: uploaded + failedUploads });
         }
         updateTransferName({
             id: IMPORT_TRANSFER_ID,
             direction: 'up',
-            name: canceled ? 'Import canceled' : (uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`),
+            name: canceled
+                ? 'Import canceled'
+                : (status === 'failed'
+                    ? 'Import failed'
+                    : (uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`)),
         });
         markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status });
         state.importBatch = null;
 
         if (typeof window.refreshFiles === 'function') window.refreshFiles();
 
-        if (!canceled && (failedUploads > 0 || oversize > 0 || errorCount > 0)) {
+        if (!canceled && (status === 'failed' || failedUploads > 0 || oversize > 0 || errorCount > 0)) {
             const bits: string[] = [];
             if (failedUploads > 0) bits.push(`${failedUploads} failed`);
             if (oversize > 0) bits.push(`${oversize} skipped (too large)`);
@@ -379,7 +387,12 @@ export function setupUploadProgress() {
             // Include the first few concrete reasons (per-file upload errors,
             // then backend scan errors) so the summary is actionable, not just
             // counts.
-            const reasons = [...importFailureReasons];
+            const reasons: string[] = [];
+            if (fatalError) reasons.push(fatalError);
+            for (const reason of importFailureReasons) {
+                if (reasons.length >= MAX_IMPORT_FAILURE_REASONS) break;
+                if (!reasons.includes(reason)) reasons.push(reason);
+            }
             if (Array.isArray(info?.errors)) {
                 for (const raw of info.errors) {
                     if (reasons.length >= MAX_IMPORT_FAILURE_REASONS) break;
@@ -388,9 +401,11 @@ export function setupUploadProgress() {
                 }
             }
             notify({
-                level: failedUploads > 0 ? 'error' : 'info',
-                title: `Imported ${uploaded === 1 ? '1 file' : `${uploaded} files`}`,
-                body: [...bits, ...reasons].join('  ·  '),
+                level: status === 'failed' ? 'error' : 'info',
+                title: status === 'failed'
+                    ? 'Import failed'
+                    : `Imported ${uploaded === 1 ? '1 file' : `${uploaded} files`}`,
+                body: [...bits, ...reasons].join('  ·  ') || 'The import stopped before it could finish.',
             });
         }
         importFailureReasons.length = 0;
@@ -521,7 +536,7 @@ async function runImportFlow(parentID: any, paths: any) {
             if (!state.cancelingUpload && !importCompleteReceived) {
                 notify({ level: 'error', title: 'Import failed', body: String(err) });
             }
-            if (!state.importBatch) {
+            if (!importCompleteReceived && !state.importBatch) {
                 pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
             }
         } finally {
@@ -532,7 +547,7 @@ async function runImportFlow(parentID: any, paths: any) {
                 markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importThrew ? 'failed' : 'done' });
                 state.importBatch = null;
             }
-            if (importThrew) {
+            if (importThrew && !importCompleteReceived) {
                 markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
             }
         }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -148,6 +149,26 @@ func (r *importTestEventRecorder) names() []string {
 	return names
 }
 
+func (r *importTestEventRecorder) lastPayload(name string) (map[string]any, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for index := len(r.records) - 1; index >= 0; index-- {
+		record := r.records[index]
+		if record.name != name || len(record.args) != 1 {
+			continue
+		}
+		payload, ok := record.args[0].(map[string]any)
+		return payload, ok
+	}
+	return nil, false
+}
+
+type importPeerResolverFunc func(context.Context, int64) (tgclient.InputPeer, error)
+
+func (resolve importPeerResolverFunc) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+	return resolve(ctx, channelID)
+}
+
 func TestRunImportEmitsAggregateEventsOnly(t *testing.T) {
 	svc, db, _, _ := newTestService(t)
 	svc.CreateFolder = contextTestFolderCreator(db)
@@ -268,5 +289,134 @@ func TestRunImportStopsSchedulingAfterFatalUploadWindow(t *testing.T) {
 	}
 	if sent := len(fakeTG.SentFiles()); sent != importUploadBatchSize-1 {
 		t.Fatalf("sent files after fatal upload window = %d, want first window minus failed send %d", sent, importUploadBatchSize-1)
+	}
+}
+
+func TestRunImportCompletionReportsFatalFolderOnlyFailure(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	events := &importTestEventRecorder{}
+	svc.Events = events
+	fatalErr := fmt.Errorf("folder projection failed: %w", tgclient.ErrSendOutcomeUnknown)
+	svc.CreateFolder = func(context.Context, int64, string, string) (string, error) {
+		return "", fatalErr
+	}
+
+	folder := filepath.Join(t.TempDir(), "Empty folder")
+	if err := os.Mkdir(folder, 0o755); err != nil {
+		t.Fatalf("create empty folder: %v", err)
+	}
+
+	err := svc.RunImport(context.Background(), personalChannelID, []string{folder}, "", false, false)
+	if !errors.Is(err, tgclient.ErrSendOutcomeUnknown) {
+		t.Fatalf("RunImport error = %v, want ErrSendOutcomeUnknown", err)
+	}
+	if files := fakeTG.SentFiles(); len(files) != 0 {
+		t.Fatalf("sent files = %d, want 0 for folder-only failure", len(files))
+	}
+	payload, ok := events.lastPayload("import_complete")
+	if !ok {
+		t.Fatal("import_complete payload missing")
+	}
+	if got := payload["status"]; got != "failed" {
+		t.Fatalf("completion status = %v, want failed", got)
+	}
+	if got := payload["error"]; got == nil || !strings.Contains(fmt.Sprint(got), "folder projection failed") {
+		t.Fatalf("completion error = %v, want folder projection failure", got)
+	}
+	if got := payload["uploaded"]; got != 0 {
+		t.Fatalf("completion uploaded = %v, want 0", got)
+	}
+	if got := payload["failed"]; got != 0 {
+		t.Fatalf("completion failed files = %v, want 0", got)
+	}
+}
+
+func TestRunImportStopsAfterNestedControlProjectionFailure(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	createCalls := 0
+	svc.CreateFolder = func(context.Context, int64, string, string) (string, error) {
+		createCalls++
+		if createCalls == 1 {
+			return projection.FolderIDPrefix + "top", nil
+		}
+		return "", fmt.Errorf("nested folder projection failed: %w", projection.ErrControlProjection)
+	}
+
+	selectionRoot := t.TempDir()
+	folder := filepath.Join(selectionRoot, "Project")
+	if err := os.MkdirAll(filepath.Join(folder, "nested"), 0o755); err != nil {
+		t.Fatalf("create nested folder: %v", err)
+	}
+	laterFile := filepath.Join(selectionRoot, "later.txt")
+	if err := os.WriteFile(laterFile, []byte("must not upload"), 0o600); err != nil {
+		t.Fatalf("create later file: %v", err)
+	}
+
+	err := svc.RunImport(
+		context.Background(),
+		personalChannelID,
+		[]string{folder, laterFile},
+		"",
+		false,
+		false,
+	)
+	if !errors.Is(err, projection.ErrControlProjection) {
+		t.Fatalf("RunImport error = %v, want ErrControlProjection", err)
+	}
+	if createCalls != 2 {
+		t.Fatalf("folder creation calls = %d, want top-level and failing nested folder", createCalls)
+	}
+	if files := fakeTG.SentFiles(); len(files) != 0 {
+		t.Fatalf("sent files after nested projection failure = %d, want 0", len(files))
+	}
+}
+
+func TestRunImportArchiveFallbackUsesScheduledUploadCount(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	svc.CreateFolder = contextTestFolderCreator(db)
+	events := &importTestEventRecorder{}
+	svc.Events = events
+	archivePath := buildZip(t, map[string]string{
+		"one.txt":   "one",
+		"two.txt":   "two",
+		"three.txt": "three",
+	}, nil, nil)
+	if plan := svc.PlanImport([]string{archivePath}, false, true); plan.Files != 3 {
+		t.Fatalf("preflight files = %d, want 3 archive members", plan.Files)
+	}
+
+	baseResolver := svc.Peers
+	svc.Peers = importPeerResolverFunc(func(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+		peer, err := baseResolver.ResolvePeer(ctx, channelID)
+		if err != nil {
+			return tgclient.InputPeer{}, err
+		}
+		if err := os.WriteFile(archivePath, []byte("corrupt after preflight"), 0o600); err != nil {
+			return tgclient.InputPeer{}, err
+		}
+		return peer, nil
+	})
+
+	if err := svc.RunImport(context.Background(), personalChannelID, []string{archivePath}, "", false, true); err != nil {
+		t.Fatalf("RunImport fallback: %v", err)
+	}
+	if files := fakeTG.SentFiles(); len(files) != 1 {
+		t.Fatalf("sent files = %d, want one raw archive fallback", len(files))
+	}
+	payload, ok := events.lastPayload("import_complete")
+	if !ok {
+		t.Fatal("import_complete payload missing")
+	}
+	if got := payload["uploaded"]; got != 1 {
+		t.Fatalf("completion uploaded = %v, want 1", got)
+	}
+	if got := payload["failed"]; got != 0 {
+		t.Fatalf("completion failed = %v, want 0 for successful raw fallback", got)
+	}
+	if got := payload["status"]; got != "done" {
+		t.Fatalf("completion status = %v, want done", got)
+	}
+	if got := payload["errorCount"]; got != 1 {
+		t.Fatalf("completion errorCount = %v, want one extraction warning", got)
 	}
 }
