@@ -42,6 +42,7 @@ func TestGitHubSourceParsesLatestRelease(t *testing.T) {
 		"assets": [
 			{"name": "TDrive-v1.7.0-macos-arm64.zip", "size": 42, "browser_download_url": "https://github.com/owner/repo/releases/download/v1.7.0/TDrive-v1.7.0-macos-arm64.zip"},
 			{"name": "checksums.txt", "size": 5, "browser_download_url": "https://github.com/owner/repo/releases/download/v1.7.0/checksums.txt"},
+			{"name": "checksums.txt.sig", "size": 173, "browser_download_url": "https://github.com/owner/repo/releases/download/v1.7.0/checksums.txt.sig"},
 			{"name": "bad", "size": 1, "browser_download_url": "http://insecure.example/bad"}
 		]
 	}`)
@@ -55,8 +56,8 @@ func TestGitHubSourceParsesLatestRelease(t *testing.T) {
 	if release.PublishedAt.IsZero() {
 		t.Fatalf("published_at not parsed")
 	}
-	if len(release.Assets) != 2 {
-		t.Fatalf("assets = %+v, want the two https assets", release.Assets)
+	if len(release.Assets) != 3 {
+		t.Fatalf("assets = %+v, want the three https assets", release.Assets)
 	}
 }
 

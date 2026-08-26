@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CGO_ENABLED: 1
@@ -187,9 +187,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
+    environment: release-signing
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Download Artifacts
         uses: actions/download-artifact@v4
@@ -203,9 +212,8 @@ jobs:
           mkdir -p dist
           git archive --format=zip --output "dist/TDrive-${{ github.ref_name }}-source.zip" HEAD
 
-      # The in-app updater verifies every download against this manifest and
-      # refuses to install a release that does not carry it. Names only, so the
-      # checked-out file matches the uploaded asset name.
+      # The in-app updater authenticates this manifest before trusting any
+      # digest. Names only, so each entry matches its uploaded asset name.
       - name: Generate checksums
         shell: bash
         run: |
@@ -213,6 +221,74 @@ jobs:
           cd dist
           sha256sum -- * > checksums.txt.tmp
           mv checksums.txt.tmp checksums.txt
+
+      - name: Sign checksum manifest
+        shell: bash
+        env:
+          TDRIVE_UPDATE_SIGNING_KEY_PEM: ${{ secrets.TDRIVE_UPDATE_SIGNING_KEY_PEM }}
+          TDRIVE_UPDATE_SIGNING_KEY_PEM_NEXT: ${{ secrets.TDRIVE_UPDATE_SIGNING_KEY_PEM_NEXT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TDRIVE_UPDATE_SIGNING_KEY_PEM:-}" ]]; then
+            echo "The release environment is missing TDRIVE_UPDATE_SIGNING_KEY_PEM." >&2
+            exit 1
+          fi
+
+          umask 077
+          message_file="${RUNNER_TEMP}/tdrive-update-manifest.bin"
+          temporary_files=("${message_file}")
+          cleanup() {
+            rm -f -- "${temporary_files[@]}"
+          }
+          trap cleanup EXIT
+
+          printf '%s\0' 'TDrive update manifest v1' > "${message_file}"
+          cat dist/checksums.txt >> "${message_file}"
+          : > dist/checksums.txt.sig
+
+          signing_keys=("${TDRIVE_UPDATE_SIGNING_KEY_PEM}")
+          if [[ -n "${TDRIVE_UPDATE_SIGNING_KEY_PEM_NEXT:-}" ]]; then
+            signing_keys+=("${TDRIVE_UPDATE_SIGNING_KEY_PEM_NEXT}")
+          fi
+          declare -A seen_key_ids=()
+          signing_key_ids=()
+
+          for index in "${!signing_keys[@]}"; do
+            key_file="${RUNNER_TEMP}/tdrive-update-signing-${index}.pem"
+            public_key_file="${RUNNER_TEMP}/tdrive-update-signing-${index}.der"
+            signature_file="${RUNNER_TEMP}/tdrive-update-signing-${index}.sig"
+            temporary_files+=("${key_file}" "${public_key_file}" "${signature_file}")
+
+            printf '%s' "${signing_keys[$index]}" > "${key_file}"
+            openssl pkey -in "${key_file}" -pubout -outform DER -out "${public_key_file}"
+            openssl pkeyutl -sign -rawin -inkey "${key_file}" -in "${message_file}" -out "${signature_file}"
+            if [[ "$(wc -c < "${signature_file}")" -ne 64 ]]; then
+              echo "The update signing key is not an Ed25519 key." >&2
+              exit 1
+            fi
+
+            key_id="$(sha256sum "${public_key_file}" | awk '{print $1}')"
+            if [[ -n "${seen_key_ids[$key_id]:-}" ]]; then
+              echo "Duplicate update signing key ${key_id}." >&2
+              exit 1
+            fi
+            seen_key_ids[$key_id]=1
+            signing_key_ids+=("${key_id}")
+            signature="$(base64 -w 0 < "${signature_file}")"
+            printf 'tdrive-ed25519-v1 %s %s\n' "${key_id}" "${signature}" >> dist/checksums.txt.sig
+          done
+
+          embedded_key_ids="$(IFS=,; printf '%s' "${signing_key_ids[*]}")"
+          unset TDRIVE_UPDATE_SIGNING_KEY_PEM TDRIVE_UPDATE_SIGNING_KEY_PEM_NEXT
+          signing_keys=()
+          unset signing_keys
+          cleanup
+          trap - EXIT
+
+          TDRIVE_RELEASE_MANIFEST_PATH="${GITHUB_WORKSPACE}/dist/checksums.txt" \
+          TDRIVE_RELEASE_SIGNATURE_PATH="${GITHUB_WORKSPACE}/dist/checksums.txt.sig" \
+          TDRIVE_RELEASE_SIGNING_KEY_IDS="${embedded_key_ids}" \
+            go test ./backend/updater -run '^TestReleaseSigningArtifactsUseEmbeddedKeys$' -count=1
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2

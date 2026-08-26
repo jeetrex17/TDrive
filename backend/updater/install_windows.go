@@ -20,10 +20,14 @@ const mediaDirName = "media"
 
 type windowsInstaller struct {
 	executable func() (string, error)
+	swapPaths  func(current, fresh string) error
 }
 
 func newPlatformInstaller() Installer {
-	return windowsInstaller{executable: os.Executable}
+	return windowsInstaller{
+		executable: os.Executable,
+		swapPaths:  swapPaths,
+	}
 }
 
 func (w windowsInstaller) Target() (Target, error) {
@@ -42,15 +46,20 @@ func (w windowsInstaller) Target() (Target, error) {
 // relies on; the media folder must not be in use, so callers close native
 // players first.
 func (w windowsInstaller) Install(payload string, target Target) error {
+	swap := w.swapPaths
+	if swap == nil {
+		swap = swapPaths
+	}
+
 	dir := filepath.Dir(target.Path)
 	staging := stagingPath(dir)
 	if err := os.RemoveAll(staging); err != nil {
 		return fmt.Errorf("clear staging: %w", err)
 	}
+	defer os.RemoveAll(staging)
 	if err := extractZip(payload, staging); err != nil {
 		return fmt.Errorf("unpack update: %w", err)
 	}
-	defer os.RemoveAll(staging)
 
 	newExe, err := findSingleExecutable(staging)
 	if err != nil {
@@ -60,23 +69,33 @@ func (w windowsInstaller) Install(payload string, target Target) error {
 	currentMedia := filepath.Join(dir, mediaDirName)
 	newMedia := filepath.Join(staging, mediaDirName)
 	mediaSwapped := false
+	mediaCreated := false
 	if info, err := os.Stat(newMedia); err == nil && info.IsDir() {
 		if _, err := os.Stat(currentMedia); err == nil {
-			if err := swapPaths(currentMedia, newMedia); err != nil {
+			if err := swap(currentMedia, newMedia); err != nil {
 				return fmt.Errorf("media runtime: %w", err)
 			}
 			mediaSwapped = true
 		} else if err := os.Rename(newMedia, currentMedia); err != nil {
 			return fmt.Errorf("media runtime: %w", err)
+		} else {
+			mediaCreated = true
 		}
 	}
 
-	if err := swapPaths(target.Path, newExe); err != nil {
+	if err := swap(target.Path, newExe); err != nil {
 		if mediaSwapped {
 			// Put the old runtime back so the still-installed old exe keeps
 			// a matching mpv next to it.
 			_ = os.Rename(currentMedia, newMedia)
 			_ = os.Rename(currentMedia+previousSuffix, currentMedia)
+		} else if mediaCreated {
+			// There was no runtime before this install. Remove the newly
+			// created folder so a failed executable swap leaves the existing
+			// installation exactly as it was.
+			if rollbackErr := os.RemoveAll(currentMedia); rollbackErr != nil {
+				return fmt.Errorf("%w (removing newly installed media also failed: %v)", err, rollbackErr)
+			}
 		}
 		return err
 	}

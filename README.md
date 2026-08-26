@@ -70,12 +70,25 @@ This is what it looks like in **Privacy & Security**:
 
 TDrive keeps itself up to date from GitHub releases — no need to watch the repo.
 
-- A check runs shortly after launch and once a day; new builds download in the background and are verified against the release `checksums.txt` before anything is installed.
+- A check runs shortly after launch and once a day; new builds download in the background and are verified against an Ed25519-signed `checksums.txt` manifest before anything is installed. Releases without a valid signature from a key embedded in TDrive are never installed automatically.
 - **Check for updates** in the account menu (top-right avatar) shows **Ready** when a build is waiting — click **Restart to update**. On macOS it's also under **Help → Check for Updates…**.
 - **What's new** opens that version's GitHub release page. You can turn off automatic downloads, or skip a version, from the same panel.
 - Updates replace the app in place, so the macOS "unverified developer" prompt above only ever applies to your first manual install.
 
 Update checks contact only `api.github.com` with an anonymous request that carries no account data. Development builds (`wails dev`) don't check.
+
+### Release signing setup (maintainers)
+
+The `release-signing` GitHub Actions environment must contain an Ed25519 private key in the protected secret `TDRIVE_UPDATE_SIGNING_KEY_PEM`. Generate it offline with `openssl genpkey -algorithm ED25519`; store only the PEM private key in the environment secret, keep an offline backup, and replace the explicit bootstrap placeholder in `backend/updater/manifest_signature.go` with the corresponding 32-byte public key. Never commit the private key or attach it to a release. The workflow rejects the placeholder and cryptographically checks every generated signature against the embedded public-key ring before the release action can run.
+
+For a staged key rotation, embed both old and new public keys first, then add the new private key as `TDRIVE_UPDATE_SIGNING_KEY_PEM_NEXT`. The workflow emits one authenticated envelope record per key; after upgraded clients have received the new public key, promote the new secret and remove the old key in a later release.
+
+These commands print the raw public key hex used by the app and its deterministic envelope key ID (SHA-256 of the PKIX public-key DER):
+
+```bash
+openssl pkey -in tdrive-update-signing-key.pem -pubout -outform DER | tail -c 32 | xxd -p -c 32
+openssl pkey -in tdrive-update-signing-key.pem -pubout -outform DER | sha256sum
+```
 
 ## How it works
 

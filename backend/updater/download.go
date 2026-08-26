@@ -22,11 +22,18 @@ var ErrChecksumMismatch = errors.New("payload failed checksum verification")
 var errDownloadStalled = errors.New("download stalled")
 
 const (
-	downloadIdleTimeout  = 60 * time.Second
-	downloadBufferSize   = 256 * 1024
-	smallAssetLimitBytes = 256 * 1024
-	partSuffix           = ".part"
+	downloadResponseHeaderTimeout       = githubTimeout
+	downloadIdleTimeout                 = 60 * time.Second
+	downloadBufferSize                  = 256 * 1024
+	smallAssetLimitBytes                = 256 * 1024
+	maxDownloadBytes              int64 = 1 << 30
+	partSuffix                          = ".part"
 )
+
+type downloadLimits struct {
+	responseHeaderTimeout time.Duration
+	maxBytes              int64
+}
 
 // fetchSmall GETs a small text asset (the checksum manifest) with a hard size cap.
 func fetchSmall(ctx context.Context, client *http.Client, userAgent, url string) ([]byte, error) {
@@ -61,9 +68,38 @@ func fetchSmall(ctx context.Context, client *http.Client, userAgent, url string)
 // only renamed into place once both the size and the SHA-256 digest match, so
 // a file that exists at dest has always been verified. progress receives
 // cumulative byte counts; total is 0 when the server did not announce one.
-func downloadFile(ctx context.Context, client *http.Client, userAgent, url, dest string, wantSize int64, wantSHA string, progress func(done, total int64)) (err error) {
+func downloadFile(ctx context.Context, client *http.Client, userAgent, url, dest string, wantSize int64, wantSHA string, progress func(done, total int64)) error {
+	return downloadFileWithLimits(
+		ctx,
+		client,
+		userAgent,
+		url,
+		dest,
+		wantSize,
+		wantSHA,
+		progress,
+		downloadLimits{
+			responseHeaderTimeout: downloadResponseHeaderTimeout,
+			maxBytes:              maxDownloadBytes,
+		},
+	)
+}
+
+func downloadFileWithLimits(ctx context.Context, client *http.Client, userAgent, url, dest string, wantSize int64, wantSHA string, progress func(done, total int64), limits downloadLimits) (err error) {
 	if wantSHA == "" {
 		return errors.New("download: no expected checksum")
+	}
+	if limits.responseHeaderTimeout <= 0 {
+		return errors.New("download: response header timeout must be positive")
+	}
+	if limits.maxBytes <= 0 {
+		return errors.New("download: maximum size must be positive")
+	}
+	if wantSize < 0 {
+		return errors.New("download: expected size cannot be negative")
+	}
+	if wantSize > limits.maxBytes {
+		return fmt.Errorf("download: release lists %d bytes, maximum is %d", wantSize, limits.maxBytes)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -75,15 +111,35 @@ func downloadFile(ctx context.Context, client *http.Client, userAgent, url, dest
 	if userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
 	}
+	var responseHeaderTimedOut atomic.Bool
+	responseHeaderTimerDone := make(chan struct{})
+	responseHeaderTimer := time.AfterFunc(limits.responseHeaderTimeout, func() {
+		responseHeaderTimedOut.Store(true)
+		cancel()
+		close(responseHeaderTimerDone)
+	})
 	resp, err := client.Do(req)
+	if !responseHeaderTimer.Stop() {
+		<-responseHeaderTimerDone
+	}
 	if err != nil {
+		if responseHeaderTimedOut.Load() {
+			return fmt.Errorf("download: response headers: %w", context.DeadlineExceeded)
+		}
 		return err
+	}
+	if responseHeaderTimedOut.Load() {
+		_ = resp.Body.Close()
+		return fmt.Errorf("download: response headers: %w", context.DeadlineExceeded)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download: status %d", resp.StatusCode)
 	}
 	total := resp.ContentLength
+	if total > limits.maxBytes {
+		return fmt.Errorf("download: server reports %d bytes, maximum is %d", total, limits.maxBytes)
+	}
 	if wantSize > 0 && total > 0 && total != wantSize {
 		return fmt.Errorf("download: server reports %d bytes, release lists %d", total, wantSize)
 	}
@@ -113,10 +169,20 @@ func downloadFile(ctx context.Context, client *http.Client, userAgent, url, dest
 	hasher := sha256.New()
 	writer := io.MultiWriter(f, hasher)
 	buf := make([]byte, downloadBufferSize)
+	streamLimit := limits.maxBytes
+	if wantSize > 0 {
+		streamLimit = wantSize
+	}
 	var done int64
 	for {
 		n, readErr := body.Read(buf)
 		if n > 0 {
+			if int64(n) > streamLimit-done {
+				if wantSize > 0 {
+					return fmt.Errorf("download: response exceeds expected size of %d bytes", wantSize)
+				}
+				return fmt.Errorf("download: response exceeds maximum size of %d bytes", limits.maxBytes)
+			}
 			if _, werr := writer.Write(buf[:n]); werr != nil {
 				return werr
 			}

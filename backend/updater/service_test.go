@@ -2,6 +2,7 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -63,21 +64,23 @@ func (f *fakeInstaller) Cleanup(Target) error {
 }
 
 // fixture wires a service to an in-memory release whose assets are served by
-// httptest, mirroring the real GitHub layout (payload + checksums.txt).
+// httptest, mirroring the real GitHub layout (payload + signed checksums.txt).
 type fixture struct {
-	t         *testing.T
-	service   *Service
-	source    *fakeSource
-	installer *fakeInstaller
-	server    *httptest.Server
-	payload   []byte
-	assetName string
-	cacheDir  string
-	events    chan State
-	blockBody chan struct{}
-	mu        sync.Mutex
-	serveSums string
-	serveBody bool
+	t          *testing.T
+	service    *Service
+	source     *fakeSource
+	installer  *fakeInstaller
+	server     *httptest.Server
+	payload    []byte
+	assetName  string
+	cacheDir   string
+	events     chan State
+	blockBody  chan struct{}
+	mu         sync.Mutex
+	serveSums  string
+	serveSig   []byte
+	signingKey manifestTestKey
+	serveBody  bool
 }
 
 func newFixture(t *testing.T, current, latest string) *fixture {
@@ -86,11 +89,13 @@ func newFixture(t *testing.T, current, latest string) *fixture {
 	f.payload = []byte("payload for " + latest)
 	f.assetName, _ = appAssetName("v"+latest, Platform{OS: "darwin", Arch: "arm64"})
 	f.serveSums = sha256Hex(f.payload) + "  " + f.assetName + "\n" + sha256Hex([]byte("cli")) + "  TDrive-v" + latest + "-darwin-arm64-cli.tar.gz\n"
+	f.signingKey = newManifestTestKey(t)
+	f.serveSig = []byte(manifestRecord(t, f.signingKey, []byte(f.serveSums)))
 	f.serveBody = true
 
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
-		sums, serveBody, block := f.serveSums, f.serveBody, f.blockBody
+		sums, signature, serveBody, block := f.serveSums, append([]byte(nil), f.serveSig...), f.serveBody, f.blockBody
 		f.mu.Unlock()
 		switch r.URL.Path {
 		case "/" + checksumsAssetName:
@@ -99,6 +104,8 @@ func newFixture(t *testing.T, current, latest string) *fixture {
 				return
 			}
 			_, _ = w.Write([]byte(sums))
+		case "/" + checksumsSignatureAssetName:
+			_, _ = w.Write(signature)
 		case "/" + f.assetName:
 			if !serveBody {
 				w.WriteHeader(http.StatusNotFound)
@@ -129,20 +136,30 @@ func newFixture(t *testing.T, current, latest string) *fixture {
 			{Name: f.assetName, Size: int64(len(f.payload)), URL: f.server.URL + "/" + f.assetName},
 			{Name: "TDrive-v" + latest + "-darwin-arm64-cli.tar.gz", Size: 3, URL: f.server.URL + "/cli"},
 			{Name: checksumsAssetName, Size: int64(len(f.serveSums)), URL: f.server.URL + "/" + checksumsAssetName},
+			{Name: checksumsSignatureAssetName, Size: int64(len(f.serveSig)), URL: f.server.URL + "/" + checksumsSignatureAssetName},
 		},
 	}}
 	f.installer = &fakeInstaller{target: Target{Path: filepath.Join(t.TempDir(), "TDrive.app"), Kind: "bundle"}}
 	f.service = New(Options{
-		CurrentVersion: current,
-		Platform:       Platform{OS: "darwin", Arch: "arm64"},
-		Source:         f.source,
-		Client:         f.server.Client(),
-		CacheDir:       f.cacheDir,
-		Installer:      f.installer,
-		OnChange:       func(s State) { f.events <- s },
+		CurrentVersion:     current,
+		Platform:           Platform{OS: "darwin", Arch: "arm64"},
+		Source:             f.source,
+		Client:             f.server.Client(),
+		CacheDir:           f.cacheDir,
+		Installer:          f.installer,
+		manifestPublicKeys: []ed25519.PublicKey{f.signingKey.publicKey},
+		OnChange:           func(s State) { f.events <- s },
 	})
 	t.Cleanup(f.service.Close)
 	return f
+}
+
+func (f *fixture) setManifest(manifest string) {
+	f.t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.serveSums = manifest
+	f.serveSig = []byte(manifestRecord(f.t, f.signingKey, []byte(manifest)))
 }
 
 func (f *fixture) waitPhase(phase Phase) State {
@@ -361,9 +378,7 @@ func TestChecksumFetchFailureIsAFailedCheck(t *testing.T) {
 	if got.Phase != PhaseIdle || got.ErrorStage != "check" || got.Error == "" || got.Latest != nil {
 		t.Fatalf("state = %+v", got)
 	}
-	f.mu.Lock()
-	f.serveSums = sha256Hex(f.payload) + "  " + f.assetName + "\n"
-	f.mu.Unlock()
+	f.setManifest(sha256Hex(f.payload) + "  " + f.assetName + "\n")
 	if got := f.service.Check(context.Background()); got.Phase != PhaseAvailable || got.Error != "" {
 		t.Fatalf("retry must succeed, got %+v", got)
 	}
@@ -374,6 +389,55 @@ func TestNotInstallableTargetKeepsReleaseVisible(t *testing.T) {
 	f.installer.targetErr = &NotInstallableError{Reason: "TDrive is running from a temporary location."}
 	got := f.service.Check(context.Background())
 	if got.Phase != PhaseAvailable || got.Installable || got.InstallHint != "TDrive is running from a temporary location." {
+		t.Fatalf("state = %+v", got)
+	}
+}
+
+func TestMissingManifestSignatureIsNotInstallable(t *testing.T) {
+	f := newFixture(t, "1.6.0", "1.7.0")
+	f.source.release.Assets = f.source.release.Assets[:len(f.source.release.Assets)-1]
+
+	got := f.service.Check(context.Background())
+	if got.Phase != PhaseAvailable || got.Installable || got.InstallHint == "" {
+		t.Fatalf("state = %+v", got)
+	}
+	if err := f.service.StartDownload(); err == nil {
+		t.Fatalf("unsigned release must not be downloadable")
+	}
+}
+
+func TestTamperedManifestIsNotInstallable(t *testing.T) {
+	f := newFixture(t, "1.6.0", "1.7.0")
+	f.mu.Lock()
+	f.serveSums += "# changed after signing\n"
+	f.mu.Unlock()
+
+	got := f.service.Check(context.Background())
+	if got.Phase != PhaseAvailable || got.Installable || got.InstallHint == "" {
+		t.Fatalf("state = %+v", got)
+	}
+}
+
+func TestTamperedManifestSignatureIsNotInstallable(t *testing.T) {
+	f := newFixture(t, "1.6.0", "1.7.0")
+	f.mu.Lock()
+	f.serveSig = []byte(manifestRecord(t, f.signingKey, []byte("different manifest\n")))
+	f.mu.Unlock()
+
+	got := f.service.Check(context.Background())
+	if got.Phase != PhaseAvailable || got.Installable || got.InstallHint == "" {
+		t.Fatalf("state = %+v", got)
+	}
+}
+
+func TestOversizedManifestSignatureIsNotInstallable(t *testing.T) {
+	f := newFixture(t, "1.6.0", "1.7.0")
+	f.mu.Lock()
+	f.serveSig = make([]byte, manifestSignatureMaxBytes+1)
+	f.mu.Unlock()
+
+	got := f.service.Check(context.Background())
+	if got.Phase != PhaseAvailable || got.Installable || got.InstallHint == "" {
 		t.Fatalf("state = %+v", got)
 	}
 }
@@ -441,9 +505,7 @@ func TestDownloadFailureReportsError(t *testing.T) {
 
 func TestChecksumMismatchDiscardsDownload(t *testing.T) {
 	f := newFixture(t, "1.6.0", "1.7.0")
-	f.mu.Lock()
-	f.serveSums = sha256Hex([]byte("something else")) + "  " + f.assetName + "\n"
-	f.mu.Unlock()
+	f.setManifest(sha256Hex([]byte("something else")) + "  " + f.assetName + "\n")
 	f.service.Check(context.Background())
 	if err := f.service.StartDownload(); err != nil {
 		t.Fatal(err)
@@ -481,6 +543,36 @@ func TestInstallFailureReturnsToReady(t *testing.T) {
 	}
 }
 
+func TestInstallRejectsMutatedReadyPayload(t *testing.T) {
+	f := newFixture(t, "1.6.0", "1.7.0")
+	f.service.Check(context.Background())
+	if err := f.service.StartDownload(); err != nil {
+		t.Fatal(err)
+	}
+	f.waitPhase(PhaseReady)
+	payloadPath := filepath.Join(f.cacheDir, f.assetName)
+	mutatedPayload := append([]byte(nil), f.payload...)
+	mutatedPayload[0] ^= 0xff
+	if err := os.WriteFile(payloadPath, mutatedPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := f.service.Install()
+	if !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("Install = %v, want ErrChecksumMismatch", err)
+	}
+	got := f.service.State()
+	if got.Phase != PhaseAvailable || got.DownloadedBytes != 0 || got.ErrorStage != "install" || got.Error == "" {
+		t.Fatalf("state = %+v", got)
+	}
+	if len(f.installer.installed) != 0 {
+		t.Fatalf("installer received mutated payload: %v", f.installer.installed)
+	}
+	if exists(payloadPath) {
+		t.Fatalf("mutated payload must be removed")
+	}
+}
+
 func TestInstallRequiresReady(t *testing.T) {
 	f := newFixture(t, "1.6.0", "1.7.0")
 	if err := f.service.Install(); !errors.Is(err, ErrNotReady) {
@@ -504,9 +596,7 @@ func TestNewerReleaseSupersedesReadyPayload(t *testing.T) {
 	f.source.release.Assets[0].Name = newName
 	f.source.release.Assets[0].URL = f.server.URL + "/" + f.assetName
 	f.source.mu.Unlock()
-	f.mu.Lock()
-	f.serveSums = sha256Hex(f.payload) + "  " + newName + "\n"
-	f.mu.Unlock()
+	f.setManifest(sha256Hex(f.payload) + "  " + newName + "\n")
 
 	got := f.service.Check(context.Background())
 	if got.Phase != PhaseAvailable || got.Latest.Version != "1.8.0" {

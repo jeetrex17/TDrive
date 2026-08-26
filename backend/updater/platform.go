@@ -13,9 +13,12 @@ func HostPlatform() Platform {
 	return Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
 }
 
-// checksumsAssetName is the SHA-256 manifest the release workflow attaches
-// next to the binaries (sha256sum format, bare file names).
-const checksumsAssetName = "checksums.txt"
+// The release workflow attaches a SHA-256 manifest and its Ed25519 signature
+// envelope next to the binaries.
+const (
+	checksumsAssetName          = "checksums.txt"
+	checksumsSignatureAssetName = "checksums.txt.sig"
+)
 
 // assetSuffix maps a platform to the desktop asset suffix produced by
 // .github/workflows/release.yml. Selection is always by the exact asset name

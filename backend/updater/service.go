@@ -8,6 +8,7 @@ package updater
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net"
@@ -75,8 +76,11 @@ type Options struct {
 	UserAgent      string
 	CacheDir       string
 	Installer      Installer
-	OnChange       func(State)
-	Now            func() time.Time
+	// manifestPublicKeys is test-only trust-root injection. Production callers
+	// always use the embedded ring; New copies every injected key.
+	manifestPublicKeys []ed25519.PublicKey
+	OnChange           func(State)
+	Now                func() time.Time
 }
 
 var (
@@ -93,9 +97,10 @@ const (
 
 // Service is safe for concurrent use. One instance lives for the process.
 type Service struct {
-	opts    Options
-	dev     bool
-	current Version
+	opts         Options
+	dev          bool
+	current      Version
+	manifestKeys manifestKeyRing
 
 	mu         sync.Mutex
 	state      State
@@ -135,7 +140,13 @@ func New(opts Options) *Service {
 		opts.Source = NewGitHubSource(DefaultRepo, opts.UserAgent, opts.Client)
 	}
 
-	s := &Service{opts: opts}
+	manifestKeys := productionManifestKeyRing()
+	if opts.manifestPublicKeys != nil {
+		manifestKeys = newManifestKeyRing(opts.manifestPublicKeys)
+	}
+	// Do not retain caller-owned key slices in the service options.
+	opts.manifestPublicKeys = nil
+	s := &Service{opts: opts, manifestKeys: manifestKeys}
 	s.state = State{Phase: PhaseIdle, CurrentVersion: opts.CurrentVersion}
 	if opts.OnChange != nil {
 		s.events = make(chan State, eventQueueSize)
@@ -266,10 +277,23 @@ func (s *Service) resolve(ctx context.Context, release Release) (resolution, err
 		res.hint = fmt.Sprintf("TDrive can't replace itself in %s. Move it to a folder you can write to, or update manually.", parent)
 		return res, nil
 	}
+	if s.opts.CacheDir == "" {
+		res.hint = "TDrive couldn't create a private update cache, so automatic installation is disabled."
+		return res, nil
+	}
 
 	sumsAsset, ok := release.asset(checksumsAssetName)
 	if !ok {
 		res.hint = "This release has no checksum file, so the download can't be verified. Install it manually."
+		return res, nil
+	}
+	signatureAsset, ok := release.asset(checksumsSignatureAssetName)
+	if !ok {
+		res.hint = "This release has no signed checksum manifest, so automatic installation is disabled."
+		return res, nil
+	}
+	if signatureAsset.Size > manifestSignatureMaxBytes {
+		res.hint = "The release checksum manifest has an invalid signature, so automatic installation is disabled."
 		return res, nil
 	}
 	body, err := fetchSmall(ctx, s.opts.Client, s.opts.UserAgent, sumsAsset.URL)
@@ -277,6 +301,18 @@ func (s *Service) resolve(ctx context.Context, release Release) (resolution, err
 		// Almost always transient; surface it as a failed check so the next
 		// attempt (manual or scheduled) retries instead of caching "manual".
 		return res, fmt.Errorf("fetch checksums: %w", err)
+	}
+	envelope, err := fetchManifestSignature(ctx, s.opts.Client, s.opts.UserAgent, signatureAsset.URL)
+	if err != nil {
+		if errors.Is(err, ErrManifestSignature) {
+			res.hint = "The release checksum manifest has an invalid signature, so automatic installation is disabled."
+			return res, nil
+		}
+		return res, fmt.Errorf("fetch checksum signature: %w", err)
+	}
+	if err := s.manifestKeys.Verify(body, envelope); err != nil {
+		res.hint = "The release checksum manifest has an invalid signature, so automatic installation is disabled."
+		return res, nil
 	}
 	sums, err := parseChecksums(bytes.NewReader(body))
 	if err != nil {
@@ -372,7 +408,7 @@ func (s *Service) StartDownload() error {
 		s.mu.Unlock()
 		return &NotInstallableError{Reason: s.state.InstallHint}
 	}
-	if err := os.MkdirAll(s.opts.CacheDir, 0o755); err != nil {
+	if err := ensureCacheDir(s.opts.CacheDir); err != nil {
 		s.mu.Unlock()
 		return fmt.Errorf("create update cache: %w", err)
 	}
@@ -462,11 +498,38 @@ func (s *Service) Install() error {
 		s.mu.Unlock()
 		return ErrNotReady
 	}
+	if s.asset == nil {
+		s.mu.Unlock()
+		return ErrNotReady
+	}
+	asset := *s.asset
+	want, ok := s.checksums[asset.Name]
+	if !ok || want == "" {
+		s.mu.Unlock()
+		return ErrNotReady
+	}
 	payload, target := s.payload, s.target
 	s.state.Phase = PhaseInstalling
 	s.state.Error, s.state.ErrorStage = "", ""
 	s.emitLocked()
 	s.mu.Unlock()
+
+	if err := verifyFile(payload, asset.Size, want); err != nil {
+		verificationErr := err
+		if !errors.Is(err, ErrChecksumMismatch) {
+			verificationErr = fmt.Errorf("%w: %v", ErrChecksumMismatch, err)
+		}
+		_ = os.Remove(payload)
+		s.mu.Lock()
+		s.payload = ""
+		s.state.Phase = PhaseAvailable
+		s.state.DownloadedBytes = 0
+		s.state.Error = userMessage(verificationErr)
+		s.state.ErrorStage = "install"
+		s.emitLocked()
+		s.mu.Unlock()
+		return verificationErr
+	}
 
 	err := s.opts.Installer.Install(payload, target)
 

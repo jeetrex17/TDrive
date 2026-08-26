@@ -44,17 +44,25 @@ func (a *App) initUpdater() {
 }
 
 // finishUpdateCleanup removes the previous version once this build has come
-// up healthy. Running it any earlier would delete the rollback copy before
-// we know the new binary works.
-func (a *App) finishUpdateCleanup() {
+// up healthy. Mount initialization is part of that health check because a
+// build that cannot mount drives must keep the rollback copy recoverable.
+func (a *App) finishUpdateCleanup(mountInitErr error) {
 	if a.updates == nil {
 		return
 	}
+	scheduleUpdateCleanup(mountInitErr, a.updates.CleanupAfterRestart)
+}
+
+func scheduleUpdateCleanup(mountInitErr error, cleanup func() error) bool {
+	if mountInitErr != nil || cleanup == nil {
+		return false
+	}
 	go func() {
-		if err := a.updates.CleanupAfterRestart(); err != nil {
+		if err := cleanup(); err != nil {
 			fmt.Printf("Warning: update cleanup failed: %v\n", err)
 		}
 	}()
+	return true
 }
 
 // requestUpdatesPanel is the native "Check for Updates…" menu action.

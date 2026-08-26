@@ -664,12 +664,13 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
-	if _, err := a.ensureMountController(); err != nil {
-		fmt.Printf("Warning: Failed to initialize TDrive mount: %v\n", err)
+	_, mountInitErr := a.ensureMountController()
+	if mountInitErr != nil {
+		fmt.Printf("Warning: Failed to initialize TDrive mount: %v\n", mountInitErr)
 	}
 
 	fmt.Println("TDrive DB ready!")
-	a.finishUpdateCleanup()
+	a.finishUpdateCleanup(mountInitErr)
 }
 
 // SyncChannel triggers an incremental sync for the given channel. Wails-bound

@@ -35,3 +35,12 @@ func TestReleaseAssetMatchesExactNameOnly(t *testing.T) {
 		t.Fatalf("missing asset must not match")
 	}
 }
+
+func TestManifestAssetNames(t *testing.T) {
+	if checksumsAssetName != "checksums.txt" {
+		t.Fatalf("checksumsAssetName = %q", checksumsAssetName)
+	}
+	if checksumsSignatureAssetName != "checksums.txt.sig" {
+		t.Fatalf("checksumsSignatureAssetName = %q", checksumsSignatureAssetName)
+	}
+}
