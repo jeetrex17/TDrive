@@ -158,6 +158,30 @@ describe('theme controller', () => {
         controller.destroy();
     });
 
+    it('consumes the expected ready rejection when a rapid change skips a transition', async () => {
+        const ready = Promise.reject(new DOMException('Transition was skipped', 'AbortError'));
+        const catchReady = vi.spyOn(ready, 'catch');
+        Object.defineProperty(document, 'startViewTransition', {
+            configurable: true,
+            value: vi.fn((update: () => void) => {
+                update();
+                return { ready, finished: Promise.resolve() };
+            }),
+        });
+        const controller = createThemeController({
+            document,
+            storage,
+            reducedMotion: createMediaQuery(false),
+        });
+        controller.start();
+
+        controller.setPreferredTheme('dark', 'nord');
+        await Promise.resolve();
+
+        expect(catchReady).toHaveBeenCalledOnce();
+        controller.destroy();
+    });
+
     it('changes instantly when the user requests reduced motion', () => {
         const startViewTransition = vi.fn((update: () => void) => {
             update();

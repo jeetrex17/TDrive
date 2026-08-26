@@ -5,7 +5,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import AuthScreens from './AuthScreens.svelte';
-import { setPreferredTheme, setThemeMode, themeController } from '../theme/theme-controller';
+import {
+    setPreferredTheme,
+    setThemeMode,
+    THEME_TRANSITION_CLASS,
+    themeController,
+} from '../theme/theme-controller';
 import { authCodeReset, authPhone, authScreen } from './auth-store';
 
 let host: HTMLElement;
@@ -15,6 +20,20 @@ function codeInput(): HTMLInputElement {
     const el = host.querySelector('.code-input') as HTMLInputElement | null;
     if (!el) throw new Error('code input not rendered');
     return el;
+}
+
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+    return {
+        x: left,
+        y: top,
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
+        toJSON: () => ({}),
+    };
 }
 
 beforeEach(() => {
@@ -90,6 +109,34 @@ describe('AuthScreens field reset', () => {
 
         expect(host.querySelector('#auth-appearance-popover')).toBeNull();
         expect(host.querySelector('#auth-appearance-trigger')?.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('recovers a rapid palette click intercepted by the root transition layer', async () => {
+        authScreen.set('phone');
+        flushSync();
+        host.querySelector<HTMLButtonElement>('#auth-appearance-trigger')?.click();
+        flushSync();
+        await tick();
+
+        const popover = host.querySelector<HTMLElement>('#auth-appearance-popover');
+        const nord = host.querySelector<HTMLButtonElement>('#appearance-theme-nord');
+        if (!popover || !nord) throw new Error('appearance controls did not render');
+        vi.spyOn(popover, 'getBoundingClientRect').mockReturnValue(rect(100, 100, 360, 640));
+        vi.spyOn(nord, 'getBoundingClientRect').mockReturnValue(rect(280, 360, 160, 100));
+        document.documentElement.classList.add(THEME_TRANSITION_CLASS);
+
+        document.documentElement.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            clientX: 320,
+            clientY: 400,
+        }));
+        flushSync();
+        await tick();
+
+        expect(host.querySelector('#auth-appearance-popover')).not.toBeNull();
+        expect(host.querySelector('#appearance-theme-nord')?.getAttribute('aria-checked')).toBe('true');
+        expect(document.activeElement).toBe(host.querySelector('#appearance-theme-nord'));
     });
 
     it('clears the code field when transitioning onto the code screen', () => {

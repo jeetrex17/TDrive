@@ -6,6 +6,7 @@
     import { tick } from 'svelte';
     import { eventOccurredWithin } from '../event-path';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
+    import { recoverThemeTransitionClick } from '../theme/theme-interaction';
     import Avatar from './Avatar.svelte';
     import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
 
@@ -119,6 +120,8 @@
     function onDocumentClick(event: MouseEvent): void {
         if (!open) return;
         if (eventOccurredWithin(event, menuEl) || eventOccurredWithin(event, triggerEl)) return;
+        if (recoverThemeTransitionClick(event, menuEl)
+            || recoverThemeTransitionClick(event, triggerEl)) return;
         closeMenu();
     }
 </script>
@@ -129,6 +132,7 @@
 <button
     bind:this={triggerEl}
     id="profile-trigger"
+    data-theme-hit-target
     class="profile-trigger"
     type="button"
     aria-haspopup="menu"

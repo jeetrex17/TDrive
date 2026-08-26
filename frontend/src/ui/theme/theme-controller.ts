@@ -122,6 +122,12 @@ export function createThemeController(
                 stateApplied = true;
                 applyState(nextState);
             });
+            // Starting another transition automatically skips the previous
+            // one in Chromium/WebView2. `ready` rejects in that normal case;
+            // observe it so rapid palette scrubbing stays console-clean.
+            if (transition?.ready) {
+                void Promise.resolve(transition.ready).catch(() => undefined);
+            }
             const cleanUp = () => {
                 if (generation === transitionGeneration && !stateApplied && started) {
                     applyState(nextState);

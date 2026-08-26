@@ -117,6 +117,7 @@
                 <button
                     id={`appearance-mode-${option.id}`}
                     data-appearance-mode={option.id}
+                    data-theme-hit-target
                     class:selected
                     class="mode-card"
                     type="button"
@@ -143,6 +144,7 @@
                 {@const selected = selectedThemeId === theme.id}
                 <button
                     id={`appearance-theme-${theme.id}`}
+                    data-theme-hit-target
                     class:selected
                     class="theme-card"
                     type="button"

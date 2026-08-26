@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import ProfileMenu from './ProfileMenu.svelte';
-import { setPreferredTheme, setThemeMode, themeController } from '../theme/theme-controller';
+import {
+    setPreferredTheme,
+    setThemeMode,
+    THEME_TRANSITION_CLASS,
+    themeController,
+} from '../theme/theme-controller';
 import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
 
 let component: Record<string, unknown> | null = null;
@@ -26,6 +31,20 @@ function click(selector: string): void {
     if (!element) throw new Error(`missing ${selector}`);
     element.click();
     flushSync();
+}
+
+function rect(left: number, top: number, width: number, height: number): DOMRect {
+    return {
+        x: left,
+        y: top,
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
+        toJSON: () => ({}),
+    };
 }
 
 afterEach(async () => {
@@ -85,5 +104,34 @@ describe('ProfileMenu appearance navigation', () => {
         expect(menu?.getAttribute('role')).toBe('dialog');
         expect(host?.querySelector('#appearance-theme-nord')?.getAttribute('aria-checked')).toBe('true');
         expect(host?.textContent).toContain('Nord is active.');
+    });
+
+    it('recovers a rapid palette click intercepted by the root transition layer', async () => {
+        setup();
+        click('#profile-trigger');
+        click('#profile-menu-appearance');
+        await tick();
+        await Promise.resolve();
+
+        const menu = host?.querySelector<HTMLElement>('#profile-menu');
+        const nord = host?.querySelector<HTMLButtonElement>('#appearance-theme-nord');
+        if (!menu || !nord) throw new Error('appearance controls did not render');
+        vi.spyOn(menu, 'getBoundingClientRect').mockReturnValue(rect(100, 100, 390, 680));
+        vi.spyOn(nord, 'getBoundingClientRect').mockReturnValue(rect(290, 360, 180, 100));
+        document.documentElement.classList.add(THEME_TRANSITION_CLASS);
+
+        document.documentElement.dispatchEvent(new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            clientX: 340,
+            clientY: 410,
+        }));
+        flushSync();
+        await tick();
+
+        expect(menu.hidden).toBe(false);
+        expect(menu.getAttribute('role')).toBe('dialog');
+        expect(host?.querySelector('#appearance-theme-nord')?.getAttribute('aria-checked')).toBe('true');
+        expect(document.activeElement).toBe(host?.querySelector('#appearance-theme-nord'));
     });
 });

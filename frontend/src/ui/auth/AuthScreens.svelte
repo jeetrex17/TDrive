@@ -9,6 +9,7 @@
     import { tick } from 'svelte';
     import { eventOccurredWithin } from '../event-path';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
+    import { recoverThemeTransitionClick } from '../theme/theme-interaction';
     import { authCodeReset, authHint, authPhone, authScreen } from './auth-store';
 
     interface Props {
@@ -29,6 +30,7 @@
     let revealPassword = $state(false);
     let appearanceOpen = $state(false);
     let appearanceRoot = $state<HTMLElement | null>(null);
+    let appearancePopover = $state<HTMLElement | null>(null);
     let appearanceTrigger = $state<HTMLButtonElement | null>(null);
 
     let apiIdEl = $state<HTMLInputElement | null>(null);
@@ -94,7 +96,10 @@
     }
 
     function onDocumentClick(event: MouseEvent): void {
-        if (!appearanceOpen || eventOccurredWithin(event, appearanceRoot)) return;
+        if (!appearanceOpen
+            || eventOccurredWithin(event, appearanceRoot)
+            || recoverThemeTransitionClick(event, appearancePopover)
+            || recoverThemeTransitionClick(event, appearanceRoot)) return;
         closeAppearance();
     }
 </script>
@@ -107,6 +112,7 @@
         <button
             bind:this={appearanceTrigger}
             id="auth-appearance-trigger"
+            data-theme-hit-target
             class="auth-appearance-trigger"
             type="button"
             aria-label="Customize appearance"
@@ -119,7 +125,13 @@
             <PaletteIcon size={18} strokeWidth={2} aria-hidden="true" />
         </button>
         {#if appearanceOpen}
-            <div id="auth-appearance-popover" class="auth-appearance-popover" role="dialog" aria-label="Appearance settings">
+            <div
+                bind:this={appearancePopover}
+                id="auth-appearance-popover"
+                class="auth-appearance-popover"
+                role="dialog"
+                aria-label="Appearance settings"
+            >
                 <AppearancePanel autofocus />
             </div>
         {/if}
