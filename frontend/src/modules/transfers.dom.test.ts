@@ -37,6 +37,7 @@ type RuntimeHandler = (...args: unknown[]) => void;
 
 interface TestNotice {
     level?: string;
+    title?: string;
     body?: string;
 }
 
@@ -118,11 +119,17 @@ describe('aggregate import completion', () => {
         expect(mocks.markTransferDone).toHaveBeenCalledTimes(1);
         expect(mocks.markTransferDone).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'done' }));
         expect(mocks.pushTransferStart).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'Import failed' }));
+        expect(mocks.updateTransferName).toHaveBeenLastCalledWith({
+            id: 'import',
+            direction: 'up',
+            name: 'Import failed',
+        });
 
         const errorNotifications = mocks.notify.mock.calls
             .map(([notice]) => notice as TestNotice)
             .filter((notice) => notice?.level === 'error');
         expect(errorNotifications).toHaveLength(1);
+        expect(errorNotifications[0].title).toBe('Import failed');
         expect(errorNotifications[0].body).toContain('folder projection failed');
     });
 
@@ -144,5 +151,32 @@ describe('aggregate import completion', () => {
             status: 'canceled',
         });
         expect(mocks.notify).not.toHaveBeenCalled();
+    });
+
+    it('preserves partial-import wording for non-fatal file failures', () => {
+        handlers.get('import_start')?.();
+        handlers.get('import_complete')?.({
+            status: 'done',
+            uploaded: 999,
+            failed: 1,
+            errorCount: 0,
+            errors: [],
+        });
+
+        expect(mocks.updateTransferName).toHaveBeenLastCalledWith({
+            id: 'import',
+            direction: 'up',
+            name: 'Imported 999 files · 1 failed',
+        });
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({
+            id: 'import',
+            direction: 'up',
+            status: 'failed',
+        });
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'error',
+            title: 'Imported 999 files · 1 failed',
+            body: expect.stringContaining('1 failed'),
+        }));
     });
 });

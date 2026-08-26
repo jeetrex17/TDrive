@@ -168,6 +168,11 @@ function recordImportFailureReason(name: any, message: any) {
     if (!importFailureReasons.includes(entry)) importFailureReasons.push(entry);
 }
 
+function formatImportResultLabel(uploaded: number, failedUploads = 0) {
+    const imported = uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`;
+    return failedUploads > 0 ? `${imported} · ${failedUploads} failed` : imported;
+}
+
 // refreshImportRow renders one constant-size aggregate supplied by the backend.
 function refreshImportRow() {
     const batch = state.importBatch;
@@ -359,9 +364,11 @@ export function setupUploadProgress() {
             ? Math.max(0, Math.floor(reportedErrors))
             : (Array.isArray(info?.errors) ? info.errors.length : 0);
         const canceled = state.cancelingUpload || backendStatus === 'canceled';
+        const fatal = backendStatus === 'failed';
         const status = canceled
             ? 'canceled'
-            : (backendStatus === 'failed' || failedUploads > 0 ? 'failed' : 'done');
+            : (fatal || failedUploads > 0 ? 'failed' : 'done');
+        const resultLabel = formatImportResultLabel(uploaded, failedUploads);
         if (!state.importBatch) {
             pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import completed', total: uploaded + failedUploads });
         }
@@ -370,9 +377,9 @@ export function setupUploadProgress() {
             direction: 'up',
             name: canceled
                 ? 'Import canceled'
-                : (status === 'failed'
+                : (fatal
                     ? 'Import failed'
-                    : (uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`)),
+                    : resultLabel),
         });
         markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status });
         state.importBatch = null;
@@ -402,9 +409,9 @@ export function setupUploadProgress() {
             }
             notify({
                 level: status === 'failed' ? 'error' : 'info',
-                title: status === 'failed'
+                title: fatal
                     ? 'Import failed'
-                    : `Imported ${uploaded === 1 ? '1 file' : `${uploaded} files`}`,
+                    : resultLabel,
                 body: [...bits, ...reasons].join('  ·  ') || 'The import stopped before it could finish.',
             });
         }

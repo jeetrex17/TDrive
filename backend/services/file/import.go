@@ -226,10 +226,6 @@ func (s *Service) planArchive(ctx context.Context, p string, encrypt bool, plan 
 	entries, ignored, err := scanArchiveForImport(ctx, p)
 	plan.Ignored += ignored
 	if err != nil {
-		if errors.Is(err, errImportItemLimit) {
-			plan.LimitExceeded = true
-			return err
-		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
@@ -307,9 +303,6 @@ func scanArchiveForImportLimit(ctx context.Context, archivePath string, maxScann
 		}
 		if entry.IsDir {
 			return nil
-		}
-		if len(entries) >= maxScanned {
-			return errArchiveScanLimit
 		}
 		entries = append(entries, entry)
 		return nil
@@ -546,7 +539,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 				if err := s.addFileTask(p, info.Size(), parent, encrypt, tasks); err != nil {
 					fatalErr = err
 				}
-				continue
+				break // reach the shared fatal guard before scheduling another selected path
 			}
 			if err := s.importTree(ctx, channelID, dir, archiveFolderName(p), parent, encrypt, tasks); err != nil {
 				if isFatalImportError(err) {

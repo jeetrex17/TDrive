@@ -420,3 +420,67 @@ func TestRunImportArchiveFallbackUsesScheduledUploadCount(t *testing.T) {
 		t.Fatalf("completion errorCount = %v, want one extraction warning", got)
 	}
 }
+
+func TestRunImportArchiveFallbackStopsSchedulingAfterFatalUploadWindow(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	events := &importTestEventRecorder{}
+	svc.Events = events
+	svc.MaxConcurrentUploads = 1
+	svc.FloodWaitRetry = tgclient.FloodWaitRetryPolicy{
+		Sleep: func(context.Context, time.Duration) error { return nil },
+	}
+	fakeTG.InjectFloodWaits(1)
+
+	selectionRoot := t.TempDir()
+	paths := make([]string, 0, importUploadBatchSize+1)
+	for index := 0; index < importUploadBatchSize-1; index++ {
+		filePath := filepath.Join(selectionRoot, fmt.Sprintf("file-%03d.txt", index))
+		mkfile(t, filePath, "x")
+		paths = append(paths, filePath)
+	}
+	archivePath := buildZip(t, map[string]string{"inside.txt": "inside"}, nil, nil)
+	paths = append(paths, archivePath)
+	laterFolder := filepath.Join(selectionRoot, "must-not-be-created")
+	if err := os.Mkdir(laterFolder, 0o755); err != nil {
+		t.Fatalf("create later folder: %v", err)
+	}
+	paths = append(paths, laterFolder)
+
+	createCalls := 0
+	svc.CreateFolder = func(context.Context, int64, string, string) (string, error) {
+		createCalls++
+		return "", fmt.Errorf("later folder creation: %w", projection.ErrControlProjection)
+	}
+	baseResolver := svc.Peers
+	svc.Peers = importPeerResolverFunc(func(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+		peer, err := baseResolver.ResolvePeer(ctx, channelID)
+		if err != nil {
+			return tgclient.InputPeer{}, err
+		}
+		if err := os.WriteFile(archivePath, []byte("corrupt after preflight"), 0o600); err != nil {
+			return tgclient.InputPeer{}, err
+		}
+		return peer, nil
+	})
+
+	err := svc.RunImport(context.Background(), personalChannelID, paths, "", false, true)
+	if !errors.Is(err, tgclient.ErrFloodWait) {
+		t.Fatalf("RunImport error = %v, want FLOOD_WAIT", err)
+	}
+	if createCalls != 0 {
+		t.Fatalf("folder creation calls after fatal archive fallback = %d, want 0", createCalls)
+	}
+	payload, ok := events.lastPayload("import_complete")
+	if !ok {
+		t.Fatal("import_complete payload missing")
+	}
+	if got := payload["scheduled"]; got != importUploadBatchSize {
+		t.Fatalf("completion scheduled = %v, want one bounded window %d", got, importUploadBatchSize)
+	}
+	if got := payload["status"]; got != "failed" {
+		t.Fatalf("completion status = %v, want failed", got)
+	}
+	if got := fmt.Sprint(payload["error"]); !strings.Contains(got, "flood wait") {
+		t.Fatalf("completion error = %q, want original FLOOD_WAIT", got)
+	}
+}
