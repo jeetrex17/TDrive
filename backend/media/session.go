@@ -110,11 +110,8 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		}
 		s.decryptor = decryptor
 		if s.thumbReader != nil {
-			thumbDecryptor, err := tdcrypto.NewRandomAccessDecryptor(
-				openCtx,
+			thumbDecryptor, err := decryptor.Clone(
 				storedContentReader{session: s, reader: s.thumbReader},
-				file.StoredSize,
-				opts.MasterKey,
 			)
 			if err != nil {
 				s.Close()

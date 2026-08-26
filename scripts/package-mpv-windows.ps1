@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $versionFile = Join-Path $PSScriptRoot "package-mpv-version.txt"
+. (Join-Path $PSScriptRoot "mpv-metadata.ps1")
 
 function Fail($Message) {
     throw "package-mpv-windows: $Message"
@@ -56,28 +57,29 @@ function Get-MpvMetadata([string]$Path, [string]$ExpectedVersion) {
     if ($LASTEXITCODE -ne 0) {
         Fail "could not execute mpv runtime: $Path"
     }
-    $mpvMatch = [regex]::Match($output, '(?m)^mpv v?([^\s]+)')
-    $ffmpegMatch = [regex]::Match($output, '(?m)^FFmpeg version:\s*(.+)$')
-    if (-not $mpvMatch.Success) {
-        Fail "could not read mpv version from $Path"
+    $metadata = Get-TDriveMpvMetadataFromOutput -Output $output
+    if ($metadata.Mpv -ne $ExpectedVersion) {
+        Fail "mpv version mismatch: expected $ExpectedVersion, got $($metadata.Mpv)"
     }
-    if (-not $ffmpegMatch.Success) {
-        Fail "could not read FFmpeg version from $Path"
-    }
-    $mpvVersion = $mpvMatch.Groups[1].Value.Trim()
-    if ($mpvVersion -ne $ExpectedVersion) {
-        Fail "mpv version mismatch: expected $ExpectedVersion, got $mpvVersion"
-    }
-    return @{
-        Mpv = $mpvVersion
-        FFmpeg = $ffmpegMatch.Groups[1].Value.Trim()
-    }
+    return $metadata
 }
 
-function Invoke-MpvQualification([string]$Path) {
-    & $Path --no-config --terminal=no --msg-level=all=warn --vo=null --ao=null --frames=2 -- "av://lavfi:testsrc=size=64x64:rate=1:duration=2" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Fail "bundled mpv failed deterministic lavfi decode qualification"
+function Invoke-MpvQualification([string]$Path, [string]$RuntimeDirectory) {
+    $oldPath = $env:PATH
+    $runtimePaths = @($RuntimeDirectory)
+    if ($env:SystemRoot) {
+        $runtimePaths += (Join-Path $env:SystemRoot "System32")
+        $runtimePaths += $env:SystemRoot
+    }
+    try {
+        $env:PATH = ($runtimePaths -join [System.IO.Path]::PathSeparator)
+        & $Path --no-config --terminal=no --msg-level=all=warn --vo=null --ao=null --frames=2 -- "av://lavfi:testsrc=size=64x64:rate=1:duration=2" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Fail "bundled mpv failed deterministic lavfi decode qualification"
+        }
+    }
+    finally {
+        $env:PATH = $oldPath
     }
 }
 
@@ -153,7 +155,7 @@ Get-ChildItem -LiteralPath $mpvDir -File -Filter "*.dll" | ForEach-Object {
 
 $bundledMPV = Join-Path $mediaDir "mpv.exe"
 $metadata = Get-MpvMetadata $bundledMPV $expectedMpvVersion
-Invoke-MpvQualification $bundledMPV
+Invoke-MpvQualification $bundledMPV $mediaDir
 
 $packageSource = if ($env:TDRIVE_MPV_PACKAGE_SOURCE) { $env:TDRIVE_MPV_PACKAGE_SOURCE } else { "local-unverified" }
 $packageSource = ($packageSource -replace "`r|`n", " ").Trim()

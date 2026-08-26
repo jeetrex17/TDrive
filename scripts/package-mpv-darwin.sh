@@ -4,6 +4,7 @@ set -euo pipefail
 APP_PATH="${1:-build/bin/TDrive.app}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_FILE="$SCRIPT_DIR/package-mpv-version.txt"
+. "$SCRIPT_DIR/mpv-metadata.sh"
 
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "package-mpv-darwin: this script only runs on macOS" >&2
@@ -22,6 +23,7 @@ MEDIA_DIR="$APP_PATH/Contents/Resources/media"
 MPV_SIDECAR="$MEDIA_DIR/mpv"
 RUNTIME_MANIFEST="$MEDIA_DIR/media-runtime.manifest"
 RUNTIME_CHECKSUMS="$MEDIA_DIR/media-runtime.sha256"
+RUNTIME_SOURCE="$MEDIA_DIR/SOURCE.txt"
 RUNTIME_NOTICE="$MEDIA_DIR/THIRD_PARTY_NOTICES.txt"
 
 if [ ! -x "$BIN_PATH" ]; then
@@ -44,7 +46,7 @@ mkdir -p "$FRAMEWORKS_DIR" "$MEDIA_DIR"
 # This script owns the media runtime files it places in the bundle. Removing
 # them up front keeps repeated local package runs deterministic.
 find "$FRAMEWORKS_DIR" -maxdepth 1 -type f -name '*.dylib' -delete
-rm -f "$MPV_SIDECAR" "$RUNTIME_MANIFEST" "$RUNTIME_CHECKSUMS" "$RUNTIME_NOTICE"
+rm -f "$MPV_SIDECAR" "$RUNTIME_MANIFEST" "$RUNTIME_CHECKSUMS" "$RUNTIME_SOURCE" "$RUNTIME_NOTICE"
 
 log() {
   printf 'package-mpv-darwin: %s\n' "$*"
@@ -74,7 +76,7 @@ otool_deps() {
 
 is_system_ref() {
   case "$1" in
-    @*|/System/*|/usr/lib/*)
+    /System/*|/usr/lib/*)
       return 0
       ;;
   esac
@@ -88,40 +90,85 @@ is_bundle_ref() {
   [ -f "$1" ]
 }
 
-find_mpv_lib() {
-  if [ -n "${TDRIVE_MPV_LIB:-}" ]; then
-    [ -f "$TDRIVE_MPV_LIB" ] || die "TDRIVE_MPV_LIB does not exist: $TDRIVE_MPV_LIB"
-    printf '%s\n' "$TDRIVE_MPV_LIB"
-    return
-  fi
+expand_path_token() {
+  local origin="$1"
+  local ref="$2"
+  local root
 
-  local libdir=""
-  libdir="$(pkg-config --variable=libdir mpv 2>/dev/null || true)"
-  for candidate in \
-    "$libdir/libmpv.2.dylib" \
-    "$libdir/libmpv.dylib" \
-    "/opt/homebrew/opt/mpv/lib/libmpv.2.dylib" \
-    "/usr/local/opt/mpv/lib/libmpv.2.dylib"; do
-    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
-      printf '%s\n' "$candidate"
+  case "$ref" in
+    @loader_path/*)
+      printf '%s/%s\n' "$(dirname "$origin")" "${ref#@loader_path/}"
       return
-    fi
-  done
-
-  die "could not find libmpv; install mpv or set TDRIVE_MPV_LIB"
+      ;;
+    @executable_path/*)
+      for root in "$(dirname "$origin")" "$(dirname "${MPV_BIN:-$origin}")" "$(dirname "$BIN_PATH")"; do
+        printf '%s/%s\n' "$root" "${ref#@executable_path/}"
+      done
+      return
+      ;;
+  esac
+  printf '%s\n' "$ref"
 }
 
-find_mpv_bin() {
-  if [ -n "${TDRIVE_MPV_BIN:-}" ]; then
-    [ -f "$TDRIVE_MPV_BIN" ] || die "TDRIVE_MPV_BIN does not exist: $TDRIVE_MPV_BIN"
-    printf '%s\n' "$TDRIVE_MPV_BIN"
-    return
-  fi
+otool_rpaths() {
+  local file="$1"
+  otool -l "$file" | awk '
+    $1 == "cmd" && $2 == "LC_RPATH" { in_rpath = 1; next }
+    in_rpath && $1 == "path" { print $2; in_rpath = 0 }
+  '
+}
 
-  local found=""
-  found="$(command -v mpv || true)"
-  [ -n "$found" ] || die "could not find mpv sidecar; install mpv or set TDRIVE_MPV_BIN"
-  printf '%s\n' "$found"
+resolve_dependency_ref() {
+  local origin="$1"
+  local dep="$2"
+  local rpath expanded_rpath candidate
+
+  case "$dep" in
+    @rpath/*)
+      while IFS= read -r rpath; do
+        [ -n "$rpath" ] || continue
+        while IFS= read -r expanded_rpath; do
+          [ -n "$expanded_rpath" ] || continue
+          candidate="$expanded_rpath/${dep#@rpath/}"
+          if [ -f "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return
+          fi
+        done < <(expand_path_token "$origin" "$rpath")
+      done < <(otool_rpaths "$origin")
+      ;;
+    @loader_path/*|@executable_path/*)
+      while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        if [ -f "$candidate" ]; then
+          printf '%s\n' "$candidate"
+          return
+        fi
+      done < <(expand_path_token "$origin" "$dep")
+      ;;
+    *)
+      printf '%s\n' "$dep"
+      return
+      ;;
+  esac
+
+  printf '%s\n' "$dep"
+}
+
+find_runtime_root() {
+  local root first_symlink
+  root="${TDRIVE_MPV_RUNTIME_DIR:-}"
+  [ -n "$root" ] || die "TDRIVE_MPV_RUNTIME_DIR is required for macOS media packaging"
+  [ -d "$root" ] || die "macOS runtime directory not found: $root"
+  root="$(cd "$root" && pwd -P)"
+
+  first_symlink="$(find "$root" -type l -print -quit)"
+  [ -z "$first_symlink" ] || die "macOS runtime directory must not contain symbolic links: $first_symlink"
+  [ -x "$root/bin/mpv" ] || die "macOS runtime must contain executable bin/mpv"
+  [ -f "$root/lib/libmpv.2.dylib" ] || die "macOS runtime must contain lib/libmpv.2.dylib"
+  [ -s "$root/SOURCE.txt" ] || die "macOS runtime must contain non-empty SOURCE.txt"
+  [ -s "$root/THIRD_PARTY_NOTICES.txt" ] || die "macOS runtime must contain non-empty THIRD_PARTY_NOTICES.txt"
+  printf '%s\n' "$root"
 }
 
 assert_arch_compatible() {
@@ -194,10 +241,7 @@ read_runtime_metadata() {
   local mpv_bin="$1"
   local output
   output="$("$mpv_bin" --no-config --version)" || die "could not execute mpv runtime: $mpv_bin"
-  MPV_VERSION="$(printf '%s\n' "$output" | awk '$1 == "mpv" { sub(/^v/, "", $2); print $2; exit }')"
-  FFMPEG_VERSION="$(printf '%s\n' "$output" | sed -n 's/^FFmpeg version: //p' | sed -n '1p')"
-  [ -n "$MPV_VERSION" ] || die "could not read mpv version from $mpv_bin"
-  [ -n "$FFMPEG_VERSION" ] || die "could not read FFmpeg version from $mpv_bin"
+  tdrive_parse_mpv_metadata "$output" || die "could not read mpv/FFmpeg metadata from $mpv_bin"
   if [ "$MPV_VERSION" != "$EXPECTED_MPV_VERSION" ]; then
     die "mpv version mismatch: expected $EXPECTED_MPV_VERSION, got $MPV_VERSION"
   fi
@@ -218,25 +262,19 @@ qualify_runtime() {
 }
 
 write_runtime_metadata() {
-  local app_arches source_reference
+  local app_arches source_reference archive_sha256
   app_arches="$(lipo -archs "$BIN_PATH")"
   source_reference="${TDRIVE_MPV_PACKAGE_SOURCE:-local-unverified}"
   source_reference="$(printf '%s' "$source_reference" | tr '\r\n' '  ')"
+  archive_sha256="${TDRIVE_MPV_ARCHIVE_SHA256:-}"
+  case "$archive_sha256" in
+    *[!0-9A-Fa-f]*|'') die "TDRIVE_MPV_ARCHIVE_SHA256 must be set to the approved macOS runtime archive SHA-256" ;;
+  esac
+  [ "${#archive_sha256}" -eq 64 ] || die "TDRIVE_MPV_ARCHIVE_SHA256 must contain exactly 64 hexadecimal characters"
+  archive_sha256="$(printf '%s' "$archive_sha256" | tr '[:upper:]' '[:lower:]')"
 
-  {
-    printf '%s\n' \
-      'TDrive media runtime notice' \
-      '' \
-      "Bundled mpv version: $MPV_VERSION" \
-      "Bundled FFmpeg version: $FFMPEG_VERSION" \
-      'mpv is GPL-2.0-or-later by default and can be built LGPL-2.1-or-later with GPL features disabled.' \
-      'FFmpeg is LGPL-2.1-or-later by default; optional components can make a build GPL.' \
-      'This notice does not determine the exact build license or replace its redistribution obligations.' \
-      'Review the pinned package source and provide corresponding sources/notices before public distribution.' \
-      '' \
-      'mpv source and license: https://github.com/mpv-player/mpv' \
-      'FFmpeg source and license: https://ffmpeg.org/'
-  } > "$RUNTIME_NOTICE"
+  cp -p "$RUNTIME_SOURCE_DIR/SOURCE.txt" "$RUNTIME_SOURCE"
+  cp -p "$RUNTIME_SOURCE_DIR/THIRD_PARTY_NOTICES.txt" "$RUNTIME_NOTICE"
 
   {
     printf 'schema=1\n'
@@ -245,7 +283,9 @@ write_runtime_metadata() {
     printf 'mpv_version=%s\n' "$MPV_VERSION"
     printf 'ffmpeg_version=%s\n' "$FFMPEG_VERSION"
     printf 'package_source=%s\n' "$source_reference"
+    printf 'source_archive_sha256=%s\n' "$archive_sha256"
     printf 'qualification=lavfi-testsrc-64x64-2frames\n'
+    printf 'license_metadata=SOURCE.txt,THIRD_PARTY_NOTICES.txt\n'
     printf 'license_review_required=true\n'
   } > "$RUNTIME_MANIFEST"
 
@@ -291,17 +331,18 @@ enqueue() {
 enqueue_deps_for() {
   local file="$1"
   local skip_install_name="${2:-0}"
-  local dep
+  local dep resolved
 
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
     if is_system_ref "$dep"; then
       continue
     fi
-    if [ ! -f "$dep" ]; then
-      die "non-system dependency does not exist: $dep (from $file)"
+    resolved="$(resolve_dependency_ref "$file" "$dep")"
+    if [ ! -f "$resolved" ]; then
+      die "non-system dependency does not exist or cannot be resolved: $dep (from $file)"
     fi
-    enqueue "$dep"
+    enqueue "$resolved"
   done < <(otool_deps "$file" "$skip_install_name")
 }
 
@@ -335,11 +376,10 @@ rewrite_executable_refs() {
 
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
-    if is_bundle_ref "$dep"; then
+    if ! is_system_ref "$dep"; then
       base="$(basename "$dep")"
-      if [ -f "$FRAMEWORKS_DIR/$base" ]; then
-        install_name_tool -change "$dep" "$prefix/$base" "$file"
-      fi
+      [ -f "$FRAMEWORKS_DIR/$base" ] || die "packaged dependency is missing: $dep (from $file)"
+      install_name_tool -change "$dep" "$prefix/$base" "$file"
     fi
   done < <(otool_deps "$file" 0)
 }
@@ -352,37 +392,59 @@ rewrite_dylib_refs() {
   install_name_tool -id "@rpath/$base" "$dest"
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
-    if is_bundle_ref "$dep"; then
+    if ! is_system_ref "$dep"; then
       dep_base="$(basename "$dep")"
-      if [ -f "$FRAMEWORKS_DIR/$dep_base" ]; then
-        install_name_tool -change "$dep" "@loader_path/$dep_base" "$dest"
-      fi
+      [ -f "$FRAMEWORKS_DIR/$dep_base" ] || die "packaged dependency is missing: $dep (from $dest)"
+      install_name_tool -change "$dep" "@loader_path/$dep_base" "$dest"
     fi
   done < <(otool_deps "$dest" 1)
 }
 
-verify_no_local_refs() {
-  local files bad
-  files=("$BIN_PATH" "$MPV_SIDECAR")
-  while IFS= read -r base; do
-    [ -n "$base" ] || continue
-    files+=("$FRAMEWORKS_DIR/$base")
-  done < "$COPIED"
+verify_packaged_refs_for() {
+  local file="$1"
+  local kind="$2"
+  local skip_install_name="${3:-0}"
+  local dep relative target
 
-  bad="$(
-    for file in "${files[@]}"; do
-      [ -f "$file" ] || continue
-      otool -L "$file"
-    done | grep -E '/opt/homebrew|/usr/local' || true
-  )"
-  if [ -n "$bad" ]; then
-    printf '%s\n' "$bad" >&2
-    die "packaged app still references local Homebrew paths"
-  fi
+  while IFS= read -r dep; do
+    [ -n "$dep" ] || continue
+    if is_system_ref "$dep"; then
+      continue
+    fi
+    case "$kind:$dep" in
+      app:@executable_path/../Frameworks/TDriveMedia/*)
+        relative="${dep#@executable_path/}"
+        target="$(dirname "$BIN_PATH")/$relative"
+        ;;
+      sidecar:@executable_path/../../Frameworks/TDriveMedia/*)
+        relative="${dep#@executable_path/}"
+        target="$(dirname "$MPV_SIDECAR")/$relative"
+        ;;
+      dylib:@loader_path/*)
+        relative="${dep#@loader_path/}"
+        target="$(dirname "$file")/$relative"
+        ;;
+      *)
+        die "packaged binary has an unresolved non-system dependency: $dep (from $file)"
+        ;;
+    esac
+    [ -f "$target" ] || die "packaged dependency target does not exist: $dep (from $file)"
+  done < <(otool_deps "$file" "$skip_install_name")
 }
 
-MPV_LIB="$(find_mpv_lib)"
-MPV_BIN="$(find_mpv_bin)"
+verify_packaged_refs() {
+  local base
+  verify_packaged_refs_for "$BIN_PATH" app 0
+  verify_packaged_refs_for "$MPV_SIDECAR" sidecar 0
+  while IFS= read -r base; do
+    [ -n "$base" ] || continue
+    verify_packaged_refs_for "$FRAMEWORKS_DIR/$base" dylib 1
+  done < "$COPIED"
+}
+
+RUNTIME_SOURCE_DIR="$(find_runtime_root)"
+MPV_LIB="$RUNTIME_SOURCE_DIR/lib/libmpv.2.dylib"
+MPV_BIN="$RUNTIME_SOURCE_DIR/bin/mpv"
 assert_arch_compatible "$MPV_LIB" "libmpv"
 assert_arch_compatible "$MPV_BIN" "mpv sidecar"
 assert_deployment_compatible "$MPV_LIB" "libmpv"
@@ -414,7 +476,7 @@ done < "$COPIED"
 
 rewrite_executable_refs "$BIN_PATH" "@executable_path/../Frameworks/TDriveMedia"
 rewrite_executable_refs "$MPV_SIDECAR" "@executable_path/../../Frameworks/TDriveMedia"
-verify_no_local_refs
+verify_packaged_refs
 
 if command -v codesign >/dev/null 2>&1; then
   log "ad-hoc signing bundled media runtime"

@@ -238,6 +238,9 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 	size := session.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", contentTypeFor(session.Name()))
+	if session.Encrypted() {
+		setMediaNoStore(w.Header())
+	}
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -296,6 +299,9 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if session.Encrypted() {
+		setMediaNoStore(w.Header())
+	}
 	seconds, err := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
 	if err != nil || seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		http.Error(w, "invalid thumbnail time", http.StatusBadRequest)
@@ -305,7 +311,9 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		w.Header().Set("Content-Type", videoThumbMime)
-		w.Header().Set("Cache-Control", "private, max-age=86400")
+		if !session.Encrypted() {
+			w.Header().Set("Cache-Control", "private, max-age=86400")
+		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
@@ -319,6 +327,12 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "thumbnail error", http.StatusInternalServerError)
 	}
+}
+
+func setMediaNoStore(header http.Header) {
+	header.Set("Cache-Control", "no-store, max-age=0")
+	header.Set("Pragma", "no-cache")
+	header.Set("Expires", "0")
 }
 
 func applyMediaCORS(w http.ResponseWriter, r *http.Request, exposeRangeHeaders bool) bool {

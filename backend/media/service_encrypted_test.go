@@ -75,6 +75,86 @@ func TestMediaOpenServesEncryptedFileAsPlaintext(t *testing.T) {
 	}
 }
 
+func TestEncryptedMediaResponsesAreNoStore(t *testing.T) {
+	db := newResolverTestDB(t)
+	key := bytes.Repeat([]byte{0x32}, 32)
+	plaintext := testBytes(512)
+	ciphertext := encryptMediaFixture(t, plaintext, key)
+	projectEncryptedMedia(t, db, 10, "secret.mp4", ciphertext, plaintext)
+	ranges := newMediaRangeFake(map[int64][]byte{10: ciphertext})
+	thumbGen := &fakeVideoThumbGenerator{available: true}
+	svc := NewService(Config{
+		DB:             db,
+		Peers:          staticPeerResolver{peer: ranges.peer},
+		Ranges:         ranges,
+		ThumbGenerator: thumbGen,
+		Keys: MasterKeyProviderFunc(func(context.Context, int64) ([]byte, error) {
+			return append([]byte(nil), key...), nil
+		}),
+	})
+	defer svc.Close()
+
+	opened, err := svc.Open(context.Background(), testChannelID, 10)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	session := svc.server.session(opened.Token)
+	if session == nil {
+		t.Fatal("encrypted media session was not registered")
+	}
+
+	assertNoStoreResponse(t, opened.URL, "bytes=0-15")
+	assertNoStoreResponse(t, session.thumbnailSourceURL(), "bytes=0-15")
+
+	thumbURL := opened.ThumbnailURL + "?t=0"
+	_ = waitForThumbnail(t, thumbURL)
+	resp, err := http.Get(thumbURL)
+	if err != nil {
+		t.Fatalf("thumbnail GET: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("thumbnail status = %d, want 200", resp.StatusCode)
+	}
+	assertNoStoreHeaders(t, resp.Header)
+}
+
+func TestEncryptedVideoSessionDoesNotDuplicateAuthenticationReadsForThumbnails(t *testing.T) {
+	key := bytes.Repeat([]byte{0x33}, 32)
+	plaintext := testBytes(128)
+	ciphertext := encryptMediaFixture(t, plaintext, key)
+	ranges := newCountingMediaRangeFake(map[int64][]byte{10: ciphertext})
+	ref := tgclient.DocumentRef{
+		Peer: ranges.peer, MsgID: 10, Size: int64(len(ciphertext)), Name: "secret.mp4",
+	}
+	file := LogicalFile{
+		ChannelID: testChannelID, FileID: 10, Revision: 1, Name: "secret.mp4",
+		StoredSize: int64(len(ciphertext)), PlaintextSize: int64(len(plaintext)),
+		Encrypted: true, EncryptionVersion: 1,
+		Segments: []Segment{{MsgID: 10, Size: int64(len(ciphertext))}},
+	}
+
+	session, err := newSession(
+		file,
+		[]resolvedSegment{{start: 0, size: int64(len(ciphertext)), ref: ref}},
+		ranges,
+		nil,
+		nil,
+		SessionOptions{EnableVideoThumbnails: true, MasterKey: append([]byte(nil), key...)},
+	)
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	defer session.Close()
+	if session.thumbDecryptor == nil {
+		t.Fatal("encrypted thumbnail decryptor was not created")
+	}
+	if calls := ranges.readCalls.Load(); calls != 1 {
+		t.Fatalf("range reads during encrypted video open = %d, want 1", calls)
+	}
+}
+
 func TestMediaOpenReadsEncryptedMultipartAcrossStoredSegments(t *testing.T) {
 	db := newResolverTestDB(t)
 	key := bytes.Repeat([]byte{0x42}, 32)
@@ -414,4 +494,52 @@ func zeroBytes(data []byte) bool {
 		}
 	}
 	return true
+}
+
+type countingMediaRangeFake struct {
+	*mediaRangeFake
+	readCalls atomic.Int64
+}
+
+func newCountingMediaRangeFake(bodies map[int64][]byte) *countingMediaRangeFake {
+	return &countingMediaRangeFake{mediaRangeFake: newMediaRangeFake(bodies)}
+}
+
+func (f *countingMediaRangeFake) ReadDocumentRange(ctx context.Context, ref tgclient.DocumentRef, offset int64, dst []byte) (int, error) {
+	f.readCalls.Add(1)
+	return f.mediaRangeFake.ReadDocumentRange(ctx, ref, offset, dst)
+}
+
+func assertNoStoreResponse(t *testing.T, url, rawRange string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if rawRange != "" {
+		req.Header.Set("Range", rawRange)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200/206", resp.StatusCode)
+	}
+	assertNoStoreHeaders(t, resp.Header)
+}
+
+func assertNoStoreHeaders(t *testing.T, header http.Header) {
+	t.Helper()
+	if got := header.Get("Cache-Control"); got != "no-store, max-age=0" {
+		t.Fatalf("Cache-Control = %q, want no-store, max-age=0", got)
+	}
+	if got := header.Get("Pragma"); got != "no-cache" {
+		t.Fatalf("Pragma = %q, want no-cache", got)
+	}
+	if got := header.Get("Expires"); got != "0" {
+		t.Fatalf("Expires = %q, want 0", got)
+	}
 }

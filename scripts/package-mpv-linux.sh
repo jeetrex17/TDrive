@@ -4,6 +4,7 @@ set -euo pipefail
 APP_DIR="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_FILE="$SCRIPT_DIR/package-mpv-version.txt"
+. "$SCRIPT_DIR/mpv-metadata.sh"
 
 log() {
   printf 'package-mpv-linux: %s\n' "$*"
@@ -77,18 +78,15 @@ elf_architecture() {
 read_runtime_metadata() {
   local mpv_bin="$1"
   local output
-  output="$("$mpv_bin" --no-config --version)" || die "could not execute mpv runtime: $mpv_bin"
-  MPV_VERSION="$(printf '%s\n' "$output" | awk '$1 == "mpv" { sub(/^v/, "", $2); print $2; exit }')"
-  FFMPEG_VERSION="$(printf '%s\n' "$output" | sed -n 's/^FFmpeg version: //p' | sed -n '1p')"
-  [ -n "$MPV_VERSION" ] || die "could not read mpv version from $mpv_bin"
-  [ -n "$FFMPEG_VERSION" ] || die "could not read FFmpeg version from $mpv_bin"
+  output="$(env -u LD_LIBRARY_PATH -u LD_PRELOAD -u LD_AUDIT "$mpv_bin" --no-config --version)" || die "could not execute mpv runtime: $mpv_bin"
+  tdrive_parse_mpv_metadata "$output" || die "could not read mpv/FFmpeg metadata from $mpv_bin"
   if [ "$MPV_VERSION" != "$EXPECTED_MPV_VERSION" ]; then
     die "mpv version mismatch: expected $EXPECTED_MPV_VERSION, got $MPV_VERSION"
   fi
 }
 
 qualify_runtime() {
-  "$1" \
+  env -u LD_LIBRARY_PATH -u LD_PRELOAD -u LD_AUDIT "$1" \
     --no-config \
     --terminal=no \
     --msg-level=all=warn \
