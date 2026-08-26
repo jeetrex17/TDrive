@@ -34,8 +34,9 @@ const bootstrapManifestPublicKeyPlaceholderHex = "000000000000000000000000000000
 // Add both old and new raw public keys here for a bridge-release rotation.
 func productionManifestPublicKeyHexes() []string {
 	return []string{
-		// RELEASE BOOTSTRAP: replace this with the authorized Ed25519 public key.
-		bootstrapManifestPublicKeyPlaceholderHex,
+		// Release signing key, generated 2026-08-26. The private half lives only in
+		// the release-signing GitHub environment as TDRIVE_UPDATE_SIGNING_KEY_PEM.
+		"d899038fd8adec0b152680f87c479620c38abac576adc67d3556a668606e15d8",
 	}
 }
 
