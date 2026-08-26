@@ -92,6 +92,33 @@ describe('notif-bell', () => {
         expect(entry.progress).toBe(50);
     });
 
+    it('tracks aggregate folder bytes and file counts monotonically', () => {
+        pushTransferStart({ id: 'folder:d:project', direction: 'down', name: 'Project', total: 0 });
+        updateTransferProgress({
+            id: 'folder:d:project', direction: 'down', progress: 60,
+            bytes: 600, total: 1000, itemsDone: 3, itemsTotal: 5,
+        });
+        // Retry callbacks can restart at zero. A stale update must not move any
+        // visible aggregate counter backwards.
+        updateTransferProgress({
+            id: 'folder:d:project', direction: 'down', progress: 10,
+            bytes: 100, total: 1000, itemsDone: 1, itemsTotal: 5,
+        });
+        flushSync();
+
+        const entry = get(historyEvents)[0] as TransferEvent;
+        expect(entry).toMatchObject({
+            progress: 60,
+            bytes: 600,
+            total: 1000,
+            itemsDone: 3,
+            itemsTotal: 5,
+        });
+        bell().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        flushSync();
+        expect(document.body.textContent).toContain('3 / 5 files');
+    });
+
     it('opens the panel on click, renders sections, and clears unread errors', () => {
         pushTransferStart({ id: 3, direction: 'up', name: 'c.bin', total: 10 });
         pushHistoryEvent({ level: 'error', title: 'Could not join drive', body: 'expired' });

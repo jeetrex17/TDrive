@@ -27,9 +27,9 @@
         : transfer.status === 'canceled' ? 'Canceled'
         : '',
     );
-    const doneBytes = $derived(
-        transfer.total > 0 ? Math.min(transfer.total, ((transfer.progress || 0) / 100) * transfer.total) : 0,
-    );
+    const doneBytes = $derived(transfer.total > 0
+        ? Math.min(transfer.total, Math.max(transfer.bytes || 0, ((transfer.progress || 0) / 100) * transfer.total))
+        : transfer.bytes || 0);
 
     // pointerdown, not click: the panel re-renders on every progress tick,
     // which can replace the button between mousedown and mouseup and eat a
@@ -68,8 +68,15 @@
         {#if terminalLabel}
             {terminalLabel}
         {:else if transfer.total <= 0}
-            {Math.round(transfer.progress || 0)}%
+            {#if (transfer.itemsTotal || 0) > 0}
+                <div class="notif-row-size">{transfer.itemsDone || 0} / {transfer.itemsTotal} files</div>
+            {:else}
+                {Math.round(transfer.progress || 0)}%
+            {/if}
         {:else}
+            {#if (transfer.itemsTotal || 0) > 0}
+                <div class="notif-row-size">{transfer.itemsDone || 0} / {transfer.itemsTotal} files</div>
+            {/if}
             <div class="notif-row-size">{formatBytes(doneBytes)} / {formatBytes(transfer.total)}</div>
             {#if transfer.speed > 0}
                 <div class="notif-row-speed">{formatBytes(transfer.speed)}/s</div>

@@ -95,17 +95,42 @@ export function pushTransferStart({ id, direction, name, total = 0 }: { id: stri
     return key;
 }
 
-export function updateTransferProgress({ id, direction, progress }: { id: string | number; direction: TransferDirection; progress: number }) {
+export function updateTransferProgress({
+    id,
+    direction,
+    progress,
+    bytes: exactBytes,
+    total: exactTotal,
+    itemsDone,
+    itemsTotal,
+}: {
+    id: string | number;
+    direction: TransferDirection;
+    progress: number;
+    bytes?: number;
+    total?: number;
+    itemsDone?: number;
+    itemsTotal?: number;
+}) {
     const key = transferKey(direction, id);
     const entry = findActiveTransfer(key);
     if (!entry) return;
-    const value = Math.max(0, Math.min(100, Number(progress) || 0));
+    const value = Math.max(entry.progress, Math.max(0, Math.min(100, Number(progress) || 0)));
+    const suppliedTotal = Number(exactTotal);
+    const total = Number.isFinite(suppliedTotal) && suppliedTotal >= 0
+        ? Math.max(entry.total, suppliedTotal)
+        : entry.total;
 
     // Track transferred bytes and a smoothed speed for the row meta.
     let bytes = entry.bytes;
     let speed = entry.speed;
-    if (entry.total > 0) {
-        bytes = (value / 100) * entry.total;
+    const suppliedBytes = Number(exactBytes);
+    if (Number.isFinite(suppliedBytes) && suppliedBytes >= 0) {
+        bytes = Math.max(entry.bytes, total > 0 ? Math.min(total, suppliedBytes) : suppliedBytes);
+    } else if (total > 0) {
+        bytes = Math.max(entry.bytes, (value / 100) * total);
+    }
+    if (total > 0) {
         const now = Date.now();
         const prev = speedSamples.get(key);
         if (prev && now > prev.at) {
@@ -117,9 +142,22 @@ export function updateTransferProgress({ id, direction, progress }: { id: string
         speedSamples.set(key, { at: now, bytes, speed });
     }
 
-    if (Math.round(entry.progress) === Math.round(value)) return; // skip render noise
+    const nextItemsDone = Number.isFinite(Number(itemsDone))
+        ? Math.max(entry.itemsDone ?? 0, Math.max(0, Number(itemsDone)))
+        : entry.itemsDone;
+    const nextItemsTotal = Number.isFinite(Number(itemsTotal))
+        ? Math.max(entry.itemsTotal ?? 0, Math.max(0, Number(itemsTotal)))
+        : entry.itemsTotal;
+    const unchanged = Math.round(entry.progress) === Math.round(value)
+        && entry.total === total
+        && entry.bytes === bytes
+        && entry.itemsDone === nextItemsDone
+        && entry.itemsTotal === nextItemsTotal;
+    if (unchanged) return; // skip render noise
     historyEvents.update((events) =>
-        events.map((e) => (e.id === key && e.kind === 'transfer' ? { ...e, progress: value, bytes, speed } : e)),
+        events.map((e) => (e.id === key && e.kind === 'transfer'
+            ? { ...e, progress: value, bytes, total, speed, itemsDone: nextItemsDone, itemsTotal: nextItemsTotal }
+            : e)),
     );
 }
 

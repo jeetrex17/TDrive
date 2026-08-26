@@ -45,6 +45,8 @@ export function DeleteFolder(arg1:string):Promise<string>;
 
 export function DownloadFile(arg1:number,arg2:number):Promise<main.DownloadResult>;
 
+export function DownloadFolder(arg1:string):Promise<main.DownloadResult>;
+
 export function DownloadUpdate():Promise<void>;
 
 export function EncryptionStatus():Promise<main.EncryptionStatus>;

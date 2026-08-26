@@ -78,6 +78,10 @@ export function DownloadFile(arg1, arg2) {
   return window['go']['main']['App']['DownloadFile'](arg1, arg2);
 }
 
+export function DownloadFolder(arg1) {
+  return window['go']['main']['App']['DownloadFolder'](arg1);
+}
+
 export function DownloadUpdate() {
   return window['go']['main']['App']['DownloadUpdate']();
 }

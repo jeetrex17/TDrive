@@ -5,8 +5,8 @@
 // hover popover via pushTransferStart/updateTransferProgress/markTransferDone.
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
-import { state } from '../state';
-import { SelectFiles, DownloadFile } from '../../wailsjs/go/main/App';
+import { state, type DownloadQueueItem, type DownloadState } from '../state';
+import { SelectFiles, DownloadFile, DownloadFolder } from '../../wailsjs/go/main/App';
 import { notify } from './notifications';
 import { loadEncryptionStatus } from './encryption';
 import { openUploadOptionsModal } from './modals/upload-options';
@@ -26,121 +26,228 @@ let uploadMenuHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 const DOWNLOAD_TERMINAL_STATES = new Set(["done", "failed", "canceled"]);
 
-function isDownloadTerminalState(status: any) {
+type DownloadResultPayload = {
+    status?: unknown;
+    message?: unknown;
+    saved_path?: unknown;
+};
+
+type FolderDownloadProgressPayload = {
+    folder_id?: unknown;
+    percent?: unknown;
+    bytes_completed?: unknown;
+    bytes_total?: unknown;
+    files_completed?: unknown;
+    files_total?: unknown;
+};
+
+function isDownloadTerminalState(status: unknown) {
     return DOWNLOAD_TERMINAL_STATES.has(String(status || ""));
 }
 
-function normalizeDownloadResult(result: any) {
+function asObjectRecord(value: unknown): Record<string, unknown> {
+    return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function normalizeDownloadResult(result: unknown) {
     if (!result || typeof result !== "object") {
         return { status: "error", message: "Download failed", saved_path: "" };
     }
 
-    const status = String(result.status || "error").toLowerCase();
+    const payload = result as DownloadResultPayload;
+    const status = String(payload.status || "error").toLowerCase();
     return {
         status: status === "success" || status === "canceled" || status === "error" ? status : "error",
-        message: String(result.message || "Download failed"),
-        saved_path: String(result.saved_path || ""),
+        message: String(payload.message || "Download failed"),
+        saved_path: String(payload.saved_path || ""),
     };
 }
 
 export function setupDownloadProgress() {
     if (!window.runtime?.EventsOn) return;
 
-    window.runtime.EventsOn("download_progress", (percent: any) => {
-        const activeId = state.activeDownloadId;
-        if (activeId === null || activeId === undefined) return;
+    window.runtime.EventsOn("download_progress", (percent: unknown) => {
+        const activeKey = state.activeDownloadId;
+        if (activeKey === null) return;
         const value = Number(percent);
         if (!Number.isFinite(value)) return;
 
         const clamped = Math.max(0, Math.min(100, value));
-        const item = (state.downloadQueue || []).find((entry) => entry.id === activeId);
-        if (!item) return;
+        const item = state.downloadQueue.find((entry) => entry.key === activeKey);
+        if (!item || item.kind !== 'file') return;
+        const nextProgress = Math.max(item.progress, clamped);
+        replaceDownloadItem(activeKey, (current) => ({
+            ...current,
+            progress: nextProgress,
+            state: isDownloadTerminalState(current.state) ? current.state : 'downloading',
+        }));
+        updateTransferProgress({ id: item.key, direction: 'down', progress: nextProgress });
+    });
 
-        item.progress = clamped;
-        if (!isDownloadTerminalState(item.state)) {
-            item.state = "downloading";
-        }
-        updateTransferProgress({ id: item.id, direction: 'down', progress: clamped });
+    window.runtime.EventsOn("folder_download_progress", (rawPayload: unknown) => {
+        const activeKey = state.activeDownloadId;
+        if (activeKey === null) return;
+        const item = state.downloadQueue.find((entry) => entry.key === activeKey);
+        const payload = asObjectRecord(rawPayload) as FolderDownloadProgressPayload;
+        if (!item || item.kind !== 'folder' || String(payload?.folder_id ?? '') !== item.id) return;
+
+        const progress = clampFinite(payload?.percent, item.progress, 0, 100);
+        const bytesCompleted = clampFinite(payload?.bytes_completed, item.bytesCompleted, 0, Number.MAX_SAFE_INTEGER);
+        const bytesTotal = clampFinite(payload?.bytes_total, item.bytesTotal, 0, Number.MAX_SAFE_INTEGER);
+        const filesCompleted = clampFinite(payload?.files_completed, item.filesCompleted, 0, Number.MAX_SAFE_INTEGER);
+        const filesTotal = clampFinite(payload?.files_total, item.filesTotal, 0, Number.MAX_SAFE_INTEGER);
+        const next = {
+            progress: Math.max(item.progress, progress),
+            bytesCompleted: Math.max(item.bytesCompleted, bytesCompleted),
+            bytesTotal: Math.max(item.bytesTotal, bytesTotal),
+            filesCompleted: Math.max(item.filesCompleted, filesCompleted),
+            filesTotal: Math.max(item.filesTotal, filesTotal),
+        };
+        replaceDownloadItem(activeKey, (current) => ({
+            ...current,
+            ...next,
+            size: Math.max(current.size, next.bytesTotal),
+            state: isDownloadTerminalState(current.state) ? current.state : 'downloading',
+        }));
+        updateTransferProgress({
+            id: item.key,
+            direction: 'down',
+            progress: next.progress,
+            bytes: next.bytesCompleted,
+            total: next.bytesTotal,
+            itemsDone: next.filesCompleted,
+            itemsTotal: next.filesTotal,
+        });
     });
 }
 
 async function startNextDownload() {
-    if (state.activeDownloadId !== null && state.activeDownloadId !== undefined) return;
-    const queue = Array.isArray(state.downloadQueue) ? state.downloadQueue : [];
-    const next = queue.find((entry) => String(entry?.state || "queued") === "queued");
-    if (!next) return;
+    if (state.activeDownloadId !== null) return;
+    const next = state.downloadQueue.find((entry) => entry.state === 'queued');
+    if (!next) {
+        if (state.activeTransfer === 'download') state.activeTransfer = null;
+        return;
+    }
 
-    state.activeDownloadId = next.id;
-    next.state = "downloading";
-    next.progress = Math.max(0, Math.min(100, Number(next.progress) || 0));
-    pushTransferStart({ id: next.id, direction: 'down', name: next.name, total: next.size });
+    state.activeTransfer = 'download';
+    state.activeDownloadId = next.key;
+    replaceDownloadItem(next.key, (current) => ({
+        ...current,
+        state: 'downloading',
+        progress: Math.max(0, Math.min(100, Number(current.progress) || 0)),
+    }));
+    pushTransferStart({ id: next.key, direction: 'down', name: next.name, total: next.size });
 
     try {
-        let result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
+        let result = normalizeDownloadResult(await dispatchDownload(next));
         // If the backend needs the encryption password, prompt once and
         // retry. This avoids a separate per-file encryption lookup before
         // download starts.
         if (result.status === "error" && /encryption password required/i.test(result.message || "")) {
             const ok = await openEncryptionPasswordModal();
             if (ok) {
-                result = normalizeDownloadResult(await DownloadFile(Number(next.id), Number(next.id)));
+                result = normalizeDownloadResult(await dispatchDownload(next));
             }
         }
-        next.message = result.message;
 
         if (result.status === "success") {
-            next.state = "done";
-            next.progress = 100;
-            markTransferDone({ id: next.id, direction: 'down', status: 'done' });
+            updateDownloadResult(next.key, 'done', result.message, 100);
+            markTransferDone({ id: next.key, direction: 'down', status: 'done' });
         } else if (result.status === "canceled") {
-            next.state = "canceled";
-            markTransferDone({ id: next.id, direction: 'down', status: 'canceled' });
+            updateDownloadResult(next.key, 'canceled', result.message);
+            markTransferDone({ id: next.key, direction: 'down', status: 'canceled' });
         } else {
             const canceled = state.cancelingDownload;
-            next.state = canceled ? "canceled" : "failed";
-            markTransferDone({ id: next.id, direction: 'down', status: canceled ? 'canceled' : 'failed' });
+            const status = canceled ? 'canceled' : 'failed';
+            updateDownloadResult(next.key, status, result.message);
+            markTransferDone({ id: next.key, direction: 'down', status });
         }
     } catch (err) {
         console.error("Download failed:", err);
-        next.message = "Download failed";
         const canceled = state.cancelingDownload;
-        next.state = canceled ? "canceled" : "failed";
-        markTransferDone({ id: next.id, direction: 'down', status: canceled ? 'canceled' : 'failed' });
+        const status = canceled ? 'canceled' : 'failed';
+        updateDownloadResult(next.key, status, 'Download failed');
+        markTransferDone({ id: next.key, direction: 'down', status });
     } finally {
         state.cancelingDownload = false;
         state.activeDownloadId = null;
-        startNextDownload();
+        void startNextDownload();
     }
 }
 
-export function enqueueDownload(id: any, name: any, size: any) {
+export function enqueueDownload(id: unknown, name: unknown, size: unknown) {
     const downloadId = Number(id);
     if (!Number.isFinite(downloadId)) return;
-    if (!Array.isArray(state.downloadQueue)) state.downloadQueue = [];
-
     const label = String(name || "Download");
-    const existing = state.downloadQueue.find((entry) => entry.id === downloadId);
-    if (existing) {
-        existing.name = existing.name || label;
-        existing.size = Number(size) || existing.size || 0;
-        existing.progress = 0;
-        existing.state = "queued";
-        existing.message = "";
-        if (state.activeDownloadId === null || state.activeDownloadId === undefined) startNextDownload();
-        return;
-    }
-
-    const item = {
+    enqueueDownloadItem({
+        key: `file:${downloadId}`,
+        kind: 'file',
         id: downloadId,
         name: label,
         size: Number(size) || 0,
         progress: 0,
-        state: "queued",
-        message: "",
-    };
+        state: 'queued',
+        message: '',
+        bytesCompleted: 0,
+        bytesTotal: Number(size) || 0,
+        filesCompleted: 0,
+        filesTotal: 1,
+    });
+}
 
-    state.downloadQueue.push(item);
-    if (state.activeDownloadId === null || state.activeDownloadId === undefined) startNextDownload();
+export function enqueueFolderDownload(id: unknown, name: unknown, size: unknown = 0) {
+    const folderId = String(id ?? '').trim();
+    if (!folderId) return;
+    const storedSize = Math.max(0, Number(size) || 0);
+    enqueueDownloadItem({
+        key: `folder:${folderId}`,
+        kind: 'folder',
+        id: folderId,
+        name: String(name || 'Folder'),
+        size: storedSize,
+        progress: 0,
+        state: 'queued',
+        message: '',
+        bytesCompleted: 0,
+        bytesTotal: storedSize,
+        filesCompleted: 0,
+        filesTotal: 0,
+    });
+}
+
+function enqueueDownloadItem(item: DownloadQueueItem) {
+    const existing = state.downloadQueue.find((entry) => entry.key === item.key);
+    state.downloadQueue = existing
+        ? state.downloadQueue.map((entry) => entry.key === item.key
+            ? { ...item, name: entry.name || item.name }
+            : entry)
+        : [...state.downloadQueue, item];
+    if (state.activeDownloadId === null) void startNextDownload();
+}
+
+function replaceDownloadItem(key: string, update: (item: DownloadQueueItem) => DownloadQueueItem) {
+    state.downloadQueue = state.downloadQueue.map((item) => item.key === key ? update(item) : item);
+}
+
+function updateDownloadResult(key: string, status: DownloadState, message: string, progress?: number) {
+    replaceDownloadItem(key, (item) => ({
+        ...item,
+        state: status,
+        message,
+        progress: progress ?? item.progress,
+    }));
+}
+
+function dispatchDownload(item: DownloadQueueItem) {
+    return item.kind === 'folder'
+        ? DownloadFolder(item.id)
+        : DownloadFile(item.id, item.id);
+}
+
+function clampFinite(raw: unknown, fallback: number, minValue: number, maxValue: number): number {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return fallback;
+    return Math.max(minValue, Math.min(maxValue, value));
 }
 
 // IMPORT_TRANSFER_ID keys the single aggregate bell row for a folder/archive

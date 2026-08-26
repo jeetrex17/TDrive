@@ -27,13 +27,40 @@ export interface EncryptionState {
     loaded: boolean;
 }
 
+export type DownloadState = 'queued' | 'downloading' | 'done' | 'failed' | 'canceled';
+
+type DownloadQueueBase = {
+    key: string;
+    name: string;
+    size: number;
+    progress: number;
+    state: DownloadState;
+    message: string;
+    bytesCompleted: number;
+    bytesTotal: number;
+    filesCompleted: number;
+    filesTotal: number;
+};
+
+export type FileDownloadQueueItem = DownloadQueueBase & {
+    kind: 'file';
+    id: number;
+};
+
+export type FolderDownloadQueueItem = DownloadQueueBase & {
+    kind: 'folder';
+    id: string;
+};
+
+export type DownloadQueueItem = FileDownloadQueueItem | FolderDownloadQueueItem;
+
 export interface State {
     currentFolderId: string;
     folderPath: DrivePathEntry[];
 
     activeTransfer: "download" | "upload" | null;
-    downloadQueue: any[];
-    activeDownloadId: string | number | null;
+    downloadQueue: DownloadQueueItem[];
+    activeDownloadId: string | null;
 
     transferPillEl: HTMLElement | null;
     transferSheetEl: HTMLElement | null;
