@@ -36,6 +36,8 @@ describe('AuthScreens', () => {
         const { body } = render(AuthScreens, { props });
         expect(body).toContain('Welcome Back');
         expect(body).toContain('Send Code');
+        expect(body).toContain('id="auth-appearance-trigger"');
+        expect(body).toContain('Customize appearance');
     });
 
     it('shows the sent-to pill on the code screen only when a phone is set', () => {

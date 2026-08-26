@@ -3,7 +3,7 @@
 // keeps the user on the same screen (where a screen-value change cannot fire).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { flushSync, mount, tick, unmount } from 'svelte';
 import AuthScreens from './AuthScreens.svelte';
 import { authCodeReset, authPhone, authScreen } from './auth-store';
 
@@ -42,6 +42,41 @@ afterEach(async () => {
 });
 
 describe('AuthScreens field reset', () => {
+    it('opens and dismisses appearance settings before login', async () => {
+        authScreen.set('phone');
+        flushSync();
+
+        const trigger = host.querySelector<HTMLButtonElement>('#auth-appearance-trigger');
+        trigger?.click();
+        flushSync();
+        await tick();
+        await tick();
+        expect(host.querySelector('#auth-appearance-popover')).not.toBeNull();
+        expect(trigger?.getAttribute('aria-expanded')).toBe('true');
+        expect(host.querySelector('.appearance-back')).toBe(document.activeElement);
+
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        flushSync();
+        expect(host.querySelector('#auth-appearance-popover')).toBeNull();
+        expect(trigger?.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('does not reopen appearance settings after the auth flow unmounts and returns', () => {
+        authScreen.set('phone');
+        flushSync();
+        host.querySelector<HTMLButtonElement>('#auth-appearance-trigger')?.click();
+        flushSync();
+        expect(host.querySelector('#auth-appearance-popover')).not.toBeNull();
+
+        authScreen.set(null);
+        flushSync();
+        authScreen.set('setup');
+        flushSync();
+
+        expect(host.querySelector('#auth-appearance-popover')).toBeNull();
+        expect(host.querySelector('#auth-appearance-trigger')?.getAttribute('aria-expanded')).toBe('false');
+    });
+
     it('clears the code field when transitioning onto the code screen', () => {
         authScreen.set('code');
         flushSync();

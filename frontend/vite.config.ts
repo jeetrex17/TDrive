@@ -14,6 +14,16 @@ export default defineConfig({
         },
     },
     test: {
+        coverage: {
+            provider: 'v8',
+            include: ['src/ui/theme/**'],
+            thresholds: {
+                branches: 80,
+                functions: 80,
+                lines: 80,
+                statements: 80,
+            },
+        },
         projects: [
             // Fast server-render smoke tests (the default): assert markup from
             // svelte/server without a DOM.

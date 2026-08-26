@@ -14,6 +14,8 @@ import { setupFileListWindowBindings, refreshFiles } from './modules/file-list';
 import { setupGallery } from './modules/gallery';
 import { setupSearchBar, runGlobalSearch } from './modules/search';
 import { setupRefreshShortcut } from './modules/refresh-shortcut';
+import { initializeTheme } from './ui/theme/theme-controller';
+import { initializeNativeTheme } from './ui/theme/native-theme';
 
 // Import modal setup functions
 import { setupDeleteModal, openDeleteModal } from './modules/modals/delete';
@@ -46,6 +48,11 @@ import { setupNotifBell } from './modules/notif-bell';
 
 // Profile menu (top-right avatar dropdown)
 import { setupProfileMenu } from './modules/profile-menu';
+
+// Apply persisted/system appearance before waiting for the native runtime so
+// authentication and startup screens never render in the wrong palette.
+initializeTheme();
+let disconnectNativeTheme = () => {};
 
 // Setup window bindings that need to be available globally
 window.refreshFiles = refreshFiles;
@@ -93,6 +100,7 @@ function waitForWailsRuntime(timeoutMs = 4000): Promise<void> {
 window.onload = async function() {
     console.log("App loaded. Checking Status...");
     await waitForWailsRuntime();
+    disconnectNativeTheme = await initializeNativeTheme();
     setupAppShell();
     hideAllScreens();
 
@@ -152,3 +160,5 @@ window.onload = async function() {
     // Check status and show appropriate screen
     await checkStatusAndShowScreen();
 };
+
+window.addEventListener('beforeunload', () => disconnectNativeTheme(), { once: true });

@@ -80,7 +80,7 @@
     }
 
     .is-primary {
-        color: var(--color-surface-0);
+        color: var(--color-on-accent);
         background: var(--accent);
         border-color: var(--accent);
     }
@@ -103,7 +103,7 @@
     }
 
     .is-danger {
-        color: var(--color-surface-0);
+        color: var(--color-on-danger);
         background: var(--danger);
         border-color: var(--danger);
     }

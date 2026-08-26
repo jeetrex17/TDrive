@@ -1,0 +1,561 @@
+<script lang="ts">
+    import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
+    import CheckIcon from '@lucide/svelte/icons/check';
+    import LaptopIcon from '@lucide/svelte/icons/laptop';
+    import MoonIcon from '@lucide/svelte/icons/moon';
+    import SparklesIcon from '@lucide/svelte/icons/sparkles';
+    import SunIcon from '@lucide/svelte/icons/sun';
+    import { onMount, tick } from 'svelte';
+    import {
+        getThemeDefinition,
+        themesForAppearance,
+        type ThemeAppearance,
+        type ThemeDefinition,
+        type ThemeMode,
+    } from './theme-model';
+    import {
+        setPreferredTheme,
+        setThemeMode,
+        themeState,
+        type ThemeChangeOrigin,
+    } from './theme-controller';
+
+    interface Props {
+        onBack: () => void;
+        backLabel?: string;
+        autofocus?: boolean;
+    }
+
+    interface ModeOption {
+        id: ThemeMode;
+        label: string;
+        description: string;
+        icon: typeof LaptopIcon;
+    }
+
+    let { onBack, backLabel = 'Back', autofocus = false }: Props = $props();
+    let backButton = $state<HTMLButtonElement | null>(null);
+    let systemPalette = $state<ThemeAppearance>('light');
+
+    const modeOptions: readonly ModeOption[] = [
+        { id: 'system', label: 'Automatic', description: 'Follow your system', icon: LaptopIcon },
+        { id: 'light', label: 'Light', description: 'Always bright', icon: SunIcon },
+        { id: 'dark', label: 'Dark', description: 'Always dim', icon: MoonIcon },
+    ];
+
+    const activeAppearance = $derived<ThemeAppearance>(
+        $themeState.preference.mode === 'system' ? systemPalette : $themeState.preference.mode,
+    );
+    const visibleThemes = $derived(themesForAppearance(activeAppearance));
+    const selectedThemeId = $derived(
+        activeAppearance === 'light'
+            ? $themeState.preference.lightThemeId
+            : $themeState.preference.darkThemeId,
+    );
+    const resolvedThemeName = $derived(getThemeDefinition($themeState.resolvedThemeId).name);
+
+    onMount(() => {
+        systemPalette = $themeState.systemAppearance;
+        if (autofocus) void tick().then(() => backButton?.focus());
+    });
+
+    function originFrom(event: MouseEvent): ThemeChangeOrigin {
+        return { x: event.clientX, y: event.clientY };
+    }
+
+    function selectMode(event: MouseEvent, mode: ThemeMode): void {
+        setThemeMode(mode, originFrom(event));
+        if (mode !== 'system') systemPalette = mode;
+    }
+
+    function selectTheme(event: MouseEvent, theme: ThemeDefinition): void {
+        setPreferredTheme(theme.appearance, theme.id, originFrom(event));
+    }
+
+    async function moveModeFocus(event: KeyboardEvent, index: number): Promise<void> {
+        const nextIndex = nextRadioIndex(event, index, modeOptions.length);
+        if (nextIndex === null) return;
+
+        event.preventDefault();
+        const nextMode = modeOptions[nextIndex].id;
+        setThemeMode(nextMode);
+        if (nextMode !== 'system') systemPalette = nextMode;
+        await tick();
+        document.getElementById(`appearance-mode-${nextMode}`)?.focus();
+    }
+
+    async function moveThemeFocus(event: KeyboardEvent, index: number): Promise<void> {
+        const nextIndex = nextRadioIndex(event, index, visibleThemes.length);
+        if (nextIndex === null) return;
+
+        event.preventDefault();
+        const nextTheme = visibleThemes[nextIndex];
+        setPreferredTheme(nextTheme.appearance, nextTheme.id);
+        await tick();
+        document.getElementById(`appearance-theme-${nextTheme.id}`)?.focus();
+    }
+
+    async function moveSystemPaletteFocus(event: KeyboardEvent): Promise<void> {
+        if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+            return;
+        }
+
+        event.preventDefault();
+        const nextAppearance = event.key === 'ArrowLeft'
+            || event.key === 'ArrowUp'
+            || event.key === 'Home'
+            ? 'light'
+            : 'dark';
+        systemPalette = nextAppearance;
+        await tick();
+        document.getElementById(`appearance-system-${nextAppearance}`)?.focus();
+    }
+
+    function nextRadioIndex(event: KeyboardEvent, index: number, length: number): number | null {
+        if (event.key === 'Home') return 0;
+        if (event.key === 'End') return length - 1;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') return (index + 1) % length;
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') return (index - 1 + length) % length;
+        return null;
+    }
+
+    function previewStyle(theme: ThemeDefinition): string {
+        const [canvas, surface, accent, text] = theme.preview;
+        return [
+            `--preview-canvas:${canvas}`,
+            `--preview-surface:${surface}`,
+            `--preview-accent:${accent}`,
+            `--preview-text:${text}`,
+        ].join(';');
+    }
+</script>
+
+<section class="appearance-panel" aria-labelledby="appearance-title">
+    <header class="appearance-header">
+        <button bind:this={backButton} class="appearance-back" type="button" onclick={onBack} aria-label={backLabel}>
+            <ArrowLeftIcon size={17} strokeWidth={2.2} aria-hidden="true" />
+        </button>
+        <div>
+            <div class="appearance-eyebrow"><SparklesIcon size={12} aria-hidden="true" /> Personalize</div>
+            <h2 id="appearance-title">Appearance</h2>
+        </div>
+    </header>
+
+    <div class="appearance-section">
+        <div class="section-heading">
+            <span>Mode</span>
+            <span class="section-value">
+                {modeOptions.find((option) => option.id === $themeState.preference.mode)?.description}
+            </span>
+        </div>
+        <div class="mode-grid" role="radiogroup" aria-label="Appearance mode">
+            {#each modeOptions as option, index (option.id)}
+                {@const Icon = option.icon}
+                {@const selected = $themeState.preference.mode === option.id}
+                <button
+                    id={`appearance-mode-${option.id}`}
+                    class:selected
+                    class="mode-card"
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    tabindex={selected ? 0 : -1}
+                    onclick={(event) => selectMode(event, option.id)}
+                    onkeydown={(event) => void moveModeFocus(event, index)}
+                >
+                    <span class="mode-icon"><Icon size={17} strokeWidth={2} aria-hidden="true" /></span>
+                    <span>{option.label}</span>
+                </button>
+            {/each}
+        </div>
+    </div>
+
+    {#if $themeState.preference.mode === 'system'}
+        <div class="system-pair" aria-label="Automatic theme pair">
+            <div class="system-copy">
+                <strong>Automatic pair</strong>
+                <span>Choose a palette for each system appearance.</span>
+            </div>
+            <div class="appearance-toggle" role="tablist" aria-label="System appearance palette">
+                <button
+                    id="appearance-system-light"
+                    class:active={systemPalette === 'light'}
+                    type="button"
+                    role="tab"
+                    aria-selected={systemPalette === 'light'}
+                    aria-controls="appearance-palette-panel"
+                    tabindex={systemPalette === 'light' ? 0 : -1}
+                    onclick={() => (systemPalette = 'light')}
+                    onkeydown={(event) => void moveSystemPaletteFocus(event)}
+                ><SunIcon size={13} aria-hidden="true" /> Day</button>
+                <button
+                    id="appearance-system-dark"
+                    class:active={systemPalette === 'dark'}
+                    type="button"
+                    role="tab"
+                    aria-selected={systemPalette === 'dark'}
+                    aria-controls="appearance-palette-panel"
+                    tabindex={systemPalette === 'dark' ? 0 : -1}
+                    onclick={() => (systemPalette = 'dark')}
+                    onkeydown={(event) => void moveSystemPaletteFocus(event)}
+                ><MoonIcon size={13} aria-hidden="true" /> Night</button>
+            </div>
+        </div>
+    {/if}
+
+    <div
+        id="appearance-palette-panel"
+        class="appearance-section palette-section"
+        role={$themeState.preference.mode === 'system' ? 'tabpanel' : undefined}
+        aria-labelledby={$themeState.preference.mode === 'system' ? `appearance-system-${systemPalette}` : undefined}
+    >
+        <div class="section-heading">
+            <span>{activeAppearance === 'light' ? 'Light palettes' : 'Dark palettes'}</span>
+            <span class="theme-count">{visibleThemes.length}</span>
+        </div>
+        <div class="theme-grid" role="radiogroup" aria-label="Theme palette">
+            {#each visibleThemes as theme, index (theme.id)}
+                {@const selected = selectedThemeId === theme.id}
+                <button
+                    id={`appearance-theme-${theme.id}`}
+                    class:selected
+                    class="theme-card"
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    aria-label={`${theme.name}: ${theme.description}`}
+                    tabindex={selected ? 0 : -1}
+                    style={previewStyle(theme)}
+                    onclick={(event) => selectTheme(event, theme)}
+                    onkeydown={(event) => void moveThemeFocus(event, index)}
+                >
+                    <span class="theme-preview" aria-hidden="true">
+                        <span class="preview-sidebar">
+                            <span></span><span></span><span></span>
+                        </span>
+                        <span class="preview-content">
+                            <span class="preview-topline"></span>
+                            <span class="preview-row"><i></i><b></b></span>
+                            <span class="preview-row short"><i></i><b></b></span>
+                        </span>
+                    </span>
+                    <span class="theme-meta">
+                        <span class="theme-name">{theme.name}</span>
+                        <span class="theme-description">{theme.description}</span>
+                    </span>
+                    <span class="theme-check" aria-hidden="true">
+                        {#if selected}<CheckIcon size={13} strokeWidth={3} />{/if}
+                    </span>
+                </button>
+            {/each}
+        </div>
+    </div>
+
+    <p class="appearance-status" aria-live="polite">{resolvedThemeName} is active.</p>
+</section>
+
+<style>
+    .appearance-panel {
+        width: min(390px, calc(100vw - 32px));
+        max-height: min(680px, calc(100vh - 92px));
+        overflow: auto;
+        scrollbar-width: none;
+        color: var(--color-text);
+    }
+
+    .appearance-panel::-webkit-scrollbar { display: none; }
+
+    .appearance-header {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 8px 8px 14px;
+    }
+
+    .appearance-header h2 {
+        margin: 1px 0 0;
+        color: var(--color-text);
+        font-size: 1rem;
+        font-weight: 800;
+        letter-spacing: 0;
+    }
+
+    .appearance-eyebrow {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--color-accent);
+        font-size: 0.65rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .appearance-back {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        color: var(--color-text-soft);
+        background: var(--overlay-white-1);
+        border: 1px solid var(--color-border-soft);
+        border-radius: 10px;
+        cursor: pointer;
+        transition: transform var(--motion-fast) var(--ease-standard),
+            background var(--motion-fast) var(--ease-standard),
+            border-color var(--motion-fast) var(--ease-standard);
+    }
+
+    .appearance-back:hover { background: var(--overlay-white-2); border-color: var(--color-border); }
+    .appearance-back:active { transform: scale(0.95); }
+    .appearance-back:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+    .appearance-section { padding: 0 8px 14px; }
+
+    .section-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 20px;
+        margin-bottom: 8px;
+        color: var(--color-text-muted);
+        font-size: 0.69rem;
+        font-weight: 800;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+    }
+
+    .section-value {
+        color: var(--color-text-subtle);
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: none;
+    }
+
+    .mode-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 7px;
+    }
+
+    .mode-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 68px;
+        padding: 8px;
+        color: var(--color-text-muted);
+        background: var(--overlay-white-1);
+        border: 1px solid var(--color-border-soft);
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 750;
+        cursor: pointer;
+        transition: transform var(--motion-med) var(--ease-standard),
+            background var(--motion-med) var(--ease-standard),
+            border-color var(--motion-med) var(--ease-standard),
+            color var(--motion-med) var(--ease-standard),
+            box-shadow var(--motion-med) var(--ease-standard);
+    }
+
+    .mode-card:hover { transform: translateY(-1px); color: var(--color-text); }
+    .mode-card:active { transform: translateY(0) scale(0.98); }
+    .mode-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .mode-card.selected {
+        color: var(--color-accent);
+        background: var(--overlay-accent-1);
+        border-color: var(--overlay-accent-3);
+        box-shadow: 0 7px 20px color-mix(in srgb, var(--color-accent) 9%, transparent);
+    }
+
+    .mode-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 8px;
+        background: var(--overlay-white-1);
+    }
+
+    .mode-card.selected .mode-icon { background: var(--overlay-accent-2); }
+
+    .system-pair {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 8px 14px;
+        padding: 10px 11px;
+        background: linear-gradient(135deg, var(--overlay-accent-1), var(--overlay-white-1));
+        border: 1px solid var(--color-border-soft);
+        border-radius: 12px;
+    }
+
+    .system-copy { display: flex; flex-direction: column; min-width: 0; }
+    .system-copy strong { color: var(--color-text); font-size: 0.76rem; }
+    .system-copy span { margin-top: 2px; color: var(--color-text-muted); font-size: 0.68rem; line-height: 1.3; }
+
+    .appearance-toggle {
+        display: flex;
+        flex: 0 0 auto;
+        padding: 3px;
+        background: var(--color-surface-0);
+        border: 1px solid var(--color-border-soft);
+        border-radius: 9px;
+    }
+
+    .appearance-toggle button {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 26px;
+        padding: 0 7px;
+        color: var(--color-text-muted);
+        background: transparent;
+        border: 0;
+        border-radius: 6px;
+        font-size: 0.68rem;
+        font-weight: 750;
+        cursor: pointer;
+    }
+
+    .appearance-toggle button.active {
+        color: var(--color-text);
+        background: var(--color-surface-2);
+        box-shadow: var(--shadow-sm);
+    }
+
+    .appearance-toggle button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+    .palette-section { padding-bottom: 9px; }
+    .theme-count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 18px;
+        padding: 0 5px;
+        color: var(--color-text-subtle);
+        background: var(--overlay-white-1);
+        border-radius: 999px;
+        font-size: 0.68rem;
+    }
+
+    .theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+
+    .theme-card {
+        position: relative;
+        display: grid;
+        grid-template-rows: 62px auto;
+        gap: 8px;
+        min-width: 0;
+        padding: 7px;
+        overflow: hidden;
+        color: var(--color-text);
+        text-align: left;
+        background: var(--overlay-white-1);
+        border: 1px solid var(--color-border-soft);
+        border-radius: 13px;
+        cursor: pointer;
+        transition: transform var(--motion-med) var(--ease-standard),
+            border-color var(--motion-med) var(--ease-standard),
+            box-shadow var(--motion-med) var(--ease-standard),
+            background var(--motion-med) var(--ease-standard);
+    }
+
+    .theme-card:hover { transform: translateY(-2px); border-color: var(--color-border); }
+    .theme-card:active { transform: translateY(0) scale(0.985); }
+    .theme-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .theme-card.selected {
+        background: var(--overlay-accent-1);
+        border-color: var(--color-accent);
+        box-shadow: 0 9px 24px color-mix(in srgb, var(--color-accent) 12%, transparent);
+    }
+
+    .theme-preview {
+        display: grid;
+        grid-template-columns: 32px 1fr;
+        overflow: hidden;
+        background: var(--preview-canvas);
+        border: 1px solid color-mix(in srgb, var(--preview-text) 13%, transparent);
+        border-radius: 9px;
+        box-shadow: var(--shadow-sm);
+    }
+
+    .preview-sidebar {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        padding: 9px 6px;
+        background: var(--preview-surface);
+    }
+
+    .preview-sidebar span { width: 100%; height: 3px; background: color-mix(in srgb, var(--preview-text) 22%, transparent); border-radius: 3px; }
+    .preview-sidebar span:first-child { background: var(--preview-accent); }
+    .preview-sidebar span:last-child { width: 70%; }
+
+    .preview-content { display: flex; flex-direction: column; gap: 7px; padding: 8px; }
+    .preview-topline { width: 72%; height: 4px; background: color-mix(in srgb, var(--preview-text) 62%, transparent); border-radius: 4px; }
+    .preview-row { display: flex; align-items: center; gap: 5px; }
+    .preview-row i { width: 7px; height: 7px; background: var(--preview-accent); border-radius: 2px; }
+    .preview-row b { width: 64%; height: 3px; background: color-mix(in srgb, var(--preview-text) 28%, transparent); border-radius: 4px; }
+    .preview-row.short b { width: 42%; }
+
+    .theme-meta { display: flex; flex-direction: column; min-width: 0; padding: 0 2px 2px; }
+    .theme-name { overflow: hidden; font-size: 0.75rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .theme-description { margin-top: 2px; overflow: hidden; color: var(--color-text-muted); font-size: 0.68rem; text-overflow: ellipsis; white-space: nowrap; }
+
+    .theme-check {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        color: var(--color-on-accent);
+        background: var(--color-accent);
+        border: 2px solid var(--preview-canvas);
+        border-radius: 999px;
+        opacity: 0;
+        transform: scale(0.75);
+        transition: opacity var(--motion-med) var(--ease-standard), transform var(--motion-med) var(--ease-standard);
+    }
+
+    .theme-card.selected .theme-check { opacity: 1; transform: scale(1); }
+
+    .appearance-status {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
+
+    @media (max-width: 460px) {
+        .appearance-panel { width: min(350px, calc(100vw - 24px)); }
+        .theme-grid { grid-template-columns: 1fr; }
+        .system-pair { align-items: flex-start; flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .appearance-back,
+        .mode-card,
+        .theme-card,
+        .theme-check { transition: none; }
+
+        .mode-card:hover,
+        .theme-card:hover { transform: none; }
+    }
+</style>

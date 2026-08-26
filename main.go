@@ -26,7 +26,10 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		// Match the no-preference Tokyo Night canvas during native window
+		// creation. The frontend synchronises this backdrop to the resolved
+		// light/dark palette as soon as the Wails runtime is ready.
+		BackgroundColour: &options.RGBA{R: 26, G: 27, B: 38, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		// Native file drop: dropped folders and files arrive as absolute paths,
