@@ -266,15 +266,16 @@ function resolveEnvironment(environment: ThemeControllerEnvironment): ResolvedEn
 
 /**
  * True for WebKitGTK/WPE (Wails and Tauri on Linux, Epiphany), which report
- * `Linux` + `AppleWebKit` + `Safari` without a Chromium token. Chromium and
- * test DOMs (happy-dom, jsdom) never carry the `Safari/` product token.
+ * `Linux` + `AppleWebKit` + `Safari` without a Chromium token (matched without
+ * a word boundary so `HeadlessChrome/` is excluded too). Test DOMs (happy-dom,
+ * jsdom) never carry the `Safari/` product token.
  */
 export function isLinuxWebKit(userAgent: string | undefined): boolean {
     if (!userAgent) return false;
     return /\bLinux\b/.test(userAgent)
         && /AppleWebKit\//.test(userAgent)
         && /\bSafari\//.test(userAgent)
-        && !/\b(?:Chrome|Chromium|CriOS|Edg|OPR)\//.test(userAgent);
+        && !/(?:Chrome|Chromium|CriOS|Edg|OPR)\//.test(userAgent);
 }
 
 function getBrowserDocument(): Document | undefined {
