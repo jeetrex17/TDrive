@@ -78,7 +78,7 @@ read_runtime_metadata() {
   local mpv_bin="$1"
   local output
   output="$("$mpv_bin" --no-config --version)" || die "could not execute mpv runtime: $mpv_bin"
-  MPV_VERSION="$(printf '%s\n' "$output" | sed -n 's/^mpv v\([^ ]*\).*/\1/p' | sed -n '1p')"
+  MPV_VERSION="$(printf '%s\n' "$output" | awk '$1 == "mpv" { sub(/^v/, "", $2); print $2; exit }')"
   FFMPEG_VERSION="$(printf '%s\n' "$output" | sed -n 's/^FFmpeg version: //p' | sed -n '1p')"
   [ -n "$MPV_VERSION" ] || die "could not read mpv version from $mpv_bin"
   [ -n "$FFMPEG_VERSION" ] || die "could not read FFmpeg version from $mpv_bin"

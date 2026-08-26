@@ -56,7 +56,7 @@ function Get-MpvMetadata([string]$Path, [string]$ExpectedVersion) {
     if ($LASTEXITCODE -ne 0) {
         Fail "could not execute mpv runtime: $Path"
     }
-    $mpvMatch = [regex]::Match($output, '(?m)^mpv v([^\s]+)')
+    $mpvMatch = [regex]::Match($output, '(?m)^mpv v?([^\s]+)')
     $ffmpegMatch = [regex]::Match($output, '(?m)^FFmpeg version:\s*(.+)$')
     if (-not $mpvMatch.Success) {
         Fail "could not read mpv version from $Path"
