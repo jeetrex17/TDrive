@@ -17,7 +17,9 @@ export const THEME_TRANSITION_CLASS = 'theme-transition-active';
 export const THEME_FALLBACK_CLASS = 'theme-transition-fallback';
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
-const FALLBACK_CLEANUP_DELAY_MS = 1050;
+// Keep the fallback class just beyond the 1.2s CSS animation so WebViews that
+// lack View Transitions never remove the final animation frame prematurely.
+const FALLBACK_CLEANUP_DELAY_MS = 1250;
 
 type ThemeStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
