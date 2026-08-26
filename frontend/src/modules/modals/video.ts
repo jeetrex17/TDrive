@@ -768,13 +768,15 @@ function setChromeVisible(visible: boolean) {
 
 function setNativeLayout(layout: NativeLayout) {
     const visible = layout !== "none";
+    const overlay = layout === "embedded-overlay";
     const fallback = layout === "embedded-fallback";
     const standalone = layout === "standalone";
     modalEl?.classList.toggle("is-video-native", visible);
     modalEl?.classList.toggle("is-video-native-fallback", fallback);
     modalEl?.classList.toggle("is-video-native-standalone", standalone);
     if (standaloneEl) standaloneEl.hidden = !standalone;
-    document.body.classList.toggle("native-video-active", layout === "embedded-overlay");
+    document.documentElement.classList.toggle("native-video-active", overlay);
+    document.body.classList.toggle("native-video-active", overlay);
     syncFallbackNativeViewportInsets();
 }
 

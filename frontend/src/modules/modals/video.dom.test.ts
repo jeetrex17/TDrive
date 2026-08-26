@@ -274,6 +274,26 @@ describe("video HTML-to-native fallback", () => {
     });
 });
 
+describe("macOS native video layering", () => {
+    it("makes the document canvas transparent only while HTML controls overlay native video", async () => {
+        const opened = nativeOpenResult(19, "macos-overlay-session");
+        opened.htmlControls = true;
+        apiMocks.openNativeMedia.mockResolvedValue(opened);
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 19, name: "movie-19.mkv", size: 1024 });
+
+        expect(document.documentElement.classList.contains("native-video-active")).toBe(true);
+        expect(document.body.classList.contains("native-video-active")).toBe(true);
+
+        await videoModule.closeVideoModal();
+
+        expect(document.documentElement.classList.contains("native-video-active")).toBe(false);
+        expect(document.body.classList.contains("native-video-active")).toBe(false);
+    });
+});
+
 describe("native video track controls", () => {
     it("shows useful audio and subtitle choices and sends validated mpv commands", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(20, MKV_SESSION_ID));

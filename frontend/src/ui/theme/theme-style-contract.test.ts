@@ -24,6 +24,12 @@ function ruleFor(selector: string): string {
 }
 
 describe('global theme style contract', () => {
+    it('reveals the native renderer through the themed document canvas', () => {
+        expect(globalCss).toMatch(
+            /html\.native-video-active,\s*body\.native-video-active\s*\{[^}]*background(?:-color)?:\s*transparent;/,
+        );
+    });
+
     it('keeps palette colors out of the lower-specificity bare root', () => {
         const root = /:root\s*\{([\s\S]*?)\n\}/.exec(globalCss)?.[1];
         expect(root).toBeDefined();
