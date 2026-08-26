@@ -6,10 +6,10 @@ $passed = 0
 function Assert-Parse($Name, $InputText, $ExpectedMpv, $ExpectedFFmpeg) {
     $metadata = Get-TDriveMpvMetadataFromOutput -Output $InputText
     if ($metadata.Mpv -ne $ExpectedMpv) {
-        throw "FAIL $Name: mpv=$($metadata.Mpv) want $ExpectedMpv"
+        throw "FAIL ${Name}: mpv=$($metadata.Mpv) want $ExpectedMpv"
     }
     if ($metadata.FFmpeg -ne $ExpectedFFmpeg) {
-        throw "FAIL $Name: ffmpeg=$($metadata.FFmpeg) want $ExpectedFFmpeg"
+        throw "FAIL ${Name}: ffmpeg=$($metadata.FFmpeg) want $ExpectedFFmpeg"
     }
     $script:passed++
 }
@@ -22,7 +22,7 @@ function Assert-Reject($Name, $InputText) {
         $script:passed++
         return
     }
-    throw "FAIL $Name: parser accepted invalid output"
+    throw "FAIL ${Name}: parser accepted invalid output"
 }
 
 Assert-Parse "plain-mpv-version" "mpv 0.41.0 Copyright`nFFmpeg version: 7.1.1`n" "0.41.0" "7.1.1"
