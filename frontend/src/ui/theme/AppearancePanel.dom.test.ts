@@ -1,18 +1,17 @@
 import { get } from 'svelte/store';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
+import { afterEach, describe, expect, it } from 'vitest';
+import { flushSync, mount, tick, unmount } from 'svelte';
 import AppearancePanel from './AppearancePanel.svelte';
 import { setPreferredTheme, setThemeMode, themeController, themeState } from './theme-controller';
 
 let component: Record<string, unknown> | null = null;
 let host: HTMLElement | null = null;
 
-function setup(onBack = vi.fn()): typeof onBack {
+function setup(autofocus = false): void {
     host = document.createElement('div');
     document.body.appendChild(host);
-    component = mount(AppearancePanel, { target: host, props: { onBack } });
+    component = mount(AppearancePanel, { target: host, props: { autofocus } });
     flushSync();
-    return onBack;
 }
 
 function click(selector: string): void {
@@ -34,46 +33,25 @@ afterEach(async () => {
 });
 
 describe('AppearancePanel behavior', () => {
-    it('lets System users configure the day and night palettes independently', () => {
+    it('keeps System mode free of nested palette controls', () => {
         setup();
 
-        click('[role="tab"][aria-selected="false"]');
-        expect(host?.textContent).toContain('Tokyo Night');
-        expect(host?.textContent).toContain('Dracula');
-
-        click('#appearance-theme-dracula');
-        expect(get(themeState).preference.darkThemeId).toBe('dracula');
-        expect(get(themeState).preference.lightThemeId).toBe('tdrive-light');
+        expect(host?.textContent).toContain('System');
+        expect(host?.textContent).not.toContain('Automatic pair');
+        expect(host?.querySelector('.appearance-toggle')).toBeNull();
+        expect(host?.querySelector('.palette-section')).toBeNull();
     });
 
     it('supports arrow-key navigation through appearance modes', () => {
         setup();
-        const automatic = host?.querySelector<HTMLElement>('#appearance-mode-system');
-        if (!automatic) throw new Error('missing automatic mode');
+        const system = host?.querySelector<HTMLElement>('#appearance-mode-system');
+        if (!system) throw new Error('missing system mode');
 
-        automatic.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+        system.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
         flushSync();
 
         expect(get(themeState).preference.mode).toBe('light');
         expect(host?.querySelector('#appearance-mode-light')?.getAttribute('aria-checked')).toBe('true');
-    });
-
-    it('supports keyboard navigation across the automatic day and night pair', () => {
-        setup();
-        const dayTab = host?.querySelector<HTMLElement>('#appearance-system-light');
-        if (!dayTab) throw new Error('missing day palette tab');
-
-        dayTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
-        flushSync();
-
-        expect(host?.querySelector('#appearance-system-dark')?.getAttribute('aria-selected')).toBe('true');
-        expect(host?.textContent).toContain('Tokyo Night');
-
-        host?.querySelector<HTMLElement>('#appearance-system-dark')?.dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
-        );
-        flushSync();
-        expect(host?.querySelector('#appearance-system-light')?.getAttribute('aria-selected')).toBe('true');
     });
 
     it('uses roving keyboard selection across the visible palette cards', () => {
@@ -89,11 +67,78 @@ describe('AppearancePanel behavior', () => {
         expect(host?.querySelector('#appearance-theme-catppuccin-mocha')?.getAttribute('aria-checked')).toBe('true');
     });
 
-    it('returns focus ownership to the account menu through its back action', () => {
-        const onBack = setup();
+    it('supports keyboard boundaries without changing selection for unrelated keys', () => {
+        setup();
+        const system = host?.querySelector<HTMLElement>('#appearance-mode-system');
+        if (!system) throw new Error('missing system mode');
 
-        click('.appearance-back');
+        system.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+        flushSync();
+        expect(get(themeState).preference.mode).toBe('system');
 
-        expect(onBack).toHaveBeenCalledOnce();
+        system.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+        flushSync();
+        expect(get(themeState).preference.mode).toBe('dark');
+
+        const tokyoNight = host?.querySelector<HTMLElement>('#appearance-theme-tokyo-night');
+        if (!tokyoNight) throw new Error('missing Tokyo Night theme');
+        tokyoNight.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+        tokyoNight.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+        flushSync();
+        expect(get(themeState).preference.darkThemeId).toBe('nord');
+
+        host?.querySelector<HTMLElement>('#appearance-theme-nord')?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'Home', bubbles: true }),
+        );
+        flushSync();
+        expect(get(themeState).preference.darkThemeId).toBe('tokyo-night');
+
+        host?.querySelector<HTMLElement>('#appearance-theme-tokyo-night')?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
+        );
+        flushSync();
+        expect(get(themeState).preference.darkThemeId).toBe('nord');
+
+        host?.querySelector<HTMLElement>('#appearance-theme-nord')?.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
+        );
+        flushSync();
+        expect(get(themeState).preference.darkThemeId).toBe('gruvbox-dark');
+    });
+
+    it('remembers Light and Dark choices when returning to System', () => {
+        setup();
+
+        click('#appearance-mode-light');
+        click('#appearance-theme-catppuccin-latte');
+        click('#appearance-mode-dark');
+        click('#appearance-theme-dracula');
+        click('#appearance-mode-system');
+
+        expect(get(themeState).preference).toMatchObject({
+            mode: 'system',
+            lightThemeId: 'catppuccin-latte',
+            darkThemeId: 'dracula',
+        });
+        expect(host?.querySelector('.palette-section')).toBeNull();
+    });
+
+    it('shows palette names without descriptions or auxiliary footer copy', () => {
+        setup();
+        click('#appearance-mode-dark');
+
+        expect(host?.textContent).toContain('Tokyo Night');
+        expect(host?.textContent).not.toContain('TDrive’s original midnight-blue glow.');
+        expect(host?.textContent).not.toContain('Changes are previewed instantly and saved on this device.');
+        expect(host?.querySelector('.theme-description')).toBeNull();
+        expect(host?.querySelector('.appearance-back')).toBeNull();
+    });
+
+    it('autofocuses the selected mode when opened as a dialog', async () => {
+        setup(true);
+        await tick();
+        await Promise.resolve();
+
+        expect(host?.querySelector('#appearance-mode-system')).toBe(document.activeElement);
     });
 });

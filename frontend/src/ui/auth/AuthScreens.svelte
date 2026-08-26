@@ -119,7 +119,7 @@
         </button>
         {#if appearanceOpen}
             <div id="auth-appearance-popover" class="auth-appearance-popover" role="dialog" aria-label="Appearance settings">
-                <AppearancePanel onBack={() => closeAppearance(true)} backLabel="Close appearance settings" autofocus />
+                <AppearancePanel autofocus />
             </div>
         {/if}
     </div>

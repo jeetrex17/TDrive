@@ -53,7 +53,8 @@ describe('AuthScreens field reset', () => {
         await tick();
         expect(host.querySelector('#auth-appearance-popover')).not.toBeNull();
         expect(trigger?.getAttribute('aria-expanded')).toBe('true');
-        expect(host.querySelector('.appearance-back')).toBe(document.activeElement);
+        expect(host.querySelector('.appearance-back')).toBeNull();
+        expect(host.querySelector('#appearance-mode-system')).toBe(document.activeElement);
 
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
         flushSync();

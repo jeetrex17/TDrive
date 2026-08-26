@@ -60,7 +60,7 @@
     async function openAppearance(): Promise<void> {
         view = 'appearance';
         await tick();
-        menuEl?.querySelector<HTMLElement>('.appearance-back')?.focus();
+        menuEl?.querySelector<HTMLElement>('[aria-label="Appearance mode"] [aria-checked="true"]')?.focus();
     }
 
     async function closeAppearance(): Promise<void> {
@@ -156,7 +156,7 @@
     onkeydown={onMenuKeydown}
 >
     {#if view === 'appearance'}
-        <AppearancePanel onBack={() => void closeAppearance()} backLabel="Back to account menu" />
+        <AppearancePanel />
     {:else}
         <div class="profile-menu-header">
             <Avatar user={$profileUser} large />

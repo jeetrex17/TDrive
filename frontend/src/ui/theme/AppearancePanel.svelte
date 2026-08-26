@@ -1,9 +1,7 @@
 <script lang="ts">
-    import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
     import CheckIcon from '@lucide/svelte/icons/check';
     import LaptopIcon from '@lucide/svelte/icons/laptop';
     import MoonIcon from '@lucide/svelte/icons/moon';
-    import SparklesIcon from '@lucide/svelte/icons/sparkles';
     import SunIcon from '@lucide/svelte/icons/sun';
     import { onMount, tick } from 'svelte';
     import {
@@ -21,8 +19,6 @@
     } from './theme-controller';
 
     interface Props {
-        onBack: () => void;
-        backLabel?: string;
         autofocus?: boolean;
     }
 
@@ -33,30 +29,33 @@
         icon: typeof LaptopIcon;
     }
 
-    let { onBack, backLabel = 'Back', autofocus = false }: Props = $props();
-    let backButton = $state<HTMLButtonElement | null>(null);
-    let systemPalette = $state<ThemeAppearance>('light');
+    let { autofocus = false }: Props = $props();
+    let panel = $state<HTMLElement | null>(null);
 
     const modeOptions: readonly ModeOption[] = [
-        { id: 'system', label: 'Automatic', description: 'Follow your system', icon: LaptopIcon },
+        { id: 'system', label: 'System', description: 'Follow your system', icon: LaptopIcon },
         { id: 'light', label: 'Light', description: 'Always bright', icon: SunIcon },
         { id: 'dark', label: 'Dark', description: 'Always dim', icon: MoonIcon },
     ];
 
-    const activeAppearance = $derived<ThemeAppearance>(
-        $themeState.preference.mode === 'system' ? systemPalette : $themeState.preference.mode,
+    const activeAppearance = $derived<ThemeAppearance | null>(
+        $themeState.preference.mode === 'system' ? null : $themeState.preference.mode,
     );
-    const visibleThemes = $derived(themesForAppearance(activeAppearance));
+    const visibleThemes = $derived(activeAppearance ? themesForAppearance(activeAppearance) : []);
     const selectedThemeId = $derived(
         activeAppearance === 'light'
             ? $themeState.preference.lightThemeId
-            : $themeState.preference.darkThemeId,
+            : activeAppearance === 'dark'
+                ? $themeState.preference.darkThemeId
+                : null,
     );
     const resolvedThemeName = $derived(getThemeDefinition($themeState.resolvedThemeId).name);
 
     onMount(() => {
-        systemPalette = $themeState.systemAppearance;
-        if (autofocus) void tick().then(() => backButton?.focus());
+        if (!autofocus) return;
+        void tick().then(() => {
+            panel?.querySelector<HTMLElement>(`#appearance-mode-${$themeState.preference.mode}`)?.focus();
+        });
     });
 
     function originFrom(event: MouseEvent): ThemeChangeOrigin {
@@ -65,7 +64,6 @@
 
     function selectMode(event: MouseEvent, mode: ThemeMode): void {
         setThemeMode(mode, originFrom(event));
-        if (mode !== 'system') systemPalette = mode;
     }
 
     function selectTheme(event: MouseEvent, theme: ThemeDefinition): void {
@@ -79,7 +77,6 @@
         event.preventDefault();
         const nextMode = modeOptions[nextIndex].id;
         setThemeMode(nextMode);
-        if (nextMode !== 'system') systemPalette = nextMode;
         await tick();
         document.getElementById(`appearance-mode-${nextMode}`)?.focus();
     }
@@ -93,22 +90,6 @@
         setPreferredTheme(nextTheme.appearance, nextTheme.id);
         await tick();
         document.getElementById(`appearance-theme-${nextTheme.id}`)?.focus();
-    }
-
-    async function moveSystemPaletteFocus(event: KeyboardEvent): Promise<void> {
-        if (!['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-            return;
-        }
-
-        event.preventDefault();
-        const nextAppearance = event.key === 'ArrowLeft'
-            || event.key === 'ArrowUp'
-            || event.key === 'Home'
-            ? 'light'
-            : 'dark';
-        systemPalette = nextAppearance;
-        await tick();
-        document.getElementById(`appearance-system-${nextAppearance}`)?.focus();
     }
 
     function nextRadioIndex(event: KeyboardEvent, index: number, length: number): number | null {
@@ -130,15 +111,9 @@
     }
 </script>
 
-<section class="appearance-panel" aria-labelledby="appearance-title">
+<section bind:this={panel} class="appearance-panel" aria-labelledby="appearance-title">
     <header class="appearance-header">
-        <button bind:this={backButton} class="appearance-back" type="button" onclick={onBack} aria-label={backLabel}>
-            <ArrowLeftIcon size={17} strokeWidth={2.2} aria-hidden="true" />
-        </button>
-        <div>
-            <div class="appearance-eyebrow"><SparklesIcon size={12} aria-hidden="true" /> Personalize</div>
-            <h2 id="appearance-title">Appearance</h2>
-        </div>
+        <h2 id="appearance-title">Appearance</h2>
     </header>
 
     <div class="appearance-section">
@@ -170,86 +145,49 @@
         </div>
     </div>
 
-    {#if $themeState.preference.mode === 'system'}
-        <div class="system-pair" aria-label="Automatic theme pair">
-            <div class="system-copy">
-                <strong>Automatic pair</strong>
-                <span>Choose a palette for each system appearance.</span>
+    {#if activeAppearance}
+        <div id="appearance-palette-panel" class="appearance-section palette-section">
+            <div class="section-heading">
+                <span>{activeAppearance === 'light' ? 'Light palettes' : 'Dark palettes'}</span>
+                <span class="theme-count">{visibleThemes.length}</span>
             </div>
-            <div class="appearance-toggle" role="tablist" aria-label="System appearance palette">
-                <button
-                    id="appearance-system-light"
-                    class:active={systemPalette === 'light'}
-                    type="button"
-                    role="tab"
-                    aria-selected={systemPalette === 'light'}
-                    aria-controls="appearance-palette-panel"
-                    tabindex={systemPalette === 'light' ? 0 : -1}
-                    onclick={() => (systemPalette = 'light')}
-                    onkeydown={(event) => void moveSystemPaletteFocus(event)}
-                ><SunIcon size={13} aria-hidden="true" /> Day</button>
-                <button
-                    id="appearance-system-dark"
-                    class:active={systemPalette === 'dark'}
-                    type="button"
-                    role="tab"
-                    aria-selected={systemPalette === 'dark'}
-                    aria-controls="appearance-palette-panel"
-                    tabindex={systemPalette === 'dark' ? 0 : -1}
-                    onclick={() => (systemPalette = 'dark')}
-                    onkeydown={(event) => void moveSystemPaletteFocus(event)}
-                ><MoonIcon size={13} aria-hidden="true" /> Night</button>
+            <div class="theme-grid" role="radiogroup" aria-label="Theme palette">
+                {#each visibleThemes as theme, index (theme.id)}
+                    {@const selected = selectedThemeId === theme.id}
+                    <button
+                        id={`appearance-theme-${theme.id}`}
+                        class:selected
+                        class="theme-card"
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        aria-label={theme.name}
+                        tabindex={selected ? 0 : -1}
+                        style={previewStyle(theme)}
+                        onclick={(event) => selectTheme(event, theme)}
+                        onkeydown={(event) => void moveThemeFocus(event, index)}
+                    >
+                        <span class="theme-preview" aria-hidden="true">
+                            <span class="preview-sidebar">
+                                <span></span><span></span><span></span>
+                            </span>
+                            <span class="preview-content">
+                                <span class="preview-topline"></span>
+                                <span class="preview-row"><i></i><b></b></span>
+                                <span class="preview-row short"><i></i><b></b></span>
+                            </span>
+                        </span>
+                        <span class="theme-meta">
+                            <span class="theme-name">{theme.name}</span>
+                        </span>
+                        <span class="theme-check" aria-hidden="true">
+                            {#if selected}<CheckIcon size={13} strokeWidth={3} />{/if}
+                        </span>
+                    </button>
+                {/each}
             </div>
         </div>
     {/if}
-
-    <div
-        id="appearance-palette-panel"
-        class="appearance-section palette-section"
-        role={$themeState.preference.mode === 'system' ? 'tabpanel' : undefined}
-        aria-labelledby={$themeState.preference.mode === 'system' ? `appearance-system-${systemPalette}` : undefined}
-    >
-        <div class="section-heading">
-            <span>{activeAppearance === 'light' ? 'Light palettes' : 'Dark palettes'}</span>
-            <span class="theme-count">{visibleThemes.length}</span>
-        </div>
-        <div class="theme-grid" role="radiogroup" aria-label="Theme palette">
-            {#each visibleThemes as theme, index (theme.id)}
-                {@const selected = selectedThemeId === theme.id}
-                <button
-                    id={`appearance-theme-${theme.id}`}
-                    class:selected
-                    class="theme-card"
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    aria-label={`${theme.name}: ${theme.description}`}
-                    tabindex={selected ? 0 : -1}
-                    style={previewStyle(theme)}
-                    onclick={(event) => selectTheme(event, theme)}
-                    onkeydown={(event) => void moveThemeFocus(event, index)}
-                >
-                    <span class="theme-preview" aria-hidden="true">
-                        <span class="preview-sidebar">
-                            <span></span><span></span><span></span>
-                        </span>
-                        <span class="preview-content">
-                            <span class="preview-topline"></span>
-                            <span class="preview-row"><i></i><b></b></span>
-                            <span class="preview-row short"><i></i><b></b></span>
-                        </span>
-                    </span>
-                    <span class="theme-meta">
-                        <span class="theme-name">{theme.name}</span>
-                        <span class="theme-description">{theme.description}</span>
-                    </span>
-                    <span class="theme-check" aria-hidden="true">
-                        {#if selected}<CheckIcon size={13} strokeWidth={3} />{/if}
-                    </span>
-                </button>
-            {/each}
-        </div>
-    </div>
 
     <p class="appearance-status" aria-live="polite">{resolvedThemeName} is active.</p>
 </section>
@@ -268,49 +206,16 @@
     .appearance-header {
         display: flex;
         align-items: center;
-        gap: 11px;
-        padding: 8px 8px 14px;
+        padding: 8px 8px 16px;
     }
 
     .appearance-header h2 {
-        margin: 1px 0 0;
+        margin: 0;
         color: var(--color-text);
-        font-size: 1rem;
+        font-size: 1.05rem;
         font-weight: 800;
         letter-spacing: 0;
     }
-
-    .appearance-eyebrow {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        color: var(--color-accent);
-        font-size: 0.65rem;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-    }
-
-    .appearance-back {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 34px;
-        height: 34px;
-        padding: 0;
-        color: var(--color-text-soft);
-        background: var(--overlay-white-1);
-        border: 1px solid var(--color-border-soft);
-        border-radius: 10px;
-        cursor: pointer;
-        transition: transform var(--motion-fast) var(--ease-standard),
-            background var(--motion-fast) var(--ease-standard),
-            border-color var(--motion-fast) var(--ease-standard);
-    }
-
-    .appearance-back:hover { background: var(--overlay-white-2); border-color: var(--color-border); }
-    .appearance-back:active { transform: scale(0.95); }
-    .appearance-back:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
     .appearance-section { padding: 0 8px 14px; }
 
@@ -384,54 +289,6 @@
     }
 
     .mode-card.selected .mode-icon { background: var(--overlay-accent-2); }
-
-    .system-pair {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin: 0 8px 14px;
-        padding: 10px 11px;
-        background: linear-gradient(135deg, var(--overlay-accent-1), var(--overlay-white-1));
-        border: 1px solid var(--color-border-soft);
-        border-radius: 12px;
-    }
-
-    .system-copy { display: flex; flex-direction: column; min-width: 0; }
-    .system-copy strong { color: var(--color-text); font-size: 0.76rem; }
-    .system-copy span { margin-top: 2px; color: var(--color-text-muted); font-size: 0.68rem; line-height: 1.3; }
-
-    .appearance-toggle {
-        display: flex;
-        flex: 0 0 auto;
-        padding: 3px;
-        background: var(--color-surface-0);
-        border: 1px solid var(--color-border-soft);
-        border-radius: 9px;
-    }
-
-    .appearance-toggle button {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        min-height: 26px;
-        padding: 0 7px;
-        color: var(--color-text-muted);
-        background: transparent;
-        border: 0;
-        border-radius: 6px;
-        font-size: 0.68rem;
-        font-weight: 750;
-        cursor: pointer;
-    }
-
-    .appearance-toggle button.active {
-        color: var(--color-text);
-        background: var(--color-surface-2);
-        box-shadow: var(--shadow-sm);
-    }
-
-    .appearance-toggle button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
     .palette-section { padding-bottom: 9px; }
     .theme-count {
@@ -509,7 +366,6 @@
 
     .theme-meta { display: flex; flex-direction: column; min-width: 0; padding: 0 2px 2px; }
     .theme-name { overflow: hidden; font-size: 0.75rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-    .theme-description { margin-top: 2px; overflow: hidden; color: var(--color-text-muted); font-size: 0.68rem; text-overflow: ellipsis; white-space: nowrap; }
 
     .theme-check {
         position: absolute;
@@ -546,11 +402,9 @@
     @media (max-width: 460px) {
         .appearance-panel { width: min(350px, calc(100vw - 24px)); }
         .theme-grid { grid-template-columns: 1fr; }
-        .system-pair { align-items: flex-start; flex-direction: column; }
     }
 
     @media (prefers-reduced-motion: reduce) {
-        .appearance-back,
         .mode-card,
         .theme-card,
         .theme-check { transition: none; }
