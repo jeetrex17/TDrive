@@ -236,3 +236,9 @@ func TestArchiveImportScanBoundsIgnoredMetadataToo(t *testing.T) {
 		t.Fatalf("retained ignored entries = %d, want 0", len(entries))
 	}
 }
+
+func TestArchiveScanLimitRemainsRecoverableForRawUploadFallback(t *testing.T) {
+	if isFatalImportError(errArchiveScanLimit) {
+		t.Fatal("archive inspection limit must fall back to uploading the original archive")
+	}
+}

@@ -356,7 +356,7 @@ func (s *Service) projectUploaded(channelID, actorID int64, uploaded []uploadedR
 			for _, item := range pending[start:] {
 				observer.Failed(item.UploadID, item.Meta.Name, wrapped)
 			}
-			return fmt.Errorf("%w: %v", errUploadProjection, err)
+			return fmt.Errorf("%w: %w", errUploadProjection, err)
 		}
 		for _, item := range pending[start:end] {
 			observer.Completed(item.UploadID, item.Meta.Name)

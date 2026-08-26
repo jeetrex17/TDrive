@@ -29,13 +29,15 @@ const (
 	archiveExtractedBytesLimitFloor      = 512 * 1024 * 1024
 	archiveExtractedBytesLimitMultiplier = 8
 	maxImportItems                       = 10_000
-	maxImportArchiveScanEntries          = 100_000
-	importUploadBatchSize                = 128
-	maxImportErrorDetails                = 20
+	// Leave room for ignored and oversize members without permitting metadata
+	// alone to pin the app on an adversarial or generated archive.
+	maxImportArchiveScanEntries = maxImportItems * 4
+	importUploadBatchSize       = 128
+	maxImportErrorDetails       = 20
 )
 
 var (
-	errImportItemLimit   = errors.New("import exceeds the remote item limit")
+	errImportItemLimit  = errors.New("import exceeds the remote item limit")
 	errArchiveScanLimit = errors.New("archive has too many entries to inspect safely")
 )
 
@@ -154,6 +156,12 @@ func (s *Service) planImport(ctx context.Context, paths []string, encrypt, extra
 		if errors.Is(planErr, errImportItemLimit) {
 			break
 		}
+		if planErr != nil {
+			plan.addError(filepath.Base(p), planErr)
+			if ctx.Err() != nil {
+				break
+			}
+		}
 	}
 	return plan
 }
@@ -210,10 +218,7 @@ func (s *Service) planFolder(ctx context.Context, root string, encrypt bool, pla
 		plan.addError(filepath.Base(p), err)
 		return nil
 	})
-	if errors.Is(err, errImportItemLimit) {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (s *Service) planArchive(ctx context.Context, p string, encrypt bool, plan *ImportPlan) error {
@@ -222,6 +227,9 @@ func (s *Service) planArchive(ctx context.Context, p string, encrypt bool, plan 
 	if err != nil {
 		if errors.Is(err, errImportItemLimit) {
 			plan.LimitExceeded = true
+			return err
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
 		// Corrupt or unreadable: RunImport falls back to uploading it as a file.
@@ -261,8 +269,8 @@ func (s *Service) planArchive(ctx context.Context, p string, encrypt bool, plan 
 }
 
 // scanArchiveForImport streams archive metadata into a bounded, policy-filtered
-// slice. Tar scans stop at the admission limit; zip still requires Go's central
-// directory index, but TDrive no longer duplicates an unbounded list in memory.
+// slice. Tar scans stop at the inspection budget; zip still requires Go's
+// central-directory index, but TDrive no longer duplicates an unbounded list.
 func scanArchiveForImport(ctx context.Context, archivePath string) ([]ArchiveEntry, int, error) {
 	return scanArchiveForImportLimit(ctx, archivePath, maxImportArchiveScanEntries)
 }
@@ -294,8 +302,8 @@ func scanArchiveForImportLimit(ctx context.Context, archivePath string, maxScann
 		if entry.IsDir {
 			return nil
 		}
-		if len(entries) >= maxImportItems {
-			return errImportItemLimit
+		if len(entries) >= maxScanned {
+			return errArchiveScanLimit
 		}
 		entries = append(entries, entry)
 		return nil
@@ -391,7 +399,8 @@ func (t *importTasks) flush() error {
 }
 
 func isFatalImportError(err error) bool {
-	return errors.Is(err, context.Canceled) ||
+	return tgclient.IsTransientTransport(err) ||
+		errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, errImportItemLimit) ||
 		errors.Is(err, errUploadProjection) ||
