@@ -3,7 +3,44 @@
 <head>
     <meta charset="UTF-8"/>
     <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <meta name="color-scheme" content="dark light"/>
     <title>TDrive</title>
+    <script>
+        // Resolve the saved palette before CSS is parsed. The typed theme
+        // controller validates the same value during boot; this tiny preflight
+        // exists solely to prevent a bright/dark flash between native window
+        // creation and the Svelte application starting.
+        (() => {
+            const lightThemes = ['tdrive-light', 'catppuccin-latte', 'solarized-light', 'gruvbox-light'];
+            const darkThemes = ['tokyo-night', 'catppuccin-mocha', 'dracula', 'solarized-dark', 'gruvbox-dark', 'nord'];
+            const fallback = {
+                mode: 'dark',
+                lightThemeId: 'tdrive-light',
+                darkThemeId: 'tokyo-night',
+            };
+            let saved = fallback;
+
+            try {
+                saved = JSON.parse(localStorage.getItem('tdrive.appearance.v1') || 'null') || fallback;
+            } catch {
+                // Storage can be unavailable in hardened webviews. The dark
+                // fallback below still guarantees a deterministic first paint.
+            }
+
+            // Legacy System preferences intentionally migrate to dark while
+            // retaining the user's previously selected dark palette.
+            const mode = ['light', 'dark'].includes(saved.mode) ? saved.mode : fallback.mode;
+            const lightThemeId = lightThemes.includes(saved.lightThemeId)
+                ? saved.lightThemeId
+                : fallback.lightThemeId;
+            const darkThemeId = darkThemes.includes(saved.darkThemeId)
+                ? saved.darkThemeId
+                : fallback.darkThemeId;
+
+            document.documentElement.dataset.theme = mode === 'dark' ? darkThemeId : lightThemeId;
+            document.documentElement.dataset.themeAppearance = mode;
+        })();
+    </script>
     <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>

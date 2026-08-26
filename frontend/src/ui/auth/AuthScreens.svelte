@@ -4,8 +4,12 @@
     import KeyRoundIcon from '@lucide/svelte/icons/key-round';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import MailIcon from '@lucide/svelte/icons/mail';
+    import PaletteIcon from '@lucide/svelte/icons/palette';
     import SettingsIcon from '@lucide/svelte/icons/settings';
     import { tick } from 'svelte';
+    import { eventOccurredWithin } from '../event-path';
+    import AppearancePanel from '../theme/AppearancePanel.svelte';
+    import { recoverThemeTransitionClick } from '../theme/theme-interaction';
     import { authCodeReset, authHint, authPhone, authScreen } from './auth-store';
 
     interface Props {
@@ -24,6 +28,10 @@
     let code = $state('');
     let password = $state('');
     let revealPassword = $state(false);
+    let appearanceOpen = $state(false);
+    let appearanceRoot = $state<HTMLElement | null>(null);
+    let appearancePopover = $state<HTMLElement | null>(null);
+    let appearanceTrigger = $state<HTMLButtonElement | null>(null);
 
     let apiIdEl = $state<HTMLInputElement | null>(null);
     let phoneEl = $state<HTMLInputElement | null>(null);
@@ -35,6 +43,7 @@
     let lastScreen: string | null = null;
     $effect(() => {
         const screen = $authScreen;
+        if (!screen) appearanceOpen = false;
         if (screen === lastScreen) return;
         lastScreen = screen;
         if (screen === 'code') code = '';
@@ -44,6 +53,7 @@
         }
         void tick().then(() => {
             if ($authScreen !== screen) return;
+            if (appearanceOpen) return;
             const el = screen === 'setup' ? apiIdEl
                 : screen === 'phone' ? phoneEl
                 : screen === 'code' ? codeEl
@@ -69,7 +79,64 @@
             action();
         }
     }
+
+    function closeAppearance(returnFocus = false): void {
+        appearanceOpen = false;
+        if (returnFocus) void tick().then(() => appearanceTrigger?.focus());
+    }
+
+    function toggleAppearance(): void {
+        appearanceOpen = !appearanceOpen;
+    }
+
+    function onWindowKeydown(event: KeyboardEvent): void {
+        if (event.key !== 'Escape' || !appearanceOpen) return;
+        event.preventDefault();
+        closeAppearance(true);
+    }
+
+    function onDocumentClick(event: MouseEvent): void {
+        if (!appearanceOpen
+            || eventOccurredWithin(event, appearanceRoot)
+            || recoverThemeTransitionClick(event, appearancePopover)
+            || recoverThemeTransitionClick(event, appearanceRoot)) return;
+        closeAppearance();
+    }
 </script>
+
+<svelte:window onkeydown={onWindowKeydown} />
+<svelte:document onclickcapture={onDocumentClick} />
+
+{#if $authScreen}
+    <div class="auth-appearance-control" bind:this={appearanceRoot}>
+        <button
+            bind:this={appearanceTrigger}
+            id="auth-appearance-trigger"
+            data-theme-hit-target
+            class="auth-appearance-trigger"
+            type="button"
+            aria-label="Customize appearance"
+            aria-haspopup="dialog"
+            aria-expanded={appearanceOpen}
+            aria-controls="auth-appearance-popover"
+            title="Customize appearance"
+            onclick={toggleAppearance}
+        >
+            <PaletteIcon size={18} strokeWidth={2} aria-hidden="true" />
+        </button>
+        {#if appearanceOpen}
+            <div
+                bind:this={appearancePopover}
+                id="auth-appearance-popover"
+                class="auth-appearance-popover"
+                role="dialog"
+                aria-label="Appearance settings"
+            >
+                <AppearancePanel autofocus />
+            </div>
+        {/if}
+    </div>
+{/if}
 
 {#if $authScreen === 'setup'}
     <div class="auth-box">
