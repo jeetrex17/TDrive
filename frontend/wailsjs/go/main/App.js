@@ -62,6 +62,10 @@ export function CreateFolder(arg1, arg2) {
   return window['go']['main']['App']['CreateFolder'](arg1, arg2);
 }
 
+export function CreatePersonalDrive() {
+  return window['go']['main']['App']['CreatePersonalDrive']();
+}
+
 export function CreateSharedDrive(arg1, arg2) {
   return window['go']['main']['App']['CreateSharedDrive'](arg1, arg2);
 }
@@ -246,6 +250,10 @@ export function PlanImport(arg1, arg2, arg3) {
   return window['go']['main']['App']['PlanImport'](arg1, arg2, arg3);
 }
 
+export function PreparePersonalDrive() {
+  return window['go']['main']['App']['PreparePersonalDrive']();
+}
+
 export function PreviewFile(arg1) {
   return window['go']['main']['App']['PreviewFile'](arg1);
 }
@@ -296,6 +304,10 @@ export function SelectFiles() {
 
 export function SelectFolder() {
   return window['go']['main']['App']['SelectFolder']();
+}
+
+export function SelectPersonalDrive(arg1) {
+  return window['go']['main']['App']['SelectPersonalDrive'](arg1);
 }
 
 export function SendHint(arg1) {

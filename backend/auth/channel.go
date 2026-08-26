@@ -2,13 +2,18 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/tg"
 )
 
-func GetTDriveChannel(ctx context.Context, Client *telegram.Client) (int64, error) {
+// ErrPersonalDriveSetupRequired means the user is authenticated but has not
+// explicitly selected or created the Telegram channel TDrive should use.
+// Missing configuration must never create a remote channel as a side effect.
+var ErrPersonalDriveSetupRequired = errors.New("personal drive setup required")
+
+func GetTDriveChannel(_ context.Context, _ *telegram.Client) (int64, error) {
 	savedId, err := LoadConfig()
 	if err != nil {
 		return 0, fmt.Errorf("load TDrive channel config: %w", err)
@@ -18,47 +23,5 @@ func GetTDriveChannel(ctx context.Context, Client *telegram.Client) (int64, erro
 		return savedId, nil
 	}
 
-	return CreateTDriveChannel(ctx, Client)
-}
-
-func CreateTDriveChannel(ctx context.Context, Clinet *telegram.Client) (int64, error) {
-	updates, err := Clinet.API().ChannelsCreateChannel(ctx, &tg.ChannelsCreateChannelRequest{
-		Broadcast: true,
-		Megagroup: false,
-		Title:     "TDrive",
-		About:     "Tdrive not so private Personal Storage",
-		Address:   "",
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	var newID int64
-
-	switch u := updates.(type) {
-	case *tg.Updates:
-		newID = findChannelID(u.Chats)
-	case *tg.UpdatesCombined:
-		newID = findChannelID(u.Chats)
-	}
-	if newID == 0 {
-		return 0, fmt.Errorf("id not found (newID is 0) ")
-	}
-
-	if err := SaveConfig(newID); err != nil {
-		return 0, fmt.Errorf("could not save config: %w", err)
-	}
-	return newID, nil
-}
-
-func findChannelID(chats []tg.ChatClass) int64 {
-	for _, chat := range chats {
-		switch channel := chat.(type) {
-		case *tg.Channel:
-			return channel.ID
-		case *tg.ChannelForbidden:
-			return channel.ID
-		}
-	}
-	return 0
+	return 0, ErrPersonalDriveSetupRequired
 }

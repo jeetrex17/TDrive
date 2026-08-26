@@ -20,6 +20,7 @@ import (
 	fileservice "TDrive/backend/services/file"
 	folderservice "TDrive/backend/services/folder"
 	lifecycleservice "TDrive/backend/services/lifecycle"
+	personaldriveservice "TDrive/backend/services/personaldrive"
 	readservice "TDrive/backend/services/read"
 	userservice "TDrive/backend/services/user"
 	tdsync "TDrive/backend/sync"
@@ -93,6 +94,7 @@ type Engine struct {
 	media      *media.Service
 	reads      *readservice.Service
 	lifecycle  *lifecycleservice.Service
+	personal   *personaldriveservice.Service
 	users      *userservice.Service
 	syncEngine *tdsync.Engine
 	liveSync   *livesync.Coordinator
@@ -173,6 +175,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		return err
 	}
 	e.lifecycle = e.newLifecycleService()
+	e.personal = e.newPersonalDriveService()
 	e.users = e.newUserService()
 	e.startLiveSync(liveActivity)
 
@@ -521,6 +524,13 @@ func (e *Engine) LifecycleService() *lifecycleservice.Service {
 	return e.lifecycle
 }
 
+func (e *Engine) PersonalDriveService() *personaldriveservice.Service {
+	if e.personal == nil {
+		e.personal = e.newPersonalDriveService()
+	}
+	return e.personal
+}
+
 func (e *Engine) UserService() *userservice.Service {
 	if e.users == nil {
 		e.users = e.newUserService()
@@ -680,24 +690,23 @@ func (e *Engine) newLifecycleService() *lifecycleservice.Service {
 		Active:   e.active,
 		Events:   e.events,
 		PersonalChannel: func(ctx context.Context) (int64, error) {
-			client, err := e.connect()
-			if err != nil {
-				return 0, fmt.Errorf("Could not connect: %w", err)
-			}
-			var channelID int64
-			err = client.Run(ctx, func(ctx context.Context) error {
-				id, err := auth.GetTDriveChannel(ctx, client)
-				if err != nil {
-					return err
-				}
-				channelID = id
-				return nil
-			})
-			return channelID, err
+			return auth.GetTDriveChannel(ctx, nil)
 		},
 		Warnf: func(format string, args ...any) {
 			e.warnf(format, args...)
 		},
+	})
+}
+
+func (e *Engine) newPersonalDriveService() *personaldriveservice.Service {
+	return personaldriveservice.NewService(personaldriveservice.Config{
+		DB:       backend.DB,
+		Telegram: e.tg,
+		Sync:     e.syncEngine,
+		UseSaved: func(ctx context.Context, channelID int64) error {
+			return e.LifecycleService().UsePersonalChannel(ctx, channelID)
+		},
+		SetActive: e.SetActiveChannelID,
 	})
 }
 

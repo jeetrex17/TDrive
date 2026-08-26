@@ -11,6 +11,8 @@
     import AppearancePanel from '../theme/AppearancePanel.svelte';
     import { recoverThemeTransitionClick } from '../theme/theme-interaction';
     import { authCodeReset, authHint, authPhone, authScreen } from './auth-store';
+    import { personalDriveSetup } from './personal-drive-store';
+    import PersonalDriveSetup from './PersonalDriveSetup.svelte';
     import { installUpdate, openReleasePage } from '../../modules/updates';
     import { isVersionSkipped } from '../updates/update-model';
     import { updatePrefs, updateState } from '../updates/update-store';
@@ -21,9 +23,21 @@
         onCode: (code: string) => void;
         onPassword: (password: string) => void;
         onBackToPhone: () => void;
+        onDriveSelect?: (channelID: string) => void;
+        onDriveCreate?: () => void;
+        onDriveRetry?: () => void;
     }
 
-    let { onSetup, onPhone, onCode, onPassword, onBackToPhone }: Props = $props();
+    let {
+        onSetup,
+        onPhone,
+        onCode,
+        onPassword,
+        onBackToPhone,
+        onDriveSelect = () => undefined,
+        onDriveCreate = () => undefined,
+        onDriveRetry = () => undefined,
+    }: Props = $props();
 
     // Update discoverability for users who are stuck before login (e.g. a
     // Telegram API change breaks sign-in). The updater runs independently of
@@ -236,4 +250,14 @@
         </div>
         <button class="primary-btn" type="button" onclick={() => onPassword(password)}>Unlock</button>
     </div>
+{:else if $authScreen === 'drive'}
+    <PersonalDriveSetup
+        phase={$personalDriveSetup.phase}
+        candidates={$personalDriveSetup.candidates}
+        error={$personalDriveSetup.error}
+        createRetry={$personalDriveSetup.createRetry}
+        onSelect={onDriveSelect}
+        onCreate={onDriveCreate}
+        onRetry={onDriveRetry}
+    />
 {/if}

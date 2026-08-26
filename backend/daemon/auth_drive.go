@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	coreauth "TDrive/backend/auth"
 	"TDrive/backend/projection"
 	channelservice "TDrive/backend/services/channel"
+	personaldriveservice "TDrive/backend/services/personaldrive"
 	"TDrive/backend/tgclient"
 )
 
@@ -62,11 +64,11 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 		case event := <-events:
 			switch event.Name {
 			case "login-success":
-				slog.Info("daemon: login succeeded, initializing drive")
-				result := s.engine.LifecycleService().InitDrive(ctx)
-				if strings.HasPrefix(result, "Error:") {
-					slog.Warn("daemon: drive init after login failed", "result", result)
-					return AuthLoginResponse{}, fmt.Errorf("%s", result)
+				slog.Info("daemon: login succeeded, preparing personal drive")
+				setup, err := s.preparePersonalDrive(ctx)
+				if err != nil {
+					slog.Warn("daemon: personal drive preparation failed", "error", err)
+					return AuthLoginResponse{}, err
 				}
 				active := s.engine.ActiveChannelID()
 				if active != 0 {
@@ -74,7 +76,12 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 						return AuthLoginResponse{}, err
 					}
 				}
-				return AuthLoginResponse{LoggedIn: true, InitDriveResult: result, ActiveChannelID: active}, nil
+				return AuthLoginResponse{
+					LoggedIn:        true,
+					InitDriveResult: setup.Status,
+					ActiveChannelID: active,
+					PersonalDrive:   setup,
+				}, nil
 			case "login-error":
 				slog.Warn("daemon: login failed")
 				return AuthLoginResponse{}, fmt.Errorf("%s", firstEventArg(event))
@@ -83,6 +90,79 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 			return AuthLoginResponse{}, ctx.Err()
 		}
 	}
+}
+
+func (s *Server) preparePersonalDrive(ctx context.Context) (PersonalDriveSetup, error) {
+	state, err := s.engine.PersonalDriveService().Prepare(ctx)
+	if err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	return personalDriveSetupFromService(state), nil
+}
+
+func (s *Server) selectPersonalDrive(ctx context.Context, rawChannelID string) (PersonalDriveSetup, error) {
+	channelID, err := parsePersonalDriveID(rawChannelID)
+	if err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.engine.PersonalDriveService().Select(ctx, channelID); err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	return s.commitPersonalDrive(s.engine.ActiveChannelID())
+}
+
+func (s *Server) createPersonalDrive(ctx context.Context) (PersonalDriveSetup, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.engine.PersonalDriveService().Create(ctx); err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	return s.commitPersonalDrive(s.engine.ActiveChannelID())
+}
+
+func (s *Server) commitPersonalDrive(channelID int64) (PersonalDriveSetup, error) {
+	if channelID <= 0 {
+		return PersonalDriveSetup{}, fmt.Errorf("personal drive did not become active")
+	}
+	if err := s.saveCurrentDrive(channelID); err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	return PersonalDriveSetup{
+		Status:          "ready",
+		ActiveChannelID: strconv.FormatInt(channelID, 10),
+		Candidates:      []PersonalDriveCandidate{},
+	}, nil
+}
+
+func personalDriveSetupFromService(state personaldriveservice.State) PersonalDriveSetup {
+	result := PersonalDriveSetup{
+		Status:     state.Status,
+		Candidates: make([]PersonalDriveCandidate, len(state.Candidates)),
+	}
+	if state.ChannelID > 0 {
+		result.ActiveChannelID = strconv.FormatInt(state.ChannelID, 10)
+	}
+	for i, candidate := range state.Candidates {
+		result.Candidates[i] = PersonalDriveCandidate{
+			ID:          strconv.FormatInt(candidate.ID, 10),
+			Title:       candidate.Title,
+			CreatedAt:   candidate.CreatedAt,
+			HasActivity: candidate.HasActivity,
+			Recommended: candidate.Recommended,
+		}
+	}
+	return result
+}
+
+func parsePersonalDriveID(raw string) (int64, error) {
+	value := strings.TrimSpace(raw)
+	channelID, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || channelID <= 0 || strconv.FormatInt(channelID, 10) != value {
+		return 0, fmt.Errorf("invalid personal drive channel id")
+	}
+	return channelID, nil
 }
 
 func (s *Server) authLogout(ctx context.Context, mode string) (AuthLogoutResponse, error) {

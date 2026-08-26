@@ -37,6 +37,8 @@ export function CreateEncryptionPassword(arg1:string,arg2:string):Promise<void>;
 
 export function CreateFolder(arg1:string,arg2:string):Promise<backend.Folder>;
 
+export function CreatePersonalDrive():Promise<void>;
+
 export function CreateSharedDrive(arg1:string,arg2:boolean):Promise<main.ChannelInfo>;
 
 export function DeleteFile(arg1:number):Promise<string>;
@@ -129,6 +131,8 @@ export function OpenUpdatePage():Promise<void>;
 
 export function PlanImport(arg1:Array<string>,arg2:boolean,arg3:boolean):Promise<file.ImportPlan>;
 
+export function PreparePersonalDrive():Promise<main.PersonalDriveSetupState>;
+
 export function PreviewFile(arg1:number):Promise<main.PreviewPayload>;
 
 export function PreviewThumbnail(arg1:number):Promise<main.PreviewPayload>;
@@ -154,6 +158,8 @@ export function Search(arg1:string,arg2:number):Promise<Array<backend.SearchResu
 export function SelectFiles():Promise<Array<string>>;
 
 export function SelectFolder():Promise<string>;
+
+export function SelectPersonalDrive(arg1:string):Promise<void>;
 
 export function SendHint(arg1:string):Promise<void>;
 

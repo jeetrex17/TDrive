@@ -47,6 +47,12 @@ const (
 	CommandMountStop          = "mount.stop"
 )
 
+const (
+	CommandPersonalDrivePrepare = "personal_drive.prepare"
+	CommandPersonalDriveSelect  = "personal_drive.select"
+	CommandPersonalDriveCreate  = "personal_drive.create"
+)
+
 type Request struct {
 	ID      string          `json:"id,omitempty"`
 	Version int             `json:"version"`
@@ -105,9 +111,28 @@ type AuthLoginRequest struct {
 }
 
 type AuthLoginResponse struct {
-	LoggedIn        bool   `json:"logged_in"`
-	InitDriveResult string `json:"init_drive_result,omitempty"`
-	ActiveChannelID int64  `json:"active_channel_id,omitempty"`
+	LoggedIn        bool               `json:"logged_in"`
+	InitDriveResult string             `json:"init_drive_result,omitempty"`
+	ActiveChannelID int64              `json:"active_channel_id,omitempty"`
+	PersonalDrive   PersonalDriveSetup `json:"personal_drive"`
+}
+
+type PersonalDriveCandidate struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	CreatedAt   int64  `json:"created_at"`
+	HasActivity bool   `json:"has_activity"`
+	Recommended bool   `json:"recommended"`
+}
+
+type PersonalDriveSetup struct {
+	Status          string                   `json:"status"`
+	ActiveChannelID string                   `json:"active_channel_id,omitempty"`
+	Candidates      []PersonalDriveCandidate `json:"candidates"`
+}
+
+type PersonalDriveSelectRequest struct {
+	ChannelID string `json:"channel_id"`
 }
 
 type AuthSubmitRequest struct {
