@@ -51,7 +51,7 @@ import { setupProfileMenu } from './modules/profile-menu';
 
 // Apply persisted/system appearance before waiting for the native runtime so
 // authentication and startup screens never render in the wrong palette.
-initializeTheme();
+const disconnectTheme = initializeTheme();
 let disconnectNativeTheme = () => {};
 
 // Setup window bindings that need to be available globally
@@ -161,4 +161,7 @@ window.onload = async function() {
     await checkStatusAndShowScreen();
 };
 
-window.addEventListener('beforeunload', () => disconnectNativeTheme(), { once: true });
+window.addEventListener('beforeunload', () => {
+    disconnectTheme();
+    disconnectNativeTheme();
+}, { once: true });

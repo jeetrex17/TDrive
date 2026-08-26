@@ -51,7 +51,8 @@ describe('ProfileMenu appearance navigation', () => {
         expect(host?.textContent).toContain('System');
         expect(host?.textContent).not.toContain('Automatic pair');
         expect(host?.querySelector('.appearance-back')).toBeNull();
-        expect(host?.querySelector('#appearance-mode-system')).toBe(document.activeElement);
+        const selectedMode = host?.querySelector('[data-appearance-mode="system"]');
+        expect(selectedMode).toBe(document.activeElement);
 
         menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
         flushSync();

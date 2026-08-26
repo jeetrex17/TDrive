@@ -122,6 +122,7 @@
                 {@const selected = $themeState.preference.mode === option.id}
                 <button
                     id={`appearance-mode-${option.id}`}
+                    data-appearance-mode={option.id}
                     class:selected
                     class="mode-card"
                     type="button"

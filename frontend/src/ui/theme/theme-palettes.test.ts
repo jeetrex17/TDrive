@@ -28,10 +28,40 @@ const requiredTokens = [
     '--scrim',
 ] as const;
 
+const requiredViewerTokens = [
+    '--viewer-text',
+    '--viewer-text-muted',
+    '--viewer-text-subtle',
+    '--viewer-surface-0',
+    '--viewer-surface-1',
+    '--viewer-surface-2',
+    '--viewer-control-hover',
+    '--viewer-border',
+    '--viewer-border-soft',
+    '--viewer-accent',
+    '--viewer-on-accent',
+    '--viewer-danger',
+    '--viewer-on-danger',
+    '--viewer-overlay-1',
+    '--viewer-overlay-2',
+    '--viewer-overlay-3',
+    '--viewer-scrim',
+    '--viewer-shadow',
+    '--viewer-focus-ring',
+] as const;
+
 function paletteBlock(themeId: string): string {
     const selector = new RegExp(`data-theme=["']${themeId}["']`);
     const match = selector.exec(paletteSource);
     if (!match) throw new Error(`missing palette selector for ${themeId}`);
+    const openBrace = paletteSource.indexOf('{', match.index);
+    const closeBrace = paletteSource.indexOf('}', openBrace);
+    return paletteSource.slice(openBrace + 1, closeBrace);
+}
+
+function sharedRootBlock(): string {
+    const match = /^:root\s*\{/m.exec(paletteSource);
+    if (!match) throw new Error('missing shared :root theme contract');
     const openBrace = paletteSource.indexOf('{', match.index);
     const closeBrace = paletteSource.indexOf('}', openBrace);
     return paletteSource.slice(openBrace + 1, closeBrace);
@@ -58,6 +88,27 @@ function contrast(foreground: string, background: string): number {
     const lighter = Math.max(luminance(foreground), luminance(background));
     const darker = Math.min(luminance(foreground), luminance(background));
     return (lighter + 0.05) / (darker + 0.05);
+}
+
+function expectReadablePair(
+    block: string,
+    label: string,
+    foregroundToken: string,
+    backgroundToken: string,
+    minimum = 4.5,
+): void {
+    const foreground = tokenValue(block, foregroundToken);
+    const background = tokenValue(block, backgroundToken);
+    expect(foreground, `${label} ${foregroundToken} must be an auditable six-digit hex color`).toMatch(
+        /^#[\da-f]{6}$/i,
+    );
+    expect(background, `${label} ${backgroundToken} must be an auditable six-digit hex color`).toMatch(
+        /^#[\da-f]{6}$/i,
+    );
+    expect(
+        contrast(foreground, background),
+        `${label} ${foregroundToken} on ${backgroundToken}`,
+    ).toBeGreaterThanOrEqual(minimum);
 }
 
 describe('theme palettes', () => {
@@ -93,19 +144,59 @@ describe('theme palettes', () => {
                 ['--color-text-muted', '--color-surface-0'],
                 ['--color-text-muted', '--color-surface-1'],
                 ['--color-text-muted', '--color-surface-2'],
+                ['--color-text-subtle', '--color-canvas'],
+                ['--color-text-subtle', '--color-surface-0'],
+                ['--color-text-subtle', '--color-surface-1'],
+                ['--color-text-subtle', '--color-surface-2'],
                 ['--color-on-accent', '--color-accent'],
                 ['--color-on-danger', '--color-danger'],
             ] as const;
 
             for (const [foregroundToken, backgroundToken] of pairs) {
-                const foreground = tokenValue(block, foregroundToken);
-                const background = tokenValue(block, backgroundToken);
-                expect(
-                    contrast(foreground, background),
-                    `${theme.id} ${foregroundToken} on ${backgroundToken}`,
-                ).toBeGreaterThanOrEqual(4.5);
+                expectReadablePair(block, theme.id, foregroundToken, backgroundToken);
             }
         }
+    });
+
+    it('defines one fixed-dark semantic contract for content viewers', () => {
+        const block = sharedRootBlock();
+
+        for (const token of requiredViewerTokens) {
+            expect(tokenValue(block, token), `viewer contract is missing ${token}`).not.toBe('');
+        }
+    });
+
+    it('keeps fixed-dark viewer text, controls, and statuses WCAG AA readable', () => {
+        const block = sharedRootBlock();
+        const pairs = [
+            ['--viewer-text', '--viewer-surface-0'],
+            ['--viewer-text', '--viewer-surface-1'],
+            ['--viewer-text', '--viewer-surface-2'],
+            ['--viewer-text-muted', '--viewer-surface-0'],
+            ['--viewer-text-muted', '--viewer-surface-1'],
+            ['--viewer-text-muted', '--viewer-surface-2'],
+            ['--viewer-text-subtle', '--viewer-surface-0'],
+            ['--viewer-text-subtle', '--viewer-surface-1'],
+            ['--viewer-text-subtle', '--viewer-surface-2'],
+            ['--viewer-text', '--viewer-control-hover'],
+            ['--viewer-text-muted', '--viewer-control-hover'],
+            ['--viewer-accent', '--viewer-surface-2'],
+            ['--viewer-danger', '--viewer-surface-2'],
+            ['--viewer-on-accent', '--viewer-accent'],
+            ['--viewer-on-danger', '--viewer-danger'],
+        ] as const;
+
+        for (const [foregroundToken, backgroundToken] of pairs) {
+            expectReadablePair(block, 'fixed viewer', foregroundToken, backgroundToken);
+        }
+
+        expectReadablePair(
+            block,
+            'fixed viewer control boundary',
+            '--viewer-border',
+            '--viewer-surface-2',
+            3,
+        );
     });
 
     it('keeps selector previews synchronized with the applied palette', () => {

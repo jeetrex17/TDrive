@@ -20,7 +20,6 @@ export interface ThemeDefinition {
     readonly id: ThemeId;
     readonly name: string;
     readonly appearance: ThemeAppearance;
-    readonly description: string;
     readonly preview: ThemePreview;
 }
 
@@ -47,70 +46,60 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         id: 'tdrive-light',
         name: 'TDrive Light',
         appearance: 'light',
-        description: 'Crisp, calm, and unmistakably TDrive.',
         preview: ['#f3f5f9', '#eceff5', '#315fc4', '#101828'],
     }),
     defineTheme({
         id: 'catppuccin-latte',
         name: 'Catppuccin Latte',
         appearance: 'light',
-        description: 'Warm pastels with gentle contrast.',
         preview: ['#eff1f5', '#dfe3eb', '#1d61ea', '#4c4f69'],
     }),
     defineTheme({
         id: 'solarized-light',
         name: 'Solarized Light',
         appearance: 'light',
-        description: 'Paper-soft tones for focused work.',
         preview: ['#fdf6e3', '#eee8d5', '#1676ad', '#073642'],
     }),
     defineTheme({
         id: 'gruvbox-light',
         name: 'Gruvbox Light',
         appearance: 'light',
-        description: 'A warm retro palette with earthy depth.',
         preview: ['#fbf1c7', '#ebdbb2', '#076678', '#282828'],
     }),
     defineTheme({
         id: 'tokyo-night',
         name: 'Tokyo Night',
         appearance: 'dark',
-        description: 'TDrive’s original midnight-blue glow.',
         preview: ['#1a1b26', '#24283b', '#7aa2f7', '#f5f7ff'],
     }),
     defineTheme({
         id: 'catppuccin-mocha',
         name: 'Catppuccin Mocha',
         appearance: 'dark',
-        description: 'Velvety dark surfaces and soft pastels.',
         preview: ['#1e1e2e', '#313244', '#89b4fa', '#f1f3fb'],
     }),
     defineTheme({
         id: 'dracula',
         name: 'Dracula',
         appearance: 'dark',
-        description: 'Vivid violet energy on charcoal.',
         preview: ['#282a36', '#383a4a', '#bd93f9', '#f8f8f2'],
     }),
     defineTheme({
         id: 'solarized-dark',
         name: 'Solarized Dark',
         appearance: 'dark',
-        description: 'Low-glare contrast with oceanic accents.',
         preview: ['#002b36', '#0d414d', '#36a4d9', '#f5efdd'],
     }),
     defineTheme({
         id: 'gruvbox-dark',
         name: 'Gruvbox Dark',
         appearance: 'dark',
-        description: 'Cozy earth tones built for long sessions.',
         preview: ['#282828', '#3c3836', '#83a598', '#fbf1c7'],
     }),
     defineTheme({
         id: 'nord',
         name: 'Nord',
         appearance: 'dark',
-        description: 'Cool arctic hues with quiet clarity.',
         preview: ['#2e3440', '#3b4252', '#88c0d0', '#eceff4'],
     }),
 ]);

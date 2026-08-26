@@ -15,6 +15,7 @@ describe('theme model', () => {
         expect(themesForAppearance('light').length).toBeGreaterThanOrEqual(4);
         expect(themesForAppearance('dark').length).toBeGreaterThanOrEqual(5);
         expect(THEME_DEFINITIONS.every((theme) => theme.preview.length === 4)).toBe(true);
+        expect(THEME_DEFINITIONS.every((theme) => !('description' in theme))).toBe(true);
     });
 
     it('normalizes unknown or appearance-incompatible persisted values', () => {

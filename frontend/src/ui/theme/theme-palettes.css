@@ -11,6 +11,34 @@
  * bright or dark flash without making JavaScript part of first paint.
  */
 
+/*
+ * Content viewers intentionally remain dark so media, documents, and code do
+ * not jump between radically different presentation environments. Defining
+ * this contract once also prevents an app theme from leaking into viewer
+ * chrome through a generic token alias.
+ */
+:root {
+    --viewer-text: #f5f7ff;
+    --viewer-text-muted: #c0caf5;
+    --viewer-text-subtle: #8b95c5;
+    --viewer-surface-0: #05070c;
+    --viewer-surface-1: #080a0f;
+    --viewer-surface-2: #0b0d14;
+    --viewer-control-hover: #202536;
+    --viewer-border: #596487;
+    --viewer-border-soft: #2b3145;
+    --viewer-accent: #7aa2f7;
+    --viewer-on-accent: #11131a;
+    --viewer-danger: #f7768e;
+    --viewer-on-danger: #16161e;
+    --viewer-overlay-1: rgba(255, 255, 255, 0.04);
+    --viewer-overlay-2: rgba(255, 255, 255, 0.08);
+    --viewer-overlay-3: rgba(255, 255, 255, 0.14);
+    --viewer-scrim: rgba(4, 6, 11, 0.94);
+    --viewer-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
+    --viewer-focus-ring: 0 0 0 3px rgba(122, 162, 247, 0.42);
+}
+
 :root:not([data-theme]),
 :root[data-theme="tokyo-night"] {
     color-scheme: dark;
@@ -24,7 +52,7 @@
     --color-text: #f5f7ff;
     --color-text-soft: #c0caf5;
     --color-text-muted: #8b95c5;
-    --color-text-subtle: #6f789e;
+    --color-text-subtle: #848ebb;
     --color-border: #2f3650;
     --color-border-soft: #292e42;
     --color-accent: #7aa2f7;
@@ -86,7 +114,7 @@
     --color-text: #101828;
     --color-text-soft: #344054;
     --color-text-muted: #526078;
-    --color-text-subtle: #667085;
+    --color-text-subtle: #626c80;
     --color-border: #c8d0dc;
     --color-border-soft: #dce1e9;
     --color-accent: #315fc4;
@@ -148,7 +176,7 @@
     --color-text: #4c4f69;
     --color-text-soft: #5c5f77;
     --color-text-muted: #606378;
-    --color-text-subtle: #676a80;
+    --color-text-subtle: #616479;
     --color-border: #bcc0cc;
     --color-border-soft: #d3d6df;
     --color-accent: #1d61ea;
@@ -210,7 +238,7 @@
     --color-text: #073642;
     --color-text-soft: #3f5961;
     --color-text-muted: #536970;
-    --color-text-subtle: #61737a;
+    --color-text-subtle: #566b72;
     --color-border: #c9c1ad;
     --color-border-soft: #ded7c4;
     --color-accent: #1676ad;
@@ -272,7 +300,7 @@
     --color-text: #282828;
     --color-text-soft: #3c3836;
     --color-text-muted: #5f554d;
-    --color-text-subtle: #6b6056;
+    --color-text-subtle: #695e55;
     --color-border: #bdae93;
     --color-border-soft: #d8c8a3;
     --color-accent: #076678;
@@ -334,7 +362,7 @@
     --color-text: #f1f3fb;
     --color-text-soft: #cdd6f4;
     --color-text-muted: #a6adc8;
-    --color-text-subtle: #8f96b0;
+    --color-text-subtle: #949bb6;
     --color-border: #45475a;
     --color-border-soft: #313244;
     --color-accent: #89b4fa;
@@ -396,7 +424,7 @@
     --color-text: #f8f8f2;
     --color-text-soft: #e7e7f0;
     --color-text-muted: #adb4d3;
-    --color-text-subtle: #929cc3;
+    --color-text-subtle: #99a4ca;
     --color-border: #55586f;
     --color-border-soft: #44475a;
     --color-accent: #bd93f9;
@@ -458,7 +486,7 @@
     --color-text: #f5efdd;
     --color-text-soft: #c8c5b6;
     --color-text-muted: #9aa9a7;
-    --color-text-subtle: #849795;
+    --color-text-subtle: #99a8a6;
     --color-border: #315e67;
     --color-border-soft: #174a55;
     --color-accent: #36a4d9;
@@ -520,7 +548,7 @@
     --color-text: #fbf1c7;
     --color-text-soft: #ebdbb2;
     --color-text-muted: #c0ae90;
-    --color-text-subtle: #aa9b80;
+    --color-text-subtle: #b1a085;
     --color-border: #665c54;
     --color-border-soft: #504945;
     --color-accent: #83a598;
@@ -582,7 +610,7 @@
     --color-text: #eceff4;
     --color-text-soft: #d8dee9;
     --color-text-muted: #adb9ca;
-    --color-text-subtle: #94a2b7;
+    --color-text-subtle: #a4b0c3;
     --color-border: #5c687f;
     --color-border-soft: #434c5e;
     --color-accent: #88c0d0;
@@ -649,7 +677,7 @@
         --color-text: #101828;
         --color-text-soft: #344054;
         --color-text-muted: #526078;
-        --color-text-subtle: #667085;
+        --color-text-subtle: #626c80;
         --color-border: #c8d0dc;
         --color-border-soft: #dce1e9;
         --color-accent: #315fc4;

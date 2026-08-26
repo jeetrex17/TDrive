@@ -60,7 +60,7 @@
     async function openAppearance(): Promise<void> {
         view = 'appearance';
         await tick();
-        menuEl?.querySelector<HTMLElement>('[aria-label="Appearance mode"] [aria-checked="true"]')?.focus();
+        menuEl?.querySelector<HTMLElement>('[data-appearance-mode][aria-checked="true"]')?.focus();
     }
 
     async function closeAppearance(): Promise<void> {

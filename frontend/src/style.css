@@ -1,45 +1,6 @@
 @import './ui/theme/theme-palettes.css';
 
 :root {
-    color-scheme: dark;
-
-    --color-canvas: #1a1b26;
-    --color-surface-0: #16161e;
-    --color-surface-1: #1f2335;
-    --color-surface-2: #24283b;
-    --color-surface-3: #2f3650;
-    --color-text: #f5f7ff;
-    --color-text-soft: #c0caf5;
-    --color-text-muted: #8b95c5;
-    --color-text-subtle: #6f789e;
-    --color-border: #2f3650;
-    --color-border-soft: #292e42;
-    --color-accent: #7aa2f7;
-    --color-accent-hover: #8fb4ff;
-    --color-accent-strong: #5d85e0;
-    --color-on-accent: #16161e;
-    --color-danger: #f7768e;
-    --color-on-danger: #16161e;
-    --color-warning: #e0af68;
-    --color-success: #34c759;
-
-    --overlay-white-1: rgba(255, 255, 255, 0.04);
-    --overlay-white-2: rgba(255, 255, 255, 0.08);
-    --overlay-white-3: rgba(255, 255, 255, 0.12);
-    --overlay-accent-1: rgba(122, 162, 247, 0.10);
-    --overlay-accent-2: rgba(122, 162, 247, 0.16);
-    --overlay-accent-3: rgba(122, 162, 247, 0.32);
-    --overlay-danger-1: rgba(247, 118, 142, 0.10);
-    --overlay-danger-2: rgba(247, 118, 142, 0.28);
-    --overlay-warning-1: rgba(224, 175, 104, 0.12);
-    --overlay-warning-2: rgba(224, 175, 104, 0.30);
-    --overlay-success-1: rgba(52, 199, 89, 0.12);
-    --overlay-success-2: rgba(52, 199, 89, 0.30);
-    --glass-bg: rgba(36, 40, 59, 0.88);
-    --glass-border: rgba(255, 255, 255, 0.08);
-    --glass-highlight: rgba(255, 255, 255, 0.04);
-    --scrim: rgba(0, 0, 0, 0.55);
-
     --radius-xs: 4px;
     --radius-sm: 6px;
     --radius-md: 8px;
@@ -54,11 +15,6 @@
     --space-5: 20px;
     --space-6: 24px;
     --space-8: 32px;
-
-    --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.24);
-    --shadow-md: 0 16px 44px rgba(0, 0, 0, 0.36);
-    --shadow-lg: 0 24px 72px rgba(0, 0, 0, 0.48);
-    --focus-ring: 0 0 0 3px rgba(122, 162, 247, 0.34);
 
     --motion-fast: 120ms;
     --motion-med: 180ms;
@@ -110,14 +66,14 @@ body { background-color: var(--bg-dark); color: var(--text-main); height: 100vh;
    it. Older WebView2/WebKitGTK builds receive the quieter app-settle fallback
    below, while reduced-motion users always get an immediate palette swap. */
 ::view-transition-old(root) {
-    animation: theme-old-fade 300ms var(--ease-standard) both;
+    animation: theme-old-fade 600ms var(--ease-standard) both;
 }
 ::view-transition-new(root) {
-    animation: theme-new-reveal 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: theme-new-reveal 1000ms cubic-bezier(0.16, 1, 0.3, 1) both;
     clip-path: circle(150vmax at var(--theme-origin-x, 50vw) var(--theme-origin-y, 50vh));
 }
 html.theme-transition-fallback #app {
-    animation: theme-app-settle 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: theme-app-settle 1000ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 @keyframes theme-old-fade {
     to { opacity: 0.84; filter: saturate(0.92); }
@@ -1327,7 +1283,7 @@ header {
 .file-viewer-overlay {
     align-items: stretch;
     justify-content: stretch;
-    background: rgba(4, 6, 11, 0.94);
+    background: var(--viewer-scrim);
     padding: 28px;
 }
 
@@ -1340,10 +1296,10 @@ header {
     max-width: none;
     padding: 0;
     overflow: hidden;
-    background: #080a0f;
-    border: 1px solid var(--border);
+    background: var(--viewer-surface-1);
+    border: 1px solid var(--viewer-border);
     border-radius: var(--radius-lg);
-    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
+    box-shadow: var(--viewer-shadow);
 }
 
 .file-viewer-topbar {
@@ -1353,8 +1309,8 @@ header {
     gap: var(--space-5);
     min-height: 72px;
     padding: 14px 18px;
-    border-bottom: 1px solid var(--border);
-    background: #0b0d14;
+    border-bottom: 1px solid var(--viewer-border-soft);
+    background: var(--viewer-surface-2);
 }
 
 .file-viewer-identity {
@@ -1371,10 +1327,10 @@ header {
     flex: 0 0 auto;
     width: 42px;
     height: 42px;
-    color: var(--color-accent);
-    border: 1px solid var(--border);
+    color: var(--viewer-accent);
+    border: 1px solid var(--viewer-border);
     border-radius: var(--radius-md);
-    background: var(--overlay-white-1);
+    background: var(--viewer-overlay-1);
 }
 
 .file-viewer-kind-mark svg {
@@ -1389,7 +1345,7 @@ header {
 .file-viewer-title {
     max-width: min(72vw, 980px);
     overflow: hidden;
-    color: var(--color-text);
+    color: var(--viewer-text);
     font-size: 1.05rem;
     font-weight: 800;
     line-height: 1.2;
@@ -1402,7 +1358,7 @@ header {
     align-items: center;
     gap: 8px;
     margin-top: 4px;
-    color: var(--color-text-muted);
+    color: var(--viewer-text-muted);
     font-size: var(--type-xs);
     font-weight: 700;
     letter-spacing: 0.02em;
@@ -1424,9 +1380,9 @@ header {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--border);
-    background: rgba(255, 255, 255, 0.035);
-    color: var(--color-text-soft);
+    border: 1px solid var(--viewer-border);
+    background: var(--viewer-overlay-1);
+    color: var(--viewer-text-muted);
     appearance: none;
     cursor: pointer;
     transition: background var(--motion-fast) var(--ease-standard),
@@ -1470,9 +1426,9 @@ header {
 .file-viewer-close:hover,
 .audio-play:hover,
 .audio-mute:hover {
-    background: var(--overlay-white-2);
-    border-color: var(--color-border);
-    color: var(--color-text);
+    background: var(--viewer-control-hover);
+    border-color: var(--viewer-border);
+    color: var(--viewer-text);
 }
 
 .file-viewer-action:active,
@@ -1495,14 +1451,14 @@ header {
 .audio-seek:focus-visible,
 .audio-volume:focus-visible {
     outline: none;
-    box-shadow: var(--focus-ring);
+    box-shadow: var(--viewer-focus-ring);
 }
 
 .file-viewer-stage {
     min-height: 0;
     height: 100%;
     overflow: hidden;
-    background: #05070c;
+    background: var(--viewer-surface-0);
 }
 
 .file-viewer-state {
@@ -1511,7 +1467,7 @@ header {
     justify-content: center;
     min-height: 180px;
     padding: var(--space-6);
-    color: var(--color-text-soft);
+    color: var(--viewer-text-muted);
     font-size: var(--type-base);
     font-weight: 800;
     text-align: center;
@@ -1522,7 +1478,7 @@ header {
     display: flex;
     height: 100%;
     min-height: 0;
-    background: #05070c;
+    background: var(--viewer-surface-0);
 }
 
 .pdf-frame {
@@ -1532,7 +1488,7 @@ header {
     flex: 1 1 auto;
     min-height: 0;
     border: 0;
-    background: #05070c;
+    background: var(--viewer-surface-0);
 }
 
 .pdf-frame-overlay {
@@ -1543,7 +1499,7 @@ header {
     justify-content: center;
     padding: var(--space-6);
     background: rgba(5, 7, 12, 0.78);
-    color: var(--color-text-soft);
+    color: var(--viewer-text-muted);
     font-size: var(--type-base);
     font-weight: 800;
     text-align: center;
@@ -1574,10 +1530,10 @@ header {
     justify-content: center;
     width: 112px;
     height: 112px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--viewer-border);
     border-radius: var(--radius-md);
-    background: #10131d;
-    color: var(--color-accent);
+    background: var(--viewer-surface-2);
+    color: var(--viewer-accent);
 }
 
 .audio-art svg {
@@ -1591,7 +1547,7 @@ header {
 
 .audio-title {
     overflow: hidden;
-    color: var(--color-text);
+    color: var(--viewer-text);
     font-size: 1.16rem;
     font-weight: 800;
     line-height: 1.25;
@@ -1601,7 +1557,7 @@ header {
 
 .audio-subtitle {
     margin-top: 6px;
-    color: var(--color-text-muted);
+    color: var(--viewer-text-muted);
     font-size: var(--type-sm);
     font-weight: 700;
 }
@@ -1632,9 +1588,9 @@ header {
 .audio-play {
     width: 50px;
     height: 50px;
-    color: var(--color-text);
-    border-color: var(--overlay-accent-3);
-    background: var(--overlay-accent-1);
+    color: var(--viewer-text);
+    border-color: var(--viewer-accent);
+    background: var(--viewer-control-hover);
 }
 
 .audio-play svg,
@@ -1644,7 +1600,7 @@ header {
 }
 
 .audio-time {
-    color: var(--color-text);
+    color: var(--viewer-text);
     font-size: var(--type-sm);
     font-variant-numeric: tabular-nums;
     font-weight: 800;
@@ -1663,7 +1619,7 @@ header {
     min-width: 0;
     height: 18px;
     background: transparent;
-    accent-color: var(--color-accent);
+    accent-color: var(--viewer-accent);
     appearance: none;
 }
 
@@ -1671,7 +1627,7 @@ header {
 .audio-volume::-webkit-slider-runnable-track {
     height: 4px;
     border-radius: var(--radius-pill);
-    background: var(--overlay-white-3);
+    background: var(--viewer-overlay-3);
 }
 
 .audio-seek::-webkit-slider-thumb,
@@ -1681,7 +1637,7 @@ header {
     margin-top: -5px;
     border: 0;
     border-radius: var(--radius-pill);
-    background: var(--color-text);
+    background: var(--viewer-text);
     appearance: none;
 }
 
@@ -1689,7 +1645,7 @@ header {
 .audio-volume::-moz-range-track {
     height: 4px;
     border-radius: var(--radius-pill);
-    background: var(--overlay-white-3);
+    background: var(--viewer-overlay-3);
 }
 
 .audio-seek::-moz-range-thumb,
@@ -1698,7 +1654,7 @@ header {
     height: 14px;
     border: 0;
     border-radius: var(--radius-pill);
-    background: var(--color-text);
+    background: var(--viewer-text);
 }
 
 .text-viewer {
@@ -1706,7 +1662,7 @@ header {
     grid-template-rows: minmax(0, 1fr) auto;
     height: 100%;
     min-height: 0;
-    background: #05070c;
+    background: var(--viewer-surface-0);
 }
 
 .text-viewer-scroll {
@@ -1721,10 +1677,10 @@ header {
     min-height: 100%;
     margin: 0 auto;
     padding: 26px 28px;
-    color: var(--color-text-soft);
-    border: 1px solid var(--border);
+    color: var(--viewer-text-muted);
+    border: 1px solid var(--viewer-border);
     border-radius: var(--radius-md);
-    background: #0b0d14;
+    background: var(--viewer-surface-2);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-size: 0.88rem;
     line-height: 1.72;
@@ -1749,7 +1705,7 @@ header {
 }
 
 .text-viewer-body.is-markdown {
-    color: var(--color-text);
+    color: var(--viewer-text);
 }
 
 .text-viewer-body.is-markdown > :first-child,
@@ -1767,7 +1723,7 @@ header {
 .text-viewer-body.is-markdown h3,
 .text-viewer-body.is-markdown h4 {
     margin: 1.6em 0 0.6em;
-    color: var(--color-text);
+    color: var(--viewer-text);
     font-weight: 800;
     line-height: 1.18;
 }
@@ -1802,7 +1758,7 @@ header {
 }
 
 .text-viewer-body.is-markdown a {
-    color: var(--color-accent);
+    color: var(--viewer-accent);
     text-decoration: none;
 }
 
@@ -1812,9 +1768,9 @@ header {
 
 .text-viewer-body.is-markdown code {
     padding: 0.14em 0.4em;
-    border: 1px solid rgba(143, 155, 206, 0.14);
+    border: 1px solid var(--viewer-border-soft);
     border-radius: 8px;
-    background: rgba(143, 155, 206, 0.08);
+    background: var(--viewer-overlay-1);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-size: 0.9em;
 }
@@ -1829,10 +1785,10 @@ header {
 .text-viewer-body.is-code code.hljs {
     display: block;
     padding: 18px 20px;
-    border: 1px solid rgba(143, 155, 206, 0.14);
+    border: 1px solid var(--viewer-border-soft);
     border-radius: var(--radius-md);
-    background: #0f1320;
-    color: var(--color-text);
+    background: var(--viewer-surface-2);
+    color: var(--viewer-text);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-size: 0.88rem;
     line-height: 1.72;
@@ -1844,12 +1800,12 @@ header {
 
 .text-viewer-body.is-markdown blockquote {
     padding-left: 16px;
-    color: var(--color-text-muted);
-    border-left: 2px solid rgba(143, 155, 206, 0.26);
+    color: var(--viewer-text-muted);
+    border-left: 2px solid var(--viewer-border);
 }
 
 .text-viewer-body.is-code {
-    color: var(--color-text);
+    color: var(--viewer-text);
 }
 
 .text-viewer-body.is-code .hljs-attr,
@@ -1875,7 +1831,7 @@ header {
 
 .text-viewer-body.is-code .hljs-comment,
 .text-viewer-body.is-code .hljs-quote {
-    color: rgba(245, 247, 255, 0.42);
+    color: var(--viewer-text-subtle);
 }
 
 .text-viewer-footer {
@@ -1884,9 +1840,9 @@ header {
     justify-content: flex-end;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    color: var(--color-text-muted);
-    border-top: 1px solid var(--border);
-    background: #0b0d14;
+    color: var(--viewer-text-muted);
+    border-top: 1px solid var(--viewer-border-soft);
+    background: var(--viewer-surface-2);
     font-size: var(--type-sm);
     font-weight: 700;
 }
@@ -1896,9 +1852,9 @@ header {
     align-items: center;
     gap: 4px;
     padding: 4px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--viewer-border);
     border-radius: var(--radius-pill);
-    background: rgba(143, 155, 206, 0.06);
+    background: var(--viewer-overlay-1);
 }
 
 .text-viewer-toggle button {
@@ -1907,24 +1863,24 @@ header {
     border: 0;
     border-radius: calc(var(--radius-pill) - 4px);
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--viewer-text-muted);
     font: inherit;
     cursor: pointer;
     transition: background 0.14s ease, color 0.14s ease;
 }
 
 .text-viewer-toggle button:hover {
-    color: var(--color-text);
+    color: var(--viewer-text);
 }
 
 .text-viewer-toggle button.active {
-    background: rgba(122, 162, 247, 0.16);
-    color: var(--color-text);
+    background: var(--viewer-control-hover);
+    color: var(--viewer-text);
 }
 
 .text-viewer-toggle button:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px var(--color-accent-ring);
+    box-shadow: var(--viewer-focus-ring);
 }
 
 @media (max-width: 760px) {
@@ -2895,7 +2851,7 @@ header {
     border-radius: 8px;
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(255, 255, 255, 0.04);
-    color: var(--accent);
+    color: var(--viewer-accent);
     font-size: 0.82rem;
     font-weight: 700;
     cursor: pointer;
@@ -2965,7 +2921,7 @@ header {
 .preview-unlock-bar:focus-within {
     border-color: rgba(122, 162, 247, 0.6);
 }
-.preview-unlock-lock { width: 18px; height: 18px; flex-shrink: 0; color: var(--text-muted); }
+.preview-unlock-lock { width: 18px; height: 18px; flex-shrink: 0; color: var(--viewer-text-muted); }
 .preview-unlock-bar input {
     flex: 1;
     min-width: 0;
@@ -2973,13 +2929,13 @@ header {
     padding: 12px 0;
     border: none;
     background: transparent;
-    color: var(--text-main);
+    color: var(--viewer-text);
     font-size: 1rem;
     letter-spacing: 0.01em;
     outline: none;
 }
 .preview-unlock-bar input:focus { box-shadow: none; }
-.preview-unlock-bar input::placeholder { color: var(--text-muted); }
+.preview-unlock-bar input::placeholder { color: var(--viewer-text-muted); }
 /* Secondary action: a ghost show/hide toggle, muted so it doesn't compete. */
 .preview-unlock-eye {
     flex-shrink: 0;
@@ -2991,11 +2947,11 @@ header {
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--viewer-text-muted);
     cursor: pointer;
     transition: color 0.15s ease, background 0.15s ease;
 }
-.preview-unlock-eye:hover { color: var(--text-main); background: rgba(255, 255, 255, 0.06); }
+.preview-unlock-eye:hover { color: var(--viewer-text); background: var(--viewer-overlay-2); }
 .preview-unlock-eye svg { width: 18px; height: 18px; }
 /* Primary action: the single filled accent button (the one strong CTA), flat. */
 .preview-unlock-go {
@@ -3007,8 +2963,8 @@ header {
     justify-content: center;
     border: none;
     border-radius: 12px;
-    background: var(--accent);
-    color: var(--bg-dark);
+    background: var(--viewer-accent);
+    color: var(--viewer-on-accent);
     cursor: pointer;
     transition: filter 0.15s ease, transform 0.15s ease;
 }
@@ -3018,14 +2974,14 @@ header {
 .preview-unlock-go svg { width: 18px; height: 18px; }
 .preview-unlock-error {
     margin-top: 16px;
-    color: var(--danger);
+    color: var(--viewer-danger);
     font-family: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
     font-size: 0.8rem;
     text-align: center;
 }
 .preview-unlock-hint {
     margin-top: 16px;
-    color: var(--text-muted);
+    color: var(--viewer-text-muted);
     font-family: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
     font-size: 0.8rem;
     font-weight: 500;
@@ -3044,11 +3000,11 @@ header {
 
 /* ----- Video player ----- */
 .video-overlay {
-    --video-accent: var(--accent);
+    --video-accent: var(--viewer-accent);
     --video-accent-bg: rgba(122, 162, 247, 0.2);
     --video-accent-border: rgba(122, 162, 247, 0.58);
     --video-accent-ring: rgba(122, 162, 247, 0.28);
-    background: rgba(4, 6, 11, 0.94);
+    background: var(--viewer-scrim);
     backdrop-filter: blur(16px);
     z-index: 2400;
     align-items: stretch;
@@ -3065,7 +3021,7 @@ header {
     height: 100%;
     min-width: 0;
     min-height: 0;
-    background: #05070c;
+    background: var(--viewer-surface-0);
     overflow: hidden;
     outline: none;
     user-select: none;
@@ -3077,7 +3033,7 @@ header {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #05070c;
+    background: var(--viewer-surface-0);
     cursor: inherit;
 }
 

@@ -179,7 +179,7 @@ describe('theme controller', () => {
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
         expect(document.documentElement.style.getPropertyValue('--theme-origin-x')).toBe(`${window.innerWidth / 2}px`);
 
-        vi.advanceTimersByTime(499);
+        vi.advanceTimersByTime(1049);
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
 
         vi.advanceTimersByTime(1);
