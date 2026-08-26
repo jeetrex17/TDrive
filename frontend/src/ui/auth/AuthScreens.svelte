@@ -11,6 +11,9 @@
     import AppearancePanel from '../theme/AppearancePanel.svelte';
     import { recoverThemeTransitionClick } from '../theme/theme-interaction';
     import { authCodeReset, authHint, authPhone, authScreen } from './auth-store';
+    import { installUpdate, openReleasePage } from '../../modules/updates';
+    import { isVersionSkipped } from '../updates/update-model';
+    import { updatePrefs, updateState } from '../updates/update-store';
 
     interface Props {
         onSetup: (apiId: string, apiHash: string) => void;
@@ -21,6 +24,22 @@
     }
 
     let { onSetup, onPhone, onCode, onPassword, onBackToPhone }: Props = $props();
+
+    // Update discoverability for users who are stuck before login (e.g. a
+    // Telegram API change breaks sign-in). The updater runs independently of
+    // auth, so a ready build can be installed straight from here.
+    const updateFooter = $derived.by(() => {
+        const s = $updateState;
+        const latest = s.latest;
+        if (!latest || isVersionSkipped(latest.version, $updatePrefs.skippedVersion)) return null;
+        if (s.phase === 'ready') {
+            return { version: latest.version, label: 'Restart to update', action: installUpdate };
+        }
+        if (s.phase === 'available' && s.installable) {
+            return { version: latest.version, label: 'Get the update', action: openReleasePage };
+        }
+        return null;
+    });
 
     let apiId = $state('');
     let apiHash = $state('');
@@ -135,6 +154,14 @@
                 <AppearancePanel autofocus />
             </div>
         {/if}
+    </div>
+{/if}
+
+{#if $authScreen && updateFooter}
+    <div class="auth-update-footer">
+        <button type="button" onclick={() => void updateFooter.action()}>
+            TDrive <span class="auth-update-accent">{updateFooter.version}</span> · {updateFooter.label}
+        </button>
     </div>
 {/if}
 

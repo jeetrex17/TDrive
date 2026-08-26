@@ -49,6 +49,9 @@ import { setupNotifBell } from './modules/notif-bell';
 // Profile menu (top-right avatar dropdown)
 import { setupProfileMenu } from './modules/profile-menu';
 
+// In-app updater (GitHub releases)
+import { setupUpdates } from './modules/updates';
+
 // Apply persisted/system appearance before waiting for the native runtime so
 // authentication and startup screens never render in the wrong palette.
 const disconnectTheme = initializeTheme();
@@ -130,6 +133,10 @@ window.onload = async function() {
     setupLogoutModal();
     setupMountSelectionModal();
     setupProfileMenu();
+
+    // Updater: hydrates version, listens for backend update-state events, and
+    // schedules background checks. Must follow setupNotifications (it toasts).
+    setupUpdates();
 
     // Setup UI components
     setupBreadcrumb();

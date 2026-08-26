@@ -149,3 +149,10 @@ func ReadActive() (Info, bool, error) {
 	}
 	return info, processRunning(info.PID), nil
 }
+
+// ProcessRunning reports whether a process with pid is still alive. The
+// updater's relaunch handshake uses it to wait for the instance that spawned
+// the new one to exit before contending for the lock.
+func ProcessRunning(pid int) bool {
+	return processRunning(pid)
+}

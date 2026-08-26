@@ -6,6 +6,10 @@ export function ActiveChannelID() {
   return window['go']['main']['App']['ActiveChannelID']();
 }
 
+export function AppVersion() {
+  return window['go']['main']['App']['AppVersion']();
+}
+
 export function ApproveJoinRequest(arg1, arg2) {
   return window['go']['main']['App']['ApproveJoinRequest'](arg1, arg2);
 }
@@ -14,12 +18,20 @@ export function CancelDownload() {
   return window['go']['main']['App']['CancelDownload']();
 }
 
+export function CancelUpdateDownload() {
+  return window['go']['main']['App']['CancelUpdateDownload']();
+}
+
 export function CancelUpload() {
   return window['go']['main']['App']['CancelUpload']();
 }
 
 export function ChangeEncryptionPassword(arg1, arg2, arg3) {
   return window['go']['main']['App']['ChangeEncryptionPassword'](arg1, arg2, arg3);
+}
+
+export function CheckForUpdate() {
+  return window['go']['main']['App']['CheckForUpdate']();
 }
 
 export function CheckLoginStatus() {
@@ -64,6 +76,10 @@ export function DeleteFolder(arg1) {
 
 export function DownloadFile(arg1, arg2) {
   return window['go']['main']['App']['DownloadFile'](arg1, arg2);
+}
+
+export function DownloadUpdate() {
+  return window['go']['main']['App']['DownloadUpdate']();
 }
 
 export function EncryptionStatus() {
@@ -114,6 +130,10 @@ export function GetStorageUsed() {
   return window['go']['main']['App']['GetStorageUsed']();
 }
 
+export function GetUpdateState() {
+  return window['go']['main']['App']['GetUpdateState']();
+}
+
 export function HideNativeSeekThumbnail(arg1) {
   return window['go']['main']['App']['HideNativeSeekThumbnail'](arg1);
 }
@@ -124,6 +144,10 @@ export function ImportPaths(arg1, arg2, arg3, arg4) {
 
 export function InitDrive() {
   return window['go']['main']['App']['InitDrive']();
+}
+
+export function InstallUpdateAndRestart() {
+  return window['go']['main']['App']['InstallUpdateAndRestart']();
 }
 
 export function JoinSharedDrive(arg1) {
@@ -212,6 +236,10 @@ export function OpenNativeMedia(arg1, arg2) {
 
 export function OpenStream(arg1) {
   return window['go']['main']['App']['OpenStream'](arg1);
+}
+
+export function OpenUpdatePage() {
+  return window['go']['main']['App']['OpenUpdatePage']();
 }
 
 export function PlanImport(arg1, arg2, arg3) {
