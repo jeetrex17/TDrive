@@ -5,7 +5,15 @@ import (
 	"fmt"
 )
 
-const ProtocolVersion = 1
+// ProtocolVersion gates every request frame. The CLI reuses an already
+// running daemon, so an upgrade can leave a new CLI talking to a daemon from
+// the previous install. Bump this whenever commands or response shapes
+// change, so that pairing fails with a clear version error instead of an
+// obscure unknown-command one.
+//
+// 2: personal-drive setup commands, and AuthLoginResponse carries the setup
+// state instead of an InitDrive string (v1.7.1).
+const ProtocolVersion = 2
 
 const (
 	CommandStatus             = "daemon.status"
