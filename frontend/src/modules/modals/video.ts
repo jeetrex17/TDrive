@@ -18,6 +18,7 @@ import {
 import { EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from "../../../wailsjs/runtime/runtime";
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
+import { setNativeVideoLayerActive } from "../video/native-video-layer";
 import { installModalA11y } from "../../ui/modals/modal-a11y";
 import VideoModal from "../../ui/video/VideoModal.svelte";
 import { mountSvelte, type SvelteMountHandle } from "../../ui/mount";
@@ -586,7 +587,9 @@ function setChromeVisible(visible: boolean) {
 function setNativeMode(visible: boolean, fallback = false) {
     modalEl?.classList.toggle("is-video-native", visible);
     modalEl?.classList.toggle("is-video-native-fallback", visible && fallback);
-    document.body.classList.toggle("native-video-active", visible && !fallback);
+    // Only the overlay layout renders mpv underneath the WebView; the fallback
+    // layout puts a native child window on top and needs the canvas left alone.
+    setNativeVideoLayerActive(document, visible && !fallback);
     syncFallbackNativeViewportInsets();
 }
 
