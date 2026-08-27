@@ -140,7 +140,9 @@
 <svelte:window onkeydown={onWindowKeydown} />
 <svelte:document onclickcapture={onDocumentClick} />
 
-{#if $authScreen}
+<!-- Appearance stays off the drive picker: someone recovering their files
+     is not choosing a theme, and the popover would compete with the list. -->
+{#if $authScreen && $authScreen !== 'drive'}
     <div class="auth-appearance-control" bind:this={appearanceRoot}>
         <button
             bind:this={appearanceTrigger}
