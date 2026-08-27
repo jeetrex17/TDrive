@@ -424,14 +424,6 @@ func (a *App) LoginPhoneNumber(phoneNumber string) error {
 	return svc.StartLogin(a.ctx, phoneNumber)
 }
 
-func (a *App) InitDrive() string {
-	svc, err := a.requireLifecycleService()
-	if err != nil {
-		return err.Error()
-	}
-	return svc.InitDrive(a.ctx)
-}
-
 func (a *App) GetFileList() []TDriveFile {
 	svc, err := a.requireReadService()
 	if err != nil {

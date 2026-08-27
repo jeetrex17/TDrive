@@ -174,6 +174,8 @@ tdrive login [phone]
 
 Log in to Telegram. If phone is omitted, the CLI prompts for it.
 The CLI will ask for the login code and optional 2FA password.
+If no personal drive is configured, it then lists channels you created and
+asks you to choose one, or explicitly create a new TDrive channel.
 `,
 	"logout": `
 tdrive logout [--soft|--full]

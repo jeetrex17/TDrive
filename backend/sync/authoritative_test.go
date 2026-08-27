@@ -3,6 +3,7 @@ package sync
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -137,4 +138,65 @@ func encryptionOp(cfg projection.EncryptionConfig) projection.Op {
 		KeyCheck:         append([]byte(nil), cfg.KeyCheck...),
 		ConfigVersion:    cfg.Version,
 	}
+}
+
+// Legacy channels hold caption-less uploads whose placement was published
+// later by backfill meta ops. A full scan over a projection that already
+// applied those meta ops must not re-adopt the upload at root: the meta op
+// is in replay_log and would be skipped, leaving the file at root.
+func TestEnsureAuthoritativeAdoptsCaptionlessMediaOnlyOnEmptyProjection(t *testing.T) {
+	seed := func(t *testing.T, tg *tgclient.Fake) (folderOp, metaOp projection.Op, folderID, metaID int64) {
+		t.Helper()
+		tg.SeedHistory(tgclient.HistoryMessage{MsgID: 1, HasMedia: true, MediaSize: 42, DocumentName: "photo.jpg", Date: 100})
+		folderOp = projection.Op{Type: projection.OpMkdir, Obj: "d:photos", Parent: projection.RootParent, Name: "Photos"}
+		folderID = sendOp(t, tg, folderOp)
+		metaOp = projection.Op{Type: projection.OpMeta, Obj: "f:1", Parent: "d:photos", Name: "photo.jpg"}
+		metaID = sendOp(t, tg, metaOp)
+		return folderOp, metaOp, folderID, metaID
+	}
+	assertPlaced := func(t *testing.T, db *sql.DB) {
+		t.Helper()
+		file, ok, err := projection.FileByID(db, testChan, 1)
+		if err != nil || !ok {
+			t.Fatalf("legacy file missing after scan: ok=%v err=%v", ok, err)
+		}
+		if file.ParentID != "d:photos" {
+			t.Fatalf("legacy file parent = %q, want d:photos", file.ParentID)
+		}
+		channel, err := projection.GetChannel(db, testChan)
+		if err != nil || !channel.InitialSyncDone {
+			t.Fatalf("channel = %#v, %v; want initial sync marker", channel, err)
+		}
+	}
+
+	t.Run("populated projection keeps placement", func(t *testing.T) {
+		db, tg, engine := newSyncEnv(t)
+		folderOp, metaOp, folderID, metaID := seed(t, tg)
+		for _, op := range []struct {
+			id int64
+			op projection.Op
+		}{{folderID, folderOp}, {metaID, metaOp}} {
+			if _, err := projection.ProjectFromOp(db, testChan, op.id, op.op, 7, projection.Format(op.op)); err != nil {
+				t.Fatalf("seed local projection: %v", err)
+			}
+		}
+		if _, err := db.Exec(`UPDATE channels SET last_synced_msg = ?, initial_sync_done = 0 WHERE channel_id = ?`, metaID, testChan); err != nil {
+			t.Fatalf("seed watermark: %v", err)
+		}
+
+		if err := engine.EnsureAuthoritative(context.Background(), testChan); err != nil {
+			t.Fatalf("EnsureAuthoritative() error = %v", err)
+		}
+		assertPlaced(t, db)
+	})
+
+	t.Run("empty projection adopts then places", func(t *testing.T) {
+		db, tg, engine := newSyncEnv(t)
+		seed(t, tg)
+
+		if err := engine.EnsureAuthoritative(context.Background(), testChan); err != nil {
+			t.Fatalf("EnsureAuthoritative() error = %v", err)
+		}
+		assertPlaced(t, db)
+	})
 }

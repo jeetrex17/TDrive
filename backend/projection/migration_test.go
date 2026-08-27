@@ -414,6 +414,41 @@ func TestMigrateAddsEncryptionHintColumn(t *testing.T) {
 	}
 }
 
+func TestMigratePersonalChannelRegistersChannelAtCurrentSchemaVersion(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const originalID int64 = 111
+	const recoveredID int64 = 8200
+	if err := MigratePersonalChannel(db, originalID); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+	if err := MigratePersonalChannel(db, recoveredID); err != nil {
+		t.Fatalf("current-version migrate: %v", err)
+	}
+
+	recovered, err := GetChannel(db, recoveredID)
+	if err != nil {
+		t.Fatalf("recovered channel missing: %v", err)
+	}
+	if recovered.Kind != KindPersonal {
+		t.Fatalf("recovered kind = %q, want %q", recovered.Kind, KindPersonal)
+	}
+	if _, err := GetChannel(db, originalID); err != nil {
+		t.Fatalf("original channel changed: %v", err)
+	}
+	v, err := currentVersion(db)
+	if err != nil {
+		t.Fatalf("currentVersion: %v", err)
+	}
+	if v != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", v, currentSchemaVersion)
+	}
+}
+
 func topLevelColumnSet(db *sql.DB, table string) (map[string]bool, error) {
 	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {

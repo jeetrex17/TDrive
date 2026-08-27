@@ -131,6 +131,17 @@ type UserMessageRef struct {
 	MsgID  int64
 }
 
+// OwnedBroadcastChannel is the minimum metadata needed to let a user recover
+// a personal drive. AccessHash is intentionally kept behind the backend API;
+// frontend and daemon DTOs must expose only the stable channel ID.
+type OwnedBroadcastChannel struct {
+	ID          int64
+	AccessHash  int64
+	Title       string
+	CreatedAt   int64
+	HasActivity bool
+}
+
 // Client is the surface sync, backfill, and local-action paths use to talk
 // to Telegram. Both the real (gotd-backed) and fake test implementations
 // implement this.
@@ -189,6 +200,8 @@ type Client interface {
 	// vanished from Telegram directly.
 	MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error)
 
+	ListOwnedBroadcastChannels(ctx context.Context) ([]OwnedBroadcastChannel, error)
+	CreateBroadcastChannel(ctx context.Context, title, about string) (OwnedBroadcastChannel, error)
 	CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error)
 	ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error)
 	CheckInvite(ctx context.Context, hash string) (InviteInfo, error)

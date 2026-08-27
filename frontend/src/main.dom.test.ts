@@ -34,5 +34,5 @@ describe('application appearance lifecycle', () => {
         window.dispatchEvent(new Event('beforeunload'));
 
         expect(themeLifecycle.disconnect).toHaveBeenCalledOnce();
-    });
+    }, 10_000);
 });

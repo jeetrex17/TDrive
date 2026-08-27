@@ -56,6 +56,30 @@ func (c *Client) Login(phone string, onEvent EventHandler) (AuthLoginResponse, e
 	return out, nil
 }
 
+func (c *Client) PreparePersonalDrive() (PersonalDriveSetup, error) {
+	var out PersonalDriveSetup
+	if err := c.call(CommandPersonalDrivePrepare, nil, &out); err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) SelectPersonalDrive(channelID string) (PersonalDriveSetup, error) {
+	var out PersonalDriveSetup
+	if err := c.call(CommandPersonalDriveSelect, PersonalDriveSelectRequest{ChannelID: channelID}, &out); err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) CreatePersonalDrive() (PersonalDriveSetup, error) {
+	var out PersonalDriveSetup
+	if err := c.call(CommandPersonalDriveCreate, nil, &out); err != nil {
+		return PersonalDriveSetup{}, err
+	}
+	return out, nil
+}
+
 func (c *Client) SubmitLoginCode(code string) error {
 	return c.call(CommandAuthSubmitCode, AuthSubmitRequest{Value: code}, nil)
 }
