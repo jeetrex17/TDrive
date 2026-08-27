@@ -45,3 +45,10 @@ tdrive_parse_mpv_metadata() {
   MPV_VERSION="$(printf '%s\n' "$versions" | sed -n '1p')"
   FFMPEG_VERSION="$(printf '%s\n' "$ffmpeg_versions" | sed -n '1p')"
 }
+
+tdrive_safe_mpv_package_source() {
+  local source="$1"
+  source="$(printf '%s' "$source" | tr '\r\n' '  ')"
+  source="${source%%[?#]*}"
+  printf '%s\n' "$source" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+}

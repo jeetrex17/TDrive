@@ -480,8 +480,17 @@ static int tdrive_player_snapshot(void *ptr, tdrive_player_state *state) {
     if (ptr == nil || state == NULL) {
         return 0;
     }
+    __block int result = 0;
     TDriveMPVView *view = (TDriveMPVView *)ptr;
-    return [view snapshot:state] ? 1 : 0;
+    void (^snapshot)(void) = ^{
+        result = [view snapshot:state] ? 1 : 0;
+    };
+    if ([NSThread isMainThread]) {
+        snapshot();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), snapshot);
+    }
+    return result;
 }
 
 static void tdrive_player_destroy_view(void *ptr) {
@@ -526,6 +535,9 @@ type Player struct {
 }
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
+	if !darwinNativePlayerEnabled() {
+		return nil, ErrUnsupported
+	}
 	if !rect.Valid() {
 		return nil, fmt.Errorf("native player: invalid view rect")
 	}

@@ -20,6 +20,9 @@ const preflightTimeout = 12 * time.Second
 // timeouts and ordinary decoder exits are not treated as unsafe because Telegram
 // range latency can make a healthy file look like a failed probe.
 func PreflightDecode(ctx context.Context, url string) error {
+	if !darwinNativePlayerEnabled() {
+		return nil
+	}
 	if os.Getenv("TDRIVE_SKIP_MPV_PREFLIGHT") == "1" {
 		return nil
 	}
@@ -57,6 +60,9 @@ func findPreflightMPV() (string, error) {
 	}
 	if bundled, err := bundledMPVPath(); err == nil {
 		return bundled, nil
+	}
+	if !systemMPVLookupEnabled(os.Getenv(systemMPVLookupFlag)) {
+		return "", fmt.Errorf("native player: bundled mpv executable not found")
 	}
 	return exec.LookPath("mpv")
 }

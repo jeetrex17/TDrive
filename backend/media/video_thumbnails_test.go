@@ -3,14 +3,107 @@ package media
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"TDrive/backend/thumbnail"
 )
+
+func TestMPVThumbnailGeneratorOneShotDoesNotExposeSourceURLInArgsOrErrors(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args.txt")
+	stdinPath := filepath.Join(dir, "stdin.txt")
+	sourceURL := "http://127.0.0.1:49152/media/thumb-source/session-token-secret"
+
+	origCommandContext := mpvThumbnailCommandContext
+	mpvThumbnailCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		helperArgs := append([]string{"-test.run=TestMPVThumbnailGeneratorHelperProcess", "--"}, args...)
+		cmd := exec.CommandContext(ctx, os.Args[0], helperArgs...)
+		cmd.Env = append(os.Environ(),
+			"TDRIVE_TEST_MPV_THUMB_HELPER=1",
+			"TDRIVE_TEST_MPV_ARGS_PATH="+argsPath,
+			"TDRIVE_TEST_MPV_STDIN_PATH="+stdinPath,
+		)
+		return cmd
+	}
+	defer func() { mpvThumbnailCommandContext = origCommandContext }()
+
+	gen := &MPVThumbnailGenerator{path: "fake-mpv"}
+	err := gen.GenerateVideoThumbnail(context.Background(), sourceURL, filepath.Join(dir, "thumb.jpg"), 12)
+	if err == nil {
+		t.Fatal("GenerateVideoThumbnail unexpectedly succeeded")
+	}
+	if strings.Contains(err.Error(), sourceURL) || strings.Contains(err.Error(), "session-token-secret") {
+		t.Fatalf("thumbnail error leaked source URL/token: %v", err)
+	}
+	args, readErr := os.ReadFile(argsPath)
+	if readErr != nil {
+		t.Fatalf("read helper args: %v", readErr)
+	}
+	if strings.Contains(string(args), sourceURL) || strings.Contains(string(args), "session-token-secret") {
+		t.Fatalf("thumbnail command argv leaked source URL/token: %q", string(args))
+	}
+	stdin, readErr := os.ReadFile(stdinPath)
+	if readErr != nil {
+		t.Fatalf("read helper stdin: %v", readErr)
+	}
+	if !strings.Contains(string(stdin), sourceURL) {
+		t.Fatalf("thumbnail source URL was not delivered over stdin: %q", string(stdin))
+	}
+}
+
+func TestMPVThumbnailGeneratorHelperProcess(t *testing.T) {
+	if os.Getenv("TDRIVE_TEST_MPV_THUMB_HELPER") != "1" {
+		return
+	}
+	argsPath := os.Getenv("TDRIVE_TEST_MPV_ARGS_PATH")
+	stdinPath := os.Getenv("TDRIVE_TEST_MPV_STDIN_PATH")
+	if argsPath == "" || stdinPath == "" {
+		fmt.Fprintln(os.Stderr, "missing helper paths")
+		os.Exit(2)
+	}
+	stdin, _ := io.ReadAll(os.Stdin)
+	_ = os.WriteFile(argsPath, []byte(strings.Join(os.Args, "\x00")), 0o600)
+	_ = os.WriteFile(stdinPath, stdin, 0o600)
+	fmt.Fprintf(os.Stderr, "mpv rejected playlist %s", string(stdin))
+	os.Exit(42)
+}
+
+func TestFindMPVBinaryRequiresSystemLookupOptIn(t *testing.T) {
+	dir := t.TempDir()
+	exeName := "mpv"
+	if runtime.GOOS == "windows" {
+		exeName = "mpv.exe"
+	}
+	fakeMPV := filepath.Join(dir, exeName)
+	if err := os.WriteFile(fakeMPV, []byte("fake mpv"), 0o755); err != nil {
+		t.Fatalf("write fake mpv: %v", err)
+	}
+	t.Setenv("TDRIVE_MPV_BIN", "")
+	t.Setenv("TDRIVE_ALLOW_SYSTEM_MPV", "")
+	t.Setenv("PATH", dir)
+
+	if path, err := findMPVBinary(); err == nil && path == fakeMPV {
+		t.Fatalf("findMPVBinary used system PATH without explicit opt-in: %s", path)
+	}
+
+	t.Setenv("TDRIVE_ALLOW_SYSTEM_MPV", "1")
+	path, err := findMPVBinary()
+	if err != nil {
+		t.Fatalf("findMPVBinary with opt-in: %v", err)
+	}
+	if path != fakeMPV {
+		t.Fatalf("findMPVBinary path = %q, want %q", path, fakeMPV)
+	}
+}
 
 func TestVideoThumbnailerPrioritizesLatestRequest(t *testing.T) {
 	gen := &recordingVideoThumbGenerator{

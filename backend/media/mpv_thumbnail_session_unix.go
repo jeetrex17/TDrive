@@ -198,7 +198,7 @@ func (s *mpvThumbnailSession) command(ctx context.Context, command []any) error 
 			continue
 		}
 		if msg.Error != "" && msg.Error != "success" {
-			return fmt.Errorf("mpv command %v failed: %s", command, msg.Error)
+			return fmt.Errorf("mpv command %v failed: %s", redactMPVThumbnailCommand(command), redactMPVThumbnailError(msg.Error, command))
 		}
 		return nil
 	}

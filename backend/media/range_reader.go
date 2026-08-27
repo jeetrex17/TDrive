@@ -96,7 +96,8 @@ type RangeReader struct {
 	cache               *blockCache
 	meter               *throughputMeter
 	sem                 chan struct{}
-	group               singleflight.Group
+	foregroundGroup     singleflight.Group
+	backgroundGroup     singleflight.Group
 	prefetchMu          sync.Mutex
 	prefetching         map[string]struct{}
 	prefetchBlocks      int
@@ -294,8 +295,15 @@ func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, block
 	if data, ok := r.cache.get(key); ok {
 		return data, nil
 	}
-
-	ch := r.group.DoChan(key, func() (any, error) {
+	group := &r.foregroundGroup
+	if background {
+		group = &r.backgroundGroup
+	}
+	// Foreground and background reads intentionally do not coalesce with each
+	// other. A speculative thumbnail/prefetch fetch may duplicate one block of
+	// network work, but it can never make live playback wait behind background
+	// getFile slots. Both groups share the cache, so completed work is still reused.
+	ch := group.DoChan(key, func() (any, error) {
 		if data, ok := r.cache.get(key); ok {
 			return data, nil
 		}

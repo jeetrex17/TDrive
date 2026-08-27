@@ -258,6 +258,54 @@ func TestRangeReaderCallerCancellationDoesNotPoisonCoalescedWaiter(t *testing.T)
 	}
 }
 
+func TestRangeReaderForegroundDoesNotJoinBlockedBackgroundFlight(t *testing.T) {
+	data := testBytes(tgclient.RangeReadMaxBytes)
+	fake := &priorityRangeFake{
+		data:      data,
+		bgEntered: make(chan struct{}),
+		bgRelease: make(chan struct{}),
+	}
+	reader := NewRangeReader(RangeReaderConfig{
+		Client:         fake,
+		MaxConcurrency: 2,
+	})
+	defer reader.Close()
+	ref := fake.ref()
+
+	bgErr := make(chan error, 1)
+	go func() {
+		_, err := reader.block(context.Background(), ref, 0, true)
+		bgErr <- err
+	}()
+
+	select {
+	case <-fake.bgEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background block fetch")
+	}
+
+	block, err := reader.block(context.Background(), ref, 0, false)
+	if err != nil {
+		t.Fatalf("foreground block: %v", err)
+	}
+	if !bytes.Equal(block, data) {
+		t.Fatal("foreground block bytes mismatch")
+	}
+	if calls := fake.calls(); len(calls) != 2 {
+		t.Fatalf("calls = %+v, want bounded duplicate fetch instead of joining blocked background flight", calls)
+	}
+
+	close(fake.bgRelease)
+	select {
+	case err := <-bgErr:
+		if err != nil {
+			t.Fatalf("background block: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for background block")
+	}
+}
+
 func TestRangeReaderRetriesFloodWait(t *testing.T) {
 	data := testBytes(1024)
 	fake := newStrictRangeFake(data)
@@ -446,6 +494,59 @@ func (f *strictRangeFake) ReadDocumentRange(ctx context.Context, ref tgclient.Do
 }
 
 func (f *strictRangeFake) calls() []rangeCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]rangeCall(nil), f.callLog...)
+}
+
+type priorityRangeFake struct {
+	mu        sync.Mutex
+	data      []byte
+	callLog   []rangeCall
+	bgEntered chan struct{}
+	bgRelease chan struct{}
+}
+
+func (f *priorityRangeFake) ref() tgclient.DocumentRef {
+	return tgclient.DocumentRef{
+		Peer:  tgclient.InputPeer{ChannelID: 42},
+		MsgID: 99,
+		Size:  int64(len(f.data)),
+		Name:  "priority-video.bin",
+	}
+}
+
+func (f *priorityRangeFake) ResolveDocument(context.Context, tgclient.InputPeer, int64) (tgclient.DocumentRef, error) {
+	return f.ref(), nil
+}
+
+func (f *priorityRangeFake) ReadDocumentRange(ctx context.Context, ref tgclient.DocumentRef, offset int64, dst []byte) (int, error) {
+	if err := validateNormalizedRange(offset, len(dst)); err != nil {
+		return 0, err
+	}
+	f.mu.Lock()
+	f.callLog = append(f.callLog, rangeCall{offset: offset, length: len(dst)})
+	callIndex := len(f.callLog)
+	f.mu.Unlock()
+
+	if callIndex == 1 {
+		close(f.bgEntered)
+		select {
+		case <-f.bgRelease:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+	if ref.MsgID != 99 {
+		return 0, tgclient.ErrMessageNotFound
+	}
+	if offset < 0 || offset+int64(len(dst)) > int64(len(f.data)) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return copy(dst, f.data[offset:offset+int64(len(dst))]), nil
+}
+
+func (f *priorityRangeFake) calls() []rangeCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]rangeCall(nil), f.callLog...)

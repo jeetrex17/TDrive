@@ -241,6 +241,25 @@ go build -o tdrive ./cmd/tdrive  # build the CLI
 
 You’ll need your own Telegram API credentials (see above) the first time you run it.
 
+### Native video preview status
+
+The all-format mpv preview path is experimental while its runtime provenance,
+signing, and physical playback matrix are being completed. It is intentionally
+opt-in on every OS; the regular webview video path remains the default.
+
+| Target | Native presentation | Development opt-in |
+| --- | --- | --- |
+| macOS 11+ arm64 | Embedded libmpv with a crash-only sidecar preflight | `TDRIVE_EXPERIMENTAL_MACOS_NATIVE_PLAYER=1` |
+| Windows amd64 | Isolated mpv child process/window | `TDRIVE_EXPERIMENTAL_WINDOWS_NATIVE_PLAYER=1` |
+| Linux amd64/X11 | Isolated mpv child process embedded through X11 | `TDRIVE_EXPERIMENTAL_LINUX_NATIVE_PLAYER=1` |
+| Linux amd64/Wayland | Isolated standalone mpv window | `TDRIVE_EXPERIMENTAL_LINUX_NATIVE_PLAYER=1` |
+
+Development builds first use `TDRIVE_MPV_BIN`, then a bundled runtime. Falling
+back to an arbitrary `mpv` from `PATH` requires the additional explicit opt-in
+`TDRIVE_ALLOW_SYSTEM_MPV=1`; release packages must use their checksum-pinned
+bundled runtime. macOS Intel, Linux ARM, signing/notarization, and real-device
+codec/container/HDR/subtitle coverage are not yet release-qualified.
+
 ## Where data is stored (local files)
 
 Persistent local files are stored inside your OS “user config” folder under a `TDrive` directory:

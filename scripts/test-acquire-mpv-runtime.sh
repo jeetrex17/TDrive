@@ -24,6 +24,17 @@ make_linux_runtime_archive() {
   tar -czf "$archive" -C "$root" .
 }
 
+make_windows_runtime_archive() {
+  local archive="$1"
+  local root="$TMP_ROOT/windows-runtime"
+  mkdir -p "$root"
+  printf 'MZ fixture mpv\n' > "$root/mpv.exe"
+  printf 'MZ fixture dll\n' > "$root/libmpv-2.dll"
+  printf 'source provenance\n' > "$root/SOURCE.txt"
+  printf 'third party notices\n' > "$root/THIRD_PARTY_NOTICES.txt"
+  tar -czf "$archive" -C "$root" .
+}
+
 pass_count=0
 
 expect_failure() {
@@ -117,5 +128,22 @@ bad_pc_archive="$TMP_ROOT/bad-pc-runtime.tar.gz"
 tar -czf "$bad_pc_archive" -C "$bad_pc_root" .
 expect_failure nonrelocatable-pkgconfig \
   bash "$SCRIPT_DIR/acquire-mpv-runtime.sh" darwin "file://$bad_pc_archive" "$(sha256_file "$bad_pc_archive")" "$TMP_ROOT/bad-pc-dest"
+
+windows_archive="$TMP_ROOT/windows-runtime.tar.gz"
+make_windows_runtime_archive "$windows_archive"
+windows_sha="$(sha256_file "$windows_archive")"
+bash "$SCRIPT_DIR/acquire-mpv-runtime.sh" windows "file://$windows_archive" "$windows_sha" "$TMP_ROOT/extracted-windows" >/dev/null
+[ -s "$TMP_ROOT/extracted-windows/mpv.exe" ] || { echo "extracted Windows mpv.exe is missing" >&2; exit 1; }
+[ -s "$TMP_ROOT/extracted-windows/SOURCE.txt" ] || { echo "extracted Windows SOURCE.txt is missing" >&2; exit 1; }
+pass_count=$((pass_count + 1))
+
+missing_windows_mpv_root="$TMP_ROOT/missing-windows-mpv-runtime"
+mkdir -p "$missing_windows_mpv_root"
+printf 'source provenance\n' > "$missing_windows_mpv_root/SOURCE.txt"
+printf 'third party notices\n' > "$missing_windows_mpv_root/THIRD_PARTY_NOTICES.txt"
+missing_windows_mpv_archive="$TMP_ROOT/missing-windows-mpv-runtime.tar.gz"
+tar -czf "$missing_windows_mpv_archive" -C "$missing_windows_mpv_root" .
+expect_failure missing-windows-mpv \
+  bash "$SCRIPT_DIR/acquire-mpv-runtime.sh" windows "file://$missing_windows_mpv_archive" "$(sha256_file "$missing_windows_mpv_archive")" "$TMP_ROOT/missing-windows-mpv-dest"
 
 echo "mpv runtime acquisition tests passed: $pass_count"

@@ -25,6 +25,14 @@ function Assert-Reject($Name, $InputText) {
     throw "FAIL ${Name}: parser accepted invalid output"
 }
 
+function Assert-SafeSource($Name, $InputText, $Expected) {
+    $actual = Get-TDriveSafeMpvPackageSource -Source $InputText
+    if ($actual -ne $Expected) {
+        throw "FAIL ${Name}: safe source=$actual want $Expected"
+    }
+    $script:passed++
+}
+
 Assert-Parse "plain-mpv-version" "mpv 0.41.0 Copyright`nFFmpeg version: 7.1.1`n" "0.41.0" "7.1.1"
 Assert-Parse "v-prefixed-mpv-version" "mpv v0.41.0 Copyright`nFFmpeg version: 7.1.1`n" "0.41.0" "7.1.1"
 Assert-Parse "crlf-and-leading-whitespace" "  mpv v0.41.0 Copyright`r`n  FFmpeg version: 7.1.1`r`n" "0.41.0" "7.1.1"
@@ -33,5 +41,8 @@ Assert-Reject "missing-ffmpeg" "mpv 0.41.0 Copyright`nlibavcodec 61.19.101`n"
 Assert-Reject "malformed-mpv" "mpv next Copyright`nFFmpeg version: 7.1.1`n"
 Assert-Reject "conflicting-mpv" "mpv 0.40.0 Copyright`nmpv v0.41.0 Copyright`nFFmpeg version: 7.1.1`n"
 Assert-Reject "conflicting-ffmpeg" "mpv 0.41.0 Copyright`nFFmpeg version: 7.0`nFFmpeg version: 7.1.1`n"
+Assert-SafeSource "strips-query" "https://downloads.example.com/mpv/windows.tar.gz?X-Amz-Signature=secret&Expires=1" "https://downloads.example.com/mpv/windows.tar.gz"
+Assert-SafeSource "strips-fragment" "https://downloads.example.com/mpv/darwin.tar.gz#token" "https://downloads.example.com/mpv/darwin.tar.gz"
+Assert-SafeSource "normalizes-newlines-before-stripping" " https://downloads.example.com/mpv/linux.tar.gz?sig=secret`nignored " "https://downloads.example.com/mpv/linux.tar.gz"
 
 Write-Host "mpv metadata PowerShell parser tests passed: $passed"

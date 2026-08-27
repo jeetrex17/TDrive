@@ -17,6 +17,12 @@ export default defineConfig({
         coverage: {
             provider: 'v8',
             include: [
+                // Media/native boundaries are security- and lifecycle-sensitive.
+                // Keep their pure contracts in the coverage gate; the DOM-heavy
+                // modal coordinator is exercised by video.dom.test.ts.
+                'src/api.ts',
+                'src/modules/video/**',
+                'src/ui/video/**',
                 'src/ui/theme/**',
                 'src/ui/auth/PersonalDriveSetup.svelte',
                 'src/ui/auth/personal-drive-store.ts',

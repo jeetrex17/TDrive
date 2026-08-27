@@ -22,6 +22,53 @@ function Get-ExpectedMpvVersion {
     return $version
 }
 
+function Get-RequiredPackageSource {
+    if ([string]::IsNullOrWhiteSpace($env:TDRIVE_MPV_PACKAGE_SOURCE)) {
+        Fail "TDRIVE_MPV_PACKAGE_SOURCE is required"
+    }
+    return (Get-TDriveSafeMpvPackageSource -Source $env:TDRIVE_MPV_PACKAGE_SOURCE)
+}
+
+function Get-RequiredArchiveSha256 {
+    $value = if ($env:TDRIVE_MPV_ARCHIVE_SHA256) { $env:TDRIVE_MPV_ARCHIVE_SHA256.Trim().ToLowerInvariant() } else { "" }
+    if ($value -notmatch '^[0-9a-f]{64}$') {
+        Fail "TDRIVE_MPV_ARCHIVE_SHA256 must be a SHA-256 value"
+    }
+    return $value
+}
+
+function Get-WindowsRuntimeDirectory {
+    if (-not [string]::IsNullOrWhiteSpace($env:TDRIVE_MPV_RUNTIME_DIR)) {
+        if (-not (Test-Path -LiteralPath $env:TDRIVE_MPV_RUNTIME_DIR -PathType Container)) {
+            Fail "runtime directory not found: $env:TDRIVE_MPV_RUNTIME_DIR"
+        }
+        $runtimeRoot = (Resolve-Path -LiteralPath $env:TDRIVE_MPV_RUNTIME_DIR).Path
+        $mpv = Join-Path $runtimeRoot "mpv.exe"
+        if (-not (Test-Path -LiteralPath $mpv -PathType Leaf)) {
+            Fail "runtime directory must contain mpv.exe at its root"
+        }
+        foreach ($required in @("SOURCE.txt", "THIRD_PARTY_NOTICES.txt")) {
+            $path = Join-Path $runtimeRoot $required
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or ((Get-Item -LiteralPath $path).Length -le 0)) {
+                Fail "runtime archive must include a non-empty $required"
+            }
+        }
+        $firstReparsePoint = Get-ChildItem -LiteralPath $runtimeRoot -Recurse -Force |
+            Where-Object { ($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } |
+            Select-Object -First 1
+        if ($null -ne $firstReparsePoint) {
+            Fail "runtime directory must not contain symbolic links or reparse points: $($firstReparsePoint.FullName)"
+        }
+        return $runtimeRoot
+    }
+
+    if ($env:TDRIVE_MPV_ALLOW_UNPINNED_CI_FIXTURE -eq "1") {
+        return $null
+    }
+
+    Fail "TDRIVE_MPV_RUNTIME_DIR is required; release packaging must use a checksum-pinned runtime archive"
+}
+
 function Get-PEArchitecture([string]$Path) {
     $stream = [System.IO.File]::OpenRead($Path)
     $reader = [System.IO.BinaryReader]::new($stream)
@@ -130,7 +177,17 @@ $appPath = (Resolve-Path -LiteralPath $AppExe).Path
 $appDir = Split-Path -Parent $appPath
 $mediaDir = Join-Path $appDir "media"
 $expectedMpvVersion = Get-ExpectedMpvVersion
-$mpvPath = Find-MpvExecutable
+$packageSource = Get-RequiredPackageSource
+$archiveSha256 = Get-RequiredArchiveSha256
+$runtimeRoot = Get-WindowsRuntimeDirectory
+$ciFixture = $false
+if ($null -eq $runtimeRoot) {
+    $ciFixture = $true
+    $mpvPath = Find-MpvExecutable
+}
+else {
+    $mpvPath = Join-Path $runtimeRoot "mpv.exe"
+}
 $mpvDir = Split-Path -Parent $mpvPath
 $appArchitecture = Get-PEArchitecture $appPath
 $mpvArchitecture = Get-PEArchitecture $mpvPath
@@ -157,25 +214,27 @@ $bundledMPV = Join-Path $mediaDir "mpv.exe"
 $metadata = Get-MpvMetadata $bundledMPV $expectedMpvVersion
 Invoke-MpvQualification $bundledMPV $mediaDir
 
-$packageSource = if ($env:TDRIVE_MPV_PACKAGE_SOURCE) { $env:TDRIVE_MPV_PACKAGE_SOURCE } else { "local-unverified" }
-$packageSource = ($packageSource -replace "`r|`n", " ").Trim()
+$releaseRuntime = -not $ciFixture -and ($archiveSha256 -ne "0000000000000000000000000000000000000000000000000000000000000000") -and ($packageSource -notlike "*not-release-runtime*")
 $noticePath = Join-Path $mediaDir "THIRD_PARTY_NOTICES.txt"
+$sourcePath = Join-Path $mediaDir "SOURCE.txt"
 $manifestPath = Join-Path $mediaDir "media-runtime.manifest"
 $checksumsPath = Join-Path $mediaDir "media-runtime.sha256"
 
-@(
-    "TDrive media runtime notice",
-    "",
-    "Bundled mpv version: $($metadata.Mpv)",
-    "Bundled FFmpeg version: $($metadata.FFmpeg)",
-    "mpv is GPL-2.0-or-later by default and can be built LGPL-2.1-or-later with GPL features disabled.",
-    "FFmpeg is LGPL-2.1-or-later by default; optional components can make a build GPL.",
-    "This notice does not determine the exact build license or replace its redistribution obligations.",
-    "Review the pinned package source and provide corresponding sources/notices before public distribution.",
-    "",
-    "mpv source and license: https://github.com/mpv-player/mpv",
-    "FFmpeg source and license: https://ffmpeg.org/"
-) | Set-Content -LiteralPath $noticePath -Encoding utf8
+if ($ciFixture) {
+    @(
+        "CI-only Windows media runtime fixture.",
+        "This package was assembled from the runner's installed mpv package and is not an approved release runtime.",
+        "Release archives must provide exact source/build provenance."
+    ) | Set-Content -LiteralPath $sourcePath -Encoding utf8
+    @(
+        "CI-only media packaging contract fixture.",
+        "Release archives must provide complete third-party notices."
+    ) | Set-Content -LiteralPath $noticePath -Encoding utf8
+}
+else {
+    Copy-Item -LiteralPath (Join-Path $runtimeRoot "SOURCE.txt") -Destination $sourcePath -Force
+    Copy-Item -LiteralPath (Join-Path $runtimeRoot "THIRD_PARTY_NOTICES.txt") -Destination $noticePath -Force
+}
 
 @(
     "schema=1",
@@ -184,7 +243,11 @@ $checksumsPath = Join-Path $mediaDir "media-runtime.sha256"
     "mpv_version=$($metadata.Mpv)",
     "ffmpeg_version=$($metadata.FFmpeg)",
     "package_source=$packageSource",
-    "qualification=lavfi-testsrc-64x64-2frames",
+    "source_archive_sha256=$archiveSha256",
+    "release_runtime=$($releaseRuntime.ToString().ToLowerInvariant())",
+    "ci_fixture=$($ciFixture.ToString().ToLowerInvariant())",
+    "qualification=headless-lavfi-testsrc-64x64-2frames",
+    "license_metadata=SOURCE.txt,THIRD_PARTY_NOTICES.txt",
     "license_review_required=true"
 ) | Set-Content -LiteralPath $manifestPath -Encoding utf8
 
@@ -196,5 +259,5 @@ Get-ChildItem -LiteralPath $mediaDir -File |
         "$hash  $($_.Name)"
     } | Set-Content -LiteralPath $checksumsPath -Encoding ascii
 
-Write-Host "package-mpv-windows: qualified mpv $($metadata.Mpv) with FFmpeg $($metadata.FFmpeg)"
+Write-Host "package-mpv-windows: validated headless mpv decode for mpv $($metadata.Mpv) with FFmpeg $($metadata.FFmpeg)"
 Write-Host "package-mpv-windows: bundled mpv runtime into $mediaDir"

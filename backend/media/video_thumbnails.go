@@ -32,6 +32,7 @@ const (
 	videoThumbDirMode          = 0o700
 	videoThumbFileMode         = 0o600
 	videoThumbMime             = "image/jpeg"
+	systemMPVLookupFlag        = "TDRIVE_ALLOW_SYSTEM_MPV"
 
 	// Playback-buffer watermarks (seconds ahead of the playhead) govern how much
 	// the background thumbnail builder may steal from the shared pipe. Foreground
@@ -878,9 +879,49 @@ func resetTimer(timer *time.Timer, d time.Duration) {
 	timer.Reset(d)
 }
 
+func redactMediaURLText(text string, sensitiveValues ...string) string {
+	for _, value := range sensitiveValues {
+		if value == "" {
+			continue
+		}
+		text = strings.ReplaceAll(text, value, "<redacted-media-url>")
+	}
+	return text
+}
+
+func redactMPVThumbnailCommand(command []any) []any {
+	if len(command) == 0 {
+		return nil
+	}
+	redacted := append([]any(nil), command...)
+	for i, arg := range redacted {
+		value, ok := arg.(string)
+		if !ok {
+			continue
+		}
+		if strings.Contains(value, "/media/") || strings.Contains(value, "\\media\\") {
+			redacted[i] = "<redacted-media-url>"
+		}
+	}
+	return redacted
+}
+
+func redactMPVThumbnailError(text string, command []any) string {
+	for _, arg := range command {
+		value, ok := arg.(string)
+		if !ok {
+			continue
+		}
+		text = redactMediaURLText(text, value)
+	}
+	return text
+}
+
 type MPVThumbnailGenerator struct {
 	path string
 }
+
+var mpvThumbnailCommandContext = exec.CommandContext
 
 func NewMPVThumbnailGenerator() *MPVThumbnailGenerator {
 	path, _ := findMPVBinary()
@@ -904,7 +945,7 @@ func (g *MPVThumbnailGenerator) GenerateVideoThumbnail(ctx context.Context, sour
 		beforeSet[path] = struct{}{}
 	}
 
-	cmd := exec.CommandContext(ctx, g.path,
+	cmd := mpvThumbnailCommandContext(ctx, g.path,
 		"--no-config",
 		"--really-quiet",
 		"--terminal=no",
@@ -922,15 +963,15 @@ func (g *MPVThumbnailGenerator) GenerateVideoThumbnail(ctx context.Context, sour
 		"--vf=scale=192:-2",
 		"--demuxer-readahead-secs=0.5",
 		"--demuxer-max-bytes=4194304",
-		"--",
-		sourceURL,
+		"--playlist=-",
 	)
+	cmd.Stdin = strings.NewReader(sourceURL + "\n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("media: mpv thumbnail: %w: %s", err, string(output))
+		return fmt.Errorf("media: mpv thumbnail: %w: %s", err, redactMediaURLText(string(output), sourceURL))
 	}
 
 	after, err := filepath.Glob(filepath.Join(dir, "*.jpg"))
@@ -975,7 +1016,14 @@ func findMPVBinary() (string, error) {
 	if bundled, err := bundledMPVBinaryPath(); err == nil {
 		return bundled, nil
 	}
+	if !systemMPVLookupEnabled(os.Getenv(systemMPVLookupFlag)) {
+		return "", fmt.Errorf("media: bundled mpv executable not found")
+	}
 	return exec.LookPath("mpv")
+}
+
+func systemMPVLookupEnabled(value string) bool {
+	return value == "1"
 }
 
 func bundledMPVBinaryPath() (string, error) {

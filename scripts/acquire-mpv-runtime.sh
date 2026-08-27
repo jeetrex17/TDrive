@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: acquire-mpv-runtime.sh <linux|darwin> <archive-url> <archive-sha256> <destination-dir>" >&2
+  echo "usage: acquire-mpv-runtime.sh <linux|darwin|windows> <archive-url> <archive-sha256> <destination-dir>" >&2
   exit 2
 }
 
@@ -43,11 +43,14 @@ esac
 [ "${#EXPECTED_SHA256}" -eq 64 ] || die "$PLATFORM runtime SHA-256 must contain exactly 64 hexadecimal characters"
 
 case "$PLATFORM" in
-  linux|darwin) ;;
+  linux|darwin|windows) ;;
   *) usage ;;
 esac
 
 TMP_PARENT="${RUNNER_TEMP:-/tmp}"
+if command -v cygpath >/dev/null 2>&1; then
+  TMP_PARENT="$(cygpath -u "$TMP_PARENT" 2>/dev/null || printf '%s' "$TMP_PARENT")"
+fi
 [ -d "$TMP_PARENT" ] || die "temporary directory does not exist: $TMP_PARENT"
 ARCHIVE_PATH="$(mktemp "$TMP_PARENT/tdrive-$PLATFORM-mpv-runtime.XXXXXX.tar.gz")"
 STAGING_ROOT="$(mktemp -d "$RUNTIME_PARENT_REAL/.tdrive-$PLATFORM-mpv-runtime.XXXXXX")"
@@ -103,6 +106,9 @@ case "$PLATFORM" in
       die 'macOS runtime lib/pkgconfig/mpv.pc must use prefix=${pcfiledir}/../..'
     fi
     chmod 755 "$STAGING_ROOT/bin/mpv"
+    ;;
+  windows)
+    [ -s "$STAGING_ROOT/mpv.exe" ] || die "Windows runtime archive must contain root file: mpv.exe"
     ;;
 esac
 

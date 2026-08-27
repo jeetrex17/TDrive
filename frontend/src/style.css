@@ -3144,7 +3144,22 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     padding: 12px 26px 14px;
 }
 
-.video-overlay.is-video-native-fallback .video-scrubber-tooltip {
+.video-overlay.is-video-native-fallback.has-native-seek-overlay .video-scrubber-tooltip {
+    display: none;
+}
+
+.video-overlay.is-video-native-fallback:not(.has-native-seek-overlay) .video-scrubber-tooltip {
+    top: 50%;
+    bottom: auto;
+    display: grid;
+    width: auto;
+    min-width: 46px;
+    padding: 4px 7px;
+    transform: translate(-50%, -50%);
+}
+
+.video-overlay.is-video-native-fallback:not(.has-native-seek-overlay) .video-scrubber-tooltip-image,
+.video-overlay.is-video-native-fallback:not(.has-native-seek-overlay) .video-scrubber-tooltip::before {
     display: none;
 }
 

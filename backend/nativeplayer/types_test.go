@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRectValidRejectsNonFiniteAndUnboundedCoordinates(t *testing.T) {
@@ -39,6 +40,13 @@ func TestStateFromMPVPropertiesDerivesParityContract(t *testing.T) {
 				"idle-active": true,
 				"volume":      float64(100),
 				"speed":       float64(1),
+			},
+			want: State{Status: StatusOpening, Paused: true, Volume: 1, Rate: 1, Loading: true},
+		},
+		{
+			name: "opening defaults missing volume and speed like libmpv",
+			values: map[string]any{
+				"idle-active": true,
 			},
 			want: State{Status: StatusOpening, Paused: true, Volume: 1, Rate: 1, Loading: true},
 		},
@@ -220,6 +228,7 @@ func TestScanMPVEventsIgnoresRepliesAndMalformedMessages(t *testing.T) {
 		`{"request_id":1,"error":"success","data":false}`,
 		`not json`,
 		`{"event":"file-loaded"}`,
+		`{"event":"property-change","name":"volume","data":85}`,
 		`{"event":"end-file","reason":"error","error":"loading failed"}`,
 	}, "\n") + "\n"
 	var events []mpvIPCEvent
@@ -230,10 +239,89 @@ func TestScanMPVEventsIgnoresRepliesAndMalformedMessages(t *testing.T) {
 	}
 	want := []mpvIPCEvent{
 		{Event: "file-loaded"},
+		{Event: "property-change", Name: "volume", Data: json.RawMessage("85")},
 		{Event: "end-file", Reason: "error", Error: "loading failed"},
 	}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+func TestMPVObservePropertiesPayloadBatchesJSONCommands(t *testing.T) {
+	payload := mpvObservePropertiesPayload([]string{"time-pos", "", "duration"})
+	lines := strings.Split(strings.TrimSpace(string(payload)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("observe payload lines = %q, want 2 commands", lines)
+	}
+	var first struct {
+		Command []any `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("decode first observe command: %v", err)
+	}
+	want := []any{"observe_property", float64(1), "time-pos"}
+	if !reflect.DeepEqual(first.Command, want) {
+		t.Fatalf("first observe command = %#v, want %#v", first.Command, want)
+	}
+}
+
+func TestObservedPropertiesWaitForKnownInitialValues(t *testing.T) {
+	observed := newMPVObservedProperties([]string{"time-pos", "pause", ""})
+	now := time.Unix(100, 0)
+	if values, ready := observed.update(mpvIPCEvent{Event: "property-change", Name: "time-pos"}, now); ready || values != nil {
+		t.Fatalf("first known property ready=%t values=%#v, want not ready", ready, values)
+	}
+	if values, ready := observed.update(mpvIPCEvent{Event: "property-change", Name: "playlist-pos", Data: json.RawMessage("1")}, now); ready || values != nil {
+		t.Fatalf("unknown property ready=%t values=%#v, want ignored", ready, values)
+	}
+	values, ready := observed.update(mpvIPCEvent{Event: "property-change", Name: "pause", Data: json.RawMessage("false")}, now)
+	if !ready {
+		t.Fatalf("all initial known properties ready=%t values=%#v, want ready", ready, values)
+	}
+	if _, ok := values["playlist-pos"]; ok {
+		t.Fatalf("unknown property leaked into values: %#v", values)
+	}
+	if value, ok := values["time-pos"]; !ok || value != nil {
+		t.Fatalf("missing-data time-pos = %#v, present=%t; want present nil", value, ok)
+	}
+	if value, ok := values["pause"].(bool); !ok || value {
+		t.Fatalf("pause = %#v, present=%t; want false", values["pause"], ok)
+	}
+}
+
+func TestObservedPropertiesThrottleProgressButKeepLatestValue(t *testing.T) {
+	observed := newMPVObservedProperties([]string{"time-pos", "pause"})
+	start := time.Unix(200, 0)
+	if _, ready := observed.update(mpvIPCEvent{Event: "property-change", Name: "time-pos", Data: json.RawMessage("0")}, start); ready {
+		t.Fatal("observer became ready before all initial properties arrived")
+	}
+	if _, ready := observed.update(mpvIPCEvent{Event: "property-change", Name: "pause", Data: json.RawMessage("false")}, start); !ready {
+		t.Fatal("observer did not become ready after all initial properties arrived")
+	}
+	if values, emit := observed.update(mpvIPCEvent{Event: "property-change", Name: "time-pos", Data: json.RawMessage("1")}, start.Add(50*time.Millisecond)); emit || values != nil {
+		t.Fatalf("early progress emit=%t values=%#v, want throttled", emit, values)
+	}
+	values, emit := observed.update(mpvIPCEvent{Event: "property-change", Name: "time-pos", Data: json.RawMessage("2")}, start.Add(130*time.Millisecond))
+	if !emit {
+		t.Fatalf("later progress emit=%t values=%#v, want emitted", emit, values)
+	}
+	if got := values["time-pos"]; got != float64(2) {
+		t.Fatalf("time-pos = %#v, want latest throttled value 2", got)
+	}
+}
+
+func TestObservedPropertiesEmitControlChangesImmediately(t *testing.T) {
+	observed := newMPVObservedProperties([]string{"time-pos", "pause", "track-list"})
+	start := time.Unix(300, 0)
+	observed.update(mpvIPCEvent{Event: "property-change", Name: "time-pos", Data: json.RawMessage("0")}, start)
+	observed.update(mpvIPCEvent{Event: "property-change", Name: "pause", Data: json.RawMessage("false")}, start)
+	observed.update(mpvIPCEvent{Event: "property-change", Name: "track-list", Data: json.RawMessage("[]")}, start)
+	values, emit := observed.update(mpvIPCEvent{Event: "property-change", Name: "pause", Data: json.RawMessage("true")}, start.Add(time.Millisecond))
+	if !emit {
+		t.Fatalf("pause change emit=%t values=%#v, want immediate emit", emit, values)
+	}
+	if got := values["pause"]; got != true {
+		t.Fatalf("pause = %#v, want true", got)
 	}
 }
 
@@ -294,5 +382,27 @@ func TestMPVPreflightInvocationKeepsURLOutOfArguments(t *testing.T) {
 	}
 	if got := string(payload); got != "#EXTM3U\n"+secretURL+"\n" {
 		t.Fatalf("preflight stdin = %q", got)
+	}
+}
+
+func TestExperimentalNativePlayerEnabledIsExplicitOptIn(t *testing.T) {
+	for _, value := range []string{"", "0", "true", "yes", "2"} {
+		if experimentalNativePlayerEnabled(value) {
+			t.Fatalf("experimentalNativePlayerEnabled(%q) = true, want false", value)
+		}
+	}
+	if !experimentalNativePlayerEnabled("1") {
+		t.Fatal("experimentalNativePlayerEnabled(\"1\") = false, want true")
+	}
+}
+
+func TestSystemMPVLookupEnabledIsExplicitOptIn(t *testing.T) {
+	for _, value := range []string{"", "0", "true", "yes", "2"} {
+		if systemMPVLookupEnabled(value) {
+			t.Fatalf("systemMPVLookupEnabled(%q) = true, want false", value)
+		}
+	}
+	if !systemMPVLookupEnabled("1") {
+		t.Fatal("systemMPVLookupEnabled(\"1\") = false, want true")
 	}
 }

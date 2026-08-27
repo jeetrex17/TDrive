@@ -31,3 +31,12 @@ function Get-TDriveMpvMetadataFromOutput {
         FFmpeg = $ffmpegVersions[0]
     }
 }
+
+function Get-TDriveSafeMpvPackageSource {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source
+    )
+
+    return (($Source -replace "`r|`n", " ") -replace '[?#].*$', '').Trim()
+}

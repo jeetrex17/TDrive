@@ -1,7 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
+	"image"
+	"image/color"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +32,8 @@ func TestValidateNativeMediaCommandAcceptsSupportedCommands(t *testing.T) {
 		{"set", "speed", "2"},
 		{"set", "mute", "yes"},
 		{"set", "mute", "no"},
+		{"set", "pause", "yes"},
+		{"set", "pause", "no"},
 		{"set", "aid", "1"},
 		{"set", "aid", "42"},
 		{"set", "aid", "auto"},
@@ -138,6 +148,12 @@ func TestValidateNativeMediaCommandRejectsUnsupportedCommands(t *testing.T) {
 		{"set", "speed", "0.1"},
 		{"set", "speed", "5"},
 		{"set", "mute", "maybe"},
+		{"set", "pause", "maybe"},
+		{"set", "pause", "true"},
+		{"set", "pause", "1"},
+		{"seek", strings.Repeat("9", maxNativeMediaCommandArgumentBytes+1), "absolute"},
+		{"set", "aid", strings.Repeat("9", maxNativeMediaCommandArgumentBytes+1)},
+		{"set", "pause", "yes", "extra"},
 		{"set", "aid", "-1"},
 		{"set", "aid", "1.5"},
 		{"set", "aid", "yes"},
@@ -152,6 +168,205 @@ func TestValidateNativeMediaCommandRejectsUnsupportedCommands(t *testing.T) {
 			t.Fatalf("validateNativeMediaCommand(%v) returned nil error", command)
 		}
 	}
+}
+
+func TestShowNativeSeekThumbnailSkipsStaleSessionBeforeDecoding(t *testing.T) {
+	app := &App{}
+	invalidOversizedPayload := strings.Repeat("!", maxNativeSeekThumbnailEncodedBytes+1)
+
+	err := app.ShowNativeSeekThumbnail("stale-session-token", invalidOversizedPayload, validSeekThumbnailRect())
+	if err != nil {
+		t.Fatalf("ShowNativeSeekThumbnail() stale-session error = %v, want nil", err)
+	}
+}
+
+func TestShowNativeSeekThumbnailValidatesTokenAndRectBeforeDecoding(t *testing.T) {
+	const activeToken = "active-session-token"
+	app := appWithNativeThumbnailPlayer(activeToken)
+	validPayload := encodeSeekThumbnailPNG(t, 8, 8)
+
+	tests := []struct {
+		name    string
+		token   string
+		rect    nativeplayer.Rect
+		wantErr error
+	}{
+		{name: "empty token", token: "", rect: validSeekThumbnailRect(), wantErr: errInvalidNativeMediaSession},
+		{name: "oversized token", token: strings.Repeat("t", maxNativeMediaSessionTokenBytes+1), rect: validSeekThumbnailRect(), wantErr: errInvalidNativeMediaSession},
+		{name: "zero width", token: activeToken, rect: nativeplayer.Rect{X: 10, Y: 10, Height: 81}, wantErr: errInvalidNativeMediaViewport},
+		{name: "non-finite coordinate", token: activeToken, rect: nativeplayer.Rect{X: math.NaN(), Y: 10, Width: 144, Height: 81}, wantErr: errInvalidNativeMediaViewport},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := app.ShowNativeSeekThumbnail(test.token, validPayload, test.rect)
+			assertSafeSeekThumbnailError(t, err, test.token, validPayload)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("ShowNativeSeekThumbnail() error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestNativeMediaBridgeValidationBoundsRequestsBeforeLookup(t *testing.T) {
+	const staleToken = "stale-session-token"
+	app := &App{}
+	oversizedToken := strings.Repeat("t", maxNativeMediaSessionTokenBytes+1)
+	validRect := validSeekThumbnailRect()
+	invalidRect := nativeplayer.Rect{X: math.Inf(1), Y: 10, Width: 144, Height: 81}
+
+	if err := app.NativeMediaCommand(staleToken, []string{"set", "pause", "yes"}); err != nil {
+		t.Fatalf("NativeMediaCommand() stale-session error = %v, want nil", err)
+	}
+	if err := app.ResizeNativeMedia(staleToken, validRect); err != nil {
+		t.Fatalf("ResizeNativeMedia() stale-session error = %v, want nil", err)
+	}
+	if err := app.MoveNativeSeekThumbnail(staleToken, validRect); err != nil {
+		t.Fatalf("MoveNativeSeekThumbnail() stale-session error = %v, want nil", err)
+	}
+	if err := app.HideNativeSeekThumbnail(staleToken); err != nil {
+		t.Fatalf("HideNativeSeekThumbnail() stale-session error = %v, want nil", err)
+	}
+
+	if err := app.NativeMediaCommand(oversizedToken, []string{"set", "pause", "yes"}); !errors.Is(err, errInvalidNativeMediaSession) {
+		t.Fatalf("NativeMediaCommand() oversized-token error = %v", err)
+	}
+	if err := app.ResizeNativeMedia(oversizedToken, validRect); !errors.Is(err, errInvalidNativeMediaSession) {
+		t.Fatalf("ResizeNativeMedia() oversized-token error = %v", err)
+	}
+	if err := app.MoveNativeSeekThumbnail(oversizedToken, validRect); !errors.Is(err, errInvalidNativeMediaSession) {
+		t.Fatalf("MoveNativeSeekThumbnail() oversized-token error = %v", err)
+	}
+	if err := app.HideNativeSeekThumbnail(oversizedToken); !errors.Is(err, errInvalidNativeMediaSession) {
+		t.Fatalf("HideNativeSeekThumbnail() oversized-token error = %v", err)
+	}
+	if _, err := app.AttachNativeMedia(oversizedToken, validRect); !errors.Is(err, errInvalidNativeMediaSession) {
+		t.Fatalf("AttachNativeMedia() oversized-token error = %v", err)
+	}
+	if err := app.CloseNativeMedia(oversizedToken); !errors.Is(err, errInvalidNativeMediaSession) {
+		t.Fatalf("CloseNativeMedia() oversized-token error = %v", err)
+	}
+	if err := app.CloseNativeMedia(""); err != nil {
+		t.Fatalf("CloseNativeMedia() empty-token error = %v, want nil", err)
+	}
+	if err := app.CloseNativeMedia(staleToken); err != nil {
+		t.Fatalf("CloseNativeMedia() stale-session error = %v, want nil", err)
+	}
+	oversizedCommand := []string{"seek", strings.Repeat("9", maxNativeMediaCommandArgumentBytes+1), "absolute"}
+	if err := app.NativeMediaCommand(staleToken, oversizedCommand); !errors.Is(err, errNativeMediaCommandTooLarge) {
+		t.Fatalf("NativeMediaCommand() oversized-command error = %v", err)
+	}
+	if err := app.ResizeNativeMedia(staleToken, invalidRect); !errors.Is(err, errInvalidNativeMediaViewport) {
+		t.Fatalf("ResizeNativeMedia() invalid-rect error = %v", err)
+	}
+	if err := app.MoveNativeSeekThumbnail(staleToken, invalidRect); !errors.Is(err, errInvalidNativeMediaViewport) {
+		t.Fatalf("MoveNativeSeekThumbnail() invalid-rect error = %v", err)
+	}
+}
+
+func TestShowNativeSeekThumbnailRejectsUnsafePayloads(t *testing.T) {
+	const activeToken = "active-session-token"
+	app := appWithNativeThumbnailPlayer(activeToken)
+
+	oversizedDecoded := base64.StdEncoding.EncodeToString(make([]byte, maxNativeSeekThumbnailDecodedBytes+1))
+	if len(oversizedDecoded) > maxNativeSeekThumbnailEncodedBytes {
+		t.Fatalf("decoded-size fixture also exceeds encoded limit: %d > %d", len(oversizedDecoded), maxNativeSeekThumbnailEncodedBytes)
+	}
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "oversized encoded input", payload: strings.Repeat("A", maxNativeSeekThumbnailEncodedBytes+1)},
+		{name: "oversized decoded input", payload: oversizedDecoded},
+		{name: "malformed base64", payload: "%%%secret-invalid-base64%%%"},
+		{name: "malformed image", payload: base64.StdEncoding.EncodeToString([]byte("secret-not-an-image"))},
+		{name: "unsupported format", payload: encodeSeekThumbnailGIF(t)},
+		{name: "oversized width", payload: encodeSeekThumbnailPNG(t, maxNativeSeekThumbnailDimension+1, 1)},
+		{name: "oversized pixel count", payload: encodeSeekThumbnailPNG(t, maxNativeSeekThumbnailDimension, maxNativeSeekThumbnailPixels/maxNativeSeekThumbnailDimension+1)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := app.ShowNativeSeekThumbnail(activeToken, test.payload, validSeekThumbnailRect())
+			assertSafeSeekThumbnailError(t, err, activeToken, test.payload)
+		})
+	}
+}
+
+func TestShowNativeSeekThumbnailAcceptsJPEGAndPNG(t *testing.T) {
+	const activeToken = "active-session-token"
+	app := appWithNativeThumbnailPlayer(activeToken)
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "jpeg", payload: encodeSeekThumbnailJPEG(t)},
+		{name: "png", payload: encodeSeekThumbnailPNG(t, 8, 8)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := app.ShowNativeSeekThumbnail(activeToken, test.payload, validSeekThumbnailRect()); err != nil {
+				t.Fatalf("ShowNativeSeekThumbnail() error = %v", err)
+			}
+		})
+	}
+}
+
+func validSeekThumbnailRect() nativeplayer.Rect {
+	return nativeplayer.Rect{X: 10, Y: 10, Width: 144, Height: 81}
+}
+
+func appWithNativeThumbnailPlayer(token string) *App {
+	return &App{nativeMedia: map[string]*nativeMediaSession{
+		token: {player: new(nativeplayer.Player)},
+	}}
+}
+
+func assertSafeSeekThumbnailError(t *testing.T, err error, secrets ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("ShowNativeSeekThumbnail() error = nil, want rejection")
+	}
+	for _, secret := range secrets {
+		if secret != "" && len(secret) <= len(err.Error()) && strings.Contains(err.Error(), secret) {
+			t.Fatalf("error leaked request data: %q", err)
+		}
+	}
+}
+
+func encodeSeekThumbnailPNG(t *testing.T, width, height int) string {
+	t.Helper()
+	return encodeSeekThumbnailImage(t, image.NewGray(image.Rect(0, 0, width, height)), func(buffer *bytes.Buffer, source image.Image) error {
+		return png.Encode(buffer, source)
+	})
+}
+
+func encodeSeekThumbnailJPEG(t *testing.T) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	return encodeSeekThumbnailImage(t, img, func(buffer *bytes.Buffer, source image.Image) error {
+		return jpeg.Encode(buffer, source, nil)
+	})
+}
+
+func encodeSeekThumbnailGIF(t *testing.T) string {
+	t.Helper()
+	img := image.NewPaletted(image.Rect(0, 0, 1, 1), color.Palette{color.Black})
+	return encodeSeekThumbnailImage(t, img, func(buffer *bytes.Buffer, source image.Image) error {
+		return gif.Encode(buffer, source, nil)
+	})
+}
+
+func encodeSeekThumbnailImage(t *testing.T, source image.Image, encode func(*bytes.Buffer, image.Image) error) string {
+	t.Helper()
+	var buffer bytes.Buffer
+	if err := encode(&buffer, source); err != nil {
+		t.Fatalf("encode seek-thumbnail fixture: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(buffer.Bytes())
 }
 
 func TestNativeMediaReservationRejectsConcurrentDuplicateAttach(t *testing.T) {

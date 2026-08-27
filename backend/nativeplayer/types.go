@@ -2,6 +2,7 @@ package nativeplayer
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,9 @@ var ErrUnsupported = errors.New("native player is not supported on this platform
 var ErrDecoderUnsafe = errors.New("native player decoder preflight failed")
 var ErrPlayerExited = errors.New("native media player exited unexpectedly")
 var errIPCWriteTimeout = errors.New("native player: mpv IPC write timed out")
+
+const systemMPVLookupFlag = "TDRIVE_ALLOW_SYSTEM_MPV"
+const observedProgressEmitInterval = 125 * time.Millisecond
 
 type PlaybackStatus string
 
@@ -123,10 +127,13 @@ func stateFromMPVProperties(values map[string]any) State {
 	paused := mpvBoolProperty(values, "pause")
 	eof := mpvBoolProperty(values, "eof-reached")
 	idle := mpvBoolProperty(values, "idle-active")
-	volume := clampMPVFloat(mpvNumberProperty(values, "volume")/100, 0, 1)
-	rate := clampMPVFloat(mpvNumberProperty(values, "speed"), 0.25, 4)
-	if rate == 0 {
-		rate = 1
+	volume := 1.0
+	if value, ok := mpvNumberPropertyOK(values, "volume"); ok && isFiniteMPVFloat(value) {
+		volume = clampMPVFloat(value/100, 0, 1)
+	}
+	rate := 1.0
+	if value, ok := mpvNumberPropertyOK(values, "speed"); ok && isFiniteMPVFloat(value) && value > 0 {
+		rate = clampMPVFloat(value, 0.25, 4)
 	}
 	bufferingPercent := mpvNumberProperty(values, "cache-buffering-state")
 	loading := mpvBoolProperty(values, "paused-for-cache") || (!paused && bufferingPercent > 0 && bufferingPercent < 100)
@@ -231,9 +238,11 @@ func endedState(previous State) State {
 }
 
 type mpvIPCEvent struct {
-	Event  string `json:"event"`
-	Reason string `json:"reason"`
-	Error  string `json:"error"`
+	Event  string          `json:"event"`
+	Reason string          `json:"reason"`
+	Error  string          `json:"error"`
+	Name   string          `json:"name"`
+	Data   json.RawMessage `json:"data"`
 }
 
 func mpvEventStatus(event mpvIPCEvent) (PlaybackStatus, bool) {
@@ -266,6 +275,115 @@ func scanMPVEvents(reader io.Reader, onEvent func(mpvIPCEvent)) error {
 		onEvent(event)
 	}
 	return scanner.Err()
+}
+
+func mpvObservePropertiesPayload(names []string) []byte {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	for index, name := range names {
+		if name == "" {
+			continue
+		}
+		_ = encoder.Encode(struct {
+			Command []any `json:"command"`
+		}{Command: []any{"observe_property", index + 1, name}})
+	}
+	return buf.Bytes()
+}
+
+func writeMPVObserveProperties(writer io.Writer, names []string) error {
+	if writer == nil {
+		return errors.New("native player: mpv IPC writer is required")
+	}
+	payload := mpvObservePropertiesPayload(names)
+	if len(payload) == 0 {
+		return nil
+	}
+	written, err := writer.Write(payload)
+	if err != nil {
+		return err
+	}
+	if written != len(payload) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+type mpvObservedProperties struct {
+	allowed          map[string]struct{}
+	values           map[string]any
+	seen             map[string]struct{}
+	required         int
+	ready            bool
+	lastProgressEmit time.Time
+}
+
+func newMPVObservedProperties(names []string) *mpvObservedProperties {
+	observed := &mpvObservedProperties{
+		allowed: make(map[string]struct{}, len(names)),
+		values:  make(map[string]any, len(names)),
+		seen:    make(map[string]struct{}, len(names)),
+	}
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, exists := observed.allowed[name]; exists {
+			continue
+		}
+		observed.allowed[name] = struct{}{}
+		observed.required++
+	}
+	return observed
+}
+
+func (o *mpvObservedProperties) update(event mpvIPCEvent, now time.Time) (map[string]any, bool) {
+	if o == nil || event.Event != "property-change" || event.Name == "" {
+		return nil, false
+	}
+	if _, ok := o.allowed[event.Name]; !ok {
+		return nil, false
+	}
+	var value any
+	if len(event.Data) > 0 {
+		if err := json.Unmarshal(event.Data, &value); err != nil {
+			return nil, false
+		}
+	}
+	o.values[event.Name] = value
+	o.seen[event.Name] = struct{}{}
+	if !o.ready {
+		if len(o.seen) < o.required {
+			return nil, false
+		}
+		o.ready = true
+		o.lastProgressEmit = now
+		return cloneMPVPropertyValues(o.values), true
+	}
+	if isHighFrequencyMPVProperty(event.Name) && !o.lastProgressEmit.IsZero() && now.Sub(o.lastProgressEmit) < observedProgressEmitInterval {
+		return nil, false
+	}
+	if isHighFrequencyMPVProperty(event.Name) {
+		o.lastProgressEmit = now
+	}
+	return cloneMPVPropertyValues(o.values), true
+}
+
+func cloneMPVPropertyValues(values map[string]any) map[string]any {
+	clone := make(map[string]any, len(values))
+	for name, value := range values {
+		clone[name] = value
+	}
+	return clone
+}
+
+func isHighFrequencyMPVProperty(name string) bool {
+	switch name {
+	case "time-pos", "cache-buffering-state", "demuxer-cache-duration":
+		return true
+	default:
+		return false
+	}
 }
 
 type stoppableTimer interface {
@@ -373,24 +491,29 @@ func tracksFromProperty(value any) []Track {
 }
 
 func mpvNumberProperty(values map[string]any, key string) float64 {
+	value, _ := mpvNumberPropertyOK(values, key)
+	return value
+}
+
+func mpvNumberPropertyOK(values map[string]any, key string) (float64, bool) {
 	value, ok := values[key]
 	if !ok || value == nil {
-		return 0
+		return 0, false
 	}
 	switch typed := value.(type) {
 	case float64:
-		return typed
+		return typed, true
 	case float32:
-		return float64(typed)
+		return float64(typed), true
 	case int:
-		return float64(typed)
+		return float64(typed), true
 	case int64:
-		return float64(typed)
+		return float64(typed), true
 	case json.Number:
-		n, _ := typed.Float64()
-		return n
+		n, err := typed.Float64()
+		return n, err == nil
 	default:
-		return 0
+		return 0, false
 	}
 }
 
@@ -452,6 +575,10 @@ func cleanMPVSeconds(value float64) float64 {
 	return value
 }
 
+func isFiniteMPVFloat(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
 func clampMPVFloat(value, low, high float64) float64 {
 	if value < low {
 		return low
@@ -467,4 +594,12 @@ func maxMPVFloat(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func experimentalNativePlayerEnabled(value string) bool {
+	return value == "1"
+}
+
+func systemMPVLookupEnabled(value string) bool {
+	return value == "1"
 }

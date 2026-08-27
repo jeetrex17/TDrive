@@ -295,9 +295,7 @@ static void tdrive_x11_destroy(tdrive_x11_view *view) {
 import "C"
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -310,28 +308,28 @@ import (
 )
 
 type Player struct {
-	mu          sync.Mutex
-	closed      bool
-	terminal    bool
-	view        unsafe.Pointer
-	ipcPath     string
-	ipcDir      string
-	cmd         *exec.Cmd
-	done        chan error
-	standalone  bool
-	stateCancel context.CancelFunc
-	stateDone   chan struct{}
-	eventConn   net.Conn
-	eventDone   chan struct{}
-	onState     StateHandler
-	lastState   State
+	mu            sync.Mutex
+	closed        bool
+	terminal      bool
+	view          unsafe.Pointer
+	ipcPath       string
+	ipcDir        string
+	cmd           *exec.Cmd
+	done          chan error
+	standalone    bool
+	stateCancel   context.CancelFunc
+	eventConn     net.Conn
+	eventDone     chan struct{}
+	onState       StateHandler
+	lastState     State
+	observedState *mpvObservedProperties
 
 	closeOnce sync.Once
 }
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
 	if !linuxNativePlayerEnabled() {
-		linuxNativeLogf("start rejected: disabled by %s=0", linuxNativePlayerFlag)
+		linuxNativeLogf("start rejected: explicit opt-in required with %s=1", linuxNativePlayerFlag)
 		return nil, ErrUnsupported
 	}
 	if !rect.Valid() {
@@ -476,11 +474,21 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 	p.stateCancel = cancel
 	p.eventConn = eventConn
 	p.eventDone = make(chan struct{})
-	go p.observeEvents(stateCtx, eventConn, p.eventDone)
 	if opts.OnState != nil {
-		p.stateDone = make(chan struct{})
-		go p.pollState(stateCtx)
+		_ = eventConn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+		if err := writeMPVObserveProperties(eventConn, mpvStatePropertyNames); err != nil {
+			cancel()
+			_ = eventConn.Close()
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			p.cmd = nil
+			_ = os.RemoveAll(p.ipcDir)
+			return fmt.Errorf("native player: observe mpv state: %w", err)
+		}
+		_ = eventConn.SetWriteDeadline(time.Time{})
 	}
+	go p.observeEvents(stateCtx, eventConn, p.eventDone)
 	if err := writeMPVIPCWithAttempts(p.ipcPath, mpvCommandPayload("loadfile", url, "replace"), 80); err != nil {
 		cancel()
 		_ = eventConn.Close()
@@ -570,7 +578,6 @@ func (p *Player) Close() error {
 	cmd := p.cmd
 	done := p.done
 	stateCancel := p.stateCancel
-	stateDone := p.stateDone
 	eventConn := p.eventConn
 	eventDone := p.eventDone
 	p.mu.Unlock()
@@ -596,12 +603,6 @@ func (p *Player) Close() error {
 			case <-done:
 			case <-time.After(2 * time.Second):
 			}
-		}
-	}
-	if stateDone != nil {
-		select {
-		case <-stateDone:
-		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	if eventDone != nil {
@@ -703,32 +704,6 @@ func (p *Player) handleProcessExit(err error) {
 	}
 }
 
-func (p *Player) pollState(ctx context.Context) {
-	defer close(p.stateDone)
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-
-		p.mu.Lock()
-		ipcPath := p.ipcPath
-		closed := p.closed
-		p.mu.Unlock()
-		if closed || ipcPath == "" {
-			return
-		}
-		state, ok := readLinuxMPVState(ipcPath)
-		if ok {
-			p.emitState(state)
-		}
-	}
-}
-
 func (p *Player) observeEvents(ctx context.Context, conn net.Conn, done chan<- struct{}) {
 	defer close(done)
 	defer conn.Close()
@@ -749,6 +724,10 @@ func (p *Player) observeEvents(ctx context.Context, conn net.Conn, done chan<- s
 }
 
 func (p *Player) handleMPVEvent(event mpvIPCEvent) {
+	if event.Event == "property-change" {
+		p.updateObservedState(event)
+		return
+	}
 	status, ok := mpvEventStatus(event)
 	if !ok {
 		return
@@ -763,87 +742,29 @@ func (p *Player) handleMPVEvent(event mpvIPCEvent) {
 	p.emitTerminal(status)
 }
 
+func (p *Player) updateObservedState(event mpvIPCEvent) {
+	if event.Name == "" {
+		return
+	}
+	p.mu.Lock()
+	if p.closed || p.terminal {
+		p.mu.Unlock()
+		return
+	}
+	if p.observedState == nil {
+		p.observedState = newMPVObservedProperties(mpvStatePropertyNames)
+	}
+	values, ready := p.observedState.update(event, time.Now())
+	p.mu.Unlock()
+	if !ready {
+		return
+	}
+	p.emitState(stateFromMPVProperties(values))
+}
+
 func dialLinuxMPVIPCWithAttempts(path string, attempts int) (net.Conn, error) {
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
-		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-		time.Sleep(25 * time.Millisecond)
-	}
-	return nil, fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
-}
-
-func readLinuxMPVState(ipcPath string) (State, bool) {
-	values, err := queryLinuxMPVProperties(ipcPath, mpvStatePropertyNames)
-	if err != nil {
-		return State{}, false
-	}
-	return stateFromMPVProperties(values), true
-}
-
-type linuxMPVIPCRequest struct {
-	Command   []string `json:"command"`
-	RequestID int      `json:"request_id"`
-}
-
-type linuxMPVIPCResponse struct {
-	RequestID int             `json:"request_id"`
-	Error     string          `json:"error"`
-	Data      json.RawMessage `json:"data"`
-}
-
-func queryLinuxMPVProperties(path string, names []string) (map[string]any, error) {
-	conn, err := openLinuxMPVIPCReadWrite(path)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
-
-	encoder := json.NewEncoder(conn)
-	idToName := make(map[int]string, len(names))
-	for i, name := range names {
-		id := i + 1
-		idToName[id] = name
-		if err := encoder.Encode(linuxMPVIPCRequest{Command: []string{"get_property", name}, RequestID: id}); err != nil {
-			return nil, err
-		}
-	}
-
-	values := make(map[string]any, len(names))
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	for len(idToName) > 0 && scanner.Scan() {
-		var response linuxMPVIPCResponse
-		if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
-			continue
-		}
-		name, ok := idToName[response.RequestID]
-		if !ok {
-			continue
-		}
-		delete(idToName, response.RequestID)
-		if response.Error != "success" {
-			continue
-		}
-		var value any
-		if err := json.Unmarshal(response.Data, &value); err != nil {
-			continue
-		}
-		values[name] = value
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return values, nil
-}
-
-func openLinuxMPVIPCReadWrite(path string) (net.Conn, error) {
-	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
 		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
 		if err == nil {
 			return conn, nil

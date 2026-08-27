@@ -152,11 +152,11 @@ export namespace main {
 	    os: string;
 	    arch: string;
 	    dev_build: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AppVersionInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.version = source["version"];
@@ -475,6 +475,7 @@ export namespace main {
 		    return a;
 		}
 	}
+
 	export class PersonalDriveCandidate {
 	    id: string;
 	    title: string;
@@ -792,7 +793,7 @@ export namespace nativeplayer {
 }
 
 export namespace updater {
-	
+
 	export class ReleaseInfo {
 	    version: string;
 	    tag: string;
@@ -800,11 +801,11 @@ export namespace updater {
 	    published_at: string;
 	    asset_name: string;
 	    asset_size: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ReleaseInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.version = source["version"];
@@ -826,11 +827,11 @@ export namespace updater {
 	    checked_at: number;
 	    error: string;
 	    error_stage: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new State(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.phase = source["phase"];
@@ -844,7 +845,7 @@ export namespace updater {
 	        this.error = source["error"];
 	        this.error_stage = source["error_stage"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

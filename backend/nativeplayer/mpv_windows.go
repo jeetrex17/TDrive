@@ -29,6 +29,9 @@ func findWindowsMPV() (string, error) {
 		}
 	}
 
+	if !systemMPVLookupEnabled(os.Getenv(systemMPVLookupFlag)) {
+		return "", fmt.Errorf("native player: bundled mpv executable not found")
+	}
 	for _, name := range []string{"mpv.exe", "mpv"} {
 		if path, err := exec.LookPath(name); err == nil {
 			return path, nil

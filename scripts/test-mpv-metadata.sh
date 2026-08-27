@@ -46,6 +46,19 @@ expect_reject() {
   pass
 }
 
+expect_safe_source() {
+  local name="$1"
+  local input="$2"
+  local expected="$3"
+  local actual
+  actual="$(tdrive_safe_mpv_package_source "$input")"
+  if [ "$actual" != "$expected" ]; then
+    echo "FAIL $name: safe source=$actual want $expected" >&2
+    exit 1
+  fi
+  pass
+}
+
 expect_parse "plain-mpv-version" \
   $'mpv 0.41.0 Copyright\nFFmpeg version: 7.1.1\n' \
   "0.41.0" "7.1.1"
@@ -72,5 +85,17 @@ expect_reject "conflicting-mpv" \
 
 expect_reject "conflicting-ffmpeg" \
   $'mpv 0.41.0 Copyright\nFFmpeg version: 7.0\nFFmpeg version: 7.1.1\n'
+
+expect_safe_source "strips-query" \
+  "https://downloads.example.com/mpv/windows.tar.gz?X-Amz-Signature=secret&Expires=1" \
+  "https://downloads.example.com/mpv/windows.tar.gz"
+
+expect_safe_source "strips-fragment" \
+  "https://downloads.example.com/mpv/darwin.tar.gz#token" \
+  "https://downloads.example.com/mpv/darwin.tar.gz"
+
+expect_safe_source "normalizes-newlines-before-stripping" \
+  $' https://downloads.example.com/mpv/linux.tar.gz?sig=secret\nignored ' \
+  "https://downloads.example.com/mpv/linux.tar.gz"
 
 echo "mpv metadata parser tests passed: $pass_count"

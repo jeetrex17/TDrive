@@ -418,8 +418,13 @@ export async function attachNativeMedia(token: string, rect: NativeMediaRect): P
 function normalizeNativeMediaOpenResult(opened?: main.NativeMediaResult): NativeMediaOpenResult {
     const token = String(opened?.token ?? "");
     const rawInitialState = opened?.initial_state;
-    const initialState: NativeMediaStatePayload | null = rawInitialState
-        ? { ...rawInitialState, token: String(rawInitialState.token || token) }
+    const initialStateRecord = rawInitialState !== null
+        && typeof rawInitialState === "object"
+        && !Array.isArray(rawInitialState)
+        ? rawInitialState as NativeMediaStatePayload
+        : null;
+    const initialState: NativeMediaStatePayload | null = initialStateRecord
+        ? { ...initialStateRecord, token: String(initialStateRecord.token || token) }
         : null;
     return {
         token,
@@ -447,10 +452,9 @@ export async function closeNativeMedia(token: string): Promise<void> {
     await rawCloseNativeMedia(token);
 }
 
-// showNativeSeekThumbnail paints a seek-preview thumbnail over the native video
-// window (Windows/Linux fallback, where HTML can't draw over the video). The
-// image is the raw base64 of a JPEG/PNG frame; rect is the preview box in CSS
-// pixels. No-op on platforms whose player has no overlay.
+// Windows paints seek previews above its child mpv window because the webview
+// cannot layer HTML over that native surface. Other players deliberately no-op.
+// imageBase64 is a JPEG/PNG frame; rect is the preview box in CSS pixels.
 export async function showNativeSeekThumbnail(token: string, imageBase64: string, rect: NativeMediaRect): Promise<void> {
     if (!token || !imageBase64) return;
     await rawShowNativeSeekThumbnail(token, imageBase64, rect);

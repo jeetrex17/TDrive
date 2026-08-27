@@ -198,7 +198,8 @@ describe("video HTML-to-native fallback", () => {
         });
         await nextTasks();
 
-        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(SHARED_SESSION_ID, ["cycle", "pause"]);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(SHARED_SESSION_ID, ["set", "pause", "yes"]);
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalledWith(SHARED_SESSION_ID, ["cycle", "pause"]);
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(SHARED_SESSION_ID, ["set", "volume", "35"]);
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(SHARED_SESSION_ID, ["set", "mute", "yes"]);
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(SHARED_SESSION_ID, ["set", "speed", "1.5"]);
@@ -291,6 +292,34 @@ describe("macOS native video layering", () => {
 
         expect(document.documentElement.classList.contains("native-video-active")).toBe(false);
         expect(document.body.classList.contains("native-video-active")).toBe(false);
+    });
+});
+
+describe("native seek preview platform capability", () => {
+    it("marks Windows fallback playback as native-overlay capable", async () => {
+        vi.spyOn(window.navigator, "userAgent", "get")
+            .mockReturnValue("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(23, "windows-overlay-session"));
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 23, name: "windows.mkv", size: 1024 });
+
+        expect(document.querySelector("#video-modal")?.classList.contains("has-native-seek-overlay")).toBe(true);
+        await videoModule.closeVideoModal();
+    });
+
+    it("keeps Linux fallback on its in-controls timestamp preview", async () => {
+        vi.spyOn(window.navigator, "userAgent", "get")
+            .mockReturnValue("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36");
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(24, "linux-fallback-session"));
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 24, name: "linux.mkv", size: 1024 });
+
+        expect(document.querySelector("#video-modal")?.classList.contains("has-native-seek-overlay")).toBe(false);
+        await videoModule.closeVideoModal();
     });
 });
 

@@ -781,11 +781,18 @@ function setNativeLayout(layout: NativeLayout) {
     modalEl?.classList.toggle("is-video-native", visible);
     modalEl?.classList.toggle("is-video-native-fallback", fallback);
     modalEl?.classList.toggle("is-video-native-standalone", standalone);
+    modalEl?.classList.toggle("has-native-seek-overlay", fallback && nativeSeekOverlayAvailable());
     if (standaloneEl) standaloneEl.hidden = !standalone;
     // Only the overlay layout renders mpv underneath the WebView; the fallback
     // layout puts a native child window on top and needs the canvas left alone.
     setNativeVideoLayerActive(document, overlay);
     syncFallbackNativeViewportInsets();
+}
+
+function nativeSeekOverlayAvailable() {
+    // The native overlay is implemented by the Windows child-window player.
+    // Linux/X11 keeps a timestamp inside the reserved HTML controls instead.
+    return /windows/i.test(window.navigator.userAgent);
 }
 
 function shouldMeasureNativeFallbackBeforeOpen() {
@@ -1631,7 +1638,7 @@ let nativeSeekPending: { token: string; bucket: number; image?: string; rect: Na
 let nativeSeekLastShown: { token: string; bucket: number } | null = null;
 
 function presentNativeSeekPreview(bucket: number) {
-    if (!isNativeFallbackActive()) return;
+    if (!isNativeFallbackActive() || !nativeSeekOverlayAvailable()) return;
     const token = activeNative?.token;
     if (!token) return;
     const cached = thumbnailBase64.get(bucket);
@@ -1649,7 +1656,12 @@ function presentNativeSeekPreview(bucket: number) {
     void objectURLToBase64(url).then((image) => {
         if (!image) return;
         thumbnailBase64.set(bucket, image);
-        if (currentPreviewBucket === bucket && isNativeFallbackActive() && activeNative?.token === token) {
+        if (
+            currentPreviewBucket === bucket
+            && isNativeFallbackActive()
+            && nativeSeekOverlayAvailable()
+            && activeNative?.token === token
+        ) {
             const rect = nativeSeekOverlayRect();
             if (rect) queueNativeSeek(token, bucket, image, rect);
         }
@@ -1687,7 +1699,7 @@ function hideNativeSeekPreview() {
         nativeSeekThrottleTimer = null;
     }
     const token = activeNative?.token;
-    if (token) void hideNativeSeekThumbnail(token);
+    if (token && nativeSeekOverlayAvailable()) void hideNativeSeekThumbnail(token);
 }
 
 // nativeSeekOverlayRect returns the preview box (CSS pixels, viewport coords)

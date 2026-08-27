@@ -121,8 +121,15 @@ chmod 755 "$MPV_WRAPPER"
 read_runtime_metadata "$MPV_WRAPPER"
 qualify_runtime "$MPV_WRAPPER"
 
-PACKAGE_SOURCE="$(printf '%s' "$PACKAGE_SOURCE" | tr '\r\n' '  ')"
+PACKAGE_SOURCE="$(tdrive_safe_mpv_package_source "$PACKAGE_SOURCE")"
 ARCHIVE_SHA256="$(printf '%s' "$ARCHIVE_SHA256" | tr '[:upper:]' '[:lower:]')"
+CI_FIXTURE="false"
+RELEASE_RUNTIME="true"
+if [ "$ARCHIVE_SHA256" = "0000000000000000000000000000000000000000000000000000000000000000" ] ||
+  printf '%s' "$PACKAGE_SOURCE" | grep -Fq 'not-release-runtime'; then
+  CI_FIXTURE="true"
+  RELEASE_RUNTIME="false"
+fi
 
 {
   printf 'schema=1\n'
@@ -132,7 +139,9 @@ ARCHIVE_SHA256="$(printf '%s' "$ARCHIVE_SHA256" | tr '[:upper:]' '[:lower:]')"
   printf 'ffmpeg_version=%s\n' "$FFMPEG_VERSION"
   printf 'package_source=%s\n' "$PACKAGE_SOURCE"
   printf 'source_archive_sha256=%s\n' "$ARCHIVE_SHA256"
-  printf 'qualification=lavfi-testsrc-64x64-2frames\n'
+  printf 'release_runtime=%s\n' "$RELEASE_RUNTIME"
+  printf 'ci_fixture=%s\n' "$CI_FIXTURE"
+  printf 'qualification=headless-lavfi-testsrc-64x64-2frames\n'
   printf 'x11_playback=embedded-window\n'
   printf 'wayland_playback=standalone-window\n'
   printf 'license_metadata=runtime/SOURCE.txt,runtime/THIRD_PARTY_NOTICES.txt\n'
@@ -148,5 +157,5 @@ ARCHIVE_SHA256="$(printf '%s' "$ARCHIVE_SHA256" | tr '[:upper:]' '[:lower:]')"
 ) > "$RUNTIME_CHECKSUMS"
 
 log "qualified mpv $MPV_VERSION with FFmpeg $FFMPEG_VERSION ($APP_ARCH)"
-log "qualified X11 embedded playback and Wayland standalone-window fallback"
+log "validated headless mpv decode; X11 embedded and Wayland standalone playback still require OS display smoke/manual coverage"
 log "bundled checksum-pinned media runtime into $MEDIA_DIR"

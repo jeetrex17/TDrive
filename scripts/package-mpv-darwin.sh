@@ -277,13 +277,21 @@ write_runtime_metadata() {
   local app_arches source_reference archive_sha256
   app_arches="$(lipo -archs "$BIN_PATH")"
   source_reference="${TDRIVE_MPV_PACKAGE_SOURCE:-local-unverified}"
-  source_reference="$(printf '%s' "$source_reference" | tr '\r\n' '  ')"
+  source_reference="$(tdrive_safe_mpv_package_source "$source_reference")"
   archive_sha256="${TDRIVE_MPV_ARCHIVE_SHA256:-}"
   case "$archive_sha256" in
     *[!0-9A-Fa-f]*|'') die "TDRIVE_MPV_ARCHIVE_SHA256 must be set to the approved macOS runtime archive SHA-256" ;;
   esac
   [ "${#archive_sha256}" -eq 64 ] || die "TDRIVE_MPV_ARCHIVE_SHA256 must contain exactly 64 hexadecimal characters"
   archive_sha256="$(printf '%s' "$archive_sha256" | tr '[:upper:]' '[:lower:]')"
+  local ci_fixture release_runtime
+  ci_fixture="false"
+  release_runtime="true"
+  if [ "$archive_sha256" = "0000000000000000000000000000000000000000000000000000000000000000" ] ||
+    printf '%s' "$source_reference" | grep -Fq 'not-release-runtime'; then
+    ci_fixture="true"
+    release_runtime="false"
+  fi
 
   cp -p "$RUNTIME_SOURCE_DIR/SOURCE.txt" "$RUNTIME_SOURCE"
   cp -p "$RUNTIME_SOURCE_DIR/THIRD_PARTY_NOTICES.txt" "$RUNTIME_NOTICE"
@@ -296,7 +304,9 @@ write_runtime_metadata() {
     printf 'ffmpeg_version=%s\n' "$FFMPEG_VERSION"
     printf 'package_source=%s\n' "$source_reference"
     printf 'source_archive_sha256=%s\n' "$archive_sha256"
-    printf 'qualification=lavfi-testsrc-64x64-2frames\n'
+    printf 'release_runtime=%s\n' "$release_runtime"
+    printf 'ci_fixture=%s\n' "$ci_fixture"
+    printf 'qualification=headless-lavfi-testsrc-64x64-2frames\n'
     printf 'license_metadata=SOURCE.txt,THIRD_PARTY_NOTICES.txt\n'
     printf 'license_review_required=true\n'
   } > "$RUNTIME_MANIFEST"
@@ -509,5 +519,5 @@ if command -v codesign >/dev/null 2>&1; then
   codesign --verify --deep --strict "$APP_PATH" >/dev/null
 fi
 
-log "qualified mpv $MPV_VERSION with FFmpeg $FFMPEG_VERSION"
+log "validated headless mpv decode for mpv $MPV_VERSION with FFmpeg $FFMPEG_VERSION"
 log "done"

@@ -14,7 +14,7 @@ const preflightTimeout = 6 * time.Second
 
 func PreflightDecode(ctx context.Context, url string) error {
 	if !linuxNativePlayerEnabled() {
-		linuxNativeLogf("preflight skipped: disabled by %s=0", linuxNativePlayerFlag)
+		linuxNativeLogf("preflight skipped: explicit opt-in required with %s=1", linuxNativePlayerFlag)
 		return nil
 	}
 	if !sidecarPreflightEnabled(os.Getenv("TDRIVE_ENABLE_MPV_PREFLIGHT"), os.Getenv("TDRIVE_SKIP_MPV_PREFLIGHT")) {
