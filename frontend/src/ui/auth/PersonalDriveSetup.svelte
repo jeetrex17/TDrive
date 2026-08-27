@@ -33,13 +33,6 @@
     const busy = $derived(phase === 'loading' || phase === 'recovering');
     const recovering = $derived(phase === 'recovering');
 
-    // Channel IDs are noise unless two channels share a title — typically the
-    // real drive next to an empty one an earlier version created.
-    const duplicateTitles = $derived.by(() => {
-        const keys = candidates.map((candidate) => candidateTitle(candidate).toLowerCase());
-        return keys.filter((key, index) => keys.indexOf(key) !== index);
-    });
-
     $effect(() => {
         if (selectedID && !candidates.some((candidate) => candidate.id === selectedID)) {
             selectedID = '';
@@ -51,10 +44,6 @@
 
     function candidateTitle(candidate: PersonalDriveCandidate): string {
         return candidate.title || 'Untitled channel';
-    }
-
-    function showsID(candidate: PersonalDriveCandidate): boolean {
-        return duplicateTitles.includes(candidateTitle(candidate).toLowerCase());
     }
 
     function formatCreated(timestamp: number): string {
@@ -133,9 +122,7 @@
                                 {#if formatCreated(candidate.created_at)}
                                     <span>{formatCreated(candidate.created_at)}</span>
                                 {/if}
-                                {#if showsID(candidate)}
-                                    <span>ID {candidate.id}</span>
-                                {/if}
+                                <span>ID {candidate.id}</span>
                             </span>
                         </span>
                         <span class="drive-check" aria-hidden="true">

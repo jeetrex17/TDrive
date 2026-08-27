@@ -54,10 +54,18 @@ func (f *fakeTelegram) counts() (list, create int) {
 }
 
 type fakeAuthoritativeSync struct {
-	mu       sync.Mutex
-	calls    []int64
-	errors   []error
-	onEnsure func(int64)
+	mu          sync.Mutex
+	calls       []int64
+	incremental []int64
+	errors      []error
+	onEnsure    func(int64)
+}
+
+func (f *fakeAuthoritativeSync) Incremental(_ context.Context, channelID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.incremental = append(f.incremental, channelID)
+	return nil
 }
 
 func (f *fakeAuthoritativeSync) EnsureAuthoritative(_ context.Context, channelID int64) error {
@@ -502,6 +510,54 @@ func TestSelectRetiresStalePersonalChannelAndKeepsSharedDrives(t *testing.T) {
 	}
 	if want := []int64{recovered, shared}; !reflect.DeepEqual(ids, want) || personal != 1 {
 		t.Fatalf("channels after recovery = %v (personal=%d), want %v with one personal", ids, personal, want)
+	}
+}
+
+// A projection that already holds the channel (config.json deleted, DB kept)
+// is the accumulated truth. A scan from message zero would re-adopt legacy
+// caption-less uploads at root; recovery must only sync incrementally and
+// must not claim the backfill is complete on the channel's behalf.
+func TestSelectOnPopulatedProjectionSyncsIncrementallyAndKeepsLocalState(t *testing.T) {
+	db := newServiceDB(t)
+	const channelID int64 = 1001
+	if err := projection.MigratePersonalChannel(db, channelID); err != nil {
+		t.Fatalf("register channel: %v", err)
+	}
+	folder := projection.Op{Type: projection.OpMkdir, Obj: "d:docs", Parent: projection.RootParent, Name: "Docs"}
+	if _, err := projection.ProjectFromOp(db, channelID, 5, folder, 1, projection.Format(folder)); err != nil {
+		t.Fatalf("seed local projection: %v", err)
+	}
+	syncer := &fakeAuthoritativeSync{}
+	var saved, active int64
+	service := NewService(Config{
+		DB: db,
+		Telegram: &fakeTelegram{channels: []tgclient.OwnedBroadcastChannel{{
+			ID: channelID, AccessHash: 8001, Title: "TDrive", HasActivity: true,
+		}}},
+		Sync:       syncer,
+		LoadConfig: func() (int64, error) { return 0, nil },
+		SaveConfig: func(id int64) error { saved = id; return nil },
+		SetActive:  func(id int64) { active = id },
+	})
+
+	if err := service.Select(context.Background(), channelID); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if len(syncer.calls) != 0 || !reflect.DeepEqual(syncer.incremental, []int64{channelID}) {
+		t.Fatalf("sync calls = authoritative:%v incremental:%v, want incremental only", syncer.calls, syncer.incremental)
+	}
+	if saved != channelID || active != channelID {
+		t.Fatalf("saved=%d active=%d, want %d", saved, active, channelID)
+	}
+	row, err := projection.GetChannel(db, channelID)
+	if err != nil {
+		t.Fatalf("GetChannel: %v", err)
+	}
+	if row.PersonalBackfillDone {
+		t.Fatal("recovery marked backfill done for a projection it did not rebuild")
+	}
+	if _, ok, err := projection.FolderByID(db, channelID, "d:docs"); err != nil || !ok {
+		t.Fatalf("local folder lost during recovery: ok=%v err=%v", ok, err)
 	}
 }
 

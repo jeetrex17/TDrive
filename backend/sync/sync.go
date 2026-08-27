@@ -247,6 +247,21 @@ func (e *Engine) EnsureAuthoritative(ctx context.Context, channelID int64) error
 	if err != nil {
 		return err
 	}
+	// Adopting caption-less media is only safe on an empty projection. On a
+	// populated one the adopted upload re-applies below the meta/move ops
+	// that already placed the file (those are in replay_log and skipped), so
+	// the file would land back at root. TDX1 ops replay idempotently either
+	// way, which is all a full scan of a populated channel needs.
+	if parseOpts.AdoptCaptionlessMedia {
+		empty, err := projection.ChannelIsEmpty(e.db, channelID)
+		if err != nil {
+			return fmt.Errorf("sync: inspect projection: %w", err)
+		}
+		if !empty {
+			slog.Info("sync: projection already populated, skipping caption-less adoption during full scan", "channel_id", channelID)
+			parseOpts.AdoptCaptionlessMedia = false
+		}
+	}
 	peer, err := e.peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("sync: resolve peer: %w", err)

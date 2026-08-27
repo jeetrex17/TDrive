@@ -57,24 +57,21 @@ describe('PersonalDriveSetup', () => {
         expect(body).toContain('&lt;img src=x>');
         expect(body).toContain('In use');
         expect(body).toContain('Recommended');
-        expect(body).not.toContain('ID 8200');
+        expect(body).toContain('ID 8200');
         expect(body.toLowerCase()).not.toContain('access_hash');
         expect(body.toLowerCase()).not.toContain('access hash');
     });
 
-    it('shows channel IDs only when titles collide', () => {
+    it('shows every channel ID so identically named channels stay distinguishable', () => {
         const body = renderSetup({
             candidates: [{
                 id: '8200', title: 'TDrive', created_at: 100, has_activity: true, recommended: true,
             }, {
-                id: '8300', title: 'tdrive', created_at: 200, has_activity: false, recommended: false,
-            }, {
-                id: '8400', title: 'Archive', created_at: 300, has_activity: false, recommended: false,
+                id: '8300', title: 'TDrive', created_at: 200, has_activity: false, recommended: false,
             }],
         });
         expect(body).toContain('ID 8200');
         expect(body).toContain('ID 8300');
-        expect(body).not.toContain('ID 8400');
     });
 
     it('renders discovery error details under the headline', () => {

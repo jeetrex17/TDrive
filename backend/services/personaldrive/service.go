@@ -44,8 +44,12 @@ type Telegram interface {
 	CreateBroadcastChannel(ctx context.Context, title, about string) (tgclient.OwnedBroadcastChannel, error)
 }
 
-type AuthoritativeSync interface {
+// HistorySync rebuilds a channel's projection from Telegram history.
+// EnsureAuthoritative scans from message zero and is only used on an empty
+// projection; Incremental continues from the channel's watermark.
+type HistorySync interface {
 	EnsureAuthoritative(ctx context.Context, channelID int64) error
+	Incremental(ctx context.Context, channelID int64) error
 }
 
 type Candidate struct {
@@ -66,7 +70,7 @@ type State struct {
 type Config struct {
 	DB         *sql.DB
 	Telegram   Telegram
-	Sync       AuthoritativeSync
+	Sync       HistorySync
 	LoadConfig func() (int64, error)
 	SaveConfig func(int64) error
 	UseSaved   func(context.Context, int64) error
@@ -76,7 +80,7 @@ type Config struct {
 type Service struct {
 	db         *sql.DB
 	telegram   Telegram
-	syncer     AuthoritativeSync
+	syncer     HistorySync
 	loadConfig func() (int64, error)
 	saveConfig func(int64) error
 	useSaved   func(context.Context, int64) error
@@ -220,9 +224,16 @@ func (s *Service) listOwnedChannels(ctx context.Context) ([]tgclient.OwnedBroadc
 }
 
 // recover makes channel the personal drive: it registers the channel
-// locally, rebuilds the projection from Telegram history, retires any other
-// personal registration, and only then persists config and activates. A
-// failure before the config write leaves no provisional channel behind.
+// locally, brings the projection up to date with Telegram history, retires
+// any other personal registration, and only then persists config and
+// activates. A failure before the config write leaves no provisional channel
+// behind.
+//
+// An empty projection (fresh install) is rebuilt from message zero and, since
+// nothing local can be missing from Telegram afterwards, marked backfilled. A
+// projection that already holds this channel is the accumulated truth: it only
+// gets an incremental sync, and its backfill state is left untouched so any
+// local-only structure still gets published later.
 func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastChannel) (returnErr error) {
 	if s.db == nil || s.syncer == nil || s.saveConfig == nil || s.setActive == nil {
 		return fmt.Errorf("personaldrive: recovery dependencies are unavailable")
@@ -246,6 +257,10 @@ func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastCh
 	if err := projection.MigratePersonalChannel(s.db, channel.ID); err != nil {
 		return fmt.Errorf("personaldrive: register channel: %w", err)
 	}
+	fresh, err := projection.ChannelIsEmpty(s.db, channel.ID)
+	if err != nil {
+		return fmt.Errorf("personaldrive: inspect channel projection: %w", err)
+	}
 	if err := projection.InsertChannel(s.db, projection.Channel{
 		ChannelID:  channel.ID,
 		AccessHash: channel.AccessHash,
@@ -255,10 +270,7 @@ func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastCh
 	}); err != nil {
 		return fmt.Errorf("personaldrive: store channel metadata: %w", err)
 	}
-	if err := s.syncer.EnsureAuthoritative(ctx, channel.ID); err != nil {
-		return fmt.Errorf("personaldrive: rebuild channel history: %w", err)
-	}
-	if err := projection.MarkPersonalBackfillDone(s.db, channel.ID); err != nil {
+	if err := s.syncHistory(ctx, channel.ID, fresh); err != nil {
 		return err
 	}
 	if err := s.retirePersonalChannelsExcept(channel.ID); err != nil {
@@ -270,6 +282,20 @@ func (s *Service) recover(ctx context.Context, channel tgclient.OwnedBroadcastCh
 	s.setActive(channel.ID)
 	slog.Info("personaldrive: recovery completed", "channel_id", channel.ID)
 	return nil
+}
+
+func (s *Service) syncHistory(ctx context.Context, channelID int64, fresh bool) error {
+	if !fresh {
+		slog.Info("personaldrive: projection already populated, syncing incrementally", "channel_id", channelID)
+		if err := s.syncer.Incremental(ctx, channelID); err != nil {
+			return fmt.Errorf("personaldrive: sync channel history: %w", err)
+		}
+		return nil
+	}
+	if err := s.syncer.EnsureAuthoritative(ctx, channelID); err != nil {
+		return fmt.Errorf("personaldrive: rebuild channel history: %w", err)
+	}
+	return projection.MarkPersonalBackfillDone(s.db, channelID)
 }
 
 // dropProvisionalChannel removes a channel row that recovery registered but
