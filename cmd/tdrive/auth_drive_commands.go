@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"TDrive/backend/daemon"
 
@@ -60,10 +61,105 @@ func runLogin(args []string) error {
 	if out.LoggedIn {
 		fmt.Println("login: ok")
 	}
-	if out.ActiveChannelID != 0 {
+	setup := out.PersonalDrive
+	if setup.Status == "selection_required" {
+		setup, err = choosePersonalDrive(c, setup, os.Stdin, os.Stderr)
+		if err != nil {
+			return err
+		}
+	}
+	if setup.ActiveChannelID != "" {
+		fmt.Printf("drive: %s\n", setup.ActiveChannelID)
+	} else if out.ActiveChannelID != 0 {
 		fmt.Printf("drive: %d\n", out.ActiveChannelID)
 	}
 	return nil
+}
+
+type personalDriveSetupClient interface {
+	SelectPersonalDrive(channelID string) (daemon.PersonalDriveSetup, error)
+	CreatePersonalDrive() (daemon.PersonalDriveSetup, error)
+}
+
+// choosePersonalDrive accepts only a displayed menu number or the explicit
+// create action. It never accepts a raw Telegram channel ID.
+func choosePersonalDrive(
+	client personalDriveSetupClient,
+	setup daemon.PersonalDriveSetup,
+	reader io.Reader,
+	writer io.Writer,
+) (daemon.PersonalDriveSetup, error) {
+	if setup.Status != "selection_required" {
+		return setup, nil
+	}
+	if client == nil || reader == nil || writer == nil {
+		return daemon.PersonalDriveSetup{}, fmt.Errorf("personal drive picker is unavailable")
+	}
+
+	scanner := bufio.NewScanner(reader)
+	fmt.Fprintln(writer, "Choose the Telegram channel to use as your personal TDrive:")
+	for i, candidate := range setup.Candidates {
+		title := terminalSafeTitle(candidate.Title)
+		if title == "" {
+			title = "Untitled channel"
+		}
+		details := "Empty"
+		if candidate.HasActivity {
+			details = "Has activity"
+		}
+		if candidate.Recommended {
+			details += ", Recommended"
+		}
+		fmt.Fprintf(writer, "  %d. %s - %s (Channel ID %s)\n", i+1, title, details, candidate.ID)
+	}
+	fmt.Fprintln(writer, "  c. Create New TDrive")
+
+	for {
+		fmt.Fprint(writer, "Selection: ")
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return daemon.PersonalDriveSetup{}, err
+			}
+			return daemon.PersonalDriveSetup{}, io.EOF
+		}
+		choice := strings.TrimSpace(scanner.Text())
+		if strings.EqualFold(choice, "c") {
+			fmt.Fprint(writer, "Create one new empty Telegram channel? [y/N]: ")
+			if !scanner.Scan() {
+				if err := scanner.Err(); err != nil {
+					return daemon.PersonalDriveSetup{}, err
+				}
+				return daemon.PersonalDriveSetup{}, io.EOF
+			}
+			if strings.EqualFold(strings.TrimSpace(scanner.Text()), "y") {
+				return client.CreatePersonalDrive()
+			}
+			fmt.Fprintln(writer, "Creation cancelled.")
+			continue
+		}
+
+		index, err := strconv.Atoi(choice)
+		if err == nil && index >= 1 && index <= len(setup.Candidates) {
+			return client.SelectPersonalDrive(setup.Candidates[index-1].ID)
+		}
+		fmt.Fprintln(writer, "Enter a menu number, or c to create a new TDrive.")
+	}
+}
+
+func terminalSafeTitle(title string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, title)
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	const maxTitleRunes = 80
+	runes := []rune(cleaned)
+	if len(runes) > maxTitleRunes {
+		cleaned = string(runes[:maxTitleRunes]) + "..."
+	}
+	return cleaned
 }
 
 func runLogout(args []string) error {

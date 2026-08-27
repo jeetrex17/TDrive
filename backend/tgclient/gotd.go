@@ -26,6 +26,7 @@ import (
 type Gotd struct {
 	connect func() (*telegram.Client, error)
 	conn    *liveConn
+	writes  *writeCoordinator
 
 	mu     sync.Mutex
 	client *telegram.Client
@@ -40,6 +41,7 @@ func NewGotd(connect func() (*telegram.Client, error)) *Gotd {
 	g := &Gotd{
 		connect: connect,
 		cdn:     make(map[int]telegram.CloseInvoker),
+		writes:  newWriteCoordinator(time.Now, sleepContext),
 	}
 	g.conn = newLiveConn(g.scope)
 	return g
@@ -239,20 +241,22 @@ func (g *Gotd) SendControlWithRandomID(ctx context.Context, peer InputPeer, text
 		return 0, fmt.Errorf("tgclient: random id must be positive")
 	}
 	var msgID int64
-	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		req := &tg.MessagesSendMessageRequest{
-			Peer:      toPeer(peer),
-			Message:   text,
-			RandomID:  sendRandomID,
-			Silent:    silent,
-			NoWebpage: true,
-		}
-		updates, err := api.MessagesSendMessage(ctx, req)
-		if err != nil {
-			return fmt.Errorf("%w: send message: %w", ErrSendOutcomeUnknown, err)
-		}
-		msgID, err = requiredSendMsgID(updates, sendRandomID, "send control")
-		return err
+	err := g.writes.Do(ctx, writeClassMessage, func() error {
+		return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+			req := &tg.MessagesSendMessageRequest{
+				Peer:      toPeer(peer),
+				Message:   text,
+				RandomID:  sendRandomID,
+				Silent:    silent,
+				NoWebpage: true,
+			}
+			updates, err := api.MessagesSendMessage(ctx, req)
+			if err != nil {
+				return fmt.Errorf("%w: send message: %w", ErrSendOutcomeUnknown, err)
+			}
+			msgID, err = requiredSendMsgID(updates, sendRandomID, "send control")
+			return err
+		})
 	})
 	return msgID, err
 }
@@ -272,8 +276,10 @@ func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 	partClient := &retryingUploadClient{
 		policy: DefaultWriteFloodWaitRetryPolicy(),
 		run: func(ctx context.Context, action func(uploader.Client) error) error {
-			return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-				return action(api)
+			return g.writes.Do(ctx, writeClassUploadPart, func() error {
+				return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+					return action(api)
+				})
 			})
 		},
 	}
@@ -298,29 +304,31 @@ func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 	}
 
 	var result SendFileResult
-	err = g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		req := &tg.MessagesSendMediaRequest{
-			Peer: toPeer(peer),
-			Media: &tg.InputMediaUploadedDocument{
-				File:      uploadResult,
-				MimeType:  "application/octet-stream",
-				ForceFile: true,
-				Attributes: []tg.DocumentAttributeClass{
-					&tg.DocumentAttributeFilename{FileName: name},
+	err = g.writes.Do(ctx, writeClassMessage, func() error {
+		return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+			req := &tg.MessagesSendMediaRequest{
+				Peer: toPeer(peer),
+				Media: &tg.InputMediaUploadedDocument{
+					File:      uploadResult,
+					MimeType:  "application/octet-stream",
+					ForceFile: true,
+					Attributes: []tg.DocumentAttributeClass{
+						&tg.DocumentAttributeFilename{FileName: name},
+					},
 				},
-			},
-			RandomID: sendRandomID,
-			Message:  caption,
-		}
-		updates, err := api.MessagesSendMedia(ctx, req)
-		if err != nil {
-			// Uploading the document precedes MessagesSendMedia. A transport error
-			// at this boundary can arrive after Telegram accepted the random_id,
-			// so callers must reconcile with the same id before cleanup.
-			return fmt.Errorf("%w: send media: %w", ErrSendOutcomeUnknown, err)
-		}
-		result.MsgID, err = requiredSendMsgID(updates, sendRandomID, "send file")
-		return err
+				RandomID: sendRandomID,
+				Message:  caption,
+			}
+			updates, err := api.MessagesSendMedia(ctx, req)
+			if err != nil {
+				// Uploading the document precedes MessagesSendMedia. A transport error
+				// at this boundary can arrive after Telegram accepted the random_id,
+				// so callers must reconcile with the same id before cleanup.
+				return fmt.Errorf("%w: send media: %w", ErrSendOutcomeUnknown, err)
+			}
+			result.MsgID, err = requiredSendMsgID(updates, sendRandomID, "send file")
+			return err
+		})
 	})
 	return result, err
 }
@@ -532,16 +540,18 @@ func (g *Gotd) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 		return nil
 	}
 	slog.Debug("tgclient: ChannelsDeleteMessages", "channel_id", peer.ChannelID, "count", len(msgIDs))
-	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		ids := make([]int, 0, len(msgIDs))
-		for _, id := range msgIDs {
-			ids = append(ids, int(id))
-		}
-		_, err := api.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
-			Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
-			ID:      ids,
+	err := g.writes.Do(ctx, writeClassMessage, func() error {
+		return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+			ids := make([]int, 0, len(msgIDs))
+			for _, id := range msgIDs {
+				ids = append(ids, int(id))
+			}
+			_, err := api.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+				Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
+				ID:      ids,
+			})
+			return err
 		})
-		return err
 	})
 	if err != nil {
 		slog.Error("tgclient: ChannelsDeleteMessages failed", "channel_id", peer.ChannelID, "count", len(msgIDs), "error", err)

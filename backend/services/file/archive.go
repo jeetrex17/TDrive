@@ -75,16 +75,12 @@ func sanitizeArchivePath(name string) (rel string, ok bool) {
 // Directory entries are returned with IsDir true. Symlinks, hardlinks, devices,
 // and zip-slip entries are skipped.
 func ScanArchive(p string) ([]ArchiveEntry, error) {
-	switch classifyArchive(p) {
-	case archiveZip:
-		return scanZip(p)
-	case archiveTar:
-		return scanTar(p, false)
-	case archiveTarGz:
-		return scanTar(p, true)
-	default:
-		return nil, fmt.Errorf("unsupported archive type: %s", p)
-	}
+	var entries []ArchiveEntry
+	err := forEachArchiveEntry(p, func(entry ArchiveEntry) error {
+		entries = append(entries, entry)
+		return nil
+	})
+	return entries, err
 }
 
 // StreamArchiveFiles calls fn for each safe regular-file entry in archive order,
@@ -108,14 +104,13 @@ func StreamArchiveFiles(p string, fn func(e ArchiveEntry, r io.Reader) error) er
 	}
 }
 
-func scanZip(p string) ([]ArchiveEntry, error) {
+func forEachZipEntry(p string, fn func(ArchiveEntry) error) error {
 	zr, err := zip.OpenReader(p)
 	if err != nil {
-		return nil, fmt.Errorf("open zip: %w", err)
+		return fmt.Errorf("open zip: %w", err)
 	}
 	defer zr.Close()
 
-	entries := make([]ArchiveEntry, 0, len(zr.File))
 	for _, f := range zr.File {
 		fi := f.FileInfo()
 		if fi.Mode()&os.ModeSymlink != 0 {
@@ -126,15 +121,19 @@ func scanZip(p string) ([]ArchiveEntry, error) {
 			continue
 		}
 		if fi.IsDir() {
-			entries = append(entries, ArchiveEntry{RelPath: rel, IsDir: true})
+			if err := fn(ArchiveEntry{RelPath: rel, IsDir: true}); err != nil {
+				return err
+			}
 			continue
 		}
 		if f.UncompressedSize64 > math.MaxInt64 {
 			continue // implausible declared size; treat as malformed and skip
 		}
-		entries = append(entries, ArchiveEntry{RelPath: rel, Size: int64(f.UncompressedSize64)})
+		if err := fn(ArchiveEntry{RelPath: rel, Size: int64(f.UncompressedSize64)}); err != nil {
+			return err
+		}
 	}
-	return entries, nil
+	return nil
 }
 
 func streamZip(p string, fn func(e ArchiveEntry, r io.Reader) error) error {
@@ -169,9 +168,8 @@ func streamZip(p string, fn func(e ArchiveEntry, r io.Reader) error) error {
 	return nil
 }
 
-func scanTar(p string, gzipped bool) ([]ArchiveEntry, error) {
-	var entries []ArchiveEntry
-	err := withTarReader(p, gzipped, func(tr *tar.Reader) error {
+func forEachTarEntry(p string, gzipped bool, fn func(ArchiveEntry) error) error {
+	return withTarReader(p, gzipped, func(tr *tar.Reader) error {
 		for {
 			hdr, err := tr.Next()
 			if err == io.EOF {
@@ -186,18 +184,31 @@ func scanTar(p string, gzipped bool) ([]ArchiveEntry, error) {
 			}
 			switch {
 			case isTarDir(hdr):
-				entries = append(entries, ArchiveEntry{RelPath: rel, IsDir: true})
+				if err := fn(ArchiveEntry{RelPath: rel, IsDir: true}); err != nil {
+					return err
+				}
 			case isTarRegular(hdr):
-				entries = append(entries, ArchiveEntry{RelPath: rel, Size: hdr.Size})
+				if err := fn(ArchiveEntry{RelPath: rel, Size: hdr.Size}); err != nil {
+					return err
+				}
 			default:
 				// symlink, hardlink, device, fifo: skip
 			}
 		}
 	})
-	if err != nil {
-		return nil, err
+}
+
+func forEachArchiveEntry(p string, fn func(ArchiveEntry) error) error {
+	switch classifyArchive(p) {
+	case archiveZip:
+		return forEachZipEntry(p, fn)
+	case archiveTar:
+		return forEachTarEntry(p, false, fn)
+	case archiveTarGz:
+		return forEachTarEntry(p, true, fn)
+	default:
+		return fmt.Errorf("unsupported archive type: %s", p)
 	}
-	return entries, nil
 }
 
 func streamTar(p string, gzipped bool, fn func(e ArchiveEntry, r io.Reader) error) error {

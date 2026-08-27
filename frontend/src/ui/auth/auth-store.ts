@@ -3,7 +3,7 @@ import { writable } from 'svelte/store';
 // Which auth screen is visible. null means no auth screen (the wrapper is
 // hidden, or the dashboard is showing). modules/auth.ts drives this from the
 // login flow and the Telegram event stream.
-export type AuthScreen = 'setup' | 'phone' | 'code' | 'password' | null;
+export type AuthScreen = 'setup' | 'phone' | 'code' | 'password' | 'drive' | null;
 
 export const authScreen = writable<AuthScreen>(null);
 

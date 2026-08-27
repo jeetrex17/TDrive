@@ -275,9 +275,6 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 	if err != nil {
 		return fmt.Errorf("projection: read schema version: %w", err)
 	}
-	if v >= currentSchemaVersion {
-		return nil
-	}
 
 	tx, err := db.Begin()
 	if err != nil {
@@ -287,6 +284,12 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 
 	if err := upsertChannel(tx, personalChannelID); err != nil {
 		return err
+	}
+	if v >= currentSchemaVersion {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("projection: commit personal channel registration: %w", err)
+		}
+		return nil
 	}
 
 	if v < 1 {

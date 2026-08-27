@@ -5,7 +5,15 @@ import (
 	"fmt"
 )
 
-const ProtocolVersion = 1
+// ProtocolVersion gates every request frame. The CLI reuses an already
+// running daemon, so an upgrade can leave a new CLI talking to a daemon from
+// the previous install. Bump this whenever commands or response shapes
+// change, so that pairing fails with a clear version error instead of an
+// obscure unknown-command one.
+//
+// 2: personal-drive setup commands, and AuthLoginResponse carries the setup
+// state instead of an InitDrive string (v1.7.1).
+const ProtocolVersion = 2
 
 const (
 	CommandStatus             = "daemon.status"
@@ -45,6 +53,12 @@ const (
 	CommandMountStart         = "mount.start"
 	CommandMountStatus        = "mount.status"
 	CommandMountStop          = "mount.stop"
+)
+
+const (
+	CommandPersonalDrivePrepare = "personal_drive.prepare"
+	CommandPersonalDriveSelect  = "personal_drive.select"
+	CommandPersonalDriveCreate  = "personal_drive.create"
 )
 
 type Request struct {
@@ -105,9 +119,28 @@ type AuthLoginRequest struct {
 }
 
 type AuthLoginResponse struct {
-	LoggedIn        bool   `json:"logged_in"`
-	InitDriveResult string `json:"init_drive_result,omitempty"`
-	ActiveChannelID int64  `json:"active_channel_id,omitempty"`
+	LoggedIn        bool               `json:"logged_in"`
+	InitDriveResult string             `json:"init_drive_result,omitempty"`
+	ActiveChannelID int64              `json:"active_channel_id,omitempty"`
+	PersonalDrive   PersonalDriveSetup `json:"personal_drive"`
+}
+
+type PersonalDriveCandidate struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	CreatedAt   int64  `json:"created_at"`
+	HasActivity bool   `json:"has_activity"`
+	Recommended bool   `json:"recommended"`
+}
+
+type PersonalDriveSetup struct {
+	Status          string                   `json:"status"`
+	ActiveChannelID string                   `json:"active_channel_id,omitempty"`
+	Candidates      []PersonalDriveCandidate `json:"candidates"`
+}
+
+type PersonalDriveSelectRequest struct {
+	ChannelID string `json:"channel_id"`
 }
 
 type AuthSubmitRequest struct {

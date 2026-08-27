@@ -12,6 +12,10 @@ function sectionBetween(startMarker: string, endMarker: string): string {
     return globalCss.slice(start, end);
 }
 
+function stripComments(css: string): string {
+    return css.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 function ruleFor(selector: string): string {
     const start = globalCss.indexOf(`${selector} {`);
     if (start < 0) throw new Error(`missing CSS rule: ${selector}`);
@@ -24,10 +28,26 @@ function ruleFor(selector: string): string {
 }
 
 describe('global theme style contract', () => {
-    it('reveals the native renderer through the themed document canvas', () => {
-        expect(globalCss).toMatch(
-            /html\.native-video-active,\s*body\.native-video-active\s*\{[^}]*background(?:-color)?:\s*transparent;/,
-        );
+    it('lets the themed backdrop step aside for the native video renderer', () => {
+        // macOS renders libmpv below the WebView, so anything left painting in
+        // the root chain hides the picture behind a flat themed rectangle. Each
+        // element that carries a background must be cleared while the marker
+        // class is set: clearing <body> alone is not enough, because giving
+        // <html> a background stops body transparency reaching the canvas.
+        const paintedBy = new Set<string>();
+        const clearedBy = new Set<string>();
+        for (const [, selectors, declarations] of stripComments(globalCss).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+            const background = /(?:^|;)\s*background(?:-color|-image)?\s*:\s*([^;]+)/.exec(declarations)?.[1]?.trim();
+            if (!background) continue;
+            const target = /^(transparent|none)$/.test(background) ? clearedBy : paintedBy;
+            for (const selector of selectors.split(',')) target.add(selector.trim());
+        }
+
+        expect(paintedBy).toContain('html');
+        for (const selector of ['html', 'body', '#app']) {
+            if (!paintedBy.has(selector)) continue;
+            expect(clearedBy).toContain(`html.native-video-active ${selector}`.replace(' html', ''));
+        }
     });
 
     it('keeps palette colors out of the lower-specificity bare root', () => {

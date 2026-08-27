@@ -1,3 +1,5 @@
+import type { ImportProgress } from './modules/import-progress';
+
 // Centralized state for the TDrive frontend.
 //
 // Loosely-shaped, frequently-reshaped fields (drag payloads, modal targets,
@@ -41,9 +43,9 @@ export interface State {
     transferClearEl: HTMLElement | null;
     uploadTransfers: Map<string | number, any>;
     uploadBatch: { total: number; done: number; failed: number } | null;
-    // Aggregate progress for a folder/archive import. When set, per-file upload
-    // events feed this single bell row instead of spawning one row per file.
-    importBatch: { total: number; done: number; failed: number } | null;
+    // Constant-size aggregate progress for a folder/archive import. The backend
+    // coalesces per-file activity before it crosses the Wails bridge.
+    importBatch: ImportProgress | null;
     // True while a cancel is in flight, so abort events relabel rows as canceled
     // instead of failed.
     cancelingUpload: boolean;

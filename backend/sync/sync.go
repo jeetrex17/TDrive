@@ -33,6 +33,37 @@ var errHistoryPaginationNoProgress = errors.New("sync: history pagination made n
 type historyPlan struct {
 	upperBounds []int64
 	highestSeen int64
+	// messages is how many messages the counting pass observed. It is the
+	// denominator the apply pass counts towards.
+	messages int
+}
+
+// ProgressPhase names the stage a history scan is in.
+type ProgressPhase string
+
+const (
+	// ProgressCounting is the backwards pagination that discovers how much
+	// history exists. Totals are unknown until it finishes.
+	ProgressCounting ProgressPhase = "counting"
+	// ProgressApplying is the forwards pass that projects each page.
+	ProgressApplying ProgressPhase = "applying"
+	// ProgressWaiting is a Telegram-imposed pause. Nothing is read during it,
+	// and it is the one stage long enough to look like a hang.
+	ProgressWaiting ProgressPhase = "waiting"
+)
+
+// Progress reports how far a history scan has got. Totals are 0 while still
+// unknown, so a UI shows an indeterminate indicator rather than "x of 0".
+type Progress struct {
+	ChannelID     int64
+	Phase         ProgressPhase
+	PagesDone     int
+	PagesTotal    int
+	MessagesDone  int
+	MessagesTotal int
+	// Wait is how long Telegram asked us to pause. Set only for
+	// ProgressWaiting; the counters keep their last known values.
+	Wait time.Duration
 }
 
 type Engine struct {
@@ -40,9 +71,10 @@ type Engine struct {
 	tg    tgclient.Client
 	peers PeerResolver
 
-	// OnFloodWait, if set, is invoked before sleeping out a read-side
-	// FLOOD_WAIT. Optional progress/UI hook; nil is fine.
-	OnFloodWait func(channelID int64, wait time.Duration)
+	// OnProgress, if set, is invoked as a history scan advances, including
+	// when a read-side FLOOD_WAIT forces a pause. Optional UI hook; nil is
+	// fine. It runs on the scanning goroutine, so it must not block.
+	OnProgress func(Progress)
 
 	// EmitTomb persists a tomb op for a file whose backing message(s) were
 	// found deleted directly on Telegram, bypassing TDrive's own delete
@@ -70,9 +102,7 @@ func (e *Engine) getHistory(ctx context.Context, channelID int64, peer tgclient.
 			wait = maxFloodWaitSleep
 		}
 		slog.Warn("sync: FLOOD_WAIT on history read, retrying", "channel_id", channelID, "attempt", attempt+1, "wait", wait)
-		if e.OnFloodWait != nil {
-			e.OnFloodWait(channelID, wait)
-		}
+		e.report(Progress{ChannelID: channelID, Phase: ProgressWaiting, Wait: wait})
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
@@ -93,6 +123,12 @@ func NewEngine(db *sql.DB, tg tgclient.Client, peers PeerResolver) *Engine {
 		tg:    tg,
 		peers: peers,
 		locks: make(map[int64]*stdsync.Mutex),
+	}
+}
+
+func (e *Engine) report(p Progress) {
+	if e.OnProgress != nil {
+		e.OnProgress(p)
 	}
 }
 
@@ -247,6 +283,21 @@ func (e *Engine) EnsureAuthoritative(ctx context.Context, channelID int64) error
 	if err != nil {
 		return err
 	}
+	// Adopting caption-less media is only safe on an empty projection. On a
+	// populated one the adopted upload re-applies below the meta/move ops
+	// that already placed the file (those are in replay_log and skipped), so
+	// the file would land back at root. TDX1 ops replay idempotently either
+	// way, which is all a full scan of a populated channel needs.
+	if parseOpts.AdoptCaptionlessMedia {
+		empty, err := projection.ChannelIsEmpty(e.db, channelID)
+		if err != nil {
+			return fmt.Errorf("sync: inspect projection: %w", err)
+		}
+		if !empty {
+			slog.Info("sync: projection already populated, skipping caption-less adoption during full scan", "channel_id", channelID)
+			parseOpts.AdoptCaptionlessMedia = false
+		}
+	}
 	peer, err := e.peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("sync: resolve peer: %w", err)
@@ -318,6 +369,7 @@ func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient
 	var lowestPerPage []int64
 	highestSeen := minID
 	offsetID := int64(0)
+	messages := 0
 	for {
 		page, err := e.getHistory(ctx, channelID, peer, minID, offsetID, defaultPageSize)
 		if err != nil {
@@ -336,6 +388,13 @@ func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient
 			}
 		}
 		lowestPerPage = append(lowestPerPage, lowestInPage)
+		messages += len(page)
+		e.report(Progress{
+			ChannelID:    channelID,
+			Phase:        ProgressCounting,
+			PagesDone:    len(lowestPerPage),
+			MessagesDone: messages,
+		})
 		if len(page) < defaultPageSize {
 			break
 		}
@@ -353,10 +412,24 @@ func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient
 	for i := 1; i < len(lowestPerPage); i++ {
 		upperBounds[i] = lowestPerPage[i-1]
 	}
-	return historyPlan{upperBounds: upperBounds, highestSeen: highestSeen}, nil
+	return historyPlan{upperBounds: upperBounds, highestSeen: highestSeen, messages: messages}, nil
+}
+
+// applyProgress reports one projected page. Pages are applied oldest-first
+// from the end of the plan, so the index maps to a count directly.
+func (e *Engine) applyProgress(channelID int64, plan historyPlan, index, messagesDone int) {
+	e.report(Progress{
+		ChannelID:     channelID,
+		Phase:         ProgressApplying,
+		PagesDone:     len(plan.upperBounds) - index,
+		PagesTotal:    len(plan.upperBounds),
+		MessagesDone:  messagesDone,
+		MessagesTotal: plan.messages,
+	})
 }
 
 func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions) error {
+	messagesDone := 0
 	for i := len(plan.upperBounds) - 1; i >= 0; i-- {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -401,6 +474,8 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("sync: commit projection: %w", err)
 		}
+		messagesDone += len(page)
+		e.applyProgress(channelID, plan, i, messagesDone)
 	}
 	return nil
 }
@@ -412,6 +487,7 @@ func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, p
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	messagesDone := 0
 	for i := len(plan.upperBounds) - 1; i >= 0; i-- {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -436,6 +512,8 @@ func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, p
 				return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
 			}
 		}
+		messagesDone += len(page)
+		e.applyProgress(channelID, plan, i, messagesDone)
 	}
 
 	if err := markInitialSyncDoneTx(tx, channelID, plan.highestSeen); err != nil {

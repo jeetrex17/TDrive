@@ -120,6 +120,13 @@ func TestDeleteChannelCascadesAllScopedTables(t *testing.T) {
 	`, sharedID); err != nil {
 		t.Fatalf("seed backfill: %v", err)
 	}
+	if _, err := db.Exec(`
+		INSERT INTO encryption
+		  (channel_id, enabled, kdf_salt, kdf_params_json, wrapped_master_key, key_check, hint, created_at, version)
+		VALUES (?, 0, X'01', '{}', X'02', X'03', '', 0, 1)
+	`, sharedID); err != nil {
+		t.Fatalf("seed encryption: %v", err)
+	}
 
 	if err := DeleteChannel(db, sharedID); err != nil {
 		t.Fatalf("delete: %v", err)
@@ -132,6 +139,7 @@ func TestDeleteChannelCascadesAllScopedTables(t *testing.T) {
 		"folders":           `SELECT 1 FROM folders WHERE channel_id = ?`,
 		"files":             `SELECT 1 FROM files WHERE channel_id = ?`,
 		"backfill_progress": `SELECT 1 FROM backfill_progress WHERE channel_id = ?`,
+		"encryption":        `SELECT 1 FROM encryption WHERE channel_id = ?`,
 	} {
 		var tmp int
 		err := db.QueryRow(query, sharedID).Scan(&tmp)

@@ -31,6 +31,9 @@ function makePlan(overrides: Partial<ImportOptionsPlan> = {}): ImportOptionsPlan
         bytes: 2048,
         oversize: 0,
         archives: 0,
+        ignored: 0,
+        maxItems: 10_000,
+        limitExceeded: false,
         maxBytes: 1024 * 1024,
         errors: [],
         ...overrides,
@@ -212,6 +215,70 @@ describe('ImportOptionsModal', () => {
         expect(body).toContain('1 file over 1.0 MB will be skipped');
         expect(body).toContain('import-options-extract-row');
         expect(body).toContain('import-options-encrypt-row');
+    });
+
+    it('explains when generated and cache entries will be skipped', () => {
+        importOptionsModal.open({
+            plan: makePlan({ ignored: 137 }),
+            personal: false,
+            hasArchives: false,
+        });
+
+        const { body } = render(ImportOptionsModal, {
+            props: { onCancel: noop, onConfirm: noop, onToggle: noop },
+        });
+
+        expect(body).toContain('137 generated/cache entries will be skipped');
+    });
+
+    it('blocks an oversized import with actionable guidance', () => {
+        importOptionsModal.open({
+            plan: makePlan({ files: 10_001, maxItems: 10_000, limitExceeded: true }),
+            personal: false,
+            hasArchives: false,
+        });
+
+        const { body } = render(ImportOptionsModal, {
+            props: { onCancel: noop, onConfirm: noop, onToggle: noop },
+        });
+        const confirm = body.match(/<button[^>]*id="import-options-confirm"[^>]*>/)?.[0] ?? '';
+
+        expect(body).toContain('Keep it under 10,000 items');
+        expect(body).toContain('removing generated/cache folders or splitting it into smaller batches');
+        expect(confirm).toContain('disabled');
+    });
+
+    it('keeps the confirm action enabled for imports within the limit', () => {
+        importOptionsModal.open({
+            plan: makePlan({ files: 9_999, maxItems: 10_000, limitExceeded: false }),
+            personal: false,
+            hasArchives: false,
+        });
+
+        const { body } = render(ImportOptionsModal, {
+            props: { onCancel: noop, onConfirm: noop, onToggle: noop },
+        });
+        const confirm = body.match(/<button[^>]*id="import-options-confirm"[^>]*>/)?.[0] ?? '';
+
+        expect(confirm).not.toContain('disabled');
+    });
+
+    it('prevents confirmation while an option replan is pending', () => {
+        importOptionsModal.open({
+            plan: makePlan(),
+            personal: true,
+            hasArchives: true,
+            replanning: true,
+        });
+
+        const { body } = render(ImportOptionsModal, {
+            props: { onCancel: noop, onConfirm: noop, onToggle: noop },
+        });
+        const confirm = body.match(/<button[^>]*id="import-options-confirm"[^>]*>/)?.[0] ?? '';
+
+        expect(confirm).toContain('disabled');
+        expect(confirm).toContain('aria-busy="true"');
+        expect(body).toContain('Checking…');
     });
 });
 

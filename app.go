@@ -314,8 +314,8 @@ func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fil
 
 // ImportPaths recreates the folder structure of the selected paths under
 // parentID and uploads their files. Archives are extracted when extractArchives
-// is set, otherwise uploaded as-is. Progress flows through the import_* and the
-// per-file upload_* events.
+// is set, otherwise uploaded as-is. Progress flows through aggregate import_*
+// events.
 func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) error {
 	svc, err := a.requireFileService()
 	if err != nil {
@@ -422,14 +422,6 @@ func (a *App) LoginPhoneNumber(phoneNumber string) error {
 		return fmt.Errorf("backend not ready")
 	}
 	return svc.StartLogin(a.ctx, phoneNumber)
-}
-
-func (a *App) InitDrive() string {
-	svc, err := a.requireLifecycleService()
-	if err != nil {
-		return err.Error()
-	}
-	return svc.InitDrive(a.ctx)
 }
 
 func (a *App) GetFileList() []TDriveFile {

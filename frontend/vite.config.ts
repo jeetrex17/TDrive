@@ -16,7 +16,11 @@ export default defineConfig({
     test: {
         coverage: {
             provider: 'v8',
-            include: ['src/ui/theme/**'],
+            include: [
+                'src/ui/theme/**',
+                'src/ui/auth/PersonalDriveSetup.svelte',
+                'src/ui/auth/personal-drive-store.ts',
+            ],
             thresholds: {
                 branches: 80,
                 functions: 80,

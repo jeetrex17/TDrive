@@ -228,6 +228,36 @@ describe('theme controller', () => {
         controller.destroy();
     });
 
+    it('takes the CSS fallback instead of a view transition on Linux WebKit', () => {
+        vi.useFakeTimers();
+        const startViewTransition = vi.fn((update: () => void) => {
+            update();
+            return { finished: Promise.resolve() };
+        });
+        Object.defineProperty(document, 'startViewTransition', {
+            configurable: true,
+            value: startViewTransition,
+        });
+        const controller = createThemeController({
+            document,
+            storage,
+            reducedMotion: createMediaQuery(false),
+            userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+        });
+        controller.start();
+
+        controller.setPreferredTheme('dark', 'nord', { x: 120, y: 84 });
+
+        expect(startViewTransition).not.toHaveBeenCalled();
+        expect(document.documentElement.dataset.theme).toBe('nord');
+        expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
+        expect(document.documentElement.style.getPropertyValue('--theme-origin-x')).toBe('120px');
+
+        vi.advanceTimersByTime(1250);
+        expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(false);
+        controller.destroy();
+    });
+
     it('keeps working when storage is unavailable and ignores invalid runtime input', () => {
         const unavailableStorage = {
             getItem: () => { throw new Error('blocked'); },

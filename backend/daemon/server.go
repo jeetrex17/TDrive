@@ -364,6 +364,40 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 			return ErrorResponse(req.ID, err)
 		}
 		return frame
+	case CommandPersonalDrivePrepare:
+		out, err := s.preparePersonalDrive(ctx)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandPersonalDriveSelect:
+		var in PersonalDriveSelectRequest
+		if err := decodePayload(req.Payload, &in); err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		out, err := s.selectPersonalDrive(ctx, in.ChannelID)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
+	case CommandPersonalDriveCreate:
+		out, err := s.createPersonalDrive(ctx)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		frame, err := Response(req.ID, out)
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
 	case CommandAuthSubmitCode:
 		var in AuthSubmitRequest
 		if err := decodePayload(req.Payload, &in); err != nil {

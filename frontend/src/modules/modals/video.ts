@@ -31,6 +31,7 @@ import {
     normalizeNativeTracks,
     type NativeMediaTrack,
 } from "../video/media-tracks";
+import { setNativeVideoLayerActive } from "../video/native-video-layer";
 import { installModalA11y } from "../../ui/modals/modal-a11y";
 import VideoModal from "../../ui/video/VideoModal.svelte";
 import { mountSvelte, type SvelteMountHandle } from "../../ui/mount";
@@ -352,6 +353,12 @@ class NativeMpvAdapter implements PlayerAdapter {
     playPause() {
         void this.sendCommand(["cycle", "pause"]);
         this.updateFallbackState((state) => ({ ...state, paused: !state.paused }));
+    }
+
+    setPaused(value: boolean) {
+        const paused = Boolean(value);
+        this.scheduleLatestCommand("pause", ["set", "pause", paused ? "yes" : "no"]);
+        this.updateFallbackState((state) => ({ ...state, paused }));
     }
 
     seekAbsolute(_seconds: number) {
@@ -775,8 +782,9 @@ function setNativeLayout(layout: NativeLayout) {
     modalEl?.classList.toggle("is-video-native-fallback", fallback);
     modalEl?.classList.toggle("is-video-native-standalone", standalone);
     if (standaloneEl) standaloneEl.hidden = !standalone;
-    document.documentElement.classList.toggle("native-video-active", overlay);
-    document.body.classList.toggle("native-video-active", overlay);
+    // Only the overlay layout renders mpv underneath the WebView; the fallback
+    // layout puts a native child window on top and needs the canvas left alone.
+    setNativeVideoLayerActive(document, overlay);
     syncFallbackNativeViewportInsets();
 }
 
@@ -1610,7 +1618,7 @@ function showTooltipImage(url: string) {
     }
 }
 
-// --- Native seek-thumbnail overlay (Windows/Linux fallback) ---------------
+// --- Native seek-thumbnail overlay (Windows fallback) ---------------------
 // WebView2 can't paint HTML over the native video, so in the fallback the seek
 // preview is drawn by a native overlay window. We hand the backend the same
 // frame bytes the HTML tooltip would show plus a target box in CSS pixels, and
@@ -1683,7 +1691,7 @@ function hideNativeSeekPreview() {
 }
 
 // nativeSeekOverlayRect returns the preview box (CSS pixels, viewport coords)
-// centered on the hovered point just above the scrubber. On Windows/Linux this
+// centered on the hovered point just above the scrubber. On Windows fallback this
 // is a small native child window, so it can sit over the mpv video rectangle
 // while the WebView controls remain in their reserved chrome strip.
 function nativeSeekOverlayRect(): NativeMediaRect | null {
@@ -2211,7 +2219,7 @@ function activateNativePlayback(
         adapter.setVolume(intent.volume);
         adapter.setMuted(intent.muted);
         adapter.setSpeed(intent.rate);
-        if (intent.paused) adapter.playPause();
+        adapter.setPaused(intent.paused);
     }
 
     let positionRestored = !intent || intent.currentTime <= 0;

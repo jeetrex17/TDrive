@@ -92,10 +92,15 @@ html.theme-transition-fallback #app {
         animation: none;
     }
 }
-/* macOS places libmpv below the transparent WebView so HTML controls can stay
-   interactive. Clear the root canvas as well as the body to reveal that view. */
+/* macOS layers libmpv *below* the transparent WebView, so every element that
+   paints between the viewer and that view has to clear out or the video stays
+   hidden behind the app backdrop. Clear the whole root chain, not just <body>:
+   once <html> carries a themed background of its own, body transparency no
+   longer propagates to the page canvas and the video renders as a flat
+   --color-canvas rectangle. */
 html.native-video-active,
-body.native-video-active { background: transparent; }
+html.native-video-active body,
+html.native-video-active #app { background: transparent; }
 body.native-video-active #auth-wrapper,
 body.native-video-active #success-screen,
 body.native-video-active #context-menu,
