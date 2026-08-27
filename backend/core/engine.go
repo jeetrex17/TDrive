@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -167,6 +169,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.reads = e.newReadService()
 	e.media = e.newMediaService()
 	e.syncEngine = tdsync.NewEngine(backend.DB, e.tg, peerResolverFn(e.ResolvePeer))
+	e.syncEngine.OnProgress = e.emitDriveScanProgress
 	e.syncEngine.EmitTomb = func(channelID int64, fileMsgID int64) error {
 		_, err := e.EmitAndProject(channelID, projection.Op{
 			Type: projection.OpTomb,
@@ -186,6 +189,39 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	}
 
 	return e, nil
+}
+
+// DriveScanProgressEvent is the frontend-facing shape of a history-scan
+// update. The channel id is a string because Telegram ids can exceed
+// JavaScript's safe integer range.
+type DriveScanProgressEvent struct {
+	ChannelID     string `json:"channel_id"`
+	Phase         string `json:"phase"`
+	PagesDone     int    `json:"pages_done"`
+	PagesTotal    int    `json:"pages_total"`
+	MessagesDone  int    `json:"messages_done"`
+	MessagesTotal int    `json:"messages_total"`
+	WaitSeconds   int    `json:"wait_seconds"`
+}
+
+// DriveScanProgressEventName is emitted while a drive's Telegram history is
+// being read. Recovery is the only scan long enough for a user to watch, but
+// routine incremental syncs emit it too; consumers decide what to show.
+const DriveScanProgressEventName = "drive_scan_progress"
+
+func (e *Engine) emitDriveScanProgress(p tdsync.Progress) {
+	if e == nil || e.events == nil {
+		return
+	}
+	e.events.Emit(DriveScanProgressEventName, DriveScanProgressEvent{
+		ChannelID:     strconv.FormatInt(p.ChannelID, 10),
+		Phase:         string(p.Phase),
+		PagesDone:     p.PagesDone,
+		PagesTotal:    p.PagesTotal,
+		MessagesDone:  p.MessagesDone,
+		MessagesTotal: p.MessagesTotal,
+		WaitSeconds:   int(math.Ceil(p.Wait.Seconds())),
+	})
 }
 
 func (e *Engine) startLiveSync(activity *livesync.TelegramActivity) {

@@ -258,6 +258,8 @@
         candidates={$personalDriveSetup.candidates}
         error={$personalDriveSetup.error}
         detail={$personalDriveSetup.detail}
+        scan={$personalDriveSetup.scan}
+        waitSeconds={$personalDriveSetup.waitSeconds}
         createRetry={$personalDriveSetup.createRetry}
         onSelect={onDriveSelect}
         onCreate={onDriveCreate}

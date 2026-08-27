@@ -3,7 +3,7 @@
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
-    import type { PersonalDriveCandidate, PersonalDrivePhase } from './personal-drive-store';
+    import type { DriveScanProgress, PersonalDriveCandidate, PersonalDrivePhase } from './personal-drive-store';
 
     interface Props {
         phase: PersonalDrivePhase;
@@ -11,6 +11,8 @@
         error: string;
         detail?: string;
         createRetry?: boolean;
+        scan?: DriveScanProgress | null;
+        waitSeconds?: number;
         onSelect: (channelID: string) => void;
         onCreate: () => void;
         onRetry: () => void;
@@ -22,6 +24,8 @@
         error,
         detail = '',
         createRetry = false,
+        scan = null,
+        waitSeconds = 0,
         onSelect,
         onCreate,
         onRetry,
@@ -32,6 +36,42 @@
 
     const busy = $derived(phase === 'loading' || phase === 'recovering');
     const recovering = $derived(phase === 'recovering');
+
+    // Counting walks the channel backwards to size the job, so no total is
+    // known yet; only the applying pass can fill a determinate bar.
+    const percent = $derived.by(() => {
+        if (!scan || scan.phase !== 'applying' || scan.messages_total <= 0) return null;
+        const ratio = scan.messages_done / scan.messages_total;
+        return Math.max(0, Math.min(100, Math.round(ratio * 100)));
+    });
+
+    let waitRemaining = $state(0);
+
+    // Telegram's pauses are the only stage long enough to look like a hang,
+    // so count them down locally rather than showing a frozen number.
+    $effect(() => {
+        if (waitSeconds <= 0) {
+            waitRemaining = 0;
+            return;
+        }
+        let left = waitSeconds;
+        waitRemaining = left;
+        const timer = setInterval(() => {
+            left -= 1;
+            waitRemaining = Math.max(0, left);
+            if (left <= 0) clearInterval(timer);
+        }, 1000);
+        return () => clearInterval(timer);
+    });
+
+    const scanLabel = $derived.by(() => {
+        if (waitRemaining > 0) return `Telegram asked us to slow down — resuming in ${waitRemaining}s`;
+        if (!scan) return 'Reading your Telegram channel…';
+        if (scan.phase === 'counting') {
+            return `Counting messages… ${formatCount(scan.messages_done)} so far`;
+        }
+        return `Rebuilding your files… ${formatCount(scan.messages_done)} of ${formatCount(scan.messages_total)} messages`;
+    });
 
     $effect(() => {
         if (selectedID && !candidates.some((candidate) => candidate.id === selectedID)) {
@@ -44,6 +84,10 @@
 
     function candidateTitle(candidate: PersonalDriveCandidate): string {
         return candidate.title || 'Untitled channel';
+    }
+
+    function formatCount(value: number): string {
+        return value.toLocaleString();
     }
 
     function formatCreated(timestamp: number): string {
@@ -139,22 +183,32 @@
                 disabled={!selectedID || busy}
                 onclick={submitSelection}
             >
-                {#if recovering}
-                    <span class="drive-spinner drive-spinner-on-accent" aria-hidden="true"></span>
-                    Recovering…
-                {:else}
-                    Continue
-                {/if}
+                {recovering ? 'Recovering…' : 'Continue'}
             </button>
-            {#if recovering}
-                <span class="drive-hint" role="status" aria-live="polite">
-                    Recovering your files from Telegram. Large drives can take a minute.
-                </span>
-            {/if}
         {:else}
             <div class="drive-panel">
                 <strong>No channels found</strong>
                 <span>You haven't created any Telegram channels, so there is nothing to recover yet.</span>
+            </div>
+        {/if}
+
+        {#if recovering}
+            <div class="drive-scan" data-drive-scan>
+                <div
+                    class="drive-scan-track"
+                    role="progressbar"
+                    aria-label="Recovery progress"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={percent ?? undefined}
+                >
+                    <span
+                        class="drive-scan-fill"
+                        class:indeterminate={percent === null}
+                        style={percent === null ? undefined : `width: ${percent}%`}
+                    ></span>
+                </div>
+                <span class="drive-hint" role="status" aria-live="polite">{scanLabel}</span>
             </div>
         {/if}
 
@@ -302,6 +356,28 @@
         line-height: 1.45;
     }
 
+    .drive-scan { display: grid; gap: 7px; margin-top: 14px; }
+    .drive-scan .drive-hint { margin-top: 0; }
+
+    .drive-scan-track {
+        height: 4px;
+        overflow: hidden;
+        background: var(--color-surface-2);
+        border-radius: 999px;
+    }
+    .drive-scan-fill {
+        display: block;
+        width: 0;
+        height: 100%;
+        background: var(--accent);
+        border-radius: inherit;
+        transition: width var(--motion-med) var(--ease-standard);
+    }
+    .drive-scan-fill.indeterminate {
+        width: 38%;
+        animation: drive-scan-slide 1.25s var(--ease-standard) infinite;
+    }
+
     .drive-panel {
         display: grid;
         gap: 6px;
@@ -337,10 +413,6 @@
         border-top-color: var(--accent);
         border-radius: 50%;
         animation: drive-spin 800ms linear infinite;
-    }
-    .drive-spinner-on-accent {
-        border-color: color-mix(in srgb, var(--color-on-accent) 35%, transparent);
-        border-top-color: var(--color-on-accent);
     }
 
     .drive-ghost {
@@ -412,6 +484,10 @@
     }
 
     @keyframes drive-spin { to { transform: rotate(360deg); } }
+    @keyframes drive-scan-slide {
+        from { transform: translateX(-100%); }
+        to { transform: translateX(300%); }
+    }
 
     @media (max-width: 520px) {
         .drive-setup { padding: 1.75rem 1.25rem; }
@@ -421,6 +497,8 @@
 
     @media (prefers-reduced-motion: reduce) {
         .drive-spinner { animation-duration: 1.5s; }
+        .drive-scan-fill { transition: none; }
+        .drive-scan-fill.indeterminate { width: 100%; animation: none; }
         .drive-choice, .drive-check, .drive-ghost { transition: none; }
     }
 </style>

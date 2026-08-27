@@ -19,7 +19,7 @@ import { loadSelfUser } from './profile-menu';
 import { notify } from './notifications';
 import AuthScreens from '../ui/auth/AuthScreens.svelte';
 import { authCodeReset, authHint, authPhone, authScreen } from '../ui/auth/auth-store';
-import { personalDriveSetup } from '../ui/auth/personal-drive-store';
+import { parseDriveScanProgress, personalDriveSetup } from '../ui/auth/personal-drive-store';
 import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 let authScreensHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
@@ -354,6 +354,13 @@ export function setupAuthWindowBindings() {
     if (!window.runtime?.EventsOn) return;
 
     window.runtime.EventsOn("login-success", () => { void preparePersonalDriveAndContinue(); });
+
+    // History-scan progress. Fires for routine syncs too; the store ignores
+    // anything that arrives outside an on-screen recovery.
+    window.runtime.EventsOn("drive_scan_progress", (payload: unknown) => {
+        const update = parseDriveScanProgress(payload);
+        if (update) personalDriveSetup.scanProgress(update);
+    });
 
     window.runtime.EventsOn("login-password-required", () => {
         showAuthWrapper();
