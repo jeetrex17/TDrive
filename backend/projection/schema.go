@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 8
+const currentSchemaVersion = 9
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -332,6 +332,12 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 	}
 	if v < 8 {
 		if err := migrateWritableProjection(tx); err != nil {
+			return err
+		}
+	}
+
+	if v < 9 {
+		if err := rescanTruncatedChannels(tx); err != nil {
 			return err
 		}
 	}
@@ -748,4 +754,51 @@ func tableColumnSet(tx *sql.Tx, name string) (map[string]struct{}, error) {
 		out[cname] = struct{}{}
 	}
 	return out, rows.Err()
+}
+
+// danglingParentChannels selects channels holding a live row whose parent
+// folder has no record at all. A tombstoned parent is a real delete and is
+// deliberately not matched; only a wholly absent one means the mkdir that
+// would have created it was never read from the channel.
+const danglingParentChannels = `
+	SELECT channel_id FROM folders f
+	WHERE f.tombstoned = 0 AND f.parent_id <> ''
+	  AND NOT EXISTS (
+	    SELECT 1 FROM folders p WHERE p.channel_id = f.channel_id AND p.id = f.parent_id
+	  )
+	UNION
+	SELECT channel_id FROM files f
+	WHERE f.tombstoned = 0 AND f.parent_id <> ''
+	  AND NOT EXISTS (
+	    SELECT 1 FROM folders p WHERE p.channel_id = f.channel_id AND p.id = f.parent_id
+	  )`
+
+// rescanTruncatedChannels repairs drives left half-scanned by the history
+// pagination bug, where a page thinned by deletions ended the backwards walk
+// early and the channel was still marked authoritative at the newest id seen.
+// Such a drive keeps every row it did read but has no way back to the ops it
+// skipped, so folders orphaned below a missing ancestor stay invisible forever.
+//
+// Clearing the watermark sends those channels back through a full scan. Ops
+// already in replay_log re-apply idempotently; the ones that were rejected for
+// a parent that had not been read yet are dropped from the log first, because
+// replay_log membership alone would otherwise make the scan skip them again.
+func rescanTruncatedChannels(tx *sql.Tx) error {
+	if _, err := tx.Exec(`
+		DELETE FROM replay_log
+		WHERE (channel_id, msg_id) IN (SELECT channel_id, msg_id FROM replay_log_rejects)
+		  AND channel_id IN (` + danglingParentChannels + `)`); err != nil {
+		return fmt.Errorf("projection: clear rejected ops for rescan: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM replay_log_rejects
+		WHERE channel_id IN (` + danglingParentChannels + `)`); err != nil {
+		return fmt.Errorf("projection: clear rejects for rescan: %w", err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE channels SET last_synced_msg = 0, initial_sync_done = 0
+		WHERE channel_id IN (` + danglingParentChannels + `)`); err != nil {
+		return fmt.Errorf("projection: reset truncated history scan: %w", err)
+	}
+	return nil
 }

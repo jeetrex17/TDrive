@@ -395,9 +395,12 @@ func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient
 			PagesDone:    len(lowestPerPage),
 			MessagesDone: messages,
 		})
-		if len(page) < defaultPageSize {
-			break
-		}
+		// Only an empty page proves the channel is exhausted. A short page
+		// does not: Telegram returns fewer than the limit whenever the window
+		// it scanned is thinned by deletions or service events. Stopping on
+		// one silently truncated the scan, and because the caller then marks
+		// the channel authoritative at the highest id seen, every later pass
+		// starts above the history that was skipped and can never reach it.
 		if offsetID != 0 && lowestInPage >= offsetID {
 			return historyPlan{}, errHistoryPaginationNoProgress
 		}

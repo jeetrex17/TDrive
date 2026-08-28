@@ -172,6 +172,11 @@ type Client interface {
 	// default history order: newest first. minID filters out messages at or
 	// below that watermark; offsetID pages older than a previous page.
 	// Callers must sort before applying projection ops.
+	//
+	// Every message Telegram returns is reported, including service messages
+	// and the empty placeholders left by deletions. Those carry no projectable
+	// payload, but they do occupy message ids, so silently dropping them would
+	// make a full page look short and mislead callers paginating on page size.
 	GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error)
 
 	// GetFileDocument resolves one Telegram message into a downloadable
