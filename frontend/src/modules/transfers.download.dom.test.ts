@@ -58,10 +58,10 @@ async function loadModule() {
             listeners.set(name, callback);
         }),
     };
-    const { state } = await import('../state');
+    const { idleTransferActivity, state } = await import('../state');
     state.downloadQueue = [];
     state.activeDownloadId = null;
-    state.activeTransfer = null;
+    state.transferActivity = idleTransferActivity;
     state.cancelingDownload = false;
     const mod = await import('./transfers');
     mod.setupDownloadProgress();
@@ -76,26 +76,34 @@ beforeEach(() => {
 });
 
 describe('folder download queue', () => {
-    it('preserves a folder id and dispatches it to DownloadFolder', async () => {
+    it('finalizes the notification before removing a completed folder job', async () => {
         const { mod, state } = await loadModule();
+        const queueLengthAtNotificationFinalization: number[] = [];
+        transferEvents.done.mockImplementation(() => {
+            queueLengthAtNotificationFinalization.push(state.downloadQueue.length);
+        });
 
         mod.enqueueFolderDownload('d:screenshots', 'Screenshots');
         await vi.waitFor(() => expect(bindings.DownloadFolder).toHaveBeenCalledWith('d:screenshots'));
 
         expect(bindings.DownloadFile).not.toHaveBeenCalled();
-        expect(state.downloadQueue).toHaveLength(1);
-        expect(state.downloadQueue[0]).toMatchObject({
-            key: 'folder:d:screenshots',
-            kind: 'folder',
-            id: 'd:screenshots',
-            state: 'done',
-        });
+        await vi.waitFor(() => expect(transferEvents.done).toHaveBeenCalledWith({
+            id: 'folder:d:screenshots',
+            direction: 'down',
+            status: 'done',
+        }));
+        expect(queueLengthAtNotificationFinalization).toEqual([1]);
+        expect(state.downloadQueue).toEqual([]);
+        expect(state.activeDownloadId).toBeNull();
+        expect(state.transferActivity).toEqual({ upload: false, download: false });
     });
 
-    it('serializes mixed file and folder downloads', async () => {
+    it('serializes mixed file and folder downloads and starts the next job', async () => {
         const first = deferred<DownloadBindingResult>();
+        const second = deferred<DownloadBindingResult>();
         bindings.DownloadFile.mockReturnValueOnce(first.promise);
-        const { mod } = await loadModule();
+        bindings.DownloadFolder.mockReturnValueOnce(second.promise);
+        const { mod, state } = await loadModule();
 
         mod.enqueueDownload(42, 'first.txt', 10);
         mod.enqueueFolderDownload('d:next', 'Next');
@@ -106,6 +114,25 @@ describe('folder download queue', () => {
 
         first.resolve({ status: 'success', message: 'done', saved_path: '/tmp/first.txt' });
         await vi.waitFor(() => expect(bindings.DownloadFolder).toHaveBeenCalledWith('d:next'));
+        expect(state.downloadQueue).toEqual([
+            expect.objectContaining({ key: 'folder:d:next', state: 'downloading' }),
+        ]);
+
+        second.resolve({ status: 'success', message: 'done', saved_path: '/tmp/next' });
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+        expect(state.transferActivity).toEqual({ upload: false, download: false });
+    });
+
+    it('allows a completed download to be enqueued again without retaining history in the scheduler', async () => {
+        const { mod, state } = await loadModule();
+
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+            mod.enqueueDownload(42, 'again.txt', 10);
+            await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledTimes(attempt));
+            await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+        }
+
+        expect(transferEvents.done).toHaveBeenCalledTimes(3);
     });
 
     it('updates exact aggregate byte and file progress without regressing', async () => {
@@ -155,7 +182,7 @@ describe('folder download queue', () => {
         });
 
         pending.resolve({ status: 'success', message: 'done', saved_path: '/tmp/Project' });
-        await settle();
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
     });
 
     it('prompts once and retries the same folder after encryption unlock', async () => {
@@ -179,14 +206,28 @@ describe('folder download queue', () => {
             message: 'encryption password required',
             saved_path: '',
         });
-        passwordModal.mockResolvedValueOnce(false);
         const { mod, state } = await loadModule();
-
+        passwordModal.mockResolvedValueOnce(false);
         mod.enqueueFolderDownload('d:locked', 'Locked');
-        await vi.waitFor(() => expect(state.downloadQueue[0]?.state).toBe('failed'));
+        await vi.waitFor(() => expect(transferEvents.done).toHaveBeenCalledWith({
+            id: 'folder:d:locked',
+            direction: 'down',
+            status: 'failed',
+        }));
 
         expect(passwordModal).toHaveBeenCalledOnce();
         expect(bindings.DownloadFolder).toHaveBeenCalledOnce();
+        expect(state.downloadQueue).toEqual([]);
+    });
+
+    it('keeps an overlapping upload active after a download completes', async () => {
+        const { mod, state } = await loadModule();
+        state.transferActivity = { upload: true, download: false };
+
+        mod.enqueueFolderDownload('d:project', 'Project');
+
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+        expect(state.transferActivity).toEqual({ upload: true, download: false });
     });
 
     it('marks a canceled folder and continues with the next queued file', async () => {
@@ -201,7 +242,11 @@ describe('folder download queue', () => {
         first.resolve({ status: 'error', message: 'context canceled', saved_path: '' });
 
         await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(77, 77));
-        expect(state.downloadQueue.find((item) => item.key === 'folder:d:project')?.state).toBe('canceled');
-        expect(state.downloadQueue.find((item) => item.key === 'file:77')?.state).toBe('done');
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+        expect(transferEvents.done).toHaveBeenCalledWith({
+            id: 'folder:d:project',
+            direction: 'down',
+            status: 'canceled',
+        });
     });
 });

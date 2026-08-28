@@ -15,8 +15,16 @@ var (
 	// ErrFolderDownloadNotFound identifies a folder that is not live in the
 	// authoritative portable namespace.
 	ErrFolderDownloadNotFound = errors.New("projection: folder download not found")
+	// ErrFolderDownloadTooLarge identifies a subtree that exceeds the bounded
+	// in-memory manifest contract.
+	ErrFolderDownloadTooLarge = errors.New("projection: folder download exceeds safe limit")
 	// ErrInvalidFileDownload identifies an invalid logical file lookup.
 	ErrInvalidFileDownload = errors.New("projection: invalid file download")
+)
+
+const (
+	maxFolderDownloadEntries      = 10_000
+	maxFolderDownloadPartsPerFile = 32
 )
 
 // DownloadDirectory is one live portable directory in a folder-download
@@ -86,7 +94,7 @@ func BuildFolderDownloadManifestContext(
 	}
 	defer tx.Rollback()
 
-	folders, err := queryDownloadDirectories(ctx, tx, channelID, folderID)
+	folders, err := queryDownloadDirectories(ctx, tx, channelID, folderID, maxFolderDownloadEntries)
 	if err != nil {
 		return FolderDownloadManifest{}, err
 	}
@@ -97,18 +105,26 @@ func BuildFolderDownloadManifestContext(
 		return FolderDownloadManifest{}, err
 	}
 
-	files, err := queryDownloadFiles(ctx, tx, channelID, folderID)
+	maxFiles := maxFolderDownloadEntries - len(folders)
+	files, err := queryDownloadFiles(ctx, tx, channelID, folderID, maxFiles)
 	if err != nil {
 		return FolderDownloadManifest{}, err
 	}
-	partsByFile, err := queryDownloadParts(ctx, tx, channelID, folderID)
+	var expectedParts int
+	for _, file := range files {
+		if err := validateDownloadPartCount(file); err != nil {
+			return FolderDownloadManifest{}, err
+		}
+		expectedParts += file.PartCount
+	}
+	partsByFile, err := queryDownloadParts(ctx, tx, channelID, folderID, expectedParts)
 	if err != nil {
 		return FolderDownloadManifest{}, err
 	}
 
 	var totalStored, totalOutput int64
 	for i := range files {
-		files[i].Parts = append([]FilePart(nil), partsByFile[files[i].LogicalMsgID]...)
+		files[i].Parts = partsByFile[files[i].LogicalMsgID]
 		if err := validateDownloadFile(files[i]); err != nil {
 			return FolderDownloadManifest{}, err
 		}
@@ -156,8 +172,11 @@ func FileDownloadRefContext(ctx context.Context, db *sql.DB, channelID, logicalM
 	if err != nil || !found {
 		return DownloadFile{}, found, err
 	}
+	if err := validateDownloadPartCount(file); err != nil {
+		return DownloadFile{}, false, err
+	}
 	if file.UploadUUID != "" {
-		file.Parts, err = queryPartsForDownloadFile(ctx, tx, channelID, file.UploadUUID)
+		file.Parts, err = queryPartsForDownloadFile(ctx, tx, channelID, file.UploadUUID, file.PartCount)
 		if err != nil {
 			return DownloadFile{}, false, err
 		}
@@ -172,9 +191,8 @@ func FileDownloadRefContext(ctx context.Context, db *sql.DB, channelID, logicalM
 }
 
 const downloadTreeCTE = `
-WITH RECURSIVE download_tree(id, parent_id, display_name, revision, depth, ancestry) AS (
-    SELECT d.object_id, d.parent_id, d.display_name, d.revision, 0,
-           ',' || d.object_id || ','
+WITH RECURSIVE download_tree(id, parent_id, display_name, revision, depth) AS (
+    SELECT d.object_id, d.parent_id, d.display_name, d.revision, 0
     FROM dirents d
     JOIN folders f
       ON f.channel_id=d.channel_id AND f.id=d.object_id
@@ -184,8 +202,7 @@ WITH RECURSIVE download_tree(id, parent_id, display_name, revision, depth, ances
 
     UNION ALL
 
-    SELECT d.object_id, d.parent_id, d.display_name, d.revision, tree.depth + 1,
-           tree.ancestry || d.object_id || ','
+    SELECT d.object_id, d.parent_id, d.display_name, d.revision, tree.depth + 1
     FROM download_tree tree
     JOIN dirents d
       ON d.channel_id=?1 AND d.parent_id=tree.id
@@ -193,26 +210,36 @@ WITH RECURSIVE download_tree(id, parent_id, display_name, revision, depth, ances
     JOIN folders f
       ON f.channel_id=d.channel_id AND f.id=d.object_id
      AND f.parent_id=d.parent_id AND f.tombstoned=0
-    WHERE instr(tree.ancestry, ',' || d.object_id || ',')=0
+    WHERE d.object_id<>?2
+    LIMIT ?3
 )
 `
 
-func queryDownloadDirectories(ctx context.Context, tx *sql.Tx, channelID int64, folderID string) ([]DownloadDirectory, error) {
+func queryDownloadDirectories(
+	ctx context.Context,
+	tx *sql.Tx,
+	channelID int64,
+	folderID string,
+	maxEntries int,
+) ([]DownloadDirectory, error) {
 	rows, err := tx.QueryContext(ctx, downloadTreeCTE+`
 		SELECT id, display_name, parent_id, revision, depth
 		FROM download_tree
 		ORDER BY depth ASC, display_name COLLATE NOCASE, id
-	`, channelID, folderID)
+	`, channelID, folderID, maxEntries+1)
 	if err != nil {
 		return nil, fmt.Errorf("projection: list folder download directories: %w", err)
 	}
 	defer rows.Close()
 
-	folders := make([]DownloadDirectory, 0)
+	folders := make([]DownloadDirectory, 0, min(256, maxEntries))
 	for rows.Next() {
 		var folder DownloadDirectory
 		if err := rows.Scan(&folder.ID, &folder.Name, &folder.ParentID, &folder.Revision, &folder.Depth); err != nil {
 			return nil, fmt.Errorf("projection: scan folder download directory: %w", err)
+		}
+		if len(folders) == maxEntries {
+			return nil, fmt.Errorf("%w: more than %d folders and files", ErrFolderDownloadTooLarge, maxFolderDownloadEntries)
 		}
 		folders = append(folders, folder)
 	}
@@ -222,7 +249,13 @@ func queryDownloadDirectories(ctx context.Context, tx *sql.Tx, channelID int64, 
 	return folders, nil
 }
 
-func queryDownloadFiles(ctx context.Context, tx *sql.Tx, channelID int64, folderID string) ([]DownloadFile, error) {
+func queryDownloadFiles(
+	ctx context.Context,
+	tx *sql.Tx,
+	channelID int64,
+	folderID string,
+	maxFiles int,
+) ([]DownloadFile, error) {
 	rows, err := tx.QueryContext(ctx, downloadTreeCTE+`
 		SELECT f.msg_id, d.display_name, d.parent_id, f.revision,
 		       f.content_msg_id, f.content_hash, f.upload_uuid, f.part_count,
@@ -239,14 +272,18 @@ func queryDownloadFiles(ctx context.Context, tx *sql.Tx, channelID int64, folder
 		  ON r.channel_id=f.channel_id AND r.file_msg_id=f.msg_id
 		 AND r.revision=f.revision
 		ORDER BY tree.depth ASC, d.display_name COLLATE NOCASE, f.msg_id
-	`, channelID, folderID)
+		LIMIT ?4
+	`, channelID, folderID, maxFolderDownloadEntries+1, maxFiles+1)
 	if err != nil {
 		return nil, fmt.Errorf("projection: list folder download files: %w", err)
 	}
 	defer rows.Close()
 
-	files := make([]DownloadFile, 0)
+	files := make([]DownloadFile, 0, min(256, maxFiles))
 	for rows.Next() {
+		if len(files) == maxFiles {
+			return nil, fmt.Errorf("%w: more than %d folders and files", ErrFolderDownloadTooLarge, maxFolderDownloadEntries)
+		}
 		file, revisionFound, err := scanDownloadFile(rows)
 		if err != nil {
 			return nil, fmt.Errorf("projection: scan folder download file: %w", err)
@@ -311,7 +348,17 @@ func scanDownloadFile(scanner downloadFileScanner) (DownloadFile, bool, error) {
 	return file, revisionFound != 0, err
 }
 
-func queryDownloadParts(ctx context.Context, tx *sql.Tx, channelID int64, folderID string) (map[int64][]FilePart, error) {
+func queryDownloadParts(
+	ctx context.Context,
+	tx *sql.Tx,
+	channelID int64,
+	folderID string,
+	maxParts int,
+) (map[int64][]FilePart, error) {
+	parts := make(map[int64][]FilePart)
+	if maxParts == 0 {
+		return parts, nil
+	}
 	rows, err := tx.QueryContext(ctx, downloadTreeCTE+`
 		SELECT f.msg_id, p.part_index, p.msg_id, p.size
 		FROM download_tree tree
@@ -325,20 +372,25 @@ func queryDownloadParts(ctx context.Context, tx *sql.Tx, channelID int64, folder
 		  ON p.channel_id=f.channel_id AND p.upload_uuid=f.upload_uuid
 		WHERE f.upload_uuid!=''
 		ORDER BY f.msg_id, p.part_index
-	`, channelID, folderID)
+		LIMIT ?4
+	`, channelID, folderID, maxFolderDownloadEntries+1, maxParts+1)
 	if err != nil {
 		return nil, fmt.Errorf("projection: list folder download parts: %w", err)
 	}
 	defer rows.Close()
 
-	parts := make(map[int64][]FilePart)
+	partCount := 0
 	for rows.Next() {
+		if partCount == maxParts {
+			return nil, fmt.Errorf("%w: multipart rows exceed declared part counts", ErrInvalidFolderDownload)
+		}
 		var logicalMsgID int64
 		var part FilePart
 		if err := rows.Scan(&logicalMsgID, &part.PartIndex, &part.MsgID, &part.Size); err != nil {
 			return nil, fmt.Errorf("projection: scan folder download part: %w", err)
 		}
 		parts[logicalMsgID] = append(parts[logicalMsgID], part)
+		partCount++
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("projection: iterate folder download parts: %w", err)
@@ -346,20 +398,30 @@ func queryDownloadParts(ctx context.Context, tx *sql.Tx, channelID int64, folder
 	return parts, nil
 }
 
-func queryPartsForDownloadFile(ctx context.Context, tx *sql.Tx, channelID int64, uploadUUID string) ([]FilePart, error) {
+func queryPartsForDownloadFile(
+	ctx context.Context,
+	tx *sql.Tx,
+	channelID int64,
+	uploadUUID string,
+	expectedParts int,
+) ([]FilePart, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT part_index, msg_id, size
 		FROM file_parts
 		WHERE channel_id=? AND upload_uuid=?
 		ORDER BY part_index
-	`, channelID, uploadUUID)
+		LIMIT ?
+	`, channelID, uploadUUID, expectedParts+1)
 	if err != nil {
 		return nil, fmt.Errorf("projection: list file download parts: %w", err)
 	}
 	defer rows.Close()
 
-	parts := make([]FilePart, 0)
+	parts := make([]FilePart, 0, expectedParts)
 	for rows.Next() {
+		if len(parts) == expectedParts {
+			return nil, fmt.Errorf("%w: multipart rows exceed declared part count", ErrInvalidFileDownload)
+		}
 		var part FilePart
 		if err := rows.Scan(&part.PartIndex, &part.MsgID, &part.Size); err != nil {
 			return nil, fmt.Errorf("projection: scan file download part: %w", err)
@@ -403,7 +465,29 @@ func validateDownloadDirectories(folders []DownloadDirectory) error {
 	return nil
 }
 
+func validateDownloadPartCount(file DownloadFile) error {
+	switch {
+	case file.UploadUUID == "" && file.PartCount != 0:
+		return fmt.Errorf("%w: single-message file %d declares parts", ErrInvalidFileDownload, file.LogicalMsgID)
+	case file.UploadUUID != "" && file.PartCount <= 0:
+		return fmt.Errorf("%w: multipart file %d has invalid part count %d", ErrInvalidFileDownload, file.LogicalMsgID, file.PartCount)
+	case file.PartCount > maxFolderDownloadPartsPerFile:
+		return fmt.Errorf(
+			"%w: multipart file %d has %d parts (max %d)",
+			ErrInvalidFileDownload,
+			file.LogicalMsgID,
+			file.PartCount,
+			maxFolderDownloadPartsPerFile,
+		)
+	default:
+		return nil
+	}
+}
+
 func validateDownloadFile(file DownloadFile) error {
+	if err := validateDownloadPartCount(file); err != nil {
+		return err
+	}
 	if file.LogicalMsgID <= 0 || file.Revision <= 0 || file.StoredSize < 0 || file.OutputSize < 0 {
 		return fmt.Errorf("%w: invalid file metadata for %d", ErrInvalidFileDownload, file.LogicalMsgID)
 	}

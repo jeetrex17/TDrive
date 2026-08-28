@@ -5,7 +5,7 @@
 // hover popover via pushTransferStart/updateTransferProgress/markTransferDone.
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
-import { state, type DownloadQueueItem, type DownloadState } from '../state';
+import { state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
 import { SelectFiles, DownloadFile, DownloadFolder } from '../../wailsjs/go/main/App';
 import { notify } from './notifications';
 import { loadEncryptionStatus } from './encryption';
@@ -25,7 +25,6 @@ import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 let uploadMenuHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
-const DOWNLOAD_TERMINAL_STATES = new Set(["done", "failed", "canceled"]);
 
 type DownloadResultPayload = {
     status?: unknown;
@@ -41,10 +40,6 @@ type FolderDownloadProgressPayload = {
     files_completed?: unknown;
     files_total?: unknown;
 };
-
-function isDownloadTerminalState(status: unknown) {
-    return DOWNLOAD_TERMINAL_STATES.has(String(status || ""));
-}
 
 function asObjectRecord(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" ? value as Record<string, unknown> : {};
@@ -80,7 +75,7 @@ export function setupDownloadProgress() {
         replaceDownloadItem(activeKey, (current) => ({
             ...current,
             progress: nextProgress,
-            state: isDownloadTerminalState(current.state) ? current.state : 'downloading',
+            state: 'downloading',
         }));
         updateTransferProgress({ id: item.key, direction: 'down', progress: nextProgress });
     });
@@ -108,7 +103,7 @@ export function setupDownloadProgress() {
             ...current,
             ...next,
             size: Math.max(current.size, next.bytesTotal),
-            state: isDownloadTerminalState(current.state) ? current.state : 'downloading',
+            state: 'downloading',
         }));
         updateTransferProgress({
             id: item.key,
@@ -126,11 +121,11 @@ async function startNextDownload() {
     if (state.activeDownloadId !== null) return;
     const next = state.downloadQueue.find((entry) => entry.state === 'queued');
     if (!next) {
-        if (state.activeTransfer === 'download') state.activeTransfer = null;
+        setTransferDirectionActive('download', false);
         return;
     }
 
-    state.activeTransfer = 'download';
+    setTransferDirectionActive('download', true);
     state.activeDownloadId = next.key;
     replaceDownloadItem(next.key, (current) => ({
         ...current,
@@ -152,23 +147,15 @@ async function startNextDownload() {
         }
 
         if (result.status === "success") {
-            updateDownloadResult(next.key, 'done', result.message, 100);
-            markTransferDone({ id: next.key, direction: 'down', status: 'done' });
+            finalizeDownload(next.key, 'done');
         } else if (result.status === "canceled") {
-            updateDownloadResult(next.key, 'canceled', result.message);
-            markTransferDone({ id: next.key, direction: 'down', status: 'canceled' });
+            finalizeDownload(next.key, 'canceled');
         } else {
-            const canceled = state.cancelingDownload;
-            const status = canceled ? 'canceled' : 'failed';
-            updateDownloadResult(next.key, status, result.message);
-            markTransferDone({ id: next.key, direction: 'down', status });
+            finalizeDownload(next.key, state.cancelingDownload ? 'canceled' : 'failed');
         }
     } catch (err) {
         console.error("Download failed:", err);
-        const canceled = state.cancelingDownload;
-        const status = canceled ? 'canceled' : 'failed';
-        updateDownloadResult(next.key, status, 'Download failed');
-        markTransferDone({ id: next.key, direction: 'down', status });
+        finalizeDownload(next.key, state.cancelingDownload ? 'canceled' : 'failed');
     } finally {
         state.cancelingDownload = false;
         state.activeDownloadId = null;
@@ -188,7 +175,6 @@ export function enqueueDownload(id: unknown, name: unknown, size: unknown) {
         size: Number(size) || 0,
         progress: 0,
         state: 'queued',
-        message: '',
         bytesCompleted: 0,
         bytesTotal: Number(size) || 0,
         filesCompleted: 0,
@@ -208,7 +194,6 @@ export function enqueueFolderDownload(id: unknown, name: unknown, size: unknown 
         size: storedSize,
         progress: 0,
         state: 'queued',
-        message: '',
         bytesCompleted: 0,
         bytesTotal: storedSize,
         filesCompleted: 0,
@@ -230,13 +215,11 @@ function replaceDownloadItem(key: string, update: (item: DownloadQueueItem) => D
     state.downloadQueue = state.downloadQueue.map((item) => item.key === key ? update(item) : item);
 }
 
-function updateDownloadResult(key: string, status: DownloadState, message: string, progress?: number) {
-    replaceDownloadItem(key, (item) => ({
-        ...item,
-        state: status,
-        message,
-        progress: progress ?? item.progress,
-    }));
+function finalizeDownload(key: string, status: 'done' | 'failed' | 'canceled'): void {
+    // The bell owns the bounded terminal history. Keep the scheduler limited
+    // to queued and active jobs by removing a job only after that finalization.
+    markTransferDone({ id: key, direction: 'down', status });
+    state.downloadQueue = state.downloadQueue.filter((item) => item.key !== key);
 }
 
 function dispatchDownload(item: DownloadQueueItem) {
@@ -639,7 +622,7 @@ async function runImportFlow(parentID: any, paths: any) {
             if (!ok) return;
         }
 
-        state.activeTransfer = "upload";
+        setTransferDirectionActive('upload', true);
         importCompleteReceived = false;
         let importThrew = false;
         try {
@@ -654,7 +637,7 @@ async function runImportFlow(parentID: any, paths: any) {
                 pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
             }
         } finally {
-            if (state.activeTransfer === "upload") state.activeTransfer = null;
+            setTransferDirectionActive('upload', false);
             // import_complete is authoritative; if it never arrived (error or a
             // dropped event), finalize the aggregate row here with the right status.
             if (state.importBatch) {
@@ -673,7 +656,7 @@ async function runImportFlow(parentID: any, paths: any) {
 
 // uploadPathsBatch runs the classic per-file upload (one bell row per file).
 async function uploadPathsBatch(paths: any, parentID: any, encrypt: boolean) {
-    state.activeTransfer = "upload";
+    setTransferDirectionActive('upload', true);
     state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
 
     const nextTransfers = new Map();
@@ -693,7 +676,7 @@ async function uploadPathsBatch(paths: any, parentID: any, encrypt: boolean) {
 
     const upload = window?.go?.main?.App?.UploadToDriveFS;
     if (typeof upload !== "function") {
-        state.activeTransfer = null;
+        setTransferDirectionActive('upload', false);
         state.uploadBatch = null;
         state.uploadTransfers = new Map();
         notifyBindingsMissing("UploadToDriveFS");
@@ -713,7 +696,7 @@ async function uploadPathsBatch(paths: any, parentID: any, encrypt: boolean) {
             notify({ level: 'error', title: 'Upload failed', body: String(err) });
         }
     } finally {
-        if (state.activeTransfer === "upload") state.activeTransfer = null;
+        setTransferDirectionActive('upload', false);
         // Safety sweep: by the time UploadToDriveFS resolves, every upload in
         // the batch has terminated on the backend. If a Wails event was dropped,
         // an entry may still be stuck 'active' at 100% in the bell.

@@ -29,7 +29,19 @@ export interface EncryptionState {
     loaded: boolean;
 }
 
-export type DownloadState = 'queued' | 'downloading' | 'done' | 'failed' | 'canceled';
+export type DownloadState = 'queued' | 'downloading';
+
+export type TransferDirection = 'upload' | 'download';
+
+export interface TransferActivity {
+    readonly upload: boolean;
+    readonly download: boolean;
+}
+
+export const idleTransferActivity: TransferActivity = Object.freeze({
+    upload: false,
+    download: false,
+});
 
 type DownloadQueueBase = {
     key: string;
@@ -37,7 +49,6 @@ type DownloadQueueBase = {
     size: number;
     progress: number;
     state: DownloadState;
-    message: string;
     bytesCompleted: number;
     bytesTotal: number;
     filesCompleted: number;
@@ -60,7 +71,7 @@ export interface State {
     currentFolderId: string;
     folderPath: DrivePathEntry[];
 
-    activeTransfer: "download" | "upload" | null;
+    transferActivity: TransferActivity;
     downloadQueue: DownloadQueueItem[];
     activeDownloadId: string | null;
 
@@ -116,7 +127,7 @@ export const state: State = {
     currentFolderId: "",
     folderPath: [],
 
-    activeTransfer: null,
+    transferActivity: idleTransferActivity,
     downloadQueue: [],
     activeDownloadId: null,
 
@@ -169,6 +180,14 @@ export const state: State = {
     userNameFailures: new Set(),
     userNameRequests: new Map(),
 };
+
+// Transfer direction flags are replaced together rather than mutated so a
+// completion in one direction never clears concurrent activity in the other.
+export function setTransferDirectionActive(direction: TransferDirection, active: boolean): void {
+    const current = state.transferActivity;
+    if (current[direction] === active) return;
+    state.transferActivity = Object.freeze({ ...current, [direction]: active });
+}
 
 // Helper to reset folder caches (called on refresh)
 export function resetFolderCaches(): void {

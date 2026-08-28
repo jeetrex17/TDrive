@@ -110,6 +110,48 @@ func TestBuildFolderDownloadManifestRejectsInvalidInputAndCorruptNames(t *testin
 	}
 }
 
+func TestBuildFolderDownloadManifestDoesNotTreatIDSubstringsAsCycles(t *testing.T) {
+	db := newTestDB(t)
+	mustOp(t, db, 1, Op{Type: OpMkdir, Obj: "d:a,b", Parent: RootParent, Name: "Root"})
+	mustOp(t, db, 2, Op{Type: OpMkdir, Obj: "d:a", Parent: "d:a,b", Name: "Child"})
+
+	manifest, err := BuildFolderDownloadManifestContext(context.Background(), db, testChan, "d:a,b")
+	if err != nil {
+		t.Fatalf("BuildFolderDownloadManifestContext: %v", err)
+	}
+	if len(manifest.Folders) != 2 || manifest.Folders[1].ID != "d:a" {
+		t.Fatalf("folders = %+v, want root and child with substring ID", manifest.Folders)
+	}
+}
+
+func TestFolderDownloadQueriesStopAtConfiguredEntryLimit(t *testing.T) {
+	db := newTestDB(t)
+	mustOp(t, db, 1, Op{Type: OpMkdir, Obj: "d:project", Parent: RootParent, Name: "Project"})
+	mustOp(t, db, 2, Op{Type: OpMkdir, Obj: "d:nested", Parent: "d:project", Name: "Nested"})
+	mustOp(t, db, 3, Op{
+		Type: OpFileUpload, Parent: "d:project", Name: "report.txt",
+		FileSize: 1, FileUploadTime: 1,
+	})
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin directory limit transaction: %v", err)
+	}
+	if _, err := queryDownloadDirectories(context.Background(), tx, testChan, "d:project", 1); !errors.Is(err, ErrFolderDownloadTooLarge) {
+		t.Fatalf("directory limit error = %v, want ErrFolderDownloadTooLarge", err)
+	}
+	_ = tx.Rollback()
+
+	tx, err = db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin file limit transaction: %v", err)
+	}
+	if _, err := queryDownloadFiles(context.Background(), tx, testChan, "d:project", 0); !errors.Is(err, ErrFolderDownloadTooLarge) {
+		t.Fatalf("file limit error = %v, want ErrFolderDownloadTooLarge", err)
+	}
+	_ = tx.Rollback()
+}
+
 func TestBuildFolderDownloadManifestRejectsCycleThroughRoot(t *testing.T) {
 	db := newTestDB(t)
 	mustOp(t, db, 1, Op{Type: OpMkdir, Obj: "d:project", Parent: RootParent, Name: "Project"})
@@ -300,6 +342,19 @@ func TestValidateDownloadFileRejectsCorruptMetadata(t *testing.T) {
 				file.Parts = append([]FilePart(nil), validMultipart.Parts...)
 				file.Parts[1].Size = 3
 				return file
+			}(),
+		},
+		{
+			name: "multipart exceeds protocol part limit",
+			file: func() DownloadFile {
+				parts := make([]FilePart, maxFolderDownloadPartsPerFile+1)
+				for i := range parts {
+					parts[i] = FilePart{PartIndex: i, MsgID: int64(100 + i)}
+				}
+				return DownloadFile{
+					LogicalMsgID: 1, Name: "file.bin", Revision: 1,
+					UploadUUID: "parts", PartCount: len(parts), Parts: parts,
+				}
 			}(),
 		},
 	}

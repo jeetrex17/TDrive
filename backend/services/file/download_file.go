@@ -195,30 +195,75 @@ func (s *Service) downloadMultipartPlain(
 			}
 			defer func() { <-sem }()
 
-			err := s.sendRetryPolicy().Do(downloadCtx, func() error {
-				return s.TG.DownloadFileAt(downloadCtx, peer, part.MsgID, destination, partOffsets[i], func(done, _ int64) {
-					report(i, done)
-				})
-			})
-			if err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
-				cancel()
+			err := s.downloadPlainPart(
+				downloadCtx, peer, part, destination, partOffsets[i],
+				func(done int64) { report(i, done) },
+			)
+			if err == nil {
+				report(i, part.Size)
 				return
 			}
-			report(i, part.Size)
+			select {
+			case errCh <- err:
+			default:
+			}
+			cancel()
 		}()
 	}
 
 	wait.Wait()
 	close(errCh)
 	if err, ok := <-errCh; ok {
-		return classifyFileDownloadError(err)
-	}
-	if err := ctx.Err(); err != nil {
 		return err
+	}
+	return ctx.Err()
+}
+
+func (s *Service) downloadPlainPart(
+	ctx context.Context,
+	peer tgclient.InputPeer,
+	part projection.FilePart,
+	destination *os.File,
+	destinationOffset int64,
+	progress func(done int64),
+) error {
+	partTmp, err := os.CreateTemp(filepath.Dir(destination.Name()), ".tdrive-download-part-*")
+	if err != nil {
+		return fmt.Errorf("Disk Error: %w", err)
+	}
+	partPath := partTmp.Name()
+	defer func() {
+		_ = partTmp.Close()
+		_ = os.Remove(partPath)
+	}()
+
+	err = s.sendRetryPolicy().Do(ctx, func() error {
+		if err := partTmp.Truncate(0); err != nil {
+			return downloadDiskError{err: fmt.Errorf("truncate part target: %w", err)}
+		}
+		return s.TG.DownloadFileAt(ctx, peer, part.MsgID, partTmp, 0, func(done, _ int64) {
+			progress(done)
+		})
+	})
+	if err := classifyFileDownloadError(err); err != nil {
+		return err
+	}
+	if err := verifyOpenFileSize(partTmp, part.Size); err != nil {
+		return fmt.Errorf("Download verification failed: %w", err)
+	}
+	if _, err := partTmp.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("Disk Error: %w", err)
+	}
+	written, err := io.CopyN(
+		io.NewOffsetWriter(destination, destinationOffset),
+		&contextReader{ctx: ctx, source: partTmp},
+		part.Size,
+	)
+	if err != nil {
+		return fmt.Errorf("Disk Error: %w", err)
+	}
+	if written != part.Size {
+		return fmt.Errorf("Download verification failed: copied part size %d, want %d", written, part.Size)
 	}
 	return nil
 }

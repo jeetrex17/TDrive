@@ -14,7 +14,11 @@ import (
 	"TDrive/backend/tgclient"
 )
 
-const maxConcurrentFolderFiles = 2
+const (
+	maxConcurrentFolderFiles        = 2
+	folderStagingCleanupAttempts    = 4
+	folderStagingCleanupBaseBackoff = 25 * time.Millisecond
+)
 
 type ChooseDirectoryFunc func(defaultName string) (string, error)
 
@@ -26,6 +30,13 @@ type folderDownloadFile struct {
 type folderDownloadPlan struct {
 	directories []string
 	files       []folderDownloadFile
+}
+type folderDownloadStaging interface {
+	ParentPath() string
+	Path() string
+	PublishNoReplace(finalPath string) error
+	PrepareCleanup() error
+	Close() error
 }
 
 // DownloadFolder restores one revision-pinned folder tree beneath the selected
@@ -54,9 +65,9 @@ func (s *Service) DownloadFolder(
 	if err != nil {
 		return folderDownloadFailure(ctx, fmt.Errorf("Could not prepare folder download: %w", err))
 	}
-	plan, err := buildFolderDownloadPlan(manifest)
+	plan, err := buildFolderDownloadPlan(ctx, manifest)
 	if err != nil {
-		return DownloadResult{Status: "error", Message: err.Error()}
+		return folderDownloadFailure(ctx, err)
 	}
 
 	var masterKey []byte
@@ -92,10 +103,39 @@ func (s *Service) DownloadFolder(
 	if destinationParent == "" {
 		return DownloadResult{Status: "canceled", Message: "Folder download canceled"}
 	}
+	if err := ctx.Err(); err != nil {
+		return folderDownloadFailure(ctx, err)
+	}
 	if err := validateDestinationParent(destinationParent); err != nil {
 		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 	}
-	finalPath, err := joinWithinRoot(destinationParent, manifest.Root.Name)
+	staging, err := createPrivateFolderDownloadStaging(destinationParent)
+	if err != nil {
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	}
+	stagingPath := staging.Path()
+	published := false
+	defer func() {
+		if published {
+			_ = staging.Close()
+			return
+		}
+		prepareErr := staging.PrepareCleanup()
+		cleanupErr := removeFolderDownloadStaging(stagingPath, os.RemoveAll, time.Sleep)
+		closeErr := staging.Close()
+		if cleanupErr = errors.Join(prepareErr, cleanupErr, closeErr); cleanupErr != nil {
+			result = DownloadResult{
+				Status: "error",
+				Message: fmt.Sprintf(
+					"Cleanup failed; partial download may remain at %s: %v",
+					stagingPath,
+					cleanupErr,
+				),
+			}
+		}
+	}()
+
+	finalPath, err := joinWithinRoot(staging.ParentPath(), manifest.Root.Name)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 	}
@@ -105,18 +145,10 @@ func (s *Service) DownloadFolder(
 		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 	}
 
-	stagingPath, err := os.MkdirTemp(destinationParent, ".tdrive-folder-download-*")
-	if err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-	}
-	published := false
-	defer func() {
-		if !published {
-			_ = os.RemoveAll(stagingPath)
-		}
-	}()
-
 	for _, relativePath := range plan.directories {
+		if err := ctx.Err(); err != nil {
+			return folderDownloadFailure(ctx, err)
+		}
 		directoryPath, err := joinWithinRoot(stagingPath, relativePath)
 		if err != nil {
 			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
@@ -134,10 +166,10 @@ func (s *Service) DownloadFolder(
 	if err := s.downloadFolderFiles(ctx, peer, stagingPath, plan.files, masterKey, progress); err != nil {
 		return folderDownloadFailure(ctx, err)
 	}
-	if err := os.Chmod(stagingPath, 0o755); err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	if err := ctx.Err(); err != nil {
+		return folderDownloadFailure(ctx, err)
 	}
-	if err := publishDirectoryNoReplace(stagingPath, finalPath); err != nil {
+	if err := staging.PublishNoReplace(finalPath); err != nil {
 		if os.IsExist(err) {
 			return DownloadResult{Status: "error", Message: fmt.Sprintf("Destination already exists: %s", finalPath)}
 		}
@@ -214,7 +246,10 @@ sendLoop:
 	return ctx.Err()
 }
 
-func buildFolderDownloadPlan(manifest projection.FolderDownloadManifest) (folderDownloadPlan, error) {
+func buildFolderDownloadPlan(ctx context.Context, manifest projection.FolderDownloadManifest) (folderDownloadPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return folderDownloadPlan{}, err
+	}
 	if len(manifest.Folders) == 0 || manifest.Root.ID == "" || manifest.Folders[0].ID != manifest.Root.ID {
 		return folderDownloadPlan{}, fmt.Errorf("Could not prepare folder download: invalid root")
 	}
@@ -228,6 +263,9 @@ func buildFolderDownloadPlan(manifest projection.FolderDownloadManifest) (folder
 	seenPaths := make(map[string]struct{}, len(manifest.Folders)+len(manifest.Files))
 
 	for _, folder := range manifest.Folders[1:] {
+		if err := ctx.Err(); err != nil {
+			return folderDownloadPlan{}, err
+		}
 		parentPath, found := directoryPaths[folder.ParentID]
 		if !found {
 			return folderDownloadPlan{}, fmt.Errorf("Could not prepare folder download: folder %q has no parent", folder.Name)
@@ -249,6 +287,9 @@ func buildFolderDownloadPlan(manifest projection.FolderDownloadManifest) (folder
 	}
 
 	for _, file := range manifest.Files {
+		if err := ctx.Err(); err != nil {
+			return folderDownloadPlan{}, err
+		}
 		parentPath, found := directoryPaths[file.ParentID]
 		if !found {
 			return folderDownloadPlan{}, fmt.Errorf("Could not prepare folder download: file %q has no parent", file.Name)
@@ -277,6 +318,28 @@ func manifestContainsEncryptedFiles(manifest projection.FolderDownloadManifest) 
 		}
 	}
 	return false
+}
+
+func removeFolderDownloadStaging(
+	path string,
+	remove func(string) error,
+	sleep func(time.Duration),
+) error {
+	var err error
+	for attempt := range folderStagingCleanupAttempts {
+		if err = remove(path); err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		if attempt+1 < folderStagingCleanupAttempts {
+			sleep(folderStagingCleanupBaseBackoff << attempt)
+		}
+	}
+	return fmt.Errorf(
+		"remove staging directory %q after %d attempts: %w",
+		path,
+		folderStagingCleanupAttempts,
+		err,
+	)
 }
 
 func validateDestinationParent(path string) error {

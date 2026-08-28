@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
@@ -123,8 +124,13 @@ func TestDownloadFolderRestoresMixedNestedTreeAndEmptyFolders(t *testing.T) {
 	}
 
 	root := filepath.Join(destinationParent, "Project")
-	if result.SavedPath != root {
-		t.Fatalf("saved path = %q, want %q", result.SavedPath, root)
+	resolvedParent, err := filepath.EvalSymlinks(destinationParent)
+	if err != nil {
+		t.Fatalf("resolve destination parent: %v", err)
+	}
+	wantSavedPath := filepath.Join(resolvedParent, "Project")
+	if result.SavedPath != wantSavedPath {
+		t.Fatalf("saved path = %q, want %q", result.SavedPath, wantSavedPath)
 	}
 	if info, err := os.Stat(filepath.Join(root, "Empty")); err != nil || !info.IsDir() {
 		t.Fatalf("empty directory was not restored: info=%v err=%v", info, err)
@@ -260,9 +266,52 @@ func TestBuildFolderDownloadPlanRejectsCanonicalPathCollisions(t *testing.T) {
 		},
 	}
 
-	_, err := buildFolderDownloadPlan(manifest)
+	_, err := buildFolderDownloadPlan(context.Background(), manifest)
 	if err == nil || !strings.Contains(err.Error(), "duplicate path") {
 		t.Fatalf("buildFolderDownloadPlan error = %v, want duplicate path", err)
+	}
+}
+
+func TestBuildFolderDownloadPlanHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	manifest := projection.FolderDownloadManifest{
+		Root: projection.DownloadDirectory{ID: "d:root", Name: "Root", ParentID: projection.RootParent, Revision: 1},
+		Folders: []projection.DownloadDirectory{
+			{ID: "d:root", Name: "Root", ParentID: projection.RootParent, Revision: 1},
+		},
+	}
+
+	if _, err := buildFolderDownloadPlan(ctx, manifest); !errors.Is(err, context.Canceled) {
+		t.Fatalf("buildFolderDownloadPlan error = %v, want context.Canceled", err)
+	}
+}
+
+func TestRemoveFolderDownloadStagingRetriesBoundedFailures(t *testing.T) {
+	calls := 0
+	remove := func(string) error {
+		calls++
+		if calls < 3 {
+			return errors.New("sharing violation")
+		}
+		return nil
+	}
+
+	err := removeFolderDownloadStaging("staging", remove, func(time.Duration) {})
+	if err != nil {
+		t.Fatalf("removeFolderDownloadStaging: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("remove calls = %d, want 3", calls)
+	}
+
+	retainedErr := removeFolderDownloadStaging(
+		"staging",
+		func(string) error { return errors.New("still open") },
+		func(time.Duration) {},
+	)
+	if retainedErr == nil || !strings.Contains(retainedErr.Error(), "staging") {
+		t.Fatalf("retained staging error = %v", retainedErr)
 	}
 }
 
