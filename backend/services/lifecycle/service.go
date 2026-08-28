@@ -51,30 +51,27 @@ type EventSink interface {
 	Emit(name string, args ...any)
 }
 
-type PersonalChannelFunc func(ctx context.Context) (int64, error)
 type RebuildFunc func(db *sql.DB, channelID int64) error
 type WarnFunc func(format string, args ...any)
 
 type Config struct {
-	DB              *sql.DB
-	Sync            Syncer
-	Backfill        Backfiller
-	Active          *ActiveDrive
-	Events          EventSink
-	PersonalChannel PersonalChannelFunc
-	Rebuild         RebuildFunc
-	Warnf           WarnFunc
+	DB       *sql.DB
+	Sync     Syncer
+	Backfill Backfiller
+	Active   *ActiveDrive
+	Events   EventSink
+	Rebuild  RebuildFunc
+	Warnf    WarnFunc
 }
 
 type Service struct {
-	DB              *sql.DB
-	Sync            Syncer
-	Backfill        Backfiller
-	Active          *ActiveDrive
-	Events          EventSink
-	PersonalChannel PersonalChannelFunc
-	Rebuild         RebuildFunc
-	Warnf           WarnFunc
+	DB       *sql.DB
+	Sync     Syncer
+	Backfill Backfiller
+	Active   *ActiveDrive
+	Events   EventSink
+	Rebuild  RebuildFunc
+	Warnf    WarnFunc
 
 	backfillMu  sync.Mutex
 	backfilling map[int64]bool
@@ -88,34 +85,15 @@ func NewService(c Config) *Service {
 		c.Rebuild = projection.RebuildProjection
 	}
 	return &Service{
-		DB:              c.DB,
-		Sync:            c.Sync,
-		Backfill:        c.Backfill,
-		Active:          c.Active,
-		Events:          c.Events,
-		PersonalChannel: c.PersonalChannel,
-		Rebuild:         c.Rebuild,
-		Warnf:           c.Warnf,
-		backfilling:     make(map[int64]bool),
+		DB:          c.DB,
+		Sync:        c.Sync,
+		Backfill:    c.Backfill,
+		Active:      c.Active,
+		Events:      c.Events,
+		Rebuild:     c.Rebuild,
+		Warnf:       c.Warnf,
+		backfilling: make(map[int64]bool),
 	}
-}
-
-func (s *Service) InitDrive(ctx context.Context) string {
-	if ctx == nil {
-		return "Error: App context not ready"
-	}
-	if s.PersonalChannel == nil {
-		return "Error: personal drive resolver not ready"
-	}
-
-	channelID, err := s.PersonalChannel(ctx)
-	if err != nil {
-		return "Error: " + err.Error()
-	}
-	if err := s.UsePersonalChannel(ctx, channelID); err != nil {
-		return "Error: migration failed: " + err.Error()
-	}
-	return fmt.Sprintf("Success , channel ID: %d", channelID)
 }
 
 func (s *Service) UsePersonalChannel(ctx context.Context, channelID int64) error {

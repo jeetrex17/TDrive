@@ -2,6 +2,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"TDrive/backend/projection"
+	"TDrive/backend/tgclient"
 )
 
 // Folder and archive import. PlanImport walks a selection to produce counts for
@@ -26,41 +28,41 @@ const (
 	archiveExtractedFileLimit            = 10000
 	archiveExtractedBytesLimitFloor      = 512 * 1024 * 1024
 	archiveExtractedBytesLimitMultiplier = 8
+	maxImportItems                       = 10_000
+	// Leave room for ignored and oversize members without permitting metadata
+	// alone to pin the app on an adversarial or generated archive.
+	maxImportArchiveScanEntries = maxImportItems * 4
+	importUploadBatchSize       = 128
+	maxImportErrorDetails       = 20
+)
+
+var (
+	errImportItemLimit  = errors.New("import exceeds the remote item limit")
+	errArchiveScanLimit = errors.New("archive has too many entries to inspect safely")
 )
 
 // ImportPlan is the summary shown in the import dialog before confirming.
 type ImportPlan struct {
-	Files    int      `json:"files"`    // files that would upload (excludes oversize)
-	Folders  int      `json:"folders"`  // folders that would be created
-	Bytes    int64    `json:"bytes"`    // total plaintext bytes of the uploadable files
-	Oversize int      `json:"oversize"` // files skipped for exceeding the per-file limit
-	Archives int      `json:"archives"` // archive items in the selection
-	MaxBytes int64    `json:"maxBytes"` // active per-file limit, for messaging
-	Errors   []string `json:"errors"`   // items that could not be scanned
+	Files    int   `json:"files"`    // files that would upload (excludes oversize)
+	Folders  int   `json:"folders"`  // folders that would be created
+	Bytes    int64 `json:"bytes"`    // total plaintext bytes of the uploadable files
+	Oversize int   `json:"oversize"` // files skipped for exceeding the per-file limit
+	Archives int   `json:"archives"` // archive items in the selection
+	Ignored  int   `json:"ignored"`  // generated/cache roots pruned from the selection
+	MaxBytes int64 `json:"maxBytes"` // active per-file limit, for messaging
+	MaxItems int   `json:"maxItems"` // maximum files + folders in one import
+	// LimitExceeded is set after counting one item beyond MaxItems. Planning
+	// stops there so an accidental huge tree cannot consume unbounded memory.
+	LimitExceeded bool     `json:"limitExceeded"`
+	ErrorCount    int      `json:"errorCount"`
+	Errors        []string `json:"errors"` // items that could not be scanned
 }
 
 type archiveExtractStats struct {
 	files    int
 	bytes    int64
 	oversize int
-}
-
-// isJunkName reports OS bookkeeping files that should never be uploaded.
-func isJunkName(name string) bool {
-	switch name {
-	case ".DS_Store", "Thumbs.db", "desktop.ini", ".localized", "__MACOSX":
-		return true
-	}
-	return strings.HasPrefix(name, "._") // macOS AppleDouble sidecars
-}
-
-func isJunkArchivePath(rel string) bool {
-	for _, part := range strings.Split(path.Clean(rel), "/") {
-		if isJunkName(part) || strings.EqualFold(part, "__MACOSX") {
-			return true
-		}
-	}
-	return false
+	ignored  int
 }
 
 func archiveDuplicateRoot(entries []ArchiveEntry, topName string) string {
@@ -71,7 +73,7 @@ func archiveDuplicateRoot(entries []ArchiveEntry, topName string) string {
 	seenUploadable := false
 	root := ""
 	for _, e := range entries {
-		if e.IsDir || isJunkArchivePath(e.RelPath) {
+		if e.IsDir || isIgnoredArchivePath(e.RelPath, e.IsDir) {
 			continue
 		}
 		first, rest, hasSlash := strings.Cut(e.RelPath, "/")
@@ -120,134 +122,308 @@ func archiveFolderName(p string) string {
 // dialog. encrypt and extractArchives must match what RunImport will be called
 // with so the totals line up. It never mutates anything.
 func (s *Service) PlanImport(paths []string, encrypt, extractArchives bool) ImportPlan {
-	plan := ImportPlan{MaxBytes: s.largeFileMaxBytes()}
+	return s.planImport(context.Background(), paths, encrypt, extractArchives)
+}
+
+func (s *Service) planImport(ctx context.Context, paths []string, encrypt, extractArchives bool) ImportPlan {
+	plan := ImportPlan{MaxBytes: s.largeFileMaxBytes(), MaxItems: maxImportItems}
 	for _, p := range paths {
+		if err := ctx.Err(); err != nil {
+			plan.addError("import canceled", err)
+			break
+		}
 		info, err := os.Stat(p)
 		if err != nil {
-			plan.Errors = append(plan.Errors, fmt.Sprintf("%s: %v", filepath.Base(p), err))
+			plan.addError(filepath.Base(p), err)
 			continue
 		}
+		var planErr error
 		switch {
 		case info.IsDir():
-			plan.Folders++ // the top folder itself
-			s.planFolder(p, encrypt, &plan)
+			planErr = plan.addFolder() // explicit top-level choices are preserved
+			if planErr == nil {
+				planErr = s.planFolder(ctx, p, encrypt, &plan)
+			}
 		case IsArchive(p) && extractArchives:
 			plan.Archives++
-			s.planArchive(p, encrypt, &plan)
+			planErr = s.planArchive(ctx, p, encrypt, &plan)
 		default:
 			if IsArchive(p) {
 				plan.Archives++
 			}
-			s.planFile(info.Size(), encrypt, &plan)
+			_, planErr = s.planFile(info.Size(), encrypt, &plan)
+		}
+		if errors.Is(planErr, errImportItemLimit) {
+			break
+		}
+		if planErr != nil {
+			plan.addError(filepath.Base(p), planErr)
+			if ctx.Err() != nil {
+				break
+			}
 		}
 	}
 	return plan
 }
 
-func (s *Service) planFile(size int64, encrypt bool, plan *ImportPlan) {
+func (p *ImportPlan) addError(name string, err error) {
+	p.ErrorCount++
+	if len(p.Errors) < maxImportErrorDetails {
+		p.Errors = append(p.Errors, fmt.Sprintf("%s: %v", name, err))
+	}
+}
+
+func (p *ImportPlan) checkItemLimit() error {
+	if p.Files+p.Folders <= p.MaxItems {
+		return nil
+	}
+	p.LimitExceeded = true
+	return errImportItemLimit
+}
+
+func (p *ImportPlan) addFolder() error {
+	p.Folders++
+	return p.checkItemLimit()
+}
+
+func (s *Service) planFile(size int64, encrypt bool, plan *ImportPlan) (bool, error) {
 	if uploadByteSize(size, encrypt) > s.largeFileMaxBytes() {
 		plan.Oversize++
-		return
+		return false, nil
 	}
 	plan.Files++
 	plan.Bytes += size
+	return true, plan.checkItemLimit()
 }
 
-func (s *Service) planFolder(root string, encrypt bool, plan *ImportPlan) {
-	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			plan.Errors = append(plan.Errors, fmt.Sprintf("%s: %v", filepath.Base(p), err))
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if p == root {
-			return nil // counted by the caller
-		}
+func (s *Service) planFolder(ctx context.Context, root string, encrypt bool, plan *ImportPlan) error {
+	err := walkImportDescendants(ctx, root, func(_ string, _ string, d os.DirEntry) (bool, error) {
 		if d.Type()&os.ModeSymlink != 0 {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+			return true, nil
 		}
-		if isJunkName(d.Name()) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+		if isIgnoredImportName(d.Name(), d.IsDir()) {
+			plan.Ignored++
+			return d.IsDir(), nil
 		}
 		if d.IsDir() {
-			plan.Folders++
-			return nil
+			return false, plan.addFolder()
 		}
 		info, err := d.Info()
 		if err != nil {
-			plan.Errors = append(plan.Errors, fmt.Sprintf("%s: %v", d.Name(), err))
-			return nil
+			plan.addError(d.Name(), err)
+			return false, nil
 		}
-		s.planFile(info.Size(), encrypt, plan)
+		_, planErr := s.planFile(info.Size(), encrypt, plan)
+		return false, planErr
+	}, func(p string, err error) error {
+		plan.addError(filepath.Base(p), err)
 		return nil
 	})
+	return err
 }
 
-func (s *Service) planArchive(p string, encrypt bool, plan *ImportPlan) {
-	entries, err := ScanArchive(p)
+func (s *Service) planArchive(ctx context.Context, p string, encrypt bool, plan *ImportPlan) error {
+	entries, ignored, err := scanArchiveForImport(ctx, p)
+	plan.Ignored += ignored
 	if err != nil {
-		// Corrupt or unreadable: RunImport falls back to uploading it as a file.
-		plan.Errors = append(plan.Errors, fmt.Sprintf("%s: cannot read archive (%v), will upload as a file", filepath.Base(p), err))
-		if info, statErr := os.Stat(p); statErr == nil {
-			s.planFile(info.Size(), encrypt, plan)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
-		return
+		// Corrupt or unreadable: RunImport falls back to uploading it as a file.
+		plan.addError(filepath.Base(p), fmt.Errorf("cannot read archive (%v), will upload as a file", err))
+		if info, statErr := os.Stat(p); statErr == nil {
+			_, planErr := s.planFile(info.Size(), encrypt, plan)
+			return planErr
+		}
+		return nil
 	}
-	plan.Folders++ // the archive-named folder
+	if err := plan.addFolder(); err != nil { // the archive-named folder
+		return err
+	}
 	stripRoot := archiveDuplicateRoot(entries, archiveFolderName(p))
 	// Count folders the way import actually creates them: from the parent dirs
 	// of real files. Empty directory entries are not recreated (extraction
 	// streams files only), so they are intentionally not counted here.
 	dirs := map[string]struct{}{}
 	for _, e := range entries {
-		if e.IsDir || isJunkArchivePath(e.RelPath) {
-			continue
-		}
 		rel := stripArchiveRoot(e.RelPath, stripRoot)
-		if rel == "" || isJunkArchivePath(rel) {
+		if rel == "" {
 			continue
 		}
-		s.planFile(e.Size, encrypt, plan)
+		uploadable, err := s.planFile(e.Size, encrypt, plan)
+		if err != nil {
+			return err
+		}
+		if !uploadable {
+			continue
+		}
 		for d := path.Dir(rel); d != "."; d = path.Dir(d) {
+			if _, exists := dirs[d]; exists {
+				continue
+			}
 			dirs[d] = struct{}{}
+			if err := plan.addFolder(); err != nil {
+				return err
+			}
 		}
 	}
-	plan.Folders += len(dirs)
+	return nil
 }
 
-// importTasks accumulates the file uploads and folder/skip counts produced while
-// walking a selection.
+// scanArchiveForImport streams archive metadata into a bounded, policy-filtered
+// slice. Tar scans stop at the inspection budget; zip still requires Go's
+// central-directory index, but TDrive no longer duplicates an unbounded list.
+func scanArchiveForImport(ctx context.Context, archivePath string) ([]ArchiveEntry, int, error) {
+	return scanArchiveForImportLimit(ctx, archivePath, maxImportArchiveScanEntries)
+}
+
+func scanArchiveForImportLimit(ctx context.Context, archivePath string, maxScanned int) ([]ArchiveEntry, int, error) {
+	if ctx == nil {
+		return nil, 0, fmt.Errorf("archive scan requires a context")
+	}
+	if maxScanned <= 0 {
+		return nil, 0, fmt.Errorf("archive scan limit must be positive")
+	}
+	entries := make([]ArchiveEntry, 0, min(maxImportItems, 256))
+	ignoredRoots := make(map[string]struct{})
+	seen := 0
+	err := forEachArchiveEntry(archivePath, func(entry ArchiveEntry) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		seen++
+		if seen > maxScanned {
+			return errArchiveScanLimit
+		}
+		if root := ignoredArchiveRoot(entry.RelPath, entry.IsDir); root != "" {
+			if len(ignoredRoots) < maxImportItems {
+				ignoredRoots[root] = struct{}{}
+			}
+			return nil
+		}
+		if entry.IsDir {
+			return nil
+		}
+		entries = append(entries, entry)
+		return nil
+	})
+	return entries, len(ignoredRoots), err
+}
+
+type importBatch struct {
+	paths   []string
+	parents []string
+}
+
+func newImportBatch() *importBatch {
+	return &importBatch{
+		paths:   make([]string, 0, importUploadBatchSize),
+		parents: make([]string, 0, importUploadBatchSize),
+	}
+}
+
+func (b *importBatch) add(srcPath, parentID string) bool {
+	b.paths = append(b.paths, srcPath)
+	b.parents = append(b.parents, parentID)
+	return len(b.paths) == importUploadBatchSize
+}
+
+func (b *importBatch) len() int {
+	return len(b.paths)
+}
+
+func (b *importBatch) reset() {
+	clear(b.paths)
+	clear(b.parents)
+	b.paths = b.paths[:0]
+	b.parents = b.parents[:0]
+}
+
+type importBatchUploader func(paths, parents []string, idOffset int) error
+
+// importTasks retains only one bounded upload window plus bounded diagnostics.
+// The synchronous uploader provides natural backpressure to the filesystem
+// walk; it never schedules the next window while this one is active.
 type importTasks struct {
-	paths    []string
-	parents  []string
-	folders  int
-	oversize int
-	errors   []string
+	batch        *importBatch
+	upload       importBatchUploader
+	nextUploadID int
+	files        int
+	remoteItems  int
+	folders      int
+	oversize     int
+	ignored      int
+	errorCount   int
+	errors       []string
+	warnf        WarnFunc
 }
 
-func (t *importTasks) add(srcPath, parentID string) {
-	t.paths = append(t.paths, srcPath)
-	t.parents = append(t.parents, parentID)
+func (t *importTasks) reserveRemoteItem() error {
+	if t.remoteItems >= maxImportItems {
+		return errImportItemLimit
+	}
+	t.remoteItems++
+	return nil
+}
+
+func (t *importTasks) add(srcPath, parentID string) error {
+	if err := t.reserveRemoteItem(); err != nil {
+		return err
+	}
+	t.files++
+	if t.batch.add(srcPath, parentID) {
+		return t.flush()
+	}
+	return nil
+}
+
+func (t *importTasks) flush() error {
+	if t.batch.len() == 0 {
+		return nil
+	}
+	batchSize := t.batch.len()
+	err := t.upload(t.batch.paths, t.batch.parents, t.nextUploadID)
+	t.nextUploadID += batchSize
+	t.batch.reset()
+	if err != nil && t.warnf != nil {
+		t.warnf("import: upload window failed: %v\n", err)
+	}
+	if isFatalImportError(err) {
+		return err
+	}
+	if err != nil {
+		t.addError("upload window", err)
+	}
+	return nil
+}
+
+func isFatalImportError(err error) bool {
+	return tgclient.IsTransientTransport(err) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, errImportItemLimit) ||
+		errors.Is(err, projection.ErrControlProjection) ||
+		errors.Is(err, errUploadProjection) ||
+		errors.Is(err, tgclient.ErrFloodWait) ||
+		errors.Is(err, tgclient.ErrSendOutcomeUnknown)
 }
 
 func (t *importTasks) addError(name string, err error) {
-	t.errors = append(t.errors, fmt.Sprintf("%s: %v", name, err))
+	t.errorCount++
+	if len(t.errors) < maxImportErrorDetails {
+		t.errors = append(t.errors, fmt.Sprintf("%s: %v", name, err))
+	}
 }
 
 // RunImport recreates the folder structure of the selected paths under parentID
 // and uploads their files. Top-level folder names that collide with an existing
 // folder are suffixed (Name (2)); archives chosen for extraction are unpacked to
 // a temp dir and imported like folders. Progress flows through import_start, the
-// per-file upload_* events, and import_complete.
+// aggregate import events, and import_complete.
 func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string, parentID string, encrypt, extractArchives bool) error {
+	if ctx == nil {
+		return fmt.Errorf("import: context is required")
+	}
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -274,6 +450,17 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 			return fmt.Errorf("encryption upload not ready")
 		}
 	}
+	plan := s.planImport(ctx, paths, encrypt, extractArchives)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if plan.LimitExceeded {
+		return fmt.Errorf("%w: keep the selection under %d files and folders", errImportItemLimit, plan.MaxItems)
+	}
+	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return err
+	}
 
 	// The extraction temp dir is created lazily on the first archive we actually
 	// extract, so a folder-only import never touches /tmp.
@@ -297,10 +484,25 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 	// Announce the import immediately so the bell shows activity through the
 	// prepare, extract, and folder-creation phases, before any uploads begin.
 	s.emitEvent("import_start")
-
-	tasks := &importTasks{}
+	s.emitEvent("import_uploading", map[string]any{"files": plan.Files, "folders": plan.Folders})
+	observer := newImportUploadObserver(s, plan.Files)
+	observer.EmitInitial()
+	tasks := &importTasks{
+		batch: newImportBatch(),
+		warnf: s.warnf,
+	}
+	tasks.upload = func(batchPaths, batchParents []string, idOffset int) error {
+		_, err := s.upload(ctx, channelID, batchPaths, batchParents, encrypt, uploadOptions{
+			observer: observer,
+			peer:     &peer,
+			idOffset: idOffset,
+		})
+		return err
+	}
+	var fatalErr error
 	for _, p := range paths {
-		if ctx.Err() != nil {
+		if err := ctx.Err(); err != nil {
+			fatalErr = err
 			break
 		}
 		info, err := os.Stat(p)
@@ -312,77 +514,116 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 		case info.IsDir():
 			s.emitEvent("import_progress", map[string]any{"label": "Adding " + filepath.Base(p)})
 			if err := s.importTree(ctx, channelID, p, filepath.Base(p), parent, encrypt, tasks); err != nil {
+				if isFatalImportError(err) {
+					fatalErr = err
+					break
+				}
 				tasks.addError(filepath.Base(p), err)
 			}
 		case IsArchive(p) && extractArchives:
 			s.emitEvent("import_progress", map[string]any{"label": "Extracting " + filepath.Base(p)})
 			root, err := ensureTmp()
 			if err != nil {
-				return fmt.Errorf("create temp dir: %w", err)
+				fatalErr = fmt.Errorf("create temp dir: %w", err)
+				break
 			}
-			dir, stats, err := s.extractArchiveToTemp(p, root, encrypt)
+			dir, stats, err := s.extractArchiveToTemp(ctx, p, root, encrypt)
 			tasks.oversize += stats.oversize
+			tasks.ignored += stats.ignored
 			if err != nil {
+				if isFatalImportError(err) {
+					fatalErr = err
+					break
+				}
 				tasks.addError(filepath.Base(p), fmt.Errorf("extract failed, uploading as a file: %w", err))
-				s.addFileTask(p, info.Size(), parent, encrypt, tasks)
-				continue
+				if err := s.addFileTask(p, info.Size(), parent, encrypt, tasks); err != nil {
+					fatalErr = err
+				}
+				break // reach the shared fatal guard before scheduling another selected path
 			}
 			if err := s.importTree(ctx, channelID, dir, archiveFolderName(p), parent, encrypt, tasks); err != nil {
+				if isFatalImportError(err) {
+					fatalErr = err
+					break
+				}
 				tasks.addError(filepath.Base(p), err)
 			}
 		default:
-			s.addFileTask(p, info.Size(), parent, encrypt, tasks)
+			if err := s.addFileTask(p, info.Size(), parent, encrypt, tasks); err != nil {
+				fatalErr = err
+			}
+		}
+		if fatalErr != nil {
+			break
 		}
 	}
-
-	// Switch the bell to the upload phase now that the folders exist and the
-	// file list is known, so the progress denominator is the real upload count.
-	s.emitEvent("import_uploading", map[string]any{"files": len(tasks.paths), "folders": tasks.folders})
-
-	uploaded := 0
-	var uploadErr error
-	if len(tasks.paths) > 0 {
-		metas, err := s.Upload(ctx, channelID, tasks.paths, tasks.parents, encrypt)
-		uploaded = len(metas)
-		uploadErr = err
+	if fatalErr == nil {
+		if err := tasks.flush(); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				fatalErr = ctxErr
+			} else {
+				fatalErr = err
+			}
+		}
 	}
-
+	uploaded, observerFailed, uploadReasons := observer.Summary()
+	failed := max(0, tasks.files-uploaded, observerFailed)
+	errorsOut := append([]string(nil), tasks.errors...)
+	for _, reason := range uploadReasons {
+		if len(errorsOut) >= maxImportErrorDetails {
+			break
+		}
+		errorsOut = append(errorsOut, reason)
+	}
+	status := "done"
+	fatalMessage := ""
+	if fatalErr != nil {
+		status = "failed"
+		fatalMessage = fatalErr.Error()
+		if errors.Is(fatalErr, context.Canceled) {
+			status = "canceled"
+		}
+	}
 	s.emitEvent("import_complete", map[string]any{
-		"uploaded": uploaded,
-		"failed":   len(tasks.paths) - uploaded,
-		"folders":  tasks.folders,
-		"oversize": tasks.oversize,
-		"errors":   tasks.errors,
+		"uploaded":   uploaded,
+		"failed":     failed,
+		"scheduled":  tasks.files,
+		"folders":    tasks.folders,
+		"oversize":   tasks.oversize,
+		"ignored":    tasks.ignored,
+		"errorCount": tasks.errorCount,
+		"errors":     errorsOut,
+		"status":     status,
+		"error":      fatalMessage,
 	})
-	// Per-file upload failures are already reported through import_complete (and
-	// the upload_error events). Returning them here too made the frontend
-	// overwrite that accurate summary with a generic "Import failed", so log and
-	// swallow; only genuine pre-import errors above reject the call.
-	if uploadErr != nil {
-		s.warnf("import: some uploads failed: %v\n", uploadErr)
+	if fatalErr != nil {
+		return fatalErr
 	}
 	return nil
 }
 
 // addFileTask queues a single file for upload, skipping (and counting) it if it
 // exceeds the per-file limit.
-func (s *Service) addFileTask(srcPath string, size int64, parentID string, encrypt bool, tasks *importTasks) {
+func (s *Service) addFileTask(srcPath string, size int64, parentID string, encrypt bool, tasks *importTasks) error {
 	if uploadByteSize(size, encrypt) > s.largeFileMaxBytes() {
 		tasks.oversize++
-		return
+		return nil
 	}
-	tasks.add(srcPath, parentID)
+	return tasks.add(srcPath, parentID)
 }
 
 // importTree creates a top folder (collision-suffixed) under parentID, mirrors
 // the directory structure beneath root, and queues every file for upload. The
-// walk is lexical, so a directory is always created before its children.
+// depth-first walk always creates a directory before visiting its children.
 func (s *Service) importTree(ctx context.Context, channelID int64, root, topName, parentID string, encrypt bool, tasks *importTasks) error {
 	freeName, err := projection.NextFreeFolderName(s.DB, channelID, parentID, topName)
 	if err != nil {
 		return err
 	}
-	topID, err := s.CreateFolder(channelID, freeName, parentID)
+	if err := tasks.reserveRemoteItem(); err != nil {
+		return err
+	}
+	topID, err := s.CreateFolder(ctx, channelID, freeName, parentID)
 	if err != nil {
 		return err
 	}
@@ -391,64 +632,45 @@ func (s *Service) importTree(ctx context.Context, channelID int64, root, topName
 	// Maps a cleaned forward-slash relative directory to its created folder ID.
 	dirIDs := map[string]string{".": topID}
 
-	return filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if walkErr != nil {
-			tasks.addError(filepath.Base(p), walkErr)
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if p == root {
-			return nil
-		}
+	return walkImportDescendants(ctx, root, func(p, rel string, d os.DirEntry) (bool, error) {
 		if d.Type()&os.ModeSymlink != 0 {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+			return true, nil
 		}
-		if isJunkName(d.Name()) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+		if isIgnoredImportName(d.Name(), d.IsDir()) {
+			tasks.ignored++
+			return d.IsDir(), nil
 		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			tasks.addError(filepath.Base(p), err)
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
 		parentID := dirIDs[path.Dir(rel)]
 		if parentID == "" {
 			// A parent we failed to create earlier; skip this dangling entry.
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+			return d.IsDir(), nil
 		}
 
 		if d.IsDir() {
-			id, err := s.CreateFolder(channelID, d.Name(), parentID)
+			if err := tasks.reserveRemoteItem(); err != nil {
+				return false, err
+			}
+			id, err := s.CreateFolder(ctx, channelID, d.Name(), parentID)
 			if err != nil {
+				if isFatalImportError(err) {
+					return false, err
+				}
 				tasks.addError(rel, err)
-				return filepath.SkipDir
+				return true, nil
 			}
 			dirIDs[rel] = id
 			tasks.folders++
-			return nil
+			return false, nil
 		}
 
 		info, err := d.Info()
 		if err != nil {
 			tasks.addError(rel, err)
-			return nil
+			return false, nil
 		}
-		s.addFileTask(p, info.Size(), parentID, encrypt, tasks)
+		return false, s.addFileTask(p, info.Size(), parentID, encrypt, tasks)
+	}, func(p string, err error) error {
+		tasks.addError(filepath.Base(p), err)
 		return nil
 	})
 }
@@ -457,12 +679,15 @@ func (s *Service) importTree(ctx context.Context, channelID int64, root, topName
 // temp directory under tmpRoot, preserving relative structure, and returns the
 // directory. StreamArchiveFiles already drops unsafe (zip-slip) and symlink
 // entries; the prefix check below is defense in depth.
-func (s *Service) extractArchiveToTemp(archivePath, tmpRoot string, encrypt bool) (string, archiveExtractStats, error) {
+func (s *Service) extractArchiveToTemp(ctx context.Context, archivePath, tmpRoot string, encrypt bool) (string, archiveExtractStats, error) {
+	if err := ctx.Err(); err != nil {
+		return "", archiveExtractStats{}, err
+	}
 	dir, err := os.MkdirTemp(tmpRoot, "arc-")
 	if err != nil {
 		return "", archiveExtractStats{}, err
 	}
-	entries, err := ScanArchive(archivePath)
+	entries, ignored, err := scanArchiveForImport(ctx, archivePath)
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return "", archiveExtractStats{}, err
@@ -479,13 +704,16 @@ func (s *Service) extractArchiveToTemp(archivePath, tmpRoot string, encrypt bool
 		readLimit++
 	}
 	totalLimit := s.maxArchiveExtractBytes()
-	stats := archiveExtractStats{}
+	stats := archiveExtractStats{ignored: ignored}
 	err = StreamArchiveFiles(archivePath, func(e ArchiveEntry, r io.Reader) error {
-		if isJunkArchivePath(e.RelPath) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if root := ignoredArchiveRoot(e.RelPath, e.IsDir); root != "" {
 			return nil
 		}
 		rel := stripArchiveRoot(e.RelPath, stripRoot)
-		if rel == "" || isJunkArchivePath(rel) {
+		if rel == "" || isIgnoredArchivePath(rel, e.IsDir) {
 			return nil
 		}
 		if e.Size < 0 {
@@ -519,7 +747,7 @@ func (s *Service) extractArchiveToTemp(archivePath, tmpRoot string, encrypt bool
 			remainingReadLimit++
 		}
 		entryReadLimit := minInt64(readLimit, remainingReadLimit)
-		written, copyErr := io.Copy(f, io.LimitReader(r, entryReadLimit))
+		written, copyErr := io.Copy(f, io.LimitReader(&contextReader{ctx: ctx, source: r}, entryReadLimit))
 		closeErr := f.Close()
 		if copyErr != nil {
 			_ = os.Remove(actualDest)

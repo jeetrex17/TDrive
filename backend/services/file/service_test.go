@@ -36,6 +36,25 @@ func (r testPeerResolver) ResolvePeer(ctx context.Context, channelID int64) (tgc
 	return r.peer, nil
 }
 
+type countingTestPeerResolver struct {
+	mu    sync.Mutex
+	peer  tgclient.InputPeer
+	calls int
+}
+
+func (r *countingTestPeerResolver) ResolvePeer(context.Context, int64) (tgclient.InputPeer, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	return r.peer, nil
+}
+
+func (r *countingTestPeerResolver) Calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
 type eventRecorder struct {
 	mu     sync.Mutex
 	events []string
@@ -56,6 +75,18 @@ func (r *eventRecorder) Has(name string) bool {
 		}
 	}
 	return false
+}
+
+func (r *eventRecorder) Count(name string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	count := 0
+	for _, event := range r.events {
+		if event == name {
+			count++
+		}
+	}
+	return count
 }
 
 func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
@@ -357,6 +388,61 @@ func TestUploadRejectsMissingParentBeforeSend(t *testing.T) {
 	}
 	if !events.Has("upload_start") || !events.Has("upload_error") {
 		t.Fatalf("events = %+v, want visible failed upload lifecycle", events.events)
+	}
+}
+
+func TestUploadResolvesPeerOnceForTheWholeBatch(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	resolver := &countingTestPeerResolver{peer: tgclient.InputPeer{ChannelID: personalChannelID, AccessHash: 99}}
+	svc.Peers = resolver
+	paths := []string{
+		writeTempNamedFile(t, "one.txt", []byte("one")),
+		writeTempNamedFile(t, "two.txt", []byte("two")),
+		writeTempNamedFile(t, "three.txt", []byte("three")),
+	}
+
+	if _, err := svc.Upload(context.Background(), personalChannelID, paths, []string{"", "", ""}, false); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if got := resolver.Calls(); got != 1 {
+		t.Fatalf("peer resolutions = %d, want 1 for the batch", got)
+	}
+}
+
+func TestUploadEmitsExactlyOneStartForMultipartFiles(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	svc.MaxUploadBytes = 3
+	events := &eventRecorder{}
+	svc.Events = events
+	path := writeTempNamedFile(t, "multipart.txt", []byte("four"))
+
+	if _, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if got := events.Count("upload_start"); got != 1 {
+		t.Fatalf("upload_start events = %d, want exactly 1", got)
+	}
+}
+
+func TestUploadRejectsAnUnboundedDirectBatchBeforeWorkStarts(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	actorCalled := false
+	svc.ActorID = func(context.Context) (int64, error) {
+		actorCalled = true
+		return 0, errors.New("unexpected actor lookup")
+	}
+	paths := make([]string, maxImportItems+1)
+	parents := make([]string, len(paths))
+
+	_, err := svc.Upload(context.Background(), personalChannelID, paths, parents, false)
+	if !errors.Is(err, errImportItemLimit) {
+		t.Fatalf("Upload error = %v, want import item limit", err)
+	}
+	if actorCalled {
+		t.Fatal("oversized direct batch reached actor lookup")
+	}
+	if sent := fakeTG.SentFiles(); len(sent) != 0 {
+		t.Fatalf("oversized direct batch sent %d files", len(sent))
 	}
 }
 

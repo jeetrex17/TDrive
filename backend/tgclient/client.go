@@ -76,6 +76,11 @@ type HistoryMessage struct {
 	DocumentName       string
 	DocumentAccessHash int64
 	Thumbs             []FileThumb
+	// Placeholder marks an entry that occupies a message id but carries no
+	// content: a service event, or the stub left where a message was deleted.
+	// It is reported so page lengths match what Telegram sent, and callers
+	// looking for real content must skip it.
+	Placeholder bool
 }
 
 // SendFileResult is what SendFile returns. We split it from a bare msgID
@@ -131,6 +136,17 @@ type UserMessageRef struct {
 	MsgID  int64
 }
 
+// OwnedBroadcastChannel is the minimum metadata needed to let a user recover
+// a personal drive. AccessHash is intentionally kept behind the backend API;
+// frontend and daemon DTOs must expose only the stable channel ID.
+type OwnedBroadcastChannel struct {
+	ID          int64
+	AccessHash  int64
+	Title       string
+	CreatedAt   int64
+	HasActivity bool
+}
+
 // Client is the surface sync, backfill, and local-action paths use to talk
 // to Telegram. Both the real (gotd-backed) and fake test implementations
 // implement this.
@@ -161,6 +177,11 @@ type Client interface {
 	// default history order: newest first. minID filters out messages at or
 	// below that watermark; offsetID pages older than a previous page.
 	// Callers must sort before applying projection ops.
+	//
+	// Every message Telegram returns is reported, including service messages
+	// and the empty placeholders left by deletions. Those carry no projectable
+	// payload, but they do occupy message ids, so silently dropping them would
+	// make a full page look short and mislead callers paginating on page size.
 	GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error)
 
 	// GetFileDocument resolves one Telegram message into a downloadable
@@ -189,6 +210,8 @@ type Client interface {
 	// vanished from Telegram directly.
 	MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error)
 
+	ListOwnedBroadcastChannels(ctx context.Context) ([]OwnedBroadcastChannel, error)
+	CreateBroadcastChannel(ctx context.Context, title, about string) (OwnedBroadcastChannel, error)
 	CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error)
 	ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error)
 	CheckInvite(ctx context.Context, hash string) (InviteInfo, error)

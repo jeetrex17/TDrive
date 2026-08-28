@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"TDrive/backend"
@@ -19,6 +22,7 @@ import (
 	fileservice "TDrive/backend/services/file"
 	folderservice "TDrive/backend/services/folder"
 	lifecycleservice "TDrive/backend/services/lifecycle"
+	personaldriveservice "TDrive/backend/services/personaldrive"
 	readservice "TDrive/backend/services/read"
 	userservice "TDrive/backend/services/user"
 	tdsync "TDrive/backend/sync"
@@ -92,6 +96,7 @@ type Engine struct {
 	media      *media.Service
 	reads      *readservice.Service
 	lifecycle  *lifecycleservice.Service
+	personal   *personaldriveservice.Service
 	users      *userservice.Service
 	syncEngine *tdsync.Engine
 	liveSync   *livesync.Coordinator
@@ -164,6 +169,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.reads = e.newReadService()
 	e.media = e.newMediaService()
 	e.syncEngine = tdsync.NewEngine(backend.DB, e.tg, peerResolverFn(e.ResolvePeer))
+	e.syncEngine.OnProgress = e.emitDriveScanProgress
 	e.syncEngine.EmitTomb = func(channelID int64, fileMsgID int64) error {
 		_, err := e.EmitAndProject(channelID, projection.Op{
 			Type: projection.OpTomb,
@@ -172,6 +178,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		return err
 	}
 	e.lifecycle = e.newLifecycleService()
+	e.personal = e.newPersonalDriveService()
 	e.users = e.newUserService()
 	e.startLiveSync(liveActivity)
 
@@ -182,6 +189,39 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	}
 
 	return e, nil
+}
+
+// DriveScanProgressEvent is the frontend-facing shape of a history-scan
+// update. The channel id is a string because Telegram ids can exceed
+// JavaScript's safe integer range.
+type DriveScanProgressEvent struct {
+	ChannelID     string `json:"channel_id"`
+	Phase         string `json:"phase"`
+	PagesDone     int    `json:"pages_done"`
+	PagesTotal    int    `json:"pages_total"`
+	MessagesDone  int    `json:"messages_done"`
+	MessagesTotal int    `json:"messages_total"`
+	WaitSeconds   int    `json:"wait_seconds"`
+}
+
+// DriveScanProgressEventName is emitted while a drive's Telegram history is
+// being read. Recovery is the only scan long enough for a user to watch, but
+// routine incremental syncs emit it too; consumers decide what to show.
+const DriveScanProgressEventName = "drive_scan_progress"
+
+func (e *Engine) emitDriveScanProgress(p tdsync.Progress) {
+	if e == nil || e.events == nil {
+		return
+	}
+	e.events.Emit(DriveScanProgressEventName, DriveScanProgressEvent{
+		ChannelID:     strconv.FormatInt(p.ChannelID, 10),
+		Phase:         string(p.Phase),
+		PagesDone:     p.PagesDone,
+		PagesTotal:    p.PagesTotal,
+		MessagesDone:  p.MessagesDone,
+		MessagesTotal: p.MessagesTotal,
+		WaitSeconds:   int(math.Ceil(p.Wait.Seconds())),
+	})
 }
 
 func (e *Engine) startLiveSync(activity *livesync.TelegramActivity) {
@@ -310,25 +350,34 @@ func (e *Engine) ActorID(ctx context.Context) (int64, error) {
 // local projection. If local projection fails after the send, the op remains in
 // Telegram and the next sync can replay it.
 func (e *Engine) EmitAndProject(channelID int64, op projection.Op) (int64, error) {
+	return e.EmitAndProjectContext(e.ctx, channelID, op)
+}
+
+// EmitAndProjectContext is the request-scoped form used by imports and other
+// cancellable operations. Idempotent Telegram retries reuse one random_id, so
+// a lost response cannot create duplicate control messages.
+func (e *Engine) EmitAndProjectContext(ctx context.Context, channelID int64, op projection.Op) (int64, error) {
 	if e == nil || e.tg == nil {
 		return 0, fmt.Errorf("tg client not ready")
 	}
-	actorID, err := e.ActorID(e.ctx)
-	if err != nil {
+	if ctx == nil {
+		return 0, fmt.Errorf("control write requires a context")
+	}
+	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	peer, err := e.ChannelPeer(e.ctx, channelID)
+	actorID, err := e.ActorID(ctx)
 	if err != nil {
 		return 0, err
 	}
 	header := projection.Format(op)
-	msgID, err := e.tg.SendControl(e.ctx, peer, header, true)
+	msgID, err := e.sendControlContext(ctx, channelID, header)
 	if err != nil {
 		return 0, err
 	}
 	if _, err := projection.ProjectFromOp(backend.DB, channelID, msgID, op, actorID, header); err != nil {
 		e.warnf("warn: projection failed after send msg=%d op=%s: %v\n", msgID, op.Type, err)
-		return msgID, err
+		return msgID, fmt.Errorf("%w: msg=%d op=%s: %w", projection.ErrControlProjection, msgID, op.Type, err)
 	}
 	return msgID, nil
 }
@@ -344,17 +393,23 @@ type projectedOp struct {
 // the UI-facing cache must be: if a later send fails, the already-sent ops will
 // converge through the next sync instead of locally half-applying a subtree.
 func (e *Engine) EmitAndProjectBatch(channelID int64, ops []projection.Op) error {
+	return e.EmitAndProjectBatchContext(e.ctx, channelID, ops)
+}
+
+func (e *Engine) EmitAndProjectBatchContext(ctx context.Context, channelID int64, ops []projection.Op) error {
 	if len(ops) == 0 {
 		return nil
 	}
 	if e == nil || e.tg == nil {
 		return fmt.Errorf("tg client not ready")
 	}
-	actorID, err := e.ActorID(e.ctx)
-	if err != nil {
+	if ctx == nil {
+		return fmt.Errorf("control write requires a context")
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	peer, err := e.ChannelPeer(e.ctx, channelID)
+	actorID, err := e.ActorID(ctx)
 	if err != nil {
 		return err
 	}
@@ -362,7 +417,7 @@ func (e *Engine) EmitAndProjectBatch(channelID int64, ops []projection.Op) error
 	sent := make([]projectedOp, 0, len(ops))
 	for _, op := range ops {
 		header := projection.Format(op)
-		msgID, err := e.tg.SendControl(e.ctx, peer, header, true)
+		msgID, err := e.sendControlContext(ctx, channelID, header)
 		if err != nil {
 			return err
 		}
@@ -371,7 +426,7 @@ func (e *Engine) EmitAndProjectBatch(channelID int64, ops []projection.Op) error
 
 	tx, err := backend.DB.Begin()
 	if err != nil {
-		return fmt.Errorf("projection: begin batch tx: %w", err)
+		return fmt.Errorf("%w: begin batch tx: %w", projection.ErrControlProjection, err)
 	}
 	defer func() {
 		if err != nil {
@@ -380,13 +435,80 @@ func (e *Engine) EmitAndProjectBatch(channelID int64, ops []projection.Op) error
 	}()
 	for _, item := range sent {
 		if _, err = projection.ProjectFromOpTx(tx, channelID, item.msgID, item.op, actorID, item.header); err != nil {
-			return fmt.Errorf("projection: project batch msg=%d op=%s: %w", item.msgID, item.op.Type, err)
+			return fmt.Errorf("%w: batch msg=%d op=%s: %w", projection.ErrControlProjection, item.msgID, item.op.Type, err)
 		}
 	}
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("projection: commit batch tx: %w", err)
+		return fmt.Errorf("%w: commit batch tx: %w", projection.ErrControlProjection, err)
 	}
 	return nil
+}
+
+func (e *Engine) sendControlContext(ctx context.Context, channelID int64, header string) (int64, error) {
+	peer, cached, err := e.controlPeer(ctx, channelID)
+	if err != nil {
+		return 0, err
+	}
+	randomID, err := tgclient.StableRandomID(projection.NewUploadUUID(), "control")
+	if err != nil {
+		return 0, err
+	}
+
+	msgID, err := e.sendControlWithRetry(ctx, peer, header, randomID)
+	if err == nil || !cached || !isStalePeerError(err) {
+		return msgID, err
+	}
+
+	// Access hashes can rotate. Refresh once and retry with the same random_id;
+	// Telegram can therefore deduplicate an accepted send whose response was
+	// lost while the local cache was stale.
+	fresh, resolveErr := e.ChannelPeer(ctx, channelID)
+	if resolveErr != nil {
+		return 0, err
+	}
+	if backend.DB != nil {
+		if updateErr := projection.UpdateAccessHash(backend.DB, channelID, fresh.AccessHash); updateErr != nil {
+			e.warnf("warn: could not refresh channel access hash %d: %v\n", channelID, updateErr)
+		}
+	}
+	return e.sendControlWithRetry(ctx, fresh, header, randomID)
+}
+
+func (e *Engine) sendControlWithRetry(ctx context.Context, peer tgclient.InputPeer, header string, randomID int64) (int64, error) {
+	if _, ok := e.tg.(tgclient.IdempotentSender); !ok {
+		// A legacy client cannot safely retry an unknown send outcome.
+		return e.tg.SendControl(ctx, peer, header, true)
+	}
+
+	var msgID int64
+	policy := tgclient.DefaultWriteFloodWaitRetryPolicy()
+	err := policy.Do(ctx, func() error {
+		var sendErr error
+		msgID, sendErr = tgclient.SendControlIdempotent(ctx, e.tg, peer, header, true, randomID)
+		return sendErr
+	})
+	return msgID, err
+}
+
+func (e *Engine) controlPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, bool, error) {
+	if backend.DB != nil {
+		if channel, err := projection.GetChannel(backend.DB, channelID); err == nil && channel.AccessHash != 0 {
+			return tgclient.InputPeer{ChannelID: channelID, AccessHash: channel.AccessHash}, true, nil
+		}
+	}
+	peer, err := e.ChannelPeer(ctx, channelID)
+	return peer, false, err
+}
+
+func isStalePeerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToUpper(err.Error())
+	return strings.Contains(message, "CHANNEL_INVALID") ||
+		strings.Contains(message, "CHANNEL_PRIVATE") ||
+		strings.Contains(message, "PEER_ID_INVALID") ||
+		strings.Contains(message, "ACCESS_HASH")
 }
 
 func (e *Engine) AuthService() *authsvc.Service {
@@ -436,6 +558,13 @@ func (e *Engine) LifecycleService() *lifecycleservice.Service {
 		e.lifecycle = e.newLifecycleService()
 	}
 	return e.lifecycle
+}
+
+func (e *Engine) PersonalDriveService() *personaldriveservice.Service {
+	if e.personal == nil {
+		e.personal = e.newPersonalDriveService()
+	}
+	return e.personal
 }
 
 func (e *Engine) UserService() *userservice.Service {
@@ -502,8 +631,15 @@ func (e *Engine) newFolderService() *folderservice.Service {
 			_, err := e.EmitAndProject(channelID, op)
 			return err
 		},
+		EmitOpContext: func(ctx context.Context, channelID int64, op projection.Op) error {
+			_, err := e.EmitAndProjectContext(ctx, channelID, op)
+			return err
+		},
 		EmitOps: func(channelID int64, ops []projection.Op) error {
 			return e.EmitAndProjectBatch(channelID, ops)
+		},
+		EmitOpsContext: func(ctx context.Context, channelID int64, ops []projection.Op) error {
+			return e.EmitAndProjectBatchContext(ctx, channelID, ops)
 		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return e.ActorID(ctx)
@@ -529,6 +665,9 @@ func (e *Engine) newFileService() *fileservice.Service {
 		EmitOp: func(channelID int64, op projection.Op) (int64, error) {
 			return e.EmitAndProject(channelID, op)
 		},
+		EmitOpContext: func(ctx context.Context, channelID int64, op projection.Op) (int64, error) {
+			return e.EmitAndProjectContext(ctx, channelID, op)
+		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return e.ActorID(ctx)
 		},
@@ -545,8 +684,8 @@ func (e *Engine) newFileService() *fileservice.Service {
 		WriteCiphertextTemp: func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
 			return e.EncryptionService().WriteCiphertextTemp(plain, plaintextSize, masterKey)
 		},
-		CreateFolder: func(channelID int64, name, parentID string) (string, error) {
-			f, err := e.FolderService().Create(channelID, name, parentID)
+		CreateFolder: func(ctx context.Context, channelID int64, name, parentID string) (string, error) {
+			f, err := e.FolderService().CreateContext(ctx, channelID, name, parentID)
 			return f.ID, err
 		},
 		Events: e.events,
@@ -586,25 +725,21 @@ func (e *Engine) newLifecycleService() *lifecycleservice.Service {
 		Backfill: backfill.NewRunner(backend.DB, e.tg, peerResolverFn(e.ResolvePeer)),
 		Active:   e.active,
 		Events:   e.events,
-		PersonalChannel: func(ctx context.Context) (int64, error) {
-			client, err := e.connect()
-			if err != nil {
-				return 0, fmt.Errorf("Could not connect: %w", err)
-			}
-			var channelID int64
-			err = client.Run(ctx, func(ctx context.Context) error {
-				id, err := auth.GetTDriveChannel(ctx, client)
-				if err != nil {
-					return err
-				}
-				channelID = id
-				return nil
-			})
-			return channelID, err
-		},
 		Warnf: func(format string, args ...any) {
 			e.warnf(format, args...)
 		},
+	})
+}
+
+func (e *Engine) newPersonalDriveService() *personaldriveservice.Service {
+	return personaldriveservice.NewService(personaldriveservice.Config{
+		DB:       backend.DB,
+		Telegram: e.tg,
+		Sync:     e.syncEngine,
+		UseSaved: func(ctx context.Context, channelID int64) error {
+			return e.LifecycleService().UsePersonalChannel(ctx, channelID)
+		},
+		SetActive: e.SetActiveChannelID,
 	})
 }
 

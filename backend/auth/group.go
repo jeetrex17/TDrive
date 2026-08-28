@@ -1,9 +1,8 @@
 // Shared-drive Telegram helpers.
 //
 // Megagroup creation, invite link export, invite-link parsing + join,
-// channel leave. The personal-channel helpers (CreateTDriveChannel etc.)
-// stay in channel.go; this file is shared-drive specific so the layering
-// is obvious.
+// channel leave. Personal-drive creation lives behind the explicit
+// personal-drive setup service, not as an auth side effect.
 package auth
 
 import (

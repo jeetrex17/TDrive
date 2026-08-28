@@ -13,6 +13,7 @@ import { openUploadOptionsModal } from './modals/upload-options';
 import { openImportOptionsModal } from './modals/import-options';
 import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
+import { createImportProgress, reduceImportProgress } from './import-progress';
 import {
     pushTransferStart,
     updateTransferProgress,
@@ -258,15 +259,12 @@ const IMPORT_TRANSFER_ID = 'import';
 // or a drop during an active import) is rejected rather than corrupting the
 // shared batch/transfer state.
 let flowBusy = false;
-const importProgressById = new Map<number, number>();
-// Per-file upload ids seen during the current import, so stray per-file rows
-// can be swept if a completion event is dropped.
-const importFileIds = new Set<number>();
 // First few distinct per-file failure reasons, folded into the aggregate
 // import summary toast. Imports report one toast for the whole batch, so this
 // is the only place the backend's actual error text survives to the user.
 const MAX_IMPORT_FAILURE_REASONS = 3;
 const importFailureReasons: string[] = [];
+let importCompleteReceived = false;
 
 function recordImportFailureReason(name: any, message: any) {
     if (importFailureReasons.length >= MAX_IMPORT_FAILURE_REASONS) return;
@@ -277,16 +275,17 @@ function recordImportFailureReason(name: any, message: any) {
     if (!importFailureReasons.includes(entry)) importFailureReasons.push(entry);
 }
 
-// refreshImportRow advances the aggregate import row as files finish.
+function formatImportResultLabel(uploaded: number, failedUploads = 0) {
+    const imported = uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`;
+    return failedUploads > 0 ? `${imported} · ${failedUploads} failed` : imported;
+}
+
+// refreshImportRow renders one constant-size aggregate supplied by the backend.
 function refreshImportRow() {
     const batch = state.importBatch;
     if (!batch) return;
-    let partial = 0;
-    for (const value of importProgressById.values()) partial += value;
-    const finished = batch.done + batch.failed + partial;
     const total = batch.total || 0;
-    const pct = total > 0 ? Math.min(100, (finished / total) * 100) : 100;
-    updateTransferProgress({ id: IMPORT_TRANSFER_ID, direction: 'up', progress: pct });
+    updateTransferProgress({ id: IMPORT_TRANSFER_ID, direction: 'up', progress: batch.progress });
     if (total > 0) {
         updateTransferName({
             id: IMPORT_TRANSFER_ID,
@@ -296,28 +295,13 @@ function refreshImportRow() {
     }
 }
 
-// sweepImportFileRows finalizes any import per-file rows still marked active
-// (e.g. if a completion event was dropped). markTransferDone is idempotent, so
-// rows that already ended (done/failed) are left untouched.
-function sweepImportFileRows() {
-    for (const fid of importFileIds) {
-        markTransferDone({ id: fid, direction: 'up', status: 'done' });
-    }
-    importFileIds.clear();
-}
-
 export function setupUploadProgress() {
     if (!window.runtime?.EventsOn) return;
 
     window.runtime.EventsOn("upload_start", (id: any, name: any, size: any, parentId: any) => {
-        // During an import, also show a per-file row; the aggregate row owns the
-        // batch counters and the overall progress.
+        // New backends suppress detailed events during imports. Ignore any
+        // strays from an older backend so a large import still keeps one row.
         if (state.importBatch) {
-            const fid = Number(id);
-            if (Number.isFinite(fid)) {
-                importFileIds.add(fid);
-                pushTransferStart({ id: fid, direction: 'up', name: String(name ?? ""), total: Number(size) || 0 });
-            }
             return;
         }
 
@@ -354,9 +338,6 @@ export function setupUploadProgress() {
         const clamped = Math.max(0, Math.min(100, value));
 
         if (state.importBatch) {
-            importProgressById.set(uploadId, clamped / 100);
-            updateTransferProgress({ id: uploadId, direction: 'up', progress: clamped });
-            refreshImportRow();
             return;
         }
 
@@ -370,11 +351,6 @@ export function setupUploadProgress() {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         if (state.importBatch) {
-            importProgressById.delete(uploadId);
-            importFileIds.delete(uploadId);
-            state.importBatch.done += 1;
-            markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
-            refreshImportRow();
             return;
         }
         const item = state.uploadTransfers.get(uploadId);
@@ -407,13 +383,7 @@ export function setupUploadProgress() {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         if (state.importBatch) {
-            importProgressById.delete(uploadId);
-            importFileIds.delete(uploadId);
-            state.importBatch.failed += 1;
             if (!state.cancelingUpload) recordImportFailureReason(name, message);
-            pushTransferStart({ id: uploadId, direction: 'up', name: String(name ?? "") || 'Upload failed', total: 0 });
-            markTransferDone({ id: uploadId, direction: 'up', status: state.cancelingUpload ? 'canceled' : 'failed' });
-            refreshImportRow();
             return;
         }
         const filename = String(name ?? "");
@@ -457,10 +427,9 @@ export function setupUploadProgress() {
     });
 
     window.runtime.EventsOn("import_start", () => {
-        importProgressById.clear();
-        importFileIds.clear();
+        importCompleteReceived = false;
         importFailureReasons.length = 0;
-        state.importBatch = { total: 0, done: 0, failed: 0 };
+        state.importBatch = createImportProgress();
         pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Preparing import…', total: 0 });
     });
 
@@ -475,8 +444,7 @@ export function setupUploadProgress() {
     window.runtime.EventsOn("import_uploading", (info: any) => {
         if (!state.importBatch) return;
         const files = Number(info?.files) || 0;
-        state.importBatch.total = files;
-        importProgressById.clear();
+        state.importBatch = reduceImportProgress(state.importBatch, { total: files });
         updateTransferName({
             id: IMPORT_TRANSFER_ID,
             direction: 'up',
@@ -485,29 +453,47 @@ export function setupUploadProgress() {
         refreshImportRow();
     });
 
+    window.runtime.EventsOn("import_upload_progress", (info: any) => {
+        if (!state.importBatch) return;
+        state.importBatch = reduceImportProgress(state.importBatch, info ?? {});
+        refreshImportRow();
+    });
+
     window.runtime.EventsOn("import_complete", (info: any) => {
+        importCompleteReceived = true;
         const failedUploads = Math.max(Number(info?.failed) || 0, state.importBatch?.failed || 0);
         const uploaded = Number(info?.uploaded) || 0;
         const oversize = Number(info?.oversize) || 0;
-        const errorCount = Array.isArray(info?.errors) ? info.errors.length : 0;
-        const canceled = state.cancelingUpload;
-        const status = canceled ? 'canceled' : (failedUploads > 0 ? 'failed' : 'done');
+        const backendStatus = String(info?.status ?? '').toLowerCase();
+        const fatalError = String(info?.error ?? '').trim();
+        const reportedErrors = Number(info?.errorCount);
+        const errorCount = Number.isFinite(reportedErrors)
+            ? Math.max(0, Math.floor(reportedErrors))
+            : (Array.isArray(info?.errors) ? info.errors.length : 0);
+        const canceled = state.cancelingUpload || backendStatus === 'canceled';
+        const fatal = backendStatus === 'failed';
+        const status = canceled
+            ? 'canceled'
+            : (fatal || failedUploads > 0 ? 'failed' : 'done');
+        const resultLabel = formatImportResultLabel(uploaded, failedUploads);
         if (!state.importBatch) {
             pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import completed', total: uploaded + failedUploads });
         }
         updateTransferName({
             id: IMPORT_TRANSFER_ID,
             direction: 'up',
-            name: canceled ? 'Import canceled' : (uploaded === 1 ? 'Imported 1 file' : `Imported ${uploaded} files`),
+            name: canceled
+                ? 'Import canceled'
+                : (fatal
+                    ? 'Import failed'
+                    : resultLabel),
         });
         markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status });
         state.importBatch = null;
-        importProgressById.clear();
-        sweepImportFileRows();
 
         if (typeof window.refreshFiles === 'function') window.refreshFiles();
 
-        if (failedUploads > 0 || oversize > 0 || errorCount > 0) {
+        if (!canceled && (status === 'failed' || failedUploads > 0 || oversize > 0 || errorCount > 0)) {
             const bits: string[] = [];
             if (failedUploads > 0) bits.push(`${failedUploads} failed`);
             if (oversize > 0) bits.push(`${oversize} skipped (too large)`);
@@ -515,7 +501,12 @@ export function setupUploadProgress() {
             // Include the first few concrete reasons (per-file upload errors,
             // then backend scan errors) so the summary is actionable, not just
             // counts.
-            const reasons = [...importFailureReasons];
+            const reasons: string[] = [];
+            if (fatalError) reasons.push(fatalError);
+            for (const reason of importFailureReasons) {
+                if (reasons.length >= MAX_IMPORT_FAILURE_REASONS) break;
+                if (!reasons.includes(reason)) reasons.push(reason);
+            }
             if (Array.isArray(info?.errors)) {
                 for (const raw of info.errors) {
                     if (reasons.length >= MAX_IMPORT_FAILURE_REASONS) break;
@@ -524,9 +515,11 @@ export function setupUploadProgress() {
                 }
             }
             notify({
-                level: failedUploads > 0 ? 'error' : 'info',
-                title: `Imported ${uploaded === 1 ? '1 file' : `${uploaded} files`}`,
-                body: [...bits, ...reasons].join('  ·  '),
+                level: status === 'failed' ? 'error' : 'info',
+                title: fatal
+                    ? 'Import failed'
+                    : resultLabel,
+                body: [...bits, ...reasons].join('  ·  ') || 'The import stopped before it could finish.',
             });
         }
         importFailureReasons.length = 0;
@@ -599,6 +592,16 @@ async function runImportFlow(parentID: any, paths: any) {
             return;
         }
 
+        if (plan.limitExceeded) {
+            const maxItems = Math.max(1, Math.floor(Number(plan.maxItems) || 10_000));
+            notify({
+                level: 'info',
+                title: 'Selection is too large',
+                body: `Keep it under ${maxItems.toLocaleString()} items by removing generated/cache folders or splitting it into smaller batches.`,
+            });
+            return;
+        }
+
         const complex = Number(plan.folders) > 0 || Number(plan.archives) > 0;
 
         if (!complex) {
@@ -637,14 +640,17 @@ async function runImportFlow(parentID: any, paths: any) {
         }
 
         state.activeTransfer = "upload";
+        importCompleteReceived = false;
         let importThrew = false;
         try {
             await importFn(paths, parentID || "", encrypt, extract);
         } catch (err) {
             importThrew = true;
             console.error("Import failed:", err);
-            notify({ level: 'error', title: 'Import failed', body: String(err) });
-            if (!state.importBatch) {
+            if (!state.cancelingUpload && !importCompleteReceived) {
+                notify({ level: 'error', title: 'Import failed', body: String(err) });
+            }
+            if (!importCompleteReceived && !state.importBatch) {
                 pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
             }
         } finally {
@@ -655,11 +661,9 @@ async function runImportFlow(parentID: any, paths: any) {
                 markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importThrew ? 'failed' : 'done' });
                 state.importBatch = null;
             }
-            if (importThrew) {
+            if (importThrew && !importCompleteReceived) {
                 markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
             }
-            importProgressById.clear();
-            sweepImportFileRows();
         }
     } finally {
         flowBusy = false;

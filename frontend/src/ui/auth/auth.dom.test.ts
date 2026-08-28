@@ -172,3 +172,16 @@ describe('AuthScreens field reset', () => {
         expect(codeInput().value).toBe('');
     });
 });
+
+describe('AuthScreens drive picker chrome', () => {
+    it('keeps the appearance control off the recovery screen', async () => {
+        authScreen.set('phone');
+        await tick();
+        expect(host.querySelector('#auth-appearance-trigger')).not.toBeNull();
+
+        authScreen.set('drive');
+        await tick();
+        expect(host.querySelector('#auth-appearance-trigger')).toBeNull();
+        expect(host.querySelector('#auth-appearance-popover')).toBeNull();
+    });
+});

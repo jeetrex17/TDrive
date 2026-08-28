@@ -37,11 +37,15 @@ export function CreateEncryptionPassword(arg1:string,arg2:string):Promise<void>;
 
 export function CreateFolder(arg1:string,arg2:string):Promise<backend.Folder>;
 
+export function CreatePersonalDrive():Promise<void>;
+
 export function CreateSharedDrive(arg1:string,arg2:boolean):Promise<main.ChannelInfo>;
 
 export function DeleteFile(arg1:number):Promise<string>;
 
 export function DeleteFolder(arg1:string):Promise<string>;
+
+export function DiscoverPersonalDrives():Promise<Array<main.PersonalDriveCandidate>>;
 
 export function DownloadFile(arg1:number,arg2:number):Promise<main.DownloadResult>;
 
@@ -78,8 +82,6 @@ export function GetUpdateState():Promise<updater.State>;
 export function HideNativeSeekThumbnail(arg1:string):Promise<void>;
 
 export function ImportPaths(arg1:Array<string>,arg2:string,arg3:boolean,arg4:boolean):Promise<void>;
-
-export function InitDrive():Promise<string>;
 
 export function InstallUpdateAndRestart():Promise<void>;
 
@@ -131,6 +133,8 @@ export function OpenUpdatePage():Promise<void>;
 
 export function PlanImport(arg1:Array<string>,arg2:boolean,arg3:boolean):Promise<file.ImportPlan>;
 
+export function PreparePersonalDrive():Promise<main.PersonalDriveSetupState>;
+
 export function PreviewFile(arg1:number):Promise<main.PreviewPayload>;
 
 export function PreviewThumbnail(arg1:number):Promise<main.PreviewPayload>;
@@ -156,6 +160,8 @@ export function Search(arg1:string,arg2:number):Promise<Array<backend.SearchResu
 export function SelectFiles():Promise<Array<string>>;
 
 export function SelectFolder():Promise<string>;
+
+export function SelectPersonalDrive(arg1:string):Promise<void>;
 
 export function SendHint(arg1:string):Promise<void>;
 

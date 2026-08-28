@@ -24,8 +24,10 @@ func InsertChannel(db *sql.DB, c Channel) error {
 		return fmt.Errorf("projection: insert channel: invalid kind %q", c.Kind)
 	}
 	joined := c.JoinedAt
+	updateJoinedAt := 1
 	if joined == 0 {
 		joined = time.Now().Unix()
+		updateJoinedAt = 0
 	}
 	personalDone := 0
 	if c.PersonalBackfillDone {
@@ -37,8 +39,9 @@ func InsertChannel(db *sql.DB, c Channel) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(channel_id) DO UPDATE SET
 		  access_hash = excluded.access_hash,
-		  title = excluded.title
-	`, c.ChannelID, c.AccessHash, c.Title, c.Kind, nullable(c.InviteLink), joined, personalDone)
+		  title = excluded.title,
+		  joined_at = CASE WHEN ? = 1 THEN excluded.joined_at ELSE channels.joined_at END
+	`, c.ChannelID, c.AccessHash, c.Title, c.Kind, nullable(c.InviteLink), joined, personalDone, updateJoinedAt)
 	if err != nil {
 		slog.Error("projection: insert channel failed", "channel_id", c.ChannelID, "kind", c.Kind, "error", err)
 		return fmt.Errorf("projection: insert channel: %w", err)
@@ -47,9 +50,8 @@ func InsertChannel(db *sql.DB, c Channel) error {
 	return nil
 }
 
-// DeleteChannel removes the channel row plus everything scoped to it:
-// replay_log, replay_log_tamper, folders, files, file_parts,
-// pending_part_cleanup, backfill_progress.
+// DeleteChannel removes the channel row plus every projection, encryption,
+// replay, and cleanup record scoped to it.
 //
 // Used by LeaveSharedDrive. Wraps the cascade in a single transaction so a
 // crash mid-delete leaves the channel intact rather than half-deleted.
@@ -77,6 +79,7 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 		`DELETE FROM replay_log WHERE channel_id = ?`,
 		`DELETE FROM replay_log_tamper WHERE channel_id = ?`,
 		`DELETE FROM backfill_progress WHERE channel_id = ?`,
+		`DELETE FROM encryption WHERE channel_id = ?`,
 		`DELETE FROM channels WHERE channel_id = ?`,
 	} {
 		if _, err := tx.Exec(q, channelID); err != nil {
@@ -88,6 +91,38 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 	}
 	slog.Info("projection: channel deleted", "channel_id", channelID)
 	return nil
+}
+
+// ChannelExists reports whether a channel row is already registered. It also
+// handles a database that has not created the projection schema yet, which is
+// the normal state before first-run personal-drive recovery.
+func ChannelExists(db *sql.DB, channelID int64) (bool, error) {
+	if db == nil {
+		return false, fmt.Errorf("projection: channel exists: db is nil")
+	}
+	if channelID <= 0 {
+		return false, fmt.Errorf("projection: channel exists: invalid id %d", channelID)
+	}
+	var tableCount int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 'channels'
+	`).Scan(&tableCount); err != nil {
+		return false, fmt.Errorf("projection: inspect channels table: %w", err)
+	}
+	if tableCount == 0 {
+		return false, nil
+	}
+
+	var exists int
+	err := db.QueryRow(`SELECT 1 FROM channels WHERE channel_id = ?`, channelID).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("projection: check channel %d: %w", channelID, err)
+	}
+	return true, nil
 }
 
 // ListChannels returns all known channels. Personal first, then shared
@@ -132,16 +167,17 @@ func GetChannel(db *sql.DB, channelID int64) (Channel, error) {
 	var (
 		c                                                Channel
 		hasUnseen, initialSyncDone, personalBackfillDone int
+		needsRebuild                                     int
 	)
 	err := db.QueryRow(`
 		SELECT channel_id, access_hash, title, kind, COALESCE(invite_link, ''), joined_at,
 		       last_synced_msg, last_viewed_msg, has_unseen_content,
-		       initial_sync_done, personal_backfill_done
+		       initial_sync_done, personal_backfill_done, needs_projection_rebuild
 		FROM channels WHERE channel_id = ?
 	`, channelID).Scan(
 		&c.ChannelID, &c.AccessHash, &c.Title, &c.Kind, &c.InviteLink, &c.JoinedAt,
 		&c.LastSyncedMsg, &c.LastViewedMsg, &hasUnseen,
-		&initialSyncDone, &personalBackfillDone,
+		&initialSyncDone, &personalBackfillDone, &needsRebuild,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, fmt.Errorf("projection: channel %d not found", channelID)
@@ -152,6 +188,7 @@ func GetChannel(db *sql.DB, channelID int64) (Channel, error) {
 	c.HasUnseenContent = hasUnseen != 0
 	c.InitialSyncDone = initialSyncDone != 0
 	c.PersonalBackfillDone = personalBackfillDone != 0
+	c.NeedsProjectionRebuild = needsRebuild != 0
 	return c, nil
 }
 
@@ -175,6 +212,28 @@ func UpdateAccessHash(db *sql.DB, channelID, accessHash int64) error {
 		return fmt.Errorf("projection: update access hash: %w", err)
 	}
 	slog.Debug("projection: channel access hash refreshed", "channel_id", channelID)
+	return nil
+}
+
+// MarkPersonalBackfillDone records that a personal channel already has an
+// authoritative local projection. Recovery uses this after a full history
+// scan so the legacy migration backfill cannot write duplicate metadata into
+// an existing Telegram channel.
+func MarkPersonalBackfillDone(db *sql.DB, channelID int64) error {
+	if channelID == 0 {
+		return fmt.Errorf("projection: mark personal backfill done: id is zero")
+	}
+	result, err := db.Exec(`UPDATE channels SET personal_backfill_done = 1 WHERE channel_id = ?`, channelID)
+	if err != nil {
+		return fmt.Errorf("projection: mark personal backfill done: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("projection: mark personal backfill done rows affected: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("projection: mark personal backfill done: channel %d not found", channelID)
+	}
 	return nil
 }
 

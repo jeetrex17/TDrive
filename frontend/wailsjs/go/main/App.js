@@ -62,6 +62,10 @@ export function CreateFolder(arg1, arg2) {
   return window['go']['main']['App']['CreateFolder'](arg1, arg2);
 }
 
+export function CreatePersonalDrive() {
+  return window['go']['main']['App']['CreatePersonalDrive']();
+}
+
 export function CreateSharedDrive(arg1, arg2) {
   return window['go']['main']['App']['CreateSharedDrive'](arg1, arg2);
 }
@@ -72,6 +76,10 @@ export function DeleteFile(arg1) {
 
 export function DeleteFolder(arg1) {
   return window['go']['main']['App']['DeleteFolder'](arg1);
+}
+
+export function DiscoverPersonalDrives() {
+  return window['go']['main']['App']['DiscoverPersonalDrives']();
 }
 
 export function DownloadFile(arg1, arg2) {
@@ -144,10 +152,6 @@ export function HideNativeSeekThumbnail(arg1) {
 
 export function ImportPaths(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ImportPaths'](arg1, arg2, arg3, arg4);
-}
-
-export function InitDrive() {
-  return window['go']['main']['App']['InitDrive']();
 }
 
 export function InstallUpdateAndRestart() {
@@ -250,6 +254,10 @@ export function PlanImport(arg1, arg2, arg3) {
   return window['go']['main']['App']['PlanImport'](arg1, arg2, arg3);
 }
 
+export function PreparePersonalDrive() {
+  return window['go']['main']['App']['PreparePersonalDrive']();
+}
+
 export function PreviewFile(arg1) {
   return window['go']['main']['App']['PreviewFile'](arg1);
 }
@@ -300,6 +308,10 @@ export function SelectFiles() {
 
 export function SelectFolder() {
   return window['go']['main']['App']['SelectFolder']();
+}
+
+export function SelectPersonalDrive(arg1) {
+  return window['go']['main']['App']['SelectPersonalDrive'](arg1);
 }
 
 export function SendHint(arg1) {

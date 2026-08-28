@@ -116,7 +116,11 @@ export namespace file {
 	    bytes: number;
 	    oversize: number;
 	    archives: number;
+	    ignored: number;
 	    maxBytes: number;
+	    maxItems: number;
+	    limitExceeded: boolean;
+	    errorCount: number;
 	    errors: string[];
 	
 	    static createFrom(source: any = {}) {
@@ -130,7 +134,11 @@ export namespace file {
 	        this.bytes = source["bytes"];
 	        this.oversize = source["oversize"];
 	        this.archives = source["archives"];
+	        this.ignored = source["ignored"];
 	        this.maxBytes = source["maxBytes"];
+	        this.maxItems = source["maxItems"];
+	        this.limitExceeded = source["limitExceeded"];
+	        this.errorCount = source["errorCount"];
 	        this.errors = source["errors"];
 	    }
 	}
@@ -394,6 +402,40 @@ export namespace main {
 		}
 	}
 	
+	export class PersonalDriveCandidate {
+	    id: string;
+	    title: string;
+	    created_at: number;
+	    has_activity: boolean;
+	    recommended: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PersonalDriveCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.created_at = source["created_at"];
+	        this.has_activity = source["has_activity"];
+	        this.recommended = source["recommended"];
+	    }
+	}
+	export class PersonalDriveSetupState {
+	    status: string;
+	    active_channel_id: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PersonalDriveSetupState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.active_channel_id = source["active_channel_id"];
+	    }
+	}
 	export class PreviewPayload {
 	    data_base64: string;
 	    mime_type: string;

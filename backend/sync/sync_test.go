@@ -88,8 +88,12 @@ func TestIncrementalRetriesReadFloodWait(t *testing.T) {
 	db, tg, eng := newSyncEnv(t)
 	idA := sendOp(t, tg, projection.Op{Type: projection.OpMkdir, Obj: "d:a", Parent: projection.RootParent, Name: "A"})
 
-	var hooks int
-	eng.OnFloodWait = func(channelID int64, wait time.Duration) { hooks++ }
+	var waits []time.Duration
+	eng.OnProgress = func(p Progress) {
+		if p.Phase == ProgressWaiting {
+			waits = append(waits, p.Wait)
+		}
+	}
 	tg.InjectReadFloodWaits(2) // first two history reads flood-wait, then succeed
 
 	if err := eng.Incremental(context.Background(), testChan); err != nil {
@@ -98,8 +102,13 @@ func TestIncrementalRetriesReadFloodWait(t *testing.T) {
 	if !projection.FolderExists(db, testChan, "d:a") {
 		t.Fatal("d:a missing after flood-wait retry")
 	}
-	if hooks != 2 {
-		t.Fatalf("OnFloodWait fired %d times, want 2", hooks)
+	if len(waits) != 2 {
+		t.Fatalf("waiting progress fired %d times, want 2", len(waits))
+	}
+	for _, wait := range waits {
+		if wait <= 0 {
+			t.Fatalf("waiting progress reported wait %v, want a positive duration", wait)
+		}
 	}
 	var wm int64
 	if err := db.QueryRow(`SELECT last_synced_msg FROM channels WHERE channel_id = ?`, testChan).Scan(&wm); err != nil {

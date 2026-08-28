@@ -19,7 +19,10 @@ import (
 // NextFreeFolderName sees created folders) and hands back a unique id.
 func testFolderCreator(db *sql.DB) CreateFolderFunc {
 	var n, msgID int64 = 0, 50000
-	return func(channelID int64, name, parentID string) (string, error) {
+	return func(ctx context.Context, channelID int64, name, parentID string) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		n++
 		id := fmt.Sprintf("%simp%d", projection.FolderIDPrefix, n)
 		op := projection.Op{Type: projection.OpMkdir, Obj: id, Parent: parentID, Name: name}
@@ -152,6 +155,32 @@ func TestPlanImportFlagsOversize(t *testing.T) {
 	}
 }
 
+func TestPlanArchiveDoesNotReserveDirectoriesForOversizeMembers(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	svc.MaxUploadBytes = 1
+	archivePath := buildZip(t, map[string]string{
+		"nested/huge.bin": strings.Repeat("x", MaxParts+1),
+	}, nil, nil)
+	plan := ImportPlan{
+		MaxBytes: svc.largeFileMaxBytes(),
+		MaxItems: 1, // only the archive-named folder should be admitted
+	}
+
+	err := svc.planArchive(context.Background(), archivePath, false, &plan)
+	if err != nil {
+		t.Fatalf("planArchive: %v", err)
+	}
+	if plan.LimitExceeded {
+		t.Fatal("oversized member directories falsely exceeded the item limit")
+	}
+	if plan.Files != 0 || plan.Oversize != 1 {
+		t.Fatalf("plan files/oversize = %d/%d, want 0/1", plan.Files, plan.Oversize)
+	}
+	if plan.Folders != 1 {
+		t.Fatalf("plan folders = %d, want only the archive-named folder", plan.Folders)
+	}
+}
+
 func TestPlanImportCorruptArchiveDoesNotCountExtractFolder(t *testing.T) {
 	svc, _, _, _ := newTestService(t)
 	p := filepath.Join(t.TempDir(), "bad.zip")
@@ -272,7 +301,7 @@ func TestRunImportNameCollisionSuffixes(t *testing.T) {
 	svc.CreateFolder = create
 
 	// A folder named "Photos" already exists at the root.
-	if _, err := create(personalChannelID, "Photos", ""); err != nil {
+	if _, err := create(context.Background(), personalChannelID, "Photos", ""); err != nil {
 		t.Fatal(err)
 	}
 

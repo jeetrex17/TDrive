@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +49,7 @@ type WarnFunc func(format string, args ...any)
 // CreateFolderFunc creates a folder and returns its new ID. It is injected so
 // import can build folder trees without the file service depending on the
 // folder service directly.
-type CreateFolderFunc func(channelID int64, name, parentID string) (folderID string, err error)
+type CreateFolderFunc func(ctx context.Context, channelID int64, name, parentID string) (folderID string, err error)
 
 type EventSink interface {
 	Emit(name string, args ...any)
@@ -140,6 +141,7 @@ var (
 	// treating an unknown outcome as a retryable transport failure when a
 	// legacy client cannot preserve Telegram's random_id across attempts.
 	errVisibleSendOutcomeUnknownNoRetry  = errors.New("visible upload outcome unknown without idempotency")
+	errUploadProjection                  = errors.New("visible upload projection failed")
 	errPreviewNotFound                   = errors.New("File not found")
 	errPreviewNotSupported               = errors.New("Not a supported image")
 	errPreviewTooLarge                   = errors.New("File too large")
@@ -159,9 +161,31 @@ var previewMimeTypes = map[string]string{
 }
 
 func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool) ([]Metadata, error) {
+	return s.upload(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{
+		observer: detailedUploadObserver{service: s},
+	})
+}
+
+type uploadOptions struct {
+	observer uploadObserver
+	peer     *tgclient.InputPeer
+	idOffset int
+}
+
+type uploadedResult struct {
+	UploadID  int
+	Meta      Metadata
+	RawHeader string
+	Op        projection.Op
+}
+
+func (s *Service) upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool, options uploadOptions) ([]Metadata, error) {
 	slog.Debug("file: upload batch starting", "channel_id", channelID, "files", len(filePaths), "encrypt", encrypt)
 	if len(filePaths) != len(parentIDs) {
 		return nil, fmt.Errorf("filepaths and parentIDs length mismatch")
+	}
+	if len(filePaths) > maxImportItems {
+		return nil, fmt.Errorf("%w: keep the batch under %d files", errImportItemLimit, maxImportItems)
 	}
 	if err := s.ready(); err != nil {
 		return nil, err
@@ -178,16 +202,21 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	if s.ActorID == nil {
 		return nil, fmt.Errorf("actor resolver not ready")
 	}
+	observer := options.observer
+	if observer == nil {
+		observer = detailedUploadObserver{service: s}
+	}
 	actorID, err := s.ActorID(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	type uploadedResult struct {
-		UploadID  int
-		Meta      Metadata
-		RawHeader string
-		Op        projection.Op
+	peer := options.peer
+	if peer == nil {
+		resolved, err := s.Peers.ResolvePeer(ctx, channelID)
+		if err != nil {
+			return nil, err
+		}
+		peer = &resolved
 	}
 
 	var wg sync.WaitGroup
@@ -200,7 +229,7 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	for i := 0; i < len(filePaths); i++ {
 		path := filePaths[i]
 		pid := parentIDs[i]
-		uploadID := i
+		uploadID := options.idOffset + i
 		release, slotErr := s.acquireUploadSlot(ctx)
 		if slotErr != nil {
 			mu.Lock()
@@ -209,7 +238,7 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 				firstErr = slotErr
 			}
 			mu.Unlock()
-			s.emitEvent("upload_error", uploadID, filepath.Base(path), slotErr.Error())
+			observer.Failed(uploadID, filepath.Base(path), slotErr)
 			continue
 		}
 		wg.Add(1)
@@ -225,11 +254,11 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 						firstErr = fmt.Errorf("upload panic: %v", r)
 					}
 					mu.Unlock()
-					s.emitEvent("upload_error", uploadID, filepath.Base(path), fmt.Sprintf("upload panic: %v", r))
+					observer.Failed(uploadID, filepath.Base(path), fmt.Errorf("upload panic: %v", r))
 				}
 			}()
 
-			meta, op, header, err := s.uploadSingle(ctx, uploadID, path, pid, channelID, encrypt)
+			meta, op, header, err := s.uploadSingleWithObserver(ctx, uploadID, path, pid, channelID, encrypt, *peer, observer)
 			if err != nil {
 				if meta.MsgID != 0 {
 					mu.Lock()
@@ -250,7 +279,7 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 				}
 				mu.Unlock()
 				s.warnf("warn: upload failed for %q: %v\n", filepath.Base(path), err)
-				s.emitEvent("upload_error", uploadID, filepath.Base(path), err.Error())
+				observer.Failed(uploadID, filepath.Base(path), err)
 				return
 			}
 
@@ -266,40 +295,17 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	}
 
 	wg.Wait()
+	sort.Slice(uploaded, func(i, j int) bool {
+		return uploaded[i].Meta.MsgID < uploaded[j].Meta.MsgID
+	})
 
 	uploadedFiles := make([]Metadata, 0, len(uploaded))
 	for _, item := range uploaded {
 		uploadedFiles = append(uploadedFiles, item.Meta)
 	}
 
-	emitLocalIndexError := func(reason string) {
-		for _, item := range uploaded {
-			s.emitEvent("upload_error", item.UploadID, item.Meta.Name, reason)
-		}
-	}
-
-	for _, item := range uploaded {
-		// Multipart uploads project their own parts + manifest inside
-		// uploadMultipart and return an empty op, so there's nothing to project
-		// here for them.
-		if item.Op.Type == "" {
-			continue
-		}
-		if _, err := projection.ProjectFromOp(
-			s.DB,
-			channelID,
-			int64(item.Meta.MsgID),
-			item.Op,
-			actorID,
-			item.RawHeader,
-		); err != nil {
-			emitLocalIndexError("local index write failed")
-			return uploadedFiles, err
-		}
-	}
-
-	for _, item := range uploaded {
-		s.emitEvent("upload_complete", item.UploadID, item.Meta.Name)
+	if err := s.projectUploaded(channelID, actorID, uploaded, observer); err != nil {
+		return uploadedFiles, err
 	}
 
 	if failed > 0 {
@@ -313,13 +319,75 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	return uploadedFiles, nil
 }
 
+const uploadProjectionBatchSize = 128
+
+func (s *Service) projectUploaded(channelID, actorID int64, uploaded []uploadedResult, observer uploadObserver) error {
+	pending := make([]uploadedResult, 0, len(uploaded))
+	for _, item := range uploaded {
+		// Multipart uploads project their parts and manifest before returning.
+		if item.Op.Type == "" {
+			observer.Completed(item.UploadID, item.Meta.Name)
+			continue
+		}
+		pending = append(pending, item)
+	}
+
+	for start := 0; start < len(pending); start += uploadProjectionBatchSize {
+		end := min(start+uploadProjectionBatchSize, len(pending))
+		// Telegram has already accepted these messages. Finish the local receipt
+		// projection even if the caller canceled meanwhile; otherwise the files
+		// disappear until the next history sync repairs the cache.
+		tx, err := s.DB.Begin()
+		if err == nil {
+			for _, item := range pending[start:end] {
+				_, err = projection.ProjectFromOpTx(tx, channelID, int64(item.Meta.MsgID), item.Op, actorID, item.RawHeader)
+				if err != nil {
+					break
+				}
+			}
+		}
+		if err == nil {
+			err = tx.Commit()
+		} else if tx != nil {
+			_ = tx.Rollback()
+		}
+		if err != nil {
+			wrapped := fmt.Errorf("local index write failed: %w", err)
+			for _, item := range pending[start:] {
+				observer.Failed(item.UploadID, item.Meta.Name, wrapped)
+			}
+			return fmt.Errorf("%w: %w", errUploadProjection, err)
+		}
+		for _, item := range pending[start:end] {
+			observer.Completed(item.UploadID, item.Meta.Name)
+		}
+	}
+	return nil
+}
+
 func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath string, parentID string, channelID int64, wantEncrypted bool) (Metadata, projection.Op, string, error) {
+	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return Metadata{}, projection.Op{}, "", err
+	}
+	return s.uploadSingleWithObserver(
+		ctx,
+		uploadID,
+		filePath,
+		parentID,
+		channelID,
+		wantEncrypted,
+		peer,
+		detailedUploadObserver{service: s},
+	)
+}
+
+func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, filePath string, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver) (Metadata, projection.Op, string, error) {
 	if channelID == 0 {
 		return Metadata{}, projection.Op{}, "", fmt.Errorf("drive channel id not found")
 	}
 
 	filename := filepath.Base(filePath)
-	s.emitEvent("upload_start", uploadID, filename, int64(0), parentID)
 
 	plainFile, err := os.Open(filePath)
 	if err != nil {
@@ -333,8 +401,12 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 		return Metadata{}, projection.Op{}, "", err
 	}
 	plaintextSize := info.Size()
+	// Announce the operation once the local source is known, before validating
+	// remote metadata. That keeps failed uploads visible to callers while
+	// avoiding the duplicate start event that used to be emitted at two layers.
+	observer.Started(uploadID, filename, uploadByteSize(plaintextSize, wantEncrypted), parentID)
 	slog.Debug("file: uploading", "channel_id", channelID, "name", filename, "size", plaintextSize, "encrypt", wantEncrypted, "parent_id", parentID)
-	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, plainFile, filename, plaintextSize, parentID, channelID, wantEncrypted)
+	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, plainFile, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer)
 	if err != nil {
 		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
 	} else {
@@ -346,7 +418,7 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 // uploadVisibleSource is the compatibility path used by the existing GUI/CLI
 // uploader. Keeping the source boundary seekable lets staged-file callers use
 // the same single/multipart planning without coupling the core to local paths.
-func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool) (Metadata, projection.Op, string, error) {
+func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver) (Metadata, projection.Op, string, error) {
 	if err := validateSeekableSize(source, plaintextSize); err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
@@ -369,17 +441,12 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		return Metadata{}, projection.Op{}, "", err
 	}
 
-	peer, err := s.Peers.ResolvePeer(ctx, channelID)
-	if err != nil {
-		return Metadata{}, projection.Op{}, "", err
-	}
-
 	if multipart {
 		// uploadMultipart sends the parts, projects them, and emits the manifest
 		// (the commit point) itself. Success returns an empty op; if Telegram
 		// commits but the local manifest projection fails, it returns that exact
 		// op/header so Upload can retry the local-only step.
-		return s.uploadMultipart(ctx, uploadID, source, filename, plaintextSize, parent, channelID, wantEncrypted, masterKey, peer, storedSize)
+		return s.uploadMultipart(ctx, uploadID, source, filename, plaintextSize, parent, channelID, wantEncrypted, masterKey, peer, storedSize, observer)
 	}
 
 	encrypted := wantEncrypted
@@ -419,7 +486,6 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 	caption := header + "\nTDrive: " + filename
 
 	s.warnf("Starting upload: %s\n", filename)
-	s.emitEvent("upload_start", uploadID, filename, uploadSize, parent)
 
 	var (
 		lastProgress = time.Now()
@@ -438,7 +504,7 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 				percent = 100
 			}
 		}
-		s.emitEvent("upload_progress", uploadID, percent)
+		observer.Progress(uploadID, percent)
 		lastProgress = time.Now()
 	}
 	var result tgclient.SendFileResult
@@ -474,7 +540,7 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		return Metadata{}, projection.Op{}, "", fmt.Errorf("upload success, but could not find msgID")
 	}
 
-	s.emitEvent("upload_progress", uploadID, 100.0)
+	observer.Progress(uploadID, 100.0)
 	return Metadata{
 		Name:          filename,
 		Size:          uploadSize,
@@ -533,7 +599,7 @@ func (plan uploadPartPlan) window(storedSize int64, partIndex int) (offset int64
 // projected before an idempotent manifest commits the logical file. Encrypted
 // data is staged one part at a time, which makes retries rewind-safe without
 // materializing a complete multi-gigabyte ciphertext file.
-func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile io.ReadSeeker, filename string, plaintextSize int64, parent string, channelID int64, encrypt bool, masterKey []byte, peer tgclient.InputPeer, storedSize int64) (Metadata, projection.Op, string, error) {
+func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile io.ReadSeeker, filename string, plaintextSize int64, parent string, channelID int64, encrypt bool, masterKey []byte, peer tgclient.InputPeer, storedSize int64, observer uploadObserver) (Metadata, projection.Op, string, error) {
 	if s.ActorID == nil {
 		return Metadata{}, projection.Op{}, "", fmt.Errorf("actor resolver not ready")
 	}
@@ -553,7 +619,6 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 
 	uploadUUID := projection.NewUploadUUID()
 	s.warnf("Starting multipart upload: %s (%d parts)\n", filename, numParts)
-	s.emitEvent("upload_start", uploadID, filename, storedSize, parent)
 
 	var encryptedStream io.Reader
 	var finishEncryption func() error
@@ -653,7 +718,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 					percent = 100
 				}
 			}
-			s.emitEvent("upload_progress", uploadID, percent)
+			observer.Progress(uploadID, percent)
 			lastProgress = time.Now()
 		}
 		var result tgclient.SendFileResult
@@ -763,7 +828,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		return Metadata{}, projection.Op{}, "", err
 	}
 
-	s.emitEvent("upload_progress", uploadID, 100.0)
+	observer.Progress(uploadID, 100.0)
 	return committedMeta(manifestMsgID), projection.Op{}, "", nil
 }
 

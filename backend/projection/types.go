@@ -116,6 +116,10 @@ type Channel struct {
 	HasUnseenContent     bool
 	InitialSyncDone      bool
 	PersonalBackfillDone bool
+	// NeedsProjectionRebuild marks a drive whose replay_log is known to be
+	// missing history. The next full scan re-reads the channel and replays the
+	// completed log from scratch, then clears the flag.
+	NeedsProjectionRebuild bool
 }
 
 type Folder struct {

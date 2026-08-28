@@ -35,6 +35,7 @@ type Fake struct {
 	transientFails int // counter; pre-injects ErrInjectedTransport this many times before succeeding
 
 	channels       map[int64]fakeChannel
+	ownedBroadcast []OwnedBroadcastChannel
 	invites        map[string]InviteInfo
 	joinRequests   map[int64][]JoinRequest
 	requestedJoins []string
@@ -215,6 +216,21 @@ func (f *Fake) SeedChannel(peer InputPeer, title string) {
 	f.channels[peer.ChannelID] = fakeChannel{Peer: peer, Title: title}
 	if peer.ChannelID >= f.nextChannelID {
 		f.nextChannelID = peer.ChannelID + 1
+	}
+}
+
+// SeedOwnedBroadcastChannels replaces the creator-owned broadcast channels
+// returned by discovery. Values are copied so tests cannot alias fake state.
+func (f *Fake) SeedOwnedBroadcastChannels(channels ...OwnedBroadcastChannel) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ownedBroadcast = append([]OwnedBroadcastChannel(nil), channels...)
+	for _, channel := range channels {
+		peer := InputPeer{ChannelID: channel.ID, AccessHash: channel.AccessHash}
+		f.channels[channel.ID] = fakeChannel{Peer: peer, Title: channel.Title}
+		if channel.ID >= f.nextChannelID {
+			f.nextChannelID = channel.ID + 1
+		}
 	}
 }
 
@@ -662,6 +678,32 @@ func (f *Fake) MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int
 		}
 	}
 	return missing, nil
+}
+
+func (f *Fake) ListOwnedBroadcastChannels(context.Context) ([]OwnedBroadcastChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]OwnedBroadcastChannel(nil), f.ownedBroadcast...), nil
+}
+
+func (f *Fake) CreateBroadcastChannel(_ context.Context, title, about string) (OwnedBroadcastChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := f.nextChannelID
+	f.nextChannelID++
+	channel := OwnedBroadcastChannel{
+		ID:         id,
+		AccessHash: id + 1000,
+		Title:      title,
+		CreatedAt:  time.Now().Unix(),
+	}
+	f.channels[id] = fakeChannel{
+		Peer:  InputPeer{ChannelID: id, AccessHash: channel.AccessHash},
+		Title: title,
+		About: about,
+	}
+	f.ownedBroadcast = append(f.ownedBroadcast, channel)
+	return channel, nil
 }
 
 func (f *Fake) CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error) {
