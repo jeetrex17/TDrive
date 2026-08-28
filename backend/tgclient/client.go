@@ -76,6 +76,11 @@ type HistoryMessage struct {
 	DocumentName       string
 	DocumentAccessHash int64
 	Thumbs             []FileThumb
+	// Placeholder marks an entry that occupies a message id but carries no
+	// content: a service event, or the stub left where a message was deleted.
+	// It is reported so page lengths match what Telegram sent, and callers
+	// looking for real content must skip it.
+	Placeholder bool
 }
 
 // SendFileResult is what SendFile returns. We split it from a bare msgID

@@ -355,7 +355,11 @@ func (remote *TelegramRemote) ReconcileReceipt(
 	if err != nil {
 		return mountwrite.MutationResult{}, false, err
 	}
-	if len(messages) != 1 || messages[0].MsgID != msgID {
+	// A placeholder means the commit message was deleted on Telegram, which is
+	// the same "no commit to reconcile against" case as it not being returned
+	// at all. Treating it as content would parse an empty caption and report a
+	// hard conflict instead of letting the caller retry.
+	if len(messages) != 1 || messages[0].MsgID != msgID || messages[0].Placeholder {
 		return mountwrite.MutationResult{}, false, nil
 	}
 	message := messages[0]

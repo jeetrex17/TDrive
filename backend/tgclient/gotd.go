@@ -383,8 +383,11 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 				// message ids. Report them so callers paginating on page size
 				// can tell a page thinned by deletions from the end of the
 				// channel, and so backwards paging can step over a run of them.
-				if id, date, ok := placeholderMessage(msg); ok {
-					out = append(out, HistoryMessage{MsgID: id, Date: date})
+				// A non-positive id cannot be paged from, so reporting one
+				// would let a caller reset its cursor and walk the same pages
+				// forever. Those are dropped as before.
+				if id, date, ok := placeholderMessage(msg); ok && id > 0 {
+					out = append(out, HistoryMessage{MsgID: id, Date: date, Placeholder: true})
 				}
 				continue
 			}
