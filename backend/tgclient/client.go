@@ -76,6 +76,11 @@ type HistoryMessage struct {
 	DocumentName       string
 	DocumentAccessHash int64
 	Thumbs             []FileThumb
+	// Placeholder marks an entry that occupies a message id but carries no
+	// content: a service event, or the stub left where a message was deleted.
+	// It is reported so page lengths match what Telegram sent, and callers
+	// looking for real content must skip it.
+	Placeholder bool
 }
 
 // SendFileResult is what SendFile returns. We split it from a bare msgID
@@ -172,6 +177,11 @@ type Client interface {
 	// default history order: newest first. minID filters out messages at or
 	// below that watermark; offsetID pages older than a previous page.
 	// Callers must sort before applying projection ops.
+	//
+	// Every message Telegram returns is reported, including service messages
+	// and the empty placeholders left by deletions. Those carry no projectable
+	// payload, but they do occupy message ids, so silently dropping them would
+	// make a full page look short and mislead callers paginating on page size.
 	GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error)
 
 	// GetFileDocument resolves one Telegram message into a downloadable

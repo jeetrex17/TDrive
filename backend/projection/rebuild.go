@@ -115,3 +115,25 @@ func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, er
 	}
 	return applied, rejected, nil
 }
+
+// RebuildProjectionTx replays a channel's whole replay_log inside a caller's
+// transaction, and clears the rebuild flag that requested it.
+//
+// A history scan that reaches ops it had never seen before cannot simply apply
+// them: ops already in the log were skipped as "already applied" the first time
+// round, including the renames and deletes that silently no-oped because their
+// target had not been read yet. Replaying the completed log from scratch is the
+// only way to land those in order. Sharing the caller's transaction keeps the
+// repair atomic with the scan that earned it.
+func RebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, err error) {
+	applied, rejected, err = rebuildProjectionTx(tx, channelID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := tx.Exec(
+		`UPDATE channels SET needs_projection_rebuild = 0 WHERE channel_id = ?`, channelID,
+	); err != nil {
+		return 0, 0, fmt.Errorf("projection: clear rebuild flag: %w", err)
+	}
+	return applied, rejected, nil
+}

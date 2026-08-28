@@ -167,16 +167,17 @@ func GetChannel(db *sql.DB, channelID int64) (Channel, error) {
 	var (
 		c                                                Channel
 		hasUnseen, initialSyncDone, personalBackfillDone int
+		needsRebuild                                     int
 	)
 	err := db.QueryRow(`
 		SELECT channel_id, access_hash, title, kind, COALESCE(invite_link, ''), joined_at,
 		       last_synced_msg, last_viewed_msg, has_unseen_content,
-		       initial_sync_done, personal_backfill_done
+		       initial_sync_done, personal_backfill_done, needs_projection_rebuild
 		FROM channels WHERE channel_id = ?
 	`, channelID).Scan(
 		&c.ChannelID, &c.AccessHash, &c.Title, &c.Kind, &c.InviteLink, &c.JoinedAt,
 		&c.LastSyncedMsg, &c.LastViewedMsg, &hasUnseen,
-		&initialSyncDone, &personalBackfillDone,
+		&initialSyncDone, &personalBackfillDone, &needsRebuild,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, fmt.Errorf("projection: channel %d not found", channelID)
@@ -187,6 +188,7 @@ func GetChannel(db *sql.DB, channelID int64) (Channel, error) {
 	c.HasUnseenContent = hasUnseen != 0
 	c.InitialSyncDone = initialSyncDone != 0
 	c.PersonalBackfillDone = personalBackfillDone != 0
+	c.NeedsProjectionRebuild = needsRebuild != 0
 	return c, nil
 }
 
