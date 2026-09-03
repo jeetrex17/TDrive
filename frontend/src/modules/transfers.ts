@@ -148,14 +148,25 @@ async function startNextDownload() {
 
         if (result.status === "success") {
             finalizeDownload(next.key, 'done');
+            if (next.kind === 'folder') {
+                notify({
+                    level: 'success',
+                    title: 'Folder downloaded',
+                    body: result.saved_path ? `Saved to ${result.saved_path}` : `${next.name} saved`,
+                });
+            }
         } else if (result.status === "canceled") {
             finalizeDownload(next.key, 'canceled');
         } else {
-            finalizeDownload(next.key, state.cancelingDownload ? 'canceled' : 'failed');
+            const canceled = state.cancelingDownload;
+            finalizeDownload(next.key, canceled ? 'canceled' : 'failed');
+            if (!canceled) notifyDownloadFailure(next, result.message);
         }
     } catch (err) {
         console.error("Download failed:", err);
-        finalizeDownload(next.key, state.cancelingDownload ? 'canceled' : 'failed');
+        const canceled = state.cancelingDownload;
+        finalizeDownload(next.key, canceled ? 'canceled' : 'failed');
+        if (!canceled) notifyDownloadFailure(next, "Download failed");
     } finally {
         state.cancelingDownload = false;
         state.activeDownloadId = null;
@@ -220,6 +231,22 @@ function finalizeDownload(key: string, status: 'done' | 'failed' | 'canceled'): 
     // to queued and active jobs by removing a job only after that finalization.
     markTransferDone({ id: key, direction: 'down', status });
     state.downloadQueue = state.downloadQueue.filter((item) => item.key !== key);
+}
+
+// notifyDownloadFailure surfaces the backend's reason as a toast. markTransferDone
+// only flips the bell row to "failed" with no explanation, so without this a
+// rejected destination, an already-present folder, and a genuine disk error all
+// look identical. The encryption-password prompt has its own modal, so its
+// sentinel is suppressed here rather than shown twice.
+function notifyDownloadFailure(item: DownloadQueueItem, message: unknown): void {
+    const reason = String(message ?? '').trim();
+    if (/encryption password required/i.test(reason)) return;
+    const noun = item.kind === 'folder' ? 'Folder' : 'File';
+    if (/already exists/i.test(reason)) {
+        notify({ level: 'warning', title: `${noun} already exists`, body: reason });
+        return;
+    }
+    notify({ level: 'error', title: `Couldn't download ${item.name}`, body: reason || 'Download failed' });
 }
 
 function dispatchDownload(item: DownloadQueueItem) {

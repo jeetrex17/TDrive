@@ -12,6 +12,7 @@ const transferEvents = vi.hoisted(() => ({
     rename: vi.fn(),
     done: vi.fn(),
 }));
+const notifications = vi.hoisted(() => ({ notify: vi.fn() }));
 
 vi.mock('../../wailsjs/go/main/App', () => bindings);
 vi.mock('./notif-bell', () => ({
@@ -20,7 +21,7 @@ vi.mock('./notif-bell', () => ({
     updateTransferName: transferEvents.rename,
     markTransferDone: transferEvents.done,
 }));
-vi.mock('./notifications', () => ({ notify: vi.fn() }));
+vi.mock('./notifications', () => ({ notify: notifications.notify }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn(async () => undefined) }));
 vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn() }));
 vi.mock('./modals/import-options', () => ({ openImportOptionsModal: vi.fn() }));
@@ -228,6 +229,69 @@ describe('folder download queue', () => {
 
         await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
         expect(state.transferActivity).toEqual({ upload: true, download: false });
+    });
+
+    it('surfaces the backend reason as an error toast when a folder download fails', async () => {
+        bindings.DownloadFolder.mockResolvedValueOnce({
+            status: 'error',
+            message: 'Disk Error: no space left on device',
+            saved_path: '',
+        });
+        const { mod } = await loadModule();
+
+        mod.enqueueFolderDownload('d:project', 'Project');
+        await vi.waitFor(() => expect(notifications.notify).toHaveBeenCalledTimes(1));
+        expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'error',
+            title: "Couldn't download Project",
+            body: 'Disk Error: no space left on device',
+        }));
+    });
+
+    it('shows an already-exists folder as a warning, not an error', async () => {
+        bindings.DownloadFolder.mockResolvedValueOnce({
+            status: 'error',
+            message: 'Destination already exists: /tmp/Project',
+            saved_path: '',
+        });
+        const { mod } = await loadModule();
+
+        mod.enqueueFolderDownload('d:project', 'Project');
+        await vi.waitFor(() => expect(notifications.notify).toHaveBeenCalledTimes(1));
+        expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'warning',
+            title: 'Folder already exists',
+        }));
+    });
+
+    it('does not toast an error when the user cancels the encryption prompt', async () => {
+        bindings.DownloadFolder.mockResolvedValueOnce({
+            status: 'error',
+            message: 'encryption password required',
+            saved_path: '',
+        });
+        passwordModal.mockResolvedValueOnce(false);
+        const { mod } = await loadModule();
+
+        mod.enqueueFolderDownload('d:locked', 'Locked');
+        await vi.waitFor(() => expect(transferEvents.done).toHaveBeenCalledWith({
+            id: 'folder:d:locked',
+            direction: 'down',
+            status: 'failed',
+        }));
+        expect(notifications.notify).not.toHaveBeenCalled();
+    });
+
+    it('announces a successful folder download with its saved path', async () => {
+        const { mod, state } = await loadModule();
+
+        mod.enqueueFolderDownload('d:project', 'Project');
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+        expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'success',
+            title: 'Folder downloaded',
+            body: 'Saved to /tmp/folder',
+        }));
     });
 
     it('marks a canceled folder and continues with the next queued file', async () => {
