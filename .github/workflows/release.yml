@@ -51,11 +51,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run CLI, daemon, and mount tests
-        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater
+      - name: Run CLI, daemon, mount, and folder-download tests
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Vet platform-specific daemon and CLI code
-        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater
+        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Setup Node
         uses: actions/setup-node@v4
