@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestPublishDirectoryNoReplaceMovesCompletedTree(t *testing.T) {
+func TestPublishFolderDownloadMovesCompletedTree(t *testing.T) {
 	parent := t.TempDir()
 	staging := filepath.Join(parent, ".tdrive-folder-download-test")
 	final := filepath.Join(parent, "Project")
@@ -17,8 +17,8 @@ func TestPublishDirectoryNoReplaceMovesCompletedTree(t *testing.T) {
 		t.Fatalf("write staging file: %v", err)
 	}
 
-	if err := publishDirectoryNoReplace(staging, final); err != nil {
-		t.Fatalf("publishDirectoryNoReplace: %v", err)
+	if err := publishFolderDownload(staging, final); err != nil {
+		t.Fatalf("publishFolderDownload: %v", err)
 	}
 	if _, err := os.Stat(staging); !os.IsNotExist(err) {
 		t.Fatalf("staging still exists after publish: %v", err)
@@ -29,7 +29,7 @@ func TestPublishDirectoryNoReplaceMovesCompletedTree(t *testing.T) {
 	}
 }
 
-func TestPublishDirectoryNoReplacePreservesConcurrentDestination(t *testing.T) {
+func TestPublishFolderDownloadPreservesExistingDestination(t *testing.T) {
 	parent := t.TempDir()
 	staging := filepath.Join(parent, ".tdrive-folder-download-test")
 	final := filepath.Join(parent, "Project")
@@ -47,8 +47,12 @@ func TestPublishDirectoryNoReplacePreservesConcurrentDestination(t *testing.T) {
 		t.Fatalf("write destination marker: %v", err)
 	}
 
-	if err := publishDirectoryNoReplace(staging, final); err == nil {
+	err := publishFolderDownload(staging, final)
+	if err == nil {
 		t.Fatal("publish unexpectedly replaced an existing destination")
+	}
+	if !os.IsExist(err) {
+		t.Fatalf("publish error = %v, want os.IsExist so DownloadFolder reports \"already exists\"", err)
 	}
 	got, err := os.ReadFile(marker)
 	if err != nil || string(got) != "keep" {

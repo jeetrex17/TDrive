@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	maxConcurrentFolderFiles        = 2
-	folderStagingCleanupAttempts    = 4
+	maxConcurrentFolderFiles = 2
+	// Six attempts with 25ms doubling (~775ms total) outlive Windows
+	// Defender/indexer holds on freshly written files while staying fast
+	// on POSIX. Callers report any retained staging path.
+	folderStagingCleanupAttempts    = 6
 	folderStagingCleanupBaseBackoff = 25 * time.Millisecond
 )
 
@@ -30,13 +33,6 @@ type folderDownloadFile struct {
 type folderDownloadPlan struct {
 	directories []string
 	files       []folderDownloadFile
-}
-type folderDownloadStaging interface {
-	ParentPath() string
-	Path() string
-	PublishNoReplace(finalPath string) error
-	PrepareCleanup() error
-	Close() error
 }
 
 // DownloadFolder restores one revision-pinned folder tree beneath the selected
@@ -109,21 +105,16 @@ func (s *Service) DownloadFolder(
 	if err := validateDestinationParent(destinationParent); err != nil {
 		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 	}
-	staging, err := createPrivateFolderDownloadStaging(destinationParent)
+	parentPath, stagingPath, err := createFolderDownloadStaging(destinationParent)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 	}
-	stagingPath := staging.Path()
 	published := false
 	defer func() {
 		if published {
-			_ = staging.Close()
 			return
 		}
-		prepareErr := staging.PrepareCleanup()
-		cleanupErr := removeFolderDownloadStaging(stagingPath, os.RemoveAll, time.Sleep)
-		closeErr := staging.Close()
-		if cleanupErr = errors.Join(prepareErr, cleanupErr, closeErr); cleanupErr != nil {
+		if cleanupErr := removeFolderDownloadStaging(stagingPath, os.RemoveAll, time.Sleep); cleanupErr != nil {
 			result = DownloadResult{
 				Status: "error",
 				Message: fmt.Sprintf(
@@ -135,7 +126,7 @@ func (s *Service) DownloadFolder(
 		}
 	}()
 
-	finalPath, err := joinWithinRoot(staging.ParentPath(), manifest.Root.Name)
+	finalPath, err := joinWithinRoot(parentPath, manifest.Root.Name)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
 	}
@@ -169,7 +160,7 @@ func (s *Service) DownloadFolder(
 	if err := ctx.Err(); err != nil {
 		return folderDownloadFailure(ctx, err)
 	}
-	if err := staging.PublishNoReplace(finalPath); err != nil {
+	if err := publishFolderDownload(stagingPath, finalPath); err != nil {
 		if os.IsExist(err) {
 			return DownloadResult{Status: "error", Message: fmt.Sprintf("Destination already exists: %s", finalPath)}
 		}
