@@ -101,7 +101,12 @@ case "$PLATFORM" in
     arch="$(lipo -archs "$libmpv" | awk '{print $1}')"
     minos="$(xcrun vtool -arch "$arch" -show-build "$libmpv" | awk '$1 == "minos" { print $2; exit }')"
     [ -n "$minos" ] || die "could not read the minimum macOS version of Homebrew libmpv"
-    plutil -replace LSMinimumSystemVersion -string "$minos" "$SCRIPT_DIR/../build/darwin/Info.plist"
+    # The plist is a Wails template with {{...}} placeholders, so plutil cannot
+    # parse it; patch the value line after the key textually instead.
+    plist="$SCRIPT_DIR/../build/darwin/Info.plist"
+    sed -e '/<key>LSMinimumSystemVersion<\/key>/{n;s|<string>[^<]*</string>|<string>'"$minos"'</string>|;}' "$plist" > "$plist.tmp"
+    mv "$plist.tmp" "$plist"
+    grep -A1 '<key>LSMinimumSystemVersion</key>' "$plist" | grep -q "<string>$minos</string>" || die "could not set LSMinimumSystemVersion in $plist"
     emit "TDRIVE_MPV_RUNTIME_DIR=$runtime_root" \
       "TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime" \
       "MACOSX_DEPLOYMENT_TARGET=$minos"
