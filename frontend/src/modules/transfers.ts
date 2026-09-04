@@ -776,6 +776,11 @@ export function setupUploadMenu() {
 // by the Go side. The drop target is the current folder.
 export function setupFileDrop() {
     if (!window.runtime?.EventsOn) return;
+    // Accept OS file drags at the page level. Modern WebKit refuses a file
+    // drag the page does not handle, so the native drop never reaches Go, and
+    // WebView2 only reports dropped paths through this runtime hook. The Go
+    // side stays the single consumer via files_dropped below.
+    window.runtime.OnFileDrop?.(() => {}, true);
     window.runtime.EventsOn('files_dropped', (payload: any) => {
         // If an in-app drag-to-move is underway, ignore native drops entirely
         // (macOS can still fire one for the internal drag).

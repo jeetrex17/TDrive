@@ -4247,6 +4247,11 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 /* Mark the file area as a native file-drop target (folders + files). */
 #file-list { --wails-drop-target: drop; }
 
+/* Wails marks the drop zone while an OS file drag hovers it. */
+#file-list.wails-drop-target-active {
+    box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 /* In-app updater: account-menu badge + panel width. */
 .profile-trigger { position: relative; }
 .profile-update-dot {
