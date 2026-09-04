@@ -11,7 +11,6 @@ permissions:
 
 env:
   CGO_ENABLED: 1
-  MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
   build:
@@ -70,60 +69,21 @@ jobs:
         run: |
           sudo apt-get update
           # FIX 1: Explicitly install the 4.0 version which Wails expects
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev mpv
 
-      - name: Acquire checksum-pinned Windows media runtime
-        if: runner.os == 'Windows'
+      # Uses the checksum-pinned runtime archive when the repository variables
+      # are set and the runner's package-manager mpv otherwise; the bundle
+      # manifest records which one shipped. Keep in sync with ci.yml.
+      - name: Prepare media runtime
         shell: bash
         env:
-          RUNTIME_URL: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_URL }}
-          RUNTIME_SHA256: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 }}
-        run: |
-          set -euo pipefail
-          if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ]; then
-            echo "Windows releases require repository variables TDRIVE_WINDOWS_MPV_RUNTIME_URL and TDRIVE_WINDOWS_MPV_RUNTIME_SHA256." >&2
-            echo "The approved tar.gz must contain mpv.exe, SOURCE.txt, and THIRD_PARTY_NOTICES.txt at its root, with required DLLs beside mpv.exe." >&2
-            exit 1
-          fi
-          runner_temp="$RUNNER_TEMP"
-          if command -v cygpath >/dev/null 2>&1; then
-            runner_temp="$(cygpath -u "$RUNNER_TEMP")"
-          fi
-          runtime_root="$runner_temp/tdrive-windows-mpv-runtime"
-          runtime_sha256="$(bash scripts/acquire-mpv-runtime.sh windows "$RUNTIME_URL" "$RUNTIME_SHA256" "$runtime_root")"
-          runtime_root_for_env="$runtime_root"
-          if command -v cygpath >/dev/null 2>&1; then
-            runtime_root_for_env="$(cygpath -w "$runtime_root")"
-          fi
-          {
-            echo "TDRIVE_MPV_RUNTIME_DIR=$runtime_root_for_env"
-            echo "TDRIVE_MPV_ARCHIVE_SHA256=$runtime_sha256"
-            echo "TDRIVE_MPV_PACKAGE_SOURCE=${RUNTIME_URL%%[?#]*}"
-          } >> "$GITHUB_ENV"
-
-      - name: Acquire checksum-pinned macOS media runtime
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          RUNTIME_URL: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_URL }}
-          RUNTIME_SHA256: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_SHA256 }}
-        run: |
-          set -euo pipefail
-          if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ]; then
-            echo "macOS releases require repository variables TDRIVE_MACOS_MPV_RUNTIME_URL and TDRIVE_MACOS_MPV_RUNTIME_SHA256." >&2
-            echo "The approved tar.gz must contain bin/mpv, lib/libmpv.2.dylib, lib/pkgconfig/mpv.pc, include/mpv/client.h, SOURCE.txt, and THIRD_PARTY_NOTICES.txt." >&2
-            exit 1
-          fi
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          brew list pkgconf >/dev/null 2>&1 || brew install pkgconf
-          runtime_root="$RUNNER_TEMP/tdrive-macos-mpv-runtime"
-          runtime_sha256="$(bash scripts/acquire-mpv-runtime.sh darwin "$RUNTIME_URL" "$RUNTIME_SHA256" "$runtime_root")"
-          {
-            echo "PKG_CONFIG_LIBDIR=$runtime_root/lib/pkgconfig"
-            echo "TDRIVE_MPV_RUNTIME_DIR=$runtime_root"
-            echo "TDRIVE_MPV_ARCHIVE_SHA256=$runtime_sha256"
-            echo "TDRIVE_MPV_PACKAGE_SOURCE=${RUNTIME_URL%%[?#]*}"
-          } >> "$GITHUB_ENV"
+          TDRIVE_LINUX_MPV_RUNTIME_URL: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_URL }}
+          TDRIVE_LINUX_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_SHA256 }}
+          TDRIVE_MACOS_MPV_RUNTIME_URL: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_URL }}
+          TDRIVE_MACOS_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_SHA256 }}
+          TDRIVE_WINDOWS_MPV_RUNTIME_URL: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_URL }}
+          TDRIVE_WINDOWS_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 }}
+        run: bash scripts/prepare-mpv-runtime.sh
 
       - name: Install Wails
         shell: bash
@@ -146,28 +106,7 @@ jobs:
           wails build -clean -platform "${{ matrix.platform }}" -o "${{ matrix.output_name }}" \
             -ldflags "-X main.appVersion=${{ github.ref_name }}"
 
-      - name: Acquire checksum-pinned Linux media runtime
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          RUNTIME_URL: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_URL }}
-          RUNTIME_SHA256: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_SHA256 }}
-        run: |
-          set -euo pipefail
-          if [ -z "$RUNTIME_URL" ] || [ -z "$RUNTIME_SHA256" ]; then
-            echo "Linux releases require repository variables TDRIVE_LINUX_MPV_RUNTIME_URL and TDRIVE_LINUX_MPV_RUNTIME_SHA256." >&2
-            echo "The approved tar.gz must contain mpv, SOURCE.txt, THIRD_PARTY_NOTICES.txt at its root, with private shared libraries under lib/." >&2
-            exit 1
-          fi
-          runtime_root="$RUNNER_TEMP/tdrive-linux-mpv-runtime"
-          runtime_sha256="$(bash scripts/acquire-mpv-runtime.sh linux "$RUNTIME_URL" "$RUNTIME_SHA256" "$runtime_root")"
-          {
-            echo "TDRIVE_MPV_RUNTIME_DIR=$runtime_root"
-            echo "TDRIVE_MPV_ARCHIVE_SHA256=$runtime_sha256"
-            echo "TDRIVE_MPV_PACKAGE_SOURCE=${RUNTIME_URL%%[?#]*}"
-          } >> "$GITHUB_ENV"
-
-      - name: Acquire checksum-pinned AppImage tool
+      - name: Acquire AppImage tool
         if: runner.os == 'Linux'
         shell: bash
         env:
@@ -175,9 +114,15 @@ jobs:
           APPIMAGETOOL_SHA256: ${{ vars.TDRIVE_APPIMAGETOOL_SHA256 }}
         run: |
           set -euo pipefail
+          appimagetool="$RUNNER_TEMP/tdrive-appimagetool"
           if [ -z "$APPIMAGETOOL_URL" ] || [ -z "$APPIMAGETOOL_SHA256" ]; then
-            echo "Linux releases require repository variables TDRIVE_APPIMAGETOOL_URL and TDRIVE_APPIMAGETOOL_SHA256." >&2
-            exit 1
+            echo "::warning::TDRIVE_APPIMAGETOOL_URL and TDRIVE_APPIMAGETOOL_SHA256 are not set; using the continuous appimagetool build."
+            curl --fail --location --silent --show-error \
+              https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+              --output "$appimagetool"
+            chmod 755 "$appimagetool"
+            echo "TDRIVE_APPIMAGETOOL=$appimagetool" >> "$GITHUB_ENV"
+            exit 0
           fi
           expected_sha256="$(printf '%s' "$APPIMAGETOOL_SHA256" | tr '[:upper:]' '[:lower:]')"
           case "$expected_sha256" in
@@ -187,7 +132,6 @@ jobs:
             echo "TDRIVE_APPIMAGETOOL_SHA256 must contain exactly 64 hexadecimal characters" >&2
             exit 1
           fi
-          appimagetool="$RUNNER_TEMP/tdrive-appimagetool"
           curl --fail --location --silent --show-error "$APPIMAGETOOL_URL" --output "$appimagetool"
           actual_sha256="$(sha256sum "$appimagetool" | awk '{print $1}')"
           if [ "$actual_sha256" != "$expected_sha256" ]; then
@@ -231,10 +175,14 @@ jobs:
           SH
           chmod +x "$APPDIR/AppRun"
 
-          # The runtime archive is an explicit, checksum-pinned release input.
-          # package-mpv-linux validates its version, architecture, license/source
-          # metadata, and a deterministic headless decode before it is included.
-          ./scripts/package-mpv-linux.sh "$APPDIR"
+          # package-mpv-linux validates the runtime's version, architecture,
+          # license/source metadata, and a deterministic headless decode. The
+          # version override is only set for the package-manager fallback.
+          if [ -n "${TDRIVE_MPV_TEST_VERSION:-}" ]; then
+            TDRIVE_MPV_ALLOW_TEST_VERSION=1 ./scripts/package-mpv-linux.sh "$APPDIR" "$TDRIVE_MPV_TEST_VERSION"
+          else
+            ./scripts/package-mpv-linux.sh "$APPDIR"
+          fi
 
           mkdir -p dist
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \

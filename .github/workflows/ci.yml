@@ -13,7 +13,6 @@ permissions:
 
 env:
   CGO_ENABLED: 1
-  MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
   test:
@@ -46,7 +45,7 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev
 
       - name: Validate media packaging scripts
-        run: bash -n scripts/acquire-mpv-runtime.sh scripts/mpv-metadata.sh scripts/package-mpv-darwin.sh scripts/package-mpv-linux.sh scripts/test-acquire-mpv-runtime.sh scripts/test-mpv-metadata.sh scripts/test-package-mpv-darwin.sh
+        run: bash -n scripts/acquire-mpv-runtime.sh scripts/prepare-mpv-runtime.sh scripts/mpv-metadata.sh scripts/package-mpv-darwin.sh scripts/package-mpv-linux.sh scripts/test-acquire-mpv-runtime.sh scripts/test-mpv-metadata.sh scripts/test-package-mpv-darwin.sh
 
       - name: Run media parser tests
         run: bash scripts/test-mpv-metadata.sh
@@ -160,108 +159,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev mpv
 
-      - name: Prepare Linux media runtime
-        if: runner.os == 'Linux'
+      # Uses the checksum-pinned runtime archive when the repository variables
+      # are set and the runner's package-manager mpv otherwise. Keep in sync
+      # with release.yml.
+      - name: Prepare media runtime
         shell: bash
         env:
-          RUNTIME_URL: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_URL }}
-          RUNTIME_SHA256: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_SHA256 }}
-        run: |
-          set -euo pipefail
-          runtime_root="$RUNNER_TEMP/tdrive-linux-mpv-runtime"
-          runtime_sha256=""
-          package_source=""
-          test_version=""
-          if [ -n "$RUNTIME_URL" ] && [ -n "$RUNTIME_SHA256" ]; then
-            runtime_sha256="$(bash scripts/acquire-mpv-runtime.sh linux "$RUNTIME_URL" "$RUNTIME_SHA256" "$runtime_root")"
-            package_source="${RUNTIME_URL%%[?#]*}"
-          else
-            mkdir -p "$runtime_root"
-            cp "$(command -v mpv)" "$runtime_root/mpv"
-            chmod 755 "$runtime_root/mpv"
-            test_version="$("$runtime_root/mpv" --no-config --version | awk '$1 == "mpv" { sub(/^v/, "", $2); print $2; exit }')"
-            {
-              echo "CI-only Linux media runtime fixture assembled from the Ubuntu runner package."
-              echo "This is not the checksum-pinned release runtime."
-              apt-cache policy mpv
-            } > "$runtime_root/SOURCE.txt"
-            {
-              echo "CI-only media packaging contract fixture."
-              echo "Release archives must provide complete third-party notices."
-            } > "$runtime_root/THIRD_PARTY_NOTICES.txt"
-            runtime_sha256="0000000000000000000000000000000000000000000000000000000000000000"
-            package_source="ubuntu-ci-system-mpv-not-release-runtime"
-          fi
-          {
-            echo "TDRIVE_MPV_RUNTIME_DIR=$runtime_root"
-            echo "TDRIVE_MPV_ARCHIVE_SHA256=$runtime_sha256"
-            echo "TDRIVE_MPV_PACKAGE_SOURCE=$package_source"
-            echo "TDRIVE_MPV_TEST_VERSION=$test_version"
-          } >> "$GITHUB_ENV"
-
-      - name: Prepare macOS media runtime
-        if: runner.os == 'macOS'
-        shell: bash
-        env:
-          RUNTIME_URL: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_URL }}
-          RUNTIME_SHA256: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_SHA256 }}
-        run: |
-          set -euo pipefail
-          export HOMEBREW_NO_AUTO_UPDATE=1
-          brew list pkgconf >/dev/null 2>&1 || brew install pkgconf
-          if [ -n "$RUNTIME_URL" ] && [ -n "$RUNTIME_SHA256" ]; then
-            runtime_root="$RUNNER_TEMP/tdrive-macos-mpv-runtime"
-            runtime_sha256="$(bash scripts/acquire-mpv-runtime.sh darwin "$RUNTIME_URL" "$RUNTIME_SHA256" "$runtime_root")"
-            {
-              echo "PKG_CONFIG_LIBDIR=$runtime_root/lib/pkgconfig"
-              echo "TDRIVE_MPV_RUNTIME_DIR=$runtime_root"
-              echo "TDRIVE_MPV_ARCHIVE_SHA256=$runtime_sha256"
-              echo "TDRIVE_MPV_PACKAGE_SOURCE=${RUNTIME_URL%%[?#]*}"
-              echo "TDRIVE_MPV_RUNTIME_PINNED=1"
-            } >> "$GITHUB_ENV"
-          else
-            brew list mpv >/dev/null 2>&1 || brew install mpv
-            echo "TDRIVE_MPV_RUNTIME_PINNED=0" >> "$GITHUB_ENV"
-          fi
-
-      - name: Prepare checksum-pinned Windows media runtime
-        if: runner.os == 'Windows' && vars.TDRIVE_WINDOWS_MPV_RUNTIME_URL != '' && vars.TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 != ''
-        shell: bash
-        env:
-          RUNTIME_URL: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_URL }}
-          RUNTIME_SHA256: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 }}
-        run: |
-          set -euo pipefail
-          runner_temp="$RUNNER_TEMP"
-          if command -v cygpath >/dev/null 2>&1; then
-            runner_temp="$(cygpath -u "$RUNNER_TEMP")"
-          fi
-          runtime_root="$runner_temp/tdrive-windows-mpv-runtime"
-          runtime_sha256="$(bash scripts/acquire-mpv-runtime.sh windows "$RUNTIME_URL" "$RUNTIME_SHA256" "$runtime_root")"
-          runtime_root_for_env="$runtime_root"
-          if command -v cygpath >/dev/null 2>&1; then
-            runtime_root_for_env="$(cygpath -w "$runtime_root")"
-          fi
-          {
-            echo "TDRIVE_MPV_RUNTIME_DIR=$runtime_root_for_env"
-            echo "TDRIVE_MPV_ARCHIVE_SHA256=$runtime_sha256"
-            echo "TDRIVE_MPV_PACKAGE_SOURCE=${RUNTIME_URL%%[?#]*}"
-          } >> "$GITHUB_ENV"
-
-      - name: Prepare Windows media runtime contract fixture
-        if: runner.os == 'Windows' && (vars.TDRIVE_WINDOWS_MPV_RUNTIME_URL == '' || vars.TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 == '')
-        shell: pwsh
-        run: |
-          Write-Warning "Windows release runtime validation skipped: TDRIVE_WINDOWS_MPV_RUNTIME_URL/TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 are not both configured."
-          Write-Warning "Using Chocolatey only as a CI packaging contract fixture; release.yml requires a checksum-pinned archive."
-          $mpvVersion = (Get-Content -LiteralPath scripts/package-mpv-version.txt -Raw).Trim()
-          choco install mpvio.install --version $mpvVersion --no-progress -y
-          if ($LASTEXITCODE -ne 0) {
-            throw "could not install CI fixture mpvio.install $mpvVersion"
-          }
-          "TDRIVE_MPV_ALLOW_UNPINNED_CI_FIXTURE=1" >> $env:GITHUB_ENV
-          "TDRIVE_MPV_ARCHIVE_SHA256=0000000000000000000000000000000000000000000000000000000000000000" >> $env:GITHUB_ENV
-          "TDRIVE_MPV_PACKAGE_SOURCE=chocolatey-ci-system-mpv-not-release-runtime:mpvio.install/$mpvVersion" >> $env:GITHUB_ENV
+          TDRIVE_LINUX_MPV_RUNTIME_URL: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_URL }}
+          TDRIVE_LINUX_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_SHA256 }}
+          TDRIVE_MACOS_MPV_RUNTIME_URL: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_URL }}
+          TDRIVE_MACOS_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_SHA256 }}
+          TDRIVE_WINDOWS_MPV_RUNTIME_URL: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_URL }}
+          TDRIVE_WINDOWS_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 }}
+        run: bash scripts/prepare-mpv-runtime.sh
 
       - name: Install Wails
         shell: bash
@@ -306,43 +216,7 @@ jobs:
             app_path="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"
           fi
           [ -n "$app_path" ] || { echo "no macOS app bundle found" >&2; exit 1; }
-          if [ "${TDRIVE_MPV_RUNTIME_PINNED:-0}" = "1" ]; then
-            ./scripts/package-mpv-darwin.sh "$app_path"
-            exit 0
-          fi
-
-          ci_runtime_root="$RUNNER_TEMP/tdrive-macos-ci-mpv-runtime"
-          mkdir -p "$ci_runtime_root/bin" "$ci_runtime_root/lib"
-          cp -pL "$(command -v mpv)" "$ci_runtime_root/bin/mpv"
-          cp -pL "$(pkg-config --variable=libdir mpv)/libmpv.2.dylib" "$ci_runtime_root/lib/libmpv.2.dylib"
-          chmod 755 "$ci_runtime_root/bin/mpv"
-          {
-            echo "CI-only macOS media runtime fixture assembled from Homebrew mpv."
-            echo "This is not the checksum-pinned release runtime."
-            brew list --versions mpv
-          } > "$ci_runtime_root/SOURCE.txt"
-          {
-            echo "CI-only media packaging contract fixture."
-            echo "Release archives must provide complete third-party notices."
-          } > "$ci_runtime_root/THIRD_PARTY_NOTICES.txt"
-
-          export TDRIVE_MPV_RUNTIME_DIR="$ci_runtime_root"
-          export TDRIVE_MPV_ARCHIVE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
-          export TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime
-          deployment_incompatible_status="$(./scripts/package-mpv-darwin.sh --deployment-incompatible-exit-code)"
-          set +e
-          package_output="$(./scripts/package-mpv-darwin.sh "$app_path" 2>&1)"
-          package_status=$?
-          set -e
-          printf '%s\n' "$package_output"
-          if [ "$package_status" -eq 0 ]; then
-            exit 0
-          fi
-          if [ "$package_status" -eq "$deployment_incompatible_status" ]; then
-            echo "Homebrew mpv is incompatible with the app deployment target; release packaging compatibility gate verified."
-            exit 0
-          fi
-          exit "$package_status"
+          ./scripts/package-mpv-darwin.sh "$app_path"
 
       - name: Verify Windows media bundle
         if: runner.os == 'Windows'

@@ -52,7 +52,8 @@ if command -v cygpath >/dev/null 2>&1; then
   TMP_PARENT="$(cygpath -u "$TMP_PARENT" 2>/dev/null || printf '%s' "$TMP_PARENT")"
 fi
 [ -d "$TMP_PARENT" ] || die "temporary directory does not exist: $TMP_PARENT"
-ARCHIVE_PATH="$(mktemp "$TMP_PARENT/tdrive-$PLATFORM-mpv-runtime.XXXXXX.tar.gz")"
+# No suffix after the template: BSD mktemp leaves the X's literal otherwise.
+ARCHIVE_PATH="$(mktemp "$TMP_PARENT/tdrive-$PLATFORM-mpv-runtime.XXXXXX")"
 STAGING_ROOT="$(mktemp -d "$RUNTIME_PARENT_REAL/.tdrive-$PLATFORM-mpv-runtime.XXXXXX")"
 cleanup() {
   rm -f "$ARCHIVE_PATH"
