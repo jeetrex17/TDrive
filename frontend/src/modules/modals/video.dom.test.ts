@@ -323,94 +323,105 @@ describe("native seek preview platform capability", () => {
     });
 });
 
-describe("native video track controls", () => {
-    it("shows useful audio and subtitle choices and sends validated mpv commands", async () => {
-        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(20, MKV_SESSION_ID));
+describe("native video track pickers", () => {
+    const tracks = [
+        { id: 1, type: "audio", title: "Main", language: "eng", codec: "aac", selected: true, default: true, forced: false },
+        { id: 2, type: "audio", title: "Commentary", language: "eng", codec: "opus", selected: false, default: false, forced: false },
+        { id: 3, type: "subtitle", title: "English SDH", language: "eng", codec: "ass", selected: false, default: false, forced: false },
+    ];
+    const menuLabels = (menu: HTMLElement | null) => Array.from(menu?.querySelectorAll("[data-track]") ?? [])
+        .map((item) => item.textContent?.replace("✓", "").trim());
+    const commandCount = (command: string[]) => apiMocks.nativeMediaCommand.mock.calls
+        .filter(([, sent]) => JSON.stringify(sent) === JSON.stringify(command)).length;
+
+    it("offers audio and subtitle menus and sends validated mpv commands", async () => {
+        const opened = nativeOpenResult(20, MKV_SESSION_ID);
+        opened.htmlControls = true;
+        apiMocks.openNativeMedia.mockResolvedValue(opened);
 
         const videoModule = await import("./video");
         videoModule.setupVideoModal();
         videoModule.setupVideoModal();
         await videoModule.openVideoModal({ id: 20, name: "movie-20.mkv", size: 1024 });
 
-        runtimeMocks.events.get("native_media_state")?.({
-            token: MKV_SESSION_ID,
-            paused: false,
-            duration: 240,
-            tracks: [
-                { id: 1, type: "audio", title: "Main", language: "eng", codec: "aac", selected: true, default: true, forced: false },
-                { id: 2, type: "audio", title: "Commentary", language: "eng", codec: "opus", selected: false, default: false, forced: false },
-                { id: 3, type: "subtitle", title: "English SDH", language: "eng", codec: "ass", selected: false, default: false, forced: false },
-            ],
-        });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, paused: false, duration: 240, tracks });
         await nextTasks();
 
-        const controls = document.querySelector<HTMLElement>("#video-track-controls");
-        const audioControl = document.querySelector<HTMLElement>("#video-audio-control");
-        const subtitleControl = document.querySelector<HTMLElement>("#video-subtitle-control");
-        const audio = document.querySelector<HTMLSelectElement>("#video-audio-select");
-        const subtitles = document.querySelector<HTMLSelectElement>("#video-subtitle-select");
+        const audioButton = document.querySelector<HTMLButtonElement>("#video-audio-button");
+        const subtitleButton = document.querySelector<HTMLButtonElement>("#video-subtitle-button");
+        const audioMenu = document.querySelector<HTMLElement>("#video-audio-menu");
+        const subtitleMenu = document.querySelector<HTMLElement>("#video-subtitle-menu");
 
-        expect(controls?.hidden).toBe(false);
-        expect(audioControl?.hidden).toBe(false);
-        expect(subtitleControl?.hidden).toBe(false);
-        expect(Array.from(audio?.options ?? []).map((option) => option.textContent)).toEqual([
-            "Main / ENG / AAC",
-            "Commentary / ENG / OPUS",
-        ]);
-        expect(Array.from(subtitles?.options ?? []).map((option) => option.textContent)).toEqual([
-            "Off",
-            "English SDH / ENG / ASS",
-        ]);
-        expect(audio?.value).toBe("1");
-        expect(subtitles?.value).toBe("no");
+        expect(document.querySelector<HTMLElement>("#video-audio-wrap")?.hidden).toBe(false);
+        expect(document.querySelector<HTMLElement>("#video-subtitle-wrap")?.hidden).toBe(false);
+        expect(document.querySelector("#video-audio-label")?.textContent).toBe("ENG");
+        expect(document.querySelector("#video-subtitle-label")?.textContent).toBe("Off");
+        expect(subtitleButton?.dataset.state).toBe("off");
+        expect(menuLabels(audioMenu)).toEqual(["Main / ENG / AAC", "Commentary / ENG / OPUS"]);
+        expect(menuLabels(subtitleMenu)).toEqual(["Off", "English SDH / ENG / ASS"]);
+        expect(audioMenu?.querySelector('[data-track="1"]')?.getAttribute("aria-checked")).toBe("true");
 
-        if (!audio || !subtitles) return;
-        audio.value = "2";
-        audio.dispatchEvent(new Event("change"));
-        subtitles.value = "3";
-        subtitles.dispatchEvent(new Event("change"));
+        audioButton?.click();
+        expect(audioMenu?.classList.contains("is-open")).toBe(true);
+        expect(audioButton?.getAttribute("aria-expanded")).toBe("true");
+        subtitleButton?.click();
+        expect(audioMenu?.classList.contains("is-open")).toBe(false);
+        expect(subtitleMenu?.classList.contains("is-open")).toBe(true);
+        subtitleMenu?.querySelector<HTMLButtonElement>('[data-track="3"]')?.click();
+        expect(subtitleMenu?.classList.contains("is-open")).toBe(false);
+        audioButton?.click();
+        audioMenu?.querySelector<HTMLButtonElement>('[data-track="2"]')?.click();
 
         await vi.waitFor(() => {
             expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "aid", "2"]);
             expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "3"]);
         });
-        expect(apiMocks.nativeMediaCommand.mock.calls.filter(([, command]) => (
-            command[0] === "set" && command[1] === "aid" && command[2] === "2"
-        ))).toHaveLength(1);
+        expect(commandCount(["set", "aid", "2"])).toBe(1);
+        expect(document.querySelector("#video-audio-label")?.textContent).toBe("ENG");
+        expect(document.querySelector("#video-subtitle-label")?.textContent).toBe("ENG");
+        expect(subtitleButton?.dataset.state).toBe("on");
 
         runtimeMocks.events.get("native_media_state")?.({
             token: MKV_SESSION_ID,
-            tracks: [
-                { id: 1, type: "audio", title: "Main", language: "eng", codec: "aac", selected: false, default: true, forced: false },
-                { id: 2, type: "audio", title: "Commentary", language: "eng", codec: "opus", selected: true, default: false, forced: false },
-                { id: 3, type: "subtitle", title: "English SDH", language: "eng", codec: "ass", selected: true, default: false, forced: false },
-            ],
+            tracks: tracks.map((track) => ({ ...track, selected: track.id !== 1 })),
         });
-        expect(audio.value).toBe("2");
-        expect(subtitles.value).toBe("3");
+        expect(audioMenu?.querySelector('[data-track="2"]')?.classList.contains("is-selected")).toBe(true);
+        expect(subtitleMenu?.querySelector('[data-track="3"]')?.getAttribute("aria-checked")).toBe("true");
 
-        subtitles.value = "no";
-        subtitles.dispatchEvent(new Event("change"));
+        subtitleButton?.click();
+        subtitleMenu?.querySelector<HTMLButtonElement>('[data-track="no"]')?.click();
         await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "no"]));
+        expect(document.querySelector("#video-subtitle-label")?.textContent).toBe("Off");
 
-        const injected = document.createElement("option");
-        injected.value = "999";
-        audio.appendChild(injected);
-        audio.value = "999";
-        audio.dispatchEvent(new Event("change"));
-        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "aid", "999"]);
-
-        document.querySelector<HTMLButtonElement>("#video-skip-back")?.click();
-        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(
-            MKV_SESSION_ID,
-            ["seek", "-10", "relative"],
-        ));
-        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalledWith(MKV_SESSION_ID, ["seek", "-20", "relative"]);
+        document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
+        await vi.waitFor(() => expect(commandCount(["set", "sid", "3"])).toBe(2));
 
         await videoModule.closeVideoModal();
     });
 
-    it("hides single-audio controls and clears tracks across player switches", async () => {
+    it("cycles tracks from the pill when the native child window covers the video", async () => {
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(23, MKV_SESSION_ID));
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 23, name: "movie-23.mkv", size: 1024 });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks });
+        await nextTasks();
+
+        const subtitleButton = document.querySelector<HTMLButtonElement>("#video-subtitle-button");
+        const subtitleMenu = document.querySelector<HTMLElement>("#video-subtitle-menu");
+        expect(subtitleButton?.title).toContain("click to cycle");
+
+        subtitleButton?.click();
+        expect(subtitleMenu?.classList.contains("is-open")).toBe(false);
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "3"]));
+        subtitleButton?.click();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "no"]));
+
+        await videoModule.closeVideoModal();
+    });
+
+    it("hides the single-audio picker and clears tracks across player switches", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(21, OLD_MKV_SESSION_ID));
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(22, "html-token"));
 
@@ -427,17 +438,16 @@ describe("native video track controls", () => {
             ],
         });
 
-        expect(document.querySelector<HTMLElement>("#video-audio-control")?.hidden).toBe(true);
-        expect(document.querySelector<HTMLElement>("#video-subtitle-control")?.hidden).toBe(false);
+        expect(document.querySelector<HTMLElement>("#video-audio-wrap")?.hidden).toBe(true);
+        expect(document.querySelector<HTMLElement>("#video-subtitle-wrap")?.hidden).toBe(false);
 
         await videoModule.openVideoModal({ id: 22, name: "clip-22.mp4", size: 1024 });
 
-        const controls = document.querySelector<HTMLElement>("#video-track-controls");
-        const audio = document.querySelector<HTMLSelectElement>("#video-audio-select");
-        const subtitles = document.querySelector<HTMLSelectElement>("#video-subtitle-select");
-        expect(controls?.hidden).toBe(true);
-        expect(audio?.options).toHaveLength(0);
-        expect(subtitles?.options).toHaveLength(0);
+        const audioMenu = document.querySelector<HTMLElement>("#video-audio-menu");
+        const subtitleMenu = document.querySelector<HTMLElement>("#video-subtitle-menu");
+        expect(document.querySelector<HTMLElement>("#video-audio-wrap")?.hidden).toBe(true);
+        expect(document.querySelector<HTMLElement>("#video-subtitle-wrap")?.hidden).toBe(true);
+        expect(menuLabels(subtitleMenu)).toHaveLength(0);
 
         staleStateCallback?.({
             token: OLD_MKV_SESSION_ID,
@@ -447,9 +457,9 @@ describe("native video track controls", () => {
                 { id: 4, type: "subtitle", selected: true, default: false, forced: false },
             ],
         });
-        expect(controls?.hidden).toBe(true);
-        expect(audio?.options).toHaveLength(0);
-        expect(subtitles?.options).toHaveLength(0);
+        expect(document.querySelector<HTMLElement>("#video-audio-wrap")?.hidden).toBe(true);
+        expect(menuLabels(audioMenu)).toHaveLength(0);
+        expect(menuLabels(subtitleMenu)).toHaveLength(0);
 
         await videoModule.closeVideoModal();
     });

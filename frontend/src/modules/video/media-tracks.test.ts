@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeNativeTracks, nativeTrackLabel } from "./media-tracks";
+import { normalizeNativeTracks, nativeTrackLabel, shortNativeTrackLabel } from "./media-tracks";
 
 describe("native media tracks", () => {
     it("keeps valid audio and subtitle tracks without trusting bridge payloads", () => {
@@ -75,5 +75,15 @@ describe("native media tracks", () => {
             default: false,
             forced: false,
         }, 1)).toBe("Subtitle 2");
+    });
+});
+
+describe("shortNativeTrackLabel", () => {
+    it("prefers the language code, then a trimmed title, then the position", () => {
+        const base = { id: 1, type: "audio" as const, selected: false, default: false, forced: false };
+        expect(shortNativeTrackLabel({ ...base, language: "eng", title: "Main" }, 0)).toBe("ENG");
+        expect(shortNativeTrackLabel({ ...base, title: "Signs" }, 0)).toBe("Signs");
+        expect(shortNativeTrackLabel({ ...base, title: "Director commentary" }, 0)).toBe("Director co…");
+        expect(shortNativeTrackLabel(base, 2)).toBe("#3");
     });
 });

@@ -1,4 +1,6 @@
 <script lang="ts">
+    import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
+    import CaptionsIcon from '@lucide/svelte/icons/captions';
     import MaximizeIcon from '@lucide/svelte/icons/maximize';
     import MinimizeIcon from '@lucide/svelte/icons/minimize';
     import PauseIcon from '@lucide/svelte/icons/pause';
@@ -82,17 +84,6 @@
                 </button>
             </div>
 
-            <div id="video-track-controls" class="video-track-controls" aria-label="Media tracks" hidden>
-                <label id="video-audio-control" class="video-track-control" for="video-audio-select" hidden>
-                    <span class="video-track-label">Audio</span>
-                    <select id="video-audio-select" class="video-track-select" aria-label="Audio track"></select>
-                </label>
-                <label id="video-subtitle-control" class="video-track-control" for="video-subtitle-select" hidden>
-                    <span class="video-track-label">Subtitles</span>
-                    <select id="video-subtitle-select" class="video-track-select" aria-label="Subtitle track"></select>
-                </label>
-            </div>
-
             <div class="video-command-cluster video-secondary-cluster">
                 <div class="video-volume-group">
                     <button id="video-mute" class="video-icon-btn video-mute-btn" type="button" data-state="unmuted" aria-label="Mute" title="Mute">
@@ -106,9 +97,25 @@
                     </div>
                 </div>
 
-                <div class="video-speed-wrap">
-                    <button id="video-speed-button" class="video-speed-button" type="button" aria-haspopup="menu" aria-expanded="false">1x</button>
-                    <div id="video-speed-menu" class="video-speed-menu" role="menu" aria-label="Playback speed"></div>
+                <div id="video-audio-wrap" class="video-menu-wrap video-track-wrap" hidden>
+                    <button id="video-audio-button" class="video-pill-button video-track-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Audio track" title="Audio track">
+                        <AudioLinesIcon size={15} aria-hidden="true" />
+                        <span id="video-audio-label" class="video-track-value"></span>
+                    </button>
+                    <div id="video-audio-menu" class="video-menu video-track-menu" role="menu" aria-label="Audio track"></div>
+                </div>
+
+                <div id="video-subtitle-wrap" class="video-menu-wrap video-track-wrap" hidden>
+                    <button id="video-subtitle-button" class="video-pill-button video-track-button" type="button" data-state="off" aria-haspopup="menu" aria-expanded="false" aria-label="Subtitles" title="Subtitles">
+                        <CaptionsIcon size={15} aria-hidden="true" />
+                        <span id="video-subtitle-label" class="video-track-value"></span>
+                    </button>
+                    <div id="video-subtitle-menu" class="video-menu video-track-menu" role="menu" aria-label="Subtitles"></div>
+                </div>
+
+                <div class="video-menu-wrap video-speed-wrap">
+                    <button id="video-speed-button" class="video-pill-button video-speed-button" type="button" aria-haspopup="menu" aria-expanded="false">1x</button>
+                    <div id="video-speed-menu" class="video-menu video-speed-menu" role="menu" aria-label="Playback speed"></div>
                 </div>
 
                 <button id="video-fullscreen" class="video-icon-btn video-fullscreen-btn" type="button" data-state="windowed" aria-label="Enter fullscreen" title="Enter fullscreen">

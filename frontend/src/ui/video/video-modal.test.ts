@@ -38,11 +38,14 @@ describe('VideoModal', () => {
             'video-volume-slider',
             'video-volume-fill',
             'video-volume-thumb',
-            'video-track-controls',
-            'video-audio-control',
-            'video-audio-select',
-            'video-subtitle-control',
-            'video-subtitle-select',
+            'video-audio-wrap',
+            'video-audio-button',
+            'video-audio-label',
+            'video-audio-menu',
+            'video-subtitle-wrap',
+            'video-subtitle-button',
+            'video-subtitle-label',
+            'video-subtitle-menu',
             'video-speed-button',
             'video-speed-menu',
             'video-fullscreen',
@@ -60,17 +63,17 @@ describe('VideoModal', () => {
         expect(body).toContain('aria-atomic="true"');
     });
 
-    it('renders labelled native track selectors hidden by default', () => {
+    it('renders the track pickers as labelled menu buttons hidden by default', () => {
         const { body } = render(VideoModal);
 
-        expect(body).toContain('<label id="video-audio-control"');
-        expect(body).toContain('for="video-audio-select"');
-        expect(body).toContain('>Audio</span>');
-        expect(body).toContain('aria-label="Audio track"');
-        expect(body).toContain('<label id="video-subtitle-control"');
-        expect(body).toContain('for="video-subtitle-select"');
-        expect(body).toContain('>Subtitles</span>');
-        expect(body).toContain('aria-label="Subtitle track"');
-        expect(body).toContain('id="video-track-controls" class="video-track-controls" aria-label="Media tracks" hidden');
+        expect(body).toContain('id="video-audio-wrap" class="video-menu-wrap video-track-wrap" hidden');
+        expect(body).toContain('id="video-subtitle-wrap" class="video-menu-wrap video-track-wrap" hidden');
+        for (const id of ['video-audio-button', 'video-subtitle-button', 'video-speed-button']) {
+            expect(body).toMatch(new RegExp(`id="${id}"[^>]*aria-haspopup="menu"`));
+        }
+        expect(body).toMatch(/id="video-audio-button"[^>]*aria-label="Audio track"/);
+        expect(body).toMatch(/id="video-subtitle-button"[^>]*aria-label="Subtitles"/);
+        expect(body).toMatch(/id="video-audio-menu"[^>]*role="menu"/);
+        expect(body).toMatch(/id="video-subtitle-menu"[^>]*role="menu"/);
     });
 });

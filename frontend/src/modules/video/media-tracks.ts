@@ -58,6 +58,15 @@ export function nativeTrackLabel(track: NativeMediaTrack, index: number): string
     return `${track.type === "audio" ? "Audio" : "Subtitle"} ${index + 1}`;
 }
 
+// shortNativeTrackLabel fits a track into a pill button: the language code when
+// mpv knows it, otherwise a trimmed title, otherwise the track's position.
+export function shortNativeTrackLabel(track: NativeMediaTrack, index: number): string {
+    const language = formatLanguage(track.language);
+    if (language && language.length <= 5) return language;
+    if (track.title) return track.title.length <= 12 ? track.title : `${track.title.slice(0, 11).trimEnd()}…`;
+    return `#${index + 1}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

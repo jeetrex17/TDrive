@@ -29,6 +29,7 @@ import {
 import {
     nativeTrackLabel,
     normalizeNativeTracks,
+    shortNativeTrackLabel,
     type NativeMediaTrack,
 } from "../video/media-tracks";
 import { setNativeVideoLayerActive } from "../video/native-video-layer";
@@ -536,11 +537,8 @@ let timeEl: HTMLElement | null = null;
 let durationEl: HTMLElement | null = null;
 let speedBtnEl: HTMLButtonElement | null = null;
 let speedMenuEl: HTMLElement | null = null;
-let trackControlsEl: HTMLElement | null = null;
-let audioControlEl: HTMLElement | null = null;
-let audioSelectEl: HTMLSelectElement | null = null;
-let subtitleControlEl: HTMLElement | null = null;
-let subtitleSelectEl: HTMLSelectElement | null = null;
+let audioPicker: TrackPicker | null = null;
+let subtitlePicker: TrackPicker | null = null;
 
 let activeAdapter: PlayerAdapter | null = null;
 let activeNativeStateAdapter: NativeMpvAdapter | null = null;
@@ -566,7 +564,6 @@ let volumeCommandFrame = 0;
 let hasError = false;
 let isWindowFullscreen = false;
 let lastBufferedSignature = "";
-let lastTrackSignature = "";
 let activeThumbnailURL = "";
 let currentPreviewBucket = -1;
 let lastPreviewRatio = 0;
@@ -944,9 +941,9 @@ function clearChromeTimer() {
 
 function scheduleChromeHide() {
     clearChromeTimer();
-    if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
+    if (!isOpen() || currentState.paused || hasError || isAnyMenuOpen() || isScrubberTooltipActive()) return;
     chromeHideTimer = setTimeout(() => {
-        if (!isOpen() || currentState.paused || hasError || isSpeedMenuOpen() || isScrubberTooltipActive()) return;
+        if (!isOpen() || currentState.paused || hasError || isAnyMenuOpen() || isScrubberTooltipActive()) return;
         setChromeVisible(false);
     }, CHROME_HIDE_DELAY_MS);
 }
@@ -1290,122 +1287,239 @@ function syncSpeed(state: PlayerState) {
     });
 }
 
-function syncNativeTrackControls(tracks: NativeMediaTrack[]) {
-    if (!activeNative || activeNative.presentation === "standalone") {
-        resetNativeTrackControls();
-        return;
+// syncNativeTracks shows the audio pill only when there is a choice to make and
+// the subtitle pill whenever subtitles exist. A pill appearing changes the
+// controls height, so the native viewport is re-measured.
+function syncNativeTracks(tracks: NativeMediaTrack[]) {
+    const available = Boolean(activeNative && activeNative.presentation !== "standalone");
+    const audio = tracks.filter((track) => track.type === "audio");
+    const subtitles = tracks.filter((track) => track.type === "subtitle");
+    const audioChanged = audioPicker?.update(audio, available && audio.length > 1);
+    const subtitleChanged = subtitlePicker?.update(subtitles, available && subtitles.length > 0);
+    if (audioChanged || subtitleChanged) scheduleNativeResize();
+}
+
+interface TrackPickerElements {
+    wrap: HTMLElement | null;
+    button: HTMLButtonElement | null;
+    label: HTMLElement | null;
+    menu: HTMLElement | null;
+}
+
+// TrackPicker is a pill button that opens a radio menu of mpv tracks, mirroring
+// the speed menu. In the native fallback (a child window covers the video, so
+// HTML cannot draw over it) the pill cycles through the tracks instead.
+class TrackPicker {
+    private tracks: NativeMediaTrack[] = [];
+    private renderedSignature = "";
+
+    constructor(
+        private readonly title: string,
+        private readonly offLabel: string | null,
+        private readonly apply: (adapter: NativeMpvAdapter, id: number | null) => void,
+        private readonly els: TrackPickerElements,
+    ) {
+        els.button?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (isNativeFallbackActive()) {
+                this.cycle();
+                return;
+            }
+            this.setOpen(!this.isOpen());
+            revealChrome();
+        });
+        els.menu?.addEventListener("click", (event) => {
+            const item = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-track]");
+            if (!item) return;
+            this.select(item.dataset.track === "no" ? null : Number(item.dataset.track));
+            this.close(true);
+        });
+        els.menu?.addEventListener("keydown", (event) => {
+            if (this.isOpen()) handleMenuKeydown(event, this.items(), () => this.close(true));
+        });
     }
 
-    const audioTracks = tracks.filter((track) => track.type === "audio");
-    const subtitleTracks = tracks.filter((track) => track.type === "subtitle");
-    const showAudio = audioTracks.length > 1;
-    const showSubtitles = subtitleTracks.length > 0;
-    const showControls = showAudio || showSubtitles;
-    const visibilityChanged = trackControlsEl?.hidden === showControls
-        || audioControlEl?.hidden === showAudio
-        || subtitleControlEl?.hidden === showSubtitles;
-
-    if (trackControlsEl) trackControlsEl.hidden = !showControls;
-    if (audioControlEl) audioControlEl.hidden = !showAudio;
-    if (subtitleControlEl) subtitleControlEl.hidden = !showSubtitles;
-    if (audioSelectEl) audioSelectEl.disabled = !showAudio;
-    if (subtitleSelectEl) subtitleSelectEl.disabled = !showSubtitles;
-
-    const signature = JSON.stringify({ token: activeNative.token, audioTracks, subtitleTracks });
-    if (signature !== lastTrackSignature) {
-        lastTrackSignature = signature;
-        renderTrackOptions(audioSelectEl, audioTracks, false);
-        renderTrackOptions(subtitleSelectEl, subtitleTracks, true);
+    get visible() {
+        return Boolean(this.els.wrap && !this.els.wrap.hidden);
     }
-    syncTrackSelection(audioSelectEl, audioTracks, false);
-    syncTrackSelection(subtitleSelectEl, subtitleTracks, true);
 
-    if (visibilityChanged) scheduleNativeResize();
-}
-
-function renderTrackOptions(
-    select: HTMLSelectElement | null,
-    tracks: NativeMediaTrack[],
-    includeOff: boolean,
-) {
-    if (!select) return;
-    const options: HTMLOptionElement[] = [];
-    if (includeOff) options.push(trackOption("no", "Off"));
-    tracks.forEach((track, index) => {
-        options.push(trackOption(String(track.id), nativeTrackLabel(track, index)));
-    });
-    select.replaceChildren(...options);
-}
-
-function trackOption(value: string, label: string) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    option.title = label;
-    return option;
-}
-
-function syncTrackSelection(
-    select: HTMLSelectElement | null,
-    tracks: NativeMediaTrack[],
-    includeOff: boolean,
-) {
-    if (!select) return;
-    const selected = tracks.find((track) => track.selected);
-    const fallback = tracks.find((track) => track.default) ?? tracks[0];
-    select.value = selected ? String(selected.id) : includeOff ? "no" : fallback ? String(fallback.id) : "";
-}
-
-function resetNativeTrackControls() {
-    const hadVisibleControls = Boolean(trackControlsEl && !trackControlsEl.hidden);
-    const needsReset = hadVisibleControls
-        || Boolean(audioControlEl && !audioControlEl.hidden)
-        || Boolean(subtitleControlEl && !subtitleControlEl.hidden)
-        || Boolean(audioSelectEl && (!audioSelectEl.disabled || audioSelectEl.options.length > 0))
-        || Boolean(subtitleSelectEl && (!subtitleSelectEl.disabled || subtitleSelectEl.options.length > 0))
-        || lastTrackSignature !== "";
-    if (!needsReset) return;
-    lastTrackSignature = "";
-    trackControlsEl?.setAttribute("hidden", "");
-    audioControlEl?.setAttribute("hidden", "");
-    subtitleControlEl?.setAttribute("hidden", "");
-    if (audioSelectEl) {
-        audioSelectEl.disabled = true;
-        audioSelectEl.replaceChildren();
+    // update returns whether the pill appeared or disappeared.
+    update(tracks: NativeMediaTrack[], show: boolean): boolean {
+        const wasVisible = this.visible;
+        this.tracks = show ? tracks : [];
+        if (this.els.wrap) this.els.wrap.hidden = !show;
+        if (!show) {
+            this.close();
+            this.renderedSignature = "";
+            this.els.menu?.replaceChildren();
+            return wasVisible;
+        }
+        const signature = JSON.stringify(this.tracks.map((track) => [track.id, track.title, track.language, track.codec]));
+        if (signature !== this.renderedSignature) {
+            this.renderedSignature = signature;
+            this.render();
+        }
+        this.syncSelection();
+        return !wasVisible;
     }
-    if (subtitleSelectEl) {
-        subtitleSelectEl.disabled = true;
-        subtitleSelectEl.replaceChildren();
+
+    isOpen() {
+        return Boolean(this.els.menu?.classList.contains("is-open"));
     }
-    if (hadVisibleControls) scheduleNativeResize();
-}
 
-function selectedTrackID(select: HTMLSelectElement | null, type: NativeMediaTrack["type"]): number | null {
-    if (!select) return null;
-    const id = Number(select.value);
-    if (!Number.isSafeInteger(id) || id <= 0) return null;
-    return currentState.tracks.some((track) => track.type === type && track.id === id) ? id : null;
-}
+    setOpen(open: boolean) {
+        if (open && isNativeFallbackActive()) open = false;
+        if (open) closeMenus(this);
+        this.els.button?.setAttribute("aria-expanded", open ? "true" : "false");
+        this.els.menu?.classList.toggle("is-open", open);
+        if (open) {
+            clearChromeTimer();
+            requestAnimationFrame(() => this.selectedItem()?.focus({ preventScroll: true }));
+        } else if (isOpen() && !currentState.paused && !hasError) {
+            scheduleChromeHide();
+        }
+    }
 
-function selectAudioTrack() {
-    if (!(activeAdapter instanceof NativeMpvAdapter)) return;
-    const id = selectedTrackID(audioSelectEl, "audio");
-    if (id === null) return;
-    activeAdapter.setAudioTrack(id);
-    revealChrome();
-}
+    close(restoreFocus = false) {
+        if (!this.isOpen()) return;
+        this.setOpen(false);
+        if (restoreFocus) this.els.button?.focus({ preventScroll: true });
+    }
 
-function selectSubtitleTrack() {
-    if (!(activeAdapter instanceof NativeMpvAdapter) || !subtitleSelectEl) return;
-    if (subtitleSelectEl.value === "no") {
-        activeAdapter.setSubtitleTrack(null);
+    contains(target: Node | null) {
+        return Boolean(target && (this.els.menu?.contains(target) || this.els.button?.contains(target)));
+    }
+
+    // toggle switches an optional track (subtitles) between off and its default.
+    toggle() {
+        if (!this.visible || this.offLabel === null) return;
+        const selected = this.tracks.find((track) => track.selected);
+        this.select(selected ? null : this.defaultTrack()?.id ?? null);
+    }
+
+    private defaultTrack() {
+        return this.tracks.find((track) => track.default) ?? this.tracks[0];
+    }
+
+    private currentTrack() {
+        return this.tracks.find((track) => track.selected) ?? (this.offLabel === null ? this.defaultTrack() : undefined);
+    }
+
+    private select(id: number | null) {
+        if (!(activeAdapter instanceof NativeMpvAdapter)) return;
+        if (id !== null && !this.tracks.some((track) => track.id === id)) return;
+        this.apply(activeAdapter, id);
+        // Reflect the choice immediately; mpv confirms it on the next state event.
+        this.tracks = this.tracks.map((track) => ({ ...track, selected: track.id === id }));
+        this.syncSelection();
         revealChrome();
-        return;
     }
-    const id = selectedTrackID(subtitleSelectEl, "subtitle");
-    if (id === null) return;
-    activeAdapter.setSubtitleTrack(id);
-    revealChrome();
+
+    private cycle() {
+        const ids: Array<number | null> = this.tracks.map((track) => track.id);
+        if (this.offLabel !== null) ids.unshift(null);
+        if (ids.length === 0) return;
+        const current = this.currentTrack()?.id ?? null;
+        this.select(ids[(ids.indexOf(current) + 1) % ids.length]);
+    }
+
+    private items() {
+        return Array.from(this.els.menu?.querySelectorAll<HTMLButtonElement>("[data-track]") || []);
+    }
+
+    private selectedItem() {
+        return this.items().find((item) => item.classList.contains("is-selected")) || this.items()[0] || null;
+    }
+
+    private render() {
+        if (!this.els.menu) return;
+        const items = this.tracks.map((track, index) => menuItemMarkup(`data-track="${track.id}"`, nativeTrackLabel(track, index)));
+        if (this.offLabel !== null) items.unshift(menuItemMarkup('data-track="no"', this.offLabel));
+        this.els.menu.innerHTML = `<div class="video-menu-title" role="none">${this.title}</div>${items.join("")}`;
+    }
+
+    private syncSelection() {
+        const current = this.currentTrack();
+        const key = current ? String(current.id) : "no";
+        for (const item of this.items()) {
+            const on = item.dataset.track === key;
+            item.classList.toggle("is-selected", on);
+            item.setAttribute("aria-checked", on ? "true" : "false");
+        }
+        const index = current ? this.tracks.indexOf(current) : -1;
+        const short = current ? shortNativeTrackLabel(current, index) : this.offLabel ?? "";
+        const full = current ? nativeTrackLabel(current, index) : this.offLabel ?? "";
+        if (this.els.label) this.els.label.textContent = short;
+        if (this.els.button) {
+            this.els.button.dataset.state = current ? "on" : "off";
+            this.els.button.title = `${this.title}: ${full}${isNativeFallbackActive() ? " (click to cycle)" : ""}`;
+            this.els.button.setAttribute("aria-label", this.els.button.title);
+        }
+    }
+}
+
+function trackPickers() {
+    return [audioPicker, subtitlePicker].filter((picker): picker is TrackPicker => picker !== null);
+}
+
+function isAnyMenuOpen() {
+    return isSpeedMenuOpen() || trackPickers().some((picker) => picker.isOpen());
+}
+
+// closeMenus closes every popover except the one about to open.
+function closeMenus(except: TrackPicker | "speed" | null = null) {
+    if (except !== "speed") closeSpeedMenu();
+    for (const picker of trackPickers()) {
+        if (picker !== except) picker.close();
+    }
+}
+
+// closeOpenMenu closes whichever popover is open, returning whether one was.
+function closeOpenMenu() {
+    if (!isAnyMenuOpen()) return false;
+    closeSpeedMenu(true);
+    for (const picker of trackPickers()) picker.close(true);
+    return true;
+}
+
+function menuItemMarkup(attributes: string, label: string) {
+    return `<button type="button" role="menuitemradio" ${attributes} aria-checked="false"><span class="video-menu-check" aria-hidden="true">✓</span><span>${escapeHTML(label)}</span></button>`;
+}
+
+function escapeHTML(value: string) {
+    return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+}
+
+function handleMenuKeydown(event: KeyboardEvent, buttons: HTMLButtonElement[], close: () => void) {
+    const current = Math.max(0, buttons.indexOf(document.activeElement as HTMLButtonElement));
+    const focusAt = (index: number) => buttons[(index + buttons.length) % buttons.length]?.focus({ preventScroll: true });
+    switch (event.key) {
+        case "Escape":
+            close();
+            break;
+        case "ArrowDown":
+        case "ArrowRight":
+            focusAt(current + 1);
+            break;
+        case "ArrowUp":
+        case "ArrowLeft":
+            focusAt(current - 1);
+            break;
+        case "Home":
+            focusAt(0);
+            break;
+        case "End":
+            focusAt(buttons.length - 1);
+            break;
+        case "Enter":
+        case " ":
+            (document.activeElement as HTMLButtonElement | null)?.click();
+            break;
+        default:
+            return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
 }
 
 function nextPlaybackRate(currentRate: number) {
@@ -1445,7 +1559,7 @@ function applyState(state: PlayerState) {
     syncTimeline(state);
     syncVolume(state);
     syncSpeed(state);
-    syncNativeTrackControls(state.tracks);
+    syncNativeTracks(state.tracks);
     syncTransportAvailability(state);
     syncCenterPlay(state);
     setLoading(state.loading);
@@ -2165,9 +2279,14 @@ async function openNativePlayback(
         if (!isCurrent()) return;
         console.error(existing ? "AttachNativeMedia failed:" : "OpenNativeMedia failed:", err);
         setNativeLayout("none");
-        setError(errorMessage(err, existing
-            ? "This video could not be opened by the compatible player."
-            : "Could not open this video."));
+        // A closed loopback session also surfaces as an HTML media error, so the
+        // handoff can race a dead token; report that as the interruption it is.
+        const sessionLost = Boolean(existing) && /session not found/i.test(errorMessage(err, ""));
+        setError(sessionLost
+            ? "The video stream was interrupted. Check your connection and try again."
+            : errorMessage(err, existing
+                ? "This video could not be opened by the compatible player."
+                : "Could not open this video."));
     }
 }
 
@@ -2442,6 +2561,7 @@ function selectedSpeedButton() {
 
 function setSpeedMenuOpen(open: boolean) {
     if (open && isNativeFallbackActive()) open = false;
+    if (open) closeMenus("speed");
     speedBtnEl?.setAttribute("aria-expanded", open ? "true" : "false");
     speedMenuEl?.classList.toggle("is-open", open);
     if (open) {
@@ -2456,14 +2576,6 @@ function closeSpeedMenu(restoreFocus = false) {
     if (!isSpeedMenuOpen()) return;
     setSpeedMenuOpen(false);
     if (restoreFocus) speedBtnEl?.focus({ preventScroll: true });
-}
-
-function moveSpeedMenuFocus(delta: number) {
-    const buttons = speedMenuButtons();
-    if (buttons.length === 0) return;
-    const active = document.activeElement as HTMLButtonElement | null;
-    const current = Math.max(0, buttons.indexOf(active as HTMLButtonElement));
-    buttons[(current + delta + buttons.length) % buttons.length].focus({ preventScroll: true });
 }
 
 function bindSpeedMenu() {
@@ -2508,38 +2620,16 @@ function bindSpeedMenu() {
             }
             return;
         }
-        if (event.key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            closeSpeedMenu(true);
-        } else if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-            event.preventDefault();
-            event.stopPropagation();
-            moveSpeedMenuFocus(1);
-        } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-            event.preventDefault();
-            event.stopPropagation();
-            moveSpeedMenuFocus(-1);
-        } else if (event.key === "Home") {
-            event.preventDefault();
-            event.stopPropagation();
-            speedMenuButtons()[0]?.focus({ preventScroll: true });
-        } else if (event.key === "End") {
-            event.preventDefault();
-            event.stopPropagation();
-            const buttons = speedMenuButtons();
-            buttons[buttons.length - 1]?.focus({ preventScroll: true });
-        } else if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            event.stopPropagation();
-            (document.activeElement as HTMLButtonElement | null)?.click();
-        }
+        handleMenuKeydown(event, speedMenuButtons(), () => closeSpeedMenu(true));
     });
     document.addEventListener("click", (event) => {
-        if (!isSpeedMenuOpen()) return;
         const target = event.target as Node | null;
-        if (target && (speedMenuEl?.contains(target) || speedBtnEl?.contains(target))) return;
-        closeSpeedMenu();
+        if (isSpeedMenuOpen() && !(target && (speedMenuEl?.contains(target) || speedBtnEl?.contains(target)))) {
+            closeSpeedMenu();
+        }
+        for (const picker of trackPickers()) {
+            if (picker.isOpen() && !picker.contains(target)) picker.close();
+        }
     });
 }
 
@@ -2595,6 +2685,9 @@ function handleVideoShortcut(event: KeyboardEvent) {
     } else if (key === "f") {
         event.preventDefault();
         void toggleFullscreen();
+    } else if (key === "c") {
+        event.preventDefault();
+        subtitlePicker?.toggle();
     }
 }
 
@@ -2634,8 +2727,6 @@ function bindControls() {
     skipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
     skipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
     playBtnEl?.addEventListener("click", togglePlayback);
-    audioSelectEl?.addEventListener("change", selectAudioTrack);
-    subtitleSelectEl?.addEventListener("change", selectSubtitleTrack);
     fullscreenBtnEl?.addEventListener("click", () => void toggleFullscreen());
     bindScrubber();
     bindVolume();
@@ -2653,7 +2744,7 @@ function renderSpeedOptions() {
 }
 
 function speedOptionMarkup(rate: number) {
-    return `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}"><span class="video-speed-check" aria-hidden="true">✓</span><span>${formatRate(rate)}x</span></button>`;
+    return `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}"><span class="video-menu-check" aria-hidden="true">✓</span><span>${formatRate(rate)}x</span></button>`;
 }
 
 function customSpeedMarkup() {
@@ -2705,11 +2796,20 @@ export function setupVideoModal() {
     durationEl = byID("video-duration");
     speedBtnEl = byID("video-speed-button");
     speedMenuEl = byID("video-speed-menu");
-    trackControlsEl = byID("video-track-controls");
-    audioControlEl = byID("video-audio-control");
-    audioSelectEl = byID("video-audio-select");
-    subtitleControlEl = byID("video-subtitle-control");
-    subtitleSelectEl = byID("video-subtitle-select");
+    audioPicker = new TrackPicker("Audio", null, (adapter, id) => {
+        if (id !== null) adapter.setAudioTrack(id);
+    }, {
+        wrap: byID("video-audio-wrap"),
+        button: byID("video-audio-button"),
+        label: byID("video-audio-label"),
+        menu: byID("video-audio-menu"),
+    });
+    subtitlePicker = new TrackPicker("Subtitles", "Off", (adapter, id) => adapter.setSubtitleTrack(id), {
+        wrap: byID("video-subtitle-wrap"),
+        button: byID("video-subtitle-button"),
+        label: byID("video-subtitle-label"),
+        menu: byID("video-subtitle-menu"),
+    });
 
     if (!modalEl || !videoEl || !stageEl) {
         console.error("Video modal setup failed. Missing #video-modal, #video-stage, or #video-player.");
@@ -2718,10 +2818,7 @@ export function setupVideoModal() {
     videoSetupComplete = true;
     a11y = installModalA11y(modalEl, {
         requestClose: () => {
-            if (isSpeedMenuOpen()) {
-                closeSpeedMenu(true);
-                return;
-            }
+            if (closeOpenMenu()) return;
             void closeVideoModal();
         },
         initialFocus: () => playBtnEl || closeBtnEl,
