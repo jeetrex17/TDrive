@@ -113,11 +113,14 @@ jobs:
         if: runner.os == 'Windows'
         run: go test -count=1 ./backend/nativeplayer
 
-      - name: Run daemon and mount tests
-        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater
+      # Runs on Linux, Windows, and macOS (matrix) so folder download and
+      # its tests execute natively on each OS instead of only
+      # cross-compiling. Keep in sync with release.yml.
+      - name: Run daemon, mount, and folder-download tests
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Vet platform-specific daemon and CLI code
-        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater
+        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Build CLI
         if: runner.os != 'Windows'

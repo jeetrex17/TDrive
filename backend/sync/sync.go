@@ -162,6 +162,18 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 }
 
 func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
+	// A drive flagged for rebuild cannot be moved forward from its watermark:
+	// the ops below it were never read, and the ones above were applied against
+	// objects that did not exist. It needs the full scan, which owns the repair.
+	channel, err := projection.GetChannel(e.db, channelID)
+	if err != nil {
+		return fmt.Errorf("sync: read channel authority: %w", err)
+	}
+	if channel.NeedsProjectionRebuild {
+		slog.Info("sync: rebuild pending, escalating to a full history scan", "channel_id", channelID)
+		return e.authoritativeLocked(ctx, channelID)
+	}
+
 	peer, err := e.peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		return fmt.Errorf("sync: resolve peer: %w", err)
@@ -267,18 +279,30 @@ func (e *Engine) EnsureAuthoritative(ctx context.Context, channelID int64) error
 	lk := e.lockFor(channelID)
 	lk.Lock()
 	defer lk.Unlock()
-	start := time.Now()
 
 	channel, err := projection.GetChannel(e.db, channelID)
 	if err != nil {
 		return fmt.Errorf("sync: read channel authority: %w", err)
 	}
-	if channel.InitialSyncDone {
+	// A pending rebuild means the log is known to be missing history, so the
+	// incremental path would refresh from a watermark that was never earned.
+	if channel.InitialSyncDone && !channel.NeedsProjectionRebuild {
 		slog.Debug("sync: channel already authoritative, running incremental refresh", "channel_id", channelID)
 		return e.incrementalLocked(ctx, channelID)
 	}
+	return e.authoritativeLocked(ctx, channelID)
+}
+
+// authoritativeLocked runs the full-history scan. The caller must already hold
+// the channel lock.
+func (e *Engine) authoritativeLocked(ctx context.Context, channelID int64) error {
+	start := time.Now()
 	slog.Info("sync: establishing authoritative full history scan", "channel_id", channelID)
 
+	channel, err := projection.GetChannel(e.db, channelID)
+	if err != nil {
+		return fmt.Errorf("sync: read channel authority: %w", err)
+	}
 	parseOpts, err := parseOptionsForChannel(e.db, channelID)
 	if err != nil {
 		return err
@@ -310,7 +334,7 @@ func (e *Engine) EnsureAuthoritative(ctx context.Context, channelID int64) error
 		slog.Info("sync: authoritative scan found no history", "channel_id", channelID, "elapsed", time.Since(start))
 		return markInitialSyncDone(e.db, channelID, 0)
 	}
-	err = e.applyInitialHistoryPlan(ctx, channelID, peer, 0, plan, parseOpts)
+	err = e.applyInitialHistoryPlan(ctx, channelID, peer, 0, plan, parseOpts, channel.NeedsProjectionRebuild)
 	if err != nil {
 		slog.Error("sync: authoritative scan failed", "channel_id", channelID, "elapsed", time.Since(start), "error", err)
 		return err
@@ -356,7 +380,7 @@ func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) e
 		slog.Info("sync: initial sync found no history", "channel_id", channelID, "elapsed", time.Since(start))
 		return markInitialSyncDone(e.db, channelID, watermark)
 	}
-	err = e.applyInitialHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
+	err = e.applyInitialHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts, false)
 	if err != nil {
 		slog.Error("sync: initial sync failed", "channel_id", channelID, "elapsed", time.Since(start), "error", err)
 		return err
@@ -395,9 +419,12 @@ func (e *Engine) planHistory(ctx context.Context, channelID int64, peer tgclient
 			PagesDone:    len(lowestPerPage),
 			MessagesDone: messages,
 		})
-		if len(page) < defaultPageSize {
-			break
-		}
+		// Only an empty page proves the channel is exhausted. A short page
+		// does not: Telegram returns fewer than the limit whenever the window
+		// it scanned is thinned by deletions or service events. Stopping on
+		// one silently truncated the scan, and because the caller then marks
+		// the channel authoritative at the highest id seen, every later pass
+		// starts above the history that was skipped and can never reach it.
 		if offsetID != 0 && lowestInPage >= offsetID {
 			return historyPlan{}, errHistoryPaginationNoProgress
 		}
@@ -480,7 +507,7 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 	return nil
 }
 
-func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions) error {
+func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions, rebuild bool) error {
 	tx, err := e.db.Begin()
 	if err != nil {
 		return fmt.Errorf("sync: begin initial projection: %w", err)
@@ -516,6 +543,18 @@ func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, p
 		e.applyProgress(channelID, plan, i, messagesDone)
 	}
 
+	// The scan has now read everything the log was missing, but the ops that
+	// depended on those objects were banked as applied the first time round and
+	// were skipped again just now. Replaying the completed log from scratch is
+	// what actually lands them, and doing it here keeps repair and scan atomic.
+	if rebuild {
+		applied, rejected, err := projection.RebuildProjectionTx(tx, channelID)
+		if err != nil {
+			return fmt.Errorf("sync: rebuild projection after full scan: %w", err)
+		}
+		slog.Info("sync: rebuilt projection from the completed log", "channel_id", channelID,
+			"applied", applied, "rejected", rejected)
+	}
 	if err := markInitialSyncDoneTx(tx, channelID, plan.highestSeen); err != nil {
 		return err
 	}

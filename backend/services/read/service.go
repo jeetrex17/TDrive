@@ -245,14 +245,14 @@ func (s *Service) FolderSize(channelID int64, folderID string) (int64, error) {
 	return projection.FolderSize(s.DB, channelID, folderID)
 }
 
-func (s *Service) ChildFolderSizes(channelID int64, parentID string) (map[string]int64, error) {
+func (s *Service) ChildFolderStats(channelID int64, parentID string) ([]projection.FolderStats, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
 	if channelID == 0 {
-		return map[string]int64{}, nil
+		return []projection.FolderStats{}, nil
 	}
-	return projection.ChildFolderSizes(s.DB, channelID, parentID)
+	return projection.ChildFolderStats(s.DB, channelID, parentID)
 }
 
 func (s *Service) TelegramRootFiles(ctx context.Context, channelID int64) ([]TelegramFile, error) {

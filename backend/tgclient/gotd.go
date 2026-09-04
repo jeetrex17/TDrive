@@ -333,6 +333,21 @@ func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 	return result, err
 }
 
+// placeholderMessage reports the id of a history entry that carries no
+// projectable payload: a service event, or the stub Telegram substitutes for a
+// deleted message. Only the id is meaningful, and it is what lets a caller keep
+// paging backwards past a stretch of them.
+func placeholderMessage(msg tg.MessageClass) (msgID int64, date int64, ok bool) {
+	switch m := msg.(type) {
+	case *tg.MessageService:
+		return int64(m.ID), int64(m.Date), true
+	case *tg.MessageEmpty:
+		return int64(m.ID), 0, true
+	default:
+		return 0, 0, false
+	}
+}
+
 func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error) {
 	if limit <= 0 {
 		limit = 100
@@ -363,6 +378,17 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 		for _, msg := range messages {
 			fullMsg, ok := msg.(*tg.Message)
 			if !ok {
+				// Service messages and the placeholders left behind by
+				// deletions hold nothing to project, but they still consume
+				// message ids. Report them so callers paginating on page size
+				// can tell a page thinned by deletions from the end of the
+				// channel, and so backwards paging can step over a run of them.
+				// A non-positive id cannot be paged from, so reporting one
+				// would let a caller reset its cursor and walk the same pages
+				// forever. Those are dropped as before.
+				if id, date, ok := placeholderMessage(msg); ok && id > 0 {
+					out = append(out, HistoryMessage{MsgID: id, Date: date, Placeholder: true})
+				}
 				continue
 			}
 			text := strings.TrimRight(fullMsg.Message, "\r\n")

@@ -27,6 +27,12 @@ type BaseInteractiveRow = {
 
 export type FolderListRow = BaseInteractiveRow & {
     kind: 'folder';
+    // Subtree stats, 0 until the async lookup resolves (or when it fails);
+    // sizeLabel/metaLabel are their display forms. modifiedTime is the latest
+    // file upload in the subtree — the closest available stand-in for a true
+    // modification time until dirents carry one.
+    size: number;
+    modifiedTime: number;
     actions: FileListAction[];
 };
 

@@ -573,10 +573,22 @@ WHERE files.channel_id = ? AND files.tombstoned = 0;
 	return total, err
 }
 
-// ChildFolderSizes returns the recursive byte size for every direct child
-// folder under parentID. It performs one subtree walk for the visible folder
-// set instead of one recursive CTE per row in the UI.
-func ChildFolderSizes(db *sql.DB, channelID int64, parentID string) (map[string]int64, error) {
+// FolderStats summarizes one folder subtree: the total bytes of its live files
+// and the most recent upload time among them (0 when the subtree has no
+// files). LatestUpload stands in for a modification time until dirents carry
+// one, so renames and moves do not affect it.
+type FolderStats struct {
+	ID           string `json:"id"`
+	Bytes        int64  `json:"bytes"`
+	LatestUpload int64  `json:"latestUpload"`
+}
+
+// ChildFolderStats returns FolderStats for every direct child folder under
+// parentID, ordered by folder ID. It performs one subtree walk for the visible
+// folder set instead of one recursive CTE per row in the UI. It returns a
+// slice rather than a map because the Wails binding generator only emits a
+// TypeScript model for structs it sees in slice or direct return positions.
+func ChildFolderStats(db *sql.DB, channelID int64, parentID string) ([]FolderStats, error) {
 	const q = `
 WITH RECURSIVE
 child_roots(id) AS (
@@ -595,13 +607,14 @@ descendants(root_id, id, path) AS (
       AND f.tombstoned = 0
       AND instr(d.path, ',' || f.id || ',') = 0
 )
-SELECT cr.id, COALESCE(SUM(files.size), 0)
+SELECT cr.id, COALESCE(SUM(files.size), 0), COALESCE(MAX(files.upload_time), 0)
 FROM child_roots cr
 LEFT JOIN descendants d ON d.root_id = cr.id
 LEFT JOIN files ON files.channel_id = ?
     AND files.parent_id = d.id
     AND files.tombstoned = 0
-GROUP BY cr.id;
+GROUP BY cr.id
+ORDER BY cr.id;
 `
 	rows, err := db.Query(q, channelID, parentID, channelID, channelID)
 	if err != nil {
@@ -609,14 +622,13 @@ GROUP BY cr.id;
 	}
 	defer rows.Close()
 
-	out := make(map[string]int64)
+	out := make([]FolderStats, 0, 16)
 	for rows.Next() {
-		var id string
-		var size int64
-		if err := rows.Scan(&id, &size); err != nil {
+		var stats FolderStats
+		if err := rows.Scan(&stats.ID, &stats.Bytes, &stats.LatestUpload); err != nil {
 			return nil, err
 		}
-		out[id] = size
+		out = append(out, stats)
 	}
 	return out, rows.Err()
 }

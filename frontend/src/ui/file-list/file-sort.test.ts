@@ -28,7 +28,7 @@ function file(overrides: Partial<FileListFileRow>): FileListFileRow {
     };
 }
 
-function folder(id: string, name: string): FolderListRow {
+function folder(id: string, name: string, size = 0, modifiedTime = 0): FolderListRow {
     return {
         kind: 'folder',
         key: `folder:${id}`,
@@ -38,6 +38,8 @@ function folder(id: string, name: string): FolderListRow {
         parentId: '',
         metaLabel: '—',
         sizeLabel: '…',
+        size,
+        modifiedTime,
         ariaLabel: `Folder: ${name}`,
         actions: [],
     };
@@ -91,6 +93,47 @@ describe('file list sorting', () => {
         ], { key: 'size', direction: 'desc' });
 
         expect(rows.map((row) => row.key)).toEqual(['file:c', 'file:a', 'file:b']);
+    });
+
+    it('sorts folders by size in either direction with name tie-breaks', () => {
+        const rows = [
+            folder('small', 'Small', 10),
+            folder('big', 'Big', 90),
+            folder('mid-b', 'Beta', 50),
+            folder('mid-a', 'Alpha', 50),
+            file({ id: 'f', name: 'file.mp4', size: 1, uploadTime: 1 }),
+        ];
+        const keys = (state: FileSortState) => sortFileListRows(rows, state).map((row) => row.key);
+
+        expect(keys({ key: 'size', direction: 'desc' })).toEqual([
+            'folder:big',
+            'folder:mid-a',
+            'folder:mid-b',
+            'folder:small',
+            'file:f',
+        ]);
+        expect(keys({ key: 'size', direction: 'asc' })).toEqual([
+            'folder:small',
+            'folder:mid-a',
+            'folder:mid-b',
+            'folder:big',
+            'file:f',
+        ]);
+    });
+
+    it('sorts folders by latest upload under the date column in either direction', () => {
+        // Names run opposite to dates so a date sort that fell back to name
+        // would reorder these; a folder with no uploads sorts as oldest.
+        const rows = [
+            folder('old', 'Zed', 0, 100),
+            folder('new', 'Alpha', 0, 300),
+            folder('none', 'Mid', 0, 0),
+        ];
+        const keys = (state: FileSortState) => sortFileListRows(rows, state).map((row) => row.key);
+
+        expect(keys({ key: 'date', direction: 'desc' })).toEqual(['folder:new', 'folder:old', 'folder:none']);
+        expect(keys({ key: 'date', direction: 'asc' })).toEqual(['folder:none', 'folder:old', 'folder:new']);
+        expect(keys({ key: 'name', direction: 'desc' })).toEqual(['folder:old', 'folder:none', 'folder:new']);
     });
 
     it('toggles an active column and applies sensible defaults for new columns', () => {

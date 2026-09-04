@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 8
+const currentSchemaVersion = 9
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -28,7 +28,8 @@ func EnsureSchema(db *sql.DB) error {
 			last_viewed_msg        INTEGER NOT NULL DEFAULT 0,
 			has_unseen_content     INTEGER NOT NULL DEFAULT 0,
 			initial_sync_done      INTEGER NOT NULL DEFAULT 0,
-			personal_backfill_done INTEGER NOT NULL DEFAULT 0
+			personal_backfill_done INTEGER NOT NULL DEFAULT 0,
+			needs_projection_rebuild INTEGER NOT NULL DEFAULT 0
 		);`,
 		`CREATE TABLE IF NOT EXISTS replay_log (
 			channel_id      INTEGER NOT NULL,
@@ -332,6 +333,15 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 	}
 	if v < 8 {
 		if err := migrateWritableProjection(tx); err != nil {
+			return err
+		}
+	}
+
+	if v < 9 {
+		if err := addChannelRebuildColumn(tx); err != nil {
+			return err
+		}
+		if err := flagTruncatedScansForRebuild(tx); err != nil {
 			return err
 		}
 	}
@@ -748,4 +758,71 @@ func tableColumnSet(tx *sql.Tx, name string) (map[string]struct{}, error) {
 		out[cname] = struct{}{}
 	}
 	return out, rows.Err()
+}
+
+// truncatedScanChannels selects channels whose projection shows the signature
+// of a history scan that ended early: an op that landed while the object it
+// depends on had not been read yet.
+//
+// Two shapes, because the two op generations fail differently. Legacy mkdir and
+// file ops do not validate their parent, so they leave a live row pointing at a
+// folder that has no record. Writable ops do validate, so they leave no row at
+// all and show up only as a rejected op. A tombstoned parent is deliberately
+// not matched: that is a real delete, not a truncated scan.
+const truncatedScanChannels = `
+	SELECT channel_id FROM folders f
+	WHERE f.tombstoned = 0 AND f.parent_id <> ''
+	  AND NOT EXISTS (
+	    SELECT 1 FROM folders p WHERE p.channel_id = f.channel_id AND p.id = f.parent_id
+	  )
+	UNION
+	SELECT channel_id FROM files f
+	WHERE f.tombstoned = 0 AND f.parent_id <> ''
+	  AND NOT EXISTS (
+	    SELECT 1 FROM folders p WHERE p.channel_id = f.channel_id AND p.id = f.parent_id
+	  )
+	UNION
+	SELECT channel_id FROM replay_log_rejects WHERE error LIKE '%' || ? || '%'`
+
+// flagTruncatedScansForRebuild marks drives left half-scanned by the history
+// pagination bug so the next sync re-reads the channel in full and replays the
+// result from scratch.
+//
+// Clearing the watermark alone is not enough. An op whose target had not been
+// read yet did not fail: applyRename, applyMove and applyRmdir all issue an
+// UPDATE that matches no rows and returns nil, so the op sits in replay_log
+// marked as applied and ProjectFromOpTx skips it forever after. Rejected
+// writable ops are skipped the same way, by op_id in projection_operations.
+// Re-reading the missing ancestors would therefore restore the objects but
+// none of the renames, moves or deletes that followed them.
+//
+// The rebuild flag is consumed inside the scan's own transaction, so the drive
+// is either fully repaired or left exactly as it was.
+func flagTruncatedScansForRebuild(tx *sql.Tx) error {
+	if _, err := tx.Exec(`
+		UPDATE channels
+		SET last_synced_msg = 0, initial_sync_done = 0, needs_projection_rebuild = 1
+		WHERE channel_id IN (`+truncatedScanChannels+`)`, ErrObjectNotFound.Error()); err != nil {
+		return fmt.Errorf("projection: flag truncated history scan: %w", err)
+	}
+	return nil
+}
+
+func addChannelRebuildColumn(tx *sql.Tx) error {
+	if !tableExists(tx, "channels") {
+		return nil
+	}
+	cols, err := tableColumnSet(tx, "channels")
+	if err != nil {
+		return err
+	}
+	if _, present := cols["needs_projection_rebuild"]; present {
+		return nil
+	}
+	if _, err := tx.Exec(
+		`ALTER TABLE channels ADD COLUMN needs_projection_rebuild INTEGER NOT NULL DEFAULT 0`,
+	); err != nil {
+		return fmt.Errorf("projection: add channels.needs_projection_rebuild: %w", err)
+	}
+	return nil
 }

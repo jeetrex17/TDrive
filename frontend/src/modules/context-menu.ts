@@ -6,7 +6,7 @@ import { openDeleteModal } from './modals/delete';
 import { openRenameModal } from './modals/rename';
 import { openMoveModal } from './modals/move';
 import { navigateToFolder } from './navigation';
-import { importFolderWithParentID, uploadWithParentID } from './transfers';
+import { enqueueFolderDownload, importFolderWithParentID, uploadWithParentID } from './transfers';
 import { isVideoFile } from './media-types';
 import { canOpenFileViewer, openFileViewer } from './modals/file-viewer';
 import ContextMenu from '../ui/menus/ContextMenu.svelte';
@@ -14,6 +14,21 @@ import { hideContextMenu, showContextMenu, type ContextMenuItem } from '../ui/me
 import { mountSvelte } from '../ui';
 
 let contextMenuMounted = false;
+
+export function buildFolderContextMenuItems(folderID: string, folderName: string): ContextMenuItem[] {
+    return [
+        { label: `Open "${folderName}"`, action: () => navigateToFolder(folderID, folderName) },
+        { label: `Download "${folderName}"`, action: () => enqueueFolderDownload(folderID, folderName) },
+        { label: "Upload files to this folder", action: () => uploadWithParentID(folderID) },
+        { label: "Upload folder to this folder", action: () => importFolderWithParentID(folderID) },
+        { label: "Rename…", action: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
+        { label: "Move to…", action: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
+        { label: `Delete "${folderName}"`, danger: true, action: () => window.initDeleteFolder(folderID, folderName) },
+        { type: "divider" },
+        { label: "New folder", action: () => window.openNewFolderModal() },
+        { label: "Refresh", action: () => window.triggerRefresh() },
+    ];
+}
 
 function mountContextMenu(menu: HTMLElement) {
     if (contextMenuMounted) return;
@@ -30,7 +45,7 @@ export function setupContextMenu() {
 
     list.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        const row = (e.target as HTMLElement).closest(".drive-row") as any;
+        const row = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
         const type = row?.dataset?.type || "background";
 
         if (row) ensureRowSelectedForContextMenu(row);
@@ -47,25 +62,17 @@ export function setupContextMenu() {
             return;
         }
 
-        if (type === "folder") {
-            const folderID = row.dataset.id;
+        if (type === "folder" && row) {
+            const folderID = row.dataset.id || "";
+            if (!folderID) return;
             const folderName = row.dataset.name || "Folder";
-            showContextMenu(e.clientX, e.clientY, [
-                { label: `Open "${folderName}"`, action: () => navigateToFolder(folderID, folderName) },
-                { label: "Upload files to this folder", action: () => uploadWithParentID(folderID) },
-                { label: "Upload folder to this folder", action: () => importFolderWithParentID(folderID) },
-                { label: "Rename…", action: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
-                { label: "Move to…", action: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
-                { label: `Delete "${folderName}"`, danger: true, action: () => window.initDeleteFolder(folderID, folderName) },
-                { type: "divider" },
-                { label: "New folder", action: () => window.openNewFolderModal() },
-                { label: "Refresh", action: () => window.triggerRefresh() },
-            ]);
+            showContextMenu(e.clientX, e.clientY, buildFolderContextMenuItems(folderID, folderName));
             return;
         }
 
-        if (type === "file") {
-            const fileID = parseInt(row.dataset.id, 10);
+        if (type === "file" && row) {
+            const fileID = parseInt(row.dataset.id || "", 10);
+            if (!Number.isFinite(fileID)) return;
             const fileName = row.dataset.name || "";
             const fileSize = Number(row.dataset.size || 0);
             const fileSource = row.dataset.source || "fs";

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { state } from '../state';
+import { idleTransferActivity, state } from '../state';
 
 const mocks = vi.hoisted(() => ({
     markTransferDone: vi.fn(),
@@ -47,7 +47,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     handlers.clear();
     state.activeChannel = { id: 1, title: 'Test drive', kind: 'shared' };
-    state.activeTransfer = null;
+    state.transferActivity = idleTransferActivity;
     state.cancelingUpload = false;
     state.importBatch = null;
     state.uploadBatch = null;
@@ -99,7 +99,7 @@ beforeEach(() => {
 
 afterEach(() => {
     state.activeChannel = null;
-    state.activeTransfer = null;
+    state.transferActivity = idleTransferActivity;
     state.cancelingUpload = false;
     state.importBatch = null;
     Reflect.deleteProperty(window, 'go');
