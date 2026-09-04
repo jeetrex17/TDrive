@@ -44,6 +44,7 @@ const VOLUME_STEP = 0.05;
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const MIN_PLAYBACK_RATE = 0.25;
 const MAX_PLAYBACK_RATE = 4;
+const MENU_GAP_PX = 10;
 const THUMBNAIL_BUCKET_SECONDS = 10;
 const THUMBNAIL_LONG_BUCKET_SECONDS = 20;
 const THUMBNAIL_VERY_LONG_BUCKET_SECONDS = 30;
@@ -1369,7 +1370,10 @@ class TrackPicker {
 
     setOpen(open: boolean) {
         if (open && isNativeFallbackActive()) open = false;
-        if (open) closeMenus(this);
+        if (open) {
+            closeMenus(this);
+            placeMenuAboveControls(this.els.menu, this.els.button);
+        }
         this.els.button?.setAttribute("aria-expanded", open ? "true" : "false");
         this.els.menu?.classList.toggle("is-open", open);
         if (open) {
@@ -1452,10 +1456,20 @@ class TrackPicker {
         if (this.els.label) this.els.label.textContent = short;
         if (this.els.button) {
             this.els.button.dataset.state = current ? "on" : "off";
-            this.els.button.title = `${this.title}: ${full}${isNativeFallbackActive() ? " (click to cycle)" : ""}`;
-            this.els.button.setAttribute("aria-label", this.els.button.title);
+            this.els.button.setAttribute("aria-label", `${this.title}: ${full}`);
+            // The full name lives in the menu; a long tooltip would sit on top
+            // of it. Only the cycling pill, which has no menu, spells it out.
+            this.els.button.title = isNativeFallbackActive() ? `${this.title}: ${full} (click to cycle)` : this.title;
         }
     }
+}
+
+// placeMenuAboveControls lifts a popover clear of the whole controls panel so
+// the scrubber and its hit area never sit under menu items.
+function placeMenuAboveControls(menu: HTMLElement | null, anchor: HTMLElement | null) {
+    if (!menu || !anchor || !controlsEl) return;
+    const lift = anchor.getBoundingClientRect().bottom - controlsEl.getBoundingClientRect().top;
+    menu.style.bottom = `${Math.max(0, lift) + MENU_GAP_PX}px`;
 }
 
 function trackPickers() {
@@ -2561,7 +2575,10 @@ function selectedSpeedButton() {
 
 function setSpeedMenuOpen(open: boolean) {
     if (open && isNativeFallbackActive()) open = false;
-    if (open) closeMenus("speed");
+    if (open) {
+        closeMenus("speed");
+        placeMenuAboveControls(speedMenuEl, speedBtnEl);
+    }
     speedBtnEl?.setAttribute("aria-expanded", open ? "true" : "false");
     speedMenuEl?.classList.toggle("is-open", open);
     if (open) {
