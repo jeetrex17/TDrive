@@ -138,11 +138,7 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 	}
 
 	var encryptionGeneration uint64
-	legacyGate := file.Encrypted && s.encGate != nil && s.encGeneration == nil
-	if legacyGate {
-		s.encGate.Lock()
-		defer s.encGate.Unlock()
-	} else if file.Encrypted && s.encGeneration != nil {
+	if file.Encrypted && s.encGeneration != nil {
 		encryptionGeneration = s.encGeneration()
 		if encryptionGeneration%2 != 0 {
 			return OpenResult{}, ErrKeyUnavailable

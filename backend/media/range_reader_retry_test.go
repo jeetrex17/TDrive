@@ -12,6 +12,15 @@ import (
 	"TDrive/backend/tgclient"
 )
 
+// testRetryPolicy is the production policy with deterministic backoff and an
+// injected sleep so tests observe retries without waiting.
+func testRetryPolicy(sleep func(context.Context, time.Duration) error) *tgclient.FloodWaitRetryPolicy {
+	policy := defaultRangeRetryPolicy()
+	policy.TransientJitter = 0
+	policy.Sleep = sleep
+	return &policy
+}
+
 func TestRangeReaderRetriesTransientTransportErrors(t *testing.T) {
 	data := testBytes(1024)
 	fake := newStrictRangeFake(data)
@@ -19,12 +28,11 @@ func TestRangeReaderRetriesTransientTransportErrors(t *testing.T) {
 
 	var sleeps int
 	reader := NewRangeReader(RangeReaderConfig{
-		Client:          fake,
-		TransientJitter: -1,
-		RetrySleep: func(ctx context.Context, wait time.Duration) error {
+		Client: fake,
+		Retry: testRetryPolicy(func(ctx context.Context, wait time.Duration) error {
 			sleeps++
 			return ctx.Err()
-		},
+		}),
 	})
 	defer reader.Close()
 
@@ -52,10 +60,10 @@ func TestRangeReaderDoesNotRetryNonTransientErrors(t *testing.T) {
 
 	reader := NewRangeReader(RangeReaderConfig{
 		Client: fake,
-		RetrySleep: func(context.Context, time.Duration) error {
+		Retry: testRetryPolicy(func(context.Context, time.Duration) error {
 			t.Fatal("unexpected sleep for non-transient error")
 			return nil
-		},
+		}),
 	})
 	defer reader.Close()
 
@@ -75,12 +83,11 @@ func TestRangeReaderRetriesTruncatedShortRead(t *testing.T) {
 
 	var sleeps int
 	reader := NewRangeReader(RangeReaderConfig{
-		Client:          fake,
-		TransientJitter: -1,
-		RetrySleep: func(ctx context.Context, wait time.Duration) error {
+		Client: fake,
+		Retry: testRetryPolicy(func(ctx context.Context, wait time.Duration) error {
 			sleeps++
 			return ctx.Err()
-		},
+		}),
 	})
 	defer reader.Close()
 
@@ -107,10 +114,10 @@ func TestRangeReaderAcceptsFullBufferReadWithEOF(t *testing.T) {
 
 	reader := NewRangeReader(RangeReaderConfig{
 		Client: fake,
-		RetrySleep: func(context.Context, time.Duration) error {
+		Retry: testRetryPolicy(func(context.Context, time.Duration) error {
 			t.Fatal("unexpected retry after full-buffer read")
 			return nil
-		},
+		}),
 	})
 	defer reader.Close()
 
@@ -135,13 +142,12 @@ func TestRangeReaderCancellationDuringTransientBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var sleeps int
 	reader := NewRangeReader(RangeReaderConfig{
-		Client:          fake,
-		TransientJitter: -1,
-		RetrySleep: func(context.Context, time.Duration) error {
+		Client: fake,
+		Retry: testRetryPolicy(func(context.Context, time.Duration) error {
 			sleeps++
 			cancel()
 			return ctx.Err()
-		},
+		}),
 	})
 	defer reader.Close()
 
@@ -164,14 +170,12 @@ func TestRangeReaderDoesNotRetryBeforeLongFloodWait(t *testing.T) {
 	fake.floodWait = time.Hour
 
 	var sleeps int
-	reader := NewRangeReader(RangeReaderConfig{
-		Client:            fake,
-		FloodWaitMaxSleep: time.Millisecond,
-		RetrySleep: func(context.Context, time.Duration) error {
-			sleeps++
-			return nil
-		},
+	policy := testRetryPolicy(func(context.Context, time.Duration) error {
+		sleeps++
+		return nil
 	})
+	policy.MaxWait = time.Millisecond
+	reader := NewRangeReader(RangeReaderConfig{Client: fake, Retry: policy})
 	defer reader.Close()
 
 	_, err := reader.ReadStoredAt(context.Background(), fake.ref(), make([]byte, 64), 0)
@@ -195,10 +199,9 @@ func TestRangeReaderReleasesConcurrencyBeforeTransientBackoff(t *testing.T) {
 	releaseSleep := make(chan struct{})
 	var sleepOnce sync.Once
 	reader := NewRangeReader(RangeReaderConfig{
-		Client:          fake,
-		MaxConcurrency:  1,
-		TransientJitter: -1,
-		RetrySleep: func(ctx context.Context, wait time.Duration) error {
+		Client:         fake,
+		MaxConcurrency: 1,
+		Retry: testRetryPolicy(func(ctx context.Context, wait time.Duration) error {
 			sleepOnce.Do(func() { close(firstSleeping) })
 			select {
 			case <-releaseSleep:
@@ -206,7 +209,7 @@ func TestRangeReaderReleasesConcurrencyBeforeTransientBackoff(t *testing.T) {
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-		},
+		}),
 	})
 	defer reader.Close()
 

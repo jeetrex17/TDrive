@@ -9,8 +9,6 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -25,9 +23,6 @@ const (
 	mediaSessionIdleTTL    = 2 * time.Hour
 	mediaSessionSweepEvery = 5 * time.Minute
 	mediaStreamChunkSize   = 256 * 1024
-	mediaAllowedOriginsEnv = "TDRIVE_MEDIA_ALLOWED_ORIGINS"
-	mediaWailsFrontendEnv  = "frontenddevserverurl"
-	mediaWailsDevServerEnv = "devserver"
 )
 
 var mediaStreamBufferPool = sync.Pool{
@@ -223,10 +218,7 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !applyMediaCORS(w, r, true) {
-		http.Error(w, "origin not allowed", http.StatusForbidden)
-		return
-	}
+	setMediaCORS(w.Header())
 	token := strings.TrimPrefix(path.Clean(r.URL.Path), prefix)
 	if token == "" || strings.Contains(token, "/") {
 		http.NotFound(w, r)
@@ -280,10 +272,7 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 }
 
 func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
-	if !applyMediaCORS(w, r, false) {
-		http.Error(w, "origin not allowed", http.StatusForbidden)
-		return
-	}
+	setMediaCORS(w.Header())
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -338,134 +327,13 @@ func setMediaNoStore(header http.Header) {
 	header.Set("Expires", "0")
 }
 
-func applyMediaCORS(w http.ResponseWriter, r *http.Request, exposeRangeHeaders bool) bool {
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Range")
-	if exposeRangeHeaders {
-		w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
-	}
-
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		return true
-	}
-	addVaryOrigin(w.Header())
-	if !isAllowedMediaOrigin(origin) {
-		return false
-	}
-	w.Header().Set("Access-Control-Allow-Origin", origin)
-	return true
-}
-
-func isAllowedMediaOrigin(origin string) bool {
-	if origin == "" {
-		return false
-	}
-	switch origin {
-	case "wails://wails", "http://wails.localhost":
-		return true
-	}
-	if frontendOrigin := loopbackHTTPOrigin(os.Getenv(mediaWailsFrontendEnv)); frontendOrigin != "" && origin == frontendOrigin {
-		return true
-	}
-	// Wails' internal dev server may proxy an external frontend or serve local
-	// assets itself. Validate its exact loopback address independently so both
-	// development modes work without allowing arbitrary localhost origins.
-	if isWailsDevProxyOrigin(origin, os.Getenv(mediaWailsDevServerEnv)) {
-		return true
-	}
-	for _, allowed := range strings.Split(os.Getenv(mediaAllowedOriginsEnv), ",") {
-		if strings.TrimSpace(allowed) == origin {
-			return true
-		}
-	}
-	return false
-}
-
-func loopbackHTTPOrigin(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	parsed, err := url.ParseRequestURI(raw)
-	if err != nil || parsed.Host == "" || parsed.User != nil {
-		return ""
-	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return ""
-	}
-
-	hostname, ok := canonicalLoopbackHostname(parsed.Hostname())
-	if !ok {
-		return ""
-	}
-
-	port := parsed.Port()
-	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
-		port = ""
-	}
-	host := hostname
-	if port != "" {
-		host = net.JoinHostPort(hostname, port)
-	} else if strings.Contains(hostname, ":") {
-		host = "[" + hostname + "]"
-	}
-	return scheme + "://" + host
-}
-
-func isWailsDevProxyOrigin(origin, rawAddress string) bool {
-	host, port, err := net.SplitHostPort(strings.TrimSpace(rawAddress))
-	if err != nil {
-		return false
-	}
-	host, ok := canonicalLoopbackHostname(host)
-	if !ok {
-		return false
-	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return false
-	}
-	port = strconv.Itoa(portNumber)
-
-	// Wails v2.11 uses the first origin in browser mode, the second on Windows,
-	// and the custom-scheme origin on macOS and Linux.
-	return origin == canonicalHTTPOrigin(host, port) ||
-		origin == canonicalHTTPOrigin("wails.localhost", port) ||
-		origin == "wails://"+net.JoinHostPort("wails.localhost", port)
-}
-
-func canonicalLoopbackHostname(raw string) (string, bool) {
-	hostname := strings.ToLower(strings.TrimSpace(raw))
-	if hostname == "localhost" {
-		return hostname, true
-	}
-	ip := net.ParseIP(hostname)
-	if ip == nil || !ip.IsLoopback() {
-		return "", false
-	}
-	return ip.String(), true
-}
-
-func canonicalHTTPOrigin(host, port string) string {
-	if port == "80" {
-		if strings.Contains(host, ":") {
-			return "http://[" + host + "]"
-		}
-		return "http://" + host
-	}
-	return "http://" + net.JoinHostPort(host, port)
-}
-
-func addVaryOrigin(header http.Header) {
-	const varyOrigin = "Origin"
-	for _, part := range strings.Split(header.Get("Vary"), ",") {
-		if strings.EqualFold(strings.TrimSpace(part), varyOrigin) {
-			return
-		}
-	}
-	header.Add("Vary", varyOrigin)
+// setMediaCORS allows any origin: the server binds to loopback and every URL
+// carries a random per-session token, so the token is the access boundary.
+func setMediaCORS(header http.Header) {
+	header.Set("Access-Control-Allow-Origin", "*")
+	header.Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	header.Set("Access-Control-Allow-Headers", "Range")
+	header.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
 }
 
 func (s *Server) session(token string) *Session {
