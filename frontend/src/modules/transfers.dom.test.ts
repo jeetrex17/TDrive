@@ -31,7 +31,7 @@ vi.mock('./modals/encryption-password', () => ({ openEncryptionPasswordModal: vi
 vi.mock('../ui/chrome/UploadMenu.svelte', () => ({ default: {} }));
 vi.mock('../ui/mount', () => ({ mountSvelte: vi.fn() }));
 
-import { importFolderWithParentID, setupUploadProgress } from './transfers';
+import { importFolderWithParentID, setupFileDrop, setupUploadProgress } from './transfers';
 
 type RuntimeHandler = (...args: unknown[]) => void;
 
@@ -92,6 +92,7 @@ beforeEach(() => {
             EventsOn: vi.fn((name: string, handler: RuntimeHandler) => {
                 handlers.set(name, handler);
             }),
+            OnFileDrop: vi.fn(),
         },
     });
     setupUploadProgress();
@@ -178,5 +179,34 @@ describe('aggregate import completion', () => {
             title: 'Imported 999 files · 1 failed',
             body: expect.stringContaining('1 failed'),
         }));
+    });
+});
+
+describe('native file drop', () => {
+    it('accepts OS file drags at the page level and imports drops over the file list', async () => {
+        document.body.innerHTML = '<div id="file-list"></div><div id="sidebar"></div>';
+        const list = document.getElementById('file-list');
+        let underPointer: Element | null = list;
+        Object.defineProperty(document, 'elementFromPoint', {
+            configurable: true,
+            value: () => underPointer,
+        });
+        state.currentFolderId = 'folder-7';
+
+        setupFileDrop();
+
+        // Without this hook WebKit refuses the drag and WebView2 never reports paths.
+        expect(window.runtime.OnFileDrop).toHaveBeenCalledWith(expect.any(Function), true);
+
+        handlers.get('files_dropped')?.({ x: 40, y: 80, paths: ['/tmp/movie.mkv'] });
+        await vi.waitFor(() => expect(window.go.main.App.PlanImport).toHaveBeenCalledWith(['/tmp/movie.mkv'], false, false));
+
+        underPointer = document.getElementById('sidebar');
+        handlers.get('files_dropped')?.({ x: 5, y: 5, paths: ['/tmp/ignored.txt'] });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(window.go.main.App.PlanImport).toHaveBeenCalledTimes(1);
+
+        Reflect.deleteProperty(document, 'elementFromPoint');
+        state.currentFolderId = '';
     });
 });
