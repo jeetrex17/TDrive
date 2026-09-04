@@ -11,6 +11,7 @@ import { setupBreadcrumb } from './modules/navigation';
 import { setupContextMenu } from './modules/context-menu';
 import { setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } from './modules/auth';
 import { setupFileListWindowBindings, refreshFiles } from './modules/file-list';
+import { setupDropOverlay } from './modules/drop-overlay';
 import { setupGallery } from './modules/gallery';
 import { setupSearchBar, runGlobalSearch } from './modules/search';
 import { setupRefreshShortcut } from './modules/refresh-shortcut';
@@ -146,6 +147,7 @@ window.onload = async function() {
     setupUploadProgress();
     setupUploadMenu();
     setupFileDrop();
+    setupDropOverlay();
     setupSearchBar();
     setupRefreshShortcut();
     setupGallery();

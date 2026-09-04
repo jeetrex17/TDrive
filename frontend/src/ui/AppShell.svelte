@@ -1,6 +1,7 @@
 <script lang="ts">
     import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+    import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import ImagesIcon from '@lucide/svelte/icons/images';
     import Link2Icon from '@lucide/svelte/icons/link-2';
@@ -137,6 +138,14 @@
 
         <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos"></div>
     </main>
+</div>
+
+<div id="drop-overlay" class="drop-overlay" aria-hidden="true" hidden>
+    <div class="drop-overlay-card">
+        <CloudUploadIcon size={30} aria-hidden="true" />
+        <strong id="drop-overlay-title">Drop to add here</strong>
+        <span>Files and folders go into the open folder</span>
+    </div>
 </div>
 
 <div id="context-menu" class="context-menu"></div>
