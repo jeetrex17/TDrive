@@ -44,9 +44,9 @@ func (w *timedWriteCloser) closes() int {
 func TestWriteAndCloseWithTimerReturnsTimeoutWithoutDoubleClose(t *testing.T) {
 	var timer *manualCloseTimer
 	writer := &timedWriteCloser{}
-	writer.write = func(payload []byte) (int, error) {
+	writer.write = func([]byte) (int, error) {
 		timer.Fire()
-		return len(payload), nil
+		return 0, errors.New("write on closed pipe")
 	}
 	schedule := func(_ time.Duration, callback func()) stoppableTimer {
 		timer = &manualCloseTimer{callback: callback}
@@ -56,6 +56,26 @@ func TestWriteAndCloseWithTimerReturnsTimeoutWithoutDoubleClose(t *testing.T) {
 	err := writeAndCloseWithTimer(writer, []byte("command"), time.Second, schedule)
 	if !errors.Is(err, errIPCWriteTimeout) {
 		t.Fatalf("writeAndCloseWithTimer error = %v, want errIPCWriteTimeout", err)
+	}
+	if got := writer.closes(); got != 1 {
+		t.Fatalf("Close calls = %d, want 1", got)
+	}
+}
+
+func TestWriteAndCloseWithTimerKeepsSlowSuccessfulWrite(t *testing.T) {
+	var timer *manualCloseTimer
+	writer := &timedWriteCloser{}
+	writer.write = func(payload []byte) (int, error) {
+		timer.Fire()
+		return len(payload), nil
+	}
+	schedule := func(_ time.Duration, callback func()) stoppableTimer {
+		timer = &manualCloseTimer{callback: callback}
+		return timer
+	}
+
+	if err := writeAndCloseWithTimer(writer, []byte("command"), time.Second, schedule); err != nil {
+		t.Fatalf("completed write reported as failure: %v", err)
 	}
 	if got := writer.closes(); got != 1 {
 		t.Fatalf("Close calls = %d, want 1", got)

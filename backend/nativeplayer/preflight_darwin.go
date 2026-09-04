@@ -61,9 +61,6 @@ func findPreflightMPV() (string, error) {
 	if bundled, err := bundledMPVPath(); err == nil {
 		return bundled, nil
 	}
-	if !systemMPVLookupEnabled(os.Getenv(systemMPVLookupFlag)) {
-		return "", fmt.Errorf("native player: bundled mpv executable not found")
-	}
 	return exec.LookPath("mpv")
 }
 

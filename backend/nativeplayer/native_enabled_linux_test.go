@@ -4,18 +4,18 @@ package nativeplayer
 
 import "testing"
 
-func TestLinuxNativePlayerRequiresExplicitOptIn(t *testing.T) {
+func TestLinuxNativePlayerIsOnByDefault(t *testing.T) {
 	t.Setenv(linuxNativePlayerFlag, "")
 
-	if linuxNativePlayerEnabled() {
-		t.Fatalf("linuxNativePlayerEnabled() = true, want false by default")
+	if !linuxNativePlayerEnabled() {
+		t.Fatalf("linuxNativePlayerEnabled() = false, want true by default")
 	}
 }
 
-func TestLinuxNativePlayerCanBeEnabled(t *testing.T) {
-	t.Setenv(linuxNativePlayerFlag, "1")
+func TestLinuxNativePlayerCanBeDisabled(t *testing.T) {
+	t.Setenv(linuxNativePlayerFlag, "0")
 
-	if !linuxNativePlayerEnabled() {
-		t.Fatalf("linuxNativePlayerEnabled() = false, want true when %s=1", linuxNativePlayerFlag)
+	if linuxNativePlayerEnabled() {
+		t.Fatalf("linuxNativePlayerEnabled() = true, want false when %s=0", linuxNativePlayerFlag)
 	}
 }

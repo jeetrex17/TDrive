@@ -241,24 +241,20 @@ go build -o tdrive ./cmd/tdrive  # build the CLI
 
 You’ll need your own Telegram API credentials (see above) the first time you run it.
 
-### Native video preview status
+### Native video preview
 
-The all-format mpv preview path is experimental while its runtime provenance,
-signing, and physical playback matrix are being completed. It is intentionally
-opt-in on every OS; the regular webview video path remains the default.
+Formats the webview cannot decode (MKV, HEVC, …) play through a bundled mpv
+runtime: embedded libmpv on macOS, an mpv child window on Windows and
+Linux/X11, and a standalone mpv window on Linux/Wayland. It is on by default;
+set `TDRIVE_EXPERIMENTAL_MACOS_NATIVE_PLAYER=0` (or the `WINDOWS` / `LINUX`
+variant) to force the webview-only path. `TDRIVE_MPV_BIN` overrides the mpv
+binary; without a bundled runtime the app falls back to `mpv` from `PATH`.
 
-| Target | Native presentation | Development opt-in |
-| --- | --- | --- |
-| macOS 11+ arm64 | Embedded libmpv with a crash-only sidecar preflight | `TDRIVE_EXPERIMENTAL_MACOS_NATIVE_PLAYER=1` |
-| Windows amd64 | Isolated mpv child process/window | `TDRIVE_EXPERIMENTAL_WINDOWS_NATIVE_PLAYER=1` |
-| Linux amd64/X11 | Isolated mpv child process embedded through X11 | `TDRIVE_EXPERIMENTAL_LINUX_NATIVE_PLAYER=1` |
-| Linux amd64/Wayland | Isolated standalone mpv window | `TDRIVE_EXPERIMENTAL_LINUX_NATIVE_PLAYER=1` |
-
-Development builds first use `TDRIVE_MPV_BIN`, then a bundled runtime. Falling
-back to an arbitrary `mpv` from `PATH` requires the additional explicit opt-in
-`TDRIVE_ALLOW_SYSTEM_MPV=1`; release packages must use their checksum-pinned
-bundled runtime. macOS Intel, Linux ARM, signing/notarization, and real-device
-codec/container/HDR/subtitle coverage are not yet release-qualified.
+Release packaging prefers checksum-pinned runtime archives configured through
+the `TDRIVE_<MACOS|WINDOWS|LINUX>_MPV_RUNTIME_URL` / `_SHA256` repository
+variables and otherwise bundles the runner's package-manager mpv, marked as
+unpinned in the bundle manifest. macOS Intel, Linux ARM, and notarization are
+not covered yet.
 
 ## Where data is stored (local files)
 

@@ -1137,5 +1137,5 @@ func callFailed(name string, err error) error {
 }
 
 func windowsNativePlayerEnabled() bool {
-	return experimentalNativePlayerEnabled(os.Getenv(windowsNativePlayerFlag))
+	return nativePlayerEnabled(os.Getenv(windowsNativePlayerFlag))
 }

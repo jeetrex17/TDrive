@@ -77,7 +77,7 @@ func TestMPVThumbnailGeneratorHelperProcess(t *testing.T) {
 	os.Exit(42)
 }
 
-func TestFindMPVBinaryRequiresSystemLookupOptIn(t *testing.T) {
+func TestFindMPVBinaryFallsBackToSystemPath(t *testing.T) {
 	dir := t.TempDir()
 	exeName := "mpv"
 	if runtime.GOOS == "windows" {
@@ -88,17 +88,11 @@ func TestFindMPVBinaryRequiresSystemLookupOptIn(t *testing.T) {
 		t.Fatalf("write fake mpv: %v", err)
 	}
 	t.Setenv("TDRIVE_MPV_BIN", "")
-	t.Setenv("TDRIVE_ALLOW_SYSTEM_MPV", "")
 	t.Setenv("PATH", dir)
 
-	if path, err := findMPVBinary(); err == nil && path == fakeMPV {
-		t.Fatalf("findMPVBinary used system PATH without explicit opt-in: %s", path)
-	}
-
-	t.Setenv("TDRIVE_ALLOW_SYSTEM_MPV", "1")
 	path, err := findMPVBinary()
 	if err != nil {
-		t.Fatalf("findMPVBinary with opt-in: %v", err)
+		t.Fatalf("findMPVBinary: %v", err)
 	}
 	if path != fakeMPV {
 		t.Fatalf("findMPVBinary path = %q, want %q", path, fakeMPV)

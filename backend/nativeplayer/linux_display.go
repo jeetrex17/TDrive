@@ -10,38 +10,28 @@ const (
 	linuxDisplayWaylandStandalone linuxDisplayMode = "wayland-standalone"
 )
 
+// selectLinuxDisplayMode mirrors GTK's backend choice so mpv is embedded only
+// when the app window itself is X11. GDK_BACKEND is an ordered preference list;
+// without it GTK prefers Wayland when a compositor is reachable.
 func selectLinuxDisplayMode(gdkBackend, sessionType, waylandDisplay, display string) linuxDisplayMode {
-	backend := strings.ToLower(strings.TrimSpace(gdkBackend))
-	hasX11Fallback := false
-	if preferred, _, ok := strings.Cut(backend, ","); ok {
-		for _, candidate := range strings.Split(backend, ",")[1:] {
-			if strings.TrimSpace(candidate) == "x11" {
-				hasX11Fallback = true
-				break
+	hasWayland := strings.TrimSpace(waylandDisplay) != "" || strings.EqualFold(strings.TrimSpace(sessionType), "wayland")
+	hasX11 := strings.TrimSpace(display) != ""
+
+	order := []string{"wayland", "x11"}
+	if backend := strings.ToLower(strings.TrimSpace(gdkBackend)); backend != "" {
+		order = strings.Split(backend, ",")
+	}
+	for _, candidate := range order {
+		switch strings.TrimSpace(candidate) {
+		case "x11":
+			if hasX11 {
+				return linuxDisplayX11Embedded
+			}
+		case "wayland":
+			if hasWayland {
+				return linuxDisplayWaylandStandalone
 			}
 		}
-		backend = strings.TrimSpace(preferred)
-	}
-	switch backend {
-	case "x11":
-		if strings.TrimSpace(display) != "" {
-			return linuxDisplayX11Embedded
-		}
-		return linuxDisplayUnavailable
-	case "wayland":
-		if strings.TrimSpace(waylandDisplay) != "" || strings.EqualFold(strings.TrimSpace(sessionType), "wayland") {
-			return linuxDisplayWaylandStandalone
-		}
-		if hasX11Fallback && strings.TrimSpace(display) != "" {
-			return linuxDisplayX11Embedded
-		}
-		return linuxDisplayUnavailable
-	}
-	if strings.EqualFold(strings.TrimSpace(sessionType), "wayland") || strings.TrimSpace(waylandDisplay) != "" {
-		return linuxDisplayWaylandStandalone
-	}
-	if strings.TrimSpace(display) != "" {
-		return linuxDisplayX11Embedded
 	}
 	return linuxDisplayUnavailable
 }

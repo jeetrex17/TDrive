@@ -337,6 +337,7 @@ func TestLinuxDisplayModeSelection(t *testing.T) {
 		{name: "explicit wayland without compositor", gdkBackend: "wayland", display: ":0", want: linuxDisplayUnavailable},
 		{name: "wayland preferred backend list", gdkBackend: "wayland,x11", waylandDisplay: "wayland-0", display: ":0", want: linuxDisplayWaylandStandalone},
 		{name: "backend list falls back to x11", gdkBackend: "wayland,x11", display: ":0", want: linuxDisplayX11Embedded},
+		{name: "backend list falls back to wayland", gdkBackend: "x11,wayland", waylandDisplay: "wayland-0", want: linuxDisplayWaylandStandalone},
 		{name: "wayland session", sessionType: "wayland", waylandDisplay: "wayland-0", display: ":0", want: linuxDisplayWaylandStandalone},
 		{name: "wayland only environment", waylandDisplay: "wayland-0", want: linuxDisplayWaylandStandalone},
 		{name: "wayland environment with xwayland", waylandDisplay: "wayland-0", display: ":0", want: linuxDisplayWaylandStandalone},
@@ -385,24 +386,13 @@ func TestMPVPreflightInvocationKeepsURLOutOfArguments(t *testing.T) {
 	}
 }
 
-func TestExperimentalNativePlayerEnabledIsExplicitOptIn(t *testing.T) {
-	for _, value := range []string{"", "0", "true", "yes", "2"} {
-		if experimentalNativePlayerEnabled(value) {
-			t.Fatalf("experimentalNativePlayerEnabled(%q) = true, want false", value)
+func TestNativePlayerEnabledIsOptOut(t *testing.T) {
+	for _, value := range []string{"", "1", "true", "yes"} {
+		if !nativePlayerEnabled(value) {
+			t.Fatalf("nativePlayerEnabled(%q) = false, want true", value)
 		}
 	}
-	if !experimentalNativePlayerEnabled("1") {
-		t.Fatal("experimentalNativePlayerEnabled(\"1\") = false, want true")
-	}
-}
-
-func TestSystemMPVLookupEnabledIsExplicitOptIn(t *testing.T) {
-	for _, value := range []string{"", "0", "true", "yes", "2"} {
-		if systemMPVLookupEnabled(value) {
-			t.Fatalf("systemMPVLookupEnabled(%q) = true, want false", value)
-		}
-	}
-	if !systemMPVLookupEnabled("1") {
-		t.Fatal("systemMPVLookupEnabled(\"1\") = false, want true")
+	if nativePlayerEnabled("0") {
+		t.Fatal("nativePlayerEnabled(\"0\") = true, want false")
 	}
 }

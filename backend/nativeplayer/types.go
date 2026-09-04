@@ -16,7 +16,6 @@ var ErrDecoderUnsafe = errors.New("native player decoder preflight failed")
 var ErrPlayerExited = errors.New("native media player exited unexpectedly")
 var errIPCWriteTimeout = errors.New("native player: mpv IPC write timed out")
 
-const systemMPVLookupFlag = "TDRIVE_ALLOW_SYSTEM_MPV"
 const observedProgressEmitInterval = 125 * time.Millisecond
 
 type PlaybackStatus string
@@ -411,11 +410,17 @@ func writeAndCloseWithTimer(writer io.WriteCloser, payload []byte, timeout time.
 		close(timeoutDone)
 	})
 	written, writeErr := writer.Write(payload)
-	if !timer.Stop() {
+	var closeErr error
+	if timer.Stop() {
+		closeErr = writer.Close()
+	} else {
+		// The timer fired and closed the writer. That is only a timeout when
+		// the write itself did not complete; a slow but successful write stands.
 		<-timeoutDone
-		return errIPCWriteTimeout
+		if writeErr != nil {
+			return errIPCWriteTimeout
+		}
 	}
-	closeErr := writer.Close()
 	if writeErr != nil {
 		return writeErr
 	}
@@ -495,50 +500,19 @@ func mpvNumberProperty(values map[string]any, key string) float64 {
 	return value
 }
 
+// Property values arrive through json.Unmarshal into any, so numbers are
+// always float64.
 func mpvNumberPropertyOK(values map[string]any, key string) (float64, bool) {
-	value, ok := values[key]
-	if !ok || value == nil {
-		return 0, false
-	}
-	switch typed := value.(type) {
-	case float64:
-		return typed, true
-	case float32:
-		return float64(typed), true
-	case int:
-		return float64(typed), true
-	case int64:
-		return float64(typed), true
-	case json.Number:
-		n, err := typed.Float64()
-		return n, err == nil
-	default:
-		return 0, false
-	}
+	value, ok := values[key].(float64)
+	return value, ok
 }
 
 func positiveInt64(value any) (int64, bool) {
-	var result int64
-	switch typed := value.(type) {
-	case float64:
-		if math.IsNaN(typed) || math.IsInf(typed, 0) || typed < 1 || typed != math.Trunc(typed) || typed > math.MaxInt64 {
-			return 0, false
-		}
-		result = int64(typed)
-	case int:
-		result = int64(typed)
-	case int64:
-		result = typed
-	case json.Number:
-		parsed, err := typed.Int64()
-		if err != nil {
-			return 0, false
-		}
-		result = parsed
-	default:
+	typed, ok := value.(float64)
+	if !ok || math.IsNaN(typed) || math.IsInf(typed, 0) || typed < 1 || typed != math.Trunc(typed) || typed > math.MaxInt64 {
 		return 0, false
 	}
-	return result, result > 0
+	return int64(typed), true
 }
 
 func mpvBoolProperty(values map[string]any, key string) bool {
@@ -596,10 +570,8 @@ func maxMPVFloat(a, b float64) float64 {
 	return b
 }
 
-func experimentalNativePlayerEnabled(value string) bool {
-	return value == "1"
-}
-
-func systemMPVLookupEnabled(value string) bool {
-	return value == "1"
+// nativePlayerEnabled reads a per-OS opt-out flag: native playback is on unless
+// the variable is explicitly "0".
+func nativePlayerEnabled(value string) bool {
+	return value != "0"
 }

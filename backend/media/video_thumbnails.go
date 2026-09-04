@@ -32,7 +32,6 @@ const (
 	videoThumbDirMode          = 0o700
 	videoThumbFileMode         = 0o600
 	videoThumbMime             = "image/jpeg"
-	systemMPVLookupFlag        = "TDRIVE_ALLOW_SYSTEM_MPV"
 
 	// Playback-buffer watermarks (seconds ahead of the playhead) govern how much
 	// the background thumbnail builder may steal from the shared pipe. Foreground
@@ -1016,14 +1015,7 @@ func findMPVBinary() (string, error) {
 	if bundled, err := bundledMPVBinaryPath(); err == nil {
 		return bundled, nil
 	}
-	if !systemMPVLookupEnabled(os.Getenv(systemMPVLookupFlag)) {
-		return "", fmt.Errorf("media: bundled mpv executable not found")
-	}
 	return exec.LookPath("mpv")
-}
-
-func systemMPVLookupEnabled(value string) bool {
-	return value == "1"
 }
 
 func bundledMPVBinaryPath() (string, error) {
