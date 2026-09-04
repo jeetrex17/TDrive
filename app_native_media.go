@@ -1,21 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
 	"math"
 	"os"
 	"strconv"
 
 	"TDrive/backend/media"
 	"TDrive/backend/nativeplayer"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type NativeMediaResult struct {
@@ -59,25 +53,10 @@ type nativeMediaSession struct {
 	terminal      bool
 }
 
-const (
-	// Bridge input is untrusted. These ceilings keep token hashing, command
-	// parsing, base64 allocation, and image-header parsing bounded.
-	maxNativeMediaSessionTokenBytes    = 256
-	maxNativeMediaCommandArguments     = 3
-	maxNativeMediaCommandArgumentBytes = 64
-	maxNativeSeekThumbnailDecodedBytes = 1 << 20
-	maxNativeSeekThumbnailEncodedBytes = ((maxNativeSeekThumbnailDecodedBytes + 2) / 3) * 4
-	maxNativeSeekThumbnailDimension    = 4096
-	maxNativeSeekThumbnailPixels       = 4_194_304
-)
-
 var (
-	errInvalidNativeMediaSession   = errors.New("invalid native media session")
-	errInvalidNativeMediaViewport  = errors.New("invalid native media viewport")
-	errNativeMediaCommandTooLarge  = errors.New("native media command exceeds size limit")
-	errInvalidNativeSeekThumbnail  = errors.New("invalid native seek thumbnail")
-	errNativeSeekThumbnailTooLarge = errors.New("native seek thumbnail exceeds size limit")
-	errNativeSeekThumbnailDisplay  = errors.New("native seek thumbnail could not be displayed")
+	errInvalidNativeMediaViewport = errors.New("invalid native media viewport")
+	errInvalidNativeSeekThumbnail = errors.New("invalid native seek thumbnail")
+	errNativeSeekThumbnailDisplay = errors.New("native seek thumbnail could not be displayed")
 )
 
 // OpenNativeMedia opens the same tokenized loopback stream as OpenMedia, then
@@ -109,9 +88,6 @@ func (a *App) OpenNativeMedia(msgID int, rect nativeplayer.Rect) (NativeMediaRes
 func (a *App) AttachNativeMedia(token string, rect nativeplayer.Rect) (NativeMediaResult, error) {
 	if token == "" {
 		return NativeMediaResult{}, fmt.Errorf("media session is required")
-	}
-	if err := validateNativeMediaSessionToken(token); err != nil {
-		return NativeMediaResult{}, err
 	}
 	if !rect.Valid() {
 		return NativeMediaResult{}, fmt.Errorf("invalid video viewport")
@@ -198,9 +174,6 @@ func (a *App) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect)
 }
 
 func (a *App) ResizeNativeMedia(token string, rect nativeplayer.Rect) error {
-	if err := validateNativeMediaSessionToken(token); err != nil {
-		return err
-	}
 	if !rect.Valid() {
 		return errInvalidNativeMediaViewport
 	}
@@ -212,9 +185,6 @@ func (a *App) ResizeNativeMedia(token string, rect nativeplayer.Rect) error {
 }
 
 func (a *App) NativeMediaCommand(token string, command []string) error {
-	if err := validateNativeMediaSessionToken(token); err != nil {
-		return err
-	}
 	if err := validateNativeMediaCommand(command); err != nil {
 		return err
 	}
@@ -228,9 +198,6 @@ func (a *App) NativeMediaCommand(token string, command []string) error {
 func (a *App) CloseNativeMedia(token string) error {
 	if token == "" {
 		return nil
-	}
-	if err := validateNativeMediaSessionToken(token); err != nil {
-		return err
 	}
 	session := a.takeNativeMediaSession(token)
 	if session != nil && session.player != nil {
@@ -293,10 +260,10 @@ func (a *App) closeEncryptedNativeMedia() {
 }
 
 func (a *App) emitNativeMediaState(state *NativeMediaState) {
-	if a.ctx == nil || state == nil || state.Token == "" {
+	if state == nil || state.Token == "" {
 		return
 	}
-	runtime.EventsEmit(a.ctx, "native_media_state", state)
+	a.emit("native_media_state", state)
 }
 
 func (a *App) nativeMediaSession(token string) *nativeMediaSession {
@@ -455,14 +422,6 @@ func validateNativeMediaCommand(command []string) error {
 	if len(command) == 0 {
 		return fmt.Errorf("native media command is empty")
 	}
-	if len(command) > maxNativeMediaCommandArguments {
-		return errNativeMediaCommandTooLarge
-	}
-	for _, argument := range command {
-		if len(argument) > maxNativeMediaCommandArgumentBytes {
-			return errNativeMediaCommandTooLarge
-		}
-	}
 
 	switch command[0] {
 	case "cycle":
@@ -545,25 +504,12 @@ func validateNativeMediaOpenResult(opened media.OpenResult) error {
 	return nil
 }
 
-func validateNativeMediaSessionToken(token string) error {
-	if len(token) == 0 || len(token) > maxNativeMediaSessionTokenBytes {
-		return errInvalidNativeMediaSession
-	}
-	return nil
-}
-
 // ShowNativeSeekThumbnail paints a seek-preview thumbnail over the native video.
-// imageBase64 is the raw base64 of a JPEG/PNG frame the frontend already holds;
-// rect is the desired preview box in CSS pixels. It is only meaningful on the
-// Windows fallback (where HTML can't draw over the video) and is a no-op on
-// platforms whose player does not implement an overlay.
+// imageBase64 is the raw base64 of the JPEG frame the backend's own thumbnailer
+// produced and the frontend already holds; rect is the desired preview box in
+// CSS pixels. It is only meaningful on the Windows fallback (where HTML can't
+// draw over the video) and is a no-op on platforms without an overlay.
 func (a *App) ShowNativeSeekThumbnail(token string, imageBase64 string, rect nativeplayer.Rect) error {
-	if a == nil {
-		return errInvalidNativeMediaSession
-	}
-	if err := validateNativeMediaSessionToken(token); err != nil {
-		return err
-	}
 	if !rect.Valid() {
 		return errInvalidNativeMediaViewport
 	}
@@ -571,9 +517,9 @@ func (a *App) ShowNativeSeekThumbnail(token string, imageBase64 string, rect nat
 	if player == nil {
 		return nil
 	}
-	data, err := decodeNativeSeekThumbnail(imageBase64)
-	if err != nil {
-		return err
+	data, err := base64.StdEncoding.DecodeString(imageBase64)
+	if err != nil || len(data) == 0 {
+		return errInvalidNativeSeekThumbnail
 	}
 	if err := player.ShowSeekThumbnail(data, rect); err != nil {
 		return errNativeSeekThumbnailDisplay
@@ -581,49 +527,11 @@ func (a *App) ShowNativeSeekThumbnail(token string, imageBase64 string, rect nat
 	return nil
 }
 
-func decodeNativeSeekThumbnail(encoded string) ([]byte, error) {
-	if encoded == "" {
-		return nil, errInvalidNativeSeekThumbnail
-	}
-	if len(encoded) > maxNativeSeekThumbnailEncodedBytes {
-		return nil, errNativeSeekThumbnailTooLarge
-	}
-
-	data, err := base64.StdEncoding.Strict().DecodeString(encoded)
-	if err != nil {
-		return nil, errInvalidNativeSeekThumbnail
-	}
-	if len(data) == 0 {
-		return nil, errInvalidNativeSeekThumbnail
-	}
-	if len(data) > maxNativeSeekThumbnailDecodedBytes {
-		return nil, errNativeSeekThumbnailTooLarge
-	}
-
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || (format != "jpeg" && format != "png") {
-		return nil, errInvalidNativeSeekThumbnail
-	}
-	if config.Width <= 0 || config.Height <= 0 {
-		return nil, errInvalidNativeSeekThumbnail
-	}
-	if config.Width > maxNativeSeekThumbnailDimension || config.Height > maxNativeSeekThumbnailDimension {
-		return nil, errNativeSeekThumbnailTooLarge
-	}
-	if uint64(config.Width)*uint64(config.Height) > maxNativeSeekThumbnailPixels {
-		return nil, errNativeSeekThumbnailTooLarge
-	}
-	return data, nil
-}
-
 // MoveNativeSeekThumbnail moves the already-painted seek-preview overlay without
 // re-uploading or re-decoding the frame. Windows calls this on every scrub move;
 // keeping it separate from ShowNativeSeekThumbnail avoids doing JPEG decode and
 // GDI bitmap upload work just to follow the cursor.
 func (a *App) MoveNativeSeekThumbnail(token string, rect nativeplayer.Rect) error {
-	if err := validateNativeMediaSessionToken(token); err != nil {
-		return err
-	}
 	if !rect.Valid() {
 		return errInvalidNativeMediaViewport
 	}
@@ -636,9 +544,6 @@ func (a *App) MoveNativeSeekThumbnail(token string, rect nativeplayer.Rect) erro
 
 // HideNativeSeekThumbnail hides the seek-preview overlay for the session.
 func (a *App) HideNativeSeekThumbnail(token string) error {
-	if err := validateNativeMediaSessionToken(token); err != nil {
-		return err
-	}
 	player := a.nativeMediaPlayer(token)
 	if player == nil {
 		return nil

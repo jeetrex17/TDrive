@@ -84,10 +84,17 @@ type runtimeEventSink struct {
 }
 
 func (s runtimeEventSink) Emit(name string, args ...any) {
-	if s.app == nil {
+	s.app.emit(name, args...)
+}
+
+// emit forwards an event to the webview. It is a no-op until Wails has provided
+// its lifecycle context: tests and early shutdown paths hold plain contexts,
+// which runtime.EventsEmit treats as fatal rather than ignoring.
+func (a *App) emit(name string, args ...any) {
+	if a == nil || a.ctx == nil || a.ctx.Value("events") == nil {
 		return
 	}
-	runtime.EventsEmit(s.app.ctx, name, args...)
+	runtime.EventsEmit(a.ctx, name, args...)
 }
 
 // resolvePeer satisfies tdsync.PeerResolver through peerResolverFn. Keeping
