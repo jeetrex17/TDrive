@@ -690,6 +690,27 @@ export namespace nativeplayer {
 
 }
 
+export namespace projection {
+	
+	export class FolderStats {
+	    id: string;
+	    bytes: number;
+	    latestUpload: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FolderStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.bytes = source["bytes"];
+	        this.latestUpload = source["latestUpload"];
+	    }
+	}
+
+}
+
 export namespace updater {
 	
 	export class ReleaseInfo {

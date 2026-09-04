@@ -29,13 +29,51 @@ export interface EncryptionState {
     loaded: boolean;
 }
 
+export type DownloadState = 'queued' | 'downloading';
+
+export type TransferDirection = 'upload' | 'download';
+
+export interface TransferActivity {
+    readonly upload: boolean;
+    readonly download: boolean;
+}
+
+export const idleTransferActivity: TransferActivity = Object.freeze({
+    upload: false,
+    download: false,
+});
+
+type DownloadQueueBase = {
+    key: string;
+    name: string;
+    size: number;
+    progress: number;
+    state: DownloadState;
+    bytesCompleted: number;
+    bytesTotal: number;
+    filesCompleted: number;
+    filesTotal: number;
+};
+
+export type FileDownloadQueueItem = DownloadQueueBase & {
+    kind: 'file';
+    id: number;
+};
+
+export type FolderDownloadQueueItem = DownloadQueueBase & {
+    kind: 'folder';
+    id: string;
+};
+
+export type DownloadQueueItem = FileDownloadQueueItem | FolderDownloadQueueItem;
+
 export interface State {
     currentFolderId: string;
     folderPath: DrivePathEntry[];
 
-    activeTransfer: "download" | "upload" | null;
-    downloadQueue: any[];
-    activeDownloadId: string | number | null;
+    transferActivity: TransferActivity;
+    downloadQueue: DownloadQueueItem[];
+    activeDownloadId: string | null;
 
     transferPillEl: HTMLElement | null;
     transferSheetEl: HTMLElement | null;
@@ -89,7 +127,7 @@ export const state: State = {
     currentFolderId: "",
     folderPath: [],
 
-    activeTransfer: null,
+    transferActivity: idleTransferActivity,
     downloadQueue: [],
     activeDownloadId: null,
 
@@ -142,6 +180,14 @@ export const state: State = {
     userNameFailures: new Set(),
     userNameRequests: new Map(),
 };
+
+// Transfer direction flags are replaced together rather than mutated so a
+// completion in one direction never clears concurrent activity in the other.
+export function setTransferDirectionActive(direction: TransferDirection, active: boolean): void {
+    const current = state.transferActivity;
+    if (current[direction] === active) return;
+    state.transferActivity = Object.freeze({ ...current, [direction]: active });
+}
 
 // Helper to reset folder caches (called on refresh)
 export function resetFolderCaches(): void {

@@ -48,8 +48,8 @@ async function loadModule() {
     } catch {
         // localStorage may be unavailable; defaults apply anyway.
     }
-    const { state } = await import('../state');
-    state.activeTransfer = null;
+    const { idleTransferActivity, state } = await import('../state');
+    state.transferActivity = idleTransferActivity;
     state.encryption = { available: false, passwordSet: false, passwordRemembered: false, hint: '', loaded: true };
     const mod = await import('./updates');
     const store = await import('../ui/updates/update-store');
@@ -94,7 +94,7 @@ describe('update policy', () => {
     it('defers auto-download while a transfer is active', async () => {
         bindings.CheckForUpdate.mockResolvedValue(available());
         const { mod, state } = await loadModule();
-        state.activeTransfer = 'upload';
+        state.transferActivity = { upload: true, download: false };
 
         await mod.checkForUpdates();
 
@@ -127,7 +127,7 @@ describe('update policy', () => {
     it('lists restart risks from transfer, mount, and vault state', async () => {
         bindings.MountStatus.mockResolvedValue({ mounted: true });
         const { mod, state } = await loadModule();
-        state.activeTransfer = 'download';
+        state.transferActivity = { upload: false, download: true };
         state.encryption = { available: true, passwordSet: true, passwordRemembered: true, hint: '', loaded: true };
 
         const risks = await mod.getRestartRisks();
@@ -135,6 +135,19 @@ describe('update policy', () => {
         expect(risks[0]).toContain('download');
         expect(risks.some((r) => r.includes('ejected'))).toBe(true);
         expect(risks.some((r) => r.includes('encryption password'))).toBe(true);
+    });
+
+    it('lists both transfer risks when upload and download overlap', async () => {
+        bindings.MountStatus.mockResolvedValue({ mounted: false });
+        const { mod, state } = await loadModule();
+        state.transferActivity = { upload: true, download: true };
+
+        const risks = await mod.getRestartRisks();
+
+        expect(risks).toEqual([
+            'An upload is in progress and will be cancelled.',
+            'A download is in progress and will be cancelled.',
+        ]);
     });
 
     it('has no restart risks when idle', async () => {

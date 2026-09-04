@@ -45,18 +45,37 @@ export function sortFileListRows(rows: readonly FileListRow[], sort: FileSortSta
         else files.push(row);
     }
 
-    const folderDirection = sort.key === 'name' ? sort.direction : 'asc';
     return [
         ...pending,
-        ...folders.sort((a, b) => compareDirection(compareName(a, b), folderDirection)),
+        ...folders.sort((a, b) => compareFolders(a, b, sort)),
         ...files.sort((a, b) => compareFiles(a, b, sort)),
     ];
+}
+
+function compareFolders(a: FolderListRow, b: FolderListRow, sort: FileSortState): number {
+    const primary = compareFolderPrimary(a, b, sort.key);
+    if (primary !== 0) return compareDirection(primary, sort.direction);
+    return compareTieBreak(a, b);
+}
+
+// Under the date column folders sort by their latest subtree upload, the
+// closest available stand-in for a modification time.
+function compareFolderPrimary(a: FolderListRow, b: FolderListRow, key: FileSortKey): number {
+    switch (key) {
+        case 'date':
+            return compareNumber(a.modifiedTime, b.modifiedTime);
+        case 'size':
+            return compareNumber(a.size, b.size);
+        case 'name':
+        default:
+            return compareName(a, b);
+    }
 }
 
 function compareFiles(a: FileListFileRow, b: FileListFileRow, sort: FileSortState): number {
     const primary = compareFilePrimary(a, b, sort.key);
     if (primary !== 0) return compareDirection(primary, sort.direction);
-    return compareFileTieBreak(a, b);
+    return compareTieBreak(a, b);
 }
 
 function compareFilePrimary(a: FileListFileRow, b: FileListFileRow, key: FileSortKey): number {
@@ -71,7 +90,7 @@ function compareFilePrimary(a: FileListFileRow, b: FileListFileRow, key: FileSor
     }
 }
 
-function compareFileTieBreak(a: FileListFileRow, b: FileListFileRow): number {
+function compareTieBreak(a: Pick<FileListRow, 'name' | 'key'>, b: Pick<FileListRow, 'name' | 'key'>): number {
     const name = compareName(a, b);
     if (name !== 0) return name;
     return collator.compare(a.key, b.key);

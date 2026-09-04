@@ -12,6 +12,8 @@ export interface TransferEvent {
     total: number; // bytes; 0 when unknown
     bytes: number; // transferred bytes derived from progress
     speed: number; // smoothed bytes/sec; 0 when unknown
+    itemsDone?: number; // completed files for aggregate folder/import transfers
+    itemsTotal?: number;
     status: TransferStatus;
     startedAt: number;
     finishedAt: number;

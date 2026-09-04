@@ -86,6 +86,10 @@ export function DownloadFile(arg1, arg2) {
   return window['go']['main']['App']['DownloadFile'](arg1, arg2);
 }
 
+export function DownloadFolder(arg1) {
+  return window['go']['main']['App']['DownloadFolder'](arg1);
+}
+
 export function DownloadUpdate() {
   return window['go']['main']['App']['DownloadUpdate']();
 }
@@ -118,8 +122,8 @@ export function GetFolderSize(arg1) {
   return window['go']['main']['App']['GetFolderSize'](arg1);
 }
 
-export function GetFolderSizes(arg1) {
-  return window['go']['main']['App']['GetFolderSizes'](arg1);
+export function GetFolderStats(arg1) {
+  return window['go']['main']['App']['GetFolderStats'](arg1);
 }
 
 export function GetInviteLink(arg1) {

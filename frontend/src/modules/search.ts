@@ -15,6 +15,7 @@ import { setPhotosMode } from './gallery';
 import { refreshFolderIndex } from './folder-index';
 import { isVideoFile } from './media-types';
 import { canOpenFileViewer, openFileViewer } from './modals/file-viewer';
+import { enqueueFolderDownload } from './transfers';
 import type { FileListAction, FileListRow } from '../ui/file-list/types';
 
 let activeToken = 0;
@@ -73,16 +74,16 @@ function renderSearchResults(results: any, query: any) {
                 metaLabel: String(result.path || "My Drive"),
                 sizeLabel: "—",
                 actions: [{
-                    kind: "open",
-                    className: "open-folder",
-                    title: "Open",
-                    label: "Open folder",
-                    onClick: () => openFolderResult(id),
+                    kind: "download",
+                    className: "download-folder",
+                    title: "Download",
+                    label: "Download folder",
+                    onClick: () => enqueueFolderDownload(id, String(result?.name || "Folder")),
                 }],
                 onDoubleClick: () => openFolderResult(id),
                 onClick: (event) => {
                     const target = event.target as HTMLElement;
-                    if (target.closest("button.open-folder")) return;
+                    if (target.closest("button.download-folder")) return;
                     const row = target.closest(".drive-row");
                     if (row) handleRowSelection(row, event);
                 },

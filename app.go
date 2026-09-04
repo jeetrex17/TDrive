@@ -490,6 +490,29 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 	}
 }
 
+// DownloadFolder restores the selected projected folder beneath a destination
+// parent chosen once by the user. It shares the serialized/cancellable download
+// slot with single-file downloads, so the existing CancelDownload action stops
+// either transfer type.
+func (a *App) DownloadFolder(folderID string) DownloadResult {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return DownloadResult{Status: "error", Message: err.Error()}
+	}
+	ctx := a.beginDownload()
+	defer a.endDownload()
+	result := svc.DownloadFolder(ctx, a.ActiveChannelID(), folderID, func(defaultName string) (string, error) {
+		return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+			Title: fmt.Sprintf("Choose where to save %q", defaultName),
+		})
+	})
+	return DownloadResult{
+		Status:    result.Status,
+		Message:   result.Message,
+		SavedPath: result.SavedPath,
+	}
+}
+
 func (a *App) DeleteFile(msgID int) string {
 	svc, err := a.requireFileService()
 	if err != nil {
@@ -765,12 +788,12 @@ func (a *App) GetFolderSize(folderID string) (int64, error) {
 	return svc.FolderSize(a.ActiveChannelID(), folderID)
 }
 
-func (a *App) GetFolderSizes(parentID string) (map[string]int64, error) {
+func (a *App) GetFolderStats(parentID string) ([]projection.FolderStats, error) {
 	svc, err := a.requireReadService()
 	if err != nil {
 		return nil, err
 	}
-	return svc.ChildFolderSizes(a.ActiveChannelID(), parentID)
+	return svc.ChildFolderStats(a.ActiveChannelID(), parentID)
 }
 
 func (a *App) DeleteFolder(folderID string) string {

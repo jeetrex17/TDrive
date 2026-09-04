@@ -883,52 +883,31 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 		return DownloadResult{Status: "error", Message: "Failed to choose download location: save dialog not ready"}
 	}
 
+	fileID := int64(lookupID)
+	if fileID == 0 {
+		fileID = int64(msgID)
+	}
+	file, found, err := projection.FileDownloadRefContext(ctx, s.DB, channelID, fileID)
+	if err != nil {
+		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}
+	}
+	if !found {
+		return DownloadResult{Status: "error", Message: "Message deleted or not found"}
+	}
 	peer, err := s.Peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: "Error: " + err.Error()}
 	}
 
-	// A multipart file's identity is its manifest (a text op, not a document),
-	// so GetFileDocument would fail. Detect it first and reassemble from parts.
-	fileID := int64(lookupID)
-	if fileID == 0 {
-		fileID = int64(msgID)
-	}
-	if !projection.FileExists(s.DB, channelID, fileID) {
-		return DownloadResult{Status: "error", Message: "Message deleted or not found"}
-	}
-	if parts, err := projection.MultipartParts(s.DB, channelID, fileID); err != nil {
-		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}
-	} else if len(parts) > 0 {
-		return s.downloadMultipart(ctx, channelID, fileID, parts, peer, chooseSavePath)
-	}
-
-	doc, err := s.TG.GetFileDocument(ctx, peer, int64(msgID))
-	if err != nil {
-		return downloadResolveError(err)
-	}
-
-	originalName := "tdrive_download"
-	if lookupID == 0 {
-		lookupID = msgID
-	}
-	if name := projection.LookupFileName(s.DB, channelID, int64(lookupID)); name != "" {
-		originalName = name
-	}
-
 	// Check decryption readiness before opening the save dialog. Otherwise a
 	// locked vault makes the user choose a path and then repeat it after unlock.
-	encrypted := false
-	if enc, _, _, err := projection.FileEncryptionMeta(s.DB, channelID, int64(lookupID)); err == nil {
-		encrypted = enc
-	}
-	masterKey, err := s.requireEncryptionKey(encrypted)
+	masterKey, err := s.requireEncryptionKey(file.Encrypted)
 	defer clearOwnedKey(masterKey)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: err.Error()}
 	}
 
-	savePath, err := chooseSavePath(originalName)
+	savePath, err := chooseSavePath(file.Name)
 	if err != nil {
 		return DownloadResult{Status: "error", Message: "Failed to choose download location: " + err.Error()}
 	}
@@ -936,55 +915,12 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 		return DownloadResult{Status: "canceled", Message: "Download canceled"}
 	}
 
-	finalTmp, err := os.CreateTemp(filepath.Dir(savePath), ".tdrive-download-*")
-	if err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+	if err := s.downloadProjectedFileToPath(ctx, peer, file, savePath, masterKey, s.downloadProgress(file.StoredSize)); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return DownloadResult{Status: "canceled", Message: "Download canceled"}
+		}
+		return DownloadResult{Status: "error", Message: err.Error()}
 	}
-	finalTmpPath := finalTmp.Name()
-	committed := false
-	defer func() {
-		_ = finalTmp.Close()
-		if !committed {
-			_ = os.Remove(finalTmpPath)
-		}
-	}()
-
-	if !encrypted {
-		// DownloadFileAt writes through WriterAt, so a retried attempt
-		// overwrites the same offsets instead of appending.
-		if err := s.sendRetryPolicy().Do(ctx, func() error {
-			return s.TG.DownloadFileAt(ctx, peer, int64(msgID), finalTmp, 0, s.downloadProgress(doc.Size))
-		}); err != nil {
-			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
-		}
-	} else {
-		cipher, err := os.CreateTemp(filepath.Dir(savePath), ".tdrive-download-cipher-*")
-		if err != nil {
-			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-		}
-		defer func() {
-			_ = cipher.Close()
-			_ = os.Remove(cipher.Name())
-		}()
-		if err := s.sendRetryPolicy().Do(ctx, func() error {
-			return s.TG.DownloadFileAt(ctx, peer, int64(msgID), cipher, 0, s.downloadProgress(doc.Size))
-		}); err != nil {
-			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
-		}
-		if _, err := cipher.Seek(0, io.SeekStart); err != nil {
-			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-		}
-		if _, err := tdcrypto.DecryptStream(cipher, finalTmp, masterKey); err != nil {
-			return DownloadResult{Status: "error", Message: "Decrypt failed: " + err.Error()}
-		}
-	}
-	if err := finalTmp.Close(); err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-	}
-	if err := replaceDownloadedFile(finalTmpPath, savePath); err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-	}
-	committed = true
 
 	s.emitEvent("download_progress", 100.0)
 	return DownloadResult{
@@ -994,235 +930,9 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 	}
 }
 
-// downloadMultipart reassembles a multipart file by streaming its parts in
-// order. Plain files append each part to the output; encrypted files stream the
-// concatenated ciphertext through a pipe into DecryptStream. Retriable encrypted
-// downloads stage one part beside the destination, bounding temporary storage
-// to one TDrive part instead of the complete ciphertext. Progress is aggregate
-// across all parts.
-func (s *Service) downloadMultipart(ctx context.Context, channelID int64, fileID int64, parts []projection.FilePart, peer tgclient.InputPeer, chooseSavePath ChooseSavePathFunc) DownloadResult {
-	// Refuse to reassemble an incomplete part set: a missing part would otherwise
-	// produce a silently-truncated file (plain downloads especially, since
-	// there's no AEAD tag to catch it).
-	if err := projection.MultipartComplete(s.DB, channelID, fileID, parts); err != nil {
-		return DownloadResult{Status: "error", Message: err.Error()}
-	}
-
-	originalName := "tdrive_download"
-	if name := projection.LookupFileName(s.DB, channelID, fileID); name != "" {
-		originalName = name
-	}
-
-	encrypted := false
-	if enc, _, _, err := projection.FileEncryptionMeta(s.DB, channelID, fileID); err == nil {
-		encrypted = enc
-	}
-	masterKey, err := s.requireEncryptionKey(encrypted)
-	defer clearOwnedKey(masterKey)
-	if err != nil {
-		return DownloadResult{Status: "error", Message: err.Error()}
-	}
-
-	savePath, err := chooseSavePath(originalName)
-	if err != nil {
-		return DownloadResult{Status: "error", Message: "Failed to choose download location: " + err.Error()}
-	}
-	if savePath == "" {
-		return DownloadResult{Status: "canceled", Message: "Download canceled"}
-	}
-
-	finalTmp, err := os.CreateTemp(filepath.Dir(savePath), ".tdrive-download-*")
-	if err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-	}
-	finalTmpPath := finalTmp.Name()
-	committed := false
-	defer func() {
-		_ = finalTmp.Close()
-		if !committed {
-			_ = os.Remove(finalTmpPath)
-		}
-	}()
-
-	var totalStored int64
-	for _, p := range parts {
-		totalStored += p.Size
-	}
-	progress := s.downloadProgress(totalStored)
-
-	// Encrypted decryption requires strict ordering. Stage only one ciphertext
-	// part at a time so DownloadFileAt can overwrite partial retry attempts
-	// without keeping the whole encrypted file on disk.
-	downloadPartsOrdered := func(dst io.Writer) error {
-		var base int64
-		for _, p := range parts {
-			partTmp, err := os.CreateTemp(filepath.Dir(savePath), ".tdrive-download-part-*")
-			if err != nil {
-				return err
-			}
-			partPath := partTmp.Name()
-			cleanup := func() {
-				_ = partTmp.Close()
-				_ = os.Remove(partPath)
-			}
-			if err := partTmp.Truncate(p.Size); err != nil {
-				cleanup()
-				return err
-			}
-
-			startBase := base
-			var reported int64
-			var reportedMu sync.Mutex
-			err = s.sendRetryPolicy().Do(ctx, func() error {
-				return s.TG.DownloadFileAt(ctx, peer, p.MsgID, partTmp, 0, func(partDone, _ int64) {
-					partDone = min(max(partDone, 0), p.Size)
-					reportedMu.Lock()
-					defer reportedMu.Unlock()
-					if partDone > reported {
-						reported = partDone
-						progress(startBase+partDone, totalStored)
-					}
-				})
-			})
-			if err != nil {
-				cleanup()
-				return err
-			}
-			if _, err := partTmp.Seek(0, io.SeekStart); err != nil {
-				cleanup()
-				return err
-			}
-			if _, err := io.CopyN(dst, partTmp, p.Size); err != nil {
-				cleanup()
-				return err
-			}
-			cleanup()
-			base += p.Size
-		}
-		return nil
-	}
-
-	downloadPartsAt := func(dst io.WriterAt) error {
-		const partConcurrency = 2
-
-		partOffsets := make([]int64, len(parts))
-		var off int64
-		for i, p := range parts {
-			partOffsets[i] = off
-			off += p.Size
-		}
-
-		dlCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		sem := make(chan struct{}, partConcurrency)
-		errCh := make(chan error, len(parts))
-		var wg sync.WaitGroup
-		var progressMu sync.Mutex
-		partDone := make([]int64, len(parts))
-
-		report := func(i int, done int64) {
-			if done < 0 {
-				done = 0
-			}
-			if done > parts[i].Size {
-				done = parts[i].Size
-			}
-			progressMu.Lock()
-			if done > partDone[i] {
-				partDone[i] = done
-				var totalDone int64
-				for _, n := range partDone {
-					totalDone += n
-				}
-				progress(totalDone, totalStored)
-			}
-			progressMu.Unlock()
-		}
-
-		for i, part := range parts {
-			i, part := i, part
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-				case <-dlCtx.Done():
-					return
-				}
-				defer func() { <-sem }()
-
-				// WriterAt at partOffsets[i] makes retries overwrite-safe.
-				if err := s.sendRetryPolicy().Do(dlCtx, func() error {
-					return s.TG.DownloadFileAt(dlCtx, peer, part.MsgID, dst, partOffsets[i], func(partDone, _ int64) {
-						report(i, partDone)
-					})
-				}); err != nil {
-					errCh <- err
-					cancel()
-					return
-				}
-				report(i, part.Size)
-			}()
-		}
-
-		wg.Wait()
-		close(errCh)
-		if err, ok := <-errCh; ok {
-			return err
-		}
-		progress(totalStored, totalStored)
-		return nil
-	}
-
-	if !encrypted {
-		if err := finalTmp.Truncate(totalStored); err != nil {
-			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-		}
-		if err := downloadPartsAt(finalTmp); err != nil {
-			return DownloadResult{Status: "error", Message: "Network Error: " + err.Error()}
-		}
-	} else {
-		pr, pw := io.Pipe()
-		downloadDone := make(chan error, 1)
-		go func() {
-			downloadErr := downloadPartsOrdered(pw)
-			downloadDone <- downloadErr
-			_ = pw.CloseWithError(downloadErr)
-		}()
-		if _, err := tdcrypto.DecryptStream(pr, finalTmp, masterKey); err != nil {
-			select {
-			case downloadErr := <-downloadDone:
-				if downloadErr != nil {
-					return DownloadResult{Status: "error", Message: "Network Error: " + downloadErr.Error()}
-				}
-			default:
-				_ = pr.CloseWithError(err)
-				<-downloadDone
-			}
-			return DownloadResult{Status: "error", Message: "Download/decrypt failed: " + err.Error()}
-		}
-		if downloadErr := <-downloadDone; downloadErr != nil {
-			return DownloadResult{Status: "error", Message: "Network Error: " + downloadErr.Error()}
-		}
-	}
-
-	if err := finalTmp.Close(); err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-	}
-	if err := replaceDownloadedFile(finalTmpPath, savePath); err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
-	}
-	committed = true
-
-	s.emitEvent("download_progress", 100.0)
-	return DownloadResult{
-		Status:    "success",
-		Message:   "Download complete",
-		SavedPath: savePath,
-	}
-}
-
+// replaceDownloadedFile preserves the existing single-file download contract:
+// a completed temporary file replaces an existing destination with rollback if
+// the final rename fails.
 func replaceDownloadedFile(tmpPath string, savePath string) error {
 	if err := os.Rename(tmpPath, savePath); err == nil {
 		return nil
@@ -2155,19 +1865,6 @@ func normalizePreviewError(err error) error {
 		return errPreviewEncryptionPasswordRequired
 	default:
 		return errPreviewDownloadFailed
-	}
-}
-
-func downloadResolveError(err error) DownloadResult {
-	switch {
-	case errors.Is(err, tgclient.ErrMessageNotFound):
-		return DownloadResult{Status: "error", Message: "Message deleted or not found"}
-	case errors.Is(err, tgclient.ErrNotFile):
-		return DownloadResult{Status: "error", Message: "This is not a file"}
-	case errors.Is(err, tgclient.ErrEmptyDocument):
-		return DownloadResult{Status: "error", Message: "Empty document"}
-	default:
-		return DownloadResult{Status: "error", Message: "System Error: " + err.Error()}
 	}
 }
 

@@ -24,21 +24,26 @@ jobs:
           - os: ubuntu-22.04
             platform: linux/amd64
             output_name: TDrive-linux-amd64
-            asset_name: TDrive-${{ github.ref_name }}-linux-amd64.AppImage
 
           - os: windows-latest
             platform: windows/amd64
             output_name: TDrive-windows-amd64.exe
-            asset_name: TDrive-${{ github.ref_name }}-windows-amd64.zip
 
           - os: macos-15
             platform: darwin/arm64
             output_name: TDrive-macos-arm64
-            asset_name: TDrive-${{ github.ref_name }}-macos-arm64.zip
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Sanitize artifact version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(printf '%s' "$GITHUB_REF_NAME" | sed 's/[^[:alnum:]._-]/-/g')"
+          test -n "$version"
+          echo "TDRIVE_ARTIFACT_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -46,11 +51,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run CLI, daemon, and mount tests
-        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater
+      - name: Run CLI, daemon, mount, and folder-download tests
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Vet platform-specific daemon and CLI code
-        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater
+        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -136,7 +141,7 @@ jobs:
 
           mkdir -p dist
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
-            ./appimagetool-x86_64.AppImage "$APPDIR" "dist/${{ matrix.asset_name }}"
+            ./appimagetool-x86_64.AppImage "$APPDIR" "dist/TDrive-${TDRIVE_ARTIFACT_VERSION}-linux-amd64.AppImage"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -144,7 +149,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           ./scripts/package-mpv-windows.ps1 "build/bin/${{ matrix.output_name }}"
-          Compress-Archive -Force -Path "build/bin/${{ matrix.output_name }}", "build/bin/media" -DestinationPath "dist/${{ matrix.asset_name }}"
+          Compress-Archive -Force -Path "build/bin/${{ matrix.output_name }}", "build/bin/media" -DestinationPath "dist/TDrive-$env:TDRIVE_ARTIFACT_VERSION-windows-amd64.zip"
 
       - name: Package CLI (Windows)
         if: runner.os == 'Windows'
@@ -166,7 +171,7 @@ jobs:
           
           echo "Packaging application from: $APP_PATH"
           ./scripts/package-mpv-darwin.sh "$APP_PATH"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "dist/${{ matrix.asset_name }}"
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "dist/TDrive-${TDRIVE_ARTIFACT_VERSION}-macos-arm64.zip"
 
       - name: Package CLI (macOS/Linux)
         if: runner.os != 'Windows'

@@ -3,6 +3,7 @@
 import {main} from '../models';
 import {updater} from '../models';
 import {backend} from '../models';
+import {projection} from '../models';
 import {media} from '../models';
 import {nativeplayer} from '../models';
 import {file} from '../models';
@@ -49,6 +50,8 @@ export function DiscoverPersonalDrives():Promise<Array<main.PersonalDriveCandida
 
 export function DownloadFile(arg1:number,arg2:number):Promise<main.DownloadResult>;
 
+export function DownloadFolder(arg1:string):Promise<main.DownloadResult>;
+
 export function DownloadUpdate():Promise<void>;
 
 export function EncryptionStatus():Promise<main.EncryptionStatus>;
@@ -65,7 +68,7 @@ export function GetFolderContents(arg1:string):Promise<backend.FileSystem>;
 
 export function GetFolderSize(arg1:string):Promise<number>;
 
-export function GetFolderSizes(arg1:string):Promise<Record<string, number>>;
+export function GetFolderStats(arg1:string):Promise<Array<projection.FolderStats>>;
 
 export function GetInviteLink(arg1:number):Promise<string>;
 

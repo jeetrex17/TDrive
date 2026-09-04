@@ -47,18 +47,33 @@ export async function calculateFolderTotalBytes(folderID: string): Promise<numbe
     throw new Error("GetFolderSize is not available. Restart `wails dev` to regenerate bindings.");
 }
 
-export async function calculateVisibleFolderBytes(parentID: string): Promise<Map<string, number>> {
+export type FolderStats = {
+    bytes: number;
+    latestUpload: number;
+};
+
+export async function calculateVisibleFolderStats(parentID: string): Promise<Map<string, FolderStats>> {
     const a = app();
-    if (a?.GetFolderSizes) {
-        const raw = await a.GetFolderSizes(String(parentID || ""));
-        const out = new Map<string, number>();
-        for (const [id, value] of Object.entries(raw || {})) {
-            const bytes = Number(value);
-            out.set(String(id), Number.isFinite(bytes) && bytes >= 0 ? bytes : 0);
+    if (a?.GetFolderStats) {
+        const raw = await a.GetFolderStats(String(parentID || ""));
+        const out = new Map<string, FolderStats>();
+        for (const value of Array.isArray(raw) ? raw : []) {
+            const entry = (value ?? {}) as Partial<FolderStats & { id: string }>;
+            const id = String(entry.id ?? "");
+            if (!id) continue;
+            out.set(id, {
+                bytes: nonNegative(entry.bytes),
+                latestUpload: nonNegative(entry.latestUpload),
+            });
         }
         return out;
     }
-    throw new Error("GetFolderSizes is not available. Restart `wails dev` to regenerate bindings.");
+    throw new Error("GetFolderStats is not available. Restart `wails dev` to regenerate bindings.");
+}
+
+function nonNegative(value: unknown): number {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
 export async function getAllFsMsgIDs(): Promise<number[]> {

@@ -117,7 +117,7 @@ function maybeAutoDownload(next: UpdateState): void {
     if (autoDownloaded.has(next.latest.version)) return;
     // Don't steal Telegram bandwidth from an active transfer; the next
     // scheduled check picks it up once the transfer finishes.
-    if (state.activeTransfer) return;
+    if (state.transferActivity.upload || state.transferActivity.download) return;
     autoDownloaded.add(next.latest.version);
     void DownloadUpdate().catch((err) => console.warn('auto-download failed:', err));
 }
@@ -206,9 +206,10 @@ export function openReleasePage(): void {
 // vault password. The panel shows these before the final confirm.
 export async function getRestartRisks(): Promise<string[]> {
     const risks: string[] = [];
-    if (state.activeTransfer === 'upload') {
+    if (state.transferActivity.upload) {
         risks.push('An upload is in progress and will be cancelled.');
-    } else if (state.activeTransfer === 'download') {
+    }
+    if (state.transferActivity.download) {
         risks.push('A download is in progress and will be cancelled.');
     }
     try {
