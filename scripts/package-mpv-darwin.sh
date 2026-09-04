@@ -465,6 +465,17 @@ verify_packaged_refs() {
 }
 
 RUNTIME_SOURCE_DIR="$(find_runtime_root)"
+
+# The package-manager fallback sets TDRIVE_MPV_RAISE_APP_MINOS to the runtime's
+# floor: Homebrew builds for the runner's macOS while the Go linker stamps the
+# app lower regardless of MACOSX_DEPLOYMENT_TARGET, so the promise is corrected
+# here before the compatibility checks run.
+if [ -n "${TDRIVE_MPV_RAISE_APP_MINOS:-}" ]; then
+  xcrun vtool -set-build-version macos "$TDRIVE_MPV_RAISE_APP_MINOS" "$TDRIVE_MPV_RAISE_APP_MINOS" \
+    -replace -output "$BIN_PATH" "$BIN_PATH"
+  log "raised the app's minimum macOS to $TDRIVE_MPV_RAISE_APP_MINOS"
+fi
+
 MPV_LIB="$RUNTIME_SOURCE_DIR/lib/libmpv.2.dylib"
 MPV_BIN="$RUNTIME_SOURCE_DIR/bin/mpv"
 assert_arch_compatible "$MPV_LIB" "libmpv"

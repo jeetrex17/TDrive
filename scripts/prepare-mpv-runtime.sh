@@ -109,7 +109,8 @@ case "$PLATFORM" in
     grep -A1 '<key>LSMinimumSystemVersion</key>' "$plist" | grep -q "<string>$minos</string>" || die "could not set LSMinimumSystemVersion in $plist"
     emit "TDRIVE_MPV_RUNTIME_DIR=$runtime_root" \
       "TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime" \
-      "MACOSX_DEPLOYMENT_TARGET=$minos"
+      "MACOSX_DEPLOYMENT_TARGET=$minos" \
+      "TDRIVE_MPV_RAISE_APP_MINOS=$minos"
     ;;
   windows)
     mpv_version="$(tr -d '[:space:]' < "$SCRIPT_DIR/package-mpv-version.txt")"
