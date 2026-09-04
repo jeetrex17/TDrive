@@ -788,12 +788,12 @@ func (a *App) GetFolderSize(folderID string) (int64, error) {
 	return svc.FolderSize(a.ActiveChannelID(), folderID)
 }
 
-func (a *App) GetFolderSizes(parentID string) (map[string]int64, error) {
+func (a *App) GetFolderStats(parentID string) ([]projection.FolderStats, error) {
 	svc, err := a.requireReadService()
 	if err != nil {
 		return nil, err
 	}
-	return svc.ChildFolderSizes(a.ActiveChannelID(), parentID)
+	return svc.ChildFolderStats(a.ActiveChannelID(), parentID)
 }
 
 func (a *App) DeleteFolder(folderID string) string {

@@ -12,9 +12,9 @@ import {
     GetFileList, GetStorageUsed,
 } from '../../wailsjs/go/main/App';
 import { getFolderContents as apiGetFolderContents } from '../api';
-import { calculateVisibleFolderBytes, getAllFsMsgIDs } from './drive-data';
+import { calculateVisibleFolderStats, getAllFsMsgIDs, type FolderStats } from './drive-data';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
-import { enqueueDownload } from './transfers';
+import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { isVideoFile } from './media-types';
@@ -158,10 +158,10 @@ export function resolveUploaderChipsForRows(rows: FileListRow[], isCurrent: () =
 
 function folderAction(): FileListAction {
     return {
-        kind: "open",
-        className: "open-folder",
-        title: "Open",
-        label: "Open folder",
+        kind: "download",
+        className: "download-folder",
+        title: "Download",
+        label: "Download folder",
     };
 }
 
@@ -203,6 +203,8 @@ export function buildFolderRow(folder: any, parentId: string, overrides: Partial
         parentId: String(overrides.parentId ?? parentId ?? ""),
         metaLabel: overrides.metaLabel ?? "—",
         sizeLabel: overrides.sizeLabel ?? "…",
+        size: overrides.size ?? 0,
+        modifiedTime: overrides.modifiedTime ?? 0,
         ariaLabel: overrides.ariaLabel ?? `Folder: ${name}`,
         actions: overrides.actions ?? [folderAction()],
         onClick: overrides.onClick,
@@ -376,22 +378,25 @@ function activateRow(row: HTMLElement) {
     window.initDownload(Number(row.dataset.id), row.dataset.name, Number(row.dataset.size || 0));
 }
 
-function fillVisibleFolderSizes(folders: any[], parentId: string, folderEpoch: number) {
+function fillVisibleFolderStats(folders: any[], parentId: string, folderEpoch: number) {
     if (!folders.length) return;
-    calculateVisibleFolderBytes(parentId)
-        .then((sizes) => {
+    calculateVisibleFolderStats(parentId)
+        .then((stats) => {
             if (state.folderSizeEpoch !== folderEpoch) return;
             if (state.currentFolderId !== parentId) return;
-            applyFolderSizeLabels(folders, (id) => formatBytes(sizes.get(id) ?? 0));
+            applyFolderStats(folders, (id) => stats.get(id) ?? { bytes: 0, latestUpload: 0 });
         })
         .catch(() => {
             if (state.folderSizeEpoch !== folderEpoch) return;
             if (state.currentFolderId !== parentId) return;
-            applyFolderSizeLabels(folders, () => "—");
+            applyFolderStats(folders, () => null);
         });
 }
 
-function applyFolderSizeLabels(folders: any[], labelForID: (id: string) => string) {
+// applyFolderStats stores the resolved subtree byte count and latest upload
+// time on each folder row alongside their labels so the size and date columns
+// can sort folders; null marks a failed lookup.
+function applyFolderStats(folders: any[], statsForID: (id: string) => FolderStats | null) {
     const folderIDs = new Set(
         folders
             .map((folder) => String(folder?.id || ""))
@@ -403,10 +408,15 @@ function applyFolderSizeLabels(folders: any[], labelForID: (id: string) => strin
         let changed = false;
         const nextRows = rows.map((row) => {
             if (row.kind !== "folder" || !folderIDs.has(row.id)) return row;
-            const sizeLabel = labelForID(row.id);
-            if (row.sizeLabel === sizeLabel) return row;
+            const stats = statsForID(row.id);
+            const size = stats?.bytes ?? 0;
+            const modifiedTime = stats?.latestUpload ?? 0;
+            const sizeLabel = stats === null ? "—" : formatBytes(size);
+            const metaLabel = modifiedTime > 0 ? formatDate(modifiedTime) : "—";
+            if (row.size === size && row.modifiedTime === modifiedTime
+                && row.sizeLabel === sizeLabel && row.metaLabel === metaLabel) return row;
             changed = true;
-            return { ...row, sizeLabel };
+            return { ...row, size, modifiedTime, sizeLabel, metaLabel };
         });
         return changed ? nextRows : rows;
     });
@@ -568,7 +578,7 @@ export function refreshFiles() {
                 if (state.currentFolderId !== requestedFolderId) return;
 
                 syncDriveRowTabStops(list);
-                fillVisibleFolderSizes(folders, requestedFolderId, folderEpoch);
+                fillVisibleFolderStats(folders, requestedFolderId, folderEpoch);
 
                 // Restore prior scroll on a same-folder re-render. Before
                 // pendingFocus so a just-uploaded/renamed file can still scroll
@@ -635,8 +645,8 @@ function handleListClick(e: MouseEvent) {
     if (!row) return;
 
     if (row.dataset.type === "folder") {
-        if ((e.target as HTMLElement).closest("button.open-folder")) {
-            navigateToFolder(row.dataset.id as string, row.dataset.name as string);
+        if ((e.target as HTMLElement).closest("button.download-folder")) {
+            enqueueFolderDownload(row.dataset.id, row.dataset.name);
             return;
         }
         setFocusedRow(row, { preventScroll: true });

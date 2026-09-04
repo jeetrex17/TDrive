@@ -147,7 +147,7 @@ func TestFolderContentsContextRejectsNilContext(t *testing.T) {
 	}
 }
 
-func TestChildFolderSizesBatchesVisibleSubtrees(t *testing.T) {
+func TestChildFolderStatsBatchesVisibleSubtrees(t *testing.T) {
 	svc, db, _ := newTestService(t)
 
 	project(t, db, 10, projection.Op{Type: projection.OpMkdir, Obj: "d:a", Parent: projection.RootParent, Name: "A"})
@@ -168,18 +168,24 @@ func TestChildFolderSizesBatchesVisibleSubtrees(t *testing.T) {
 		FileUploadTime: 2,
 	})
 
-	sizes, err := svc.ChildFolderSizes(testChannelID, projection.RootParent)
+	list, err := svc.ChildFolderStats(testChannelID, projection.RootParent)
 	if err != nil {
-		t.Fatalf("child sizes: %v", err)
+		t.Fatalf("child stats: %v", err)
 	}
-	if got := sizes["d:a"]; got != 20 {
-		t.Fatalf("size d:a = %d, want 20", got)
+	stats := make(map[string]projection.FolderStats, len(list))
+	for _, entry := range list {
+		stats[entry.ID] = entry
 	}
-	if got := sizes["d:b"]; got != 0 {
-		t.Fatalf("size d:b = %d, want 0", got)
+	// Bytes sum the whole subtree; LatestUpload is the newest upload in it,
+	// which here lives in the nested child, proving the walk recurses.
+	if got := stats["d:a"]; got.Bytes != 20 || got.LatestUpload != 2 {
+		t.Fatalf("stats d:a = %+v, want {Bytes:20 LatestUpload:2}", got)
 	}
-	if _, ok := sizes["d:a-child"]; ok {
-		t.Fatalf("nested child should not be keyed as visible root: %+v", sizes)
+	if got := stats["d:b"]; got.Bytes != 0 || got.LatestUpload != 0 {
+		t.Fatalf("stats d:b = %+v, want zero", got)
+	}
+	if _, ok := stats["d:a-child"]; ok {
+		t.Fatalf("nested child should not be keyed as visible root: %+v", stats)
 	}
 }
 
