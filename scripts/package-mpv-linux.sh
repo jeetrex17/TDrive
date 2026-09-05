@@ -118,6 +118,7 @@ chmod 755 "$RUNTIME_DIR/mpv"
 } > "$MPV_WRAPPER"
 chmod 755 "$MPV_WRAPPER"
 
+bash "$SCRIPT_DIR/mpv-linux-libraries.sh" validate "$RUNTIME_DIR"
 read_runtime_metadata "$MPV_WRAPPER"
 qualify_runtime "$MPV_WRAPPER"
 

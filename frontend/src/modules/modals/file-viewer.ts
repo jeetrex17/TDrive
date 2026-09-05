@@ -1,4 +1,5 @@
 import { closeMedia, openStream } from '../../api';
+import { EventsOn } from '../../../wailsjs/runtime/runtime';
 import { formatBytes } from '../../utils';
 import { enqueueDownload } from '../transfers';
 import { notify } from '../notifications';
@@ -26,8 +27,19 @@ let viewerHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let activeToken = '';
 let activeTarget: FileViewerTarget | null = null;
 let openSeq = 0;
+let encryptedSessionsEpoch = 0;
+let unsubscribeEncryptedSessionsClosed: (() => void) | null = null;
+
+function bindEncryptedMediaLifecycle(): void {
+    if (unsubscribeEncryptedSessionsClosed) return;
+    unsubscribeEncryptedSessionsClosed = EventsOn('encrypted_media_sessions_closed', () => {
+        encryptedSessionsEpoch += 1;
+        if (activeTarget?.encrypted) closeFileViewer();
+    });
+}
 
 export function setupFileViewerModal(): void {
+    bindEncryptedMediaLifecycle();
     const host = document.getElementById('viewer-modal');
     if (!host || viewerHandle) return;
 
@@ -51,14 +63,20 @@ export async function openFileViewer(target: FileViewerTarget): Promise<void> {
         notify({ level: 'warning', title: `${fileKindLabel(target.name)} files cannot be opened yet` });
         return;
     }
+    bindEncryptedMediaLifecycle();
     const seq = ++openSeq;
-    await releaseActiveSession();
-    activeTarget = {
+    // The backend can reveal encryption only after a pending open completes.
+    const encryptedEpoch = encryptedSessionsEpoch;
+    const nextTarget = {
         id: Number(target.id || 0),
         name: String(target.name || 'File'),
         size: Number(target.size || 0),
         encrypted: Boolean(target.encrypted),
     };
+    activeTarget = nextTarget;
+    closeFileViewerView();
+    await releaseActiveSession();
+    if (seq !== openSeq) return;
 
     openFileViewerView({
         kind: kind as FileViewerKind,
@@ -72,11 +90,18 @@ export async function openFileViewer(target: FileViewerTarget): Promise<void> {
     });
 
     try {
-        const opened = await openStream(activeTarget.id);
+        const opened = await openStream(nextTarget.id);
         if (seq !== openSeq) {
             await closeMedia(opened.token);
             return;
         }
+        const encrypted = nextTarget.encrypted || Boolean(opened.info.encrypted);
+        if (encrypted && encryptedEpoch !== encryptedSessionsEpoch) {
+            closeFileViewer();
+            await closeMedia(opened.token);
+            return;
+        }
+        activeTarget = { ...nextTarget, encrypted };
         activeToken = opened.token;
         openFileViewerView({
             kind: kind as FileViewerKind,

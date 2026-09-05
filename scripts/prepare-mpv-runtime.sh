@@ -80,7 +80,9 @@ case "$PLATFORM" in
   linux)
     command -v mpv >/dev/null 2>&1 || die "mpv is not installed; apt-get install mpv first"
     mkdir -p "$runtime_root"
-    cp "$(command -v mpv)" "$runtime_root/mpv"
+    cp -pL "$(command -v mpv)" "$runtime_root/mpv"
+    bash "$SCRIPT_DIR/mpv-linux-libraries.sh" collect "$runtime_root"
+    bash "$SCRIPT_DIR/mpv-linux-libraries.sh" validate "$runtime_root"
     chmod 755 "$runtime_root/mpv"
     mpv_version="$("$runtime_root/mpv" --no-config --version | awk '$1 == "mpv" { sub(/^v/, "", $2); print $2; exit }')"
     write_fixture_notices "Linux media runtime assembled from the Ubuntu runner package." apt-cache policy mpv

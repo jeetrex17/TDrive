@@ -253,8 +253,10 @@ binary; without a bundled runtime the app falls back to `mpv` from `PATH`.
 Release packaging prefers checksum-pinned runtime archives configured through
 the `TDRIVE_<MACOS|WINDOWS|LINUX>_MPV_RUNTIME_URL` / `_SHA256` repository
 variables and otherwise bundles the runner's package-manager mpv, marked as
-unpinned in the bundle manifest. macOS Intel, Linux ARM, and notarization are
-not covered yet.
+unpinned in the bundle manifest. The Linux fallback includes mpv's shared
+libraries; packaging rejects dependencies outside the bundle except for the
+system C runtime and loader. macOS Intel, Linux ARM, and notarization are not
+covered yet.
 
 ## Where data is stored (local files)
 

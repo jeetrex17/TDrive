@@ -45,13 +45,16 @@ jobs:
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev
 
       - name: Validate media packaging scripts
-        run: bash -n scripts/acquire-mpv-runtime.sh scripts/prepare-mpv-runtime.sh scripts/mpv-metadata.sh scripts/package-mpv-darwin.sh scripts/package-mpv-linux.sh scripts/test-acquire-mpv-runtime.sh scripts/test-mpv-metadata.sh scripts/test-package-mpv-darwin.sh
+        run: bash -n scripts/acquire-mpv-runtime.sh scripts/prepare-mpv-runtime.sh scripts/mpv-metadata.sh scripts/mpv-linux-libraries.sh scripts/package-mpv-darwin.sh scripts/package-mpv-linux.sh scripts/test-acquire-mpv-runtime.sh scripts/test-mpv-metadata.sh scripts/test-mpv-linux-libraries.sh scripts/test-package-mpv-darwin.sh
 
       - name: Run media parser tests
         run: bash scripts/test-mpv-metadata.sh
 
       - name: Run media runtime acquisition tests
         run: bash scripts/test-acquire-mpv-runtime.sh
+
+      - name: Run Linux media dependency tests
+        run: bash scripts/test-mpv-linux-libraries.sh
 
       - name: Run macOS media packaging contract tests
         run: bash scripts/test-package-mpv-darwin.sh
