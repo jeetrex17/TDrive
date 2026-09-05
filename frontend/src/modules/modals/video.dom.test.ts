@@ -519,7 +519,7 @@ describe("native video track pickers", () => {
         await videoModule.closeVideoModal();
     });
 
-    it("hides the single-audio picker and clears tracks across player switches", async () => {
+    it("shows the single-audio picker and clears tracks across player switches", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(21, OLD_MKV_SESSION_ID));
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(22, "html-token"));
 
@@ -536,7 +536,9 @@ describe("native video track pickers", () => {
             ],
         });
 
-        expect(document.querySelector<HTMLElement>("#video-audio-wrap")?.hidden).toBe(true);
+        expect(document.querySelector<HTMLElement>("#video-audio-wrap")?.hidden).toBe(false);
+        document.querySelector<HTMLButtonElement>("#video-audio-button")?.click();
+        expect(document.querySelector('[data-track="1"]')?.getAttribute("aria-checked")).toBe("true");
         expect(document.querySelector<HTMLElement>("#video-subtitle-wrap")?.hidden).toBe(false);
 
         await videoModule.openVideoModal({ id: 22, name: "clip-22.mp4", size: 1024 });
@@ -904,6 +906,38 @@ describe("playback settings dock", () => {
         await nextTasks();
         expect(viewport.getBoundingClientRect().width).toBe(original.width);
         expect(viewport.getBoundingClientRect().height).toBe(original.height);
+        await videoModule.closeVideoModal();
+    });
+});
+
+
+describe("playback speed slider", () => {
+    it("changes native speed without closing the panel or hijacking arrow keys", async () => {
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(40, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 40, name: "movie.mkv", size: 1024 });
+        await nextTasks();
+        document.querySelector<HTMLButtonElement>("#video-speed-button")?.click();
+        const slider = document.querySelector<HTMLInputElement>("#video-speed-slider");
+        expect(slider).toBeTruthy();
+        if (!slider) return;
+        expect(slider.min).toBe("0.25");
+        expect(slider.max).toBe("4");
+        slider.focus();
+        slider.value = "1.75";
+        slider.dispatchEvent(new Event("input", { bubbles: true }));
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "speed", "1.75"]));
+        expect(slider.getAttribute("aria-valuetext")).toBe("1.75 times");
+        expect(document.querySelector("#video-speed-value")?.textContent).toBe("1.75x");
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(false);
+        const arrow = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+        slider.dispatchEvent(arrow);
+        expect(arrow.defaultPrevented).toBe(false);
+        expect(document.activeElement).toBe(slider);
+        slider.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
+        expect(document.activeElement?.id).toBe("video-speed-button");
         await videoModule.closeVideoModal();
     });
 });

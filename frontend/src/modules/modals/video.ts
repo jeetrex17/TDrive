@@ -1315,6 +1315,14 @@ function syncSpeed(state: PlayerState) {
     if (customInput && document.activeElement !== customInput) {
         customInput.value = formatRate(state.rate);
     }
+    const slider = byID<HTMLInputElement>("video-speed-slider");
+    if (slider) {
+        slider.value = String(state.rate);
+        slider.setAttribute("aria-valuetext", `${formatRate(state.rate)} times`);
+        slider.style.setProperty("--range-fill", `${(state.rate - MIN_PLAYBACK_RATE) / (MAX_PLAYBACK_RATE - MIN_PLAYBACK_RATE) * 100}%`);
+    }
+    const value = byID("video-speed-value");
+    if (value) value.textContent = `${formatRate(state.rate)}x`;
     speedMenuEl?.querySelectorAll<HTMLButtonElement>("[data-rate]").forEach((button) => {
         const selected = Math.abs(Number(button.dataset.rate || 1) - state.rate) < 0.001;
         button.classList.toggle("is-selected", selected);
@@ -1322,14 +1330,13 @@ function syncSpeed(state: PlayerState) {
     });
 }
 
-// syncNativeTracks shows the audio pill only when there is a choice to make and
-// the subtitle pill whenever subtitles exist. A pill appearing changes the
+// Keep available audio and subtitle tracks discoverable, even with one track. A pill appearing changes the
 // controls height, so the native viewport is re-measured.
 function syncNativeTracks(tracks: NativeMediaTrack[]) {
     const available = Boolean(activeNative && activeNative.presentation !== "standalone");
     const audio = tracks.filter((track) => track.type === "audio");
     const subtitles = tracks.filter((track) => track.type === "subtitle");
-    const audioChanged = audioPicker?.update(available ? audio : [], available && audio.length > 1);
+    const audioChanged = audioPicker?.update(available ? audio : [], available && audio.length > 0);
     const subtitleChanged = subtitlePicker?.update(available ? subtitles : [], available && subtitles.length > 0);
     if (audioChanged || subtitleChanged) scheduleNativeResize();
 }
@@ -2682,10 +2689,6 @@ function speedMenuButtons() {
     return Array.from(speedMenuEl?.querySelectorAll<HTMLButtonElement>("[data-rate]") || []);
 }
 
-function selectedSpeedButton() {
-    return speedMenuButtons().find((button) => button.classList.contains("is-selected")) || speedMenuButtons()[0] || null;
-}
-
 function setSpeedMenuOpen(open: boolean) {
     if (open) {
         closeMenus("speed");
@@ -2696,7 +2699,11 @@ function setSpeedMenuOpen(open: boolean) {
     if (!open && settingsSection === "speed") hideSettingsPanel();
     if (open) {
         clearChromeTimer();
-        requestAnimationFrame(() => { if (isSpeedMenuOpen()) selectedSpeedButton()?.focus({ preventScroll: true }); });
+        requestAnimationFrame(() => {
+            if (isSpeedMenuOpen() && !speedMenuEl?.contains(document.activeElement)) {
+                byID("video-speed-slider")?.focus({ preventScroll: true });
+            }
+        });
     } else if (isOpen() && !currentState.paused && !hasError) {
         scheduleChromeHide();
     }
@@ -2721,6 +2728,13 @@ function bindSpeedMenu() {
         closeSpeedMenu(true);
         revealChrome();
     });
+    speedMenuEl?.addEventListener("input", (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || input.id !== "video-speed-slider") return;
+        const rate = parseCustomPlaybackRate(input.value);
+        if (rate !== null) activeAdapter?.setSpeed(rate);
+        revealChrome();
+    });
     speedMenuEl?.addEventListener("submit", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -2738,7 +2752,7 @@ function bindSpeedMenu() {
     speedMenuEl?.addEventListener("keydown", (event) => {
         if (!isSpeedMenuOpen()) return;
         const target = event.target as HTMLElement | null;
-        if (target?.closest(".video-speed-custom")) {
+        if (target?.closest(".video-speed-custom, .video-speed-adjustment")) {
             if (event.key === "Escape") {
                 event.preventDefault();
                 event.stopPropagation();
@@ -2870,7 +2884,7 @@ function bindControls() {
 function renderSpeedOptions() {
     if (!speedMenuEl) return;
     const options = RATE_OPTIONS.map(speedOptionMarkup).join("");
-    speedMenuEl.innerHTML = `${options}${customSpeedMarkup()}`;
+    speedMenuEl.innerHTML = `<div class="video-speed-adjustment"><label class="video-settings-field" for="video-speed-slider"><span>Playback speed <output id="video-speed-value">1x</output></span><input id="video-speed-slider" class="video-settings-range" type="range" min="${MIN_PLAYBACK_RATE}" max="${MAX_PLAYBACK_RATE}" step="0.05" value="1" aria-valuetext="1 times" /></label><div class="video-range-endpoints" aria-hidden="true"><span>${MIN_PLAYBACK_RATE}x</span><span>${MAX_PLAYBACK_RATE}x</span></div></div><div class="video-speed-presets" role="menu" aria-label="Speed presets">${options}</div>${customSpeedMarkup()}`;
 }
 
 function speedOptionMarkup(rate: number) {

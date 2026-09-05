@@ -86,6 +86,6 @@ describe('VideoModal', () => {
         expect(body).toMatch(/id="video-subtitle-button"[^>]*aria-label="Subtitles"/);
         expect(body).toMatch(/id="video-audio-menu"[^>]*role="group"/);
         expect(body).toMatch(/id="video-subtitle-menu"[^>]*role="group"/);
-        expect(body).toMatch(/id="video-picture-button"[^>]*aria-label="Picture and subtitle settings"/);
+        expect(body).toMatch(/id="video-picture-button"[^>]*aria-label="Playback settings"/);
     });
 });

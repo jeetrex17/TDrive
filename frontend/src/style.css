@@ -4417,12 +4417,12 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .video-picture-options button { display: flex; flex-direction: column; align-items: start; gap: 4px; padding: 11px 12px; border: 1px solid #ffffff16; border-radius: 10px; background: #ffffff04; color: inherit; cursor: pointer; }
 .video-picture-options button small { color: #a8b2c5; font-size: 11px; }
 .video-picture-options button.is-selected { background: #7aa5ff20; border-color: #7aa5ff70; }
-.video-subtitle-preview { display: grid; place-items: center; min-height: 84px; background: linear-gradient(130deg,#344052,#121924); border-radius: 9px; padding: 10px; text-align: center; margin-bottom: 14px; }
+.video-subtitle-preview { display: grid; place-items: center; min-height: 84px; background: transparent; border-radius: 9px; padding: 10px; text-align: center; margin-bottom: 14px; }
 .video-subtitle-preview span { padding: 3px 6px; border-radius: 3px; }
 .video-settings-field { display: grid; gap: 9px; margin: 15px 0; font-size: 13px; }
 .video-settings-field > span { display: flex; justify-content: space-between; }
 .video-settings-field output { color: #a8b2c5; }
-.video-settings-field input[type=range] { width: 100%; accent-color: #8aacff; }
+
 .video-settings-inline { display: flex; justify-content: space-between; align-items: center; }
 .video-settings-field input[type=color] { border: 1px solid #ffffff30; background: none; width: 42px; height: 30px; border-radius: 5px; }
 .video-settings-check { display: flex; align-items: center; gap: 9px; font-size: 12px; margin: 13px 0; }
@@ -4444,7 +4444,7 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 #video-subtitle-settings { order: 1; }
 .video-subtitle-appearance { border-top: 1px solid #ffffff18; padding-top: 12px; }
 .video-settings-panel input { margin: 0; box-sizing: border-box; }
-.video-settings-panel input[type=checkbox] { width: 16px; height: 16px; padding: 0; flex: 0 0 auto; }
+
 .video-settings-panel input[type=color] { padding: 3px; appearance: auto; }
 .video-settings-panel input[type=range] { padding: 0; }
 @media (max-width: 760px) {
@@ -4452,3 +4452,91 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 }
 .video-track-list button { height: auto; min-height: 38px; padding: 9px; }
 .video-track-list button > span:last-child { white-space: normal; overflow: visible; line-height: 1.4; }
+
+/* Preserve native input semantics while rendering consistent WebKit/Firefox controls. */
+.video-settings-panel .video-settings-range {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    height: 32px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    box-shadow: none;
+    cursor: pointer;
+    --range-fill: 20%;
+}
+.video-settings-range::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(to right, var(--video-accent) var(--range-fill), #58657b var(--range-fill));
+}
+.video-settings-range::-moz-range-track {
+    height: 6px;
+    border-radius: 999px;
+    background: #58657b;
+}
+.video-settings-range::-moz-range-progress { height: 6px; border-radius: 999px; background: var(--video-accent); }
+.video-settings-range::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 18px;
+    height: 18px;
+    margin-top: -6px;
+    border: 2px solid var(--video-accent);
+    border-radius: 50%;
+    background: #f4f7ff;
+    box-shadow: 0 1px 4px #0006;
+}
+.video-settings-range::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--video-accent);
+    border-radius: 50%;
+    background: #f4f7ff;
+    box-shadow: 0 1px 4px #0006;
+}
+.video-settings-range:hover::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
+.video-settings-range:hover::-moz-range-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
+.video-settings-panel .video-settings-range:focus-visible { outline: 2px solid var(--video-accent); outline-offset: 3px; box-shadow: none; }
+.video-settings-check { min-height: 40px; cursor: pointer; border-radius: 8px; padding: 4px 6px; margin: 6px -6px; }
+.video-settings-check:hover { background: #ffffff08; }
+.video-settings-panel .video-settings-check input[type=checkbox] {
+    appearance: none;
+    -webkit-appearance: none;
+    display: grid;
+    place-content: center;
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    padding: 0;
+    border: 1.5px solid #8a96ac;
+    border-radius: 5px;
+    background: transparent;
+    box-shadow: none;
+    cursor: pointer;
+}
+.video-settings-check input[type=checkbox]::before {
+    content: '';
+    width: 5px;
+    height: 9px;
+    margin-top: -2px;
+    border: solid #101725;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg) scale(0);
+}
+.video-settings-panel .video-settings-check input[type=checkbox]:checked { border-color: var(--video-accent); background: var(--video-accent); }
+.video-settings-check input[type=checkbox]:checked::before { transform: rotate(45deg) scale(1); }
+.video-settings-field output { color: #dce8ff; font-variant-numeric: tabular-nums; }
+.video-range-endpoints { display: flex; justify-content: space-between; color: #a8b2c5; font-size: 11px; margin-top: -10px; }
+.video-speed-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 18px; }
+.video-settings-panel .video-speed-presets button { display: flex; justify-content: center; min-height: 36px; height: auto; padding: 8px 4px; border: 1px solid #ffffff20; border-radius: 8px; }
+.video-speed-presets .video-menu-check { display: none; }
+.video-settings-panel .video-speed-presets button.is-selected { border-color: var(--video-accent); background: var(--video-accent-bg); }
+@media (forced-colors: active) {
+    .video-settings-panel .video-settings-check input[type=checkbox] { appearance: auto; }
+    .video-settings-check input[type=checkbox]::before { content: none; }
+    .video-settings-panel .video-settings-range { appearance: auto; }
+}

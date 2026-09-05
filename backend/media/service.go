@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+	"time"
 
 	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/tgclient"
@@ -35,6 +36,7 @@ type Config struct {
 type Service struct {
 	peers         PeerResolver
 	ranges        tgclient.RangeClient
+	resolveRetry  tgclient.FloodWaitRetryPolicy
 	keys          MasterKeyProvider
 	encGate       sync.Locker
 	encGeneration func() uint64
@@ -46,8 +48,11 @@ type Service struct {
 
 func NewService(cfg Config) *Service {
 	s := &Service{
-		peers:         cfg.Peers,
-		ranges:        cfg.Ranges,
+		peers:  cfg.Peers,
+		ranges: cfg.Ranges,
+		resolveRetry: tgclient.FloodWaitRetryPolicy{
+			MaxRetries: 2, MaxWait: 30 * time.Second, MaxTotalWait: time.Minute,
+		},
 		keys:          cfg.Keys,
 		encGate:       cfg.EncryptionOpenGate,
 		encGeneration: cfg.EncryptionOpenGeneration,
@@ -112,14 +117,26 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		return OpenResult{}, ErrUnsupportedMediaType
 	}
 
-	peer, err := s.peers.ResolvePeer(ctx, channelID)
+	// Metadata RPCs can be rate limited before a range reader exists. Honor
+	// Telegram's full wait here too, with a small, cancellable open budget.
+	var peer tgclient.InputPeer
+	err = s.resolveRetry.Do(ctx, func() error {
+		var resolveErr error
+		peer, resolveErr = s.peers.ResolvePeer(ctx, channelID)
+		return resolveErr
+	})
 	if err != nil {
 		return OpenResult{}, fmt.Errorf("media: resolve peer: %w", err)
 	}
 	segments := make([]resolvedSegment, 0, len(file.Segments))
 	var start int64
 	for _, seg := range file.Segments {
-		ref, err := s.ranges.ResolveDocument(ctx, peer, seg.MsgID)
+		var ref tgclient.DocumentRef
+		err := s.resolveRetry.Do(ctx, func() error {
+			var resolveErr error
+			ref, resolveErr = s.ranges.ResolveDocument(ctx, peer, seg.MsgID)
+			return resolveErr
+		})
 		if err != nil {
 			return OpenResult{}, fmt.Errorf("media: resolve segment %d: %w", seg.MsgID, err)
 		}

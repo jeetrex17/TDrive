@@ -8,7 +8,7 @@
     import MinimizeIcon from '@lucide/svelte/icons/minimize';
     import PauseIcon from '@lucide/svelte/icons/pause';
     import PlayIcon from '@lucide/svelte/icons/play';
-    import RatioIcon from '@lucide/svelte/icons/ratio';
+    import SettingsIcon from '@lucide/svelte/icons/settings';
     import Volume2Icon from '@lucide/svelte/icons/volume-2';
     import VolumeXIcon from '@lucide/svelte/icons/volume-x';
     import XIcon from '@lucide/svelte/icons/x';
@@ -67,7 +67,7 @@
         <div class="video-settings-body">
             <div id="video-audio-menu" class="video-menu video-track-menu" role="group" aria-label="Audio track"></div>
             <div id="video-subtitle-menu" class="video-menu video-track-menu" role="group" aria-label="Subtitles"></div>
-            <div id="video-speed-menu" class="video-menu video-speed-menu" role="menu" aria-label="Playback speed"></div>
+            <div id="video-speed-menu" class="video-menu video-speed-menu" role="group" aria-label="Playback speed"></div>
             <VideoSettingsPanel {initialPreferences} {onPreferencesChange} />
         </div>
     </aside>
@@ -135,8 +135,8 @@
                     <button id="video-speed-button" class="video-pill-button video-speed-button" type="button" aria-controls="video-settings-panel" aria-expanded="false">1x</button>
                 </div>
 
-                <button id="video-picture-button" class="video-pill-button video-picture-button" type="button" aria-label="Picture and subtitle settings" aria-expanded="false" aria-controls="video-settings-panel" title="Picture and subtitle settings">
-                    <RatioIcon size={15} aria-hidden="true" />
+                <button id="video-picture-button" class="video-pill-button video-picture-button" type="button" aria-label="Playback settings" aria-expanded="false" aria-controls="video-settings-panel" title="Playback settings">
+                    <SettingsIcon size={18} aria-hidden="true" />
                 </button>
 
                 <button id="video-fullscreen" class="video-icon-btn video-fullscreen-btn" type="button" data-state="windowed" aria-label="Enter fullscreen" title="Enter fullscreen">
