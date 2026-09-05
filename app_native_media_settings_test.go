@@ -16,7 +16,7 @@ func TestValidateNativeMediaPresentationSettings(t *testing.T) {
 		{"sub-outline-size", []string{"0", "1.65", "6"}, []string{"-0.01", "6.01", "NaN", "Inf", "-Inf", "thin"}},
 		{"sub-back-color", []string{"#AF000000", "#00000000", "#aF123aBc"}, []string{"black", "#000000", "#ZZ000000", "AF000000", "#AF000000\n"}},
 		{"sub-border-style", []string{"background-box", "outline-and-shadow"}, []string{"opaque-box", "none", "1"}},
-		{"sub-ass-override", []string{"force", "scale"}, []string{"yes", "no", "strip", "true"}},
+		{"sub-ass-override", []string{"force", "scale", "strip"}, []string{"yes", "no", "true"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.property, func(t *testing.T) {

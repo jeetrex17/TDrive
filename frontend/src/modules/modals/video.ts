@@ -1345,6 +1345,10 @@ function syncNativeTracks(tracks: NativeMediaTrack[]) {
     const available = Boolean(activeNative && activeNative.presentation !== "standalone");
     const audio = tracks.filter((track) => track.type === "audio");
     const subtitles = tracks.filter((track) => track.type === "subtitle");
+    const selectedCodec = subtitles.find((track) => track.selected)?.codec?.toLowerCase() ?? "";
+    const bitmapSubtitle = ["hdmv_pgs_subtitle", "pgs", "dvd_subtitle", "dvdsub", "dvb_subtitle", "dvbsub", "xsub"].includes(selectedCodec);
+    const formatNote = byID("video-subtitle-format-note");
+    if (formatNote) formatNote.hidden = !available || !bitmapSubtitle;
     const audioChanged = audioPicker?.update(available ? audio : [], available && audio.length > 0);
     const subtitleChanged = subtitlePicker?.update(available ? subtitles : [], available && subtitles.length > 0);
     if (audioChanged || subtitleChanged) scheduleNativeResize();

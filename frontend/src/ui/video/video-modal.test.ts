@@ -58,7 +58,8 @@ describe('VideoModal', () => {
             'video-subtitle-color',
             'video-subtitle-outline',
             'video-subtitle-background',
-            'video-subtitle-override',
+            'video-subtitle-save',
+            'video-subtitle-save-status',
             'video-subtitle-reset',
             'video-fullscreen',
         ]) {

@@ -467,9 +467,9 @@ describe("native video track pickers", () => {
         const size = document.querySelector<HTMLInputElement>("#video-subtitle-size");
         const color = document.querySelector<HTMLInputElement>("#video-subtitle-color");
         const background = document.querySelector<HTMLInputElement>("#video-subtitle-background");
-        const override = document.querySelector<HTMLInputElement>("#video-subtitle-override");
-        expect(size && color && background && override).toBeTruthy();
-        if (!size || !color || !background || !override) return;
+        const save = document.querySelector<HTMLButtonElement>("#video-subtitle-save");
+        expect(size && color && background && save).toBeTruthy();
+        if (!size || !color || !background || !save) return;
 
         size.value = "52";
         size.dispatchEvent(new Event("input", { bubbles: true }));
@@ -477,14 +477,13 @@ describe("native video track pickers", () => {
         color.dispatchEvent(new Event("input", { bubbles: true }));
         background.checked = true;
         background.dispatchEvent(new Event("change", { bubbles: true }));
-        override.checked = true;
-        override.dispatchEvent(new Event("change", { bubbles: true }));
+        save.click();
         await nextTasks();
 
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-font-size", "52"]);
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-color", "#FFCC00"]);
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-back-color", "#AF000000"]);
-        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "force"]);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "strip"]);
         expect([...storage.values()].some((value) => value.includes('"pictureMode":"fill"'))).toBe(true);
 
         await videoModule.closeVideoModal();
@@ -816,7 +815,9 @@ describe("playback settings dock", () => {
         ["color", "#ffff00", "sub-color", "#FFFF00"],
         ["outline", "4", "sub-outline-size", "4"],
         ["background", "", "sub-border-style", "background-box"],
-    ])("enables authored subtitle overrides when editing %s without an extra checkbox step", async (field, value, property, expected) => {
+    ])("previews %s locally and saves subtitle overrides explicitly", async (field, value, property, expected) => {
+        const setItem = vi.fn();
+        vi.stubGlobal("localStorage", { getItem: () => null, setItem });
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
         const videoModule = await import("./video");
         videoModule.setupVideoModal();
@@ -831,17 +832,77 @@ describe("playback settings dock", () => {
             control.dispatchEvent(new Event("input", { bubbles: true }));
         }
         flushSync();
+        await nextTasks();
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
+        expect(setItem).not.toHaveBeenCalled();
+        expect(document.querySelector("#video-subtitle-override")).toBeNull();
+        document.querySelector<HTMLButtonElement>("#video-subtitle-save")!.click();
+        flushSync();
         await vi.waitFor(() => {
             expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", property, expected]);
-            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "force"]);
+            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "strip"]);
         });
-        const override = document.querySelector<HTMLInputElement>("#video-subtitle-override")!;
-        expect(override.checked).toBe(true);
+        expect(setItem).toHaveBeenCalledWith("tdrive.playback-appearance.v1", expect.stringContaining('"overrideStyledSubtitles":true'));
+        expect(document.querySelector("#video-subtitle-save-status")?.textContent).toBe("Saved");
         apiMocks.nativeMediaCommand.mockClear();
-        override.click();
+        document.querySelector<HTMLButtonElement>("#video-subtitle-reset")!.click();
         flushSync();
         await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "scale"]));
-        expect(override.checked).toBe(false);
+        expect(setItem).toHaveBeenLastCalledWith("tdrive.playback-appearance.v1", expect.stringContaining('"overrideStyledSubtitles":false'));
+        await videoModule.closeVideoModal();
+    });
+
+    it("saves unchanged legacy custom appearance and keeps drafts separate from picture changes", async () => {
+        const legacy = { pictureMode: "fit", subtitleFontSize: 52, subtitleColor: "#FF0000", subtitleOutlineSize: 3, subtitleBackground: true, overrideStyledSubtitles: false };
+        const setItem = vi.fn();
+        vi.stubGlobal("localStorage", { getItem: () => JSON.stringify(legacy), setItem });
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "legacy.mkv" });
+        await nextTasks();
+        openSettings("subtitle");
+        document.querySelector<HTMLButtonElement>("#video-subtitle-save")!.click();
+        flushSync();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "strip"]));
+        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, overrideStyledSubtitles: true });
+        const color = document.querySelector<HTMLInputElement>("#video-subtitle-color")!;
+        color.value = "#00ff00";
+        color.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTasks();
+        expect(document.querySelector("#video-subtitle-save-status")?.textContent).toBe("Unsaved changes");
+        document.querySelector<HTMLButtonElement>("#video-aspect-button")!.click();
+        await nextTasks();
+        expect(color.value.toLowerCase()).toBe("#00ff00");
+        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, pictureMode: "fill", overrideStyledSubtitles: true });
+        openSettings("picture");
+        document.querySelector<HTMLButtonElement>('[data-picture-mode="4:3"]')!.click();
+        await nextTasks();
+        expect(color.value.toLowerCase()).toBe("#00ff00");
+        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, pictureMode: "4:3", overrideStyledSubtitles: true });
+        openSettings("subtitle");
+        document.querySelector<HTMLButtonElement>("#video-subtitle-save")!.click();
+        flushSync();
+        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, pictureMode: "4:3", subtitleColor: "#00FF00", overrideStyledSubtitles: true });
+        await videoModule.closeVideoModal();
+    });
+
+    it("explains when the selected subtitle track cannot use text styling", async () => {
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "image-subtitles.mkv" });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: [
+            { id: 1, type: "subtitle", codec: "hdmv_pgs_subtitle", selected: true },
+            { id: 2, type: "subtitle", codec: "subrip", selected: false },
+        ] });
+        await nextTasks();
+        openSettings("subtitle");
+        const notice = document.querySelector<HTMLElement>("#video-subtitle-format-note")!;
+        expect(notice.hidden).toBe(false);
+        expect(notice.textContent).toContain("image-based");
+        document.querySelector<HTMLButtonElement>("#video-subtitle-button")?.click();
+        expect(notice.hidden).toBe(true);
         await videoModule.closeVideoModal();
     });
 
@@ -865,11 +926,13 @@ describe("playback settings dock", () => {
         color.dispatchEvent(new Event("input", { bubbles: true }));
         document.querySelector<HTMLInputElement>("#video-subtitle-background")?.click();
         flushSync();
+        document.querySelector<HTMLButtonElement>("#video-subtitle-save")!.click();
+        flushSync();
         await vi.waitFor(() => {
             expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-font-size", "60"]);
             expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-color", "#FFFF00"]);
             expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-border-style", "background-box"]);
-            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "force"]);
+            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "strip"]);
         });
         document.querySelector<HTMLButtonElement>("#video-subtitle-reset")?.click();
         flushSync();

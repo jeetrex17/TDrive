@@ -72,7 +72,7 @@ describe("playback preferences", () => {
         const custom = nativePreferenceCommands({ ...DEFAULT_PLAYBACK_PREFERENCES, subtitleBackground: true, overrideStyledSubtitles: true });
         expect(custom).toContainEqual(["set", "sub-back-color", "#AF000000"]);
         expect(custom).toContainEqual(["set", "sub-border-style", "background-box"]);
-        expect(custom).toContainEqual(["set", "sub-ass-override", "force"]);
+        expect(custom).toContainEqual(["set", "sub-ass-override", "strip"]);
         expect(custom).toContainEqual(["set", "sub-color", "#FFFFFF"]);
         expect(custom).toContainEqual(["set", "sub-outline-size", "1.65"]);
     });

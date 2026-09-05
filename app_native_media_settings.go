@@ -28,7 +28,7 @@ func validateNativeMediaPresentationSetting(property, value string) error {
 	case "sub-border-style":
 		valid = value == "background-box" || value == "outline-and-shadow"
 	case "sub-ass-override":
-		valid = value == "force" || value == "scale"
+		valid = value == "force" || value == "scale" || value == "strip"
 	default:
 		return fmt.Errorf("unsupported native media set target")
 	}

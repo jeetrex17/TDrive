@@ -69,7 +69,8 @@ export function nativePreferenceCommands(preferences: PlaybackPreferences): stri
         ["set", "sub-outline-size", String(prefs.subtitleOutlineSize)],
         ["set", "sub-back-color", prefs.subtitleBackground ? "#AF000000" : "#00000000"],
         ["set", "sub-border-style", prefs.subtitleBackground ? "background-box" : "outline-and-shadow"],
-        ["set", "sub-ass-override", prefs.overrideStyledSubtitles ? "force" : "scale"],
+        // Strip inline ASS/SRT formatting too: force still preserves inline size/color tags.
+        ["set", "sub-ass-override", prefs.overrideStyledSubtitles ? "strip" : "scale"],
     ];
 }
 
