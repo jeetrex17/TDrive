@@ -3718,12 +3718,24 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .video-time-display .video-time { font-size: inherit; font-weight: inherit; }
 .video-time-separator { padding: 0 4px; }
 .video-time-display:focus-visible { outline: 2px solid var(--video-accent); outline-offset: 2px; }
-.video-end-time { margin-left: 8px; color: #a8b2c5; white-space: nowrap; }
+.video-end-time {
+    display: inline-grid;
+    grid-template-columns: 0fr;
+    margin-left: 0;
+    color: #a8b2c5;
+    white-space: nowrap;
+    vertical-align: bottom;
+    opacity: 0;
+    visibility: hidden;
+    transition: grid-template-columns 220ms ease, margin-left 220ms ease, opacity 180ms ease, visibility 0s 220ms;
+}
+.video-end-time > span { min-width: 0; overflow: hidden; }
+.video-end-time.is-visible { grid-template-columns: 1fr; margin-left: 8px; opacity: 1; visibility: visible; transition-delay: 0s; }
 @media (hover: none) {
     .video-volume-group .video-volume-slider { width: 76px; margin-left: 12px; opacity: 1; pointer-events: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
-    .video-volume-group .video-volume-slider { transition: none; }
+    .video-volume-group .video-volume-slider, .video-end-time { transition: none; }
 }
 
 .video-volume-track {

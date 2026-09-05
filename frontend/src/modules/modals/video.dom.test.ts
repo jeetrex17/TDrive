@@ -482,7 +482,7 @@ describe("native video track pickers", () => {
 
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-font-size", "52"]);
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-color", "#FFCC00"]);
-        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-back-color", "#AF000000"]);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-back-color", "#B0000000"]);
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "strip"]);
         expect([...storage.values()].some((value) => value.includes('"pictureMode":"fill"'))).toBe(true);
 
@@ -851,6 +851,57 @@ describe("playback settings dock", () => {
         await videoModule.closeVideoModal();
     });
 
+    it("previews background color and transparency locally, saves them, and resets them", async () => {
+        const setItem = vi.fn();
+        vi.stubGlobal("localStorage", { getItem: () => null, setItem });
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "background.mkv" });
+        await nextTasks();
+        openSettings("subtitle");
+        expect(document.querySelector("#video-subtitle-background-color")).toBeNull();
+        expect(document.querySelector("#video-subtitle-background-transparency")).toBeNull();
+        apiMocks.nativeMediaCommand.mockClear();
+        document.querySelector<HTMLInputElement>("#video-subtitle-background")!.click();
+        flushSync();
+        await nextTasks();
+        const color = document.querySelector<HTMLInputElement>("#video-subtitle-background-color")!;
+        const transparency = document.querySelector<HTMLInputElement>("#video-subtitle-background-transparency")!;
+        expect(color.value).toBe("#000000");
+        expect(transparency.value).toBe("31");
+        color.value = "#123456";
+        color.dispatchEvent(new Event("input", { bubbles: true }));
+        transparency.value = "50";
+        transparency.dispatchEvent(new Event("input", { bubbles: true }));
+        flushSync();
+        await nextTasks();
+        const preview = document.querySelector<HTMLElement>(".video-subtitle-preview span")!;
+        const expectedStyle = document.createElement("span");
+        expectedStyle.style.background = "#12345680";
+        expect(preview.style.background).toBe(expectedStyle.style.background);
+        await nextTasks();
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
+        expect(setItem).not.toHaveBeenCalled();
+        document.querySelector<HTMLButtonElement>("#video-subtitle-save")!.click();
+        flushSync();
+        await nextTasks();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-back-color", "#80123456"]));
+        expect(JSON.parse(setItem.mock.lastCall![1])).toMatchObject({ subtitleBackground: true, subtitleBackgroundColor: "#123456", subtitleBackgroundTransparency: 50 });
+        document.querySelector<HTMLButtonElement>("#video-subtitle-reset")!.click();
+        flushSync();
+        await nextTasks();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-back-color", "#00000000"]));
+        expect(JSON.parse(setItem.mock.lastCall![1])).toMatchObject({ subtitleBackground: false, subtitleBackgroundColor: "#000000", subtitleBackgroundTransparency: 31 });
+        expect(document.querySelector("#video-subtitle-background-color")).toBeNull();
+        document.querySelector<HTMLInputElement>("#video-subtitle-background")!.click();
+        flushSync();
+        await nextTasks();
+        expect(document.querySelector<HTMLInputElement>("#video-subtitle-background-color")!.value).toBe("#000000");
+        expect(document.querySelector<HTMLInputElement>("#video-subtitle-background-transparency")!.value).toBe("31");
+        await videoModule.closeVideoModal();
+    });
+
     it("saves unchanged legacy custom appearance and keeps drafts separate from picture changes", async () => {
         const legacy = { pictureMode: "fit", subtitleFontSize: 52, subtitleColor: "#FF0000", subtitleOutlineSize: 3, subtitleBackground: true, overrideStyledSubtitles: false };
         const setItem = vi.fn();
@@ -864,7 +915,7 @@ describe("playback settings dock", () => {
         document.querySelector<HTMLButtonElement>("#video-subtitle-save")!.click();
         flushSync();
         await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "strip"]));
-        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, overrideStyledSubtitles: true });
+        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, subtitleBackgroundColor: "#000000", subtitleBackgroundTransparency: 31, overrideStyledSubtitles: true });
         const color = document.querySelector<HTMLInputElement>("#video-subtitle-color")!;
         color.value = "#00ff00";
         color.dispatchEvent(new Event("input", { bubbles: true }));
@@ -872,16 +923,16 @@ describe("playback settings dock", () => {
         document.querySelector<HTMLButtonElement>("#video-aspect-button")!.click();
         await nextTasks();
         expect(color.value.toLowerCase()).toBe("#00ff00");
-        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, pictureMode: "fill", overrideStyledSubtitles: true });
+        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, subtitleBackgroundColor: "#000000", subtitleBackgroundTransparency: 31, pictureMode: "fill", overrideStyledSubtitles: true });
         openSettings("picture");
         document.querySelector<HTMLButtonElement>('[data-picture-mode="4:3"]')!.click();
         await nextTasks();
         expect(color.value.toLowerCase()).toBe("#00ff00");
-        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, pictureMode: "4:3", overrideStyledSubtitles: true });
+        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, subtitleBackgroundColor: "#000000", subtitleBackgroundTransparency: 31, pictureMode: "4:3", overrideStyledSubtitles: true });
         openSettings("subtitle");
         document.querySelector<HTMLButtonElement>("#video-subtitle-save")!.click();
         flushSync();
-        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, pictureMode: "4:3", subtitleColor: "#00FF00", overrideStyledSubtitles: true });
+        expect(JSON.parse(setItem.mock.lastCall![1])).toEqual({ ...legacy, subtitleBackgroundColor: "#000000", subtitleBackgroundTransparency: 31, pictureMode: "4:3", subtitleColor: "#00FF00", overrideStyledSubtitles: true });
         await videoModule.closeVideoModal();
     });
 
@@ -1079,7 +1130,8 @@ describe("video finish time", () => {
             expect(document.querySelector("#video-duration")?.textContent).toBe("40:00");
             expect(button.getAttribute("aria-pressed")).toBe("false");
             button.click();
-            expect(end.hidden).toBe(false);
+            expect(end.getAttribute("aria-hidden")).toBe("false");
+            expect(end.classList.contains("is-visible")).toBe(true);
             expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 6, 0, 20))}`);
             expect(button.getAttribute("aria-pressed")).toBe("true");
             video.playbackRate = 2;
@@ -1096,11 +1148,13 @@ describe("video finish time", () => {
             video.dispatchEvent(new Event("durationchange"));
             expect(end.textContent).toBe(" · End time unavailable");
             button.click();
-            expect(end.hidden).toBe(true);
+            expect(end.getAttribute("aria-hidden")).toBe("true");
+            expect(end.classList.contains("is-visible")).toBe(false);
             expect(button.getAttribute("aria-pressed")).toBe("false");
             button.click();
             await videoModule.closeVideoModal();
-            expect(end.hidden).toBe(true);
+            expect(end.getAttribute("aria-hidden")).toBe("true");
+            expect(end.classList.contains("is-visible")).toBe(false);
             expect(button.getAttribute("aria-pressed")).toBe("false");
             expect(vi.getTimerCount()).toBe(0);
         } finally {

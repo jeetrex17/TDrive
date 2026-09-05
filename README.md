@@ -253,11 +253,12 @@ binary; without a bundled runtime the app falls back to `mpv` from `PATH`.
 The bottom audio, subtitle, speed, and picture buttons cycle through options
 without opening a menu. Volume sits beside the forward-seek button, with its
 slider revealed on hover or keyboard focus. Click elapsed/total time to show
-the estimated local finish time at the current speed (assuming playback resumes
+the smoothly revealed local finish estimate at the current speed (assuming playback resumes
 now when paused). Picture modes include Fit, Fill, Original size, 16:9,
 and 4:3. Only the settings gear opens the panel with full audio and subtitle
 lists. Subtitle appearance settings offer
-size, color, outline, and a dark background, with a live sample and Reset.
+size, text color, outline, and background color with 0–100% transparency,
+with a live sample and Reset.
 The settings gear also provides a speed slider from 0.25x to 4x, presets, and
 exact speed entry. Audio tracks remain visible even when only one is available.
 Appearance preferences are saved on this device. Text styling applies to native

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { DEFAULT_PLAYBACK_PREFERENCES, normalizePlaybackPreferences, type PlaybackPreferences, type PictureMode } from '../../modules/video/playback-preferences';
+    import { DEFAULT_PLAYBACK_PREFERENCES, normalizePlaybackPreferences, subtitleBackgroundColors, type PlaybackPreferences, type PictureMode } from '../../modules/video/playback-preferences';
 
     let {
         initialPreferences = DEFAULT_PLAYBACK_PREFERENCES,
@@ -56,7 +56,7 @@
     <h3>Subtitle appearance</h3>
     <p id="video-subtitle-format-note" class="video-settings-note" role="status" hidden>This track uses image-based subtitles. Saved text styles won't change it.</p>
     <div class="video-subtitle-preview" aria-label="Subtitle preview" style:color={subtitlePreferences.subtitleColor} style:font-size={`${subtitlePreferences.subtitleFontSize * .55}px`} style:text-shadow={`0 1px ${subtitlePreferences.subtitleOutlineSize}px #000, 1px 0 ${subtitlePreferences.subtitleOutlineSize}px #000, -1px 0 ${subtitlePreferences.subtitleOutlineSize}px #000`}>
-        <span style:background={subtitlePreferences.subtitleBackground ? '#000a' : 'transparent'}>Your next adventure awaits.</span>
+        <span style:background={subtitleBackgroundColors(subtitlePreferences).css}>Your next adventure awaits.</span>
     </div>
     <label class="video-settings-field" for="video-subtitle-size"><span>Size <output>{subtitlePreferences.subtitleFontSize}</output></span>
         <input id="video-subtitle-size" class="video-settings-range" style:--range-fill={`${(subtitlePreferences.subtitleFontSize - 20) / 52 * 100}%`} type="range" min="20" max="72" step="1" value={subtitlePreferences.subtitleFontSize} oninput={(event) => updateSubtitle({ subtitleFontSize: Number(event.currentTarget.value) })} />
@@ -67,7 +67,15 @@
     <label class="video-settings-field" for="video-subtitle-outline"><span>Outline <output>{subtitlePreferences.subtitleOutlineSize}</output></span>
         <input id="video-subtitle-outline" class="video-settings-range" style:--range-fill={`${subtitlePreferences.subtitleOutlineSize / 6 * 100}%`} type="range" min="0" max="6" step="0.05" value={subtitlePreferences.subtitleOutlineSize} oninput={(event) => updateSubtitle({ subtitleOutlineSize: Number(event.currentTarget.value) })} />
     </label>
-    <label class="video-settings-check"><input id="video-subtitle-background" type="checkbox" checked={subtitlePreferences.subtitleBackground} onchange={(event) => updateSubtitle({ subtitleBackground: event.currentTarget.checked })} /> Dark background</label>
+    <label class="video-settings-check"><input id="video-subtitle-background" type="checkbox" checked={subtitlePreferences.subtitleBackground} onchange={(event) => updateSubtitle({ subtitleBackground: event.currentTarget.checked })} /> Background</label>
+    {#if subtitlePreferences.subtitleBackground}
+        <label class="video-settings-field video-settings-inline" for="video-subtitle-background-color"><span>Background color</span>
+            <input id="video-subtitle-background-color" type="color" value={subtitlePreferences.subtitleBackgroundColor} oninput={(event) => updateSubtitle({ subtitleBackgroundColor: event.currentTarget.value })} />
+        </label>
+        <label class="video-settings-field" for="video-subtitle-background-transparency"><span>Transparency <output>{subtitlePreferences.subtitleBackgroundTransparency}%</output></span>
+            <input id="video-subtitle-background-transparency" class="video-settings-range" style:--range-fill={`${subtitlePreferences.subtitleBackgroundTransparency}%`} type="range" min="0" max="100" step="1" value={subtitlePreferences.subtitleBackgroundTransparency} oninput={(event) => updateSubtitle({ subtitleBackgroundTransparency: Number(event.currentTarget.value) })} />
+        </label>
+    {/if}
     <div class="video-subtitle-actions">
         <button id="video-subtitle-save" class="video-settings-save" type="button" onclick={saveSubtitles}>Save</button>
         <button id="video-subtitle-reset" class="video-settings-reset" type="button" onclick={resetSubtitles}>Reset</button>

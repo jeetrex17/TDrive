@@ -6,6 +6,8 @@ export interface PlaybackPreferences {
     subtitleColor: string;
     subtitleOutlineSize: number;
     subtitleBackground: boolean;
+    subtitleBackgroundColor: string;
+    subtitleBackgroundTransparency: number;
     overrideStyledSubtitles: boolean;
 }
 
@@ -15,6 +17,8 @@ export const DEFAULT_PLAYBACK_PREFERENCES: Readonly<PlaybackPreferences> = Objec
     subtitleColor: "#FFFFFF",
     subtitleOutlineSize: 1.65,
     subtitleBackground: false,
+    subtitleBackgroundColor: "#000000",
+    subtitleBackgroundTransparency: 31,
     overrideStyledSubtitles: false,
 });
 
@@ -36,6 +40,9 @@ export function normalizePlaybackPreferences(value: unknown): PlaybackPreference
             ? candidate.subtitleColor.toUpperCase() : DEFAULT_PLAYBACK_PREFERENCES.subtitleColor,
         subtitleOutlineSize: boundedNumber(candidate.subtitleOutlineSize, 1.65, 0, 6),
         subtitleBackground: candidate.subtitleBackground === true,
+        subtitleBackgroundColor: typeof candidate.subtitleBackgroundColor === "string" && /^#[\da-f]{6}$/i.test(candidate.subtitleBackgroundColor)
+            ? candidate.subtitleBackgroundColor.toUpperCase() : DEFAULT_PLAYBACK_PREFERENCES.subtitleBackgroundColor,
+        subtitleBackgroundTransparency: boundedNumber(candidate.subtitleBackgroundTransparency, DEFAULT_PLAYBACK_PREFERENCES.subtitleBackgroundTransparency, 0, 100),
         overrideStyledSubtitles: candidate.overrideStyledSubtitles === true,
     };
 }
@@ -57,6 +64,14 @@ export function savePlaybackPreferences(preferences: PlaybackPreferences): void 
     }
 }
 
+/** mpv places alpha first; CSS places it last. Share quantization for an identical preview. */
+export function subtitleBackgroundColors(preferences: PlaybackPreferences): { native: string; css: string } {
+    const prefs = normalizePlaybackPreferences(preferences);
+    if (!prefs.subtitleBackground) return { native: "#00000000", css: "#00000000" };
+    const alpha = Math.round(255 * (1 - prefs.subtitleBackgroundTransparency / 100)).toString(16).padStart(2, "0").toUpperCase();
+    return { native: `#${alpha}${prefs.subtitleBackgroundColor.slice(1)}`, css: `${prefs.subtitleBackgroundColor}${alpha}` };
+}
+
 /** Reset all related properties, so changing modes never leaves a previous crop or stretch active. */
 export function nativePreferenceCommands(preferences: PlaybackPreferences): string[][] {
     const prefs = normalizePlaybackPreferences(preferences);
@@ -67,7 +82,7 @@ export function nativePreferenceCommands(preferences: PlaybackPreferences): stri
         ["set", "sub-font-size", String(prefs.subtitleFontSize)],
         ["set", "sub-color", prefs.subtitleColor],
         ["set", "sub-outline-size", String(prefs.subtitleOutlineSize)],
-        ["set", "sub-back-color", prefs.subtitleBackground ? "#AF000000" : "#00000000"],
+        ["set", "sub-back-color", subtitleBackgroundColors(prefs).native],
         ["set", "sub-border-style", prefs.subtitleBackground ? "background-box" : "outline-and-shadow"],
         // Strip inline ASS/SRT formatting too: force still preserves inline size/color tags.
         ["set", "sub-ass-override", prefs.overrideStyledSubtitles ? "strip" : "scale"],

@@ -6,6 +6,7 @@ import {
     nativePreferenceCommands,
     normalizePlaybackPreferences,
     savePlaybackPreferences,
+    subtitleBackgroundColors,
 } from "./playback-preferences";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -23,6 +24,7 @@ describe("playback preferences", () => {
             pictureMode: "4:3", subtitleFontSize: 999, subtitleColor: "#aaff00",
             subtitleOutlineSize: -4, subtitleBackground: true, overrideStyledSubtitles: true,
         })).toEqual({
+            ...DEFAULT_PLAYBACK_PREFERENCES,
             pictureMode: "4:3", subtitleFontSize: 72, subtitleColor: "#AAFF00",
             subtitleOutlineSize: 0, subtitleBackground: true, overrideStyledSubtitles: true,
         });
@@ -50,6 +52,36 @@ describe("playback preferences", () => {
         expect(() => savePlaybackPreferences(DEFAULT_PLAYBACK_PREFERENCES)).not.toThrow();
     });
 
+    it("loads legacy backgrounds with safe color and transparency defaults", () => {
+        expect(normalizePlaybackPreferences({ subtitleBackground: true })).toEqual({
+            ...DEFAULT_PLAYBACK_PREFERENCES, subtitleBackground: true,
+            subtitleBackgroundColor: "#000000", subtitleBackgroundTransparency: 31,
+        });
+        for (const value of [NaN, Infinity, "50", null]) {
+            expect(normalizePlaybackPreferences({ subtitleBackgroundTransparency: value }).subtitleBackgroundTransparency).toBe(31);
+        }
+        for (const value of ["red", "#FFF", "#FFFFFFFF", "#000000;bad", 42]) {
+            expect(normalizePlaybackPreferences({ subtitleBackgroundColor: value }).subtitleBackgroundColor).toBe("#000000");
+        }
+        expect(normalizePlaybackPreferences({ subtitleBackgroundColor: "#aabbcc", subtitleBackgroundTransparency: -2 })).toMatchObject({ subtitleBackgroundColor: "#AABBCC", subtitleBackgroundTransparency: 0 });
+        expect(normalizePlaybackPreferences({ subtitleBackgroundTransparency: 102 }).subtitleBackgroundTransparency).toBe(100);
+    });
+
+    it.each([[0, "FF"], [50, "80"], [100, "00"], [31, "B0"]])("matches preview and native alpha at %s percent transparency", (transparency, alpha) => {
+        const prefs = { ...DEFAULT_PLAYBACK_PREFERENCES, subtitleBackground: true, subtitleBackgroundColor: "#123456", subtitleBackgroundTransparency: transparency };
+        expect(subtitleBackgroundColors(prefs)).toEqual({ native: `#${alpha}123456`, css: `#123456${alpha}` });
+        expect(nativePreferenceCommands(prefs)).toContainEqual(["set", "sub-back-color", `#${alpha}123456`]);
+        expect(subtitleBackgroundColors({ ...prefs, subtitleBackground: false })).toEqual({ native: "#00000000", css: "#00000000" });
+    });
+
+    it("persists custom background appearance", () => {
+        let saved = "null";
+        vi.stubGlobal("localStorage", { getItem: () => saved, setItem: (_key: string, value: string) => { saved = value; } });
+        const prefs = { ...DEFAULT_PLAYBACK_PREFERENCES, subtitleBackground: true, subtitleBackgroundColor: "#12ABCD", subtitleBackgroundTransparency: 50 };
+        savePlaybackPreferences(prefs);
+        expect(loadPlaybackPreferences()).toEqual(prefs);
+    });
+
     it("resets every native picture property when switching modes", () => {
         const expected = {
             fit: ["no", "0", "no"], fill: ["no", "1", "no"], original: ["downscale-big", "0", "no"],
@@ -70,7 +102,7 @@ describe("playback preferences", () => {
         expect(commands).toContainEqual(["set", "sub-back-color", "#00000000"]);
         expect(commands).toContainEqual(["set", "sub-border-style", "outline-and-shadow"]);
         const custom = nativePreferenceCommands({ ...DEFAULT_PLAYBACK_PREFERENCES, subtitleBackground: true, overrideStyledSubtitles: true });
-        expect(custom).toContainEqual(["set", "sub-back-color", "#AF000000"]);
+        expect(custom).toContainEqual(["set", "sub-back-color", "#B0000000"]);
         expect(custom).toContainEqual(["set", "sub-border-style", "background-box"]);
         expect(custom).toContainEqual(["set", "sub-ass-override", "strip"]);
         expect(custom).toContainEqual(["set", "sub-color", "#FFFFFF"]);

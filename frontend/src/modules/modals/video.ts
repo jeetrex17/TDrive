@@ -1266,14 +1266,17 @@ function syncEndTime(state: PlayerState) {
             ? "video-time video-duration video-end-time" : "video-time video-duration");
     }
     if (!endTimeEl) return;
-    endTimeEl.hidden = !showEndTime;
+    endTimeEl.classList.toggle("is-visible", showEndTime);
+    endTimeEl.setAttribute("aria-hidden", String(!showEndTime));
     if (!showEndTime) return;
     const remaining = Math.max(0, state.duration - state.currentTime) / state.rate;
     const finish = new Date(Date.now() + remaining * 1000);
     const valid = Number.isFinite(state.duration) && state.duration > 0
         && Number.isFinite(state.currentTime) && Number.isFinite(state.rate) && state.rate > 0
         && Number.isFinite(finish.getTime());
-    endTimeEl.textContent = valid
+    const endTimeText = endTimeEl.firstElementChild;
+    if (!endTimeText) return;
+    endTimeText.textContent = valid
         ? ` · Ends at ${new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(finish)}`
         : " · End time unavailable";
 }
