@@ -17,6 +17,13 @@ emit() {
   printf '%s\n' "$@" >> "${GITHUB_ENV:?GITHUB_ENV is required}"
 }
 
+clear_darwin_build_cache() {
+  # Restored cgo objects retain pkg-config linker paths from an older Homebrew
+  # installation or runtime archive. Go does not track changes to C libraries.
+  # Keep downloaded modules, but rebuild objects against the prepared runtime.
+  go clean -cache
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZERO_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 
@@ -55,6 +62,7 @@ if [ -n "$RUNTIME_URL" ] && [ -n "$RUNTIME_SHA256" ]; then
     "TDRIVE_MPV_RUNTIME_PINNED=1"
   if [ "$PLATFORM" = darwin ]; then
     emit "PKG_CONFIG_LIBDIR=$runtime_root/lib/pkgconfig" "MACOSX_DEPLOYMENT_TARGET=11.0"
+    clear_darwin_build_cache
   fi
   exit 0
 fi
@@ -109,6 +117,7 @@ case "$PLATFORM" in
     sed -e '/<key>LSMinimumSystemVersion<\/key>/{n;s|<string>[^<]*</string>|<string>'"$minos"'</string>|;}' "$plist" > "$plist.tmp"
     mv "$plist.tmp" "$plist"
     grep -A1 '<key>LSMinimumSystemVersion</key>' "$plist" | grep -q "<string>$minos</string>" || die "could not set LSMinimumSystemVersion in $plist"
+    clear_darwin_build_cache
     emit "TDRIVE_MPV_RUNTIME_DIR=$runtime_root" \
       "TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime" \
       "MACOSX_DEPLOYMENT_TARGET=$minos" \
