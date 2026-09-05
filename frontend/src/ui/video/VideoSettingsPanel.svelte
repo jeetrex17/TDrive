@@ -17,6 +17,12 @@
         { value: '4:3', label: '4:3', detail: 'Classic television' },
     ];
 
+    // Editing appearance is an explicit request to replace embedded text styles.
+    // Otherwise ASS/SSA tracks can silently ignore the size and color controls.
+    function updateSubtitle(change: Partial<PlaybackPreferences>) {
+        update({ ...change, overrideStyledSubtitles: true });
+    }
+
     function update(change: Partial<PlaybackPreferences>) {
         const next = normalizePlaybackPreferences({ ...preferences, ...change });
         preferences = next;
@@ -42,15 +48,15 @@
         <span style:background={preferences.subtitleBackground ? '#000a' : 'transparent'}>Your next adventure awaits.</span>
     </div>
     <label class="video-settings-field" for="video-subtitle-size"><span>Size <output>{preferences.subtitleFontSize}</output></span>
-        <input id="video-subtitle-size" class="video-settings-range" style:--range-fill={`${(preferences.subtitleFontSize - 20) / 52 * 100}%`} type="range" min="20" max="72" step="1" value={preferences.subtitleFontSize} oninput={(event) => update({ subtitleFontSize: Number(event.currentTarget.value) })} />
+        <input id="video-subtitle-size" class="video-settings-range" style:--range-fill={`${(preferences.subtitleFontSize - 20) / 52 * 100}%`} type="range" min="20" max="72" step="1" value={preferences.subtitleFontSize} oninput={(event) => updateSubtitle({ subtitleFontSize: Number(event.currentTarget.value) })} />
     </label>
     <label class="video-settings-field video-settings-inline" for="video-subtitle-color"><span>Text color</span>
-        <input id="video-subtitle-color" type="color" value={preferences.subtitleColor} oninput={(event) => update({ subtitleColor: event.currentTarget.value })} />
+        <input id="video-subtitle-color" type="color" value={preferences.subtitleColor} oninput={(event) => updateSubtitle({ subtitleColor: event.currentTarget.value })} />
     </label>
     <label class="video-settings-field" for="video-subtitle-outline"><span>Outline <output>{preferences.subtitleOutlineSize}</output></span>
-        <input id="video-subtitle-outline" class="video-settings-range" style:--range-fill={`${preferences.subtitleOutlineSize / 6 * 100}%`} type="range" min="0" max="6" step="0.05" value={preferences.subtitleOutlineSize} oninput={(event) => update({ subtitleOutlineSize: Number(event.currentTarget.value) })} />
+        <input id="video-subtitle-outline" class="video-settings-range" style:--range-fill={`${preferences.subtitleOutlineSize / 6 * 100}%`} type="range" min="0" max="6" step="0.05" value={preferences.subtitleOutlineSize} oninput={(event) => updateSubtitle({ subtitleOutlineSize: Number(event.currentTarget.value) })} />
     </label>
-    <label class="video-settings-check"><input id="video-subtitle-background" type="checkbox" checked={preferences.subtitleBackground} onchange={(event) => update({ subtitleBackground: event.currentTarget.checked })} /> Dark background</label>
+    <label class="video-settings-check"><input id="video-subtitle-background" type="checkbox" checked={preferences.subtitleBackground} onchange={(event) => updateSubtitle({ subtitleBackground: event.currentTarget.checked })} /> Dark background</label>
     <label class="video-settings-check"><input id="video-subtitle-override" type="checkbox" checked={preferences.overrideStyledSubtitles} onchange={(event) => update({ overrideStyledSubtitles: event.currentTarget.checked })} /> Override styled subtitles</label>
     <button id="video-subtitle-reset" class="video-settings-reset" type="button" onclick={() => update({ ...DEFAULT_PLAYBACK_PREFERENCES, pictureMode: preferences.pictureMode })}>Reset subtitle appearance</button>
     </div>

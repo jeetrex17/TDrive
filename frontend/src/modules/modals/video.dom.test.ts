@@ -811,6 +811,40 @@ describe("playback settings dock", () => {
         await videoModule.closeVideoModal();
     });
 
+    it.each([
+        ["size", "60", "sub-font-size", "60"],
+        ["color", "#ffff00", "sub-color", "#FFFF00"],
+        ["outline", "4", "sub-outline-size", "4"],
+        ["background", "", "sub-border-style", "background-box"],
+    ])("enables authored subtitle overrides when editing %s without an extra checkbox step", async (field, value, property, expected) => {
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "styled-subtitles.mkv" });
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "scale"]));
+        openSettings("subtitle");
+        apiMocks.nativeMediaCommand.mockClear();
+        const control = document.querySelector<HTMLInputElement>(`#video-subtitle-${field}`)!;
+        if (field === "background") control.click();
+        else {
+            control.value = value;
+            control.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        flushSync();
+        await vi.waitFor(() => {
+            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", property, expected]);
+            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "force"]);
+        });
+        const override = document.querySelector<HTMLInputElement>("#video-subtitle-override")!;
+        expect(override.checked).toBe(true);
+        apiMocks.nativeMediaCommand.mockClear();
+        override.click();
+        flushSync();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "scale"]));
+        expect(override.checked).toBe(false);
+        await videoModule.closeVideoModal();
+    });
+
     it("applies picture and subtitle preferences, resets appearance, and uses an exact native speed", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
         const videoModule = await import("./video");
@@ -830,7 +864,6 @@ describe("playback settings dock", () => {
         color.value = "#ffff00";
         color.dispatchEvent(new Event("input", { bubbles: true }));
         document.querySelector<HTMLInputElement>("#video-subtitle-background")?.click();
-        document.querySelector<HTMLInputElement>("#video-subtitle-override")?.click();
         flushSync();
         await vi.waitFor(() => {
             expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-font-size", "60"]);

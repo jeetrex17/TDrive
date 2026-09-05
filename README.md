@@ -259,7 +259,9 @@ The settings gear also provides a speed slider from 0.25x to 4x, presets, and
 exact speed entry. Audio tracks remain visible even when only one is available.
 Appearance preferences are saved on this device. Text styling applies to native
 text subtitles; bitmap subtitles keep their original appearance. Styled ASS
-subtitles retain their authored styling unless you enable the override option.
+subtitles retain their authored styling until you edit appearance, which enables
+the override automatically. Uncheck the override or reset appearance to restore
+the authored style.
 On Windows and Linux/X11, the settings panel reserves space beside or below the
 video so the native player cannot cover the controls.
 
