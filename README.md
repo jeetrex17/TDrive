@@ -251,7 +251,10 @@ variant) to force the webview-only path. `TDRIVE_MPV_BIN` overrides the mpv
 binary; without a bundled runtime the app falls back to `mpv` from `PATH`.
 
 The bottom audio, subtitle, speed, and picture buttons cycle through options
-without opening a menu. Picture modes include Fit, Fill, Original size, 16:9,
+without opening a menu. Volume sits beside the forward-seek button, with its
+slider revealed on hover or keyboard focus. Click elapsed/total time to show
+the estimated local finish time at the current speed (assuming playback resumes
+now when paused). Picture modes include Fit, Fill, Original size, 16:9,
 and 4:3. Only the settings gear opens the panel with full audio and subtitle
 lists. Subtitle appearance settings offer
 size, color, outline, and a dark background, with a live sample and Reset.

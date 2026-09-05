@@ -964,12 +964,21 @@ describe("playback settings dock", () => {
     });
 
     it("reserves and restores native video space beside the dock and below compact controls", async () => {
+        let controlsHeight = 100;
+        let onControlsResize: ResizeObserverCallback | undefined;
+        const observe = vi.fn();
+        vi.stubGlobal("ResizeObserver", class {
+            constructor(callback: ResizeObserverCallback) { onControlsResize = callback; }
+            observe = observe;
+            unobserve = vi.fn();
+            disconnect = vi.fn();
+        });
         let compact = false;
         vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: compact && query.includes("760"), media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
         vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
             let left = 0, top = 0, width = 1000, height = 700;
             if (this.classList.contains("video-topbar")) height = 70;
-            if (this.classList.contains("video-controls")) { top = 600; height = 100; }
+            if (this.classList.contains("video-controls")) { top = 700 - controlsHeight; height = controlsHeight; }
             if (this.id === "video-settings-panel") { left = compact ? 10 : 658; top = compact ? 350 : 70; width = compact ? 980 : 330; height = compact ? 250 : 530; }
             if (this.id === "video-native-viewport") {
                 left = Number.parseFloat(this.style.getPropertyValue("--video-native-side-inset")) || 0;
@@ -990,6 +999,19 @@ describe("playback settings dock", () => {
         await nextTasks();
         expect(viewport.getBoundingClientRect().right).toBeLessThan(658);
         await vi.waitFor(() => expect(apiMocks.resizeNativeMedia).toHaveBeenCalledWith(MKV_SESSION_ID, expect.objectContaining({ width: viewport.getBoundingClientRect().width })));
+        expect(observe).toHaveBeenCalledWith(document.querySelector(".video-controls"));
+        apiMocks.resizeNativeMedia.mockClear();
+        controlsHeight = 150;
+        onControlsResize?.([], {} as ResizeObserver);
+        await nextTasks();
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.style.getPropertyValue("--video-panel-bottom")).toBe("150px");
+        expect(viewport.getBoundingClientRect().height).toBe(original.height - 50);
+        expect(apiMocks.resizeNativeMedia).toHaveBeenCalledWith(MKV_SESSION_ID, expect.objectContaining({ height: original.height - 50 }));
+        apiMocks.resizeNativeMedia.mockClear();
+        onControlsResize?.([], {} as ResizeObserver);
+        await nextTasks();
+        expect(apiMocks.resizeNativeMedia).not.toHaveBeenCalled();
+        controlsHeight = 100;
         compact = true;
         window.dispatchEvent(new Event("resize"));
         await nextTasks();
@@ -1034,5 +1056,56 @@ describe("playback speed slider", () => {
         expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
         expect(document.activeElement?.id).toBe("video-picture-button");
         await videoModule.closeVideoModal();
+    });
+});
+
+describe("video finish time", () => {
+    it("toggles a local estimate and updates for rate, seek, pause, midnight and unknown duration", async () => {
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(7, SHARED_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 7, name: "clip-7.mp4" });
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(2026, 8, 5, 23, 50, 0));
+        try {
+            const video = document.querySelector<HTMLVideoElement>("#video-player")!;
+            const button = document.querySelector<HTMLButtonElement>("#video-time-display")!;
+            const end = document.querySelector<HTMLElement>("#video-end-time")!;
+            const localTime = (date: Date) => new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
+            Object.defineProperty(video, "duration", { configurable: true, value: 2400 });
+            video.currentTime = 600;
+            video.dispatchEvent(new Event("timeupdate"));
+            expect(document.querySelector("#video-time")?.textContent).toBe("10:00");
+            expect(document.querySelector("#video-duration")?.textContent).toBe("40:00");
+            expect(button.getAttribute("aria-pressed")).toBe("false");
+            button.click();
+            expect(end.hidden).toBe(false);
+            expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 6, 0, 20))}`);
+            expect(button.getAttribute("aria-pressed")).toBe("true");
+            video.playbackRate = 2;
+            video.dispatchEvent(new Event("ratechange"));
+            expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 6, 0, 5))}`);
+            video.currentTime = 1800;
+            video.dispatchEvent(new Event("seeked"));
+            expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 5, 23, 55))}`);
+            video.pause();
+            expect(button.title).toContain("resume now");
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 5, 23, 56))}`);
+            Object.defineProperty(video, "duration", { configurable: true, value: Infinity });
+            video.dispatchEvent(new Event("durationchange"));
+            expect(end.textContent).toBe(" · End time unavailable");
+            button.click();
+            expect(end.hidden).toBe(true);
+            expect(button.getAttribute("aria-pressed")).toBe("false");
+            button.click();
+            await videoModule.closeVideoModal();
+            expect(end.hidden).toBe(true);
+            expect(button.getAttribute("aria-pressed")).toBe("false");
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+            await videoModule.closeVideoModal();
+        }
     });
 });

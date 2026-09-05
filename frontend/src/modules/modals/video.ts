@@ -575,6 +575,10 @@ let volumeFillEl: HTMLElement | null = null;
 let volumeThumbEl: HTMLElement | null = null;
 let timeEl: HTMLElement | null = null;
 let durationEl: HTMLElement | null = null;
+let timeDisplayEl: HTMLButtonElement | null = null;
+let endTimeEl: HTMLElement | null = null;
+let showEndTime = false;
+let endTimeTimer: number | null = null;
 let speedBtnEl: HTMLButtonElement | null = null;
 let speedMenuEl: HTMLElement | null = null;
 let audioPicker: TrackPicker | null = null;
@@ -1251,7 +1255,52 @@ function syncButtonState(state: PlayerState) {
     muteBtnEl.title = state.muted ? "Unmute" : "Mute";
 }
 
+function syncEndTime(state: PlayerState) {
+    timeDisplayEl?.setAttribute("aria-pressed", String(showEndTime));
+    if (timeDisplayEl) {
+        timeDisplayEl.title = showEndTime
+            ? `Hide estimated finish time${state.paused ? " (if you resume now)" : ""}`
+            : "Show estimated finish time";
+        timeDisplayEl.setAttribute("aria-label", timeDisplayEl.title);
+        timeDisplayEl.setAttribute("aria-describedby", showEndTime
+            ? "video-time video-duration video-end-time" : "video-time video-duration");
+    }
+    if (!endTimeEl) return;
+    endTimeEl.hidden = !showEndTime;
+    if (!showEndTime) return;
+    const remaining = Math.max(0, state.duration - state.currentTime) / state.rate;
+    const finish = new Date(Date.now() + remaining * 1000);
+    const valid = Number.isFinite(state.duration) && state.duration > 0
+        && Number.isFinite(state.currentTime) && Number.isFinite(state.rate) && state.rate > 0
+        && Number.isFinite(finish.getTime());
+    endTimeEl.textContent = valid
+        ? ` · Ends at ${new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(finish)}`
+        : " · End time unavailable";
+}
+
+function resetEndTime() {
+    if (endTimeTimer !== null) window.clearInterval(endTimeTimer);
+    endTimeTimer = null;
+    showEndTime = false;
+    syncEndTime(currentState);
+}
+
+function toggleEndTime() {
+    if (showEndTime) {
+        resetEndTime();
+    } else {
+        showEndTime = true;
+        syncEndTime(currentState);
+        // Paused playback emits no time updates; the estimate assumes resuming now.
+        endTimeTimer = window.setInterval(() => syncEndTime(currentState), 1000);
+    }
+    syncSettingsGeometry();
+    scheduleNativeResize();
+    revealChrome();
+}
+
 function syncTimeline(state: PlayerState) {
+    syncEndTime(state);
     if (timeEl) timeEl.textContent = formatTime(state.currentTime);
     if (durationEl) durationEl.textContent = state.duration > 0 ? formatTime(state.duration) : "--:--";
 
@@ -2224,6 +2273,7 @@ function detachActiveReferences(): PlayerAdapter | null {
     unsubscribeState?.();
     unsubscribeState = null;
     clearPlaybackHintTimer();
+    resetEndTime();
     clearMediaStatsPolling();
     clearVolumeCommandFrame();
     clearSkipFeedback();
@@ -2668,6 +2718,7 @@ function bindVolume() {
         revealChrome();
     });
     volumeSliderEl?.addEventListener("pointerdown", (event) => {
+        volumeSliderEl?.focus({ preventScroll: true });
         if (!activeAdapter) return;
         volumeDragging = true;
         volumeSliderEl?.setPointerCapture(event.pointerId);
@@ -2875,6 +2926,24 @@ function handleStageClick(event: MouseEvent) {
     togglePlayback();
 }
 
+function observeControlsSize() {
+    if (!controlsEl || typeof ResizeObserver === "undefined") return;
+    let previousWidth = -1;
+    let previousHeight = -1;
+    // Controls persist for the module lifetime, across playback sessions.
+    const observer = new ResizeObserver(() => {
+        if (!isOpen() || !controlsEl) return;
+        const { width, height } = controlsEl.getBoundingClientRect();
+        if (width === previousWidth && height === previousHeight) return;
+        previousWidth = width;
+        previousHeight = height;
+        syncSettingsGeometry();
+        applyHtmlPicture();
+        scheduleNativeResize();
+    });
+    observer.observe(controlsEl);
+}
+
 function handleWindowResize() {
     syncSettingsGeometry();
     applyHtmlPicture();
@@ -2892,6 +2961,7 @@ function bindEncryptedMediaLifecycle() {
 
 function bindControls() {
     closeBtnEl?.addEventListener("click", () => void closeVideoModal());
+    timeDisplayEl?.addEventListener("click", toggleEndTime);
     centerPlayBtnEl?.addEventListener("click", togglePlayback);
     centerSkipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
     centerSkipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
@@ -2966,6 +3036,8 @@ export function setupVideoModal() {
     volumeThumbEl = byID("video-volume-thumb");
     timeEl = byID("video-time");
     durationEl = byID("video-duration");
+    timeDisplayEl = byID("video-time-display");
+    endTimeEl = byID("video-end-time");
     speedBtnEl = byID("video-speed-button");
     speedMenuEl = byID("video-speed-menu");
     audioPicker = new TrackPicker("Audio", null, (adapter, id) => {
@@ -3000,5 +3072,6 @@ export function setupVideoModal() {
     bindNativeMediaStateLifecycle();
     renderSpeedOptions();
     bindControls();
+    observeControlsSize();
     applyState(EMPTY_STATE);
 }

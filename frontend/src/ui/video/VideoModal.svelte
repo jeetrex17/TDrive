@@ -81,7 +81,6 @@
 
     <div class="video-controls" aria-label="Video controls">
         <div class="video-timeline-row">
-            <span id="video-time" class="video-time">0:00</span>
             <div id="video-scrubber" class="video-scrubber" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00">
                 <div class="video-scrubber-hit">
                     <span class="video-scrubber-track"></span>
@@ -94,7 +93,6 @@
                     </span>
                 </div>
             </div>
-            <span id="video-duration" class="video-time">--:--</span>
         </div>
 
         <div class="video-command-row">
@@ -109,9 +107,6 @@
                 <button id="video-skip-forward" class="video-icon-btn video-skip-btn" type="button" aria-label="Forward 10 seconds" title="Forward 10 seconds">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 5h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17.4 8.3A7 7 0 1012 19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><text x="12" y="15.2" text-anchor="middle" fill="currentColor" font-size="6.2" font-weight="800">10</text></svg>
                 </button>
-            </div>
-
-            <div class="video-command-cluster video-secondary-cluster">
                 <div class="video-volume-group">
                     <button id="video-mute" class="video-icon-btn video-mute-btn" type="button" data-state="unmuted" aria-label="Mute" title="Mute">
                         <Volume2Icon class="video-mute-symbol video-symbol-volume" aria-hidden="true" />
@@ -124,6 +119,13 @@
                     </div>
                 </div>
 
+                <button id="video-time-display" class="video-time-display" type="button" aria-pressed="false" aria-label="Show estimated finish time" aria-describedby="video-time video-duration" title="Show estimated finish time">
+                    <span id="video-time" class="video-time">0:00</span><span class="video-time-separator"> / </span><span id="video-duration" class="video-time">--:--</span>
+                    <span id="video-end-time" class="video-end-time" hidden></span>
+                </button>
+            </div>
+
+            <div class="video-command-cluster video-secondary-cluster">
                 <div id="video-audio-wrap" class="video-menu-wrap video-track-wrap" hidden>
                     <button id="video-audio-button" class="video-pill-button video-track-button" type="button" aria-label="Audio track" title="Audio track">
                         <AudioLinesIcon size={15} aria-hidden="true" />
