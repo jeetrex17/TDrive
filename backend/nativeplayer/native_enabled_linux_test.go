@@ -4,7 +4,7 @@ package nativeplayer
 
 import "testing"
 
-func TestLinuxNativePlayerEnabledByDefault(t *testing.T) {
+func TestLinuxNativePlayerIsOnByDefault(t *testing.T) {
 	t.Setenv(linuxNativePlayerFlag, "")
 
 	if !linuxNativePlayerEnabled() {

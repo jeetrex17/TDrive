@@ -23,10 +23,14 @@ describe("media type helpers", () => {
 
     it("separates all video containers from webview-direct candidates", () => {
         expect(isVideoFile("clip.mkv")).toBe(true);
+        expect(isVideoFile("clip.mk3d")).toBe(true);
+        expect(isVideoFile("clip.qt")).toBe(true);
         expect(isVideoFile("clip.avi")).toBe(true);
         expect(isVideoFile("clip.pdf")).toBe(false);
         expect(isWebviewDirectVideo("clip.mp4")).toBe(true);
         expect(isWebviewDirectVideo("clip.mkv")).toBe(false);
+        expect(isWebviewDirectVideo("clip.mk3d")).toBe(false);
+        expect(isWebviewDirectVideo("clip.qt")).toBe(false);
     });
 
     it("returns compact display labels", () => {

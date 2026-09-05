@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
@@ -217,6 +218,7 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	setMediaCORS(w.Header())
 	token := strings.TrimPrefix(path.Clean(r.URL.Path), prefix)
 	if token == "" || strings.Contains(token, "/") {
 		http.NotFound(w, r)
@@ -231,10 +233,9 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 	size := session.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", contentTypeFor(session.Name()))
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Range")
-	w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
+	if session.Encrypted() {
+		setMediaNoStore(w.Header())
+	}
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -271,8 +272,7 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 }
 
 func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	setMediaCORS(w.Header())
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -291,8 +291,11 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if session.Encrypted() {
+		setMediaNoStore(w.Header())
+	}
 	seconds, err := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	if err != nil || seconds < 0 {
+	if err != nil || seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
 		http.Error(w, "invalid thumbnail time", http.StatusBadRequest)
 		return
 	}
@@ -300,7 +303,9 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		w.Header().Set("Content-Type", videoThumbMime)
-		w.Header().Set("Cache-Control", "private, max-age=86400")
+		if !session.Encrypted() {
+			w.Header().Set("Cache-Control", "private, max-age=86400")
+		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
@@ -314,6 +319,21 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "thumbnail error", http.StatusInternalServerError)
 	}
+}
+
+func setMediaNoStore(header http.Header) {
+	header.Set("Cache-Control", "no-store, max-age=0")
+	header.Set("Pragma", "no-cache")
+	header.Set("Expires", "0")
+}
+
+// setMediaCORS allows any origin: the server binds to loopback and every URL
+// carries a random per-session token, so the token is the access boundary.
+func setMediaCORS(header http.Header) {
+	header.Set("Access-Control-Allow-Origin", "*")
+	header.Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	header.Set("Access-Control-Allow-Headers", "Range")
+	header.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
 }
 
 func (s *Server) session(token string) *Session {

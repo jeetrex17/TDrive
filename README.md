@@ -241,6 +241,46 @@ go build -o tdrive ./cmd/tdrive  # build the CLI
 
 You’ll need your own Telegram API credentials (see above) the first time you run it.
 
+### Native video preview
+
+Formats the webview cannot decode (MKV, HEVC, …) play through a bundled mpv
+runtime: embedded libmpv on macOS, an mpv child window on Windows and
+Linux/X11, and a standalone mpv window on Linux/Wayland. It is on by default;
+set `TDRIVE_EXPERIMENTAL_MACOS_NATIVE_PLAYER=0` (or the `WINDOWS` / `LINUX`
+variant) to force the webview-only path. `TDRIVE_MPV_BIN` overrides the mpv
+binary; without a bundled runtime the app falls back to `mpv` from `PATH`.
+
+The bottom audio, subtitle, speed, and picture buttons cycle through options
+without opening a menu. Volume sits beside the forward-seek button, with its
+slider revealed on hover or keyboard focus. Click elapsed/total time to show
+the smoothly revealed local finish estimate at the current speed (assuming playback resumes
+now when paused). Picture modes include Fit, Fill, Original size, 16:9,
+and 4:3. Only the settings gear opens the panel with full audio and subtitle
+lists. Subtitle appearance settings offer
+size, text color, outline, and background color with 0–100% transparency,
+with a live sample and Reset.
+The settings gear also provides a speed slider from 0.25x to 4x, presets, and
+exact speed entry. Audio tracks remain visible even when only one is available.
+Appearance preferences are saved on this device. Text styling applies to native
+text subtitles; bitmap subtitles keep their original appearance. Styled ASS
+subtitles retain their authored styling until you click **Save subtitle settings**.
+Appearance edits update the sample first; Save applies and stores your choices,
+including replacing inline text styling. Reset restores the original style.
+On Windows and Linux/X11, the settings panel reserves space beside or below the
+video so the native player cannot cover the controls.
+
+Opening a file automatically retries temporary Telegram metadata rate limits,
+honoring waits up to 30 seconds with at most two retries and 60 seconds of total
+waiting per lookup. Longer or repeated limits still return an error.
+
+Release packaging prefers checksum-pinned runtime archives configured through
+the `TDRIVE_<MACOS|WINDOWS|LINUX>_MPV_RUNTIME_URL` / `_SHA256` repository
+variables and otherwise bundles the runner's package-manager mpv, marked as
+unpinned in the bundle manifest. The Linux fallback includes mpv's shared
+libraries; packaging rejects dependencies outside the bundle except for the
+system C runtime and loader. macOS Intel, Linux ARM, and notarization are not
+covered yet.
+
 ## Where data is stored (local files)
 
 Persistent local files are stored inside your OS “user config” folder under a `TDrive` directory:

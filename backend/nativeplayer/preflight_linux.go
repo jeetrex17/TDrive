@@ -14,11 +14,11 @@ const preflightTimeout = 6 * time.Second
 
 func PreflightDecode(ctx context.Context, url string) error {
 	if !linuxNativePlayerEnabled() {
-		linuxNativeLogf("preflight skipped: disabled by %s=0", linuxNativePlayerFlag)
+		linuxNativeLogf("preflight skipped: explicit opt-in required with %s=1", linuxNativePlayerFlag)
 		return nil
 	}
-	if os.Getenv("TDRIVE_SKIP_MPV_PREFLIGHT") == "1" {
-		linuxNativeLogf("preflight skipped: TDRIVE_SKIP_MPV_PREFLIGHT=1")
+	if !sidecarPreflightEnabled(os.Getenv("TDRIVE_ENABLE_MPV_PREFLIGHT"), os.Getenv("TDRIVE_SKIP_MPV_PREFLIGHT")) {
+		linuxNativeLogf("preflight skipped: not explicitly enabled")
 		return nil
 	}
 	mpvPath, err := findLinuxMPV()
@@ -31,30 +31,20 @@ func PreflightDecode(ctx context.Context, url string) error {
 	defer cancel()
 	started := time.Now()
 	linuxNativeLogf("preflight start: mpv=%s timeout=%s", mpvPath, preflightTimeout)
-	cmd := exec.CommandContext(runCtx, mpvPath,
-		"--no-config",
-		"--really-quiet",
-		"--terminal=no",
-		"--force-window=no",
-		"--vo=null",
-		"--ao=null",
-		"--frames=1",
-		"--demuxer-readahead-secs=0.5",
-		"--demuxer-max-bytes=2097152",
-		"--",
-		url,
-	)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	args, stdin := mpvPreflightInvocation(url)
+	cmd := exec.CommandContext(runCtx, mpvPath, args...)
+	cmd.Stdin = stdin
+	if err := cmd.Run(); err != nil {
 		if runCtx.Err() != nil {
-			linuxNativeLogf("preflight failed after %s: timeout", time.Since(started).Round(time.Millisecond))
-			return fmt.Errorf("%w: timed out", ErrDecoderUnsafe)
+			linuxNativeLogf("preflight inconclusive after %s: timeout", time.Since(started).Round(time.Millisecond))
+			return nil
 		}
-		if len(output) > 0 {
-			linuxNativeLogf("preflight failed after %s: %v: %s", time.Since(started).Round(time.Millisecond), err, string(output))
-			return fmt.Errorf("%w: %v: %s", ErrDecoderUnsafe, err, string(output))
+		if sig, crashed := decoderCrashSignal(err); crashed {
+			linuxNativeLogf("preflight decoder crash after %s: %s", time.Since(started).Round(time.Millisecond), sig)
+			return fmt.Errorf("%w: %s", ErrDecoderUnsafe, sig)
 		}
-		linuxNativeLogf("preflight failed after %s: %v", time.Since(started).Round(time.Millisecond), err)
-		return fmt.Errorf("%w: %v", ErrDecoderUnsafe, err)
+		linuxNativeLogf("preflight inconclusive after %s: ordinary mpv failure", time.Since(started).Round(time.Millisecond))
+		return nil
 	}
 	linuxNativeLogf("preflight ok after %s", time.Since(started).Round(time.Millisecond))
 	return nil

@@ -363,11 +363,83 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class NativeMediaRange {
+	    start: number;
+	    end: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new NativeMediaRange(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.start = source["start"];
+	        this.end = source["end"];
+	    }
+	}
+	export class NativeMediaState {
+	    token?: string;
+	    sequence: number;
+	    status: string;
+	    error?: string;
+	    eof: boolean;
+	    paused: boolean;
+	    current_time: number;
+	    duration: number;
+	    buffered: NativeMediaRange[];
+	    volume: number;
+	    muted: boolean;
+	    rate: number;
+	    loading: boolean;
+	    tracks: nativeplayer.Track[];
+	
+	    static createFrom(source: any = {}) {
+	        return new NativeMediaState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.sequence = source["sequence"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	        this.eof = source["eof"];
+	        this.paused = source["paused"];
+	        this.current_time = source["current_time"];
+	        this.duration = source["duration"];
+	        this.buffered = this.convertValues(source["buffered"], NativeMediaRange);
+	        this.volume = source["volume"];
+	        this.muted = source["muted"];
+	        this.rate = source["rate"];
+	        this.loading = source["loading"];
+	        this.tracks = this.convertValues(source["tracks"], nativeplayer.Track);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class NativeMediaResult {
 	    token: string;
 	    name: string;
 	    thumbnail_url: string;
 	    html_controls: boolean;
+	    presentation: string;
+	    initial_state?: NativeMediaState;
 	    info: media.LogicalFile;
 	
 	    static createFrom(source: any = {}) {
@@ -380,6 +452,8 @@ export namespace main {
 	        this.name = source["name"];
 	        this.thumbnail_url = source["thumbnail_url"];
 	        this.html_controls = source["html_controls"];
+	        this.presentation = source["presentation"];
+	        this.initial_state = this.convertValues(source["initial_state"], NativeMediaState);
 	        this.info = this.convertValues(source["info"], media.LogicalFile);
 	    }
 	
@@ -401,6 +475,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 	
 	export class PersonalDriveCandidate {
 	    id: string;
@@ -510,6 +585,7 @@ export namespace media {
 	export class LogicalFile {
 	    channel_id: number;
 	    file_id: number;
+	    revision: number;
 	    name: string;
 	    stored_size: number;
 	    plaintext_size: number;
@@ -526,6 +602,7 @@ export namespace media {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.channel_id = source["channel_id"];
 	        this.file_id = source["file_id"];
+	        this.revision = source["revision"];
 	        this.name = source["name"];
 	        this.stored_size = source["stored_size"];
 	        this.plaintext_size = source["plaintext_size"];
@@ -685,6 +762,32 @@ export namespace nativeplayer {
 	        this.y = source["y"];
 	        this.width = source["width"];
 	        this.height = source["height"];
+	    }
+	}
+	export class Track {
+	    id: number;
+	    type: string;
+	    title: string;
+	    language: string;
+	    codec: string;
+	    selected: boolean;
+	    default: boolean;
+	    forced: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Track(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.type = source["type"];
+	        this.title = source["title"];
+	        this.language = source["language"];
+	        this.codec = source["codec"];
+	        this.selected = source["selected"];
+	        this.default = source["default"];
+	        this.forced = source["forced"];
 	    }
 	}
 

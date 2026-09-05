@@ -374,6 +374,73 @@ func TestRandomAccessDecryptorCloseCancelsBlockedReadBeforeClearingKey(t *testin
 	}
 }
 
+func TestRandomAccessDecryptorCloneIsIndependentAndDoesNotReadStorage(t *testing.T) {
+	key := bytes.Repeat([]byte{0xb3}, 32)
+	plain := patternedPlaintext(chunkSizePlain + 17)
+	ciphertext := encryptRandomAccessFixture(t, plain, key)
+	decryptor, err := NewRandomAccessDecryptor(
+		context.Background(),
+		bytesContextReaderAt(ciphertext),
+		int64(len(ciphertext)),
+		key,
+	)
+	if err != nil {
+		t.Fatalf("NewRandomAccessDecryptor: %v", err)
+	}
+	t.Cleanup(func() { _ = decryptor.Close() })
+
+	cloneSource := &countingBytesContextReaderAt{data: ciphertext}
+	clone, err := decryptor.Clone(cloneSource)
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	t.Cleanup(func() { _ = clone.Close() })
+	if calls := cloneSource.calls.Load(); calls != 0 {
+		t.Fatalf("Clone storage reads = %d, want 0", calls)
+	}
+
+	if err := decryptor.Close(); err != nil {
+		t.Fatalf("Close original: %v", err)
+	}
+	got := make([]byte, 23)
+	n, readErr := clone.ReadAt(context.Background(), got, chunkSizePlain-9)
+	if readErr != nil {
+		t.Fatalf("clone ReadAt after original Close = n %d err %v", n, readErr)
+	}
+	if want := plain[chunkSizePlain-9 : chunkSizePlain-9+23]; !bytes.Equal(got[:n], want) {
+		t.Fatalf("clone plaintext = %x, want %x", got[:n], want)
+	}
+	if calls := cloneSource.calls.Load(); calls == 0 {
+		t.Fatal("clone ReadAt did not use clone source")
+	}
+}
+
+func TestRandomAccessDecryptorCloneRejectsClosedOrInvalidInputs(t *testing.T) {
+	key := bytes.Repeat([]byte{0xb4}, 32)
+	ciphertext := encryptRandomAccessFixture(t, []byte("clone input checks"), key)
+	decryptor, err := NewRandomAccessDecryptor(
+		context.Background(),
+		bytesContextReaderAt(ciphertext),
+		int64(len(ciphertext)),
+		key,
+	)
+	if err != nil {
+		t.Fatalf("NewRandomAccessDecryptor: %v", err)
+	}
+	if clone, cloneErr := decryptor.Clone(nil); clone != nil || cloneErr == nil {
+		t.Fatalf("Clone nil source = %v, %v; want nil/error", clone, cloneErr)
+	}
+	if err := decryptor.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if clone, cloneErr := decryptor.Clone(bytesContextReaderAt(ciphertext)); clone != nil || !errors.Is(cloneErr, ErrDecryptorClosed) {
+		t.Fatalf("Clone closed = %v, %v; want nil/ErrDecryptorClosed", clone, cloneErr)
+	}
+	if clone, cloneErr := (*RandomAccessDecryptor)(nil).Clone(bytesContextReaderAt(ciphertext)); clone != nil || !errors.Is(cloneErr, ErrDecryptorClosed) {
+		t.Fatalf("Clone nil decryptor = %v, %v; want nil/ErrDecryptorClosed", clone, cloneErr)
+	}
+}
+
 func TestRandomAccessDecryptorValidatesLifecycleInputs(t *testing.T) {
 	key := bytes.Repeat([]byte{0xb8}, 32)
 	ciphertext := encryptRandomAccessFixture(t, []byte("input checks"), key)
@@ -559,6 +626,19 @@ type countingContextReaderAt struct {
 func (reader *countingContextReaderAt) ReadAt(context.Context, []byte, int64) (int, error) {
 	reader.calls.Add(1)
 	return 0, io.EOF
+}
+
+type countingBytesContextReaderAt struct {
+	data  []byte
+	calls atomic.Int32
+}
+
+func (reader *countingBytesContextReaderAt) ReadAt(ctx context.Context, dst []byte, off int64) (int, error) {
+	reader.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return bytes.NewReader(reader.data).ReadAt(dst, off)
 }
 
 func (reader *measuringContextReaderAt) ReadAt(ctx context.Context, dst []byte, off int64) (int, error) {

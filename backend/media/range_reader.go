@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -14,12 +15,25 @@ import (
 )
 
 const (
-	defaultRangeCacheBytes         = 32 * 1024 * 1024
-	defaultRangeConcurrency        = 4
-	defaultFloodWaitRetries        = 5
-	defaultFloodWaitMaxSleep       = 60 * time.Second
-	rangeUploadBoundary      int64 = int64(tgclient.RangeReadMaxBytes)
+	defaultRangeCacheBytes        = 32 * 1024 * 1024
+	defaultRangeConcurrency       = 4
+	rangeUploadBoundary     int64 = int64(tgclient.RangeReadMaxBytes)
 )
+
+// defaultRangeRetryPolicy tunes the shared tgclient retry policy for playback:
+// FLOOD_WAITs are honored in full up to a bound, and transient transport drops
+// are retried quickly so a live stream does not stall behind long backoffs.
+func defaultRangeRetryPolicy() tgclient.FloodWaitRetryPolicy {
+	return tgclient.FloodWaitRetryPolicy{
+		MaxRetries:          5,
+		MaxWait:             2 * time.Minute,
+		MaxTotalWait:        5 * time.Minute,
+		MaxTransientRetries: 3,
+		TransientBackoff:    250 * time.Millisecond,
+		MaxTransientBackoff: 3 * time.Second,
+		TransientJitter:     100 * time.Millisecond,
+	}
+}
 
 type RangeReaderConfig struct {
 	Client tgclient.RangeClient
@@ -37,13 +51,11 @@ type RangeReaderConfig struct {
 	// default. Duplicate block reads are still coalesced before they hit this.
 	MaxConcurrency int
 
-	// FloodWaitRetries bounds per-block FLOOD_WAIT retries. 0 uses the default.
-	FloodWaitRetries int
+	// Retry bounds per-block FLOOD_WAIT and transient transport retries. Nil
+	// uses defaultRangeRetryPolicy.
+	Retry *tgclient.FloodWaitRetryPolicy
 
-	// FloodWaitMaxSleep caps a single FLOOD_WAIT sleep. 0 uses the default.
-	FloodWaitMaxSleep time.Duration
-
-	// OnFloodWait, when set, is called before sleeping for a Telegram
+	// OnFloodWait, when set, is called when a block read hits a Telegram
 	// FLOOD_WAIT. It is a logging/progress hook; nil is fine.
 	OnFloodWait func(wait time.Duration)
 
@@ -62,20 +74,20 @@ type RangeReaderConfig struct {
 // reads: 1 MiB boundary splitting, 4 KiB alignment, request coalescing, an LRU
 // block cache, bounded concurrency, and FLOOD_WAIT backoff.
 type RangeReader struct {
-	ctx              context.Context
-	cancel           context.CancelFunc
-	client           tgclient.RangeClient
-	cache            *blockCache
-	meter            *throughputMeter
-	sem              chan struct{}
-	group            singleflight.Group
-	prefetchMu       sync.Mutex
-	prefetching      map[string]struct{}
-	prefetchBlocks   int
-	background       bool
-	floodWaitRetries int
-	floodWaitMax     time.Duration
-	onFloodWait      func(time.Duration)
+	ctx             context.Context
+	cancel          context.CancelFunc
+	client          tgclient.RangeClient
+	cache           *blockCache
+	meter           *throughputMeter
+	sem             chan struct{}
+	foregroundGroup singleflight.Group
+	backgroundGroup singleflight.Group
+	prefetchMu      sync.Mutex
+	prefetching     map[string]struct{}
+	prefetchBlocks  int
+	background      bool
+	retry           tgclient.FloodWaitRetryPolicy
+	onFloodWait     func(time.Duration)
 }
 
 func NewRangeReader(cfg RangeReaderConfig) *RangeReader {
@@ -87,13 +99,9 @@ func NewRangeReader(cfg RangeReaderConfig) *RangeReader {
 	if concurrency <= 0 {
 		concurrency = defaultRangeConcurrency
 	}
-	retries := cfg.FloodWaitRetries
-	if retries <= 0 {
-		retries = defaultFloodWaitRetries
-	}
-	maxSleep := cfg.FloodWaitMaxSleep
-	if maxSleep <= 0 {
-		maxSleep = defaultFloodWaitMaxSleep
+	retry := defaultRangeRetryPolicy()
+	if cfg.Retry != nil {
+		retry = *cfg.Retry
 	}
 	baseCtx := cfg.Context
 	if baseCtx == nil {
@@ -101,18 +109,17 @@ func NewRangeReader(cfg RangeReaderConfig) *RangeReader {
 	}
 	ctx, cancel := context.WithCancel(baseCtx)
 	return &RangeReader{
-		ctx:              ctx,
-		cancel:           cancel,
-		client:           cfg.Client,
-		cache:            newBlockCache(maxCache),
-		meter:            newThroughputMeter(),
-		sem:              make(chan struct{}, concurrency),
-		prefetching:      make(map[string]struct{}),
-		prefetchBlocks:   cfg.PrefetchBlocks,
-		background:       cfg.Background,
-		floodWaitRetries: retries,
-		floodWaitMax:     maxSleep,
-		onFloodWait:      cfg.OnFloodWait,
+		ctx:            ctx,
+		cancel:         cancel,
+		client:         cfg.Client,
+		cache:          newBlockCache(maxCache),
+		meter:          newThroughputMeter(),
+		sem:            make(chan struct{}, concurrency),
+		prefetching:    make(map[string]struct{}),
+		prefetchBlocks: cfg.PrefetchBlocks,
+		background:     cfg.Background,
+		retry:          retry,
+		onFloodWait:    cfg.OnFloodWait,
 	}
 }
 
@@ -230,8 +237,15 @@ func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, block
 	if data, ok := r.cache.get(key); ok {
 		return data, nil
 	}
-
-	ch := r.group.DoChan(key, func() (any, error) {
+	group := &r.foregroundGroup
+	if background {
+		group = &r.backgroundGroup
+	}
+	// Foreground and background reads intentionally do not coalesce with each
+	// other. A speculative thumbnail/prefetch fetch may duplicate one block of
+	// network work, but it can never make live playback wait behind background
+	// getFile slots. Both groups share the cache, so completed work is still reused.
+	ch := group.DoChan(key, func() (any, error) {
 		if data, ok := r.cache.get(key); ok {
 			return data, nil
 		}
@@ -270,46 +284,46 @@ func (r *RangeReader) fetchBlock(ctx context.Context, ref tgclient.DocumentRef, 
 	}
 
 	buf := make([]byte, limit)
-	for attempt := 0; ; attempt++ {
-		if err := r.acquire(ctx); err != nil {
-			return nil, err
-		}
-		releaseGetFile, err := acquireGetFileSlot(ctx, background)
-		if err != nil {
-			r.release()
-			return nil, err
-		}
-		n, err := r.client.ReadDocumentRange(ctx, ref, blockStart, buf)
-		releaseGetFile()
-		r.release()
+	err := r.retry.Do(ctx, func() error {
+		n, err := r.fetchBlockOnce(ctx, ref, blockStart, buf, background)
 		if n > 0 && r.meter != nil {
 			r.meter.Add(n)
 		}
+		if n == len(buf) && (err == nil || errors.Is(err, io.EOF)) {
+			return nil
+		}
 		if err == nil {
-			if n != len(buf) {
-				return nil, io.ErrUnexpectedEOF
+			err = io.ErrUnexpectedEOF
+		}
+		if wait, ok := tgclient.FloodWaitDuration(err); ok {
+			if r.meter != nil {
+				r.meter.NoteFloodWait(wait)
 			}
-			return buf, nil
+			if r.onFloodWait != nil {
+				r.onFloodWait(wait)
+			}
 		}
-		wait, ok := tgclient.FloodWaitDuration(err)
-		if !ok || attempt >= r.floodWaitRetries {
-			return nil, err
-		}
-		if wait > r.floodWaitMax {
-			wait = r.floodWaitMax
-		}
-		if r.meter != nil {
-			r.meter.NoteFloodWait(wait)
-		}
-		if r.onFloodWait != nil {
-			r.onFloodWait(wait)
-		}
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
+	return buf, nil
+}
+
+func (r *RangeReader) fetchBlockOnce(ctx context.Context, ref tgclient.DocumentRef, blockStart int64, buf []byte, background bool) (int, error) {
+	if err := r.acquire(ctx); err != nil {
+		return 0, err
+	}
+	releaseGetFile, err := acquireGetFileSlot(ctx, background)
+	if err != nil {
+		r.release()
+		return 0, err
+	}
+	n, err := r.client.ReadDocumentRange(ctx, ref, blockStart, buf)
+	releaseGetFile()
+	r.release()
+	return n, err
 }
 
 func (r *RangeReader) acquire(ctx context.Context) error {

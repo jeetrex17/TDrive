@@ -66,6 +66,22 @@ static int tdrive_x11_window_pid(Display *display, Window window) {
 	return (int)pid;
 }
 
+static int tdrive_bytes_contains(const unsigned char *value, unsigned long value_length, const char *needle) {
+	if (value == NULL || needle == NULL) {
+		return 0;
+	}
+	size_t needle_length = strlen(needle);
+	if (needle_length == 0 || value_length < needle_length) {
+		return 0;
+	}
+	for (unsigned long index = 0; index <= value_length - needle_length; index++) {
+		if (memcmp(value + index, needle, needle_length) == 0) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static int tdrive_x11_title_contains(Display *display, Window window, const char *needle) {
 	if (needle == NULL || needle[0] == '\0') {
 		return 0;
@@ -94,7 +110,7 @@ static int tdrive_x11_title_contains(Display *display, Window window, const char
 			&data
 		);
 		if (status == Success && data != NULL) {
-			int contains = strstr((const char *)data, needle) != NULL;
+			int contains = actual_format == 8 && tdrive_bytes_contains(data, nitems, needle);
 			XFree(data);
 			if (contains) {
 				return 1;
@@ -279,9 +295,7 @@ static void tdrive_x11_destroy(tdrive_x11_view *view) {
 import "C"
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -294,64 +308,83 @@ import (
 )
 
 type Player struct {
-	mu          sync.Mutex
-	closed      bool
-	view        unsafe.Pointer
-	ipcPath     string
-	ipcDir      string
-	cmd         *exec.Cmd
-	done        chan error
-	stateCancel context.CancelFunc
-	stateDone   chan struct{}
+	mu            sync.Mutex
+	closed        bool
+	terminal      bool
+	view          unsafe.Pointer
+	ipcPath       string
+	ipcDir        string
+	cmd           *exec.Cmd
+	done          chan error
+	standalone    bool
+	stateCancel   context.CancelFunc
+	eventConn     net.Conn
+	eventDone     chan struct{}
+	onState       StateHandler
+	lastState     State
+	observedState *mpvObservedProperties
 
 	closeOnce sync.Once
 }
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
 	if !linuxNativePlayerEnabled() {
-		linuxNativeLogf("start rejected: disabled by %s=0", linuxNativePlayerFlag)
+		linuxNativeLogf("start rejected: explicit opt-in required with %s=1", linuxNativePlayerFlag)
 		return nil, ErrUnsupported
-	}
-	if os.Getenv("DISPLAY") == "" {
-		linuxNativeLogf("start rejected: DISPLAY is empty (session=%s wayland=%s)", os.Getenv("XDG_SESSION_TYPE"), os.Getenv("WAYLAND_DISPLAY"))
-		return nil, fmt.Errorf("%w: Linux native playback currently requires X11", ErrUnsupported)
 	}
 	if !rect.Valid() {
 		linuxNativeLogf("start rejected: invalid rect x=%.1f y=%.1f w=%.1f h=%.1f", rect.X, rect.Y, rect.Width, rect.Height)
 		return nil, fmt.Errorf("native player: invalid view rect")
 	}
 
-	linuxNativeLogf(
-		"start requested: display=%s session=%s gdk_backend=%s rect=x%.1f y%.1f w%.1f h%.1f html_controls=%t",
-		os.Getenv("DISPLAY"),
-		os.Getenv("XDG_SESSION_TYPE"),
+	displayMode := selectLinuxDisplayMode(
 		os.Getenv("GDK_BACKEND"),
+		os.Getenv("XDG_SESSION_TYPE"),
+		os.Getenv("WAYLAND_DISPLAY"),
+		os.Getenv("DISPLAY"),
+	)
+	if displayMode == linuxDisplayUnavailable {
+		linuxNativeLogf("start rejected: no supported graphical session")
+		return nil, fmt.Errorf("%w: Linux native playback requires X11 or Wayland", ErrUnsupported)
+	}
+
+	linuxNativeLogf(
+		"start requested: mode=%s rect=x%.1f y%.1f w%.1f h%.1f html_controls=%t",
+		displayMode,
 		rect.X,
 		rect.Y,
 		rect.Width,
 		rect.Height,
 		opts.UseHTMLControls,
 	)
-	view := C.tdrive_x11_create(C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height))
-	if view == nil {
-		linuxNativeLogf("start failed: could not create X11 child window")
-		return nil, fmt.Errorf("native player: could not create X11 child window")
+	var view *C.tdrive_x11_view
+	var child uintptr
+	if displayMode == linuxDisplayX11Embedded {
+		view = C.tdrive_x11_create(C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height))
+		if view == nil {
+			linuxNativeLogf("start failed: could not create X11 child window")
+			return nil, fmt.Errorf("native player: could not create X11 child window")
+		}
+		child = uintptr(C.tdrive_x11_child(view))
+		if child == 0 {
+			C.tdrive_x11_destroy(view)
+			linuxNativeLogf("start failed: X11 child window id is zero")
+			return nil, fmt.Errorf("native player: invalid X11 child window")
+		}
+		linuxNativeLogf("x11 child ready: wid=%d", child)
 	}
-	child := uintptr(C.tdrive_x11_child(view))
-	if child == 0 {
-		C.tdrive_x11_destroy(view)
-		linuxNativeLogf("start failed: X11 child window id is zero")
-		return nil, fmt.Errorf("native player: invalid X11 child window")
-	}
-	linuxNativeLogf("x11 child ready: wid=%d", child)
 
-	player := &Player{view: unsafe.Pointer(view), done: make(chan error, 1)}
+	player := &Player{
+		view:       unsafe.Pointer(view),
+		done:       make(chan error, 1),
+		standalone: displayMode == linuxDisplayWaylandStandalone,
+	}
 	if err := player.startProcess(ctx, url, child, opts); err != nil {
 		player.destroyView()
 		linuxNativeLogf("start failed: %v", err)
 		return nil, err
 	}
-	linuxNativeLogf("start ok: wid=%d", child)
+	linuxNativeLogf("start ok: mode=%s", displayMode)
 	return player, nil
 }
 
@@ -381,22 +414,38 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		"--demuxer-max-bytes=67108864",
 		"--demuxer-max-back-bytes=33554432",
 		"--keepaspect=yes",
-		"--keepaspect-window=no",
-		"--auto-window-resize=no",
-		"--video-align-x=0",
-		"--video-align-y=0",
-		"--osc=no",
-		"--osd-bar=no",
-		"--osd-level=0",
-		"--cursor-autohide=no",
-		"--no-input-default-bindings",
 		"--force-window=immediate",
-		"--input-vo-keyboard=no",
 		"--input-terminal=no",
+		"--idle=yes",
+		"--keep-open=yes",
 		"--input-ipc-server=" + p.ipcPath,
-		fmt.Sprintf("--wid=%d", windowID),
-		"--",
-		url,
+	}
+	if windowID != 0 {
+		args = append(args,
+			"--keepaspect-window=no",
+			"--auto-window-resize=no",
+			"--video-align-x=0",
+			"--video-align-y=0",
+			"--osc=no",
+			"--osd-bar=no",
+			"--osd-level=0",
+			"--cursor-autohide=no",
+			"--no-input-default-bindings",
+			"--input-vo-keyboard=no",
+			fmt.Sprintf("--wid=%d", windowID),
+		)
+	} else {
+		// Wayland does not provide the cross-process child-window embedding
+		// primitive used on X11. Keep playback reliable in an honest standalone
+		// mpv window and leave its native controls enabled.
+		args = append(args,
+			"--title=TDrive Video",
+			"--osc=yes",
+			"--osd-bar=yes",
+			"--osd-level=1",
+			"--input-default-bindings=yes",
+			"--input-vo-keyboard=yes",
+		)
 	}
 
 	cmd := exec.CommandContext(ctx, mpvPath, args...)
@@ -408,30 +457,64 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		return fmt.Errorf("native player: start mpv: %w", err)
 	}
 	p.cmd = cmd
+	p.onState = opts.OnState
 	if opts.OnState != nil {
-		stateCtx, cancel := context.WithCancel(ctx)
-		p.stateCancel = cancel
-		p.stateDone = make(chan struct{})
-		go p.pollState(stateCtx, opts.OnState)
+		p.emitState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
+	}
+	eventConn, err := dialLinuxMPVIPCWithAttempts(p.ipcPath, 80)
+	if err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		p.cmd = nil
+		_ = os.RemoveAll(p.ipcDir)
+		return err
+	}
+	stateCtx, cancel := context.WithCancel(ctx)
+	p.stateCancel = cancel
+	p.eventConn = eventConn
+	p.eventDone = make(chan struct{})
+	if opts.OnState != nil {
+		_ = eventConn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+		if err := writeMPVObserveProperties(eventConn, mpvStatePropertyNames); err != nil {
+			cancel()
+			_ = eventConn.Close()
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			p.cmd = nil
+			_ = os.RemoveAll(p.ipcDir)
+			return fmt.Errorf("native player: observe mpv state: %w", err)
+		}
+		_ = eventConn.SetWriteDeadline(time.Time{})
+	}
+	go p.observeEvents(stateCtx, eventConn, p.eventDone)
+	if err := writeMPVIPCWithAttempts(p.ipcPath, mpvCommandPayload("loadfile", url, "replace"), 80); err != nil {
+		cancel()
+		_ = eventConn.Close()
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		p.cmd = nil
+		_ = os.RemoveAll(p.ipcDir)
+		return fmt.Errorf("native player: initialize mpv IPC: %w", err)
 	}
 	go func() {
 		err := cmd.Wait()
-		if err != nil {
-			linuxNativeLogf("mpv exited: %v", err)
-		} else {
-			linuxNativeLogf("mpv exited cleanly")
-		}
-		p.mu.Lock()
-		stateCancel := p.stateCancel
-		p.mu.Unlock()
-		if stateCancel != nil {
-			stateCancel()
-		}
+		linuxNativeLogf("mpv process exited")
+		p.handleProcessExit(err)
 		p.done <- err
 		p.destroyView()
 		_ = os.RemoveAll(p.ipcDir)
 	}()
 	return nil
+}
+
+func (p *Player) Presentation() Presentation {
+	if p != nil && p.standalone {
+		return PresentationStandalone
+	}
+	return PresentationEmbedded
 }
 
 func (p *Player) Resize(rect Rect) error {
@@ -476,14 +559,7 @@ func (p *Player) Command(command ...string) error {
 		return nil
 	}
 
-	payload, err := json.Marshal(struct {
-		Command []string `json:"command"`
-	}{Command: command})
-	if err != nil {
-		return err
-	}
-	payload = append(payload, '\n')
-	return writeMPVIPC(ipcPath, payload)
+	return writeMPVIPC(ipcPath, mpvCommandPayload(command...))
 }
 
 func (p *Player) Close() error {
@@ -502,15 +578,19 @@ func (p *Player) Close() error {
 	cmd := p.cmd
 	done := p.done
 	stateCancel := p.stateCancel
-	stateDone := p.stateDone
+	eventConn := p.eventConn
+	eventDone := p.eventDone
 	p.mu.Unlock()
 
 	linuxNativeLogf("close requested")
+	if ipcPath != "" {
+		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
+	}
 	if stateCancel != nil {
 		stateCancel()
 	}
-	if ipcPath != "" {
-		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
+	if eventConn != nil {
+		_ = eventConn.Close()
 	}
 	if cmd != nil && cmd.Process != nil {
 		select {
@@ -525,14 +605,15 @@ func (p *Player) Close() error {
 			}
 		}
 	}
-	if stateDone != nil {
+	if eventDone != nil {
 		select {
-		case <-stateDone:
+		case <-eventDone:
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	p.destroyView()
 	_ = os.RemoveAll(ipcDir)
+	p.emitTerminal(StatusClosed)
 	linuxNativeLogf("close complete")
 	return nil
 }
@@ -554,16 +635,16 @@ func (p *Player) destroyView() {
 }
 
 func writeMPVIPC(path string, payload []byte) error {
+	return writeMPVIPCWithAttempts(path, payload, 20)
+}
+
+func writeMPVIPCWithAttempts(path string, payload []byte, attempts int) error {
 	var lastErr error
-	for attempt := 0; attempt < 20; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
 		if err == nil {
-			_, writeErr := conn.Write(payload)
-			closeErr := conn.Close()
-			if writeErr != nil {
-				return writeErr
-			}
-			return closeErr
+			_ = conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+			return writeAndCloseWithTimeout(conn, payload, 600*time.Millisecond)
 		}
 		lastErr = err
 		time.Sleep(25 * time.Millisecond)
@@ -571,136 +652,119 @@ func writeMPVIPC(path string, payload []byte) error {
 	return fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
 }
 
-func (p *Player) pollState(ctx context.Context, onState StateHandler) {
-	defer close(p.stateDone)
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
+func (p *Player) emitState(state State) {
+	state = normalizeState(state)
+	p.mu.Lock()
+	if p.closed || p.terminal {
+		p.mu.Unlock()
+		return
+	}
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
+}
 
-	for {
+func (p *Player) emitTerminal(status PlaybackStatus) {
+	state := terminalState(status)
+	p.mu.Lock()
+	if p.terminal {
+		p.mu.Unlock()
+		return
+	}
+	p.terminal = true
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
+}
+
+func (p *Player) handleProcessExit(err error) {
+	p.mu.Lock()
+	closed := p.closed
+	standalone := p.standalone
+	stateCancel := p.stateCancel
+	eventConn := p.eventConn
+	p.mu.Unlock()
+	if stateCancel != nil {
+		stateCancel()
+	}
+	if eventConn != nil {
+		_ = eventConn.Close()
+	}
+	switch sidecarExitStatus(closed, standalone, err) {
+	case StatusClosed:
+		p.emitTerminal(StatusClosed)
+	default:
+		p.emitTerminal(StatusFailed)
+	}
+}
+
+func (p *Player) observeEvents(ctx context.Context, conn net.Conn, done chan<- struct{}) {
+	defer close(done)
+	defer conn.Close()
+	stopClose := make(chan struct{})
+	go func() {
 		select {
 		case <-ctx.Done():
-			return
-		case <-ticker.C:
+			_ = conn.Close()
+		case <-stopClose:
 		}
+	}()
+	defer close(stopClose)
+	if err := scanMPVEvents(conn, func(event mpvIPCEvent) {
+		p.handleMPVEvent(event)
+	}); err != nil && ctx.Err() == nil {
+		linuxNativeLogf("mpv event observer stopped: %v", err)
+	}
+}
 
+func (p *Player) handleMPVEvent(event mpvIPCEvent) {
+	if event.Event == "property-change" {
+		p.updateObservedState(event)
+		return
+	}
+	status, ok := mpvEventStatus(event)
+	if !ok {
+		return
+	}
+	if status == StatusEnded {
 		p.mu.Lock()
-		ipcPath := p.ipcPath
-		closed := p.closed
+		lastState := p.lastState
 		p.mu.Unlock()
-		if closed || ipcPath == "" {
-			return
-		}
-		state, ok := readLinuxMPVState(ipcPath)
-		if ok {
-			onState(state)
-		}
+		p.emitState(endedState(lastState))
+		return
 	}
+	p.emitTerminal(status)
 }
 
-func readLinuxMPVState(ipcPath string) (State, bool) {
-	values, err := queryLinuxMPVProperties(ipcPath, []string{
-		"time-pos",
-		"duration",
-		"pause",
-		"mute",
-		"volume",
-		"speed",
-		"paused-for-cache",
-		"cache-buffering-state",
-		"demuxer-cache-duration",
-	})
-	if err != nil {
-		return State{}, false
+func (p *Player) updateObservedState(event mpvIPCEvent) {
+	if event.Name == "" {
+		return
 	}
-
-	current := cleanLinuxSeconds(linuxFloatProperty(values, "time-pos"))
-	duration := cleanLinuxSeconds(linuxFloatProperty(values, "duration"))
-	paused := linuxBoolProperty(values, "pause")
-	muted := linuxBoolProperty(values, "mute")
-	volume := clampLinuxFloat(linuxFloatProperty(values, "volume")/100, 0, 1)
-	rate := clampLinuxFloat(linuxFloatProperty(values, "speed"), 0.25, 4)
-	if rate == 0 {
-		rate = 1
+	p.mu.Lock()
+	if p.closed || p.terminal {
+		p.mu.Unlock()
+		return
 	}
-	buffering := linuxFloatProperty(values, "cache-buffering-state")
-	state := State{
-		Paused:      paused,
-		CurrentTime: clampLinuxFloat(current, 0, maxLinuxFloat(duration, current)),
-		Duration:    duration,
-		Volume:      volume,
-		Muted:       muted || volume == 0,
-		Rate:        rate,
-		Loading:     linuxBoolProperty(values, "paused-for-cache") || (!paused && buffering > 0 && buffering < 100),
+	if p.observedState == nil {
+		p.observedState = newMPVObservedProperties(mpvStatePropertyNames)
 	}
-	cacheDuration := cleanLinuxSeconds(linuxFloatProperty(values, "demuxer-cache-duration"))
-	if duration > 0 && cacheDuration > 0 {
-		state.Buffered = []BufferedRange{{
-			Start: clampLinuxFloat(state.CurrentTime, 0, duration),
-			End:   clampLinuxFloat(state.CurrentTime+cacheDuration, 0, duration),
-		}}
+	values, ready := p.observedState.update(event, time.Now())
+	p.mu.Unlock()
+	if !ready {
+		return
 	}
-	return state, true
+	p.emitState(stateFromMPVProperties(values))
 }
 
-type linuxMPVIPCRequest struct {
-	Command   []string `json:"command"`
-	RequestID int      `json:"request_id"`
-}
-
-type linuxMPVIPCResponse struct {
-	RequestID int             `json:"request_id"`
-	Error     string          `json:"error"`
-	Data      json.RawMessage `json:"data"`
-}
-
-func queryLinuxMPVProperties(path string, names []string) (map[string]any, error) {
-	conn, err := openLinuxMPVIPCReadWrite(path)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
-
-	encoder := json.NewEncoder(conn)
-	idToName := make(map[int]string, len(names))
-	for i, name := range names {
-		id := i + 1
-		idToName[id] = name
-		if err := encoder.Encode(linuxMPVIPCRequest{Command: []string{"get_property", name}, RequestID: id}); err != nil {
-			return nil, err
-		}
-	}
-
-	values := make(map[string]any, len(names))
-	scanner := bufio.NewScanner(conn)
-	for len(idToName) > 0 && scanner.Scan() {
-		var response linuxMPVIPCResponse
-		if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
-			continue
-		}
-		name, ok := idToName[response.RequestID]
-		if !ok {
-			continue
-		}
-		delete(idToName, response.RequestID)
-		if response.Error != "success" {
-			continue
-		}
-		var value any
-		if err := json.Unmarshal(response.Data, &value); err != nil {
-			continue
-		}
-		values[name] = value
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return values, nil
-}
-
-func openLinuxMPVIPCReadWrite(path string) (net.Conn, error) {
+func dialLinuxMPVIPCWithAttempts(path string, attempts int) (net.Conn, error) {
 	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
 		if err == nil {
 			return conn, nil
@@ -709,55 +773,4 @@ func openLinuxMPVIPCReadWrite(path string) (net.Conn, error) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
-}
-
-func linuxFloatProperty(values map[string]any, key string) float64 {
-	value, ok := values[key]
-	if !ok || value == nil {
-		return 0
-	}
-	switch typed := value.(type) {
-	case float64:
-		return typed
-	case int:
-		return float64(typed)
-	case json.Number:
-		n, _ := typed.Float64()
-		return n
-	default:
-		return 0
-	}
-}
-
-func linuxBoolProperty(values map[string]any, key string) bool {
-	value, ok := values[key]
-	if !ok || value == nil {
-		return false
-	}
-	typed, ok := value.(bool)
-	return ok && typed
-}
-
-func cleanLinuxSeconds(value float64) float64 {
-	if value < 0 || value != value {
-		return 0
-	}
-	return value
-}
-
-func clampLinuxFloat(value, minValue, maxValue float64) float64 {
-	if value < minValue {
-		return minValue
-	}
-	if value > maxValue {
-		return maxValue
-	}
-	return value
-}
-
-func maxLinuxFloat(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
 }

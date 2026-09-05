@@ -3,11 +3,9 @@
 package nativeplayer
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -75,17 +73,22 @@ var (
 )
 
 type Player struct {
-	mu          sync.Mutex
-	closed      bool
-	parent      uintptr
-	child       uintptr
-	windowOwner *windowsWindowThread
-	ipcPath     string
-	proc        *windowsMPVProcess
-	done        chan error
-	job         syscall.Handle
-	stateCancel context.CancelFunc
-	stateDone   chan struct{}
+	mu            sync.Mutex
+	closed        bool
+	terminal      bool
+	parent        uintptr
+	child         uintptr
+	windowOwner   *windowsWindowThread
+	ipcPath       string
+	proc          *windowsMPVProcess
+	done          chan error
+	job           syscall.Handle
+	stateCancel   context.CancelFunc
+	eventConn     *os.File
+	eventDone     chan struct{}
+	onState       StateHandler
+	lastState     State
+	observedState *mpvObservedProperties
 
 	destroyOnce sync.Once
 	jobOnce     sync.Once
@@ -159,10 +162,10 @@ func (p *Player) startProcess(ctx context.Context, url string, opts Options) err
 		"--force-window=immediate",
 		"--input-vo-keyboard=no",
 		"--input-terminal=no",
+		"--idle=yes",
+		"--keep-open=yes",
 		"--input-ipc-server=" + p.ipcPath,
 		fmt.Sprintf("--wid=%d", p.child),
-		"--",
-		url,
 	}
 
 	proc, err := startSuspendedMPV(ctx, mpvPath, args)
@@ -183,19 +186,57 @@ func (p *Player) startProcess(ctx context.Context, url string, opts Options) err
 		return err
 	}
 	p.proc = proc
+	p.onState = opts.OnState
 	if opts.OnState != nil {
-		stateCtx, cancel := context.WithCancel(ctx)
-		p.stateCancel = cancel
-		p.stateDone = make(chan struct{})
-		go p.pollState(stateCtx, opts.OnState)
+		p.emitState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
+	}
+	eventConn, err := openMPVIPCReadWriteWithAttempts(p.ipcPath, 80)
+	if err != nil {
+		proc.kill()
+		_ = proc.wait()
+		p.proc = nil
+		p.closeJob()
+		return err
+	}
+	stateCtx, cancel := context.WithCancel(ctx)
+	p.stateCancel = cancel
+	p.eventConn = eventConn
+	p.eventDone = make(chan struct{})
+	if opts.OnState != nil {
+		_ = eventConn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+		if err := writeMPVObserveProperties(eventConn, mpvStatePropertyNames); err != nil {
+			cancel()
+			_ = eventConn.Close()
+			proc.kill()
+			_ = proc.wait()
+			p.proc = nil
+			p.closeJob()
+			return fmt.Errorf("native player: observe mpv state: %w", err)
+		}
+		_ = eventConn.SetWriteDeadline(time.Time{})
+	}
+	go p.observeEvents(stateCtx, eventConn, p.eventDone)
+	if err := writeMPVIPCWithAttempts(p.ipcPath, mpvCommandPayload("loadfile", url, "replace"), 80); err != nil {
+		cancel()
+		_ = eventConn.Close()
+		proc.kill()
+		_ = proc.wait()
+		p.proc = nil
+		p.closeJob()
+		return fmt.Errorf("native player: initialize mpv IPC: %w", err)
 	}
 	go func() {
 		err := proc.wait()
+		p.handleProcessExit(err)
 		p.done <- err
 		p.destroyChild()
 		p.closeJob()
 	}()
 	return nil
+}
+
+func (p *Player) Presentation() Presentation {
+	return PresentationEmbedded
 }
 
 func randomPipeSuffix() (string, error) {
@@ -300,14 +341,7 @@ func (p *Player) Command(command ...string) error {
 		return nil
 	}
 
-	payload, err := json.Marshal(struct {
-		Command []string `json:"command"`
-	}{Command: command})
-	if err != nil {
-		return err
-	}
-	payload = append(payload, '\n')
-	return writeMPVIPC(ipcPath, payload)
+	return writeMPVIPC(ipcPath, mpvCommandPayload(command...))
 }
 
 func (p *Player) Close() error {
@@ -325,14 +359,18 @@ func (p *Player) Close() error {
 	proc := p.proc
 	done := p.done
 	stateCancel := p.stateCancel
-	stateDone := p.stateDone
+	eventConn := p.eventConn
+	eventDone := p.eventDone
 	p.mu.Unlock()
 
+	if ipcPath != "" {
+		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
+	}
 	if stateCancel != nil {
 		stateCancel()
 	}
-	if ipcPath != "" {
-		_ = writeMPVIPC(ipcPath, []byte(`{"command":["quit"]}`+"\n"))
+	if eventConn != nil {
+		_ = eventConn.Close()
 	}
 	if proc != nil {
 		select {
@@ -345,14 +383,15 @@ func (p *Player) Close() error {
 			}
 		}
 	}
-	if stateDone != nil {
+	if eventDone != nil {
 		select {
-		case <-stateDone:
+		case <-eventDone:
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
 	p.destroyChild()
 	p.closeJob()
+	p.emitTerminal(StatusClosed)
 	return nil
 }
 
@@ -394,16 +433,16 @@ func (p *Player) closeJob() {
 }
 
 func writeMPVIPC(path string, payload []byte) error {
+	return writeMPVIPCWithAttempts(path, payload, 20)
+}
+
+func writeMPVIPCWithAttempts(path string, payload []byte, attempts int) error {
 	var lastErr error
-	for attempt := 0; attempt < 20; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		file, err := os.OpenFile(path, os.O_WRONLY, 0)
 		if err == nil {
-			_, writeErr := file.Write(payload)
-			closeErr := file.Close()
-			if writeErr != nil {
-				return writeErr
-			}
-			return closeErr
+			_ = file.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+			return writeAndCloseWithTimeout(file, payload, 600*time.Millisecond)
 		}
 		lastErr = err
 		time.Sleep(25 * time.Millisecond)
@@ -411,135 +450,120 @@ func writeMPVIPC(path string, payload []byte) error {
 	return fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
 }
 
-func (p *Player) pollState(ctx context.Context, onState StateHandler) {
-	defer close(p.stateDone)
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
+func (p *Player) emitState(state State) {
+	state = normalizeState(state)
+	p.mu.Lock()
+	if p.closed || p.terminal {
+		p.mu.Unlock()
+		return
+	}
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
+}
 
-	for {
+func (p *Player) emitTerminal(status PlaybackStatus) {
+	state := terminalState(status)
+	p.mu.Lock()
+	if p.terminal {
+		p.mu.Unlock()
+		return
+	}
+	p.terminal = true
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
+}
+
+func (p *Player) handleProcessExit(err error) {
+	p.mu.Lock()
+	closed := p.closed
+	stateCancel := p.stateCancel
+	eventConn := p.eventConn
+	p.mu.Unlock()
+	if stateCancel != nil {
+		stateCancel()
+	}
+	if eventConn != nil {
+		_ = eventConn.Close()
+	}
+	switch sidecarExitStatus(closed, false, err) {
+	case StatusClosed:
+		p.emitTerminal(StatusClosed)
+	default:
+		p.emitTerminal(StatusFailed)
+	}
+}
+
+func (p *Player) observeEvents(ctx context.Context, file *os.File, done chan<- struct{}) {
+	defer close(done)
+	defer file.Close()
+	stopClose := make(chan struct{})
+	go func() {
 		select {
 		case <-ctx.Done():
-			return
-		case <-ticker.C:
+			_ = file.Close()
+		case <-stopClose:
 		}
-
-		p.mu.Lock()
-		ipcPath := p.ipcPath
-		closed := p.closed
-		p.mu.Unlock()
-		if closed || ipcPath == "" {
-			return
-		}
-		state, ok := readWindowsMPVState(ipcPath)
-		if ok {
-			onState(state)
-		}
-	}
-}
-
-func readWindowsMPVState(ipcPath string) (State, bool) {
-	values, err := queryMPVProperties(ipcPath, []string{
-		"time-pos",
-		"duration",
-		"pause",
-		"mute",
-		"volume",
-		"speed",
-		"paused-for-cache",
-		"cache-buffering-state",
-		"demuxer-cache-duration",
+	}()
+	defer close(stopClose)
+	_ = scanMPVEvents(file, func(event mpvIPCEvent) {
+		p.handleMPVEvent(event)
 	})
-	if err != nil {
-		return State{}, false
-	}
-
-	current := cleanWindowsSeconds(floatProperty(values, "time-pos"), true)
-	duration := cleanWindowsSeconds(floatProperty(values, "duration"), true)
-	paused := boolProperty(values, "pause")
-	muted := boolProperty(values, "mute")
-	volume := clampWindowsFloat(floatProperty(values, "volume")/100, 0, 1)
-	rate := clampWindowsFloat(floatProperty(values, "speed"), 0.25, 4)
-	if rate == 0 {
-		rate = 1
-	}
-	buffering := floatProperty(values, "cache-buffering-state")
-	state := State{
-		Paused:      paused,
-		CurrentTime: clampWindowsFloat(current, 0, maxWindowsFloat(duration, current)),
-		Duration:    duration,
-		Volume:      volume,
-		Muted:       muted || volume == 0,
-		Rate:        rate,
-		Loading:     boolProperty(values, "paused-for-cache") || (!paused && buffering > 0 && buffering < 100),
-	}
-	cacheDuration := cleanWindowsSeconds(floatProperty(values, "demuxer-cache-duration"), true)
-	if duration > 0 && cacheDuration > 0 {
-		state.Buffered = []BufferedRange{{
-			Start: clampWindowsFloat(state.CurrentTime, 0, duration),
-			End:   clampWindowsFloat(state.CurrentTime+cacheDuration, 0, duration),
-		}}
-	}
-	return state, true
 }
 
-type mpvIPCRequest struct {
-	Command   []string `json:"command"`
-	RequestID int      `json:"request_id"`
+func (p *Player) handleMPVEvent(event mpvIPCEvent) {
+	if event.Event == "property-change" {
+		p.updateObservedState(event)
+		return
+	}
+	status, ok := mpvEventStatus(event)
+	if !ok {
+		return
+	}
+	if status == StatusEnded {
+		p.mu.Lock()
+		lastState := p.lastState
+		p.mu.Unlock()
+		p.emitState(endedState(lastState))
+		return
+	}
+	p.emitTerminal(status)
 }
 
-type mpvIPCResponse struct {
-	RequestID int             `json:"request_id"`
-	Error     string          `json:"error"`
-	Data      json.RawMessage `json:"data"`
-}
-
-func queryMPVProperties(path string, names []string) (map[string]any, error) {
-	file, err := openMPVIPCReadWrite(path)
-	if err != nil {
-		return nil, err
+func (p *Player) updateObservedState(event mpvIPCEvent) {
+	if event.Name == "" {
+		return
 	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	idToName := make(map[int]string, len(names))
-	for i, name := range names {
-		id := i + 1
-		idToName[id] = name
-		if err := encoder.Encode(mpvIPCRequest{Command: []string{"get_property", name}, RequestID: id}); err != nil {
-			return nil, err
-		}
+	p.mu.Lock()
+	if p.closed || p.terminal {
+		p.mu.Unlock()
+		return
 	}
-
-	values := make(map[string]any, len(names))
-	scanner := bufio.NewScanner(file)
-	for len(idToName) > 0 && scanner.Scan() {
-		var response mpvIPCResponse
-		if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
-			continue
-		}
-		name, ok := idToName[response.RequestID]
-		if !ok {
-			continue
-		}
-		delete(idToName, response.RequestID)
-		if response.Error != "success" {
-			continue
-		}
-		var value any
-		if err := json.Unmarshal(response.Data, &value); err != nil {
-			continue
-		}
-		values[name] = value
+	if p.observedState == nil {
+		p.observedState = newMPVObservedProperties(mpvStatePropertyNames)
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
+	values, ready := p.observedState.update(event, time.Now())
+	p.mu.Unlock()
+	if !ready {
+		return
 	}
-	return values, nil
+	p.emitState(stateFromMPVProperties(values))
 }
 
 func openMPVIPCReadWrite(path string) (*os.File, error) {
+	return openMPVIPCReadWriteWithAttempts(path, 4)
+}
+
+func openMPVIPCReadWriteWithAttempts(path string, attempts int) (*os.File, error) {
 	var lastErr error
-	for attempt := 0; attempt < 4; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		file, err := os.OpenFile(path, os.O_RDWR, 0)
 		if err == nil {
 			return file, nil
@@ -548,33 +572,6 @@ func openMPVIPCReadWrite(path string) (*os.File, error) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	return nil, fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
-}
-
-func floatProperty(values map[string]any, key string) float64 {
-	value, ok := values[key]
-	if !ok || value == nil {
-		return 0
-	}
-	switch typed := value.(type) {
-	case float64:
-		return typed
-	case int:
-		return float64(typed)
-	case json.Number:
-		n, _ := typed.Float64()
-		return n
-	default:
-		return 0
-	}
-}
-
-func boolProperty(values map[string]any, key string) bool {
-	value, ok := values[key]
-	if !ok || value == nil {
-		return false
-	}
-	typed, ok := value.(bool)
-	return ok && typed
 }
 
 func findTDriveWindow() (uintptr, error) {
@@ -1111,36 +1108,6 @@ func dpiScaleForWindow(hwnd uintptr) float64 {
 	return float64(ret) / defaultDPI
 }
 
-func cleanWindowsSeconds(value float64, ok bool) float64 {
-	if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
-		return 0
-	}
-	return value
-}
-
-func clampWindowsFloat(value, min, max float64) float64 {
-	if max < min {
-		max = min
-	}
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
-}
-
-func maxWindowsFloat(values ...float64) float64 {
-	var max float64
-	for _, value := range values {
-		if value > max {
-			max = value
-		}
-	}
-	return max
-}
-
 func windowVisible(hwnd uintptr) bool {
 	ret, _, _ := procIsWindowVisible.Call(hwnd)
 	return ret != 0
@@ -1170,5 +1137,5 @@ func callFailed(name string, err error) error {
 }
 
 func windowsNativePlayerEnabled() bool {
-	return os.Getenv(windowsNativePlayerFlag) != "0"
+	return nativePlayerEnabled(os.Getenv(windowsNativePlayerFlag))
 }

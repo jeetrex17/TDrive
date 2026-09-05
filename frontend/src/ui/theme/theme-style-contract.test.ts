@@ -102,4 +102,17 @@ describe('global theme style contract', () => {
         expect(video).toContain('--video-accent: var(--viewer-accent)');
         expect(video).toContain('background: var(--viewer-scrim)');
     });
+
+    it('hides the HTML seek preview only when a native overlay is available', () => {
+        const nativeOverlay = ruleFor(
+            '.video-overlay.is-video-native-fallback.has-native-seek-overlay .video-scrubber-tooltip',
+        );
+        const inControlsFallback = ruleFor(
+            '.video-overlay.is-video-native-fallback:not(.has-native-seek-overlay) .video-scrubber-tooltip',
+        );
+
+        expect(nativeOverlay).toContain('display: none');
+        expect(inControlsFallback).toContain('display: grid');
+        expect(inControlsFallback).toContain('top: 50%');
+    });
 });

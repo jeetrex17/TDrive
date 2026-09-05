@@ -16,7 +16,14 @@ package nativeplayer
 #import <mpv/render.h>
 #import <mpv/render_gl.h>
 #import <stdint.h>
+#import <stdio.h>
 #import <string.h>
+
+#define TDRIVE_MAX_TRACKS 32
+#define TDRIVE_TRACK_KIND_SIZE 16
+#define TDRIVE_TRACK_TITLE_SIZE 128
+#define TDRIVE_TRACK_LANGUAGE_SIZE 32
+#define TDRIVE_TRACK_CODEC_SIZE 64
 
 static void *tdrive_gl_get_proc_address(void *ctx, const char *name) {
     CFStringRef symbol = CFStringCreateWithCString(kCFAllocatorDefault, name, kCFStringEncodingASCII);
@@ -24,6 +31,17 @@ static void *tdrive_gl_get_proc_address(void *ctx, const char *name) {
     CFRelease(symbol);
     return addr;
 }
+
+typedef struct {
+	int64_t id;
+	int selected;
+	int is_default;
+	int forced;
+	char kind[TDRIVE_TRACK_KIND_SIZE];
+	char title[TDRIVE_TRACK_TITLE_SIZE];
+	char language[TDRIVE_TRACK_LANGUAGE_SIZE];
+	char codec[TDRIVE_TRACK_CODEC_SIZE];
+} tdrive_player_track;
 
 typedef struct {
     double time_pos;
@@ -36,9 +54,15 @@ typedef struct {
     int muted;
     int paused_for_cache;
     int eof_reached;
+	int idle_active;
+	int file_loaded;
+	int load_failed;
+	int ended;
     int has_time_pos;
     int has_duration;
     int has_cache_duration;
+	int track_count;
+	tdrive_player_track tracks[TDRIVE_MAX_TRACKS];
 } tdrive_player_state;
 
 static int tdrive_mpv_get_double(mpv_handle *mpv, const char *name, double *out) {
@@ -66,16 +90,34 @@ static int64_t tdrive_mpv_get_int64(mpv_handle *mpv, const char *name) {
     return value;
 }
 
+static void tdrive_mpv_copy_string(mpv_handle *mpv, const char *name, char *out, size_t out_size) {
+	if (out == NULL || out_size == 0) {
+		return;
+	}
+	out[0] = '\0';
+	char *value = mpv_get_property_string(mpv, name);
+	if (value == NULL) {
+		return;
+	}
+	strncpy(out, value, out_size - 1);
+	out[out_size - 1] = '\0';
+	mpv_free(value);
+}
+
 @interface TDriveMPVView : NSOpenGLView {
     mpv_handle *_mpv;
     mpv_render_context *_render;
     BOOL _closed;
+	BOOL _fileLoaded;
+	BOOL _loadFailed;
+	BOOL _ended;
 }
 - (BOOL)startWithURL:(NSString *)url htmlControls:(BOOL)htmlControls;
 - (void)shutdown;
 - (void)shutdownSynchronously;
 - (int)sendCommand:(int)argc argv:(const char **)argv;
 - (BOOL)snapshot:(tdrive_player_state *)state;
+- (void)drainEvents;
 @end
 
 static void tdrive_mpv_render_update(void *ctx) {
@@ -126,6 +168,9 @@ static void tdrive_mpv_render_update(void *ctx) {
 	mpv_set_option_string(_mpv, "demuxer-readahead-secs", "20");
 	mpv_set_option_string(_mpv, "demuxer-max-bytes", "67108864");
 	mpv_set_option_string(_mpv, "demuxer-max-back-bytes", "33554432");
+	mpv_set_option_string(_mpv, "idle", "yes");
+	mpv_set_option_string(_mpv, "keep-open", "yes");
+	mpv_set_option_string(_mpv, "keep-open-pause", "yes");
 	mpv_set_option_string(_mpv, "osc", htmlControls ? "no" : "yes");
 	mpv_set_option_string(_mpv, "osd-bar", htmlControls ? "no" : "yes");
 
@@ -153,6 +198,46 @@ static void tdrive_mpv_render_update(void *ctx) {
         return NO;
     }
     return YES;
+}
+
+- (void)drainEvents {
+	if (_mpv == NULL) {
+		return;
+	}
+	for (;;) {
+		mpv_event *event = mpv_wait_event(_mpv, 0);
+		if (event == NULL || event->event_id == MPV_EVENT_NONE) {
+			return;
+		}
+		switch (event->event_id) {
+			case MPV_EVENT_START_FILE:
+				_fileLoaded = NO;
+				_loadFailed = NO;
+				_ended = NO;
+				break;
+			case MPV_EVENT_FILE_LOADED:
+				_fileLoaded = YES;
+				_loadFailed = NO;
+				_ended = NO;
+				break;
+			case MPV_EVENT_END_FILE: {
+				mpv_event_end_file *end = (mpv_event_end_file *)event->data;
+				if (end != NULL && end->reason == MPV_END_FILE_REASON_EOF) {
+					_ended = YES;
+				} else if (end != NULL && end->reason == MPV_END_FILE_REASON_ERROR) {
+					_loadFailed = YES;
+				}
+				break;
+			}
+			case MPV_EVENT_SHUTDOWN:
+				if (!_closed) {
+					_loadFailed = YES;
+				}
+				break;
+			default:
+				break;
+		}
+	}
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
@@ -190,6 +275,9 @@ static void tdrive_mpv_render_update(void *ctx) {
     if (_closed || _mpv == NULL || argc <= 0 || argv == NULL) {
         return 0;
     }
+	if (argv[0] != NULL && strcmp(argv[0], "seek") == 0) {
+		_ended = NO;
+	}
     return mpv_command_async(_mpv, 0, argv);
 }
 
@@ -199,10 +287,15 @@ static void tdrive_mpv_render_update(void *ctx) {
     }
 
     memset(state, 0, sizeof(tdrive_player_state));
+	[self drainEvents];
     state->paused = tdrive_mpv_get_flag(_mpv, "pause");
     state->muted = tdrive_mpv_get_flag(_mpv, "mute");
     state->paused_for_cache = tdrive_mpv_get_flag(_mpv, "paused-for-cache");
     state->eof_reached = tdrive_mpv_get_flag(_mpv, "eof-reached");
+	state->idle_active = tdrive_mpv_get_flag(_mpv, "idle-active");
+	state->file_loaded = _fileLoaded ? 1 : 0;
+	state->load_failed = _loadFailed ? 1 : 0;
+	state->ended = _ended ? 1 : 0;
     state->cache_buffering_state = tdrive_mpv_get_int64(_mpv, "cache-buffering-state");
     state->volume = 100.0;
     state->speed = 1.0;
@@ -211,6 +304,38 @@ static void tdrive_mpv_render_update(void *ctx) {
     state->has_time_pos = tdrive_mpv_get_double(_mpv, "time-pos", &state->time_pos);
     state->has_duration = tdrive_mpv_get_double(_mpv, "duration", &state->duration);
     state->has_cache_duration = tdrive_mpv_get_double(_mpv, "demuxer-cache-duration", &state->cache_duration);
+
+	int64_t track_count = tdrive_mpv_get_int64(_mpv, "track-list/count");
+	for (int64_t index = 0; index < track_count && state->track_count < TDRIVE_MAX_TRACKS; index++) {
+		char property[96];
+		char kind[TDRIVE_TRACK_KIND_SIZE];
+		snprintf(property, sizeof(property), "track-list/%lld/type", (long long)index);
+		tdrive_mpv_copy_string(_mpv, property, kind, sizeof(kind));
+		if (strcmp(kind, "audio") != 0 && strcmp(kind, "sub") != 0) {
+			continue;
+		}
+
+		tdrive_player_track *track = &state->tracks[state->track_count];
+		snprintf(property, sizeof(property), "track-list/%lld/id", (long long)index);
+		track->id = tdrive_mpv_get_int64(_mpv, property);
+		if (track->id <= 0) {
+			continue;
+		}
+		strncpy(track->kind, kind, sizeof(track->kind) - 1);
+		snprintf(property, sizeof(property), "track-list/%lld/title", (long long)index);
+		tdrive_mpv_copy_string(_mpv, property, track->title, sizeof(track->title));
+		snprintf(property, sizeof(property), "track-list/%lld/lang", (long long)index);
+		tdrive_mpv_copy_string(_mpv, property, track->language, sizeof(track->language));
+		snprintf(property, sizeof(property), "track-list/%lld/codec", (long long)index);
+		tdrive_mpv_copy_string(_mpv, property, track->codec, sizeof(track->codec));
+		snprintf(property, sizeof(property), "track-list/%lld/selected", (long long)index);
+		track->selected = tdrive_mpv_get_flag(_mpv, property);
+		snprintf(property, sizeof(property), "track-list/%lld/default", (long long)index);
+		track->is_default = tdrive_mpv_get_flag(_mpv, property);
+		snprintf(property, sizeof(property), "track-list/%lld/forced", (long long)index);
+		track->forced = tdrive_mpv_get_flag(_mpv, property);
+		state->track_count++;
+	}
     return YES;
 }
 
@@ -355,8 +480,17 @@ static int tdrive_player_snapshot(void *ptr, tdrive_player_state *state) {
     if (ptr == nil || state == NULL) {
         return 0;
     }
+    __block int result = 0;
     TDriveMPVView *view = (TDriveMPVView *)ptr;
-    return [view snapshot:state] ? 1 : 0;
+    void (^snapshot)(void) = ^{
+        result = [view snapshot:state] ? 1 : 0;
+    };
+    if ([NSThread isMainThread]) {
+        snapshot();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), snapshot);
+    }
+    return result;
 }
 
 static void tdrive_player_destroy_view(void *ptr) {
@@ -390,15 +524,20 @@ import (
 const statePollInterval = 250 * time.Millisecond
 
 type Player struct {
-	mu      sync.Mutex
-	view    unsafe.Pointer
-	closed  bool
-	cancel  context.CancelFunc
-	done    chan struct{}
-	onState StateHandler
+	mu        sync.Mutex
+	view      unsafe.Pointer
+	closed    bool
+	terminal  bool
+	cancel    context.CancelFunc
+	done      chan struct{}
+	onState   StateHandler
+	lastState State
 }
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
+	if !darwinNativePlayerEnabled() {
+		return nil, ErrUnsupported
+	}
 	if !rect.Valid() {
 		return nil, fmt.Errorf("native player: invalid view rect")
 	}
@@ -420,11 +559,16 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 		onState: opts.OnState,
 	}
 	if p.onState != nil {
+		p.publishState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
 		go p.streamState(runCtx)
 	} else {
 		close(p.done)
 	}
 	return p, nil
+}
+
+func (p *Player) Presentation() Presentation {
+	return PresentationEmbedded
 }
 
 func (p *Player) Resize(rect Rect) error {
@@ -504,6 +648,7 @@ func (p *Player) Close() error {
 	if view != nil {
 		C.tdrive_player_destroy_view(view)
 	}
+	p.emitTerminal(StatusClosed)
 	return nil
 }
 
@@ -530,7 +675,42 @@ func (p *Player) emitState() {
 	if !ok {
 		return
 	}
-	p.onState(state)
+	if state.Status == StatusFailed {
+		p.emitTerminal(StatusFailed)
+		return
+	}
+	p.publishState(state)
+}
+
+func (p *Player) publishState(state State) {
+	state = normalizeState(state)
+	p.mu.Lock()
+	if p.closed || p.terminal {
+		p.mu.Unlock()
+		return
+	}
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
+}
+
+func (p *Player) emitTerminal(status PlaybackStatus) {
+	state := terminalState(status)
+	p.mu.Lock()
+	if p.terminal {
+		p.mu.Unlock()
+		return
+	}
+	p.terminal = true
+	p.lastState = state
+	onState := p.onState
+	p.mu.Unlock()
+	if onState != nil {
+		onState(state)
+	}
 }
 
 func (p *Player) State() (State, bool) {
@@ -556,12 +736,14 @@ func (p *Player) State() (State, bool) {
 	if rate == 0 {
 		rate = 1
 	}
-	paused := raw.paused != 0 || raw.eof_reached != 0
-	if raw.eof_reached != 0 && duration > 0 {
+	eof := raw.eof_reached != 0 || raw.ended != 0
+	paused := raw.paused != 0 || eof
+	if eof && duration > 0 {
 		currentTime = duration
 	}
 
 	state := State{
+		EOF:         eof,
 		Paused:      paused,
 		CurrentTime: clampFloat(currentTime, 0, maxPositive(duration, currentTime)),
 		Duration:    duration,
@@ -569,6 +751,15 @@ func (p *Player) State() (State, bool) {
 		Muted:       raw.muted != 0 || volume == 0,
 		Rate:        rate,
 		Loading:     raw.paused_for_cache != 0 || (!paused && raw.cache_buffering_state > 0 && raw.cache_buffering_state < 100),
+		Tracks:      darwinTracks(raw),
+	}
+	if raw.load_failed != 0 {
+		state.Status = StatusFailed
+		state.Error = ErrPlayerExited.Error()
+	} else if raw.file_loaded == 0 && !eof {
+		state.Status = StatusOpening
+	} else if raw.idle_active != 0 && !eof {
+		state.Status = StatusOpening
 	}
 	if duration > 0 && raw.has_cache_duration != 0 {
 		cacheDuration := cleanSeconds(float64(raw.cache_duration), true)
@@ -579,7 +770,41 @@ func (p *Player) State() (State, bool) {
 			}}
 		}
 	}
-	return state, true
+	return normalizeState(state), true
+}
+
+func darwinTracks(raw C.tdrive_player_state) []Track {
+	count := int(raw.track_count)
+	if count < 0 {
+		return nil
+	}
+	if count > len(raw.tracks) {
+		count = len(raw.tracks)
+	}
+	tracks := make([]Track, 0, count)
+	for index := 0; index < count; index++ {
+		item := &raw.tracks[index]
+		var trackType TrackType
+		switch C.GoString(&item.kind[0]) {
+		case "audio":
+			trackType = TrackTypeAudio
+		case "sub":
+			trackType = TrackTypeSubtitle
+		default:
+			continue
+		}
+		tracks = append(tracks, Track{
+			ID:       int64(item.id),
+			Type:     trackType,
+			Title:    boundedTrackText(C.GoString(&item.title[0])),
+			Language: boundedTrackText(C.GoString(&item.language[0])),
+			Codec:    boundedTrackText(C.GoString(&item.codec[0])),
+			Selected: item.selected != 0,
+			Default:  item.is_default != 0,
+			Forced:   item.forced != 0,
+		})
+	}
+	return tracks
 }
 
 func cleanSeconds(value float64, ok bool) float64 {

@@ -1,8 +1,21 @@
 <script lang="ts">
+    import { untrack } from "svelte";
+    import VideoSettingsPanel from "./VideoSettingsPanel.svelte";
+    import { DEFAULT_PLAYBACK_PREFERENCES, type PlaybackPreferences } from "../../modules/video/playback-preferences";
+    let { initialPreferences = DEFAULT_PLAYBACK_PREFERENCES, onPreferencesChange = () => undefined }: { initialPreferences?: PlaybackPreferences; onPreferencesChange?: (value: PlaybackPreferences) => void } = $props();
+    let preferences = $state(untrack(() => initialPreferences));
+    export function setPreferences(value: PlaybackPreferences) { preferences = value; }
+    function updatePreferences(value: PlaybackPreferences) {
+        preferences = value;
+        onPreferencesChange(value);
+    }
+    import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
+    import CaptionsIcon from '@lucide/svelte/icons/captions';
     import MaximizeIcon from '@lucide/svelte/icons/maximize';
     import MinimizeIcon from '@lucide/svelte/icons/minimize';
     import PauseIcon from '@lucide/svelte/icons/pause';
     import PlayIcon from '@lucide/svelte/icons/play';
+    import SettingsIcon from '@lucide/svelte/icons/settings';
     import Volume2Icon from '@lucide/svelte/icons/volume-2';
     import VolumeXIcon from '@lucide/svelte/icons/volume-x';
     import XIcon from '@lucide/svelte/icons/x';
@@ -37,17 +50,37 @@
 
         <div id="video-skip-feedback" class="video-skip-feedback" aria-hidden="true"><span></span></div>
 
+        <div id="video-standalone" class="video-standalone" role="status" aria-live="polite" hidden>
+            <strong>Playing in a separate window</strong>
+            <span>Use the player window for playback controls. Closing this preview stops the video.</span>
+        </div>
+
         <div id="video-loading" class="video-loading" aria-hidden="true" style="display: none;">
             <div class="video-spinner"></div>
-            <div id="video-loading-status" class="video-loading-status" role="status" aria-live="polite">Opening video</div>
+            <div id="video-loading-status" class="video-loading-status" role="status" aria-live="polite" aria-atomic="true">Opening video</div>
         </div>
 
         <div id="video-error" class="video-error" role="alert" style="display: none;"></div>
     </div>
 
+    <aside id="video-settings-panel" class="video-settings-panel" aria-label="Playback settings" hidden>
+        <div class="video-settings-heading"><strong>Playback settings</strong><button id="video-settings-close" type="button" aria-label="Close playback settings"><XIcon size={18} aria-hidden="true" /></button></div>
+        <nav class="video-settings-tabs" aria-label="Playback settings sections">
+            <button type="button" data-settings-section="picture">Picture</button>
+            <button type="button" data-settings-section="audio">Audio</button>
+            <button type="button" data-settings-section="subtitle">Subtitles</button>
+            <button type="button" data-settings-section="speed">Speed</button>
+        </nav>
+        <div class="video-settings-body">
+            <div id="video-audio-menu" class="video-menu video-track-menu" role="group" aria-label="Audio track"></div>
+            <div id="video-subtitle-menu" class="video-menu video-track-menu" role="group" aria-label="Subtitles"></div>
+            <div id="video-speed-menu" class="video-menu video-speed-menu" role="group" aria-label="Playback speed"></div>
+            <VideoSettingsPanel initialPreferences={preferences} onPreferencesChange={updatePreferences} />
+        </div>
+    </aside>
+
     <div class="video-controls" aria-label="Video controls">
         <div class="video-timeline-row">
-            <span id="video-time" class="video-time">0:00</span>
             <div id="video-scrubber" class="video-scrubber" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00">
                 <div class="video-scrubber-hit">
                     <span class="video-scrubber-track"></span>
@@ -60,7 +93,6 @@
                     </span>
                 </div>
             </div>
-            <span id="video-duration" class="video-time">--:--</span>
         </div>
 
         <div class="video-command-row">
@@ -75,9 +107,6 @@
                 <button id="video-skip-forward" class="video-icon-btn video-skip-btn" type="button" aria-label="Forward 10 seconds" title="Forward 10 seconds">
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 5h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17.4 8.3A7 7 0 1012 19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><text x="12" y="15.2" text-anchor="middle" fill="currentColor" font-size="6.2" font-weight="800">10</text></svg>
                 </button>
-            </div>
-
-            <div class="video-command-cluster video-secondary-cluster">
                 <div class="video-volume-group">
                     <button id="video-mute" class="video-icon-btn video-mute-btn" type="button" data-state="unmuted" aria-label="Mute" title="Mute">
                         <Volume2Icon class="video-mute-symbol video-symbol-volume" aria-hidden="true" />
@@ -90,10 +119,36 @@
                     </div>
                 </div>
 
-                <div class="video-speed-wrap">
-                    <button id="video-speed-button" class="video-speed-button" type="button" aria-haspopup="menu" aria-expanded="false">1x</button>
-                    <div id="video-speed-menu" class="video-speed-menu" role="menu" aria-label="Playback speed"></div>
+                <button id="video-time-display" class="video-time-display" type="button" aria-pressed="false" aria-label="Show estimated finish time" aria-describedby="video-time video-duration" title="Show estimated finish time">
+                    <span id="video-time" class="video-time">0:00</span><span class="video-time-separator"> / </span><span id="video-duration" class="video-time">--:--</span>
+                    <span id="video-end-time" class="video-end-time" aria-hidden="true"><span></span></span>
+                </button>
+            </div>
+
+            <div class="video-command-cluster video-secondary-cluster">
+                <div id="video-audio-wrap" class="video-menu-wrap video-track-wrap" hidden>
+                    <button id="video-audio-button" class="video-pill-button video-track-button" type="button" aria-label="Audio track" title="Audio track">
+                        <AudioLinesIcon size={15} aria-hidden="true" />
+                        <span id="video-audio-label" class="video-track-value"></span>
+                    </button>
                 </div>
+
+                <div id="video-subtitle-wrap" class="video-menu-wrap video-track-wrap" hidden>
+                    <button id="video-subtitle-button" class="video-pill-button video-track-button" type="button" data-state="off" aria-label="Subtitles" title="Subtitles">
+                        <CaptionsIcon size={15} aria-hidden="true" />
+                        <span id="video-subtitle-label" class="video-track-value"></span>
+                    </button>
+                </div>
+
+                <div class="video-menu-wrap video-speed-wrap">
+                    <button id="video-speed-button" class="video-pill-button video-speed-button" type="button">1x</button>
+                </div>
+
+                <button id="video-aspect-button" class="video-pill-button video-aspect-button" type="button" aria-label="Video fit: Fit. Click to cycle" title="Video fit: Fit. Click to cycle">Fit</button>
+
+                <button id="video-picture-button" class="video-pill-button video-picture-button" type="button" aria-label="Playback settings" aria-expanded="false" aria-controls="video-settings-panel" title="Playback settings">
+                    <SettingsIcon size={18} aria-hidden="true" />
+                </button>
 
                 <button id="video-fullscreen" class="video-icon-btn video-fullscreen-btn" type="button" data-state="windowed" aria-label="Enter fullscreen" title="Enter fullscreen">
                     <MaximizeIcon class="video-fullscreen-symbol video-symbol-fullscreen-enter" aria-hidden="true" />

@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Sanitize artifact version
         shell: bash
@@ -46,7 +46,7 @@ jobs:
           echo "TDRIVE_ARTIFACT_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -58,7 +58,7 @@ jobs:
         run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           cache: npm
@@ -69,16 +69,21 @@ jobs:
         run: |
           sudo apt-get update
           # FIX 1: Explicitly install the 4.0 version which Wails expects
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev mpv
 
-      - name: Install macOS media dependencies
-        if: runner.os == 'macOS'
-        run: brew install mpv
-
-      - name: Install Windows media dependencies
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: choco install mpvio.install --no-progress -y
+      # Uses the checksum-pinned runtime archive when the repository variables
+      # are set and the runner's package-manager mpv otherwise; the bundle
+      # manifest records which one shipped. Keep in sync with ci.yml.
+      - name: Prepare media runtime
+        shell: bash
+        env:
+          TDRIVE_LINUX_MPV_RUNTIME_URL: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_URL }}
+          TDRIVE_LINUX_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_SHA256 }}
+          TDRIVE_MACOS_MPV_RUNTIME_URL: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_URL }}
+          TDRIVE_MACOS_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_SHA256 }}
+          TDRIVE_WINDOWS_MPV_RUNTIME_URL: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_URL }}
+          TDRIVE_WINDOWS_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 }}
+        run: bash scripts/prepare-mpv-runtime.sh
 
       - name: Install Wails
         shell: bash
@@ -100,6 +105,41 @@ jobs:
         run: |
           wails build -clean -platform "${{ matrix.platform }}" -o "${{ matrix.output_name }}" \
             -ldflags "-X main.appVersion=${{ github.ref_name }}"
+
+      - name: Acquire AppImage tool
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          APPIMAGETOOL_URL: ${{ vars.TDRIVE_APPIMAGETOOL_URL }}
+          APPIMAGETOOL_SHA256: ${{ vars.TDRIVE_APPIMAGETOOL_SHA256 }}
+        run: |
+          set -euo pipefail
+          appimagetool="$RUNNER_TEMP/tdrive-appimagetool"
+          if [ -z "$APPIMAGETOOL_URL" ] || [ -z "$APPIMAGETOOL_SHA256" ]; then
+            echo "::warning::TDRIVE_APPIMAGETOOL_URL and TDRIVE_APPIMAGETOOL_SHA256 are not set; using the continuous appimagetool build."
+            curl --fail --location --silent --show-error \
+              https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+              --output "$appimagetool"
+            chmod 755 "$appimagetool"
+            echo "TDRIVE_APPIMAGETOOL=$appimagetool" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          expected_sha256="$(printf '%s' "$APPIMAGETOOL_SHA256" | tr '[:upper:]' '[:lower:]')"
+          case "$expected_sha256" in
+            *[!0-9a-f]*|'') echo "TDRIVE_APPIMAGETOOL_SHA256 must be a SHA-256 value" >&2; exit 1 ;;
+          esac
+          if [ "${#expected_sha256}" -ne 64 ]; then
+            echo "TDRIVE_APPIMAGETOOL_SHA256 must contain exactly 64 hexadecimal characters" >&2
+            exit 1
+          fi
+          curl --fail --location --silent --show-error "$APPIMAGETOOL_URL" --output "$appimagetool"
+          actual_sha256="$(sha256sum "$appimagetool" | awk '{print $1}')"
+          if [ "$actual_sha256" != "$expected_sha256" ]; then
+            echo "appimagetool checksum mismatch: expected $expected_sha256, got $actual_sha256" >&2
+            exit 1
+          fi
+          chmod 755 "$appimagetool"
+          echo "TDRIVE_APPIMAGETOOL=$appimagetool" >> "$GITHUB_ENV"
 
       - name: Package (Linux AppImage)
         if: matrix.os == 'ubuntu-22.04'
@@ -135,13 +175,18 @@ jobs:
           SH
           chmod +x "$APPDIR/AppRun"
 
-          # appimagetool — GitHub runners have no FUSE, so extract-and-run.
-          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
+          # package-mpv-linux validates the runtime's version, architecture,
+          # license/source metadata, and a deterministic headless decode. The
+          # version override is only set for the package-manager fallback.
+          if [ -n "${TDRIVE_MPV_TEST_VERSION:-}" ]; then
+            TDRIVE_MPV_ALLOW_TEST_VERSION=1 ./scripts/package-mpv-linux.sh "$APPDIR" "$TDRIVE_MPV_TEST_VERSION"
+          else
+            ./scripts/package-mpv-linux.sh "$APPDIR"
+          fi
 
           mkdir -p dist
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
-            ./appimagetool-x86_64.AppImage "$APPDIR" "dist/TDrive-${TDRIVE_ARTIFACT_VERSION}-linux-amd64.AppImage"
+            "$TDRIVE_APPIMAGETOOL" "$APPDIR" "dist/TDrive-${TDRIVE_ARTIFACT_VERSION}-linux-amd64.AppImage"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -180,7 +225,7 @@ jobs:
           ./scripts/package-cli-release.sh "${{ github.ref_name }}"
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           # FIX 2: Sanitized the artifact name (removed slashes)
           name: binary-${{ matrix.os }}
@@ -197,16 +242,16 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Download Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true
@@ -296,7 +341,7 @@ jobs:
             go test ./backend/updater -run '^TestReleaseSigningArtifactsUseEmbeddedKeys$' -count=1
 
       - name: Publish Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/*

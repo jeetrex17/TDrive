@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
 	"sync"
 	"time"
 
+	tdcrypto "TDrive/backend/crypto"
 	"TDrive/backend/tgclient"
 	"TDrive/backend/thumbnail"
 )
@@ -21,15 +23,17 @@ type resolvedSegment struct {
 }
 
 type Session struct {
-	token       string
-	url         string
-	thumbURL    string
-	sourceURL   string
-	file        LogicalFile
-	segments    []resolvedSegment
-	reader      *RangeReader
-	thumbReader *RangeReader
-	thumbs      *videoThumbnailer
+	token          string
+	url            string
+	thumbURL       string
+	sourceURL      string
+	file           LogicalFile
+	segments       []resolvedSegment
+	reader         *RangeReader
+	thumbReader    *RangeReader
+	decryptor      *tdcrypto.RandomAccessDecryptor
+	thumbDecryptor *tdcrypto.RandomAccessDecryptor
+	thumbs         *videoThumbnailer
 
 	mu        sync.Mutex
 	lastTouch time.Time
@@ -42,7 +46,9 @@ type MediaStats struct {
 }
 
 type SessionOptions struct {
+	Context               context.Context
 	EnableVideoThumbnails bool
+	MasterKey             []byte
 }
 
 func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.RangeClient, cache *thumbnail.Cache, generator VideoThumbnailGenerator, opts SessionOptions) (*Session, error) {
@@ -62,6 +68,13 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		PrefetchBlocks: 2,
 	})
 	if opts.EnableVideoThumbnails {
+		thumbnailCache := cache
+		if file.Encrypted {
+			// Generated frames are plaintext. Keep encrypted-video thumbnails in
+			// the session temp directory only; Close removes that directory and
+			// the startup sweep removes leftovers after an unclean exit.
+			thumbnailCache = nil
+		}
 		s.thumbReader = NewRangeReader(RangeReaderConfig{
 			Client:         ranges,
 			MaxCacheBytes:  8 * 1024 * 1024,
@@ -73,7 +86,44 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 				}
 			},
 		})
-		s.thumbs = newVideoThumbnailer(s, cache, generator)
+		s.thumbs = newVideoThumbnailer(s, thumbnailCache, generator)
+	}
+	if file.Encrypted {
+		openCtx := opts.Context
+		if openCtx == nil {
+			openCtx = context.Background()
+		}
+		decryptor, err := tdcrypto.NewRandomAccessDecryptor(
+			openCtx,
+			storedContentReader{session: s, reader: s.reader},
+			file.StoredSize,
+			opts.MasterKey,
+		)
+		if err != nil {
+			s.Close()
+			return nil, err
+		}
+		if decryptor.Size() != file.PlaintextSize {
+			_ = decryptor.Close()
+			s.Close()
+			return nil, fmt.Errorf("media: encrypted plaintext size %d does not match projection %d: %w", decryptor.Size(), file.PlaintextSize, tdcrypto.ErrCiphertextSize)
+		}
+		s.decryptor = decryptor
+		if s.thumbReader != nil {
+			thumbDecryptor, err := decryptor.Clone(
+				storedContentReader{session: s, reader: s.thumbReader},
+			)
+			if err != nil {
+				s.Close()
+				return nil, err
+			}
+			if thumbDecryptor.Size() != file.PlaintextSize {
+				_ = thumbDecryptor.Close()
+				s.Close()
+				return nil, fmt.Errorf("media: encrypted thumbnail plaintext size %d does not match projection %d: %w", thumbDecryptor.Size(), file.PlaintextSize, tdcrypto.ErrCiphertextSize)
+			}
+			s.thumbDecryptor = thumbDecryptor
+		}
 	}
 	return s, nil
 }
@@ -139,6 +189,25 @@ func (s *Session) Name() string {
 	return s.file.Name
 }
 
+func (s *Session) openSnapshot() (token, url, thumbnailURL string, file LogicalFile, ok bool) {
+	if s == nil {
+		return "", "", "", LogicalFile{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return "", "", "", LogicalFile{}, false
+	}
+	s.lastTouch = time.Now()
+	file = s.file
+	file.Segments = append([]Segment(nil), s.file.Segments...)
+	return s.token, s.url, s.thumbURL, file, true
+}
+
+func (s *Session) Encrypted() bool {
+	return s != nil && s.file.Encrypted
+}
+
 func (s *Session) touch() {
 	s.mu.Lock()
 	s.lastTouch = time.Now()
@@ -165,6 +234,12 @@ func (s *Session) Close() {
 	}
 	s.closed = true
 	s.mu.Unlock()
+	if s.decryptor != nil {
+		_ = s.decryptor.Close()
+	}
+	if s.thumbDecryptor != nil {
+		_ = s.thumbDecryptor.Close()
+	}
 	if s.reader != nil {
 		s.reader.Close()
 	}
@@ -177,14 +252,14 @@ func (s *Session) Close() {
 }
 
 func (s *Session) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
-	return s.readAt(ctx, s.reader, p, off)
+	return s.readPlainAt(ctx, s.reader, s.decryptor, p, off)
 }
 
 func (s *Session) ReadThumbAt(ctx context.Context, p []byte, off int64) (int, error) {
 	if s == nil || s.thumbReader == nil {
 		return 0, ErrThumbnailUnavailable
 	}
-	return s.readAt(ctx, s.thumbReader, p, off)
+	return s.readPlainAt(ctx, s.thumbReader, s.thumbDecryptor, p, off)
 }
 
 func (s *Session) Thumbnail(ctx context.Context, seconds float64) ([]byte, error) {
@@ -229,7 +304,51 @@ func (s *Session) logStats(stats MediaStats) {
 	s.thumbs.LogStats(stats)
 }
 
-func (s *Session) readAt(ctx context.Context, reader *RangeReader, p []byte, off int64) (int, error) {
+func (s *Session) readPlainAt(ctx context.Context, reader *RangeReader, decryptor *tdcrypto.RandomAccessDecryptor, p []byte, off int64) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if decryptor != nil {
+		if err := s.validateRead(reader, off); err != nil {
+			return 0, err
+		}
+		n, err := decryptor.ReadAt(ctx, p, off)
+		if errors.Is(err, tdcrypto.ErrDecryptorClosed) {
+			s.mu.Lock()
+			closed := s.closed
+			s.mu.Unlock()
+			if closed {
+				return n, ErrSessionNotFound
+			}
+		}
+		if n > 0 || err == nil {
+			s.touch()
+		}
+		return n, err
+	}
+	return s.readStoredAt(ctx, reader, p, off, s.Size())
+}
+
+func (s *Session) validateRead(reader *RangeReader, off int64) error {
+	if off < 0 {
+		return fmt.Errorf("media: negative session offset")
+	}
+	if reader == nil {
+		return ErrRangeClientNotReady
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return ErrSessionNotFound
+	}
+	if off >= s.Size() {
+		return io.EOF
+	}
+	return nil
+}
+
+func (s *Session) readStoredAt(ctx context.Context, reader *RangeReader, p []byte, off, size int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -245,12 +364,12 @@ func (s *Session) readAt(ctx context.Context, reader *RangeReader, p []byte, off
 	if closed {
 		return 0, ErrSessionNotFound
 	}
-	if off >= s.Size() {
+	if off >= size {
 		return 0, io.EOF
 	}
 
 	want := len(p)
-	remaining := s.Size() - off
+	remaining := size - off
 	if int64(want) > remaining {
 		want = int(remaining)
 	}
@@ -285,6 +404,18 @@ func (s *Session) readAt(ctx context.Context, reader *RangeReader, p []byte, off
 		return done, io.EOF
 	}
 	return done, nil
+}
+
+type storedContentReader struct {
+	session *Session
+	reader  *RangeReader
+}
+
+func (r storedContentReader) ReadAt(ctx context.Context, dst []byte, offset int64) (int, error) {
+	if r.session == nil {
+		return 0, ErrSessionNotFound
+	}
+	return r.session.readStoredAt(ctx, r.reader, dst, offset, r.session.file.StoredSize)
 }
 
 func (s *Session) segmentFor(off int64) (resolvedSegment, bool) {

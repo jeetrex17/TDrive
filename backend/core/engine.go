@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"TDrive/backend"
@@ -105,6 +106,12 @@ type Engine struct {
 	thumbs     *thumbnail.Cache
 	maxUploads int
 	policySync func(context.Context, int64) error
+	// mediaEncryptionMu makes encrypted-session publication atomic with vault
+	// locking. The generation is odd while the write-side transition is active,
+	// so network-backed session setup stays outside the lock without admitting
+	// a session created from a stale key.
+	mediaEncryptionMu         sync.RWMutex
+	mediaEncryptionGeneration atomic.Uint64
 }
 
 // New initializes storage, Telegram adapters, and all service dependencies.
@@ -599,7 +606,19 @@ func (e *Engine) EnsureEncryptionPolicy(ctx context.Context, channelID int64) er
 }
 
 func (e *Engine) ClearEncryptionSession() {
-	if e != nil && e.enc != nil {
+	if e == nil {
+		return
+	}
+	e.mediaEncryptionMu.Lock()
+	e.mediaEncryptionGeneration.Add(1)
+	defer func() {
+		e.mediaEncryptionGeneration.Add(1)
+		e.mediaEncryptionMu.Unlock()
+	}()
+	if e.media != nil {
+		e.media.CloseEncryptedSessions()
+	}
+	if e.enc != nil {
 		e.enc.Clear()
 	}
 }
@@ -714,7 +733,26 @@ func (e *Engine) newMediaService() *media.Service {
 		DB:     backend.DB,
 		Peers:  peerResolverFn(e.ResolvePeer),
 		Ranges: ranges,
-		Thumbs: e.thumbs,
+		Keys: media.MasterKeyProviderFunc(func(ctx context.Context, channelID int64) ([]byte, error) {
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if channelID != PersonalChannelID() {
+				return nil, encservice.ErrPasswordRequired
+			}
+			lease, err := e.EncryptionService().AcquireMasterKeyLease()
+			if err != nil {
+				return nil, err
+			}
+			defer lease.Close()
+			return lease.Key()
+		}),
+		EncryptionOpenGate:       e.mediaEncryptionMu.RLocker(),
+		EncryptionOpenGeneration: e.mediaEncryptionGeneration.Load,
+		Thumbs:                   e.thumbs,
 	})
 }
 

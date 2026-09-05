@@ -20,16 +20,16 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           cache: npm
@@ -44,6 +44,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev
 
+      - name: Validate media packaging scripts
+        run: bash -n scripts/acquire-mpv-runtime.sh scripts/prepare-mpv-runtime.sh scripts/mpv-metadata.sh scripts/mpv-linux-libraries.sh scripts/package-mpv-darwin.sh scripts/package-mpv-linux.sh scripts/test-acquire-mpv-runtime.sh scripts/test-mpv-metadata.sh scripts/test-mpv-linux-libraries.sh scripts/test-package-mpv-darwin.sh scripts/test-prepare-mpv-runtime.sh
+
+      - name: Run media parser tests
+        run: bash scripts/test-mpv-metadata.sh
+
+      - name: Run media runtime acquisition tests
+        run: bash scripts/test-acquire-mpv-runtime.sh
+
+      - name: Run Linux media dependency tests
+        run: bash scripts/test-mpv-linux-libraries.sh
+
+      - name: Run macOS media packaging contract tests
+        run: bash scripts/test-package-mpv-darwin.sh
+
       - name: Typecheck frontend
         working-directory: frontend
         run: npm run typecheck
@@ -52,9 +67,9 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
-      - name: Test frontend
+      - name: Test frontend with coverage
         working-directory: frontend
-        run: npm test
+        run: npm run test:coverage
 
       - name: Build frontend
         working-directory: frontend
@@ -81,13 +96,24 @@ jobs:
             platform: darwin/arm64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Run Windows media parser and packaging contract tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/test-mpv-metadata.ps1
+          ./scripts/test-package-mpv-windows.ps1
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Run Windows native media tests
+        if: runner.os == 'Windows'
+        run: go test -count=1 ./backend/nativeplayer
 
       # Runs on Linux, Windows, and macOS (matrix) so folder download and
       # its tests execute natively on each OS instead of only
@@ -124,7 +150,7 @@ jobs:
           }
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           cache: npm
@@ -134,11 +160,25 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev mpv
 
-      - name: Install macOS media dependencies
+      # Uses the checksum-pinned runtime archive when the repository variables
+      # are set and the runner's package-manager mpv otherwise. Keep in sync
+      # with release.yml.
+      - name: Prepare media runtime
+        shell: bash
+        env:
+          TDRIVE_LINUX_MPV_RUNTIME_URL: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_URL }}
+          TDRIVE_LINUX_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_LINUX_MPV_RUNTIME_SHA256 }}
+          TDRIVE_MACOS_MPV_RUNTIME_URL: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_URL }}
+          TDRIVE_MACOS_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_MACOS_MPV_RUNTIME_SHA256 }}
+          TDRIVE_WINDOWS_MPV_RUNTIME_URL: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_URL }}
+          TDRIVE_WINDOWS_MPV_RUNTIME_SHA256: ${{ vars.TDRIVE_WINDOWS_MPV_RUNTIME_SHA256 }}
+        run: bash scripts/prepare-mpv-runtime.sh
+
+      - name: Test macOS media cache invalidation
         if: runner.os == 'macOS'
-        run: brew install mpv
+        run: bash scripts/test-prepare-mpv-runtime.sh
 
       - name: Install Wails
         shell: bash
@@ -150,11 +190,45 @@ jobs:
         shell: bash
         run: wails build -clean -platform "${{ matrix.platform }}"
 
+      - name: Package and validate Linux media runtime contract
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_dir="$RUNNER_TEMP/tdrive-ci.AppDir"
+          mkdir -p "$app_dir/usr/bin"
+
+          app_binary="$(find build/bin -maxdepth 1 -type f -perm -111 -print -quit)"
+          [ -n "$app_binary" ] || { echo "no Linux Wails executable found" >&2; exit 1; }
+          cp "$app_binary" "$app_dir/usr/bin/TDrive"
+          chmod 755 "$app_dir/usr/bin/TDrive"
+          if [ -n "${TDRIVE_MPV_TEST_VERSION:-}" ]; then
+            TDRIVE_MPV_ALLOW_TEST_VERSION=1 ./scripts/package-mpv-linux.sh "$app_dir" "$TDRIVE_MPV_TEST_VERSION"
+          else
+            ./scripts/package-mpv-linux.sh "$app_dir"
+          fi
+          (
+            cd "$app_dir/usr/bin/media"
+            sha256sum -c media-runtime.sha256
+          )
+
+      - name: Package and validate macOS media bundle contract
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d build/bin/TDrive.app ]; then
+            app_path=build/bin/TDrive.app
+          else
+            app_path="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"
+          fi
+          [ -n "$app_path" ] || { echo "no macOS app bundle found" >&2; exit 1; }
+          ./scripts/package-mpv-darwin.sh "$app_path"
+
       - name: Verify Windows media bundle
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install mpvio.install --no-progress -y
           $app = Get-ChildItem -Path build/bin -Filter "*.exe" | Select-Object -First 1
           if ($null -eq $app) {
             throw "no Windows executable found in build/bin"

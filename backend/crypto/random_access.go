@@ -116,6 +116,47 @@ func NewRandomAccessDecryptor(
 	}, nil
 }
 
+// Clone returns an independent decryptor for the same authenticated stream
+// metadata and derived file key, bound to a different ciphertext source. It does
+// not read from source or retain the master key; callers use it when they need
+// separate I/O scheduling without repeating header/tail authentication.
+func (decryptor *RandomAccessDecryptor) Clone(source ContextReaderAt) (*RandomAccessDecryptor, error) {
+	if decryptor == nil {
+		return nil, ErrDecryptorClosed
+	}
+	if source == nil {
+		return nil, errors.New("crypto: ciphertext reader is required")
+	}
+
+	decryptor.mu.RLock()
+	if decryptor.closed.Load() || decryptor.lifetime == nil || decryptor.source == nil || len(decryptor.subkey) == 0 || len(decryptor.noncePrefix) == 0 {
+		decryptor.mu.RUnlock()
+		return nil, ErrDecryptorClosed
+	}
+	plaintextSize := decryptor.plaintextSize
+	storedSize := decryptor.storedSize
+	noncePrefix := append([]byte(nil), decryptor.noncePrefix...)
+	subkey := append([]byte(nil), decryptor.subkey...)
+	closing := decryptor.closed.Load()
+	decryptor.mu.RUnlock()
+	if closing {
+		clear(noncePrefix)
+		clear(subkey)
+		return nil, ErrDecryptorClosed
+	}
+
+	lifetime, cancelLifetime := context.WithCancel(context.Background())
+	return &RandomAccessDecryptor{
+		lifetime:       lifetime,
+		cancelLifetime: cancelLifetime,
+		source:         source,
+		plaintextSize:  plaintextSize,
+		storedSize:     storedSize,
+		noncePrefix:    noncePrefix,
+		subkey:         subkey,
+	}, nil
+}
+
 func parseRandomAccessHeader(header []byte, storedSize int64) (int64, []byte, []byte, error) {
 	if len(header) != streamHeaderLen {
 		return 0, nil, nil, ErrShortHeader

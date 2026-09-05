@@ -420,23 +420,37 @@ func TestMediaServerThumbnailUnavailableWithoutGenerator(t *testing.T) {
 	}
 }
 
-func TestMediaOpenRejectsEncryptedFiles(t *testing.T) {
+func TestMediaServerRejectsNonFiniteThumbnailTimes(t *testing.T) {
 	db := newResolverTestDB(t)
+	body := testBytes(256)
 	mustApplyOp(t, db, 10, projection.Op{
-		Type:          projection.OpFileUpload,
-		Parent:        projection.RootParent,
-		Name:          "secret.mp4",
-		FileSize:      200,
-		Encrypted:     true,
-		PlaintextSize: 100,
+		Type:     projection.OpFileUpload,
+		Parent:   projection.RootParent,
+		Name:     "clip.mp4",
+		FileSize: int64(len(body)),
 	})
-	ranges := newMediaRangeFake(map[int64][]byte{10: testBytes(200)})
-	svc := NewService(Config{DB: db, Peers: staticPeerResolver{peer: ranges.peer}, Ranges: ranges})
+	ranges := newMediaRangeFake(map[int64][]byte{10: body})
+	svc := NewService(Config{
+		DB:             db,
+		Peers:          staticPeerResolver{peer: ranges.peer},
+		Ranges:         ranges,
+		ThumbGenerator: &fakeVideoThumbGenerator{available: true},
+	})
 	defer svc.Close()
+	opened, err := svc.Open(context.Background(), testChannelID, 10)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
 
-	_, err := svc.Open(context.Background(), testChannelID, 10)
-	if !errors.Is(err, ErrEncryptedUnsupported) {
-		t.Fatalf("err = %v, want ErrEncryptedUnsupported", err)
+	for _, rawTime := range []string{"NaN", "+Inf", "-Inf"} {
+		resp, err := http.Get(opened.ThumbnailURL + "?t=" + rawTime)
+		if err != nil {
+			t.Fatalf("%s thumbnail GET: %v", rawTime, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s status = %d, want 400", rawTime, resp.StatusCode)
+		}
 	}
 }
 

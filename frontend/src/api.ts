@@ -6,6 +6,7 @@
 // `wailsjs/go/main/App` functions directly.
 
 import {
+    AttachNativeMedia as rawAttachNativeMedia,
     CloseMedia as rawCloseMedia,
     CloseNativeMedia as rawCloseNativeMedia,
     GetFolderContents as rawGetFolderContents,
@@ -201,6 +202,7 @@ export async function unmountDrive(): Promise<MountStatusView> {
 export interface MediaOpenInfo {
     channelId: number;
     fileId: number;
+    revision: number;
     name: string;
     storedSize: number;
     plaintextSize: number;
@@ -230,8 +232,27 @@ export interface NativeMediaOpenResult {
     token: string;
     thumbnailUrl: string;
     htmlControls: boolean;
+    presentation: "embedded" | "standalone";
+    initialState: NativeMediaStatePayload | null;
     name: string;
     info: MediaOpenInfo;
+}
+
+export interface NativeMediaStatePayload {
+    token?: string;
+    sequence?: number;
+    status?: string;
+    error?: unknown;
+    eof?: boolean;
+    paused?: boolean;
+    current_time?: number;
+    duration?: number;
+    buffered?: Array<{ start?: number; end?: number }>;
+    volume?: number;
+    muted?: boolean;
+    rate?: number;
+    loading?: boolean;
+    tracks?: unknown;
 }
 
 export interface MediaPlaybackUpdate {
@@ -350,7 +371,6 @@ export async function openStream(msgId: number): Promise<MediaOpenResult> {
 }
 
 function normalizeMediaOpenResult(opened?: media.OpenResult): MediaOpenResult {
-    const info: media.LogicalFile | undefined = opened?.info;
     return {
         token: String(opened?.token ?? ""),
         url: String(opened?.url ?? ""),
@@ -359,15 +379,20 @@ function normalizeMediaOpenResult(opened?: media.OpenResult): MediaOpenResult {
         kind: String(opened?.kind ?? ""),
         mimeType: String(opened?.mime_type ?? ""),
         supportsRange: Boolean(opened?.supports_range),
-        info: {
-            channelId: Number(info?.channel_id ?? 0),
-            fileId: Number(info?.file_id ?? 0),
-            name: String(info?.name ?? opened?.name ?? ""),
-            storedSize: Number(info?.stored_size ?? 0),
-            plaintextSize: Number(info?.plaintext_size ?? 0),
-            encrypted: Boolean(info?.encrypted),
-            multipart: Boolean(info?.multipart),
-        },
+        info: normalizeMediaOpenInfo(opened?.info, opened?.name),
+    };
+}
+
+function normalizeMediaOpenInfo(info?: media.LogicalFile, fallbackName?: string): MediaOpenInfo {
+    return {
+        channelId: Number(info?.channel_id ?? 0),
+        fileId: Number(info?.file_id ?? 0),
+        revision: Number(info?.revision ?? 0),
+        name: String(info?.name ?? fallbackName ?? ""),
+        storedSize: Number(info?.stored_size ?? 0),
+        plaintextSize: Number(info?.plaintext_size ?? 0),
+        encrypted: Boolean(info?.encrypted),
+        multipart: Boolean(info?.multipart),
     };
 }
 
@@ -379,28 +404,42 @@ export async function closeMedia(token: string): Promise<void> {
 
 /** Open a native all-format player for one projected file. */
 export async function openNativeMedia(msgId: number, rect: NativeMediaRect): Promise<NativeMediaOpenResult> {
-    const opened = await rawOpenNativeMedia(msgId, rect as any);
-    const info: media.LogicalFile | undefined = opened?.info;
+    const opened = await rawOpenNativeMedia(msgId, rect);
+    return normalizeNativeMediaOpenResult(opened);
+}
+
+/** Promote an existing webview stream to native playback without reopening it. */
+export async function attachNativeMedia(token: string, rect: NativeMediaRect): Promise<NativeMediaOpenResult> {
+    if (!token) throw new Error("Media session is required.");
+    const opened = await rawAttachNativeMedia(token, rect);
+    return normalizeNativeMediaOpenResult(opened);
+}
+
+function normalizeNativeMediaOpenResult(opened?: main.NativeMediaResult): NativeMediaOpenResult {
+    const token = String(opened?.token ?? "");
+    const rawInitialState = opened?.initial_state;
+    const initialStateRecord = rawInitialState !== null
+        && typeof rawInitialState === "object"
+        && !Array.isArray(rawInitialState)
+        ? rawInitialState as NativeMediaStatePayload
+        : null;
+    const initialState: NativeMediaStatePayload | null = initialStateRecord
+        ? { ...initialStateRecord, token: String(initialStateRecord.token || token) }
+        : null;
     return {
-        token: String(opened?.token ?? ""),
+        token,
         thumbnailUrl: String(opened?.thumbnail_url ?? ""),
         htmlControls: Boolean(opened?.html_controls),
+        presentation: opened?.presentation === "standalone" ? "standalone" : "embedded",
+        initialState,
         name: String(opened?.name ?? ""),
-        info: {
-            channelId: Number(info?.channel_id ?? 0),
-            fileId: Number(info?.file_id ?? 0),
-            name: String(info?.name ?? opened?.name ?? ""),
-            storedSize: Number(info?.stored_size ?? 0),
-            plaintextSize: Number(info?.plaintext_size ?? 0),
-            encrypted: Boolean(info?.encrypted),
-            multipart: Boolean(info?.multipart),
-        },
+        info: normalizeMediaOpenInfo(opened?.info, opened?.name),
     };
 }
 
 export async function resizeNativeMedia(token: string, rect: NativeMediaRect): Promise<void> {
     if (!token) return;
-    await rawResizeNativeMedia(token, rect as any);
+    await rawResizeNativeMedia(token, rect);
 }
 
 export async function nativeMediaCommand(token: string, command: string[]): Promise<void> {
@@ -413,18 +452,17 @@ export async function closeNativeMedia(token: string): Promise<void> {
     await rawCloseNativeMedia(token);
 }
 
-// showNativeSeekThumbnail paints a seek-preview thumbnail over the native video
-// window (Windows/Linux fallback, where HTML can't draw over the video). The
-// image is the raw base64 of a JPEG/PNG frame; rect is the preview box in CSS
-// pixels. No-op on platforms whose player has no overlay.
+// Windows paints seek previews above its child mpv window because the webview
+// cannot layer HTML over that native surface. Other players deliberately no-op.
+// imageBase64 is a JPEG/PNG frame; rect is the preview box in CSS pixels.
 export async function showNativeSeekThumbnail(token: string, imageBase64: string, rect: NativeMediaRect): Promise<void> {
     if (!token || !imageBase64) return;
-    await rawShowNativeSeekThumbnail(token, imageBase64, rect as any);
+    await rawShowNativeSeekThumbnail(token, imageBase64, rect);
 }
 
 export async function moveNativeSeekThumbnail(token: string, rect: NativeMediaRect): Promise<void> {
     if (!token) return;
-    await rawMoveNativeSeekThumbnail(token, rect as any);
+    await rawMoveNativeSeekThumbnail(token, rect);
 }
 
 export async function hideNativeSeekThumbnail(token: string): Promise<void> {
@@ -439,7 +477,7 @@ export async function updateMediaPlayback(update: MediaPlaybackUpdate): Promise<
         current_time: update.currentTime,
         duration: update.duration,
         buffer_ahead: update.bufferAhead,
-    } as any);
+    });
 }
 
 function toThroughputStats(stats?: media.ThroughputStats): ThroughputStats {

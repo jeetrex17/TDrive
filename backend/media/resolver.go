@@ -38,6 +38,7 @@ func (r *Resolver) Resolve(ctx context.Context, channelID, fileID int64) (Logica
 	out := LogicalFile{
 		ChannelID:         channelID,
 		FileID:            fileID,
+		Revision:          row.revision,
 		Name:              row.name,
 		StoredSize:        row.size,
 		PlaintextSize:     plaintextSize(row.size, row.encrypted, row.plaintextSize),
@@ -76,6 +77,7 @@ func (r *Resolver) Resolve(ctx context.Context, channelID, fileID int64) (Logica
 type fileRow struct {
 	name              string
 	size              int64
+	revision          int64
 	encrypted         bool
 	plaintextSize     int64
 	encryptionVersion int
@@ -87,12 +89,13 @@ func (r *Resolver) lookupFile(ctx context.Context, channelID, fileID int64) (fil
 	var row fileRow
 	var encrypted int
 	err := r.db.QueryRowContext(ctx, `
-		SELECT name, size, encrypted, plaintext_size, encryption_version, content_msg_id, upload_uuid
+		SELECT name, size, revision, encrypted, plaintext_size, encryption_version, content_msg_id, upload_uuid
 		FROM files
 		WHERE channel_id = ? AND msg_id = ? AND tombstoned = 0
 	`, channelID, fileID).Scan(
 		&row.name,
 		&row.size,
+		&row.revision,
 		&encrypted,
 		&row.plaintextSize,
 		&row.encryptionVersion,

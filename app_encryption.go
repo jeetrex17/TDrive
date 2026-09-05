@@ -1,11 +1,12 @@
 package main
 
 import (
-	"TDrive/backend/core"
-	encservice "TDrive/backend/services/encryption"
 	"context"
 	"fmt"
 	"time"
+
+	"TDrive/backend/core"
+	encservice "TDrive/backend/services/encryption"
 )
 
 const encryptionMountTransitionTimeout = 55 * time.Second
@@ -52,9 +53,14 @@ func (a *App) encryptionService() appEncryptionService {
 }
 
 func (a *App) clearEncryptionSession() {
+	if a == nil {
+		return
+	}
+	a.closeEncryptedNativeMedia()
 	if a.engine != nil {
 		a.engine.ClearEncryptionSession()
 	}
+	a.emit("encrypted_media_sessions_closed")
 }
 
 func (a *App) closeMountForEncryptionTransitionLocked(ctx context.Context) error {
