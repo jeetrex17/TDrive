@@ -1,3 +1,4 @@
+import { htmlPictureStyle, loadPlaybackPreferences, nativePreferenceCommands, normalizePlaybackPreferences, savePlaybackPreferences, type PlaybackPreferences } from "../video/playback-preferences";
 import {
     attachNativeMedia,
     closeMedia,
@@ -44,7 +45,6 @@ const VOLUME_STEP = 0.05;
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const MIN_PLAYBACK_RATE = 0.25;
 const MAX_PLAYBACK_RATE = 4;
-const MENU_GAP_PX = 10;
 const THUMBNAIL_BUCKET_SECONDS = 10;
 const THUMBNAIL_LONG_BUCKET_SECONDS = 20;
 const THUMBNAIL_VERY_LONG_BUCKET_SECONDS = 30;
@@ -408,6 +408,32 @@ class NativeMpvAdapter implements PlayerAdapter {
         this.updateFallbackState((state) => ({ ...state, rate: next }));
     }
 
+    private pendingPreferences: PlaybackPreferences | null = null;
+    private applyingPreferences = false;
+
+    applyPreferences(preferences: PlaybackPreferences) {
+        if (this.closed) return;
+        this.pendingPreferences = preferences;
+        if (!this.applyingPreferences) void this.flushPreferences();
+    }
+
+    private async flushPreferences() {
+        this.applyingPreferences = true;
+        try {
+            while (this.pendingPreferences && !this.closed) {
+                const preferences = this.pendingPreferences;
+                this.pendingPreferences = null;
+                for (const command of nativePreferenceCommands(preferences)) {
+                    if (this.closed) return;
+                    // Complete each batch in order; rapid edits coalesce to the latest next batch.
+                    await this.sendCommand(command);
+                }
+            }
+        } finally {
+            this.applyingPreferences = false;
+        }
+    }
+
     setAudioTrack(id: number) {
         if (!Number.isSafeInteger(id) || id <= 0) return;
         void this.sendCommand(["set", "aid", String(id)]);
@@ -422,6 +448,7 @@ class NativeMpvAdapter implements PlayerAdapter {
         if (this.closed) return;
         this.closed = true;
         this.clearScheduledCommands();
+        this.pendingPreferences = null;
         if (activeNativeStateAdapter === this) activeNativeStateAdapter = null;
         this.subscribers.clear();
         try {
@@ -501,6 +528,9 @@ function keepUsefulBufferedRanges(ranges: BufferedRange[], currentTime: number) 
     return ranges.filter((range) => range.end >= currentTime - 2);
 }
 
+let playbackPreferences = loadPlaybackPreferences();
+let settingsSection: "picture" | "audio" | "subtitle" | "speed" | null = null;
+let settingsReturnFocus: HTMLElement | null = null;
 let modalEl: HTMLElement | null = null;
 let stageEl: HTMLElement | null = null;
 let topbarEl: HTMLElement | null = null;
@@ -892,9 +922,13 @@ function syncFallbackNativeViewportInsets() {
     const top = Math.ceil(Math.max(0, topbarBottom - stageRect.top) + FALLBACK_NATIVE_GAP_PX);
     const bottom = Math.ceil(Math.max(0, stageRect.bottom - controlsTop) + FALLBACK_NATIVE_GAP_PX);
 
+    const panelRect = settingsSection ? byID("video-settings-panel")?.getBoundingClientRect() : null;
+    const panelWidth = panelRect && !compact ? Math.max(0, stageRect.right - panelRect.left + FALLBACK_NATIVE_GAP_PX) : side;
+    const panelBottom = panelRect && compact ? Math.max(bottom, stageRect.bottom - panelRect.top + FALLBACK_NATIVE_GAP_PX) : bottom;
+    nativeViewportEl.style.setProperty("--video-native-right-inset", `${panelWidth}px`);
     nativeViewportEl.style.setProperty("--video-native-side-inset", `${side}px`);
     nativeViewportEl.style.setProperty("--video-native-top-inset", `${top}px`);
-    nativeViewportEl.style.setProperty("--video-native-bottom-inset", `${bottom}px`);
+    nativeViewportEl.style.setProperty("--video-native-bottom-inset", `${panelBottom}px`);
 }
 
 function currentNativeRect(): NativeMediaRect | null {
@@ -1275,7 +1309,7 @@ function syncSpeed(state: PlayerState) {
     const customInput = byID<HTMLInputElement>("video-speed-custom-input");
     if (speedBtnEl) {
         speedBtnEl.textContent = `${formatRate(state.rate)}x`;
-        speedBtnEl.title = isNativeFallbackActive() ? "Playback speed (click to cycle)" : "Playback speed";
+        speedBtnEl.title = "Playback speed";
         speedBtnEl.setAttribute("aria-label", speedBtnEl.title);
     }
     if (customInput && document.activeElement !== customInput) {
@@ -1295,8 +1329,8 @@ function syncNativeTracks(tracks: NativeMediaTrack[]) {
     const available = Boolean(activeNative && activeNative.presentation !== "standalone");
     const audio = tracks.filter((track) => track.type === "audio");
     const subtitles = tracks.filter((track) => track.type === "subtitle");
-    const audioChanged = audioPicker?.update(audio, available && audio.length > 1);
-    const subtitleChanged = subtitlePicker?.update(subtitles, available && subtitles.length > 0);
+    const audioChanged = audioPicker?.update(available ? audio : [], available && audio.length > 1);
+    const subtitleChanged = subtitlePicker?.update(available ? subtitles : [], available && subtitles.length > 0);
     if (audioChanged || subtitleChanged) scheduleNativeResize();
 }
 
@@ -1307,9 +1341,7 @@ interface TrackPickerElements {
     menu: HTMLElement | null;
 }
 
-// TrackPicker is a pill button that opens a radio menu of mpv tracks, mirroring
-// the speed menu. In the native fallback (a child window covers the video, so
-// HTML cannot draw over it) the pill cycles through the tracks instead.
+// TrackPicker opens searchable choices in the dock, outside native video surfaces.
 class TrackPicker {
     private tracks: NativeMediaTrack[] = [];
     private renderedSignature = "";
@@ -1322,10 +1354,6 @@ class TrackPicker {
     ) {
         els.button?.addEventListener("click", (event) => {
             event.stopPropagation();
-            if (isNativeFallbackActive()) {
-                this.cycle();
-                return;
-            }
             this.setOpen(!this.isOpen());
             revealChrome();
         });
@@ -1335,8 +1363,10 @@ class TrackPicker {
             this.select(item.dataset.track === "no" ? null : Number(item.dataset.track));
             this.close(true);
         });
+        els.menu?.addEventListener("input", () => this.filter());
         els.menu?.addEventListener("keydown", (event) => {
-            if (this.isOpen()) handleMenuKeydown(event, this.items(), () => this.close(true));
+            if ((event.target as HTMLElement).tagName === "INPUT" && event.key !== "Escape" && event.key !== "ArrowDown") return;
+            if (this.isOpen()) handleMenuKeydown(event, this.items().filter((item) => !item.hidden), () => this.close(true));
         });
     }
 
@@ -1347,13 +1377,16 @@ class TrackPicker {
     // update returns whether the pill appeared or disappeared.
     update(tracks: NativeMediaTrack[], show: boolean): boolean {
         const wasVisible = this.visible;
-        this.tracks = show ? tracks : [];
+        this.tracks = tracks;
         if (this.els.wrap) this.els.wrap.hidden = !show;
         if (!show) {
             this.close();
-            this.renderedSignature = "";
-            this.els.menu?.replaceChildren();
-            return wasVisible;
+            if (tracks.length === 0) {
+                this.renderedSignature = "";
+                this.els.menu?.replaceChildren();
+                if (this.els.menu) this.els.menu.innerHTML = `<p class="video-settings-note">No ${this.title.toLowerCase()} tracks available.</p>`;
+                return wasVisible;
+            }
         }
         const signature = JSON.stringify(this.tracks.map((track) => [track.id, track.title, track.language, track.codec]));
         if (signature !== this.renderedSignature) {
@@ -1369,18 +1402,21 @@ class TrackPicker {
     }
 
     setOpen(open: boolean) {
-        if (open && isNativeFallbackActive()) open = false;
         if (open) {
             closeMenus(this);
-            placeMenuAboveControls(this.els.menu, this.els.button);
+            showSettingsPanel(this.offLabel === null ? "audio" : "subtitle", this.els.button);
         }
         this.els.button?.setAttribute("aria-expanded", open ? "true" : "false");
         this.els.menu?.classList.toggle("is-open", open);
         if (open) {
             clearChromeTimer();
-            requestAnimationFrame(() => this.selectedItem()?.focus({ preventScroll: true }));
-        } else if (isOpen() && !currentState.paused && !hasError) {
-            scheduleChromeHide();
+            requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
+        } else {
+            if (settingsSection === (this.offLabel === null ? "audio" : "subtitle")) hideSettingsPanel();
+            const search = this.els.menu?.querySelector<HTMLInputElement>("input");
+            if (search) search.value = "";
+            this.filter();
+            if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
         }
     }
 
@@ -1419,12 +1455,12 @@ class TrackPicker {
         revealChrome();
     }
 
-    private cycle() {
-        const ids: Array<number | null> = this.tracks.map((track) => track.id);
-        if (this.offLabel !== null) ids.unshift(null);
-        if (ids.length === 0) return;
-        const current = this.currentTrack()?.id ?? null;
-        this.select(ids[(ids.indexOf(current) + 1) % ids.length]);
+    private filter() {
+        const query = this.els.menu?.querySelector<HTMLInputElement>("input")?.value.trim().toLocaleLowerCase() || "";
+        const items = this.items();
+        for (const item of items) item.hidden = item.dataset.track !== "no" && !item.textContent?.toLocaleLowerCase().includes(query);
+        const empty = this.els.menu?.querySelector<HTMLElement>(".video-track-empty");
+        if (empty) empty.hidden = items.some((item) => item.dataset.track !== "no" && !item.hidden);
     }
 
     private items() {
@@ -1439,7 +1475,7 @@ class TrackPicker {
         if (!this.els.menu) return;
         const items = this.tracks.map((track, index) => menuItemMarkup(`data-track="${track.id}"`, nativeTrackLabel(track, index)));
         if (this.offLabel !== null) items.unshift(menuItemMarkup('data-track="no"', this.offLabel));
-        this.els.menu.innerHTML = `<div class="video-menu-title" role="none">${this.title}</div>${items.join("")}`;
+        this.els.menu.innerHTML = `<div class="video-menu-title">${this.title}</div><input type="search" class="video-track-search" aria-label="Search ${this.title.toLowerCase()} tracks" placeholder="Search tracks" /><div class="video-track-list" role="radiogroup" aria-label="${this.title} tracks">${items.join("")}</div><p class="video-track-empty" hidden>No matching tracks</p>`;
     }
 
     private syncSelection() {
@@ -1449,6 +1485,7 @@ class TrackPicker {
             const on = item.dataset.track === key;
             item.classList.toggle("is-selected", on);
             item.setAttribute("aria-checked", on ? "true" : "false");
+            item.tabIndex = on ? 0 : -1;
         }
         const index = current ? this.tracks.indexOf(current) : -1;
         const short = current ? shortNativeTrackLabel(current, index) : this.offLabel ?? "";
@@ -1457,19 +1494,100 @@ class TrackPicker {
         if (this.els.button) {
             this.els.button.dataset.state = current ? "on" : "off";
             this.els.button.setAttribute("aria-label", `${this.title}: ${full}`);
-            // The full name lives in the menu; a long tooltip would sit on top
-            // of it. Only the cycling pill, which has no menu, spells it out.
-            this.els.button.title = isNativeFallbackActive() ? `${this.title}: ${full} (click to cycle)` : this.title;
+            this.els.button.title = this.title;
         }
     }
 }
 
-// placeMenuAboveControls lifts a popover clear of the whole controls panel so
-// the scrubber and its hit area never sit under menu items.
-function placeMenuAboveControls(menu: HTMLElement | null, anchor: HTMLElement | null) {
-    if (!menu || !anchor || !controlsEl) return;
-    const lift = anchor.getBoundingClientRect().bottom - controlsEl.getBoundingClientRect().top;
-    menu.style.bottom = `${Math.max(0, lift) + MENU_GAP_PX}px`;
+function updatePlaybackPreferences(value: PlaybackPreferences) {
+    playbackPreferences = normalizePlaybackPreferences(value);
+    savePlaybackPreferences(playbackPreferences);
+    if (activeAdapter instanceof NativeMpvAdapter) activeAdapter.applyPreferences(playbackPreferences);
+    applyHtmlPicture();
+}
+
+function applyHtmlPicture() {
+    if (!videoEl || !stageEl) return;
+    const rect = stageEl.getBoundingClientRect();
+    const style = htmlPictureStyle(playbackPreferences.pictureMode, rect.width, rect.height, videoEl.videoWidth, videoEl.videoHeight);
+    Object.assign(videoEl.style, style);
+}
+
+function syncSettingsGeometry() {
+    const panel = byID("video-settings-panel");
+    if (!panel || !modalEl || !settingsSection) return;
+    const shell = byID("video-shell")?.getBoundingClientRect();
+    if (!shell) return;
+    const top = Math.max(0, (topbarEl?.getBoundingClientRect().bottom ?? shell.top) - shell.top);
+    const bottom = Math.max(0, shell.bottom - (controlsEl?.getBoundingClientRect().top ?? shell.bottom));
+    panel.style.setProperty("--video-panel-top", `${top}px`);
+    panel.style.setProperty("--video-panel-bottom", `${bottom}px`);
+    syncFallbackNativeViewportInsets();
+}
+
+function showSettingsPanel(section: NonNullable<typeof settingsSection>, trigger: HTMLElement | null = null) {
+    const panel = byID("video-settings-panel");
+    if (!panel) return;
+    if (trigger) settingsReturnFocus = trigger;
+    settingsSection = section;
+    panel.hidden = false;
+    modalEl?.classList.add("has-video-settings");
+    byID("video-picture-button")?.setAttribute("aria-expanded", section === "picture" ? "true" : "false");
+    const picture = byID("video-picture-settings");
+    const appearance = byID("video-subtitle-settings");
+    if (picture) picture.hidden = section !== "picture";
+    if (appearance) appearance.hidden = section !== "subtitle";
+    for (const button of panel.querySelectorAll<HTMLElement>("[data-settings-section]")) {
+        button.setAttribute("aria-pressed", button.dataset.settingsSection === section ? "true" : "false");
+    }
+    syncSettingsGeometry();
+    clearChromeTimer();
+    revealChrome();
+    requestAnimationFrame(() => { syncSettingsGeometry(); scheduleNativeResize(); applyHtmlPicture(); });
+}
+
+function hideSettingsPanel(restoreFocus = false) {
+    settingsSection = null;
+    const panel = byID("video-settings-panel");
+    if (panel) panel.hidden = true;
+    modalEl?.classList.remove("has-video-settings");
+    byID("video-picture-button")?.setAttribute("aria-expanded", "false");
+    if (restoreFocus) settingsReturnFocus?.focus({ preventScroll: true });
+    syncFallbackNativeViewportInsets();
+    scheduleNativeResize();
+    applyHtmlPicture();
+}
+
+function bindSettingsPanel() {
+    const panel = byID("video-settings-panel");
+    byID("video-picture-button")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const wasPicture = settingsSection === "picture";
+        closeMenus();
+        if (!wasPicture) {
+            showSettingsPanel("picture", byID("video-picture-button"));
+            panel?.querySelector<HTMLButtonElement>("[data-picture-mode]")?.focus();
+        }
+    });
+    byID("video-settings-close")?.addEventListener("click", () => closeOpenMenu());
+    panel?.addEventListener("click", (event) => {
+        const button = (event.target as HTMLElement).closest<HTMLElement>("[data-settings-section]");
+        if (!button) return;
+        const returnFocus = settingsReturnFocus;
+        closeMenus();
+        const section = button.dataset.settingsSection;
+        if (section === "audio") audioPicker?.setOpen(true);
+        else if (section === "subtitle") subtitlePicker?.setOpen(true);
+        else if (section === "speed") setSpeedMenuOpen(true);
+        else showSettingsPanel("picture");
+        settingsReturnFocus = returnFocus;
+    });
+    panel?.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeOpenMenu();
+    });
 }
 
 function trackPickers() {
@@ -1477,11 +1595,12 @@ function trackPickers() {
 }
 
 function isAnyMenuOpen() {
-    return isSpeedMenuOpen() || trackPickers().some((picker) => picker.isOpen());
+    return settingsSection !== null || isSpeedMenuOpen() || trackPickers().some((picker) => picker.isOpen());
 }
 
 // closeMenus closes every popover except the one about to open.
 function closeMenus(except: TrackPicker | "speed" | null = null) {
+    if (settingsSection === "picture") hideSettingsPanel();
     if (except !== "speed") closeSpeedMenu();
     for (const picker of trackPickers()) {
         if (picker !== except) picker.close();
@@ -1493,11 +1612,12 @@ function closeOpenMenu() {
     if (!isAnyMenuOpen()) return false;
     closeSpeedMenu(true);
     for (const picker of trackPickers()) picker.close(true);
+    hideSettingsPanel(true);
     return true;
 }
 
 function menuItemMarkup(attributes: string, label: string) {
-    return `<button type="button" role="menuitemradio" ${attributes} aria-checked="false"><span class="video-menu-check" aria-hidden="true">✓</span><span>${escapeHTML(label)}</span></button>`;
+    return `<button type="button" role="radio" ${attributes} aria-checked="false"><span class="video-menu-check" aria-hidden="true">✓</span><span>${escapeHTML(label)}</span></button>`;
 }
 
 function escapeHTML(value: string) {
@@ -1505,6 +1625,12 @@ function escapeHTML(value: string) {
 }
 
 function handleMenuKeydown(event: KeyboardEvent, buttons: HTMLButtonElement[], close: () => void) {
+    if ((event.target as HTMLElement)?.tagName === "INPUT" && event.key === "ArrowDown") {
+        buttons[0]?.focus();
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+    }
     const current = Math.max(0, buttons.indexOf(document.activeElement as HTMLButtonElement));
     const focusAt = (index: number) => buttons[(index + buttons.length) % buttons.length]?.focus({ preventScroll: true });
     switch (event.key) {
@@ -1536,14 +1662,6 @@ function handleMenuKeydown(event: KeyboardEvent, buttons: HTMLButtonElement[], c
     event.stopPropagation();
 }
 
-function nextPlaybackRate(currentRate: number) {
-    const current = Number.isFinite(currentRate) && currentRate > 0 ? currentRate : 1;
-    const currentIndex = RATE_OPTIONS.findIndex((rate) => Math.abs(rate - current) < 0.001);
-    if (currentIndex >= 0) return RATE_OPTIONS[(currentIndex + 1) % RATE_OPTIONS.length];
-    const nextHigher = RATE_OPTIONS.find((rate) => rate > current);
-    return nextHigher ?? RATE_OPTIONS[0];
-}
-
 function clampPlaybackRate(value: number) {
     return clamp(Number.isFinite(value) ? value : 1, MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE);
 }
@@ -1552,14 +1670,6 @@ function parseCustomPlaybackRate(value: string) {
     const rate = Number(value.trim());
     if (!Number.isFinite(rate) || rate <= 0) return null;
     return clampPlaybackRate(rate);
-}
-
-function cycleFallbackPlaybackRate() {
-    if (!activeAdapter) return;
-    const rate = nextPlaybackRate(currentState.rate);
-    activeAdapter.setSpeed(rate);
-    closeSpeedMenu();
-    revealChrome();
 }
 
 function applyState(state: PlayerState) {
@@ -1574,6 +1684,7 @@ function applyState(state: PlayerState) {
     syncVolume(state);
     syncSpeed(state);
     syncNativeTracks(state.tracks);
+    applyHtmlPicture();
     syncTransportAvailability(state);
     syncCenterPlay(state);
     setLoading(state.loading);
@@ -2082,7 +2193,8 @@ function detachActiveReferences(): PlayerAdapter | null {
     clearVolumeCommandFrame();
     clearSkipFeedback();
     resetThumbnailPreview();
-    setSpeedMenuOpen(false);
+    closeMenus();
+    hideSettingsPanel();
     setNativeLayout("none");
     if (nativeToken) pendingNativeMediaStates.delete(nativeToken);
     currentState = { ...EMPTY_STATE };
@@ -2360,6 +2472,7 @@ function activateNativePlayback(
     activeNativeStateAdapter = adapter;
     adapter.start(takePendingNativeMediaState(opened.token));
     if (adapter.isTerminal()) return;
+    adapter.applyPreferences(playbackPreferences);
     if (intent) {
         adapter.setVolume(intent.volume);
         adapter.setMuted(intent.muted);
@@ -2574,16 +2687,16 @@ function selectedSpeedButton() {
 }
 
 function setSpeedMenuOpen(open: boolean) {
-    if (open && isNativeFallbackActive()) open = false;
     if (open) {
         closeMenus("speed");
-        placeMenuAboveControls(speedMenuEl, speedBtnEl);
+        showSettingsPanel("speed", speedBtnEl);
     }
     speedBtnEl?.setAttribute("aria-expanded", open ? "true" : "false");
     speedMenuEl?.classList.toggle("is-open", open);
+    if (!open && settingsSection === "speed") hideSettingsPanel();
     if (open) {
         clearChromeTimer();
-        requestAnimationFrame(() => selectedSpeedButton()?.focus({ preventScroll: true }));
+        requestAnimationFrame(() => { if (isSpeedMenuOpen()) selectedSpeedButton()?.focus({ preventScroll: true }); });
     } else if (isOpen() && !currentState.paused && !hasError) {
         scheduleChromeHide();
     }
@@ -2598,10 +2711,6 @@ function closeSpeedMenu(restoreFocus = false) {
 function bindSpeedMenu() {
     speedBtnEl?.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (isNativeFallbackActive()) {
-            cycleFallbackPlaybackRate();
-            return;
-        }
         setSpeedMenuOpen(!isSpeedMenuOpen());
         revealChrome();
     });
@@ -2641,6 +2750,7 @@ function bindSpeedMenu() {
     });
     document.addEventListener("click", (event) => {
         const target = event.target as Node | null;
+        if (target && byID("video-settings-panel")?.contains(target)) return;
         if (isSpeedMenuOpen() && !(target && (speedMenuEl?.contains(target) || speedBtnEl?.contains(target)))) {
             closeSpeedMenu();
         }
@@ -2651,8 +2761,8 @@ function bindSpeedMenu() {
 }
 
 function targetShouldUseOwnKeyboard(target: HTMLElement | null, event: KeyboardEvent) {
-    if (!target) return false;
-    if (target.isContentEditable) return true;
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.isContentEditable || target.closest("#video-settings-panel")) return true;
     const tag = String(target.tagName || "").toUpperCase();
     if (tag === "BUTTON") {
         if (target.closest("#video-speed-menu")) return true;
@@ -2675,7 +2785,7 @@ function targetShouldUseOwnKeyboard(target: HTMLElement | null, event: KeyboardE
 function handleVideoShortcut(event: KeyboardEvent) {
     if (!isOpen()) return;
     if (activeNative?.presentation === "standalone") return;
-    const target = event.target as HTMLElement | null;
+    const target = event.target instanceof HTMLElement ? event.target : null;
     if (targetShouldUseOwnKeyboard(target, event)) return;
     const key = event.key.toLowerCase();
     if (event.code === "Space" || event.key === " " || key === "k") {
@@ -2713,8 +2823,8 @@ function handleVideoPointerMove() {
 }
 
 function targetIsVideoChrome(target: EventTarget | null) {
-    const el = target as HTMLElement | null;
-    return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading"));
+    const el = target instanceof HTMLElement ? target : null;
+    return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading, .video-settings-panel"));
 }
 
 function handleStageClick(event: MouseEvent) {
@@ -2724,6 +2834,8 @@ function handleStageClick(event: MouseEvent) {
 }
 
 function handleWindowResize() {
+    syncSettingsGeometry();
+    applyHtmlPicture();
     if (activeNative?.presentation !== "standalone") scheduleNativeResize();
     void syncFullscreenState();
 }
@@ -2748,6 +2860,7 @@ function bindControls() {
     bindScrubber();
     bindVolume();
     bindSpeedMenu();
+    bindSettingsPanel();
     modalEl?.addEventListener("pointermove", handleVideoPointerMove);
     stageEl?.addEventListener("click", handleStageClick);
     document.addEventListener("keydown", handleVideoShortcut);
@@ -2773,7 +2886,7 @@ export function setupVideoModal() {
     const host = byID<HTMLElement>("video-modal");
     if (host && !videoMarkupHandle) {
         host.replaceChildren();
-        videoMarkupHandle = mountSvelte(VideoModal, { target: host, props: {} });
+        videoMarkupHandle = mountSvelte(VideoModal, { target: host, props: { initialPreferences: playbackPreferences, onPreferencesChange: updatePlaybackPreferences } });
     }
 
     modalEl = byID("video-modal");

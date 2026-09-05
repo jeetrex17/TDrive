@@ -399,7 +399,7 @@ describe("native video track pickers", () => {
         await videoModule.closeVideoModal();
     });
 
-    it("cycles tracks from the pill when the native child window covers the video", async () => {
+    it("opens a searchable dock without cycling tracks over the native child window", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(23, MKV_SESSION_ID));
 
         const videoModule = await import("./video");
@@ -410,13 +410,111 @@ describe("native video track pickers", () => {
 
         const subtitleButton = document.querySelector<HTMLButtonElement>("#video-subtitle-button");
         const subtitleMenu = document.querySelector<HTMLElement>("#video-subtitle-menu");
-        expect(subtitleButton?.title).toContain("click to cycle");
+        expect(subtitleButton?.title).not.toContain("click to cycle");
+        apiMocks.nativeMediaCommand.mockClear();
 
         subtitleButton?.click();
-        expect(subtitleMenu?.classList.contains("is-open")).toBe(false);
+        expect(subtitleMenu?.classList.contains("is-open")).toBe(true);
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(false);
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
+        const search = subtitleMenu?.querySelector<HTMLInputElement>("input[type=search]");
+        expect(search).toBeTruthy();
+        subtitleMenu?.querySelector<HTMLButtonElement>('[data-track="3"]')?.click();
         await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "3"]));
         subtitleButton?.click();
+        subtitleMenu?.querySelector<HTMLButtonElement>('[data-track="no"]')?.click();
         await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "no"]));
+
+        await videoModule.closeVideoModal();
+    });
+
+    it("filters long subtitle lists while keeping the off choice available", async () => {
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(25, MKV_SESSION_ID));
+        const manySubtitles = Array.from({ length: 18 }, (_, index) => ({
+            id: index + 10,
+            type: "subtitle",
+            title: index === 12 ? "Spanish forced" : `English captions ${index + 1}`,
+            language: index === 12 ? "spa" : "eng",
+            codec: index % 2 === 0 ? "ass" : "srt",
+            selected: false,
+            default: index === 0,
+            forced: index === 12,
+        }));
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 25, name: "movie-25.mkv", size: 1024 });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: manySubtitles });
+        await nextTasks();
+
+        document.querySelector<HTMLButtonElement>("#video-subtitle-button")?.click();
+        const subtitleMenu = document.querySelector<HTMLElement>("#video-subtitle-menu");
+        const search = subtitleMenu?.querySelector<HTMLInputElement>("input[type=search]");
+        expect(search).toBeTruthy();
+        if (!subtitleMenu || !search) return;
+
+        search.value = "spanish";
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+
+        expect(subtitleMenu.querySelector<HTMLButtonElement>('[data-track="no"]')?.hidden).toBe(false);
+        expect(subtitleMenu.querySelector<HTMLButtonElement>('[data-track="22"]')?.hidden).toBe(false);
+        expect(subtitleMenu.querySelector<HTMLButtonElement>('[data-track="10"]')?.hidden).toBe(true);
+        expect(subtitleMenu.querySelector<HTMLElement>(".video-track-empty")?.hidden).toBe(true);
+
+        search.value = "no-such-language";
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+
+        expect(subtitleMenu.querySelector<HTMLButtonElement>('[data-track="no"]')?.hidden).toBe(false);
+        expect(subtitleMenu.querySelector<HTMLElement>(".video-track-empty")?.hidden).toBe(false);
+
+        await videoModule.closeVideoModal();
+    });
+
+    it("applies picture and subtitle appearance settings through validated native commands", async () => {
+        const storage = new Map<string, string>();
+        vi.stubGlobal("localStorage", {
+            getItem: (key: string) => storage.get(key) ?? null,
+            setItem: (key: string, value: string) => storage.set(key, value),
+        });
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(26, MKV_SESSION_ID));
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 26, name: "movie-26.mkv", size: 1024 });
+        await nextTasks();
+        apiMocks.nativeMediaCommand.mockClear();
+
+        document.querySelector<HTMLButtonElement>("#video-picture-button")?.click();
+        document.querySelector<HTMLButtonElement>('[data-picture-mode="fill"]')?.click();
+        await nextTasks();
+
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "panscan", "1"]);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "video-unscaled", "no"]);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "video-aspect-override", "no"]);
+
+        document.querySelector<HTMLButtonElement>('[data-settings-section="subtitle"]')?.click();
+        const size = document.querySelector<HTMLInputElement>("#video-subtitle-size");
+        const color = document.querySelector<HTMLInputElement>("#video-subtitle-color");
+        const background = document.querySelector<HTMLInputElement>("#video-subtitle-background");
+        const override = document.querySelector<HTMLInputElement>("#video-subtitle-override");
+        expect(size && color && background && override).toBeTruthy();
+        if (!size || !color || !background || !override) return;
+
+        size.value = "52";
+        size.dispatchEvent(new Event("input", { bubbles: true }));
+        color.value = "#ffcc00";
+        color.dispatchEvent(new Event("input", { bubbles: true }));
+        background.checked = true;
+        background.dispatchEvent(new Event("change", { bubbles: true }));
+        override.checked = true;
+        override.dispatchEvent(new Event("change", { bubbles: true }));
+        await nextTasks();
+
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-font-size", "52"]);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-color", "#FFCC00"]);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-back-color", "#AF000000"]);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "force"]);
+        expect([...storage.values()].some((value) => value.includes('"pictureMode":"fill"'))).toBe(true);
 
         await videoModule.closeVideoModal();
     });
@@ -460,6 +558,92 @@ describe("native video track pickers", () => {
         expect(document.querySelector<HTMLElement>("#video-audio-wrap")?.hidden).toBe(true);
         expect(menuLabels(audioMenu)).toHaveLength(0);
         expect(menuLabels(subtitleMenu)).toHaveLength(0);
+
+        await videoModule.closeVideoModal();
+    });
+
+    it("closes the settings dock and releases its native viewport reservation", async () => {
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(27, MKV_SESSION_ID));
+        vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+            if (this.id === "video-stage") {
+                return { x: 0, y: 0, top: 0, right: 800, bottom: 450, left: 0, width: 800, height: 450, toJSON: () => ({}) };
+            }
+            if (this.id === "video-settings-panel") {
+                return { x: 500, y: 60, top: 60, right: 790, bottom: 350, left: 500, width: 290, height: 290, toJSON: () => ({}) };
+            }
+            if (this.classList.contains("video-topbar")) {
+                return { x: 0, y: 0, top: 0, right: 800, bottom: 58, left: 0, width: 800, height: 58, toJSON: () => ({}) };
+            }
+            if (this.classList.contains("video-controls")) {
+                return { x: 0, y: 350, top: 350, right: 800, bottom: 450, left: 0, width: 800, height: 100, toJSON: () => ({}) };
+            }
+            return { x: 0, y: 0, top: 0, right: 800, bottom: 450, left: 0, width: 800, height: 450, toJSON: () => ({}) };
+        });
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 27, name: "movie-27.mkv", size: 1024 });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks });
+        await nextTasks();
+
+        document.querySelector<HTMLButtonElement>("#video-subtitle-button")?.click();
+        await nextTasks();
+
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(false);
+        expect(document.querySelector<HTMLElement>("#video-native-viewport")?.style.getPropertyValue("--video-native-right-inset")).toBe("304px");
+
+        await videoModule.closeVideoModal();
+
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
+        expect(document.querySelector<HTMLElement>("#video-modal")?.classList.contains("has-video-settings")).toBe(false);
+    });
+});
+
+describe("video picture settings", () => {
+    it("applies fixed-ratio sizing to HTML playback", async () => {
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(28, "html-aspect-token"));
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 28, name: "clip-28.mp4", size: 1024 });
+
+        const video = document.querySelector<HTMLVideoElement>("#video-player");
+        expect(video).toBeTruthy();
+        if (!video) return;
+
+        document.querySelector<HTMLButtonElement>("#video-picture-button")?.click();
+        document.querySelector<HTMLButtonElement>('[data-picture-mode="4:3"]')?.click();
+        await nextTasks();
+
+        expect(video.style.width).toBe("600px");
+        expect(video.style.height).toBe("450px");
+        expect(video.style.objectFit).toBe("fill");
+
+        await videoModule.closeVideoModal();
+    });
+
+    it("keeps playback shortcuts out of settings fields", async () => {
+        const tracks = [
+            { id: 1, type: "audio", title: "Main", language: "eng", codec: "aac", selected: true, default: true, forced: false },
+            { id: 3, type: "subtitle", title: "English", language: "eng", codec: "srt", selected: false, default: true, forced: false },
+        ];
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(29, MKV_SESSION_ID));
+
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 29, name: "movie-29.mkv", size: 1024 });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks });
+        await nextTasks();
+        apiMocks.nativeMediaCommand.mockClear();
+
+        document.querySelector<HTMLButtonElement>("#video-subtitle-button")?.click();
+        const search = document.querySelector<HTMLInputElement>("#video-subtitle-menu input[type=search]");
+        expect(search).toBeTruthy();
+        if (!search) return;
+        search.focus();
+        search.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
+
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "3"]);
 
         await videoModule.closeVideoModal();
     });
@@ -587,5 +771,139 @@ describe("native player failures", () => {
         await vi.waitFor(() => expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith(opened.token));
         expect(document.querySelector<HTMLElement>("#video-modal")?.style.display).toBe("none");
         expect(document.querySelector("#video-error")?.textContent ?? "").not.toContain("stopped unexpectedly");
+    });
+});
+
+describe("playback settings dock", () => {
+    it("filters a large track list, keeps Off available, and restores focus on Escape", async () => {
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(31, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 31, name: "movie.mkv", size: 1024 });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: Array.from({ length: 50 }, (_, index) => ({ id: index + 1, type: "subtitle", title: `Language ${index + 1}`, selected: index === 29 })) });
+        await nextTasks();
+        const trigger = document.querySelector<HTMLButtonElement>("#video-subtitle-button")!;
+        trigger.click();
+        const menu = document.querySelector<HTMLElement>("#video-subtitle-menu")!;
+        const input = menu.querySelector<HTMLInputElement>("input")!;
+        input.focus();
+        input.value = "Language 30";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        expect(Array.from(menu.querySelectorAll<HTMLButtonElement>("[data-track]")).filter((button) => !button.hidden).map((button) => button.dataset.track)).toEqual(["no", "30"]);
+        expect(menu.querySelector('[data-track="30"]')?.getAttribute("aria-checked")).toBe("true");
+        apiMocks.nativeMediaCommand.mockClear();
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "k", bubbles: true }));
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
+        expect(document.activeElement).toBe(trigger);
+        trigger.click();
+        expect(input.value).toBe("");
+        expect(menu.querySelector<HTMLButtonElement>('[data-track="1"]')?.hidden).toBe(false);
+        input.value = "does not exist";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        expect(menu.querySelector<HTMLElement>(".video-track-empty")?.hidden).toBe(false);
+        menu.querySelector<HTMLButtonElement>('[data-track="no"]')?.click();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "no"]));
+        await videoModule.closeVideoModal();
+    });
+
+    it("applies picture and subtitle preferences, resets appearance, and uses an exact native speed", async () => {
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "movie.mkv", size: 1024 });
+        await nextTasks();
+        document.querySelector<HTMLButtonElement>("#video-picture-button")?.click();
+        document.querySelector<HTMLButtonElement>('[data-picture-mode="4:3"]')?.click();
+        flushSync();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "video-aspect-override", "4:3"]));
+        document.querySelector<HTMLButtonElement>('[data-settings-section="subtitle"]')?.click();
+        expect(document.querySelector<HTMLElement>("#video-subtitle-settings")?.hidden).toBe(false);
+        const size = document.querySelector<HTMLInputElement>("#video-subtitle-size")!;
+        size.value = "60";
+        size.dispatchEvent(new Event("input", { bubbles: true }));
+        const color = document.querySelector<HTMLInputElement>("#video-subtitle-color")!;
+        color.value = "#ffff00";
+        color.dispatchEvent(new Event("input", { bubbles: true }));
+        document.querySelector<HTMLInputElement>("#video-subtitle-background")?.click();
+        document.querySelector<HTMLInputElement>("#video-subtitle-override")?.click();
+        flushSync();
+        await vi.waitFor(() => {
+            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-font-size", "60"]);
+            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-color", "#FFFF00"]);
+            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-border-style", "background-box"]);
+            expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "force"]);
+        });
+        document.querySelector<HTMLButtonElement>("#video-subtitle-reset")?.click();
+        flushSync();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-font-size", "38"]));
+        expect(document.querySelector<HTMLButtonElement>('[data-picture-mode="4:3"]')?.getAttribute("aria-pressed")).toBe("true");
+        document.querySelector<HTMLButtonElement>("#video-speed-button")?.click();
+        expect(document.querySelector("#video-speed-menu")?.classList.contains("is-open")).toBe(true);
+        document.querySelector<HTMLButtonElement>('[data-rate="1.5"]')?.click();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "speed", "1.5"]));
+        await videoModule.closeVideoModal();
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
+    });
+
+    it("applies HTML picture sizing and carries saved preferences into the next native session", async () => {
+        const saved = new Map<string, string>();
+        vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) });
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(34, SHARED_SESSION_ID));
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(35, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 34, name: "clip.mp4", size: 1024 });
+        document.querySelector<HTMLButtonElement>("#video-picture-button")?.click();
+        document.querySelector<HTMLButtonElement>('[data-picture-mode="fill"]')?.click();
+        flushSync();
+        expect(document.querySelector<HTMLVideoElement>("#video-player")?.style.objectFit).toBe("cover");
+        expect(Array.from(saved.values())).toContainEqual(expect.stringContaining('"pictureMode":"fill"'));
+        await videoModule.openVideoModal({ id: 35, name: "movie.mkv", size: 1024 });
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "panscan", "1"]));
+        await videoModule.closeVideoModal();
+    });
+
+    it("reserves and restores native video space beside the dock and below compact controls", async () => {
+        let compact = false;
+        vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: compact && query.includes("760"), media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
+        vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+            let left = 0, top = 0, width = 1000, height = 700;
+            if (this.classList.contains("video-topbar")) height = 70;
+            if (this.classList.contains("video-controls")) { top = 600; height = 100; }
+            if (this.id === "video-settings-panel") { left = compact ? 10 : 658; top = compact ? 350 : 70; width = compact ? 980 : 330; height = compact ? 250 : 530; }
+            if (this.id === "video-native-viewport") {
+                left = Number.parseFloat(this.style.getPropertyValue("--video-native-side-inset")) || 0;
+                top = Number.parseFloat(this.style.getPropertyValue("--video-native-top-inset")) || 0;
+                width = 1000 - left - (Number.parseFloat(this.style.getPropertyValue("--video-native-right-inset")) || 0);
+                height = 700 - top - (Number.parseFloat(this.style.getPropertyValue("--video-native-bottom-inset")) || 0);
+            }
+            return { x: left, y: top, top, left, right: left + width, bottom: top + height, width, height, toJSON: () => ({}) };
+        });
+        apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(33, MKV_SESSION_ID));
+        const videoModule = await import("./video");
+        videoModule.setupVideoModal();
+        await videoModule.openVideoModal({ id: 33, name: "movie.mkv", size: 1024 });
+        await nextTasks();
+        const viewport = document.querySelector<HTMLElement>("#video-native-viewport")!;
+        const original = viewport.getBoundingClientRect();
+        document.querySelector<HTMLButtonElement>("#video-picture-button")?.click();
+        await nextTasks();
+        expect(viewport.getBoundingClientRect().right).toBeLessThan(658);
+        await vi.waitFor(() => expect(apiMocks.resizeNativeMedia).toHaveBeenCalledWith(MKV_SESSION_ID, expect.objectContaining({ width: viewport.getBoundingClientRect().width })));
+        compact = true;
+        window.dispatchEvent(new Event("resize"));
+        await nextTasks();
+        expect(viewport.getBoundingClientRect().bottom).toBeLessThan(350);
+        expect(viewport.getBoundingClientRect().height).toBeGreaterThan(0);
+        document.querySelector<HTMLButtonElement>("#video-settings-close")?.click();
+        compact = false;
+        window.dispatchEvent(new Event("resize"));
+        await nextTasks();
+        expect(viewport.getBoundingClientRect().width).toBe(original.width);
+        expect(viewport.getBoundingClientRect().height).toBe(original.height);
+        await videoModule.closeVideoModal();
     });
 });

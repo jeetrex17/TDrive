@@ -3766,6 +3766,13 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     background: var(--video-accent-bg);
 }
 
+.video-picture-button {
+    display: inline-grid;
+    place-items: center;
+    min-width: 42px;
+    padding: 0;
+}
+
 .video-track-button {
     display: inline-flex;
     align-items: center;
@@ -4371,3 +4378,77 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .auth-update-footer button:hover { color: var(--color-text); border-color: var(--color-accent); }
 .auth-update-footer button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .auth-update-footer .auth-update-accent { color: var(--color-accent); font-weight: 800; }
+
+/* The settings dock reserves video space, including native child surfaces. */
+.video-settings-panel {
+    position: absolute;
+    z-index: 15;
+    top: var(--video-panel-top, 76px);
+    bottom: var(--video-panel-bottom, 108px);
+    right: 12px;
+    width: 330px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid #ffffff1c;
+    border-radius: 16px;
+    background: #11151f;
+    color: #edf1fa;
+    box-shadow: 0 12px 36px #0005;
+}
+.video-settings-panel[hidden], .video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
+.video-settings-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
+.video-settings-heading button { display: grid; place-items: center; background: transparent; color: inherit; border: 0; padding: 6px; border-radius: 8px; cursor: pointer; }
+.video-settings-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; padding: 0 10px 10px; border-bottom: 1px solid #ffffff12; }
+.video-settings-tabs button { color: #a8b2c5; background: transparent; border: 0; border-radius: 8px; padding: 9px 2px; cursor: pointer; font-size: 12px; }
+.video-settings-tabs button[aria-pressed=true] { color: #dce8ff; background: #7aa5ff24; }
+.video-settings-body { overflow: auto; padding: 14px; min-height: 0; scrollbar-width: thin; }
+.video-settings-section h3 { font-size: 14px; margin: 0 0 10px; }
+.video-settings-note { color: #a8b2c5; font-size: 12px; line-height: 1.5; margin: 8px 0 14px; }
+.video-settings-panel .video-menu { position: static; width: 100%; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; }
+.video-overlay.is-video-native-fallback .video-settings-panel .video-menu.is-open { display: block; }
+.video-settings-panel .video-menu.is-open { display: block; }
+.video-settings-panel .video-menu:not(.is-open) { display: none; }
+.video-track-search { width: 100%; background: #080b12; border: 1px solid #ffffff26; border-radius: 9px; color: inherit; padding: 10px; margin: 0 0 10px; font-size: 13px; }
+.video-track-list { max-height: 240px; overflow: auto; scrollbar-width: thin; }
+.video-track-list button { width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.video-track-empty { font-size: 13px; color: #a8b2c5; padding: 8px; }
+.video-picture-options { display: grid; gap: 7px; }
+.video-picture-options button { display: flex; flex-direction: column; align-items: start; gap: 4px; padding: 11px 12px; border: 1px solid #ffffff16; border-radius: 10px; background: #ffffff04; color: inherit; cursor: pointer; }
+.video-picture-options button small { color: #a8b2c5; font-size: 11px; }
+.video-picture-options button.is-selected { background: #7aa5ff20; border-color: #7aa5ff70; }
+.video-subtitle-preview { display: grid; place-items: center; min-height: 84px; background: linear-gradient(130deg,#344052,#121924); border-radius: 9px; padding: 10px; text-align: center; margin-bottom: 14px; }
+.video-subtitle-preview span { padding: 3px 6px; border-radius: 3px; }
+.video-settings-field { display: grid; gap: 9px; margin: 15px 0; font-size: 13px; }
+.video-settings-field > span { display: flex; justify-content: space-between; }
+.video-settings-field output { color: #a8b2c5; }
+.video-settings-field input[type=range] { width: 100%; accent-color: #8aacff; }
+.video-settings-inline { display: flex; justify-content: space-between; align-items: center; }
+.video-settings-field input[type=color] { border: 1px solid #ffffff30; background: none; width: 42px; height: 30px; border-radius: 5px; }
+.video-settings-check { display: flex; align-items: center; gap: 9px; font-size: 12px; margin: 13px 0; }
+.video-settings-check input { accent-color: #8aacff; }
+.video-settings-reset { color: #bfceeb; border: 1px solid #ffffff25; background: transparent; border-radius: 8px; padding: 9px 12px; font-size: 12px; cursor: pointer; }
+.video-settings-panel :focus-visible { outline: 2px solid #91b4ff; outline-offset: 2px; }
+.video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 354px; }
+.video-overlay.is-video-native-fallback .video-native-viewport { right: var(--video-native-right-inset, var(--video-native-side-inset, 0)); }
+@media (max-width: 760px) {
+    .video-settings-panel { left: 10px; right: 10px; width: auto; top: auto; height: min(320px, 46vh); }
+    .video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 0; bottom: calc(min(320px, 46vh) + 110px); }
+    .video-secondary-cluster { display: flex; }
+    .video-controls .video-menu-wrap:not([hidden]), .video-controls .video-fullscreen-btn { display: flex; }
+    .video-command-row { flex-wrap: wrap; gap: 8px; }
+    .video-track-value { max-width: 45px; }
+    .video-volume-group { display: none !important; }
+}
+.video-settings-body { display: flex; flex-direction: column; gap: 12px; }
+#video-subtitle-settings { order: 1; }
+.video-subtitle-appearance { border-top: 1px solid #ffffff18; padding-top: 12px; }
+.video-settings-panel input { margin: 0; box-sizing: border-box; }
+.video-settings-panel input[type=checkbox] { width: 16px; height: 16px; padding: 0; flex: 0 0 auto; }
+.video-settings-panel input[type=color] { padding: 3px; appearance: auto; }
+.video-settings-panel input[type=range] { padding: 0; }
+@media (max-width: 760px) {
+    .video-settings-panel { max-height: calc(100% - var(--video-panel-top, 70px) - var(--video-panel-bottom, 120px) - 80px); }
+}
+.video-track-list button { height: auto; min-height: 38px; padding: 9px; }
+.video-track-list button > span:last-child { white-space: normal; overflow: visible; line-height: 1.4; }

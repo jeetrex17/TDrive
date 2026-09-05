@@ -1,10 +1,14 @@
 <script lang="ts">
+    import VideoSettingsPanel from "./VideoSettingsPanel.svelte";
+    import { DEFAULT_PLAYBACK_PREFERENCES, type PlaybackPreferences } from "../../modules/video/playback-preferences";
+    let { initialPreferences = DEFAULT_PLAYBACK_PREFERENCES, onPreferencesChange = () => undefined }: { initialPreferences?: PlaybackPreferences; onPreferencesChange?: (value: PlaybackPreferences) => void } = $props();
     import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
     import CaptionsIcon from '@lucide/svelte/icons/captions';
     import MaximizeIcon from '@lucide/svelte/icons/maximize';
     import MinimizeIcon from '@lucide/svelte/icons/minimize';
     import PauseIcon from '@lucide/svelte/icons/pause';
     import PlayIcon from '@lucide/svelte/icons/play';
+    import RatioIcon from '@lucide/svelte/icons/ratio';
     import Volume2Icon from '@lucide/svelte/icons/volume-2';
     import VolumeXIcon from '@lucide/svelte/icons/volume-x';
     import XIcon from '@lucide/svelte/icons/x';
@@ -52,6 +56,22 @@
         <div id="video-error" class="video-error" role="alert" style="display: none;"></div>
     </div>
 
+    <aside id="video-settings-panel" class="video-settings-panel" aria-label="Playback settings" hidden>
+        <div class="video-settings-heading"><strong>Playback settings</strong><button id="video-settings-close" type="button" aria-label="Close playback settings"><XIcon size={18} aria-hidden="true" /></button></div>
+        <nav class="video-settings-tabs" aria-label="Playback settings sections">
+            <button type="button" data-settings-section="picture">Picture</button>
+            <button type="button" data-settings-section="audio">Audio</button>
+            <button type="button" data-settings-section="subtitle">Subtitles</button>
+            <button type="button" data-settings-section="speed">Speed</button>
+        </nav>
+        <div class="video-settings-body">
+            <div id="video-audio-menu" class="video-menu video-track-menu" role="group" aria-label="Audio track"></div>
+            <div id="video-subtitle-menu" class="video-menu video-track-menu" role="group" aria-label="Subtitles"></div>
+            <div id="video-speed-menu" class="video-menu video-speed-menu" role="menu" aria-label="Playback speed"></div>
+            <VideoSettingsPanel {initialPreferences} {onPreferencesChange} />
+        </div>
+    </aside>
+
     <div class="video-controls" aria-label="Video controls">
         <div class="video-timeline-row">
             <span id="video-time" class="video-time">0:00</span>
@@ -98,25 +118,26 @@
                 </div>
 
                 <div id="video-audio-wrap" class="video-menu-wrap video-track-wrap" hidden>
-                    <button id="video-audio-button" class="video-pill-button video-track-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Audio track" title="Audio track">
+                    <button id="video-audio-button" class="video-pill-button video-track-button" type="button" aria-controls="video-settings-panel" aria-expanded="false" aria-label="Audio track" title="Audio track">
                         <AudioLinesIcon size={15} aria-hidden="true" />
                         <span id="video-audio-label" class="video-track-value"></span>
                     </button>
-                    <div id="video-audio-menu" class="video-menu video-track-menu" role="menu" aria-label="Audio track"></div>
                 </div>
 
                 <div id="video-subtitle-wrap" class="video-menu-wrap video-track-wrap" hidden>
-                    <button id="video-subtitle-button" class="video-pill-button video-track-button" type="button" data-state="off" aria-haspopup="menu" aria-expanded="false" aria-label="Subtitles" title="Subtitles">
+                    <button id="video-subtitle-button" class="video-pill-button video-track-button" type="button" data-state="off" aria-controls="video-settings-panel" aria-expanded="false" aria-label="Subtitles" title="Subtitles">
                         <CaptionsIcon size={15} aria-hidden="true" />
                         <span id="video-subtitle-label" class="video-track-value"></span>
                     </button>
-                    <div id="video-subtitle-menu" class="video-menu video-track-menu" role="menu" aria-label="Subtitles"></div>
                 </div>
 
                 <div class="video-menu-wrap video-speed-wrap">
-                    <button id="video-speed-button" class="video-pill-button video-speed-button" type="button" aria-haspopup="menu" aria-expanded="false">1x</button>
-                    <div id="video-speed-menu" class="video-menu video-speed-menu" role="menu" aria-label="Playback speed"></div>
+                    <button id="video-speed-button" class="video-pill-button video-speed-button" type="button" aria-controls="video-settings-panel" aria-expanded="false">1x</button>
                 </div>
+
+                <button id="video-picture-button" class="video-pill-button video-picture-button" type="button" aria-label="Picture and subtitle settings" aria-expanded="false" aria-controls="video-settings-panel" title="Picture and subtitle settings">
+                    <RatioIcon size={15} aria-hidden="true" />
+                </button>
 
                 <button id="video-fullscreen" class="video-icon-btn video-fullscreen-btn" type="button" data-state="windowed" aria-label="Enter fullscreen" title="Enter fullscreen">
                     <MaximizeIcon class="video-fullscreen-symbol video-symbol-fullscreen-enter" aria-hidden="true" />

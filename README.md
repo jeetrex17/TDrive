@@ -250,6 +250,15 @@ set `TDRIVE_EXPERIMENTAL_MACOS_NATIVE_PLAYER=0` (or the `WINDOWS` / `LINUX`
 variant) to force the webview-only path. `TDRIVE_MPV_BIN` overrides the mpv
 binary; without a bundled runtime the app falls back to `mpv` from `PATH`.
 
+The video controls include searchable audio and subtitle lists and picture modes
+for Fit, Fill, Original size, 16:9, and 4:3. Subtitle appearance settings offer
+size, color, outline, and a dark background, with a live sample and Reset.
+Appearance preferences are saved on this device. Text styling applies to native
+text subtitles; bitmap subtitles keep their original appearance. Styled ASS
+subtitles retain their authored styling unless you enable the override option.
+On Windows and Linux/X11, the settings panel reserves space beside or below the
+video so the native player cannot cover the controls.
+
 Release packaging prefers checksum-pinned runtime archives configured through
 the `TDRIVE_<MACOS|WINDOWS|LINUX>_MPV_RUNTIME_URL` / `_SHA256` repository
 variables and otherwise bundles the runner's package-manager mpv, marked as

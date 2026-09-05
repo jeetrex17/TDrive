@@ -48,6 +48,17 @@ describe('VideoModal', () => {
             'video-subtitle-menu',
             'video-speed-button',
             'video-speed-menu',
+            'video-picture-button',
+            'video-settings-panel',
+            'video-settings-close',
+            'video-picture-settings',
+            'video-subtitle-settings',
+            'video-subtitle-size',
+            'video-subtitle-color',
+            'video-subtitle-outline',
+            'video-subtitle-background',
+            'video-subtitle-override',
+            'video-subtitle-reset',
             'video-fullscreen',
         ]) {
             expect(body).toContain(`id="${id}"`);
@@ -63,17 +74,18 @@ describe('VideoModal', () => {
         expect(body).toContain('aria-atomic="true"');
     });
 
-    it('renders the track pickers as labelled menu buttons hidden by default', () => {
+    it('renders the track pickers as labelled settings buttons hidden by default', () => {
         const { body } = render(VideoModal);
 
         expect(body).toContain('id="video-audio-wrap" class="video-menu-wrap video-track-wrap" hidden');
         expect(body).toContain('id="video-subtitle-wrap" class="video-menu-wrap video-track-wrap" hidden');
         for (const id of ['video-audio-button', 'video-subtitle-button', 'video-speed-button']) {
-            expect(body).toMatch(new RegExp(`id="${id}"[^>]*aria-haspopup="menu"`));
+            expect(body).toMatch(new RegExp(`id="${id}"[^>]*aria-controls="video-settings-panel"`));
         }
         expect(body).toMatch(/id="video-audio-button"[^>]*aria-label="Audio track"/);
         expect(body).toMatch(/id="video-subtitle-button"[^>]*aria-label="Subtitles"/);
-        expect(body).toMatch(/id="video-audio-menu"[^>]*role="menu"/);
-        expect(body).toMatch(/id="video-subtitle-menu"[^>]*role="menu"/);
+        expect(body).toMatch(/id="video-audio-menu"[^>]*role="group"/);
+        expect(body).toMatch(/id="video-subtitle-menu"[^>]*role="group"/);
+        expect(body).toMatch(/id="video-picture-button"[^>]*aria-label="Picture and subtitle settings"/);
     });
 });

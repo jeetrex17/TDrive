@@ -487,7 +487,7 @@ func validateNativeMediaCommand(command []string) error {
 			}
 			return nil
 		default:
-			return fmt.Errorf("unsupported native media set target")
+			return validateNativeMediaPresentationSetting(command[1], command[2])
 		}
 	default:
 		return fmt.Errorf("unsupported native media command")
