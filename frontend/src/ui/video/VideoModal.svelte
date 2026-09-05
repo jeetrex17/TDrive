@@ -1,7 +1,14 @@
 <script lang="ts">
+    import { untrack } from "svelte";
     import VideoSettingsPanel from "./VideoSettingsPanel.svelte";
     import { DEFAULT_PLAYBACK_PREFERENCES, type PlaybackPreferences } from "../../modules/video/playback-preferences";
     let { initialPreferences = DEFAULT_PLAYBACK_PREFERENCES, onPreferencesChange = () => undefined }: { initialPreferences?: PlaybackPreferences; onPreferencesChange?: (value: PlaybackPreferences) => void } = $props();
+    let preferences = $state(untrack(() => initialPreferences));
+    export function setPreferences(value: PlaybackPreferences) { preferences = value; }
+    function updatePreferences(value: PlaybackPreferences) {
+        preferences = value;
+        onPreferencesChange(value);
+    }
     import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';
     import CaptionsIcon from '@lucide/svelte/icons/captions';
     import MaximizeIcon from '@lucide/svelte/icons/maximize';
@@ -68,7 +75,7 @@
             <div id="video-audio-menu" class="video-menu video-track-menu" role="group" aria-label="Audio track"></div>
             <div id="video-subtitle-menu" class="video-menu video-track-menu" role="group" aria-label="Subtitles"></div>
             <div id="video-speed-menu" class="video-menu video-speed-menu" role="group" aria-label="Playback speed"></div>
-            <VideoSettingsPanel {initialPreferences} {onPreferencesChange} />
+            <VideoSettingsPanel initialPreferences={preferences} onPreferencesChange={updatePreferences} />
         </div>
     </aside>
 
@@ -118,22 +125,24 @@
                 </div>
 
                 <div id="video-audio-wrap" class="video-menu-wrap video-track-wrap" hidden>
-                    <button id="video-audio-button" class="video-pill-button video-track-button" type="button" aria-controls="video-settings-panel" aria-expanded="false" aria-label="Audio track" title="Audio track">
+                    <button id="video-audio-button" class="video-pill-button video-track-button" type="button" aria-label="Audio track" title="Audio track">
                         <AudioLinesIcon size={15} aria-hidden="true" />
                         <span id="video-audio-label" class="video-track-value"></span>
                     </button>
                 </div>
 
                 <div id="video-subtitle-wrap" class="video-menu-wrap video-track-wrap" hidden>
-                    <button id="video-subtitle-button" class="video-pill-button video-track-button" type="button" data-state="off" aria-controls="video-settings-panel" aria-expanded="false" aria-label="Subtitles" title="Subtitles">
+                    <button id="video-subtitle-button" class="video-pill-button video-track-button" type="button" data-state="off" aria-label="Subtitles" title="Subtitles">
                         <CaptionsIcon size={15} aria-hidden="true" />
                         <span id="video-subtitle-label" class="video-track-value"></span>
                     </button>
                 </div>
 
                 <div class="video-menu-wrap video-speed-wrap">
-                    <button id="video-speed-button" class="video-pill-button video-speed-button" type="button" aria-controls="video-settings-panel" aria-expanded="false">1x</button>
+                    <button id="video-speed-button" class="video-pill-button video-speed-button" type="button">1x</button>
                 </div>
+
+                <button id="video-aspect-button" class="video-pill-button video-aspect-button" type="button" aria-label="Video fit: Fit. Click to cycle" title="Video fit: Fit. Click to cycle">Fit</button>
 
                 <button id="video-picture-button" class="video-pill-button video-picture-button" type="button" aria-label="Playback settings" aria-expanded="false" aria-controls="video-settings-panel" title="Playback settings">
                     <SettingsIcon size={18} aria-hidden="true" />

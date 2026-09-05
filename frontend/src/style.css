@@ -3773,6 +3773,8 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     padding: 0;
 }
 
+.video-aspect-button { display: inline-flex; align-items: center; gap: 6px; }
+
 .video-track-button {
     display: inline-flex;
     align-items: center;
@@ -4409,7 +4411,6 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .video-overlay.is-video-native-fallback .video-settings-panel .video-menu.is-open { display: block; }
 .video-settings-panel .video-menu.is-open { display: block; }
 .video-settings-panel .video-menu:not(.is-open) { display: none; }
-.video-track-search { width: 100%; background: #080b12; border: 1px solid #ffffff26; border-radius: 9px; color: inherit; padding: 10px; margin: 0 0 10px; font-size: 13px; }
 .video-track-list { max-height: 240px; overflow: auto; scrollbar-width: thin; }
 .video-track-list button { width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .video-track-empty { font-size: 13px; color: #a8b2c5; padding: 8px; }
@@ -4430,10 +4431,25 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .video-settings-reset { color: #bfceeb; border: 1px solid #ffffff25; background: transparent; border-radius: 8px; padding: 9px 12px; font-size: 12px; cursor: pointer; }
 .video-settings-panel :focus-visible { outline: 2px solid #91b4ff; outline-offset: 2px; }
 .video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 354px; }
+/* The transparent macOS WebView exposes the window beneath the reserved dock.
+   Paint only that gutter, leaving the native video surface transparent. */
+.video-overlay.is-video-native:not(.is-video-native-fallback).has-video-settings .video-shell::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: 354px;
+    background: #05070c;
+    pointer-events: none;
+}
 .video-overlay.is-video-native-fallback .video-native-viewport { right: var(--video-native-right-inset, var(--video-native-side-inset, 0)); }
 @media (max-width: 760px) {
     .video-settings-panel { left: 10px; right: 10px; width: auto; top: auto; height: min(320px, 46vh); }
     .video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 0; bottom: calc(min(320px, 46vh) + 110px); }
+    .video-overlay.is-video-native:not(.is-video-native-fallback).has-video-settings .video-shell::before {
+        inset: auto 0 0;
+        width: auto;
+        height: calc(min(320px, 46vh) + 110px);
+    }
     .video-secondary-cluster { display: flex; }
     .video-controls .video-menu-wrap:not([hidden]), .video-controls .video-fullscreen-btn { display: flex; }
     .video-command-row { flex-wrap: wrap; gap: 8px; }

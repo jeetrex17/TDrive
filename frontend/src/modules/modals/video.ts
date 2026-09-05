@@ -1,4 +1,4 @@
-import { htmlPictureStyle, loadPlaybackPreferences, nativePreferenceCommands, normalizePlaybackPreferences, savePlaybackPreferences, type PlaybackPreferences } from "../video/playback-preferences";
+import { htmlPictureStyle, loadPlaybackPreferences, nativePreferenceCommands, normalizePlaybackPreferences, savePlaybackPreferences, type PlaybackPreferences, type PictureMode } from "../video/playback-preferences";
 import {
     attachNativeMedia,
     closeMedia,
@@ -437,11 +437,20 @@ class NativeMpvAdapter implements PlayerAdapter {
     setAudioTrack(id: number) {
         if (!Number.isSafeInteger(id) || id <= 0) return;
         void this.sendCommand(["set", "aid", String(id)]);
+        this.updateTrackSelection("audio", id);
     }
 
     setSubtitleTrack(id: number | null) {
         if (id !== null && (!Number.isSafeInteger(id) || id <= 0)) return;
         void this.sendCommand(["set", "sid", id === null ? "no" : String(id)]);
+        this.updateTrackSelection("subtitle", id);
+    }
+
+    private updateTrackSelection(type: NativeMediaTrack["type"], id: number | null) {
+        this.updateFallbackState((state) => ({
+            ...state,
+            tracks: state.tracks.map((track) => track.type === type ? { ...track, selected: track.id === id } : track),
+        }));
     }
 
     async close() {
@@ -1309,7 +1318,7 @@ function syncSpeed(state: PlayerState) {
     const customInput = byID<HTMLInputElement>("video-speed-custom-input");
     if (speedBtnEl) {
         speedBtnEl.textContent = `${formatRate(state.rate)}x`;
-        speedBtnEl.title = "Playback speed";
+        speedBtnEl.title = `Playback speed: ${formatRate(state.rate)}x. Click to cycle`;
         speedBtnEl.setAttribute("aria-label", speedBtnEl.title);
     }
     if (customInput && document.activeElement !== customInput) {
@@ -1348,7 +1357,7 @@ interface TrackPickerElements {
     menu: HTMLElement | null;
 }
 
-// TrackPicker opens searchable choices in the dock, outside native video surfaces.
+// TrackPicker provides direct cycling and full choices in the settings dock.
 class TrackPicker {
     private tracks: NativeMediaTrack[] = [];
     private renderedSignature = "";
@@ -1361,7 +1370,7 @@ class TrackPicker {
     ) {
         els.button?.addEventListener("click", (event) => {
             event.stopPropagation();
-            this.setOpen(!this.isOpen());
+            this.cycle();
             revealChrome();
         });
         els.menu?.addEventListener("click", (event) => {
@@ -1370,9 +1379,7 @@ class TrackPicker {
             this.select(item.dataset.track === "no" ? null : Number(item.dataset.track));
             this.close(true);
         });
-        els.menu?.addEventListener("input", () => this.filter());
         els.menu?.addEventListener("keydown", (event) => {
-            if ((event.target as HTMLElement).tagName === "INPUT" && event.key !== "Escape" && event.key !== "ArrowDown") return;
             if (this.isOpen()) handleMenuKeydown(event, this.items().filter((item) => !item.hidden), () => this.close(true));
         });
     }
@@ -1411,18 +1418,14 @@ class TrackPicker {
     setOpen(open: boolean) {
         if (open) {
             closeMenus(this);
-            showSettingsPanel(this.offLabel === null ? "audio" : "subtitle", this.els.button);
+            showSettingsPanel(this.offLabel === null ? "audio" : "subtitle");
         }
-        this.els.button?.setAttribute("aria-expanded", open ? "true" : "false");
         this.els.menu?.classList.toggle("is-open", open);
         if (open) {
             clearChromeTimer();
             requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
         } else {
             if (settingsSection === (this.offLabel === null ? "audio" : "subtitle")) hideSettingsPanel();
-            const search = this.els.menu?.querySelector<HTMLInputElement>("input");
-            if (search) search.value = "";
-            this.filter();
             if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
         }
     }
@@ -1430,7 +1433,7 @@ class TrackPicker {
     close(restoreFocus = false) {
         if (!this.isOpen()) return;
         this.setOpen(false);
-        if (restoreFocus) this.els.button?.focus({ preventScroll: true });
+        if (restoreFocus) byID("video-picture-button")?.focus({ preventScroll: true });
     }
 
     contains(target: Node | null) {
@@ -1462,12 +1465,12 @@ class TrackPicker {
         revealChrome();
     }
 
-    private filter() {
-        const query = this.els.menu?.querySelector<HTMLInputElement>("input")?.value.trim().toLocaleLowerCase() || "";
-        const items = this.items();
-        for (const item of items) item.hidden = item.dataset.track !== "no" && !item.textContent?.toLocaleLowerCase().includes(query);
-        const empty = this.els.menu?.querySelector<HTMLElement>(".video-track-empty");
-        if (empty) empty.hidden = items.some((item) => item.dataset.track !== "no" && !item.hidden);
+    private cycle() {
+        if (!this.visible || this.tracks.length === 0) return;
+        const options: Array<number | null> = this.tracks.map((track) => track.id);
+        const choices = this.offLabel === null ? options : [null, ...options];
+        const current = this.currentTrack()?.id ?? null;
+        this.select(choices[(choices.indexOf(current) + 1) % choices.length]);
     }
 
     private items() {
@@ -1482,7 +1485,7 @@ class TrackPicker {
         if (!this.els.menu) return;
         const items = this.tracks.map((track, index) => menuItemMarkup(`data-track="${track.id}"`, nativeTrackLabel(track, index)));
         if (this.offLabel !== null) items.unshift(menuItemMarkup('data-track="no"', this.offLabel));
-        this.els.menu.innerHTML = `<div class="video-menu-title">${this.title}</div><input type="search" class="video-track-search" aria-label="Search ${this.title.toLowerCase()} tracks" placeholder="Search tracks" /><div class="video-track-list" role="radiogroup" aria-label="${this.title} tracks">${items.join("")}</div><p class="video-track-empty" hidden>No matching tracks</p>`;
+        this.els.menu.innerHTML = `<div class="video-menu-title">${this.title}</div><div class="video-track-list" role="radiogroup" aria-label="${this.title} tracks">${items.join("")}</div>`;
     }
 
     private syncSelection() {
@@ -1500,8 +1503,8 @@ class TrackPicker {
         if (this.els.label) this.els.label.textContent = short;
         if (this.els.button) {
             this.els.button.dataset.state = current ? "on" : "off";
-            this.els.button.setAttribute("aria-label", `${this.title}: ${full}`);
-            this.els.button.title = this.title;
+            this.els.button.title = `${this.title}: ${full}. Click to cycle`;
+            this.els.button.setAttribute("aria-label", this.els.button.title);
         }
     }
 }
@@ -1509,8 +1512,22 @@ class TrackPicker {
 function updatePlaybackPreferences(value: PlaybackPreferences) {
     playbackPreferences = normalizePlaybackPreferences(value);
     savePlaybackPreferences(playbackPreferences);
+    (videoMarkupHandle?.instance.setPreferences as ((value: PlaybackPreferences) => void) | undefined)?.(playbackPreferences);
+    syncAspectButton();
     if (activeAdapter instanceof NativeMpvAdapter) activeAdapter.applyPreferences(playbackPreferences);
     applyHtmlPicture();
+}
+
+const PICTURE_MODES: PictureMode[] = ["fit", "fill", "original", "16:9", "4:3"];
+const PICTURE_LABELS: Record<PictureMode, string> = { fit: "Fit", fill: "Fill", original: "Original", "16:9": "16:9", "4:3": "4:3" };
+
+function syncAspectButton() {
+    const button = byID("video-aspect-button");
+    if (!button) return;
+    const label = PICTURE_LABELS[playbackPreferences.pictureMode];
+    button.textContent = label;
+    button.title = `Video fit: ${label}. Click to cycle`;
+    button.setAttribute("aria-label", button.title);
 }
 
 function applyHtmlPicture() {
@@ -1532,14 +1549,14 @@ function syncSettingsGeometry() {
     syncFallbackNativeViewportInsets();
 }
 
-function showSettingsPanel(section: NonNullable<typeof settingsSection>, trigger: HTMLElement | null = null) {
+function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
     const panel = byID("video-settings-panel");
     if (!panel) return;
-    if (trigger) settingsReturnFocus = trigger;
+    settingsReturnFocus = byID("video-picture-button");
     settingsSection = section;
     panel.hidden = false;
     modalEl?.classList.add("has-video-settings");
-    byID("video-picture-button")?.setAttribute("aria-expanded", section === "picture" ? "true" : "false");
+    byID("video-picture-button")?.setAttribute("aria-expanded", "true");
     const picture = byID("video-picture-settings");
     const appearance = byID("video-subtitle-settings");
     if (picture) picture.hidden = section !== "picture";
@@ -1569,13 +1586,20 @@ function bindSettingsPanel() {
     const panel = byID("video-settings-panel");
     byID("video-picture-button")?.addEventListener("click", (event) => {
         event.stopPropagation();
-        const wasPicture = settingsSection === "picture";
+        const wasOpen = settingsSection !== null;
         closeMenus();
-        if (!wasPicture) {
-            showSettingsPanel("picture", byID("video-picture-button"));
+        if (!wasOpen) {
+            showSettingsPanel("picture");
             panel?.querySelector<HTMLButtonElement>("[data-picture-mode]")?.focus();
         }
     });
+    byID("video-aspect-button")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const next = PICTURE_MODES[(PICTURE_MODES.indexOf(playbackPreferences.pictureMode) + 1) % PICTURE_MODES.length];
+        updatePlaybackPreferences({ ...playbackPreferences, pictureMode: next });
+        revealChrome();
+    });
+    syncAspectButton();
     byID("video-settings-close")?.addEventListener("click", () => closeOpenMenu());
     panel?.addEventListener("click", (event) => {
         const button = (event.target as HTMLElement).closest<HTMLElement>("[data-settings-section]");
@@ -2692,9 +2716,8 @@ function speedMenuButtons() {
 function setSpeedMenuOpen(open: boolean) {
     if (open) {
         closeMenus("speed");
-        showSettingsPanel("speed", speedBtnEl);
+        showSettingsPanel("speed");
     }
-    speedBtnEl?.setAttribute("aria-expanded", open ? "true" : "false");
     speedMenuEl?.classList.toggle("is-open", open);
     if (!open && settingsSection === "speed") hideSettingsPanel();
     if (open) {
@@ -2712,13 +2735,14 @@ function setSpeedMenuOpen(open: boolean) {
 function closeSpeedMenu(restoreFocus = false) {
     if (!isSpeedMenuOpen()) return;
     setSpeedMenuOpen(false);
-    if (restoreFocus) speedBtnEl?.focus({ preventScroll: true });
+    if (restoreFocus) byID("video-picture-button")?.focus({ preventScroll: true });
 }
 
 function bindSpeedMenu() {
     speedBtnEl?.addEventListener("click", (event) => {
         event.stopPropagation();
-        setSpeedMenuOpen(!isSpeedMenuOpen());
+        const next = RATE_OPTIONS.find((rate) => rate > currentState.rate) ?? RATE_OPTIONS[0];
+        activeAdapter?.setSpeed(next);
         revealChrome();
     });
     speedMenuEl?.addEventListener("click", (event) => {

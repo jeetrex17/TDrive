@@ -250,8 +250,10 @@ set `TDRIVE_EXPERIMENTAL_MACOS_NATIVE_PLAYER=0` (or the `WINDOWS` / `LINUX`
 variant) to force the webview-only path. `TDRIVE_MPV_BIN` overrides the mpv
 binary; without a bundled runtime the app falls back to `mpv` from `PATH`.
 
-The video controls include searchable audio and subtitle lists and picture modes
-for Fit, Fill, Original size, 16:9, and 4:3. Subtitle appearance settings offer
+The bottom audio, subtitle, speed, and picture buttons cycle through options
+without opening a menu. Picture modes include Fit, Fill, Original size, 16:9,
+and 4:3. Only the settings gear opens the panel with full audio and subtitle
+lists. Subtitle appearance settings offer
 size, color, outline, and a dark background, with a live sample and Reset.
 The settings gear also provides a speed slider from 0.25x to 4x, presets, and
 exact speed entry. Audio tracks remain visible even when only one is available.
