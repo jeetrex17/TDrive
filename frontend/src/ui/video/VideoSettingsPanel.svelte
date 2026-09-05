@@ -12,7 +12,6 @@
     type SubtitleAppearance = Omit<PlaybackPreferences, 'pictureMode' | 'overrideStyledSubtitles'>;
     let subtitleDraft = $state<Partial<SubtitleAppearance>>({});
     let subtitlePreferences = $derived(normalizePlaybackPreferences({ ...preferences, ...subtitleDraft }));
-    let saveStatus = $state('');
     const modes: { value: PictureMode; label: string; detail: string }[] = [
         { value: 'fit', label: 'Fit', detail: 'Keep the original aspect ratio' },
         { value: 'fill', label: 'Fill', detail: 'Fill the frame, cropping the edges' },
@@ -23,7 +22,6 @@
 
     function updateSubtitle(change: Partial<SubtitleAppearance>) {
         subtitleDraft = { ...subtitleDraft, ...change };
-        saveStatus = 'Unsaved changes';
     }
 
     function updatePicture(pictureMode: PictureMode) {
@@ -33,13 +31,11 @@
     function saveSubtitles() {
         onPreferencesChange(normalizePlaybackPreferences({ ...subtitlePreferences, overrideStyledSubtitles: true }));
         subtitleDraft = {};
-        saveStatus = 'Saved';
     }
 
     function resetSubtitles() {
         onPreferencesChange(normalizePlaybackPreferences({ ...DEFAULT_PLAYBACK_PREFERENCES, pictureMode: preferences.pictureMode }));
         subtitleDraft = {};
-        saveStatus = '';
     }
 
 </script>
@@ -73,9 +69,8 @@
     </label>
     <label class="video-settings-check"><input id="video-subtitle-background" type="checkbox" checked={subtitlePreferences.subtitleBackground} onchange={(event) => updateSubtitle({ subtitleBackground: event.currentTarget.checked })} /> Dark background</label>
     <div class="video-subtitle-actions">
-        <button id="video-subtitle-save" class="video-settings-save" type="button" onclick={saveSubtitles}>Save subtitle settings</button>
-        <span id="video-subtitle-save-status" class="video-settings-save-status" role="status" aria-live="polite">{saveStatus}</span>
+        <button id="video-subtitle-save" class="video-settings-save" type="button" onclick={saveSubtitles}>Save</button>
+        <button id="video-subtitle-reset" class="video-settings-reset" type="button" onclick={resetSubtitles}>Reset</button>
     </div>
-    <button id="video-subtitle-reset" class="video-settings-reset" type="button" onclick={resetSubtitles}>Reset subtitle appearance</button>
     </div>
 </div>

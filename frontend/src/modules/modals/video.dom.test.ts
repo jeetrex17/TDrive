@@ -843,7 +843,6 @@ describe("playback settings dock", () => {
             expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "strip"]);
         });
         expect(setItem).toHaveBeenCalledWith("tdrive.playback-appearance.v1", expect.stringContaining('"overrideStyledSubtitles":true'));
-        expect(document.querySelector("#video-subtitle-save-status")?.textContent).toBe("Saved");
         apiMocks.nativeMediaCommand.mockClear();
         document.querySelector<HTMLButtonElement>("#video-subtitle-reset")!.click();
         flushSync();
@@ -870,7 +869,6 @@ describe("playback settings dock", () => {
         color.value = "#00ff00";
         color.dispatchEvent(new Event("input", { bubbles: true }));
         await nextTasks();
-        expect(document.querySelector("#video-subtitle-save-status")?.textContent).toBe("Unsaved changes");
         document.querySelector<HTMLButtonElement>("#video-aspect-button")!.click();
         await nextTasks();
         expect(color.value.toLowerCase()).toBe("#00ff00");

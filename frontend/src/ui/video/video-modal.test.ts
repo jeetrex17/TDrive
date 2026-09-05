@@ -59,7 +59,6 @@ describe('VideoModal', () => {
             'video-subtitle-outline',
             'video-subtitle-background',
             'video-subtitle-save',
-            'video-subtitle-save-status',
             'video-subtitle-reset',
             'video-fullscreen',
         ]) {

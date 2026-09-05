@@ -4429,10 +4429,9 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .video-settings-check { display: flex; align-items: center; gap: 9px; font-size: 12px; margin: 13px 0; }
 .video-settings-check input { accent-color: #8aacff; }
 .video-settings-reset { color: #bfceeb; border: 1px solid #ffffff25; background: transparent; border-radius: 8px; padding: 9px 12px; font-size: 12px; cursor: pointer; }
-.video-subtitle-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 18px 0 10px; }
+.video-subtitle-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; margin: 18px 0 10px; }
 .video-settings-save { border: 1px solid #7aa5ff; border-radius: 8px; padding: 10px 14px; background: #7aa5ff; color: #080b12; font-size: 12px; font-weight: 800; cursor: pointer; }
 .video-settings-save:hover { background: #9abbff; }
-.video-settings-save-status { color: #a8b2c5; font-size: 12px; min-height: 18px; }
 .video-settings-panel :focus-visible { outline: 2px solid #91b4ff; outline-offset: 2px; }
 .video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 354px; }
 /* The transparent macOS WebView exposes the window beneath the reserved dock.
