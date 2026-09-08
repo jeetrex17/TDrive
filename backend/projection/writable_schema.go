@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 )
 
 func migrateWritableProjection(tx *sql.Tx) error {
@@ -167,6 +169,134 @@ func insertLegacyDirent(tx *sql.Tx, entry legacyDirentRow) error {
 		}
 		return nil
 	}
+}
+
+type legacyCollisionAliasDirent struct {
+	channelID   int64
+	objectID    string
+	parentID    string
+	displayName string
+	sourceName  string
+}
+
+// repairLegacyCollisionAliasExtensions repairs only aliases that v8 generated
+// from the file's current source name and immutable logical ID. Matching the
+// old generated form exactly leaves any user-authored lookalike untouched.
+func repairLegacyCollisionAliasExtensions(tx *sql.Tx) error {
+	rows, err := tx.Query(`
+		SELECT d.channel_id, d.object_id, d.parent_id, d.display_name, f.name
+		FROM dirents d
+		JOIN files f
+		  ON f.channel_id=d.channel_id AND d.object_id='f:' || CAST(f.msg_id AS TEXT)
+		WHERE d.object_kind='file' AND d.tombstoned=0 AND f.tombstoned=0
+		ORDER BY d.channel_id, d.parent_id, d.object_id
+	`)
+	if err != nil {
+		return fmt.Errorf("projection: read legacy collision aliases: %w", err)
+	}
+	var entries []legacyCollisionAliasDirent
+	for rows.Next() {
+		var entry legacyCollisionAliasDirent
+		if err := rows.Scan(
+			&entry.channelID, &entry.objectID, &entry.parentID,
+			&entry.displayName, &entry.sourceName,
+		); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("projection: scan legacy collision alias: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("projection: iterate legacy collision aliases: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("projection: close legacy collision aliases: %w", err)
+	}
+
+	for _, entry := range entries {
+		attempt, generated := legacyCollisionAliasV8Attempt(
+			entry.sourceName, "file", entry.objectID, entry.displayName,
+		)
+		if !generated {
+			continue
+		}
+		name, key, err := allocateRepairedLegacyCollisionAlias(tx, entry, attempt)
+		if err != nil {
+			return err
+		}
+		if name == entry.displayName {
+			continue
+		}
+		if _, err := tx.Exec(`
+			UPDATE dirents SET display_name=?, name_key=?
+			WHERE channel_id=? AND object_id=? AND tombstoned=0 AND display_name=?
+		`, name, key, entry.channelID, entry.objectID, entry.displayName); err != nil {
+			return fmt.Errorf("projection: repair legacy collision alias %s: %w", entry.objectID, err)
+		}
+	}
+	return nil
+}
+
+func legacyCollisionAliasV8Attempt(name, kind, objectID, displayName string) (int, bool) {
+	if displayName == legacyCollisionAliasV8(name, kind, objectID, 0) {
+		return 0, true
+	}
+	prefix := fmt.Sprintf(" (%s %s-", kind, legacyCollisionToken(objectID))
+	if !strings.HasSuffix(displayName, ")") {
+		return 0, false
+	}
+	start := strings.LastIndex(displayName, prefix)
+	if start < 0 {
+		return 0, false
+	}
+	attempt, err := strconv.Atoi(displayName[start+len(prefix) : len(displayName)-1])
+	if err != nil || attempt <= 0 || displayName != legacyCollisionAliasV8(name, kind, objectID, attempt) {
+		return 0, false
+	}
+	return attempt, true
+}
+
+func legacyCollisionAliasV8(name, kind, objectID string, attempt int) string {
+	base := legacyPortableName(name, kind, objectID)
+	return truncatePortableName(base, legacyCollisionSuffix(kind, objectID, attempt))
+}
+
+func allocateRepairedLegacyCollisionAlias(
+	tx *sql.Tx,
+	entry legacyCollisionAliasDirent,
+	firstAttempt int,
+) (string, string, error) {
+	var siblings int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*) FROM dirents
+		WHERE channel_id=? AND parent_id=? AND tombstoned=0
+	`, entry.channelID, entry.parentID).Scan(&siblings); err != nil {
+		return "", "", fmt.Errorf("projection: count legacy alias siblings: %w", err)
+	}
+	for offset := 0; offset <= siblings; offset++ {
+		attempt := firstAttempt + offset
+		if attempt < firstAttempt {
+			break
+		}
+		name := legacyCollisionAlias(entry.sourceName, "file", entry.objectID, attempt)
+		key, err := CanonicalNameKey(name)
+		if err != nil {
+			return "", "", fmt.Errorf("projection: canonicalize repaired legacy alias %q: %w", name, err)
+		}
+		var owner string
+		err = tx.QueryRow(`
+			SELECT object_id FROM dirents
+			WHERE channel_id=? AND parent_id=? AND name_key=? AND tombstoned=0
+		`, entry.channelID, entry.parentID, key).Scan(&owner)
+		if errors.Is(err, sql.ErrNoRows) || owner == entry.objectID {
+			return name, key, nil
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("projection: inspect repaired legacy alias sibling: %w", err)
+		}
+	}
+	return "", "", fmt.Errorf("projection: allocate repaired legacy alias for %s", entry.objectID)
 }
 
 func syncLegacyFolderDirent(tx *sql.Tx, channelID int64, folderID string) error {

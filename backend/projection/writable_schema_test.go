@@ -2,6 +2,7 @@ package projection
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode"
@@ -425,6 +426,151 @@ func TestMigrateLegacyPortableNameCollisionsUsesDeterministicAliases(t *testing.
 	}
 	if count != 2 {
 		t.Fatalf("dirents = %d, want 2", count)
+	}
+}
+
+func TestMigrateV7CollisionAliasKeepsEncryptedFileExtension(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := seedV7Projection(t, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE files SET name='archive.rar' WHERE channel_id=? AND msg_id=41`, migPersonalChan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO files (
+			channel_id, msg_id, name, size, upload_time,
+			encrypted, plaintext_size, encryption_version
+		) VALUES (?, 6012, 'archive.rar', 1, 100, 1, 1, 1)
+	`, migPersonalChan); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MigratePersonalChannel(db, migPersonalChan); err != nil {
+		t.Fatalf("migrate duplicate encrypted archive: %v", err)
+	}
+
+	var displayName, key string
+	if err := db.QueryRow(`
+		SELECT display_name, name_key FROM dirents
+		WHERE channel_id=? AND object_id='f:6012'
+	`, migPersonalChan).Scan(&displayName, &key); err != nil {
+		t.Fatal(err)
+	}
+	const wantName = "archive (file 6012).rar"
+	wantKey, err := CanonicalNameKey(wantName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if displayName != wantName || key != wantKey {
+		t.Fatalf("encrypted archive alias = (%q, %q), want (%q, %q)", displayName, key, wantName, wantKey)
+	}
+}
+
+func TestMigrateV9RepairsGeneratedCollisionAliasesWithoutClobberingSiblings(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := seedV7Projection(t, db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE files SET name='archive.rar' WHERE channel_id=? AND msg_id=41`, migPersonalChan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO files (channel_id, msg_id, name, size, upload_time)
+		VALUES (?, 6012, 'archive.rar', 1, 100)
+	`, migPersonalChan); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigratePersonalChannel(db, migPersonalChan); err != nil {
+		t.Fatalf("build v9 fixture: %v", err)
+	}
+
+	oldName := legacyCollisionAliasV8("archive.rar", "file", "f:6012", 0)
+	oldKey, err := CanonicalNameKey(oldName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		UPDATE dirents SET display_name=?, name_key=?
+		WHERE channel_id=? AND object_id='f:6012'
+	`, oldName, oldKey, migPersonalChan); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, file := range []struct {
+		msgID       int64
+		sourceName  string
+		displayName string
+	}{
+		{7000, "occupied.bin", "archive (file 6012).rar"},
+		{7010, "manual.rar (file 7010)", "manual.rar (file 7010)"},
+	} {
+		key, err := CanonicalNameKey(file.displayName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO files (channel_id, msg_id, name, size, upload_time)
+			VALUES (?, ?, ?, 1, ?)
+		`, migPersonalChan, file.msgID, file.sourceName, file.msgID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`
+			INSERT INTO dirents (
+				channel_id, object_id, object_kind, parent_id, display_name,
+				name_key, revision, tombstoned
+			) VALUES (?, ?, 'file', '', ?, ?, 1, 0)
+		`, migPersonalChan, FileIDPrefix+fmt.Sprint(file.msgID), file.displayName, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`DELETE FROM schema_version`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO schema_version(version) VALUES (9)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MigratePersonalChannel(db, migPersonalChan); err != nil {
+		t.Fatalf("repair v9 collision alias: %v", err)
+	}
+
+	wants := map[string]string{
+		"f:6012": "archive (file 6012-1).rar",
+		"f:7000": "archive (file 6012).rar",
+		"f:7010": "manual.rar (file 7010)",
+	}
+	for objectID, wantName := range wants {
+		var gotName, gotKey string
+		if err := db.QueryRow(`
+			SELECT display_name, name_key FROM dirents
+			WHERE channel_id=? AND object_id=?
+		`, migPersonalChan, objectID).Scan(&gotName, &gotKey); err != nil {
+			t.Fatal(err)
+		}
+		wantKey, err := CanonicalNameKey(wantName)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotName != wantName || gotKey != wantKey {
+			t.Fatalf("dirent %s = (%q, %q), want (%q, %q)", objectID, gotName, gotKey, wantName, wantKey)
+		}
+	}
+
+	var version int
+	if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
 	}
 }
 
