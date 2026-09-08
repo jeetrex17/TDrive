@@ -70,6 +70,10 @@ func objectKind(objectID string) (string, error) {
 }
 
 func legacyPortableName(name, kind, objectID string) string {
+	return buildLegacyPortableName(name, kind == "file")
+}
+
+func buildLegacyPortableName(name string, preserveFileExtension bool) string {
 	name = norm.NFC.String(strings.ToValidUTF8(name, "_"))
 	var b strings.Builder
 	for _, r := range name {
@@ -89,21 +93,53 @@ func legacyPortableName(name, kind, objectID string) string {
 	}
 	// A leading underscore also makes Windows device basenames portable.
 	candidate = "_" + candidate
+	if preserveFileExtension {
+		stem, extension := splitLegacyFileExtension(candidate)
+		return truncatePortableName(stem, extension)
+	}
 	return truncatePortableName(candidate, "")
+}
+
+// legacyPortableNameV8 preserves the original v8 truncation order so the v10
+// migration can recognize aliases already stored by that release.
+func legacyPortableNameV8(name string) string {
+	return buildLegacyPortableName(name, false)
 }
 
 func legacyCollisionAlias(name, kind, objectID string, attempt int) string {
 	base := legacyPortableName(name, kind, objectID)
+	suffix := legacyCollisionSuffix(kind, objectID, attempt)
+	if kind != "file" {
+		return truncatePortableName(base, suffix)
+	}
+	stem, extension := splitLegacyFileExtension(base)
+	return truncatePortableName(stem, suffix+extension)
+}
+
+func legacyCollisionSuffix(kind, objectID string, attempt int) string {
+	if attempt > 0 {
+		return fmt.Sprintf(" (%s %s-%d)", kind, legacyCollisionToken(objectID), attempt)
+	}
+	return fmt.Sprintf(" (%s %s)", kind, legacyCollisionToken(objectID))
+}
+
+func legacyCollisionToken(objectID string) string {
 	token := strings.TrimPrefix(objectID, FileIDPrefix)
 	token = strings.TrimPrefix(token, FolderIDPrefix)
 	if len(token) > 12 {
 		token = token[len(token)-12:]
 	}
-	suffix := fmt.Sprintf(" (%s %s)", kind, token)
-	if attempt > 0 {
-		suffix = fmt.Sprintf(" (%s %s-%d)", kind, token, attempt)
+	return token
+}
+
+// splitLegacyFileExtension identifies the short final extension whose placement
+// must survive a collision alias.
+func splitLegacyFileExtension(name string) (stem, extension string) {
+	dot := strings.LastIndexByte(name, '.')
+	if dot <= 0 || len(name)-dot > 32 {
+		return name, ""
 	}
-	return truncatePortableName(base, suffix)
+	return name[:dot], name[dot:]
 }
 
 func truncatePortableName(name, suffix string) string {

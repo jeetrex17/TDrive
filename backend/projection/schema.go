@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 9
+const currentSchemaVersion = 10
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -342,6 +342,11 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 			return err
 		}
 		if err := flagTruncatedScansForRebuild(tx); err != nil {
+			return err
+		}
+	}
+	if v < 10 {
+		if err := repairLegacyCollisionAliasExtensions(tx); err != nil {
 			return err
 		}
 	}
