@@ -70,6 +70,10 @@ func objectKind(objectID string) (string, error) {
 }
 
 func legacyPortableName(name, kind, objectID string) string {
+	return buildLegacyPortableName(name, kind == "file")
+}
+
+func buildLegacyPortableName(name string, preserveFileExtension bool) string {
 	name = norm.NFC.String(strings.ToValidUTF8(name, "_"))
 	var b strings.Builder
 	for _, r := range name {
@@ -89,7 +93,17 @@ func legacyPortableName(name, kind, objectID string) string {
 	}
 	// A leading underscore also makes Windows device basenames portable.
 	candidate = "_" + candidate
+	if preserveFileExtension {
+		stem, extension := splitLegacyFileExtension(candidate)
+		return truncatePortableName(stem, extension)
+	}
 	return truncatePortableName(candidate, "")
+}
+
+// legacyPortableNameV8 preserves the original v8 truncation order so the v10
+// migration can recognize aliases already stored by that release.
+func legacyPortableNameV8(name string) string {
+	return buildLegacyPortableName(name, false)
 }
 
 func legacyCollisionAlias(name, kind, objectID string, attempt int) string {

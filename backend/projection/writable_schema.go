@@ -258,7 +258,7 @@ func legacyCollisionAliasV8Attempt(name, kind, objectID, displayName string) (in
 }
 
 func legacyCollisionAliasV8(name, kind, objectID string, attempt int) string {
-	base := legacyPortableName(name, kind, objectID)
+	base := legacyPortableNameV8(name)
 	return truncatePortableName(base, legacyCollisionSuffix(kind, objectID, attempt))
 }
 
