@@ -68,12 +68,13 @@ func (builder engineWriterBuilder) Build(ctx context.Context, drive Drive, files
 		return nil, fmt.Errorf("%w: writable namespace resolver is unavailable", ErrInvalidConfiguration)
 	}
 	remote, err := mountadapter.NewTelegramRemote(mountadapter.TelegramRemoteConfig{
-		DB:       backend.DB,
-		DriveID:  drive.ID,
-		Files:    builder.engine.FileService(),
-		Telegram: builder.engine.Telegram(),
-		Peers:    builder.engine,
-		ActorID:  builder.engine.ActorID,
+		DB:             backend.DB,
+		DriveID:        drive.ID,
+		Files:          builder.engine.FileService(),
+		Telegram:       builder.engine.Telegram(),
+		Peers:          builder.engine,
+		ActorID:        builder.engine.ActorID,
+		ProjectThrough: builder.engine.PrepareHardDeleteProjection,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: writable Telegram adapter is unavailable", ErrInvalidConfiguration)

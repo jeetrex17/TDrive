@@ -42,33 +42,37 @@ type operation struct {
 }
 
 type session struct {
-	drive        Drive
-	drives       []Drive
-	selection    string
-	label        string
-	windowsDrive string
-	mode         Mode
-	writeState   WriteState
-	key          MountKeyLease
-	content      ContentLifetime
-	writer       WriteSession
-	attachment   mountos.Attachment
+	drive              Drive
+	drives             []Drive
+	selection          string
+	label              string
+	windowsDrive       string
+	mode               Mode
+	writeState         WriteState
+	key                MountKeyLease
+	content            ContentLifetime
+	writer             WriteSession
+	attachment         mountos.Attachment
+	filesystemsByDrive map[int64]*mountfs.FS
 }
 
 // Controller serializes the lifecycle of one mounted drive. Expensive work is
 // performed without holding mu so Status remains responsive during OS calls.
 type Controller struct {
-	mu          sync.Mutex
-	filesystems FilesystemBuilder
-	writers     WriterBuilder
-	keys        MountKeyLeaser
-	endpoint    Endpoint
-	connector   mountos.Connector
-	fsOptions   mountfs.Options
-	status      Status
-	session     *session
-	operation   *operation
-	lastErr     error
+	mu                    sync.Mutex
+	filesystems           FilesystemBuilder
+	writers               WriterBuilder
+	keys                  MountKeyLeaser
+	endpoint              Endpoint
+	connector             mountos.Connector
+	fsOptions             mountfs.Options
+	status                Status
+	session               *session
+	operation             *operation
+	lastErr               error
+	projectionChanges     ProjectionChangeSource
+	projectionChangesMu   sync.Mutex
+	stopProjectionChanges func()
 }
 
 // New creates a production controller around the Engine already owned by the
@@ -99,10 +103,11 @@ func NewWithConnector(engine *core.Engine, connector mountos.Connector) (*Contro
 			peers:  engine,
 			ranges: ranges,
 		},
-		Writers:   newEngineWriterBuilder(engine),
-		Keys:      engineMountKeyLeaser{engine: engine},
-		Endpoint:  newWebDAVEndpoint(),
-		Connector: connector,
+		Writers:           newEngineWriterBuilder(engine),
+		Keys:              engineMountKeyLeaser{engine: engine},
+		Endpoint:          newWebDAVEndpoint(),
+		Connector:         connector,
+		ProjectionChanges: engine,
 	})
 }
 
@@ -120,15 +125,18 @@ func NewWithDependencies(dependencies Dependencies) (*Controller, error) {
 		options.SnapshotTTL = defaultMountSnapshotTTL
 	}
 
-	return &Controller{
-		filesystems: dependencies.Filesystems,
-		writers:     dependencies.Writers,
-		keys:        dependencies.Keys,
-		endpoint:    dependencies.Endpoint,
-		connector:   dependencies.Connector,
-		fsOptions:   options,
-		status:      Status{Phase: PhaseStopped},
-	}, nil
+	controller := &Controller{
+		filesystems:       dependencies.Filesystems,
+		writers:           dependencies.Writers,
+		keys:              dependencies.Keys,
+		endpoint:          dependencies.Endpoint,
+		connector:         dependencies.Connector,
+		fsOptions:         options,
+		status:            Status{Phase: PhaseStopped},
+		projectionChanges: dependencies.ProjectionChanges,
+	}
+	controller.subscribeProjectionChanges()
+	return controller, nil
 }
 
 // Start mounts one drive without changing the Engine's active drive. It keeps
@@ -153,6 +161,7 @@ func (controller *Controller) startDrives(ctx context.Context, requested []Drive
 	if err := ctx.Err(); err != nil {
 		return controller.Status(), err
 	}
+	controller.subscribeProjectionChanges()
 	drives, err := normalizeDriveSelection(requested)
 	if err != nil {
 		return controller.Status(), err
@@ -307,6 +316,7 @@ func (controller *Controller) runStart(ctx context.Context, current *operation, 
 	status := controller.status
 	controller.completeLocked(current, status, nil)
 	controller.mu.Unlock()
+	controller.subscribeProjectionChanges()
 	return status, nil
 }
 
@@ -520,7 +530,53 @@ func (controller *Controller) Status() Status {
 // Close applies the same safe detach-first lifecycle as Stop.
 func (controller *Controller) Close(ctx context.Context) error {
 	_, err := controller.Stop(ctx)
+	if err == nil {
+		controller.unsubscribeProjectionChanges()
+	}
 	return err
+}
+
+func (controller *Controller) subscribeProjectionChanges() {
+	if controller == nil || controller.projectionChanges == nil {
+		return
+	}
+	controller.projectionChangesMu.Lock()
+	defer controller.projectionChangesMu.Unlock()
+	if controller.stopProjectionChanges == nil {
+		unsubscribe := controller.projectionChanges.SubscribeProjectionChanges(
+			controller.invalidateProjection,
+		)
+		if unsubscribe == nil {
+			unsubscribe = func() {}
+		}
+		controller.stopProjectionChanges = unsubscribe
+	}
+}
+
+func (controller *Controller) unsubscribeProjectionChanges() {
+	if controller == nil {
+		return
+	}
+	controller.projectionChangesMu.Lock()
+	unsubscribe := controller.stopProjectionChanges
+	controller.stopProjectionChanges = nil
+	controller.projectionChangesMu.Unlock()
+	if unsubscribe != nil {
+		unsubscribe()
+	}
+}
+
+func (controller *Controller) invalidateProjection(channelID int64) {
+	if controller == nil || channelID <= 0 {
+		return
+	}
+	controller.mu.Lock()
+	var filesystem *mountfs.FS
+	if controller.session != nil {
+		filesystem = controller.session.filesystemsByDrive[channelID]
+	}
+	controller.mu.Unlock()
+	filesystem.InvalidateAll()
 }
 
 func (controller *Controller) waitLocked(ctx context.Context, current *operation) (Status, error) {

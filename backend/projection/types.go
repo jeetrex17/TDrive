@@ -37,11 +37,12 @@ const (
 	// Writable-mount operations are versioned, carry a durable operation id,
 	// and project as one SQLite transaction. Telegram body messages stay
 	// hidden; OpFileCommit is the visibility boundary for a new logical file.
-	OpFileCommit   OpType = "fcommit"
-	OpFileReplace  OpType = "freplace"
-	OpFolderCommit OpType = "dcommit"
-	OpRelocate     OpType = "relocate"
-	OpTrashTree    OpType = "trash"
+	OpFileCommit     OpType = "fcommit"
+	OpFileReplace    OpType = "freplace"
+	OpFolderCommit   OpType = "dcommit"
+	OpRelocate       OpType = "relocate"
+	OpTrashTree      OpType = "trash"
+	OpHardDeleteTree OpType = "harddel"
 )
 
 type Op struct {

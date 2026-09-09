@@ -67,6 +67,9 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 	defer func() { _ = tx.Rollback() }()
 
 	for _, q := range []string{
+		`DELETE FROM hard_delete_plan_items WHERE channel_id = ?`,
+		`DELETE FROM hard_delete_jobs WHERE channel_id = ?`,
+		`DELETE FROM hard_delete_intents WHERE channel_id = ?`,
 		`DELETE FROM dirents WHERE channel_id = ?`,
 		`DELETE FROM file_revisions WHERE channel_id = ?`,
 		`DELETE FROM projection_operations WHERE channel_id = ?`,

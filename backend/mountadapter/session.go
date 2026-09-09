@@ -243,14 +243,12 @@ func (s *Session) Delete(ctx context.Context, request mountdav.DeleteRequest) (m
 	if err := evaluateMutationConditions(request.Conditions, resource, map[string]conditionResource{request.Path: resource}); err != nil {
 		return mountdav.MutationResult{}, err
 	}
-	result, err := s.engine.Delete(ctx, mountwrite.DeleteRequest{
+	result, err := s.engine.HardDelete(ctx, mountwrite.HardDeleteRequest{
 		OperationID:      request.OperationID,
 		DriveID:          s.driveID,
 		ObjectID:         target.ObjectID,
 		ParentID:         target.ParentID,
 		ExpectedRevision: target.Revision,
-		Recursive:        target.Kind == mountfs.KindDirectory,
-		TrashRetention:   defaultTrashRetention,
 	})
 	if err != nil {
 		return mountdav.MutationResult{}, mapWriteError(err)

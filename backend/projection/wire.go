@@ -250,6 +250,16 @@ func Parse(raw string) (Op, error) {
 		if err := setPositiveInt64(&op.PurgeAfter, kv["purge"]); err != nil {
 			return Op{}, err
 		}
+	case OpHardDeleteTree:
+		if err := setWritableEnvelope(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setObjAny(&op, kv["obj"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
+			return Op{}, err
+		}
 	default:
 		return Op{}, ErrWireBadOpType
 	}
@@ -434,6 +444,12 @@ func Format(op Op) string {
 		b.WriteString(strconv.FormatInt(op.DeletedAt, 10))
 		b.WriteString("|purge=")
 		b.WriteString(strconv.FormatInt(op.PurgeAfter, 10))
+	case OpHardDeleteTree:
+		appendWritableEnvelope(&b, op)
+		b.WriteString("|obj=")
+		b.WriteString(op.Obj)
+		b.WriteString("|rev=")
+		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
 	}
 
 	return b.String()

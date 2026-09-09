@@ -74,6 +74,8 @@ func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) (er
 			applyErr = applyRelocate(tx, channelID, op)
 		case OpTrashTree:
 			applyErr = applyTrashTree(tx, channelID, op)
+		case OpHardDeleteTree:
+			applyErr = applyHardDeleteTree(tx, channelID, msgID, op)
 		}
 		if applyErr != nil {
 			return applyErr

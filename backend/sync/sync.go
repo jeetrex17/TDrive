@@ -161,39 +161,70 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 	return nil
 }
 
+// PrepareHardDeleteProjection synchronizes the channel while holding its
+// per-channel lock. Writable hard deletes use this stronger boundary because
+// local commits can be projected ahead of the contiguous sync watermark. The
+// incremental pass fills the missing range first, then rebuilds from the now
+// complete local replay log only when it encounters overlap. This avoids an
+// unnecessary full Telegram history scan for ordinary local writes.
+func (e *Engine) PrepareHardDeleteProjection(ctx context.Context, channelID int64) error {
+	lk := e.lockFor(channelID)
+	lk.Lock()
+	defer lk.Unlock()
+	return e.incrementalLocked(ctx, channelID)
+}
+
 func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
+	replayOverlap, err := e.incrementalLockedWithReplayStatus(ctx, channelID)
+	if err != nil || !replayOverlap {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// applyHistoryPlan durably marks an overlap before returning. Rebuild while
+	// the caller still owns the channel lock so no successful Incremental call
+	// exposes an out-of-order derived projection or leaves repair to a later run.
+	return projection.RebuildProjection(e.db, channelID)
+}
+
+// incrementalLockedWithReplayStatus reports whether a message fetched above
+// the contiguous watermark was already present in replay_log. That can happen
+// when a local writable commit was projected ahead of sync, in which case the
+// caller must replay the completed log before reporting successful sync.
+func (e *Engine) incrementalLockedWithReplayStatus(ctx context.Context, channelID int64) (bool, error) {
 	// A drive flagged for rebuild cannot be moved forward from its watermark:
 	// the ops below it were never read, and the ones above were applied against
 	// objects that did not exist. It needs the full scan, which owns the repair.
 	channel, err := projection.GetChannel(e.db, channelID)
 	if err != nil {
-		return fmt.Errorf("sync: read channel authority: %w", err)
+		return false, fmt.Errorf("sync: read channel authority: %w", err)
 	}
 	if channel.NeedsProjectionRebuild {
 		slog.Info("sync: rebuild pending, escalating to a full history scan", "channel_id", channelID)
-		return e.authoritativeLocked(ctx, channelID)
+		return false, e.authoritativeLocked(ctx, channelID)
 	}
 
 	peer, err := e.peers.ResolvePeer(ctx, channelID)
 	if err != nil {
-		return fmt.Errorf("sync: resolve peer: %w", err)
+		return false, fmt.Errorf("sync: resolve peer: %w", err)
 	}
 
 	watermark, err := readWatermark(e.db, channelID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	parseOpts, err := parseOptionsForChannel(e.db, channelID)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	plan, err := e.planHistory(ctx, channelID, peer, watermark)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(plan.upperBounds) == 0 {
-		return e.adoptRecentCaptionlessMedia(ctx, channelID, peer, parseOpts)
+		return false, e.adoptRecentCaptionlessMedia(ctx, channelID, peer, parseOpts)
 	}
 	return e.applyHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
 }
@@ -455,15 +486,16 @@ func (e *Engine) applyProgress(channelID int64, plan historyPlan, index, message
 	})
 }
 
-func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions) error {
+func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions) (bool, error) {
 	messagesDone := 0
+	replayOverlap := false
 	for i := len(plan.upperBounds) - 1; i >= 0; i-- {
 		if err := ctx.Err(); err != nil {
-			return err
+			return false, err
 		}
 		page, err := e.getHistory(ctx, channelID, peer, minID, plan.upperBounds[i], defaultPageSize)
 		if err != nil {
-			return fmt.Errorf("sync: get history: %w", err)
+			return false, fmt.Errorf("sync: get history: %w", err)
 		}
 		pageWatermark := minID
 		filtered := page[:0]
@@ -482,29 +514,39 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 
 		tx, err := e.db.Begin()
 		if err != nil {
-			return fmt.Errorf("sync: begin projection: %w", err)
+			return false, fmt.Errorf("sync: begin projection: %w", err)
 		}
+		pageReplayOverlap := false
 		for _, p := range parsed {
-			if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
+			alreadySeen, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader)
+			if err != nil {
 				_ = tx.Rollback()
 				slog.Error("sync: applying op failed, page rolled back", "channel_id", channelID, "msg_id", p.MsgID, "op_type", p.Op.Type, "error", err)
-				return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
+				return false, fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
 			}
+			pageReplayOverlap = pageReplayOverlap || alreadySeen
+		}
+		if pageReplayOverlap {
+			if err := markProjectionRebuildRequiredTx(tx, channelID); err != nil {
+				_ = tx.Rollback()
+				return false, err
+			}
+			replayOverlap = true
 		}
 		if pageWatermark > minID {
 			if err := writeWatermarkTx(tx, channelID, pageWatermark); err != nil {
 				_ = tx.Rollback()
-				return err
+				return false, err
 			}
 			minID = pageWatermark
 		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("sync: commit projection: %w", err)
+			return false, fmt.Errorf("sync: commit projection: %w", err)
 		}
 		messagesDone += len(page)
 		e.applyProgress(channelID, plan, i, messagesDone)
 	}
-	return nil
+	return replayOverlap, nil
 }
 
 func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions, rebuild bool) error {
@@ -620,6 +662,23 @@ func readWatermark(db *sql.DB, channelID int64) (int64, error) {
 		return 0, err
 	}
 	return v, nil
+}
+
+func markProjectionRebuildRequiredTx(tx *sql.Tx, channelID int64) error {
+	result, err := tx.Exec(`
+		UPDATE channels SET needs_projection_rebuild = 1 WHERE channel_id = ?
+	`, channelID)
+	if err != nil {
+		return fmt.Errorf("sync: mark projection rebuild required: %w", err)
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("sync: inspect projection rebuild marker: %w", err)
+	}
+	if updated != 1 {
+		return fmt.Errorf("sync: channel %d not registered", channelID)
+	}
+	return nil
 }
 
 func writeWatermark(db *sql.DB, channelID int64, msgID int64) error {

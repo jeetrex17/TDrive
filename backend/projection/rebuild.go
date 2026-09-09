@@ -28,7 +28,7 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	applied, rejected, err := rebuildProjectionTx(tx, channelID)
+	applied, rejected, err := RebuildProjectionTx(tx, channelID)
 	if err != nil {
 		slog.Error("projection: rebuild failed", "channel_id", channelID, "elapsed", time.Since(start), "error", err)
 		return err
@@ -41,6 +41,19 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 }
 
 func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, err error) {
+	// An incomplete hard-delete plan may have been captured during an
+	// out-of-order incremental pass. Recreate it from ordered replay below.
+	// Completed jobs are retained as compact local cleanup receipts and never
+	// requeue already-deleted bodies. The replayed harddel marker remains the
+	// durable namespace resurrection barrier.
+	if _, err := tx.Exec(`DELETE FROM hard_delete_plan_items WHERE channel_id = ?`, channelID); err != nil {
+		return 0, 0, fmt.Errorf("projection: rebuild clear incomplete hard-delete plans: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM hard_delete_jobs WHERE channel_id = ? AND completed = 0
+	`, channelID); err != nil {
+		return 0, 0, fmt.Errorf("projection: rebuild clear incomplete hard-delete jobs: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM files WHERE channel_id = ?`, channelID); err != nil {
 		return 0, 0, fmt.Errorf("projection: rebuild clear files: %w", err)
 	}

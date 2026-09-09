@@ -15,6 +15,7 @@ import (
 	"TDrive/backend/mountwrite"
 	"TDrive/backend/projection"
 	fileservice "TDrive/backend/services/file"
+	syncengine "TDrive/backend/sync"
 	"TDrive/backend/tgclient"
 )
 
@@ -561,6 +562,19 @@ func TestTelegramRemoteBuildsRetentionAndCASOperations(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "hard delete",
+			request: mountwrite.CommitRequest{OperationID: "hard-delete", Mutation: mountwrite.Mutation{
+				Kind: mountwrite.MutationHardDelete, DriveID: testDriveID,
+				ObjectID: "d:p", ExpectedRevision: 4,
+			}},
+			wantType: projection.OpHardDeleteTree,
+			assert: func(t *testing.T, op projection.Op) {
+				if op.ExpectedRevision != 4 || op.DeletedAt != 0 || op.PurgeAfter != 0 || op.RetainedUntil != 0 {
+					t.Fatalf("hard delete op carries retention fields: %+v", op)
+				}
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -573,6 +587,279 @@ func TestTelegramRemoteBuildsRetentionAndCASOperations(t *testing.T) {
 			}
 			test.assert(t, op)
 		})
+	}
+}
+
+func TestTelegramRemoteHardDeletePlansAndDeletesOnlyFileBodies(t *testing.T) {
+	db := newProjectionDB(t)
+	project(t, db, 20, projection.Op{
+		Type: projection.OpFilePart, UploadUUID: "hard-delete-u", PartIndex: 0, FileSize: 1,
+	})
+	project(t, db, 21, projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "put-before-hard-delete",
+		Name: "delete-me.txt", UploadUUID: "hard-delete-u", PartCount: 1,
+		FileSize: 1, PlaintextSize: 1,
+	})
+	fakeTG := tgclient.NewFake(7)
+	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: testDriveID}, "Personal")
+	remote := newTestTelegramRemote(t, db, fakeTG, time.Unix(5_000, 0))
+	barrierCalls := 0
+	remote.projectThrough = func(_ context.Context, driveID int64) error {
+		barrierCalls++
+		controls := fakeTG.SentControls()
+		control := controls[len(controls)-1]
+		op, err := projection.Parse(control.Text)
+		if err != nil {
+			return err
+		}
+		_, err = projection.ProjectFromOp(db, driveID, control.MsgID, op, 7, control.Text)
+		return err
+	}
+
+	result, err := remote.Commit(context.Background(), mountwrite.CommitRequest{
+		OperationID: "hard-delete-from-explorer",
+		CommitTime:  time.Unix(5_000, 0),
+		Mutation: mountwrite.Mutation{
+			Kind: mountwrite.MutationHardDelete, DriveID: testDriveID,
+			ObjectID: "f:21", ExpectedRevision: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Commit hard delete: %v", err)
+	}
+	if barrierCalls != 1 {
+		t.Fatalf("ordered projection barrier calls = %d, want 1", barrierCalls)
+	}
+	ids, total, done, err := remote.HardDeletePlan(context.Background(), result.OperationID, 0, 100)
+	if err != nil || total != 1 || !done || !slices.Equal(ids, []int64{20}) {
+		t.Fatalf("HardDeletePlan = %v total=%d done=%v err=%v", ids, total, done, err)
+	}
+	if err := remote.DeleteBodies(context.Background(), result.OperationID, ids); err != nil {
+		t.Fatalf("DeleteBodies: %v", err)
+	}
+	if err := remote.FinalizeHardDelete(context.Background(), result.OperationID); err != nil {
+		t.Fatalf("FinalizeHardDelete: %v", err)
+	}
+	var intents int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM hard_delete_intents
+		WHERE channel_id=? AND op_id=?
+	`, testDriveID, result.OperationID).Scan(&intents); err != nil {
+		t.Fatalf("read hard-delete intent: %v", err)
+	}
+	if intents != 0 {
+		t.Fatalf("completed hard-delete retained %d local intents", intents)
+	}
+	controls := fakeTG.SentControls()
+	if len(controls) != 1 {
+		t.Fatalf("controls = %+v", controls)
+	}
+	if batches := fakeTG.DeletedBatches(); len(batches) != 1 || !slices.Equal(batches[0], []int64{20}) {
+		t.Fatalf("deleted batches = %v", batches)
+	}
+	if controls[0].MsgID == 20 {
+		t.Fatal("test setup reused marker and body message IDs")
+	}
+}
+
+func TestTelegramRemoteRetainsHardDeleteIntentWhenSendOutcomeIsUnknown(t *testing.T) {
+	db := newProjectionDB(t)
+	project(t, db, 21, projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "uncertain-delete-file",
+		Name: "uncertain.txt", ContentMsgID: 9001, FileSize: 1,
+	})
+	fakeTG := tgclient.NewFake(7)
+	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: testDriveID}, "Personal")
+	fakeTG.FailNextSend()
+	remote := newTestTelegramRemote(t, db, fakeTG, time.Unix(5_000, 0))
+
+	_, err := remote.Commit(context.Background(), mountwrite.CommitRequest{
+		OperationID: "uncertain-hard-delete",
+		Mutation: mountwrite.Mutation{
+			Kind: mountwrite.MutationHardDelete, DriveID: testDriveID,
+			ObjectID: "f:21", ExpectedRevision: 1,
+		},
+	})
+	if !errors.Is(err, mountwrite.ErrCommitOutcomeUnknown) {
+		t.Fatalf("Commit error = %v, want ErrCommitOutcomeUnknown", err)
+	}
+	var intents int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM hard_delete_intents
+		WHERE channel_id=? AND op_id='uncertain-hard-delete'
+	`, testDriveID).Scan(&intents); err != nil {
+		t.Fatalf("read hard-delete intent: %v", err)
+	}
+	if intents != 1 {
+		t.Fatalf("hard-delete intents after uncertain send = %d, want 1", intents)
+	}
+	if _, found, err := projection.FileByID(db, testDriveID, 21); err != nil || !found {
+		t.Fatalf("uncertain send changed namespace: found=%v err=%v", found, err)
+	}
+}
+
+func TestTelegramRemoteAbandonsHardDeleteIntentAfterDefinitiveProjectionRejection(t *testing.T) {
+	db := newProjectionDB(t)
+	project(t, db, 21, projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "rejected-delete-file",
+		Name: "before.txt", ContentMsgID: 9001, FileSize: 1,
+	})
+	fakeTG := tgclient.NewFake(7)
+	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: testDriveID}, "Personal")
+	remote := newTestTelegramRemote(t, db, fakeTG, time.Unix(5_000, 0))
+	remote.projectThrough = func(_ context.Context, driveID int64) error {
+		rename := projection.Op{
+			Type: projection.OpRename, Obj: "f:21", Name: "after.txt", ExpectedRevision: 1,
+		}
+		if _, err := projection.ProjectFromOp(db, driveID, 99, rename, 7, projection.Format(rename)); err != nil {
+			return err
+		}
+		control := fakeTG.SentControls()[0]
+		op, err := projection.Parse(control.Text)
+		if err != nil {
+			return err
+		}
+		_, err = projection.ProjectFromOp(db, driveID, control.MsgID, op, 7, control.Text)
+		return err
+	}
+
+	_, err := remote.Commit(context.Background(), mountwrite.CommitRequest{
+		OperationID: "rejected-hard-delete",
+		Mutation: mountwrite.Mutation{
+			Kind: mountwrite.MutationHardDelete, DriveID: testDriveID,
+			ObjectID: "f:21", ExpectedRevision: 1,
+		},
+	})
+	if !errors.Is(err, mountwrite.ErrPreconditionFailed) {
+		t.Fatalf("Commit error = %v, want ErrPreconditionFailed", err)
+	}
+	var intents int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM hard_delete_intents
+		WHERE channel_id=? AND op_id='rejected-hard-delete'
+	`, testDriveID).Scan(&intents); err != nil {
+		t.Fatalf("read hard-delete intent: %v", err)
+	}
+	if intents != 0 {
+		t.Fatalf("rejected hard-delete retained %d intents", intents)
+	}
+}
+
+func TestTelegramRemoteReconcileHardDeleteUsesOrderingBarrier(t *testing.T) {
+	db := newProjectionDB(t)
+	root := projection.Op{
+		Type: projection.OpFolderCommit, ProtocolVersion: 1, OpID: "reconcile-root",
+		Obj: "d:root", Name: "Root",
+	}
+	part := projection.Op{Type: projection.OpFilePart, UploadUUID: "reconcile-part", PartIndex: 0, FileSize: 1}
+	file := projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "reconcile-file",
+		Parent: "d:root", Name: "preserve.txt", UploadUUID: "reconcile-part", PartCount: 1, FileSize: 1,
+	}
+	destination := projection.Op{
+		Type: projection.OpFolderCommit, ProtocolVersion: 1, OpID: "reconcile-destination",
+		Obj: "d:outside", Name: "Outside",
+	}
+	move := projection.Op{
+		Type: projection.OpRelocate, ProtocolVersion: 1, OpID: "reconcile-move",
+		Obj: "f:102", Parent: "d:outside", Name: "preserve.txt", ExpectedRevision: 1,
+	}
+	hardDelete := projection.Op{
+		Type: projection.OpHardDeleteTree, ProtocolVersion: 1, OpID: "reconcile-hard-delete",
+		Obj: "d:root", ExpectedRevision: 1,
+	}
+
+	project(t, db, 100, root)
+	project(t, db, 101, part)
+	project(t, db, 102, file)
+	// The move is locally known before its destination and is initially
+	// rejected. Recovery must synchronize/rebuild in Telegram order before
+	// it captures the hard-delete body plan.
+	if _, err := projection.ProjectFromOp(db, testDriveID, 104, move, 1, projection.Format(move)); err != nil {
+		t.Fatalf("project locally-ahead move: %v", err)
+	}
+	if err := projection.RegisterHardDeleteIntent(
+		context.Background(), db, testDriveID, hardDelete.OpID, hardDelete.Obj, hardDelete.ExpectedRevision,
+	); err != nil {
+		t.Fatalf("register hard-delete intent: %v", err)
+	}
+
+	fakeTG := tgclient.NewFake(1)
+	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: testDriveID}, "Personal")
+	fakeTG.SeedHistory(
+		tgclient.HistoryMessage{MsgID: 100, FromID: 1, Text: projection.Format(root)},
+		tgclient.HistoryMessage{MsgID: 101, FromID: 1, Text: projection.Format(part)},
+		tgclient.HistoryMessage{MsgID: 102, FromID: 1, Text: projection.Format(file)},
+		tgclient.HistoryMessage{MsgID: 103, FromID: 1, Text: projection.Format(destination)},
+		tgclient.HistoryMessage{MsgID: 104, FromID: 1, Text: projection.Format(move)},
+		tgclient.HistoryMessage{MsgID: 105, FromID: 1, Text: projection.Format(hardDelete)},
+	)
+	remote := newTestTelegramRemote(t, db, fakeTG, time.Unix(5_000, 0))
+	syncer := syncengine.NewEngine(db, fakeTG, testPeerResolver{peer: tgclient.InputPeer{ChannelID: testDriveID}})
+	remote.projectThrough = syncer.PrepareHardDeleteProjection
+
+	result, found, err := remote.Reconcile(context.Background(), hardDelete.OpID)
+	if err != nil || !found || result.ObjectID != "d:root" {
+		t.Fatalf("Reconcile = %+v, found=%v, err=%v", result, found, err)
+	}
+	preserved, found, err := projection.FileByID(db, testDriveID, 102)
+	if err != nil || !found || preserved.ParentID != "d:outside" {
+		t.Fatalf("moved-out file = %+v, found=%v, err=%v", preserved, found, err)
+	}
+	ids, total, done, err := projection.HardDeletePlanPage(
+		context.Background(), db, testDriveID, hardDelete.OpID, 0, 10,
+	)
+	if err != nil || len(ids) != 0 || total != 0 || !done {
+		t.Fatalf("hard-delete plan = (%v,%d,%t,%v), want empty safe plan", ids, total, done, err)
+	}
+}
+
+func TestTelegramRemoteHardDeleteFailsClosedWithoutOrderingBarrier(t *testing.T) {
+	db := newProjectionDB(t)
+	project(t, db, 20, projection.Op{
+		Type: projection.OpFilePart, UploadUUID: "ordered-delete-u", PartIndex: 0, FileSize: 1,
+	})
+	project(t, db, 21, projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "ordered-delete-file",
+		Name: "ordered.txt", UploadUUID: "ordered-delete-u", PartCount: 1, FileSize: 1,
+	})
+	remote := newTestTelegramRemote(t, db, tgclient.NewFake(7), time.Unix(5_000, 0))
+	op := projection.Op{
+		Type: projection.OpHardDeleteTree, ProtocolVersion: 1, OpID: "requires-ordering",
+		Obj: "f:21", ExpectedRevision: 1,
+	}
+	err := remote.projectCommitted(
+		context.Background(), testDriveID, 22, op, projection.Format(op), mountwrite.MutationHardDelete,
+	)
+	if !errors.Is(err, mountwrite.ErrUnavailable) {
+		t.Fatalf("hard-delete projection without ordering barrier error=%v, want ErrUnavailable", err)
+	}
+	if _, ok, lookupErr := projection.FileByID(db, testDriveID, 21); lookupErr != nil || !ok {
+		t.Fatalf("unsafe fallback mutated file: ok=%v err=%v", ok, lookupErr)
+	}
+}
+
+func TestTelegramRemoteRejectsDeleteBatchOutsideProjectionPlan(t *testing.T) {
+	db := newProjectionDB(t)
+	project(t, db, 20, projection.Op{Type: projection.OpFilePart, UploadUUID: "allowlist-u", PartIndex: 0, FileSize: 1})
+	project(t, db, 21, projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "allowlist-file",
+		Name: "allowlist.txt", UploadUUID: "allowlist-u", PartCount: 1, FileSize: 1,
+	})
+	project(t, db, 22, projection.Op{
+		Type: projection.OpHardDeleteTree, ProtocolVersion: 1, OpID: "allowlist-delete",
+		Obj: "f:21", ExpectedRevision: 1,
+	})
+	fakeTG := tgclient.NewFake(7)
+	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: testDriveID}, "Personal")
+	remote := newTestTelegramRemote(t, db, fakeTG, time.Unix(5_000, 0))
+
+	err := remote.DeleteBodies(context.Background(), "allowlist-delete", []int64{20, 999})
+	if !errors.Is(err, mountwrite.ErrConflict) {
+		t.Fatalf("out-of-plan delete error=%v, want ErrConflict", err)
+	}
+	if batches := fakeTG.DeletedBatches(); len(batches) != 0 {
+		t.Fatalf("out-of-plan messages reached Telegram: %v", batches)
 	}
 }
 

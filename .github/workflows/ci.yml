@@ -119,10 +119,10 @@ jobs:
       # its tests execute natively on each OS instead of only
       # cross-compiling. Keep in sync with release.yml.
       - name: Run daemon, mount, and folder-download tests
-        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountadapter ./backend/mountwrite ./backend/mountcontroller ./backend/mountos ./backend/tgclient ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Vet platform-specific daemon and CLI code
-        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
+        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountadapter ./backend/mountwrite ./backend/mountcontroller ./backend/mountos ./backend/tgclient ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Build CLI
         if: runner.os != 'Windows'
@@ -234,3 +234,14 @@ jobs:
             throw "no Windows executable found in build/bin"
           }
           ./scripts/package-mpv-windows.ps1 $app.FullName
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Force -Path $app.FullName, "build/bin/media" -DestinationPath "dist/TDrive-windows-amd64-ci.zip"
+
+      - name: Upload Windows CI package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: TDrive-windows-amd64-ci
+          path: dist/TDrive-windows-amd64-ci.zip
+          if-no-files-found: error
+          retention-days: 7

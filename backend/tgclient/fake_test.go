@@ -145,6 +145,12 @@ func TestFakeDeleteMessagesRemovesFromHistory(t *testing.T) {
 	if len(batches) != 1 || len(batches[0]) != 1 || batches[0][0] != id {
 		t.Fatalf("delete batches = %v", batches)
 	}
+	if err := f.DeleteMessages(ctx, testPeer, []int64{id, id + 999}); err != nil {
+		t.Fatalf("idempotent delete of missing messages: %v", err)
+	}
+	if batches = f.DeletedBatches(); len(batches) != 2 {
+		t.Fatalf("delete batches after idempotent retry = %v", batches)
+	}
 }
 
 func TestFakeSendFileDrainsReader(t *testing.T) {

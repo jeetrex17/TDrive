@@ -127,6 +127,16 @@ func (cache *snapshotCache) invalidateSubtree(rootID string) {
 	})
 }
 
+// invalidateAll evicts the entire snapshot generation. It is used when a
+// remote sync may have changed arbitrary directories and therefore cannot
+// provide the narrower parent IDs used by local mutations.
+func (cache *snapshotCache) invalidateAll() {
+	if cache == nil {
+		return
+	}
+	cache.loads.InvalidateAll(errSnapshotInvalidated, cache.entries.Clear)
+}
+
 func (cache *snapshotCache) len() int {
 	if cache == nil {
 		return 0

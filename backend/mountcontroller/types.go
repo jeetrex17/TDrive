@@ -192,6 +192,12 @@ type FilesystemBuilder interface {
 	Build(context.Context, int64, mountfs.Options, MountKeyLease) (*mountfs.FS, ContentLifetime, error)
 }
 
+// ProjectionChangeSource publishes successful remote projection refreshes.
+// Controllers subscribe once and invalidate only the matching mounted drive.
+type ProjectionChangeSource interface {
+	SubscribeProjectionChanges(func(channelID int64)) func()
+}
+
 // EndpointConfig is private-by-convention backend data. Endpoint must never be
 // serialized or copied into Status.
 type EndpointConfig struct {
@@ -226,12 +232,13 @@ type Endpoint interface {
 // Controller. SnapshotOptions with a zero TTL selects the mount-specific TTL,
 // while the remaining zero fields retain mountfs production defaults.
 type Dependencies struct {
-	Filesystems     FilesystemBuilder
-	Writers         WriterBuilder
-	Keys            MountKeyLeaser
-	Endpoint        Endpoint
-	Connector       mountos.Connector
-	SnapshotOptions mountfs.Options
+	Filesystems       FilesystemBuilder
+	Writers           WriterBuilder
+	Keys              MountKeyLeaser
+	Endpoint          Endpoint
+	Connector         mountos.Connector
+	ProjectionChanges ProjectionChangeSource
+	SnapshotOptions   mountfs.Options
 }
 
 // WriteStatus is a cheap, capability-free snapshot used during eject. Active

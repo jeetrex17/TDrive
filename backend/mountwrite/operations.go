@@ -341,12 +341,18 @@ func (c *Coordinator) confirmCommitted(
 	defer cancel()
 	committed, err := c.transition(maintenanceCtx, record, StateRemoteCommitted, JournalPatch{Result: &result})
 	if err != nil {
+		if record.Mutation.Kind == MutationHardDelete {
+			return MutationResult{}, operationError(record, err)
+		}
 		return c.finalizeWithoutDurableCommit(maintenanceCtx, record, result), nil
 	}
 	return c.finalizeCommitted(maintenanceCtx, committed)
 }
 
 func (c *Coordinator) finalizeCommitted(ctx context.Context, record JournalRecord) (MutationResult, error) {
+	if record.Mutation.Kind == MutationHardDelete {
+		return c.resumeHardDelete(ctx, record)
+	}
 	result, err := requireResult(record)
 	if err != nil {
 		return MutationResult{}, operationError(record, err)

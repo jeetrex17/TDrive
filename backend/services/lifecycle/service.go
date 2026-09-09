@@ -55,23 +55,25 @@ type RebuildFunc func(db *sql.DB, channelID int64) error
 type WarnFunc func(format string, args ...any)
 
 type Config struct {
-	DB       *sql.DB
-	Sync     Syncer
-	Backfill Backfiller
-	Active   *ActiveDrive
-	Events   EventSink
-	Rebuild  RebuildFunc
-	Warnf    WarnFunc
+	DB                  *sql.DB
+	Sync                Syncer
+	Backfill            Backfiller
+	Active              *ActiveDrive
+	Events              EventSink
+	Rebuild             RebuildFunc
+	Warnf               WarnFunc
+	OnProjectionChanged func(channelID int64)
 }
 
 type Service struct {
-	DB       *sql.DB
-	Sync     Syncer
-	Backfill Backfiller
-	Active   *ActiveDrive
-	Events   EventSink
-	Rebuild  RebuildFunc
-	Warnf    WarnFunc
+	DB                  *sql.DB
+	Sync                Syncer
+	Backfill            Backfiller
+	Active              *ActiveDrive
+	Events              EventSink
+	Rebuild             RebuildFunc
+	Warnf               WarnFunc
+	OnProjectionChanged func(channelID int64)
 
 	backfillMu  sync.Mutex
 	backfilling map[int64]bool
@@ -85,14 +87,15 @@ func NewService(c Config) *Service {
 		c.Rebuild = projection.RebuildProjection
 	}
 	return &Service{
-		DB:          c.DB,
-		Sync:        c.Sync,
-		Backfill:    c.Backfill,
-		Active:      c.Active,
-		Events:      c.Events,
-		Rebuild:     c.Rebuild,
-		Warnf:       c.Warnf,
-		backfilling: make(map[int64]bool),
+		DB:                  c.DB,
+		Sync:                c.Sync,
+		Backfill:            c.Backfill,
+		Active:              c.Active,
+		Events:              c.Events,
+		Rebuild:             c.Rebuild,
+		Warnf:               c.Warnf,
+		OnProjectionChanged: c.OnProjectionChanged,
+		backfilling:         make(map[int64]bool),
 	}
 }
 
@@ -119,6 +122,12 @@ func (s *Service) SyncChannel(ctx context.Context, channelID int64) error {
 	}
 	if channelID == 0 {
 		return fmt.Errorf("no active channel")
+	}
+	// Incremental sync commits one page at a time. Even if a later page fails,
+	// earlier projection changes are durable, so mounted snapshots must be
+	// invalidated before this call returns on either outcome.
+	if s.OnProjectionChanged != nil {
+		defer s.OnProjectionChanged(channelID)
 	}
 	slog.Debug("lifecycle: incremental sync starting", "channel_id", channelID)
 	err := s.Sync.Incremental(ctx, channelID)
@@ -154,6 +163,9 @@ func (s *Service) RebuildProjection(channelID int64) error {
 		return err
 	}
 	slog.Info("lifecycle: full projection rebuild complete", "channel_id", channelID)
+	if s.OnProjectionChanged != nil {
+		s.OnProjectionChanged(channelID)
+	}
 	return nil
 }
 

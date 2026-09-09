@@ -127,19 +127,27 @@ func TestDeleteChannelCascadesAllScopedTables(t *testing.T) {
 	`, sharedID); err != nil {
 		t.Fatalf("seed encryption: %v", err)
 	}
+	if _, err := db.Exec(`
+		INSERT INTO hard_delete_intents
+		  (channel_id, op_id, root_object_id, expected_revision)
+		VALUES (?, 'local-delete', 'f:2', 1)
+	`, sharedID); err != nil {
+		t.Fatalf("seed hard-delete intent: %v", err)
+	}
 
 	if err := DeleteChannel(db, sharedID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 
 	for table, query := range map[string]string{
-		"channels":          `SELECT 1 FROM channels WHERE channel_id = ?`,
-		"replay_log":        `SELECT 1 FROM replay_log WHERE channel_id = ?`,
-		"replay_log_tamper": `SELECT 1 FROM replay_log_tamper WHERE channel_id = ?`,
-		"folders":           `SELECT 1 FROM folders WHERE channel_id = ?`,
-		"files":             `SELECT 1 FROM files WHERE channel_id = ?`,
-		"backfill_progress": `SELECT 1 FROM backfill_progress WHERE channel_id = ?`,
-		"encryption":        `SELECT 1 FROM encryption WHERE channel_id = ?`,
+		"channels":            `SELECT 1 FROM channels WHERE channel_id = ?`,
+		"replay_log":          `SELECT 1 FROM replay_log WHERE channel_id = ?`,
+		"replay_log_tamper":   `SELECT 1 FROM replay_log_tamper WHERE channel_id = ?`,
+		"folders":             `SELECT 1 FROM folders WHERE channel_id = ?`,
+		"files":               `SELECT 1 FROM files WHERE channel_id = ?`,
+		"backfill_progress":   `SELECT 1 FROM backfill_progress WHERE channel_id = ?`,
+		"encryption":          `SELECT 1 FROM encryption WHERE channel_id = ?`,
+		"hard_delete_intents": `SELECT 1 FROM hard_delete_intents WHERE channel_id = ?`,
 	} {
 		var tmp int
 		err := db.QueryRow(query, sharedID).Scan(&tmp)

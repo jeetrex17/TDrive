@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 10
+const currentSchemaVersion = 12
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -163,6 +163,28 @@ func EnsureSchema(db *sql.DB) error {
 			purge_after       INTEGER NOT NULL,
 			op_id             TEXT NOT NULL,
 			PRIMARY KEY (channel_id, object_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS hard_delete_jobs (
+			channel_id      INTEGER NOT NULL,
+			op_id           TEXT NOT NULL,
+			root_object_id  TEXT NOT NULL,
+			marker_msg_id   INTEGER NOT NULL,
+			total_messages  INTEGER NOT NULL DEFAULT 0,
+			completed       INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+			PRIMARY KEY (channel_id, op_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS hard_delete_intents (
+			channel_id        INTEGER NOT NULL,
+			op_id             TEXT NOT NULL,
+			root_object_id    TEXT NOT NULL,
+			expected_revision INTEGER NOT NULL CHECK (expected_revision > 0),
+			PRIMARY KEY (channel_id, op_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS hard_delete_plan_items (
+			channel_id INTEGER NOT NULL,
+			op_id      TEXT NOT NULL,
+			msg_id     INTEGER NOT NULL,
+			PRIMARY KEY (channel_id, op_id, msg_id)
 		);`,
 	}
 
@@ -350,7 +372,6 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 			return err
 		}
 	}
-
 	if _, err := tx.Exec(`DELETE FROM schema_version`); err != nil {
 		return fmt.Errorf("projection: clear schema version: %w", err)
 	}

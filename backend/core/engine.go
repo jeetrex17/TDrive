@@ -106,6 +106,8 @@ type Engine struct {
 	thumbs     *thumbnail.Cache
 	maxUploads int
 	policySync func(context.Context, int64) error
+
+	projectionChanges projectionChangeBroker
 	// mediaEncryptionMu makes encrypted-session publication atomic with vault
 	// locking. The generation is odd while the write-side transition is active,
 	// so network-backed session setup stays outside the lock without admitting
@@ -273,6 +275,7 @@ func (e *Engine) Close() {
 		e.tg.Close()
 	}
 	if e != nil {
+		e.projectionChanges.close()
 		e.ClearEncryptionSession()
 	}
 }
@@ -605,6 +608,20 @@ func (e *Engine) EnsureEncryptionPolicy(ctx context.Context, channelID int64) er
 	return e.syncEngine.EnsureAuthoritative(ctx, channelID)
 }
 
+// PrepareHardDeleteProjection applies channel history in Telegram message
+// order under the sync engine's per-channel lock. It rebuilds derived state
+// only when locally projected commits were ahead of the sync watermark.
+func (e *Engine) PrepareHardDeleteProjection(ctx context.Context, channelID int64) error {
+	if e == nil || e.syncEngine == nil {
+		return fmt.Errorf("channel sync is unavailable")
+	}
+	// A hard-delete barrier can import unrelated remote mutations before it
+	// reaches the marker. Invalidate mounted snapshots even when a later page
+	// fails, because earlier projection pages commit independently.
+	defer e.notifyProjectionChanged(channelID)
+	return e.syncEngine.PrepareHardDeleteProjection(ctx, channelID)
+}
+
 func (e *Engine) ClearEncryptionSession() {
 	if e == nil {
 		return
@@ -766,6 +783,7 @@ func (e *Engine) newLifecycleService() *lifecycleservice.Service {
 		Warnf: func(format string, args ...any) {
 			e.warnf(format, args...)
 		},
+		OnProjectionChanged: e.notifyProjectionChanged,
 	})
 }
 

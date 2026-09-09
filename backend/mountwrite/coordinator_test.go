@@ -1030,9 +1030,11 @@ func TestNilCoordinatorIsSafelyUnavailable(t *testing.T) {
 }
 
 func TestCoordinatorBoundsAdmittedAndConcurrentOperations(t *testing.T) {
-	t.Parallel()
-
-	ctx := context.Background()
+	// This test already creates deliberate concurrency. Keep it out of the
+	// package-wide parallel pool so filesystem-backed SQLite startup latency on
+	// loaded Windows runners cannot consume the synchronization budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
 	db := openJournalDB(t, filepath.Join(t.TempDir(), "journal.db"))
 	if err := EnsureJournalSchema(ctx, db); err != nil {
 		t.Fatalf("ensure schema: %v", err)
@@ -1066,8 +1068,15 @@ func TestCoordinatorBoundsAdmittedAndConcurrentOperations(t *testing.T) {
 	}
 
 	results := make(chan error, 5)
+	var operations sync.WaitGroup
+	t.Cleanup(func() {
+		remote.releaseAll()
+		operations.Wait()
+	})
 	startMove := func(index int) {
+		operations.Add(1)
 		go func() {
+			defer operations.Done()
 			_, moveErr := coordinator.Move(ctx, MoveRequest{
 				OperationID:         fmt.Sprintf("bounded-%d", index),
 				DriveID:             42,
@@ -1081,11 +1090,11 @@ func TestCoordinatorBoundsAdmittedAndConcurrentOperations(t *testing.T) {
 	}
 	startMove(0)
 	startMove(1)
-	remote.waitForEntered(t, 2)
+	remote.waitForEntered(ctx, t, 2)
 	startMove(2)
 	startMove(3)
 	startMove(4)
-	waitForStatus(t, coordinator, Status{Accepting: true, Active: 5})
+	waitForStatus(ctx, t, coordinator, Status{Accepting: true, Active: 5})
 
 	_, err = coordinator.Move(ctx, MoveRequest{
 		OperationID:         "rejected-sixth",
@@ -1107,7 +1116,7 @@ func TestCoordinatorBoundsAdmittedAndConcurrentOperations(t *testing.T) {
 	if remote.maxConcurrent() != 2 || remote.commitCount() != 5 {
 		t.Fatalf("remote max=%d commits=%d, want max=2 commits=5", remote.maxConcurrent(), remote.commitCount())
 	}
-	waitForStatus(t, coordinator, Status{Accepting: true})
+	waitForStatus(ctx, t, coordinator, Status{Accepting: true})
 }
 
 func newTestCoordinator(t *testing.T, remote Remote, invalidator SnapshotInvalidator) (*Coordinator, Journal, *DiskStagingStore) {
@@ -1226,13 +1235,13 @@ func (r *concurrencyRemote) DiscardHidden(context.Context, string, *RemoteBody) 
 	return nil
 }
 
-func (r *concurrencyRemote) waitForEntered(t *testing.T, count int) {
+func (r *concurrencyRemote) waitForEntered(ctx context.Context, t *testing.T, count int) {
 	t.Helper()
 	for range count {
 		select {
 		case <-r.entered:
-		case <-time.After(time.Second):
-			t.Fatal("remote operation did not enter")
+		case <-ctx.Done():
+			t.Fatalf("remote operation did not enter: %v", ctx.Err())
 		}
 	}
 }
@@ -1253,16 +1262,20 @@ func (r *concurrencyRemote) commitCount() int {
 	return r.commits
 }
 
-func waitForStatus(t *testing.T, coordinator *Coordinator, want Status) {
+func waitForStatus(ctx context.Context, t *testing.T, coordinator *Coordinator, want Status) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
 		if got := coordinator.Status(); got == want {
 			return
 		}
-		time.Sleep(time.Millisecond)
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatalf("status = %#v, want %#v: %v", coordinator.Status(), want, ctx.Err())
+		}
 	}
-	t.Fatalf("status = %#v, want %#v", coordinator.Status(), want)
 }
 
 func (r *fakeRemote) UploadHidden(_ context.Context, request HiddenUpload, source io.ReadSeeker) (RemoteBody, error) {
