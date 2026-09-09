@@ -22,7 +22,7 @@ var (
 
 func isVersionedWritableOp(opType OpType) bool {
 	switch opType {
-	case OpFileCommit, OpFileReplace, OpFolderCommit, OpRelocate, OpTrashTree:
+	case OpFileCommit, OpFileReplace, OpFolderCommit, OpRelocate, OpTrashTree, OpHardDeleteTree:
 		return true
 	default:
 		return false

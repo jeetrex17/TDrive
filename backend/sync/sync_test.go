@@ -84,6 +84,109 @@ func TestIncrementalAppliesOpsAscending(t *testing.T) {
 	}
 }
 
+func TestPrepareHardDeleteProjectionRebuildsLocallyAheadStateInMessageOrder(t *testing.T) {
+	db, telegram, engine := newSyncEnv(t)
+	mkdir := projection.Op{Type: projection.OpMkdir, Obj: "d:ordered", Name: "Before"}
+	rename := projection.Op{Type: projection.OpRename, Obj: "d:ordered", Name: "After"}
+
+	// Simulate a local commit projected ahead of the contiguous sync watermark.
+	// The rename is initially a no-op because its earlier mkdir is still unseen.
+	if _, err := projection.ProjectFromOp(db, testChan, 101, rename, 7, projection.Format(rename)); err != nil {
+		t.Fatalf("project ahead rename: %v", err)
+	}
+	telegram.SeedHistory(
+		tgclient.HistoryMessage{MsgID: 100, FromID: 7, Text: projection.Format(mkdir)},
+		tgclient.HistoryMessage{MsgID: 101, FromID: 7, Text: projection.Format(rename)},
+	)
+
+	if err := engine.PrepareHardDeleteProjection(context.Background(), testChan); err != nil {
+		t.Fatalf("PrepareHardDeleteProjection: %v", err)
+	}
+	folder, found, err := projection.FolderByID(db, testChan, "d:ordered")
+	if err != nil || !found || folder.Name != "After" {
+		t.Fatalf("ordered folder = %+v found=%v err=%v", folder, found, err)
+	}
+}
+
+func TestPrepareHardDeleteProjectionReplacesStalePlanAfterOrderedRebuild(t *testing.T) {
+	db, telegram, engine := newSyncEnv(t)
+	root := projection.Op{Type: projection.OpFolderCommit, ProtocolVersion: 1, OpID: "ordered-root", Obj: "d:root", Name: "Root"}
+	outside := projection.Op{Type: projection.OpFolderCommit, ProtocolVersion: 1, OpID: "ordered-outside", Obj: "d:outside", Name: "Outside"}
+	part := projection.Op{Type: projection.OpFilePart, UploadUUID: "ordered-body", PartIndex: 0, FileSize: 1}
+	file := projection.Op{
+		Type: projection.OpFileCommit, ProtocolVersion: 1, OpID: "ordered-file",
+		Parent: "d:root", Name: "move-me.txt", UploadUUID: "ordered-body", PartCount: 1, FileSize: 1,
+	}
+	moveOut := projection.Op{
+		Type: projection.OpRelocate, ProtocolVersion: 1, OpID: "ordered-move-out",
+		Obj: "f:103", Parent: "d:outside", Name: "move-me.txt", ExpectedRevision: 1,
+	}
+	hardDelete := projection.Op{
+		Type: projection.OpHardDeleteTree, ProtocolVersion: 1, OpID: "ordered-hard-delete",
+		Obj: "d:root", ExpectedRevision: 1,
+	}
+
+	// The locally projected relocate is initially rejected because its target
+	// has not been synchronized. The first incremental pass would otherwise
+	// capture a stale hard-delete plan before repairing message order.
+	if _, err := projection.ProjectFromOp(db, testChan, 104, moveOut, 7, projection.Format(moveOut)); err != nil {
+		t.Fatalf("project ahead relocate: %v", err)
+	}
+	telegram.SeedHistory(
+		tgclient.HistoryMessage{MsgID: 100, FromID: 7, Text: projection.Format(root)},
+		tgclient.HistoryMessage{MsgID: 101, FromID: 7, Text: projection.Format(outside)},
+		tgclient.HistoryMessage{MsgID: 102, FromID: 7, Text: projection.Format(part)},
+		tgclient.HistoryMessage{MsgID: 103, FromID: 7, Text: projection.Format(file)},
+		tgclient.HistoryMessage{MsgID: 104, FromID: 7, Text: projection.Format(moveOut)},
+		tgclient.HistoryMessage{MsgID: 105, FromID: 7, Text: projection.Format(hardDelete)},
+	)
+
+	if err := engine.PrepareHardDeleteProjection(context.Background(), testChan); err != nil {
+		t.Fatalf("PrepareHardDeleteProjection: %v", err)
+	}
+	fileRow, found, err := projection.FileByID(db, testChan, 103)
+	if err != nil || !found || fileRow.ParentID != "d:outside" {
+		t.Fatalf("moved file = %+v found=%v err=%v", fileRow, found, err)
+	}
+	ids, total, done, err := projection.HardDeletePlanPage(
+		context.Background(), db, testChan, "ordered-hard-delete", 0, 10,
+	)
+	if err != nil || len(ids) != 0 || total != 0 || !done {
+		t.Fatalf("ordered hard-delete plan=(%v,%d,%t,%v), want empty", ids, total, done, err)
+	}
+}
+
+func TestPrepareHardDeleteProjectionSkipsFullRebuildForContiguousReplay(t *testing.T) {
+	db, telegram, engine := newSyncEnv(t)
+	mkdir := projection.Op{Type: projection.OpMkdir, Obj: "d:ordered", Name: "Before"}
+	rename := projection.Op{Type: projection.OpRename, Obj: "d:ordered", Name: "After"}
+	sendOp(t, telegram, mkdir)
+	if err := engine.Incremental(context.Background(), testChan); err != nil {
+		t.Fatalf("initial incremental: %v", err)
+	}
+
+	// This row is intentionally outside replay_log. It makes an unnecessary
+	// full rebuild observable without coupling production code to a test hook.
+	if _, err := db.Exec(`
+		INSERT INTO folders (channel_id, id, name, parent_id, tombstoned, revision)
+		VALUES (?, 'd:sentinel', 'Sentinel', '', 0, 1)
+	`, testChan); err != nil {
+		t.Fatalf("insert sentinel projection row: %v", err)
+	}
+
+	sendOp(t, telegram, rename)
+	if err := engine.PrepareHardDeleteProjection(context.Background(), testChan); err != nil {
+		t.Fatalf("PrepareHardDeleteProjection: %v", err)
+	}
+	if !projection.FolderExists(db, testChan, "d:sentinel") {
+		t.Fatal("contiguous hard-delete preparation performed an unnecessary full rebuild")
+	}
+	folder, found, err := projection.FolderByID(db, testChan, "d:ordered")
+	if err != nil || !found || folder.Name != "After" {
+		t.Fatalf("ordered folder = %+v found=%v err=%v", folder, found, err)
+	}
+}
+
 func TestIncrementalRetriesReadFloodWait(t *testing.T) {
 	db, tg, eng := newSyncEnv(t)
 	idA := sendOp(t, tg, projection.Op{Type: projection.OpMkdir, Obj: "d:a", Parent: projection.RootParent, Name: "A"})

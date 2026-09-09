@@ -605,6 +605,16 @@ func (e *Engine) EnsureEncryptionPolicy(ctx context.Context, channelID int64) er
 	return e.syncEngine.EnsureAuthoritative(ctx, channelID)
 }
 
+// PrepareHardDeleteProjection applies channel history in Telegram message
+// order under the sync engine's per-channel lock. It rebuilds derived state
+// only when locally projected commits were ahead of the sync watermark.
+func (e *Engine) PrepareHardDeleteProjection(ctx context.Context, channelID int64) error {
+	if e == nil || e.syncEngine == nil {
+		return fmt.Errorf("channel sync is unavailable")
+	}
+	return e.syncEngine.PrepareHardDeleteProjection(ctx, channelID)
+}
+
 func (e *Engine) ClearEncryptionSession() {
 	if e == nil {
 		return

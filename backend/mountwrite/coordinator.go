@@ -241,6 +241,9 @@ func (c *Coordinator) existingResult(ctx context.Context, record JournalRecord) 
 		}
 		result, err := c.finalizeCommitted(ctx, record)
 		return result, true, err
+	case StateDeletePlanPending, StateDeletingBodies, StateDeleteFinalizing:
+		result, err := c.resumeHardDelete(ctx, record)
+		return result, true, err
 	default:
 		return MutationResult{}, false, nil
 	}

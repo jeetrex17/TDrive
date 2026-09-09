@@ -324,18 +324,45 @@ func TestUnlockedEncryptedSessionEncryptsPutsAndAllowsEncryptedMetadataMutations
 	})
 }
 
-func TestSessionDeleteUsesThirtyDayTrashAndRecursiveFolders(t *testing.T) {
-	resolver := newFakeResolver(
-		Node{ObjectID: "d:docs", Name: "Docs", Kind: mountfs.KindDirectory, Revision: 9},
-	)
-	engine := &fakeEngine{deleteResult: mountwrite.MutationResult{ObjectID: "d:docs", Revision: 10}}
-	session := newTestSession(resolver, engine)
-
-	if _, err := session.Delete(context.Background(), mountdav.DeleteRequest{OperationID: "op-delete", Path: "/Docs"}); err != nil {
-		t.Fatalf("Delete: %v", err)
+func TestSessionDeleteUsesHardDeleteForFilesAndRecursiveFolders(t *testing.T) {
+	tests := []struct {
+		name string
+		node Node
+	}{
+		{
+			name: "file",
+			node: Node{ObjectID: "f:41", ParentID: "d:docs", Name: "notes.txt",
+				Kind: mountfs.KindFile, Revision: 7},
+		},
+		{
+			name: "folder",
+			node: Node{ObjectID: "d:docs", Name: "Docs", Kind: mountfs.KindDirectory,
+				Revision: 9},
+		},
 	}
-	if !engine.deleteRequest.Recursive || engine.deleteRequest.TrashRetention != defaultTrashRetention {
-		t.Fatalf("Delete request = %+v", engine.deleteRequest)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolver := newFakeResolver(test.node)
+			engine := &fakeEngine{hardDeleteResult: mountwrite.MutationResult{
+				ObjectID: test.node.ObjectID, Revision: test.node.Revision + 1,
+			}}
+			session := newTestSession(resolver, engine)
+
+			if _, err := session.Delete(context.Background(), mountdav.DeleteRequest{
+				OperationID: "op-hard-delete", Path: "/" + test.node.Name,
+			}); err != nil {
+				t.Fatalf("Delete: %v", err)
+			}
+			request := engine.hardDeleteRequest
+			if request.OperationID != "op-hard-delete" || request.DriveID != testDriveID ||
+				request.ObjectID != test.node.ObjectID || request.ParentID != test.node.ParentID ||
+				request.ExpectedRevision != test.node.Revision {
+				t.Fatalf("HardDelete request = %+v", request)
+			}
+			if engine.deleteRequest != (mountwrite.DeleteRequest{}) {
+				t.Fatalf("soft Delete unexpectedly called with %+v", engine.deleteRequest)
+			}
+		})
 	}
 }
 
@@ -515,22 +542,25 @@ func (r *fakeResolver) Resolve(_ context.Context, path string) (Node, bool, erro
 }
 
 type fakeEngine struct {
-	putRequest    mountwrite.PutRequest
-	mkdirRequest  mountwrite.MkdirRequest
-	moveRequest   mountwrite.MoveRequest
-	deleteRequest mountwrite.DeleteRequest
-	putResult     mountwrite.MutationResult
-	mkdirResult   mountwrite.MutationResult
-	moveResult    mountwrite.MutationResult
-	deleteResult  mountwrite.MutationResult
-	putErr        error
-	mkdirErr      error
-	moveErr       error
-	deleteErr     error
-	callCount     int
-	drainCalls    int
-	closeCalls    int
-	recoverCalls  int
+	putRequest        mountwrite.PutRequest
+	mkdirRequest      mountwrite.MkdirRequest
+	moveRequest       mountwrite.MoveRequest
+	deleteRequest     mountwrite.DeleteRequest
+	hardDeleteRequest mountwrite.HardDeleteRequest
+	putResult         mountwrite.MutationResult
+	mkdirResult       mountwrite.MutationResult
+	moveResult        mountwrite.MutationResult
+	deleteResult      mountwrite.MutationResult
+	hardDeleteResult  mountwrite.MutationResult
+	putErr            error
+	mkdirErr          error
+	moveErr           error
+	deleteErr         error
+	hardDeleteErr     error
+	callCount         int
+	drainCalls        int
+	closeCalls        int
+	recoverCalls      int
 }
 
 func (e *fakeEngine) Put(_ context.Context, request mountwrite.PutRequest, body io.Reader) (mountwrite.MutationResult, error) {
@@ -563,6 +593,12 @@ func (e *fakeEngine) Delete(_ context.Context, request mountwrite.DeleteRequest)
 	e.callCount++
 	e.deleteRequest = request
 	return e.deleteResult, e.deleteErr
+}
+
+func (e *fakeEngine) HardDelete(_ context.Context, request mountwrite.HardDeleteRequest) (mountwrite.MutationResult, error) {
+	e.callCount++
+	e.hardDeleteRequest = request
+	return e.hardDeleteResult, e.hardDeleteErr
 }
 
 func (e *fakeEngine) Recover(context.Context) (mountwrite.RecoveryReport, error) {

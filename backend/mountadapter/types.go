@@ -36,6 +36,7 @@ type Engine interface {
 	Mkdir(context.Context, mountwrite.MkdirRequest) (mountwrite.MutationResult, error)
 	Move(context.Context, mountwrite.MoveRequest) (mountwrite.MutationResult, error)
 	Delete(context.Context, mountwrite.DeleteRequest) (mountwrite.MutationResult, error)
+	HardDelete(context.Context, mountwrite.HardDeleteRequest) (mountwrite.MutationResult, error)
 	Recover(context.Context) (mountwrite.RecoveryReport, error)
 	Status() mountwrite.Status
 	Drain(context.Context) error

@@ -31,6 +31,47 @@ type recordingWriteCoordinator struct {
 	err          error
 }
 
+type blockingDeleteCoordinator struct {
+	*recordingWriteCoordinator
+	started chan struct{}
+	release chan struct{}
+}
+
+func (writer *blockingDeleteCoordinator) Delete(_ context.Context, request DeleteRequest) (MutationResult, error) {
+	writer.mu.Lock()
+	writer.deleteRequest = request
+	writer.mu.Unlock()
+	close(writer.started)
+	<-writer.release
+	return writer.deleteResult, writer.err
+}
+
+type statusRecordingResponseWriter struct {
+	header http.Header
+	status chan int
+	once   sync.Once
+}
+
+func newStatusRecordingResponseWriter() *statusRecordingResponseWriter {
+	return &statusRecordingResponseWriter{
+		header: make(http.Header),
+		status: make(chan int, 1),
+	}
+}
+
+func (writer *statusRecordingResponseWriter) Header() http.Header {
+	return writer.header
+}
+
+func (writer *statusRecordingResponseWriter) WriteHeader(status int) {
+	writer.once.Do(func() { writer.status <- status })
+}
+
+func (writer *statusRecordingResponseWriter) Write(body []byte) (int, error) {
+	writer.WriteHeader(http.StatusOK)
+	return len(body), nil
+}
+
 func (writer *recordingWriteCoordinator) Put(ctx context.Context, request PutRequest, body io.Reader) (MutationResult, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
@@ -451,6 +492,121 @@ func TestWindowsMiniRedirectorDeleteIgnoresDepthForFiles(t *testing.T) {
 
 			if recorder.Code != http.StatusNoContent || writer.deleteRequest.Path != "/Docs/note.txt" {
 				t.Fatalf("DELETE Depth %q = %d, request %+v, body=%q", depth, recorder.Code, writer.deleteRequest, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestFileManagerDeleteRequestsShareProtocolPath(t *testing.T) {
+	tests := []struct {
+		name      string
+		userAgent string
+		depth     string
+	}{
+		{name: "macOS Finder WebDAVFS", userAgent: "WebDAVFS/3.0.0 (03008000) Darwin/24.0.0", depth: "infinity"},
+		{name: "Windows MiniRedir", userAgent: "Microsoft-WebDAV-MiniRedir/10.0.26100", depth: "0"},
+		{name: "Linux GVfs", userAgent: "gvfs/1.54.1", depth: ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			writer := &recordingWriteCoordinator{}
+			handler := newWritableTestHandler(t, writer)
+			request := trustedRequest(http.MethodDelete, testCapability+"/Docs/note.txt", nil)
+			request.Header.Set("User-Agent", test.userAgent)
+			if test.depth != "" {
+				request.Header.Set("Depth", test.depth)
+			}
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusNoContent {
+				t.Fatalf("DELETE status = %d, body=%q, want 204", recorder.Code, recorder.Body.String())
+			}
+			if writer.deleteRequest.Path != "/Docs/note.txt" || writer.deleteRequest.OperationID == "" {
+				t.Fatalf("DELETE request = %+v, want shared canonical path and operation ID", writer.deleteRequest)
+			}
+		})
+	}
+}
+
+func TestDeleteWaitsForCoordinatorBeforeWritingNoContent(t *testing.T) {
+	writer := &blockingDeleteCoordinator{
+		recordingWriteCoordinator: &recordingWriteCoordinator{},
+		started:                   make(chan struct{}),
+		release:                   make(chan struct{}),
+	}
+	handler := newWritableTestHandler(t, writer)
+	response := newStatusRecordingResponseWriter()
+	request := trustedRequest(http.MethodDelete, testCapability+"/Docs/note.txt", nil)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-writer.release:
+		default:
+			close(writer.release)
+		}
+	})
+
+	go func() {
+		defer close(done)
+		handler.ServeHTTP(response, request)
+	}()
+
+	select {
+	case <-writer.started:
+	case <-time.After(time.Second):
+		t.Fatal("DELETE did not reach coordinator")
+	}
+	select {
+	case status := <-response.status:
+		t.Fatalf("DELETE wrote status %d before coordinator completed", status)
+	default:
+	}
+
+	close(writer.release)
+	select {
+	case status := <-response.status:
+		if status != http.StatusNoContent {
+			t.Fatalf("DELETE status = %d, want 204", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DELETE did not write a response after coordinator completed")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("DELETE handler did not return after coordinator completed")
+	}
+}
+
+func TestDeletePendingCleanupReturnsRetryableUnavailable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{name: "service unavailable", err: ErrWriteUnavailable},
+		{name: "durable cleanup pending", err: errors.Join(errors.New("hard-delete cleanup pending"), ErrWriteUnavailable)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			writer := &recordingWriteCoordinator{err: test.err}
+			handler := newWritableTestHandler(t, writer)
+			request := trustedRequest(http.MethodDelete, testCapability+"/Docs/note.txt", nil)
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusServiceUnavailable {
+				t.Fatalf("DELETE status = %d, body=%q, want 503", recorder.Code, recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Retry-After"); got != serverBusyRetrySeconds {
+				t.Fatalf("DELETE Retry-After = %q, want %q", got, serverBusyRetrySeconds)
+			}
+			if strings.Contains(recorder.Body.String(), "hard-delete") {
+				t.Fatalf("DELETE leaked internal cleanup state: %q", recorder.Body.String())
 			}
 		})
 	}

@@ -23,6 +23,9 @@ const (
 	MutationMkdir  MutationKind = "mkdir"
 	MutationMove   MutationKind = "move"
 	MutationDelete MutationKind = "delete"
+	// MutationHardDelete permanently removes backing content after a durable
+	// control marker has hidden the object from the projected namespace.
+	MutationHardDelete MutationKind = "hard_delete"
 
 	EncryptionNone EncryptionVersion = 0
 	EncryptionTDE1 EncryptionVersion = 1
@@ -42,6 +45,9 @@ const (
 	StateRemoteCommitted   JournalState = "remote_committed"
 	StateProjectionPending JournalState = "projection_pending"
 	StateCleanupPending    JournalState = "cleanup_pending"
+	StateDeletePlanPending JournalState = "delete_plan_pending"
+	StateDeletingBodies    JournalState = "deleting_bodies"
+	StateDeleteFinalizing  JournalState = "delete_finalizing"
 	StateDone              JournalState = "done"
 	StateAborted           JournalState = "aborted"
 )
@@ -254,6 +260,35 @@ func (r DeleteRequest) mutation() Mutation {
 	}
 }
 
+// HardDeleteRequest is intentionally retention-free. It is used by mounted
+// filesystem deletes that must remove Telegram content before reporting
+// success, while DeleteRequest preserves the existing soft-delete contract.
+type HardDeleteRequest struct {
+	OperationID      string
+	DriveID          int64
+	ObjectID         string
+	ParentID         string
+	ExpectedRevision uint64
+}
+
+func (r HardDeleteRequest) Validate() error {
+	if !validOperationID(r.OperationID) || r.DriveID <= 0 || r.ObjectID == "" || r.ExpectedRevision == 0 {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func (r HardDeleteRequest) mutation() Mutation {
+	return Mutation{
+		Kind:                MutationHardDelete,
+		DriveID:             r.DriveID,
+		ObjectID:            r.ObjectID,
+		DestinationParentID: r.ParentID,
+		ExpectedRevision:    r.ExpectedRevision,
+		Recursive:           true,
+	}
+}
+
 type StagedObject struct {
 	Key           string `json:"key"`
 	Path          string `json:"path"`
@@ -422,6 +457,22 @@ type ReceiptReconciler interface {
 	ReconcileReceipt(ctx context.Context, request CommitRequest, commitRef string) (MutationResult, bool, error)
 }
 
+// HardDeleteRemote exposes the projection-owned deletion plan and the
+// Telegram body deletion primitive. Plans must be stable, sorted by message
+// ID, and pageable after the supplied exclusive cursor. DeleteBodies and
+// FinalizeHardDelete must be idempotent because recovery can retry a completed
+// remote call whose local journal checkpoint did not commit.
+type HardDeleteRemote interface {
+	HardDeletePlan(
+		ctx context.Context,
+		operationID string,
+		afterMsgID int64,
+		limit int,
+	) (messageIDs []int64, total int64, done bool, err error)
+	DeleteBodies(ctx context.Context, operationID string, messageIDs []int64) error
+	FinalizeHardDelete(ctx context.Context, operationID string) error
+}
+
 // SnapshotInvalidator invalidates exactly the parents and objects supplied
 // after the corresponding remote commit is confirmed.
 type SnapshotInvalidator interface {
@@ -457,11 +508,14 @@ var allowedTransitions = map[JournalState][]JournalState{
 	StateUploaded:          {StateCommitting, StateCleanupPending, StateAborted},
 	StateCommitting:        {StateRemoteCommitted, StateReconciling, StateCleanupPending, StateAborted},
 	StateReconciling:       {StateRemoteCommitted, StateCommitting, StateCleanupPending, StateAborted},
-	StateRemoteCommitted:   {StateProjectionPending, StateCleanupPending, StateDone},
+	StateRemoteCommitted:   {StateProjectionPending, StateCleanupPending, StateDeletePlanPending, StateDone},
 	StateProjectionPending: {StateCleanupPending, StateDone},
 	// A cleanup-pending self-transition durably refines a receipt-unknown
 	// record with exact recovered body IDs before local staging is removed.
-	StateCleanupPending: {StateCleanupPending, StateDone, StateAborted},
+	StateCleanupPending:    {StateCleanupPending, StateDone, StateAborted},
+	StateDeletePlanPending: {StateDeletingBodies},
+	StateDeletingBodies:    {StateDeleteFinalizing},
+	StateDeleteFinalizing:  {StateDone},
 }
 
 func validName(name string) bool {
@@ -512,7 +566,7 @@ func sortedUnique(values []string, keepEmpty bool) []string {
 }
 
 func validateMutation(m Mutation) error {
-	if m.DriveID == 0 {
+	if m.DriveID <= 0 {
 		return ErrInvalidRequest
 	}
 	if !validEncryptionVersion(m.EncryptionVersion) || (m.Kind != MutationPut && m.EncryptionVersion != EncryptionNone) {
@@ -529,6 +583,10 @@ func validateMutation(m Mutation) error {
 		}
 	case MutationDelete:
 		if m.ObjectID == "" || m.TrashRetention < 0 {
+			return ErrInvalidRequest
+		}
+	case MutationHardDelete:
+		if m.ObjectID == "" || m.ExpectedRevision == 0 || !m.Recursive || m.TrashRetention != 0 {
 			return ErrInvalidRequest
 		}
 	default:

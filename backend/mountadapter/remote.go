@@ -24,6 +24,7 @@ const (
 	defaultRevisionRetention = 30 * 24 * time.Hour
 	defaultHistoryPageSize   = 100
 	defaultHistoryPages      = 3
+	hardDeleteBatchSize      = 100
 )
 
 type HiddenStore interface {
@@ -44,6 +45,10 @@ type TelegramRemoteConfig struct {
 	HistoryPageSize int
 	HistoryPages    int
 	FloodWaitRetry  tgclient.FloodWaitRetryPolicy
+	// ProjectThrough synchronizes channel history through the just-sent marker
+	// under the sync engine's per-channel lock. Production wiring supplies it
+	// so hard-delete subtree capture observes earlier writes from other clients.
+	ProjectThrough func(context.Context, int64) error
 }
 
 type TelegramRemote struct {
@@ -57,6 +62,7 @@ type TelegramRemote struct {
 	historyPageSize int
 	historyPages    int
 	floodWaitRetry  tgclient.FloodWaitRetryPolicy
+	projectThrough  func(context.Context, int64) error
 }
 
 func NewTelegramRemote(config TelegramRemoteConfig) (*TelegramRemote, error) {
@@ -92,6 +98,7 @@ func NewTelegramRemote(config TelegramRemoteConfig) (*TelegramRemote, error) {
 		historyPageSize: config.HistoryPageSize,
 		historyPages:    config.HistoryPages,
 		floodWaitRetry:  config.FloodWaitRetry,
+		projectThrough:  config.ProjectThrough,
 	}, nil
 }
 
@@ -224,7 +231,7 @@ func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.Com
 			return uncertain, mountwrite.ErrCommitOutcomeUnknown
 		}
 	}
-	if err := remote.project(ctx, request.Mutation.DriveID, msgID, op, header); err != nil {
+	if err := remote.projectCommitted(ctx, request.Mutation.DriveID, msgID, op, header, request.Mutation.Kind); err != nil {
 		slog.Warn("mountadapter: Commit failed to apply projection synchronously", "operation_id", request.OperationID, "msg_id", msgID, "error", err)
 		return uncertain, mountwrite.ErrCommitOutcomeUnknown
 	}
@@ -252,7 +259,80 @@ func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.Com
 	return result, nil
 }
 
+func (remote *TelegramRemote) projectCommitted(
+	ctx context.Context,
+	driveID, msgID int64,
+	op projection.Op,
+	header string,
+	kind mountwrite.MutationKind,
+) error {
+	if kind == mountwrite.MutationHardDelete {
+		if remote.projectThrough == nil {
+			return mountwrite.ErrUnavailable
+		}
+		return remote.projectThrough(ctx, driveID)
+	}
+	return remote.project(ctx, driveID, msgID, op, header)
+}
+
 var _ mountwrite.ReceiptReconciler = (*TelegramRemote)(nil)
+var _ mountwrite.HardDeleteRemote = (*TelegramRemote)(nil)
+
+// HardDeletePlan pages the immutable body plan captured by the projection
+// transaction that applied the hard-delete marker. Telegram deletion must not
+// begin until the caller has durably copied and sealed the complete plan.
+func (remote *TelegramRemote) HardDeletePlan(
+	ctx context.Context,
+	operationID string,
+	afterMsgID int64,
+	limit int,
+) ([]int64, int64, bool, error) {
+	if remote == nil || ctx == nil || strings.TrimSpace(operationID) == "" || afterMsgID < 0 || limit <= 0 {
+		return nil, 0, false, mountwrite.ErrInvalidRequest
+	}
+	return projection.HardDeletePlanPage(ctx, remote.db, remote.driveID, operationID, afterMsgID, limit)
+}
+
+// DeleteBodies physically removes one coordinator-sized batch. The retry
+// policy is shared with visibility writes so transient and flood-wait errors
+// remain bounded and cancellation-aware.
+func (remote *TelegramRemote) DeleteBodies(ctx context.Context, operationID string, msgIDs []int64) error {
+	if remote == nil || ctx == nil || strings.TrimSpace(operationID) == "" || len(msgIDs) == 0 || len(msgIDs) > hardDeleteBatchSize {
+		return mountwrite.ErrInvalidRequest
+	}
+	seen := make(map[int64]struct{}, len(msgIDs))
+	for _, msgID := range msgIDs {
+		if msgID <= 0 || msgID > math.MaxInt32 {
+			return mountwrite.ErrInvalidRequest
+		}
+		if _, duplicate := seen[msgID]; duplicate {
+			return mountwrite.ErrInvalidRequest
+		}
+		seen[msgID] = struct{}{}
+	}
+	if err := projection.ValidateHardDeletePlanItems(ctx, remote.db, remote.driveID, operationID, msgIDs); err != nil {
+		if errors.Is(err, projection.ErrHardDeletePlanMismatch) || errors.Is(err, projection.ErrHardDeletePlanNotFound) {
+			return errors.Join(mountwrite.ErrConflict, err)
+		}
+		return err
+	}
+	peer, err := remote.peers.ResolvePeer(ctx, remote.driveID)
+	if err != nil {
+		return err
+	}
+	return remote.floodWaitRetry.Do(ctx, func() error {
+		return remote.telegram.DeleteMessages(ctx, peer, msgIDs)
+	})
+}
+
+// FinalizeHardDelete compacts projection-owned cleanup metadata only after the
+// journal confirms that every planned Telegram body was deleted.
+func (remote *TelegramRemote) FinalizeHardDelete(ctx context.Context, operationID string) error {
+	if remote == nil || ctx == nil || strings.TrimSpace(operationID) == "" {
+		return mountwrite.ErrInvalidRequest
+	}
+	return projection.CompleteHardDeletePlan(ctx, remote.db, remote.driveID, operationID)
+}
 
 func (remote *TelegramRemote) Reconcile(ctx context.Context, operationID string) (mountwrite.MutationResult, bool, error) {
 	if remote == nil {
@@ -367,7 +447,7 @@ func (remote *TelegramRemote) ReconcileReceipt(
 	if err != nil || !projectionOperationMatchesCommit(request, op) {
 		return mountwrite.MutationResult{}, false, mountwrite.ErrConflict
 	}
-	if err := remote.projectHistory(ctx, remote.driveID, message.MsgID, message.FromID, op, projection.Format(op)); err != nil {
+	if err := remote.projectCommitted(ctx, remote.driveID, message.MsgID, op, projection.Format(op), request.Mutation.Kind); err != nil {
 		return mountwrite.MutationResult{}, false, err
 	}
 	result, found, err := remote.reconcileProjected(request.OperationID)
@@ -557,6 +637,10 @@ func buildProjectionOperation(request mountwrite.CommitRequest, now time.Time) (
 		op.ExpectedRevision = int64(request.Mutation.ExpectedRevision)
 		op.DeletedAt = now.Unix()
 		op.PurgeAfter = now.Add(request.Mutation.TrashRetention).Unix()
+	case mountwrite.MutationHardDelete:
+		op.Type = projection.OpHardDeleteTree
+		op.Obj = request.Mutation.ObjectID
+		op.ExpectedRevision = int64(request.Mutation.ExpectedRevision)
 	default:
 		return projection.Op{}, mountwrite.ErrInvalidRequest
 	}
@@ -593,7 +677,7 @@ func (remote *TelegramRemote) objectIDFromProjectionOperation(operation projecti
 		return projection.FileIDPrefix + strconv.FormatInt(operation.MsgID, 10), nil
 	case projection.OpFolderCommit:
 		return deterministicFolderID(operation.OpID), nil
-	case projection.OpFileReplace, projection.OpRelocate, projection.OpTrashTree:
+	case projection.OpFileReplace, projection.OpRelocate, projection.OpTrashTree, projection.OpHardDeleteTree:
 		op, found, err := remote.replayOp(operation.ChannelID, operation.MsgID)
 		if err != nil {
 			return "", err

@@ -37,7 +37,9 @@ func (c *Coordinator) Recover(ctx context.Context) (RecoveryReport, error) {
 			// blocking the whole mount.
 			// Validation/corruption errors and every commit-state failure remain
 			// fatal so uncertain namespace changes still fail closed.
-			if state == StateCleanupPending && errors.Is(err, ErrUnavailable) {
+			hardDeletePending := listed.Mutation.Kind == MutationHardDelete &&
+				(state == StateRemoteCommitted || isHardDeleteState(state))
+			if (state == StateCleanupPending || hardDeletePending) && errors.Is(err, ErrUnavailable) {
 				slog.Warn("mountwrite: recovery cleanup temporarily unavailable, will retry later", "operation_id", listed.OperationID, "error", err)
 				report.Pending++
 				continue
@@ -67,14 +69,22 @@ func (c *Coordinator) recoverOne(ctx context.Context, operationID string) (Journ
 		return "", newOperationError(operationID, MutationPut, err)
 	}
 	defer finish()
-	release, err := c.locks.Lock(ctx, "operation:"+operationID)
-	if err != nil {
-		return "", newOperationError(operationID, MutationPut, err)
-	}
-	defer release()
 	record, found, err := c.journal.Get(ctx, operationID)
 	if err != nil {
 		return "", newOperationError(operationID, MutationPut, err)
+	}
+	if !found {
+		return StateAborted, nil
+	}
+	keys := append(record.Mutation.lockKeys(), "operation:"+operationID)
+	release, err := c.locks.Lock(ctx, keys...)
+	if err != nil {
+		return "", newOperationError(operationID, record.Mutation.Kind, err)
+	}
+	defer release()
+	record, found, err = c.journal.Get(ctx, operationID)
+	if err != nil {
+		return "", newOperationError(operationID, record.Mutation.Kind, err)
 	}
 	if !found {
 		return StateAborted, nil
@@ -108,6 +118,9 @@ func (c *Coordinator) resumeRecovery(ctx context.Context, record JournalRecord) 
 		return err
 	case StateCleanupPending:
 		return c.recoverCleanup(ctx, record)
+	case StateDeletePlanPending, StateDeletingBodies, StateDeleteFinalizing:
+		_, err := c.resumeHardDelete(ctx, record)
+		return err
 	default:
 		return operationError(record, ErrInvalidTransition)
 	}

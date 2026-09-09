@@ -119,10 +119,10 @@ jobs:
       # its tests execute natively on each OS instead of only
       # cross-compiling. Keep in sync with release.yml.
       - name: Run daemon, mount, and folder-download tests
-        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
+        run: go test -count=1 ./cmd/tdrive ./backend/daemon ./backend/mountfs ./backend/mountcontent ./backend/mountdav ./backend/mountadapter ./backend/mountwrite ./backend/mountcontroller ./backend/mountos ./backend/tgclient ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Vet platform-specific daemon and CLI code
-        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountcontroller ./backend/mountos ./backend/updater ./backend/services/file ./backend/projection
+        run: go vet ./cmd/tdrive ./backend/daemon ./backend/mountadapter ./backend/mountwrite ./backend/mountcontroller ./backend/mountos ./backend/tgclient ./backend/updater ./backend/services/file ./backend/projection
 
       - name: Build CLI
         if: runner.os != 'Windows'

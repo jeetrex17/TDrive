@@ -44,6 +44,28 @@ type Journal interface {
 	ListRecoverable(ctx context.Context) ([]JournalRecord, error)
 }
 
+// HardDeletePlanStatus is a compact summary of a normalized hard-delete plan.
+// Cursor is the greatest durably imported message ID and supports bounded
+// projection paging without loading the entire plan into memory.
+type HardDeletePlanStatus struct {
+	ExpectedCount  int64
+	PlannedCount   int64
+	CompletedCount int64
+	Cursor         int64
+	Sealed         bool
+}
+
+// HardDeleteJournal is an optional journal capability used only by permanent
+// deletes. Keeping it separate preserves compatibility for journals that only
+// support the original writable-mount operations.
+type HardDeleteJournal interface {
+	AppendHardDeletePlan(ctx context.Context, operationID string, messageIDs []int64, total int64, done bool) error
+	NextHardDeleteBatch(ctx context.Context, operationID string, limit int) ([]int64, error)
+	MarkHardDeleteBatchDone(ctx context.Context, operationID string, messageIDs []int64) error
+	HardDeletePlanStatus(ctx context.Context, operationID string) (HardDeletePlanStatus, bool, error)
+	CompactHardDeletePlan(ctx context.Context, operationID string) error
+}
+
 type SQLiteJournal struct {
 	db *sql.DB
 }
@@ -69,6 +91,19 @@ func EnsureJournalSchema(ctx context.Context, db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_mount_write_journal_recovery
 			ON mount_write_journal(state, updated_at_ns, operation_id)`,
+		`CREATE TABLE IF NOT EXISTS mount_write_hard_delete_plans (
+			operation_id TEXT PRIMARY KEY NOT NULL,
+			expected_count INTEGER NOT NULL,
+			sealed INTEGER NOT NULL DEFAULT 0 CHECK (sealed IN (0, 1))
+		)`,
+		`CREATE TABLE IF NOT EXISTS mount_write_hard_delete_messages (
+			operation_id TEXT NOT NULL,
+			message_id INTEGER NOT NULL CHECK (message_id > 0),
+			completed INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+			PRIMARY KEY (operation_id, message_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mount_write_hard_delete_pending
+			ON mount_write_hard_delete_messages(operation_id, completed, message_id)`,
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -398,7 +433,8 @@ func knownState(state JournalState) bool {
 	switch state {
 	case StateReceiving, StateStaged, StateUploading, StateUploaded, StateCommitting,
 		StateReconciling, StateRemoteCommitted, StateProjectionPending,
-		StateCleanupPending, StateDone, StateAborted:
+		StateCleanupPending, StateDeletePlanPending, StateDeletingBodies,
+		StateDeleteFinalizing, StateDone, StateAborted:
 		return true
 	default:
 		return false
