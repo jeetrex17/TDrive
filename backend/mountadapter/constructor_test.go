@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -34,8 +35,13 @@ func TestNewBuildsAndOwnsDurableCoordinator(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { _ = session.Close(context.Background()) })
-	if info, err := os.Stat(root); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
 		t.Fatalf("staging root info = %+v, err=%v", info, err)
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(root); err != nil || info.Mode().Perm() != 0o700 {
+			t.Fatalf("staging root permissions = %+v, err=%v", info, err)
+		}
 	}
 	var journalTable string
 	if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='mount_write_journal'`).Scan(&journalTable); err != nil {
