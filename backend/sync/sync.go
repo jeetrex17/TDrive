@@ -163,42 +163,35 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 
 // PrepareHardDeleteProjection synchronizes the channel while holding its
 // per-channel lock. Writable hard deletes use this stronger boundary because
-// local commits can be projected ahead of the contiguous sync watermark. A
-// full replay is performed only when that overlap is detected, keeping the
-// normal path incremental while preserving Telegram message ordering.
+// local commits can be projected ahead of the contiguous sync watermark. The
+// incremental pass fills the missing range first, then rebuilds from the now
+// complete local replay log only when it encounters overlap. This avoids an
+// unnecessary full Telegram history scan for ordinary local writes.
 func (e *Engine) PrepareHardDeleteProjection(ctx context.Context, channelID int64) error {
 	lk := e.lockFor(channelID)
 	lk.Lock()
 	defer lk.Unlock()
-	if _, err := flagReplayAheadOfWatermark(e.db, channelID); err != nil {
-		return err
-	}
+	return e.incrementalLocked(ctx, channelID)
+}
+
+func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
 	replayOverlap, err := e.incrementalLockedWithReplayStatus(ctx, channelID)
-	if err != nil {
+	if err != nil || !replayOverlap {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	replayAhead, err := flagReplayAheadOfWatermark(e.db, channelID)
-	if err != nil {
-		return err
-	}
-	if !replayOverlap && !replayAhead {
-		return nil
-	}
+	// applyHistoryPlan durably marks an overlap before returning. Rebuild while
+	// the caller still owns the channel lock so no successful Incremental call
+	// exposes an out-of-order derived projection or leaves repair to a later run.
 	return projection.RebuildProjection(e.db, channelID)
-}
-
-func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
-	_, err := e.incrementalLockedWithReplayStatus(ctx, channelID)
-	return err
 }
 
 // incrementalLockedWithReplayStatus reports whether a message fetched above
 // the contiguous watermark was already present in replay_log. That can happen
-// when a local writable commit was projected ahead of sync, in which case a
-// replay is required before hard-delete subtree ownership can be trusted.
+// when a local writable commit was projected ahead of sync, in which case the
+// caller must replay the completed log before reporting successful sync.
 func (e *Engine) incrementalLockedWithReplayStatus(ctx context.Context, channelID int64) (bool, error) {
 	// A drive flagged for rebuild cannot be moved forward from its watermark:
 	// the ops below it were never read, and the ones above were applied against
@@ -669,26 +662,6 @@ func readWatermark(db *sql.DB, channelID int64) (int64, error) {
 		return 0, err
 	}
 	return v, nil
-}
-
-func flagReplayAheadOfWatermark(db *sql.DB, channelID int64) (bool, error) {
-	result, err := db.Exec(`
-		UPDATE channels
-		SET needs_projection_rebuild = 1
-		WHERE channel_id = ? AND EXISTS (
-			SELECT 1 FROM replay_log replay
-			WHERE replay.channel_id = channels.channel_id
-			  AND replay.msg_id > channels.last_synced_msg
-		)
-	`, channelID)
-	if err != nil {
-		return false, fmt.Errorf("sync: flag replay ahead of watermark: %w", err)
-	}
-	updated, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("sync: inspect replay-ahead update: %w", err)
-	}
-	return updated > 0, nil
 }
 
 func markProjectionRebuildRequiredTx(tx *sql.Tx, channelID int64) error {

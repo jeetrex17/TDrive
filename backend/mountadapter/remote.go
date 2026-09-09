@@ -209,6 +209,19 @@ func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.Com
 	if err != nil {
 		return mountwrite.MutationResult{}, err
 	}
+	if request.Mutation.Kind == mountwrite.MutationHardDelete {
+		if err := projection.RegisterHardDeleteIntent(
+			ctx,
+			remote.db,
+			request.Mutation.DriveID,
+			request.OperationID,
+			request.Mutation.ObjectID,
+			int64(request.Mutation.ExpectedRevision),
+		); err != nil {
+			slog.Warn("mountadapter: Commit failed to register hard-delete intent", "operation_id", request.OperationID, "error", err)
+			return mountwrite.MutationResult{}, errors.Join(mapRejectedProjectionError(err.Error()), err)
+		}
+	}
 	header := projection.Format(op)
 	var msgID int64
 	err = remote.floodWaitRetry.Do(ctx, func() error {
@@ -245,6 +258,11 @@ func (remote *TelegramRemote) Commit(ctx context.Context, request mountwrite.Com
 	}
 	if operation.Outcome == projection.OperationRejected {
 		slog.Warn("mountadapter: Commit rejected by projection", "operation_id", request.OperationID, "msg_id", msgID, "reason", operation.Error)
+		if request.Mutation.Kind == mountwrite.MutationHardDelete {
+			if abandonErr := projection.AbandonHardDeleteIntent(ctx, remote.db, request.Mutation.DriveID, request.OperationID); abandonErr != nil {
+				return mountwrite.MutationResult{}, errors.Join(mapRejectedProjectionError(operation.Error), abandonErr)
+			}
+		}
 		return mountwrite.MutationResult{}, mapRejectedProjectionError(operation.Error)
 	}
 	if operation.Outcome != projection.OperationApplied {
@@ -378,8 +396,23 @@ func (remote *TelegramRemote) Reconcile(ctx context.Context, operationID string)
 	if !candidateFound {
 		return mountwrite.MutationResult{}, false, nil
 	}
-	if err := remote.projectHistory(ctx, remote.driveID, candidate.MsgID, candidate.FromID, candidateOp, projection.Format(candidateOp)); err != nil {
-		return mountwrite.MutationResult{}, false, err
+	var projectErr error
+	if candidateOp.Type == projection.OpHardDeleteTree {
+		projectErr = remote.projectCommitted(
+			ctx,
+			remote.driveID,
+			candidate.MsgID,
+			candidateOp,
+			projection.Format(candidateOp),
+			mountwrite.MutationHardDelete,
+		)
+	} else {
+		projectErr = remote.projectHistory(
+			ctx, remote.driveID, candidate.MsgID, candidate.FromID, candidateOp, projection.Format(candidateOp),
+		)
+	}
+	if projectErr != nil {
+		return mountwrite.MutationResult{}, false, projectErr
 	}
 	result, found, err := remote.reconcileProjected(operationID)
 	return result, found, err

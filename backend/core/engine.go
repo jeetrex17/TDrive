@@ -106,6 +106,8 @@ type Engine struct {
 	thumbs     *thumbnail.Cache
 	maxUploads int
 	policySync func(context.Context, int64) error
+
+	projectionChanges projectionChangeBroker
 	// mediaEncryptionMu makes encrypted-session publication atomic with vault
 	// locking. The generation is odd while the write-side transition is active,
 	// so network-backed session setup stays outside the lock without admitting
@@ -273,6 +275,7 @@ func (e *Engine) Close() {
 		e.tg.Close()
 	}
 	if e != nil {
+		e.projectionChanges.close()
 		e.ClearEncryptionSession()
 	}
 }
@@ -612,6 +615,10 @@ func (e *Engine) PrepareHardDeleteProjection(ctx context.Context, channelID int6
 	if e == nil || e.syncEngine == nil {
 		return fmt.Errorf("channel sync is unavailable")
 	}
+	// A hard-delete barrier can import unrelated remote mutations before it
+	// reaches the marker. Invalidate mounted snapshots even when a later page
+	// fails, because earlier projection pages commit independently.
+	defer e.notifyProjectionChanged(channelID)
 	return e.syncEngine.PrepareHardDeleteProjection(ctx, channelID)
 }
 
@@ -776,6 +783,7 @@ func (e *Engine) newLifecycleService() *lifecycleservice.Service {
 		Warnf: func(format string, args ...any) {
 			e.warnf(format, args...)
 		},
+		OnProjectionChanged: e.notifyProjectionChanged,
 	})
 }
 

@@ -43,8 +43,9 @@ func RebuildProjection(db *sql.DB, channelID int64) error {
 func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, err error) {
 	// An incomplete hard-delete plan may have been captured during an
 	// out-of-order incremental pass. Recreate it from ordered replay below.
-	// Completed jobs are retained as compact resurrection barriers and never
-	// requeue already-deleted bodies.
+	// Completed jobs are retained as compact local cleanup receipts and never
+	// requeue already-deleted bodies. The replayed harddel marker remains the
+	// durable namespace resurrection barrier.
 	if _, err := tx.Exec(`DELETE FROM hard_delete_plan_items WHERE channel_id = ?`, channelID); err != nil {
 		return 0, 0, fmt.Errorf("projection: rebuild clear incomplete hard-delete plans: %w", err)
 	}

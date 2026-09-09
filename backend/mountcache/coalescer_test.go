@@ -250,6 +250,55 @@ func TestCoalescerInvalidationWalksDependentKeysOnce(t *testing.T) {
 	}
 }
 
+func TestCoalescerInvalidateAllEvictsValuesAndDetachesEveryLoad(t *testing.T) {
+	errInvalidated := errors.New("all invalidated")
+	cache := NewLRU[string, string](LRUConfig[string]{Capacity: 4})
+	cache.Put("cached-a", "stale-a")
+	cache.Put("cached-b", "stale-b")
+	loads := NewCoalescer[string, string](0)
+
+	started := make(chan string, 2)
+	results := make(chan loadResult[string], 2)
+	for _, key := range []string{"loading-a", "loading-b"} {
+		key := key
+		go func() {
+			value, err := loads.Load(
+				context.Background(),
+				context.Background(),
+				key,
+				nil,
+				func(ctx context.Context) (string, error) {
+					started <- key
+					<-ctx.Done()
+					return "stale", nil
+				},
+				func(value string) { cache.Put(key, value) },
+			)
+			results <- loadResult[string]{value: value, err: err}
+		}()
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for active loads")
+		}
+	}
+
+	loads.InvalidateAll(errInvalidated, cache.Clear)
+	for range 2 {
+		if result := waitResult(t, results); !errors.Is(result.err, errInvalidated) {
+			t.Fatalf("invalidated load error = %v, want sentinel", result.err)
+		}
+	}
+	if got := cache.Len(); got != 0 {
+		t.Fatalf("cache length after InvalidateAll = %d, want 0", got)
+	}
+	if got := loads.Len(); got != 0 {
+		t.Fatalf("active loads after InvalidateAll = %d, want 0", got)
+	}
+}
+
 type loadResult[V any] struct {
 	value V
 	err   error

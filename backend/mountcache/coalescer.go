@@ -252,6 +252,31 @@ func (loads *Coalescer[K, V]) Invalidate(
 	}
 }
 
+// InvalidateAll atomically detaches every current load and evicts all cached
+// values. Future loads remain allowed. The eviction callback runs while the
+// load-group lock is held, preventing an older completion from publishing a
+// value between load cancellation and cache eviction.
+func (loads *Coalescer[K, V]) InvalidateAll(terminalErr error, evict func()) {
+	if terminalErr == nil {
+		terminalErr = context.Canceled
+	}
+	if loads == nil {
+		if evict != nil {
+			evict()
+		}
+		return
+	}
+
+	loads.mu.Lock()
+	for key := range loads.loads {
+		loads.invalidateLocked(key, terminalErr)
+	}
+	if evict != nil {
+		evict()
+	}
+	loads.mu.Unlock()
+}
+
 // Close permanently rejects new loads and cancels all active loads.
 func (loads *Coalescer[K, V]) Close(terminalErr error) {
 	if loads == nil {

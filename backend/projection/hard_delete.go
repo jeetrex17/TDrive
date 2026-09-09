@@ -22,9 +22,10 @@ type hardDeleteScope struct {
 	revision   int64
 }
 
-// applyHardDeleteTree captures the complete Telegram body deletion plan and
-// hides the namespace subtree in the same SQLite transaction. The Telegram
-// control message itself stays in replay_log and is never selected as a body.
+// applyHardDeleteTree validates the complete Telegram body set and hides the
+// namespace subtree in one SQLite transaction. Locally originated mutations
+// also capture an immutable cleanup plan; remote replay only compacts local
+// pointers. The hard-delete control message stays in replay_log.
 func applyHardDeleteTree(tx *sql.Tx, channelID, markerMsgID int64, op Op) error {
 	if markerMsgID <= 0 || op.ExpectedRevision <= 0 {
 		return fmt.Errorf("%w: hard delete requires marker message and expected revision", ErrBadOp)
@@ -36,26 +37,32 @@ func applyHardDeleteTree(tx *sql.Tx, channelID, markerMsgID int64, op Op) error 
 	if err != nil {
 		return err
 	}
-	if err := validateHardDeleteContent(tx, scope); err != nil {
-		return err
-	}
 
-	completed, exists, err := hardDeleteJobStateTx(tx, channelID, op.OpID, op.Obj)
+	_, exists, err := hardDeleteJobStateTx(tx, channelID, op.OpID, op.Obj)
 	if err != nil {
 		return err
 	}
-	if !exists {
+	localIntent, err := hardDeleteIntentMatchesTx(tx, channelID, op)
+	if err != nil {
+		return err
+	}
+	if !exists && localIntent {
+		// Only the originating installation will physically delete Telegram
+		// bodies, so only it needs a complete and exclusively owned allowlist.
+		// A secondary installation may legitimately have an incomplete local
+		// multipart index; it must still apply the namespace tombstone.
+		if err := validateHardDeleteContent(tx, scope); err != nil {
+			return err
+		}
 		if err := createHardDeletePlanTx(tx, scope, markerMsgID, op.OpID); err != nil {
 			return err
 		}
 	}
-	if completed {
-		// A rebuild replays body-part ops from the retained local replay log.
-		// Cleanup has already succeeded remotely, so remove those reconstructed
-		// local pointers without recreating a deletion plan.
-		if err := removeHardDeletedPartPointersTx(tx, scope); err != nil {
-			return err
-		}
+	// The normalized plan is self-contained once captured. Remove multipart
+	// pointers on every client so remote replay cannot retain stale local body
+	// state. An origin with pending cleanup still reads IDs from its plan.
+	if err := removeHardDeletedPartPointersTx(tx, scope); err != nil {
+		return err
 	}
 	if err := clearHardDeleteRetentionTx(tx, scope); err != nil {
 		return err
@@ -395,7 +402,7 @@ func removeHardDeletedPartPointersTx(tx *sql.Tx, scope hardDeleteScope) error {
 	`)
 	args = append(args, scope.channelID, scope.channelID)
 	if _, err := tx.Exec(query, args...); err != nil {
-		return fmt.Errorf("projection: clear completed hard-delete part pointers: %w", err)
+		return fmt.Errorf("projection: clear hard-delete part pointers: %w", err)
 	}
 	return nil
 }
@@ -535,8 +542,8 @@ func HardDeletePlanPage(ctx context.Context, db *sql.DB, channelID int64, opID s
 	return ids[:limit], total, false, nil
 }
 
-// CompleteHardDeletePlan atomically removes local multipart pointers, compacts
-// the normalized plan, and retains a small completed job marker for rebuilds.
+// CompleteHardDeletePlan atomically removes any remaining multipart pointers,
+// compacts the plan and local intent, and retains a small completion receipt.
 func CompleteHardDeletePlan(ctx context.Context, db *sql.DB, channelID int64, opID string) (err error) {
 	if err := validateHardDeletePlanRequest(ctx, db, channelID, opID); err != nil {
 		return err
@@ -579,6 +586,11 @@ func CompleteHardDeletePlan(ctx context.Context, db *sql.DB, channelID int64, op
 		`, channelID, opID); err != nil {
 			return fmt.Errorf("projection: complete hard-delete plan: %w", err)
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM hard_delete_intents WHERE channel_id=? AND op_id=?
+	`, channelID, opID); err != nil {
+		return fmt.Errorf("projection: compact hard-delete intent: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("projection: commit hard-delete completion: %w", err)

@@ -176,10 +176,14 @@ func TestHardDeleteRejectsKnownControlAndOversizedBodyReferences(t *testing.T) {
 				Type: OpFileCommit, ProtocolVersion: 1, OpID: "file-with-unsafe-reference",
 				Name: "unsafe.bin", ContentMsgID: test.bodyMsgID,
 			})
-			err := runOp(t, db, testChan, 102, Op{
+			op := Op{
 				Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "reject-unsafe-reference",
 				Obj: "f:101", ExpectedRevision: 1,
-			})
+			}
+			if err := RegisterHardDeleteIntent(context.Background(), db, testChan, op.OpID, op.Obj, op.ExpectedRevision); err != nil {
+				t.Fatalf("register hard-delete intent: %v", err)
+			}
+			err := runOp(t, db, testChan, 102, op)
 			if !errors.Is(err, ErrBadOp) {
 				t.Fatalf("unsafe hard delete error=%v, want ErrBadOp", err)
 			}
@@ -219,10 +223,14 @@ func TestHardDeleteRejectsIncompleteHistoricalMultipart(t *testing.T) {
 	if _, err := db.Exec(`DELETE FROM file_parts WHERE channel_id=? AND msg_id=11`, testChan); err != nil {
 		t.Fatal(err)
 	}
-	err := runOp(t, db, testChan, 102, Op{
+	op := Op{
 		Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "delete-damaged",
 		Obj: "f:101", ExpectedRevision: 1,
-	})
+	}
+	if err := RegisterHardDeleteIntent(context.Background(), db, testChan, op.OpID, op.Obj, op.ExpectedRevision); err != nil {
+		t.Fatalf("register hard-delete intent: %v", err)
+	}
+	err := runOp(t, db, testChan, 102, op)
 	if !errors.Is(err, ErrContentIncomplete) {
 		t.Fatalf("hard delete incomplete multipart error=%v, want ErrContentIncomplete", err)
 	}
@@ -289,10 +297,14 @@ func TestHardDeleteRejectsBodiesReferencedOutsideSubtree(t *testing.T) {
 			})
 			test.prepare(t, db)
 
-			err := runOp(t, db, testChan, 200, Op{
+			op := Op{
 				Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "delete-shared-body",
 				Obj: "d:inside", ExpectedRevision: 1,
-			})
+			}
+			if err := RegisterHardDeleteIntent(context.Background(), db, testChan, op.OpID, op.Obj, op.ExpectedRevision); err != nil {
+				t.Fatalf("register hard-delete intent: %v", err)
+			}
+			err := runOp(t, db, testChan, 200, op)
 			if !errors.Is(err, ErrContentAlreadyCommitted) {
 				t.Fatalf("hard delete shared body error=%v, want ErrContentAlreadyCommitted", err)
 			}
@@ -363,6 +375,9 @@ func TestHardDeleteCompletedJobSurvivesRebuildWithoutRequeue(t *testing.T) {
 		Type: OpFileCommit, ProtocolVersion: 1, OpID: "rebuild-file",
 		Name: "rebuild.bin", UploadUUID: "rebuild-parts", PartCount: 2, FileSize: 10,
 	})
+	if err := RegisterHardDeleteIntent(context.Background(), db, testChan, "rebuild-delete", "f:101", 1); err != nil {
+		t.Fatalf("register intent: %v", err)
+	}
 	project(102, Op{
 		Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "rebuild-delete",
 		Obj: "f:101", ExpectedRevision: 1,
@@ -385,6 +400,163 @@ func TestHardDeleteCompletedJobSurvivesRebuildWithoutRequeue(t *testing.T) {
 	if parts != 0 {
 		t.Fatalf("rebuild restored %d completed body pointers", parts)
 	}
+}
+
+func TestRemoteHardDeleteReplayDoesNotCreateLocalCleanupWork(t *testing.T) {
+	db := newTestDB(t)
+	project := func(msgID int64, op Op) {
+		t.Helper()
+		if _, err := ProjectFromOp(db, testChan, msgID, op, 0, Format(op)); err != nil {
+			t.Fatalf("project msg %d: %v", msgID, err)
+		}
+	}
+	project(10, Op{Type: OpFilePart, UploadUUID: "remote-parts", PartIndex: 0, FileSize: 4})
+	project(101, Op{
+		Type: OpFileCommit, ProtocolVersion: 1, OpID: "remote-file",
+		Name: "remote.bin", UploadUUID: "remote-parts", PartCount: 1, FileSize: 4,
+	})
+	project(102, Op{
+		Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "remote-delete",
+		Obj: "f:101", ExpectedRevision: 1,
+	})
+
+	assertNoFileParts(t, db, "remote-parts")
+	assertNoHardDeleteCleanupWork(t, db, "remote-delete")
+	if _, ok, err := FileByID(db, testChan, 101); err != nil || ok {
+		t.Fatalf("remote marker did not hide file: ok=%v err=%v", ok, err)
+	}
+	if err := RebuildProjection(db, testChan); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	assertNoFileParts(t, db, "remote-parts")
+	assertNoHardDeleteCleanupWork(t, db, "remote-delete")
+	if _, ok, err := FileByID(db, testChan, 101); err != nil || ok {
+		t.Fatalf("rebuilt remote marker did not hide file: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRemoteHardDeleteReplayTombstonesWithIncompleteMultipartIndex(t *testing.T) {
+	db := newTestDB(t)
+	project := func(msgID int64, op Op) {
+		t.Helper()
+		if _, err := ProjectFromOp(db, testChan, msgID, op, 0, Format(op)); err != nil {
+			t.Fatalf("project msg %d: %v", msgID, err)
+		}
+	}
+	project(10, Op{Type: OpFilePart, UploadUUID: "partial-remote", PartIndex: 0, FileSize: 4})
+	project(11, Op{Type: OpFilePart, UploadUUID: "partial-remote", PartIndex: 1, FileSize: 6})
+	project(101, Op{
+		Type: OpFileCommit, ProtocolVersion: 1, OpID: "partial-remote-file",
+		Name: "partial.bin", UploadUUID: "partial-remote", PartCount: 2, FileSize: 10,
+	})
+	if _, err := db.Exec(`DELETE FROM file_parts WHERE channel_id=? AND msg_id=?`, testChan, 11); err != nil {
+		t.Fatal(err)
+	}
+
+	project(102, Op{
+		Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "partial-remote-delete",
+		Obj: "f:101", ExpectedRevision: 1,
+	})
+
+	assertNoFileParts(t, db, "partial-remote")
+	assertNoHardDeleteCleanupWork(t, db, "partial-remote-delete")
+	if _, ok, err := FileByID(db, testChan, 101); err != nil || ok {
+		t.Fatalf("remote marker did not hide file: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestHardDeleteIntentSurvivesReconciliationAndRebuildUntilCompletion(t *testing.T) {
+	db := newTestDB(t)
+	project := func(msgID int64, op Op) {
+		t.Helper()
+		if _, err := ProjectFromOp(db, testChan, msgID, op, 0, Format(op)); err != nil {
+			t.Fatalf("project msg %d: %v", msgID, err)
+		}
+	}
+	project(10, Op{Type: OpFilePart, UploadUUID: "owned-parts", PartIndex: 0, FileSize: 4})
+	project(101, Op{
+		Type: OpFileCommit, ProtocolVersion: 1, OpID: "owned-file",
+		Name: "owned.bin", UploadUUID: "owned-parts", PartCount: 1, FileSize: 4,
+	})
+	ctx := context.Background()
+	if err := RegisterHardDeleteIntent(ctx, db, testChan, "owned-delete", "f:101", 1); err != nil {
+		t.Fatalf("register intent: %v", err)
+	}
+	project(102, Op{
+		Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "owned-delete",
+		Obj: "f:101", ExpectedRevision: 1,
+	})
+
+	// Receipt reconciliation may call registration again after projection has
+	// already hidden the target. Exact retry must remain idempotent.
+	if err := RegisterHardDeleteIntent(ctx, db, testChan, "owned-delete", "f:101", 1); err != nil {
+		t.Fatalf("re-register projected intent: %v", err)
+	}
+	assertHardDeletePlan(t, db, "owned-delete", []int64{10}, 1, true)
+	assertNoFileParts(t, db, "owned-parts")
+
+	if err := RebuildProjection(db, testChan); err != nil {
+		t.Fatalf("rebuild pending delete: %v", err)
+	}
+	assertHardDeletePlan(t, db, "owned-delete", []int64{10}, 1, true)
+	assertNoFileParts(t, db, "owned-parts")
+
+	if err := CompleteHardDeletePlan(ctx, db, testChan, "owned-delete"); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	assertHardDeleteIntentCount(t, db, "owned-delete", 0)
+	assertHardDeletePlan(t, db, "owned-delete", nil, 1, true)
+}
+
+func TestAbandonHardDeleteIntentPreventsOrphanCleanupWork(t *testing.T) {
+	db := newTestDB(t)
+	mustOp(t, db, 101, Op{
+		Type: OpFileCommit, ProtocolVersion: 1, OpID: "abandoned-file",
+		Name: "abandoned.bin", ContentMsgID: 9001,
+	})
+	ctx := context.Background()
+	if err := RegisterHardDeleteIntent(ctx, db, testChan, "abandoned-delete", "f:101", 1); err != nil {
+		t.Fatalf("register intent: %v", err)
+	}
+	if err := AbandonHardDeleteIntent(ctx, db, testChan, "abandoned-delete"); err != nil {
+		t.Fatalf("abandon intent: %v", err)
+	}
+	if err := AbandonHardDeleteIntent(ctx, db, testChan, "abandoned-delete"); err != nil {
+		t.Fatalf("repeat abandon: %v", err)
+	}
+	assertHardDeleteIntentCount(t, db, "abandoned-delete", 0)
+
+	// If a marker unexpectedly arrives after a caller definitively abandoned
+	// its send, replay still hides the object but cannot enqueue local cleanup.
+	if _, err := ProjectFromOp(db, testChan, 102, Op{
+		Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "abandoned-delete",
+		Obj: "f:101", ExpectedRevision: 1,
+	}, 0, ""); err != nil {
+		t.Fatalf("project late marker: %v", err)
+	}
+	assertNoHardDeleteCleanupWork(t, db, "abandoned-delete")
+}
+
+func TestCannotAbandonAppliedHardDeleteIntent(t *testing.T) {
+	db := newTestDB(t)
+	mustOp(t, db, 101, Op{
+		Type: OpFileCommit, ProtocolVersion: 1, OpID: "applied-file",
+		Name: "applied.bin", ContentMsgID: 9001,
+	})
+	ctx := context.Background()
+	if err := RegisterHardDeleteIntent(ctx, db, testChan, "applied-delete", "f:101", 1); err != nil {
+		t.Fatalf("register intent: %v", err)
+	}
+	if _, err := ProjectFromOp(db, testChan, 102, Op{
+		Type: OpHardDeleteTree, ProtocolVersion: 1, OpID: "applied-delete",
+		Obj: "f:101", ExpectedRevision: 1,
+	}, 0, ""); err != nil {
+		t.Fatalf("project marker: %v", err)
+	}
+	if err := AbandonHardDeleteIntent(ctx, db, testChan, "applied-delete"); !errors.Is(err, ErrHardDeleteIntentApplied) {
+		t.Fatalf("abandon applied intent error=%v, want ErrHardDeleteIntentApplied", err)
+	}
+	assertHardDeleteIntentCount(t, db, "applied-delete", 1)
 }
 
 func TestHardDeletePlanAPIBoundaries(t *testing.T) {
@@ -428,5 +600,47 @@ func assertHardDeletePlan(t *testing.T, db *sql.DB, opID string, wantIDs []int64
 	}
 	if !reflect.DeepEqual(ids, wantIDs) || total != wantTotal || done != wantDone {
 		t.Fatalf("plan %q=(%v,%d,%t), want (%v,%d,%t)", opID, ids, total, done, wantIDs, wantTotal, wantDone)
+	}
+}
+
+func assertNoHardDeleteCleanupWork(t *testing.T, db *sql.DB, opID string) {
+	t.Helper()
+	if _, _, _, err := HardDeletePlanPage(context.Background(), db, testChan, opID, 0, 1000); !errors.Is(err, ErrHardDeletePlanNotFound) {
+		t.Fatalf("HardDeletePlanPage(%q) error=%v, want ErrHardDeletePlanNotFound", opID, err)
+	}
+	for _, table := range []string{"hard_delete_jobs", "hard_delete_plan_items"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE channel_id=? AND op_id=?`, testChan, opID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("remote marker retained %d rows in %s", count, table)
+		}
+	}
+}
+
+func assertNoFileParts(t *testing.T, db *sql.DB, uploadUUID string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM file_parts WHERE channel_id=? AND upload_uuid=?
+	`, testChan, uploadUUID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("hard delete retained %d local part pointers for %q", count, uploadUUID)
+	}
+}
+
+func assertHardDeleteIntentCount(t *testing.T, db *sql.DB, opID string, want int) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`
+		SELECT COUNT(*) FROM hard_delete_intents WHERE channel_id=? AND op_id=?
+	`, testChan, opID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != want {
+		t.Fatalf("hard-delete intent count=%d, want %d", count, want)
 	}
 }

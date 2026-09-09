@@ -165,6 +165,15 @@ func (fs *FS) InvalidateSubtree(rootID string) {
 	fs.cache.invalidateSubtree(rootID)
 }
 
+// InvalidateAll evicts every cached directory snapshot for this drive. Use it
+// when an external projection refresh may have changed arbitrary paths.
+func (fs *FS) InvalidateAll() {
+	if fs == nil || fs.cache == nil {
+		return
+	}
+	fs.cache.invalidateAll()
+}
+
 func (fs *FS) ready(ctx context.Context) error {
 	if fs == nil || fs.source == nil || fs.opener == nil || fs.channelID <= 0 {
 		return ErrInvalidConfiguration

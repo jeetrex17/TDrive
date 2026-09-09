@@ -221,9 +221,16 @@ func TestSyncChannelSucceedsWhenReconcileFails(t *testing.T) {
 	active := NewActiveDrive()
 	active.Set(99)
 	syncer := &fakeSyncer{reconcileErr: fmt.Errorf("boom")}
+	notified := 0
 	svc := NewService(Config{
 		Active: active,
 		Sync:   syncer,
+		OnProjectionChanged: func(channelID int64) {
+			if channelID != 99 {
+				t.Errorf("completion channel = %d, want 99", channelID)
+			}
+			notified++
+		},
 	})
 
 	// Reconcile failing is best-effort: it must not fail the overall sync.
@@ -233,6 +240,65 @@ func TestSyncChannelSucceedsWhenReconcileFails(t *testing.T) {
 	if syncer.reconcileCalled != 1 {
 		t.Fatalf("reconcile called=%d, want 1", syncer.reconcileCalled)
 	}
+	if notified != 1 {
+		t.Fatalf("completion notifications = %d, want 1", notified)
+	}
+}
+
+func TestSyncChannelNotifiesAfterProjectionWorkCompletes(t *testing.T) {
+	t.Parallel()
+
+	order := make([]string, 0, 3)
+	syncer := &orderedSyncer{order: &order}
+	svc := NewService(Config{
+		Active: NewActiveDrive(),
+		Sync:   syncer,
+		OnProjectionChanged: func(channelID int64) {
+			order = append(order, fmt.Sprintf("notify:%d", channelID))
+		},
+	})
+
+	if err := svc.SyncChannel(context.Background(), 123); err != nil {
+		t.Fatalf("SyncChannel() error = %v", err)
+	}
+	want := []string{"incremental", "reconcile", "notify:123"}
+	if fmt.Sprint(order) != fmt.Sprint(want) {
+		t.Fatalf("completion order = %v, want %v", order, want)
+	}
+}
+
+func TestSyncChannelInvalidatesProjectionWhenIncrementalFails(t *testing.T) {
+	t.Parallel()
+
+	notified := false
+	svc := NewService(Config{
+		Active: NewActiveDrive(),
+		Sync:   &fakeSyncer{err: fmt.Errorf("boom")},
+		OnProjectionChanged: func(int64) {
+			notified = true
+		},
+	})
+
+	if err := svc.SyncChannel(context.Background(), 123); err == nil {
+		t.Fatal("SyncChannel() error = nil, want incremental failure")
+	}
+	if !notified {
+		t.Fatal("projection callback did not run after a possibly partial incremental sync")
+	}
+}
+
+type orderedSyncer struct {
+	order *[]string
+}
+
+func (syncer *orderedSyncer) Incremental(context.Context, int64) error {
+	*syncer.order = append(*syncer.order, "incremental")
+	return nil
+}
+
+func (syncer *orderedSyncer) ReconcileDeletions(context.Context, int64) (int, error) {
+	*syncer.order = append(*syncer.order, "reconcile")
+	return 0, nil
 }
 
 func TestRebuildProjectionDelegates(t *testing.T) {
@@ -240,6 +306,7 @@ func TestRebuildProjectionDelegates(t *testing.T) {
 	active := NewActiveDrive()
 	active.Set(55)
 	var rebuilt int64
+	var notified int64
 	svc := NewService(Config{
 		DB:     db,
 		Active: active,
@@ -250,6 +317,9 @@ func TestRebuildProjectionDelegates(t *testing.T) {
 			rebuilt = channelID
 			return nil
 		},
+		OnProjectionChanged: func(channelID int64) {
+			notified = channelID
+		},
 	})
 
 	if err := svc.RebuildProjection(0); err != nil {
@@ -257,5 +327,8 @@ func TestRebuildProjectionDelegates(t *testing.T) {
 	}
 	if rebuilt != 55 {
 		t.Fatalf("rebuilt channel = %d, want 55", rebuilt)
+	}
+	if notified != 55 {
+		t.Fatalf("projection notification channel = %d, want 55", notified)
 	}
 }

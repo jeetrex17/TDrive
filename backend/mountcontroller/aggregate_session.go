@@ -81,6 +81,7 @@ func (controller *Controller) prepareSession(
 			FS:       filesystem,
 		})
 	}
+	controller.setFilesystems(active, filesystems)
 
 	if len(active.drives) == 1 {
 		filesystem := filesystems[active.drives[0].ID]
@@ -104,6 +105,12 @@ func (controller *Controller) prepareSession(
 		}
 	}
 	return aggregate, nil
+}
+
+func (controller *Controller) setFilesystems(active *session, filesystems map[int64]*mountfs.FS) {
+	controller.mu.Lock()
+	active.filesystemsByDrive = filesystems
+	controller.mu.Unlock()
 }
 
 func (controller *Controller) prepareWriter(

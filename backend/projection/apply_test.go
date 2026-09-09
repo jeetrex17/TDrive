@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -433,6 +434,11 @@ func TestApplyRejectsOverflowFileID(t *testing.T) {
 
 func mustOp(t *testing.T, db *sql.DB, msgID int64, op Op) {
 	t.Helper()
+	if op.Type == OpHardDeleteTree {
+		if err := RegisterHardDeleteIntent(context.Background(), db, testChan, op.OpID, op.Obj, op.ExpectedRevision); err != nil {
+			t.Fatalf("register hard-delete intent msg=%d %v: %v", msgID, op, err)
+		}
+	}
 	if err := runOp(t, db, testChan, msgID, op); err != nil {
 		t.Fatalf("apply msg=%d %v: %v", msgID, op, err)
 	}

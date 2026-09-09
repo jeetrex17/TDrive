@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 11
+const currentSchemaVersion = 12
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -171,6 +171,13 @@ func EnsureSchema(db *sql.DB) error {
 			marker_msg_id   INTEGER NOT NULL,
 			total_messages  INTEGER NOT NULL DEFAULT 0,
 			completed       INTEGER NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+			PRIMARY KEY (channel_id, op_id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS hard_delete_intents (
+			channel_id        INTEGER NOT NULL,
+			op_id             TEXT NOT NULL,
+			root_object_id    TEXT NOT NULL,
+			expected_revision INTEGER NOT NULL CHECK (expected_revision > 0),
 			PRIMARY KEY (channel_id, op_id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS hard_delete_plan_items (

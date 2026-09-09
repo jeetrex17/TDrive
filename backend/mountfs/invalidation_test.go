@@ -260,12 +260,55 @@ func TestInvalidationIsSafeWithDisabledCacheAndNilFilesystem(t *testing.T) {
 	var nilFS *FS
 	nilFS.InvalidateDirectories(RootID, "d:any")
 	nilFS.InvalidateSubtree(RootID)
+	nilFS.InvalidateAll()
 
 	fs := mustNewFSWithOptions(t, 42, newMutableDirectorySource(nil), &fakeContentOpener{}, Options{
 		DisableSnapshotCache: true,
 	})
 	fs.InvalidateDirectories(RootID, "d:any")
 	fs.InvalidateSubtree(RootID)
+	fs.InvalidateAll()
+}
+
+func TestInvalidateAllRefreshesEveryCachedDirectory(t *testing.T) {
+	t.Parallel()
+
+	source := newMutableDirectorySource(map[string][]SourceEntry{
+		RootID: {
+			{ID: "d:first", ParentID: RootID, Name: "first", Kind: KindDirectory},
+			{ID: "d:second", ParentID: RootID, Name: "second", Kind: KindDirectory},
+		},
+		"d:first":  {{ID: "f:old-first", ParentID: "d:first", Name: "old-first.txt", Kind: KindFile}},
+		"d:second": {{ID: "f:old-second", ParentID: "d:second", Name: "old-second.txt", Kind: KindFile}},
+	})
+	fs := mustNewFSWithOptions(t, 42, source, &fakeContentOpener{}, Options{
+		SnapshotTTL:          time.Hour,
+		MaxCachedDirectories: 8,
+	})
+	for _, path := range []string{"/first", "/second"} {
+		if _, err := fs.ReadDir(context.Background(), path); err != nil {
+			t.Fatalf("warm ReadDir(%q) error = %v", path, err)
+		}
+	}
+	source.replace("d:first", nil)
+	source.replace("d:second", nil)
+
+	fs.InvalidateAll()
+
+	for _, path := range []string{"/first", "/second"} {
+		entries, err := fs.ReadDir(context.Background(), path)
+		if err != nil {
+			t.Fatalf("refreshed ReadDir(%q) error = %v", path, err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("refreshed ReadDir(%q) = %#v, want empty", path, entries)
+		}
+	}
+	for _, parentID := range []string{RootID, "d:first", "d:second"} {
+		if got := source.callsFor(parentID); got != 2 {
+			t.Errorf("loads for %q = %d, want 2", parentID, got)
+		}
+	}
 }
 
 type mutableDirectorySource struct {

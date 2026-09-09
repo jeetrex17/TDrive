@@ -7,10 +7,98 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"TDrive/backend/mountfs"
 	"TDrive/backend/mountos"
 )
+
+func TestProjectionSyncInvalidatesOnlyTheMatchingMountedFilesystem(t *testing.T) {
+	t.Parallel()
+
+	source := newProjectionRefreshSource([]mountfs.SourceEntry{{
+		ID:       "f:before",
+		ParentID: mountfs.RootID,
+		Name:     "before.txt",
+		Kind:     mountfs.KindFile,
+	}})
+	filesystem, err := mountfs.NewWithOptions(
+		personalDrive().ID,
+		source,
+		emptyContentOpener{},
+		mountfs.Options{SnapshotTTL: time.Hour},
+	)
+	if err != nil {
+		t.Fatalf("mountfs.NewWithOptions() error = %v", err)
+	}
+	changes := &fakeProjectionChangeSource{}
+	controller := newTestController(t, Dependencies{
+		Filesystems:       &fakeFilesystemBuilder{fs: filesystem, content: &fakeContent{}},
+		Endpoint:          &fakeEndpoint{endpoint: testEndpoint},
+		Connector:         &fakeConnector{},
+		ProjectionChanges: changes,
+	})
+	if _, err := controller.Start(context.Background(), personalDrive(), StartOptions{}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _, _ = controller.Stop(context.Background()) })
+
+	entries, err := filesystem.ReadDir(context.Background(), "/")
+	if err != nil || len(entries) != 1 || entries[0].Name != "before.txt" {
+		t.Fatalf("warm ReadDir() = %#v, %v", entries, err)
+	}
+	source.replace([]mountfs.SourceEntry{{
+		ID:       "f:after",
+		ParentID: mountfs.RootID,
+		Name:     "after.txt",
+		Kind:     mountfs.KindFile,
+	}})
+	changes.notify(999)
+	entries, err = filesystem.ReadDir(context.Background(), "/")
+	if err != nil || len(entries) != 1 || entries[0].Name != "before.txt" {
+		t.Fatalf("unrelated sync refreshed cache: entries=%#v error=%v", entries, err)
+	}
+
+	changes.notify(personalDrive().ID)
+	entries, err = filesystem.ReadDir(context.Background(), "/")
+	if err != nil || len(entries) != 1 || entries[0].Name != "after.txt" {
+		t.Fatalf("ReadDir() after matching sync = %#v, %v; want fresh projection", entries, err)
+	}
+}
+
+func TestProjectionChangeSubscriptionFollowsControllerLifecycle(t *testing.T) {
+	t.Parallel()
+
+	changes := &fakeProjectionChangeSource{}
+	controller := newTestController(t, Dependencies{
+		Filesystems:       &fakeFilesystemBuilder{content: &fakeContent{}},
+		Endpoint:          &fakeEndpoint{endpoint: testEndpoint},
+		Connector:         &fakeConnector{},
+		ProjectionChanges: changes,
+	})
+	if subscribed, unsubscribed := changes.counts(); subscribed != 1 || unsubscribed != 0 {
+		t.Fatalf("constructor subscriptions = (%d, %d), want (1, 0)", subscribed, unsubscribed)
+	}
+	if err := controller.Close(context.Background()); err != nil {
+		t.Fatalf("Close() while stopped error = %v", err)
+	}
+	if subscribed, unsubscribed := changes.counts(); subscribed != 1 || unsubscribed != 1 {
+		t.Fatalf("closed subscriptions = (%d, %d), want (1, 1)", subscribed, unsubscribed)
+	}
+
+	if _, err := controller.Start(context.Background(), personalDrive(), StartOptions{}); err != nil {
+		t.Fatalf("Start() after Close error = %v", err)
+	}
+	if subscribed, unsubscribed := changes.counts(); subscribed != 2 || unsubscribed != 1 {
+		t.Fatalf("restart subscriptions = (%d, %d), want (2, 1)", subscribed, unsubscribed)
+	}
+	if err := controller.Close(context.Background()); err != nil {
+		t.Fatalf("final Close() error = %v", err)
+	}
+	if subscribed, unsubscribed := changes.counts(); subscribed != 2 || unsubscribed != 2 {
+		t.Fatalf("final subscriptions = (%d, %d), want (2, 2)", subscribed, unsubscribed)
+	}
+}
 
 func TestDisplayLabel(t *testing.T) {
 	t.Parallel()
@@ -1183,6 +1271,69 @@ type emptyContentOpener struct{}
 
 func (emptyContentOpener) OpenContent(context.Context, int64, mountfs.SourceEntry) (mountfs.RandomAccessContent, error) {
 	return nil, mountfs.ErrNotFound
+}
+
+type projectionRefreshSource struct {
+	mu      sync.Mutex
+	entries []mountfs.SourceEntry
+}
+
+func newProjectionRefreshSource(entries []mountfs.SourceEntry) *projectionRefreshSource {
+	return &projectionRefreshSource{entries: append([]mountfs.SourceEntry(nil), entries...)}
+}
+
+func (source *projectionRefreshSource) ListDirectory(
+	context.Context,
+	int64,
+	string,
+) ([]mountfs.SourceEntry, error) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	return append([]mountfs.SourceEntry(nil), source.entries...), nil
+}
+
+func (source *projectionRefreshSource) replace(entries []mountfs.SourceEntry) {
+	source.mu.Lock()
+	source.entries = append([]mountfs.SourceEntry(nil), entries...)
+	source.mu.Unlock()
+}
+
+type fakeProjectionChangeSource struct {
+	mu              sync.Mutex
+	listener        func(int64)
+	subscriptions   int
+	unsubscriptions int
+}
+
+func (source *fakeProjectionChangeSource) SubscribeProjectionChanges(listener func(int64)) func() {
+	source.mu.Lock()
+	source.listener = listener
+	source.subscriptions++
+	source.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			source.mu.Lock()
+			source.listener = nil
+			source.unsubscriptions++
+			source.mu.Unlock()
+		})
+	}
+}
+
+func (source *fakeProjectionChangeSource) notify(channelID int64) {
+	source.mu.Lock()
+	listener := source.listener
+	source.mu.Unlock()
+	if listener != nil {
+		listener(channelID)
+	}
+}
+
+func (source *fakeProjectionChangeSource) counts() (int, int) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	return source.subscriptions, source.unsubscriptions
 }
 
 type fakeEndpoint struct {
