@@ -19,7 +19,7 @@ var assets embed.FS
 
 // appVersion is stamped by the release workflow:
 //
-//	wails build -ldflags "-X main.appVersion=v1.7.0"
+//	wails build -ldflags "-X main.appVersion=vX.Y.Z"
 //
 // Local builds keep "dev", which disables the updater.
 var appVersion = "dev"
