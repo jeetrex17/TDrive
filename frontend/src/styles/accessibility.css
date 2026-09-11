@@ -1,0 +1,5 @@
+@media (forced-colors: active) {
+    .video-settings-panel .video-settings-check input[type=checkbox] { appearance: auto; }
+    .video-settings-check input[type=checkbox]::before { content: none; }
+    .video-settings-panel .video-settings-range { appearance: auto; }
+}

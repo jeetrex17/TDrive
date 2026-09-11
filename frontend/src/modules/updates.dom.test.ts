@@ -19,7 +19,7 @@ vi.mock('./notifications', () => ({ notify: notifyMock }));
 
 import { initialUpdateState, type UpdateState } from '../ui/updates/update-model';
 
-function available(version = '1.7.0'): UpdateState {
+function available(version = '1.7.0') {
     return {
         ...initialUpdateState('1.6.0'),
         phase: 'available',

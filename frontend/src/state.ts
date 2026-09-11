@@ -1,4 +1,5 @@
 import type { ImportProgress } from './modules/import-progress';
+import type { DriveChannel, DriveKind, PendingJoin, RootFile } from './types';
 
 // Centralized state for the TDrive frontend.
 //
@@ -13,13 +14,6 @@ export interface DrivePathEntry {
     name: string;
 }
 
-export interface Channel {
-    id: number;
-    title: string;
-    kind: string;
-    is_active?: boolean;
-    invite_link?: string;
-}
 
 export interface EncryptionState {
     available: boolean;
@@ -94,7 +88,7 @@ export interface State {
     dragRootEl: HTMLElement | null;
 
     searchQuery: string;
-    telegramRootCache: any[] | null;
+    telegramRootCache: RootFile[] | null;
     pendingFocus: { type: string; id: string | number } | null;
 
     folderIndexCache: any;
@@ -106,9 +100,9 @@ export interface State {
     selectionAnchorIndex: number;
     selectionBarEl: HTMLElement | null;
 
-    activeChannel: Channel | null;
-    channels: Channel[];
-    pendingJoins: any[];
+    activeChannel: { id: number; title: string; kind: DriveKind } | null;
+    channels: DriveChannel[];
+    pendingJoins: PendingJoin[];
     channelSwitchInProgress: boolean;
     myUserID: number;
 

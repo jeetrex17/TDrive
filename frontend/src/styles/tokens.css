@@ -1,0 +1,49 @@
+
+:root {
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-pill: 999px;
+
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    --motion-fast: 120ms;
+    --motion-med: 180ms;
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+    --z-selection: 20;
+    --z-popover: 10000;
+    --z-video: 2400;
+    --z-modal: 20000;
+
+    --type-xs: 0.75rem;
+    --type-sm: 0.85rem;
+    --type-base: 0.9rem;
+    --type-md: 1rem;
+    --type-lg: 1.05rem;
+
+    /* Compatibility aliases used by the current frontend modules. */
+    --bg-dark: var(--color-canvas);
+    --bg-sidebar: var(--color-surface-0);
+    --bg-panel: var(--color-surface-2);
+    --surface-control: var(--color-surface-1);
+    --accent: var(--color-accent);
+    --accent-hover: var(--color-accent-hover);
+    --text-main: var(--color-text-soft);
+    --text-muted: var(--color-text-muted);
+    --border: var(--color-border-soft);
+    --danger: var(--color-danger);
+    --success: var(--color-success);
+    --radius-full: var(--radius-pill);
+    --font-size-xs: var(--type-xs);
+    --font-size-sm: var(--type-sm);
+    --font-size-base: var(--type-base);
+}

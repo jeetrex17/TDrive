@@ -11,12 +11,13 @@
 
 import { state } from '../state';
 import { getMedia } from '../api';
-import { openPreviewList } from './modals/preview';
 import { clearSearch } from './search';
+import { appActions } from './app-actions';
 import Gallery from '../ui/gallery/Gallery.svelte';
 import { beginRender, cachedThumb, rearmLocked, setRoot } from '../ui/gallery/gallery-controller';
 import { galleryView, type GalleryGroup } from '../ui/gallery/gallery-store';
 import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
+import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
 import type { FileItem } from '../types';
 
 let galleryEl: HTMLElement | null = null;
@@ -45,11 +46,18 @@ export function setupGallery(): void {
 // the Photos item is active in gallery view, the active drive in files view.
 export function setPhotosMode(on: boolean): void {
     document.querySelector('.main-content')?.classList.toggle('photos-mode', on);
-    document.getElementById('nav-photos')?.classList.toggle('active', on);
+    const photosNav = document.getElementById('nav-photos');
+    photosNav?.classList.toggle('active', on);
+    if (on) photosNav?.setAttribute('aria-current', 'page');
+    else photosNav?.removeAttribute('aria-current');
+    setSidebarPhotosActive(on);
+
     const activeId = Number(state.activeChannel?.id || 0);
     document.querySelectorAll<HTMLElement>('.drive-item[data-channel-id]').forEach((el) => {
         const isActiveDrive = Number(el.dataset.channelId) === activeId;
         el.classList.toggle('active', isActiveDrive && !on);
+        if (isActiveDrive && !on) el.setAttribute('aria-current', 'page');
+        else el.removeAttribute('aria-current');
     });
 }
 
@@ -89,10 +97,10 @@ function onGalleryClick(event: MouseEvent): void {
     if (!cell) return;
     const index = Number(cell.dataset.index ?? -1);
     if (index < 0 || index >= currentItems.length) return;
-    openGalleryLightbox(index);
+    void openGalleryLightbox(index);
 }
 
-function openGalleryLightbox(index: number): void {
+async function openGalleryLightbox(index: number): Promise<void> {
     const channelId = currentChannelId;
     // Carry the fields the lightbox + info panel need: a download size
     // (plaintext for encrypted files), the loaded thumbnail as an instant
@@ -107,7 +115,9 @@ function openGalleryLightbox(index: number): void {
         uploadTime: it.uploadTime,
         thumbUrl: cachedThumb(channelId, it.msgId),
     }));
-    void openPreviewList(items, index);
+    const preview = await import('./modals/preview');
+    preview.setupPreviewModal();
+    await preview.openPreviewList(items, index);
 }
 
 // --- view switching (wired from the sidebar Photos item) ---
@@ -118,13 +128,13 @@ export function enterPhotos(): void {
     // to Files restores normal row interaction instead of search mode.
     clearSearch({ refresh: false });
     state.virtualView = 'photos';
-    window.refreshFiles();
+    appActions().refreshFiles();
 }
 
 export function exitPhotos(): void {
     if (state.virtualView !== 'photos') return;
     state.virtualView = null;
-    window.refreshFiles();
+    appActions().refreshFiles();
 }
 
 // --- date grouping ---

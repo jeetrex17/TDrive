@@ -5,8 +5,8 @@
  * mapping its visual language onto this contract. Keeping every theme here
  * makes palette changes cheap, predictable, and independent of layout CSS.
  *
- * The unscoped fallback is Tokyo Night, TDrive's original palette, so first
- * paint remains deterministic before the theme controller starts.
+ * The unscoped fallback is TDrive Vault, so first paint matches the native
+ * window before the theme controller starts.
  */
 
 /*
@@ -38,6 +38,68 @@
 }
 
 :root:not([data-theme]),
+:root[data-theme="tdrive-vault"] {
+    color-scheme: dark;
+
+    /* Quiet Relay: a low-glare vault with blue reserved for live interaction. */
+    --color-canvas: #0e171c;
+    --color-surface-0: #121e24;
+    --color-surface-1: #18272f;
+    --color-surface-2: #20343d;
+    --color-surface-3: #29454f;
+    --color-text: #e7f0f2;
+    --color-text-soft: #c1d0d4;
+    --color-text-muted: #94a7ad;
+    --color-text-subtle: #899da4;
+    --color-border: #5a737c;
+    --color-border-soft: #30464f;
+    --color-accent: #2aabee;
+    --color-accent-hover: #4bb8ef;
+    --color-accent-strong: #168fca;
+    --color-on-accent: #0e171c;
+    --color-danger: #de6c76;
+    --color-on-danger: #0e171c;
+    --color-warning: #d6a34e;
+    --color-success: #49b889;
+
+    --shadow-sm: 0 8px 20px rgba(2, 8, 11, 0.24);
+    --shadow-md: 0 14px 36px rgba(2, 8, 11, 0.32);
+    --shadow-lg: 0 22px 56px rgba(2, 8, 11, 0.40);
+    --focus-ring: 0 0 0 3px rgba(42, 171, 238, 0.38);
+    --glass-bg: #121e24;
+    --glass-border: rgba(148, 167, 173, 0.20);
+    --glass-highlight: rgba(231, 240, 242, 0.04);
+    --scrim: rgba(5, 10, 13, 0.72);
+
+    --overlay-neutral-1: rgba(231, 240, 242, 0.04);
+    --overlay-neutral-2: rgba(231, 240, 242, 0.07);
+    --overlay-neutral-3: rgba(231, 240, 242, 0.11);
+    --overlay-white-1: rgba(255, 255, 255, 0.04);
+    --overlay-white-2: rgba(255, 255, 255, 0.07);
+    --overlay-white-3: rgba(255, 255, 255, 0.11);
+    --overlay-accent-1: rgba(42, 171, 238, 0.10);
+    --overlay-accent-2: rgba(42, 171, 238, 0.16);
+    --overlay-accent-3: rgba(42, 171, 238, 0.28);
+    --overlay-danger-1: rgba(222, 108, 118, 0.10);
+    --overlay-danger-2: rgba(222, 108, 118, 0.28);
+    --overlay-warning-1: rgba(214, 163, 78, 0.11);
+    --overlay-warning-2: rgba(214, 163, 78, 0.28);
+    --overlay-success-1: rgba(73, 184, 137, 0.10);
+    --overlay-success-2: rgba(73, 184, 137, 0.27);
+
+    --overlay-neutral-soft: var(--overlay-neutral-1);
+    --overlay-neutral-hover: var(--overlay-neutral-2);
+    --overlay-neutral-strong: var(--overlay-neutral-3);
+    --overlay-accent-soft: var(--overlay-accent-1);
+    --overlay-accent-strong: var(--overlay-accent-3);
+    --overlay-danger-soft: var(--overlay-danger-1);
+    --overlay-danger-strong: var(--overlay-danger-2);
+    --overlay-warning-soft: var(--overlay-warning-1);
+    --overlay-warning-strong: var(--overlay-warning-2);
+    --overlay-success-soft: var(--overlay-success-1);
+    --overlay-success-strong: var(--overlay-success-2);
+}
+
 :root[data-theme="tokyo-night"] {
     color-scheme: dark;
 
@@ -98,7 +160,68 @@
     --overlay-warning-strong: var(--overlay-warning-2);
     --overlay-success-soft: var(--overlay-success-1);
     --overlay-success-strong: var(--overlay-success-2);
+}
 
+:root[data-theme="tdrive-day"] {
+    color-scheme: light;
+
+    /* Quiet Relay daylight: cool, quiet surfaces with structural borders. */
+    --color-canvas: #eef4f5;
+    --color-surface-0: #f8fbfb;
+    --color-surface-1: #ffffff;
+    --color-surface-2: #e6eef0;
+    --color-surface-3: #d8e4e7;
+    --color-text: #17262c;
+    --color-text-soft: #354a52;
+    --color-text-muted: #5a6e75;
+    --color-text-subtle: #5a6e75;
+    --color-border: #9fb4ba;
+    --color-border-soft: #d2dfe2;
+    --color-accent: #1689be;
+    --color-accent-hover: #329ac7;
+    --color-accent-strong: #0f739f;
+    --color-on-accent: #0e171c;
+    --color-danger: #b94a55;
+    --color-on-danger: #ffffff;
+    --color-warning: #8b5d08;
+    --color-success: #247a58;
+
+    --shadow-sm: 0 8px 20px rgba(33, 54, 61, 0.08);
+    --shadow-md: 0 14px 36px rgba(33, 54, 61, 0.11);
+    --shadow-lg: 0 22px 56px rgba(33, 54, 61, 0.15);
+    --focus-ring: 0 0 0 3px rgba(22, 137, 190, 0.30);
+    --glass-bg: #ffffff;
+    --glass-border: rgba(23, 38, 44, 0.12);
+    --glass-highlight: rgba(255, 255, 255, 0.00);
+    --scrim: rgba(14, 23, 28, 0.46);
+
+    --overlay-neutral-1: rgba(23, 38, 44, 0.04);
+    --overlay-neutral-2: rgba(23, 38, 44, 0.07);
+    --overlay-neutral-3: rgba(23, 38, 44, 0.11);
+    --overlay-white-1: rgba(23, 38, 44, 0.04);
+    --overlay-white-2: rgba(23, 38, 44, 0.07);
+    --overlay-white-3: rgba(23, 38, 44, 0.11);
+    --overlay-accent-1: rgba(22, 137, 190, 0.09);
+    --overlay-accent-2: rgba(22, 137, 190, 0.15);
+    --overlay-accent-3: rgba(22, 137, 190, 0.26);
+    --overlay-danger-1: rgba(185, 74, 85, 0.09);
+    --overlay-danger-2: rgba(185, 74, 85, 0.22);
+    --overlay-warning-1: rgba(139, 93, 8, 0.10);
+    --overlay-warning-2: rgba(139, 93, 8, 0.23);
+    --overlay-success-1: rgba(36, 122, 88, 0.09);
+    --overlay-success-2: rgba(36, 122, 88, 0.22);
+
+    --overlay-neutral-soft: var(--overlay-neutral-1);
+    --overlay-neutral-hover: var(--overlay-neutral-2);
+    --overlay-neutral-strong: var(--overlay-neutral-3);
+    --overlay-accent-soft: var(--overlay-accent-1);
+    --overlay-accent-strong: var(--overlay-accent-3);
+    --overlay-danger-soft: var(--overlay-danger-1);
+    --overlay-danger-strong: var(--overlay-danger-2);
+    --overlay-warning-soft: var(--overlay-warning-1);
+    --overlay-warning-strong: var(--overlay-warning-2);
+    --overlay-success-soft: var(--overlay-success-1);
+    --overlay-success-strong: var(--overlay-success-2);
 }
 
 :root[data-theme="tdrive-light"] {
@@ -160,7 +283,6 @@
     --overlay-warning-strong: var(--overlay-warning-2);
     --overlay-success-soft: var(--overlay-success-1);
     --overlay-success-strong: var(--overlay-success-2);
-
 }
 
 :root[data-theme="catppuccin-latte"] {

@@ -3,14 +3,15 @@
 
 import { state } from './state';
 import { setupAppShell } from './modules/app-shell';
+import { configureAppActions } from './modules/app-actions';
 
 // Import setup functions from modules
 import { setupSelectionBar } from './modules/selection';
-import { setupDownloadProgress, setupUploadProgress, setupUploadMenu, setupFileDrop, uploadWithParentID } from './modules/transfers';
+import { setupDownloadProgress, setupUploadProgress, setupUploadMenu, setupFileDrop } from './modules/transfers';
 import { setupBreadcrumb } from './modules/navigation';
 import { setupContextMenu } from './modules/context-menu';
 import { setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } from './modules/auth';
-import { setupFileListWindowBindings, refreshFiles } from './modules/file-list';
+import { refreshFiles, setupFileList } from './modules/file-list';
 import { setupDropOverlay } from './modules/drop-overlay';
 import { setupGallery } from './modules/gallery';
 import { setupSearchBar, runGlobalSearch } from './modules/search';
@@ -19,13 +20,11 @@ import { initializeTheme } from './ui/theme/theme-controller';
 import { initializeNativeTheme } from './ui/theme/native-theme';
 
 // Import modal setup functions
-import { setupDeleteModal, openDeleteModal } from './modules/modals/delete';
+import { setupDeleteModal } from './modules/modals/delete';
 import { setupRenameModal } from './modules/modals/rename';
 import { setupMoveModal } from './modules/modals/move';
-import { setupFolderModal, openNewFolderModal } from './modules/modals/folder';
-import { setupPreviewModal } from './modules/modals/preview';
-import { setupVideoModal } from './modules/modals/video';
-import { setupFileViewerModal } from './modules/modals/file-viewer';
+import { setupFolderModal } from './modules/modals/folder';
+
 import { setupNewDriveModal } from './modules/modals/new-drive';
 import { setupJoinDriveModal } from './modules/modals/join-drive';
 import { setupShareDriveModal } from './modules/modals/share-drive';
@@ -58,27 +57,26 @@ import { setupUpdates } from './modules/updates';
 const disconnectTheme = initializeTheme();
 let disconnectNativeTheme = () => {};
 
-// Setup window bindings that need to be available globally
-window.refreshFiles = refreshFiles;
-window.triggerRefresh = function() {
-    if (String(state.searchQuery || "").trim()) {
-        runGlobalSearch();
-        return;
-    }
-    // Manual refresh: pull new ops from Telegram, then re-render. Awaitable
-    // for callers that want to show progress, but most click handlers don't.
-    return refreshActiveDrive();
-};
-window.openNewFolderModal = openNewFolderModal;
-window.selectFile = function() {
-    uploadWithParentID(state.currentFolderId);
-};
-window.initDeleteFolder = function(folderID, folderName) {
-    openDeleteModal({ type: "folder", id: folderID, name: folderName || "" });
-};
-window.initDelete = function(id, name) {
-    openDeleteModal({ type: "file", id, name: name || "" });
-};
+configureAppActions({
+    refreshFiles,
+    triggerRefresh: async () => {
+        if (String(state.searchQuery || "").trim()) {
+            await runGlobalSearch();
+            return;
+        }
+        await refreshActiveDrive();
+    },
+    openFile: async (target) => {
+        const viewer = await import('./modules/modals/file-viewer');
+        viewer.setupFileViewerModal();
+        await viewer.openFileViewer(target);
+    },
+    playVideo: async (target) => {
+        const video = await import('./modules/modals/video');
+        video.setupVideoModal();
+        await video.openVideoModal(target);
+    },
+});
 
 // The Wails runtime (`window.runtime`) and bound Go methods (`window.go`) are
 // injected by the webview, not bundled by us. With the Vite dev server they can
@@ -118,9 +116,7 @@ window.onload = async function() {
     setupFolderModal();
     setupRenameModal();
     setupMoveModal();
-    setupPreviewModal();
-    setupVideoModal();
-    setupFileViewerModal();
+
     setupNewDriveModal();
     setupJoinDriveModal();
     setupShareDriveModal();
@@ -161,9 +157,8 @@ window.onload = async function() {
     });
     setupSidebar();
 
-    // Setup window bindings
     setupAuthWindowBindings();
-    setupFileListWindowBindings();
+    setupFileList();
     setupLiveSyncEvents();
 
     // Check status and show appropriate screen

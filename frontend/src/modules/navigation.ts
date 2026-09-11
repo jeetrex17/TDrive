@@ -2,6 +2,7 @@
 
 import { state } from '../state';
 import { canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
+import { appActions } from './app-actions';
 import Breadcrumb from '../ui/chrome/Breadcrumb.svelte';
 import { breadcrumbPath, type BreadcrumbDrag } from '../ui/chrome/breadcrumb-store';
 import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
@@ -47,7 +48,7 @@ function navigateToIndex(index: number) {
     // Breadcrumb navigation always exits any virtual view (e.g. Photos).
     state.virtualView = null;
     renderBreadcrumb();
-    window.refreshFiles();
+    appActions().refreshFiles();
 }
 
 function navigateBack() {
@@ -56,7 +57,7 @@ function navigateBack() {
     state.currentFolderId = state.folderPath.length ? state.folderPath[state.folderPath.length - 1].id : '';
     state.virtualView = null;
     renderBreadcrumb();
-    window.refreshFiles();
+    appActions().refreshFiles();
 }
 
 export function setupBreadcrumb() {
@@ -80,7 +81,7 @@ export function navigateToFolder(folderID: string, folderName: string) {
     state.currentFolderId = folderID;
     state.virtualView = null;
     renderBreadcrumb();
-    window.refreshFiles();
+    appActions().refreshFiles();
 }
 
 export function ensureNotInsideDeletedFolder(deletedFolderID: string) {

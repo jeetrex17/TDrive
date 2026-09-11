@@ -17,15 +17,20 @@ export default defineConfig({
         coverage: {
             provider: 'v8',
             include: [
-                // Media/native boundaries are security- and lifecycle-sensitive.
-                // Keep their pure contracts in the coverage gate; the DOM-heavy
-                // modal coordinator is exercised by video.dom.test.ts.
-                'src/api.ts',
+                // Gate behavior-heavy modules where missed branches are user-visible.
+                // Thin Wails forwarding stays outside the percentage gate: testing
+                // mock echoes would inflate coverage without defending a contract.
+                'src/modules/errors.ts',
+                'src/modules/media-types.ts',
+                'src/modules/modals/preview-info.ts',
                 'src/modules/video/**',
-                'src/ui/video/**',
-                'src/ui/theme/**',
-                'src/ui/auth/PersonalDriveSetup.svelte',
+                'src/ui/auth/auth-store.ts',
                 'src/ui/auth/personal-drive-store.ts',
+                'src/ui/sidebar/sidebar-store.ts',
+                'src/ui/theme/**',
+                'src/ui/updates/update-model.ts',
+                'src/ui/updates/update-store.ts',
+                'src/ui/video/**',
             ],
             thresholds: {
                 branches: 80,

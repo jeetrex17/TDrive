@@ -8,13 +8,19 @@ const mocks = vi.hoisted(() => ({
     pushTransferStart: vi.fn(),
     updateTransferName: vi.fn(),
     updateTransferProgress: vi.fn(),
+    refreshFiles: vi.fn(),
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => ({
     DownloadFile: vi.fn(),
+    ImportPaths: (...args: unknown[]) => window.go.main.App.ImportPaths(...args),
+    PlanImport: (...args: unknown[]) => window.go.main.App.PlanImport(...args),
     SelectFiles: vi.fn(),
+    SelectFolder: (...args: unknown[]) => window.go.main.App.SelectFolder(...args),
+    UploadToDriveFS: (...args: unknown[]) => window.go.main.App.UploadToDriveFS(...args),
 }));
 vi.mock('./notifications', () => ({ notify: mocks.notify }));
+vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles: mocks.refreshFiles }) }));
 vi.mock('./notif-bell', () => ({
     markTransferDone: mocks.markTransferDone,
     pushTransferStart: mocks.pushTransferStart,
@@ -82,10 +88,7 @@ beforeEach(() => {
         configurable: true,
         value: { main: { App: app } },
     });
-    Object.defineProperty(window, 'refreshFiles', {
-        configurable: true,
-        value: vi.fn(),
-    });
+
     Object.defineProperty(window, 'runtime', {
         configurable: true,
         value: {
@@ -105,7 +108,7 @@ afterEach(() => {
     state.importBatch = null;
     Reflect.deleteProperty(window, 'go');
     Reflect.deleteProperty(window, 'runtime');
-    Reflect.deleteProperty(window, 'refreshFiles');
+
 });
 
 describe('aggregate import completion', () => {

@@ -7,8 +7,16 @@ import { escapeHtml, formatBytes, splitNameAndExt } from '../../utils';
 import { state } from '../../state';
 import { parseExif, dataUrlToBytes, type ImageExif } from '../exif';
 
+export interface PreviewInfoItem {
+    name?: string;
+    size?: number;
+    encrypted?: boolean;
+    uploaderId?: number;
+    uploadTime?: number;
+}
+
 export interface InfoInput {
-    item: any; // { id, name, size, encrypted?, uploaderId?, uploadTime? }
+    item: PreviewInfoItem;
     fullSrc: string; // data URL of the full image, or "" if not loaded yet
     naturalWidth: number;
     naturalHeight: number;
@@ -18,7 +26,7 @@ export function renderImageInfoHTML(input: InfoInput): string {
     const { item, fullSrc, naturalWidth, naturalHeight } = input;
     const exif: ImageExif = fullSrc ? exifFromDataUrl(fullSrc) : {};
 
-    const when = exif.takenTime || Number(item?.uploadTime || 0);
+    const when = exif.takenTime || Number(item.uploadTime || 0);
     const width = exif.width || naturalWidth || 0;
     const height = exif.height || naturalHeight || 0;
 
@@ -32,10 +40,10 @@ export function renderImageInfoHTML(input: InfoInput): string {
     if (width > 0 && height > 0) {
         details.push(row('Dimensions', `${width} × ${height}${megapixels(width, height)}`));
     }
-    if (Number(item?.size || 0) > 0) {
+    if (Number(item.size || 0) > 0) {
         details.push(row('Size', formatBytes(Number(item.size))));
     }
-    const ext = splitNameAndExt(String(item?.name || '')).ext;
+    const ext = splitNameAndExt(String(item.name || '')).ext;
     if (ext && ext !== 'FILE') {
         details.push(row('Type', ext));
     }
@@ -43,7 +51,7 @@ export function renderImageInfoHTML(input: InfoInput): string {
     if (uploader) {
         details.push(row('Uploaded by', uploader));
     }
-    if (item?.encrypted) {
+    if (item.encrypted) {
         details.push(row('Encrypted', 'Yes'));
     }
     if (details.length) {
@@ -55,13 +63,9 @@ export function renderImageInfoHTML(input: InfoInput): string {
 
     if (exif.gps) {
         const { lat, lon } = exif.gps;
-        // Keyless classic Google Maps embed. The official Maps Embed API also
-        // supports interactive iframes, but its /embed/v1 URL requires an API key.
-        const embed = `https://www.google.com/maps?q=${lat}%2C${lon}&z=14&output=embed`;
-        const open = `https://www.google.com/maps/search/?api=1&query=${lat}%2C${lon}`;
+        const open = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${lat},${lon}`)}`;
         const body = row('Coordinates', escapeHtml(`${lat}, ${lon}`))
-            + `<iframe class="info-map" loading="lazy" allowfullscreen referrerpolicy="no-referrer-when-downgrade" title="Map location" src="${escapeHtml(embed)}"></iframe>`
-            + `<button class="info-map-link" type="button" data-map-url="${escapeHtml(open)}">Open in Google Maps</button>`;
+            + `<button class="info-map-link" type="button" data-map-url="${escapeHtml(open)}" aria-label="Open this location externally in Google Maps">Open externally in Google Maps</button>`;
         sections.push(section('Location', body));
     }
 
@@ -105,9 +109,9 @@ function dedupeMake(make?: string, model?: string): string {
     return `${mk} ${md}`;
 }
 
-function uploaderName(item: any): string {
+function uploaderName(item: PreviewInfoItem): string {
     if (state.activeChannel?.kind !== 'shared') return '';
-    const id = Number(item?.uploaderId || 0);
+    const id = Number(item.uploaderId || 0);
     if (id <= 0) return '';
     return escapeHtml(state.userNames.get(String(id)) || '');
 }

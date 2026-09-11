@@ -68,7 +68,7 @@ describe('theme controller', () => {
         });
 
         controller.start();
-        expect(document.documentElement.dataset.theme).toBe('tokyo-night');
+        expect(document.documentElement.dataset.theme).toBe('tdrive-vault');
         expect(document.documentElement.dataset.themeAppearance).toBe('dark');
         expect(get(controller.state)).not.toHaveProperty('systemAppearance');
 
@@ -116,10 +116,10 @@ describe('theme controller', () => {
 
         const after = get(first.state).preference;
         expect(after).not.toBe(before);
-        expect(before.darkThemeId).toBe('tokyo-night');
+        expect(before.darkThemeId).toBe('tdrive-vault');
         expect(after).toEqual({
             mode: 'dark',
-            lightThemeId: 'tdrive-light',
+            lightThemeId: 'tdrive-day',
             darkThemeId: 'dracula',
         });
         expect(JSON.parse(storage.getItem(THEME_STORAGE_KEY) ?? '')).toEqual(after);
@@ -305,7 +305,7 @@ describe('theme controller', () => {
         expect(get(controller.state).preference).toEqual({
             mode: 'light',
             lightThemeId: 'catppuccin-latte',
-            darkThemeId: 'tokyo-night',
+            darkThemeId: 'tdrive-vault',
         });
         expect(document.documentElement.dataset.theme).toBe('catppuccin-latte');
         controller.destroy();

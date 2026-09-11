@@ -2,7 +2,7 @@
 // On success the backend remembers the decrypted master key in memory
 // until the app exits, so users do not re-enter the password per file.
 
-import { UseEncryptionPassword } from '../../../wailsjs/go/main/App';
+import { useEncryptionPassword } from '../../api';
 import { loadEncryptionStatus } from '../encryption';
 import { state } from '../../state';
 import EncryptionPasswordModal from '../../ui/modals/EncryptionPasswordModal.svelte';
@@ -43,7 +43,7 @@ async function submitPassword(password: string): Promise<void> {
     encryptionPasswordModal.setError('');
     encryptionPasswordModal.setBusy(true);
     try {
-        await UseEncryptionPassword(password);
+        await useEncryptionPassword(password);
         await loadEncryptionStatus();
         finish(true);
     } catch (err) {

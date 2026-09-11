@@ -1,14 +1,7 @@
 import { writable } from 'svelte/store';
+import type { PersonalDriveCandidate } from '../../types';
 
 export type PersonalDrivePhase = 'loading' | 'ready' | 'recovering' | 'discovery-error';
-
-export interface PersonalDriveCandidate {
-    id: string;
-    title: string;
-    created_at: number;
-    has_activity: boolean;
-    recommended: boolean;
-}
 
 export type DriveScanPhase = 'counting' | 'applying' | 'waiting';
 

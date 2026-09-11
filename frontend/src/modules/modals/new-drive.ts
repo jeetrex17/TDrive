@@ -3,6 +3,7 @@
 import { createSharedDrive } from '../channels';
 import { openShareDriveModal } from './share-drive';
 import { notify, dismissNotification } from '../notifications';
+import { humanizeBackendError } from '../errors';
 import NewDriveModal from '../../ui/modals/NewDriveModal.svelte';
 import { newDriveModal } from '../../ui/modals/new-drive-modal-store';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
@@ -40,15 +41,15 @@ async function submitNewDrive(title: string, requireApproval: boolean): Promise<
         newDriveModal.close();
         dismissNotification(progressId);
         notify({ level: 'success', title: `Drive "${title}" created` });
-        if (info?.invite_link) {
-            openShareDriveModal(String(info.invite_link), { approvalRequired: requireApproval });
+        if (info.inviteLink) {
+            openShareDriveModal(info.inviteLink, { approvalRequired: requireApproval });
         }
     } catch (err) {
         dismissNotification(progressId);
         notify({
             level: 'error',
             title: 'Could not create drive',
-            body: String(err),
+            body: humanizeBackendError(err),
         });
     } finally {
         newDriveModal.setBusy(false);

@@ -3,7 +3,7 @@
 // timestamps for the chip suffix.
 
 import { state } from '../state';
-import { ResolveUsernames } from '../../wailsjs/go/main/App';
+import { resolveUsernames } from '../api';
 
 interface ChipFile {
     uploaderID?: number;
@@ -35,7 +35,7 @@ export async function ensureUserNames(userIDs: Array<number | string>): Promise<
     }
 
     if (missing.length > 0) {
-        const request = ResolveUsernames(missing).then((resolved) => {
+        const request = resolveUsernames(missing).then((resolved) => {
             const got = new Set<string>();
             if (resolved && typeof resolved === 'object') {
                 for (const [k, v] of Object.entries(resolved)) {

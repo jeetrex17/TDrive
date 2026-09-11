@@ -1,7 +1,8 @@
-import { PreviewFile, PreviewThumbnail, UseEncryptionPassword } from '../../../wailsjs/go/main/App';
+import { getPreviewFile, getPreviewThumbnail, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
 import { state } from '../../state';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
+import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
 import PreviewModal from '../../ui/preview/PreviewModal.svelte';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
@@ -339,7 +340,7 @@ async function resolveThumbnailPreviewEntry(target: any) {
         throw new Error("Download failed");
     }
 
-    const asset = payloadToPreviewAsset(await PreviewThumbnail(msgID));
+    const asset = payloadToPreviewAsset(await getPreviewThumbnail(msgID));
     await decodePreviewSource(asset.src);
     return asset;
 }
@@ -585,9 +586,7 @@ function handleDownloadFromPreview() {
     if (!id) return;
     const name = String(activePreviewItem?.name || "");
     const size = Number(activePreviewItem?.size || 0);
-    if (typeof window.initDownload === "function") {
-        window.initDownload(id, name, size);
-    }
+    enqueueDownload(id, name, size);
 }
 
 function toggleInfoPanel() {
@@ -699,7 +698,7 @@ async function submitInlineUnlock() {
     if (lockedUnlockEl) lockedUnlockEl.disabled = true;
     if (lockedInputEl) lockedInputEl.disabled = true;
     try {
-        await UseEncryptionPassword(value);
+        await useEncryptionPassword(value);
         await loadEncryptionStatus();
         if (lockedInputEl) lockedInputEl.value = "";
         // Let the gallery's locked thumbnail cells reload too.
@@ -849,7 +848,7 @@ function fetchFullRaw(item: any): Promise<string> {
 	if (existing) return existing;
 
 	const p = (async () => {
-		const asset = payloadToPreviewAsset(await PreviewFile(id));
+		const asset = payloadToPreviewAsset(await getPreviewFile(id));
 		await decodePreviewSource(asset.src);
 		cacheFull(key, asset.src);
 		return asset.src;
@@ -1047,14 +1046,12 @@ export function setupPreviewModal() {
     if (infoPanelEl) {
         // Map links open in the system browser. The panel is rebuilt via
         // innerHTML, so handle clicks by delegation.
-        infoPanelEl.addEventListener("click", (e: any) => {
-            const link = (e.target as HTMLElement).closest("[data-map-url]") as HTMLElement | null;
+        infoPanelEl.addEventListener("click", (event: MouseEvent) => {
+            const link = (event.target as HTMLElement).closest("[data-map-url]") as HTMLElement | null;
             if (!link) return;
-            e.stopPropagation();
+            event.stopPropagation();
             const url = link.getAttribute("data-map-url") || "";
-            if (!url) return;
-            if (window.runtime?.BrowserOpenURL) window.runtime.BrowserOpenURL(url);
-            else window.open(url, "_blank");
+            if (url) openExternalUrl(url);
         });
     }
     updateNavChrome();
@@ -1099,16 +1096,14 @@ export function setupPreviewModal() {
         // Full image decoded: the info panel can now report real dimensions.
         if (infoOpen) refreshInfoPanel();
     });
-    if (window.runtime?.EventsOn) {
-        window.runtime.EventsOn("preview_progress", (msgID: any, percent: any) => {
-            if (!isPreviewOpen()) return;
+    onRuntimeEvent<[unknown, unknown]>("preview_progress", (msgID, percent) => {
+        if (!isPreviewOpen()) return;
 
-            const targetID = Number(msgID);
-            if (!Number.isFinite(targetID) || targetID !== activePreviewMsgID) return;
+        const targetID = Number(msgID);
+        if (!Number.isFinite(targetID) || targetID !== activePreviewMsgID) return;
 
-            setPreviewProgress(percent);
-        });
-    }
+        setPreviewProgress(percent);
+    });
 
     window.addEventListener("keydown", (event) => {
         void handlePreviewKeydown(event);

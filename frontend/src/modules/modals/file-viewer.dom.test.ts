@@ -2,7 +2,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { flushSync } from 'svelte';
 import { get } from 'svelte/store';
 import { fileViewerState } from '../../ui/viewers/file-viewer-store';
-import { canOpenFileViewer, closeFileViewer, openFileViewer, setupFileViewerModal } from './file-viewer';
+import { closeFileViewer, openFileViewer, setupFileViewerModal } from './file-viewer';
+import { canOpenFileViewer } from '../media-types';
 
 const mocks = vi.hoisted(() => ({
     openStream: vi.fn(),
@@ -13,17 +14,19 @@ const mocks = vi.hoisted(() => ({
     notify: vi.fn(),
 }));
 
-vi.mock('../../api', () => ({ openStream: mocks.openStream, closeMedia: mocks.closeMedia }));
-vi.mock('../../ui/viewers/pdf-frame', () => ({ pdfViewerFrameSrc: () => 'about:blank', isPdfFrameMessage: () => false }));
-vi.mock('../transfers', () => ({ enqueueDownload: mocks.enqueueDownload }));
-vi.mock('../notifications', () => ({ notify: mocks.notify }));
-vi.mock('../../../wailsjs/runtime/runtime', () => ({
-    EventsOn: (name: string, callback: () => void) => {
+vi.mock('../../api', () => ({
+    openStream: mocks.openStream,
+    closeMedia: mocks.closeMedia,
+    onRuntimeEvent: (name: string, callback: () => void) => {
         mocks.eventsOn(name, callback);
         mocks.events.set(name, callback);
         return vi.fn();
     },
 }));
+vi.mock('../../ui/viewers/pdf-frame', () => ({ pdfViewerFrameSrc: () => 'about:blank', isPdfFrameMessage: () => false }));
+vi.mock('../transfers', () => ({ enqueueDownload: mocks.enqueueDownload }));
+vi.mock('../notifications', () => ({ notify: mocks.notify }));
+
 
 function opened(token: string, encrypted = true, name = 'secret.txt') {
     return {

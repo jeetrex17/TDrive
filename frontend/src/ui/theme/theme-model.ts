@@ -1,8 +1,10 @@
 export const THEME_IDS = [
+    'tdrive-day',
     'tdrive-light',
     'catppuccin-latte',
     'solarized-light',
     'gruvbox-light',
+    'tdrive-vault',
     'tokyo-night',
     'catppuccin-mocha',
     'dracula',
@@ -43,6 +45,12 @@ function defineTheme(definition: ThemeDefinition): ThemeDefinition {
  */
 export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
     defineTheme({
+        id: 'tdrive-day',
+        name: 'TDrive Day',
+        appearance: 'light',
+        preview: ['#eef4f5', '#e6eef0', '#1689be', '#17262c'],
+    }),
+    defineTheme({
         id: 'tdrive-light',
         name: 'TDrive Light',
         appearance: 'light',
@@ -65,6 +73,12 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         name: 'Gruvbox Light',
         appearance: 'light',
         preview: ['#fbf1c7', '#ebdbb2', '#076678', '#282828'],
+    }),
+    defineTheme({
+        id: 'tdrive-vault',
+        name: 'TDrive Vault',
+        appearance: 'dark',
+        preview: ['#0e171c', '#20343d', '#2aabee', '#e7f0f2'],
     }),
     defineTheme({
         id: 'tokyo-night',
@@ -106,8 +120,8 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
 
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = Object.freeze({
     mode: 'dark',
-    lightThemeId: 'tdrive-light',
-    darkThemeId: 'tokyo-night',
+    lightThemeId: 'tdrive-day',
+    darkThemeId: 'tdrive-vault',
 });
 
 const THEME_ID_SET: ReadonlySet<string> = new Set(THEME_IDS);

@@ -4,9 +4,10 @@
 //
 // The modal trigger lives in the top-right profile menu, not here.
 
-import { Logout } from '../../../wailsjs/go/main/App';
+import { logout } from '../../api';
 import { showAuthWrapper, hideAllScreens } from '../auth';
 import { notify, dismissNotification } from '../notifications';
+import { humanizeBackendError } from '../errors';
 import LogoutModal from '../../ui/modals/LogoutModal.svelte';
 import { logoutModal, type LogoutMode } from '../../ui/modals/logout-modal-store';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
@@ -40,7 +41,7 @@ async function confirmLogout(mode: LogoutMode): Promise<void> {
     });
     logoutModal.setBusy(true);
     try {
-        await Logout(mode);
+        await logout(mode);
         // Backend issues runtime.Quit on success, so this fallback only
         // runs if the process somehow stays alive (e.g. dev hot-reload).
         logoutModal.close();
@@ -52,7 +53,7 @@ async function confirmLogout(mode: LogoutMode): Promise<void> {
         notify({
             level: 'error',
             title: 'Could not log out',
-            body: String(err),
+            body: humanizeBackendError(err),
         });
     } finally {
         logoutModal.setBusy(false);

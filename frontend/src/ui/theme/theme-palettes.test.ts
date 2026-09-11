@@ -112,8 +112,9 @@ function expectReadablePair(
 }
 
 describe('theme palettes', () => {
-    it('uses Tokyo Night as the deterministic pre-controller fallback', () => {
-        expect(paletteSource).toContain(':root:not([data-theme])');
+    it('uses TDrive Vault as the deterministic pre-controller fallback', () => {
+        expect(paletteSource).toContain(':root:not([data-theme]),');
+        expect(paletteSource).toContain(':root[data-theme="tdrive-vault"] {');
         expect(paletteSource).not.toContain('prefers-color-scheme');
     });
 
@@ -153,7 +154,6 @@ describe('theme palettes', () => {
                 ['--color-text-subtle', '--color-surface-0'],
                 ['--color-text-subtle', '--color-surface-1'],
                 ['--color-text-subtle', '--color-surface-2'],
-                ['--color-accent', '--color-surface-1'],
                 ['--color-warning', '--color-surface-1'],
                 ['--color-success', '--color-surface-1'],
                 ['--color-on-accent', '--color-accent'],
@@ -163,6 +163,18 @@ describe('theme palettes', () => {
             for (const [foregroundToken, backgroundToken] of pairs) {
                 expectReadablePair(block, theme.id, foregroundToken, backgroundToken);
             }
+        }
+    });
+
+    it('keeps the active, focus, and progress accent distinguishable as a UI indicator', () => {
+        for (const theme of THEME_DEFINITIONS) {
+            expectReadablePair(
+                paletteBlock(theme.id),
+                theme.id,
+                '--color-accent',
+                '--color-surface-1',
+                3,
+            );
         }
     });
 
@@ -219,9 +231,44 @@ describe('theme palettes', () => {
         }
     });
 
-    it('preserves the existing Tokyo Night foundation', () => {
+    it('maps the reviewed Quiet Relay anchors onto the existing semantic contract', () => {
+        const vault = paletteBlock('tdrive-vault');
+        const day = paletteBlock('tdrive-day');
+
+        expect([
+            tokenValue(vault, '--color-canvas'),
+            tokenValue(vault, '--color-surface-0'),
+            tokenValue(vault, '--color-surface-1'),
+            tokenValue(vault, '--color-text'),
+            tokenValue(vault, '--color-accent'),
+        ]).toEqual(['#0e171c', '#121e24', '#18272f', '#e7f0f2', '#2aabee']);
+        expect([
+            tokenValue(day, '--color-canvas'),
+            tokenValue(day, '--color-surface-0'),
+            tokenValue(day, '--color-surface-1'),
+            tokenValue(day, '--color-text'),
+            tokenValue(day, '--color-accent'),
+        ]).toEqual(['#eef4f5', '#f8fbfb', '#ffffff', '#17262c', '#1689be']);
+
+        expect(tokenValue(vault, '--focus-ring')).toContain('42, 171, 238');
+        expect(tokenValue(day, '--focus-ring')).toContain('22, 137, 190');
+        for (const block of [vault, day]) {
+            const accent = tokenValue(block, '--color-accent');
+            expect([
+                tokenValue(block, '--color-success'),
+                tokenValue(block, '--color-warning'),
+                tokenValue(block, '--color-danger'),
+            ]).not.toContain(accent);
+        }
+    });
+
+    it('preserves the existing TDrive Light and Tokyo Night foundations', () => {
+        const tdriveLight = paletteBlock('tdrive-light');
         const tokyoNight = paletteBlock('tokyo-night');
 
+        expect(tokenValue(tdriveLight, '--color-canvas')).toBe('#f3f5f9');
+        expect(tokenValue(tdriveLight, '--color-surface-0')).toBe('#ffffff');
+        expect(tokenValue(tdriveLight, '--color-accent')).toBe('#315fc4');
         expect(tokenValue(tokyoNight, '--color-canvas')).toBe('#1a1b26');
         expect(tokenValue(tokyoNight, '--color-surface-0')).toBe('#16161e');
         expect(tokenValue(tokyoNight, '--color-accent')).toBe('#7aa2f7');

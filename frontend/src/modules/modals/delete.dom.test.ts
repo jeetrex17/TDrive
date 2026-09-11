@@ -8,12 +8,14 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
 
 const deleteFileMock = vi.fn();
+const appActionMocks = vi.hoisted(() => ({ refreshFiles: vi.fn() }));
 vi.mock('../../../wailsjs/go/main/App', () => ({
     DeleteFile: (...args: unknown[]) => deleteFileMock(...args),
 }));
 vi.mock('../drive-data', () => ({
     deleteFolder: vi.fn(),
 }));
+vi.mock('../app-actions', () => ({ appActions: () => appActionMocks }));
 
 import { openDeleteModal, setupDeleteModal } from './delete';
 
@@ -35,32 +37,28 @@ beforeAll(() => {
 
 afterEach(() => {
     deleteFileMock.mockReset();
-    (window as any).refreshFiles = undefined;
+    appActionMocks.refreshFiles.mockReset();
 });
 
 describe('confirmDelete (single file)', () => {
     it('refreshes the file list when the delete fails', async () => {
         deleteFileMock.mockResolvedValue('Error: File not found');
-        const refreshFiles = vi.fn();
-        (window as any).refreshFiles = refreshFiles;
 
         openDeleteModal({ type: 'file', id: 42, name: 'ghost.png' });
         flushSync();
         click('#delete-confirm');
 
         // confirmDelete's error branch is async (await deleteFileWithPasswordRetry).
-        await vi.waitFor(() => expect(refreshFiles).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
     });
 
     it('still refreshes the file list when the delete succeeds', async () => {
         deleteFileMock.mockResolvedValue('Success');
-        const refreshFiles = vi.fn();
-        (window as any).refreshFiles = refreshFiles;
 
         openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
         flushSync();
         click('#delete-confirm');
 
-        await vi.waitFor(() => expect(refreshFiles).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
     });
 });

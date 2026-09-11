@@ -1,10 +1,11 @@
 // Drag and drop handling for TDrive frontend
 
 import { state } from '../state';
-import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../wailsjs/go/main/App';
+import { addTelegramFileToDrive, moveFile, moveFolder } from '../api';
 import { callWithPasswordRetry } from './modals/encryption-password';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
+import { appActions } from './app-actions';
 
 export function clearDropHighlights() {
     if (state.dragOverEl) {
@@ -42,12 +43,10 @@ async function ensureFileInTdriveSystem(target: any) {
     if (!target || target.type !== "file") return;
     if (String(target.source || "fs") !== "tg") return;
 
-    const res = await MsgToTdriveSystem(
-        Number(target.id),
-        String(target.name || ""),
-        Number(target.size || 0),
-        String(target.parentId || "")
-    );
+    const res = await addTelegramFileToDrive(Number(target.id),
+    String(target.name || ""),
+    Number(target.size || 0),
+    String(target.parentId || ""));
 
     if (typeof res === "string" && res.startsWith("Error")) {
         throw new Error(humanizeBackendError(res));
@@ -69,7 +68,7 @@ export async function performDropMove(newParentId: string) {
         try {
             let res = "";
             if (item.type === "folder") {
-                res = await callWithPasswordRetry(() => MoveFolder(String(item.id), parent));
+                res = await callWithPasswordRetry(() => moveFolder(String(item.id), parent));
             } else {
                 await ensureFileInTdriveSystem({
                     type: "file",
@@ -79,7 +78,7 @@ export async function performDropMove(newParentId: string) {
                     parentId: item.parentId,
                     source: item.source,
                 });
-                res = await callWithPasswordRetry(() => MoveFile(Number(item.id), parent));
+                res = await callWithPasswordRetry(() => moveFile(Number(item.id), parent));
             }
             if (typeof res === "string" && res.startsWith("Error")) {
                 failures++;
@@ -98,7 +97,7 @@ export async function performDropMove(newParentId: string) {
             body: lastError,
         });
     }
-    window.refreshFiles();
+    appActions().refreshFiles();
     clearDropHighlights();
 }
 

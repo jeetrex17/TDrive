@@ -3,10 +3,10 @@
 // data so Svelte components can render it declaratively.
 
 export interface AvatarUser {
-    photo_base64?: string;
-    display_name?: string;
+    photoBase64?: string;
+    displayName?: string;
     username?: string;
-    user_id?: number;
+    userId?: number;
 }
 
 export interface AvatarView {
@@ -23,7 +23,7 @@ const AVATAR_PALETTE = [
 export function avatarViewFor(user: AvatarUser | null): AvatarView {
     if (!user) return {};
 
-    const photo = String(user.photo_base64 || '').trim();
+    const photo = String(user.photoBase64 || '').trim();
     if (photo) {
         return { photoUrl: `data:image/jpeg;base64,${photo}` };
     }
@@ -31,7 +31,7 @@ export function avatarViewFor(user: AvatarUser | null): AvatarView {
 }
 
 function initialsFor(user: AvatarUser): string {
-    const name = String(user.display_name || '').trim();
+    const name = String(user.displayName || '').trim();
     if (name && !name.startsWith('@')) {
         const parts = name.split(/\s+/).filter(Boolean);
         if (parts.length >= 2) {
@@ -45,7 +45,7 @@ function initialsFor(user: AvatarUser): string {
 }
 
 function paletteFor(user: AvatarUser): string {
-    const id = Number(user.user_id || 0);
+    const id = Number(user.userId || 0);
     const idx = Math.abs(id) % AVATAR_PALETTE.length;
     return AVATAR_PALETTE[idx];
 }

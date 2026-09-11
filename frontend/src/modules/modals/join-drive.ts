@@ -2,6 +2,7 @@
 
 import { joinSharedDrive } from '../channels';
 import { notify, dismissNotification } from '../notifications';
+import { humanizeBackendError } from '../errors';
 import JoinDriveModal from '../../ui/modals/JoinDriveModal.svelte';
 import { joinDriveModal } from '../../ui/modals/join-drive-modal-store';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
@@ -57,7 +58,7 @@ async function submitJoinDrive(link: string): Promise<void> {
         notify({
             level: 'error',
             title: 'Could not join drive',
-            body: String(err),
+            body: humanizeBackendError(err),
         });
     } finally {
         joinDriveModal.setBusy(false);

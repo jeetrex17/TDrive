@@ -1,22 +1,15 @@
 import { writable } from 'svelte/store';
+import type { DriveChannel, PendingJoin } from '../../types';
 
-export interface SidebarChannel {
-    id: number;
-    title: string;
-    kind: 'personal' | 'shared' | string;
-    is_active?: boolean;
-}
-
-export interface SidebarPendingJoin {
-    invite_hash: string;
-    title: string;
-    last_error?: string;
+export interface SidebarActionMenuRequest {
+    x: number;
+    y: number;
 }
 
 export interface SidebarState {
-    personal: SidebarChannel[];
-    shared: SidebarChannel[];
-    pending: SidebarPendingJoin[];
+    personal: DriveChannel[];
+    shared: DriveChannel[];
+    pending: PendingJoin[];
     activeChannelId: number | null;
     photosActive: boolean;
 }
@@ -33,4 +26,10 @@ export const sidebarState = writable<SidebarState>(initialState);
 
 export function setSidebarState(next: SidebarState): void {
     sidebarState.set(next);
+}
+
+export function setSidebarPhotosActive(photosActive: boolean): void {
+    sidebarState.update((current) => (
+        current.photosActive === photosActive ? current : { ...current, photosActive }
+    ));
 }

@@ -1,3 +1,5 @@
+import { appActions } from './app-actions';
+
 type Refresh = () => void | Promise<void>;
 
 let installed = false;
@@ -20,7 +22,7 @@ function isRefreshShortcut(event: KeyboardEvent): boolean {
 
 export function handleRefreshShortcut(
     event: KeyboardEvent,
-    refresh: Refresh = () => window.triggerRefresh?.(),
+    refresh: Refresh = () => appActions().triggerRefresh(),
 ): boolean {
     if (event.defaultPrevented || !isRefreshShortcut(event)) return false;
 

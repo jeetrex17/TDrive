@@ -13,14 +13,44 @@ describe('theme model', () => {
         const ids = THEME_DEFINITIONS.map((theme) => theme.id);
 
         expect(new Set(ids).size).toBe(ids.length);
-        expect(themesForAppearance('light').length).toBeGreaterThanOrEqual(4);
-        expect(themesForAppearance('dark').length).toBeGreaterThanOrEqual(5);
+        expect(themesForAppearance('light').length).toBeGreaterThanOrEqual(5);
+        expect(themesForAppearance('dark').length).toBeGreaterThanOrEqual(6);
         expect(THEME_DEFINITIONS.every((theme) => theme.preview.length === 4)).toBe(true);
         expect(THEME_DEFINITIONS.every((theme) => !('description' in theme))).toBe(true);
+        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'tdrive-day')).toMatchObject({
+            name: 'TDrive Day',
+            appearance: 'light',
+        });
+        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'tdrive-light')).toMatchObject({
+            name: 'TDrive Light',
+            appearance: 'light',
+        });
+        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'tdrive-vault')).toMatchObject({
+            name: 'TDrive Vault',
+            appearance: 'dark',
+        });
+
+        const previousThemeIds = [
+            'tdrive-light',
+            'catppuccin-latte',
+            'solarized-light',
+            'gruvbox-light',
+            'tokyo-night',
+            'catppuccin-mocha',
+            'dracula',
+            'solarized-dark',
+            'gruvbox-dark',
+            'nord',
+        ];
+        expect(ids).toEqual(expect.arrayContaining(previousThemeIds));
     });
 
-    it('defaults unknown or appearance-incompatible persisted values to dark', () => {
-        expect(DEFAULT_THEME_PREFERENCE.mode).toBe('dark');
+    it('defaults unknown or appearance-incompatible persisted values to the TDrive pair', () => {
+        expect(DEFAULT_THEME_PREFERENCE).toEqual({
+            mode: 'dark',
+            lightThemeId: 'tdrive-day',
+            darkThemeId: 'tdrive-vault',
+        });
         expect(
             normalizeThemePreference({
                 mode: 'neon',
@@ -28,6 +58,16 @@ describe('theme model', () => {
                 darkThemeId: 'missing-theme',
             }),
         ).toEqual(DEFAULT_THEME_PREFERENCE);
+    });
+
+    it('preserves the previous TDrive Light and Tokyo Night stored preference IDs', () => {
+        const persisted = {
+            mode: 'dark',
+            lightThemeId: 'tdrive-light',
+            darkThemeId: 'tokyo-night',
+        } as const;
+
+        expect(normalizeThemePreference(persisted)).toEqual(persisted);
     });
 
     it('migrates the removed System mode to explicit dark without losing valid palettes', () => {

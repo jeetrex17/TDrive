@@ -31,7 +31,7 @@
     let menuEl = $state<HTMLElement | null>(null);
 
     const displayName = $derived(
-        !$profileLoaded ? 'Loading account…' : $profileUser?.display_name || 'Telegram account',
+        !$profileLoaded ? 'Loading account…' : $profileUser?.displayName || 'Telegram account',
     );
     const handle = $derived(($profileUser?.username || '').trim());
 

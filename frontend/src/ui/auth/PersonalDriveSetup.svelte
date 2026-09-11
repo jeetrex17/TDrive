@@ -3,7 +3,8 @@
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
-    import type { DriveScanProgress, PersonalDriveCandidate, PersonalDrivePhase } from './personal-drive-store';
+    import type { PersonalDriveCandidate } from '../../types';
+    import type { DriveScanProgress, PersonalDrivePhase } from './personal-drive-store';
 
     interface Props {
         phase: PersonalDrivePhase;
@@ -160,11 +161,11 @@
                                 {/if}
                             </span>
                             <span class="drive-choice-meta">
-                                <span class:in-use={candidate.has_activity}>
-                                    {candidate.has_activity ? 'In use' : 'Empty'}
+                                <span class:in-use={candidate.hasActivity}>
+                                    {candidate.hasActivity ? 'In use' : 'Empty'}
                                 </span>
-                                {#if formatCreated(candidate.created_at)}
-                                    <span>{formatCreated(candidate.created_at)}</span>
+                                {#if formatCreated(candidate.createdAt)}
+                                    <span>{formatCreated(candidate.createdAt)}</span>
                                 {/if}
                                 <span>ID {candidate.id}</span>
                             </span>

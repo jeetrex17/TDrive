@@ -2,7 +2,7 @@
 // chooses "Encrypt before upload". This password protects every
 // encrypted personal file; if forgotten, those files cannot be recovered.
 
-import { CreateEncryptionPassword } from '../../../wailsjs/go/main/App';
+import { createEncryptionPassword } from '../../api';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
 import EncryptionSetupModal from '../../ui/modals/EncryptionSetupModal.svelte';
@@ -48,7 +48,7 @@ async function submitSetup(password: string, confirmPassword: string, hint: stri
     encryptionSetupModal.setError('');
     encryptionSetupModal.setBusy(true);
     try {
-        await CreateEncryptionPassword(password, hint);
+        await createEncryptionPassword(password, hint);
         await loadEncryptionStatus();
         finish(true);
         notify({

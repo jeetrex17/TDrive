@@ -7,70 +7,74 @@
 
 import { state, resetFolderCaches, resetSelection } from '../state';
 import {
-    ListChannels,
-    CreateSharedDrive,
-    JoinSharedDrive,
-    GetInviteLink,
-    GetApprovalInviteLink,
-    LeaveSharedDrive,
-    ListPendingJoins,
-    CheckPendingJoin,
-    RemovePendingJoin,
-    ListJoinRequests,
-    ApproveJoinRequest,
-    RejectJoinRequest,
-    SetActiveChannel,
-    SyncChannel,
-} from '../../wailsjs/go/main/App';
+    approveJoinRequest as approveJoinRequestApi,
+    checkPendingJoin as checkPendingJoinApi,
+    createSharedDrive as createSharedDriveApi,
+    getApprovalInviteLink as getApprovalInviteLinkApi,
+    getInviteLink as getInviteLinkApi,
+    joinSharedDrive as joinSharedDriveApi,
+    leaveSharedDrive as leaveSharedDriveApi,
+    listChannels,
+    listJoinRequests as listJoinRequestsApi,
+    listPendingJoins,
+    onRuntimeEvent,
+    rejectJoinRequest as rejectJoinRequestApi,
+    removePendingJoin as removePendingJoinApi,
+    setActiveChannel,
+    syncChannel,
+} from '../api';
+import type { DriveChannel, JoinDriveResult, JoinRequest, PendingJoin } from '../types';
 import { runGlobalSearch } from './search';
 
-let renderSidebar = () => {};
-let refreshFilesView = () => {};
+interface ChannelRenderers {
+    onSidebarUpdate: () => void;
+    onActiveDriveChanged: () => void | Promise<void>;
+}
+
+interface LiveSyncPayload {
+    channel_id?: unknown;
+    error?: unknown;
+}
+
+let renderSidebar: () => void = () => undefined;
+let refreshFilesView: () => void | Promise<void> = () => undefined;
 const pendingLiveSyncChannels = new Set<number>();
 let processingLiveSyncRefresh = false;
 let liveSyncEventsBound = false;
 
-export function bindChannelsRenderers({ onSidebarUpdate, onActiveDriveChanged }: { onSidebarUpdate: any; onActiveDriveChanged: any }) {
-    if (typeof onSidebarUpdate === 'function') renderSidebar = onSidebarUpdate;
-    if (typeof onActiveDriveChanged === 'function') refreshFilesView = onActiveDriveChanged;
+export function bindChannelsRenderers({ onSidebarUpdate, onActiveDriveChanged }: ChannelRenderers): void {
+    renderSidebar = onSidebarUpdate;
+    refreshFilesView = onActiveDriveChanged;
 }
 
-function applyChannels(list: any) {
-    const arr = Array.isArray(list) ? list : [];
-    state.channels = arr;
-    const active = arr.find((c: any) => c && c.is_active) || arr.find((c: any) => c && c.kind === 'personal') || null;
+function applyChannels(channels: DriveChannel[]): void {
+    state.channels = channels;
+    const active = channels.find((channel) => channel.isActive)
+        ?? channels.find((channel) => channel.kind === 'personal')
+        ?? null;
     state.activeChannel = active
-        ? { id: Number(active.id), title: String(active.title || ''), kind: String(active.kind || '') }
+        ? { id: active.id, title: active.title, kind: active.kind }
         : null;
-    applyDriveKindUI();
 }
 
-function applyPendingJoins(list: any) {
-    state.pendingJoins = Array.isArray(list) ? list : [];
+function applyPendingJoins(pending: PendingJoin[]): void {
+    state.pendingJoins = pending;
 }
 
-// Hook for per-drive-kind UI tweaks. Step 4 hid folder controls in shared
-// drives; Step 5 unlocks shared folders so the function is currently a
-// no-op. Kept as a hook because Step 6 polish (uploader chips, member
-// count, unread dots) will likely want to toggle UI based on drive kind.
-function applyDriveKindUI() {
-    // Intentionally empty.
-}
-
-export async function loadChannels() {
+export async function loadChannels(): Promise<void> {
     try {
         const [channels, pending] = await Promise.all([
-            ListChannels(),
-            ListPendingJoins().catch((err) => {
-                console.warn('ListPendingJoins failed:', err);
+            listChannels(),
+            listPendingJoins().catch((error: unknown) => {
+                console.warn('ListPendingJoins failed:', error);
                 return [];
             }),
         ]);
         applyChannels(channels);
         applyPendingJoins(pending);
         renderSidebar();
-    } catch (err) {
-        console.error('ListChannels failed:', err);
+    } catch (error) {
+        console.error('ListChannels failed:', error);
         state.channels = [];
         state.activeChannel = null;
         state.pendingJoins = [];
@@ -78,44 +82,43 @@ export async function loadChannels() {
     }
 }
 
-export function setupLiveSyncEvents() {
+export function setupLiveSyncEvents(): void {
     if (liveSyncEventsBound) return;
-    if (!window.runtime?.EventsOn) return;
-    liveSyncEventsBound = true;
-
-    window.runtime.EventsOn("live_sync_completed", (payload: any) => {
+    const offCompleted = onRuntimeEvent<[LiveSyncPayload]>("live_sync_completed", (payload) => {
         queueLiveSyncRefresh(payload);
     });
-    window.runtime.EventsOn("live_sync_failed", (payload: any) => {
-        const channelID = Number(payload?.channel_id || 0);
-        const activeID = Number(state.activeChannel?.id || 0);
-        if (channelID && channelID !== activeID) return;
-        console.warn("live sync failed:", payload?.error || payload);
+    if (!offCompleted) return;
+    liveSyncEventsBound = true;
+    onRuntimeEvent<[LiveSyncPayload]>("live_sync_failed", (payload) => {
+        const channelId = Number(payload?.channel_id ?? 0);
+        const activeId = Number(state.activeChannel?.id ?? 0);
+        if (channelId && channelId !== activeId) return;
+        console.warn("live sync failed:", payload?.error ?? payload);
     });
 }
 
-function queueLiveSyncRefresh(payload: any) {
-    const channelID = Number(payload?.channel_id || 0);
-    if (!channelID) return;
-    pendingLiveSyncChannels.add(channelID);
+function queueLiveSyncRefresh(payload: LiveSyncPayload): void {
+    const channelId = Number(payload?.channel_id ?? 0);
+    if (!channelId) return;
+    pendingLiveSyncChannels.add(channelId);
     if (processingLiveSyncRefresh) return;
     processingLiveSyncRefresh = true;
     void processLiveSyncRefreshes();
 }
 
-async function processLiveSyncRefreshes() {
+async function processLiveSyncRefreshes(): Promise<void> {
     try {
         while (pendingLiveSyncChannels.size > 0) {
             const changedChannels = new Set(pendingLiveSyncChannels);
             pendingLiveSyncChannels.clear();
 
             await loadChannels();
-            const activeID = Number(state.activeChannel?.id || 0);
-            if (!activeID || !changedChannels.has(activeID)) continue;
+            const activeId = Number(state.activeChannel?.id ?? 0);
+            if (!activeId || !changedChannels.has(activeId)) continue;
 
             state.telegramRootCache = null;
-            if (String(state.searchQuery || "").trim()) {
-                runGlobalSearch();
+            if (state.searchQuery.trim()) {
+                void runGlobalSearch();
             } else {
                 await refreshFilesView();
             }
@@ -125,88 +128,81 @@ async function processLiveSyncRefreshes() {
     }
 }
 
-export async function createSharedDrive(title: any, requireApproval = false) {
-    const trimmed = String(title || '').trim();
+export async function createSharedDrive(title: string, requireApproval = false): Promise<DriveChannel> {
+    const trimmed = title.trim();
     if (!trimmed) throw new Error('Title required');
-    const info = await CreateSharedDrive(trimmed, Boolean(requireApproval));
+    const info = await createSharedDriveApi(trimmed, requireApproval);
     await loadChannels();
-    if (info && Number(info.id)) {
-        await switchActiveChannel(Number(info.id));
-    }
-    return info; // includes invite_link for the share modal
+    if (info.id) await switchActiveChannel(info.id);
+    return info;
 }
 
-export async function joinSharedDrive(link: any) {
-    const trimmed = String(link || '').trim();
+export async function joinSharedDrive(link: string): Promise<JoinDriveResult> {
+    const trimmed = link.trim();
     if (!trimmed) throw new Error('Invite link required');
-    const result = await JoinSharedDrive(trimmed);
+    const result = await joinSharedDriveApi(trimmed);
     await loadChannels();
-    if (result?.status === 'joined' && result?.channel && Number(result.channel.id)) {
-        await switchActiveChannel(Number(result.channel.id));
+    if (result.status === 'joined' && result.channel?.id) {
+        await switchActiveChannel(result.channel.id);
     }
     return result;
 }
 
-export async function getInviteLink(channelID: any) {
-    return GetInviteLink(Number(channelID || 0));
+export function getInviteLink(channelId: number): Promise<string> {
+    return getInviteLinkApi(channelId);
 }
 
-export async function getApprovalInviteLink(channelID: any) {
-    return GetApprovalInviteLink(Number(channelID || 0));
+export function getApprovalInviteLink(channelId: number): Promise<string> {
+    return getApprovalInviteLinkApi(channelId);
 }
 
-export async function checkPendingJoin(inviteHash: any) {
-    const result = await CheckPendingJoin(String(inviteHash || ''));
+export async function checkPendingJoin(inviteHash: string): Promise<JoinDriveResult> {
+    const result = await checkPendingJoinApi(inviteHash);
     await loadChannels();
-    if (result?.status === 'joined' && result?.channel && Number(result.channel.id)) {
-        await switchActiveChannel(Number(result.channel.id));
+    if (result.status === 'joined' && result.channel?.id) {
+        await switchActiveChannel(result.channel.id);
     }
     return result;
 }
 
-export async function removePendingJoin(inviteHash: any) {
-    await RemovePendingJoin(String(inviteHash || ''));
+export async function removePendingJoin(inviteHash: string): Promise<void> {
+    await removePendingJoinApi(inviteHash);
     await loadChannels();
 }
 
-export async function listJoinRequests(channelID: any) {
-    return ListJoinRequests(Number(channelID || 0));
+export function listJoinRequests(channelId: number): Promise<JoinRequest[]> {
+    return listJoinRequestsApi(channelId);
 }
 
-export async function approveJoinRequest(channelID: any, userID: any) {
-    await ApproveJoinRequest(Number(channelID || 0), Number(userID || 0));
+export function approveJoinRequest(channelId: number, userId: number): Promise<void> {
+    return approveJoinRequestApi(channelId, userId);
 }
 
-export async function rejectJoinRequest(channelID: any, userID: any) {
-    await RejectJoinRequest(Number(channelID || 0), Number(userID || 0));
+export function rejectJoinRequest(channelId: number, userId: number): Promise<void> {
+    return rejectJoinRequestApi(channelId, userId);
 }
 
-export async function leaveSharedDrive(channelID: any) {
-    if (!channelID) throw new Error('Channel id required');
-    await LeaveSharedDrive(Number(channelID));
+export async function leaveSharedDrive(channelId: number): Promise<void> {
+    if (!channelId) throw new Error('Channel id required');
+    await leaveSharedDriveApi(channelId);
     await loadChannels();
-    if (state.activeChannel) {
-        await switchActiveChannel(state.activeChannel.id);
-    }
+    if (state.activeChannel) await switchActiveChannel(state.activeChannel.id);
 }
 
-export async function switchActiveChannel(channelID: any) {
-    if (!channelID) return;
-    if (state.channelSwitchInProgress) return;
+export async function switchActiveChannel(channelId: number): Promise<void> {
+    if (!channelId || state.channelSwitchInProgress) return;
     state.channelSwitchInProgress = true;
     try {
-        await SetActiveChannel(Number(channelID));
+        await setActiveChannel(channelId);
 
-        const target = state.channels.find((c) => Number(c?.id) === Number(channelID));
+        const target = state.channels.find((channel) => channel.id === channelId) ?? null;
         state.activeChannel = target
-            ? { id: Number(target.id), title: String(target.title || ''), kind: String(target.kind || '') }
+            ? { id: target.id, title: target.title, kind: target.kind }
             : null;
-        for (const c of state.channels) {
-            if (c) c.is_active = Number(c.id) === Number(channelID);
+        for (const channel of state.channels) {
+            channel.isActive = channel.id === channelId;
         }
-        applyDriveKindUI();
 
-        // Reset folder/file view state — different drive, different tree.
         state.currentFolderId = '';
         state.folderPath = [];
         state.virtualView = null;
@@ -215,41 +211,29 @@ export async function switchActiveChannel(channelID: any) {
 
         renderSidebar();
         await refreshFilesView();
-
-        // Background incremental sync. Don't await — UI feels snappier
-        // showing the local cache immediately and folding new ops in
-        // when they arrive.
-        syncInBackground(channelID);
-    } catch (err) {
-        console.error('SetActiveChannel failed:', err);
+        syncInBackground(channelId);
+    } catch (error) {
+        console.error('SetActiveChannel failed:', error);
     } finally {
         state.channelSwitchInProgress = false;
     }
 }
 
-// refreshActiveDrive is the manual-Refresh entrypoint. It runs an
-// incremental sync against the active channel, then re-renders. Awaitable
-// — caller can show progress UI and react when done. Sync errors are
-// logged and swallowed; the UI re-render still happens so users see
-// whatever local state we have.
-export async function refreshActiveDrive() {
+export async function refreshActiveDrive(): Promise<void> {
     if (!state.activeChannel) {
         await refreshFilesView();
         return;
     }
     try {
-        await SyncChannel(Number(state.activeChannel.id));
-    } catch (err) {
-        console.warn('SyncChannel:', err);
+        await syncChannel(state.activeChannel.id);
+    } catch (error) {
+        console.warn('SyncChannel:', error);
     }
     await refreshFilesView();
 }
 
-// syncInBackground is fire-and-forget. Used by switchActiveChannel where
-// the user has already seen the local cache; we just want to fold in any
-// new ops asynchronously.
-function syncInBackground(channelID: any) {
-    SyncChannel(Number(channelID))
+function syncInBackground(channelId: number): void {
+    void syncChannel(channelId)
         .then(() => refreshFilesView())
-        .catch((err) => console.warn('SyncChannel:', err));
+        .catch((error: unknown) => console.warn('SyncChannel:', error));
 }

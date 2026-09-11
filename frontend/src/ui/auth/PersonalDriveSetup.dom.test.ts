@@ -11,14 +11,14 @@ let onRetry: () => void;
 const candidates = [{
     id: '8200',
     title: 'TDrive',
-    created_at: 1_700_000_000,
-    has_activity: true,
+    createdAt: 1_700_000_000,
+    hasActivity: true,
     recommended: true,
 }, {
     id: '8300',
     title: 'Archive',
-    created_at: 1_600_000_000,
-    has_activity: false,
+    createdAt: 1_600_000_000,
+    hasActivity: false,
     recommended: false,
 }];
 

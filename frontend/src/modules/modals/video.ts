@@ -3,10 +3,15 @@ import {
     attachNativeMedia,
     closeMedia,
     closeNativeMedia,
+    enterFullscreen,
+    exitFullscreen,
+    fullscreenAvailable,
     getMediaStats,
     hideNativeSeekThumbnail,
+    isFullscreen,
     moveNativeSeekThumbnail,
     nativeMediaCommand,
+    onRuntimeEvent,
     openMedia,
     openNativeMedia,
     resizeNativeMedia,
@@ -18,7 +23,7 @@ import {
     type NativeMediaRect,
     type NativeMediaStatePayload,
 } from "../../api";
-import { EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from "../../../wailsjs/runtime/runtime";
+
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import {
@@ -761,7 +766,7 @@ function takePendingNativeMediaState(token: string) {
 
 function bindNativeMediaStateLifecycle() {
     if (unsubscribeNativeMediaState) return;
-    unsubscribeNativeMediaState = EventsOn("native_media_state", routeNativeMediaState);
+    unsubscribeNativeMediaState = onRuntimeEvent<[unknown]>("native_media_state", routeNativeMediaState);
 }
 
 // coalesceRanges clamps ranges to the known duration and merges any whose gap is
@@ -844,11 +849,7 @@ function shouldMeasureNativeFallbackBeforeOpen() {
 }
 
 function fullscreenRuntimeAvailable() {
-    return Boolean(
-        window.runtime?.WindowFullscreen &&
-        window.runtime?.WindowUnfullscreen &&
-        window.runtime?.WindowIsFullscreen
-    );
+    return fullscreenAvailable();
 }
 
 function canUseFullscreen() {
@@ -873,7 +874,7 @@ function applyFullscreenState(isFullscreen: boolean) {
 async function readWindowFullscreen() {
     if (!fullscreenRuntimeAvailable()) return false;
     try {
-        return Boolean(await WindowIsFullscreen());
+        return await isFullscreen();
     } catch (err) {
         console.warn("WindowIsFullscreen failed:", err);
         return false;
@@ -888,7 +889,7 @@ async function exitVideoFullscreen() {
     if (!fullscreenRuntimeAvailable()) return;
     if (!(await readWindowFullscreen())) return;
     try {
-        WindowUnfullscreen();
+        exitFullscreen();
         applyFullscreenState(false);
     } catch (err) {
         console.warn("WindowUnfullscreen failed:", err);
@@ -900,9 +901,9 @@ async function toggleFullscreen() {
     try {
         const next = !(await readWindowFullscreen());
         if (next) {
-            WindowFullscreen();
+            enterFullscreen();
         } else {
-            WindowUnfullscreen();
+            exitFullscreen();
         }
         applyFullscreenState(next);
     } catch (err) {
@@ -2956,7 +2957,7 @@ function handleWindowResize() {
 
 function bindEncryptedMediaLifecycle() {
     if (unsubscribeEncryptedMediaSessionsClosed) return;
-    unsubscribeEncryptedMediaSessionsClosed = EventsOn("encrypted_media_sessions_closed", () => {
+    unsubscribeEncryptedMediaSessionsClosed = onRuntimeEvent("encrypted_media_sessions_closed", () => {
         if (!activeOpenAttempt || (!activeOpenAttempt.target.encrypted && !activeMediaEncrypted)) return;
         void closeVideoModal();
     });

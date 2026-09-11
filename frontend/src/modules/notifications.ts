@@ -15,7 +15,7 @@
 //   notify({ level: 'success', title: 'Folder created' });
 //
 //   // Errors are sticky by default; user dismisses or clicks to copy.
-//   notify({ level: 'error', title: 'Could not join drive', body: String(err) });
+//   notify({ level: 'error', title: 'Could not join drive', body: 'Try again.' });
 //
 // This module owns the queue: capping, replace-by-id, and the expiry ticker
 // with its hover-pause rules. ToastStack.svelte only renders the store.

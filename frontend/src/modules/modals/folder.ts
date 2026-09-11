@@ -1,8 +1,10 @@
 // New folder modal for TDrive frontend
 
 import { state } from '../../state';
-import { createFolder } from '../drive-data';
+import { createFolder } from '../../api';
 import { notify } from '../notifications';
+import { humanizeBackendError } from '../errors';
+import { appActions } from '../app-actions';
 import FolderModal from '../../ui/modals/FolderModal.svelte';
 import {
     closeFolderModalView,
@@ -43,7 +45,7 @@ async function submitFolder(name: string): Promise<void> {
 
     // Render immediately so the new row appears under the cursor before the
     // Telegram round-trip completes.
-    window.refreshFiles();
+    appActions().refreshFiles();
 
     let failed = false;
     try {
@@ -54,7 +56,7 @@ async function submitFolder(name: string): Promise<void> {
         notify({
             level: 'error',
             title: 'Could not create folder',
-            body: String(err),
+            body: humanizeBackendError(err),
         });
     } finally {
         // Drop the pending overlay regardless of outcome. The follow-up
@@ -63,7 +65,7 @@ async function submitFolder(name: string): Promise<void> {
         state.pendingFolderOps.delete(tempId);
         inFlight = false;
         setFolderModalInFlight(false);
-        window.refreshFiles();
+        appActions().refreshFiles();
         if (!failed) {
             notify({ level: 'success', title: `Folder "${trimmed}" created` });
         }

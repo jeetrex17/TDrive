@@ -48,8 +48,8 @@ describe('PersonalDriveSetup', () => {
             candidates: [{
                 id: '8200',
                 title: '<img src=x>',
-                created_at: 1_700_000_000,
-                has_activity: true,
+                createdAt: 1_700_000_000,
+                hasActivity: true,
                 recommended: true,
             }],
         });
@@ -65,9 +65,9 @@ describe('PersonalDriveSetup', () => {
     it('shows every channel ID so identically named channels stay distinguishable', () => {
         const body = renderSetup({
             candidates: [{
-                id: '8200', title: 'TDrive', created_at: 100, has_activity: true, recommended: true,
+                id: '8200', title: 'TDrive', createdAt: 100, hasActivity: true, recommended: true,
             }, {
-                id: '8300', title: 'TDrive', created_at: 200, has_activity: false, recommended: false,
+                id: '8300', title: 'TDrive', createdAt: 200, hasActivity: false, recommended: false,
             }],
         });
         expect(body).toContain('ID 8200');
@@ -89,8 +89,8 @@ describe('PersonalDriveSetup', () => {
             candidates: [{
                 id: '8200',
                 title: 'TDrive-with-a-very-long-unbroken-channel-name',
-                created_at: 0,
-                has_activity: false,
+                createdAt: 0,
+                hasActivity: false,
                 recommended: true,
             }],
         });

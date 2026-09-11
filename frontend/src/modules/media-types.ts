@@ -92,6 +92,11 @@ export function fileOpenKind(name: string): FileOpenKind {
     return "unsupported";
 }
 
+export function canOpenFileViewer(name: string): boolean {
+    const kind = fileOpenKind(name);
+    return kind === "audio" || kind === "pdf" || kind === "text";
+}
+
 export function isFileOpenable(name: string): boolean {
     return fileOpenKind(name) !== "unsupported";
 }

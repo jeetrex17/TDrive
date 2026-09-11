@@ -21,10 +21,10 @@ function release(version: string) {
     return {
         version,
         tag: `v${version}`,
-        page_url: `https://github.com/x/y/releases/tag/v${version}`,
-        published_at: '2026-08-25T09:18:39Z',
-        asset_name: `TDrive-v${version}-macos-arm64.zip`,
-        asset_size: 42_000_000,
+        pageUrl: 'https://github.com/x/y/releases/tag/v' + version,
+        publishedAt: '2026-08-25T09:18:39Z',
+        assetName: 'TDrive-v' + version + '-macos-arm64.zip',
+        assetSize: 42_000_000,
     };
 }
 
@@ -83,7 +83,7 @@ describe('menuBadge', () => {
         expect(menuBadge(stateWith({ phase: 'installing' }))).toBe('ready');
         expect(menuBadge(stateWith({ phase: 'checking' }))).toBe('checking');
         expect(menuBadge(stateWith({ phase: 'available' }))).toBe('none');
-        expect(menuBadge(stateWith({ phase: 'up_to_date', error: 'boom', error_stage: 'check' }))).toBe('error');
+        expect(menuBadge(stateWith({ phase: 'up_to_date', error: 'boom', errorStage: 'check' }))).toBe('error');
     });
 });
 
@@ -105,8 +105,8 @@ describe('shouldAnnounce', () => {
 
 describe('formatPlatform', () => {
     it('renders friendly OS names', () => {
-        expect(formatPlatform({ version: '1', os: 'darwin', arch: 'arm64', dev_build: false })).toBe('macOS arm64');
-        expect(formatPlatform({ version: '1', os: 'windows', arch: 'amd64', dev_build: false })).toBe('Windows amd64');
+        expect(formatPlatform({ version: '1', os: 'darwin', arch: 'arm64', devBuild: false })).toBe('macOS arm64');
+        expect(formatPlatform({ version: '1', os: 'windows', arch: 'amd64', devBuild: false })).toBe('Windows amd64');
         expect(formatPlatform(null)).toBe('');
     });
 });

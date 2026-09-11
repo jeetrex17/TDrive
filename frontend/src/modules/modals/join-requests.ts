@@ -1,7 +1,9 @@
 // Admin modal for approval-required Telegram invite links.
 
 import { approveJoinRequest, listJoinRequests, rejectJoinRequest } from '../channels';
+import type { DriveChannel, JoinRequest } from '../../types';
 import { notify } from '../notifications';
+import { humanizeBackendError } from '../errors';
 import JoinRequestsModal from '../../ui/modals/JoinRequestsModal.svelte';
 import {
     joinRequestsList,
@@ -26,7 +28,7 @@ export function setupJoinRequestsModal() {
     });
 }
 
-export async function openJoinRequestsModal(drive: any) {
+export async function openJoinRequestsModal(drive: Pick<DriveChannel, 'id' | 'title'>): Promise<void> {
     const driveId = Number(drive?.id || 0);
     if (!driveId) return;
 
@@ -35,13 +37,12 @@ export async function openJoinRequestsModal(drive: any) {
     await loadRequests();
 }
 
-function toRow(req: any): JoinRequestRow {
-    const userId = Number(req?.user_id || 0);
+function toRow(request: JoinRequest): JoinRequestRow {
     return {
-        userId,
-        displayName: String(req?.display_name || `User ${userId || ''}`).trim(),
-        username: String(req?.username || ''),
-        requestedAt: Number(req?.requested_at || 0),
+        userId: request.userId,
+        displayName: request.displayName.trim() || `User ${request.userId || ''}`,
+        username: request.username,
+        requestedAt: request.requestedAt,
     };
 }
 
@@ -55,7 +56,7 @@ async function loadRequests(): Promise<void> {
         if (driveId !== activeDriveId) return; // modal moved to another drive
         joinRequestsList.set({
             status: 'ready',
-            rows: (Array.isArray(rows) ? rows : []).map(toRow),
+            rows: rows.map(toRow),
             actingUserId: 0,
         });
     } catch (err) {
@@ -82,7 +83,7 @@ async function resolveRequest(userId: number, approved: boolean): Promise<void> 
         notify({
             level: 'error',
             title: `Could not ${approved ? 'approve' : 'reject'} request`,
-            body: String(err),
+            body: humanizeBackendError(err),
         });
         joinRequestsList.update((view) =>
             view.status === 'ready' ? { ...view, actingUserId: 0 } : view,

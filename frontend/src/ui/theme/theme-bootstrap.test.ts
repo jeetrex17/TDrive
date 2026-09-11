@@ -42,11 +42,20 @@ describe('pre-paint theme bootstrap', () => {
         expect(runBootstrap(saved)).toEqual({ theme: 'nord', themeAppearance: 'dark' });
     });
 
-    it('normalizes missing and unknown persisted values to the dark default without OS lookup', () => {
-        const invalid = JSON.stringify({ mode: 'sepia', lightThemeId: 'dracula', darkThemeId: 'missing' });
+    it('keeps legacy TDrive Light and Tokyo Night preferences during pre-paint boot', () => {
+        const saved = JSON.stringify({
+            mode: 'light',
+            lightThemeId: 'tdrive-light',
+            darkThemeId: 'tokyo-night',
+        });
 
-        expect(runBootstrap(null)).toEqual({ theme: 'tokyo-night', themeAppearance: 'dark' });
-        expect(runBootstrap(invalid)).toEqual({ theme: 'tokyo-night', themeAppearance: 'dark' });
+        expect(runBootstrap(saved)).toEqual({ theme: 'tdrive-light', themeAppearance: 'light' });
+    });
+
+    it('normalizes missing and unknown persisted values to TDrive Vault without OS lookup', () => {
+        const invalid = JSON.stringify({ mode: 'sepia', lightThemeId: 'dracula', darkThemeId: 'missing' });
+        expect(runBootstrap(null)).toEqual({ theme: 'tdrive-vault', themeAppearance: 'dark' });
+        expect(runBootstrap(invalid)).toEqual({ theme: 'tdrive-vault', themeAppearance: 'dark' });
         expect(bootstrap).not.toContain('matchMedia');
         expect(bootstrap).not.toContain('prefers-color-scheme');
     });

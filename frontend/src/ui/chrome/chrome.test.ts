@@ -56,12 +56,12 @@ describe('Breadcrumb', () => {
 
 describe('Avatar', () => {
     it('renders a photo background when available', () => {
-        const { body } = render(Avatar, { props: { user: { photo_base64: 'Zm9v' } } });
+        const { body } = render(Avatar, { props: { user: { photoBase64: 'Zm9v' } } });
         expect(body).toContain('data:image/jpeg;base64,Zm9v');
     });
 
     it('falls back to initials on the deterministic palette', () => {
-        const { body } = render(Avatar, { props: { user: { display_name: 'Ada Lovelace', user_id: 1 } } });
+        const { body } = render(Avatar, { props: { user: { displayName: 'Ada Lovelace', userId: 1 } } });
         expect(body).toContain('>AL</span>');
         expect(body).toContain('background: #bb9af7'); // 1 % 8 -> palette[1]
     });
@@ -79,7 +79,7 @@ describe('ProfileMenu', () => {
     });
 
     it('renders name, handle, and the encryption entry when enabled', () => {
-        profileUser.set({ display_name: 'Ada L.', username: 'ada', user_id: 7 });
+        profileUser.set({ displayName: 'Ada L.', username: 'ada', userId: 7 });
         profileLoaded.set(true);
         encryptionEntryVisible.set(true);
 

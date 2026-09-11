@@ -2,7 +2,7 @@
 // account/settings actions belong here too.
 
 import { get } from 'svelte/store';
-import { Me } from '../../wailsjs/go/main/App';
+import { getSelfUser } from '../api';
 import { renderEncryptionSettingsEntry } from './encryption';
 import { openLogoutModal } from './modals/logout';
 import { openEncryptionSettingsModal } from './modals/encryption-settings';
@@ -40,9 +40,9 @@ export async function loadSelfUser(): Promise<ProfileUser | null> {
     selfUserPromise = (async () => {
         let user: ProfileUser | null = null;
         try {
-            user = ((await Me()) as ProfileUser) || null;
+            user = await getSelfUser();
         } catch (err) {
-            console.warn('Me failed:', err);
+            console.warn('Profile load failed:', err);
         }
         profileUser.set(user);
         profileLoaded.set(true);

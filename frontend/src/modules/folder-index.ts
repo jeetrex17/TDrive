@@ -3,25 +3,25 @@
 // (to block dropping a folder into itself or one of its own subfolders).
 
 import { state } from '../state';
-import { getFolderContents } from './drive-data';
-import type { backend } from '../../wailsjs/go/models';
+import { getFolderContents } from '../api';
+import type { FolderItem } from '../types';
 
 export interface FolderIndex {
-    folders: backend.Folder[];
-    byId: Map<string, backend.Folder>;
+    folders: FolderItem[];
+    byId: Map<string, FolderItem>;
     children: Map<string, string[]>;
 }
 
 export async function buildFolderIndex(): Promise<FolderIndex> {
-    const folders: backend.Folder[] = [];
-    const byId = new Map<string, backend.Folder>();
+    const folders: FolderItem[] = [];
+    const byId = new Map<string, FolderItem>();
     const children = new Map<string, string[]>();
 
-    const addFolder = (folder: backend.Folder) => {
+    const addFolder = (folder: FolderItem) => {
         if (!folder?.id || byId.has(folder.id)) return;
         byId.set(folder.id, folder);
         folders.push(folder);
-        const pid = folder.parent_id || "";
+        const pid = folder.parentId;
         if (!children.has(pid)) children.set(pid, []);
         children.get(pid)!.push(folder.id);
     };
@@ -34,7 +34,7 @@ export async function buildFolderIndex(): Promise<FolderIndex> {
         if (visited.has(parentID)) continue;
         visited.add(parentID);
 
-        let contents: { folders?: backend.Folder[] };
+        let contents: { folders: FolderItem[] };
         try {
             contents = await getFolderContents(parentID);
         } catch {
@@ -49,7 +49,7 @@ export async function buildFolderIndex(): Promise<FolderIndex> {
     }
 
     folders.forEach((folder) => {
-        const pid = folder.parent_id || "";
+        const pid = folder.parentId;
         if (!children.has(pid)) children.set(pid, []);
         children.get(pid)!.sort((a, b) => (byId.get(a)?.name || "").localeCompare(byId.get(b)?.name || ""));
     });

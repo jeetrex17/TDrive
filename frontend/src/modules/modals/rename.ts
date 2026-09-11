@@ -1,8 +1,9 @@
 // Rename modal for TDrive frontend
 
-import { RenameFile, RenameFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
+import { addTelegramFileToDrive, renameFile, renameFolder } from '../../api';
 import { callWithPasswordRetry } from './encryption-password';
 import { humanizeBackendError } from '../errors';
+import { appActions } from '../app-actions';
 import RenameModal from '../../ui/modals/RenameModal.svelte';
 import {
     closeRenameModalView,
@@ -19,12 +20,10 @@ async function ensureFileInTdriveSystem(target: RenameModalTarget): Promise<void
     if (target.type !== 'file') return;
     if (String(target.source || 'fs') !== 'tg') return;
 
-    const res = await MsgToTdriveSystem(
-        Number(target.id),
-        String(target.name || ''),
-        Number(target.size || 0),
-        String(target.parentId || ''),
-    );
+    const res = await addTelegramFileToDrive(Number(target.id),
+    String(target.name || ''),
+    Number(target.size || 0),
+    String(target.parentId || ''),);
 
     if (typeof res === 'string' && res.startsWith('Error')) {
         throw new Error(humanizeBackendError(res));
@@ -72,10 +71,10 @@ async function submitRename(target: RenameModalTarget, rawName: string): Promise
     try {
         let res = '';
         if (target.type === 'folder') {
-            res = await callWithPasswordRetry(() => RenameFolder(String(target.id), nextName));
+            res = await callWithPasswordRetry(() => renameFolder(String(target.id), nextName));
         } else {
             await ensureFileInTdriveSystem(target);
-            res = await callWithPasswordRetry(() => RenameFile(Number(target.id), nextName));
+            res = await callWithPasswordRetry(() => renameFile(Number(target.id), nextName));
         }
 
         if (typeof res === 'string' && res.startsWith('Error')) {
@@ -83,7 +82,7 @@ async function submitRename(target: RenameModalTarget, rawName: string): Promise
             return;
         }
         closeRenameModalView();
-        window.refreshFiles();
+        appActions().refreshFiles();
     } catch (err) {
         setRenameModalError(humanizeBackendError(err));
     } finally {

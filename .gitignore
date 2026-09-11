@@ -7,9 +7,10 @@ frontend/coverage
 .env
 .env.local
 secret.json
-*.json
-# Tracked config that the blanket *.json above would otherwise hide.
-!frontend/tsconfig.json
+/imp_config.json
+/session.json
+/config.json
+/cli.json
 
 # --- Wails / Build Artifacts ---
 build/bin/

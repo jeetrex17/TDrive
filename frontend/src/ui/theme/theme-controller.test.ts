@@ -12,7 +12,7 @@ describe('theme controller without a browser runtime', () => {
 
         expect(get(controller.state).preference.mode).toBe('dark');
         expect(get(controller.state).resolvedAppearance).toBe('dark');
-        expect(get(controller.state).resolvedThemeId).toBe('tokyo-night');
+        expect(get(controller.state).resolvedThemeId).toBe('tdrive-vault');
         controller.destroy();
     });
 
@@ -22,7 +22,7 @@ describe('theme controller without a browser runtime', () => {
         expect(() => controller.start()).not.toThrow();
         expect(() => controller.setMode('dark')).not.toThrow();
         expect(get(controller.state).preference.mode).toBe('dark');
-        expect(get(controller.state).resolvedThemeId).toBe('tokyo-night');
+        expect(get(controller.state).resolvedThemeId).toBe('tdrive-vault');
 
         expect(() => controller.destroy()).not.toThrow();
     });

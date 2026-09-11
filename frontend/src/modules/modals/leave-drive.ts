@@ -2,6 +2,7 @@
 
 import { leaveSharedDrive } from '../channels';
 import { notify, dismissNotification } from '../notifications';
+import { humanizeBackendError } from '../errors';
 import LeaveDriveModal from '../../ui/modals/LeaveDriveModal.svelte';
 import {
     closeLeaveDriveModalView,
@@ -54,7 +55,7 @@ async function confirmLeaveDrive(target: LeaveDriveTarget): Promise<void> {
         notify({
             level: 'error',
             title: 'Could not leave drive',
-            body: String(err),
+            body: humanizeBackendError(err),
         });
     } finally {
         inFlight = false;

@@ -1,9 +1,8 @@
-import { closeMedia, openStream } from '../../api';
-import { EventsOn } from '../../../wailsjs/runtime/runtime';
+import { closeMedia, onRuntimeEvent, openStream } from '../../api';
 import { formatBytes } from '../../utils';
 import { enqueueDownload } from '../transfers';
 import { notify } from '../notifications';
-import { fileKindLabel, fileOpenKind, type FileOpenKind } from '../media-types';
+import { canOpenFileViewer, fileKindLabel, fileOpenKind } from '../media-types';
 import FileViewerModal from '../../ui/viewers/FileViewerModal.svelte';
 import {
     closeFileViewerView,
@@ -21,7 +20,7 @@ export interface FileViewerTarget {
     encrypted?: boolean;
 }
 
-const STREAM_KINDS = new Set<FileOpenKind>(['audio', 'pdf', 'text']);
+
 
 let viewerHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let activeToken = '';
@@ -32,7 +31,7 @@ let unsubscribeEncryptedSessionsClosed: (() => void) | null = null;
 
 function bindEncryptedMediaLifecycle(): void {
     if (unsubscribeEncryptedSessionsClosed) return;
-    unsubscribeEncryptedSessionsClosed = EventsOn('encrypted_media_sessions_closed', () => {
+    unsubscribeEncryptedSessionsClosed = onRuntimeEvent('encrypted_media_sessions_closed', () => {
         encryptedSessionsEpoch += 1;
         if (activeTarget?.encrypted) closeFileViewer();
     });
@@ -53,13 +52,11 @@ export function setupFileViewerModal(): void {
     });
 }
 
-export function canOpenFileViewer(name: string): boolean {
-    return STREAM_KINDS.has(fileOpenKind(name));
-}
+
 
 export async function openFileViewer(target: FileViewerTarget): Promise<void> {
     const kind = fileOpenKind(target.name);
-    if (!STREAM_KINDS.has(kind)) {
+    if (!canOpenFileViewer(target.name)) {
         notify({ level: 'warning', title: `${fileKindLabel(target.name)} files cannot be opened yet` });
         return;
     }

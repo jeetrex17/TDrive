@@ -2,48 +2,12 @@
 // build on these so the interesting logic (preference parsing, skip rules,
 // progress maths, phase interpretation) is unit-testable without a DOM.
 
-// Phase mirrors updater.Phase in the Go backend. Errors are carried in
-// `error`/`error_stage` rather than as a phase, so a verified download keeps
-// its phase after a flaky re-check.
-export type UpdatePhase =
-    | 'idle'
-    | 'disabled'
-    | 'checking'
-    | 'up_to_date'
-    | 'available'
-    | 'downloading'
-    | 'ready'
-    | 'installing'
-    | 'installed';
+import type { AppVersion, UpdatePhase, UpdateRelease, UpdateSnapshot } from '../../types';
 
-export interface ReleaseInfo {
-    version: string;
-    tag: string;
-    page_url: string;
-    published_at: string;
-    asset_name: string;
-    asset_size: number;
-}
-
-export interface UpdateState {
-    phase: UpdatePhase;
-    current_version: string;
-    latest: ReleaseInfo | null;
-    installable: boolean;
-    install_hint: string;
-    downloaded_bytes: number;
-    total_bytes: number;
-    checked_at: number;
-    error: string;
-    error_stage: string;
-}
-
-export interface AppVersionInfo {
-    version: string;
-    os: string;
-    arch: string;
-    dev_build: boolean;
-}
+export type { UpdatePhase };
+export type ReleaseInfo = UpdateRelease;
+export type AppVersionInfo = AppVersion;
+export type UpdateState = UpdateSnapshot;
 
 export interface UpdatePrefs {
     // Auto-download the payload as soon as a check finds one. Restarting is
@@ -63,15 +27,15 @@ export const UPDATE_PREFS_STORAGE_KEY = 'tdrive.updates.v1';
 export function initialUpdateState(currentVersion = ''): UpdateState {
     return {
         phase: 'idle',
-        current_version: currentVersion,
+        currentVersion,
         latest: null,
         installable: false,
-        install_hint: '',
-        downloaded_bytes: 0,
-        total_bytes: 0,
-        checked_at: 0,
+        installHint: '',
+        downloadedBytes: 0,
+        totalBytes: 0,
+        checkedAt: 0,
         error: '',
-        error_stage: '',
+        errorStage: '',
     };
 }
 

@@ -5,17 +5,20 @@
 
 import { get } from 'svelte/store';
 import {
-    AppVersion,
-    CancelUpdateDownload,
-    CheckForUpdate,
-    DownloadUpdate,
-    GetUpdateState,
-    InstallUpdateAndRestart,
-    MountStatus,
-    OpenUpdatePage,
-} from '../../wailsjs/go/main/App';
+    cancelUpdateDownload as requestCancelUpdateDownload,
+    checkForUpdate as requestUpdateCheck,
+    downloadUpdate as requestDownloadUpdate,
+    getAppVersion,
+    getMountStatus,
+    getUpdateState,
+    installUpdateAndRestart,
+    onRuntimeEvent,
+    onUpdateState,
+    openUpdatePage,
+} from '../api';
 import { state } from '../state';
 import { notify } from './notifications';
+import { humanizeBackendError } from './errors';
 import {
     isVersionSkipped,
     type AppVersionInfo,
@@ -37,6 +40,8 @@ const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 let started = false;
 let firstCheckTimer: ReturnType<typeof setTimeout> | null = null;
 let intervalTimer: ReturnType<typeof setInterval> | null = null;
+let stopUpdateState: (() => void) | null = null;
+let stopOpenUpdates: (() => void) | null = null;
 
 // Versions we've already acted on, so a phase that re-emits (or a failed
 // download dropping back to "available") can't spam toasts or retry forever.
@@ -47,24 +52,16 @@ export function setupUpdates(): void {
     if (started) return;
     started = true;
 
-    if (window.runtime?.EventsOn) {
-        window.runtime.EventsOn('update_state', (payload: unknown) => {
-            applyState(payload as UpdateState);
-        });
-        // Native "Check for Updates…" (macOS menu) and any other explicit
-        // entry point routes through here.
-        window.runtime.EventsOn('updates:open', () => {
-            void openUpdatesUI();
-        });
-    }
-
-    // Without the Wails bridge (missing runtime, unit tests) the bound methods
-    // throw synchronously, so gate every backend call behind it.
-    if (!window.go?.main?.App) return;
+    stopUpdateState = onUpdateState(applyState);
+    // Native "Check for Updates…" (macOS menu) and any other explicit entry
+    // point routes through the same panel action.
+    stopOpenUpdates = onRuntimeEvent('updates:open', () => {
+        void openUpdatesUI();
+    });
 
     void hydrateVersion();
-    void GetUpdateState()
-        .then((snapshot) => applyState(snapshot as unknown as UpdateState))
+    void getUpdateState()
+        .then(applyState)
         .catch((err) => console.warn('GetUpdateState failed:', err));
 
     scheduleChecks();
@@ -73,6 +70,10 @@ export function setupUpdates(): void {
 export function teardownUpdates(): void {
     if (firstCheckTimer) clearTimeout(firstCheckTimer);
     if (intervalTimer) clearInterval(intervalTimer);
+    stopUpdateState?.();
+    stopOpenUpdates?.();
+    stopUpdateState = null;
+    stopOpenUpdates = null;
     firstCheckTimer = null;
     intervalTimer = null;
     started = false;
@@ -80,7 +81,7 @@ export function teardownUpdates(): void {
 
 async function hydrateVersion(): Promise<void> {
     try {
-        const info = (await AppVersion()) as AppVersionInfo;
+        const info = await getAppVersion();
         appVersionInfo.set(info);
     } catch (err) {
         console.warn('AppVersion failed:', err);
@@ -89,7 +90,7 @@ async function hydrateVersion(): Promise<void> {
 
 function scheduleChecks(): void {
     const info = get(appVersionInfo);
-    if (info?.dev_build) return; // updater is disabled for local builds
+    if (info?.devBuild) return; // updater is disabled for local builds
     firstCheckTimer = setTimeout(() => {
         void checkForUpdates();
     }, FIRST_CHECK_DELAY_MS);
@@ -119,7 +120,7 @@ function maybeAutoDownload(next: UpdateState): void {
     // scheduled check picks it up once the transfer finishes.
     if (state.transferActivity.upload || state.transferActivity.download) return;
     autoDownloaded.add(next.latest.version);
-    void DownloadUpdate().catch((err) => console.warn('auto-download failed:', err));
+    void requestDownloadUpdate().catch((err) => console.warn('auto-download failed:', err));
 }
 
 function maybeAnnounce(next: UpdateState): void {
@@ -153,10 +154,10 @@ function maybeAnnounce(next: UpdateState): void {
 // surface a new version through applyState.
 export async function checkForUpdates(options: { explicit?: boolean } = {}): Promise<void> {
     try {
-        const result = (await CheckForUpdate()) as unknown as UpdateState;
+        const result = await requestUpdateCheck();
         applyState(result);
         if (options.explicit) {
-            if (result.error && result.error_stage === 'check') {
+            if (result.error && result.errorStage === 'check') {
                 notify({ level: 'error', title: 'Update check failed', body: result.error });
             } else if (result.phase === 'up_to_date') {
                 notify({ level: 'success', title: 'TDrive is up to date' });
@@ -166,7 +167,7 @@ export async function checkForUpdates(options: { explicit?: boolean } = {}): Pro
         }
     } catch (err) {
         if (options.explicit) {
-            notify({ level: 'error', title: 'Update check failed', body: String(err) });
+            notify({ level: 'error', title: 'Update check failed', body: humanizeBackendError(err) });
         } else {
             console.warn('update check failed:', err);
         }
@@ -175,30 +176,30 @@ export async function checkForUpdates(options: { explicit?: boolean } = {}): Pro
 
 export async function downloadUpdate(): Promise<void> {
     try {
-        await DownloadUpdate();
+        await requestDownloadUpdate();
     } catch (err) {
-        notify({ level: 'error', title: 'Could not start the download', body: String(err) });
+        notify({ level: 'error', title: 'Could not start the download', body: humanizeBackendError(err) });
     }
 }
 
 export function cancelUpdateDownload(): void {
-    void CancelUpdateDownload().catch((err) => console.warn('cancel download failed:', err));
+    void requestCancelUpdateDownload().catch((err) => console.warn('cancel download failed:', err));
 }
 
 export async function installUpdate(): Promise<void> {
     try {
-        await InstallUpdateAndRestart();
+        await installUpdateAndRestart();
     } catch (err) {
         notify({
             level: 'error',
             title: 'Could not install the update',
-            body: String(err),
+            body: humanizeBackendError(err),
         });
     }
 }
 
 export function openReleasePage(): void {
-    void OpenUpdatePage().catch((err) => console.warn('open release page failed:', err));
+    void openUpdatePage().catch((err) => console.warn('open release page failed:', err));
 }
 
 // getRestartRisks lists, in plain language, what a restart-to-update will
@@ -213,7 +214,7 @@ export async function getRestartRisks(): Promise<string[]> {
         risks.push('A download is in progress and will be cancelled.');
     }
     try {
-        const mount = await MountStatus();
+        const mount = await getMountStatus();
         if (mount?.mounted) {
             risks.push('The mounted drive will be ejected first.');
         }

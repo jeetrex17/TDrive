@@ -3,18 +3,18 @@
 // files and is remembered only for the current app session.
 
 import { state } from '../state';
-import { EncryptionStatus } from '../../wailsjs/go/main/App';
+import { getEncryptionStatus } from '../api';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
 import { encryptionEntryVisible } from '../ui/chrome/profile-store';
 
 export async function loadEncryptionStatus(): Promise<void> {
     try {
-        const s = await EncryptionStatus();
+        const s = await getEncryptionStatus();
         state.encryption = {
-            available: !!s?.available,
-            passwordSet: !!s?.password_set,
-            passwordRemembered: !!s?.password_remembered,
-            hint: String(s?.hint || ''),
+            available: s.available,
+            passwordSet: s.passwordSet,
+            passwordRemembered: s.passwordRemembered,
+            hint: s.hint,
             loaded: true,
         };
     } catch (err) {

@@ -23,10 +23,10 @@ function release(version: string, size = 42_000_000) {
     return {
         version,
         tag: `v${version}`,
-        page_url: `https://github.com/x/y/releases/tag/v${version}`,
-        published_at: '2026-08-25T09:18:39Z',
-        asset_name: `TDrive-v${version}-macos-arm64.zip`,
-        asset_size: size,
+        pageUrl: 'https://github.com/x/y/releases/tag/v' + version,
+        publishedAt: '2026-08-25T09:18:39Z',
+        assetName: 'TDrive-v' + version + '-macos-arm64.zip',
+        assetSize: size,
     };
 }
 
@@ -59,7 +59,7 @@ function byText(text: string): HTMLElement | null {
 beforeEach(() => {
     updateState.set(initialUpdateState('1.6.0'));
     updatePrefs.set({ autoDownload: true, skippedVersion: '' });
-    appVersionInfo.set({ version: '1.6.0', os: 'darwin', arch: 'arm64', dev_build: false });
+    appVersionInfo.set({ version: '1.6.0', os: 'darwin', arch: 'arm64', devBuild: false });
     vi.clearAllMocks();
 });
 
@@ -81,7 +81,7 @@ describe('UpdatesPanel', () => {
     });
 
     it('offers a download for an available release and can skip it', async () => {
-        setState({ phase: 'available', installable: true, latest: release('1.7.0'), total_bytes: 42_000_000 });
+        setState({ phase: 'available', installable: true, latest: release('1.7.0'), totalBytes: 42_000_000 });
         setup();
 
         const download = byText('Download');
@@ -96,7 +96,7 @@ describe('UpdatesPanel', () => {
     });
 
     it('renders download progress and cancels', () => {
-        setState({ phase: 'downloading', latest: release('1.7.0'), downloaded_bytes: 21_000_000, total_bytes: 42_000_000 });
+        setState({ phase: 'downloading', latest: release('1.7.0'), downloadedBytes: 21_000_000, totalBytes: 42_000_000 });
         setup();
 
         const bar = q('.updates-progress');
@@ -148,7 +148,7 @@ describe('UpdatesPanel', () => {
     });
 
     it('confirms an up-to-date state', () => {
-        setState({ phase: 'up_to_date', checked_at: Date.now() });
+        setState({ phase: 'up_to_date', checkedAt: Date.now() });
         setup();
 
         const status = q('.updates-status');
@@ -168,13 +168,13 @@ describe('UpdatesPanel', () => {
     });
 
     it('surfaces a check error', () => {
-        setState({ phase: 'available', installable: true, latest: release('1.7.0'), error: 'Couldn\'t reach GitHub.', error_stage: 'check' });
+        setState({ phase: 'available', installable: true, latest: release('1.7.0'), error: 'Couldn\'t reach GitHub.', errorStage: 'check' });
         setup();
         expect(q('.updates-error')?.textContent).toContain("Couldn't reach GitHub.");
     });
 
     it('falls back to the release page when the platform is not installable', () => {
-        setState({ phase: 'available', installable: false, install_hint: 'This release has no macOS build yet.', latest: release('1.7.0') });
+        setState({ phase: 'available', installable: false, installHint: 'This release has no macOS build yet.', latest: release('1.7.0') });
         setup();
         expect(host?.textContent).toContain('This release has no macOS build yet.');
         byText('Get it from GitHub')!.click();
@@ -199,7 +199,7 @@ describe('UpdatesPanel', () => {
     });
 
     it('checks again from the single footer action', () => {
-        setState({ phase: 'up_to_date', checked_at: Date.now() });
+        setState({ phase: 'up_to_date', checkedAt: Date.now() });
         setup();
 
         byText('Check Again')!.click();

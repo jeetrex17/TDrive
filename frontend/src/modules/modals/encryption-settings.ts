@@ -2,7 +2,7 @@
 // There is intentionally no "forgot password" reset; without the current
 // password encrypted files cannot be recovered.
 
-import { ChangeEncryptionPassword } from '../../../wailsjs/go/main/App';
+import { changeEncryptionPassword } from '../../api';
 import { state } from '../../state';
 import { loadEncryptionStatus } from '../encryption';
 import { notify } from '../notifications';
@@ -52,7 +52,7 @@ async function submitChange(
 
     encryptionSettingsModal.setBusy(true);
     try {
-        await ChangeEncryptionPassword(currentPassword, newPassword, hint);
+        await changeEncryptionPassword(currentPassword, newPassword, hint);
         await loadEncryptionStatus();
         encryptionSettingsModal.close();
         notify({

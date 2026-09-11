@@ -1,10 +1,11 @@
 // Delete modal for TDrive frontend
 
-import { DeleteFile } from '../../../wailsjs/go/main/App';
+import { deleteFile } from '../../api';
 import { clearSelection } from '../selection';
 import { ensureNotInsideDeletedFolder } from '../navigation';
-import { deleteFolder } from '../drive-data';
+import { deleteFolder } from '../../api';
 import { notify, dismissNotification } from '../notifications';
+import { appActions } from '../app-actions';
 import { openEncryptionPasswordModal } from './encryption-password';
 import DeleteModal from '../../ui/modals/DeleteModal.svelte';
 import { closeDeleteModalView, openDeleteModalView } from '../../ui/modals/delete-modal-store';
@@ -30,11 +31,11 @@ function failureTitle(item: any) {
 }
 
 async function deleteFileWithPasswordRetry(id: any) {
-    let res = await DeleteFile(Number(id));
+    let res = await deleteFile(Number(id));
     if (typeof res === "string" && res.startsWith("Error") && /encryption password required/i.test(res)) {
         const ok = await openEncryptionPasswordModal();
         if (!ok) return "Error: Encryption password required";
-        res = await DeleteFile(Number(id));
+        res = await deleteFile(Number(id));
     }
     return res;
 }
@@ -190,7 +191,7 @@ async function confirmDelete(): Promise<void> {
                     body: error,
                 });
             }
-            window.refreshFiles();
+            appActions().refreshFiles();
         } else {
             const res = target.type === "folder"
                 ? await deleteFolderWithPasswordRetry(target.id)
@@ -206,7 +207,7 @@ async function confirmDelete(): Promise<void> {
                 // A failed delete can mean the backend already considers this
                 // row gone (e.g. "File not found"). Refresh so a stale/ghost
                 // row doesn't sit there re-clickable forever.
-                window.refreshFiles();
+                appActions().refreshFiles();
                 return;
             }
             if (target.type === "folder") ensureNotInsideDeletedFolder(String(target.id));
@@ -214,7 +215,7 @@ async function confirmDelete(): Promise<void> {
                 level: 'success',
                 title: successTitle(target),
             });
-            window.refreshFiles();
+            appActions().refreshFiles();
         }
     } catch (err) {
         console.error("Delete failed:", err);

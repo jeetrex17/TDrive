@@ -9,17 +9,19 @@ import { openDeleteModal } from './modals/delete';
 import { navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
-    GetFileList, GetStorageUsed,
-} from '../../wailsjs/go/main/App';
-import { getFolderContents as apiGetFolderContents } from '../api';
-import { calculateVisibleFolderStats, getAllFsMsgIDs, type FolderStats } from './drive-data';
+    getAllFsMsgIds,
+    getFileList,
+    getFolderContents as apiGetFolderContents,
+    getStorageUsed,
+} from '../api';
+import { calculateVisibleFolderStats } from './drive-data';
+import type { FolderItem, FolderStat, RootFile } from '../types';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
-import { isVideoFile } from './media-types';
-import { openVideoModal } from './modals/video';
-import { canOpenFileViewer, openFileViewer } from './modals/file-viewer';
+import { canOpenFileViewer, isVideoFile } from './media-types';
+import { appActions } from './app-actions';
 import FileList from '../ui/file-list/FileList.svelte';
 import { showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
@@ -347,6 +349,15 @@ function renameRow(row: HTMLElement) {
     });
 }
 
+function fileTargetForRow(row: HTMLElement) {
+    return {
+        id: Number(row.dataset.id),
+        name: row.dataset.name || "File",
+        size: Number(row.dataset.size || 0),
+        encrypted: row.dataset.encrypted === "true",
+    };
+}
+
 function activateRow(row: HTMLElement) {
     if (isSearchMode()) {
         row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
@@ -357,34 +368,25 @@ function activateRow(row: HTMLElement) {
         return;
     }
     if (row.dataset.type !== "file") return;
-    if (isVideoFile(row.dataset.name || "")) {
-        window.initVideoPlayback(
-            Number(row.dataset.id),
-            row.dataset.name,
-            Number(row.dataset.size || 0),
-            row.dataset.encrypted === "true",
-        );
+    const target = fileTargetForRow(row);
+    if (isVideoFile(target.name)) {
+        void appActions().playVideo(target);
         return;
     }
-    if (canOpenFileViewer(row.dataset.name || "")) {
-        void openFileViewer({
-            id: Number(row.dataset.id),
-            name: row.dataset.name || "File",
-            size: Number(row.dataset.size || 0),
-            encrypted: row.dataset.encrypted === "true",
-        });
+    if (canOpenFileViewer(target.name)) {
+        void appActions().openFile(target);
         return;
     }
-    window.initDownload(Number(row.dataset.id), row.dataset.name, Number(row.dataset.size || 0));
+    enqueueDownload(target.id, target.name, target.size);
 }
 
-function fillVisibleFolderStats(folders: any[], parentId: string, folderEpoch: number) {
+function fillVisibleFolderStats(folders: FolderItem[], parentId: string, folderEpoch: number) {
     if (!folders.length) return;
     calculateVisibleFolderStats(parentId)
         .then((stats) => {
             if (state.folderSizeEpoch !== folderEpoch) return;
             if (state.currentFolderId !== parentId) return;
-            applyFolderStats(folders, (id) => stats.get(id) ?? { bytes: 0, latestUpload: 0 });
+            applyFolderStats(folders, (id) => stats.get(id) ?? { id, bytes: 0, latestUpload: 0 });
         })
         .catch(() => {
             if (state.folderSizeEpoch !== folderEpoch) return;
@@ -396,7 +398,7 @@ function fillVisibleFolderStats(folders: any[], parentId: string, folderEpoch: n
 // applyFolderStats stores the resolved subtree byte count and latest upload
 // time on each folder row alongside their labels so the size and date columns
 // can sort folders; null marks a failed lookup.
-function applyFolderStats(folders: any[], statsForID: (id: string) => FolderStats | null) {
+function applyFolderStats(folders: FolderItem[], statsForID: (id: string) => FolderStat | null) {
     const folderIDs = new Set(
         folders
             .map((folder) => String(folder?.id || ""))
@@ -447,7 +449,7 @@ export function refreshFiles() {
     renderFileState(list, "loading", "Loading files");
     if (storageUsed) {
         storageUsed.innerText = "Calculating... / Unlimited";
-        GetStorageUsed()
+        getStorageUsed()
             .then((bytes) => {
                 const value = Number(bytes);
                 if (!Number.isFinite(value) || value < 0) {
@@ -474,7 +476,7 @@ export function refreshFiles() {
             const msg = String(folderErr?.message || folderErr || "Failed to load files");
             renderFileState(list, "error", "Could not load this folder", msg, {
                 label: "Retry",
-                onClick: () => window.refreshFiles(),
+                onClick: () => appActions().refreshFiles(),
             });
             return;
         }
@@ -482,49 +484,48 @@ export function refreshFiles() {
         const folders = Array.isArray(fs?.folders) ? fs.folders : [];
         const fsFiles = Array.isArray(fs?.files) ? fs.files : [];
 
-        const fsFileItems = fsFiles.map((f) => {
-            const encrypted = !!f.encrypted;
-            const plaintextSize = Number(f.plaintextSize || 0);
-            // For encrypted files, the displayed size should be the
-            // original plaintext size, not the on-wire ciphertext.
-            const displaySize = encrypted && plaintextSize > 0 ? plaintextSize : f.size;
+        const fsFileItems = fsFiles.map((file) => {
+            const encrypted = file.encrypted;
+            const plaintextSize = file.plaintextSize;
+            // For encrypted files, display the original plaintext size rather
+            // than the on-wire ciphertext size.
+            const displaySize = encrypted && plaintextSize > 0 ? plaintextSize : file.size;
             return {
                 source: "fs",
-                id: f.msgId,
-                name: f.name,
+                id: file.msgId,
+                name: file.name,
                 size: displaySize,
-                date: f.uploadTime,
-                uploaderID: Number(f.uploaderId || 0),
+                date: file.uploadTime,
+                uploaderID: file.uploaderId,
                 encrypted,
             };
         });
 
-        const finalize = async (tgFiles: any[] = [], preserveCurrentScroll = false) => {
+        const finalize = async (telegramFiles: RootFile[] = [], preserveCurrentScroll = false) => {
             if (state.folderSizeEpoch !== folderEpoch) return;
             if (state.currentFolderId !== requestedFolderId) return;
-            const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
             const scrollTopForRender = preserveCurrentScroll ? list.scrollTop : prevScrollTop;
             const keepScrollForRender = preserveCurrentScroll || keepScroll;
-            let fsIDs;
+            let fsIDs: Set<number>;
             if (requestedFolderId === "" && telegramFiles.length > 0) {
                 try {
-                    fsIDs = new Set((await getAllFsMsgIDs()).filter((id) => typeof id === "number"));
+                    fsIDs = new Set(await getAllFsMsgIds());
                 } catch (err) {
                     console.error("GetAllFsMsgIDs failed:", err);
                     fsIDs = new Set();
                 }
             } else {
-                fsIDs = new Set(fsFileItems.map((f) => f.id));
+                fsIDs = new Set(fsFileItems.map((file) => file.id));
             }
 
             const tgFileItems = telegramFiles
-                .filter((f) => !fsIDs.has(f.id))
-                .map((f) => ({
+                .filter((file) => !fsIDs.has(file.msgId))
+                .map((file) => ({
                     source: "tg",
-                    id: f.id,
-                    name: f.name,
-                    size: f.size,
-                    date: f.date,
+                    id: file.msgId,
+                    name: file.name,
+                    size: file.size,
+                    date: file.date,
                 }));
 
             const files = [...fsFileItems, ...tgFileItems];
@@ -614,7 +615,7 @@ export function refreshFiles() {
         await finalize();
 
         if (requestedFolderId === "" && state.currentFolderId === requestedFolderId) {
-            GetFileList()
+            getFileList()
                 .then(async (tgFiles) => {
                     if (state.folderSizeEpoch !== folderEpoch) return;
                     if (state.currentFolderId !== requestedFolderId) return;
@@ -654,26 +655,17 @@ function handleListClick(e: MouseEvent) {
         return;
     }
     if (row.dataset.type === "file") {
+        const target = fileTargetForRow(row);
         if ((e.target as HTMLElement).closest("button.download")) {
-            window.initDownload(Number(row.dataset.id), row.dataset.name, Number(row.dataset.size || 0));
+            enqueueDownload(target.id, target.name, target.size);
             return;
         }
         if ((e.target as HTMLElement).closest("button.play-video")) {
-            window.initVideoPlayback(
-                Number(row.dataset.id),
-                row.dataset.name,
-                Number(row.dataset.size || 0),
-                row.dataset.encrypted === "true",
-            );
+            void appActions().playVideo(target);
             return;
         }
         if ((e.target as HTMLElement).closest("button.open-file")) {
-            void openFileViewer({
-                id: Number(row.dataset.id),
-                name: row.dataset.name || "File",
-                size: Number(row.dataset.size || 0),
-                encrypted: row.dataset.encrypted === "true",
-            });
+            void appActions().openFile(target);
             return;
         }
         if ((e.target as HTMLElement).closest("button")) return;
@@ -755,28 +747,17 @@ function handleListDblClick(e: MouseEvent) {
     if (row.dataset.type === "file") {
         // Rename only from the name area and only when allowed.
         if (!(e.target as HTMLElement).closest(".row-name")) return;
-        if (isVideoFile(row.dataset.name || "")) {
+        const target = fileTargetForRow(row);
+        if (isVideoFile(target.name)) {
             e.preventDefault();
-            const selection = window.getSelection?.();
-            if (selection) selection.removeAllRanges();
-            window.initVideoPlayback(
-                Number(row.dataset.id),
-                row.dataset.name,
-                Number(row.dataset.size || 0),
-                row.dataset.encrypted === "true",
-            );
+            window.getSelection?.()?.removeAllRanges();
+            void appActions().playVideo(target);
             return;
         }
-        if (canOpenFileViewer(row.dataset.name || "")) {
+        if (canOpenFileViewer(target.name)) {
             e.preventDefault();
-            const selection = window.getSelection?.();
-            if (selection) selection.removeAllRanges();
-            void openFileViewer({
-                id: Number(row.dataset.id),
-                name: row.dataset.name || "File",
-                size: Number(row.dataset.size || 0),
-                encrypted: row.dataset.encrypted === "true",
-            });
+            window.getSelection?.()?.removeAllRanges();
+            void appActions().openFile(target);
             return;
         }
         if (row.dataset.canRename !== "true") return;
@@ -866,22 +847,7 @@ async function handleListDrop(e: DragEvent) {
     await performDropMove(folderID);
 }
 
-export function setupFileListWindowBindings() {
-    window.refreshFiles = refreshFiles;
-
-    window.initDownload = function(id, name, size) {
-        enqueueDownload(id, name, size);
-    };
-
-    window.initVideoPlayback = function(id, name, size, encrypted) {
-        void openVideoModal({
-            id: Number(id || 0),
-            name: String(name || ""),
-            size: Number(size || 0),
-            encrypted: encrypted === true || encrypted === "true",
-        });
-    };
-
+export function setupFileList() {
     const list = document.getElementById("file-list");
     if (list) {
         list.addEventListener("click", handleListClick);
@@ -896,6 +862,5 @@ export function setupFileListWindowBindings() {
         });
     }
 
-    // Note: window.initDelete and window.initDeleteFolder are set up in main.js
-    // to avoid circular dependency issues with the delete modal
+
 }

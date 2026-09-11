@@ -94,9 +94,9 @@ describe('AppearancePanel behavior', () => {
             new KeyboardEvent('keydown', { key: 'Home', bubbles: true }),
         );
         flushSync();
-        expect(get(themeState).preference.darkThemeId).toBe('tokyo-night');
+        expect(get(themeState).preference.darkThemeId).toBe('tdrive-vault');
 
-        host?.querySelector<HTMLElement>('#appearance-theme-tokyo-night')?.dispatchEvent(
+        host?.querySelector<HTMLElement>('#appearance-theme-tdrive-vault')?.dispatchEvent(
             new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
         );
         flushSync();
@@ -133,8 +133,13 @@ describe('AppearancePanel behavior', () => {
         const tokyoNight = host?.querySelector('#appearance-theme-tokyo-night');
         const preview = tokyoNight?.querySelector('.theme-preview');
         const label = tokyoNight?.querySelector('.theme-label');
+        expect(host?.textContent).toContain('TDrive Vault');
         expect(host?.textContent).toContain('Tokyo Night');
         expect(label?.previousElementSibling).toBe(preview);
+
+        click('#appearance-mode-light');
+        expect(host?.textContent).toContain('TDrive Day');
+        expect(host?.textContent).toContain('TDrive Light');
         expect(host?.textContent).not.toContain('TDrive’s original midnight-blue glow.');
         expect(host?.textContent).not.toContain('Changes are previewed instantly and saved on this device.');
         expect(host?.querySelector('.theme-description')).toBeNull();

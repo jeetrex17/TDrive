@@ -1,12 +1,13 @@
 // Move modal for TDrive frontend
 
 import { get } from 'svelte/store';
-import { MoveFile, MoveFolder, MsgToTdriveSystem } from '../../../wailsjs/go/main/App';
+import { addTelegramFileToDrive, moveFile, moveFolder } from '../../api';
 import { callWithPasswordRetry } from './encryption-password';
 import { clearSelection } from '../selection';
-import { getFolderContents } from '../drive-data';
+import { getFolderContents } from '../../api';
 import { buildFolderIndex, collectDescendants } from '../folder-index';
 import { humanizeBackendError } from '../errors';
+import { appActions } from '../app-actions';
 import MoveModal from '../../ui/modals/MoveModal.svelte';
 import {
     moveBrowse,
@@ -26,12 +27,10 @@ async function ensureFileInTdriveSystem(target: any) {
     if (!target || target.type !== "file") return;
     if (String(target.source || "fs") !== "tg") return;
 
-    const res = await MsgToTdriveSystem(
-        Number(target.id),
-        String(target.name || ""),
-        Number(target.size || 0),
-        String(target.parentId || "")
-    );
+    const res = await addTelegramFileToDrive(Number(target.id),
+    String(target.name || ""),
+    Number(target.size || 0),
+    String(target.parentId || ""));
 
     if (typeof res === "string" && res.startsWith("Error")) {
         throw new Error(humanizeBackendError(res));
@@ -157,7 +156,7 @@ async function confirmMove(): Promise<void> {
             const files = items.filter((item: any) => item?.type === "file");
 
             for (const folder of folders) {
-                const res = await callWithPasswordRetry(() => MoveFolder(String(folder.id), destId));
+                const res = await callWithPasswordRetry(() => moveFolder(String(folder.id), destId));
                 if (typeof res === "string" && res.startsWith("Error")) {
                     throw new Error(humanizeBackendError(res));
                 }
@@ -165,19 +164,19 @@ async function confirmMove(): Promise<void> {
 
             for (const file of files) {
                 await ensureFileInTdriveSystem(file);
-                const res = await callWithPasswordRetry(() => MoveFile(Number(file.id), destId));
+                const res = await callWithPasswordRetry(() => moveFile(Number(file.id), destId));
                 if (typeof res === "string" && res.startsWith("Error")) {
                     throw new Error(humanizeBackendError(res));
                 }
             }
         } else if (target.type === "folder") {
-            const res = await callWithPasswordRetry(() => MoveFolder(String(target.id), destId));
+            const res = await callWithPasswordRetry(() => moveFolder(String(target.id), destId));
             if (typeof res === "string" && res.startsWith("Error")) {
                 throw new Error(humanizeBackendError(res));
             }
         } else {
             await ensureFileInTdriveSystem(target);
-            const res = await callWithPasswordRetry(() => MoveFile(Number(target.id), destId));
+            const res = await callWithPasswordRetry(() => moveFile(Number(target.id), destId));
             if (typeof res === "string" && res.startsWith("Error")) {
                 throw new Error(humanizeBackendError(res));
             }
@@ -186,7 +185,7 @@ async function confirmMove(): Promise<void> {
         pendingTarget = null;
         moveModal.close();
         clearSelection();
-        window.refreshFiles();
+        appActions().refreshFiles();
     } catch (err) {
         moveModal.setError(humanizeBackendError(err));
     } finally {

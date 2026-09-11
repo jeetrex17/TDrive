@@ -31,7 +31,7 @@
     let risks = $state<string[]>([]);
     let preparingRestart = $state(false);
 
-    const version = $derived($updateState.current_version || $appVersionInfo?.version || '');
+    const version = $derived($updateState.currentVersion || $appVersionInfo?.version || '');
     const platform = $derived(
         formatPlatform($appVersionInfo)
             .replace('macOS arm64', 'macOS · Apple silicon')
@@ -39,13 +39,13 @@
     );
     const latest = $derived($updateState.latest);
     const phase = $derived($updateState.phase);
-    const percent = $derived(progressPercent($updateState.downloaded_bytes, $updateState.total_bytes));
+    const percent = $derived(progressPercent($updateState.downloadedBytes, $updateState.totalBytes));
     const skipped = $derived(
         latest ? isVersionSkipped(latest.version, $updatePrefs.skippedVersion) : false,
     );
-    const lastChecked = $derived(formatChecked($updateState.checked_at));
+    const lastChecked = $derived(formatChecked($updateState.checkedAt));
     const checkLabel = $derived(
-        phase === 'checking' ? 'Checking…' : $updateState.checked_at ? 'Check Again' : 'Check Now',
+        phase === 'checking' ? 'Checking…' : $updateState.checkedAt ? 'Check Again' : 'Check Now',
     );
 
     function formatChecked(ms: number): string {
@@ -123,7 +123,7 @@
                 <div class="updates-progress-fill" style={`width:${percent}%`}></div>
             </div>
             <div class="updates-progress-meta">
-                {formatBytes($updateState.downloaded_bytes)}{#if $updateState.total_bytes > 0} / {formatBytes($updateState.total_bytes)}{/if}
+                {formatBytes($updateState.downloadedBytes)}{#if $updateState.totalBytes > 0} / {formatBytes($updateState.totalBytes)}{/if}
                 <span>{percent}%</span>
             </div>
         {:else if phase === 'ready'}
@@ -164,7 +164,7 @@
                 <div class="updates-actions">
                     <button class="updates-btn primary" type="button" onclick={() => void downloadUpdate()}>
                         <DownloadIcon size={15} strokeWidth={2} aria-hidden="true" /> Download
-                        {#if latest?.asset_size}<span class="updates-btn-size">{formatBytes(latest.asset_size)}</span>{/if}
+                        {#if latest?.assetSize}<span class="updates-btn-size">{formatBytes(latest.assetSize)}</span>{/if}
                     </button>
                 </div>
                 <div class="updates-sublinks">
@@ -182,7 +182,7 @@
                 <button class="updates-link" type="button" onclick={clearSkippedVersion}>Undo skip</button>
             {:else}
                 <p class="updates-status muted" role="status" aria-live="polite">
-                    {$updateState.install_hint || 'A newer version is available.'}
+                    {$updateState.installHint || 'A newer version is available.'}
                 </p>
                 <button class="updates-link" type="button" onclick={openReleasePage}>
                     Get it from GitHub <ExternalLinkIcon size={12} strokeWidth={2} aria-hidden="true" />

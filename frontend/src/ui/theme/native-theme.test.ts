@@ -12,8 +12,8 @@ function state(mode: ThemeMode, resolvedThemeId: ThemeState['resolvedThemeId']):
     return {
         preference: normalizeThemePreference({
             mode,
-            lightThemeId: 'tdrive-light',
-            darkThemeId: resolvedThemeId === 'dracula' ? 'dracula' : 'tokyo-night',
+            lightThemeId: activeTheme.appearance === 'light' ? resolvedThemeId : 'tdrive-day',
+            darkThemeId: activeTheme.appearance === 'dark' ? resolvedThemeId : 'tdrive-vault',
         }),
         resolvedAppearance: activeTheme.appearance,
         resolvedThemeId,
@@ -37,6 +37,26 @@ describe('native theme bridge', () => {
 
         expect(native.setBackgroundColour).toHaveBeenLastCalledWith(243, 245, 249, 255);
         expect(native.setLightTheme).not.toHaveBeenCalled();
+        disconnect();
+    });
+
+    it('uses the TDrive Day canvas for the default light palette backdrop', () => {
+        const theme = writable(state('light', 'tdrive-day'));
+        const native = runtime();
+
+        const disconnect = connectNativeTheme(theme, 'darwin', native);
+
+        expect(native.setBackgroundColour).toHaveBeenLastCalledWith(238, 244, 245, 255);
+        disconnect();
+    });
+
+    it('uses the TDrive Vault canvas for the default native backdrop', () => {
+        const theme = writable(state('dark', 'tdrive-vault'));
+        const native = runtime();
+
+        const disconnect = connectNativeTheme(theme, 'darwin', native);
+
+        expect(native.setBackgroundColour).toHaveBeenLastCalledWith(14, 23, 28, 255);
         disconnect();
     });
 

@@ -14,6 +14,15 @@ const apiMocks = vi.hoisted(() => ({
     resizeNativeMedia: vi.fn(),
     showNativeSeekThumbnail: vi.fn(),
     updateMediaPlayback: vi.fn(),
+    enterFullscreen: vi.fn(),
+    exitFullscreen: vi.fn(),
+    fullscreenAvailable: vi.fn(() => true),
+    isFullscreen: vi.fn(async () => false),
+    onRuntimeEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        runtimeMocks.eventsOn(name, callback);
+        runtimeMocks.events.set(name, callback);
+        return () => runtimeMocks.events.delete(name);
+    }),
 }));
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -27,16 +36,7 @@ const OLD_MKV_SESSION_ID = "old-mkv-session-id";
 const FAILED_NATIVE_SESSION_ID = "failed-native-session-id";
 
 vi.mock("../../api", () => apiMocks);
-vi.mock("../../../wailsjs/runtime/runtime", () => ({
-    EventsOn: (name: string, callback: (payload: unknown) => void) => {
-        runtimeMocks.eventsOn(name, callback);
-        runtimeMocks.events.set(name, callback);
-        return () => runtimeMocks.events.delete(name);
-    },
-    WindowFullscreen: vi.fn(),
-    WindowIsFullscreen: vi.fn(async () => false),
-    WindowUnfullscreen: vi.fn(),
-}));
+
 
 function openSettings(section: "picture" | "audio" | "subtitle" | "speed") {
     if (document.querySelector<HTMLElement>("#video-settings-panel")?.hidden) {
