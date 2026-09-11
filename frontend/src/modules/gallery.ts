@@ -13,6 +13,7 @@ import { state } from '../state';
 import { getMedia } from '../api';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
+import { capturePreviewTransitionSource, type PreviewTransitionSource } from './modals/preview-transition';
 import Gallery from '../ui/gallery/Gallery.svelte';
 import { beginRender, cachedThumb, rearmLocked, setRoot } from '../ui/gallery/gallery-controller';
 import { galleryView, type GalleryGroup } from '../ui/gallery/gallery-store';
@@ -97,10 +98,10 @@ function onGalleryClick(event: MouseEvent): void {
     if (!cell) return;
     const index = Number(cell.dataset.index ?? -1);
     if (index < 0 || index >= currentItems.length) return;
-    void openGalleryLightbox(index);
+    void openGalleryLightbox(index, capturePreviewTransitionSource(cell));
 }
 
-async function openGalleryLightbox(index: number): Promise<void> {
+async function openGalleryLightbox(index: number, transitionSource: PreviewTransitionSource | null): Promise<void> {
     const channelId = currentChannelId;
     // Carry the fields the lightbox + info panel need: a download size
     // (plaintext for encrypted files), the loaded thumbnail as an instant
@@ -117,7 +118,7 @@ async function openGalleryLightbox(index: number): Promise<void> {
     }));
     const preview = await import('./modals/preview');
     preview.setupPreviewModal();
-    await preview.openPreviewList(items, index);
+    await preview.openPreviewList(items, index, transitionSource);
 }
 
 // --- view switching (wired from the sidebar Photos item) ---

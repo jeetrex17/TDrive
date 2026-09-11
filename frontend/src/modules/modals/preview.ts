@@ -6,8 +6,15 @@ import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
 import PreviewModal from '../../ui/preview/PreviewModal.svelte';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
+import type { PreviewPayload } from '../../types';
+import {
+    capturePreviewTransitionSource,
+    createPreviewTransitionController,
+    type PreviewTransitionSource,
+} from './preview-transition';
 
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
+
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
 const REQUIRED_ELEMENT_IDS = [
     "preview-modal",
@@ -77,6 +84,8 @@ let activePreviewMsgID = 0;
 let activePreviewItem: any = null;
 let chromeHideTimer: any = null;
 let previewMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let activePreviewTransitionSource: PreviewTransitionSource | null = null;
+const previewTransition = createPreviewTransitionController();
 
 // Lightbox navigation context. When opened from the gallery this holds the
 // ordered image set and the current position so ←/→ and the on-screen chevrons
@@ -220,7 +229,9 @@ function preparePreviewSurface(filename: any, { keepCurrentImage = false } = {})
 function showPreviewError(message: any, { keepCurrentImage = false } = {}) {
     if (!modalEl || !loadingEl || !errorEl) return;
 
+    previewTransition.cancel();
     hideLockedState();
+
     modalEl.classList.remove("is-preview-locked");
     hidePreviewProgress();
     if (!keepCurrentImage) resetImageSurface();
@@ -250,9 +261,10 @@ function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
     imageEl.hidden = false;
     // Opacity-only entrance: we drive transform via zoom/pan, so the animation
     // must not write transform (and must not hold it with fill).
+    const sharedTransition = previewTransition.finishOpen(imageEl);
     const reduceMotion = typeof window.matchMedia === "function"
         && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!reduceMotion && typeof imageEl.animate === "function") {
+    if (!sharedTransition && !previewTransition.isRunning() && !reduceMotion && typeof imageEl.animate === "function") {
         imageEl.animate(
             [{ opacity: 0.6 }, { opacity: 1 }],
             { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
@@ -296,13 +308,13 @@ export function isPreviewableImage(filename: any) {
     return SUPPORTED_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
 }
 
-function buildPreviewSource(mimeType: any, dataBase64: any) {
-    return `data:${mimeType};base64,${dataBase64}`;
+function buildPreviewSource(mimeType: string, dataBase64: string) {
+    return 'data:' + mimeType + ';base64,' + dataBase64;
 }
 
-function payloadToPreviewAsset(payload: any) {
-    const dataBase64 = String(payload?.data_base64 || "");
-    const mimeType = String(payload?.mime_type || "");
+function payloadToPreviewAsset(payload: PreviewPayload) {
+    const dataBase64 = payload.dataBase64;
+    const mimeType = payload.mimeType;
     if (!dataBase64 || !mimeType) {
         throw new Error("Download failed");
     }
@@ -479,6 +491,12 @@ export async function loadPreview(target: any) {
 }
 
 export function closePreviewModal() {
+    if (zoomScale === 1 && activePreviewTransitionSource && isPreviewVisible()) {
+        previewTransition.playClose(activePreviewTransitionSource, imageEl);
+    } else {
+        previewTransition.cancel();
+    }
+    activePreviewTransitionSource = null;
     previewRequestToken += 1;
     preloadEpoch += 1; // abort any in-flight neighbor prefetch
     // Drop the full-image cache between sessions: it's keyed by msg id, which is
@@ -495,7 +513,7 @@ export function closePreviewModal() {
     if (modalEl) {
         modalEl.style.display = "none";
         modalEl.setAttribute("aria-hidden", "true");
-        modalEl.classList.remove("is-chrome-visible", "is-preview-error", "is-preview-locked");
+        modalEl.classList.remove("is-chrome-visible", "is-preview-error", "is-preview-locked", "is-shared-entering");
     }
     if (filenameEl) filenameEl.textContent = "";
     if (loadingEl) loadingEl.style.display = "none";
@@ -509,13 +527,19 @@ export function closePreviewModal() {
 
 // openPreviewItem shows the modal and loads one item. It does not touch the
 // navigation context, so both single-item and list callers route through it.
-async function openPreviewItem(item: any) {
-    const keepCurrentImage = isPreviewOpen() && isPreviewVisible();
+async function openPreviewItem(item: any, transitionSource: PreviewTransitionSource | null = null) {
+    const wasOpen = isPreviewOpen();
+    const keepCurrentImage = wasOpen && isPreviewVisible();
 
+    previewTransition.cancel();
+    activePreviewTransitionSource = transitionSource;
     modalEl.style.display = "flex";
     modalEl.setAttribute("aria-hidden", "false");
     setChromeVisible(true);
     preparePreviewSurface(item.name || "Preview", { keepCurrentImage });
+    if (!wasOpen && transitionSource && previewTransition.beginOpen(transitionSource, modalEl)) {
+        showPreviewImage(transitionSource.imageSrc, item.name || "Preview", { keepLoading: true });
+    }
 
     try {
         await loadPreview(item);
@@ -545,9 +569,20 @@ export async function openPreviewForSelection(target = null) {
     return openPreviewItem(selection.item);
 }
 
+function findGalleryPreviewSource(item: any): PreviewTransitionSource | null {
+    const id = Number(item?.id || 0);
+    if (!id) return null;
+    const cell = document.querySelector<HTMLElement>('.gallery-cell[data-id="' + id + '"]');
+    return capturePreviewTransitionSource(cell);
+}
+
 // openPreviewList opens the lightbox on items[index] with ←/→ navigation across
 // the whole list. Items are { type:"file", id, name, size?, thumbUrl? }.
-export async function openPreviewList(items: any[], index: number) {
+export async function openPreviewList(
+    items: any[],
+    index: number,
+    transitionSource: PreviewTransitionSource | null = null,
+) {
     if (!assertPreviewReady()) return false;
     if (!Array.isArray(items) || items.length === 0) return false;
 
@@ -555,7 +590,7 @@ export async function openPreviewList(items: any[], index: number) {
     navItems = items;
     navIndex = i;
     updateNavChrome();
-    return openPreviewItem(items[i]);
+    return openPreviewItem(items[i], transitionSource || findGalleryPreviewSource(items[i]));
 }
 
 async function navigatePreview(delta: number) {
@@ -564,7 +599,7 @@ async function navigatePreview(delta: number) {
     if (next < 0 || next >= navItems.length) return;
     navIndex = next;
     updateNavChrome();
-    await openPreviewItem(navItems[next]);
+    await openPreviewItem(navItems[next], findGalleryPreviewSource(navItems[next]));
 }
 
 function updateNavChrome() {
@@ -629,6 +664,7 @@ function refreshInfoPanel() {
 
 function showLockedState() {
     if (!lockedEl) return;
+    previewTransition.cancel();
     hidePreviewProgress();
     resetImageSurface();
     if (errorEl) {

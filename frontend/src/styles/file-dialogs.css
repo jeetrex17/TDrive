@@ -168,6 +168,25 @@
     pointer-events: none;
     background: rgba(7, 9, 15, 0.72);
 }
+.preview-overlay.is-shared-entering::before {
+    --motion-enter-x: 0;
+    --motion-enter-y: 0;
+    animation: tdrive-surface-enter var(--motion-med) var(--ease-standard) both;
+}
+
+.preview-shared-transition-image {
+    position: fixed;
+    z-index: calc(var(--z-modal) + 1);
+    display: block;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    transform-origin: top left;
+    will-change: transform, opacity;
+}
 
 .preview-shell {
     position: relative;
