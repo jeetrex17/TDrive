@@ -384,6 +384,9 @@
     padding: var(--space-1);
     box-shadow: var(--shadow-lg);
     pointer-events: auto;
+    transform-origin: center;
+    --motion-enter-scale: 0.985;
+    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
 }
 .context-menu button {
     width: 100%;

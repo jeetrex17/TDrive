@@ -20,19 +20,7 @@ import {
     type TransferEvent,
 } from '../ui/notifications/notif-store';
 
-// happy-dom has no Web Animations API; Svelte outros call element.animate.
-// Stub it so out-transitions complete immediately.
-if (!Element.prototype.animate) {
-    (Element.prototype as any).animate = function () {
-        const anim: any = { cancel() {}, finish() {}, finished: Promise.resolve() };
-        Object.defineProperty(anim, 'onfinish', {
-            set(cb: (() => void) | null) {
-                if (cb) queueMicrotask(cb);
-            },
-        });
-        return anim;
-    };
-}
+
 
 function bell(): HTMLElement {
     const el = document.getElementById('notif-bell');

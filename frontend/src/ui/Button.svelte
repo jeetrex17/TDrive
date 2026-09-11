@@ -88,7 +88,6 @@
     .is-primary:hover:not(:disabled) {
         background: var(--accent-hover);
         border-color: var(--accent-hover);
-        transform: translateY(-1px);
     }
 
     .is-secondary {
@@ -111,7 +110,6 @@
     .is-danger:hover:not(:disabled) {
         background: color-mix(in srgb, var(--danger) 88%, white);
         border-color: color-mix(in srgb, var(--danger) 88%, white);
-        transform: translateY(-1px);
     }
 
     .is-small {
@@ -121,7 +119,7 @@
     }
 
     .ui-button:active:not(:disabled) {
-        transform: translateY(0);
+        transform: translateY(0.5px) scale(0.985);
     }
 
     .ui-button:focus-visible {
@@ -151,6 +149,10 @@
     @media (prefers-reduced-motion: reduce) {
         .ui-button {
             transition: none;
+        }
+
+        .ui-button:active:not(:disabled) {
+            transform: none;
         }
 
         .ui-button-spinner {

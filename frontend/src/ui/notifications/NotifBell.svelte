@@ -26,10 +26,7 @@
     let anchor = $state({ top: 0, right: 0 });
     let hoverGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
-    function surfaceOut(_node: Element) {
-        // Mirrors the legacy .notif-leaving fade.
-        return { duration: 160, css: (t: number) => `opacity: ${t};` };
-    }
+
 
     function reanchor(): void {
         if (!bellEl) return;
@@ -148,7 +145,7 @@
         tabindex="-1"
         style={`top:${anchor.top}px; right:${anchor.right}px;`}
         use:portal
-        out:surfaceOut
+
         onmouseenter={clearGraceTimer}
         onmouseleave={onBellLeave}
         onclick={(event) => {
@@ -178,7 +175,7 @@
         tabindex="-1"
         style={`top:${anchor.top}px; right:${anchor.right}px;`}
         use:portal
-        out:surfaceOut
+
         onclick={(event) => event.stopPropagation()}
     >
         <div class="notif-panel-header">

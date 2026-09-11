@@ -250,7 +250,9 @@ function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
     imageEl.hidden = false;
     // Opacity-only entrance: we drive transform via zoom/pan, so the animation
     // must not write transform (and must not hold it with fill).
-    if (typeof imageEl.animate === "function") {
+    const reduceMotion = typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduceMotion && typeof imageEl.animate === "function") {
         imageEl.animate(
             [{ opacity: 0.6 }, { opacity: 1 }],
             { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },

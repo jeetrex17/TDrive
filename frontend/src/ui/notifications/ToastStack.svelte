@@ -17,14 +17,7 @@
 
     let { onDismiss, onPauseToast, onResumeToast, onPauseAll, onResumeAll }: Props = $props();
 
-    // Mirrors the legacy .toast-leaving exit: fade and slide while the stack
-    // collapses underneath.
-    function toastOut(_node: Element) {
-        return {
-            duration: 180,
-            css: (t: number) => `opacity: ${t}; transform: translateY(${(1 - t) * 6}px);`,
-        };
-    }
+
 
     function onToastClick(event: MouseEvent, toast: ToastItem): void {
         if ((event.target as HTMLElement).closest('.toast-close')) return;
@@ -45,7 +38,7 @@
             class={`toast toast-${toast.level}`}
             data-id={toast.id}
             role={toast.level === 'error' ? 'alert' : 'status'}
-            out:toastOut
+
             onmouseenter={() => onPauseToast(toast.id)}
             onmouseleave={() => onResumeToast(toast.id)}
             onclick={(event) => onToastClick(event, toast)}

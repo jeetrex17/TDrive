@@ -17,7 +17,9 @@
 
     --motion-fast: 120ms;
     --motion-med: 180ms;
+    --motion-slow: 240ms;
     --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
 
     --z-selection: 20;
     --z-popover: 10000;

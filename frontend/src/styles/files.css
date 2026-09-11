@@ -65,6 +65,7 @@
     backdrop-filter: blur(10px);
     text-transform: none;
     letter-spacing: 0;
+    animation: tdrive-surface-enter var(--motion-fast) var(--ease-standard) both;
 }
 .selection-count {
     color: var(--text-main);
@@ -310,11 +311,16 @@
 
 .action-icon {
     width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
-    border-radius: 6px; cursor: pointer; transition: all 0.2s;
+    border-radius: 6px; cursor: pointer;
     background: var(--overlay-white-1); border: 1px solid var(--border);
     color: var(--text-main);
     padding: 0;
     appearance: none;
+    transition:
+        background-color var(--motion-med) var(--ease-standard),
+        border-color var(--motion-med) var(--ease-standard),
+        color var(--motion-med) var(--ease-standard),
+        transform var(--motion-fast) var(--ease-standard);
 }
 .action-icon svg { width: 16px; height: 16px; }
 .action-icon:hover { background: var(--bg-panel); }

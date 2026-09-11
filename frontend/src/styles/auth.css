@@ -47,13 +47,17 @@
     -webkit-backdrop-filter: blur(28px) saturate(165%);
     backdrop-filter: blur(28px) saturate(165%);
     transform-origin: top right;
-    animation: profile-menu-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    --motion-enter-y: -4px;
+    --motion-enter-scale: 0.985;
+    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
 }
 
 .auth-box {
     background: var(--bg-sidebar); border: 1px solid var(--border);
     padding: 2.5rem; border-radius: 16px; width: 380px; text-align: center;
     box-shadow: var(--shadow-md);
+    --motion-enter-y: 4px;
+    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
 }
 
 .auth-icon-box {
@@ -131,7 +135,11 @@
 input {
     width: 100%; padding: 12px 15px; background: var(--bg-dark); border: 1px solid var(--border);
     border-radius: 8px; color: var(--color-text); margin-bottom: 15px; font-size: 0.95rem; outline: none;
-    transition: all 0.2s ease;
+    transition:
+        background-color var(--motion-med) var(--ease-standard),
+        border-color var(--motion-med) var(--ease-standard),
+        box-shadow var(--motion-med) var(--ease-standard),
+        color var(--motion-med) var(--ease-standard);
 }
 input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 

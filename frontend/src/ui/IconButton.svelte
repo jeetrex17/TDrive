@@ -148,5 +148,9 @@
         .ui-icon-button {
             transition: none;
         }
+
+        .ui-icon-button:active:not(:disabled) {
+            transform: none;
+        }
     }
 </style>

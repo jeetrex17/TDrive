@@ -32,13 +32,32 @@
 }
 .drives-list { display: flex; flex-direction: column; gap: 2px; }
 .drive-item {
+    position: relative;
     display: flex; align-items: center; gap: 12px; color: var(--text-muted);
     background: transparent; border: none; cursor: pointer;
     padding: 9px 12px; border-radius: 8px; font-size: 0.9rem; font-weight: 500;
-    transition: all 0.15s ease; text-align: left; width: 100%;
+    transition:
+        background-color var(--motion-fast) var(--ease-standard),
+        color var(--motion-fast) var(--ease-standard);
+    text-align: left; width: 100%;
+}
+.drive-item::before {
+    position: absolute;
+    left: 3px;
+    width: 2px;
+    height: 14px;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    content: '';
+    opacity: 0;
+    transform: scaleY(0.35);
+    transition:
+        opacity var(--motion-fast) var(--ease-standard),
+        transform var(--motion-fast) var(--ease-standard);
 }
 .drive-item:hover { background: var(--bg-panel); color: var(--text-main); }
 .drive-item.active { background: var(--overlay-accent-1); color: var(--accent); }
+.drive-item.active::before { opacity: 1; transform: scaleY(1); }
 .drive-item .icon { width: 18px; height: 18px; flex-shrink: 0; }
 .drive-item-title {
     flex: 1;
@@ -74,7 +93,12 @@
 .drive-action-btn {
     display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid var(--border);
     color: var(--text-muted); padding: 8px 12px; border-radius: 8px; cursor: pointer;
-    font-size: 0.85rem; transition: all 0.15s ease;
+    font-size: 0.85rem;
+    transition:
+        background-color var(--motion-fast) var(--ease-standard),
+        border-color var(--motion-fast) var(--ease-standard),
+        color var(--motion-fast) var(--ease-standard),
+        transform var(--motion-fast) var(--ease-standard);
 }
 .drive-action-btn:hover,
 .drive-action-btn:focus-visible {
@@ -82,6 +106,7 @@
     border-color: var(--accent);
     border-style: solid;
 }
+.drive-action-btn:active { transform: translateY(0.5px); }
 .drive-action-btn .icon { width: 16px; height: 16px; }
 
 .uploader-chip {

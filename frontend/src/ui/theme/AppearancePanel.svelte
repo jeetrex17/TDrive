@@ -187,6 +187,8 @@
         overflow: auto;
         scrollbar-width: none;
         color: var(--color-text);
+        --motion-enter-y: 4px;
+        animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
     }
 
     .appearance-panel::-webkit-scrollbar { display: none; }
@@ -405,11 +407,16 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
+        .appearance-panel { animation: none; }
+
         .mode-card,
         .theme-card,
         .theme-check { transition: none; }
 
         .mode-card:hover,
-        .theme-card:hover { transform: none; }
+        .mode-card:active,
+        .theme-card:hover,
+        .theme-card:active { transform: none; }
     }
 </style>
+

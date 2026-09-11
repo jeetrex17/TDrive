@@ -44,9 +44,15 @@
 
 .icon-btn {
     background: transparent; border: 1px solid var(--border); color: var(--text-muted);
-    width: 36px; height: 36px; border-radius: 8px; cursor: pointer; transition: all 0.2s ease;
+    width: 36px; height: 36px; border-radius: 8px; cursor: pointer;
     display: flex; align-items: center; justify-content: center;
+    transition:
+        background-color var(--motion-med) var(--ease-standard),
+        border-color var(--motion-med) var(--ease-standard),
+        color var(--motion-med) var(--ease-standard),
+        transform var(--motion-fast) var(--ease-standard);
 }
 .icon-btn:hover { border-color: var(--text-main); color: var(--text-main); }
+.icon-btn:active { transform: translateY(0.5px) scale(0.98); }
 .icon-btn svg { width: 18px; height: 18px; }
 

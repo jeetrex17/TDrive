@@ -63,14 +63,12 @@
     -webkit-backdrop-filter: blur(28px) saturate(165%);
     backdrop-filter: blur(28px) saturate(165%);
     transform-origin: top right;
-    animation: profile-menu-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    --motion-enter-y: -4px;
+    --motion-enter-scale: 0.985;
+    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
 }
 .profile-menu[hidden] { display: none; }
 .profile-menu.appearance-view { min-width: min(390px, calc(100vw - 32px)); }
-@keyframes profile-menu-in {
-    from { opacity: 0; transform: translateY(-5px) scale(0.97); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-}
 .profile-menu-header {
     display: flex;
     gap: 12px;

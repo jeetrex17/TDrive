@@ -7,7 +7,7 @@ import { state } from '../state';
 // dragover keeps firing while the pointer moves; going quiet for this long is
 // the reliable "left the window" signal. dragleave is noisy across children.
 const HIDE_AFTER_IDLE_MS = 160;
-const FADE_MS = 160;
+const FADE_MS = 180;
 
 let overlayEl: HTMLElement | null = null;
 let titleEl: HTMLElement | null = null;

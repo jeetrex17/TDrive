@@ -13,6 +13,10 @@
     background: var(--bg-panel);
     border: 1px solid var(--border);
     box-shadow: var(--shadow-md);
+    transform-origin: top right;
+    --motion-enter-y: -4px;
+    --motion-enter-scale: 0.985;
+    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
 }
 .upload-menu-item {
     display: flex;
