@@ -127,11 +127,43 @@ export interface PreviewPayload {
     mimeType: string;
 }
 
-export type DownloadStatus = "success" | "canceled" | "error";
+export type OperationErrorCode =
+    | "operation_failed"
+    | "backend_unavailable"
+    | "encryption_password_required"
+    | "invalid_encryption_password"
+    | "encryption_password_already_set"
+    | "encryption_policy_unavailable"
+    | "canceled"
+    | "deadline_exceeded"
+    | "not_found"
+    | "permission_denied"
+    | "already_exists"
+    | "insufficient_storage"
+    | "network_unavailable"
+    | "file_too_large";
+
+export interface OperationError {
+    code: OperationErrorCode;
+    message: string;
+}
+
+export type OperationResult =
+    | { ok: true; error?: never }
+    | { ok: false; error: OperationError };
+
+export interface PreviewResult {
+    result: OperationResult;
+    payload: PreviewPayload;
+}
+
+export interface UploadResult {
+    result: OperationResult;
+    files: FileItem[];
+}
 
 export interface DownloadResult {
-    status: DownloadStatus;
-    message: string;
+    result: OperationResult;
     savedPath: string;
 }
 

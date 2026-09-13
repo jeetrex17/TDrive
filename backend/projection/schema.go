@@ -332,9 +332,7 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 			return err
 		}
 	}
-	if v < 3 {
-		// pending_joins is created by EnsureSchema above. Nothing to backfill.
-	}
+	// Version 3 added pending_joins through EnsureSchema; no backfill is required.
 	if v < 4 {
 		if err := addEncryptionColumnsToFiles(tx); err != nil {
 			return err
@@ -345,9 +343,7 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 			return err
 		}
 	}
-	if v < 6 {
-		// replay_log_rejects is created by EnsureSchema above. Nothing to backfill.
-	}
+	// Version 6 added replay_log_rejects through EnsureSchema; no backfill is required.
 	if v < 7 {
 		if err := addMultipartColumnsToFiles(tx); err != nil {
 			return err

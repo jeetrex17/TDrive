@@ -1,92 +1,85 @@
 // Drag and drop handling for TDrive frontend
 
 import { state } from '../state';
-import { addTelegramFileToDrive, moveFile, moveFolder } from '../api';
+import {
+    addTelegramFileToDrive,
+    moveFile,
+    moveFolder,
+    setFileDropEnabled,
+    type OperationResult,
+} from '../api';
 import { callWithPasswordRetry } from './modals/encryption-password';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
 import { appActions } from './app-actions';
+import type { FileCommandItem } from '../ui/file-list/types';
 
-export function clearDropHighlights() {
+export function clearDropHighlights(): void {
     if (state.dragOverEl) {
-        state.dragOverEl.classList.remove("drop-target");
-        state.dragOverEl.classList.remove("drop-denied");
+        state.dragOverEl.classList.remove('drop-target');
+        state.dragOverEl.classList.remove('drop-denied');
         state.dragOverEl = null;
     }
     if (state.dragRootEl) {
-        state.dragRootEl.classList.remove("drop-target");
-        state.dragRootEl.classList.remove("drop-denied");
+        state.dragRootEl.classList.remove('drop-target');
+        state.dragRootEl.classList.remove('drop-denied');
     }
 }
 
-export function setDropHighlight(el: HTMLElement, allowed: boolean) {
-    if (state.dragOverEl && state.dragOverEl !== el) {
-        state.dragOverEl.classList.remove("drop-target");
-        state.dragOverEl.classList.remove("drop-denied");
+export function setDropHighlight(element: HTMLElement, allowed: boolean): void {
+    if (state.dragOverEl && state.dragOverEl !== element) {
+        state.dragOverEl.classList.remove('drop-target');
+        state.dragOverEl.classList.remove('drop-denied');
     }
-    state.dragOverEl = el;
-    el.classList.toggle("drop-target", Boolean(allowed));
-    el.classList.toggle("drop-denied", !allowed);
+    state.dragOverEl = element;
+    element.classList.toggle('drop-target', allowed);
+    element.classList.toggle('drop-denied', !allowed);
 }
 
-export function canDropOnFolder(targetFolderId: string) {
-    if (!state.dragState) return false;
-    const target = String(targetFolderId || "");
-    if (target === String(state.dragState.parentId || "")) return false;
-    // blocked holds every dragged folder id plus its descendants, so we never
-    // drop a folder into itself or its own subtree.
-    if (state.dragState.blocked && state.dragState.blocked.has(target)) return false;
-    return true;
+export function canDropOnFolder(targetFolderId: string): boolean {
+    const drag = state.dragState;
+    if (!drag || targetFolderId === drag.parentId) return false;
+    return !drag.blocked.has(targetFolderId);
 }
 
-async function ensureFileInTdriveSystem(target: any) {
-    if (!target || target.type !== "file") return;
-    if (String(target.source || "fs") !== "tg") return;
-
-    const res = await addTelegramFileToDrive(Number(target.id),
-    String(target.name || ""),
-    Number(target.size || 0),
-    String(target.parentId || ""));
-
-    if (typeof res === "string" && res.startsWith("Error")) {
-        throw new Error(humanizeBackendError(res));
-    }
+async function ensureFileInTdriveSystem(target: FileCommandItem): Promise<void> {
+    if (target.type !== 'file' || target.source !== 'tg') return;
+    const result = await addTelegramFileToDrive(
+        target.id,
+        target.name,
+        target.size,
+        target.parentId,
+    );
+    if (!result.ok) throw new Error(humanizeBackendError(result.error));
 }
 
-export async function performDropMove(newParentId: string) {
-    if (!state.dragState) return;
-    const items = Array.isArray(state.dragState.items) ? state.dragState.items : [];
-    const parent = String(newParentId || "");
-    if (!items.length || parent === String(state.dragState.parentId || "")) {
+export async function performDropMove(newParentId: string): Promise<void> {
+    const drag = state.dragState;
+    if (!drag) return;
+    const items = drag.items;
+    if (items.length === 0 || newParentId === drag.parentId) {
         clearDropHighlights();
         return;
     }
 
     let failures = 0;
-    let lastError = "";
+    let lastError = '';
     for (const item of items) {
         try {
-            let res = "";
-            if (item.type === "folder") {
-                res = await callWithPasswordRetry(() => moveFolder(String(item.id), parent));
+            let result: OperationResult;
+            if (item.type === 'folder') {
+                result = await callWithPasswordRetry(() => moveFolder(item.id, newParentId));
             } else {
-                await ensureFileInTdriveSystem({
-                    type: "file",
-                    id: Number(item.id),
-                    name: item.name,
-                    size: item.size,
-                    parentId: item.parentId,
-                    source: item.source,
-                });
-                res = await callWithPasswordRetry(() => moveFile(Number(item.id), parent));
+                await ensureFileInTdriveSystem(item);
+                result = await callWithPasswordRetry(() => moveFile(item.id, newParentId));
             }
-            if (typeof res === "string" && res.startsWith("Error")) {
-                failures++;
-                lastError = humanizeBackendError(res);
+            if (!result.ok) {
+                failures += 1;
+                lastError = humanizeBackendError(result.error);
             }
-        } catch (err) {
-            failures++;
-            lastError = humanizeBackendError(err);
+        } catch (error) {
+            failures += 1;
+            lastError = humanizeBackendError(error);
         }
     }
 
@@ -101,35 +94,34 @@ export async function performDropMove(newParentId: string) {
     clearDropHighlights();
 }
 
-function setNativeFileDrop(enabled: boolean) {
-    // macOS intercepts the in-app HTML5 drag while the native OS file-drop target
-    // is live, breaking the move and popping the upload dialog. Turn it off for
-    // the duration of an internal drag.
-    try { (window as any)?.go?.main?.App?.SetFileDropEnabled?.(enabled); } catch { /* binding optional */ }
+function setNativeFileDrop(enabled: boolean): void {
+    void setFileDropEnabled(enabled).catch(() => {
+        // Browser-only development has no native drop binding.
+    });
 }
 
-function clearDragRows() {
-    if (!state.dragState) return;
-    if (state.dragState.row) state.dragState.row.classList.remove("is-dragging");
-    if (Array.isArray(state.dragState.items)) {
-        for (const it of state.dragState.items) {
-            if (it?.row) it.row.classList.remove("is-dragging");
-        }
-    }
+function clearDragRows(): void {
+    const drag = state.dragState;
+    if (!drag) return;
+    drag.row.classList.remove('is-dragging');
+    for (const item of drag.items) item.row?.classList.remove('is-dragging');
 }
 
-export function beginRowDrag(row: HTMLElement, items: any[], parentId: string, blocked?: Set<string>) {
+export function beginRowDrag(
+    row: HTMLElement,
+    items: FileCommandItem[],
+    parentId: string,
+    blocked: Set<string> = new Set<string>(),
+): void {
     clearDropHighlights();
     clearDragRows();
     setNativeFileDrop(false);
-    state.dragState = { items, parentId: String(parentId || ""), blocked: blocked || new Set<string>(), row };
-    for (const it of items) {
-        if (it?.row) it.row.classList.add("is-dragging");
-    }
-    row.classList.add("is-dragging");
+    state.dragState = { items, parentId, blocked, row };
+    for (const item of items) item.row?.classList.add('is-dragging');
+    row.classList.add('is-dragging');
 }
 
-export function endRowDrag() {
+export function endRowDrag(): void {
     clearDragRows();
     state.dragState = null;
     clearDropHighlights();

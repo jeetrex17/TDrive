@@ -240,7 +240,7 @@ func isTarDir(hdr *tar.Header) bool {
 }
 
 func isTarRegular(hdr *tar.Header) bool {
-	return hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA
+	return hdr.Typeflag == tar.TypeReg || hdr.Typeflag == 0
 }
 
 // withTarReader opens p as a tar stream (optionally gzip-wrapped) and invokes fn

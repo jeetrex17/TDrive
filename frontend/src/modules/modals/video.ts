@@ -1,27 +1,17 @@
-import { htmlPictureStyle, loadPlaybackPreferences, nativePreferenceCommands, normalizePlaybackPreferences, savePlaybackPreferences, type PlaybackPreferences, type PictureMode } from "../video/playback-preferences";
+import { htmlPictureStyle, loadPlaybackPreferences, normalizePlaybackPreferences, savePlaybackPreferences, type PlaybackPreferences, type PictureMode } from "../video/playback-preferences";
 import {
     attachNativeMedia,
     closeMedia,
     closeNativeMedia,
-    enterFullscreen,
-    exitFullscreen,
-    fullscreenAvailable,
     getMediaStats,
-    hideNativeSeekThumbnail,
-    isFullscreen,
-    moveNativeSeekThumbnail,
-    nativeMediaCommand,
     onRuntimeEvent,
     openMedia,
     openNativeMedia,
-    resizeNativeMedia,
-    showNativeSeekThumbnail,
     updateMediaPlayback,
     type MediaStats,
     type MediaOpenResult,
     type NativeMediaOpenResult,
     type NativeMediaRect,
-    type NativeMediaStatePayload,
 } from "../../api";
 
 import { formatBytes } from "../../utils";
@@ -34,33 +24,30 @@ import {
 } from "../video/playback-lifecycle";
 import {
     nativeTrackLabel,
-    normalizeNativeTracks,
     shortNativeTrackLabel,
     type NativeMediaTrack,
 } from "../video/media-tracks";
-import { setNativeVideoLayerActive } from "../video/native-video-layer";
+import {
+    EMPTY_PLAYER_STATE,
+    HtmlVideoAdapter,
+    MAX_PLAYBACK_RATE,
+    MIN_PLAYBACK_RATE,
+    NativeMediaStateRouter,
+    NativeMpvAdapter,
+    clampPlaybackRate,
+    type PlayerAdapter,
+    type PlayerState,
+} from "../video/player-adapters";
+import { VideoGeometryController } from "../video/video-geometry";
+import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
+import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
 import { installModalA11y } from "../../ui/modals/modal-a11y";
 import VideoModal from "../../ui/video/VideoModal.svelte";
 import { mountSvelte, type SvelteMountHandle } from "../../ui/mount";
 
 const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
-const SEEK_STEP_SECONDS = 10;
-const VOLUME_STEP = 0.05;
 const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
-const MIN_PLAYBACK_RATE = 0.25;
-const MAX_PLAYBACK_RATE = 4;
-const THUMBNAIL_BUCKET_SECONDS = 10;
-const THUMBNAIL_LONG_BUCKET_SECONDS = 20;
-const THUMBNAIL_VERY_LONG_BUCKET_SECONDS = 30;
-const THUMBNAIL_REQUEST_DEBOUNCE_MS = 140;
-const THUMBNAIL_DWELL_PREFETCH_MS = 420;
-const THUMBNAIL_RETRY_MS = 650;
-const THUMBNAIL_FAILURE_TTL_MS = 15_000;
-// When the exact bucket isn't ready yet, show the nearest already-cached frame
-// within this many seconds as a placeholder (the exact frame swaps in on load).
-// Kept small so the placeholder is genuinely the same scene, never a far one.
-const THUMBNAIL_NEAREST_MAX_SECONDS = 120;
 const PLAYBACK_HINT_INTERVAL_MS = 1000;
 const MEDIA_STATS_POLL_MS = 1000;
 const STREAM_ACTIVITY_HOLD_MS = 2000;
@@ -72,34 +59,6 @@ interface VideoOpenTarget {
     encrypted?: boolean;
 }
 
-interface BufferedRange {
-    start: number;
-    end: number;
-}
-
-interface PlayerState {
-    paused: boolean;
-    currentTime: number;
-    duration: number;
-    buffered: BufferedRange[];
-    volume: number;
-    muted: boolean;
-    rate: number;
-    loading: boolean;
-    tracks: NativeMediaTrack[];
-}
-
-interface PlayerAdapter {
-    subscribe(callback: (state: PlayerState) => void): () => void;
-    playPause(): void;
-    seekAbsolute(seconds: number): void;
-    seekRelative(seconds: number): void;
-    setVolume(value: number): void;
-    setMuted(value: boolean): void;
-    setSpeed(value: number): void;
-    close(): Promise<void>;
-}
-
 interface VideoOpenAttempt {
     generation: number;
     target: VideoOpenTarget;
@@ -108,439 +67,6 @@ interface VideoOpenAttempt {
     pausedByUser: boolean;
 }
 
-type HtmlMediaErrorHandler = (code: number | undefined, state: PlayerState) => void;
-type NativeMediaErrorHandler = (detail: string) => void;
-type NativeMediaClosedHandler = () => void;
-type NativeLayout = "none" | "embedded-overlay" | "embedded-fallback" | "standalone";
-
-const EMPTY_STATE: PlayerState = {
-    paused: true,
-    currentTime: 0,
-    duration: 0,
-    buffered: [],
-    volume: 1,
-    muted: false,
-    rate: 1,
-    loading: false,
-    tracks: [],
-};
-
-class HtmlVideoAdapter implements PlayerAdapter {
-    private subscribers = new Set<(state: PlayerState) => void>();
-    private listeners: Array<() => void> = [];
-    private closed = false;
-    private lastAudibleVolume: number;
-
-    constructor(
-        private readonly video: HTMLVideoElement,
-        private readonly opened: MediaOpenResult,
-        private readonly onMediaError: HtmlMediaErrorHandler,
-    ) {
-        this.lastAudibleVolume = video.volume > 0 ? video.volume : 1;
-        const events = [
-            "loadstart",
-            "loadedmetadata",
-            "canplay",
-            "waiting",
-            "playing",
-            "pause",
-            "timeupdate",
-            "durationchange",
-            "progress",
-            "volumechange",
-            "ratechange",
-            "seeking",
-            "seeked",
-        ];
-        for (const event of events) {
-            const listener = () => this.emit();
-            video.addEventListener(event, listener);
-            this.listeners.push(() => video.removeEventListener(event, listener));
-        }
-        const errorListener = () => {
-            if (this.closed) return;
-            this.onMediaError(this.video.error?.code, this.snapshot());
-        };
-        video.addEventListener("error", errorListener);
-        this.listeners.push(() => video.removeEventListener("error", errorListener));
-    }
-
-    load() {
-        this.video.pause();
-        this.video.removeAttribute("src");
-        this.video.load();
-        this.video.src = this.opened.url;
-        this.video.playbackRate = 1;
-        this.emit();
-
-        const playPromise = this.video.play();
-        if (playPromise && typeof playPromise.catch === "function") {
-            playPromise.catch(() => {
-                // Autoplay may be blocked; leave the first frame and explicit play control visible.
-                this.emit();
-                revealChrome();
-            });
-        }
-    }
-
-    subscribe(callback: (state: PlayerState) => void) {
-        this.subscribers.add(callback);
-        callback(this.snapshot());
-        return () => this.subscribers.delete(callback);
-    }
-
-    playPause() {
-        if (this.video.paused) {
-            this.video.play().catch((err) => setError(String(err?.message || err || "Playback failed.")));
-        } else {
-            this.video.pause();
-        }
-        this.emit();
-    }
-
-    seekAbsolute(seconds: number) {
-        const duration = Number.isFinite(this.video.duration) ? this.video.duration : 0;
-        if (duration <= 0) return;
-        this.video.currentTime = clamp(seconds, 0, duration);
-        this.emit();
-    }
-
-    seekRelative(seconds: number) {
-        this.seekAbsolute(this.video.currentTime + seconds);
-    }
-
-    setVolume(value: number) {
-        const next = clamp(value, 0, 1);
-        this.video.volume = next;
-        if (next > 0) this.lastAudibleVolume = next;
-        this.video.muted = next === 0;
-        this.emit();
-    }
-
-    setMuted(value: boolean) {
-        if (!value && this.video.volume === 0) {
-            this.video.volume = this.lastAudibleVolume;
-        }
-        this.video.muted = value;
-        this.emit();
-    }
-
-    setSpeed(value: number) {
-        this.video.playbackRate = clampPlaybackRate(value);
-        this.emit();
-    }
-
-    async close() {
-        if (this.closed) return;
-        try {
-            this.detach();
-        } finally {
-            await closeMedia(this.opened.token);
-        }
-    }
-
-    detachForNative(): MediaOpenResult | null {
-        return this.detach() ? this.opened : null;
-    }
-
-    private detach(): boolean {
-        if (this.closed) return false;
-        this.closed = true;
-        for (const remove of this.listeners.splice(0)) remove();
-        this.subscribers.clear();
-        try {
-            this.video.pause();
-        } catch {
-            // The token still has to be released if a platform media element is
-            // already torn down and rejects a final pause/reset.
-        }
-        this.video.removeAttribute("src");
-        try {
-            this.video.load();
-        } catch {
-            // Removing src is sufficient to detach ownership for native handoff.
-        }
-        return true;
-    }
-
-    private snapshot(): PlayerState {
-        const duration = Number.isFinite(this.video.duration) ? this.video.duration : 0;
-        const currentTime = Number.isFinite(this.video.currentTime) ? this.video.currentTime : 0;
-        return {
-            paused: this.video.paused,
-            currentTime,
-            duration,
-            buffered: bufferedRanges(this.video),
-            volume: this.video.volume,
-            muted: this.video.muted || this.video.volume === 0,
-            rate: this.video.playbackRate || 1,
-            loading: this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !this.video.paused,
-            tracks: [],
-        };
-    }
-
-    private emit() {
-        if (this.closed) return;
-        const state = this.snapshot();
-        for (const callback of this.subscribers) callback(state);
-    }
-}
-
-class NativeMpvAdapter implements PlayerAdapter {
-    private subscribers = new Set<(state: PlayerState) => void>();
-    private state: PlayerState;
-    private closed = false;
-    private commandFlushFrame = 0;
-    private pendingSeek: { mode: "absolute" | "relative"; value: number } | null = null;
-    private pendingLatestCommands = new Map<string, string[]>();
-    private lastAudibleVolume = 1;
-    private failureReported = false;
-    private closeReported = false;
-    private lastSequence = 0;
-
-    constructor(
-        private readonly opened: NativeMediaOpenResult,
-        private readonly onMediaError: NativeMediaErrorHandler,
-        private readonly onMediaClosed: NativeMediaClosedHandler,
-    ) {
-        this.state = { ...EMPTY_STATE, paused: false, loading: true };
-    }
-
-    start(pending: NativeMediaStatePayload | null) {
-        if (this.opened.initialState) {
-            this.applyPayload(this.opened.initialState);
-        }
-        if (pending) this.applyPayload(pending);
-    }
-
-    accepts(payload: NativeMediaStatePayload) {
-        return !this.closed && payload.token === this.opened.token;
-    }
-
-    receive(payload: NativeMediaStatePayload) {
-        if (this.accepts(payload)) this.applyPayload(payload);
-    }
-
-    isTerminal() {
-        return this.failureReported || this.closeReported;
-    }
-
-    private applyPayload(payload: NativeMediaStatePayload) {
-        const sequence = Number(payload.sequence ?? 0);
-        if (sequence > 0) {
-            if (sequence <= this.lastSequence) return;
-            this.lastSequence = sequence;
-        }
-        const failure = nativeFailureDetail(payload);
-        if (failure) {
-            if (!this.failureReported) {
-                this.failureReported = true;
-                this.onMediaError(failure);
-            }
-            return;
-        }
-        if (payload.status === "closed") {
-            if (!this.closeReported) {
-                this.closeReported = true;
-                this.onMediaClosed();
-            }
-            return;
-        }
-        this.state = nativePayloadToState(payload, this.state);
-        if (!this.state.muted && this.state.volume > 0) this.lastAudibleVolume = this.state.volume;
-        this.emit();
-    }
-
-    subscribe(callback: (state: PlayerState) => void) {
-        this.subscribers.add(callback);
-        callback(this.state);
-        return () => this.subscribers.delete(callback);
-    }
-
-    playPause() {
-        void this.sendCommand(["cycle", "pause"]);
-        this.updateFallbackState((state) => ({ ...state, paused: !state.paused }));
-    }
-
-    setPaused(value: boolean) {
-        const paused = Boolean(value);
-        this.scheduleLatestCommand("pause", ["set", "pause", paused ? "yes" : "no"]);
-        this.updateFallbackState((state) => ({ ...state, paused }));
-    }
-
-    seekAbsolute(_seconds: number) {
-        if (this.state.duration <= 0) return;
-        const next = clamp(_seconds, 0, Math.max(0, this.state.duration || _seconds));
-        this.scheduleSeek("absolute", next);
-        this.updateFallbackState((state) => ({
-            ...state,
-            currentTime: clamp(next, 0, Math.max(0, state.duration || next)),
-            buffered: keepUsefulBufferedRanges(state.buffered, next),
-        }));
-    }
-
-    seekRelative(seconds: number) {
-        this.scheduleSeek("relative", seconds);
-        this.updateFallbackState((state) => {
-            if (state.duration <= 0) return state;
-            const currentTime = clamp(state.currentTime + seconds, 0, state.duration);
-            return { ...state, currentTime, buffered: keepUsefulBufferedRanges(state.buffered, currentTime) };
-        });
-    }
-
-    setVolume(value: number) {
-        const next = clamp(value, 0, 1);
-        this.scheduleLatestCommand("volume", ["set", "volume", String(Math.round(next * 100))]);
-        if (next > 0) {
-            this.lastAudibleVolume = next;
-            this.scheduleLatestCommand("mute", ["set", "mute", "no"]);
-        }
-        this.updateFallbackState((state) => ({ ...state, volume: next, muted: next <= 0 }));
-    }
-
-    setMuted(value: boolean) {
-        const nextVolume = !value && this.state.volume === 0 ? this.lastAudibleVolume : this.state.volume;
-        if (!value && this.state.volume === 0) {
-            this.scheduleLatestCommand("volume", ["set", "volume", String(Math.round(nextVolume * 100))]);
-        }
-        this.scheduleLatestCommand("mute", ["set", "mute", value ? "yes" : "no"]);
-        this.updateFallbackState((state) => ({ ...state, volume: nextVolume, muted: value }));
-    }
-
-    setSpeed(value: number) {
-        const next = clampPlaybackRate(value);
-        this.scheduleLatestCommand("speed", ["set", "speed", String(next)]);
-        this.updateFallbackState((state) => ({ ...state, rate: next }));
-    }
-
-    private pendingPreferences: PlaybackPreferences | null = null;
-    private applyingPreferences = false;
-
-    applyPreferences(preferences: PlaybackPreferences) {
-        if (this.closed) return;
-        this.pendingPreferences = preferences;
-        if (!this.applyingPreferences) void this.flushPreferences();
-    }
-
-    private async flushPreferences() {
-        this.applyingPreferences = true;
-        try {
-            while (this.pendingPreferences && !this.closed) {
-                const preferences = this.pendingPreferences;
-                this.pendingPreferences = null;
-                for (const command of nativePreferenceCommands(preferences)) {
-                    if (this.closed) return;
-                    // Complete each batch in order; rapid edits coalesce to the latest next batch.
-                    await this.sendCommand(command);
-                }
-            }
-        } finally {
-            this.applyingPreferences = false;
-        }
-    }
-
-    setAudioTrack(id: number) {
-        if (!Number.isSafeInteger(id) || id <= 0) return;
-        void this.sendCommand(["set", "aid", String(id)]);
-        this.updateTrackSelection("audio", id);
-    }
-
-    setSubtitleTrack(id: number | null) {
-        if (id !== null && (!Number.isSafeInteger(id) || id <= 0)) return;
-        void this.sendCommand(["set", "sid", id === null ? "no" : String(id)]);
-        this.updateTrackSelection("subtitle", id);
-    }
-
-    private updateTrackSelection(type: NativeMediaTrack["type"], id: number | null) {
-        this.updateFallbackState((state) => ({
-            ...state,
-            tracks: state.tracks.map((track) => track.type === type ? { ...track, selected: track.id === id } : track),
-        }));
-    }
-
-    async close() {
-        if (this.closed) return;
-        this.closed = true;
-        this.clearScheduledCommands();
-        this.pendingPreferences = null;
-        if (activeNativeStateAdapter === this) activeNativeStateAdapter = null;
-        this.subscribers.clear();
-        try {
-            await closeNativeMedia(this.opened.token);
-        } finally {
-            pendingNativeMediaStates.delete(this.opened.token);
-        }
-    }
-
-    private emit() {
-        for (const callback of this.subscribers) callback(this.state);
-    }
-
-    private updateFallbackState(update: (state: PlayerState) => PlayerState) {
-        if (this.closed) return;
-        this.state = update(this.state);
-        if (!this.state.muted && this.state.volume > 0) this.lastAudibleVolume = this.state.volume;
-        this.emit();
-    }
-
-    private scheduleSeek(mode: "absolute" | "relative", value: number) {
-        if (mode === "relative" && this.pendingSeek?.mode === "relative") {
-            this.pendingSeek.value += value;
-        } else {
-            this.pendingSeek = { mode, value };
-        }
-        this.scheduleCommandFlush();
-    }
-
-    private scheduleLatestCommand(key: string, command: string[]) {
-        this.pendingLatestCommands.set(key, command);
-        this.scheduleCommandFlush();
-    }
-
-    private scheduleCommandFlush() {
-        if (this.commandFlushFrame || this.closed) return;
-        this.commandFlushFrame = requestAnimationFrame(() => {
-            this.commandFlushFrame = 0;
-            this.flushScheduledCommands();
-        });
-    }
-
-    private flushScheduledCommands() {
-        if (this.closed) return;
-        const seek = this.pendingSeek;
-        this.pendingSeek = null;
-        if (seek) {
-            void this.sendCommand(["seek", String(seek.value), seek.mode]);
-        }
-        const commands = Array.from(this.pendingLatestCommands.values());
-        this.pendingLatestCommands.clear();
-        for (const command of commands) {
-            void this.sendCommand(command);
-        }
-    }
-
-    private clearScheduledCommands() {
-        if (this.commandFlushFrame) {
-            cancelAnimationFrame(this.commandFlushFrame);
-            this.commandFlushFrame = 0;
-        }
-        this.pendingSeek = null;
-        this.pendingLatestCommands.clear();
-    }
-
-    private async sendCommand(command: string[]) {
-        if (this.closed) return;
-        try {
-            await nativeMediaCommand(this.opened.token, command);
-        } catch (err) {
-            console.warn("NativeMediaCommand failed:", err);
-        }
-    }
-}
-
-function keepUsefulBufferedRanges(ranges: BufferedRange[], currentTime: number) {
-    return ranges.filter((range) => range.end >= currentTime - 2);
-}
 
 let playbackPreferences = loadPlaybackPreferences();
 let settingsSection: "picture" | "audio" | "subtitle" | "speed" | null = null;
@@ -552,74 +78,30 @@ let controlsEl: HTMLElement | null = null;
 let filenameEl: HTMLElement | null = null;
 let metaEl: HTMLElement | null = null;
 let closeBtnEl: HTMLButtonElement | null = null;
-let nativeViewportEl: HTMLElement | null = null;
-let standaloneEl: HTMLElement | null = null;
 let videoEl: HTMLVideoElement | null = null;
 let loadingEl: HTMLElement | null = null;
 let loadingStatusEl: HTMLElement | null = null;
 let errorEl: HTMLElement | null = null;
-let centerControlsEl: HTMLElement | null = null;
-let centerPlayBtnEl: HTMLButtonElement | null = null;
-let centerSkipBackBtnEl: HTMLButtonElement | null = null;
-let centerSkipForwardBtnEl: HTMLButtonElement | null = null;
-let skipFeedbackEl: HTMLElement | null = null;
 let playBtnEl: HTMLButtonElement | null = null;
-let skipBackBtnEl: HTMLButtonElement | null = null;
-let skipForwardBtnEl: HTMLButtonElement | null = null;
-let muteBtnEl: HTMLButtonElement | null = null;
-let fullscreenBtnEl: HTMLButtonElement | null = null;
-let scrubberEl: HTMLElement | null = null;
-let scrubberPlayedEl: HTMLElement | null = null;
-let scrubberBufferedEl: HTMLElement | null = null;
-let scrubberThumbEl: HTMLElement | null = null;
-let scrubberTooltipEl: HTMLElement | null = null;
-let scrubberTooltipImageEl: HTMLImageElement | null = null;
-let scrubberTooltipTimeEl: HTMLElement | null = null;
-let volumeSliderEl: HTMLElement | null = null;
-let volumeFillEl: HTMLElement | null = null;
-let volumeThumbEl: HTMLElement | null = null;
-let timeEl: HTMLElement | null = null;
-let durationEl: HTMLElement | null = null;
-let timeDisplayEl: HTMLButtonElement | null = null;
-let endTimeEl: HTMLElement | null = null;
-let showEndTime = false;
-let endTimeTimer: number | null = null;
 let speedBtnEl: HTMLButtonElement | null = null;
 let speedMenuEl: HTMLElement | null = null;
 let audioPicker: TrackPicker | null = null;
 let subtitlePicker: TrackPicker | null = null;
 
 let activeAdapter: PlayerAdapter | null = null;
-let activeNativeStateAdapter: NativeMpvAdapter | null = null;
 let activeNative: NativeMediaOpenResult | null = null;
 let activeMediaToken = "";
 let activeMediaEncrypted = false;
 let unsubscribeState: (() => void) | null = null;
-let currentState: PlayerState = { ...EMPTY_STATE };
+let currentState: PlayerState = { ...EMPTY_PLAYER_STATE };
 let activeOpenAttempt: VideoOpenAttempt | null = null;
 const playbackTransitions = new SerialPlaybackTransitions();
+const nativeStateRouter = new NativeMediaStateRouter();
 let unsubscribeEncryptedMediaSessionsClosed: (() => void) | null = null;
-let unsubscribeNativeMediaState: (() => void) | null = null;
-const pendingNativeMediaStates = new Map<string, NativeMediaStatePayload>();
 let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
 let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 let loadingStatusOverride = "";
-let skipFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
-let nativeResizeFrame = 0;
-let seekingWithPointer = false;
-let volumeDragging = false;
-let pendingVolumeValue: number | null = null;
-let volumeCommandFrame = 0;
 let hasError = false;
-let isWindowFullscreen = false;
-let lastBufferedSignature = "";
-let activeThumbnailURL = "";
-let currentPreviewBucket = -1;
-let lastPreviewRatio = 0;
-let thumbnailRequestSeq = 0;
-let thumbnailRequestTimer: number | null = null;
-let thumbnailDwellTimer: number | null = null;
-let scheduledThumbnailBucket = -1;
 let lastPlaybackHintAt = 0;
 let playbackHintTimer: number | null = null;
 let playbackHintInFlight = false;
@@ -630,164 +112,13 @@ let streamActivityText = "";
 let streamActivityAt = 0;
 let mediaMetaBaseText = "";
 let mediaMetaBytes = 0;
-const thumbnailObjectURLs = new Map<number, string>();
-// Native fallback only: base64 of frames already shown, so the seek overlay is
-// not re-encoded on every scrub. nativeSeekAspect tracks the loaded thumbnail's
-// aspect ratio so the overlay box is not distorted.
-const thumbnailBase64 = new Map<number, string>();
-let nativeSeekAspect = 9 / 16;
-const pendingThumbnails = new Set<number>();
-const failedThumbnails = new Map<number, number>();
 let a11y: ReturnType<typeof installModalA11y> | null = null;
 let videoMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let videoDOM: VideoDOM | null = null;
+let geometry: VideoGeometryController | null = null;
+let transport: VideoTransportController | null = null;
 let videoSetupComplete = false;
 
-// Gap between the native video and the chrome strips. Kept small so the picture
-// is as large as possible; the chrome itself is measured, so this is the only
-// slack. Sides are trimmed too — horizontal margin only shrinks the picture.
-const FALLBACK_NATIVE_GAP_PX = 4;
-const FALLBACK_NATIVE_SIDE_PX = 0;
-const FALLBACK_NATIVE_SIDE_COMPACT_PX = 0;
-
-function byID<T extends HTMLElement>(id: string): T | null {
-    return document.getElementById(id) as T | null;
-}
-
-function clamp(value: number, min: number, max: number) {
-    return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
-}
-
-function percent(value: number, total: number) {
-    return total > 0 ? clamp((value / total) * 100, 0, 100) : 0;
-}
-
-// Fragment boundaries (e.g. fMP4 segments) can split one contiguous download
-// into several adjacent ranges; rendering every hairline gap is visual noise,
-// not honesty, so segments closer than this are fused for display.
-const BUFFERED_MERGE_GAP_SECONDS = 0.4;
-
-// bufferedRanges reads the full set of cached [start, end] segments from the
-// media element. HTML video keeps several disjoint ranges after seeking, so we
-// preserve all of them instead of collapsing to a single "buffered end" — the
-// timeline can then honestly show which parts are actually downloaded.
-function bufferedRanges(video: HTMLVideoElement): BufferedRange[] {
-    const ranges: BufferedRange[] = [];
-    const buffered = video.buffered;
-    for (let i = 0; i < buffered.length; i += 1) {
-        const start = buffered.start(i);
-        const end = buffered.end(i);
-        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
-            ranges.push({ start, end });
-        }
-    }
-    return ranges;
-}
-
-function nativePayloadToState(payload: NativeMediaStatePayload, previous: PlayerState): PlayerState {
-    const duration = Number(payload.duration ?? previous.duration ?? 0);
-    const currentTime = Number(payload.current_time ?? previous.currentTime ?? 0);
-    const volume = Number(payload.volume ?? previous.volume ?? 1);
-    const rate = Number(payload.rate ?? previous.rate ?? 1);
-    const buffered = Array.isArray(payload.buffered)
-        ? payload.buffered
-            .map((range) => ({
-                start: Number(range.start ?? 0),
-                end: Number(range.end ?? 0),
-            }))
-            .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
-        : previous.buffered;
-    return {
-        paused: Boolean(payload.paused ?? previous.paused),
-        currentTime: clamp(currentTime, 0, Math.max(0, duration || currentTime)),
-        duration: Math.max(0, Number.isFinite(duration) ? duration : 0),
-        buffered,
-        volume: clamp(volume, 0, 1),
-        muted: Boolean(payload.muted ?? previous.muted),
-        rate: clamp(rate, 0.25, 4),
-        loading: Boolean(payload.loading ?? false),
-        tracks: Array.isArray(payload.tracks) ? normalizeNativeTracks(payload.tracks) : previous.tracks,
-    };
-}
-
-function nativeFailureDetail(payload: NativeMediaStatePayload): string | null {
-    const detail = typeof payload.error === "string" ? payload.error.trim().slice(0, 256) : "";
-    if (payload.status !== "failed" && !detail) return null;
-    return detail || "native media player exited unexpectedly";
-}
-
-function normalizeNativeMediaStatePayload(value: unknown): NativeMediaStatePayload | null {
-    if (!value || typeof value !== "object") return null;
-    const raw = value as NativeMediaStatePayload;
-    const token = typeof raw.token === "string" ? raw.token : "";
-    if (!token || token.length > 512 || token.trim() !== token) return null;
-    const sequence = Number(raw.sequence ?? 0);
-    return {
-        ...raw,
-        token,
-        sequence: Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0,
-    };
-}
-
-function nativeStateSequence(payload: NativeMediaStatePayload | null | undefined) {
-    const sequence = Number(payload?.sequence ?? 0);
-    return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : 0;
-}
-
-function cachePendingNativeMediaState(payload: NativeMediaStatePayload) {
-    const token = payload.token!;
-    const previous = pendingNativeMediaStates.get(token);
-    const sequence = nativeStateSequence(payload);
-    const previousSequence = nativeStateSequence(previous);
-    if (previous && previousSequence > 0 && (sequence === 0 || sequence <= previousSequence)) return;
-    pendingNativeMediaStates.delete(token);
-    pendingNativeMediaStates.set(token, payload);
-    while (pendingNativeMediaStates.size > 16) {
-        const oldest = pendingNativeMediaStates.keys().next().value;
-        if (typeof oldest !== "string") break;
-        pendingNativeMediaStates.delete(oldest);
-    }
-}
-
-function routeNativeMediaState(value: unknown) {
-    const payload = normalizeNativeMediaStatePayload(value);
-    if (!payload) return;
-    if (activeNativeStateAdapter?.accepts(payload)) {
-        activeNativeStateAdapter.receive(payload);
-        return;
-    }
-    cachePendingNativeMediaState(payload);
-}
-
-function takePendingNativeMediaState(token: string) {
-    const payload = pendingNativeMediaStates.get(token) ?? null;
-    pendingNativeMediaStates.delete(token);
-    return payload;
-}
-
-function bindNativeMediaStateLifecycle() {
-    if (unsubscribeNativeMediaState) return;
-    unsubscribeNativeMediaState = onRuntimeEvent<[unknown]>("native_media_state", routeNativeMediaState);
-}
-
-// coalesceRanges clamps ranges to the known duration and merges any whose gap is
-// within BUFFERED_MERGE_GAP_SECONDS, returning a sorted, disjoint set ready to
-// paint. The native adapter can feed the same shape later from mpv's cache state.
-function coalesceRanges(ranges: BufferedRange[], duration: number): BufferedRange[] {
-    const sorted = ranges
-        .map((range) => ({ start: clamp(range.start, 0, duration), end: clamp(range.end, 0, duration) }))
-        .filter((range) => range.end > range.start)
-        .sort((a, b) => a.start - b.start);
-    const merged: BufferedRange[] = [];
-    for (const range of sorted) {
-        const last = merged[merged.length - 1];
-        if (last && range.start - last.end <= BUFFERED_MERGE_GAP_SECONDS) {
-            last.end = Math.max(last.end, range.end);
-        } else {
-            merged.push({ ...range });
-        }
-    }
-    return merged;
-}
 
 function isOpen() {
     return Boolean(modalEl && modalEl.style.display !== "none");
@@ -819,168 +150,6 @@ function setChromeVisible(visible: boolean) {
     modalEl?.classList.toggle("is-video-cursor-hidden", !visible && !hasError && !isNativeFallbackActive());
 }
 
-function setNativeLayout(layout: NativeLayout) {
-    const visible = layout !== "none";
-    const overlay = layout === "embedded-overlay";
-    const fallback = layout === "embedded-fallback";
-    const standalone = layout === "standalone";
-    modalEl?.classList.toggle("is-video-native", visible);
-    modalEl?.classList.toggle("is-video-native-fallback", fallback);
-    modalEl?.classList.toggle("is-video-native-standalone", standalone);
-    modalEl?.classList.toggle("has-native-seek-overlay", fallback && nativeSeekOverlayAvailable());
-    if (standaloneEl) standaloneEl.hidden = !standalone;
-    // Only the overlay layout renders mpv underneath the WebView; the fallback
-    // layout puts a native child window on top and needs the canvas left alone.
-    setNativeVideoLayerActive(document, overlay);
-    syncFallbackNativeViewportInsets();
-}
-
-function nativeSeekOverlayAvailable() {
-    // The native overlay is implemented by the Windows child-window player.
-    // Linux/X11 keeps a timestamp inside the reserved HTML controls instead.
-    return /windows/i.test(window.navigator.userAgent);
-}
-
-function shouldMeasureNativeFallbackBeforeOpen() {
-    // macOS renders libmpv below a transparent WebView and can overlay HTML controls.
-    // Windows/Linux use native child windows above the WebView, so reserve HTML-owned
-    // top/bottom strips before opening mpv or it can briefly cover the whole modal.
-    return !/macintosh|mac os x/i.test(window.navigator.userAgent);
-}
-
-function fullscreenRuntimeAvailable() {
-    return fullscreenAvailable();
-}
-
-function canUseFullscreen() {
-    return Boolean(
-        fullscreenRuntimeAvailable()
-        && activeAdapter
-        && activeNative?.presentation !== "standalone"
-        && !hasError
-    );
-}
-
-function applyFullscreenState(isFullscreen: boolean) {
-    isWindowFullscreen = isFullscreen;
-    modalEl?.classList.toggle("is-video-fullscreen", isWindowFullscreen);
-    if (!fullscreenBtnEl) return;
-    fullscreenBtnEl.dataset.state = isWindowFullscreen ? "fullscreen" : "windowed";
-    fullscreenBtnEl.setAttribute("aria-label", isWindowFullscreen ? "Exit fullscreen" : "Enter fullscreen");
-    fullscreenBtnEl.title = isWindowFullscreen ? "Exit fullscreen" : "Enter fullscreen";
-    setButtonDisabled(fullscreenBtnEl, !canUseFullscreen());
-}
-
-async function readWindowFullscreen() {
-    if (!fullscreenRuntimeAvailable()) return false;
-    try {
-        return await isFullscreen();
-    } catch (err) {
-        console.warn("WindowIsFullscreen failed:", err);
-        return false;
-    }
-}
-
-async function syncFullscreenState() {
-    applyFullscreenState(await readWindowFullscreen());
-}
-
-async function exitVideoFullscreen() {
-    if (!fullscreenRuntimeAvailable()) return;
-    if (!(await readWindowFullscreen())) return;
-    try {
-        exitFullscreen();
-        applyFullscreenState(false);
-    } catch (err) {
-        console.warn("WindowUnfullscreen failed:", err);
-    }
-}
-
-async function toggleFullscreen() {
-    if (!canUseFullscreen()) return;
-    try {
-        const next = !(await readWindowFullscreen());
-        if (next) {
-            enterFullscreen();
-        } else {
-            exitFullscreen();
-        }
-        applyFullscreenState(next);
-    } catch (err) {
-        console.warn("toggle fullscreen failed:", err);
-    } finally {
-        scheduleNativeResizeAfterWindowTransition();
-        setTimeout(() => {
-            void syncFullscreenState();
-            scheduleNativeResizeAfterWindowTransition();
-        }, 180);
-        revealChrome();
-    }
-}
-
-function nextFrame(): Promise<void> {
-    return new Promise((resolve) => requestAnimationFrame(() => resolve()));
-}
-
-function syncFallbackNativeViewportInsets() {
-    if (!modalEl || !stageEl || !nativeViewportEl || !modalEl.classList.contains("is-video-native-fallback")) return;
-    const stageRect = stageEl.getBoundingClientRect();
-    if (stageRect.width <= 0 || stageRect.height <= 0) return;
-
-    const topbarRect = topbarEl?.getBoundingClientRect();
-    const controlsRect = controlsEl?.getBoundingClientRect();
-    const compact = window.matchMedia("(max-width: 760px)").matches;
-    const side = compact ? FALLBACK_NATIVE_SIDE_COMPACT_PX : FALLBACK_NATIVE_SIDE_PX;
-    const topbarBottom = topbarRect ? Math.max(topbarRect.bottom, stageRect.top) : stageRect.top;
-    const controlsTop = controlsRect ? Math.min(controlsRect.top, stageRect.bottom) : stageRect.bottom;
-    const top = Math.ceil(Math.max(0, topbarBottom - stageRect.top) + FALLBACK_NATIVE_GAP_PX);
-    const bottom = Math.ceil(Math.max(0, stageRect.bottom - controlsTop) + FALLBACK_NATIVE_GAP_PX);
-
-    const panelRect = settingsSection ? byID("video-settings-panel")?.getBoundingClientRect() : null;
-    const panelWidth = panelRect && !compact ? Math.max(0, stageRect.right - panelRect.left + FALLBACK_NATIVE_GAP_PX) : side;
-    const panelBottom = panelRect && compact ? Math.max(bottom, stageRect.bottom - panelRect.top + FALLBACK_NATIVE_GAP_PX) : bottom;
-    nativeViewportEl.style.setProperty("--video-native-right-inset", `${panelWidth}px`);
-    nativeViewportEl.style.setProperty("--video-native-side-inset", `${side}px`);
-    nativeViewportEl.style.setProperty("--video-native-top-inset", `${top}px`);
-    nativeViewportEl.style.setProperty("--video-native-bottom-inset", `${panelBottom}px`);
-}
-
-function currentNativeRect(): NativeMediaRect | null {
-    syncFallbackNativeViewportInsets();
-    const source = nativeViewportEl || stageEl;
-    if (!source) return null;
-    const rect = source.getBoundingClientRect();
-    if (rect.width < 2 || rect.height < 2) return null;
-    return {
-        x: rect.left,
-        y: rect.top,
-        width: rect.width,
-        height: rect.height,
-    };
-}
-
-function scheduleNativeResize() {
-    if (!activeNative || activeNative.presentation === "standalone") return;
-    if (nativeResizeFrame) cancelAnimationFrame(nativeResizeFrame);
-    nativeResizeFrame = requestAnimationFrame(() => {
-        nativeResizeFrame = 0;
-        if (activeNative?.presentation === "standalone") return;
-        const token = activeNative?.token || "";
-        const rect = currentNativeRect();
-        if (!token || !rect) return;
-        void resizeNativeMedia(token, rect).catch((err) => {
-            console.warn("ResizeNativeMedia failed:", err);
-        });
-    });
-}
-
-function scheduleNativeResizeAfterWindowTransition() {
-    if (!activeNative || activeNative.presentation === "standalone") return;
-    scheduleNativeResize();
-    requestAnimationFrame(scheduleNativeResize);
-    window.setTimeout(scheduleNativeResize, 180);
-    window.setTimeout(scheduleNativeResize, 420);
-}
 
 function clearChromeTimer() {
     if (!chromeHideTimer) return;
@@ -998,7 +167,7 @@ function scheduleChromeHide() {
 }
 
 function isScrubberTooltipActive() {
-    return Boolean(scrubberEl?.classList.contains("is-hovered") || currentPreviewBucket >= 0);
+    return transport?.isScrubberTooltipActive() ?? false;
 }
 
 function revealChrome() {
@@ -1146,34 +315,6 @@ function clearStreamActivity() {
     renderMediaMeta();
 }
 
-function showSkipFeedback(delta: number) {
-    if (!skipFeedbackEl) return;
-    const value = Math.abs(Math.round(delta));
-    const label = `${delta > 0 ? "+" : "-"}${value}s`;
-    const textEl = skipFeedbackEl.querySelector("span");
-    if (textEl) textEl.textContent = label;
-
-    if (skipFeedbackTimer) {
-        clearTimeout(skipFeedbackTimer);
-        skipFeedbackTimer = null;
-    }
-    skipFeedbackEl.classList.remove("is-visible", "is-forward", "is-back");
-    // Restart the pulse when repeated skips happen quickly.
-    void skipFeedbackEl.offsetWidth;
-    skipFeedbackEl.classList.add(delta > 0 ? "is-forward" : "is-back", "is-visible");
-    skipFeedbackTimer = setTimeout(() => {
-        skipFeedbackTimer = null;
-        skipFeedbackEl?.classList.remove("is-visible");
-    }, 620);
-}
-
-function clearSkipFeedback() {
-    if (skipFeedbackTimer) {
-        clearTimeout(skipFeedbackTimer);
-        skipFeedbackTimer = null;
-    }
-    skipFeedbackEl?.classList.remove("is-visible", "is-forward", "is-back");
-}
 
 function setError(message: string) {
     hasError = true;
@@ -1196,176 +337,6 @@ function clearError() {
     modalEl?.classList.remove("is-video-error");
 }
 
-function formatTime(value: number) {
-    if (!Number.isFinite(value) || value < 0) return "0:00";
-    const total = Math.floor(value);
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const seconds = total % 60;
-    if (hours > 0) {
-        return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-    }
-    return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
-function setSliderARIA(el: HTMLElement | null, value: number, min: number, max: number, text: string) {
-    if (!el) return;
-    el.setAttribute("aria-valuemin", String(min));
-    el.setAttribute("aria-valuemax", String(max));
-    el.setAttribute("aria-valuenow", String(Math.round(value)));
-    el.setAttribute("aria-valuetext", text);
-}
-
-function setButtonDisabled(button: HTMLButtonElement | null, disabled: boolean) {
-    if (!button) return;
-    button.disabled = disabled;
-    button.setAttribute("aria-disabled", disabled ? "true" : "false");
-}
-
-function setSliderDisabled(el: HTMLElement | null, disabled: boolean) {
-    if (!el) return;
-    el.classList.toggle("is-disabled", disabled);
-    el.setAttribute("aria-disabled", disabled ? "true" : "false");
-    el.tabIndex = disabled ? -1 : 0;
-}
-
-function syncTransportAvailability(state: PlayerState) {
-    const canScrub = Boolean(activeAdapter && (state.duration > 0 || isNativeFallbackActive()));
-    const canRelativeSeek = canScrub || isNativeFallbackActive();
-    setButtonDisabled(skipBackBtnEl, !canRelativeSeek);
-    setButtonDisabled(skipForwardBtnEl, !canRelativeSeek);
-    setButtonDisabled(centerSkipBackBtnEl, !canRelativeSeek);
-    setButtonDisabled(centerSkipForwardBtnEl, !canRelativeSeek);
-    setSliderDisabled(scrubberEl, !canScrub);
-    applyFullscreenState(isWindowFullscreen);
-}
-
-function syncCenterPlay(state: PlayerState) {
-    const visible = Boolean(activeAdapter && state.paused && !state.loading && !hasError);
-    modalEl?.classList.toggle("is-video-paused", visible);
-    centerControlsEl?.setAttribute("aria-hidden", visible ? "false" : "true");
-}
-
-function syncButtonState(state: PlayerState) {
-    if (!playBtnEl || !muteBtnEl) return;
-    playBtnEl.dataset.state = state.paused ? "paused" : "playing";
-    playBtnEl.setAttribute("aria-label", state.paused ? "Play" : "Pause");
-    playBtnEl.title = state.paused ? "Play" : "Pause";
-    muteBtnEl.dataset.state = state.muted ? "muted" : "unmuted";
-    muteBtnEl.setAttribute("aria-label", state.muted ? "Unmute" : "Mute");
-    muteBtnEl.title = state.muted ? "Unmute" : "Mute";
-}
-
-function syncEndTime(state: PlayerState) {
-    timeDisplayEl?.setAttribute("aria-pressed", String(showEndTime));
-    if (timeDisplayEl) {
-        timeDisplayEl.title = showEndTime
-            ? `Hide estimated finish time${state.paused ? " (if you resume now)" : ""}`
-            : "Show estimated finish time";
-        timeDisplayEl.setAttribute("aria-label", timeDisplayEl.title);
-        timeDisplayEl.setAttribute("aria-describedby", showEndTime
-            ? "video-time video-duration video-end-time" : "video-time video-duration");
-    }
-    if (!endTimeEl) return;
-    endTimeEl.classList.toggle("is-visible", showEndTime);
-    endTimeEl.setAttribute("aria-hidden", String(!showEndTime));
-    if (!showEndTime) return;
-    const remaining = Math.max(0, state.duration - state.currentTime) / state.rate;
-    const finish = new Date(Date.now() + remaining * 1000);
-    const valid = Number.isFinite(state.duration) && state.duration > 0
-        && Number.isFinite(state.currentTime) && Number.isFinite(state.rate) && state.rate > 0
-        && Number.isFinite(finish.getTime());
-    const endTimeText = endTimeEl.firstElementChild;
-    if (!endTimeText) return;
-    endTimeText.textContent = valid
-        ? ` · Ends at ${new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(finish)}`
-        : " · End time unavailable";
-}
-
-function resetEndTime() {
-    if (endTimeTimer !== null) window.clearInterval(endTimeTimer);
-    endTimeTimer = null;
-    showEndTime = false;
-    syncEndTime(currentState);
-}
-
-function toggleEndTime() {
-    if (showEndTime) {
-        resetEndTime();
-    } else {
-        showEndTime = true;
-        syncEndTime(currentState);
-        // Paused playback emits no time updates; the estimate assumes resuming now.
-        endTimeTimer = window.setInterval(() => syncEndTime(currentState), 1000);
-    }
-    syncSettingsGeometry();
-    scheduleNativeResize();
-    revealChrome();
-}
-
-function syncTimeline(state: PlayerState) {
-    syncEndTime(state);
-    if (timeEl) timeEl.textContent = formatTime(state.currentTime);
-    if (durationEl) durationEl.textContent = state.duration > 0 ? formatTime(state.duration) : "--:--";
-
-    const played = percent(state.currentTime, state.duration);
-    if (scrubberPlayedEl && !seekingWithPointer) scrubberPlayedEl.style.width = `${played}%`;
-    if (scrubberThumbEl && !seekingWithPointer) scrubberThumbEl.style.left = `${played}%`;
-    renderBuffered(state);
-    if (scrubberEl) {
-        setSliderARIA(scrubberEl, state.currentTime, 0, Math.max(0, state.duration), `${formatTime(state.currentTime)} of ${state.duration > 0 ? formatTime(state.duration) : "unknown"}`);
-    }
-}
-
-// renderBuffered paints one segment per cached range so the bar honestly shows
-// the disjoint downloaded islands (not a single block to the furthest point).
-// It is diff-guarded: buffered only changes on the media element's "progress"
-// event, but applyState also runs on every "timeupdate", so we skip DOM work
-// whenever the rendered set is unchanged. Releasing a session resets to an empty
-// state, which clears the segments and the signature for the next video.
-function renderBuffered(state: PlayerState) {
-    const container = scrubberBufferedEl;
-    if (!container) return;
-
-    const segments: Array<{ left: number; width: number }> = [];
-    if (state.duration > 0) {
-        for (const range of coalesceRanges(state.buffered, state.duration)) {
-            const left = clamp((range.start / state.duration) * 100, 0, 100);
-            const width = clamp(((range.end - range.start) / state.duration) * 100, 0, 100 - left);
-            if (width > 0) segments.push({ left, width });
-        }
-    }
-
-    const signature = segments.map((s) => `${s.left.toFixed(3)}:${s.width.toFixed(3)}`).join("|");
-    if (signature === lastBufferedSignature) return;
-    lastBufferedSignature = signature;
-
-    while (container.childElementCount > segments.length) {
-        container.lastElementChild?.remove();
-    }
-    while (container.childElementCount < segments.length) {
-        const segment = document.createElement("span");
-        segment.className = "video-scrubber-segment";
-        container.appendChild(segment);
-    }
-    segments.forEach((segment, index) => {
-        const node = container.children[index] as HTMLElement;
-        node.style.left = `${segment.left}%`;
-        node.style.width = `${segment.width}%`;
-    });
-}
-
-function syncVolume(state: PlayerState) {
-    const value = state.muted ? 0 : state.volume;
-    previewVolume(value);
-}
-
-function previewVolume(value: number) {
-    const safe = clamp(value, 0, 1);
-    if (volumeFillEl) volumeFillEl.style.width = `${safe * 100}%`;
-    if (volumeThumbEl) volumeThumbEl.style.left = `${safe * 100}%`;
-    setSliderARIA(volumeSliderEl, safe * 100, 0, 100, `${Math.round(safe * 100)}%`);
-}
 
 function syncSpeed(state: PlayerState) {
     const customInput = byID<HTMLInputElement>("video-speed-custom-input");
@@ -1404,7 +375,7 @@ function syncNativeTracks(tracks: NativeMediaTrack[]) {
     if (formatNote) formatNote.hidden = !available || !bitmapSubtitle;
     const audioChanged = audioPicker?.update(available ? audio : [], available && audio.length > 0);
     const subtitleChanged = subtitlePicker?.update(available ? subtitles : [], available && subtitles.length > 0);
-    if (audioChanged || subtitleChanged) scheduleNativeResize();
+    if (audioChanged || subtitleChanged) geometry?.scheduleNativeResize();
 }
 
 interface TrackPickerElements {
@@ -1603,7 +574,7 @@ function syncSettingsGeometry() {
     const bottom = Math.max(0, shell.bottom - (controlsEl?.getBoundingClientRect().top ?? shell.bottom));
     panel.style.setProperty("--video-panel-top", `${top}px`);
     panel.style.setProperty("--video-panel-bottom", `${bottom}px`);
-    syncFallbackNativeViewportInsets();
+    geometry?.syncFallbackNativeViewportInsets();
 }
 
 function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
@@ -1624,7 +595,7 @@ function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
     syncSettingsGeometry();
     clearChromeTimer();
     revealChrome();
-    requestAnimationFrame(() => { syncSettingsGeometry(); scheduleNativeResize(); applyHtmlPicture(); });
+    requestAnimationFrame(() => { syncSettingsGeometry(); geometry?.scheduleNativeResize(); applyHtmlPicture(); });
 }
 
 function hideSettingsPanel(restoreFocus = false) {
@@ -1634,8 +605,8 @@ function hideSettingsPanel(restoreFocus = false) {
     modalEl?.classList.remove("has-video-settings");
     byID("video-picture-button")?.setAttribute("aria-expanded", "false");
     if (restoreFocus) settingsReturnFocus?.focus({ preventScroll: true });
-    syncFallbackNativeViewportInsets();
-    scheduleNativeResize();
+    geometry?.syncFallbackNativeViewportInsets();
+    geometry?.scheduleNativeResize();
     applyHtmlPicture();
 }
 
@@ -1750,10 +721,6 @@ function handleMenuKeydown(event: KeyboardEvent, buttons: HTMLButtonElement[], c
     event.stopPropagation();
 }
 
-function clampPlaybackRate(value: number) {
-    return clamp(Number.isFinite(value) ? value : 1, MIN_PLAYBACK_RATE, MAX_PLAYBACK_RATE);
-}
-
 function parseCustomPlaybackRate(value: string) {
     const rate = Number(value.trim());
     if (!Number.isFinite(rate) || rate <= 0) return null;
@@ -1767,14 +734,10 @@ function applyState(state: PlayerState) {
         loadingStatusOverride = "";
     }
     schedulePlaybackHint(state);
-    syncButtonState(state);
-    syncTimeline(state);
-    syncVolume(state);
+    transport?.sync(state);
     syncSpeed(state);
     syncNativeTracks(state.tracks);
     applyHtmlPicture();
-    syncTransportAvailability(state);
-    syncCenterPlay(state);
     setLoading(state.loading);
     syncMediaStatsPolling();
     if (state.paused || hasError) {
@@ -1820,8 +783,7 @@ async function sendPlaybackHint(state: PlayerState) {
 
 // bufferAheadSeconds reports how many seconds are buffered ahead of the current
 // playhead. It reads the shared PlayerState.buffered ranges, so it works for both
-// the HTML <video> and native mpv engines. The thumbnail scheduler uses it to
-// decide how aggressively it may build previews without starving playback.
+// the HTML <video> and native mpv engines when sending backend playback hints.
 function bufferAheadSeconds(state: PlayerState): number {
     const t = state.currentTime;
     for (const range of state.buffered) {
@@ -1862,398 +824,6 @@ function formatStreamMultiplier(bytesPerSecond: number) {
     return `(~${Math.round(multiplier)}x)`;
 }
 
-function scrubberSecondsFromEvent(event: PointerEvent | MouseEvent) {
-    if (!scrubberEl || currentState.duration <= 0) return 0;
-    const rect = scrubberEl.getBoundingClientRect();
-    const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-    return ratio * currentState.duration;
-}
-
-function previewScrubber(event: PointerEvent | MouseEvent) {
-    if (!scrubberEl || !scrubberTooltipEl) return;
-    const rect = scrubberEl.getBoundingClientRect();
-    const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-    lastPreviewRatio = ratio;
-    if (currentState.duration <= 0) {
-        if (isNativeFallbackActive() && activeThumbnailURL) {
-            currentPreviewBucket = -1;
-            if (scrubberTooltipTimeEl) scrubberTooltipTimeEl.textContent = "--:--";
-            setThumbnailTooltipState("pending");
-            positionScrubberTooltip(ratio, rect);
-        }
-        return;
-    }
-    const seconds = ratio * currentState.duration;
-    updateThumbnailTooltip(seconds);
-    positionScrubberTooltip(ratio, rect);
-}
-
-function positionScrubberTooltip(ratio: number, rect?: DOMRect) {
-    if (!scrubberEl || !scrubberTooltipEl) return;
-    const bounds = rect || scrubberEl.getBoundingClientRect();
-    const tooltipWidth = scrubberTooltipEl.offsetWidth || 44;
-    const half = tooltipWidth / 2;
-    const x = clamp(ratio * bounds.width, half, Math.max(half, bounds.width - half));
-    scrubberTooltipEl.style.left = `${x}px`;
-}
-
-function updateThumbnailTooltip(seconds: number) {
-    if (scrubberTooltipTimeEl) scrubberTooltipTimeEl.textContent = formatTime(seconds);
-    const bucket = thumbnailBucket(seconds);
-    currentPreviewBucket = bucket;
-    const cached = thumbnailObjectURLs.get(bucket);
-    if (cached && scrubberTooltipImageEl && scrubberTooltipEl) {
-        clearThumbnailRequestTimer();
-        scheduleThumbnailDwell(bucket);
-        showTooltipImage(cached);
-        setThumbnailTooltipState("ready");
-        presentNativeSeekPreview(bucket);
-        return;
-    }
-    clearThumbnailDwellTimer();
-    // No exact frame yet: show the nearest already-cached frame as a placeholder so
-    // the user never stares at a blank skeleton. The time label stays exact, and the
-    // precise frame swaps in when it loads (keepVisible avoids a skeleton flash).
-    const nearestBucket = nearestCachedBucket(bucket);
-    if (nearestBucket !== null && scrubberTooltipImageEl && scrubberTooltipEl) {
-        const nearestURL = thumbnailObjectURLs.get(nearestBucket);
-        if (nearestURL) showTooltipImage(nearestURL);
-        setThumbnailTooltipState("ready");
-        presentNativeSeekPreview(nearestBucket);
-        scheduleThumbnailRequest(bucket, true);
-        return;
-    }
-    if (thumbnailFailedRecently(bucket)) {
-        setThumbnailTooltipState("failed");
-        return;
-    }
-    setThumbnailTooltipState("pending");
-    scheduleThumbnailRequest(bucket);
-}
-
-// nearestCachedBucket returns the cached frame's bucket closest to bucket, but
-// only within THUMBNAIL_NEAREST_MAX_SECONDS so the placeholder is the same scene.
-function nearestCachedBucket(bucket: number): number | null {
-    let best: number | null = null;
-    let bestDistance = Infinity;
-    for (const cachedBucket of thumbnailObjectURLs.keys()) {
-        const distance = Math.abs(cachedBucket - bucket);
-        if (distance <= THUMBNAIL_NEAREST_MAX_SECONDS && distance < bestDistance) {
-            bestDistance = distance;
-            best = cachedBucket;
-        }
-    }
-    return best;
-}
-
-function showTooltipImage(url: string) {
-    if (scrubberTooltipImageEl && scrubberTooltipImageEl.src !== url) {
-        scrubberTooltipImageEl.src = url;
-    }
-}
-
-// --- Native seek-thumbnail overlay (Windows fallback) ---------------------
-// WebView2 can't paint HTML over the native video, so in the fallback the seek
-// preview is drawn by a native overlay window. We hand the backend the same
-// frame bytes the HTML tooltip would show plus a target box in CSS pixels, and
-// throttle the calls so a fast scrub doesn't flood the bridge.
-
-const NATIVE_SEEK_PREVIEW_WIDTH = 144;
-const NATIVE_SEEK_MOVE_THROTTLE_MS = 16;
-let nativeSeekThrottleTimer: number | null = null;
-let nativeSeekPending: { token: string; bucket: number; image?: string; rect: NativeMediaRect } | null = null;
-let nativeSeekLastShown: { token: string; bucket: number } | null = null;
-
-function presentNativeSeekPreview(bucket: number) {
-    if (!isNativeFallbackActive() || !nativeSeekOverlayAvailable()) return;
-    const token = activeNative?.token;
-    if (!token) return;
-    const cached = thumbnailBase64.get(bucket);
-    if (cached) {
-        const rect = nativeSeekOverlayRect();
-        if (rect) queueNativeSeek(token, bucket, cached, rect);
-        return;
-    }
-    const url = thumbnailObjectURLs.get(bucket);
-    if (!url) return;
-    // Encode the already-fetched frame once, then cache it so later scrubs over
-    // this bucket render without re-encoding. Fetching blob: URLs is unreliable
-    // in some WebView2 builds, so this is only a fallback for frames cached
-    // before the native fallback path asked for their bytes.
-    void objectURLToBase64(url).then((image) => {
-        if (!image) return;
-        thumbnailBase64.set(bucket, image);
-        if (
-            currentPreviewBucket === bucket
-            && isNativeFallbackActive()
-            && nativeSeekOverlayAvailable()
-            && activeNative?.token === token
-        ) {
-            const rect = nativeSeekOverlayRect();
-            if (rect) queueNativeSeek(token, bucket, image, rect);
-        }
-    });
-}
-
-function queueNativeSeek(token: string, bucket: number, image: string, rect: NativeMediaRect) {
-    const needsUpload = !nativeSeekLastShown || nativeSeekLastShown.token !== token || nativeSeekLastShown.bucket !== bucket;
-    nativeSeekPending = { token, bucket, image: needsUpload ? image : undefined, rect };
-    if (nativeSeekThrottleTimer !== null) return;
-    flushNativeSeek(); // leading edge: show immediately
-    nativeSeekThrottleTimer = window.setTimeout(() => {
-        nativeSeekThrottleTimer = null;
-        flushNativeSeek(); // trailing edge: show the latest position
-    }, NATIVE_SEEK_MOVE_THROTTLE_MS);
-}
-
-function flushNativeSeek() {
-    const req = nativeSeekPending;
-    nativeSeekPending = null;
-    if (!req) return;
-    if (req.image) {
-        nativeSeekLastShown = { token: req.token, bucket: req.bucket };
-        void showNativeSeekThumbnail(req.token, req.image, req.rect);
-        return;
-    }
-    void moveNativeSeekThumbnail(req.token, req.rect);
-}
-
-function hideNativeSeekPreview() {
-    nativeSeekPending = null;
-    nativeSeekLastShown = null;
-    if (nativeSeekThrottleTimer !== null) {
-        window.clearTimeout(nativeSeekThrottleTimer);
-        nativeSeekThrottleTimer = null;
-    }
-    const token = activeNative?.token;
-    if (token && nativeSeekOverlayAvailable()) void hideNativeSeekThumbnail(token);
-}
-
-// nativeSeekOverlayRect returns the preview box (CSS pixels, viewport coords)
-// centered on the hovered point just above the scrubber. On Windows fallback this
-// is a small native child window, so it can sit over the mpv video rectangle
-// while the WebView controls remain in their reserved chrome strip.
-function nativeSeekOverlayRect(): NativeMediaRect | null {
-    if (!scrubberEl) return null;
-    const sb = scrubberEl.getBoundingClientRect();
-    if (sb.width < 2) return null;
-    const img = scrubberTooltipImageEl;
-    if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
-        nativeSeekAspect = img.naturalHeight / img.naturalWidth;
-    }
-    const width = NATIVE_SEEK_PREVIEW_WIDTH;
-    const height = Math.max(1, Math.round(width * nativeSeekAspect));
-    const gap = 8;
-    const viewport = nativeViewportEl?.getBoundingClientRect();
-    const leftBound = (viewport?.left ?? sb.left) + gap;
-    const rightBound = (viewport?.right ?? sb.right) - gap;
-    const topBound = (viewport?.top ?? 0) + gap;
-    const bottomBound = (viewport?.bottom ?? sb.top) - gap;
-    const centerX = sb.left + clamp(lastPreviewRatio, 0, 1) * sb.width;
-    const x = clamp(centerX - width / 2, leftBound, Math.max(leftBound, rightBound - width));
-    const y = clamp(sb.top - height - gap, topBound, Math.max(topBound, bottomBound - height));
-    return { x, y, width, height };
-}
-
-async function blobToBase64(blob: Blob): Promise<string | null> {
-    try {
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        let binary = "";
-        const chunk = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunk) {
-            binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-        }
-        return btoa(binary);
-    } catch {
-        return null;
-    }
-}
-
-async function objectURLToBase64(url: string): Promise<string | null> {
-    try {
-        const response = await fetch(url);
-        return await blobToBase64(await response.blob());
-    } catch {
-        return null;
-    }
-}
-
-function thumbnailBucket(seconds: number) {
-    if (!Number.isFinite(seconds) || seconds < 0) return 0;
-    const interval = thumbnailBucketInterval(currentState.duration);
-    return Math.max(0, Math.round(seconds / interval) * interval);
-}
-
-function thumbnailBucketInterval(duration: number) {
-    if (duration >= 2 * 60 * 60) return THUMBNAIL_VERY_LONG_BUCKET_SECONDS;
-    if (duration >= 30 * 60) return THUMBNAIL_LONG_BUCKET_SECONDS;
-    return THUMBNAIL_BUCKET_SECONDS;
-}
-
-function clearThumbnailRequestTimer() {
-    if (thumbnailRequestTimer == null) return;
-    window.clearTimeout(thumbnailRequestTimer);
-    thumbnailRequestTimer = null;
-    scheduledThumbnailBucket = -1;
-}
-
-function clearThumbnailDwellTimer() {
-    if (thumbnailDwellTimer == null) return;
-    window.clearTimeout(thumbnailDwellTimer);
-    thumbnailDwellTimer = null;
-}
-
-function scheduleThumbnailRequest(bucket: number, keepVisible = false) {
-    if (!activeThumbnailURL || thumbnailObjectURLs.has(bucket)) return;
-    scheduledThumbnailBucket = bucket;
-    if (thumbnailRequestTimer != null) window.clearTimeout(thumbnailRequestTimer);
-    thumbnailRequestTimer = window.setTimeout(() => {
-        thumbnailRequestTimer = null;
-        const bucketToRequest = scheduledThumbnailBucket;
-        scheduledThumbnailBucket = -1;
-        if (bucketToRequest !== currentPreviewBucket) return;
-        requestThumbnail(bucketToRequest, false, keepVisible);
-    }, THUMBNAIL_REQUEST_DEBOUNCE_MS);
-}
-
-function scheduleThumbnailDwell(bucket: number) {
-    clearThumbnailDwellTimer();
-    if (!activeThumbnailURL || !thumbnailObjectURLs.has(bucket) || seekingWithPointer) return;
-    thumbnailDwellTimer = window.setTimeout(() => {
-        thumbnailDwellTimer = null;
-        if (currentPreviewBucket !== bucket || seekingWithPointer || !thumbnailObjectURLs.has(bucket)) return;
-        const interval = thumbnailBucketInterval(currentState.duration);
-        for (const neighbor of [bucket - interval, bucket + interval, bucket - 2 * interval, bucket + 2 * interval]) {
-            if (neighbor < 0 || neighbor > currentState.duration) continue;
-            requestThumbnail(neighbor, true);
-        }
-    }, THUMBNAIL_DWELL_PREFETCH_MS);
-}
-
-function requestThumbnail(bucket: number, prefetch = false, keepVisible = false) {
-    if (!activeThumbnailURL || pendingThumbnails.has(bucket) || thumbnailObjectURLs.has(bucket)) return;
-    if (thumbnailFailedRecently(bucket)) return;
-    pendingThumbnails.add(bucket);
-    if (!prefetch && !keepVisible && currentPreviewBucket === bucket) setThumbnailTooltipState("pending");
-    const seq = thumbnailRequestSeq;
-    const url = `${activeThumbnailURL}?t=${encodeURIComponent(String(bucket))}`;
-    let retryScheduled = false;
-    fetch(url, { cache: "no-store" })
-        .then(async (response) => {
-            if (seq !== thumbnailRequestSeq) return;
-            if (response.status === 202) {
-                retryScheduled = true;
-                window.setTimeout(() => {
-                    pendingThumbnails.delete(bucket);
-                    if (seq === thumbnailRequestSeq && currentPreviewBucket === bucket) requestThumbnail(bucket);
-                }, THUMBNAIL_RETRY_MS);
-                return;
-            }
-            if (!response.ok) {
-                failedThumbnails.set(bucket, Date.now());
-                if (!prefetch && !keepVisible && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
-                return;
-            }
-            const blob = await response.blob();
-            if (!blob.size || seq !== thumbnailRequestSeq) return;
-            const nativeImage = isNativeFallbackActive() ? await blobToBase64(blob) : null;
-            if (seq !== thumbnailRequestSeq) return;
-            const objectURL = URL.createObjectURL(blob);
-            const old = thumbnailObjectURLs.get(bucket);
-            if (old) URL.revokeObjectURL(old);
-            thumbnailObjectURLs.set(bucket, objectURL);
-            if (nativeImage) thumbnailBase64.set(bucket, nativeImage);
-            failedThumbnails.delete(bucket);
-            if (currentPreviewBucket === bucket && scrubberTooltipImageEl && scrubberTooltipEl) {
-                scrubberTooltipImageEl.src = objectURL;
-                setThumbnailTooltipState("ready");
-                positionScrubberTooltip(lastPreviewRatio);
-                scheduleThumbnailDwell(bucket);
-                presentNativeSeekPreview(bucket);
-            }
-        })
-        .catch(() => {
-            if (seq === thumbnailRequestSeq) failedThumbnails.set(bucket, Date.now());
-            if (!prefetch && !keepVisible && seq === thumbnailRequestSeq && currentPreviewBucket === bucket) setThumbnailTooltipState("failed");
-        })
-        .finally(() => {
-            if (seq === thumbnailRequestSeq && !retryScheduled) pendingThumbnails.delete(bucket);
-        });
-}
-
-function thumbnailFailedRecently(bucket: number) {
-    const failedAt = failedThumbnails.get(bucket);
-    return Boolean(failedAt && Date.now() - failedAt < THUMBNAIL_FAILURE_TTL_MS);
-}
-
-function setThumbnailTooltipState(state: "pending" | "ready" | "failed") {
-    if (!scrubberTooltipEl) return;
-    scrubberTooltipEl.classList.toggle("has-thumbnail", state === "ready");
-    scrubberTooltipEl.classList.toggle("is-thumbnail-pending", state === "pending");
-    scrubberTooltipEl.classList.toggle("is-thumbnail-failed", state === "failed");
-    if (state !== "ready") scrubberTooltipImageEl?.removeAttribute("src");
-}
-
-function resetThumbnailPreview() {
-    thumbnailRequestSeq += 1;
-    activeThumbnailURL = "";
-    currentPreviewBucket = -1;
-    lastPreviewRatio = 0;
-    clearThumbnailRequestTimer();
-    clearThumbnailDwellTimer();
-    pendingThumbnails.clear();
-    failedThumbnails.clear();
-    for (const objectURL of thumbnailObjectURLs.values()) {
-        URL.revokeObjectURL(objectURL);
-    }
-    thumbnailObjectURLs.clear();
-    thumbnailBase64.clear();
-    nativeSeekAspect = 9 / 16;
-    hideNativeSeekPreview();
-    if (scrubberTooltipImageEl) scrubberTooltipImageEl.removeAttribute("src");
-    if (scrubberTooltipTimeEl) scrubberTooltipTimeEl.textContent = "0:00";
-    scrubberTooltipEl?.classList.remove("has-thumbnail", "is-thumbnail-pending", "is-thumbnail-failed");
-}
-
-function updateScrubVisual(seconds: number) {
-    const played = percent(seconds, currentState.duration);
-    if (scrubberPlayedEl) scrubberPlayedEl.style.width = `${played}%`;
-    if (scrubberThumbEl) scrubberThumbEl.style.left = `${played}%`;
-    if (timeEl) timeEl.textContent = formatTime(seconds);
-}
-
-function volumeFromEvent(event: PointerEvent | MouseEvent) {
-    if (!volumeSliderEl) return currentState.volume;
-    const rect = volumeSliderEl.getBoundingClientRect();
-    return clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
-}
-
-function setVolumeFromPointer(event: PointerEvent | MouseEvent) {
-    const value = volumeFromEvent(event);
-    previewVolume(value);
-    scheduleVolumeSet(value);
-    revealChrome();
-}
-
-function scheduleVolumeSet(value: number) {
-    pendingVolumeValue = clamp(value, 0, 1);
-    if (volumeCommandFrame) return;
-    volumeCommandFrame = requestAnimationFrame(() => {
-        volumeCommandFrame = 0;
-        const next = pendingVolumeValue;
-        pendingVolumeValue = null;
-        if (next == null) return;
-        activeAdapter?.setVolume(next);
-    });
-}
-
-function clearVolumeCommandFrame() {
-    if (volumeCommandFrame) {
-        cancelAnimationFrame(volumeCommandFrame);
-        volumeCommandFrame = 0;
-    }
-    pendingVolumeValue = null;
-}
 
 async function releaseActive() {
     const adapter = detachActiveReferences();
@@ -2269,24 +839,21 @@ async function releaseActive() {
 function detachActiveReferences(): PlayerAdapter | null {
     const adapter = activeAdapter;
     const nativeToken = activeNative?.token ?? "";
+    if (adapter instanceof NativeMpvAdapter) nativeStateRouter.deactivate(adapter);
     activeAdapter = null;
-    if (adapter === activeNativeStateAdapter) activeNativeStateAdapter = null;
     activeNative = null;
     activeMediaToken = "";
     activeMediaEncrypted = false;
     unsubscribeState?.();
     unsubscribeState = null;
     clearPlaybackHintTimer();
-    resetEndTime();
     clearMediaStatsPolling();
-    clearVolumeCommandFrame();
-    clearSkipFeedback();
-    resetThumbnailPreview();
+    transport?.resetSession();
     closeMenus();
     hideSettingsPanel();
-    setNativeLayout("none");
-    if (nativeToken) pendingNativeMediaStates.delete(nativeToken);
-    currentState = { ...EMPTY_STATE };
+    geometry?.setNativeLayout("none");
+    if (nativeToken) nativeStateRouter.discard(nativeToken);
+    currentState = { ...EMPTY_PLAYER_STATE };
     applyState(currentState);
     return adapter;
 }
@@ -2315,7 +882,7 @@ async function safelyCloseNativeMedia(token: string) {
     } catch (err) {
         console.warn("Close native media session failed:", err);
     } finally {
-        pendingNativeMediaStates.delete(token);
+        nativeStateRouter.discard(token);
     }
 }
 
@@ -2331,19 +898,6 @@ function renderMediaMeta() {
     metaEl.textContent = streamActivityText ? `${mediaMetaBaseText} · ${streamActivityText}` : mediaMetaBaseText;
 }
 
-async function prepareNativeRect(isCurrent: () => boolean): Promise<NativeMediaRect | null> {
-    const measureFallback = shouldMeasureNativeFallbackBeforeOpen();
-    // macOS can overlay the HTML controls above libmpv. Windows/Linux reserve
-    // their HTML chrome before creating the native child surface.
-    setNativeLayout(measureFallback ? "embedded-fallback" : "none");
-    await nextFrame();
-    if (!isCurrent() || !isOpen()) return null;
-    const rect = currentNativeRect();
-    if (rect) return rect;
-    setNativeLayout("none");
-    setError("Could not prepare the native video surface.");
-    return null;
-}
 
 async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => boolean) {
     let opened: MediaOpenResult | null = null;
@@ -2363,13 +917,14 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
         updateMediaText(displayName, displaySize);
-        activeThumbnailURL = opened.thumbnailUrl;
+        transport?.beginSession(opened.thumbnailUrl);
         activeMediaToken = opened.token;
         activeMediaEncrypted = Boolean(opened.info.encrypted);
-        thumbnailRequestSeq += 1;
 
-        adapter = new HtmlVideoAdapter(videoEl!, opened, (code, state) => {
-            handleHtmlMediaError(attempt, adapter!, code, state);
+        adapter = new HtmlVideoAdapter(videoEl!, opened, {
+            mediaError: (code, state) => handleHtmlMediaError(attempt, adapter!, code, state),
+            playbackError: setError,
+            revealChrome,
         });
         activeAdapter = adapter;
         unsubscribeState = adapter.subscribe((state) => {
@@ -2440,7 +995,7 @@ async function promoteHtmlToNative(
             await safelyCloseMedia(existing.token);
             return;
         }
-        const rect = await prepareNativeRect(isCurrent);
+        const rect = await geometry?.prepareNativeRect(isCurrent);
         if (!rect || !isCurrent()) {
             await safelyCloseMedia(existing.token);
             return;
@@ -2493,7 +1048,7 @@ async function openNativePlayback(
         }
         if (!isCurrent()) return;
         console.error(existing ? "AttachNativeMedia failed:" : "OpenNativeMedia failed:", err);
-        setNativeLayout("none");
+        geometry?.setNativeLayout("none");
         // A closed loopback session also surfaces as an HTML media error, so the
         // handoff can race a dead token; report that as the interruption it is.
         const sessionLost = Boolean(existing) && /session not found/i.test(errorMessage(err, ""));
@@ -2542,25 +1097,22 @@ function activateNativePlayback(
     intent: PlaybackIntent | null,
 ) {
     const standalone = opened.presentation === "standalone";
-    setNativeLayout(standalone ? "standalone" : opened.htmlControls ? "embedded-overlay" : "embedded-fallback");
+    geometry?.setNativeLayout(standalone ? "standalone" : opened.htmlControls ? "embedded-overlay" : "embedded-fallback");
     activeNative = opened;
     activeMediaToken = opened.token;
     activeMediaEncrypted = Boolean(opened.info.encrypted);
     const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
     const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
     updateMediaText(displayName, displaySize);
-    activeThumbnailURL = opened.thumbnailUrl;
-    thumbnailRequestSeq += 1;
+    transport?.beginSession(opened.thumbnailUrl);
 
-    const adapter = new NativeMpvAdapter(opened, (detail) => {
-        handleNativeMediaError(attempt, opened.token, detail);
-    }, () => {
-        handleNativeMediaClosed(attempt, opened.token);
+    const adapter = new NativeMpvAdapter(opened, {
+        mediaError: (detail) => handleNativeMediaError(attempt, opened.token, detail),
+        mediaClosed: () => handleNativeMediaClosed(attempt, opened.token),
+        dispose: (disposed) => nativeStateRouter.deactivate(disposed),
     });
     activeAdapter = adapter;
-    activeNativeStateAdapter = adapter;
-    adapter.start(takePendingNativeMediaState(opened.token));
-    if (adapter.isTerminal()) return;
+    if (nativeStateRouter.activate(adapter)) return;
     adapter.applyPreferences(playbackPreferences);
     if (intent) {
         adapter.setVolume(intent.volume);
@@ -2579,7 +1131,7 @@ function activateNativePlayback(
         }
     });
     setChromeVisible(true);
-    if (!standalone) scheduleNativeResize();
+    if (!standalone) geometry?.scheduleNativeResize();
 }
 
 export async function openVideoModal(target: VideoOpenTarget) {
@@ -2604,7 +1156,7 @@ export async function openVideoModal(target: VideoOpenTarget) {
     modalEl.style.display = "flex";
     modalEl.setAttribute("aria-hidden", "false");
     a11y?.activate();
-    void syncFullscreenState();
+    void geometry?.syncFullscreenState();
 
     return playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
@@ -2615,7 +1167,7 @@ export async function openVideoModal(target: VideoOpenTarget) {
             await openHtmlPlayback(attempt, isCurrent);
             return;
         }
-        const rect = await prepareNativeRect(isCurrent);
+        const rect = await geometry?.prepareNativeRect(isCurrent);
         if (!rect || !isCurrent()) return;
         await openNativePlayback(attempt, rect, isCurrent);
     });
@@ -2626,7 +1178,7 @@ export async function closeVideoModal() {
     const generation = playbackTransitions.begin();
     activeOpenAttempt = null;
     clearChromeTimer();
-    await exitVideoFullscreen();
+    await geometry?.exitVideoFullscreen();
     if (!playbackTransitions.isCurrent(generation)) return;
     modalEl.style.display = "none";
     modalEl.setAttribute("aria-hidden", "true");
@@ -2638,131 +1190,6 @@ export async function closeVideoModal() {
     setLoading(false);
 }
 
-function togglePlayback() {
-    if (!activeAdapter || hasError) return;
-    if (activeOpenAttempt) {
-        activeOpenAttempt.pausedByUser = !currentState.paused;
-    }
-    activeAdapter.playPause();
-    revealChrome();
-}
-
-function seekBy(delta: number) {
-    if (!activeAdapter || (currentState.duration <= 0 && !activeNative)) return;
-    activeAdapter.seekRelative(delta);
-    showSkipFeedback(delta);
-    revealChrome();
-}
-
-function bindScrubber() {
-    scrubberEl?.addEventListener("pointerenter", (event) => {
-        scrubberEl?.classList.add("is-hovered");
-        previewScrubber(event);
-    });
-    scrubberEl?.addEventListener("pointermove", (event) => {
-        previewScrubber(event);
-        if (!seekingWithPointer) return;
-        updateScrubVisual(scrubberSecondsFromEvent(event));
-    });
-    scrubberEl?.addEventListener("pointerleave", () => {
-        currentPreviewBucket = -1;
-        clearThumbnailDwellTimer();
-        hideNativeSeekPreview();
-        if (!seekingWithPointer) scrubberEl?.classList.remove("is-hovered");
-        scheduleChromeHide();
-    });
-    scrubberEl?.addEventListener("pointerdown", (event) => {
-        if (!activeAdapter || currentState.duration <= 0) return;
-        seekingWithPointer = true;
-        scrubberEl?.setPointerCapture(event.pointerId);
-        scrubberEl?.classList.add("is-dragging", "is-hovered");
-        updateScrubVisual(scrubberSecondsFromEvent(event));
-        revealChrome();
-    });
-    scrubberEl?.addEventListener("pointerup", (event) => {
-        if (!activeAdapter || currentState.duration <= 0) return;
-        const seconds = scrubberSecondsFromEvent(event);
-        seekingWithPointer = false;
-        if (scrubberEl?.hasPointerCapture(event.pointerId)) {
-            scrubberEl.releasePointerCapture(event.pointerId);
-        }
-        scrubberEl?.classList.remove("is-dragging");
-        activeAdapter.seekAbsolute(seconds);
-        revealChrome();
-    });
-    scrubberEl?.addEventListener("pointercancel", (event) => {
-        seekingWithPointer = false;
-        if (scrubberEl?.hasPointerCapture(event.pointerId)) {
-            scrubberEl.releasePointerCapture(event.pointerId);
-        }
-        scrubberEl?.classList.remove("is-dragging", "is-hovered");
-        syncTimeline(currentState);
-    });
-    scrubberEl?.addEventListener("keydown", (event) => {
-        const handled = ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key);
-        if (!handled) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (!activeAdapter || currentState.duration <= 0) return;
-        if (event.key === "ArrowLeft") {
-            activeAdapter.seekRelative(-SEEK_STEP_SECONDS);
-        } else if (event.key === "ArrowRight") {
-            activeAdapter.seekRelative(SEEK_STEP_SECONDS);
-        } else if (event.key === "Home") {
-            activeAdapter.seekAbsolute(0);
-        } else if (event.key === "End") {
-            activeAdapter.seekAbsolute(currentState.duration);
-        }
-    });
-}
-
-function bindVolume() {
-    muteBtnEl?.addEventListener("click", () => {
-        activeAdapter?.setMuted(!currentState.muted);
-        revealChrome();
-    });
-    volumeSliderEl?.addEventListener("pointerdown", (event) => {
-        volumeSliderEl?.focus({ preventScroll: true });
-        if (!activeAdapter) return;
-        volumeDragging = true;
-        volumeSliderEl?.setPointerCapture(event.pointerId);
-        setVolumeFromPointer(event);
-    });
-    volumeSliderEl?.addEventListener("pointermove", (event) => {
-        if (!volumeDragging) return;
-        setVolumeFromPointer(event);
-    });
-    volumeSliderEl?.addEventListener("pointerup", (event) => {
-        if (!volumeDragging) return;
-        volumeDragging = false;
-        if (volumeSliderEl?.hasPointerCapture(event.pointerId)) {
-            volumeSliderEl.releasePointerCapture(event.pointerId);
-        }
-        setVolumeFromPointer(event);
-    });
-    volumeSliderEl?.addEventListener("pointercancel", (event) => {
-        volumeDragging = false;
-        if (volumeSliderEl?.hasPointerCapture(event.pointerId)) {
-            volumeSliderEl.releasePointerCapture(event.pointerId);
-        }
-    });
-    volumeSliderEl?.addEventListener("keydown", (event) => {
-        const handled = ["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp", "Home", "End"].includes(event.key);
-        if (!handled) return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (!activeAdapter) return;
-        if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
-            activeAdapter.setVolume(currentState.volume - VOLUME_STEP);
-        } else if (event.key === "ArrowRight" || event.key === "ArrowUp") {
-            activeAdapter.setVolume(currentState.volume + VOLUME_STEP);
-        } else if (event.key === "Home") {
-            activeAdapter.setVolume(0);
-        } else if (event.key === "End") {
-            activeAdapter.setVolume(1);
-        }
-    });
-}
 
 function isSpeedMenuOpen() {
     return Boolean(speedMenuEl?.classList.contains("is-open"));
@@ -2887,13 +1314,13 @@ function handleVideoShortcut(event: KeyboardEvent) {
     const key = event.key.toLowerCase();
     if (event.code === "Space" || event.key === " " || key === "k") {
         event.preventDefault();
-        togglePlayback();
+        transport?.togglePlayback();
     } else if (event.key === "ArrowLeft" || key === "j") {
         event.preventDefault();
-        seekBy(-SEEK_STEP_SECONDS);
+        transport?.seekBy(-SEEK_STEP_SECONDS);
     } else if (event.key === "ArrowRight" || key === "l") {
         event.preventDefault();
-        seekBy(SEEK_STEP_SECONDS);
+        transport?.seekBy(SEEK_STEP_SECONDS);
     } else if (event.key === "ArrowUp") {
         event.preventDefault();
         activeAdapter?.setVolume(currentState.volume + VOLUME_STEP);
@@ -2908,7 +1335,7 @@ function handleVideoShortcut(event: KeyboardEvent) {
         revealChrome();
     } else if (key === "f") {
         event.preventDefault();
-        void toggleFullscreen();
+        void geometry?.toggleFullscreen();
     } else if (key === "c") {
         event.preventDefault();
         subtitlePicker?.toggle();
@@ -2927,33 +1354,9 @@ function targetIsVideoChrome(target: EventTarget | null) {
 function handleStageClick(event: MouseEvent) {
     if (activeNative?.presentation === "standalone") return;
     if (targetIsVideoChrome(event.target)) return;
-    togglePlayback();
+    transport?.togglePlayback();
 }
 
-function observeControlsSize() {
-    if (!controlsEl || typeof ResizeObserver === "undefined") return;
-    let previousWidth = -1;
-    let previousHeight = -1;
-    // Controls persist for the module lifetime, across playback sessions.
-    const observer = new ResizeObserver(() => {
-        if (!isOpen() || !controlsEl) return;
-        const { width, height } = controlsEl.getBoundingClientRect();
-        if (width === previousWidth && height === previousHeight) return;
-        previousWidth = width;
-        previousHeight = height;
-        syncSettingsGeometry();
-        applyHtmlPicture();
-        scheduleNativeResize();
-    });
-    observer.observe(controlsEl);
-}
-
-function handleWindowResize() {
-    syncSettingsGeometry();
-    applyHtmlPicture();
-    if (activeNative?.presentation !== "standalone") scheduleNativeResize();
-    void syncFullscreenState();
-}
 
 function bindEncryptedMediaLifecycle() {
     if (unsubscribeEncryptedMediaSessionsClosed) return;
@@ -2963,25 +1366,6 @@ function bindEncryptedMediaLifecycle() {
     });
 }
 
-function bindControls() {
-    closeBtnEl?.addEventListener("click", () => void closeVideoModal());
-    timeDisplayEl?.addEventListener("click", toggleEndTime);
-    centerPlayBtnEl?.addEventListener("click", togglePlayback);
-    centerSkipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
-    centerSkipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
-    skipBackBtnEl?.addEventListener("click", () => seekBy(-SEEK_STEP_SECONDS));
-    skipForwardBtnEl?.addEventListener("click", () => seekBy(SEEK_STEP_SECONDS));
-    playBtnEl?.addEventListener("click", togglePlayback);
-    fullscreenBtnEl?.addEventListener("click", () => void toggleFullscreen());
-    bindScrubber();
-    bindVolume();
-    bindSpeedMenu();
-    bindSettingsPanel();
-    modalEl?.addEventListener("pointermove", handleVideoPointerMove);
-    stageEl?.addEventListener("click", handleStageClick);
-    document.addEventListener("keydown", handleVideoShortcut);
-    window.addEventListener("resize", handleWindowResize);
-}
 
 function renderSpeedOptions() {
     if (!speedMenuEl) return;
@@ -3005,64 +1389,68 @@ export function setupVideoModal() {
         videoMarkupHandle = mountSvelte(VideoModal, { target: host, props: { initialPreferences: playbackPreferences, onPreferencesChange: updatePlaybackPreferences } });
     }
 
-    modalEl = byID("video-modal");
-    stageEl = byID("video-stage");
-    topbarEl = document.querySelector<HTMLElement>("#video-modal .video-topbar");
-    controlsEl = document.querySelector<HTMLElement>("#video-modal .video-controls");
-    filenameEl = byID("video-filename");
-    metaEl = byID("video-meta");
-    closeBtnEl = byID("video-close");
-    nativeViewportEl = byID("video-native-viewport");
-    standaloneEl = byID("video-standalone");
-    videoEl = byID("video-player");
-    loadingEl = byID("video-loading");
-    loadingStatusEl = byID("video-loading-status");
-    errorEl = byID("video-error");
-    centerControlsEl = byID("video-center-controls");
-    centerPlayBtnEl = byID("video-center-play");
-    centerSkipBackBtnEl = byID("video-center-skip-back");
-    centerSkipForwardBtnEl = byID("video-center-skip-forward");
-    skipFeedbackEl = byID("video-skip-feedback");
-    playBtnEl = byID("video-play");
-    skipBackBtnEl = byID("video-skip-back");
-    skipForwardBtnEl = byID("video-skip-forward");
-    muteBtnEl = byID("video-mute");
-    fullscreenBtnEl = byID("video-fullscreen");
-    scrubberEl = byID("video-scrubber");
-    scrubberPlayedEl = byID("video-scrubber-played");
-    scrubberBufferedEl = byID("video-scrubber-buffered");
-    scrubberThumbEl = byID("video-scrubber-thumb");
-    scrubberTooltipEl = byID("video-scrubber-tooltip");
-    scrubberTooltipImageEl = byID("video-scrubber-tooltip-image");
-    scrubberTooltipTimeEl = byID("video-scrubber-tooltip-time");
-	volumeSliderEl = byID("video-volume-slider");
-	volumeFillEl = byID("video-volume-fill");
-    volumeThumbEl = byID("video-volume-thumb");
-    timeEl = byID("video-time");
-    durationEl = byID("video-duration");
-    timeDisplayEl = byID("video-time-display");
-    endTimeEl = byID("video-end-time");
-    speedBtnEl = byID("video-speed-button");
-    speedMenuEl = byID("video-speed-menu");
+    videoDOM = collectVideoDOM();
+    ({
+        modal: modalEl,
+        stage: stageEl,
+        topbar: topbarEl,
+        controls: controlsEl,
+        filename: filenameEl,
+        meta: metaEl,
+        closeButton: closeBtnEl,
+        video: videoEl,
+        loading: loadingEl,
+        loadingStatus: loadingStatusEl,
+        error: errorEl,
+        playButton: playBtnEl,
+        speedButton: speedBtnEl,
+        speedMenu: speedMenuEl,
+    } = videoDOM);
     audioPicker = new TrackPicker("Audio", null, (adapter, id) => {
         if (id !== null) adapter.setAudioTrack(id);
-    }, {
-        wrap: byID("video-audio-wrap"),
-        button: byID("video-audio-button"),
-        label: byID("video-audio-label"),
-        menu: byID("video-audio-menu"),
-    });
-    subtitlePicker = new TrackPicker("Subtitles", "Off", (adapter, id) => adapter.setSubtitleTrack(id), {
-        wrap: byID("video-subtitle-wrap"),
-        button: byID("video-subtitle-button"),
-        label: byID("video-subtitle-label"),
-        menu: byID("video-subtitle-menu"),
-    });
+    }, videoDOM.audioPicker);
+    subtitlePicker = new TrackPicker(
+        "Subtitles",
+        "Off",
+        (adapter, id) => adapter.setSubtitleTrack(id),
+        videoDOM.subtitlePicker,
+    );
 
     if (!modalEl || !videoEl || !stageEl) {
         console.error("Video modal setup failed. Missing #video-modal, #video-stage, or #video-player.");
         return;
     }
+
+    geometry = new VideoGeometryController({
+        dom: videoDOM,
+        getNative: () => activeNative,
+        hasActivePlayer: () => Boolean(activeAdapter),
+        hasError: () => hasError,
+        isOpen,
+        isSettingsOpen: () => settingsSection !== null,
+        settingsPanel: () => byID("video-settings-panel"),
+        revealChrome,
+        reportSurfaceError: setError,
+    });
+    transport = new VideoTransportController({
+        dom: videoDOM,
+        getAdapter: () => activeAdapter,
+        getState: () => currentState,
+        getNative: () => activeNative,
+        hasError: () => hasError,
+        isNativeFallbackActive,
+        markPausedByUser: (paused) => {
+            if (activeOpenAttempt) activeOpenAttempt.pausedByUser = paused;
+        },
+        revealChrome,
+        scheduleChromeHide,
+        geometryChanged: () => {
+            syncSettingsGeometry();
+            geometry?.scheduleNativeResize();
+        },
+        refreshFullscreenAvailability: () => geometry?.refreshFullscreenAvailability(),
+    });
+
     videoSetupComplete = true;
     a11y = installModalA11y(modalEl, {
         requestClose: () => {
@@ -3073,9 +1461,25 @@ export function setupVideoModal() {
         restoreFocus: "#file-list",
     });
     bindEncryptedMediaLifecycle();
-    bindNativeMediaStateLifecycle();
+    nativeStateRouter.bind();
     renderSpeedOptions();
-    bindControls();
-    observeControlsSize();
-    applyState(EMPTY_STATE);
+    transport.bind();
+    bindSpeedMenu();
+    bindSettingsPanel();
+    bindVideoDOM(videoDOM, {
+        close: () => { void closeVideoModal(); },
+        toggleFullscreen: () => { void geometry?.toggleFullscreen(); },
+        pointerMove: handleVideoPointerMove,
+        stageClick: handleStageClick,
+        keydown: handleVideoShortcut,
+        resize: () => geometry?.handleWindowResize(() => {
+            syncSettingsGeometry();
+            applyHtmlPicture();
+        }),
+    });
+    geometry.observeControlsSize(() => {
+        syncSettingsGeometry();
+        applyHtmlPicture();
+    });
+    applyState(EMPTY_PLAYER_STATE);
 }

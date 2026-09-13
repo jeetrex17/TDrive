@@ -72,7 +72,7 @@ func IsTransientTransport(err error) bool {
 		return false
 	}
 	var netErr net.Error
-	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func isTypedTransientTransport(err error) bool {

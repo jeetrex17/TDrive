@@ -75,8 +75,8 @@ func setupEncryptionAppWithPolicyRefresh(t *testing.T, refresh func(context.Cont
 func TestEncryptionPasswordStoresHint(t *testing.T) {
 	app, _ := setupEncryptionApp(t)
 
-	if err := app.CreateEncryptionPassword("old-password", "pet name"); err != nil {
-		t.Fatalf("create password: %v", err)
+	if result := app.CreateEncryptionPassword("old-password", "pet name"); !result.OK {
+		t.Fatalf("create password: %v", result.Error)
 	}
 	status, err := app.EncryptionStatus()
 	if err != nil {
@@ -97,26 +97,26 @@ func TestEncryptionPasswordStoresHint(t *testing.T) {
 	if !status.PasswordSet || status.PasswordRemembered || status.Hint != "pet name" {
 		t.Fatalf("status after clear = %+v", status)
 	}
-	if err := app.UseEncryptionPassword("old-password"); err != nil {
-		t.Fatalf("use password: %v", err)
+	if result := app.UseEncryptionPassword("old-password"); !result.OK {
+		t.Fatalf("use password: %v", result.Error)
 	}
 }
 
 func TestChangeEncryptionPasswordRewrapsConfig(t *testing.T) {
 	app, db := setupEncryptionApp(t)
 
-	if err := app.CreateEncryptionPassword("old-password", "old hint"); err != nil {
-		t.Fatalf("create password: %v", err)
+	if result := app.CreateEncryptionPassword("old-password", "old hint"); !result.OK {
+		t.Fatalf("create password: %v", result.Error)
 	}
-	if err := app.ChangeEncryptionPassword("bad-password", "new-password", "new hint"); err == nil {
+	if result := app.ChangeEncryptionPassword("bad-password", "new-password", "new hint"); result.OK {
 		t.Fatalf("wrong current password unexpectedly succeeded")
 	}
-	if err := app.UseEncryptionPassword("old-password"); err != nil {
-		t.Fatalf("old password should still work after failed change: %v", err)
+	if result := app.UseEncryptionPassword("old-password"); !result.OK {
+		t.Fatalf("old password should still work after failed change: %v", result.Error)
 	}
 
-	if err := app.ChangeEncryptionPassword("old-password", "new-password", "new hint"); err != nil {
-		t.Fatalf("change password: %v", err)
+	if result := app.ChangeEncryptionPassword("old-password", "new-password", "new hint"); !result.OK {
+		t.Fatalf("change password: %v", result.Error)
 	}
 	after, err := projection.GetEncryptionConfig(db, testEncryptionChannelID)
 	if err != nil {
@@ -127,10 +127,10 @@ func TestChangeEncryptionPasswordRewrapsConfig(t *testing.T) {
 	}
 
 	app.clearEncryptionSession()
-	if err := app.UseEncryptionPassword("old-password"); err == nil {
+	if result := app.UseEncryptionPassword("old-password"); result.OK {
 		t.Fatalf("old password unexpectedly worked after change")
 	}
-	if err := app.UseEncryptionPassword("new-password"); err != nil {
-		t.Fatalf("new password failed: %v", err)
+	if result := app.UseEncryptionPassword("new-password"); !result.OK {
+		t.Fatalf("new password failed: %v", result.Error)
 	}
 }

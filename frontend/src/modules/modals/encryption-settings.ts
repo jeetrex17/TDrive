@@ -6,6 +6,7 @@ import { changeEncryptionPassword } from '../../api';
 import { state } from '../../state';
 import { loadEncryptionStatus } from '../encryption';
 import { notify } from '../notifications';
+import { humanizeBackendError } from '../errors';
 import EncryptionSettingsModal from '../../ui/modals/EncryptionSettingsModal.svelte';
 import { encryptionSettingsModal } from '../../ui/modals/encryption-settings-modal-store';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
@@ -52,7 +53,11 @@ async function submitChange(
 
     encryptionSettingsModal.setBusy(true);
     try {
-        await changeEncryptionPassword(currentPassword, newPassword, hint);
+        const result = await changeEncryptionPassword(currentPassword, newPassword, hint);
+        if (!result.ok) {
+            encryptionSettingsModal.setError(humanizeBackendError(result.error));
+            return;
+        }
         await loadEncryptionStatus();
         encryptionSettingsModal.close();
         notify({
@@ -61,7 +66,7 @@ async function submitChange(
             body: 'Use the new password for encrypted files from now on.',
         });
     } catch (err) {
-        encryptionSettingsModal.setError(String(err));
+        encryptionSettingsModal.setError(humanizeBackendError(err));
     } finally {
         encryptionSettingsModal.setBusy(false);
     }

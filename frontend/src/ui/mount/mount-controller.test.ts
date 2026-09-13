@@ -1,5 +1,6 @@
 import { get } from 'svelte/store';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { OperationFailure } from '../../api';
 import type { MountStatusView } from '../../types';
 import {
     createMountController,
@@ -120,7 +121,7 @@ describe('mount controller', () => {
     it('mounts a sanitized immutable drive selection and retries that selection after unlock', async () => {
         const selected = [7, 7, -1, 9];
         const mountDrives = vi.fn()
-            .mockRejectedValueOnce(new Error('mount controller: encryption password required'))
+            .mockRejectedValueOnce(new OperationFailure({ code: 'encryption_password_required', message: 'Credentials are locked' }))
             .mockResolvedValueOnce(writableMountedStatus({ label: 'TDrive' }));
         const unlockEncryption = vi.fn(async () => true);
         const controller = createMountController(api({ mountDrives, unlockEncryption }));
@@ -137,7 +138,7 @@ describe('mount controller', () => {
     it('prompts once and retries the same encrypted mount after unlock', async () => {
         const mountDrive = vi
             .fn<MountApi['mountDrive']>()
-            .mockRejectedValueOnce(new Error('mount controller: encryption password required'))
+            .mockRejectedValueOnce(new OperationFailure({ code: 'encryption_password_required', message: 'Unlock before mounting' }))
             .mockResolvedValueOnce(writableMountedStatus());
         const unlockEncryption = vi.fn(async () => true);
         const controller = createMountController(api({ mountDrive, unlockEncryption }));
@@ -151,7 +152,7 @@ describe('mount controller', () => {
 
     it('returns to Mount without a retry or error when encryption unlock is cancelled', async () => {
         const mountDrive = vi.fn<MountApi['mountDrive']>()
-            .mockRejectedValue(new Error('encryption password required'));
+            .mockRejectedValue(new OperationFailure({ code: 'encryption_password_required', message: 'Mount credentials unavailable' }));
         const unlockEncryption = vi.fn(async () => false);
         const notices: MountNotice[] = [];
         const controller = createMountController(

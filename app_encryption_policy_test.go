@@ -20,8 +20,8 @@ func TestAppEncryptionSetupFailsClosedWhenPolicyRefreshFails(t *testing.T) {
 	if _, err := app.EncryptionStatus(); !errors.Is(err, mountpolicy.ErrEncryptionPolicyUnavailable) || errors.Is(err, detail) {
 		t.Fatalf("EncryptionStatus() error = %v, want sanitized unavailable", err)
 	}
-	if err := app.CreateEncryptionPassword("password-1", "hint"); !errors.Is(err, mountpolicy.ErrEncryptionPolicyUnavailable) || errors.Is(err, detail) {
-		t.Fatalf("CreateEncryptionPassword() error = %v, want sanitized unavailable", err)
+	if result := app.CreateEncryptionPassword("password-1", "hint"); !errors.Is(result.Error, mountpolicy.ErrEncryptionPolicyUnavailable) || errors.Is(result.Error, detail) {
+		t.Fatalf("CreateEncryptionPassword() error = %v, want sanitized unavailable", result.Error)
 	}
 	if len(telegram.SentControls()) != 0 {
 		t.Fatalf("password setup sent %d controls with unknown policy", len(telegram.SentControls()))
@@ -49,8 +49,8 @@ func TestAppEncryptionSetupHonorsConfigRestoredByPolicyRefresh(t *testing.T) {
 	if !status.PasswordSet || status.PasswordRemembered {
 		t.Fatalf("EncryptionStatus() = %#v, want locked configured vault", status)
 	}
-	if err := app.CreateEncryptionPassword("password-1", "hint"); !errors.Is(err, encservice.ErrPasswordAlreadySet) {
-		t.Fatalf("CreateEncryptionPassword() error = %v, want already set", err)
+	if result := app.CreateEncryptionPassword("password-1", "hint"); !errors.Is(result.Error, encservice.ErrPasswordAlreadySet) {
+		t.Fatalf("CreateEncryptionPassword() error = %v, want already set", result.Error)
 	}
 	if refreshCalls != 1 || len(telegram.SentControls()) != 0 {
 		t.Fatalf("refresh calls = %d, sent controls = %d", refreshCalls, len(telegram.SentControls()))
@@ -65,8 +65,8 @@ func TestAppEncryptionSetupCreatesOnlyAfterAuthoritativePlaintextPolicy(t *testi
 	})
 	t.Cleanup(app.engine.Close)
 
-	if err := app.CreateEncryptionPassword("password-1", "hint"); err != nil {
-		t.Fatalf("CreateEncryptionPassword() error = %v", err)
+	if result := app.CreateEncryptionPassword("password-1", "hint"); !result.OK {
+		t.Fatalf("CreateEncryptionPassword() error = %v", result.Error)
 	}
 	if refreshCalls != 1 || len(telegram.SentControls()) != 1 {
 		t.Fatalf("refresh calls = %d, sent controls = %d", refreshCalls, len(telegram.SentControls()))

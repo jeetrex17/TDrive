@@ -27,6 +27,10 @@ describe("humanizeBackendError", () => {
         expect(humanizeBackendError("api_hash=abcdef failed at /Users/alice/TDrive/cache.db"))
             .toBe("api_hash=[redacted] failed at [local path]");
     });
+    it("maps stable operation codes independently of display wording", () => {
+        expect(humanizeBackendError({ code: "insufficient_storage", message: "localized detail" }))
+            .toBe("There is not enough free disk space to finish this action.");
+    });
     it("maps actionable backend failures without leaking backend vocabulary", () => {
         const cases = [
             ["file is already in this folder", "This item is already there."],

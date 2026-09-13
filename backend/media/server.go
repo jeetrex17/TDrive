@@ -171,9 +171,7 @@ func (s *Server) ensureStarted() error {
 	s.mu.Unlock()
 
 	go func() {
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
-			// There is intentionally no logging dependency in backend/media.
-		}
+		_ = srv.Serve(ln)
 	}()
 	go s.sweepIdleSessions(srv)
 	return nil

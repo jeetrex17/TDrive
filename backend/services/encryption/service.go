@@ -27,6 +27,8 @@ var ErrPasswordRequired = errors.New("encryption password required")
 
 var ErrPasswordAlreadySet = errors.New("encryption password already exists")
 
+var ErrWrongPassword = errors.New("wrong password")
+
 const masterKeySize = 32
 
 type EmitOpFunc func(channelID int64, op projection.Op) error
@@ -433,13 +435,13 @@ func unwrapMasterKeyWithKDF(cfg projection.EncryptionConfig, password string, de
 	if err != nil {
 		zeroBytes(master)
 		if errors.Is(err, tdcrypto.ErrWrongPassword) {
-			return nil, fmt.Errorf("wrong password")
+			return nil, ErrWrongPassword
 		}
 		return nil, err
 	}
 	if err := tdcrypto.VerifyKeyCheck(master, cfg.KeyCheck); err != nil {
 		zeroBytes(master)
-		return nil, fmt.Errorf("wrong password")
+		return nil, ErrWrongPassword
 	}
 	return master, nil
 }

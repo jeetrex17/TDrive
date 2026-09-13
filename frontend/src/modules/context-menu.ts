@@ -12,6 +12,7 @@ import { canOpenFileViewer, isVideoFile } from './media-types';
 import { appActions } from './app-actions';
 import ContextMenu from '../ui/menus/ContextMenu.svelte';
 import { hideContextMenu, showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
+import type { FileCommandItem } from '../ui/file-list/types';
 import { mountSvelte } from '../ui';
 
 let contextMenuMounted = false;
@@ -76,7 +77,7 @@ export function setupContextMenu() {
             if (!Number.isFinite(fileID)) return;
             const fileName = row.dataset.name || "";
             const fileSize = Number(row.dataset.size || 0);
-            const fileSource = row.dataset.source || "fs";
+            const fileSource = row.dataset.source === 'tg' ? 'tg' : 'fs';
             const canDelete = row.dataset.canDelete === "true";
             const canRename = row.dataset.canRename !== "false";
             const encrypted = row.dataset.encrypted === "true";
@@ -88,18 +89,29 @@ export function setupContextMenu() {
             } else if (canOpenFileViewer(fileName)) {
                 items.unshift({ label: "Open", action: () => { void appActions().openFile({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
             }
+            const fileTarget: FileCommandItem = fileSource === 'tg'
+                ? {
+                    type: 'file',
+                    id: fileID,
+                    name: fileName,
+                    size: fileSize,
+                    parentId: state.currentFolderId,
+                    source: 'tg',
+                }
+                : {
+                    type: 'file',
+                    id: fileID,
+                    name: fileName,
+                    size: fileSize,
+                    parentId: state.currentFolderId,
+                    source: 'fs',
+                };
             if (canRename) {
-                const renamePayload = fileSource === "fs"
-                    ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }
-                    : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
-                items.push({ label: "Rename…", action: () => openRenameModal(renamePayload) });
+                items.push({ label: 'Rename…', action: () => openRenameModal(fileTarget) });
             }
-            const movePayload = fileSource === "fs"
-                ? { type: "file", id: fileID, name: fileName, parentId: state.currentFolderId }
-                : { type: "file", id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: "tg" };
-            items.push({ label: "Move to…", action: () => openMoveModal(movePayload) });
+            items.push({ label: 'Move to…', action: () => openMoveModal(fileTarget) });
             if (canDelete) {
-                items.push({ label: "Delete", danger: true, action: () => openDeleteModal({ type: "file", id: fileID, name: fileName }) });
+                items.push({ label: 'Delete', danger: true, action: () => openDeleteModal(fileTarget) });
             }
             items.push(
                 { type: "divider" },

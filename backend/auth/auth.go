@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
@@ -16,8 +15,8 @@ import (
 )
 
 type ImpCredentials struct {
-	ApiID   int    `json:"API_ID"`
-	ApiHash string `json:"API_HASH"`
+	APIID   int    `json:"API_ID"`
+	APIHash string `json:"API_HASH"`
 }
 
 const (
@@ -25,7 +24,7 @@ const (
 	privateFileMode os.FileMode = 0o600
 )
 
-type getchanel interface {
+type getChannel interface {
 	WaitCode(ctx context.Context) (string, error)
 	WaitPassword(ctx context.Context, hint string) (string, error)
 	SendHint(hint string)
@@ -45,35 +44,25 @@ func GetConfigPath() string {
 
 func SaveImpCredentials(id int, hash string) error {
 	path := GetConfigPath()
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, privateDirMode); err != nil {
-		return fmt.Errorf("could not create config folder: %v", err)
-	}
-	_ = os.Chmod(dir, privateDirMode)
-
-	ic := ImpCredentials{
-		ApiID:   id,
-		ApiHash: hash,
+	credentials := ImpCredentials{
+		APIID:   id,
+		APIHash: hash,
 	}
 
-	jsonData, err := json.MarshalIndent(ic, "", " ")
+	jsonData, err := json.MarshalIndent(credentials, "", " ")
 	if err != nil {
 		return fmt.Errorf("error marshaling credentials: %v", err)
 	}
-	err = os.WriteFile(GetConfigPath(), jsonData, privateFileMode)
-	if err != nil {
-		return fmt.Errorf("error writing file: %v", err)
+	if err := writePrivateFile(path, jsonData); err != nil {
+		return fmt.Errorf("error writing file: %w", err)
 	}
-	_ = os.Chmod(GetConfigPath(), privateFileMode)
-
 	return nil
 }
 
 func LoadImpCredentials() (ImpCredentials, error) {
-	impCongigPath := GetConfigPath()
+	credentialsPath := GetConfigPath()
 
-	creds, err := os.ReadFile(impCongigPath)
+	creds, err := os.ReadFile(credentialsPath)
 	if err != nil {
 		return ImpCredentials{}, err
 	}
@@ -98,9 +87,6 @@ func ConnectWithOptions(options telegram.Options) (*telegram.Client, error) {
 		return nil, fmt.Errorf("API credentials are not configured")
 	}
 
-	TgApiID := creds.ApiID
-	TgApiHash := creds.ApiHash
-
 	path, err := os.UserConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("error getting config dir for session: %v", err)
@@ -110,16 +96,17 @@ func ConnectWithOptions(options telegram.Options) (*telegram.Client, error) {
 	if err := os.MkdirAll(dir, privateDirMode); err != nil {
 		return nil, fmt.Errorf("could not create config folder: %v", err)
 	}
-	_ = os.Chmod(dir, privateDirMode)
-
-	sessionPath := filepath.Join(dir, "session.json")
-	_ = os.Chmod(sessionPath, privateFileMode)
-	ses := &session.FileStorage{
-		Path: sessionPath,
+	if err := os.Chmod(dir, privateDirMode); err != nil {
+		return nil, fmt.Errorf("could not secure config folder: %w", err)
 	}
 
-	options.SessionStorage = ses
-	tgclient := telegram.NewClient(TgApiID, TgApiHash, options)
+	sessionPath := filepath.Join(dir, "session.json")
+	if err := os.Chmod(sessionPath, privateFileMode); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("could not secure session file: %w", err)
+	}
+
+	options.SessionStorage = &privateSessionStorage{path: sessionPath}
+	tgclient := telegram.NewClient(creds.APIID, creds.APIHash, options)
 
 	return tgclient, nil
 }
@@ -153,7 +140,7 @@ func CheckLogin(ctx context.Context) (bool, error) {
 // sign in. Unlike gotd's one-shot auth.Flow, this keeps the same phone-code
 // hash and re-prompts on an invalid code, so a mistyped code can be corrected
 // without requesting (and waiting for) a brand-new code.
-func StartLogin(ctx context.Context, client *telegram.Client, ch getchanel, phone string) error {
+func StartLogin(ctx context.Context, client *telegram.Client, ch getChannel, phone string) error {
 	return client.Run(ctx, func(ctx context.Context) error {
 		ac := client.Auth()
 
@@ -201,7 +188,7 @@ func StartLogin(ctx context.Context, client *telegram.Client, ch getchanel, phon
 
 // signInWithPassword completes a 2FA login. The hint is best-effort: failing to
 // fetch it must not block the password prompt.
-func signInWithPassword(ctx context.Context, client *telegram.Client, ch getchanel) error {
+func signInWithPassword(ctx context.Context, client *telegram.Client, ch getChannel) error {
 	hint := "NO HINT found"
 	if passObj, err := client.API().AccountGetPassword(ctx); err == nil && passObj.Hint != "" {
 		hint = "Hint : " + passObj.Hint

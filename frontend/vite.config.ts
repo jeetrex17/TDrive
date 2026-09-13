@@ -23,7 +23,7 @@ export default defineConfig({
                 'src/modules/errors.ts',
                 'src/modules/media-types.ts',
                 'src/modules/modals/preview-info.ts',
-                'src/modules/video/**',
+                'src/modules/video/media-tracks.ts',
                 'src/ui/auth/auth-store.ts',
                 'src/ui/auth/personal-drive-store.ts',
                 'src/ui/sidebar/sidebar-store.ts',

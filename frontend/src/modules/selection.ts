@@ -6,61 +6,62 @@ import { openMoveModal } from './modals/move';
 import SelectionBar from '../ui/selection/SelectionBar.svelte';
 import { setSelectionCount } from '../ui/selection/selection-bar-store';
 import { setSelectedFileRowKeys } from '../ui/file-list/row-state-store';
+import type { FileCommandItem, FileSource } from '../ui/file-list/types';
 import { mountSvelte } from '../ui';
 
 const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
 let selectionBarMounted = false;
 
-function emitSelectionChange() {
-    window.dispatchEvent(new Event("tdrive:selectionchange"));
+function emitSelectionChange(): void {
+    window.dispatchEvent(new Event('tdrive:selectionchange'));
 }
 
-export function getRowKey(row: any) {
-    if (!row) return "";
-    const explicitKey = String(row.dataset.rowKey || "");
+export function getRowKey(row: HTMLElement): string {
+    const explicitKey = row.dataset.rowKey ?? '';
     if (explicitKey) return explicitKey;
-    const type = String(row.dataset.type || "");
-    const id = String(row.dataset.id || "");
-    if (!type || !id) return "";
-    return `${type}:${id}`;
+    const type = row.dataset.type ?? '';
+    const id = row.dataset.id ?? '';
+    return type && id ? `${type}:${id}` : '';
 }
 
-function syncSelectedRowKeys() {
+function syncSelectedRowKeys(): void {
     setSelectedFileRowKeys(state.selectedItems.keys());
 }
 
-export function isRowSelected(row: any) {
+export function isRowSelected(row: HTMLElement): boolean {
     const key = getRowKey(row);
     return Boolean(key && state.selectedItems.has(key));
 }
 
-export function rowToSelectionItem(row: any) {
-    const type = String(row?.dataset?.type || "");
-    if (type === "folder") {
+export function rowToSelectionItem(row: HTMLElement): FileCommandItem {
+    if (row.dataset.type === 'folder') {
         return {
-            type: "folder",
-            id: String(row.dataset.id || ""),
-            name: String(row.dataset.name || "Folder"),
-            parentId: String(row.dataset.parentId || ""),
+            type: 'folder',
+            id: row.dataset.id ?? '',
+            name: row.dataset.name || 'Folder',
+            parentId: row.dataset.parentId ?? '',
+            canDelete: row.dataset.canDelete !== 'false',
+            canRename: row.dataset.canRename !== 'false',
             row,
         };
     }
 
+    const source: FileSource = row.dataset.source === 'tg' ? 'tg' : 'fs';
     return {
-        type: "file",
-        id: Number(row?.dataset?.id || 0),
-        name: String(row?.dataset?.name || "File"),
-        size: Number(row?.dataset?.size || 0),
-        source: String(row?.dataset?.source || "fs"),
-        parentId: String(row?.dataset?.parentId || ""),
-        uploaderID: Number(row?.dataset?.uploaderId || 0),
-        canDelete: row?.dataset?.canDelete !== "false",
-        canRename: row?.dataset?.canRename !== "false",
+        type: 'file',
+        id: Number(row.dataset.id ?? 0),
+        name: row.dataset.name || 'File',
+        size: Number(row.dataset.size ?? 0),
+        source,
+        parentId: row.dataset.parentId ?? '',
+        uploaderID: Number(row.dataset.uploaderId ?? 0),
+        canDelete: row.dataset.canDelete !== 'false',
+        canRename: row.dataset.canRename !== 'false',
         row,
     };
 }
 
-export function updateSelectionBar() {
+export function updateSelectionBar(): void {
     syncSelectedRowKeys();
     if (!state.selectionBarEl) {
         emitSelectionChange();
@@ -68,65 +69,60 @@ export function updateSelectionBar() {
     }
     const count = state.selectedItems.size;
     setSelectionCount(count);
-    if (!count) {
-        state.selectionBarEl.style.display = "none";
+    if (count === 0) {
+        state.selectionBarEl.style.display = 'none';
         emitSelectionChange();
         return;
     }
 
-    state.selectionBarEl.style.display = "flex";
+    state.selectionBarEl.style.display = 'flex';
     emitSelectionChange();
 }
 
-export function clearSelection({ keepAnchor = false } = {}) {
+export function clearSelection({ keepAnchor = false }: { keepAnchor?: boolean } = {}): void {
     state.selectedItems.clear();
     if (!keepAnchor) state.selectionAnchorIndex = -1;
     updateSelectionBar();
 }
 
-export function selectRow(row: any, rowIndex: any) {
+export function selectRow(row: HTMLElement, rowIndex: number): void {
     const key = getRowKey(row);
     if (!key) return;
-    const item = rowToSelectionItem(row);
-    state.selectedItems.set(key, item);
+    state.selectedItems.set(key, rowToSelectionItem(row));
     state.selectionAnchorIndex = rowIndex;
     updateSelectionBar();
 }
 
-export function deselectRow(row: any) {
+export function deselectRow(row: HTMLElement): void {
     const key = getRowKey(row);
     if (!key) return;
     state.selectedItems.delete(key);
     updateSelectionBar();
 }
 
-export function handleRowSelection(row: any, e: any) {
-    if (!row) return;
-    if (e?.button === 2) return;
+export function handleRowSelection(row: HTMLElement, event: MouseEvent | KeyboardEvent): void {
+    if ('button' in event && event.button === 2) return;
 
-    const list = document.getElementById("file-list");
-    const rows = list ? Array.from(list.querySelectorAll(SELECTABLE_ROW_SELECTOR)) : [];
-    const idx = rows.indexOf(row);
-    if (idx === -1) return;
+    const list = document.getElementById('file-list');
+    const rows = list ? Array.from(list.querySelectorAll<HTMLElement>(SELECTABLE_ROW_SELECTOR)) : [];
+    const index = rows.indexOf(row);
+    if (index === -1) return;
 
-    const isToggle = Boolean(e?.metaKey || e?.ctrlKey);
-    const isRange = Boolean(e?.shiftKey) && state.selectionAnchorIndex >= 0;
+    const isToggle = event.metaKey || event.ctrlKey;
+    const isRange = event.shiftKey && state.selectionAnchorIndex >= 0;
 
     if (isRange) {
-        const start = Math.min(state.selectionAnchorIndex, idx);
-        const end = Math.max(state.selectionAnchorIndex, idx);
+        const start = Math.min(state.selectionAnchorIndex, index);
+        const end = Math.max(state.selectionAnchorIndex, index);
         if (!isToggle) clearSelection({ keepAnchor: true });
 
-        for (let i = start; i <= end; i++) {
-            const r = rows[i];
-            if (!r) continue;
-            const key = getRowKey(r);
-            if (!key) continue;
-            if (state.selectedItems.has(key)) continue;
-            const item = rowToSelectionItem(r);
-            state.selectedItems.set(key, item);
+        for (let cursor = start; cursor <= end; cursor += 1) {
+            const rangeRow = rows[cursor];
+            if (!rangeRow) continue;
+            const key = getRowKey(rangeRow);
+            if (!key || state.selectedItems.has(key)) continue;
+            state.selectedItems.set(key, rowToSelectionItem(rangeRow));
         }
-
         updateSelectionBar();
         return;
     }
@@ -137,50 +133,72 @@ export function handleRowSelection(row: any, e: any) {
         } else {
             const key = getRowKey(row);
             if (!key) return;
-            const item = rowToSelectionItem(row);
-            state.selectedItems.set(key, item);
-            state.selectionAnchorIndex = idx;
+            state.selectedItems.set(key, rowToSelectionItem(row));
+            state.selectionAnchorIndex = index;
             updateSelectionBar();
         }
         return;
     }
 
     clearSelection({ keepAnchor: true });
-    selectRow(row, idx);
+    selectRow(row, index);
 }
 
-export function ensureRowSelectedForContextMenu(row: any) {
-    if (!row) return;
-    const list = document.getElementById("file-list");
-    const rows = list ? Array.from(list.querySelectorAll(SELECTABLE_ROW_SELECTOR)) : [];
-    const idx = rows.indexOf(row);
-    if (idx === -1) return;
+export function ensureRowSelectedForContextMenu(row: HTMLElement): void {
+    const list = document.getElementById('file-list');
+    const rows = list ? Array.from(list.querySelectorAll<HTMLElement>(SELECTABLE_ROW_SELECTOR)) : [];
+    const index = rows.indexOf(row);
+    if (index === -1) return;
 
-    if (!isRowSelected(row) || !state.selectedItems.size) {
+    if (!isRowSelected(row) || state.selectedItems.size === 0) {
         clearSelection({ keepAnchor: true });
-        selectRow(row, idx);
+        selectRow(row, index);
         return;
     }
-
-    state.selectionAnchorIndex = idx;
+    state.selectionAnchorIndex = index;
 }
 
-export function getSelectionPayload() {
-    return Array.from(state.selectedItems.values()).map((item) => ({
-        type: item.type,
-        id: item.id,
-        name: item.name,
-        size: item.size,
-        source: item.source,
-        parentId: item.parentId,
-        uploaderID: item.uploaderID || 0,
-        canDelete: item.canDelete !== false,
-        canRename: item.canRename !== false,
-    }));
+export function getSelectionPayload(): FileCommandItem[] {
+    return Array.from(state.selectedItems.values(), (item): FileCommandItem => {
+        if (item.type === 'folder') {
+            return {
+                type: 'folder',
+                id: item.id,
+                name: item.name,
+                parentId: item.parentId,
+                canDelete: item.canDelete,
+                canRename: item.canRename,
+            };
+        }
+        if (item.source === 'tg') {
+            return {
+                type: 'file',
+                id: item.id,
+                name: item.name,
+                size: item.size,
+                source: 'tg',
+                parentId: item.parentId,
+                uploaderID: item.uploaderID,
+                canDelete: item.canDelete,
+                canRename: item.canRename,
+            };
+        }
+        return {
+            type: 'file',
+            id: item.id,
+            name: item.name,
+            size: item.size,
+            source: 'fs',
+            parentId: item.parentId,
+            uploaderID: item.uploaderID,
+            canDelete: item.canDelete,
+            canRename: item.canRename,
+        };
+    });
 }
 
-export function setupSelectionBar() {
-    state.selectionBarEl = document.getElementById("selection-bar");
+export function setupSelectionBar(): void {
+    state.selectionBarEl = document.getElementById('selection-bar');
     if (!state.selectionBarEl) return;
 
     if (!selectionBarMounted) {
@@ -190,28 +208,26 @@ export function setupSelectionBar() {
             props: {
                 onClear: () => clearSelection(),
                 onDelete: () => {
-                    if (!state.selectedItems.size) return;
-                    openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId });
+                    if (state.selectedItems.size === 0) return;
+                    openDeleteModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
                 },
                 onMove: () => {
-                    if (!state.selectedItems.size) return;
-                    openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId });
+                    if (state.selectedItems.size === 0) return;
+                    openMoveModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
                 },
             },
         });
         selectionBarMounted = true;
     }
 
-    const list = document.getElementById("file-list");
-    if (list) {
-        list.addEventListener("click", (e) => {
-            if ((e.target as HTMLElement).closest(".drive-row")) return;
-            clearSelection();
-        });
-    }
+    const list = document.getElementById('file-list');
+    list?.addEventListener('click', (event) => {
+        if ((event.target as HTMLElement).closest('.drive-row')) return;
+        clearSelection();
+    });
 
-    window.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") clearSelection();
+    window.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') clearSelection();
     });
 
     updateSelectionBar();

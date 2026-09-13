@@ -115,3 +115,42 @@ func TestLRUClearAndDisabledCacheAreSafe(t *testing.T) {
 		t.Fatal("nil cache reported retained state")
 	}
 }
+
+// Cache hits are on every snapshot-backed mount lookup after the first directory load.
+func BenchmarkLRUGetHit(b *testing.B) {
+	const capacity = 1024
+	cache := NewLRU[int, int](LRUConfig[int]{Capacity: capacity})
+	for key := range capacity {
+		cache.Put(key, key)
+	}
+
+	b.ReportAllocs()
+	var value int
+	var found bool
+	for b.Loop() {
+		value, found = cache.Get(capacity / 2)
+	}
+	if !found || value != capacity/2 {
+		b.Fatalf("Get() = %d, %v", value, found)
+	}
+}
+
+// Cache admission and eviction run whenever directory snapshots rotate through
+// the bounded caches used by the mount implementations.
+func BenchmarkLRUPutEvict(b *testing.B) {
+	const capacity = 1024
+	cache := NewLRU[int, int](LRUConfig[int]{Capacity: capacity})
+	for key := range capacity {
+		cache.Put(key, key)
+	}
+
+	b.ReportAllocs()
+	key := capacity
+	for b.Loop() {
+		cache.Put(key, key)
+		key = (key + 1) & (2*capacity - 1)
+	}
+	if got := cache.Len(); got != capacity {
+		b.Fatalf("Len() = %d, want %d", got, capacity)
+	}
+}

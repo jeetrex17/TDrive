@@ -397,7 +397,7 @@ func mapWriteError(err error) error {
 }
 
 func splitParentPath(value string) (string, string, error) {
-	value, components, err := parseAbsolutePath(value)
+	_, components, err := parseAbsolutePath(value)
 	if err != nil || len(components) == 0 {
 		return "", "", mountdav.ErrWriteInvalid
 	}

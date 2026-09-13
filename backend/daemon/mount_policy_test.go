@@ -110,7 +110,8 @@ func TestDaemonVaultAndGeneralStatusFailClosedWhenPolicyCannotBeProven(t *testin
 		sharedID   int64 = 8_600_002
 	)
 	detail := errors.New("telegram policy sync failed")
-	contextKey := struct{}{}
+	type requestContextKey struct{}
+	contextKey := requestContextKey{}
 	requestContext := context.WithValue(context.Background(), contextKey, "request")
 	refreshCalls := 0
 	engine := newDaemonMountEngineWithPolicyRefresh(t, personalID, sharedID, func(ctx context.Context, _ int64) error {

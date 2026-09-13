@@ -141,52 +141,55 @@ func (a *App) EncryptionStatus() (EncryptionStatus, error) {
 // CreateEncryptionPassword creates the user's first encryption password.
 // It stores a random master key wrapped under the password and an optional
 // plaintext hint. It refuses to overwrite an existing password.
-func (a *App) CreateEncryptionPassword(password string, hint string) error {
-	if a.encryptionService() == nil {
-		return fmt.Errorf("backend not ready")
+func (a *App) CreateEncryptionPassword(password string, hint string) OperationResult {
+	service := a.encryptionService()
+	if service == nil {
+		return operationFailure(errBackendUnavailable)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	defer cancel()
 	release, err := a.acquireMountLifecycle(ctx)
 	if err != nil {
-		return fmt.Errorf("eject TDrive before changing the encryption session: %w", err)
+		return operationFailure(fmt.Errorf("eject TDrive before changing the encryption session: %w", err))
 	}
 	defer release()
 	if err := a.closeMountForEncryptionTransitionLocked(ctx); err != nil {
-		return err
+		return operationFailure(err)
 	}
-	return a.encryptionService().CreatePasswordContext(ctx, password, hint)
+	return operationFailure(service.CreatePasswordContext(ctx, password, hint))
 }
 
 // UseEncryptionPassword verifies an existing encryption password and keeps
 // the master key in memory for the rest of the app session.
-func (a *App) UseEncryptionPassword(password string) error {
-	if a.encryptionService() == nil {
-		return fmt.Errorf("backend not ready")
+func (a *App) UseEncryptionPassword(password string) OperationResult {
+	service := a.encryptionService()
+	if service == nil {
+		return operationFailure(errBackendUnavailable)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	defer cancel()
 	release, err := a.acquireMountLifecycle(ctx)
 	if err != nil {
-		return fmt.Errorf("unlock encryption: %w", err)
+		return operationFailure(fmt.Errorf("unlock encryption: %w", err))
 	}
 	defer release()
-	return a.encryptionService().UsePassword(password)
+	return operationFailure(service.UsePassword(password))
 }
 
 // ChangeEncryptionPassword verifies the current password, then re-wraps
 // the same master key with the new password. Existing encrypted files stay
 // decryptable; file contents are not re-encrypted.
-func (a *App) ChangeEncryptionPassword(currentPassword string, newPassword string, hint string) error {
-	if a.encryptionService() == nil {
-		return fmt.Errorf("backend not ready")
+func (a *App) ChangeEncryptionPassword(currentPassword string, newPassword string, hint string) OperationResult {
+	service := a.encryptionService()
+	if service == nil {
+		return operationFailure(errBackendUnavailable)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	defer cancel()
 	release, err := a.acquireMountLifecycle(ctx)
 	if err != nil {
-		return fmt.Errorf("change encryption password: %w", err)
+		return operationFailure(fmt.Errorf("change encryption password: %w", err))
 	}
 	defer release()
-	return a.encryptionService().ChangePassword(currentPassword, newPassword, hint)
+	return operationFailure(service.ChangePassword(currentPassword, newPassword, hint))
 }

@@ -22,7 +22,7 @@ export function CancelUpdateDownload():Promise<void>;
 
 export function CancelUpload():Promise<void>;
 
-export function ChangeEncryptionPassword(arg1:string,arg2:string,arg3:string):Promise<void>;
+export function ChangeEncryptionPassword(arg1:string,arg2:string,arg3:string):Promise<main.OperationResult>;
 
 export function CheckForUpdate():Promise<updater.State>;
 
@@ -36,7 +36,7 @@ export function CloseMedia(arg1:string):Promise<void>;
 
 export function CloseNativeMedia(arg1:string):Promise<void>;
 
-export function CreateEncryptionPassword(arg1:string,arg2:string):Promise<void>;
+export function CreateEncryptionPassword(arg1:string,arg2:string):Promise<main.OperationResult>;
 
 export function CreateFolder(arg1:string,arg2:string):Promise<backend.Folder>;
 
@@ -44,9 +44,9 @@ export function CreatePersonalDrive():Promise<void>;
 
 export function CreateSharedDrive(arg1:string,arg2:boolean):Promise<main.ChannelInfo>;
 
-export function DeleteFile(arg1:number):Promise<string>;
+export function DeleteFile(arg1:number):Promise<main.OperationResult>;
 
-export function DeleteFolder(arg1:string):Promise<string>;
+export function DeleteFolder(arg1:string):Promise<main.OperationResult>;
 
 export function DiscoverPersonalDrives():Promise<Array<main.PersonalDriveCandidate>>;
 
@@ -84,7 +84,7 @@ export function GetUpdateState():Promise<updater.State>;
 
 export function HideNativeSeekThumbnail(arg1:string):Promise<void>;
 
-export function ImportPaths(arg1:Array<string>,arg2:string,arg3:boolean,arg4:boolean):Promise<void>;
+export function ImportPaths(arg1:Array<string>,arg2:string,arg3:boolean,arg4:boolean):Promise<main.OperationResult>;
 
 export function InstallUpdateAndRestart():Promise<void>;
 
@@ -106,19 +106,19 @@ export function Logout(arg1:string):Promise<void>;
 
 export function Me():Promise<main.SelfUser>;
 
-export function MountDrive():Promise<main.MountView>;
+export function MountDrive():Promise<main.MountResult>;
 
-export function MountDrives(arg1:Array<number>):Promise<main.MountView>;
+export function MountDrives(arg1:Array<number>):Promise<main.MountResult>;
 
 export function MountStatus():Promise<main.MountView>;
 
-export function MoveFile(arg1:number,arg2:string):Promise<string>;
+export function MoveFile(arg1:number,arg2:string):Promise<main.OperationResult>;
 
-export function MoveFolder(arg1:string,arg2:string):Promise<string>;
+export function MoveFolder(arg1:string,arg2:string):Promise<main.OperationResult>;
 
 export function MoveNativeSeekThumbnail(arg1:string,arg2:nativeplayer.Rect):Promise<void>;
 
-export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:string):Promise<string>;
+export function MsgToTdriveSystem(arg1:number,arg2:string,arg3:number,arg4:string):Promise<main.OperationResult>;
 
 export function MyUserID():Promise<number>;
 
@@ -138,9 +138,9 @@ export function PlanImport(arg1:Array<string>,arg2:boolean,arg3:boolean):Promise
 
 export function PreparePersonalDrive():Promise<main.PersonalDriveSetupState>;
 
-export function PreviewFile(arg1:number):Promise<main.PreviewPayload>;
+export function PreviewFile(arg1:number):Promise<main.PreviewResult>;
 
-export function PreviewThumbnail(arg1:number):Promise<main.PreviewPayload>;
+export function PreviewThumbnail(arg1:number):Promise<main.PreviewResult>;
 
 export function RebuildProjection(arg1:number):Promise<void>;
 
@@ -148,9 +148,9 @@ export function RejectJoinRequest(arg1:number,arg2:number):Promise<void>;
 
 export function RemovePendingJoin(arg1:string):Promise<void>;
 
-export function RenameFile(arg1:number,arg2:string):Promise<string>;
+export function RenameFile(arg1:number,arg2:string):Promise<main.OperationResult>;
 
-export function RenameFolder(arg1:string,arg2:string):Promise<string>;
+export function RenameFolder(arg1:string,arg2:string):Promise<main.OperationResult>;
 
 export function ResizeNativeMedia(arg1:string,arg2:nativeplayer.Rect):Promise<void>;
 
@@ -174,9 +174,9 @@ export function SetFileDropEnabled(arg1:boolean):Promise<void>;
 
 export function ShowNativeSeekThumbnail(arg1:string,arg2:string,arg3:nativeplayer.Rect):Promise<void>;
 
-export function SumbitCode(arg1:string):Promise<void>;
+export function SubmitCode(arg1:string):Promise<void>;
 
-export function SumbitPassword(arg1:string):Promise<void>;
+export function SubmitPassword(arg1:string):Promise<void>;
 
 export function SyncChannel(arg1:number):Promise<void>;
 
@@ -186,6 +186,6 @@ export function UnmountDrive():Promise<main.MountView>;
 
 export function UpdateMediaPlayback(arg1:media.PlaybackUpdate):Promise<void>;
 
-export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<Array<backend.FileMetaData>>;
+export function UploadToDriveFS(arg1:Array<string>,arg2:Array<string>,arg3:boolean):Promise<main.UploadResult>;
 
-export function UseEncryptionPassword(arg1:string):Promise<void>;
+export function UseEncryptionPassword(arg1:string):Promise<main.OperationResult>;

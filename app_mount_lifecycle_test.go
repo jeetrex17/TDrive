@@ -26,7 +26,7 @@ func TestEncryptionLockWaitsForInFlightMountStart(t *testing.T) {
 
 	mountDone := make(chan error, 1)
 	go func() {
-		_, err := app.MountDrive()
+		_, err := app.mountDriveNative()
 		mountDone <- err
 	}()
 	waitLifecycleSignal(t, controller.startEntered, "mount start")
@@ -74,7 +74,7 @@ func TestCreateEncryptionPasswordSerializesPolicyChangeWithMountStart(t *testing
 
 	createDone := make(chan error, 1)
 	go func() {
-		createDone <- app.CreateEncryptionPassword("correct horse battery staple", "hint")
+		createDone <- app.CreateEncryptionPassword("correct horse battery staple", "hint").Err()
 	}()
 	waitLifecycleSignal(t, controller.closeEntered, "mount close before password creation")
 	if app.mountLifecycle.TryLock() {
@@ -84,7 +84,7 @@ func TestCreateEncryptionPasswordSerializesPolicyChangeWithMountStart(t *testing
 
 	mountDone := make(chan error, 1)
 	go func() {
-		_, err := app.MountDrive()
+		_, err := app.mountDriveNative()
 		mountDone <- err
 	}()
 	close(controller.releaseClose)
@@ -170,7 +170,7 @@ func TestLogoutLifecyclePermanentlyRejectsQueuedMountStart(t *testing.T) {
 
 	mountDone := make(chan error, 1)
 	go func() {
-		_, err := app.MountDrive()
+		_, err := app.mountDriveNative()
 		mountDone <- err
 	}()
 	close(releaseCleanup)
@@ -200,7 +200,7 @@ func TestPasswordKeyWritersSerializeBeforeLockAndLogout(t *testing.T) {
 				service.useEntered = make(chan struct{})
 				service.releaseUse = make(chan struct{})
 			},
-			writeKey: func(app *App) error { return app.UseEncryptionPassword("password") },
+			writeKey: func(app *App) error { return app.UseEncryptionPassword("password").Err() },
 			clearKey: func(app *App) error { return app.lockEncryptionSession() },
 		},
 		{
@@ -210,7 +210,7 @@ func TestPasswordKeyWritersSerializeBeforeLockAndLogout(t *testing.T) {
 				service.releaseChange = make(chan struct{})
 			},
 			writeKey: func(app *App) error {
-				return app.ChangeEncryptionPassword("old-password", "new-password", "hint")
+				return app.ChangeEncryptionPassword("old-password", "new-password", "hint").Err()
 			},
 			clearKey: func(app *App) error { return app.runWithClosedMountForLogout(nil) },
 		},
@@ -262,7 +262,7 @@ func TestAppShutdownMakesMountLifecycleTerminal(t *testing.T) {
 
 	app.shutdown(context.Background())
 	waitLifecycleSignal(t, controller.closeEntered, "shutdown mount close")
-	if _, err := app.MountDrive(); err == nil {
+	if _, err := app.mountDriveNative(); err == nil {
 		t.Fatal("MountDrive() succeeded after shutdown")
 	}
 	select {
@@ -284,7 +284,7 @@ func TestAppShutdownWithoutControllerMakesMountLifecycleTerminal(t *testing.T) {
 	}
 
 	app.shutdown(context.Background())
-	if _, err := app.MountDrive(); !errors.Is(err, errAppMountLifecycleTerminal) {
+	if _, err := app.mountDriveNative(); !errors.Is(err, errAppMountLifecycleTerminal) {
 		t.Fatalf("MountDrive() after shutdown error = %v, want terminal lifecycle", err)
 	}
 	if constructionCalls != 0 {
@@ -304,7 +304,7 @@ func TestFailedLogoutCleanupLeavesMountLifecycleRecoverable(t *testing.T) {
 	if err := app.runWithClosedMountForLogout(func() error { return sentinel }); !errors.Is(err, sentinel) {
 		t.Fatalf("logout cleanup error = %v, want sentinel", err)
 	}
-	if _, err := app.MountDrive(); err != nil {
+	if _, err := app.mountDriveNative(); err != nil {
 		t.Fatalf("MountDrive() after failed logout cleanup error = %v", err)
 	}
 	waitLifecycleSignal(t, controller.startEntered, "recoverable mount start")

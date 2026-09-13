@@ -334,12 +334,12 @@ export function ShowNativeSeekThumbnail(arg1, arg2, arg3) {
   return window['go']['main']['App']['ShowNativeSeekThumbnail'](arg1, arg2, arg3);
 }
 
-export function SumbitCode(arg1) {
-  return window['go']['main']['App']['SumbitCode'](arg1);
+export function SubmitCode(arg1) {
+  return window['go']['main']['App']['SubmitCode'](arg1);
 }
 
-export function SumbitPassword(arg1) {
-  return window['go']['main']['App']['SumbitPassword'](arg1);
+export function SubmitPassword(arg1) {
+  return window['go']['main']['App']['SubmitPassword'](arg1);
 }
 
 export function SyncChannel(arg1) {

@@ -34,7 +34,7 @@ func TestMountDrivesStartsExactCanonicalSelection(t *testing.T) {
 		},
 	}
 
-	view, err := app.MountDrives([]int64{11, 22})
+	view, err := app.mountDrivesNative([]int64{11, 22})
 	if err != nil {
 		t.Fatalf("MountDrives() error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestMountDrivesResolverFailureDoesNotStartController(t *testing.T) {
 		},
 	}
 
-	if _, err := app.MountDrives(nil); !errors.Is(err, sentinel) {
+	if _, err := app.mountDrivesNative(nil); !errors.Is(err, sentinel) {
 		t.Fatalf("MountDrives() error = %v, want sentinel", err)
 	}
 	if controller.startDrivesCalls != 0 || controller.startCalls != 0 {

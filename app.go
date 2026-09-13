@@ -174,11 +174,6 @@ type TDriveFile struct {
 	Date       int    `json:"date"`
 }
 
-type DownloadResult struct {
-	Status    string `json:"status"`
-	Message   string `json:"message"`
-	SavedPath string `json:"saved_path,omitempty"`
-}
 type PreviewPayload struct {
 	DataBase64 string `json:"data_base64"`
 	MimeType   string `json:"mime_type"`
@@ -285,27 +280,23 @@ func (a *App) CancelDownload() {
 	}
 }
 
-func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) ([]backend.FileMetaData, error) {
+func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) UploadResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return nil, err
+		return UploadResult{Result: operationFailure(err)}
 	}
 	ctx := a.beginUpload()
 	defer a.endUpload()
 	a.sweepOrphanParts(ctx)
 	files, err := svc.Upload(ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
-	if err != nil {
-		out := make([]backend.FileMetaData, 0, len(files))
-		for _, f := range files {
-			out = append(out, uploadMetaToBackend(f))
-		}
-		return out, err
-	}
 	out := make([]backend.FileMetaData, 0, len(files))
 	for _, f := range files {
 		out = append(out, uploadMetaToBackend(f))
 	}
-	return out, nil
+	if err != nil {
+		return UploadResult{Result: operationFailure(err), Files: out}
+	}
+	return UploadResult{Result: operationSuccess(), Files: out}
 }
 
 // PlanImport scans the selected paths and returns the counts shown in the
@@ -323,15 +314,15 @@ func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fil
 // parentID and uploads their files. Archives are extracted when extractArchives
 // is set, otherwise uploaded as-is. Progress flows through aggregate import_*
 // events.
-func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) error {
+func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) OperationResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return err
+		return operationFailure(err)
 	}
 	ctx := a.beginUpload()
 	defer a.endUpload()
 	a.sweepOrphanParts(ctx)
-	return svc.RunImport(ctx, a.ActiveChannelID(), paths, parentID, encrypt, extractArchives)
+	return operationFailure(svc.RunImport(ctx, a.ActiveChannelID(), paths, parentID, encrypt, extractArchives))
 }
 
 func uploadMetaToBackend(f fileservice.Metadata) backend.FileMetaData {
@@ -357,7 +348,7 @@ func (a *App) requireFolderService() (*folderservice.Service, error) {
 	if svc := a.folderService(); svc != nil {
 		return svc, nil
 	}
-	return nil, fmt.Errorf("backend not ready")
+	return nil, errBackendUnavailable
 }
 
 func (a *App) fileService() *fileservice.Service {
@@ -371,7 +362,7 @@ func (a *App) requireFileService() (*fileservice.Service, error) {
 	if svc := a.fileService(); svc != nil {
 		return svc, nil
 	}
-	return nil, fmt.Errorf("backend not ready")
+	return nil, errBackendUnavailable
 }
 
 func (a *App) readService() *readservice.Service {
@@ -385,7 +376,7 @@ func (a *App) requireReadService() (*readservice.Service, error) {
 	if svc := a.readService(); svc != nil {
 		return svc, nil
 	}
-	return nil, fmt.Errorf("backend not ready")
+	return nil, errBackendUnavailable
 }
 
 func (a *App) lifecycleService() *lifecycleservice.Service {
@@ -399,7 +390,7 @@ func (a *App) requireLifecycleService() (*lifecycleservice.Service, error) {
 	if svc := a.lifecycleService(); svc != nil {
 		return svc, nil
 	}
-	return nil, fmt.Errorf("backend not ready")
+	return nil, errBackendUnavailable
 }
 
 func (a *App) userService() *userservice.Service {
@@ -413,7 +404,7 @@ func (a *App) requireUserService() (*userservice.Service, error) {
 	if svc := a.userService(); svc != nil {
 		return svc, nil
 	}
-	return nil, fmt.Errorf("backend not ready")
+	return nil, errBackendUnavailable
 }
 
 func (a *App) authService() *authsvc.Service {
@@ -453,34 +444,28 @@ func (a *App) GetFileList() []TDriveFile {
 	return out
 }
 
-func (a *App) PreviewThumbnail(msgID int) (PreviewPayload, error) {
+func (a *App) PreviewThumbnail(msgID int) PreviewResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return PreviewPayload{}, err
+		return previewOperationResult(PreviewPayload{}, err)
 	}
 	payload, err := svc.PreviewThumbnail(a.ctx, a.ActiveChannelID(), msgID)
-	if err != nil {
-		return PreviewPayload{}, err
-	}
-	return PreviewPayload(payload), nil
+	return previewOperationResult(PreviewPayload(payload), err)
 }
 
-func (a *App) PreviewFile(msgID int) (PreviewPayload, error) {
+func (a *App) PreviewFile(msgID int) PreviewResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return PreviewPayload{}, err
+		return previewOperationResult(PreviewPayload{}, err)
 	}
 	payload, err := svc.PreviewFile(a.ctx, a.ActiveChannelID(), msgID)
-	if err != nil {
-		return PreviewPayload{}, err
-	}
-	return PreviewPayload(payload), nil
+	return previewOperationResult(PreviewPayload(payload), err)
 }
 
 func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return DownloadResult{Status: "error", Message: err.Error()}
+		return DownloadResult{Result: operationFailure(err)}
 	}
 	ctx := a.beginDownload()
 	defer a.endDownload()
@@ -490,11 +475,7 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 			Title:           "Save File As...",
 		})
 	})
-	return DownloadResult{
-		Status:    result.Status,
-		Message:   result.Message,
-		SavedPath: result.SavedPath,
-	}
+	return downloadOperationResult(result)
 }
 
 // DownloadFolder restores the selected projected folder beneath a destination
@@ -504,7 +485,7 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 func (a *App) DownloadFolder(folderID string) DownloadResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return DownloadResult{Status: "error", Message: err.Error()}
+		return DownloadResult{Result: operationFailure(err)}
 	}
 	ctx := a.beginDownload()
 	defer a.endDownload()
@@ -513,22 +494,18 @@ func (a *App) DownloadFolder(folderID string) DownloadResult {
 			Title: fmt.Sprintf("Choose where to save %q", defaultName),
 		})
 	})
-	return DownloadResult{
-		Status:    result.Status,
-		Message:   result.Message,
-		SavedPath: result.SavedPath,
-	}
+	return downloadOperationResult(result)
 }
 
-func (a *App) DeleteFile(msgID int) string {
+func (a *App) DeleteFile(msgID int) OperationResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
 	if err := svc.Delete(a.ctx, a.ActiveChannelID(), msgID); err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
-	return "Success"
+	return operationSuccess()
 }
 
 func (a *App) GetStorageUsed() (int64, error) {
@@ -559,7 +536,7 @@ func (a *App) SaveSetup(apiId int, apiHash string) string {
 	return a.authService().SaveSetup(apiId, apiHash)
 }
 
-func (a *App) SumbitCode(code string) {
+func (a *App) SubmitCode(code string) {
 	a.authService().SubmitCode(code)
 }
 
@@ -567,7 +544,7 @@ func (a *App) SendHint(hint string) {
 	a.authService().SendHint(hint)
 }
 
-func (a *App) SumbitPassword(password string) {
+func (a *App) SubmitPassword(password string) {
 	a.authService().SubmitPassword(password)
 }
 
@@ -803,68 +780,68 @@ func (a *App) GetFolderStats(parentID string) ([]projection.FolderStats, error) 
 	return svc.ChildFolderStats(a.ActiveChannelID(), parentID)
 }
 
-func (a *App) DeleteFolder(folderID string) string {
+func (a *App) DeleteFolder(folderID string) OperationResult {
 	svc, err := a.requireFolderService()
 	if err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
 	if err := svc.Delete(a.ctx, a.ActiveChannelID(), folderID); err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
-	return "Success"
+	return operationSuccess()
 }
 
-func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID string) string {
+func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID string) OperationResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
 	if err := svc.Meta(a.ActiveChannelID(), msgID, name, size, parentID); err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
-	return "Success"
+	return operationSuccess()
 }
 
-func (a *App) RenameFile(msgID int, newName string) string {
+func (a *App) RenameFile(msgID int, newName string) OperationResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
 	if err := svc.Rename(a.ctx, a.ActiveChannelID(), msgID, newName); err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
-	return "Success"
+	return operationSuccess()
 }
 
-func (a *App) RenameFolder(folderID string, newName string) string {
+func (a *App) RenameFolder(folderID string, newName string) OperationResult {
 	svc, err := a.requireFolderService()
 	if err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
 	if err := svc.Rename(a.ActiveChannelID(), folderID, newName); err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
-	return "Success"
+	return operationSuccess()
 }
 
-func (a *App) MoveFile(msgID int, newParentID string) string {
+func (a *App) MoveFile(msgID int, newParentID string) OperationResult {
 	svc, err := a.requireFileService()
 	if err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
 	if err := svc.Move(a.ctx, a.ActiveChannelID(), msgID, newParentID); err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
-	return "Success"
+	return operationSuccess()
 }
 
-func (a *App) MoveFolder(folderID string, newParentID string) string {
+func (a *App) MoveFolder(folderID string, newParentID string) OperationResult {
 	svc, err := a.requireFolderService()
 	if err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
 	if err := svc.Move(a.ActiveChannelID(), folderID, newParentID); err != nil {
-		return "Error: " + err.Error()
+		return operationFailure(err)
 	}
-	return "Success"
+	return operationSuccess()
 }

@@ -2,8 +2,9 @@
 // On success the backend remembers the decrypted master key in memory
 // until the app exits, so users do not re-enter the password per file.
 
-import { useEncryptionPassword } from '../../api';
+import { useEncryptionPassword, type OperationResult } from '../../api';
 import { loadEncryptionStatus } from '../encryption';
+import { humanizeBackendError } from '../errors';
 import { state } from '../../state';
 import EncryptionPasswordModal from '../../ui/modals/EncryptionPasswordModal.svelte';
 import { encryptionPasswordModal } from '../../ui/modals/encryption-password-modal-store';
@@ -43,28 +44,35 @@ async function submitPassword(password: string): Promise<void> {
     encryptionPasswordModal.setError('');
     encryptionPasswordModal.setBusy(true);
     try {
-        await useEncryptionPassword(password);
+        const result = await useEncryptionPassword(password);
+        if (!result.ok) {
+            encryptionPasswordModal.setError(humanizeBackendError(result.error));
+            return;
+        }
         await loadEncryptionStatus();
         finish(true);
     } catch (err) {
-        encryptionPasswordModal.setError(String(err));
+        encryptionPasswordModal.setError(humanizeBackendError(err));
     } finally {
         encryptionPasswordModal.setBusy(false);
     }
 }
 
-// callWithPasswordRetry runs a backend binding that returns "Error: ..." strings.
-// If it fails with "encryption password required" (a locked vault), it prompts
-// for the password once and retries. Used by rename/move/delete on encrypted
-// files and folders.
-export async function callWithPasswordRetry(call: () => Promise<any>): Promise<any> {
-    let res = await call();
-    if (typeof res === "string" && res.startsWith("Error") && /encryption password required/i.test(res)) {
-        const ok = await openEncryptionPasswordModal();
-        if (!ok) return "Error: Encryption password required";
-        res = await call();
+// Retry exactly once when the stable backend code says a locked vault blocked
+// the operation. Display wording is intentionally irrelevant to this branch.
+export async function callWithPasswordRetry(call: () => Promise<OperationResult>): Promise<OperationResult> {
+    let result = await call();
+    if (!result.ok && result.error.code === "encryption_password_required") {
+        const unlocked = await openEncryptionPasswordModal();
+        if (!unlocked) {
+            return {
+                ok: false,
+                error: { code: 'canceled', message: 'Encryption password entry was canceled' },
+            };
+        }
+        result = await call();
     }
-    return res;
+    return result;
 }
 
 export function openEncryptionPasswordModal(): Promise<boolean> {

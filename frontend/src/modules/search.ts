@@ -81,7 +81,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                 onClick: (event) => {
                     const target = event.target as HTMLElement;
                     if (target.closest("button.download-folder")) return;
-                    const row = target.closest(".drive-row");
+                    const row = target.closest<HTMLElement>('.drive-row');
                     if (row) handleRowSelection(row, event);
                 },
             }));
@@ -154,7 +154,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                 onClick: (event) => {
                     const target = event.target as HTMLElement;
                     if (target.closest("button")) return;
-                    const row = target.closest(".drive-row");
+                    const row = target.closest<HTMLElement>('.drive-row');
                     if (row) handleRowSelection(row, event);
                 },
             }));

@@ -1,6 +1,7 @@
 import { get, writable, type Readable } from 'svelte/store';
 import {
     getMountStatus,
+    hasOperationErrorCode,
     mountDrive,
     mountDrives,
     safeMountError,
@@ -8,6 +9,7 @@ import {
 } from '../../api';
 import type { MountableDrive, MountPhase, MountStatusView } from '../../types';
 import { mountSelection } from './mount-selection-store';
+import { requireEncryptionPassword } from '../../modules/encryption';
 
 export interface MountApi {
     mountDrive(): Promise<MountStatusView>;
@@ -46,10 +48,7 @@ export const defaultMountApi: MountApi = {
     mountDrives,
     mountStatus: getMountStatus,
     unmountDrive,
-    unlockEncryption: async () => {
-        const { requireEncryptionPassword } = await import('../../modules/encryption');
-        return requireEncryptionPassword();
-    },
+    unlockEncryption: requireEncryptionPassword,
 };
 
 const INITIAL_STATUS: MountStatusView = {
@@ -100,8 +99,7 @@ function markEjectFailed(current: MountStatusView, message: string): MountStatus
 }
 
 function encryptionPasswordRequired(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error ?? '');
-    return /encryption password required/i.test(message);
+    return hasOperationErrorCode(error, 'encryption_password_required');
 }
 
 function normalizeChannelIds(channelIds: readonly number[] | undefined): number[] | null {

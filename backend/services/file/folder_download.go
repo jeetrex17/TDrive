@@ -45,7 +45,7 @@ func (s *Service) DownloadFolder(
 	chooseDirectory ChooseDirectoryFunc,
 ) (result DownloadResult) {
 	if err := s.ready(); err != nil {
-		return DownloadResult{Status: "error", Message: err.Error()}
+		return DownloadResult{Status: "error", Message: err.Error(), Err: err}
 	}
 	if ctx == nil {
 		return DownloadResult{Status: "error", Message: "Download failed: context is nil"}
@@ -71,7 +71,7 @@ func (s *Service) DownloadFolder(
 		masterKey, err = s.requireEncryptionKey(true)
 		defer clearOwnedKey(masterKey)
 		if err != nil {
-			return DownloadResult{Status: "error", Message: err.Error()}
+			return DownloadResult{Status: "error", Message: err.Error(), Err: err}
 		}
 	}
 
@@ -94,20 +94,20 @@ func (s *Service) DownloadFolder(
 
 	destinationParent, err := chooseDirectory(manifest.Root.Name)
 	if err != nil {
-		return DownloadResult{Status: "error", Message: "Failed to choose download location: " + err.Error()}
+		return DownloadResult{Status: "error", Message: "Failed to choose download location: " + err.Error(), Err: err}
 	}
 	if destinationParent == "" {
-		return DownloadResult{Status: "canceled", Message: "Folder download canceled"}
+		return DownloadResult{Status: "canceled", Message: "Folder download canceled", Err: context.Canceled}
 	}
 	if err := ctx.Err(); err != nil {
 		return folderDownloadFailure(ctx, err)
 	}
 	if err := validateDestinationParent(destinationParent); err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error(), Err: err}
 	}
 	parentPath, stagingPath, err := createFolderDownloadStaging(destinationParent)
 	if err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error(), Err: err}
 	}
 	published := false
 	defer func() {
@@ -128,12 +128,12 @@ func (s *Service) DownloadFolder(
 
 	finalPath, err := joinWithinRoot(parentPath, manifest.Root.Name)
 	if err != nil {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error(), Err: err}
 	}
 	if _, err := os.Lstat(finalPath); err == nil {
-		return DownloadResult{Status: "error", Message: fmt.Sprintf("Destination already exists: %s", finalPath)}
+		return DownloadResult{Status: "error", Message: fmt.Sprintf("Destination already exists: %s", finalPath), Err: os.ErrExist}
 	} else if !os.IsNotExist(err) {
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error(), Err: err}
 	}
 
 	for _, relativePath := range plan.directories {
@@ -142,10 +142,10 @@ func (s *Service) DownloadFolder(
 		}
 		directoryPath, err := joinWithinRoot(stagingPath, relativePath)
 		if err != nil {
-			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error(), Err: err}
 		}
 		if err := os.MkdirAll(directoryPath, 0o755); err != nil {
-			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+			return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error(), Err: err}
 		}
 	}
 
@@ -162,9 +162,9 @@ func (s *Service) DownloadFolder(
 	}
 	if err := publishFolderDownload(stagingPath, finalPath); err != nil {
 		if os.IsExist(err) {
-			return DownloadResult{Status: "error", Message: fmt.Sprintf("Destination already exists: %s", finalPath)}
+			return DownloadResult{Status: "error", Message: fmt.Sprintf("Destination already exists: %s", finalPath), Err: os.ErrExist}
 		}
-		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error()}
+		return DownloadResult{Status: "error", Message: "Disk Error: " + err.Error(), Err: err}
 	}
 	published = true
 	progress.emitTerminal()
@@ -388,11 +388,14 @@ func joinWithinRoot(root string, relativePath string) (string, error) {
 }
 
 func folderDownloadFailure(ctx context.Context, err error) DownloadResult {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		(ctx != nil && (errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded))) {
-		return DownloadResult{Status: "canceled", Message: "Folder download canceled"}
+	cause := err
+	if ctx != nil && ctx.Err() != nil {
+		cause = ctx.Err()
 	}
-	return DownloadResult{Status: "error", Message: err.Error()}
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return DownloadResult{Status: "canceled", Message: "Folder download canceled", Err: cause}
+	}
+	return DownloadResult{Status: "error", Message: err.Error(), Err: err}
 }
 
 type folderDownloadProgress struct {

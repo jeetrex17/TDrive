@@ -34,10 +34,19 @@ type Deferred<T> = {
 };
 
 type DownloadBindingResult = {
-    status: string;
-    message: string;
+    result:
+        | { ok: true }
+        | { ok: false; error: { code: string; message: string } };
     saved_path: string;
 };
+
+function downloadSuccess(savedPath: string): DownloadBindingResult {
+    return { result: { ok: true }, saved_path: savedPath };
+}
+
+function downloadFailure(code: string, message: string): DownloadBindingResult {
+    return { result: { ok: false, error: { code, message } }, saved_path: '' };
+}
 
 function deferred<T>(): Deferred<T> {
     let resolve!: (value: T) => void;
@@ -71,8 +80,8 @@ async function loadModule() {
 
 beforeEach(() => {
     vi.clearAllMocks();
-    bindings.DownloadFile.mockResolvedValue({ status: 'success', message: 'done', saved_path: '/tmp/file' });
-    bindings.DownloadFolder.mockResolvedValue({ status: 'success', message: 'done', saved_path: '/tmp/folder' });
+    bindings.DownloadFile.mockResolvedValue(downloadSuccess('/tmp/file'));
+    bindings.DownloadFolder.mockResolvedValue(downloadSuccess('/tmp/folder'));
     passwordModal.mockResolvedValue(false);
 });
 
@@ -113,13 +122,13 @@ describe('folder download queue', () => {
         expect(bindings.DownloadFile).toHaveBeenCalledWith(42, 42);
         expect(bindings.DownloadFolder).not.toHaveBeenCalled();
 
-        first.resolve({ status: 'success', message: 'done', saved_path: '/tmp/first.txt' });
+        first.resolve(downloadSuccess('/tmp/first.txt'));
         await vi.waitFor(() => expect(bindings.DownloadFolder).toHaveBeenCalledWith('d:next'));
         expect(state.downloadQueue).toEqual([
             expect.objectContaining({ key: 'folder:d:next', state: 'downloading' }),
         ]);
 
-        second.resolve({ status: 'success', message: 'done', saved_path: '/tmp/next' });
+        second.resolve(downloadSuccess('/tmp/next'));
         await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
         expect(state.transferActivity).toEqual({ upload: false, download: false });
     });
@@ -182,14 +191,14 @@ describe('folder download queue', () => {
             itemsTotal: 5,
         });
 
-        pending.resolve({ status: 'success', message: 'done', saved_path: '/tmp/Project' });
+        pending.resolve(downloadSuccess('/tmp/Project'));
         await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
     });
 
     it('prompts once and retries the same folder after encryption unlock', async () => {
         bindings.DownloadFolder
-            .mockResolvedValueOnce({ status: 'error', message: 'encryption password required' })
-            .mockResolvedValueOnce({ status: 'success', message: 'done', saved_path: '/tmp/Locked' });
+            .mockResolvedValueOnce(downloadFailure('encryption_password_required', 'Unlock before downloading'))
+            .mockResolvedValueOnce(downloadSuccess('/tmp/Locked'));
         passwordModal.mockResolvedValueOnce(true);
         const { mod } = await loadModule();
 
@@ -202,18 +211,16 @@ describe('folder download queue', () => {
     });
 
     it('does not retry when encryption unlock is canceled', async () => {
-        bindings.DownloadFolder.mockResolvedValueOnce({
-            status: 'error',
-            message: 'encryption password required',
-            saved_path: '',
-        });
+        bindings.DownloadFolder.mockResolvedValueOnce(
+            downloadFailure('encryption_password_required', 'Unlock before downloading'),
+        );
         const { mod, state } = await loadModule();
         passwordModal.mockResolvedValueOnce(false);
         mod.enqueueFolderDownload('d:locked', 'Locked');
         await vi.waitFor(() => expect(transferEvents.done).toHaveBeenCalledWith({
             id: 'folder:d:locked',
             direction: 'down',
-            status: 'failed',
+            status: 'canceled',
         }));
 
         expect(passwordModal).toHaveBeenCalledOnce();
@@ -232,11 +239,9 @@ describe('folder download queue', () => {
     });
 
     it('surfaces the backend reason as an error toast when a folder download fails', async () => {
-        bindings.DownloadFolder.mockResolvedValueOnce({
-            status: 'error',
-            message: 'Disk Error: no space left on device',
-            saved_path: '',
-        });
+        bindings.DownloadFolder.mockResolvedValueOnce(
+            downloadFailure('insufficient_storage', 'Storage unavailable'),
+        );
         const { mod } = await loadModule();
 
         mod.enqueueFolderDownload('d:project', 'Project');
@@ -244,16 +249,14 @@ describe('folder download queue', () => {
         expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
             level: 'error',
             title: "Couldn't download Project",
-            body: 'Disk Error: no space left on device',
+            body: 'There is not enough free disk space to finish this action.',
         }));
     });
 
     it('shows an already-exists folder as a warning, not an error', async () => {
-        bindings.DownloadFolder.mockResolvedValueOnce({
-            status: 'error',
-            message: 'Destination already exists: /tmp/Project',
-            saved_path: '',
-        });
+        bindings.DownloadFolder.mockResolvedValueOnce(
+            downloadFailure('already_exists', 'Choose another destination'),
+        );
         const { mod } = await loadModule();
 
         mod.enqueueFolderDownload('d:project', 'Project');
@@ -265,11 +268,9 @@ describe('folder download queue', () => {
     });
 
     it('does not toast an error when the user cancels the encryption prompt', async () => {
-        bindings.DownloadFolder.mockResolvedValueOnce({
-            status: 'error',
-            message: 'encryption password required',
-            saved_path: '',
-        });
+        bindings.DownloadFolder.mockResolvedValueOnce(
+            downloadFailure('encryption_password_required', 'Vault is locked'),
+        );
         passwordModal.mockResolvedValueOnce(false);
         const { mod } = await loadModule();
 
@@ -277,7 +278,7 @@ describe('folder download queue', () => {
         await vi.waitFor(() => expect(transferEvents.done).toHaveBeenCalledWith({
             id: 'folder:d:locked',
             direction: 'down',
-            status: 'failed',
+            status: 'canceled',
         }));
         expect(notifications.notify).not.toHaveBeenCalled();
     });
@@ -303,7 +304,7 @@ describe('folder download queue', () => {
         mod.enqueueDownload(77, 'next.txt', 4);
         await settle();
         state.cancelingDownload = true;
-        first.resolve({ status: 'error', message: 'context canceled', saved_path: '' });
+        first.resolve(downloadFailure('canceled', 'context canceled'));
 
         await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(77, 77));
         await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));

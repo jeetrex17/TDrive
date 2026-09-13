@@ -185,10 +185,55 @@ export namespace main {
 	        this.invite_link = source["invite_link"];
 	    }
 	}
-	export class DownloadResult {
-	    status: string;
+	export class OperationError {
+	    code: string;
 	    message: string;
-	    saved_path?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OperationError(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.message = source["message"];
+	    }
+	}
+	export class OperationResult {
+	    ok: boolean;
+	    error?: OperationError;
+	
+	    static createFrom(source: any = {}) {
+	        return new OperationResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.error = this.convertValues(source["error"], OperationError);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DownloadResult {
+	    result: OperationResult;
+	    saved_path: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new DownloadResult(source);
@@ -196,10 +241,27 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.status = source["status"];
-	        this.message = source["message"];
+	        this.result = this.convertValues(source["result"], OperationResult);
 	        this.saved_path = source["saved_path"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class EncryptionStatus {
 	    available: boolean;
@@ -363,6 +425,39 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class MountResult {
+	    result: OperationResult;
+	    mount: MountView;
+	
+	    static createFrom(source: any = {}) {
+	        return new MountResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.result = this.convertValues(source["result"], OperationResult);
+	        this.mount = this.convertValues(source["mount"], MountView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class NativeMediaRange {
 	    start: number;
 	    end: number;
@@ -477,6 +572,8 @@ export namespace main {
 	}
 	
 	
+	
+	
 	export class PersonalDriveCandidate {
 	    id: string;
 	    title: string;
@@ -525,6 +622,38 @@ export namespace main {
 	        this.mime_type = source["mime_type"];
 	    }
 	}
+	export class PreviewResult {
+	    result: OperationResult;
+	    payload: PreviewPayload;
+	
+	    static createFrom(source: any = {}) {
+	        return new PreviewResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.result = this.convertValues(source["result"], OperationResult);
+	        this.payload = this.convertValues(source["payload"], PreviewPayload);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SelfUser {
 	    user_id: number;
 	    display_name: string;
@@ -562,6 +691,38 @@ export namespace main {
 	        this.access_hash = source["access_hash"];
 	        this.date = source["date"];
 	    }
+	}
+	export class UploadResult {
+	    result: OperationResult;
+	    files: backend.FileMetaData[];
+	
+	    static createFrom(source: any = {}) {
+	        return new UploadResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.result = this.convertValues(source["result"], OperationResult);
+	        this.files = this.convertValues(source["files"], backend.FileMetaData);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }

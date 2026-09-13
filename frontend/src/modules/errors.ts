@@ -1,6 +1,25 @@
-const LOCAL_PATH = new RegExp("(?:file://)?/(?:Users|home|tmp|private|var/folders)/[^\\s',;)]+", "gi");
+import type { OperationErrorCode } from '../types';
+
+const LOCAL_PATH = /(?:file:\/\/)?\/(?:Users|home|tmp|private|var\/folders)\/[^\s',;)]+/gi;
 const SECRET_ASSIGNMENT = /\b(api[_ -]?hash|access[_ -]?token|token|password|secret)\b\s*[:=]\s*[^\s,;]+/gi;
 const MAX_USER_MESSAGE_LENGTH = 240;
+
+const OPERATION_ERROR_MESSAGES: Record<OperationErrorCode, string> = {
+    operation_failed: '',
+    backend_unavailable: 'TDrive is not ready yet. Try again.',
+    encryption_password_required: 'Enter your encryption password first.',
+    invalid_encryption_password: 'That encryption password is incorrect.',
+    encryption_password_already_set: 'Encryption is already configured.',
+    encryption_policy_unavailable: 'Encryption is unavailable for this drive.',
+    canceled: 'Canceled.',
+    deadline_exceeded: 'The request took too long. Try again.',
+    not_found: 'That item no longer exists. Refresh and try again.',
+    permission_denied: "You don't have permission to do that.",
+    already_exists: 'This item is already there.',
+    insufficient_storage: 'There is not enough free disk space to finish this action.',
+    network_unavailable: 'Telegram is not reachable right now. Try again.',
+    file_too_large: 'This file is too large to upload.',
+};
 
 function cleanBackendMessage(error: unknown): string {
     const message = (error as { message?: unknown } | null | undefined)?.message;
@@ -15,6 +34,12 @@ function cleanBackendMessage(error: unknown): string {
 
 /** Converts backend failures into concise, non-sensitive copy safe for UI surfaces. */
 export function humanizeBackendError(error: unknown): string {
+    const code = (error as { code?: unknown } | null | undefined)?.code;
+    const codedMessage = typeof code === 'string'
+        ? OPERATION_ERROR_MESSAGES[code as OperationErrorCode]
+        : undefined;
+    if (codedMessage) return codedMessage;
+
     const raw = cleanBackendMessage(error);
     const lower = raw.toLowerCase();
 

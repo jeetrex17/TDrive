@@ -48,7 +48,12 @@ type MountDriveView struct {
 
 // MountDrive attaches the active drive without changing it. The controller
 // pins this immutable drive record until the user disconnects it.
-func (a *App) MountDrive() (MountView, error) {
+func (a *App) MountDrive() MountResult {
+	mount, err := a.mountDriveNative()
+	return mountOperationResult(mount, err)
+}
+
+func (a *App) mountDriveNative() (MountView, error) {
 	ctx, cancel := a.mountMutationContext()
 	defer cancel()
 	release, err := a.acquireMountLifecycle(ctx)
@@ -72,7 +77,12 @@ func (a *App) MountDrive() (MountView, error) {
 // MountDrives attaches an explicit selection inside one TDrive volume. The
 // client supplies IDs only; titles, kinds, and encryption state are resolved
 // from the authoritative local projection before the controller is called.
-func (a *App) MountDrives(channelIDs []int64) (MountView, error) {
+func (a *App) MountDrives(channelIDs []int64) MountResult {
+	mount, err := a.mountDrivesNative(channelIDs)
+	return mountOperationResult(mount, err)
+}
+
+func (a *App) mountDrivesNative(channelIDs []int64) (MountView, error) {
 	ctx, cancel := a.mountMutationContext()
 	defer cancel()
 	release, err := a.acquireMountLifecycle(ctx)

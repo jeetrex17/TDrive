@@ -1,13 +1,7 @@
 import { writable } from 'svelte/store';
+import type { FileCommandItem } from '../file-list/types';
 
-export interface RenameModalTarget {
-    type: 'file' | 'folder';
-    id: string | number;
-    name: string;
-    size?: number;
-    parentId?: string;
-    source?: string;
-}
+export type RenameModalTarget = FileCommandItem;
 
 export interface RenameModalState {
     open: boolean;

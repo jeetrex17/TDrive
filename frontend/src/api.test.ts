@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { backend, main } from "../wailsjs/go/models";
 import {
     normalizeMountableDrives,
+    normalizeMountResult,
     normalizeMountStatus,
     toFileItem,
     toFolderItem,
@@ -143,5 +144,28 @@ describe("api normalizers", () => {
         expect(normalizeMountStatus({ phase: "mounting", mounted: false }).phase).toBe("mounting");
         expect(normalizeMountStatus({ phase: "idle", mounted: true }).phase).toBe("mounted");
         expect(normalizeMountStatus({ phase: "mounting", running: true }).mounted).toBe(false);
+    });
+    it("keeps mount control codes independent from display text", () => {
+        expect(normalizeMountResult({
+            result: { ok: true },
+            mount: { phase: "mounted", mounted: true, label: "TDrive" },
+        })).toMatchObject({ phase: "mounted", mounted: true, label: "TDrive" });
+
+        try {
+            normalizeMountResult({
+                result: {
+                    ok: false,
+                    error: { code: "encryption_password_required", message: "Localized credential prompt" },
+                },
+                mount: { phase: "idle", mounted: false },
+            });
+            throw new Error("expected typed mount failure");
+        } catch (error) {
+            expect(error).toMatchObject({
+                name: "OperationFailure",
+                code: "encryption_password_required",
+                message: "Localized credential prompt",
+            });
+        }
     });
 });

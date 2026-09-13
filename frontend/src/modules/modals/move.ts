@@ -1,10 +1,15 @@
 // Move modal for TDrive frontend
 
 import { get } from 'svelte/store';
-import { addTelegramFileToDrive, moveFile, moveFolder } from '../../api';
+import {
+    addTelegramFileToDrive,
+    getFolderContents,
+    moveFile,
+    moveFolder,
+    type OperationResult,
+} from '../../api';
 import { callWithPasswordRetry } from './encryption-password';
 import { clearSelection } from '../selection';
-import { getFolderContents } from '../../api';
 import { buildFolderIndex, collectDescendants } from '../folder-index';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
@@ -15,99 +20,87 @@ import {
     resetMoveBrowse,
     type MoveFolderEntry,
 } from '../../ui/modals/move-modal-store';
+import type {
+    FileCommandItem,
+    FileCommandTarget,
+    FolderCommandItem,
+} from '../../ui/file-list/types';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
 let moveModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
-let pendingTarget: any = null;
-// Guards against out-of-order folder listings and blocked-set results from a
-// previous open landing on the current view.
+let pendingTarget: FileCommandTarget | null = null;
 let browseEpoch = 0;
 
-async function ensureFileInTdriveSystem(target: any) {
-    if (!target || target.type !== "file") return;
-    if (String(target.source || "fs") !== "tg") return;
-
-    const res = await addTelegramFileToDrive(Number(target.id),
-    String(target.name || ""),
-    Number(target.size || 0),
-    String(target.parentId || ""));
-
-    if (typeof res === "string" && res.startsWith("Error")) {
-        throw new Error(humanizeBackendError(res));
-    }
+function isFolder(item: FileCommandItem): item is FolderCommandItem {
+    return item.type === 'folder';
 }
 
-function moveTitle(target: any): string {
-    if (target?.type === "bulk") {
-        const total = Array.isArray(target?.items) ? target.items.length : 0;
-        return total === 1 ? "Move 1 item" : `Move ${total} items`;
-    }
-    const name = String(target?.name || "").trim();
-    return name ? `Move "${name}"` : "Move item";
+function requireOperationSuccess(result: OperationResult): void {
+    if (!result.ok) throw new Error(humanizeBackendError(result.error));
 }
 
-// browseTo shows `path` immediately (so the breadcrumb tracks the click) and
-// fills in that folder's listing when it arrives.
+async function ensureFileInTdriveSystem(target: FileCommandItem): Promise<void> {
+    if (target.type !== 'file' || target.source !== 'tg') return;
+    requireOperationSuccess(await addTelegramFileToDrive(
+        target.id,
+        target.name,
+        target.size,
+        target.parentId,
+    ));
+}
+
+function moveTitle(target: FileCommandTarget): string {
+    if (target.type === 'bulk') {
+        return target.items.length === 1 ? 'Move 1 item' : `Move ${target.items.length} items`;
+    }
+    const name = target.name.trim();
+    return name ? `Move "${name}"` : 'Move item';
+}
+
 async function browseTo(path: MoveFolderEntry[]): Promise<void> {
     const epoch = ++browseEpoch;
     moveBrowse.update((browse) => ({ ...browse, path, listing: { status: 'loading' } }));
 
-    let contents: { folders?: any[] };
+    let folders: MoveFolderEntry[] = [];
     try {
-        contents = await getFolderContents(path[path.length - 1]?.id ?? "");
+        const contents = await getFolderContents(path[path.length - 1]?.id ?? '');
+        folders = contents.folders
+            .map((folder) => ({ id: folder.id, name: folder.name || 'Folder' }))
+            .sort((left, right) => left.name.localeCompare(right.name));
     } catch {
-        contents = { folders: [] };
+        folders = [];
     }
     if (epoch !== browseEpoch) return;
-
-    const folders = (Array.isArray(contents?.folders) ? contents.folders : [])
-        .map((folder: any): MoveFolderEntry => ({
-            id: String(folder?.id || ""),
-            name: String(folder?.name || "Folder"),
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name));
     moveBrowse.update((browse) => ({ ...browse, listing: { status: 'ready', folders } }));
 }
 
-// computeBlocked marks the moved folders and all their descendants as invalid
-// destinations. The index walk is async; the modal is browsable meanwhile and
-// the blocked set snaps in when ready.
-async function computeBlocked(target: any): Promise<void> {
-    const folderIds: string[] = [];
-    if (target?.type === "folder") {
-        const id = String(target?.id || "");
-        if (id) folderIds.push(id);
-    } else if (target?.type === "bulk") {
-        for (const item of Array.isArray(target?.items) ? target.items : []) {
-            if (item?.type !== "folder") continue;
-            const id = String(item?.id || "");
-            if (id) folderIds.push(id);
-        }
-    }
-    if (!folderIds.length) return;
+async function computeBlocked(target: FileCommandTarget): Promise<void> {
+    const folderIds = target.type === 'folder'
+        ? [target.id]
+        : target.type === 'bulk'
+            ? target.items.filter(isFolder).map((folder) => folder.id)
+            : [];
+    if (folderIds.length === 0) return;
 
     const epoch = browseEpoch;
     let index = { children: new Map<string, string[]>() };
     try {
         index = await buildFolderIndex();
     } catch {
-        // Keep the empty index: no destinations get blocked, and the backend
-        // still rejects a cycle-creating move.
+        // The backend remains the final cycle guard if the local index fails.
     }
     if (epoch !== browseEpoch || pendingTarget !== target) return;
 
     const blocked = new Set<string>();
     for (const folderId of folderIds) {
         blocked.add(folderId);
-        for (const id of collectDescendants(folderId, index.children)) {
-            blocked.add(String(id));
-        }
+        for (const id of collectDescendants(folderId, index.children)) blocked.add(String(id));
     }
     moveBrowse.update((browse) => ({ ...browse, blocked }));
 }
 
-export function setupMoveModal() {
-    const modal = document.getElementById("move-modal");
+export function setupMoveModal(): void {
+    const modal = document.getElementById('move-modal');
     if (!modal || moveModalHandle) return;
 
     modal.replaceChildren();
@@ -130,11 +123,9 @@ export function setupMoveModal() {
     });
 }
 
-export async function openMoveModal(target: any) {
-    if (!target) return;
-
+export function openMoveModal(target: FileCommandTarget): void {
     pendingTarget = target;
-    resetMoveBrowse(String(target?.parentId || ""));
+    resetMoveBrowse(target.parentId ?? '');
     moveModal.open({ title: moveTitle(target) });
     void browseTo([]);
     void computeBlocked(target);
@@ -144,50 +135,41 @@ async function confirmMove(): Promise<void> {
     const target = pendingTarget;
     if (!target) return;
     const browse = get(moveBrowse);
-    const destId = browse.path[browse.path.length - 1]?.id ?? "";
-    if (browse.blocked.has(destId) || destId === browse.sourceParent) return;
+    const destinationId = browse.path[browse.path.length - 1]?.id ?? '';
+    if (browse.blocked.has(destinationId) || destinationId === browse.sourceParent) return;
 
     moveModal.setError('');
     moveModal.setBusy(true);
     try {
-        if (target.type === "bulk") {
-            const items = Array.isArray(target.items) ? target.items : [];
-            const folders = items.filter((item: any) => item?.type === "folder");
-            const files = items.filter((item: any) => item?.type === "file");
-
-            for (const folder of folders) {
-                const res = await callWithPasswordRetry(() => moveFolder(String(folder.id), destId));
-                if (typeof res === "string" && res.startsWith("Error")) {
-                    throw new Error(humanizeBackendError(res));
-                }
+        if (target.type === 'bulk') {
+            for (const folder of target.items.filter(isFolder)) {
+                requireOperationSuccess(await callWithPasswordRetry(
+                    () => moveFolder(folder.id, destinationId),
+                ));
             }
-
-            for (const file of files) {
+            for (const file of target.items.filter((item) => item.type === 'file')) {
                 await ensureFileInTdriveSystem(file);
-                const res = await callWithPasswordRetry(() => moveFile(Number(file.id), destId));
-                if (typeof res === "string" && res.startsWith("Error")) {
-                    throw new Error(humanizeBackendError(res));
-                }
+                requireOperationSuccess(await callWithPasswordRetry(
+                    () => moveFile(file.id, destinationId),
+                ));
             }
-        } else if (target.type === "folder") {
-            const res = await callWithPasswordRetry(() => moveFolder(String(target.id), destId));
-            if (typeof res === "string" && res.startsWith("Error")) {
-                throw new Error(humanizeBackendError(res));
-            }
+        } else if (target.type === 'folder') {
+            requireOperationSuccess(await callWithPasswordRetry(
+                () => moveFolder(target.id, destinationId),
+            ));
         } else {
             await ensureFileInTdriveSystem(target);
-            const res = await callWithPasswordRetry(() => moveFile(Number(target.id), destId));
-            if (typeof res === "string" && res.startsWith("Error")) {
-                throw new Error(humanizeBackendError(res));
-            }
+            requireOperationSuccess(await callWithPasswordRetry(
+                () => moveFile(target.id, destinationId),
+            ));
         }
 
         pendingTarget = null;
         moveModal.close();
         clearSelection();
         appActions().refreshFiles();
-    } catch (err) {
-        moveModal.setError(humanizeBackendError(err));
+    } catch (error) {
+        moveModal.setError(humanizeBackendError(error));
     } finally {
         moveModal.setBusy(false);
     }

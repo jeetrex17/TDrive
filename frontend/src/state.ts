@@ -1,5 +1,6 @@
 import type { ImportProgress } from './modules/import-progress';
 import type { DriveChannel, DriveKind, PendingJoin, RootFile } from './types';
+import type { FileCommandItem, FileDragState } from './ui/file-list/types';
 
 // Centralized state for the TDrive frontend.
 //
@@ -83,7 +84,7 @@ export interface State {
     cancelingUpload: boolean;
     cancelingDownload: boolean;
 
-    dragState: any;
+    dragState: FileDragState | null;
     dragOverEl: HTMLElement | null;
     dragRootEl: HTMLElement | null;
 
@@ -96,7 +97,7 @@ export interface State {
 
     folderSizeEpoch: number;
 
-    selectedItems: Map<string, any>;
+    selectedItems: Map<string, FileCommandItem>;
     selectionAnchorIndex: number;
     selectionBarEl: HTMLElement | null;
 

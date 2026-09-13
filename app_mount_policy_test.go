@@ -25,7 +25,7 @@ func TestAppMountFailsClosedWhenPersonalPolicyCannotBeProven(t *testing.T) {
 		return detail
 	}
 
-	_, err := app.MountDrive()
+	_, err := app.mountDriveNative()
 	if !errors.Is(err, mountpolicy.ErrEncryptionPolicyUnavailable) || errors.Is(err, detail) {
 		t.Fatalf("MountDrive() error = %v, want sanitized policy unavailable", err)
 	}
@@ -55,7 +55,7 @@ func TestAppMountUsesEncryptedPolicyRestoredByAuthoritativeRefresh(t *testing.T)
 				}
 			}
 
-			if _, err := app.MountDrive(); err != nil {
+			if _, err := app.mountDriveNative(); err != nil {
 				t.Fatalf("MountDrive() error = %v", err)
 			}
 			if controller.startCalls != 1 || !controller.startedDrive.Encrypted || controller.startedDrive.EncryptionUnlocked != unlocked {
@@ -77,7 +77,7 @@ func TestAppMountAllowsPlaintextOnlyAfterAuthoritativeRefresh(t *testing.T) {
 		return nil
 	}
 
-	if _, err := app.MountDrive(); err != nil {
+	if _, err := app.mountDriveNative(); err != nil {
 		t.Fatalf("MountDrive() error = %v", err)
 	}
 	if refreshCalls != 1 || controller.startCalls != 1 || controller.startedDrive.Encrypted {

@@ -1,4 +1,4 @@
-import { getPreviewFile, getPreviewThumbnail, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
+import { getPreviewFile, getPreviewThumbnail, hasOperationErrorCode, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
 import { state } from '../../state';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
@@ -7,11 +7,16 @@ import { renderImageInfoHTML } from './preview-info';
 import PreviewModal from '../../ui/preview/PreviewModal.svelte';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 import type { PreviewPayload } from '../../types';
+import type { FileCommandItem } from '../../ui/file-list/types';
 import {
     capturePreviewTransitionSource,
     createPreviewTransitionController,
     type PreviewTransitionSource,
 } from './preview-transition';
+type PreviewCommandItem = Extract<FileCommandItem, { type: 'file' }>;
+type PreviewSelection =
+    | { reason: 'none' | 'multiple' | 'unsupported' }
+    | { reason: 'ok'; item: PreviewCommandItem; key: string };
 
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
 
@@ -136,16 +141,16 @@ function isPreviewVisible() {
     return Boolean(imageEl && !imageEl.hidden && imageEl.getAttribute("src"));
 }
 
-function getSelectedPreviewTarget() {
+function getSelectedPreviewTarget(): PreviewSelection {
     const items = Array.from(state.selectedItems.values());
-    if (items.length === 0) return { reason: "none" };
-    if (items.length > 1) return { reason: "multiple" };
+    if (items.length === 0) return { reason: 'none' };
+    if (items.length > 1) return { reason: 'multiple' };
 
     const item = items[0];
-    if (!item || item.type !== "file") return { reason: "unsupported" };
-    if (!isPreviewableImage(item.name)) return { reason: "unsupported" };
+    if (!item || item.type !== 'file') return { reason: 'unsupported' };
+    if (!isPreviewableImage(item.name)) return { reason: 'unsupported' };
 
-    return { reason: "ok", item, key: getPreviewKey(item) };
+    return { reason: 'ok', item, key: getPreviewKey(item) };
 }
 
 function clearChromeHideTimer() {
@@ -366,7 +371,7 @@ async function resolveFullPreviewEntry(target: any) {
     }
 
     // Shares an in-flight neighbor prefetch for the same image. A locked
-    // encrypted file rejects with "encryption password required"; loadPreview
+    // encrypted file returns the stable encryption_password_required code; loadPreview
     // turns that into the inline unlock card rather than a popup modal.
 	return { src: await fetchFullRaw(target), mimeType: "" };
 }
@@ -464,7 +469,7 @@ export async function loadPreview(target: any) {
 
         // Locked encrypted photo: show the inline unlock card in place of the
         // image, never a popup modal, so navigation stays uninterrupted.
-        if (/encryption password required/i.test(String(err))) {
+        if (hasOperationErrorCode(err, 'encryption_password_required')) {
             showLockedState();
             return null;
         }
@@ -549,11 +554,11 @@ async function openPreviewItem(item: any, transitionSource: PreviewTransitionSou
     }
 }
 
-export async function openPreviewForSelection(target = null) {
+export async function openPreviewForSelection(target: PreviewCommandItem | null = null) {
     if (!assertPreviewReady()) return false;
 
-    const selection = target
-        ? { reason: "ok", item: target, key: getPreviewKey(target) }
+    const selection: PreviewSelection = target
+        ? { reason: 'ok', item: target, key: getPreviewKey(target) }
         : getSelectedPreviewTarget();
 
     if (selection.reason === "none") return false;
@@ -964,7 +969,10 @@ async function handlePreviewKeydown(event: any) {
     const selection = getSelectedPreviewTarget();
 
     if (!previewOpen) {
-        if (selection.reason === "none") return;
+        if (selection.reason !== 'ok') {
+            if (selection.reason !== 'none') showSelectionPreviewError(selection);
+            return;
+        }
         event.preventDefault();
         event.stopPropagation();
         await openPreviewForSelection(selection.item);

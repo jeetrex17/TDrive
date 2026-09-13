@@ -44,7 +44,7 @@ func TestAppMountDrivePinsResolvedActiveDrive(t *testing.T) {
 		},
 	}
 
-	view, err := app.MountDrive()
+	view, err := app.mountDriveNative()
 	if err != nil {
 		t.Fatalf("MountDrive() error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestAppMountDriveRejectsUnavailableActiveDrive(t *testing.T) {
 		},
 	}
 
-	if _, err := app.MountDrive(); !errors.Is(err, sentinel) {
+	if _, err := app.mountDriveNative(); !errors.Is(err, sentinel) {
 		t.Fatalf("MountDrive() error = %v, want sentinel", err)
 	}
 	if controller.startCalls != 0 {
@@ -174,7 +174,7 @@ func TestAppMountMutationsUseBoundedContexts(t *testing.T) {
 				return mountcontroller.Drive{ID: 1, Kind: mountcontroller.DriveKindShared}, nil
 			},
 		}
-		if _, err := app.MountDrive(); err != nil {
+		if _, err := app.mountDriveNative(); err != nil {
 			t.Fatalf("MountDrive() error = %v", err)
 		}
 	})
@@ -188,7 +188,7 @@ func TestAppMountMutationsUseBoundedContexts(t *testing.T) {
 				return []mountcontroller.Drive{{ID: 1, Kind: mountcontroller.DriveKindShared}}, nil
 			},
 		}
-		if _, err := app.MountDrives([]int64{1}); err != nil {
+		if _, err := app.mountDrivesNative([]int64{1}); err != nil {
 			t.Fatalf("MountDrives() error = %v", err)
 		}
 	})
@@ -218,7 +218,7 @@ func TestAppMountFailureMessageRedactsCapabilities(t *testing.T) {
 		},
 	}
 
-	view, err := app.MountDrive()
+	view, err := app.mountDriveNative()
 	if err == nil || !strings.Contains(err.Error(), "Mount operation failed") {
 		t.Fatalf("MountDrive() error = %v, want safe fallback", err)
 	}
@@ -277,7 +277,7 @@ func TestAppMountControllerConstructionRetriesAfterFailure(t *testing.T) {
 	if _, err := app.ensureMountController(); !errors.Is(err, sentinel) {
 		t.Fatalf("startup controller construction error = %v, want sentinel", err)
 	}
-	if _, err := app.MountDrive(); err != nil {
+	if _, err := app.mountDriveNative(); err != nil {
 		t.Fatalf("second MountDrive() error = %v", err)
 	}
 	if constructionCalls != 2 || controller.startCalls != 1 {

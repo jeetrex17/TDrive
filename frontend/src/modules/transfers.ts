@@ -7,7 +7,7 @@
 
 import { state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
 import { downloadFile, downloadFolder, importPaths, onNativeFileDrop, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs } from '../api';
-import type { ImportPlan } from '../types';
+import type { ImportPlan, OperationError } from '../types';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
 import { appActions } from './app-actions';
@@ -125,17 +125,16 @@ async function startNextDownload() {
 
     try {
         let result = await dispatchDownload(next);
-        // If the backend needs the encryption password, prompt once and
-        // retry. This avoids a separate per-file encryption lookup before
-        // download starts.
-        if (result.status === "error" && /encryption password required/i.test(result.message || "")) {
-            const ok = await openEncryptionPasswordModal();
-            if (ok) {
-                result = await dispatchDownload(next);
+        if (!result.result.ok && result.result.error.code === 'encryption_password_required') {
+            const unlocked = await openEncryptionPasswordModal();
+            if (!unlocked) {
+                finalizeDownload(next.key, 'canceled');
+                return;
             }
+            result = await dispatchDownload(next);
         }
 
-        if (result.status === "success") {
+        if (result.result.ok) {
             finalizeDownload(next.key, 'done');
             if (next.kind === 'folder') {
                 notify({
@@ -144,12 +143,12 @@ async function startNextDownload() {
                     body: result.savedPath ? 'Saved to ' + result.savedPath : next.name + ' saved',
                 });
             }
-        } else if (result.status === "canceled") {
+        } else if (result.result.error.code === 'canceled') {
             finalizeDownload(next.key, 'canceled');
         } else {
             const canceled = state.cancelingDownload;
             finalizeDownload(next.key, canceled ? 'canceled' : 'failed');
-            if (!canceled) notifyDownloadFailure(next, result.message);
+            if (!canceled) notifyDownloadFailure(next, result.result.error);
         }
     } catch (err) {
         console.error("Download failed:", err);
@@ -222,20 +221,20 @@ function finalizeDownload(key: string, status: 'done' | 'failed' | 'canceled'): 
     state.downloadQueue = state.downloadQueue.filter((item) => item.key !== key);
 }
 
-// notifyDownloadFailure surfaces the backend's reason as a toast. markTransferDone
-// only flips the bell row to "failed" with no explanation, so without this a
-// rejected destination, an already-present folder, and a genuine disk error all
-// look identical. The encryption-password prompt has its own modal, so its
-// sentinel is suppressed here rather than shown twice.
-function notifyDownloadFailure(item: DownloadQueueItem, message: unknown): void {
-    const reason = String(message ?? '').trim();
-    if (/encryption password required/i.test(reason)) return;
+// Surface the backend's display message because the terminal bell row carries
+// only status, not the reason the download failed.
+function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | string): void {
+    const reason = humanizeBackendError(error);
     const noun = item.kind === 'folder' ? 'Folder' : 'File';
-    if (/already exists/i.test(reason)) {
-        notify({ level: 'warning', title: `${noun} already exists`, body: reason });
+    if (typeof error !== 'string' && error.code === 'already_exists') {
+        notify({ level: 'warning', title: noun + ' already exists', body: reason });
         return;
     }
-    notify({ level: 'error', title: `Couldn't download ${item.name}`, body: reason || 'Download failed' });
+    notify({
+        level: 'error',
+        title: `Couldn't download ${item.name}`,
+        body: reason || 'The download could not be completed.',
+    });
 }
 
 function dispatchDownload(item: DownloadQueueItem) {
@@ -630,12 +629,16 @@ async function runImportFlow(parentID: string, paths: string[]) {
         importCompleteReceived = false;
         let importThrew = false;
         try {
-            await importPaths(paths, parentID, encrypt, extract);
-        } catch (err) {
+            const result = await importPaths(paths, parentID, encrypt, extract);
+            if (!result.ok) {
+                if (result.error.code === 'canceled') state.cancelingUpload = true;
+                throw result.error;
+            }
+        } catch (error) {
             importThrew = true;
-            console.error("Import failed:", err);
+            console.error('Import failed:', error);
             if (!state.cancelingUpload && !importCompleteReceived) {
-                notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(err) });
+                notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(error) });
             }
             if (!importCompleteReceived && !state.importBatch) {
                 pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
@@ -683,14 +686,16 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
     let uploadThrew = false;
     try {
         const parentIDs = paths.map(() => parentID);
-        await uploadToDriveFs(paths, parentIDs, encrypt);
-    } catch (err) {
+        const upload = await uploadToDriveFs(paths, parentIDs, encrypt);
+        if (!upload.result.ok) {
+            if (upload.result.error.code === 'canceled') state.cancelingUpload = true;
+            throw upload.result.error;
+        }
+    } catch (error) {
         uploadThrew = true;
-        console.error("Upload failed:", err);
-        // On cancel the backend returns "N uploads failed"; the per-file rows
-        // already show Canceled, so don't also pop a generic failure toast.
+        console.error('Upload failed:', error);
         if (!state.cancelingUpload) {
-            notify({ level: 'error', title: 'Upload failed', body: humanizeBackendError(err) });
+            notify({ level: 'error', title: 'Upload failed', body: humanizeBackendError(error) });
         }
     } finally {
         setTransferDirectionActive('upload', false);

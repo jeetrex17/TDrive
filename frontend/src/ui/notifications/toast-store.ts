@@ -10,9 +10,9 @@ export interface ToastItem {
     sticky: boolean;
     spinner: boolean;
     durationMs: number;
-    // Absolute deadline for auto-dismiss; 0 for sticky toasts. The expiry
-    // ticker in modules/notifications.ts owns this field, together with the
-    // paused/remainingMs pair that freezes the countdown while hovered.
+    // Absolute deadline for auto-dismiss; 0 for sticky toasts. The nearest-
+    // deadline scheduler in modules/notifications.ts owns this field together
+    // with the paused/remainingMs pair that freezes hover time.
     expiresAt: number;
     paused: boolean;
     remainingMs?: number;

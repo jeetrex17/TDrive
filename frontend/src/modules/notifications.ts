@@ -17,8 +17,9 @@
 //   // Errors are sticky by default; user dismisses or clicks to copy.
 //   notify({ level: 'error', title: 'Could not join drive', body: 'Try again.' });
 //
-// This module owns the queue: capping, replace-by-id, and the expiry ticker
-// with its hover-pause rules. ToastStack.svelte only renders the store.
+// This module owns the queue: capping, replace-by-id, and the nearest-deadline
+// expiry scheduler with its hover-pause rules. ToastStack.svelte only renders
+// the store.
 
 import { get } from 'svelte/store';
 import { pushHistoryEvent } from './notif-bell';
@@ -28,10 +29,13 @@ import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 const MAX_VISIBLE = 5;
 const DEFAULT_DURATION = 4000;
+const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
 const LEVELS: readonly ToastLevel[] = ['info', 'success', 'warning', 'error'];
 
 let stackHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
-let timer: number | null = null;
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+let allPaused = false;
+const individuallyPaused = new Set<string>();
 
 export function setupNotifications() {
     if (stackHandle) return;
@@ -63,7 +67,14 @@ export function setupNotifications() {
         if (lastError) dismissNotification(lastError.id);
     });
 
-    ensureTimer();
+    // A suspended WebView can wake long after a timeout's deadline. Reconcile
+    // against wall-clock time immediately instead of waiting for a clamped
+    // background timer to run.
+    document.addEventListener('visibilitychange', handleAppWake);
+    window.addEventListener('focus', handleAppWake);
+    window.addEventListener('pageshow', handleAppWake);
+
+    rescheduleExpiry();
 }
 
 // notify enqueues a toast. Returns its id; pass the same id back via
@@ -75,6 +86,7 @@ export function notify(opts: any = {}) {
     const sticky = opts.sticky === true || level === 'error' || opts.durationMs === 0;
     const duration = sticky ? 0 : (Number.isFinite(opts.durationMs) ? opts.durationMs : DEFAULT_DURATION);
     const now = Date.now();
+    const paused = allPaused || individuallyPaused.has(id);
     const entry: ToastItem = {
         id,
         level,
@@ -83,7 +95,8 @@ export function notify(opts: any = {}) {
         sticky,
         durationMs: duration,
         expiresAt: duration > 0 ? now + duration : 0,
-        paused: false,
+        paused,
+        ...(paused && duration > 0 ? { remainingMs: duration } : {}),
         spinner: opts.spinner === true,
     };
 
@@ -99,6 +112,7 @@ export function notify(opts: any = {}) {
         });
     }
 
+    let evictedID = '';
     toasts.update((list) => {
         const idx = list.findIndex((t) => t.id === id);
         if (idx >= 0) {
@@ -112,12 +126,13 @@ export function notify(opts: any = {}) {
         const next = [...list];
         if (next.length >= MAX_VISIBLE) {
             const stalest = next.findIndex((t) => !t.sticky);
-            next.splice(stalest >= 0 ? stalest : 0, 1);
+            [evictedID] = next.splice(stalest >= 0 ? stalest : 0, 1).map((toast) => toast.id);
         }
         next.push(entry);
         return next;
     });
-    ensureTimer();
+    if (evictedID) individuallyPaused.delete(evictedID);
+    rescheduleExpiry();
     return id;
 }
 
@@ -129,73 +144,123 @@ export function dismissNotification(id: string) {
         next.splice(idx, 1);
         return next;
     });
-    ensureTimer();
+    individuallyPaused.delete(id);
+    rescheduleExpiry();
 }
 
 export function clearAllNotifications() {
     toasts.set([]);
-    if (timer) {
-        cancelAnimationFrame(timer);
-        timer = null;
-    }
+    individuallyPaused.clear();
+    allPaused = false;
+    clearExpiryTimer();
 }
 
-// pauseToast freezes one toast's countdown while it is hovered; resumeToast
-// restarts it from the captured remainder (or a fresh window when the broad
-// stack-level pause didn't capture one).
+// pauseToast freezes one toast's countdown while it is hovered. Stack and
+// toast hover states are tracked separately so moving between child toasts
+// cannot accidentally restart a countdown while the stack remains hovered.
 function pauseToast(id: string) {
-    toasts.update((list) =>
-        list.map((t) => (t.id === id && !t.paused ? { ...t, paused: true } : t)),
-    );
+    individuallyPaused.add(id);
+    const now = Date.now();
+    toasts.update((list) => list.map((toast) => {
+        if (toast.id !== id || toast.sticky || toast.paused) return toast;
+        return pauseAt(toast, now);
+    }));
+    rescheduleExpiry();
 }
 
 function resumeToast(id: string) {
+    individuallyPaused.delete(id);
+    if (allPaused) {
+        rescheduleExpiry();
+        return;
+    }
     const now = Date.now();
-    toasts.update((list) =>
-        list.map((t) => {
-            if (t.id !== id || t.sticky || !t.paused) return t;
-            const remaining = t.remainingMs || t.durationMs || DEFAULT_DURATION;
-            return { ...t, paused: false, expiresAt: now + remaining };
-        }),
-    );
-    ensureTimer();
+    toasts.update((list) => list.map((toast) => {
+        if (toast.id !== id || toast.sticky || !toast.paused) return toast;
+        const remaining = toast.remainingMs ?? toast.durationMs ?? DEFAULT_DURATION;
+        return { ...toast, paused: false, expiresAt: now + remaining };
+    }));
+    rescheduleExpiry();
 }
 
 function setAllPaused(paused: boolean) {
+    if (paused === allPaused) {
+        rescheduleExpiry();
+        return;
+    }
+    allPaused = paused;
     const now = Date.now();
     toasts.update((list) => {
         if (!list.length) return list;
-        return list.map((t) => {
-            if (t.sticky) return t;
-            if (paused && !t.paused) {
-                return { ...t, paused: true, remainingMs: Math.max(0, (t.expiresAt || now) - now) };
+        return list.map((toast) => {
+            if (toast.sticky) return toast;
+            if (paused && !toast.paused) return pauseAt(toast, now);
+            if (!paused && toast.paused && !individuallyPaused.has(toast.id)) {
+                return { ...toast, paused: false, expiresAt: now + (toast.remainingMs ?? 0) };
             }
-            if (!paused && t.paused) {
-                return { ...t, paused: false, expiresAt: now + (t.remainingMs || 0) };
-            }
-            return t;
+            return toast;
         });
     });
-    ensureTimer();
+    rescheduleExpiry();
 }
 
-function hasExpiringToasts() {
-    return get(toasts).some((t) => !t.sticky && !t.paused && t.expiresAt);
+function pauseAt(toast: ToastItem, now: number): ToastItem {
+    return {
+        ...toast,
+        paused: true,
+        remainingMs: Math.max(0, (toast.expiresAt || now) - now),
+    };
 }
 
-function ensureTimer() {
-    if (timer || !hasExpiringToasts()) return;
-    timer = requestAnimationFrame(tick);
+function handleAppWake() {
+    if (document.visibilityState === 'hidden') return;
+    rescheduleExpiry();
 }
 
-function tick() {
-    timer = null;
-    const now = Date.now();
-    // The rAF loop runs every frame while a countdown is live; only touch the
-    // store (and wake its subscribers) when something actually expired.
-    const survives = (t: ToastItem) => t.sticky || t.paused || !t.expiresAt || now < t.expiresAt;
+function clearExpiryTimer() {
+    if (expiryTimer === null) return;
+    clearTimeout(expiryTimer);
+    expiryTimer = null;
+}
+
+function expireDueToasts(now: number) {
+    const survives = (toast: ToastItem) => (
+        toast.sticky || toast.paused || !toast.expiresAt || now < toast.expiresAt
+    );
     if (!get(toasts).every(survives)) {
-        toasts.update((list) => list.filter(survives));
+        toasts.update((list) => {
+            for (const toast of list) {
+                if (!survives(toast)) individuallyPaused.delete(toast.id);
+            }
+            return list.filter(survives);
+        });
     }
-    ensureTimer();
+}
+
+function nearestDeadline(): number | null {
+    let nearest = Infinity;
+    for (const toast of get(toasts)) {
+        if (toast.sticky || toast.paused || !toast.expiresAt) continue;
+        nearest = Math.min(nearest, toast.expiresAt);
+    }
+    return Number.isFinite(nearest) ? nearest : null;
+}
+
+function rescheduleExpiry() {
+    clearExpiryTimer();
+    expireDueToasts(Date.now());
+    scheduleNearestDeadline();
+}
+
+function scheduleNearestDeadline() {
+    const deadline = nearestDeadline();
+    if (deadline === null) return;
+    const delay = Math.min(MAX_TIMEOUT_DELAY_MS, Math.max(0, deadline - Date.now()));
+    expiryTimer = setTimeout(handleExpiryTimer, delay);
+}
+
+function handleExpiryTimer() {
+    expiryTimer = null;
+    expireDueToasts(Date.now());
+    scheduleNearestDeadline();
 }

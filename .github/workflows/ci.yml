@@ -13,6 +13,7 @@ permissions:
 
 env:
   CGO_ENABLED: 1
+  FIRST_PARTY_GO_PACKAGES: ". ./cmd/... ./backend/..."
 
 jobs:
   test:
@@ -76,10 +77,94 @@ jobs:
         run: npm run build
 
       - name: Run Go tests
-        run: go test ./...
+        run: go test $FIRST_PARTY_GO_PACKAGES
 
       - name: Run Go vet
-        run: go vet ./...
+        run: go vet $FIRST_PARTY_GO_PACKAGES
+
+  browser-contracts:
+    name: Chromium frontend contracts
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run production-build browser contracts
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: playwright-failure-artifacts
+          path: frontend/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  race:
+    name: Targeted race detector
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run targeted race tests
+        run: go test -race -count=1 ./backend/core ./backend/crypto ./backend/media ./backend/mountcache ./backend/mountcontroller ./backend/sync
+
+  analysis:
+    name: Static and vulnerability analysis
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev
+
+      - name: Install analyzers
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+
+      # Nil contexts are passed intentionally by boundary-validation tests.
+      - name: Run staticcheck correctness analyzers
+        run: staticcheck -checks='SA*,-SA1012' $FIRST_PARTY_GO_PACKAGES
+
+      - name: Run govulncheck
+        run: govulncheck $FIRST_PARTY_GO_PACKAGES
 
   wails-build:
     name: Wails build (${{ matrix.platform }})

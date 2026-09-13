@@ -12,22 +12,22 @@ import {
     setRenameModalInFlight,
     type RenameModalTarget,
 } from '../../ui/modals/rename-modal-store';
+import type { FileCommandItem } from '../../ui/file-list/types';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
 let renameModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 async function ensureFileInTdriveSystem(target: RenameModalTarget): Promise<void> {
-    if (target.type !== 'file') return;
-    if (String(target.source || 'fs') !== 'tg') return;
+    if (target.type !== 'file' || target.source !== 'tg') return;
 
-    const res = await addTelegramFileToDrive(Number(target.id),
-    String(target.name || ''),
-    Number(target.size || 0),
-    String(target.parentId || ''),);
+    const result = await addTelegramFileToDrive(
+        target.id,
+        target.name,
+        target.size,
+        target.parentId,
+    );
 
-    if (typeof res === 'string' && res.startsWith('Error')) {
-        throw new Error(humanizeBackendError(res));
-    }
+    if (!result.ok) throw new Error(humanizeBackendError(result.error));
 }
 
 export function setupRenameModal() {
@@ -43,16 +43,8 @@ export function setupRenameModal() {
     });
 }
 
-export function openRenameModal(target: any) {
-    if (!target) return;
-    openRenameModalView({
-        type: target.type === 'folder' ? 'folder' : 'file',
-        id: target.id,
-        name: String(target.name || ''),
-        size: Number(target.size || 0),
-        parentId: String(target.parentId || ''),
-        source: String(target.source || 'fs'),
-    });
+export function openRenameModal(target: FileCommandItem): void {
+    openRenameModalView(target);
 }
 
 async function submitRename(target: RenameModalTarget, rawName: string): Promise<void> {
@@ -69,16 +61,16 @@ async function submitRename(target: RenameModalTarget, rawName: string): Promise
     setRenameModalError('');
     setRenameModalInFlight(true);
     try {
-        let res = '';
+        let result;
         if (target.type === 'folder') {
-            res = await callWithPasswordRetry(() => renameFolder(String(target.id), nextName));
+            result = await callWithPasswordRetry(() => renameFolder(target.id, nextName));
         } else {
             await ensureFileInTdriveSystem(target);
-            res = await callWithPasswordRetry(() => renameFile(Number(target.id), nextName));
+            result = await callWithPasswordRetry(() => renameFile(target.id, nextName));
         }
 
-        if (typeof res === 'string' && res.startsWith('Error')) {
-            setRenameModalError(humanizeBackendError(res));
+        if (!result.ok) {
+            setRenameModalError(humanizeBackendError(result.error));
             return;
         }
         closeRenameModalView();

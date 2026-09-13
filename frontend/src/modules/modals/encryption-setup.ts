@@ -5,6 +5,7 @@
 import { createEncryptionPassword } from '../../api';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
+import { humanizeBackendError } from '../errors';
 import EncryptionSetupModal from '../../ui/modals/EncryptionSetupModal.svelte';
 import { encryptionSetupModal } from '../../ui/modals/encryption-setup-modal-store';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
@@ -48,7 +49,11 @@ async function submitSetup(password: string, confirmPassword: string, hint: stri
     encryptionSetupModal.setError('');
     encryptionSetupModal.setBusy(true);
     try {
-        await createEncryptionPassword(password, hint);
+        const result = await createEncryptionPassword(password, hint);
+        if (!result.ok) {
+            encryptionSetupModal.setError(humanizeBackendError(result.error));
+            return;
+        }
         await loadEncryptionStatus();
         finish(true);
         notify({
@@ -57,7 +62,7 @@ async function submitSetup(password: string, confirmPassword: string, hint: stri
             body: 'Encrypted uploads will be protected before they leave this device.',
         });
     } catch (err) {
-        encryptionSetupModal.setError(String(err));
+        encryptionSetupModal.setError(humanizeBackendError(err));
     } finally {
         encryptionSetupModal.setBusy(false);
     }

@@ -75,3 +75,52 @@ export type FileListRowsView = {
 };
 
 export type FileListView = FileListStateView | FileListRowsView;
+
+export type FileSource = 'fs' | 'tg';
+
+type CommandItemBase = {
+    name: string;
+    parentId?: string;
+    row?: HTMLElement;
+    canDelete?: boolean;
+    canRename?: boolean;
+};
+
+export type FolderCommandItem = CommandItemBase & {
+    type: 'folder';
+    id: string;
+};
+
+export type ProjectedFileCommandItem = CommandItemBase & {
+    type: 'file';
+    id: number;
+    size?: number;
+    source?: 'fs';
+    uploaderID?: number;
+};
+
+export type TelegramFileCommandItem = CommandItemBase & {
+    type: 'file';
+    id: number;
+    size: number;
+    source: 'tg';
+    parentId: string;
+    uploaderID?: number;
+};
+
+export type FileCommandItem = FolderCommandItem | ProjectedFileCommandItem | TelegramFileCommandItem;
+
+export type BulkFileCommandTarget = {
+    type: 'bulk';
+    items: FileCommandItem[];
+    parentId: string;
+};
+
+export type FileCommandTarget = FileCommandItem | BulkFileCommandTarget;
+
+export type FileDragState = {
+    items: FileCommandItem[];
+    parentId: string;
+    blocked: Set<string>;
+    row: HTMLElement;
+};
