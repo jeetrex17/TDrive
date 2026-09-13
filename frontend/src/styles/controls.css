@@ -4,7 +4,8 @@
     padding: var(--space-3);
     background: var(--accent);
     color: var(--color-on-accent);
-    font-weight: 700;
+    font-size: var(--type-sm);
+    font-weight: var(--weight-strong);
     border: none;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -30,7 +31,8 @@
         background-color var(--motion-med) var(--ease-standard),
         border-color var(--motion-med) var(--ease-standard),
         transform var(--motion-fast) var(--ease-standard);
-    font-weight: 700;
+    font-size: var(--type-sm);
+    font-weight: var(--weight-strong);
     display: flex;
     align-items: center;
     justify-content: center;

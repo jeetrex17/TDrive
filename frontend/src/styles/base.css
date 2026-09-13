@@ -1,13 +1,16 @@
 
+/* Nunito variable, Fontsource 5.3.0 (OFL); hosted locally for offline use. */
 @font-face {
     font-family: 'Nunito';
-    src: url('../assets/fonts/nunito-v16-latin-regular.woff2') format('woff2');
-    font-weight: 400;
+    src: url('../assets/fonts/nunito-latin-variable.woff2') format('woff2');
+    font-weight: 200 1000;
     font-style: normal;
     font-display: swap;
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Nunito', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-ui); font-synthesis: style; }
+button, input, textarea, select { font-family: inherit; }
 
 html { background: var(--color-canvas); }
 body { background-color: var(--bg-dark); color: var(--text-main); height: 100vh; overflow: hidden; user-select: none; }

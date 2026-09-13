@@ -1,5 +1,9 @@
 
 :root {
+    --font-ui: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --weight-medium: 500;
+    --weight-semibold: 600;
+    --weight-strong: 700;
     --radius-xs: 4px;
     --radius-sm: 6px;
     --radius-md: 8px;

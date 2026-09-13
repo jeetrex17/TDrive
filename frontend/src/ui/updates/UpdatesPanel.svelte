@@ -246,10 +246,6 @@
         color: var(--color-text);
     }
 
-    .updates-panel,
-    .updates-panel :global(*) {
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
-    }
 
     .updates-header {
         padding: 11px 12px 12px;

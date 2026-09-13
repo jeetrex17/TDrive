@@ -1,5 +1,5 @@
 /* === AUTH SCREENS === */
-#auth-wrapper { display: flex; justify-content: center; align-items: center; height: 100vh; background: var(--bg-dark); }
+#auth-wrapper { display: flex; justify-content: center; align-items: safe center; height: 100vh; padding: 64px 16px 24px; overflow-y: auto; background: var(--bg-dark); }
 
 .auth-appearance-control {
     position: fixed;
@@ -54,7 +54,7 @@
 
 .auth-box {
     background: var(--bg-sidebar); border: 1px solid var(--border);
-    padding: 2.5rem; border-radius: 16px; width: 380px; text-align: center;
+    padding: clamp(1.25rem, 5vw, 2.5rem); border-radius: var(--radius-xl); width: 380px; max-width: 100%; flex-shrink: 0; text-align: center;
     box-shadow: var(--shadow-md);
     --motion-enter-y: 4px;
     animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
