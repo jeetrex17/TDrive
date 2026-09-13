@@ -21,7 +21,7 @@ import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { canOpenFileViewer, isVideoFile } from './media-types';
-import { appActions } from './app-actions';
+import { appActions, type RefreshFilesOptions } from './app-actions';
 import FileList from '../ui/file-list/FileList.svelte';
 import { showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
@@ -80,6 +80,8 @@ export function canOwnerActOnFile(file: any) {
 // re-render can restore the scroll position instead of jumping to the top.
 let lastRenderedFolderId: string | null = null;
 let fileListHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let fileRefreshToken = 0;
+let backgroundFileRefreshToken = 0;
 
 export function resetFileListScrollRestore() {
     lastRenderedFolderId = null;
@@ -322,7 +324,7 @@ function deleteRow(row: HTMLElement) {
             id: row.dataset.id,
             name: row.dataset.name,
             parentId: row.dataset.parentId || state.currentFolderId,
-        });
+        } as Parameters<typeof openDeleteModal>[0]);
         return;
     }
     if (row.dataset.canDelete === "false") return;
@@ -334,7 +336,7 @@ function deleteRow(row: HTMLElement) {
         parentId: row.dataset.parentId || state.currentFolderId,
         source: row.dataset.source || "fs",
         canDelete: row.dataset.canDelete !== "false",
-    });
+    } as Parameters<typeof openDeleteModal>[0]);
 }
 
 function renameRow(row: HTMLElement) {
@@ -346,7 +348,7 @@ function renameRow(row: HTMLElement) {
         size: Number(row.dataset.size || 0),
         parentId: row.dataset.parentId || state.currentFolderId,
         source: row.dataset.source || "fs",
-    });
+    } as Parameters<typeof openRenameModal>[0]);
 }
 
 function fileTargetForRow(row: HTMLElement) {
@@ -424,11 +426,14 @@ function applyFolderStats(folders: FolderItem[], statsForID: (id: string) => Fol
     });
 }
 
-export function refreshFiles() {
+export function refreshFiles({ background = false }: RefreshFilesOptions = {}) {
     if (state.virtualView === "photos") {
+        // File requests started before Photos must never become current again
+        // when the user returns to the drive.
+        fileRefreshToken++;
         clearSelection();
         setPhotosMode(true);
-        void renderGallery();
+        void renderGallery({ background });
         return;
     }
     setPhotosMode(false);
@@ -436,21 +441,33 @@ export function refreshFiles() {
     const list = document.getElementById("file-list") as HTMLElement;
     const storageUsed = document.getElementById("storage-used");
     const requestedFolderId = state.currentFolderId;
-    resetFolderCaches();
-    const folderEpoch = state.folderSizeEpoch;
-    clearSelection();
+    const requestedChannelId = Number(state.activeChannel?.id ?? 0);
+    const refreshToken = background ? fileRefreshToken : ++fileRefreshToken;
+    const backgroundToken = background ? ++backgroundFileRefreshToken : 0;
+    const isCurrentRequest = () => (
+        refreshToken === fileRefreshToken
+        && (!background || backgroundToken === backgroundFileRefreshToken)
+        && Number(state.activeChannel?.id ?? 0) === requestedChannelId
+        && state.currentFolderId === requestedFolderId
+    );
+    let folderEpoch = state.folderSizeEpoch;
+    if (!background) {
+        resetFolderCaches();
+        folderEpoch = state.folderSizeEpoch;
+        clearSelection();
+    }
 
     // Preserve scroll on a same-folder re-render (upload, delete, rename,
     // sync); navigation into a different folder still starts at the top.
     // Captured before the "Loading…" wipe resets scrollTop.
     const prevScrollTop = list.scrollTop;
     const keepScroll = lastRenderedFolderId === requestedFolderId;
-
-    renderFileState(list, "loading", "Loading files");
+    if (!background) renderFileState(list, "loading", "Loading files");
     if (storageUsed) {
-        storageUsed.innerText = "Calculating... / Unlimited";
+        if (!background) storageUsed.innerText = "Calculating... / Unlimited";
         getStorageUsed()
             .then((bytes) => {
+                if (!isCurrentRequest()) return;
                 const value = Number(bytes);
                 if (!Number.isFinite(value) || value < 0) {
                     storageUsed.innerText = "— / Unlimited";
@@ -459,6 +476,7 @@ export function refreshFiles() {
                 storageUsed.innerText = `${formatBytes(value)} / Unlimited`;
             })
             .catch(() => {
+                if (!isCurrentRequest()) return;
                 storageUsed.innerText = "— / Unlimited";
             });
     }
@@ -466,13 +484,17 @@ export function refreshFiles() {
     let folderErr: any = null;
     const folderPromise = apiGetFolderContents(requestedFolderId).catch((err) => {
         folderErr = err;
-        console.error("GetFolderContents failed:", err);
+        if (!background) console.error("GetFolderContents failed:", err);
         return null;
     });
 
     Promise.all([folderPromise]).then(async ([fs]) => {
+        if (!isCurrentRequest()) return;
         if (folderErr || !fs) {
-            if (state.currentFolderId !== requestedFolderId) return;
+            if (background) {
+                console.warn("Background file refresh failed:", folderErr);
+                return;
+            }
             const msg = String(folderErr?.message || folderErr || "Failed to load files");
             renderFileState(list, "error", "Could not load this folder", msg, {
                 label: "Retry",
@@ -480,6 +502,7 @@ export function refreshFiles() {
             });
             return;
         }
+
 
         const folders = Array.isArray(fs?.folders) ? fs.folders : [];
         const fsFiles = Array.isArray(fs?.files) ? fs.files : [];
@@ -501,21 +524,54 @@ export function refreshFiles() {
             };
         });
 
-        const finalize = async (telegramFiles: RootFile[] = [], preserveCurrentScroll = false) => {
+        let preparedTelegramFiles: RootFile[] = [];
+        let preparedFsIDs: Set<number> | undefined;
+        let preparedFolderStats: Map<string, FolderStat> | undefined;
+        if (background) {
+            try {
+                const [stats, telegramFiles] = await Promise.all([
+                    folders.length > 0
+                        ? calculateVisibleFolderStats(requestedFolderId)
+                        : Promise.resolve(new Map<string, FolderStat>()),
+                    requestedFolderId === "" ? getFileList() : Promise.resolve([]),
+                ]);
+                preparedFolderStats = stats;
+                preparedTelegramFiles = Array.isArray(telegramFiles) ? telegramFiles : [];
+                preparedFsIDs = requestedFolderId === "" && preparedTelegramFiles.length > 0
+                    ? new Set(await getAllFsMsgIds())
+                    : new Set(fsFileItems.map((file) => file.id));
+            } catch (err) {
+                console.warn("Background file refresh failed:", err);
+                return;
+            }
+            if (!isCurrentRequest()) return;
+            if (requestedFolderId === "") state.telegramRootCache = preparedTelegramFiles;
+            resetFolderCaches();
+            folderEpoch = state.folderSizeEpoch;
+        }
+
+        const finalize = async (
+            telegramFiles: RootFile[] = [],
+            preserveCurrentScroll = false,
+            preparedIDs?: Set<number>,
+            folderStats?: Map<string, FolderStat>,
+        ) => {
             if (state.folderSizeEpoch !== folderEpoch) return;
-            if (state.currentFolderId !== requestedFolderId) return;
+            if (!isCurrentRequest()) return;
             const scrollTopForRender = preserveCurrentScroll ? list.scrollTop : prevScrollTop;
             const keepScrollForRender = preserveCurrentScroll || keepScroll;
-            let fsIDs: Set<number>;
-            if (requestedFolderId === "" && telegramFiles.length > 0) {
-                try {
-                    fsIDs = new Set(await getAllFsMsgIds());
-                } catch (err) {
-                    console.error("GetAllFsMsgIDs failed:", err);
-                    fsIDs = new Set();
+            let fsIDs = preparedIDs;
+            if (!fsIDs) {
+                if (requestedFolderId === "" && telegramFiles.length > 0) {
+                    try {
+                        fsIDs = new Set(await getAllFsMsgIds());
+                    } catch (err) {
+                        console.error("GetAllFsMsgIDs failed:", err);
+                        fsIDs = new Set();
+                    }
+                } else {
+                    fsIDs = new Set(fsFileItems.map((file) => file.id));
                 }
-            } else {
-                fsIDs = new Set(fsFileItems.map((file) => file.id));
             }
 
             const tgFileItems = telegramFiles
@@ -530,7 +586,7 @@ export function refreshFiles() {
 
             const files = [...fsFileItems, ...tgFileItems];
 
-            if (state.currentFolderId !== requestedFolderId) return;
+            if (!isCurrentRequest()) return;
 
             folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
             files.sort((a, b) => (b.date || 0) - (a.date || 0));
@@ -563,7 +619,19 @@ export function refreshFiles() {
             }
 
             folders.forEach((folder) => {
-                rows.push(buildFolderRow(folder, requestedFolderId));
+                if (!folderStats) {
+                    rows.push(buildFolderRow(folder, requestedFolderId));
+                    return;
+                }
+                const stats = folderStats.get(String(folder?.id || ""));
+                const size = stats?.bytes ?? 0;
+                const modifiedTime = stats?.latestUpload ?? 0;
+                rows.push(buildFolderRow(folder, requestedFolderId, {
+                    size,
+                    modifiedTime,
+                    sizeLabel: formatBytes(size),
+                    metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : "—",
+                }));
             });
 
             files.forEach((file: any) => {
@@ -579,7 +647,7 @@ export function refreshFiles() {
                 if (state.currentFolderId !== requestedFolderId) return;
 
                 syncDriveRowTabStops(list);
-                fillVisibleFolderStats(folders, requestedFolderId, folderEpoch);
+                if (!folderStats) fillVisibleFolderStats(folders, requestedFolderId, folderEpoch);
 
                 // Restore prior scroll on a same-folder re-render. Before
                 // pendingFocus so a just-uploaded/renamed file can still scroll
@@ -591,10 +659,10 @@ export function refreshFiles() {
 
                 if (state.pendingFocus && state.pendingFocus.type === "file") {
                     const targetID = String(state.pendingFocus.id || "");
-                    const targetRow = targetID ? list.querySelector(`.drive-row[data-type="file"][data-id="${CSS.escape(targetID)}"]`) : null;
+                    const targetRow = targetID ? list.querySelector<HTMLElement>(`.drive-row[data-type="file"][data-id="${CSS.escape(targetID)}"]`) : null;
                     state.pendingFocus = null;
                     if (targetRow) {
-                        const interactive = Array.from(list.querySelectorAll(".drive-row"));
+                        const interactive = Array.from(list.querySelectorAll<HTMLElement>(".drive-row"));
                         const idx = interactive.indexOf(targetRow);
                         clearSelection();
                         if (idx >= 0) selectRow(targetRow, idx);
@@ -612,13 +680,18 @@ export function refreshFiles() {
             });
         };
 
+        if (background) {
+            await finalize(preparedTelegramFiles, false, preparedFsIDs, preparedFolderStats);
+            return;
+        }
+
         await finalize();
 
-        if (requestedFolderId === "" && state.currentFolderId === requestedFolderId) {
+        if (requestedFolderId === "" && isCurrentRequest()) {
             getFileList()
                 .then(async (tgFiles) => {
                     if (state.folderSizeEpoch !== folderEpoch) return;
-                    if (state.currentFolderId !== requestedFolderId) return;
+                    if (!isCurrentRequest()) return;
                     const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
                     state.telegramRootCache = telegramFiles;
                     await finalize(telegramFiles, true);
@@ -771,7 +844,7 @@ function handleListDblClick(e: MouseEvent) {
             size: Number(row.dataset.size || 0),
             parentId: state.currentFolderId,
             source: row.dataset.source || "fs",
-        });
+        } as Parameters<typeof openRenameModal>[0]);
     }
 }
 

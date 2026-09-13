@@ -13,7 +13,6 @@ import { state } from '../state';
 import { getMedia } from '../api';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
-import { capturePreviewTransitionSource, type PreviewTransitionSource } from './modals/preview-transition';
 import Gallery from '../ui/gallery/Gallery.svelte';
 import { beginRender, cachedThumb, rearmLocked, setRoot } from '../ui/gallery/gallery-controller';
 import { galleryView, type GalleryGroup } from '../ui/gallery/gallery-store';
@@ -24,6 +23,7 @@ import type { FileItem } from '../types';
 let galleryEl: HTMLElement | null = null;
 let galleryHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let renderToken = 0;
+let backgroundRenderToken = 0;
 let currentItems: FileItem[] = [];
 let currentChannelId = 0;
 
@@ -62,25 +62,36 @@ export function setPhotosMode(on: boolean): void {
     });
 }
 
-export async function renderGallery(): Promise<void> {
+interface GalleryRefreshOptions {
+    background?: boolean;
+}
+
+export async function renderGallery({ background = false }: GalleryRefreshOptions = {}): Promise<void> {
     if (!galleryEl) setupGallery();
     if (!galleryEl) return;
 
-    const token = ++renderToken;
+    const token = background ? renderToken : ++renderToken;
+    const backgroundToken = background ? ++backgroundRenderToken : 0;
     const channelId = Number(state.activeChannel?.id || 0);
-    galleryView.set({ status: 'loading' });
+    if (!background) galleryView.set({ status: 'loading' });
 
     let media: FileItem[];
     try {
         media = await getMedia();
     } catch (err) {
         console.error('ListMedia failed:', err);
-        if (token === renderToken) galleryView.set({ status: 'error' });
+        if (token === renderToken && !background) galleryView.set({ status: 'error' });
         return;
     }
 
-    // A newer render started, or the user left photos mode, while we awaited.
-    if (token !== renderToken || state.virtualView !== 'photos') return;
+    // Foreground navigation invalidates background work; background refreshes
+    // only compete with other background refreshes after they have data to commit.
+    if (
+        token !== renderToken
+        || (background && backgroundToken !== backgroundRenderToken)
+        || state.virtualView !== 'photos'
+        || Number(state.activeChannel?.id ?? 0) !== channelId
+    ) return;
 
     currentItems = media;
     currentChannelId = channelId;
@@ -98,10 +109,10 @@ function onGalleryClick(event: MouseEvent): void {
     if (!cell) return;
     const index = Number(cell.dataset.index ?? -1);
     if (index < 0 || index >= currentItems.length) return;
-    void openGalleryLightbox(index, capturePreviewTransitionSource(cell));
+    void openGalleryLightbox(index);
 }
 
-async function openGalleryLightbox(index: number, transitionSource: PreviewTransitionSource | null): Promise<void> {
+async function openGalleryLightbox(index: number): Promise<void> {
     const channelId = currentChannelId;
     // Carry the fields the lightbox + info panel need: a download size
     // (plaintext for encrypted files), the loaded thumbnail as an instant
@@ -118,7 +129,7 @@ async function openGalleryLightbox(index: number, transitionSource: PreviewTrans
     }));
     const preview = await import('./modals/preview');
     preview.setupPreviewModal();
-    await preview.openPreviewList(items, index, transitionSource);
+    await preview.openPreviewList(items, index);
 }
 
 // --- view switching (wired from the sidebar Photos item) ---
@@ -135,7 +146,7 @@ export function enterPhotos(): void {
 export function exitPhotos(): void {
     if (state.virtualView !== 'photos') return;
     state.virtualView = null;
-    appActions().refreshFiles();
+    appActions().refreshFiles({ background: true });
 }
 
 // --- date grouping ---

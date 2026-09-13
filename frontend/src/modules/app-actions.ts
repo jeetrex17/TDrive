@@ -5,8 +5,12 @@ export interface AppFileTarget {
     encrypted?: boolean;
 }
 
+export interface RefreshFilesOptions {
+    background?: boolean;
+}
+
 export interface AppActions {
-    refreshFiles: () => void;
+    refreshFiles: (options?: RefreshFilesOptions) => void;
     triggerRefresh: () => Promise<void>;
     openFile: (target: AppFileTarget) => Promise<void>;
     playVideo: (target: AppFileTarget) => Promise<void>;

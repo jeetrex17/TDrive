@@ -153,7 +153,7 @@ window.onload = async function() {
     // auth.js loads channels after InitDrive succeeds.
     bindChannelsRenderers({
         onSidebarUpdate: () => renderSidebar(),
-        onActiveDriveChanged: () => refreshFiles(),
+        onActiveDriveChanged: (options) => refreshFiles(options),
     });
     setupSidebar();
 

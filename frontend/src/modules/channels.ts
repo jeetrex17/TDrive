@@ -25,10 +25,11 @@ import {
 } from '../api';
 import type { DriveChannel, JoinDriveResult, JoinRequest, PendingJoin } from '../types';
 import { runGlobalSearch } from './search';
+import type { RefreshFilesOptions } from './app-actions';
 
 interface ChannelRenderers {
     onSidebarUpdate: () => void;
-    onActiveDriveChanged: () => void | Promise<void>;
+    onActiveDriveChanged: (options?: RefreshFilesOptions) => void | Promise<void>;
 }
 
 interface LiveSyncPayload {
@@ -37,7 +38,7 @@ interface LiveSyncPayload {
 }
 
 let renderSidebar: () => void = () => undefined;
-let refreshFilesView: () => void | Promise<void> = () => undefined;
+let refreshFilesView: (options?: RefreshFilesOptions) => void | Promise<void> = () => undefined;
 const pendingLiveSyncChannels = new Set<number>();
 let processingLiveSyncRefresh = false;
 let liveSyncEventsBound = false;
@@ -120,7 +121,7 @@ async function processLiveSyncRefreshes(): Promise<void> {
             if (state.searchQuery.trim()) {
                 void runGlobalSearch();
             } else {
-                await refreshFilesView();
+                await refreshFilesView({ background: true });
             }
         }
     } finally {
@@ -192,6 +193,9 @@ export async function leaveSharedDrive(channelId: number): Promise<void> {
 export async function switchActiveChannel(channelId: number): Promise<void> {
     if (!channelId || state.channelSwitchInProgress) return;
     state.channelSwitchInProgress = true;
+    // Route intent changes immediately. A later Photos click must win while the
+    // native channel switch is still in flight.
+    state.virtualView = null;
     try {
         await setActiveChannel(channelId);
 
@@ -205,7 +209,6 @@ export async function switchActiveChannel(channelId: number): Promise<void> {
 
         state.currentFolderId = '';
         state.folderPath = [];
-        state.virtualView = null;
         resetFolderCaches();
         resetSelection();
 
@@ -234,6 +237,9 @@ export async function refreshActiveDrive(): Promise<void> {
 
 function syncInBackground(channelId: number): void {
     void syncChannel(channelId)
-        .then(() => refreshFilesView())
+        .then(() => {
+            if (Number(state.activeChannel?.id ?? 0) !== channelId) return;
+            return refreshFilesView({ background: true });
+        })
         .catch((error: unknown) => console.warn('SyncChannel:', error));
 }
