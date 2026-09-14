@@ -1279,7 +1279,9 @@ describe("video finish time", () => {
             video.dispatchEvent(new Event("seeked"));
             expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 5, 23, 55))}`);
             video.pause();
-            expect(button.title).toContain("resume now");
+            // The control carries no native tooltip; the label is the meaning.
+            expect(button.getAttribute("aria-label")).toContain("resume now");
+            expect(button.title).toBe("");
             await vi.advanceTimersByTimeAsync(60_000);
             expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 5, 23, 56))}`);
             Object.defineProperty(video, "duration", { configurable: true, value: Infinity });

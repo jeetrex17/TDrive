@@ -152,7 +152,7 @@
                     </div>
                 </div>
 
-                <button id="video-time-display" class="video-time-display" type="button" aria-pressed="false" aria-label="Show estimated finish time" aria-describedby="video-time video-duration" title="Show estimated finish time">
+                <button id="video-time-display" class="video-time-display" type="button" aria-pressed="false" aria-label="Show estimated finish time" aria-describedby="video-time video-duration">
                     <span id="video-time" class="video-time">0:00</span><span class="video-time-separator"> / </span><span id="video-duration" class="video-time">--:--</span>
                     <span id="video-end-time" class="video-end-time" aria-hidden="true"><span></span></span>
                 </button>

@@ -205,10 +205,13 @@ export class VideoTransportController {
         const { timeDisplay, endTime } = this.context.dom;
         timeDisplay?.setAttribute('aria-pressed', String(this.showEndTime));
         if (timeDisplay) {
-            timeDisplay.title = this.showEndTime
+            // No `title`: a native tooltip here is wide enough that the OS
+            // reflows it away from the control and drops it over the picture.
+            // The label already carries the meaning for assistive tech, and the
+            // button reads as a time display on its own.
+            timeDisplay.setAttribute('aria-label', this.showEndTime
                 ? `Hide estimated finish time${state.paused ? ' (if you resume now)' : ''}`
-                : 'Show estimated finish time';
-            timeDisplay.setAttribute('aria-label', timeDisplay.title);
+                : 'Show estimated finish time');
             timeDisplay.setAttribute(
                 'aria-describedby',
                 this.showEndTime ? 'video-time video-duration video-end-time' : 'video-time video-duration',

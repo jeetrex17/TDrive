@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,8 +11,10 @@ import (
 
 // recordingRangeClient reports the offset of every range read it serves.
 type recordingRangeClient struct {
-	size  int64
-	reads chan int64
+	size    int64
+	reads   chan int64
+	mu      sync.Mutex
+	lastLen int
 }
 
 func newRecordingRangeClient(size int64) *recordingRangeClient {
@@ -23,11 +26,21 @@ func (c *recordingRangeClient) ResolveDocument(context.Context, tgclient.InputPe
 }
 
 func (c *recordingRangeClient) ReadDocumentRange(_ context.Context, _ tgclient.DocumentRef, offset int64, dst []byte) (int, error) {
+	c.mu.Lock()
+	c.lastLen = len(dst)
+	c.mu.Unlock()
 	select {
 	case c.reads <- offset:
 	default:
 	}
 	return len(dst), nil
+}
+
+// lastLength reports the size of the most recent range read.
+func (c *recordingRangeClient) lastLength() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastLen
 }
 
 func (c *recordingRangeClient) awaitRead(t *testing.T) int64 {
