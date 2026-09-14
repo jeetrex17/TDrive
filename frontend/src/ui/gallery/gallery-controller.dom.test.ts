@@ -115,6 +115,40 @@ describe('gallery-controller', () => {
         expect(controller.cachedThumb(1, 30)).toBe('');
     });
 
+    it('ignores a stale completion when a keyed cell is registered for another item', async () => {
+        let resolveOld!: (value: string) => void;
+        let resolveNew!: (value: string) => void;
+        let request = 0;
+        thumbnails.resolver = () => new Promise<string>((resolve) => {
+            if (request++ === 0) resolveOld = resolve;
+            else resolveNew = resolve;
+        });
+
+        const oldCell = makeCell(31);
+        controller.registerCell(oldCell.node, { msgId: 31, apply: oldCell.apply });
+        fireIntersect(oldCell.node);
+        await flush();
+        expect(oldCell.last()).toEqual({ status: 'loading' });
+
+        const replacementPatches: CellPatch[] = [];
+        controller.registerCell(oldCell.node, {
+            msgId: 32,
+            apply: (patch) => replacementPatches.push(patch),
+        });
+        fireIntersect(oldCell.node);
+        await flush();
+
+        resolveOld('data:url:31');
+        await flush();
+        expect(oldCell.patches.some((patch) => patch.status === 'loaded')).toBe(false);
+        expect(replacementPatches.some((patch) => patch.status === 'loaded')).toBe(false);
+        expect(controller.cachedThumb(1, 31)).toBe('');
+
+        resolveNew('data:url:32');
+        await flush();
+        expect(replacementPatches[replacementPatches.length - 1]).toEqual({ status: 'loaded', src: 'data:url:32' });
+    });
+
     it('discards a load when the drive changed mid-flight', async () => {
         let resolve!: (v: string) => void;
         thumbnails.resolver = () => new Promise<string>((r) => { resolve = r; });

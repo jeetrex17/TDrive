@@ -36,7 +36,7 @@
         <div id="video-native-viewport" class="video-native-viewport" aria-hidden="true"></div>
         <video id="video-player" class="video-player" playsinline preload="metadata"></video>
 
-        <div id="video-center-controls" class="video-center-controls" aria-hidden="true">
+        <div id="video-center-controls" class="video-center-controls" aria-hidden="true" inert>
             <button id="video-center-skip-back" class="video-center-skip video-center-skip-back" type="button" aria-label="Back 10 seconds" title="Back 10 seconds">
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M11 5H6v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.6 8.3A7 7 0 1112 19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><text x="12" y="15.2" text-anchor="middle" fill="currentColor" font-size="6.2" font-weight="800">10</text></svg>
             </button>
@@ -63,7 +63,7 @@
         <div id="video-error" class="video-error" role="alert" style="display: none;"></div>
     </div>
 
-    <aside id="video-settings-panel" class="video-settings-panel" aria-label="Playback settings" hidden>
+    <aside id="video-settings-panel" class="video-settings-panel" aria-label="Playback settings" aria-hidden="true" inert hidden>
         <div class="video-settings-heading"><strong>Playback settings</strong><button id="video-settings-close" type="button" aria-label="Close playback settings"><XIcon size={18} aria-hidden="true" /></button></div>
         <nav class="video-settings-tabs" aria-label="Playback settings sections">
             <button type="button" data-settings-section="picture">Picture</button>

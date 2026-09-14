@@ -17,6 +17,11 @@
         return `Sort by ${key} ${$fileSortState.direction === 'asc' ? 'descending' : 'ascending'}`;
     }
 
+    function sortAriaValue(key: FileSortKey): 'ascending' | 'descending' | 'none' {
+        if ($fileSortState.key !== key) return 'none';
+        return $fileSortState.direction === 'asc' ? 'ascending' : 'descending';
+    }
+
 </script>
 
 {#snippet sortIndicator(key: FileSortKey)}
@@ -94,45 +99,50 @@
             <div id="gallery-title" class="gallery-title">Photos</div>
         </div>
 
-        <div class="file-table-header">
-            <button
-                class:active={$fileSortState.key === 'name'}
-                class="file-sort-button col-name"
-                type="button"
-                aria-label={sortButtonLabel('name')}
-                aria-pressed={$fileSortState.key === 'name'}
-                onclick={() => setFileSortKey('name')}
-            >
-                <span>Name</span>
-                <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('name')}</span>
-            </button>
-            <button
-                class:active={$fileSortState.key === 'date'}
-                class="file-sort-button col-date"
-                type="button"
-                aria-label={sortButtonLabel('date')}
-                aria-pressed={$fileSortState.key === 'date'}
-                onclick={() => setFileSortKey('date')}
-            >
-                <span>Date</span>
-                <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('date')}</span>
-            </button>
-            <button
-                class:active={$fileSortState.key === 'size'}
-                class="file-sort-button col-size"
-                type="button"
-                aria-label={sortButtonLabel('size')}
-                aria-pressed={$fileSortState.key === 'size'}
-                onclick={() => setFileSortKey('size')}
-            >
-                <span>Size</span>
-                <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('size')}</span>
-            </button>
-            <span class="col-actions">Actions</span>
-            <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite"></div>
+        <div class="file-table-header" role="row" aria-rowindex="1">
+            <div class="col-name" role="columnheader" aria-colindex="1" aria-sort={sortAriaValue('name')}>
+                <button
+                    class:active={$fileSortState.key === 'name'}
+                    class="file-sort-button"
+                    type="button"
+                    aria-label={sortButtonLabel('name')}
+                    onclick={() => setFileSortKey('name')}
+                >
+                    <span>Name</span>
+                    <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('name')}</span>
+                </button>
+            </div>
+            <div class="col-date" role="columnheader" aria-colindex="2" aria-sort={sortAriaValue('date')}>
+                <button
+                    class:active={$fileSortState.key === 'date'}
+                    class="file-sort-button"
+                    type="button"
+                    aria-label={sortButtonLabel('date')}
+                    onclick={() => setFileSortKey('date')}
+                >
+                    <span>Date</span>
+                    <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('date')}</span>
+                </button>
+            </div>
+            <div class="col-size" role="columnheader" aria-colindex="3" aria-sort={sortAriaValue('size')}>
+                <button
+                    class:active={$fileSortState.key === 'size'}
+                    class="file-sort-button"
+                    type="button"
+                    aria-label={sortButtonLabel('size')}
+                    onclick={() => setFileSortKey('size')}
+                >
+                    <span>Size</span>
+                    <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('size')}</span>
+                </button>
+            </div>
+            <div class="col-actions" role="columnheader" aria-colindex="4">
+                <span>Actions</span>
+                <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite"></div>
+            </div>
         </div>
 
-        <div id="file-list" class="file-list-box" role="listbox" tabindex="0" aria-label="Files" aria-multiselectable="true">
+        <div id="file-list" class="file-list-box" role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4">
             <div class="empty-state">Loading...</div>
         </div>
 

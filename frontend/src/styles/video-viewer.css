@@ -1157,20 +1157,20 @@
     }
 
     .video-command-row {
-        justify-content: center;
+        justify-content: space-between;
+        align-items: flex-start;
     }
 
     .video-secondary-cluster {
-        display: none;
-    }
-
-    .video-overlay.is-video-native-fallback .video-secondary-cluster {
         display: flex;
+        margin-left: 0;
+        flex-wrap: wrap;
+        justify-content: flex-end;
     }
 
-    .video-controls .video-menu-wrap,
+    .video-controls .video-menu-wrap:not([hidden]),
     .video-controls .video-fullscreen-btn {
-        display: none;
+        display: flex;
     }
 
     .video-overlay.is-video-native-fallback .video-controls #video-duration {

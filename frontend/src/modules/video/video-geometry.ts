@@ -47,8 +47,16 @@ function nextFrame(): Promise<void> {
 export class VideoGeometryController {
     private isWindowFullscreen = false;
     private nativeResizeFrame = 0;
+    private controlsObserver: ResizeObserver | null = null;
 
     constructor(private readonly context: VideoGeometryContext) {}
+
+    destroy(): void {
+        this.controlsObserver?.disconnect();
+        this.controlsObserver = null;
+        if (this.nativeResizeFrame) cancelAnimationFrame(this.nativeResizeFrame);
+        this.nativeResizeFrame = 0;
+    }
 
     setNativeLayout(layout: NativeLayout): void {
         const { dom } = this.context;
@@ -180,7 +188,8 @@ export class VideoGeometryController {
         let previousWidth = -1;
         let previousHeight = -1;
         // Controls persist for the module lifetime, across playback sessions.
-        const observer = new ResizeObserver(() => {
+        this.controlsObserver?.disconnect();
+        this.controlsObserver = new ResizeObserver(() => {
             if (!this.context.isOpen()) return;
             const { width, height } = controls.getBoundingClientRect();
             if (width === previousWidth && height === previousHeight) return;
@@ -189,7 +198,7 @@ export class VideoGeometryController {
             layoutChanged();
             this.scheduleNativeResize();
         });
-        observer.observe(controls);
+        this.controlsObserver.observe(controls);
     }
 
     handleWindowResize(layoutChanged: () => void): void {

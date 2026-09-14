@@ -8,6 +8,7 @@
     let left = $state(0);
     let top = $state(0);
     let lastFocusVersion = 0;
+    let invoker: HTMLElement | null = null;
 
     function menuButtons(): HTMLButtonElement[] {
         if (!panel) return [];
@@ -30,6 +31,24 @@
         target?.focus();
     }
 
+    function captureInvoker(): void {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && !panel?.contains(active)) invoker = active;
+    }
+
+    function focusInvoker(): void {
+        const target = invoker;
+        invoker = null;
+        if (!target?.isConnected || target.hasAttribute('disabled')) return;
+        target.focus({ preventScroll: true });
+    }
+
+    async function dismissAndRestoreFocus(): Promise<void> {
+        hideContextMenu();
+        await tick();
+        focusInvoker();
+    }
+
     async function positionHost(): Promise<void> {
         const state = $contextMenuState;
         if (!state.open) return;
@@ -46,6 +65,7 @@
         top = Math.max(VIEWPORT_MARGIN, Math.min(state.y, maxY));
 
         if (lastFocusVersion !== state.focusVersion) {
+            captureInvoker();
             lastFocusVersion = state.focusVersion;
             await tick();
             focusMenuEdge('first');
@@ -55,20 +75,30 @@
     function invoke(item: ContextMenuItem): void {
         if (item.type === 'divider' || item.disabled) return;
         hideContextMenu();
+        // Hand the invoker to actions synchronously. A dialog opened by the
+        // action records it as its restore target; navigation remains free to
+        // establish its own focus without a delayed menu restoration.
+        focusInvoker();
         void item.action();
     }
 
     function onDocumentClick(event: MouseEvent): void {
         if (!$contextMenuState.open) return;
         if (panel?.contains(event.target as Node)) return;
+        invoker = null;
         hideContextMenu();
     }
 
     function onDocumentKeydown(event: KeyboardEvent): void {
         if (!$contextMenuState.open) return;
+        if (event.key === 'Tab') {
+            hideContextMenu();
+            focusInvoker();
+            return;
+        }
         if (event.key === 'Escape') {
             event.preventDefault();
-            hideContextMenu();
+            void dismissAndRestoreFocus();
             return;
         }
         if (event.key === 'ArrowDown') {

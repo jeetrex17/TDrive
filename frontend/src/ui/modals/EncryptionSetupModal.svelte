@@ -63,13 +63,15 @@
     restoreFocus="#file-list"
     onClose={cancel}
 >
-    <p class="modal-subtitle">
+    <p id="encryption-setup-help" class="modal-subtitle">
         Use one password for every encrypted file in My Drive.
         <strong>If you forget it, encrypted files cannot be recovered.</strong>
     </p>
     <input
         id="encryption-setup-password"
         type="password"
+        aria-label="Encryption password"
+        aria-describedby={$view.error ? 'encryption-setup-help encryption-setup-error' : 'encryption-setup-help'}
         placeholder="Password"
         autocomplete="new-password"
         bind:this={passwordInput}
@@ -79,6 +81,8 @@
     <input
         id="encryption-setup-password-confirm"
         type="password"
+        aria-label="Confirm encryption password"
+        aria-describedby={$view.error ? 'encryption-setup-help encryption-setup-error' : 'encryption-setup-help'}
         placeholder="Confirm password"
         autocomplete="new-password"
         bind:this={confirmPasswordInput}
@@ -88,17 +92,19 @@
     <input
         id="encryption-setup-hint"
         type="text"
+        aria-label="Password hint"
+        aria-describedby={$view.error ? 'encryption-setup-hint-help encryption-setup-error' : 'encryption-setup-hint-help'}
         placeholder="Optional hint (do not put the password here)"
         autocomplete="off"
         bind:value={hint}
         disabled={$view.busy}
     />
-    <p class="field-help">
+    <p id="encryption-setup-hint-help" class="field-help">
         This hint is shown when TDrive asks for your encryption password. It is not encrypted, so don't put the
         password itself here.
     </p>
     {#if $view.error}
-        <div id="encryption-setup-error" class="modal-error">{$view.error}</div>
+        <div id="encryption-setup-error" class="modal-error" role="alert">{$view.error}</div>
     {/if}
 
     {#snippet actions()}

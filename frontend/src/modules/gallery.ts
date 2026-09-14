@@ -14,7 +14,7 @@ import { getMedia } from '../api';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
 import Gallery from '../ui/gallery/Gallery.svelte';
-import { beginRender, cachedThumb, rearmLocked, setRoot } from '../ui/gallery/gallery-controller';
+import { beginRender, cachedThumb, rearmLocked, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
 import { galleryView, type GalleryGroup } from '../ui/gallery/gallery-store';
 import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
@@ -27,10 +27,16 @@ let backgroundRenderToken = 0;
 let currentItems: FileItem[] = [];
 let currentChannelId = 0;
 
-export function setupGallery(): void {
-    galleryEl = document.getElementById('gallery-view');
-    if (!galleryEl || galleryHandle) return;
+export function setupGallery(): boolean {
+    const host = document.getElementById('gallery-view');
+    if (!host) {
+        if (galleryEl || galleryHandle) teardownGallery();
+        return false;
+    }
+    if (galleryEl === host && galleryHandle) return true;
+    if (galleryEl || galleryHandle) teardownGallery();
 
+    galleryEl = host;
     setRoot(galleryEl);
     galleryEl.replaceChildren();
     galleryHandle = mountSvelte(Gallery, { target: galleryEl, props: {} });
@@ -40,6 +46,20 @@ export function setupGallery(): void {
     // When the vault unlocks (e.g. from the lightbox), let locked cells retry
     // without waiting for a full gallery refresh.
     window.addEventListener('tdrive:unlocked', rearmLocked);
+    return true;
+}
+
+export function teardownGallery(): void {
+    renderToken += 1;
+    backgroundRenderToken += 1;
+    galleryEl?.removeEventListener('click', onGalleryClick);
+    window.removeEventListener('tdrive:unlocked', rearmLocked);
+    teardownGalleryController();
+    void galleryHandle?.destroy();
+    galleryHandle = null;
+    galleryEl = null;
+    currentItems = [];
+    currentChannelId = 0;
 }
 
 // setPhotosMode toggles the whole main view between the file list and the
@@ -68,6 +88,10 @@ interface GalleryRefreshOptions {
 
 export async function renderGallery({ background = false }: GalleryRefreshOptions = {}): Promise<void> {
     if (!galleryEl) setupGallery();
+    if (!galleryEl) return;
+
+    const host = document.getElementById('gallery-view');
+    if (galleryEl !== host || !galleryHandle) setupGallery();
     if (!galleryEl) return;
 
     const token = background ? renderToken : ++renderToken;

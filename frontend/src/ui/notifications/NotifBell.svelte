@@ -1,7 +1,9 @@
 <script lang="ts">
+    import { tick } from 'svelte';
     import BellIcon from '@lucide/svelte/icons/bell';
     import EventRow from './EventRow.svelte';
     import TransferRow from './TransferRow.svelte';
+    import { hasActiveModal } from '../modals/modal-a11y';
     import { portal } from './portal';
     import {
         activeTransfers,
@@ -23,10 +25,10 @@
     const HOVER_GRACE_MS = 280;
 
     let bellEl = $state<HTMLButtonElement | null>(null);
+    let panelEl = $state<HTMLElement | null>(null);
     let anchor = $state({ top: 0, right: 0 });
     let hoverGraceTimer: ReturnType<typeof setTimeout> | null = null;
-
-
+    let panelFocusVersion = 0;
 
     function reanchor(): void {
         if (!bellEl) return;
@@ -44,15 +46,26 @@
         }
     }
 
+    function focusPanel(): void {
+        const version = ++panelFocusVersion;
+        void tick().then(() => {
+            if (version !== panelFocusVersion || !$notifPanelOpen) return;
+            panelEl?.querySelector<HTMLElement>('[data-notif-initial-focus]')?.focus({ preventScroll: true });
+        });
+    }
+
     function openPanel(): void {
         closeHover();
         reanchor();
         notifPanelOpen.set(true);
         notifUnreadErrors.set(0); // opening clears the unread badge
+        focusPanel();
     }
 
-    function closePanel(): void {
+    function closePanel({ restoreFocus = false }: { restoreFocus?: boolean } = {}): void {
+        panelFocusVersion += 1;
         notifPanelOpen.set(false);
+        if (restoreFocus) bellEl?.focus({ preventScroll: true });
     }
 
     function togglePanel(): void {
@@ -90,9 +103,14 @@
     }
 
     function onWindowKeydown(event: KeyboardEvent): void {
-        if (event.key !== 'Escape') return;
-        if ($notifPanelOpen) closePanel();
-        else if ($notifHoverOpen) closeHover();
+        if (event.key !== 'Escape' || hasActiveModal()) return;
+        if ($notifPanelOpen) {
+            event.preventDefault();
+            event.stopPropagation();
+            closePanel({ restoreFocus: true });
+        } else if ($notifHoverOpen) {
+            closeHover();
+        }
     }
 
     function onDocumentMousedown(event: MouseEvent): void {
@@ -120,6 +138,7 @@
     type="button"
     data-mode={$bellMode}
     aria-haspopup="dialog"
+    aria-controls="notif-panel"
     aria-expanded={$notifPanelOpen ? 'true' : 'false'}
     aria-label="Notifications"
     onclick={(event) => {
@@ -168,10 +187,12 @@
 {#if $notifPanelOpen}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
+        bind:this={panelEl}
+        id="notif-panel"
         class="notif-panel"
         role="dialog"
         aria-modal="false"
-        aria-label="Notifications"
+        aria-labelledby="notif-panel-title"
         tabindex="-1"
         style={`top:${anchor.top}px; right:${anchor.right}px;`}
         use:portal
@@ -179,15 +200,25 @@
         onclick={(event) => event.stopPropagation()}
     >
         <div class="notif-panel-header">
-            <div class="notif-panel-title">Notifications</div>
-            <button
-                class="notif-panel-clear"
-                type="button"
-                disabled={$recentEvents.length === 0}
-                onclick={onClearHistory}
-            >
-                Clear
-            </button>
+            <div id="notif-panel-title" class="notif-panel-title">Notifications</div>
+            <div class="notif-panel-actions">
+                <button
+                    class="notif-panel-clear"
+                    type="button"
+                    disabled={$recentEvents.length === 0}
+                    onclick={onClearHistory}
+                >
+                    Clear
+                </button>
+                <button
+                    class="notif-panel-close"
+                    type="button"
+                    data-notif-initial-focus
+                    onclick={() => closePanel({ restoreFocus: true })}
+                >
+                    Close
+                </button>
+            </div>
         </div>
         <div class="notif-panel-body">
             {#if $activeTransfers.length > 0}

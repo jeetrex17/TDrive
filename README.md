@@ -67,6 +67,12 @@
 - Native mpv playback for formats the system webview cannot decode, including MKV and HEVC.
 - Audio-track, subtitle, playback-speed, picture-fit, and subtitle-appearance controls.
 
+### Desktop accessibility
+
+- The file grid supports keyboard navigation: **Up/Down/Home/End** move focus; **Space** selects, toggles, or range-selects with **Shift**; **Enter** opens a folder, previews a file, or downloads when preview is unavailable.
+- **Right** enters row actions; **Left** or **Escape** returns to the row. **F2**, **Delete**, **Menu**, or **Shift+F10** exposes the selected row’s action menu.
+- Dialogs keep keyboard focus in the active dialog and restore it to the invoking control when closed.
+
 ### Share and collaborate
 
 - Shared drives backed by Telegram megagroups.

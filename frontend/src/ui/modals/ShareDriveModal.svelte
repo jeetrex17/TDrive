@@ -60,7 +60,7 @@
     restoreFocus="#drives-nav"
     onClose={close}
 >
-    <input id="share-drive-link" type="text" readonly value={link} bind:this={inputEl} />
+    <input id="share-drive-link" type="text" aria-label="Shared drive invite link" readonly value={link} bind:this={inputEl} />
 
     {#snippet actions()}
         <button id="share-drive-close" class="secondary-btn" type="button" onclick={close}>Close</button>

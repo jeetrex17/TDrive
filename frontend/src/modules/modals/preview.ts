@@ -6,6 +6,7 @@ import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
 import PreviewModal from '../../ui/preview/PreviewModal.svelte';
 import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
+import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
 import type { PreviewPayload } from '../../types';
 import type { FileCommandItem } from '../../ui/file-list/types';
 import {
@@ -89,6 +90,10 @@ let activePreviewMsgID = 0;
 let activePreviewItem: any = null;
 let chromeHideTimer: any = null;
 let previewMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let previewHostEl: HTMLElement | null = null;
+let previewA11y: ReturnType<typeof installModalA11y> | null = null;
+let previewProgressUnsubscribe: (() => void) | null = null;
+const previewListenerCleanups: Array<() => void> = [];
 let activePreviewTransitionSource: PreviewTransitionSource | null = null;
 const previewTransition = createPreviewTransitionController();
 
@@ -97,6 +102,12 @@ const previewTransition = createPreviewTransitionController();
 // can page through it. A single-item open (file-list preview) leaves it empty.
 let navItems: any[] = [];
 let navIndex = -1;
+
+function listenPreview(target: EventTarget | null, type: string, listener: EventListener, options?: boolean | AddEventListenerOptions): void {
+    if (!target) return;
+    target.addEventListener(type, listener, options);
+    previewListenerCleanups.push(() => target.removeEventListener(type, listener, options));
+}
 
 function isSpaceKey(event: any) {
     return event.code === "Space" || event.key === " " || event.key === "Spacebar";
@@ -518,6 +529,8 @@ export function closePreviewModal() {
     if (modalEl) {
         modalEl.style.display = "none";
         modalEl.setAttribute("aria-hidden", "true");
+        previewA11y?.deactivate();
+        deactivateModalOwnership(modalEl);
         modalEl.classList.remove("is-chrome-visible", "is-preview-error", "is-preview-locked", "is-shared-entering");
     }
     if (filenameEl) filenameEl.textContent = "";
@@ -540,6 +553,8 @@ async function openPreviewItem(item: any, transitionSource: PreviewTransitionSou
     activePreviewTransitionSource = transitionSource;
     modalEl.style.display = "flex";
     modalEl.setAttribute("aria-hidden", "false");
+    previewA11y?.activate();
+    activateModalOwnership(modalEl);
     setChromeVisible(true);
     preparePreviewSurface(item.name || "Preview", { keepCurrentImage });
     if (!wasOpen && transitionSource && previewTransition.beginOpen(transitionSource, modalEl)) {
@@ -995,17 +1010,77 @@ async function handlePreviewKeydown(event: any) {
     closePreviewModal();
 }
 
-export function setupPreviewModal() {
-    const host = document.getElementById("preview-modal");
-    if (host && !previewMarkupHandle) {
-        host.replaceChildren();
-        previewMarkupHandle = mountSvelte(PreviewModal, { target: host, props: {} });
+export function teardownPreviewModal(): void {
+    if (isPreviewOpen()) closePreviewModal();
+    previewA11y?.deactivate();
+    if (modalEl) deactivateModalOwnership(modalEl);
+    previewA11y = null;
+    previewProgressUnsubscribe?.();
+    previewProgressUnsubscribe = null;
+    for (let i = previewListenerCleanups.length - 1; i >= 0; i -= 1) {
+        previewListenerCleanups[i]();
     }
+    previewListenerCleanups.length = 0;
+    void previewMarkupHandle?.destroy();
+    previewMarkupHandle = null;
+    previewHostEl = null;
+    previewReady = false;
+    previewTransition.cancel();
+    preloadEpoch += 1;
+    fullCache.clear();
+    clearActivePreview();
+    infoOpen = false;
+    modalEl = null;
+    shellEl = null;
+    stageEl = null;
+    filenameEl = null;
+    imageEl = null;
+    loadingEl = null;
+    loadingFillEl = null;
+    errorEl = null;
+    closeBtnEl = null;
+    prevBtnEl = null;
+    nextBtnEl = null;
+    counterEl = null;
+    downloadBtnEl = null;
+    infoBtnEl = null;
+    infoPanelEl = null;
+    infoBodyEl = null;
+    infoCloseBtnEl = null;
+    lockedEl = null;
+    lockedInputEl = null;
+    lockedUnlockEl = null;
+    lockedEyeEl = null;
+    lockedErrorEl = null;
+    lockedHintEl = null;
+    lockedHintTextEl = null;
+}
+
+export function setupPreviewModal(): boolean {
+    const host = document.getElementById("preview-modal");
+    if (!host) {
+        if (previewHostEl || previewMarkupHandle) teardownPreviewModal();
+        previewReady = false;
+        return false;
+    }
+
+    const canReuse = previewHostEl === host
+        && previewReady
+        && REQUIRED_ELEMENT_IDS.every((id) => Boolean(document.getElementById(id)));
+    if (canReuse) {
+        updateNavChrome();
+        return true;
+    }
+    if (previewHostEl || previewMarkupHandle || previewReady) teardownPreviewModal();
+
+    host.replaceChildren();
+    previewMarkupHandle = mountSvelte(PreviewModal, { target: host, props: {} });
+    previewHostEl = host;
 
     const missing = REQUIRED_ELEMENT_IDS.filter((id) => !document.getElementById(id));
     if (missing.length) {
         previewReady = false;
-        console.error(`Preview modal setup failed. Missing DOM elements: ${missing.join(", ")}`);
+        console.error("Preview modal setup failed. Missing DOM elements: " + missing.join(", "));
         return false;
     }
 
@@ -1018,8 +1093,6 @@ export function setupPreviewModal() {
     loadingFillEl = document.getElementById("preview-loading-fill");
     errorEl = document.getElementById("preview-error");
     closeBtnEl = document.getElementById("preview-close");
-    // Optional chrome: list navigation + download. Absent in older markup, so
-    // these are not in REQUIRED_ELEMENT_IDS and every use is guarded.
     prevBtnEl = document.getElementById("preview-prev");
     nextBtnEl = document.getElementById("preview-next");
     counterEl = document.getElementById("preview-counter");
@@ -1036,124 +1109,93 @@ export function setupPreviewModal() {
     lockedHintEl = document.getElementById("preview-locked-hint");
     lockedHintTextEl = document.getElementById("preview-locked-hint-text");
     previewReady = true;
+    previewA11y = installModalA11y(modalEl, {
+        requestClose: closePreviewModal,
+        initialFocus: () => closeBtnEl,
+        restoreFocus: () => state.virtualView === "photos"
+            ? document.getElementById("gallery-view")
+            : document.getElementById("file-list"),
+    });
 
-    if (prevBtnEl) {
-        prevBtnEl.addEventListener("click", (e: any) => {
-            e.stopPropagation();
-            void navigatePreview(-1);
-        });
-    }
-    if (nextBtnEl) {
-        nextBtnEl.addEventListener("click", (e: any) => {
-            e.stopPropagation();
-            void navigatePreview(1);
-        });
-    }
-    if (downloadBtnEl) {
-        downloadBtnEl.addEventListener("click", (e: any) => {
-            e.stopPropagation();
-            handleDownloadFromPreview();
-        });
-    }
-    if (infoBtnEl) {
-        infoBtnEl.addEventListener("click", (e: any) => {
-            e.stopPropagation();
-            toggleInfoPanel();
-        });
-    }
-    if (infoCloseBtnEl) {
-        infoCloseBtnEl.addEventListener("click", (e: any) => {
-            e.stopPropagation();
-            closeInfoPanel();
-        });
-    }
-    if (lockedUnlockEl) {
-        lockedUnlockEl.addEventListener("click", (e: any) => {
-            e.stopPropagation();
+    listenPreview(prevBtnEl, "click", ((event: MouseEvent) => {
+        event.stopPropagation();
+        void navigatePreview(-1);
+    }) as EventListener);
+    listenPreview(nextBtnEl, "click", ((event: MouseEvent) => {
+        event.stopPropagation();
+        void navigatePreview(1);
+    }) as EventListener);
+    listenPreview(downloadBtnEl, "click", ((event: MouseEvent) => {
+        event.stopPropagation();
+        handleDownloadFromPreview();
+    }) as EventListener);
+    listenPreview(infoBtnEl, "click", ((event: MouseEvent) => {
+        event.stopPropagation();
+        toggleInfoPanel();
+    }) as EventListener);
+    listenPreview(infoCloseBtnEl, "click", ((event: MouseEvent) => {
+        event.stopPropagation();
+        closeInfoPanel();
+    }) as EventListener);
+    listenPreview(lockedUnlockEl, "click", ((event: MouseEvent) => {
+        event.stopPropagation();
+        void submitInlineUnlock();
+    }) as EventListener);
+    listenPreview(lockedEyeEl, "click", ((event: MouseEvent) => {
+        event.stopPropagation();
+        toggleLockedReveal();
+    }) as EventListener);
+    listenPreview(lockedInputEl, "keydown", ((event: KeyboardEvent) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
             void submitInlineUnlock();
-        });
-    }
-    if (lockedEyeEl) {
-        lockedEyeEl.addEventListener("click", (e: any) => {
-            e.stopPropagation();
-            toggleLockedReveal();
-        });
-    }
-    if (lockedInputEl) {
-        lockedInputEl.addEventListener("keydown", (e: any) => {
-            if (e.key === "Enter") {
-                e.preventDefault();
-                void submitInlineUnlock();
-            }
-            // Don't let typing (Space/arrows/i) trigger preview keyboard shortcuts.
-            e.stopPropagation();
-        });
-    }
-    if (infoPanelEl) {
-        // Map links open in the system browser. The panel is rebuilt via
-        // innerHTML, so handle clicks by delegation.
-        infoPanelEl.addEventListener("click", (event: MouseEvent) => {
-            const link = (event.target as HTMLElement).closest("[data-map-url]") as HTMLElement | null;
-            if (!link) return;
-            event.stopPropagation();
-            const url = link.getAttribute("data-map-url") || "";
-            if (url) openExternalUrl(url);
-        });
-    }
-    updateNavChrome();
-
-    closeBtnEl.addEventListener("click", closePreviewModal);
-    modalEl.addEventListener("click", (event: any) => {
-        // A pan drag can end with a click on the backdrop; don't treat it as
-        // a close.
+        }
+        event.stopPropagation();
+    }) as EventListener);
+    listenPreview(infoPanelEl, "click", ((event: MouseEvent) => {
+        const link = (event.target as HTMLElement).closest("[data-map-url]") as HTMLElement | null;
+        if (!link) return;
+        event.stopPropagation();
+        const url = link.getAttribute("data-map-url") || "";
+        if (url) openExternalUrl(url);
+    }) as EventListener);
+    listenPreview(closeBtnEl, "click", closePreviewModal as EventListener);
+    listenPreview(modalEl, "click", ((event: MouseEvent) => {
         if (panMoved) {
             panMoved = false;
             return;
         }
-        if (event.target === modalEl || event.target === shellEl || event.target === stageEl) {
-            closePreviewModal();
-        }
-    });
-    modalEl.addEventListener("pointermove", () => {
-        if (!isPreviewOpen()) return;
-        revealChrome();
-    });
-
-    // Zoom + pan on the image. Wheel zooms toward the cursor, double-click
-    // toggles, and dragging pans while zoomed.
-    stageEl.addEventListener("wheel", handleZoomWheel, { passive: false });
-    imageEl.addEventListener("dblclick", handleZoomDblClick);
-    imageEl.addEventListener("pointerdown", handlePanStart);
-    imageEl.addEventListener("pointermove", handlePanMove);
-    imageEl.addEventListener("pointerup", handlePanEnd);
-    imageEl.addEventListener("pointercancel", handlePanEnd);
-    closeBtnEl.addEventListener("focus", () => {
+        if (event.target === modalEl || event.target === shellEl || event.target === stageEl) closePreviewModal();
+    }) as EventListener);
+    listenPreview(modalEl, "pointermove", (() => {
+        if (isPreviewOpen()) revealChrome();
+    }) as EventListener);
+    listenPreview(stageEl, "wheel", handleZoomWheel as EventListener, { passive: false });
+    listenPreview(imageEl, "dblclick", handleZoomDblClick as EventListener);
+    listenPreview(imageEl, "pointerdown", handlePanStart as EventListener);
+    listenPreview(imageEl, "pointermove", handlePanMove as EventListener);
+    listenPreview(imageEl, "pointerup", handlePanEnd as EventListener);
+    listenPreview(imageEl, "pointercancel", handlePanEnd as EventListener);
+    listenPreview(closeBtnEl, "focus", (() => {
         setChromeVisible(true);
         clearChromeHideTimer();
-    });
-    closeBtnEl.addEventListener("blur", () => {
-        scheduleChromeHide();
-    });
-    imageEl.addEventListener("error", () => {
-        if (!isPreviewOpen() || !imageEl.getAttribute("src")) return;
-        showPreviewError("Not a supported image");
-    });
-    imageEl.addEventListener("load", () => {
-        // Full image decoded: the info panel can now report real dimensions.
+    }) as EventListener);
+    listenPreview(closeBtnEl, "blur", (() => scheduleChromeHide()) as EventListener);
+    listenPreview(imageEl, "error", (() => {
+        if (isPreviewOpen() && imageEl?.getAttribute("src")) showPreviewError("Not a supported image");
+    }) as EventListener);
+    listenPreview(imageEl, "load", (() => {
         if (infoOpen) refreshInfoPanel();
-    });
-    onRuntimeEvent<[unknown, unknown]>("preview_progress", (msgID, percent) => {
+    }) as EventListener);
+    previewProgressUnsubscribe = onRuntimeEvent<[unknown, unknown]>("preview_progress", (msgID, percent) => {
         if (!isPreviewOpen()) return;
-
         const targetID = Number(msgID);
         if (!Number.isFinite(targetID) || targetID !== activePreviewMsgID) return;
-
         setPreviewProgress(percent);
     });
-
-    window.addEventListener("keydown", (event) => {
+    listenPreview(window, "keydown", ((event: KeyboardEvent) => {
         void handlePreviewKeydown(event);
-    }, true);
-
+    }) as EventListener, true);
+    updateNavChrome();
     return true;
 }

@@ -40,7 +40,7 @@ export type FileListFileRow = BaseInteractiveRow & {
     kind: 'file';
     baseName: string;
     ext: string;
-    source: string;
+    source: FileSource;
     size: number;
     uploaderID: number;
     uploadTime: number;

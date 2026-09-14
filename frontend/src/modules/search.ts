@@ -12,7 +12,7 @@ import {
     syncDriveRowTabStops,
 } from './file-list';
 import { setPhotosMode } from './gallery';
-import { refreshFolderIndex } from './folder-index';
+import { getFolderIndexDriveKey, refreshFolderIndex } from './folder-index';
 import { canOpenFileViewer, isVideoFile } from './media-types';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { appActions } from './app-actions';
@@ -23,6 +23,9 @@ import type { RootFile, SearchHit } from '../types';
 let activeToken = 0;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let colDateEl: HTMLElement | null = null;
+let telegramRootRequest: Promise<RootFile[]> | null = null;
+let telegramRootRequestDriveKey: string | null = null;
+const inFlightSearches = new Map<string, Promise<SearchHit[]>>();
 let colDateText = "";
 
 function setHeaderMode(isSearch: boolean) {
@@ -37,18 +40,48 @@ function getSearchInput() {
     return document.getElementById("search-input") as HTMLInputElement | null;
 }
 
-async function getTelegramRootFiles(): Promise<RootFile[]> {
-    if (state.telegramRootCache) return state.telegramRootCache;
-    try {
-        state.telegramRootCache = await getFileList();
+async function getTelegramRootFiles(driveKey: string): Promise<RootFile[]> {
+    if (state.telegramRootCacheDriveKey === driveKey && state.telegramRootCache) {
         return state.telegramRootCache;
-    } catch {
-        return [];
     }
+    if (telegramRootRequestDriveKey === driveKey && telegramRootRequest) {
+        return telegramRootRequest;
+    }
+
+    const request = getFileList()
+        .then((files) => {
+            if ((getFolderIndexDriveKey() ?? 'none') === driveKey) {
+                state.telegramRootCache = files;
+                state.telegramRootCacheDriveKey = driveKey;
+            }
+            return files;
+        })
+        .catch(() => [] as RootFile[]);
+    telegramRootRequest = request;
+    telegramRootRequestDriveKey = driveKey;
+    const clearRequest = () => {
+        if (telegramRootRequest === request) {
+            telegramRootRequest = null;
+            telegramRootRequestDriveKey = null;
+        }
+    };
+    void request.then(clearRequest, clearRequest);
+    return request;
 }
 
-async function searchDrive(query: string, limit: number): Promise<SearchHit[]> {
-    return search(query, limit);
+function searchDrive(query: string, limit: number): Promise<SearchHit[]> {
+    const driveKey = getFolderIndexDriveKey() ?? 'none';
+    const requestKey = driveKey + '\u0000' + query.trim().toLowerCase() + '\u0000' + String(limit);
+    const existing = inFlightSearches.get(requestKey);
+    if (existing) return existing;
+
+    const request = search(query, limit);
+    inFlightSearches.set(requestKey, request);
+    const clearRequest = () => {
+        if (inFlightSearches.get(requestKey) === request) inFlightSearches.delete(requestKey);
+    };
+    void request.then(clearRequest, clearRequest);
+    return request;
 }
 
 function renderSearchResults(results: SearchHit[], query: string) {
@@ -168,9 +201,11 @@ function renderSearchResults(results: SearchHit[], query: string) {
 }
 
 export function clearSearch({ refresh = true } = {}) {
+    cancelScheduledSearch();
+    activeToken += 1;
     const input = getSearchInput();
-    if (input) input.value = "";
-    state.searchQuery = "";
+    if (input) input.value = '';
+    state.searchQuery = '';
     resetFileListScrollRestore();
     setHeaderMode(false);
     clearSelection();
@@ -233,35 +268,37 @@ async function openFileResult(fileID: any, parentID: any) {
 }
 
 export async function runGlobalSearch() {
-    const query = String(state.searchQuery || "").trim();
-    const list = document.getElementById("file-list");
+    cancelScheduledSearch();
+    const query = String(state.searchQuery || '').trim();
+    const list = document.getElementById('file-list');
     if (!list) return;
     if (!query) return;
 
     // Search results render into #file-list, which the Photos view hides. A
     // search is a file-list operation, so leave Photos mode when one runs.
-    if (state.virtualView === "photos") {
+    if (state.virtualView === 'photos') {
         state.virtualView = null;
         setPhotosMode(false);
     }
 
     const token = ++activeToken;
+    const driveKey = getFolderIndexDriveKey() ?? 'none';
     setHeaderMode(true);
     clearSelection();
-    renderFileState(list, "loading", "Searching files");
+    renderFileState(list, 'loading', 'Searching files');
 
     try {
         const [fsResults, tgFiles] = await Promise.all([
             searchDrive(query, 200).catch(() => []),
-            getTelegramRootFiles(),
+            getTelegramRootFiles(driveKey),
         ]);
-        if (token !== activeToken) return;
+        if (token !== activeToken || (getFolderIndexDriveKey() ?? 'none') !== driveKey) return;
 
         const normalized = query.toLowerCase();
         const fs = fsResults;
 
         const fsFileIDs = new Set(
-            fs.filter((result) => result.type === "file").map((result) => result.id),
+            fs.filter((result) => result.type === 'file').map((result) => result.id),
         );
 
         const tgMatches: SearchHit[] = tgFiles
@@ -269,32 +306,41 @@ export async function runGlobalSearch() {
             .filter((file) => !fsFileIDs.has(String(file.msgId)))
             .slice(0, 50)
             .map((file) => ({
-                type: "file",
+                type: 'file',
                 id: String(file.msgId),
                 name: file.name,
                 size: file.size,
-                parentId: "",
+                parentId: '',
                 uploadTime: file.date,
                 uploaderId: 0,
                 encrypted: false,
                 plaintextSize: 0,
-                path: "My Drive",
-                source: "tg",
+                path: 'My Drive',
+                source: 'tg',
             }));
 
         renderSearchResults([...fs, ...tgMatches], query);
     } catch (err) {
-        if (token !== activeToken) return;
-        renderFileState(list, "error", "Search failed", "Try again or refine your query.");
-        console.error("Search failed:", err);
+        if (token !== activeToken || (getFolderIndexDriveKey() ?? 'none') !== driveKey) return;
+        renderFileState(list, 'error', 'Search failed', 'Try again or refine your query.');
+        console.error('Search failed:', err);
+    }
+}
+
+function cancelScheduledSearch() {
+    if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
     }
 }
 
 function scheduleSearch() {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    const query = String(state.searchQuery || "").trim();
+    cancelScheduledSearch();
+    // A new input invalidates any request already rendering. The debounce
+    // callback will allocate the token for the query it actually runs.
+    activeToken += 1;
+    const query = String(state.searchQuery || '').trim();
     if (!query) {
-        activeToken += 1;
         setHeaderMode(false);
         clearSelection();
         appActions().refreshFiles();
@@ -302,7 +348,8 @@ function scheduleSearch() {
     }
     setHeaderMode(true);
     debounceTimer = setTimeout(() => {
-        runGlobalSearch();
+        debounceTimer = null;
+        void runGlobalSearch();
     }, 160);
 }
 

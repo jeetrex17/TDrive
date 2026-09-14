@@ -102,7 +102,7 @@
 }
 .notif-panel-header {
     flex-shrink: 0;
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2);
     padding: 12px 14px;
     border-bottom: 1px solid var(--glass-border);
 }
@@ -111,7 +111,14 @@
     font-weight: 600;
     color: var(--text-main);
 }
-.notif-panel-clear {
+.notif-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+.notif-panel-clear,
+.notif-panel-close {
     background: transparent;
     border: 1px solid var(--color-border-soft);
     color: var(--color-text-soft);
@@ -123,12 +130,19 @@
     cursor: pointer;
     transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
 }
-.notif-panel-clear:hover:not(:disabled) {
+.notif-panel-clear:hover:not(:disabled),
+.notif-panel-close:hover {
     background: var(--overlay-white-2);
     color: var(--text-main);
     border-color: var(--color-border);
 }
 .notif-panel-clear:disabled { opacity: 0.4; cursor: default; }
+.notif-panel-clear:focus-visible,
+.notif-panel-close:focus-visible,
+.notif-row-copy:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
 .notif-panel-body {
     overflow-y: auto;
     padding: 10px 14px 14px;
@@ -162,9 +176,15 @@
     transition: background 140ms ease, transform 140ms ease;
 }
 .notif-row:hover { background: var(--overlay-white-2); }
-.notif-row[data-clipable="1"] { cursor: pointer; }
-.notif-row[data-clipable="1"]:active { transform: scale(0.99); }
 .notif-row.notif-copied { background: var(--overlay-success-1); border-color: var(--overlay-success-2); }
+
+.notif-row-event { grid-template-columns: 22px minmax(0, 1fr) auto; row-gap: 6px; }
+.notif-row-event .notif-row-icon { align-self: start; }
+.notif-row-event .notif-row-body { grid-column: 2 / -1; }
+.notif-row-event .notif-row-meta { grid-column: 2; margin-left: 0; align-items: flex-start; }
+.notif-row-event .notif-row-copy { grid-column: 3; }
+.notif-row-event .notif-row-title { white-space: normal; overflow-wrap: anywhere; }
+.notif-row-event .notif-row-sub { display: block; overflow-wrap: anywhere; }
 
 .notif-row-icon {
     width: 22px; height: 22px;
@@ -226,6 +246,26 @@
     transition: background 0.15s ease, color 0.15s ease;
 }
 .notif-row-cancel:hover { background: var(--overlay-danger-1); color: var(--danger); }
+.notif-row-copy {
+    justify-self: end;
+    min-height: 26px;
+    padding: 3px 7px;
+    border: 1px solid var(--color-border-soft);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-soft);
+    font: inherit;
+    font-size: 0.74rem;
+    font-weight: 600;
+    line-height: 1.1;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.notif-row-copy:hover {
+    background: var(--overlay-white-2);
+    border-color: var(--color-border);
+    color: var(--text-main);
+}
 .notif-row-progress {
     width: 100%;
     height: 4px;

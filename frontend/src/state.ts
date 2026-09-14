@@ -90,11 +90,16 @@ export interface State {
 
     searchQuery: string;
     telegramRootCache: RootFile[] | null;
+    telegramRootCacheDriveKey: string | null;
     pendingFocus: { type: string; id: string | number } | null;
 
     folderIndexCache: any;
     folderIndexBuildPromise: any;
 
+    folderIndexCacheDriveKey: string | null;
+    folderIndexBuildDriveKey: string | null;
+    folderIndexBuildGeneration: number;
+    folderIndexGenerations: Map<string, number>;
     folderSizeEpoch: number;
 
     selectedItems: Map<string, FileCommandItem>;
@@ -142,11 +147,16 @@ export const state: State = {
 
     searchQuery: "",
     telegramRootCache: null,
+    telegramRootCacheDriveKey: null,
     pendingFocus: null,
 
     folderIndexCache: null,
     folderIndexBuildPromise: null,
 
+    folderIndexCacheDriveKey: null,
+    folderIndexBuildDriveKey: null,
+    folderIndexBuildGeneration: 0,
+    folderIndexGenerations: new Map(),
     folderSizeEpoch: 0,
 
     selectedItems: new Map(),
@@ -182,6 +192,53 @@ export function setTransferDirectionActive(direction: TransferDirection, active:
     const current = state.transferActivity;
     if (current[direction] === active) return;
     state.transferActivity = Object.freeze({ ...current, [direction]: active });
+}
+
+function normalizeFolderIndexDriveKey(driveKey: string | number | null | undefined): string | null {
+    if (driveKey === null || driveKey === undefined) return null;
+    const key = String(driveKey).trim();
+    return key ? key : null;
+}
+
+function bumpFolderIndexGeneration(driveKey: string): number {
+    const generation = (state.folderIndexGenerations.get(driveKey) ?? 0) + 1;
+    state.folderIndexGenerations.set(driveKey, generation);
+    return generation;
+}
+
+/**
+ * Invalidate the recursive folder index for one drive without invalidating
+ * unrelated drive state. A build is allowed to finish for its existing
+ * callers, but its generation no longer permits publishing into the cache.
+ */
+export function invalidateFolderIndex(driveKey?: string | number | null): void {
+    const key = normalizeFolderIndexDriveKey(driveKey === undefined ? state.activeChannel?.id : driveKey);
+    if (!key) {
+        const staleKeys = [state.folderIndexCacheDriveKey, state.folderIndexBuildDriveKey]
+            .filter((value): value is string => Boolean(value));
+        for (const staleKey of new Set(staleKeys)) bumpFolderIndexGeneration(staleKey);
+        state.folderIndexCache = null;
+        state.folderIndexCacheDriveKey = null;
+        state.folderIndexBuildPromise = null;
+        state.folderIndexBuildDriveKey = null;
+        state.folderIndexBuildGeneration = 0;
+        return;
+    }
+
+    bumpFolderIndexGeneration(key);
+    if (state.folderIndexCacheDriveKey === key) {
+        state.folderIndexCache = null;
+        state.folderIndexCacheDriveKey = null;
+    }
+    if (state.folderIndexBuildDriveKey === key) {
+        state.folderIndexBuildPromise = null;
+        state.folderIndexBuildDriveKey = null;
+        state.folderIndexBuildGeneration = 0;
+    }
+}
+
+export function folderIndexGeneration(driveKey: string | number): number {
+    return state.folderIndexGenerations.get(String(driveKey)) ?? 0;
 }
 
 // Helper to reset folder caches (called on refresh)

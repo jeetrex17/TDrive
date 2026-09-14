@@ -93,9 +93,113 @@ test('dashboard renders normalized first-party drive and file data', async ({ pa
 
     await expect(page.locator('#success-screen')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Personal', exact: true })).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('option', { name: 'File: contract.txt' })).toBeVisible();
+    await expect(page.getByRole('row', { name: 'File: contract.txt' })).toBeVisible();
     await expect(page.locator('#storage-used')).toContainText('0 B / Unlimited');
     expect(await mock.calls('GetFolderContents')).toMatchObject([{ args: [''] }]);
+});
+
+test('publishes merged root sources once after delayed data resolves', async ({ page }) => {
+    await page.addInitScript(() => {
+        const snapshots: string[] = window.__fileListSnapshots = [];
+        const attach = () => {
+            const list = document.getElementById('file-list');
+            if (!list || list.dataset.snapshotObserverAttached) return;
+            list.dataset.snapshotObserverAttached = 'true';
+            const capture = () => snapshots.push(Array.from(list.querySelectorAll<HTMLElement>('.drive-row'))
+                .map((row) => row.dataset.name ?? '').join('|'));
+            new MutationObserver(capture).observe(list, { childList: true, subtree: true });
+        };
+        const observeList = () => {
+            new MutationObserver(attach).observe(document.documentElement, { childList: true, subtree: true });
+            attach();
+        };
+        if (document.documentElement) observeList();
+        else document.addEventListener('DOMContentLoaded', observeList, { once: true });
+    });
+    await bootTDrive(page, {
+        GetFolderContents: resolves({
+            folders: [],
+            files: [{
+                name: 'filesystem.txt', size: 1, msg_id: 41, parent_id: '', upload_time: 1_735_689_600,
+                uploader_id: 7, encrypted: false, plaintext_size: 0,
+            }],
+        }, 120),
+        GetFileList: resolves([{
+            name: 'telegram.txt', size: 2, msg_id: 42, access_hash: 0, date: 1_735_689_601,
+        }], 180),
+    });
+
+    await expect(page.getByRole('row', { name: 'File: filesystem.txt' })).toBeVisible();
+    await expect(page.getByRole('row', { name: 'File: telegram.txt' })).toBeVisible();
+
+    const snapshots = await page.evaluate(() => window.__fileListSnapshots ?? []);
+    expect(snapshots.some((snapshot) => snapshot.includes('filesystem.txt') && !snapshot.includes('telegram.txt'))).toBe(false);
+});
+
+test('keeps foreground navigation failures visible', async ({ page }) => {
+    await bootTDrive(page, {
+        GetFolderContents: byFirstArg({
+            '': resolves({ folders: [{ id: 'reports', name: 'Reports', parent_id: '' }], files: [] }),
+            reports: rejects('Folder is unavailable', 120),
+        }),
+    });
+
+    const reports = page.getByRole('row', { name: 'Folder: Reports' });
+    await expect(reports).toBeVisible();
+    await reports.dblclick();
+
+    await expect(page.getByRole('alert')).toContainText('Folder is unavailable');
+});
+
+test('moves row focus and reaches row actions with the keyboard', async ({ page }) => {
+    await bootTDrive(page, {
+        GetFolderContents: resolves({
+            folders: [],
+            files: [
+                { name: 'older.txt', size: 1, msg_id: 1, parent_id: '', upload_time: 1, uploader_id: 7, encrypted: false, plaintext_size: 0 },
+                { name: 'newer.txt', size: 2, msg_id: 2, parent_id: '', upload_time: 2, uploader_id: 7, encrypted: false, plaintext_size: 0 },
+            ],
+        }),
+    });
+
+    const newest = page.getByRole('row', { name: 'File: newer.txt' });
+    const older = page.getByRole('row', { name: 'File: older.txt' });
+    await expect(newest).toBeVisible();
+    await newest.focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(older).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(older).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('ArrowRight');
+    await expect(older.getByRole('button', { name: 'Open file' })).toBeFocused();
+    await page.keyboard.press('ArrowLeft');
+    await expect(older).toBeFocused();
+});
+
+test('windows large file lists while preserving endpoint keyboard focus', async ({ page }) => {
+    await bootTDrive(page, {
+        GetFolderContents: resolves({
+            folders: [],
+            files: Array.from({ length: 128 }, (_, index) => ({
+                name: `entry-${String(index).padStart(3, '0')}.txt`,
+                size: index + 1,
+                msg_id: index + 1,
+                parent_id: '',
+                upload_time: index + 1,
+                uploader_id: 7,
+                encrypted: false,
+                plaintext_size: 0,
+            })),
+        }),
+    });
+
+    const list = page.locator('#file-list');
+    const newest = page.getByRole('row', { name: 'File: entry-127.txt' });
+    const oldest = page.getByRole('row', { name: 'File: entry-000.txt' });
+    await newest.focus();
+    await page.keyboard.press('End');
+    await expect(oldest).toBeFocused();
+    expect(await list.locator('.drive-row').count()).toBeLessThan(64);
 });
 
 test('returning from Photos keeps the current file list while it refreshes', async ({ page }) => {
@@ -122,7 +226,7 @@ test('returning from Photos keeps the current file list while it refreshes', asy
         ], 400),
     });
 
-    const file = page.getByRole('option', { name: 'File: contract.txt' });
+    const file = page.getByRole('row', { name: 'File: contract.txt' });
     await expect(file).toBeVisible();
     const folders = page.locator('#file-list .folder-row');
     await expect(folders).toHaveCount(2);

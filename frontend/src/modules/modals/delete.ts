@@ -1,6 +1,7 @@
 // Delete modal for TDrive frontend
 
 import { deleteFile, deleteFolder } from '../../api';
+import { invalidateFolderIndex } from '../../state';
 import { clearSelection } from '../selection';
 import { ensureNotInsideDeletedFolder } from '../navigation';
 import { notify, dismissNotification } from '../notifications';
@@ -152,6 +153,7 @@ async function confirmDelete(): Promise<void> {
             for (const { item, error } of failures) {
                 notify({ level: 'error', title: failureTitle(item), body: error });
             }
+            if (succeeded.length > 0) invalidateFolderIndex();
             appActions().refreshFiles();
             return;
         }
@@ -172,6 +174,7 @@ async function confirmDelete(): Promise<void> {
         }
         if (target.type === 'folder') ensureNotInsideDeletedFolder(target.id);
         notify({ level: 'success', title: successTitle(target) });
+        invalidateFolderIndex();
         appActions().refreshFiles();
     } catch (error) {
         console.error('Delete failed:', error);

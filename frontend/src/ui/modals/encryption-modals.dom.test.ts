@@ -143,8 +143,11 @@ describe('EncryptionPasswordModal secret lifecycle', () => {
         click(host, '#encryption-password-confirm');
         await settleSubmission();
 
+        const error = host.querySelector('#encryption-password-error');
         expect(input(host, '#encryption-password-input').value).toBe('');
-        expect(host.querySelector('#encryption-password-error')?.textContent).toContain('Wrong password.');
+        expect(input(host, '#encryption-password-input').getAttribute('aria-describedby')).toBe('encryption-password-error');
+        expect(error?.getAttribute('role')).toBe('alert');
+        expect(error?.textContent).toContain('Wrong password.');
 
         encryptionPasswordModal.close();
         flushSync();
@@ -260,9 +263,15 @@ describe('EncryptionSetupModal secret lifecycle', () => {
         click(host, '#encryption-setup-confirm');
         await settleSubmission();
 
-        expect(input(host, '#encryption-setup-password').value).toBe('');
+        const error = host.querySelector('#encryption-setup-error');
+        const password = input(host, '#encryption-setup-password');
+        expect(password.value).toBe('');
         expect(input(host, '#encryption-setup-password-confirm').value).toBe('');
-        expect(host.querySelector('#encryption-setup-error')?.textContent).toContain('Setup failed.');
+        expect(password.getAttribute('aria-label')).toBe('Encryption password');
+        expect(password.getAttribute('aria-describedby')).toBe('encryption-setup-help encryption-setup-error');
+        expect(host.querySelector('#encryption-setup-help')?.textContent).toContain('every encrypted file');
+        expect(error?.getAttribute('role')).toBe('alert');
+        expect(error?.textContent).toContain('Setup failed.');
 
         encryptionSetupModal.close();
         flushSync();

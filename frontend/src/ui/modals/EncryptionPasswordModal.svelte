@@ -69,6 +69,8 @@
     <input
         id="encryption-password-input"
         type="password"
+        aria-label="Encryption password"
+        aria-describedby={hint && $view.error ? 'encryption-password-hint encryption-password-error' : hint ? 'encryption-password-hint' : $view.error ? 'encryption-password-error' : undefined}
         placeholder="Password"
         autocomplete="current-password"
         bind:this={passwordInput}
@@ -77,7 +79,7 @@
         onkeydown={onInputKeydown}
     />
     {#if $view.error}
-        <div id="encryption-password-error" class="modal-error">{$view.error}</div>
+        <div id="encryption-password-error" class="modal-error" role="alert">{$view.error}</div>
     {/if}
 
     {#snippet actions()}

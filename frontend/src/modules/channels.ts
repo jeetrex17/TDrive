@@ -5,7 +5,7 @@
 // state.activeChannel in sync; tells the sidebar to re-render on every
 // change.
 
-import { state, resetFolderCaches, resetSelection } from '../state';
+import { state, invalidateFolderIndex, resetFolderCaches, resetSelection } from '../state';
 import {
     approveJoinRequest as approveJoinRequestApi,
     checkPendingJoin as checkPendingJoinApi,
@@ -46,6 +46,13 @@ let liveSyncEventsBound = false;
 export function bindChannelsRenderers({ onSidebarUpdate, onActiveDriveChanged }: ChannelRenderers): void {
     renderSidebar = onSidebarUpdate;
     refreshFilesView = onActiveDriveChanged;
+}
+
+function invalidateDriveCaches(channelId: number): void {
+    invalidateFolderIndex(channelId);
+    if (state.telegramRootCacheDriveKey !== String(channelId)) return;
+    state.telegramRootCache = null;
+    state.telegramRootCacheDriveKey = null;
 }
 
 function applyChannels(channels: DriveChannel[]): void {
@@ -114,10 +121,10 @@ async function processLiveSyncRefreshes(): Promise<void> {
             pendingLiveSyncChannels.clear();
 
             await loadChannels();
+            for (const changedId of changedChannels) invalidateDriveCaches(changedId);
             const activeId = Number(state.activeChannel?.id ?? 0);
             if (!activeId || !changedChannels.has(activeId)) continue;
 
-            state.telegramRootCache = null;
             if (state.searchQuery.trim()) {
                 void runGlobalSearch();
             } else {
@@ -209,6 +216,7 @@ export async function switchActiveChannel(channelId: number): Promise<void> {
 
         state.currentFolderId = '';
         state.folderPath = [];
+        invalidateDriveCaches(channelId);
         resetFolderCaches();
         resetSelection();
 
@@ -227,10 +235,13 @@ export async function refreshActiveDrive(): Promise<void> {
         await refreshFilesView();
         return;
     }
+    const channelId = state.activeChannel.id;
     try {
-        await syncChannel(state.activeChannel.id);
+        await syncChannel(channelId);
     } catch (error) {
         console.warn('SyncChannel:', error);
+    } finally {
+        invalidateDriveCaches(channelId);
     }
     await refreshFilesView();
 }
@@ -238,8 +249,12 @@ export async function refreshActiveDrive(): Promise<void> {
 function syncInBackground(channelId: number): void {
     void syncChannel(channelId)
         .then(() => {
+            invalidateDriveCaches(channelId);
             if (Number(state.activeChannel?.id ?? 0) !== channelId) return;
             return refreshFilesView({ background: true });
         })
-        .catch((error: unknown) => console.warn('SyncChannel:', error));
+        .catch((error: unknown) => {
+            invalidateDriveCaches(channelId);
+            console.warn('SyncChannel:', error);
+        });
 }

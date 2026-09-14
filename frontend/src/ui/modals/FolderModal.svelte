@@ -58,6 +58,7 @@
     <input
         id="new-folder-name"
         type="text"
+        aria-label="Folder name"
         placeholder="Folder name"
         autocomplete="off"
         bind:value={name}

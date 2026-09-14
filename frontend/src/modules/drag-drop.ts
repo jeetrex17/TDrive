@@ -1,6 +1,6 @@
 // Drag and drop handling for TDrive frontend
 
-import { state } from '../state';
+import { invalidateFolderIndex, state } from '../state';
 import {
     addTelegramFileToDrive,
     moveFile,
@@ -56,6 +56,7 @@ async function ensureFileInTdriveSystem(target: FileCommandItem): Promise<void> 
 export async function performDropMove(newParentId: string): Promise<void> {
     const drag = state.dragState;
     if (!drag) return;
+    const originatingDriveId = state.activeChannel?.id ?? null;
     const items = drag.items;
     if (items.length === 0 || newParentId === drag.parentId) {
         clearDropHighlights();
@@ -90,6 +91,11 @@ export async function performDropMove(newParentId: string): Promise<void> {
             body: lastError,
         });
     }
+    if (originatingDriveId !== null && state.telegramRootCacheDriveKey === String(originatingDriveId)) {
+        state.telegramRootCache = null;
+        state.telegramRootCacheDriveKey = null;
+    }
+    invalidateFolderIndex(originatingDriveId);
     appActions().refreshFiles();
     clearDropHighlights();
 }

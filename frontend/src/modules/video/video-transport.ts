@@ -134,6 +134,10 @@ export class VideoTransportController {
         this.resetThumbnailPreview();
     }
 
+    destroy(): void {
+        this.resetSession();
+    }
+
     isScrubberTooltipActive(): boolean {
         return Boolean(
             this.context.dom.scrubber?.classList.contains('is-hovered')
@@ -176,9 +180,15 @@ export class VideoTransportController {
     }
 
     private syncCenterPlay(state: PlayerState): void {
+        const { centerControls } = this.context.dom;
         const visible = Boolean(this.context.getAdapter() && state.paused && !state.loading && !this.context.hasError());
         this.context.dom.modal?.classList.toggle('is-video-paused', visible);
-        this.context.dom.centerControls?.setAttribute('aria-hidden', visible ? 'false' : 'true');
+        if (!centerControls) return;
+        if (!visible && centerControls.contains(document.activeElement)) {
+            (this.context.dom.playButton || this.context.dom.closeButton)?.focus({ preventScroll: true });
+        }
+        centerControls.inert = !visible;
+        centerControls.setAttribute('aria-hidden', visible ? 'false' : 'true');
     }
 
     private syncButtonState(state: PlayerState): void {

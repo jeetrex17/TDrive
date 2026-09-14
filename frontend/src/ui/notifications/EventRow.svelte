@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onDestroy } from 'svelte';
     import CheckIcon from '@lucide/svelte/icons/check';
     import CircleXIcon from '@lucide/svelte/icons/circle-x';
     import InfoIcon from '@lucide/svelte/icons/info';
@@ -43,13 +44,13 @@
             copiedTimer = null;
         }, 800);
     }
+    onDestroy(() => {
+        if (copiedTimer) clearTimeout(copiedTimer);
+    });
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->
 <div
     class={`notif-row notif-row-event level-${event.level}${copied ? ' notif-copied' : ''}`}
-    data-clipable={clipable ? '1' : '0'}
-    onclick={() => void copyBody()}
 >
     <span class="notif-row-icon" data-kind={event.level} aria-hidden="true">
         {#if event.level === 'success'}
@@ -69,4 +70,14 @@
         {/if}
     </div>
     <div class="notif-row-meta">{formatRelative(event.ts)}</div>
+    {#if clipable}
+        <button
+            class="notif-row-copy"
+            type="button"
+            aria-label={copied ? 'Error details copied' : 'Copy error details'}
+            onclick={() => void copyBody()}
+        >
+            {copied ? 'Copied' : 'Copy details'}
+        </button>
+    {/if}
 </div>

@@ -104,6 +104,8 @@
         <input
             id="encryption-current-password"
             type={revealCurrent ? 'text' : 'password'}
+            aria-label="Current encryption password"
+            aria-describedby={$view.error ? 'encryption-settings-error' : undefined}
             placeholder="Current password"
             autocomplete="current-password"
             bind:this={currentPasswordInput}
@@ -127,6 +129,8 @@
         <input
             id="encryption-new-password"
             type={revealNew ? 'text' : 'password'}
+            aria-label="New encryption password"
+            aria-describedby={$view.error ? 'encryption-settings-error' : undefined}
             placeholder="New password"
             autocomplete="new-password"
             bind:this={newPasswordInput}
@@ -149,6 +153,8 @@
     <input
         id="encryption-new-password-confirm"
         type="password"
+        aria-label="Confirm new encryption password"
+        aria-describedby={$view.error ? 'encryption-settings-error' : undefined}
         placeholder="Confirm new password"
         autocomplete="new-password"
         bind:this={confirmPasswordInput}
@@ -158,17 +164,19 @@
     <input
         id="encryption-settings-hint"
         type="text"
+        aria-label="Password hint"
+        aria-describedby={$view.error ? 'encryption-settings-hint-help encryption-settings-error' : 'encryption-settings-hint-help'}
         placeholder="Optional hint (do not put the password here)"
         autocomplete="off"
         bind:value={hint}
         disabled={$view.busy}
     />
-    <p class="field-help">
+    <p id="encryption-settings-hint-help" class="field-help">
         This hint is shown when TDrive asks for your encryption password. It is not encrypted, so don't put the
         password itself here.
     </p>
     {#if $view.error}
-        <div id="encryption-settings-error" class="modal-error">{$view.error}</div>
+        <div id="encryption-settings-error" class="modal-error" role="alert">{$view.error}</div>
     {/if}
 
     {#snippet actions()}

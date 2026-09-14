@@ -21,6 +21,7 @@
         : 'is-active',
     );
     const progressWidth = $derived(Math.max(0, Math.min(100, transfer.progress || 0)));
+    const progressLabel = $derived(`${dirLabel} ${transfer.name || 'transfer'}`);
     const terminalLabel = $derived(
         transfer.status === 'done' ? 'Done'
         : transfer.status === 'failed' ? 'Failed'
@@ -31,20 +32,7 @@
         ? Math.min(transfer.total, Math.max(transfer.bytes || 0, ((transfer.progress || 0) / 100) * transfer.total))
         : transfer.bytes || 0);
 
-    // pointerdown, not click: the panel re-renders on every progress tick,
-    // which can replace the button between mousedown and mouseup and eat a
-    // click. It also runs before the row's copy handler can see the event.
-    function onCancelPointerDown(event: PointerEvent): void {
-        event.preventDefault();
-        event.stopPropagation();
-        onCancel?.(transfer.direction);
-    }
-
-    // Keyboard activation: pointerdown never fires for Enter/Space, and the
-    // native click those keys synthesize is not handled either.
-    function onCancelKeydown(event: KeyboardEvent): void {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
+    function cancel(event: MouseEvent): void {
         event.stopPropagation();
         onCancel?.(transfer.direction);
     }
@@ -60,8 +48,17 @@
     </span>
     <div class="notif-row-body">
         <div class="notif-row-title" title={transfer.name}>{transfer.name || dirLabel}</div>
-        <div class="notif-row-progress">
-            <div class="notif-row-progress-fill" style={`width:${progressWidth}%`}></div>
+        <!-- A progressbar reports state when queried or focused, without a
+             live region that would announce each transfer tick. -->
+        <div
+            class="notif-row-progress"
+            role="progressbar"
+            aria-label={progressLabel}
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={Math.round(progressWidth)}
+        >
+            <div class="notif-row-progress-fill" style={`width:${progressWidth}%`} aria-hidden="true"></div>
         </div>
     </div>
     <div class="notif-row-meta">
@@ -90,8 +87,7 @@
             data-cancel-dir={transfer.direction}
             aria-label="Cancel transfer"
             title="Cancel"
-            onpointerdown={onCancelPointerDown}
-            onkeydown={onCancelKeydown}
+            onclick={cancel}
         >
             <XIcon size={12} strokeWidth={2} aria-hidden="true" />
         </button>

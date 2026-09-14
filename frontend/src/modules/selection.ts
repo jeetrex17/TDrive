@@ -6,11 +6,14 @@ import { openMoveModal } from './modals/move';
 import SelectionBar from '../ui/selection/SelectionBar.svelte';
 import { setSelectionCount } from '../ui/selection/selection-bar-store';
 import { setSelectedFileRowKeys } from '../ui/file-list/row-state-store';
-import type { FileCommandItem, FileSource } from '../ui/file-list/types';
+import type { FileCommandItem, FileListFileRow, FileSource, FolderListRow } from '../ui/file-list/types';
 import { mountSvelte } from '../ui';
 
 const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
 let selectionBarMounted = false;
+let selectionAnchorKey = '';
+
+type LogicalFileListRow = FolderListRow | FileListFileRow;
 
 function emitSelectionChange(): void {
     window.dispatchEvent(new Event('tdrive:selectionchange'));
@@ -61,6 +64,52 @@ export function rowToSelectionItem(row: HTMLElement): FileCommandItem {
     };
 }
 
+function logicalRowToSelectionItem(row: LogicalFileListRow, element?: HTMLElement): FileCommandItem {
+    const withElement = element ? { row: element } : {};
+    if (row.kind === 'folder') {
+        return {
+            type: 'folder',
+            id: row.id,
+            name: row.name,
+            parentId: row.parentId,
+            canDelete: true,
+            canRename: true,
+            ...withElement,
+        };
+    }
+    if (row.source === 'tg') {
+        return {
+            type: 'file',
+            id: Number(row.id),
+            name: row.name,
+            size: row.size,
+            source: 'tg',
+            parentId: row.parentId,
+            uploaderID: row.uploaderID,
+            canDelete: row.canDelete,
+            canRename: row.canRename,
+            ...withElement,
+        };
+    }
+    return {
+        type: 'file',
+        id: Number(row.id),
+        name: row.name,
+        size: row.size,
+        source: 'fs',
+        parentId: row.parentId,
+        uploaderID: row.uploaderID,
+        canDelete: row.canDelete,
+        canRename: row.canRename,
+        ...withElement,
+    };
+}
+
+function renderedRowsByKey(list: HTMLElement): Map<string, HTMLElement> {
+    return new Map(Array.from(list.querySelectorAll<HTMLElement>(SELECTABLE_ROW_SELECTOR))
+        .map((row) => [getRowKey(row), row] as const)
+        .filter(([key]) => Boolean(key)));
+}
 export function updateSelectionBar(): void {
     syncSelectedRowKeys();
     if (!state.selectionBarEl) {
@@ -81,7 +130,10 @@ export function updateSelectionBar(): void {
 
 export function clearSelection({ keepAnchor = false }: { keepAnchor?: boolean } = {}): void {
     state.selectedItems.clear();
-    if (!keepAnchor) state.selectionAnchorIndex = -1;
+    if (!keepAnchor) {
+        selectionAnchorKey = '';
+        state.selectionAnchorIndex = -1;
+    }
     updateSelectionBar();
 }
 
@@ -89,6 +141,7 @@ export function selectRow(row: HTMLElement, rowIndex: number): void {
     const key = getRowKey(row);
     if (!key) return;
     state.selectedItems.set(key, rowToSelectionItem(row));
+    selectionAnchorKey = key;
     state.selectionAnchorIndex = rowIndex;
     updateSelectionBar();
 }
@@ -100,28 +153,86 @@ export function deselectRow(row: HTMLElement): void {
     updateSelectionBar();
 }
 
-export function handleRowSelection(row: HTMLElement, event: MouseEvent | KeyboardEvent): void {
+// A keyed file-list update can replace row nodes. When the grid is windowed,
+// logicalRows keeps offscreen selections and the range anchor intact.
+export function reconcileSelection(list: HTMLElement, logicalRows?: readonly LogicalFileListRow[]): void {
+    const renderedRows = Array.from(list.querySelectorAll<HTMLElement>(SELECTABLE_ROW_SELECTOR));
+    const renderedByKey = renderedRowsByKey(list);
+    const previous = state.selectedItems;
+    const next = new Map<string, FileCommandItem>();
+
+    if (logicalRows) {
+        for (const row of logicalRows) {
+            if (!previous.has(row.selectionKey)) continue;
+            next.set(row.selectionKey, logicalRowToSelectionItem(row, renderedByKey.get(row.selectionKey)));
+        }
+    } else {
+        for (const row of renderedRows) {
+            const key = getRowKey(row);
+            if (!key || !previous.has(key)) continue;
+            next.set(key, rowToSelectionItem(row));
+        }
+    }
+
+    previous.clear();
+    for (const [key, item] of next) previous.set(key, item);
+
+    const anchorIndex = logicalRows
+        ? logicalRows.findIndex((row) => row.selectionKey === selectionAnchorKey)
+        : renderedRows.findIndex((row) => getRowKey(row) === selectionAnchorKey);
+    if (anchorIndex === -1) {
+        selectionAnchorKey = '';
+        state.selectionAnchorIndex = -1;
+    } else {
+        state.selectionAnchorIndex = anchorIndex;
+    }
+    updateSelectionBar();
+}
+
+export function handleRowSelection(
+    row: HTMLElement,
+    event: MouseEvent | KeyboardEvent,
+    logicalRows?: readonly LogicalFileListRow[],
+): void {
     if ('button' in event && event.button === 2) return;
 
     const list = document.getElementById('file-list');
-    const rows = list ? Array.from(list.querySelectorAll<HTMLElement>(SELECTABLE_ROW_SELECTOR)) : [];
-    const index = rows.indexOf(row);
+    const renderedRows = list ? Array.from(list.querySelectorAll<HTMLElement>(SELECTABLE_ROW_SELECTOR)) : [];
+    const key = getRowKey(row);
+    const index = logicalRows
+        ? logicalRows.findIndex((candidate) => candidate.selectionKey === key)
+        : renderedRows.indexOf(row);
     if (index === -1) return;
 
     const isToggle = event.metaKey || event.ctrlKey;
-    const isRange = event.shiftKey && state.selectionAnchorIndex >= 0;
+    const anchorIndex = selectionAnchorKey
+        ? logicalRows
+            ? logicalRows.findIndex((candidate) => candidate.selectionKey === selectionAnchorKey)
+            : renderedRows.findIndex((candidate) => getRowKey(candidate) === selectionAnchorKey)
+        : state.selectionAnchorIndex;
+    const isRange = event.shiftKey && anchorIndex >= 0;
 
     if (isRange) {
-        const start = Math.min(state.selectionAnchorIndex, index);
-        const end = Math.max(state.selectionAnchorIndex, index);
+        const start = Math.min(anchorIndex, index);
+        const end = Math.max(anchorIndex, index);
         if (!isToggle) clearSelection({ keepAnchor: true });
+        const renderedByKey = list ? renderedRowsByKey(list) : new Map<string, HTMLElement>();
 
         for (let cursor = start; cursor <= end; cursor += 1) {
-            const rangeRow = rows[cursor];
+            if (logicalRows) {
+                const rangeRow = logicalRows[cursor];
+                if (!rangeRow || state.selectedItems.has(rangeRow.selectionKey)) continue;
+                state.selectedItems.set(
+                    rangeRow.selectionKey,
+                    logicalRowToSelectionItem(rangeRow, renderedByKey.get(rangeRow.selectionKey)),
+                );
+                continue;
+            }
+            const rangeRow = renderedRows[cursor];
             if (!rangeRow) continue;
-            const key = getRowKey(rangeRow);
-            if (!key || state.selectedItems.has(key)) continue;
-            state.selectedItems.set(key, rowToSelectionItem(rangeRow));
+            const rangeKey = getRowKey(rangeRow);
+            if (!rangeKey || state.selectedItems.has(rangeKey)) continue;
+            state.selectedItems.set(rangeKey, rowToSelectionItem(rangeRow));
         }
         updateSelectionBar();
         return;
@@ -131,9 +242,9 @@ export function handleRowSelection(row: HTMLElement, event: MouseEvent | Keyboar
         if (isRowSelected(row)) {
             deselectRow(row);
         } else {
-            const key = getRowKey(row);
             if (!key) return;
             state.selectedItems.set(key, rowToSelectionItem(row));
+            selectionAnchorKey = key;
             state.selectionAnchorIndex = index;
             updateSelectionBar();
         }
@@ -155,6 +266,7 @@ export function ensureRowSelectedForContextMenu(row: HTMLElement): void {
         selectRow(row, index);
         return;
     }
+    selectionAnchorKey = getRowKey(row);
     state.selectionAnchorIndex = index;
 }
 

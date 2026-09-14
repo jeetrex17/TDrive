@@ -77,18 +77,25 @@ describe('AppShell behavior', () => {
         expect(selectionBar?.children).toHaveLength(0);
     });
 
-    it('toggles file-list sort headers accessibly', () => {
+    it('exposes sortable data-grid headers', () => {
         setup();
 
-        click('.file-sort-button.col-name');
-        let name = host?.querySelector<HTMLButtonElement>('.file-sort-button.col-name');
+        const grid = host?.querySelector('#file-list');
+        expect(grid?.getAttribute('role')).toBe('grid');
+        expect(grid?.getAttribute('aria-colcount')).toBe('4');
+
+        click('.col-name .file-sort-button');
+        let name = host?.querySelector<HTMLButtonElement>('.col-name .file-sort-button');
+        const nameHeader = host?.querySelector('.col-name');
         expect(name?.classList.contains('active')).toBe(true);
-        expect(name?.getAttribute('aria-pressed')).toBe('true');
+        expect(nameHeader?.getAttribute('role')).toBe('columnheader');
+        expect(nameHeader?.getAttribute('aria-sort')).toBe('ascending');
         expect(name?.getAttribute('aria-label')).toContain('descending');
         expect(name?.querySelector('.sort-direction-up')).not.toBeNull();
 
-        click('.file-sort-button.col-name');
-        name = host?.querySelector<HTMLButtonElement>('.file-sort-button.col-name');
+        click('.col-name .file-sort-button');
+        name = host?.querySelector<HTMLButtonElement>('.col-name .file-sort-button');
+        expect(nameHeader?.getAttribute('aria-sort')).toBe('descending');
         expect(name?.getAttribute('aria-label')).toContain('ascending');
         expect(name?.querySelector('.sort-direction-down')).not.toBeNull();
     });

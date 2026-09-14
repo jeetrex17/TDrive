@@ -23,9 +23,17 @@
         if (patch.title !== undefined) detail = patch.title;
     }
 
-    function register(node: HTMLElement) {
-        registerCell(node, { msgId: item.msgId, apply });
+    function register(node: HTMLElement, msgId: number) {
+        registerCell(node, { msgId, apply });
         return {
+            update(nextMsgId: number) {
+                if (nextMsgId === msgId) return;
+                msgId = nextMsgId;
+                status = 'idle';
+                src = '';
+                detail = '';
+                registerCell(node, { msgId, apply });
+            },
             destroy() {
                 unregisterCell(node);
             },
@@ -46,9 +54,9 @@
     data-name={item.name}
     {title}
     aria-label={item.name}
-    use:register
+    use:register={item.msgId}
 >
-    <img class="gallery-thumb" alt="" decoding="async" src={src || undefined} />
+    <img class="gallery-thumb" alt={item.name} decoding="async" src={src || undefined} />
     {#if item.encrypted}
         <span class="gallery-lock">
             <LockKeyholeIcon size={13} strokeWidth={2} aria-hidden="true" />

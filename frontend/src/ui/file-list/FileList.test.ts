@@ -53,12 +53,14 @@ describe('FileList', () => {
         expect(body).toContain('tabindex="0"');
     });
 
-    it('renders unselected rows as unfocused options', () => {
+    it('renders unselected rows as unfocused data-grid rows', () => {
         showFileListRows([makeFileRow()]);
 
         const { body } = render(FileList);
 
         expect(body).toContain('class="file-row drive-row"');
+        expect(body).toContain('role="row"');
+        expect(body).toContain('role="gridcell"');
         expect(body).toContain('aria-selected="false"');
         expect(body).toContain('tabindex="-1"');
     });

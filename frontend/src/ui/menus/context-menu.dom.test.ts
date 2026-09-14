@@ -95,6 +95,27 @@ describe('ContextMenu', () => {
         expect(first).toHaveBeenCalledTimes(1);
         expect(document.querySelector('.context-menu-panel')).toBeNull();
     });
+    it('restores the invoking control on Escape and before running an item action', async () => {
+        const invoker = document.createElement('button');
+        document.body.appendChild(invoker);
+        invoker.focus();
+        const action = vi.fn(() => {
+            expect(document.activeElement).toBe(invoker);
+        });
+
+        showContextMenu(24, 32, [{ label: 'Rename', action }]);
+        await settle();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        await settle();
+        expect(document.activeElement).toBe(invoker);
+
+        showContextMenu(24, 32, [{ label: 'Rename', action }]);
+        await settle();
+        buttons()[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        flushSync();
+        expect(action).toHaveBeenCalledTimes(1);
+        invoker.remove();
+    });
 
     it('closes on outside click but ignores clicks inside the panel', async () => {
         await openMenu();

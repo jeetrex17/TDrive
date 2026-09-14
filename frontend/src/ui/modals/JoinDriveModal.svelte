@@ -51,6 +51,7 @@
     <input
         id="join-drive-link"
         type="text"
+        aria-label="Shared drive invite link"
         placeholder="https://t.me/+..."
         autocomplete="off"
         bind:value={link}

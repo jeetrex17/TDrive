@@ -1,5 +1,7 @@
-import { writable } from 'svelte/store';
-import type { FileListView, FileListRow, FileListStateView } from './types';
+import { get, writable } from 'svelte/store';
+import { sortFileListRows } from './file-sort';
+import { fileSortState } from './file-sort-store';
+import type { FileListFileRow, FileListRow, FileListStateView, FileListView, FolderListRow } from './types';
 
 export const fileListView = writable<FileListView>({
     kind: 'state',
@@ -21,4 +23,13 @@ export function updateFileListRows(updater: (rows: FileListRow[]) => FileListRow
         const rows = updater(view.rows);
         return rows === view.rows ? view : { kind: 'rows', rows };
     });
+}
+
+export type InteractiveFileListRow = FolderListRow | FileListFileRow;
+
+export function getInteractiveFileListRows(): InteractiveFileListRow[] {
+    const view = get(fileListView);
+    if (view.kind !== 'rows') return [];
+    return sortFileListRows(view.rows, get(fileSortState))
+        .filter((row): row is InteractiveFileListRow => row.kind === 'folder' || row.kind === 'file');
 }

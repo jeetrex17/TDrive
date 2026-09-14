@@ -76,6 +76,8 @@
     <input
         id="rename-input"
         type="text"
+        aria-label={isFolder ? 'Folder name' : 'File name'}
+        aria-describedby={$renameModalState.error ? 'rename-error' : undefined}
         placeholder="Name"
         autocomplete="off"
         bind:this={inputEl}
@@ -84,7 +86,7 @@
         onkeydown={onInputKeydown}
     />
     {#if $renameModalState.error}
-        <div id="rename-error" class="modal-error">{$renameModalState.error}</div>
+        <div id="rename-error" class="modal-error" role="alert">{$renameModalState.error}</div>
     {/if}
 
     {#snippet actions()}

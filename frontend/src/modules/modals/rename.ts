@@ -1,6 +1,7 @@
 // Rename modal for TDrive frontend
 
 import { addTelegramFileToDrive, renameFile, renameFolder } from '../../api';
+import { invalidateFolderIndex } from '../../state';
 import { callWithPasswordRetry } from './encryption-password';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
@@ -73,6 +74,7 @@ async function submitRename(target: RenameModalTarget, rawName: string): Promise
             setRenameModalError(humanizeBackendError(result.error));
             return;
         }
+        invalidateFolderIndex();
         closeRenameModalView();
         appActions().refreshFiles();
     } catch (err) {

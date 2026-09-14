@@ -118,11 +118,20 @@ export function collectVideoDOM(): VideoDOM {
     };
 }
 
-export function bindVideoDOM(dom: VideoDOM, handlers: VideoDOMHandlers): void {
-    dom.closeButton?.addEventListener('click', handlers.close);
-    dom.fullscreenButton?.addEventListener('click', handlers.toggleFullscreen);
-    dom.modal?.addEventListener('pointermove', handlers.pointerMove);
-    dom.stage?.addEventListener('click', handlers.stageClick);
-    document.addEventListener('keydown', handlers.keydown);
-    window.addEventListener('resize', handlers.resize);
+export function bindVideoDOM(dom: VideoDOM, handlers: VideoDOMHandlers): () => void {
+    const cleanups: Array<() => void> = [];
+    const listen = (target: EventTarget | null, type: string, listener: EventListener): void => {
+        if (!target) return;
+        target.addEventListener(type, listener);
+        cleanups.push(() => target.removeEventListener(type, listener));
+    };
+    listen(dom.closeButton, 'click', handlers.close as EventListener);
+    listen(dom.fullscreenButton, 'click', handlers.toggleFullscreen as EventListener);
+    listen(dom.modal, 'pointermove', handlers.pointerMove as EventListener);
+    listen(dom.stage, 'click', handlers.stageClick as EventListener);
+    listen(document, 'keydown', handlers.keydown as EventListener);
+    listen(window, 'resize', handlers.resize as EventListener);
+    return () => {
+        for (const cleanup of cleanups.splice(0)) cleanup();
+    };
 }

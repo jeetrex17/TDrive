@@ -53,6 +53,7 @@
     <input
         id="new-drive-name"
         type="text"
+        aria-label="Drive name"
         placeholder="Drive name (e.g. Goa Trip)"
         autocomplete="off"
         bind:value={title}

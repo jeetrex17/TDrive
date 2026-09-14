@@ -6,7 +6,7 @@
 // event stream that advances screens.
 
 import { get } from 'svelte/store';
-import { state } from '../state';
+import { invalidateFolderIndex, state } from '../state';
 import type { PersonalDriveCandidate, PersonalDriveSetup } from '../types';
 import {
     checkSystemStatus,
@@ -98,7 +98,15 @@ async function showDashboardForFlow(flowVersion: number): Promise<void> {
     if (dashboard) dashboard.style.display = "flex";
     state.currentFolderId = "";
     state.folderPath = [];
+    state.myUserID = 0;
     renderBreadcrumb();
+
+    // Identity is independent of channel discovery. Resolve both together,
+    // but publish identity only after this dashboard flow is still current.
+    const userIDPromise = getMyUserId().catch((err: unknown) => {
+        if (isCurrentPersonalDriveFlow(flowVersion)) console.warn('getMyUserId failed:', err);
+        return 0;
+    });
 
     // Load drive list (personal + any joined shared) before the first
     // refresh, so the sidebar populates and folder-control gating runs
@@ -119,18 +127,10 @@ async function showDashboardForFlow(flowVersion: number): Promise<void> {
     }
     if (!isCurrentPersonalDriveFlow(flowVersion)) return;
 
-    // Resolve self user id once. Owner-only actions on shared drives
-    // depend on this; if it fails (e.g. offline), default-deny by
-    // leaving state.myUserID = 0.
-    try {
-        const id = await getMyUserId();
-        if (!isCurrentPersonalDriveFlow(flowVersion)) return;
-        state.myUserID = Number(id) || 0;
-    } catch (err) {
-        if (!isCurrentPersonalDriveFlow(flowVersion)) return;
-        console.warn('getMyUserId failed:', err);
-        state.myUserID = 0;
-    }
+    // Owner-only shared-drive actions remain default-deny until identity resolves.
+    const userID = await userIDPromise;
+    if (!isCurrentPersonalDriveFlow(flowVersion)) return;
+    state.myUserID = Number(userID) || 0;
 
     // Pull Telegram metadata before reading encryption state. On a fresh
     // reinstall this is what restores the wrapped master key into SQLite.
@@ -150,6 +150,8 @@ async function showDashboardForFlow(flowVersion: number): Promise<void> {
     if (personal && Number(personal.id) !== Number(state.activeChannel?.id || 0)) {
         try {
             await syncChannel(Number(personal.id));
+            if (!isCurrentPersonalDriveFlow(flowVersion)) return;
+            invalidateFolderIndex(personal.id);
         } catch (err) {
             if (!isCurrentPersonalDriveFlow(flowVersion)) return;
             console.warn('Personal sync before encryption status failed:', err);

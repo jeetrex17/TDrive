@@ -3,7 +3,7 @@
 import { state, resetFolderCaches } from '../state';
 import { splitNameAndExt, formatDate, formatBytes } from '../utils';
 import { tick } from 'svelte';
-import { clearSelection, handleRowSelection, selectRow, getRowKey } from './selection';
+import { clearSelection, handleRowSelection, reconcileSelection, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
 import { navigateToFolder } from './navigation';
@@ -15,7 +15,7 @@ import {
     getStorageUsed,
 } from '../api';
 import { calculateVisibleFolderStats } from './drive-data';
-import type { FolderItem, FolderStat, RootFile } from '../types';
+import type { FileItem, FolderItem, FolderStat, RootFile } from '../types';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
@@ -23,43 +23,80 @@ import { renderGallery, setPhotosMode } from './gallery';
 import { canOpenFileViewer, isVideoFile } from './media-types';
 import { appActions, type RefreshFilesOptions } from './app-actions';
 import FileList from '../ui/file-list/FileList.svelte';
-import { showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
+import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
-import type { FileListAction, FileListFileRow, FileListRow, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
+import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
 import { mountSvelte, type SvelteMountHandle } from '../ui';
+
+type FileRowInput = {
+    id?: string | number;
+    msgId?: string | number;
+    name?: string;
+    size?: number;
+    date?: number;
+    uploadTime?: number;
+    uploaderID?: number;
+    uploaderId?: number;
+    encrypted?: boolean;
+    canDelete?: boolean;
+    canRename?: boolean;
+    source?: string;
+};
+
+type FolderRowInput = Pick<FolderItem, 'id' | 'name'> & Partial<Pick<FolderItem, 'parentId'>>;
+
+type FileViewIdentity = {
+    channelId: number;
+    folderId: string;
+};
+
+type FileRefreshPresentation = 'foreground-navigation' | 'same-view-refresh';
+
+type FileRefreshRequest = {
+    token: number;
+    view: FileViewIdentity;
+    presentation: FileRefreshPresentation;
+    folderEpoch: number;
+};
+
+type LoadedFileData = {
+    folders: FolderItem[];
+    filesystemFiles: FileItem[];
+    telegramFiles: RootFile[];
+    filesystemMessageIds: Set<number>;
+    folderStats: Map<string, FolderStat>;
+};
 
 // dragItemsFor returns the items to move for a drag started on `row`: the whole
 // current selection when the row is part of a multi-selection, else just the
 // row's own item.
-function dragItemsFor(row: HTMLElement, fallback: any): any[] {
+function dragItemsFor(row: HTMLElement, fallback: FileCommandItem): FileCommandItem[] {
     const key = getRowKey(row);
-    const sel = state.selectedItems;
-    if (key && sel.has(key) && sel.size > 1) {
-        return Array.from(sel.values());
-    }
+    const selected = state.selectedItems;
+    if (key && selected.has(key) && selected.size > 1) return Array.from(selected.values());
     return [fallback];
 }
 
 // startDrag begins an internal drag-to-move, resolving multi-select and the set
 // of folders that can't be a drop target (a dragged folder or its own subtree).
-function startDrag(row: HTMLElement, fallback: any, parentId: string) {
+function startDrag(row: HTMLElement, fallback: FileCommandItem, parentId: string): void {
     const items = dragItemsFor(row, fallback);
     const folderIds = items
-        .filter((i: any) => i && i.type === "folder")
-        .map((i: any) => String(i.id));
-    beginRowDrag(row, items, parentId, new Set<string>(folderIds));
-    if (folderIds.length) {
-        refreshFolderIndex()
-            .then((index: any) => {
-                if (!state.dragState || state.dragState.row !== row) return;
-                const blocked = new Set<string>(folderIds);
-                for (const fid of folderIds) {
-                    for (const d of collectDescendants(fid, index.children)) blocked.add(d);
-                }
-                state.dragState.blocked = blocked;
-            })
-            .catch(() => {});
-    }
+        .filter((item): item is FolderCommandItem => item.type === 'folder')
+        .map((item) => item.id);
+    beginRowDrag(row, items, parentId, new Set(folderIds));
+    if (!folderIds.length) return;
+
+    void refreshFolderIndex()
+        .then((index) => {
+            if (!state.dragState || state.dragState.row !== row) return;
+            const blocked = new Set(folderIds);
+            for (const folderId of folderIds) {
+                for (const descendant of collectDescendants(folderId, index.children)) blocked.add(descendant);
+            }
+            state.dragState.blocked = blocked;
+        })
+        .catch(() => {});
 }
 
 // canOwnerActOnFile returns true when the current user is allowed to
@@ -67,24 +104,27 @@ function startDrag(row: HTMLElement, fallback: any, parentId: string) {
 // uploaded everything). In shared drives it's only true when the file's
 // recorded uploader matches the current user. Default-deny when uploader
 // or self id is unknown.
-export function canOwnerActOnFile(file: any) {
+export function canOwnerActOnFile(file: Pick<FileRowInput, 'uploaderID' | 'uploaderId'> | null | undefined): boolean {
     if (!file) return false;
-    if (state.activeChannel?.kind !== "shared") return true;
-    const uploader = Number(file.uploaderID ?? file.uploader_id ?? 0);
+    if (state.activeChannel?.kind !== 'shared') return true;
+    const uploader = Number(file.uploaderID ?? file.uploaderId ?? 0);
     const me = Number(state.myUserID || 0);
-    if (!uploader || !me) return false;
-    return uploader === me;
+    return Boolean(uploader && me && uploader === me);
 }
 
-// Tracks the folder whose rows are currently rendered, so a same-folder
-// re-render can restore the scroll position instead of jumping to the top.
-let lastRenderedFolderId: string | null = null;
+// The last published identity controls both stale request rejection and whether
+// a refresh keeps the current grid visible. It intentionally includes the drive
+// so two root folders from different drives never share scroll or selection.
+let lastRenderedFileView: FileViewIdentity | null = null;
 let fileListHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let fileRefreshToken = 0;
-let backgroundFileRefreshToken = 0;
 
-export function resetFileListScrollRestore() {
-    lastRenderedFolderId = null;
+function sameFileView(left: FileViewIdentity | null, right: FileViewIdentity): boolean {
+    return left?.channelId === right.channelId && left.folderId === right.folderId;
+}
+
+export function resetFileListScrollRestore(): void {
+    lastRenderedFileView = null;
 }
 
 function ensureFileListView(list: HTMLElement) {
@@ -106,6 +146,7 @@ export function renderFileState(
     action?: { label: string; onClick: () => void },
 ) {
     ensureFileListView(list);
+    list.removeAttribute('aria-rowcount');
     showFileListState({
         stateKind: kind,
         title,
@@ -124,6 +165,7 @@ function afterFileListPaint(list: HTMLElement, callback: () => void) {
 
 export function renderFileListRows(list: HTMLElement, rows: FileListRow[], afterRender?: () => void) {
     ensureFileListView(list);
+    list.setAttribute('aria-rowcount', String(rows.length + 1));
     showFileListRows(rows);
     if (afterRender) afterFileListPaint(list, afterRender);
 }
@@ -195,18 +237,18 @@ function fileActions(name: string): FileListAction[] {
     return actions;
 }
 
-export function buildFolderRow(folder: any, parentId: string, overrides: Partial<FolderListRow> = {}): FolderListRow {
-    const id = String(folder?.id || overrides.id || "");
-    const name = String(folder?.name || overrides.name || "Folder");
+export function buildFolderRow(folder: FolderRowInput, parentId: string, overrides: Partial<FolderListRow> = {}): FolderListRow {
+    const id = String(folder.id || overrides.id || '');
+    const name = String(folder.name || overrides.name || 'Folder');
     return {
-        kind: "folder",
+        kind: 'folder',
         key: overrides.key || `folder:${id}`,
         selectionKey: overrides.selectionKey || `folder:${id}`,
         id,
         name,
-        parentId: String(overrides.parentId ?? parentId ?? ""),
-        metaLabel: overrides.metaLabel ?? "—",
-        sizeLabel: overrides.sizeLabel ?? "…",
+        parentId: String(overrides.parentId ?? folder.parentId ?? parentId ?? ''),
+        metaLabel: overrides.metaLabel ?? '—',
+        sizeLabel: overrides.sizeLabel ?? '…',
         size: overrides.size ?? 0,
         modifiedTime: overrides.modifiedTime ?? 0,
         ariaLabel: overrides.ariaLabel ?? `Folder: ${name}`,
@@ -216,19 +258,21 @@ export function buildFolderRow(folder: any, parentId: string, overrides: Partial
     };
 }
 
-export function buildFileRow(file: any, parentId: string, overrides: Partial<FileListFileRow> = {}): FileListFileRow {
-    const name = String(file?.name || overrides.name || "File");
+export function buildFileRow(file: FileRowInput, parentId: string, overrides: Partial<FileListFileRow> = {}): FileListFileRow {
+    const name = String(file.name || overrides.name || 'File');
     const { base, ext } = splitNameAndExt(name);
-    const id = String(file?.id ?? overrides.id ?? "");
-    const size = Number(file?.size ?? overrides.size ?? 0);
-    const uploadTime = Number(file?.date ?? file?.uploadTime ?? overrides.uploadTime ?? 0);
-    const source = String(file?.source ?? overrides.source ?? "fs");
-    const uploaderID = Number(file?.uploaderID ?? file?.uploaderId ?? overrides.uploaderID ?? 0);
-    const encrypted = Boolean(file?.encrypted ?? overrides.encrypted ?? false);
-    const canDelete = Boolean(file?.canDelete ?? overrides.canDelete ?? canOwnerActOnFile(file));
-    const canRename = Boolean(file?.canRename ?? overrides.canRename ?? canDelete);
+    const id = String(file.id ?? file.msgId ?? overrides.id ?? '');
+    const size = Number(file.size ?? overrides.size ?? 0);
+    const uploadTime = Number(file.date ?? file.uploadTime ?? overrides.uploadTime ?? 0);
+    const source = file.source === 'tg' || overrides.source === 'tg' ? 'tg' : 'fs';
+    const uploaderID = Number(file.uploaderID ?? file.uploaderId ?? overrides.uploaderID ?? 0);
+    const encrypted = Boolean(file.encrypted ?? overrides.encrypted ?? false);
+    const canDelete = Boolean(file.canDelete ?? overrides.canDelete ?? canOwnerActOnFile(file));
+    const canRename = Boolean(file.canRename ?? overrides.canRename ?? canDelete);
+    const uploaderLabel = uploaderChipLabel({ uploaderID, uploadTime });
+
     return {
-        kind: "file",
+        kind: 'file',
         key: overrides.key || `file:${source}:${id}`,
         selectionKey: overrides.selectionKey || `file:${id}`,
         id,
@@ -236,7 +280,7 @@ export function buildFileRow(file: any, parentId: string, overrides: Partial<Fil
         baseName: overrides.baseName ?? base,
         ext: overrides.ext ?? ext,
         source,
-        parentId: String(overrides.parentId ?? parentId ?? ""),
+        parentId: String(overrides.parentId ?? parentId ?? ''),
         size,
         metaLabel: overrides.metaLabel ?? formatDate(uploadTime),
         sizeLabel: overrides.sizeLabel ?? formatBytes(size),
@@ -248,10 +292,7 @@ export function buildFileRow(file: any, parentId: string, overrides: Partial<Fil
         canRename,
         uploaderChip: overrides.uploaderChip !== undefined
             ? overrides.uploaderChip
-            : (() => {
-                const label = uploaderChipLabel({ uploaderID, uploadTime });
-                return label ? { label } : null;
-            })(),
+            : uploaderLabel ? { label: uploaderLabel } : null,
         actions: overrides.actions ?? fileActions(name),
         onClick: overrides.onClick,
         onDoubleClick: overrides.onDoubleClick,
@@ -279,6 +320,23 @@ function setFocusedRow(row: HTMLElement | null, { preventScroll = true } = {}) {
     void tick().then(() => {
         if (!document.body.contains(row)) return;
         row.focus({ preventScroll });
+    });
+}
+
+function rowForSelectionKey(list: HTMLElement, key: string): HTMLElement | null {
+    return interactiveRows(list).find((row) => getRowKey(row) === key) ?? null;
+}
+
+function setFocusedLogicalRow(key: string, { preventScroll = false } = {}): void {
+    const list = document.getElementById('file-list') as HTMLElement | null;
+    if (!list || !key) return;
+    setActiveFileRowKey(key);
+    window.dispatchEvent(new CustomEvent('tdrive:reveal-file-row', { detail: { key } }));
+    void tick().then(() => {
+        requestAnimationFrame(() => {
+            const row = rowForSelectionKey(list, key);
+            row?.focus({ preventScroll });
+        });
     });
 }
 
@@ -382,55 +440,179 @@ function activateRow(row: HTMLElement) {
     enqueueDownload(target.id, target.name, target.size);
 }
 
-function fillVisibleFolderStats(folders: FolderItem[], parentId: string, folderEpoch: number) {
-    if (!folders.length) return;
-    calculateVisibleFolderStats(parentId)
-        .then((stats) => {
-            if (state.folderSizeEpoch !== folderEpoch) return;
-            if (state.currentFolderId !== parentId) return;
-            applyFolderStats(folders, (id) => stats.get(id) ?? { id, bytes: 0, latestUpload: 0 });
+
+function isCurrentFileRequest(request: FileRefreshRequest): boolean {
+    return (
+        request.token === fileRefreshToken
+        && state.virtualView === null
+        && Number(state.activeChannel?.id ?? 0) === request.view.channelId
+        && state.currentFolderId === request.view.folderId
+        && state.folderSizeEpoch === request.folderEpoch
+    );
+}
+
+function refreshStorageUsage(request: FileRefreshRequest, storageUsed: HTMLElement | null): void {
+    if (!storageUsed) return;
+    if (request.presentation === 'foreground-navigation') {
+        storageUsed.innerText = 'Calculating... / Unlimited';
+    }
+    void getStorageUsed()
+        .then((bytes) => {
+            if (!isCurrentFileRequest(request)) return;
+            const value = Number(bytes);
+            storageUsed.innerText = Number.isFinite(value) && value >= 0
+                ? `${formatBytes(value)} / Unlimited`
+                : '— / Unlimited';
         })
         .catch(() => {
-            if (state.folderSizeEpoch !== folderEpoch) return;
-            if (state.currentFolderId !== parentId) return;
-            applyFolderStats(folders, () => null);
+            if (isCurrentFileRequest(request)) storageUsed.innerText = '— / Unlimited';
         });
 }
 
-// applyFolderStats stores the resolved subtree byte count and latest upload
-// time on each folder row alongside their labels so the size and date columns
-// can sort folders; null marks a failed lookup.
-function applyFolderStats(folders: FolderItem[], statsForID: (id: string) => FolderStat | null) {
-    const folderIDs = new Set(
-        folders
-            .map((folder) => String(folder?.id || ""))
-            .filter(Boolean),
-    );
-    if (!folderIDs.size) return;
+async function loadFileData(view: FileViewIdentity): Promise<LoadedFileData> {
+    const contents = await apiGetFolderContents(view.folderId);
+    const filesystemFiles = contents.files;
+    const [folderStats, telegramFiles] = await Promise.all([
+        contents.folders.length > 0
+            ? calculateVisibleFolderStats(view.folderId).catch(() => new Map<string, FolderStat>())
+            : Promise.resolve(new Map<string, FolderStat>()),
+        view.folderId === '' ? getFileList() : Promise.resolve([] as RootFile[]),
+    ]);
+    const normalizedTelegramFiles = Array.isArray(telegramFiles) ? telegramFiles : [];
+    let filesystemMessageIds = new Set(filesystemFiles.map((file) => file.msgId));
 
-    updateFileListRows((rows) => {
-        let changed = false;
-        const nextRows = rows.map((row) => {
-            if (row.kind !== "folder" || !folderIDs.has(row.id)) return row;
-            const stats = statsForID(row.id);
+    if (view.folderId === '' && normalizedTelegramFiles.length > 0) {
+        try {
+            filesystemMessageIds = new Set(await getAllFsMsgIds());
+        } catch (error) {
+            // The visible folder remains correct with its direct filesystem IDs.
+            console.warn('GetAllFsMsgIDs failed:', error);
+        }
+    }
+
+    return {
+        folders: contents.folders,
+        filesystemFiles,
+        telegramFiles: normalizedTelegramFiles,
+        filesystemMessageIds,
+        folderStats,
+    };
+}
+
+function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileListRow[] {
+    const pendingRows: PendingFolderListRow[] = [];
+    for (const [tempId, operation] of state.pendingFolderOps) {
+        if (operation.parentId === view.folderId) {
+            pendingRows.push(buildPendingFolderRow(tempId, operation.name));
+        }
+    }
+
+    const folderRows = [...data.folders]
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((folder) => {
+            const stats = data.folderStats.get(folder.id);
             const size = stats?.bytes ?? 0;
             const modifiedTime = stats?.latestUpload ?? 0;
-            const sizeLabel = stats === null ? "—" : formatBytes(size);
-            const metaLabel = modifiedTime > 0 ? formatDate(modifiedTime) : "—";
-            if (row.size === size && row.modifiedTime === modifiedTime
-                && row.sizeLabel === sizeLabel && row.metaLabel === metaLabel) return row;
-            changed = true;
-            return { ...row, size, modifiedTime, sizeLabel, metaLabel };
+            return buildFolderRow(folder, view.folderId, {
+                size,
+                modifiedTime,
+                sizeLabel: formatBytes(size),
+                metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : '—',
+            });
         });
-        return changed ? nextRows : rows;
+
+    const filesystemRows = data.filesystemFiles.map((file) => buildFileRow({
+        source: 'fs',
+        id: file.msgId,
+        name: file.name,
+        size: file.encrypted && file.plaintextSize > 0 ? file.plaintextSize : file.size,
+        date: file.uploadTime,
+        uploaderID: file.uploaderId,
+        encrypted: file.encrypted,
+    }, view.folderId));
+    const telegramRows = data.telegramFiles
+        .filter((file) => !data.filesystemMessageIds.has(file.msgId))
+        .map((file) => buildFileRow({
+            source: 'tg',
+            id: file.msgId,
+            name: file.name,
+            size: file.size,
+            date: file.date,
+        }, view.folderId));
+    const fileRows = [...filesystemRows, ...telegramRows]
+        .sort((left, right) => right.uploadTime - left.uploadTime);
+
+    return [...pendingRows, ...folderRows, ...fileRows];
+}
+
+function applyPendingFocus(list: HTMLElement): void {
+    if (state.pendingFocus?.type !== 'file') return;
+    const targetId = String(state.pendingFocus.id || '');
+    const target = targetId
+        ? list.querySelector<HTMLElement>(`.drive-row[data-type="file"][data-id="${CSS.escape(targetId)}"]`)
+        : null;
+    state.pendingFocus = null;
+    if (!target) return;
+
+    const index = interactiveRows(list).indexOf(target);
+    clearSelection();
+    if (index >= 0) selectRow(target, index);
+    setFocusedRow(target);
+    target.scrollIntoView({ block: 'center' });
+}
+
+function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, data: LoadedFileData): void {
+    if (!isCurrentFileRequest(request)) return;
+    const rows = rowsForLoadedData(data, request.view);
+    const preserveScroll = sameFileView(lastRenderedFileView, request.view);
+    const scrollTop = preserveScroll ? list.scrollTop : 0;
+
+    if (request.view.folderId === '') {
+        state.telegramRootCache = data.telegramFiles;
+        state.telegramRootCacheDriveKey = String(request.view.channelId);
+    }
+    lastRenderedFileView = request.view;
+
+    const afterPublish = () => {
+        if (!isCurrentFileRequest(request)) return;
+        reconcileSelection(list, getInteractiveFileListRows());
+        syncDriveRowTabStops(list);
+        if (preserveScroll) list.scrollTop = scrollTop;
+        applyPendingFocus(list);
+        resolveUploaderChipsForRows(rows, () => isCurrentFileRequest(request));
+    };
+
+    if (rows.length === 0) {
+        renderFileState(list, 'empty', 'This folder is empty', 'Upload files or create a folder to start organizing this drive.');
+        afterFileListPaint(list, afterPublish);
+        return;
+    }
+
+    renderFileListRows(list, rows, afterPublish);
+}
+
+function refreshErrorMessage(error: unknown): string {
+    if (error instanceof Error && error.message) return error.message;
+    return String(error || 'Failed to load files');
+}
+
+function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, error: unknown): void {
+    if (!isCurrentFileRequest(request)) return;
+    if (request.presentation === 'same-view-refresh') {
+        console.warn('Same-view file refresh failed:', error);
+        return;
+    }
+    renderFileState(list, 'error', 'Could not load this folder', refreshErrorMessage(error), {
+        label: 'Retry',
+        onClick: () => appActions().refreshFiles(),
     });
 }
 
-export function refreshFiles({ background = false }: RefreshFilesOptions = {}) {
-    if (state.virtualView === "photos") {
-        // File requests started before Photos must never become current again
-        // when the user returns to the drive.
-        fileRefreshToken++;
+export function refreshFiles({ background = false }: RefreshFilesOptions = {}): void {
+    if (state.virtualView === 'photos') {
+        // A request that began before Photos is never permitted to republish
+        // over the gallery or the preserved drive list on return.
+        fileRefreshToken += 1;
         clearSelection();
         setPhotosMode(true);
         void renderGallery({ background });
@@ -438,269 +620,33 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}) {
     }
     setPhotosMode(false);
 
-    const list = document.getElementById("file-list") as HTMLElement;
-    const storageUsed = document.getElementById("storage-used");
-    const requestedFolderId = state.currentFolderId;
-    const requestedChannelId = Number(state.activeChannel?.id ?? 0);
-    const refreshToken = background ? fileRefreshToken : ++fileRefreshToken;
-    const backgroundToken = background ? ++backgroundFileRefreshToken : 0;
-    const isCurrentRequest = () => (
-        refreshToken === fileRefreshToken
-        && (!background || backgroundToken === backgroundFileRefreshToken)
-        && Number(state.activeChannel?.id ?? 0) === requestedChannelId
-        && state.currentFolderId === requestedFolderId
-    );
-    let folderEpoch = state.folderSizeEpoch;
-    if (!background) {
-        resetFolderCaches();
-        folderEpoch = state.folderSizeEpoch;
+    const list = document.getElementById('file-list');
+    if (!list) return;
+    const view: FileViewIdentity = {
+        channelId: Number(state.activeChannel?.id ?? 0),
+        folderId: state.currentFolderId,
+    };
+    const presentation: FileRefreshPresentation = background || sameFileView(lastRenderedFileView, view)
+        ? 'same-view-refresh'
+        : 'foreground-navigation';
+
+    resetFolderCaches();
+    const request: FileRefreshRequest = {
+        token: ++fileRefreshToken,
+        view,
+        presentation,
+        folderEpoch: state.folderSizeEpoch,
+    };
+
+    if (presentation === 'foreground-navigation') {
         clearSelection();
+        renderFileState(list, 'loading', 'Loading files');
     }
+    refreshStorageUsage(request, document.getElementById('storage-used'));
 
-    // Preserve scroll on a same-folder re-render (upload, delete, rename,
-    // sync); navigation into a different folder still starts at the top.
-    // Captured before the "Loading…" wipe resets scrollTop.
-    const prevScrollTop = list.scrollTop;
-    const keepScroll = lastRenderedFolderId === requestedFolderId;
-    if (!background) renderFileState(list, "loading", "Loading files");
-    if (storageUsed) {
-        if (!background) storageUsed.innerText = "Calculating... / Unlimited";
-        getStorageUsed()
-            .then((bytes) => {
-                if (!isCurrentRequest()) return;
-                const value = Number(bytes);
-                if (!Number.isFinite(value) || value < 0) {
-                    storageUsed.innerText = "— / Unlimited";
-                    return;
-                }
-                storageUsed.innerText = `${formatBytes(value)} / Unlimited`;
-            })
-            .catch(() => {
-                if (!isCurrentRequest()) return;
-                storageUsed.innerText = "— / Unlimited";
-            });
-    }
-
-    let folderErr: any = null;
-    const folderPromise = apiGetFolderContents(requestedFolderId).catch((err) => {
-        folderErr = err;
-        if (!background) console.error("GetFolderContents failed:", err);
-        return null;
-    });
-
-    Promise.all([folderPromise]).then(async ([fs]) => {
-        if (!isCurrentRequest()) return;
-        if (folderErr || !fs) {
-            if (background) {
-                console.warn("Background file refresh failed:", folderErr);
-                return;
-            }
-            const msg = String(folderErr?.message || folderErr || "Failed to load files");
-            renderFileState(list, "error", "Could not load this folder", msg, {
-                label: "Retry",
-                onClick: () => appActions().refreshFiles(),
-            });
-            return;
-        }
-
-
-        const folders = Array.isArray(fs?.folders) ? fs.folders : [];
-        const fsFiles = Array.isArray(fs?.files) ? fs.files : [];
-
-        const fsFileItems = fsFiles.map((file) => {
-            const encrypted = file.encrypted;
-            const plaintextSize = file.plaintextSize;
-            // For encrypted files, display the original plaintext size rather
-            // than the on-wire ciphertext size.
-            const displaySize = encrypted && plaintextSize > 0 ? plaintextSize : file.size;
-            return {
-                source: "fs",
-                id: file.msgId,
-                name: file.name,
-                size: displaySize,
-                date: file.uploadTime,
-                uploaderID: file.uploaderId,
-                encrypted,
-            };
-        });
-
-        let preparedTelegramFiles: RootFile[] = [];
-        let preparedFsIDs: Set<number> | undefined;
-        let preparedFolderStats: Map<string, FolderStat> | undefined;
-        if (background) {
-            try {
-                const [stats, telegramFiles] = await Promise.all([
-                    folders.length > 0
-                        ? calculateVisibleFolderStats(requestedFolderId)
-                        : Promise.resolve(new Map<string, FolderStat>()),
-                    requestedFolderId === "" ? getFileList() : Promise.resolve([]),
-                ]);
-                preparedFolderStats = stats;
-                preparedTelegramFiles = Array.isArray(telegramFiles) ? telegramFiles : [];
-                preparedFsIDs = requestedFolderId === "" && preparedTelegramFiles.length > 0
-                    ? new Set(await getAllFsMsgIds())
-                    : new Set(fsFileItems.map((file) => file.id));
-            } catch (err) {
-                console.warn("Background file refresh failed:", err);
-                return;
-            }
-            if (!isCurrentRequest()) return;
-            if (requestedFolderId === "") state.telegramRootCache = preparedTelegramFiles;
-            resetFolderCaches();
-            folderEpoch = state.folderSizeEpoch;
-        }
-
-        const finalize = async (
-            telegramFiles: RootFile[] = [],
-            preserveCurrentScroll = false,
-            preparedIDs?: Set<number>,
-            folderStats?: Map<string, FolderStat>,
-        ) => {
-            if (state.folderSizeEpoch !== folderEpoch) return;
-            if (!isCurrentRequest()) return;
-            const scrollTopForRender = preserveCurrentScroll ? list.scrollTop : prevScrollTop;
-            const keepScrollForRender = preserveCurrentScroll || keepScroll;
-            let fsIDs = preparedIDs;
-            if (!fsIDs) {
-                if (requestedFolderId === "" && telegramFiles.length > 0) {
-                    try {
-                        fsIDs = new Set(await getAllFsMsgIds());
-                    } catch (err) {
-                        console.error("GetAllFsMsgIDs failed:", err);
-                        fsIDs = new Set();
-                    }
-                } else {
-                    fsIDs = new Set(fsFileItems.map((file) => file.id));
-                }
-            }
-
-            const tgFileItems = telegramFiles
-                .filter((file) => !fsIDs.has(file.msgId))
-                .map((file) => ({
-                    source: "tg",
-                    id: file.msgId,
-                    name: file.name,
-                    size: file.size,
-                    date: file.date,
-                }));
-
-            const files = [...fsFileItems, ...tgFileItems];
-
-            if (!isCurrentRequest()) return;
-
-            folders.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-            files.sort((a, b) => (b.date || 0) - (a.date || 0));
-
-            // Pending optimistic-create rows scoped to the current parent.
-            // Computed up front so the empty-folder branch can include
-            // them — otherwise creating a folder inside an empty one
-            // would briefly show "This folder is empty" instead of the
-            // ghost row.
-            const pendingForParent = [];
-            for (const [tempId, op] of state.pendingFolderOps.entries()) {
-                if (op.parentId === requestedFolderId) {
-                    pendingForParent.push({ tempId, name: op.name });
-                }
-            }
-
-            if (folders.length === 0 && files.length === 0 && pendingForParent.length === 0) {
-                renderFileState(list, "empty", "This folder is empty", "Upload files or create a folder to start organizing this drive.");
-                lastRenderedFolderId = requestedFolderId;
-                return;
-            }
-
-            const rows: FileListRow[] = [];
-
-            // Pending CreateFolder ghost rows: rendered before real folders
-            // so the just-clicked entry shows up at the top until the
-            // backend confirms it.
-            for (const op of pendingForParent) {
-                rows.push(buildPendingFolderRow(op.tempId, op.name));
-            }
-
-            folders.forEach((folder) => {
-                if (!folderStats) {
-                    rows.push(buildFolderRow(folder, requestedFolderId));
-                    return;
-                }
-                const stats = folderStats.get(String(folder?.id || ""));
-                const size = stats?.bytes ?? 0;
-                const modifiedTime = stats?.latestUpload ?? 0;
-                rows.push(buildFolderRow(folder, requestedFolderId, {
-                    size,
-                    modifiedTime,
-                    sizeLabel: formatBytes(size),
-                    metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : "—",
-                }));
-            });
-
-            files.forEach((file: any) => {
-                const ownerOnly = canOwnerActOnFile(file);
-                rows.push(buildFileRow(file, requestedFolderId, {
-                    canDelete: ownerOnly,
-                    canRename: ownerOnly,
-                }));
-            });
-
-            renderFileListRows(list, rows, () => {
-                if (state.folderSizeEpoch !== folderEpoch) return;
-                if (state.currentFolderId !== requestedFolderId) return;
-
-                syncDriveRowTabStops(list);
-                if (!folderStats) fillVisibleFolderStats(folders, requestedFolderId, folderEpoch);
-
-                // Restore prior scroll on a same-folder re-render. Before
-                // pendingFocus so a just-uploaded/renamed file can still scroll
-                // itself into view and win.
-                lastRenderedFolderId = requestedFolderId;
-                if (keepScrollForRender && state.currentFolderId === requestedFolderId) {
-                    list.scrollTop = scrollTopForRender;
-                }
-
-                if (state.pendingFocus && state.pendingFocus.type === "file") {
-                    const targetID = String(state.pendingFocus.id || "");
-                    const targetRow = targetID ? list.querySelector<HTMLElement>(`.drive-row[data-type="file"][data-id="${CSS.escape(targetID)}"]`) : null;
-                    state.pendingFocus = null;
-                    if (targetRow) {
-                        const interactive = Array.from(list.querySelectorAll<HTMLElement>(".drive-row"));
-                        const idx = interactive.indexOf(targetRow);
-                        clearSelection();
-                        if (idx >= 0) selectRow(targetRow, idx);
-                        setFocusedRow(targetRow as HTMLElement);
-                        try {
-                            targetRow.scrollIntoView({ block: "center" });
-                        } catch {}
-                    }
-                }
-
-                resolveUploaderChipsForRows(rows, () => (
-                    state.folderSizeEpoch === folderEpoch
-                    && state.currentFolderId === requestedFolderId
-                ));
-            });
-        };
-
-        if (background) {
-            await finalize(preparedTelegramFiles, false, preparedFsIDs, preparedFolderStats);
-            return;
-        }
-
-        await finalize();
-
-        if (requestedFolderId === "" && isCurrentRequest()) {
-            getFileList()
-                .then(async (tgFiles) => {
-                    if (state.folderSizeEpoch !== folderEpoch) return;
-                    if (!isCurrentRequest()) return;
-                    const telegramFiles = Array.isArray(tgFiles) ? tgFiles : [];
-                    state.telegramRootCache = telegramFiles;
-                    await finalize(telegramFiles, true);
-                })
-                .catch((err) => {
-                    console.error("GetFileList failed:", err);
-                });
-        }
-    });
+    void loadFileData(view)
+        .then((data) => publishLoadedFileData(list, request, data))
+        .catch((error: unknown) => publishRefreshError(list, request, error));
 }
 
 // Delegated row interactions. Listeners live on the #file-list container and
@@ -724,7 +670,7 @@ function handleListClick(e: MouseEvent) {
             return;
         }
         setFocusedRow(row, { preventScroll: true });
-        handleRowSelection(row, e);
+        handleRowSelection(row, e, getInteractiveFileListRows());
         return;
     }
     if (row.dataset.type === "file") {
@@ -743,57 +689,74 @@ function handleListClick(e: MouseEvent) {
         }
         if ((e.target as HTMLElement).closest("button")) return;
         setFocusedRow(row, { preventScroll: true });
-        handleRowSelection(row, e);
+        handleRowSelection(row, e, getInteractiveFileListRows());
     }
 }
 
 function handleListKeyDown(e: KeyboardEvent) {
     const target = e.target as HTMLElement | null;
-    if (target?.closest("button, input, textarea, select, [contenteditable='true']")) return;
+    const action = target?.closest<HTMLButtonElement>('.row-actions button');
+    if (action) {
+        if (e.key !== 'ArrowLeft' && e.key !== 'Escape') return;
+        const row = action.closest<HTMLElement>('.drive-row');
+        if (!row) return;
+        e.preventDefault();
+        setFocusedRow(row, { preventScroll: true });
+        return;
+    }
+    if (isSearchMode() || target?.closest("input, textarea, select, [contenteditable='true']")) return;
 
-    const list = document.getElementById("file-list") as HTMLElement | null;
+    const list = document.getElementById('file-list') as HTMLElement | null;
     if (!list) return;
-    const rows = interactiveRows(list);
-    if (!rows.length) return;
+    const renderedRows = interactiveRows(list);
+    const logicalRows = getInteractiveFileListRows();
+    if (!renderedRows.length || !logicalRows.length) return;
 
-    const current = activeRowFromEventTarget(e.target) || rows[0];
-    const currentIndex = Math.max(0, rows.indexOf(current));
-    let next: HTMLElement | null = null;
+    const current = activeRowFromEventTarget(e.target) || renderedRows[0];
+    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === getRowKey(current)));
+    let nextKey: string | null = null;
 
     switch (e.key) {
-        case "ArrowDown":
-            next = rows[Math.min(rows.length - 1, currentIndex + 1)];
+        case 'ArrowDown':
+            nextKey = logicalRows[Math.min(logicalRows.length - 1, currentIndex + 1)]?.selectionKey ?? null;
             break;
-        case "ArrowUp":
-            next = rows[Math.max(0, currentIndex - 1)];
+        case 'ArrowUp':
+            nextKey = logicalRows[Math.max(0, currentIndex - 1)]?.selectionKey ?? null;
             break;
-        case "Home":
-            next = rows[0];
+        case 'Home':
+            nextKey = logicalRows[0]?.selectionKey ?? null;
             break;
-        case "End":
-            next = rows[rows.length - 1];
+        case 'End':
+            nextKey = logicalRows[logicalRows.length - 1]?.selectionKey ?? null;
             break;
-        case " ":
+        case 'ArrowRight': {
+            const firstAction = current.querySelector<HTMLButtonElement>('.row-actions button:not(:disabled)');
+            if (!firstAction) return;
             e.preventDefault();
-            handleRowSelection(current, e);
+            firstAction.focus();
             return;
-        case "Enter":
+        }
+        case ' ':
+            e.preventDefault();
+            handleRowSelection(current, e, logicalRows);
+            return;
+        case 'Enter':
             e.preventDefault();
             activateRow(current);
             return;
-        case "F2":
+        case 'F2':
             e.preventDefault();
             renameRow(current);
             return;
-        case "Delete":
+        case 'Delete':
             e.preventDefault();
             deleteRow(current);
             return;
-        case "ContextMenu":
+        case 'ContextMenu':
             e.preventDefault();
             triggerRowContextMenu(current);
             return;
-        case "F10":
+        case 'F10':
             if (!e.shiftKey) return;
             e.preventDefault();
             triggerRowContextMenu(current);
@@ -802,9 +765,9 @@ function handleListKeyDown(e: KeyboardEvent) {
             return;
     }
 
-    if (!next) return;
+    if (!nextKey) return;
     e.preventDefault();
-    setFocusedRow(next, { preventScroll: false });
+    setFocusedLogicalRow(nextKey, { preventScroll: false });
 }
 
 function handleListDblClick(e: MouseEvent) {
@@ -880,7 +843,7 @@ function handleListDragStart(e: DragEvent) {
         name: row.dataset.name || "File",
         size: Number(row.dataset.size || 0),
         parentId: row.dataset.parentId || state.currentFolderId,
-        source: row.dataset.source || "fs",
+        source: row.dataset.source === 'tg' ? 'tg' : 'fs',
         row,
     }, row.dataset.parentId || state.currentFolderId);
 }

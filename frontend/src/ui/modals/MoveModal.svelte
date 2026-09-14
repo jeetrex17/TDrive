@@ -110,7 +110,7 @@
     </div>
 
     {#if $view.error}
-        <div id="move-error" class="modal-error">{$view.error}</div>
+        <div id="move-error" class="modal-error" role="alert">{$view.error}</div>
     {/if}
 
     {#snippet actions()}

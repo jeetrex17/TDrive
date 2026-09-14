@@ -44,6 +44,7 @@ import {
 } from './auth';
 import { authScreen } from '../ui/auth/auth-store';
 import { personalDriveSetup } from '../ui/auth/personal-drive-store';
+import { state } from '../state';
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -224,5 +225,23 @@ describe('personal drive startup gate', () => {
         });
         expect(get(personalDriveSetup).error).toContain('previous attempt');
         expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
+    });
+
+    it('does not publish identity from a superseded dashboard flow', async () => {
+        const olderIdentity = deferred<number>();
+        authApi.preparePersonalDrive.mockResolvedValue({ status: 'ready', activeChannelId: '8200' });
+        authApi.getMyUserId.mockImplementationOnce(() => olderIdentity.promise);
+        state.myUserID = 99;
+
+        const olderRequest = preparePersonalDriveAndContinue();
+        await vi.waitFor(() => expect(authApi.getMyUserId).toHaveBeenCalledOnce());
+        expect(state.myUserID).toBe(0);
+
+        await preparePersonalDriveAndContinue();
+        expect(state.myUserID).toBe(77);
+        olderIdentity.resolve(99);
+        await olderRequest;
+
+        expect(state.myUserID).toBe(77);
     });
 });

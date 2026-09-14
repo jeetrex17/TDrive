@@ -583,6 +583,13 @@ export class NativeMediaStateRouter {
         this.unsubscribe = onRuntimeEvent<[unknown]>('native_media_state', (value) => this.route(value));
     }
 
+    unbind(): void {
+        this.unsubscribe?.();
+        this.unsubscribe = null;
+        this.active = null;
+        this.pending.clear();
+    }
+
     activate(adapter: NativeMpvAdapter): boolean {
         this.active = adapter;
         adapter.start(this.takePending(adapter.token));

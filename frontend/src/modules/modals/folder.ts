@@ -1,6 +1,6 @@
 // New folder modal for TDrive frontend
 
-import { state } from '../../state';
+import { invalidateFolderIndex, state } from '../../state';
 import { createFolder } from '../../api';
 import { notify } from '../notifications';
 import { humanizeBackendError } from '../errors';
@@ -50,6 +50,7 @@ async function submitFolder(name: string): Promise<void> {
     let failed = false;
     try {
         await createFolder(trimmed, parentId);
+        invalidateFolderIndex();
         closeFolderModalView();
     } catch (err) {
         failed = true;

@@ -5,7 +5,7 @@
 // hover popover via pushTransferStart/updateTransferProgress/markTransferDone.
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
-import { state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
+import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
 import { downloadFile, downloadFolder, importPaths, onNativeFileDrop, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs } from '../api';
 import type { ImportPlan, OperationError } from '../types';
 import { notify } from './notifications';
@@ -36,6 +36,16 @@ let uploadMenuHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 
 
+let activeTransferDriveId: number | null = null;
+
+function invalidateTransferCaches(): void {
+    invalidateFolderIndex(activeTransferDriveId);
+    const driveKey = activeTransferDriveId === null ? null : String(activeTransferDriveId);
+    if (driveKey && state.telegramRootCacheDriveKey === driveKey) {
+        state.telegramRootCache = null;
+        state.telegramRootCacheDriveKey = null;
+    }
+}
 type FolderDownloadProgressPayload = {
     folder_id?: unknown;
     percent?: unknown;
@@ -371,6 +381,7 @@ export function setupUploadProgress() {
         markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
 
         if (batchFinished) {
+            invalidateTransferCaches();
             appActions().refreshFiles();
         }
     });
@@ -418,6 +429,7 @@ export function setupUploadProgress() {
         }
 
         if (batchFinished) {
+            invalidateTransferCaches();
             appActions().refreshFiles();
         }
     });
@@ -490,6 +502,7 @@ export function setupUploadProgress() {
         markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status });
         state.importBatch = null;
 
+        invalidateTransferCaches();
         appActions().refreshFiles();
 
         if (!canceled && (status === 'failed' || failedUploads > 0 || oversize > 0 || errorCount > 0)) {
@@ -558,6 +571,7 @@ async function runImportFlow(parentID: string, paths: string[]) {
         return;
     }
     flowBusy = true;
+    activeTransferDriveId = state.activeChannel?.id ?? null;
     try {
         const onPersonal = state.activeChannel?.kind === 'personal';
         if (onPersonal) {
@@ -656,6 +670,7 @@ async function runImportFlow(parentID: string, paths: string[]) {
             }
         }
     } finally {
+        if (!importCompleteReceived) invalidateTransferCaches();
         flowBusy = false;
         state.cancelingUpload = false;
     }
@@ -663,6 +678,7 @@ async function runImportFlow(parentID: string, paths: string[]) {
 
 // uploadPathsBatch runs the classic per-file upload (one bell row per file).
 async function uploadPathsBatch(paths: string[], parentID: string, encrypt: boolean) {
+    if (activeTransferDriveId === null) activeTransferDriveId = state.activeChannel?.id ?? null;
     setTransferDirectionActive('upload', true);
     state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
 
@@ -713,6 +729,7 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
                 markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
             }
         }
+        invalidateTransferCaches();
         state.uploadBatch = null;
         state.cancelingUpload = false;
     }

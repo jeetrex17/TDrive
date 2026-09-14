@@ -62,14 +62,29 @@ export function setRoot(el: HTMLElement): void {
     }
 }
 
+// Release the observer and every live cell registration when the gallery host
+// is replaced. The thumbnail URL cache intentionally survives so a remount
+// can reuse already-fetched data without retaining detached DOM nodes.
+export function teardown(): void {
+    observer?.disconnect();
+    observer = null;
+    rootEl = null;
+    handles.clear();
+    loadedHandles.length = 0;
+}
+
 // beginRender records the drive the upcoming cells belong to, so an in-flight
 // thumbnail load from a previous drive is discarded rather than painted onto a
 // reused cell. Called before the orchestrator publishes new cells.
 export function beginRender(channelId: number): void {
     currentChannelId = channelId;
 }
-
 export function registerCell(node: HTMLElement, reg: CellRegistration): void {
+    const previous = handles.get(node);
+    if (previous) {
+        observer?.unobserve(node);
+        removeLoaded(previous);
+    }
     const handle: CellHandle = { node, msgId: reg.msgId, apply: reg.apply, status: 'idle' };
     handles.set(node, handle);
     observer?.observe(node);
@@ -78,12 +93,10 @@ export function registerCell(node: HTMLElement, reg: CellRegistration): void {
 export function unregisterCell(node: HTMLElement): void {
     observer?.unobserve(node);
     const handle = handles.get(node);
-    if (handle) {
-        const idx = loadedHandles.indexOf(handle);
-        if (idx >= 0) loadedHandles.splice(idx, 1);
-    }
+    if (handle) removeLoaded(handle);
     handles.delete(node);
 }
+
 
 // rearmLocked lets locked cells retry after the vault unlocks, without a full
 // gallery refresh.
@@ -132,13 +145,13 @@ async function loadCell(handle: CellHandle): Promise<void> {
         // Discard if the drive changed mid-flight or the cell was unregistered
         // (destroyed), so a stale or wrong-drive image is never painted/cached.
         // A reused same-drive cell still matches both guards and paints.
-        if (channelId !== currentChannelId || !handles.has(handle.node)) return;
+        if (channelId !== currentChannelId || handles.get(handle.node) !== handle) return;
         cacheThumb(key, url);
         handle.status = 'loaded';
         handle.apply({ status: 'loaded', src: url });
         registerLoaded(handle);
     } catch (err) {
-        if (channelId !== currentChannelId || !handles.has(handle.node)) return;
+        if (channelId !== currentChannelId || handles.get(handle.node) !== handle) return;
         if (/password required/i.test(String(err))) {
             handle.status = 'locked';
             handle.apply({ status: 'locked', title: 'locked, click to unlock' });
@@ -152,6 +165,7 @@ async function loadCell(handle: CellHandle): Promise<void> {
 // registerLoaded tracks a cell holding a decoded image and unloads the oldest
 // once we exceed the budget, keeping decoded-image memory bounded.
 function registerLoaded(handle: CellHandle): void {
+    removeLoaded(handle);
     loadedHandles.push(handle);
     while (loadedHandles.length > MAX_LOADED_CELLS) {
         const old = loadedHandles.shift();
@@ -160,11 +174,16 @@ function registerLoaded(handle: CellHandle): void {
 }
 
 function unloadCell(handle: CellHandle): void {
-    if (!handles.has(handle.node)) return;
+    if (handles.get(handle.node) !== handle) return;
     handle.status = 'idle';
     handle.apply({ status: 'idle', src: '' });
     // Re-arm so it reloads (instantly, from the thumb cache) when scrolled back.
     observer?.observe(handle.node);
+}
+
+function removeLoaded(handle: CellHandle): void {
+    const idx = loadedHandles.indexOf(handle);
+    if (idx >= 0) loadedHandles.splice(idx, 1);
 }
 
 function cacheThumb(key: string, url: string): void {

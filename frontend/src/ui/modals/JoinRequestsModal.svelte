@@ -42,7 +42,7 @@
         {#if $list.status === 'loading'}
             <div class="modal-empty">Loading requests...</div>
         {:else if $list.status === 'error'}
-            <div class="modal-error">Failed to load requests: {$list.message}</div>
+            <div class="modal-error" role="alert">Failed to load requests: {$list.message}</div>
         {:else if $list.rows.length === 0}
             <div class="modal-empty">No pending requests.</div>
         {:else}

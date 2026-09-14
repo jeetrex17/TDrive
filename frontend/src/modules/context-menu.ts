@@ -50,7 +50,12 @@ export function setupContextMenu() {
         const row = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
         const type = row?.dataset?.type || "background";
 
-        if (row) ensureRowSelectedForContextMenu(row);
+        if (row) {
+            ensureRowSelectedForContextMenu(row);
+            row.focus({ preventScroll: true });
+        } else {
+            list.focus({ preventScroll: true });
+        }
 
         if (state.selectedItems.size > 1) {
             const count = state.selectedItems.size;

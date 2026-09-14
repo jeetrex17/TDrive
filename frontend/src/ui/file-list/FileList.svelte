@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from 'svelte';
     import DownloadIcon from '@lucide/svelte/icons/download';
     import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
     import FolderIcon from '@lucide/svelte/icons/folder';
@@ -31,14 +32,87 @@
         row.onDoubleClick?.(event, row);
     }
 
-    // Keyboard handling is delegated once on #file-list. Keeping this no-op on
-    // the row makes Svelte's a11y contract explicit without adding per-row
-    // behavior or fighting the existing roving-focus controller.
-    function onDelegatedKeydown() {}
+
+    // Keyboard commands are owned by the single delegated listener on
+    // #file-list. This handler keeps that bubbling contract explicit to Svelte.
+    function onGridRowKeydown(_event: KeyboardEvent): void {}
+
+    const ESTIMATED_ROW_HEIGHT = 54;
+    const WINDOW_OVERSCAN = 8;
+    let scrollTop = $state(0);
+    let viewportHeight = $state(0);
+    let rowHeight = $state(ESTIMATED_ROW_HEIGHT);
+    let list: HTMLElement | null = null;
 
     const visibleRows = $derived($fileListView.kind === 'rows'
         ? sortFileListRows($fileListView.rows, $fileSortState)
         : []);
+    const rowWindow = $derived.by(() => {
+        if (visibleRows.length <= 64) {
+            return { before: 0, rows: visibleRows, start: 0, after: 0 };
+        }
+        const firstVisible = Math.floor(scrollTop / rowHeight);
+        const visibleCount = Math.max(1, Math.ceil(viewportHeight / rowHeight));
+        const start = Math.max(0, firstVisible - WINDOW_OVERSCAN);
+        const end = Math.min(visibleRows.length, firstVisible + visibleCount + WINDOW_OVERSCAN);
+        return {
+            before: start * rowHeight,
+            rows: visibleRows.slice(start, end),
+            start,
+            after: (visibleRows.length - end) * rowHeight,
+        };
+    });
+
+    function updateViewport(): void {
+        if (!list) return;
+        scrollTop = list.scrollTop;
+        viewportHeight = list.clientHeight;
+    }
+
+    function measureRow(element: HTMLElement): { destroy: () => void } {
+        const update = () => {
+            const style = getComputedStyle(element);
+            const footprint = Math.ceil(
+                element.getBoundingClientRect().height
+                + Number.parseFloat(style.marginTop || '0')
+                + Number.parseFloat(style.marginBottom || '0'),
+            );
+            if (footprint > 0) rowHeight = footprint;
+        };
+        update();
+        const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+        observer?.observe(element);
+        return { destroy: () => observer?.disconnect() };
+    }
+
+    function revealRow(event: Event): void {
+        const key = (event as CustomEvent<{ key: string }>).detail?.key;
+        const index = visibleRows.findIndex((row) => row.kind !== 'pending-folder' && row.selectionKey === key);
+        if (!list || index === -1) return;
+        const top = index * rowHeight;
+        const bottom = top + rowHeight;
+        if (top < list.scrollTop || bottom > list.scrollTop + list.clientHeight) {
+            list.scrollTop = Math.max(0, top - Math.max(0, (list.clientHeight - rowHeight) / 2));
+        }
+        updateViewport();
+    }
+
+    onMount(() => {
+        list = document.getElementById('file-list');
+        if (!list) return;
+        const onScroll = () => updateViewport();
+        const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateViewport);
+        list.addEventListener('scroll', onScroll, { passive: true });
+        resizeObserver?.observe(list);
+        window.addEventListener('tdrive:reveal-file-row', revealRow);
+        updateViewport();
+        return () => {
+            list?.removeEventListener('scroll', onScroll);
+            resizeObserver?.disconnect();
+            window.removeEventListener('tdrive:reveal-file-row', revealRow);
+            list = null;
+        };
+    });
 </script>
 
 {#if $fileListView.kind === 'state'}
@@ -50,31 +124,33 @@
         onAction={$fileListView.onAction}
     />
 {:else}
-    {#each visibleRows as row (row.key)}
+    <div aria-hidden="true" style:height={`${rowWindow.before}px`}></div>
+    {#each rowWindow.rows as row, rowIndex (row.key)}
         {#if row.kind === 'pending-folder'}
             <div
                 class="file-row drive-row folder-row pending-folder"
+                use:measureRow
                 data-type="pending-folder"
                 data-temp-id={row.tempId}
+                role="row"
+                aria-rowindex={rowWindow.start + rowIndex + 2}
                 title="Creating..."
             >
-                <div class="row-name" title={row.name}>
+                <div class="row-name" role="gridcell" aria-colindex="1" title={row.name}>
                     <span class="folder-chip" aria-hidden="true">
                         <FolderIcon size={18} strokeWidth={2} aria-hidden="true" />
                     </span>
                     <span class="row-label">{row.name}</span>
                     <span class="pending-indicator" aria-hidden="true"></span>
                 </div>
-                <div class="row-meta">Creating...</div>
-                <div class="row-meta">—</div>
-                <div class="row-actions"></div>
+                <div class="row-meta" role="gridcell" aria-colindex="2">Creating...</div>
+                <div class="row-meta" role="gridcell" aria-colindex="3">—</div>
+                <div class="row-actions" role="gridcell" aria-colindex="4"></div>
             </div>
         {:else}
-            <!-- Events stay delegated on #file-list, but selected/focused row
-                 visuals are model-driven here so keyed Svelte updates cannot
-                 clobber accessibility state. -->
             <div
                 class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${$selectedFileRowKeys.has(row.selectionKey) ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}`}
+                use:measureRow
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}
                 data-id={row.id}
@@ -87,15 +163,16 @@
                 data-encrypted={row.kind === 'file' ? String(row.encrypted) : undefined}
                 data-can-delete={row.kind === 'file' ? String(row.canDelete) : undefined}
                 data-can-rename={row.kind === 'file' ? String(row.canRename) : undefined}
-                role="option"
+                role="row"
+                aria-rowindex={rowWindow.start + rowIndex + 2}
                 aria-selected={$selectedFileRowKeys.has(row.selectionKey) ? 'true' : 'false'}
                 aria-label={row.ariaLabel}
                 tabindex={$activeFileRowKey === row.selectionKey ? 0 : -1}
                 onclick={(event) => onRowClick(event, row)}
                 ondblclick={(event) => onRowDoubleClick(event, row)}
-                onkeydown={onDelegatedKeydown}
+                onkeydown={onGridRowKeydown}
             >
-                <div class="row-name" draggable="true" title={row.name}>
+                <div class="row-name" role="gridcell" aria-colindex="1" draggable="true" title={row.name}>
                     {#if row.kind === 'folder'}
                         <span class="folder-chip" aria-hidden="true">
                             <FolderIcon size={18} strokeWidth={2} aria-hidden="true" />
@@ -114,9 +191,9 @@
                         {/if}
                     {/if}
                 </div>
-                <div class="row-meta">{row.metaLabel}</div>
-                <div class={`row-meta ${row.kind === 'folder' ? 'folder-size' : ''}`}>{row.sizeLabel}</div>
-                <div class="row-actions">
+                <div class="row-meta" role="gridcell" aria-colindex="2">{row.metaLabel}</div>
+                <div class={`row-meta ${row.kind === 'folder' ? 'folder-size' : ''}`} role="gridcell" aria-colindex="3">{row.sizeLabel}</div>
+                <div class="row-actions" role="gridcell" aria-colindex="4">
                     {#each row.actions as action (action.kind)}
                         <button
                             class={`action-icon ${action.className}`}
@@ -138,4 +215,5 @@
             </div>
         {/if}
     {/each}
+    <div aria-hidden="true" style:height={`${rowWindow.after}px`}></div>
 {/if}

@@ -5,7 +5,7 @@
     import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
     import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
     import XIcon from '@lucide/svelte/icons/x';
-    import { toasts, type ToastItem } from './toast-store';
+    import { toasts } from './toast-store';
 
     interface Props {
         onDismiss: (id: string) => void;
@@ -19,11 +19,6 @@
 
 
 
-    function onToastClick(event: MouseEvent, toast: ToastItem): void {
-        if ((event.target as HTMLElement).closest('.toast-close')) return;
-        // Click anywhere on an error to clear it quickly.
-        if (toast.level === 'error') onDismiss(toast.id);
-    }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -38,10 +33,8 @@
             class={`toast toast-${toast.level}`}
             data-id={toast.id}
             role={toast.level === 'error' ? 'alert' : 'status'}
-
             onmouseenter={() => onPauseToast(toast.id)}
             onmouseleave={() => onResumeToast(toast.id)}
-            onclick={(event) => onToastClick(event, toast)}
         >
             <span class="toast-icon" aria-hidden="true">
                 {#if toast.spinner}

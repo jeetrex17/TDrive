@@ -41,7 +41,7 @@ import {
 import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
-import { installModalA11y } from "../../ui/modals/modal-a11y";
+import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from "../../ui/modals/modal-a11y";
 import VideoModal from "../../ui/video/VideoModal.svelte";
 import { mountSvelte, type SvelteMountHandle } from "../../ui/mount";
 
@@ -114,6 +114,9 @@ let mediaMetaBaseText = "";
 let mediaMetaBytes = 0;
 let a11y: ReturnType<typeof installModalA11y> | null = null;
 let videoMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let videoHostEl: HTMLElement | null = null;
+let unbindVideoDOM: (() => void) | null = null;
+let unbindSpeedMenu: (() => void) | null = null;
 let videoDOM: VideoDOM | null = null;
 let geometry: VideoGeometryController | null = null;
 let transport: VideoTransportController | null = null;
@@ -583,6 +586,8 @@ function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
     settingsReturnFocus = byID("video-picture-button");
     settingsSection = section;
     panel.hidden = false;
+    panel.setAttribute("aria-hidden", "false");
+    panel.inert = false;
     modalEl?.classList.add("has-video-settings");
     byID("video-picture-button")?.setAttribute("aria-expanded", "true");
     const picture = byID("video-picture-settings");
@@ -601,14 +606,20 @@ function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
 function hideSettingsPanel(restoreFocus = false) {
     settingsSection = null;
     const panel = byID("video-settings-panel");
-    if (panel) panel.hidden = true;
+    const focusInside = Boolean(panel?.contains(document.activeElement));
+    if (panel) {
+        panel.hidden = true;
+        panel.setAttribute("aria-hidden", "true");
+        panel.inert = true;
+    }
     modalEl?.classList.remove("has-video-settings");
     byID("video-picture-button")?.setAttribute("aria-expanded", "false");
-    if (restoreFocus) settingsReturnFocus?.focus({ preventScroll: true });
+    if ((restoreFocus || focusInside) && settingsReturnFocus?.isConnected) settingsReturnFocus.focus({ preventScroll: true });
     geometry?.syncFallbackNativeViewportInsets();
     geometry?.scheduleNativeResize();
     applyHtmlPicture();
 }
+
 
 function bindSettingsPanel() {
     const panel = byID("video-settings-panel");
@@ -1135,6 +1146,8 @@ function activateNativePlayback(
 }
 
 export async function openVideoModal(target: VideoOpenTarget) {
+    const host = byID<HTMLElement>("video-modal");
+    if (videoHostEl !== host || !videoSetupComplete) setupVideoModal();
     if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
     const id = Number(target.id || 0);
     if (!id) return;
@@ -1155,6 +1168,7 @@ export async function openVideoModal(target: VideoOpenTarget) {
     setChromeVisible(true);
     modalEl.style.display = "flex";
     modalEl.setAttribute("aria-hidden", "false");
+    activateModalOwnership(modalEl);
     a11y?.activate();
     void geometry?.syncFullscreenState();
 
@@ -1182,6 +1196,7 @@ export async function closeVideoModal() {
     if (!playbackTransitions.isCurrent(generation)) return;
     modalEl.style.display = "none";
     modalEl.setAttribute("aria-hidden", "true");
+    deactivateModalOwnership(modalEl);
     a11y?.deactivate();
     await playbackTransitions.run(generation, async () => releaseActive());
     if (!playbackTransitions.isCurrent(generation)) return;
@@ -1223,7 +1238,6 @@ function closeSpeedMenu(restoreFocus = false) {
     setSpeedMenuOpen(false);
     if (restoreFocus) byID("video-picture-button")?.focus({ preventScroll: true });
 }
-
 function bindSpeedMenu() {
     speedBtnEl?.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -1272,7 +1286,7 @@ function bindSpeedMenu() {
         }
         handleMenuKeydown(event, speedMenuButtons(), () => closeSpeedMenu(true));
     });
-    document.addEventListener("click", (event) => {
+    const onDocumentClick = (event: MouseEvent) => {
         const target = event.target as Node | null;
         if (target && byID("video-settings-panel")?.contains(target)) return;
         if (isSpeedMenuOpen() && !(target && (speedMenuEl?.contains(target) || speedBtnEl?.contains(target)))) {
@@ -1281,7 +1295,9 @@ function bindSpeedMenu() {
         for (const picker of trackPickers()) {
             if (picker.isOpen() && !picker.contains(target)) picker.close();
         }
-    });
+    };
+    document.addEventListener("click", onDocumentClick);
+    return () => document.removeEventListener("click", onDocumentClick);
 }
 
 function targetShouldUseOwnKeyboard(target: HTMLElement | null, event: KeyboardEvent) {
@@ -1381,13 +1397,71 @@ function customSpeedMarkup() {
     return `<form class="video-speed-custom" role="none" aria-label="Custom playback speed"><label for="video-speed-custom-input">Custom</label><div class="video-speed-custom-row"><input id="video-speed-custom-input" type="number" inputmode="decimal" min="${MIN_PLAYBACK_RATE}" max="${MAX_PLAYBACK_RATE}" step="0.05" value="1" aria-label="Custom playback speed" /><span aria-hidden="true">x</span><button type="submit">Set</button></div></form>`;
 }
 
-export function setupVideoModal() {
-    if (videoSetupComplete) return;
-    const host = byID<HTMLElement>("video-modal");
-    if (host && !videoMarkupHandle) {
-        host.replaceChildren();
-        videoMarkupHandle = mountSvelte(VideoModal, { target: host, props: { initialPreferences: playbackPreferences, onPreferencesChange: updatePlaybackPreferences } });
+
+export function teardownVideoModal(): void {
+    playbackTransitions.begin();
+    activeOpenAttempt = null;
+    clearChromeTimer();
+    if (modalEl) {
+        modalEl.style.display = "none";
+        modalEl.setAttribute("aria-hidden", "true");
     }
+
+    if (modalEl) deactivateModalOwnership(modalEl);
+    a11y?.deactivate();
+    a11y = null;
+    unbindVideoDOM?.();
+    unbindVideoDOM = null;
+    unbindSpeedMenu?.();
+    unbindSpeedMenu = null;
+    nativeStateRouter.unbind();
+    unsubscribeEncryptedMediaSessionsClosed?.();
+    unsubscribeEncryptedMediaSessionsClosed = null;
+    void releaseActive();
+    transport?.destroy();
+    geometry?.destroy();
+    transport = null;
+    geometry = null;
+    videoDOM = null;
+    audioPicker = null;
+    subtitlePicker = null;
+
+    const markupHandle = videoMarkupHandle;
+    videoMarkupHandle = null;
+    void markupHandle?.destroy();
+
+    modalEl = null;
+    stageEl = null;
+    topbarEl = null;
+    controlsEl = null;
+    filenameEl = null;
+    metaEl = null;
+    closeBtnEl = null;
+    videoEl = null;
+    loadingEl = null;
+    loadingStatusEl = null;
+    errorEl = null;
+    playBtnEl = null;
+    speedBtnEl = null;
+    speedMenuEl = null;
+    settingsSection = null;
+    settingsReturnFocus = null;
+    videoHostEl = null;
+    videoSetupComplete = false;
+}
+
+export function setupVideoModal(): boolean {
+    const host = byID<HTMLElement>("video-modal");
+    if (!host) {
+        if (videoSetupComplete || videoHostEl || videoMarkupHandle) teardownVideoModal();
+        return false;
+    }
+    if (videoSetupComplete && videoHostEl === host && videoDOM?.modal === host) return true;
+    if (videoSetupComplete || videoHostEl || videoMarkupHandle) teardownVideoModal();
+
+    host.replaceChildren();
+    videoMarkupHandle = mountSvelte(VideoModal, { target: host, props: { initialPreferences: playbackPreferences, onPreferencesChange: updatePlaybackPreferences } });
+    videoHostEl = host;
 
     videoDOM = collectVideoDOM();
     ({
@@ -1418,7 +1492,8 @@ export function setupVideoModal() {
 
     if (!modalEl || !videoEl || !stageEl) {
         console.error("Video modal setup failed. Missing #video-modal, #video-stage, or #video-player.");
-        return;
+        teardownVideoModal();
+        return false;
     }
 
     geometry = new VideoGeometryController({
@@ -1454,7 +1529,13 @@ export function setupVideoModal() {
     videoSetupComplete = true;
     a11y = installModalA11y(modalEl, {
         requestClose: () => {
-            if (closeOpenMenu()) return;
+            const panel = byID<HTMLElement>("video-settings-panel");
+            if (panel && !panel.hidden) {
+                closeOpenMenu();
+                if (!panel.hidden) hideSettingsPanel(true);
+                byID("video-picture-button")?.focus({ preventScroll: true });
+                return;
+            }
             void closeVideoModal();
         },
         initialFocus: () => playBtnEl || closeBtnEl,
@@ -1464,9 +1545,9 @@ export function setupVideoModal() {
     nativeStateRouter.bind();
     renderSpeedOptions();
     transport.bind();
-    bindSpeedMenu();
+    unbindSpeedMenu = bindSpeedMenu();
     bindSettingsPanel();
-    bindVideoDOM(videoDOM, {
+    unbindVideoDOM = bindVideoDOM(videoDOM, {
         close: () => { void closeVideoModal(); },
         toggleFullscreen: () => { void geometry?.toggleFullscreen(); },
         pointerMove: handleVideoPointerMove,
@@ -1482,4 +1563,5 @@ export function setupVideoModal() {
         applyHtmlPicture();
     });
     applyState(EMPTY_PLAYER_STATE);
+    return true;
 }

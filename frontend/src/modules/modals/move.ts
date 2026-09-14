@@ -8,6 +8,7 @@ import {
     moveFolder,
     type OperationResult,
 } from '../../api';
+import { invalidateFolderIndex } from '../../state';
 import { callWithPasswordRetry } from './encryption-password';
 import { clearSelection } from '../selection';
 import { buildFolderIndex, collectDescendants } from '../folder-index';
@@ -167,6 +168,7 @@ async function confirmMove(): Promise<void> {
         pendingTarget = null;
         moveModal.close();
         clearSelection();
+        invalidateFolderIndex();
         appActions().refreshFiles();
     } catch (error) {
         moveModal.setError(humanizeBackendError(error));

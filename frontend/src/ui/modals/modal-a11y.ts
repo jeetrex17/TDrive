@@ -1,13 +1,7 @@
-// Keyboard + focus handling shared by the confirm dialogs.
-//
-// Wire it once in a modal's setup() with the modal element, its close callback,
-// and the element to focus on open (use the safe / Cancel control for
-// destructive modals). Call the returned activate() when the modal opens and
-// deactivate() when it closes.
-//
-// Provides: focus the safe control on open, trap Tab inside the dialog, close
-// on Escape (and stop the global Esc handler from firing behind the overlay),
-// and restore focus to whatever was focused before the modal opened.
+// Keyboard, focus, and overlay ownership shared by ModalShell-based dialogs.
+// The active stack has one keyboard owner: the topmost dialog. While it is
+// open, every other branch of the application is inert and hidden from the
+// accessibility tree. This also makes nested dialogs behave as one stack.
 
 const FOCUSABLE = [
     'a[href]',
@@ -18,61 +12,161 @@ const FOCUSABLE = [
     '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-function resolveTarget(target: any) {
-    if (typeof target === 'function') return target();
-    if (typeof target === 'string') return document.querySelector(target);
-    return target || null;
+const activeModals: HTMLElement[] = [];
+
+interface BackgroundState {
+    inert: boolean;
+    ariaHidden: string | null;
 }
 
-function canFocus(el: any) {
+const backgroundStates = new Map<HTMLElement, BackgroundState>();
+
+
+function rememberBackground(element: HTMLElement): void {
+    if (backgroundStates.has(element)) return;
+    backgroundStates.set(element, {
+        inert: element.inert,
+        ariaHidden: element.getAttribute('aria-hidden'),
+    });
+}
+
+function hideBackground(element: HTMLElement): void {
+    rememberBackground(element);
+    element.inert = true;
+    element.setAttribute('aria-hidden', 'true');
+}
+
+function restoreForeground(element: HTMLElement): void {
+    const previous = backgroundStates.get(element);
+    if (!previous) return;
+    element.inert = previous.inert;
+    if (element.classList.contains('modal-overlay') && activeModals.includes(element)) {
+        element.setAttribute('aria-hidden', 'false');
+    } else if (previous.ariaHidden === null) {
+        element.removeAttribute('aria-hidden');
+    } else {
+        element.setAttribute('aria-hidden', previous.ariaHidden);
+    }
+}
+
+function restoreAllBackgrounds(): void {
+    for (const [element, previous] of backgroundStates) {
+        element.inert = previous.inert;
+        // Closed modal hosts must remain hidden even when they were exposed
+        // before they entered the stack. ModalShell owns their display state.
+        if (element.classList.contains('modal-overlay') && !activeModals.includes(element)) {
+            element.setAttribute('aria-hidden', 'true');
+            continue;
+        }
+        if (previous.ariaHidden === null) element.removeAttribute('aria-hidden');
+        else element.setAttribute('aria-hidden', previous.ariaHidden);
+    }
+    backgroundStates.clear();
+}
+
+function syncModalOwnership(): void {
+    const top = activeModals[activeModals.length - 1];
+    if (!top) {
+        restoreAllBackgrounds();
+        return;
+    }
+
+    // Walk from the active host to <body>. At each level, every sibling branch
+    // is background. This includes document portals such as notifications while
+    // preserving the active dialog's ancestor path.
+    let branch: HTMLElement | null = top;
+    while (branch?.parentElement) {
+        const parent: HTMLElement = branch.parentElement;
+        for (const sibling of Array.from(parent.children)) {
+            if (sibling instanceof HTMLElement && sibling !== branch) hideBackground(sibling);
+        }
+        restoreForeground(branch);
+        branch = parent;
+    }
+}
+
+export function activateModalOwnership(modal: HTMLElement): void {
+    const existingIndex = activeModals.indexOf(modal);
+    if (existingIndex >= 0) activeModals.splice(existingIndex, 1);
+    activeModals.push(modal);
+    syncModalOwnership();
+}
+
+export function deactivateModalOwnership(modal: HTMLElement): void {
+    const index = activeModals.lastIndexOf(modal);
+    if (index >= 0) activeModals.splice(index, 1);
+    syncModalOwnership();
+}
+
+export function hasActiveModal(): boolean {
+    return activeModals.length > 0;
+}
+
+
+function resolveTarget(target: unknown): Element | null {
+    if (typeof target === 'function') return target();
+    if (typeof target === 'string') return document.querySelector(target);
+    return target instanceof Element ? target : null;
+}
+
+function canFocus(el: unknown): el is HTMLElement {
     return Boolean(
-        el &&
+        el instanceof HTMLElement &&
         typeof el.focus === 'function' &&
         el.isConnected &&
-        !el.disabled &&
-        el.offsetParent !== null
+        !el.hasAttribute('disabled') &&
+        !el.closest('[inert], [aria-hidden="true"]') &&
+        el.offsetParent !== null,
     );
 }
 
-function focusIfPossible(el: any) {
+function focusIfPossible(el: unknown): boolean {
     if (!canFocus(el)) return false;
     el.focus({ preventScroll: true });
-    return true;
+    return document.activeElement === el;
 }
 
-export function installModalA11y(modal: any, { requestClose, initialFocus, restoreFocus }: { requestClose?: any; initialFocus?: any; restoreFocus?: any } = {}) {
-    let lastActive: any = null;
+export function installModalA11y(
+    modal: HTMLElement,
+    { requestClose, initialFocus, restoreFocus }: {
+        requestClose?: () => void;
+        initialFocus?: Element | (() => Element | null) | null;
+        restoreFocus?: Element | string | (() => Element | null) | null;
+    } = {},
+) {
+    let lastActive: Element | null = null;
     let active = false;
 
-    const focusable = (): any[] =>
-        Array.from(modal.querySelectorAll(FOCUSABLE)).filter(canFocus);
+    const focusable = (): HTMLElement[] =>
+        Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(canFocus);
 
-    const onKeydown = (e: any) => {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            e.stopPropagation();
+    const onKeydown = (event: KeyboardEvent) => {
+        if (activeModals[activeModals.length - 1] !== modal) return;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopImmediatePropagation();
             requestClose?.();
             return;
         }
-        if (e.key !== 'Tab') return;
+        if (event.key !== 'Tab') return;
         const items = focusable();
         if (items.length === 0) {
-            e.preventDefault();
+            event.preventDefault();
             return;
         }
         const first = items[0];
         const last = items[items.length - 1];
         if (!modal.contains(document.activeElement)) {
-            e.preventDefault();
-            first.focus();
+            event.preventDefault();
+            first.focus({ preventScroll: true });
             return;
         }
-        if (e.shiftKey && document.activeElement === first) {
-            e.preventDefault();
-            last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-            e.preventDefault();
-            first.focus();
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus({ preventScroll: true });
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus({ preventScroll: true });
         }
     };
 
@@ -80,23 +174,21 @@ export function installModalA11y(modal: any, { requestClose, initialFocus, resto
         activate() {
             if (active) return;
             active = true;
-            lastActive = document.activeElement;
+            lastActive = document.activeElement instanceof Element ? document.activeElement : null;
+            activateModalOwnership(modal);
             document.addEventListener('keydown', onKeydown, true);
             const target =
                 (typeof initialFocus === 'function' ? initialFocus() : initialFocus) || focusable()[0];
-            if (!focusIfPossible(target)) {
-                focusIfPossible(focusable()[0]);
-            }
+            if (!focusIfPossible(target)) focusIfPossible(focusable()[0]);
         },
         deactivate() {
             if (!active) return;
             active = false;
             document.removeEventListener('keydown', onKeydown, true);
+            deactivateModalOwnership(modal);
             const restore = lastActive;
             lastActive = null;
-            if (!focusIfPossible(restore)) {
-                focusIfPossible(resolveTarget(restoreFocus));
-            }
+            if (!focusIfPossible(restore)) focusIfPossible(resolveTarget(restoreFocus));
         },
     };
 }

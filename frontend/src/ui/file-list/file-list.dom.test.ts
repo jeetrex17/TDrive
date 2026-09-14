@@ -76,6 +76,23 @@ describe('FileList DOM behavior', () => {
         expect(row().getAttribute('tabindex')).toBe('0');
     });
 
+    it('uses grid rows and keeps row actions as native buttons', () => {
+        setup();
+        showFileListRows([makeFileRow({
+            actions: [{
+                kind: 'download',
+                className: 'download',
+                title: 'Download',
+                label: 'Download',
+            }],
+        })]);
+        flushSync();
+
+        expect(row().getAttribute('role')).toBe('row');
+        expect(row().querySelectorAll('[role="gridcell"]')).toHaveLength(4);
+        expect(row().querySelector<HTMLButtonElement>('.action-icon.download')?.getAttribute('type')).toBe('button');
+    });
+
     it('keeps keyed row elements stable across row-data updates', () => {
         setup();
         showFileListRows([makeFileRow({ metaLabel: 'Today' })]);
@@ -139,5 +156,23 @@ describe('FileList DOM behavior', () => {
         const rows = Array.from(host?.querySelectorAll<HTMLElement>('.drive-row') ?? []);
         expect(rows.map((item) => item.dataset.rowKey)).toEqual(['file:1', 'file:2']);
         expect(rows[1].classList.contains('is-selected')).toBe(true);
+    });
+    it('windows large row sets instead of mounting every row', () => {
+        setup();
+        showFileListRows(Array.from({ length: 128 }, (_, index) => makeFileRow({
+            id: String(index),
+            key: `file:fs:${index}`,
+            selectionKey: `file:${index}`,
+            name: `entry-${String(index).padStart(3, '0')}.txt`,
+            baseName: `entry-${String(index).padStart(3, '0')}`,
+            ariaLabel: `File: entry-${String(index).padStart(3, '0')}.txt`,
+            uploadTime: index,
+        })));
+        flushSync();
+
+        const rows = host?.querySelectorAll<HTMLElement>('.drive-row') ?? [];
+        expect(rows.length).toBeLessThan(64);
+        expect(rows[0]?.getAttribute('aria-rowindex')).toBe('2');
+        expect(host?.querySelector('.drive-row[data-row-key="file:0"]')).toBeNull();
     });
 });
