@@ -651,13 +651,9 @@
 }
 
 .video-volume-slider {
-    position: absolute;
-    left: 100%;
-    top: 50%;
-    z-index: 3;
+    position: relative;
     width: 100px;
     margin-left: 12px;
-    translate: 0 -50%;
     opacity: 0;
     pointer-events: none;
     transition: opacity 180ms ease;
@@ -1240,6 +1236,12 @@
     .video-command-row {
         justify-content: space-between;
         align-items: flex-start;
+    }
+
+    /* The reserved slider width is worth more than the slider itself once the
+       row is this tight. Mute and the arrow keys still adjust volume. */
+    .video-volume-slider {
+        display: none;
     }
 
     .video-secondary-cluster {
