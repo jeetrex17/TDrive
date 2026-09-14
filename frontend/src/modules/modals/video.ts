@@ -43,6 +43,16 @@ import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../vid
 import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from "../../ui/modals/modal-a11y";
 import { videoPlaybackPreferences } from "../../ui/video/video-preferences-store";
+import { loadAutoNextPreference } from "../video/video-playlist";
+import {
+    resetVideoPlaylist,
+    setVideoPlaylist,
+    setVideoPlaylistAutoNext,
+    setVideoPlaylistCurrentIndex,
+    setVideoPlaylistOpen,
+    setVideoPlaylistSwitching,
+    type VideoPlaylistViewItem,
+} from "../../ui/video/video-playlist-store";
 
 const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
@@ -54,8 +64,22 @@ const STREAM_ACTIVITY_HOLD_MS = 2000;
 interface VideoOpenTarget {
     id: number;
     name: string;
+    key?: string;
     size?: number;
     encrypted?: boolean;
+}
+
+export interface VideoPlaylistLaunch {
+    readonly items: readonly VideoOpenTarget[];
+    readonly currentIndex: number;
+    readonly title: string;
+}
+
+interface ActiveVideoPlaylist {
+    readonly items: readonly VideoOpenTarget[];
+    readonly title: string;
+    currentIndex: number;
+    autoNext: boolean;
 }
 
 interface VideoOpenAttempt {
@@ -64,12 +88,15 @@ interface VideoOpenAttempt {
     htmlFailureHandled: boolean;
     nativeFallbackRequested: boolean;
     pausedByUser: boolean;
+    playbackIntent: PlaybackIntent | null;
 }
-
 
 let playbackPreferences = loadPlaybackPreferences();
 let settingsSection: "picture" | "audio" | "subtitle" | "speed" | "shortcuts" | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
+let playlistOpen = false;
+let playlistReturnFocus: HTMLElement | null = null;
+let activePlaylist: ActiveVideoPlaylist | null = null;
 let modalEl: HTMLElement | null = null;
 let stageEl: HTMLElement | null = null;
 let topbarEl: HTMLElement | null = null;
@@ -122,7 +149,6 @@ let videoDOM: VideoDOM | null = null;
 let geometry: VideoGeometryController | null = null;
 let transport: VideoTransportController | null = null;
 let videoSetupComplete = false;
-
 
 function isOpen() {
     return Boolean(modalEl && modalEl.style.display !== "none");
@@ -348,7 +374,7 @@ function clearError() {
 function retryVideoOpen() {
     const target = activeOpenAttempt?.target;
     if (!target || !hasError || !isOpen()) return;
-    void openVideoModal(target);
+    void openVideoTarget(target, null);
 }
 
 function handleHtmlPlaybackError(detail: string) {
@@ -577,9 +603,15 @@ function applyHtmlPicture() {
     Object.assign(videoEl.style, style);
 }
 
-function syncSettingsGeometry() {
-    const panel = byID("video-settings-panel");
-    if (!panel || !modalEl || !settingsSection) return;
+function getActiveVideoPanel(): HTMLElement | null {
+    if (settingsSection !== null) return byID("video-settings-panel");
+    if (playlistOpen) return byID("video-playlist-panel");
+    return null;
+}
+
+function syncActivePanelGeometry() {
+    const panel = getActiveVideoPanel();
+    if (!panel || !modalEl) return;
     const shell = byID("video-shell")?.getBoundingClientRect();
     if (!shell) return;
     const top = Math.max(0, (topbarEl?.getBoundingClientRect().bottom ?? shell.top) - shell.top);
@@ -593,6 +625,7 @@ function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
     const panel = byID("video-settings-panel");
     if (!panel) return;
     settingsReturnFocus = byID("video-picture-button");
+    hideVideoPlaylist();
     settingsSection = section;
     panel.hidden = false;
     panel.setAttribute("aria-hidden", "false");
@@ -608,10 +641,10 @@ function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
     for (const button of panel.querySelectorAll<HTMLElement>("[data-settings-section]")) {
         button.setAttribute("aria-pressed", button.dataset.settingsSection === section ? "true" : "false");
     }
-    syncSettingsGeometry();
+    syncActivePanelGeometry();
     clearChromeTimer();
     revealChrome();
-    requestAnimationFrame(() => { syncSettingsGeometry(); geometry?.scheduleNativeResize(); applyHtmlPicture(); });
+    requestAnimationFrame(() => { syncActivePanelGeometry(); geometry?.scheduleNativeResize(); applyHtmlPicture(); });
 }
 
 function hideSettingsPanel(restoreFocus = false) {
@@ -631,6 +664,57 @@ function hideSettingsPanel(restoreFocus = false) {
     applyHtmlPicture();
 }
 
+function showVideoPlaylist() {
+    if (!activePlaylist || activePlaylist.items.length < 2) return;
+    closeMenus();
+    const panel = byID("video-playlist-panel");
+    if (!panel) return;
+    playlistReturnFocus = byID("video-playlist-button");
+    playlistOpen = true;
+    panel.hidden = false;
+    panel.inert = false;
+    panel.setAttribute("aria-hidden", "false");
+    modalEl?.classList.add("has-video-playlist");
+    byID("video-playlist-button")?.setAttribute("aria-expanded", "true");
+    setVideoPlaylistOpen(true);
+    syncActivePanelGeometry();
+    clearChromeTimer();
+    revealChrome();
+    requestAnimationFrame(() => {
+        syncActivePanelGeometry();
+        geometry?.scheduleNativeResize();
+        applyHtmlPicture();
+        panel.querySelector<HTMLElement>("[aria-current='true']")?.focus({ preventScroll: true });
+    });
+}
+
+export function hideVideoPlaylist(restoreFocus = false): void {
+    const panel = byID("video-playlist-panel");
+    const focusInside = Boolean(panel?.contains(document.activeElement));
+    playlistOpen = false;
+    if (panel) {
+        panel.hidden = true;
+        panel.inert = true;
+        panel.setAttribute("aria-hidden", "true");
+    }
+    modalEl?.classList.remove("has-video-playlist");
+    byID("video-playlist-button")?.setAttribute("aria-expanded", "false");
+    setVideoPlaylistOpen(false);
+    if ((restoreFocus || focusInside) && playlistReturnFocus?.isConnected) {
+        playlistReturnFocus.focus({ preventScroll: true });
+    }
+    geometry?.syncFallbackNativeViewportInsets();
+    geometry?.scheduleNativeResize();
+    applyHtmlPicture();
+}
+
+function bindVideoPlaylist() {
+    byID("video-playlist-button")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (playlistOpen) hideVideoPlaylist(true);
+        else showVideoPlaylist();
+    });
+}
 
 function bindSettingsPanel() {
     const panel = byID("video-settings-panel");
@@ -677,7 +761,7 @@ function trackPickers() {
 }
 
 function isAnyMenuOpen() {
-    return settingsSection !== null || isSpeedMenuOpen() || trackPickers().some((picker) => picker.isOpen());
+    return playlistOpen || settingsSection !== null || isSpeedMenuOpen() || trackPickers().some((picker) => picker.isOpen());
 }
 
 // closeMenus closes every popover except the one about to open.
@@ -689,8 +773,12 @@ function closeMenus(except: TrackPicker | "speed" | null = null) {
     }
 }
 
-// closeOpenMenu closes whichever popover is open, returning whether one was.
+// closeOpenMenu closes whichever popover or panel is open, returning whether one was.
 function closeOpenMenu() {
+    if (playlistOpen) {
+        hideVideoPlaylist(true);
+        return true;
+    }
     if (!isAnyMenuOpen()) return false;
     closeSpeedMenu(true);
     for (const picker of trackPickers()) picker.close(true);
@@ -921,6 +1009,152 @@ function renderMediaMeta() {
     metaEl.textContent = streamActivityText ? `${mediaMetaBaseText} · ${streamActivityText}` : mediaMetaBaseText;
 }
 
+function normalizeVideoTarget(target: VideoOpenTarget): VideoOpenTarget | null {
+    const id = Number(target.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const normalized = {
+        id,
+        name: String(target.name || "Video"),
+        size: Math.max(0, Number(target.size) || 0),
+        encrypted: Boolean(target.encrypted),
+    };
+    const key = String(target.key || "").trim();
+    return key ? { ...normalized, key } : normalized;
+}
+
+function createActivePlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch): ActiveVideoPlaylist {
+    const fallback = Object.freeze([{ ...target }]);
+    if (!launch) {
+        return { items: fallback, title: "Videos", currentIndex: 0, autoNext: loadAutoNextPreference() };
+    }
+
+    const items = launch.items
+        .map(normalizeVideoTarget)
+        .filter((item): item is VideoOpenTarget => item !== null);
+    let currentIndex = Number.isInteger(launch.currentIndex) ? launch.currentIndex : -1;
+    if (currentIndex < 0 || currentIndex >= items.length || items[currentIndex].id !== target.id) {
+        const matches = items.reduce<number[]>((indices, item, index) => {
+            if (item.id === target.id) indices.push(index);
+            return indices;
+        }, []);
+        currentIndex = matches.length === 1 ? matches[0] : -1;
+    }
+    if (currentIndex < 0) {
+        return { items: fallback, title: "Videos", currentIndex: 0, autoNext: loadAutoNextPreference() };
+    }
+    items[currentIndex] = { ...items[currentIndex], ...target };
+    return {
+        items: Object.freeze(items.map((item) => Object.freeze({ ...item }))),
+        title: String(launch.title || "Videos"),
+        currentIndex,
+        autoNext: loadAutoNextPreference(),
+    };
+}
+
+function playlistItemIdentity(item: VideoOpenTarget, index: number): string {
+    return item.key || `video:${item.id}:${index}`;
+}
+
+function playlistViewItems(playlist: ActiveVideoPlaylist): readonly VideoPlaylistViewItem[] {
+    return playlist.items.map((item, index) => ({
+        id: playlistItemIdentity(item, index),
+        name: item.name,
+        size: item.size || 0,
+        format: videoFormatLabel(item.name),
+        position: index + 1,
+    }));
+}
+
+function syncPlaylistButton() {
+    const button = byID<HTMLButtonElement>("video-playlist-button");
+    const count = activePlaylist?.items.length ?? 0;
+    const available = count > 1;
+    if (!button) return;
+    button.hidden = !available;
+    const position = available ? activePlaylist!.currentIndex + 1 : 0;
+    button.setAttribute("aria-label", available ? `Playlist, ${position} of ${count}` : "Playlist");
+    button.title = available ? `Playlist (${position} of ${count})` : "Playlist";
+}
+
+function syncPlaylistSnapshot() {
+    if (!activePlaylist) {
+        resetVideoPlaylist();
+        syncPlaylistButton();
+        return;
+    }
+    setVideoPlaylist({
+        open: playlistOpen && activePlaylist.items.length > 1,
+        title: activePlaylist.title,
+        items: playlistViewItems(activePlaylist),
+        currentIndex: activePlaylist.currentIndex,
+        autoNext: activePlaylist.autoNext,
+        switchingId: null,
+    });
+    syncPlaylistButton();
+}
+
+function installVideoPlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch) {
+    hideVideoPlaylist();
+    activePlaylist = createActivePlaylist(target, launch);
+    syncPlaylistSnapshot();
+}
+
+function nextPlaylistPlaybackIntent(): PlaybackIntent {
+    const intent = capturePlaybackIntent(currentState, false);
+    intent.currentTime = 0;
+    intent.paused = false;
+    return intent;
+}
+
+async function switchVideoPlaylistItem(index: number, closePanel: boolean): Promise<void> {
+    const playlist = activePlaylist;
+    if (!playlist || index < 0 || index >= playlist.items.length) return;
+    if (index === playlist.currentIndex) {
+        if (closePanel) hideVideoPlaylist(true);
+        return;
+    }
+    const target = playlist.items[index];
+    const intent = nextPlaylistPlaybackIntent();
+    playlist.currentIndex = index;
+    setVideoPlaylistCurrentIndex(index);
+    setVideoPlaylistSwitching(playlistItemIdentity(target, index));
+    syncPlaylistButton();
+    if (closePanel) hideVideoPlaylist(true);
+    try {
+        await openVideoTarget(target, intent);
+    } finally {
+        if (activePlaylist === playlist && playlist.currentIndex === index) {
+            setVideoPlaylistSwitching(null);
+        }
+    }
+}
+
+export function selectVideoPlaylistItem(index: number): void {
+    void switchVideoPlaylistItem(index, true);
+}
+
+export function updateVideoAutoNext(enabled: boolean): void {
+    if (activePlaylist) activePlaylist.autoNext = Boolean(enabled);
+    setVideoPlaylistAutoNext(Boolean(enabled));
+}
+
+function handleNaturalMediaEnd(attempt: VideoOpenAttempt, adapter: PlayerAdapter) {
+    if (
+        activeOpenAttempt !== attempt ||
+        activeAdapter !== adapter ||
+        !playbackTransitions.isCurrent(attempt.generation) ||
+        !activePlaylist?.autoNext
+    ) {
+        return;
+    }
+    const nextIndex = activePlaylist.currentIndex + 1;
+    if (nextIndex >= activePlaylist.items.length) {
+        setChromeVisible(true);
+        clearChromeTimer();
+        return;
+    }
+    void switchVideoPlaylistItem(nextIndex, false);
+}
 
 async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => boolean) {
     let opened: MediaOpenResult | null = null;
@@ -948,6 +1182,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             mediaError: (code, state) => handleHtmlMediaError(attempt, adapter!, code, state),
             playbackError: handleHtmlPlaybackError,
             revealChrome,
+            mediaEnded: () => handleNaturalMediaEnd(attempt, adapter!),
         });
         activeAdapter = adapter;
         unsubscribeState = adapter.subscribe((state) => {
@@ -955,6 +1190,11 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             applyState(state);
         });
         adapter.load();
+        if (attempt.playbackIntent) {
+            adapter.setVolume(attempt.playbackIntent.volume);
+            adapter.setMuted(attempt.playbackIntent.muted);
+            adapter.setSpeed(attempt.playbackIntent.rate);
+        }
     } catch (err: unknown) {
         if (adapter && activeAdapter === adapter) {
             await releaseActive();
@@ -1133,6 +1373,7 @@ function activateNativePlayback(
     const adapter = new NativeMpvAdapter(opened, {
         mediaError: (detail) => handleNativeMediaError(attempt, opened.token, detail),
         mediaClosed: () => handleNativeMediaClosed(attempt, opened.token),
+        mediaEnded: () => handleNaturalMediaEnd(attempt, adapter),
         dispose: (disposed) => nativeStateRouter.deactivate(disposed),
     });
     activeAdapter = adapter;
@@ -1158,19 +1399,18 @@ function activateNativePlayback(
     if (!standalone) geometry?.scheduleNativeResize();
 }
 
-export async function openVideoModal(target: VideoOpenTarget) {
+async function openVideoTarget(target: VideoOpenTarget, playbackIntent: PlaybackIntent | null): Promise<void> {
     const host = byID<HTMLElement>("video-modal");
     if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
     if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
-    const id = Number(target.id || 0);
-    if (!id) return;
 
     const attempt: VideoOpenAttempt = {
         generation: playbackTransitions.begin(),
-        target: { ...target, id },
+        target,
         htmlFailureHandled: false,
         nativeFallbackRequested: false,
         pausedByUser: false,
+        playbackIntent,
     };
     activeOpenAttempt = attempt;
 
@@ -1185,7 +1425,7 @@ export async function openVideoModal(target: VideoOpenTarget) {
     a11y?.activate();
     void geometry?.syncFullscreenState();
 
-    return playbackTransitions.run(attempt.generation, async (isCurrent) => {
+    await playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
         if (!isCurrent() || !isOpen()) return;
         setLoadingStatusOverride("");
@@ -1196,14 +1436,27 @@ export async function openVideoModal(target: VideoOpenTarget) {
         }
         const rect = await geometry?.prepareNativeRect(isCurrent);
         if (!rect || !isCurrent()) return;
-        await openNativePlayback(attempt, rect, isCurrent);
+        await openNativePlayback(attempt, rect, isCurrent, null, attempt.playbackIntent);
     });
+}
+
+export async function openVideoModal(target: VideoOpenTarget, playlist?: VideoPlaylistLaunch): Promise<void> {
+    const normalized = normalizeVideoTarget(target);
+    if (!normalized) return;
+    const host = byID<HTMLElement>("video-modal");
+    if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
+    if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
+    installVideoPlaylist(normalized, playlist);
+    await openVideoTarget(normalized, null);
 }
 
 export async function closeVideoModal() {
     if (!modalEl) return;
     const generation = playbackTransitions.begin();
     activeOpenAttempt = null;
+    hideVideoPlaylist();
+    activePlaylist = null;
+    resetVideoPlaylist();
     clearChromeTimer();
     await geometry?.exitVideoFullscreen();
     if (!playbackTransitions.isCurrent(generation)) return;
@@ -1314,7 +1567,7 @@ function bindSpeedMenu() {
 
 function targetShouldUseOwnKeyboard(target: HTMLElement | null, event: KeyboardEvent) {
     if (!(target instanceof HTMLElement)) return false;
-    if (target.isContentEditable || target.closest("#video-settings-panel")) return true;
+    if (target.isContentEditable || target.closest("#video-settings-panel, #video-playlist-panel")) return true;
     const tag = String(target.tagName || "").toUpperCase();
     if (tag === "BUTTON") {
         if (target.closest("#video-speed-menu")) return true;
@@ -1376,7 +1629,7 @@ function handleVideoPointerMove() {
 
 function targetIsVideoChrome(target: EventTarget | null) {
     const el = target instanceof Element ? target : null;
-    return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading, .video-settings-panel"));
+    return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading, .video-settings-panel, .video-playlist-panel"));
 }
 
 function handleStageClick(event: MouseEvent) {
@@ -1392,7 +1645,6 @@ function handleStageDoubleClick(event: MouseEvent) {
     void geometry?.toggleFullscreen();
 }
 
-
 function bindEncryptedMediaLifecycle() {
     if (unsubscribeEncryptedMediaSessionsClosed) return;
     unsubscribeEncryptedMediaSessionsClosed = onRuntimeEvent("encrypted_media_sessions_closed", () => {
@@ -1400,7 +1652,6 @@ function bindEncryptedMediaLifecycle() {
         void closeVideoModal();
     });
 }
-
 
 function renderSpeedOptions() {
     if (!speedMenuEl) return;
@@ -1420,6 +1671,9 @@ function customSpeedMarkup() {
 export function teardownVideoModal(): void {
     playbackTransitions.begin();
     activeOpenAttempt = null;
+    hideVideoPlaylist();
+    activePlaylist = null;
+    resetVideoPlaylist();
     clearChromeTimer();
     if (modalEl) {
         modalEl.style.display = "none";
@@ -1466,6 +1720,8 @@ export function teardownVideoModal(): void {
     speedMenuEl = null;
     settingsSection = null;
     settingsReturnFocus = null;
+    playlistOpen = false;
+    playlistReturnFocus = null;
     videoHostEl = null;
     videoSetupComplete = false;
 }
@@ -1526,8 +1782,7 @@ export function activateVideoModal(): () => void {
         hasActivePlayer: () => Boolean(activeAdapter),
         hasError: () => hasError,
         isOpen,
-        isSettingsOpen: () => settingsSection !== null,
-        settingsPanel: () => byID("video-settings-panel"),
+        getActivePanel: getActiveVideoPanel,
         revealChrome,
         reportSurfaceError: () => setError("Could not prepare the video player. Try again."),
     });
@@ -1544,7 +1799,7 @@ export function activateVideoModal(): () => void {
         revealChrome,
         scheduleChromeHide,
         geometryChanged: () => {
-            syncSettingsGeometry();
+            syncActivePanelGeometry();
             geometry?.scheduleNativeResize();
         },
         refreshFullscreenAvailability: () => geometry?.refreshFullscreenAvailability(),
@@ -1553,6 +1808,10 @@ export function activateVideoModal(): () => void {
     videoSetupComplete = true;
     a11y = installModalA11y(modalEl, {
         requestClose: () => {
+            if (playlistOpen) {
+                hideVideoPlaylist(true);
+                return;
+            }
             const panel = byID<HTMLElement>("video-settings-panel");
             if (panel && !panel.hidden) {
                 closeOpenMenu();
@@ -1571,6 +1830,7 @@ export function activateVideoModal(): () => void {
     transport.bind();
     unbindSpeedMenu = bindSpeedMenu();
     bindSettingsPanel();
+    bindVideoPlaylist();
     unbindVideoDOM = bindVideoDOM(videoDOM, {
         close: () => { void closeVideoModal(); },
         retry: retryVideoOpen,
@@ -1580,12 +1840,12 @@ export function activateVideoModal(): () => void {
         stageDoubleClick: handleStageDoubleClick,
         keydown: handleVideoShortcut,
         resize: () => geometry?.handleWindowResize(() => {
-            syncSettingsGeometry();
+            syncActivePanelGeometry();
             applyHtmlPicture();
         }),
     });
     geometry.observeControlsSize(() => {
-        syncSettingsGeometry();
+        syncActivePanelGeometry();
         applyHtmlPicture();
     });
     applyState(EMPTY_PLAYER_STATE);

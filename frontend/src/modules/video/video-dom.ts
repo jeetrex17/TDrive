@@ -48,6 +48,8 @@ export interface VideoDOM {
     endTime: HTMLElement | null;
     speedButton: HTMLButtonElement | null;
     speedMenu: HTMLElement | null;
+    playlistButton: HTMLButtonElement | null;
+    playlistPanel: HTMLElement | null;
     audioPicker: TrackPickerDOM;
     subtitlePicker: TrackPickerDOM;
 }
@@ -111,6 +113,8 @@ export function collectVideoDOM(): VideoDOM {
         endTime: byID('video-end-time'),
         speedButton: byID('video-speed-button'),
         speedMenu: byID('video-speed-menu'),
+        playlistButton: byID('video-playlist-button'),
+        playlistPanel: byID('video-playlist-panel'),
         audioPicker: {
             wrap: byID('video-audio-wrap'),
             button: byID('video-audio-button'),

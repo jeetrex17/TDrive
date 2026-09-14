@@ -1,9 +1,23 @@
 <script lang="ts">
+    import ListVideoIcon from '@lucide/svelte/icons/list-video';
+    import VideoPlaylistPanel from "./VideoPlaylistPanel.svelte";
     import VideoSettingsPanel from "./VideoSettingsPanel.svelte";
     import type { PlaybackPreferences } from "../../modules/video/playback-preferences";
     import { videoPlaybackPreferences } from "./video-preferences-store";
 
-    let { onPreferencesChange = () => undefined }: { onPreferencesChange?: (value: PlaybackPreferences) => void } = $props();
+    interface Props {
+        onPreferencesChange?: (value: PlaybackPreferences) => void;
+        onHidePlaylist?: (restoreFocus?: boolean) => void;
+        onSelectPlaylistItem?: (index: number) => void;
+        onUpdateVideoAutoNext?: (enabled: boolean) => void;
+    }
+
+    let {
+        onPreferencesChange = () => undefined,
+        onHidePlaylist = () => undefined,
+        onSelectPlaylistItem = () => undefined,
+        onUpdateVideoAutoNext = () => undefined,
+    }: Props = $props();
     let preferences = $derived($videoPlaybackPreferences);
 
     function updatePreferences(value: PlaybackPreferences): void {
@@ -90,6 +104,12 @@
         </div>
     </aside>
 
+    <VideoPlaylistPanel
+        onClose={() => onHidePlaylist(true)}
+        onSelect={onSelectPlaylistItem}
+        onAutoNextChange={onUpdateVideoAutoNext}
+    />
+
     <div class="video-controls" aria-label="Video controls">
         <div class="video-timeline-row">
             <div id="video-scrubber" class="video-scrubber" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="0:00">
@@ -159,6 +179,10 @@
 
                 <button id="video-picture-button" class="video-pill-button video-picture-button" type="button" aria-label="Playback settings" aria-expanded="false" aria-controls="video-settings-panel" title="Playback settings">
                     <SettingsIcon size={18} aria-hidden="true" />
+                </button>
+
+                <button id="video-playlist-button" class="video-pill-button video-playlist-button" type="button" aria-label="Open video playlist" aria-expanded="false" aria-controls="video-playlist-panel" title="Open video playlist" hidden>
+                    <ListVideoIcon size={18} aria-hidden="true" />
                 </button>
 
                 <button id="video-fullscreen" class="video-icon-btn video-fullscreen-btn" type="button" data-state="windowed" aria-label="Enter fullscreen" title="Enter fullscreen">

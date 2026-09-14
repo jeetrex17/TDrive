@@ -98,6 +98,17 @@
     background: #05070c;
     pointer-events: none;
 }
+/* The playlist is the wider sibling of the settings dock. Reserve the media
+   surface instead of covering video content while the dock is open. */
+.video-overlay.has-video-playlist:not(.is-video-native-fallback) .video-stage { right: 384px; }
+.video-overlay.is-video-native:not(.is-video-native-fallback).has-video-playlist .video-shell::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 0 auto;
+    width: 384px;
+    background: #05070c;
+    pointer-events: none;
+}
 .video-overlay.is-video-native-fallback .video-native-viewport { right: var(--video-native-right-inset, var(--video-native-side-inset, 0)); }
 @media (max-width: 760px) {
     .video-settings-panel { left: 10px; right: 10px; width: auto; top: auto; height: min(320px, 46vh); }
@@ -106,6 +117,12 @@
         inset: auto 0 0;
         width: auto;
         height: calc(min(320px, 46vh) + 110px);
+    }
+    .video-overlay.has-video-playlist:not(.is-video-native-fallback) .video-stage { right: 0; bottom: calc(min(360px, 48vh) + 110px); }
+    .video-overlay.is-video-native:not(.is-video-native-fallback).has-video-playlist .video-shell::before {
+        inset: auto 0 0;
+        width: auto;
+        height: calc(min(360px, 48vh) + 110px);
     }
     .video-secondary-cluster { display: flex; }
     .video-controls .video-menu-wrap:not([hidden]), .video-controls .video-fullscreen-btn { display: flex; }

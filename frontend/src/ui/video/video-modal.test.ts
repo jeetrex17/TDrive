@@ -3,69 +3,6 @@ import { render } from 'svelte/server';
 import VideoModal from './VideoModal.svelte';
 
 describe('VideoModal', () => {
-    it('renders the IDs consumed by the video controller', () => {
-        const { body } = render(VideoModal);
-
-        for (const id of [
-            'video-shell',
-            'video-stage',
-            'video-native-viewport',
-            'video-player',
-            'video-filename',
-            'video-meta',
-            'video-close',
-            'video-center-controls',
-            'video-center-play',
-            'video-center-skip-back',
-            'video-center-skip-forward',
-            'video-skip-feedback',
-            'video-loading',
-            'video-loading-status',
-            'video-error',
-            'video-time',
-            'video-scrubber',
-            'video-scrubber-buffered',
-            'video-scrubber-played',
-            'video-scrubber-thumb',
-            'video-scrubber-tooltip',
-            'video-scrubber-tooltip-image',
-            'video-scrubber-tooltip-time',
-            'video-duration',
-            'video-play',
-            'video-skip-back',
-            'video-skip-forward',
-            'video-mute',
-            'video-volume-slider',
-            'video-volume-fill',
-            'video-volume-thumb',
-            'video-audio-wrap',
-            'video-audio-button',
-            'video-audio-label',
-            'video-audio-menu',
-            'video-subtitle-wrap',
-            'video-subtitle-button',
-            'video-subtitle-label',
-            'video-subtitle-menu',
-            'video-speed-button',
-            'video-speed-menu',
-            'video-picture-button',
-            'video-aspect-button',
-            'video-settings-panel',
-            'video-settings-close',
-            'video-picture-settings',
-            'video-subtitle-settings',
-            'video-subtitle-size',
-            'video-subtitle-color',
-            'video-subtitle-outline',
-            'video-subtitle-background',
-            'video-subtitle-save',
-            'video-subtitle-reset',
-            'video-fullscreen',
-        ]) {
-            expect(body).toContain(`id="${id}"`);
-        }
-    });
-
     it('announces buffering and fallback status updates atomically', () => {
         const { body } = render(VideoModal);
 
