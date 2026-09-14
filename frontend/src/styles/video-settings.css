@@ -1,48 +1,46 @@
-/* The settings dock reserves video space, including native child surfaces. */
-.video-settings-panel {
+/* Surface, anchoring and motion come from .video-popover. */
+.video-settings-panel { width: min(340px, calc(100vw - 24px)); }
+.video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
+/* One segmented control, inset concentrically inside the popover corner. */
+.video-settings-tabs {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+    margin: 0 var(--video-popover-inset) 8px;
+    padding: 2px;
+    border-radius: var(--video-popover-item-radius);
+    background: rgba(255, 255, 255, 0.06);
+}
+.video-settings-tabs button {
+    padding: 7px 2px;
+    border: 0;
+    border-radius: calc(var(--video-popover-item-radius) - 2px);
+    background: transparent;
+    color: #9aa6bd;
+    font-size: 11.5px;
+    font-weight: 650;
+    cursor: pointer;
+    transition: color 120ms var(--ease-standard), background-color 120ms var(--ease-standard), scale 120ms var(--ease-standard);
+}
+.video-settings-tabs button:hover { color: #dbe4f7; }
+.video-settings-tabs button:active { scale: 0.96; }
+.video-settings-tabs button[aria-pressed=true] { background: rgba(255, 255, 255, 0.1); color: #f2f5ff; }
+.video-settings-body { padding: 0 14px 14px; }
+.video-settings-section h3 {
     position: absolute;
-    z-index: 15;
-    top: var(--video-panel-top, 76px);
-    bottom: var(--video-panel-bottom, 108px);
-    right: 12px;
-    width: 330px;
-    display: flex;
-    flex-direction: column;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
     overflow: hidden;
-    border: 1px solid #ffffff1c;
-    border-radius: 16px;
-    background: #11151f;
-    color: #edf1fa;
-    box-shadow: 0 12px 36px #0005;
+    clip-path: inset(50%);
+    white-space: nowrap;
 }
-.video-settings-panel[hidden], .video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
-.video-settings-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
-.video-settings-heading button { display: grid; place-items: center; background: transparent; color: inherit; border: 0; padding: 6px; border-radius: 8px; cursor: pointer; }
-.video-settings-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; padding: 0 10px 10px; border-bottom: 1px solid #ffffff12; }
-.video-settings-tabs button { color: #a8b2c5; background: transparent; border: 0; border-radius: 8px; padding: 9px 2px; cursor: pointer; font-size: 12px; }
-.video-settings-tabs button[aria-pressed=true] { color: #dce8ff; background: #7aa5ff24; }
-.video-settings-body {
-    flex: 1 1 auto;
-    min-width: 0;
-    min-height: 0;
-    overflow-x: hidden;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 14px;
-    scrollbar-gutter: stable;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(145, 180, 255, 0.62) rgba(255, 255, 255, 0.06);
-    /* A restrained edge shadow keeps the scroll boundary legible when the
-       platform hides overlay scrollbars until the panel is scrolled. */
-    box-shadow: inset 0 -14px 14px -18px rgba(0, 0, 0, 0.9);
-}
-.video-settings-body::-webkit-scrollbar { width: 7px; }
-.video-settings-body::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.06); border-radius: 999px; }
-.video-settings-body::-webkit-scrollbar-thumb { min-height: 28px; border: 1px solid #11151f; border-radius: 999px; background: rgba(145, 180, 255, 0.62); }
-.video-settings-body::-webkit-scrollbar-thumb:hover { background: rgba(170, 199, 255, 0.82); }
-.video-settings-section h3 { font-size: 14px; margin: 0 0 10px; }
+.video-settings-note { margin-top: 14px; }
 .video-settings-note { color: #a8b2c5; font-size: 12px; line-height: 1.5; margin: 8px 0 14px; }
 .video-settings-panel .video-menu { position: static; width: 100%; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; }
+.video-settings-panel .video-menu button { height: auto; min-height: 34px; border-radius: var(--video-popover-item-radius); padding: 7px 10px; }
 .video-overlay.is-video-native-fallback .video-settings-panel .video-menu.is-open { display: block; }
 .video-settings-panel .video-menu.is-open { display: block; }
 .video-settings-panel .video-menu:not(.is-open) { display: none; }
@@ -50,9 +48,22 @@
 .video-track-list button { width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .video-track-empty { font-size: 13px; color: #a8b2c5; padding: 8px; }
 .video-picture-options { display: grid; gap: 7px; }
-.video-picture-options button { display: flex; flex-direction: column; align-items: start; gap: 4px; padding: 11px 12px; border: 1px solid #ffffff16; border-radius: 10px; background: #ffffff04; color: inherit; cursor: pointer; }
+.video-picture-options button {
+    display: flex;
+    flex-direction: column;
+    align-items: start;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--video-popover-item-radius);
+    background: rgba(255, 255, 255, 0.05);
+    color: inherit;
+    cursor: pointer;
+    transition: background-color 120ms var(--ease-standard), border-color 120ms var(--ease-standard);
+}
+.video-picture-options button:hover { background: rgba(255, 255, 255, 0.08); }
 .video-picture-options button small { color: #a8b2c5; font-size: 11px; }
-.video-picture-options button.is-selected { background: #7aa5ff20; border-color: #7aa5ff70; }
+.video-picture-options button.is-selected { border-color: rgba(122, 162, 247, 0.55); background: rgba(122, 162, 247, 0.16); }
 .video-shortcuts-list { display: grid; gap: 1px; margin: 0; }
 .video-shortcuts-list > div { display: grid; grid-template-columns: minmax(112px, auto) 1fr; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #ffffff12; }
 .video-shortcuts-list > div:last-child { border-bottom: 0; }
@@ -84,46 +95,24 @@
     border-top: 1px solid #ffffff14;
     background: #11151ff2;
 }
-.video-settings-save { border: 1px solid #7aa5ff; border-radius: 8px; padding: 10px 14px; background: #7aa5ff; color: #080b12; font-size: 12px; font-weight: 800; cursor: pointer; }
+.video-settings-save {
+    border: 0;
+    border-radius: var(--video-popover-item-radius);
+    padding: 9px 14px;
+    background: #7aa5ff;
+    color: #080b12;
+    font-size: 12px;
+    font-weight: 750;
+    cursor: pointer;
+    transition: background-color 120ms var(--ease-standard), scale 120ms var(--ease-standard);
+}
+.video-settings-save:active { scale: 0.96; }
 .video-settings-save:hover { background: #9abbff; }
-.video-settings-panel :focus-visible { outline: 2px solid #91b4ff; outline-offset: 2px; }
-.video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 354px; }
-/* The transparent macOS WebView exposes the window beneath the reserved dock.
-   Paint only that gutter, leaving the native video surface transparent. */
-.video-overlay.is-video-native:not(.is-video-native-fallback).has-video-settings .video-shell::before {
-    content: "";
-    position: absolute;
-    inset: 0 0 0 auto;
-    width: 354px;
-    background: #05070c;
-    pointer-events: none;
-}
-/* The playlist is the wider sibling of the settings dock. Reserve the media
-   surface instead of covering video content while the dock is open. */
-.video-overlay.has-video-playlist:not(.is-video-native-fallback) .video-stage { right: 384px; }
-.video-overlay.is-video-native:not(.is-video-native-fallback).has-video-playlist .video-shell::before {
-    content: "";
-    position: absolute;
-    inset: 0 0 0 auto;
-    width: 384px;
-    background: #05070c;
-    pointer-events: none;
-}
+/* The native player on Windows and Linux still needs the picture inset, since
+   its window paints above the webview and would otherwise cover the dock. */
 .video-overlay.is-video-native-fallback .video-native-viewport { right: var(--video-native-right-inset, var(--video-native-side-inset, 0)); }
 @media (max-width: 760px) {
-    .video-settings-panel { left: 10px; right: 10px; width: auto; top: auto; height: min(320px, 46vh); }
-    .video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 0; bottom: calc(min(320px, 46vh) + 110px); }
-    .video-overlay.is-video-native:not(.is-video-native-fallback).has-video-settings .video-shell::before {
-        inset: auto 0 0;
-        width: auto;
-        height: calc(min(320px, 46vh) + 110px);
-    }
-    .video-overlay.has-video-playlist:not(.is-video-native-fallback) .video-stage { right: 0; bottom: calc(min(360px, 48vh) + 110px); }
-    .video-overlay.is-video-native:not(.is-video-native-fallback).has-video-playlist .video-shell::before {
-        inset: auto 0 0;
-        width: auto;
-        height: calc(min(360px, 48vh) + 110px);
-    }
+    .video-settings-panel { width: auto; }
     .video-secondary-cluster { display: flex; }
     .video-controls .video-menu-wrap:not([hidden]), .video-controls .video-fullscreen-btn { display: flex; }
     .video-command-row { flex-wrap: wrap; gap: 8px; }

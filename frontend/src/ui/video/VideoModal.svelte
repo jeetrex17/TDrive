@@ -87,8 +87,11 @@
         </div>
     </div>
 
-    <aside id="video-settings-panel" class="video-settings-panel" aria-label="Playback settings" aria-hidden="true" inert hidden>
-        <div class="video-settings-heading"><strong>Playback settings</strong><button id="video-settings-close" type="button" aria-label="Close playback settings"><XIcon size={18} aria-hidden="true" /></button></div>
+    <aside id="video-settings-panel" class="video-popover video-settings-panel" aria-label="Playback settings" aria-hidden="true" inert hidden>
+        <header class="video-popover-header">
+            <div class="video-popover-heading"><h2 class="video-popover-title">Playback</h2></div>
+            <button id="video-settings-close" class="video-popover-close" type="button" aria-label="Close playback settings"><XIcon size={16} strokeWidth={2} aria-hidden="true" /></button>
+        </header>
         <nav class="video-settings-tabs" aria-label="Playback settings sections">
             <button type="button" data-settings-section="picture">Picture</button>
             <button type="button" data-settings-section="audio">Audio</button>
@@ -96,7 +99,7 @@
             <button type="button" data-settings-section="speed">Speed</button>
             <button type="button" data-settings-section="shortcuts">Shortcuts</button>
         </nav>
-        <div class="video-settings-body">
+        <div class="video-popover-body video-settings-body">
             <div id="video-audio-menu" class="video-menu video-track-menu" role="group" aria-label="Audio track"></div>
             <div id="video-subtitle-menu" class="video-menu video-track-menu" role="group" aria-label="Subtitles"></div>
             <div id="video-speed-menu" class="video-menu video-speed-menu" role="group" aria-label="Playback speed"></div>

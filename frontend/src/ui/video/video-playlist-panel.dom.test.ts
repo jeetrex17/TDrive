@@ -57,7 +57,10 @@ describe('VideoPlaylistPanel behavior', () => {
         expect(host?.querySelector('.video-playlist-count')?.textContent?.trim()).toBe('3');
         expect(host?.querySelectorAll('.video-playlist-row')).toHaveLength(3);
         expect(host?.querySelector('.video-playlist-row[aria-current="true"]')?.getAttribute('data-playlist-index')).toBe('1');
-        expect(host?.querySelector('[data-playlist-index="1"]')?.textContent).toContain('2 of 3');
+        // Position shows as a standalone index column; the full "2 of 3" phrasing
+        // stays in the accessible name rather than repeating in visible text.
+        expect(host?.querySelector('[data-playlist-index="1"] .video-playlist-index')?.textContent?.trim()).toBe('2');
+        expect(host?.querySelector('[data-playlist-index="1"]')?.getAttribute('aria-label')).toContain('2 of 3');
         expect(host?.querySelector('[data-playlist-index="1"]')?.textContent).toContain('WEBM');
         expect(host?.querySelector('[data-playlist-index="1"]')?.textContent).toContain('2 KB');
     });
