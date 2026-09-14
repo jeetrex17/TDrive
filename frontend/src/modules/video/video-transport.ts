@@ -199,7 +199,6 @@ export class VideoTransportController {
         playButton.title = state.paused ? 'Play' : 'Pause';
         muteButton.dataset.state = state.muted ? 'muted' : 'unmuted';
         muteButton.setAttribute('aria-label', state.muted ? 'Unmute' : 'Mute');
-        muteButton.title = state.muted ? 'Unmute' : 'Mute';
     }
 
     private syncEndTime(state: PlayerState): void {

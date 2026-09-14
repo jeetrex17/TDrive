@@ -119,7 +119,7 @@
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 5h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17.4 8.3A7 7 0 1012 19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><text x="12" y="15.2" text-anchor="middle" fill="currentColor" font-size="6.2" font-weight="800">10</text></svg>
                 </button>
                 <div class="video-volume-group">
-                    <button id="video-mute" class="video-icon-btn video-mute-btn" type="button" data-state="unmuted" aria-label="Mute" title="Mute">
+                    <button id="video-mute" class="video-icon-btn video-mute-btn" type="button" data-state="unmuted" aria-label="Mute">
                         <Volume2Icon class="video-mute-symbol video-symbol-volume" aria-hidden="true" />
                         <VolumeXIcon class="video-mute-symbol video-symbol-muted" aria-hidden="true" />
                     </button>

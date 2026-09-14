@@ -652,23 +652,37 @@
     z-index: 2;
 }
 
-/* Float the expansion above the timeline so it never changes row geometry. */
+
+/* Keep the popover attached to the mute control without changing row geometry. */
 .video-volume-slider {
     position: absolute;
-    left: 0;
+    left: 50%;
     right: auto;
     bottom: calc(100% + 48px);
+    transform: translateX(-50%);
     width: 0;
     margin-left: 0;
     opacity: 0;
-    pointer-events: none;
+    pointer-events: auto;
     z-index: 3;
-    transition: width 180ms ease, opacity 180ms ease;
+    transition: width 180ms ease 250ms, opacity 180ms ease 250ms;
     height: 28px;
     cursor: pointer;
     outline: none;
     touch-action: none;
 }
+
+.video-volume-slider::before {
+    content: "";
+    position: absolute;
+    inset: -6px -10px;
+    border: 1px solid rgba(129, 149, 186, 0.34);
+    border-radius: 999px;
+    background: rgba(10, 13, 20, 0.96);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+    pointer-events: none;
+}
+
 
 .video-volume-track,
 .video-volume-fill {
@@ -685,6 +699,7 @@
     width: 100px;
     opacity: 1;
     pointer-events: auto;
+    transition-delay: 0ms;
 }
 .video-time-display {
     border: 0;
