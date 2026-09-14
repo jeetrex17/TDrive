@@ -348,6 +348,61 @@ func placeholderMessage(msg tg.MessageClass) (msgID int64, date int64, ok bool) 
 	}
 }
 
+// historyMessageFromTG converts one tg.MessageClass into the HistoryMessage
+// shape GetHistory and GetChannelDifference both report. ok is false only for
+// a message kind that carries no id worth reporting (see placeholderMessage).
+func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
+	fullMsg, ok := msg.(*tg.Message)
+	if !ok {
+		// Service messages and the placeholders left behind by deletions hold
+		// nothing to project, but they still consume message ids. Report them
+		// so callers paginating on page size can tell a page thinned by
+		// deletions from the end of the channel, and so backwards paging can
+		// step over a run of them. A non-positive id cannot be paged from, so
+		// reporting one would let a caller reset its cursor and walk the same
+		// pages forever. Those are dropped as before.
+		if id, date, ok := placeholderMessage(msg); ok && id > 0 {
+			return HistoryMessage{MsgID: id, Date: date, Placeholder: true}, true
+		}
+		return HistoryMessage{}, false
+	}
+	text := strings.TrimRight(fullMsg.Message, "\r\n")
+	fromID := int64(0)
+	if from, ok := fullMsg.FromID.(*tg.PeerUser); ok {
+		fromID = from.UserID
+	}
+	var (
+		hasMedia           bool
+		mediaSize          int64
+		documentName       string
+		documentAccessHash int64
+	)
+	if media, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
+		hasMedia = true
+		if doc, ok := media.Document.(*tg.Document); ok {
+			mediaSize = doc.Size
+			documentAccessHash = doc.AccessHash
+			for _, attr := range doc.Attributes {
+				if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
+					documentName = fname.FileName
+					break
+				}
+			}
+		}
+	}
+
+	return HistoryMessage{
+		MsgID:              int64(fullMsg.ID),
+		Date:               int64(fullMsg.Date),
+		FromID:             fromID,
+		Text:               text,
+		HasMedia:           hasMedia,
+		MediaSize:          mediaSize,
+		DocumentName:       documentName,
+		DocumentAccessHash: documentAccessHash,
+	}, true
+}
+
 func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error) {
 	if limit <= 0 {
 		limit = 100
@@ -376,56 +431,9 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 		}
 
 		for _, msg := range messages {
-			fullMsg, ok := msg.(*tg.Message)
-			if !ok {
-				// Service messages and the placeholders left behind by
-				// deletions hold nothing to project, but they still consume
-				// message ids. Report them so callers paginating on page size
-				// can tell a page thinned by deletions from the end of the
-				// channel, and so backwards paging can step over a run of them.
-				// A non-positive id cannot be paged from, so reporting one
-				// would let a caller reset its cursor and walk the same pages
-				// forever. Those are dropped as before.
-				if id, date, ok := placeholderMessage(msg); ok && id > 0 {
-					out = append(out, HistoryMessage{MsgID: id, Date: date, Placeholder: true})
-				}
-				continue
+			if hm, ok := historyMessageFromTG(msg); ok {
+				out = append(out, hm)
 			}
-			text := strings.TrimRight(fullMsg.Message, "\r\n")
-			fromID := int64(0)
-			if from, ok := fullMsg.FromID.(*tg.PeerUser); ok {
-				fromID = from.UserID
-			}
-			var (
-				hasMedia           bool
-				mediaSize          int64
-				documentName       string
-				documentAccessHash int64
-			)
-			if media, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
-				hasMedia = true
-				if doc, ok := media.Document.(*tg.Document); ok {
-					mediaSize = doc.Size
-					documentAccessHash = doc.AccessHash
-					for _, attr := range doc.Attributes {
-						if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
-							documentName = fname.FileName
-							break
-						}
-					}
-				}
-			}
-
-			out = append(out, HistoryMessage{
-				MsgID:              int64(fullMsg.ID),
-				Date:               int64(fullMsg.Date),
-				FromID:             fromID,
-				Text:               text,
-				HasMedia:           hasMedia,
-				MediaSize:          mediaSize,
-				DocumentName:       documentName,
-				DocumentAccessHash: documentAccessHash,
-			})
 		}
 		return nil
 	})
@@ -635,6 +643,90 @@ func (g *Gotd) MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int
 		return nil, err
 	}
 	return missing, nil
+}
+
+// GetChannelDifference returns one page of changes since pts. It is the
+// gotd-backed half of the sync engine's incremental path: given a stored
+// pts, ask Telegram what changed instead of rescanning history and probing
+// every message's existence.
+func (g *Gotd) GetChannelDifference(ctx context.Context, peer InputPeer, pts int64, limit int) (ChannelDifference, error) {
+	var out ChannelDifference
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		req := &tg.UpdatesGetChannelDifferenceRequest{
+			Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
+			Filter:  &tg.ChannelMessagesFilterEmpty{},
+			Pts:     int(pts),
+			Limit:   limit,
+		}
+		result, err := api.UpdatesGetChannelDifference(ctx, req)
+		if err != nil {
+			return err
+		}
+		switch diff := result.(type) {
+		case *tg.UpdatesChannelDifferenceEmpty:
+			out = ChannelDifference{Pts: int64(diff.Pts), Final: diff.Final}
+		case *tg.UpdatesChannelDifference:
+			out = channelDifferenceFromTG(diff)
+		case *tg.UpdatesChannelDifferenceTooLong:
+			out = ChannelDifference{Final: true, TooLong: true}
+			if dialog, ok := diff.Dialog.(*tg.Dialog); ok {
+				out.Pts = int64(dialog.Pts)
+			}
+		default:
+			return fmt.Errorf("tgclient: updates.getChannelDifference: unexpected result type %T", result)
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Error("tgclient: UpdatesGetChannelDifference failed", "channel_id", peer.ChannelID, "pts", pts, "error", err)
+		return ChannelDifference{}, fmt.Errorf("tgclient: updates.getChannelDifference: %w", err)
+	}
+	return out, nil
+}
+
+// channelDifferenceFromTG maps a non-empty, non-too-long channel difference.
+// Edits are deliberately ignored: the sync engine's incremental path does not
+// apply them today, only new messages and deletions.
+func channelDifferenceFromTG(diff *tg.UpdatesChannelDifference) ChannelDifference {
+	out := ChannelDifference{Pts: int64(diff.Pts), Final: diff.Final}
+	for _, msg := range diff.NewMessages {
+		if hm, ok := historyMessageFromTG(msg); ok {
+			out.NewMessages = append(out.NewMessages, hm)
+		}
+	}
+	for _, update := range diff.OtherUpdates {
+		del, ok := update.(*tg.UpdateDeleteChannelMessages)
+		if !ok {
+			continue
+		}
+		for _, id := range del.Messages {
+			out.DeletedIDs = append(out.DeletedIDs, int64(id))
+		}
+	}
+	return out
+}
+
+// GetChannelPts returns the channel's current pts, used to bootstrap
+// GetChannelDifference after a full history scan.
+func (g *Gotd) GetChannelPts(ctx context.Context, peer InputPeer) (int64, error) {
+	var pts int64
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		full, err := api.ChannelsGetFullChannel(ctx, &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash})
+		if err != nil {
+			return err
+		}
+		channelFull, ok := full.FullChat.(*tg.ChannelFull)
+		if !ok {
+			return fmt.Errorf("tgclient: channels.getFullChannel: unexpected full chat type %T", full.FullChat)
+		}
+		pts = int64(channelFull.Pts)
+		return nil
+	})
+	if err != nil {
+		slog.Error("tgclient: ChannelsGetFullChannel failed", "channel_id", peer.ChannelID, "error", err)
+		return 0, fmt.Errorf("tgclient: channels.getFullChannel: %w", err)
+	}
+	return pts, nil
 }
 
 func (g *Gotd) CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error) {
