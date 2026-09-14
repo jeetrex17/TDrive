@@ -1181,3 +1181,64 @@ describe("video finish time", () => {
         }
     });
 });
+
+describe("video keyboard shortcuts", () => {
+    it("makes shortcuts discoverable from playback settings and restores focus", async () => {
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(42, SHARED_SESSION_ID));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 42, name: "shortcuts.mp4", size: 1024 });
+
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        const gear = document.querySelector<HTMLButtonElement>("#video-picture-button")!;
+        expect(panel.hidden).toBe(true);
+        gear.click();
+        const tab = document.querySelector<HTMLButtonElement>('[data-settings-section="shortcuts"]')!;
+        const section = document.querySelector<HTMLElement>("#video-shortcuts-settings")!;
+        expect(tab).toBeTruthy();
+        expect(section.hidden).toBe(true);
+
+        tab.click();
+        expect(section.hidden).toBe(false);
+        expect(tab.getAttribute("aria-pressed")).toBe("true");
+        expect(section.textContent).toContain("Space");
+        expect(section.textContent).toContain("Seek back 10 seconds");
+        expect(section.textContent).toContain("Seek forward 10 seconds");
+        expect(section.textContent).toContain("Adjust volume");
+        expect(section.textContent).toContain("Toggle fullscreen");
+        expect(section.textContent).toContain("Toggle subtitles");
+
+        tab.focus();
+        tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(panel.hidden).toBe(true);
+        expect(document.activeElement).toBe(gear);
+        await videoModule.closeVideoModal();
+    });
+
+    it("toggles fullscreen from the stage but ignores video chrome", async () => {
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(43, SHARED_SESSION_ID));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 43, name: "fullscreen.mp4", size: 1024 });
+
+        const stage = document.querySelector<HTMLElement>("#video-stage")!;
+        const enter = apiMocks.enterFullscreen;
+        enter.mockClear();
+        const stageDblClick = new MouseEvent("dblclick", { bubbles: true, cancelable: true });
+        stage.dispatchEvent(stageDblClick);
+        await vi.waitFor(() => expect(enter).toHaveBeenCalledOnce());
+        expect(stageDblClick.defaultPrevented).toBe(true);
+
+        enter.mockClear();
+        const centerGraphic = document.querySelector<SVGElement>("#video-center-play svg")!;
+        centerGraphic.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+        await nextTasks();
+        expect(enter).not.toHaveBeenCalled();
+
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        document.querySelector<HTMLButtonElement>("#video-picture-button")!.click();
+        panel.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+        expect(enter).not.toHaveBeenCalled();
+        await videoModule.closeVideoModal();
+    });
+});

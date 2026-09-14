@@ -54,6 +54,7 @@ export interface VideoDOMHandlers {
     toggleFullscreen(): void;
     pointerMove(): void;
     stageClick(event: MouseEvent): void;
+    stageDoubleClick(event: MouseEvent): void;
     keydown(event: KeyboardEvent): void;
     resize(): void;
 }
@@ -129,6 +130,7 @@ export function bindVideoDOM(dom: VideoDOM, handlers: VideoDOMHandlers): () => v
     listen(dom.fullscreenButton, 'click', handlers.toggleFullscreen as EventListener);
     listen(dom.modal, 'pointermove', handlers.pointerMove as EventListener);
     listen(dom.stage, 'click', handlers.stageClick as EventListener);
+    listen(dom.stage, 'dblclick', handlers.stageDoubleClick as EventListener);
     listen(document, 'keydown', handlers.keydown as EventListener);
     listen(window, 'resize', handlers.resize as EventListener);
     return () => {

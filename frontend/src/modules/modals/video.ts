@@ -68,7 +68,7 @@ interface VideoOpenAttempt {
 
 
 let playbackPreferences = loadPlaybackPreferences();
-let settingsSection: "picture" | "audio" | "subtitle" | "speed" | null = null;
+let settingsSection: "picture" | "audio" | "subtitle" | "speed" | "shortcuts" | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
 let modalEl: HTMLElement | null = null;
 let stageEl: HTMLElement | null = null;
@@ -591,8 +591,10 @@ function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
     byID("video-picture-button")?.setAttribute("aria-expanded", "true");
     const picture = byID("video-picture-settings");
     const appearance = byID("video-subtitle-settings");
+    const shortcuts = byID("video-shortcuts-settings");
     if (picture) picture.hidden = section !== "picture";
     if (appearance) appearance.hidden = section !== "subtitle";
+    if (shortcuts) shortcuts.hidden = section !== "shortcuts";
     for (const button of panel.querySelectorAll<HTMLElement>("[data-settings-section]")) {
         button.setAttribute("aria-pressed", button.dataset.settingsSection === section ? "true" : "false");
     }
@@ -648,6 +650,7 @@ function bindSettingsPanel() {
         if (section === "audio") audioPicker?.setOpen(true);
         else if (section === "subtitle") subtitlePicker?.setOpen(true);
         else if (section === "speed") setSpeedMenuOpen(true);
+        else if (section === "shortcuts") showSettingsPanel("shortcuts");
         else showSettingsPanel("picture");
         settingsReturnFocus = returnFocus;
     });
@@ -669,7 +672,7 @@ function isAnyMenuOpen() {
 
 // closeMenus closes every popover except the one about to open.
 function closeMenus(except: TrackPicker | "speed" | null = null) {
-    if (settingsSection === "picture") hideSettingsPanel();
+    if (settingsSection !== null) hideSettingsPanel();
     if (except !== "speed") closeSpeedMenu();
     for (const picker of trackPickers()) {
         if (picker !== except) picker.close();
@@ -1362,7 +1365,7 @@ function handleVideoPointerMove() {
 }
 
 function targetIsVideoChrome(target: EventTarget | null) {
-    const el = target instanceof HTMLElement ? target : null;
+    const el = target instanceof Element ? target : null;
     return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading, .video-settings-panel"));
 }
 
@@ -1370,6 +1373,13 @@ function handleStageClick(event: MouseEvent) {
     if (activeNative?.presentation === "standalone") return;
     if (targetIsVideoChrome(event.target)) return;
     transport?.togglePlayback();
+}
+
+function handleStageDoubleClick(event: MouseEvent) {
+    if (activeNative?.presentation === "standalone") return;
+    if (targetIsVideoChrome(event.target)) return;
+    event.preventDefault();
+    void geometry?.toggleFullscreen();
 }
 
 
@@ -1552,6 +1562,7 @@ export function activateVideoModal(): () => void {
         toggleFullscreen: () => { void geometry?.toggleFullscreen(); },
         pointerMove: handleVideoPointerMove,
         stageClick: handleStageClick,
+        stageDoubleClick: handleStageDoubleClick,
         keydown: handleVideoShortcut,
         resize: () => geometry?.handleWindowResize(() => {
             syncSettingsGeometry();
