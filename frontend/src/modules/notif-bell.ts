@@ -1,10 +1,7 @@
-// Notification bell — the single unified feedback surface in the top-right
-// header. Three layers of detail:
-//
-//   • Idle bell — quiet, dim. Nothing happening.
-//   • Hover popover — only when transfers are active. Mini progress list.
-//   • Click panel — full history. Active transfers + Recent (notifications
-//     and completed transfers, merged chronologically).
+// Notification bell — the single unified feedback surface in the top-right header.
+// The idle bell stays quiet; hovering opens the full history panel, while click
+// and keyboard activation preserve access on touch devices and for keyboard users.
+// Active transfers and completed events remain merged chronologically.
 //
 // History lives in the ui/notifications stores (capped at 100, ephemeral).
 // Modules elsewhere call `pushHistoryEvent(...)` and `pushTransferStart()` /

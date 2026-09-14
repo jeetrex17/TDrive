@@ -46,35 +46,6 @@
     transform: scale(1);
 }
 
-/* Hover popover — minimal active-transfer peek */
-.notif-popover {
-    position: fixed;
-    z-index: 9998;
-    width: 280px;
-    max-width: calc(100vw - 24px);
-    padding: 10px;
-    border-radius: 12px;
-    background: var(--glass-bg);
-    border: 1px solid var(--glass-border);
-    box-shadow:
-        var(--shadow-md),
-        0 1px 0 var(--glass-highlight) inset;
-    backdrop-filter: blur(24px) saturate(180%);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    color: var(--text-main);
-    transform-origin: top right;
-    --motion-enter-y: -4px;
-    --motion-enter-scale: 0.985;
-    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
-}
-.notif-popover-list { display: flex; flex-direction: column; gap: 8px; }
-.notif-popover-more {
-    margin-top: 8px;
-    text-align: center;
-    font-size: 0.74rem;
-    color: var(--text-muted);
-    opacity: 0.7;
-}
 
 /* Full panel */
 .notif-panel {
@@ -89,8 +60,6 @@
     box-shadow:
         var(--shadow-lg),
         0 1px 0 var(--glass-highlight) inset;
-    backdrop-filter: blur(28px) saturate(180%);
-    -webkit-backdrop-filter: blur(28px) saturate(180%);
     color: var(--text-main);
     display: flex;
     flex-direction: column;
@@ -99,6 +68,15 @@
     --motion-enter-y: -4px;
     --motion-enter-scale: 0.985;
     animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .notif-panel {
+        background-color: color-mix(in srgb, var(--glass-bg) 14%, transparent);
+        background-image: linear-gradient(135deg, color-mix(in srgb, var(--text-main) 6%, transparent), transparent 44%);
+        -webkit-backdrop-filter: blur(16px) saturate(145%);
+        backdrop-filter: blur(16px) saturate(145%);
+    }
 }
 .notif-panel-header {
     flex-shrink: 0;
@@ -117,8 +95,7 @@
     gap: 6px;
     margin-left: auto;
 }
-.notif-panel-clear,
-.notif-panel-close {
+.notif-panel-clear {
     background: transparent;
     border: 1px solid var(--color-border-soft);
     color: var(--color-text-soft);
@@ -128,17 +105,18 @@
     padding: 4px 10px;
     border-radius: 7px;
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+    transition:
+        background-color var(--motion-fast) var(--ease-standard),
+        color var(--motion-fast) var(--ease-standard),
+        border-color var(--motion-fast) var(--ease-standard);
 }
-.notif-panel-clear:hover:not(:disabled),
-.notif-panel-close:hover {
+.notif-panel-clear:hover:not(:disabled) {
     background: var(--overlay-white-2);
     color: var(--text-main);
     border-color: var(--color-border);
 }
 .notif-panel-clear:disabled { opacity: 0.4; cursor: default; }
 .notif-panel-clear:focus-visible,
-.notif-panel-close:focus-visible,
 .notif-row-copy:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;

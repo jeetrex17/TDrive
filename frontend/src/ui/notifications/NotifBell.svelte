@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { tick } from 'svelte';
+    import { onDestroy } from 'svelte';
     import BellIcon from '@lucide/svelte/icons/bell';
     import EventRow from './EventRow.svelte';
     import TransferRow from './TransferRow.svelte';
@@ -8,7 +8,6 @@
     import {
         activeTransfers,
         bellMode,
-        notifHoverOpen,
         notifPanelOpen,
         notifUnreadErrors,
         recentEvents,
@@ -22,13 +21,11 @@
 
     let { onCancelDirection, onClearHistory }: Props = $props();
 
-    const HOVER_GRACE_MS = 280;
+    const HOVER_CLOSE_MS = 140;
 
     let bellEl = $state<HTMLButtonElement | null>(null);
-    let panelEl = $state<HTMLElement | null>(null);
     let anchor = $state({ top: 0, right: 0 });
-    let hoverGraceTimer: ReturnType<typeof setTimeout> | null = null;
-    let panelFocusVersion = 0;
+    let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
     function reanchor(): void {
         if (!bellEl) return;
@@ -39,78 +36,46 @@
         };
     }
 
-    function clearGraceTimer(): void {
-        if (hoverGraceTimer) {
-            clearTimeout(hoverGraceTimer);
-            hoverGraceTimer = null;
-        }
-    }
-
-    function focusPanel(): void {
-        const version = ++panelFocusVersion;
-        void tick().then(() => {
-            if (version !== panelFocusVersion || !$notifPanelOpen) return;
-            panelEl?.querySelector<HTMLElement>('[data-notif-initial-focus]')?.focus({ preventScroll: true });
-        });
+    function clearCloseTimer(): void {
+        if (!closeTimer) return;
+        clearTimeout(closeTimer);
+        closeTimer = null;
     }
 
     function openPanel(): void {
-        closeHover();
+        clearCloseTimer();
         reanchor();
         notifPanelOpen.set(true);
-        notifUnreadErrors.set(0); // opening clears the unread badge
-        focusPanel();
+        notifUnreadErrors.set(0);
     }
 
     function closePanel({ restoreFocus = false }: { restoreFocus?: boolean } = {}): void {
-        panelFocusVersion += 1;
+        clearCloseTimer();
         notifPanelOpen.set(false);
         if (restoreFocus) bellEl?.focus({ preventScroll: true });
     }
 
-    function togglePanel(): void {
-        if ($notifPanelOpen) closePanel();
-        else openPanel();
-    }
-
-    function openHover(): void {
-        if ($notifPanelOpen || $activeTransfers.length === 0) return;
-        reanchor();
-        notifHoverOpen.set(true);
-    }
-
-    function closeHover(): void {
-        clearGraceTimer();
-        notifHoverOpen.set(false);
+    function scheduleClosePanel(): void {
+        clearCloseTimer();
+        closeTimer = setTimeout(() => closePanel(), HOVER_CLOSE_MS);
     }
 
     function onBellEnter(): void {
-        if ($notifPanelOpen) return;
-        clearGraceTimer();
-        openHover();
-    }
-
-    function onBellLeave(): void {
-        clearGraceTimer();
-        hoverGraceTimer = setTimeout(() => closeHover(), HOVER_GRACE_MS);
+        openPanel();
     }
 
     function onBellKeydown(event: KeyboardEvent): void {
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            togglePanel();
+            openPanel();
         }
     }
 
     function onWindowKeydown(event: KeyboardEvent): void {
-        if (event.key !== 'Escape' || hasActiveModal()) return;
-        if ($notifPanelOpen) {
-            event.preventDefault();
-            event.stopPropagation();
-            closePanel({ restoreFocus: true });
-        } else if ($notifHoverOpen) {
-            closeHover();
-        }
+        if (event.key !== 'Escape' || hasActiveModal() || !$notifPanelOpen) return;
+        event.preventDefault();
+        event.stopPropagation();
+        closePanel({ restoreFocus: true });
     }
 
     function onDocumentMousedown(event: MouseEvent): void {
@@ -121,11 +86,7 @@
         closePanel();
     }
 
-    // The hover popover only exists while transfers run; drop it the moment
-    // the last active transfer settles.
-    $effect(() => {
-        if ($notifHoverOpen && $activeTransfers.length === 0) closeHover();
-    });
+    onDestroy(clearCloseTimer);
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} onresize={reanchor} />
@@ -143,11 +104,11 @@
     aria-label="Notifications"
     onclick={(event) => {
         event.stopPropagation();
-        togglePanel();
+        openPanel();
     }}
     onkeydown={onBellKeydown}
     onmouseenter={onBellEnter}
-    onmouseleave={onBellLeave}
+    onmouseleave={scheduleClosePanel}
 >
     <span class="notif-bell-icon" aria-hidden="true">
         <BellIcon size={18} strokeWidth={1.8} aria-hidden="true" />
@@ -155,39 +116,10 @@
     <span class="notif-bell-dot" data-mode={$bellMode} aria-hidden="true"></span>
 </button>
 
-{#if $notifHoverOpen}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div
-        class="notif-popover"
-        role="dialog"
-        aria-label="Active transfers"
-        tabindex="-1"
-        style={`top:${anchor.top}px; right:${anchor.right}px;`}
-        use:portal
-
-        onmouseenter={clearGraceTimer}
-        onmouseleave={onBellLeave}
-        onclick={(event) => {
-            // Click into the popover upgrades it to the full panel.
-            event.stopPropagation();
-            openPanel();
-        }}
-    >
-        <div class="notif-popover-list">
-            {#each $activeTransfers.slice(0, 4) as transfer (transfer.id)}
-                <TransferRow {transfer} onCancel={onCancelDirection} />
-            {/each}
-        </div>
-        {#if $activeTransfers.length > 4}
-            <div class="notif-popover-more">+ {$activeTransfers.length - 4} more</div>
-        {/if}
-    </div>
-{/if}
 
 {#if $notifPanelOpen}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div
-        bind:this={panelEl}
         id="notif-panel"
         class="notif-panel"
         role="dialog"
@@ -196,7 +128,8 @@
         tabindex="-1"
         style={`top:${anchor.top}px; right:${anchor.right}px;`}
         use:portal
-
+        onmouseenter={clearCloseTimer}
+        onmouseleave={scheduleClosePanel}
         onclick={(event) => event.stopPropagation()}
     >
         <div class="notif-panel-header">
@@ -209,14 +142,6 @@
                     onclick={onClearHistory}
                 >
                     Clear
-                </button>
-                <button
-                    class="notif-panel-close"
-                    type="button"
-                    data-notif-initial-focus
-                    onclick={() => closePanel({ restoreFocus: true })}
-                >
-                    Close
                 </button>
             </div>
         </div>

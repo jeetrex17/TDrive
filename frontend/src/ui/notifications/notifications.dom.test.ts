@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, tick, unmount } from 'svelte';
+import { flushSync, mount, unmount } from 'svelte';
 import EventRow from './EventRow.svelte';
 import NotifBell from './NotifBell.svelte';
 import ToastStack from './ToastStack.svelte';
 import TransferRow from './TransferRow.svelte';
-import { historyEvents, notifHoverOpen, notifPanelOpen, type NoticeEvent, type TransferEvent } from './notif-store';
+import { historyEvents, notifPanelOpen, type NoticeEvent, type TransferEvent } from './notif-store';
 import { toasts, type ToastItem } from './toast-store';
 
 let mounts: Record<string, unknown>[] = [];
@@ -71,7 +71,6 @@ afterEach(async () => {
     toasts.set([]);
     historyEvents.set([]);
     notifPanelOpen.set(false);
-    notifHoverOpen.set(false);
     flushSync();
     await Promise.all(mounts.map((app) => unmount(app)));
     mounts = [];
@@ -151,17 +150,16 @@ describe('notification interaction controls', () => {
         expect(progress.hasAttribute('aria-live')).toBe(false);
     });
 
-    it('focuses the deliberate close control and restores the bell after Escape', async () => {
+    it('opens from the keyboard and restores the bell after Escape', () => {
         const host = mountComponent(NotifBell, { onCancelDirection: vi.fn(), onClearHistory: vi.fn() });
         const bell = host.querySelector<HTMLButtonElement>('#notif-bell');
         if (!bell) throw new Error('Expected the notification bell');
 
-        click(bell);
-        await tick();
+        bell.focus();
+        bell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
         flushSync();
-        const closeButton = document.querySelector<HTMLButtonElement>('.notif-panel-close');
-        expect(closeButton).not.toBeNull();
-        expect(document.activeElement).toBe(closeButton);
+        expect(document.querySelector('.notif-panel')).not.toBeNull();
+        expect(document.querySelector('.notif-panel-close')).toBeNull();
 
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
         flushSync();

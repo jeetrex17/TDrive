@@ -36,7 +36,6 @@ export type BellMode = 'idle' | 'active' | 'error';
 // that module so cap/dedupe/idempotency rules live in one place.
 export const historyEvents = writable<HistoryEvent[]>([]);
 export const notifPanelOpen = writable(false);
-export const notifHoverOpen = writable(false);
 export const notifUnreadErrors = writable(0);
 
 export const activeTransfers = derived(historyEvents, (events) =>
