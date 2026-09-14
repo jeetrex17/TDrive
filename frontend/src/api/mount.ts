@@ -4,7 +4,7 @@ import {
     MountDrives as rawMountDrives,
     MountStatus as rawMountStatus,
     UnmountDrive as rawUnmountDrive,
-} from "../../wailsjs/go/main/App";
+} from "../../bindings/TDrive/app";
 import type {
     MountedDrive,
     MountedDriveKind,

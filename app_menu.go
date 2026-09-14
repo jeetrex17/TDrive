@@ -3,9 +3,7 @@ package main
 import (
 	goruntime "runtime"
 
-	"github.com/wailsapp/wails/v2/pkg/menu"
-	"github.com/wailsapp/wails/v2/pkg/options/mac"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 const repoURL = "https://github.com/" + updateRepo
@@ -15,32 +13,30 @@ const repoURL = "https://github.com/" + updateRepo
 // home. Windows and Linux would gain a menu strip the app otherwise never
 // shows, so they rely on the in-app account menu instead.
 //
-// Wails renders the application menu from a fixed role (About, Hide, Quit)
-// that accepts no extra items, so the updater entry lives under Help.
-func buildAppMenu(app *App) *menu.Menu {
+// The AppMenu role reproduces the About/Hide/Quit items Wails installs when
+// no menu is configured, reading the About panel text from
+// application.Options.Name/Description, so the updater entry lives under
+// Help instead of trying to extend that fixed role.
+func buildAppMenu(app *App, wailsApp *application.App) *application.Menu {
 	if goruntime.GOOS != "darwin" {
 		return nil
 	}
-	help := menu.NewMenu()
-	help.AddText("Check for Updates…", nil, func(*menu.CallbackData) {
+	menu := wailsApp.NewMenu()
+	menu.AddRole(application.AppMenu)
+	// EditMenu reproduces the defaults Wails installs when no menu is
+	// configured; dropping it would break Cmd+C/V in the webview.
+	menu.AddRole(application.EditMenu)
+	menu.AddRole(application.WindowMenu)
+
+	help := menu.AddSubmenu("Help")
+	help.Add("Check for Updates…").OnClick(func(*application.Context) {
 		app.requestUpdatesPanel()
 	})
 	help.AddSeparator()
-	help.AddText("TDrive on GitHub", nil, func(*menu.CallbackData) {
-		if app.ctx != nil {
-			runtime.BrowserOpenURL(app.ctx, repoURL)
+	help.Add("TDrive on GitHub").OnClick(func(*application.Context) {
+		if app.wails != nil {
+			_ = app.wails.Browser.OpenURL(repoURL)
 		}
 	})
-	// AppMenu/EditMenu/WindowMenu reproduce the defaults Wails installs when
-	// no menu is configured; dropping EditMenu would break Cmd+C/V in the
-	// webview.
-	return menu.NewMenuFromItems(menu.AppMenu(), menu.EditMenu(), menu.WindowMenu(), menu.SubMenu("Help", help))
-}
-
-// macAbout feeds the native "About TDrive" panel with the build version.
-func macAbout(version string) *mac.AboutInfo {
-	return &mac.AboutInfo{
-		Title:   "TDrive",
-		Message: "Version " + version + "\nTelegram-backed desktop drive.",
-	}
+	return menu
 }

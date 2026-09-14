@@ -240,7 +240,7 @@ TDrive checks GitHub Releases shortly after launch and once each day. Downloads 
 
 Open **Check for updates** from the account menu. When an update is ready, select **Restart to update**. On macOS, the same action is available under **Help → Check for Updates…**.
 
-You can disable automatic downloads or skip a version. Update checks contact only `api.github.com` using an anonymous request with no Telegram account data. Development builds created with `wails dev` do not check for updates.
+You can disable automatic downloads or skip a version. Update checks contact only `api.github.com` using an anonymous request with no Telegram account data. Development builds created with `wails3 dev` do not check for updates.
 
 ## Known limitations
 
@@ -254,7 +254,7 @@ You can disable automatic downloads or skip a version. Update checks contact onl
 
 ## Build from source
 
-Requirements include Go 1.25, Node.js with npm, Wails v2, and the platform dependencies required by Wails.
+Requirements include Go 1.25, Node.js with npm, [Wails v3](https://v3.wails.io) (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22`), and the platform dependencies required by Wails.
 
 ```bash
 # Backend and CLI
@@ -271,8 +271,9 @@ npm test
 npm run build
 
 # Desktop development/build
-wails dev
-wails build
+wails3 dev
+wails3 task build      # binary only, into build/bin
+wails3 task package    # + platform packaging (.app / NSIS installer / AppImage)
 ```
 
 Native playback packaging is handled by the scripts under `scripts/` and the release workflow. When a bundled runtime is unavailable, TDrive can fall back to `mpv` from `PATH`; `TDRIVE_MPV_BIN` overrides that binary.

@@ -1,17 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test as base, type Page } from '@playwright/test';
 
 type MockOutcome =
     | { kind: 'resolve'; value: unknown; delayMs: number }
     | { kind: 'reject'; message: string; delayMs: number }
     | { kind: 'return'; value: unknown };
-
-type PromiseWithResolvers = typeof Promise & {
-    withResolvers<T>(): {
-        promise: Promise<T>;
-        resolve: (value: T | PromiseLike<T>) => void;
-        reject: (reason?: unknown) => void;
-    };
-};
 
 export type MockPlan =
     | MockOutcome
@@ -94,6 +88,36 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     SyncChannel: resolves(null),
 };
 
+// The generated bindings (frontend/bindings/TDrive/app.ts) call
+// `$Call.ByID(<numeric id>, ...args)` for every bound Go method — there is no
+// name in the wire request. Recover the id -> method name mapping straight
+// from that generated file instead of hand-copying 89 numbers, so this stays
+// correct across regenerations.
+const APP_BINDINGS_PATH = join(__dirname, '../bindings/TDrive/app.ts');
+
+function loadMethodIdsByName(): Record<string, number> {
+    const source = readFileSync(APP_BINDINGS_PATH, 'utf8');
+    const ids: Record<string, number> = {};
+    const functionPattern = /^export function (\w+)\(/gm;
+    let match: RegExpExecArray | null;
+    while ((match = functionPattern.exec(source)) !== null) {
+        const name = match[1];
+        const bodyStart = source.indexOf('{', match.index);
+        const bodyEnd = source.indexOf('\n}', bodyStart);
+        const body = source.slice(bodyStart, bodyEnd === -1 ? source.length : bodyEnd);
+        const idMatch = /\$Call\.ByID\((\d+)/.exec(body);
+        if (idMatch) ids[name] = Number(idMatch[1]);
+    }
+    return ids;
+}
+
+function methodNamesById(): Record<string, string> {
+    const byName = loadMethodIdsByName();
+    const byId: Record<string, string> = {};
+    for (const [name, id] of Object.entries(byName)) byId[String(id)] = name;
+    return byId;
+}
+
 export interface WailsMockHandle {
     calls(method?: string): Promise<MockCall[]>;
     emit(eventName: string, ...args: unknown[]): Promise<void>;
@@ -104,13 +128,14 @@ export async function bootTDrive(
     methodOverrides: Record<string, MockPlan> = {},
 ): Promise<WailsMockHandle> {
     const methods = { ...DEFAULT_METHODS, ...methodOverrides };
+    const methodNameById = methodNamesById();
 
-    await page.addInitScript((configuredMethods: Record<string, MockPlan>) => {
-        type EventListener = (...args: unknown[]) => void;
-
+    await page.addInitScript(({ configuredMethods, methodNameById: idToName }: {
+        configuredMethods: Record<string, MockPlan>;
+        methodNameById: Record<string, string>;
+    }) => {
         const plans = configuredMethods;
         const calls: MockCall[] = [];
-        const listeners = new Map<string, Set<EventListener>>();
 
         const selectPlan = (candidate: MockPlan | undefined, args: unknown[]): MockOutcome => {
             const plan = candidate ?? { kind: 'resolve', value: null, delayMs: 0 };
@@ -120,115 +145,102 @@ export async function bootTDrive(
             return plan;
         };
 
-        const invoke = (method: string, args: unknown[]): unknown => {
-            const plan = selectPlan(plans[method], args);
-            const call: MockCall = { method, args, state: 'pending' };
+        // Wails v3 bound methods always go over the wire as a JSON POST to
+        // /wails/runtime; there is no injected window.go/window.runtime
+        // object anymore. Intercept that one endpoint instead.
+        const RUNTIME_PATH = '/wails/runtime';
+        const originalFetch = window.fetch.bind(window);
+
+        const jsonResponse = (status: number, body: unknown): Response => new Response(JSON.stringify(body), {
+            status,
+            headers: { 'Content-Type': 'application/json' },
+        });
+
+        window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+            const url = typeof input === 'string' || input instanceof URL ? input : input.url;
+            const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
+            let pathname = '';
+            try {
+                pathname = new URL(url, window.location.origin).pathname;
+            } catch {
+                pathname = '';
+            }
+            if (pathname !== RUNTIME_PATH || method !== 'POST' || typeof init?.body !== 'string') {
+                return originalFetch(input, init);
+            }
+
+            let body: { args?: Record<string, unknown> };
+            try {
+                body = JSON.parse(init.body);
+            } catch {
+                return originalFetch(input, init);
+            }
+
+            const callArgs = body.args;
+            if (callArgs == null || typeof callArgs !== 'object' || !('call-id' in callArgs)) {
+                // Window/System/Browser/Events/CancelCall calls the app makes
+                // in the background (native theme sync, etc). None of these
+                // e2e tests assert on them; a harmless empty success keeps
+                // every caller's best-effort error handling quiet.
+                return Promise.resolve(jsonResponse(200, {}));
+            }
+
+            const methodID = typeof callArgs.methodID === 'number' ? callArgs.methodID : undefined;
+            const methodName = methodID !== undefined
+                ? idToName[String(methodID)]
+                : (typeof callArgs.methodName === 'string' ? callArgs.methodName : undefined);
+            if (!methodName) return Promise.resolve(jsonResponse(200, {}));
+
+            const args = Array.isArray(callArgs.args) ? callArgs.args : [];
+            const plan = selectPlan(plans[methodName], args);
+            const call: MockCall = { method: methodName, args, state: 'pending' };
             calls.push(call);
 
             if (plan.kind === 'return') {
                 call.state = 'returned';
-                return plan.value;
+                return Promise.resolve(jsonResponse(200, plan.value));
             }
 
             if (plan.kind === 'reject') {
-                if (plan.delayMs === 0) {
+                const respond = () => {
                     call.state = 'rejected';
-                    return Promise.reject(new Error(plan.message));
-                }
-                const deferred = (Promise as PromiseWithResolvers).withResolvers<unknown>();
-                window.setTimeout(() => {
-                    call.state = 'rejected';
-                    deferred.reject(new Error(plan.message));
-                }, plan.delayMs);
-                return deferred.promise;
+                    return jsonResponse(500, { message: plan.message, kind: 'RuntimeError' });
+                };
+                if (plan.delayMs === 0) return Promise.resolve(respond());
+                return new Promise<Response>((resolve) => {
+                    window.setTimeout(() => resolve(respond()), plan.delayMs);
+                });
             }
 
-            if (plan.delayMs === 0) {
+            const respond = () => {
                 call.state = 'fulfilled';
-                return Promise.resolve(plan.value);
-            }
-            const deferred = (Promise as PromiseWithResolvers).withResolvers<unknown>();
-            window.setTimeout(() => {
-                call.state = 'fulfilled';
-                deferred.resolve(plan.value);
-            }, plan.delayMs);
-            return deferred.promise;
-        };
-
-        const subscribe = (eventName: string, callback: EventListener): (() => void) => {
-            const eventListeners = listeners.get(eventName) ?? new Set<EventListener>();
-            eventListeners.add(callback);
-            listeners.set(eventName, eventListeners);
-            return () => {
-                eventListeners.delete(callback);
-                if (eventListeners.size === 0) listeners.delete(eventName);
+                return jsonResponse(200, plan.value);
             };
-        };
+            if (plan.delayMs === 0) return Promise.resolve(respond());
+            return new Promise<Response>((resolve) => {
+                window.setTimeout(() => resolve(respond()), plan.delayMs);
+            });
+        }) as typeof window.fetch;
 
-        const runtimeMethods = {
-            BrowserOpenURL: () => undefined,
-            EventsEmit: (eventName: string, ...args: unknown[]) => {
-                for (const callback of [...(listeners.get(eventName) ?? [])]) callback(...args);
-            },
-            EventsOff: (eventName: string) => listeners.delete(eventName),
-            EventsOn: (eventName: string, callback: EventListener) => subscribe(eventName, callback),
-            EventsOnMultiple: (eventName: string, callback: EventListener, maxCallbacks: number) => {
-                let remaining = maxCallbacks;
-                let unsubscribe: () => void = () => undefined;
-                const limited: EventListener = (...args) => {
-                    callback(...args);
-                    if (remaining > 0 && --remaining === 0) unsubscribe();
-                };
-                unsubscribe = subscribe(eventName, limited);
-                return unsubscribe;
-            },
-            EventsOnce: (eventName: string, callback: EventListener) => {
-                let unsubscribe: () => void = () => undefined;
-                const once: EventListener = (...args) => {
-                    unsubscribe();
-                    callback(...args);
-                };
-                unsubscribe = subscribe(eventName, once);
-                return unsubscribe;
-            },
-            OnFileDrop: () => undefined,
-            OnFileDropOff: () => undefined,
-            WindowFullscreen: () => undefined,
-            WindowIsFullscreen: () => Promise.resolve(false),
-            WindowSetDarkTheme: () => undefined,
-            WindowSetLightTheme: () => undefined,
-            WindowSetSystemDefaultTheme: () => undefined,
-            WindowUnfullscreen: () => undefined,
-        };
+        // Go injects window._wails.environment (via an inline script before
+        // the app bundle loads) in every real webview; its presence is what
+        // the frontend's gateway-readiness check looks for.
+        window._wails = window._wails || {};
+        window._wails.environment = { OS: 'test', Arch: 'test', Debug: true };
 
-        const app = new Proxy<Record<string, (...args: unknown[]) => unknown>>({}, {
-            get: (_target, property) => {
-                if (typeof property !== 'string') return undefined;
-                return (...args: unknown[]) => invoke(property, args);
-            },
-        });
-        const runtime = new Proxy(runtimeMethods as Record<string, unknown>, {
-            get: (target, property) => {
-                if (typeof property !== 'string') return undefined;
-                return property in target ? target[property] : () => undefined;
-            },
-        });
-
-        Object.defineProperty(window, 'go', {
-            configurable: true,
-            value: { main: { App: app } },
-        });
-        Object.defineProperty(window, 'runtime', {
-            configurable: true,
-            value: runtime,
-        });
         window.__wailsMock = {
             calls,
-            emit(eventName, ...args) {
-                for (const callback of [...(listeners.get(eventName) ?? [])]) callback(...args);
+            emit(eventName: string, ...args: unknown[]) {
+                // @wailsio/runtime's events module always wires up this hook
+                // (window._wails.dispatchWailsEvent) once it loads — the same
+                // entry point Go's native side uses to deliver real events.
+                const wails = window._wails as unknown as {
+                    dispatchWailsEvent?: (event: { name: string; data: unknown }) => void;
+                };
+                wails.dispatchWailsEvent?.({ name: eventName, data: args });
             },
         };
-    }, methods);
+    }, { configuredMethods: methods, methodNameById });
 
     await page.goto('/');
 

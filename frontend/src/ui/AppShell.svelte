@@ -153,7 +153,7 @@
             </div>
         </div>
 
-        <div id="file-list" class="file-list-box" role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4"></div>
+        <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4"></div>
 
         <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos"></div>
     </main>

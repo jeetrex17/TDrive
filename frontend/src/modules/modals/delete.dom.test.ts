@@ -11,7 +11,7 @@ import { closeDeleteModalView } from '../../ui/modals/delete-modal-store';
 
 const deleteFileMock = vi.fn();
 const appActionMocks = vi.hoisted(() => ({ refreshFiles: vi.fn() }));
-vi.mock('../../../wailsjs/go/main/App', () => ({
+vi.mock('../../../bindings/TDrive/app', () => ({
     DeleteFile: (...args: unknown[]) => deleteFileMock(...args),
 }));
 vi.mock('../drive-data', () => ({

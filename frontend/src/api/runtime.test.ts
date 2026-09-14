@@ -5,6 +5,22 @@ import {
     invokeRuntimeAsync,
     RuntimeInvocationError,
 } from './gateway';
+
+// runtime.ts is a thin wrapper over @wailsio/runtime's Events/Browser/System/
+// Window modules; mock those instead of the removed window.runtime bridge.
+const eventsOn = vi.hoisted(() => vi.fn());
+vi.mock('@wailsio/runtime', () => ({
+    Events: { On: eventsOn },
+    Browser: { OpenURL: vi.fn() },
+    System: { Environment: vi.fn() },
+    Window: {
+        Fullscreen: vi.fn(),
+        UnFullscreen: vi.fn(),
+        IsFullscreen: vi.fn(),
+        SetBackgroundColour: vi.fn(),
+    },
+}));
+
 import {
     isFullscreen,
     onRuntimeEvent,
@@ -14,6 +30,7 @@ import {
 
 afterEach(() => {
     vi.unstubAllGlobals();
+    eventsOn.mockReset();
 });
 
 describe('typed gateway runtime boundary', () => {
@@ -84,17 +101,16 @@ describe('typed gateway runtime boundary', () => {
 
     it('forwards each typed event tuple and tears down its native listener once', () => {
         const stop = vi.fn();
-        let listener: ((messageId: unknown, percent: unknown) => void) | undefined;
-        const eventsOn = vi.fn((eventName: string, callback: (messageId: unknown, percent: unknown) => void) => {
+        let listener: ((event: { name: string; data: unknown }) => void) | undefined;
+        eventsOn.mockImplementation((eventName: string, callback: typeof listener) => {
             expect(eventName).toBe('preview_progress');
             listener = callback;
             return stop;
         });
         const callback = vi.fn();
-        vi.stubGlobal('window', { runtime: { EventsOn: eventsOn } });
 
         const unsubscribe = onRuntimeEvent('preview_progress', callback);
-        listener?.(42, 75);
+        listener?.({ name: 'preview_progress', data: [42, 75] });
         unsubscribe();
         unsubscribe();
 

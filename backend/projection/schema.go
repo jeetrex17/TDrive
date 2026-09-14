@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 12
+const currentSchemaVersion = 13
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -29,7 +29,8 @@ func EnsureSchema(db *sql.DB) error {
 			has_unseen_content     INTEGER NOT NULL DEFAULT 0,
 			initial_sync_done      INTEGER NOT NULL DEFAULT 0,
 			personal_backfill_done INTEGER NOT NULL DEFAULT 0,
-			needs_projection_rebuild INTEGER NOT NULL DEFAULT 0
+			needs_projection_rebuild INTEGER NOT NULL DEFAULT 0,
+			pts                    INTEGER NOT NULL DEFAULT 0
 		);`,
 		`CREATE TABLE IF NOT EXISTS replay_log (
 			channel_id      INTEGER NOT NULL,
@@ -365,6 +366,11 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 	}
 	if v < 10 {
 		if err := repairLegacyCollisionAliasExtensions(tx); err != nil {
+			return err
+		}
+	}
+	if v < 13 {
+		if err := addChannelPtsColumn(tx); err != nil {
 			return err
 		}
 	}
@@ -845,6 +851,28 @@ func addChannelRebuildColumn(tx *sql.Tx) error {
 		`ALTER TABLE channels ADD COLUMN needs_projection_rebuild INTEGER NOT NULL DEFAULT 0`,
 	); err != nil {
 		return fmt.Errorf("projection: add channels.needs_projection_rebuild: %w", err)
+	}
+	return nil
+}
+
+// addChannelPtsColumn tops up an existing channels table with the Telegram
+// update-counter (pts) column, so sync can request a difference since the
+// last known pts instead of always re-fetching history from the watermark.
+func addChannelPtsColumn(tx *sql.Tx) error {
+	if !tableExists(tx, "channels") {
+		return nil
+	}
+	cols, err := tableColumnSet(tx, "channels")
+	if err != nil {
+		return err
+	}
+	if _, present := cols["pts"]; present {
+		return nil
+	}
+	if _, err := tx.Exec(
+		`ALTER TABLE channels ADD COLUMN pts INTEGER NOT NULL DEFAULT 0`,
+	); err != nil {
+		return fmt.Errorf("projection: add channels.pts: %w", err)
 	}
 	return nil
 }

@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"TDrive/backend/updater"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // updateRepo is where desktop releases are published.
@@ -36,9 +34,7 @@ func (a *App) initUpdater() {
 		Source:         updater.NewGitHubSource(updateRepo, "TDrive/"+a.version, nil),
 		UserAgent:      "TDrive/" + a.version,
 		OnChange: func(state updater.State) {
-			if a.ctx != nil {
-				runtime.EventsEmit(a.ctx, updateStateEvent, state)
-			}
+			a.emit(updateStateEvent, state)
 		},
 	})
 }
@@ -67,10 +63,7 @@ func scheduleUpdateCleanup(mountInitErr error, cleanup func() error) bool {
 
 // requestUpdatesPanel is the native "Check for Updates…" menu action.
 func (a *App) requestUpdatesPanel() {
-	if a.ctx == nil {
-		return
-	}
-	runtime.EventsEmit(a.ctx, updatesOpenEvent)
+	a.emit(updatesOpenEvent)
 }
 
 // AppVersion returns the build identity shown in the Updates panel.
@@ -135,7 +128,7 @@ func (a *App) InstallUpdateAndRestart() error {
 		// the new version, so this is a warning, not a failure.
 		fmt.Printf("Warning: relaunch after update failed: %v\n", err)
 	}
-	runtime.Quit(a.ctx)
+	a.wails.Quit()
 	return nil
 }
 
@@ -143,7 +136,7 @@ func (a *App) InstallUpdateAndRestart() error {
 // the releases index when no newer release is known. The URL never comes
 // from the frontend.
 func (a *App) OpenUpdatePage() {
-	if a.ctx == nil {
+	if a.wails == nil {
 		return
 	}
 	url := ""
@@ -153,5 +146,5 @@ func (a *App) OpenUpdatePage() {
 	if url == "" {
 		url = "https://github.com/" + updateRepo + "/releases/latest"
 	}
-	runtime.BrowserOpenURL(a.ctx, url)
+	_ = a.wails.Browser.OpenURL(url)
 }

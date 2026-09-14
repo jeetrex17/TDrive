@@ -83,6 +83,15 @@ type HistoryMessage struct {
 	Placeholder bool
 }
 
+// ChannelDifference is one page of changes since a stored pts.
+type ChannelDifference struct {
+	Pts         int64            // pts to store after applying this page
+	Final       bool             // false: call again with Pts to get more
+	TooLong     bool             // Telegram refused a diff; caller must rescan history, then store Pts
+	NewMessages []HistoryMessage // new messages, same shape GetHistory returns
+	DeletedIDs  []int64          // message ids deleted in the channel
+}
+
 // SendFileResult is what SendFile returns. We split it from a bare msgID
 // because the upload progress callback is configurable and we may want to
 // extend with more fields (e.g. document size confirmation).
@@ -209,6 +218,16 @@ type Client interface {
 	// external-delete reconciliation to detect a file whose backing message
 	// vanished from Telegram directly.
 	MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error)
+
+	// GetChannelDifference returns one page of changes to the channel since
+	// the given pts, so the sync engine can ask "what changed" instead of
+	// rescanning history and probing every message's existence. Call again
+	// with the returned Pts when Final is false to page through the rest.
+	GetChannelDifference(ctx context.Context, peer InputPeer, pts int64, limit int) (ChannelDifference, error)
+
+	// GetChannelPts returns the channel's current pts, for bootstrapping
+	// GetChannelDifference after a full history scan.
+	GetChannelPts(ctx context.Context, peer InputPeer) (int64, error)
 
 	ListOwnedBroadcastChannels(ctx context.Context) ([]OwnedBroadcastChannel, error)
 	CreateBroadcastChannel(ctx context.Context, title, about string) (OwnedBroadcastChannel, error)

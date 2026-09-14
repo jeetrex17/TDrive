@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "{{.Info.ProductVersion}}"
+		"file_version": "1.8.1"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "{{.Info.ProductVersion}}",
-			"CompanyName": "{{.Info.CompanyName}}",
-			"FileDescription": "{{.Info.ProductName}}",
-			"LegalCopyright": "{{.Info.Copyright}}",
-			"ProductName": "{{.Info.ProductName}}",
-			"Comments": "{{.Info.Comments}}"
+			"ProductVersion": "1.8.1",
+			"CompanyName": "Jeetraj",
+			"FileDescription": "Use a private Telegram channel as cloud storage",
+			"LegalCopyright": "© 2026, Jeetraj",
+			"ProductName": "TDrive",
+			"Comments": "Use a private Telegram channel as cloud storage"
 		}
 	}
 }

@@ -260,7 +260,7 @@ func TestAppShutdownMakesMountLifecycleTerminal(t *testing.T) {
 		},
 	}
 
-	app.shutdown(context.Background())
+	app.ServiceShutdown()
 	waitLifecycleSignal(t, controller.closeEntered, "shutdown mount close")
 	if _, err := app.mountDriveNative(); err == nil {
 		t.Fatal("MountDrive() succeeded after shutdown")
@@ -283,7 +283,7 @@ func TestAppShutdownWithoutControllerMakesMountLifecycleTerminal(t *testing.T) {
 		mountDriveResolver: unlockedEncryptedDrive,
 	}
 
-	app.shutdown(context.Background())
+	app.ServiceShutdown()
 	if _, err := app.mountDriveNative(); !errors.Is(err, errAppMountLifecycleTerminal) {
 		t.Fatalf("MountDrive() after shutdown error = %v, want terminal lifecycle", err)
 	}

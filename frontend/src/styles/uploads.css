@@ -46,8 +46,8 @@
     line-height: 1.4;
 }
 
-/* Mark the file area as a native file-drop target (folders + files). */
-#file-list { --wails-drop-target: drop; }
+/* The native file-drop target (folders + files) is marked in AppShell.svelte
+   with the `data-file-drop-target` attribute Wails v3 looks for. */
 
 /* Frosted drop target laid over the file list during an OS file drag. It is
    positioned by drop-overlay.ts and ignores the pointer so the drop still lands

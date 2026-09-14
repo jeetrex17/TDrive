@@ -1,0 +1,48 @@
+# This file contains the configuration for this project.
+# When you update `info`, run `wails3 task common:update:build-assets` to
+# regenerate build/darwin/Info*.plist, build/windows/info.json and
+# wails.exe.manifest. Note that this OVERWRITES those files - build/linux/
+# TDrive.desktop is maintained by hand and is not touched by that task.
+version: '3'
+
+# This information is used to generate the build assets.
+info:
+  companyName: "Jeetraj"
+  productName: "TDrive"
+  productIdentifier: "com.jeetraj.tdrive"
+  description: "Use a private Telegram channel as cloud storage"
+  copyright: "© 2026, Jeetraj"
+  comments: "Use a private Telegram channel as cloud storage"
+  version: "1.8.1"
+
+# Dev mode configuration
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - build
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+      - "*.js" # Watch for changes to JS/TS files included using the //wails:include directive.
+      - "*.ts" # The frontend directory will be excluded entirely by the setting above.
+    git_ignore: true
+  executes:
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task common:dev:frontend
+      type: background
+    - cmd: wails3 task run
+      type: primary
+
+# File Associations - TDrive doesn't register any.
+fileAssociations: []

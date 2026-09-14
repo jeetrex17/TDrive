@@ -30,6 +30,7 @@
     "vitest": "^4.1.9"
   },
   "dependencies": {
+    "@wailsio/runtime": "3.0.0-beta.22",
     "dompurify": "^3.4.11",
     "highlight.js": "^11.11.1",
     "markdown-it": "^14.3.0",

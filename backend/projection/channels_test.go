@@ -178,3 +178,59 @@ func TestUpdateInviteLink(t *testing.T) {
 		t.Fatalf("invite_link = %q", got.InviteLink)
 	}
 }
+
+func TestSetChannelPtsRoundTripsThroughGetAndListChannels(t *testing.T) {
+	db := newChannelsDB(t)
+	if err := InsertChannel(db, Channel{ChannelID: 3333, AccessHash: 1, Title: "X", Kind: KindShared, PersonalBackfillDone: true}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := SetChannelPts(db, 3333, 424242); err != nil {
+		t.Fatalf("set pts: %v", err)
+	}
+
+	got, err := GetChannel(db, 3333)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Pts != 424242 {
+		t.Fatalf("pts = %d, want 424242", got.Pts)
+	}
+
+	list, err := ListChannels(db)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var found bool
+	for _, c := range list {
+		if c.ChannelID != 3333 {
+			continue
+		}
+		found = true
+		if c.Pts != 424242 {
+			t.Fatalf("list pts = %d, want 424242", c.Pts)
+		}
+	}
+	if !found {
+		t.Fatalf("channel 3333 not in list")
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := SetChannelPtsTx(tx, 3333, 999); err != nil {
+		t.Fatalf("set pts tx: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	got, err = GetChannel(db, 3333)
+	if err != nil {
+		t.Fatalf("get after tx: %v", err)
+	}
+	if got.Pts != 999 {
+		t.Fatalf("pts after tx = %d, want 999", got.Pts)
+	}
+}

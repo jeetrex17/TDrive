@@ -4,10 +4,11 @@ package nativeplayer
 
 /*
 #cgo darwin CFLAGS: -x objective-c -fblocks -DGL_SILENCE_DEPRECATION
-#cgo darwin LDFLAGS: -framework Cocoa -framework QuartzCore -framework OpenGL
+#cgo darwin LDFLAGS: -framework Cocoa -framework QuartzCore -framework OpenGL -framework WebKit
 #cgo darwin pkg-config: mpv
 
 #import <Cocoa/Cocoa.h>
+#import <WebKit/WebKit.h>
 #import <math.h>
 #import <OpenGL/gl3.h>
 #import <QuartzCore/QuartzCore.h>
@@ -429,6 +430,16 @@ static void* tdrive_player_create_view(const char *rawURL, double x, double y, d
             return;
         }
         [view setAutoresizingMask:0];
+        if (htmlControls) {
+            // Wails v3 keeps the WKWebView opaque (v2 had WebviewIsTransparent).
+            // The page paints everything except the video area, so stop the
+            // webview drawing its own backdrop and let this view show through.
+            for (NSView *sibling in [content subviews]) {
+                if ([sibling isKindOfClass:[WKWebView class]]) {
+                    [sibling setValue:@NO forKey:@"drawsBackground"];
+                }
+            }
+        }
         [content addSubview:view positioned:(htmlControls ? NSWindowBelow : NSWindowAbove) relativeTo:nil];
     };
     if ([NSThread isMainThread]) {

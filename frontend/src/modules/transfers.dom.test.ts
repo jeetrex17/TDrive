@@ -11,14 +11,25 @@ const mocks = vi.hoisted(() => ({
     refreshFiles: vi.fn(),
 }));
 
-vi.mock('../../wailsjs/go/main/App', () => ({
-    DownloadFile: vi.fn(),
-    ImportPaths: (paths: string[], parentId: string, encrypt: boolean, extract: boolean) => window.go.main.App.ImportPaths(paths, parentId, encrypt, extract),
-    PlanImport: (paths: string[], encrypt: boolean, extract: boolean) => window.go.main.App.PlanImport(paths, encrypt, extract),
-    SelectFiles: vi.fn(),
-    SelectFolder: () => window.go.main.App.SelectFolder(),
-    UploadToDriveFS: (files: string[], folders: string[], encrypt: boolean) => window.go.main.App.UploadToDriveFS(files, folders, encrypt),
+// Go always emits an event's payload as a JSON array of its original args
+// (see RuntimeEventMap in api/runtime.ts); mimic that instead of the removed
+// window.runtime.EventsOn bridge.
+const eventListeners = vi.hoisted(() => new Map<string, (...args: unknown[]) => void>());
+const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { name: string; data: unknown[] }) => void) => {
+    eventListeners.set(eventName, (...args: unknown[]) => callback({ name: eventName, data: args }));
+    return () => eventListeners.delete(eventName);
 }));
+const app = vi.hoisted(() => ({
+    DownloadFile: vi.fn(),
+    ImportPaths: vi.fn(),
+    PlanImport: vi.fn(),
+    SelectFiles: vi.fn(),
+    SelectFolder: vi.fn(),
+    UploadToDriveFS: vi.fn(),
+}));
+
+vi.mock('../../bindings/TDrive/app', () => app);
+vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notifications', () => ({ notify: mocks.notify }));
 vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles: mocks.refreshFiles }) }));
 vi.mock('./notif-bell', () => ({
@@ -39,15 +50,13 @@ vi.mock('../ui/mount', () => ({ mountSvelte: vi.fn() }));
 
 import { activateTransferSurfaces, importFolderWithParentID } from './transfers';
 
-type RuntimeHandler = (...args: unknown[]) => void;
-
 interface TestNotice {
     level?: string;
     title?: string;
     body?: string;
 }
 
-const handlers = new Map<string, RuntimeHandler>();
+const handlers = eventListeners;
 let deactivateTransfers = () => {};
 
 beforeEach(() => {
@@ -61,44 +70,29 @@ beforeEach(() => {
     state.uploadTransfers = new Map();
 
     mocks.openImportOptionsModal.mockResolvedValue({ encrypt: false, extract: false });
-    const app = {
-        SelectFolder: vi.fn().mockResolvedValue('/tmp/empty-folder'),
-        PlanImport: vi.fn().mockResolvedValue({
-            files: 0,
-            folders: 1,
-            archives: 0,
-            limitExceeded: false,
-        }),
-        ImportPaths: vi.fn(async () => {
-            handlers.get('import_start')?.();
-            handlers.get('import_complete')?.({
-                status: 'failed',
-                error: 'folder projection failed after Telegram accepted the folder',
-                uploaded: 0,
-                failed: 0,
-                folders: 0,
-                oversize: 0,
-                ignored: 0,
-                errorCount: 0,
-                errors: [],
-            });
-            throw new Error('folder projection failed after Telegram accepted the folder');
-        }),
-    };
-    Object.defineProperty(window, 'go', {
-        configurable: true,
-        value: { main: { App: app } },
+    app.SelectFolder.mockResolvedValue('/tmp/empty-folder');
+    app.PlanImport.mockResolvedValue({
+        files: 0,
+        folders: 1,
+        archives: 0,
+        limitExceeded: false,
+    });
+    app.ImportPaths.mockImplementation(async () => {
+        handlers.get('import_start')?.();
+        handlers.get('import_complete')?.({
+            status: 'failed',
+            error: 'folder projection failed after Telegram accepted the folder',
+            uploaded: 0,
+            failed: 0,
+            folders: 0,
+            oversize: 0,
+            ignored: 0,
+            errorCount: 0,
+            errors: [],
+        });
+        throw new Error('folder projection failed after Telegram accepted the folder');
     });
 
-    Object.defineProperty(window, 'runtime', {
-        configurable: true,
-        value: {
-            EventsOn: vi.fn((name: string, handler: RuntimeHandler) => {
-                handlers.set(name, handler);
-            }),
-            OnFileDrop: vi.fn(),
-        },
-    });
     deactivateTransfers = activateTransferSurfaces();
 });
 
@@ -108,9 +102,6 @@ afterEach(() => {
     state.cancelingUpload = false;
     state.importBatch = null;
     deactivateTransfers();
-        Reflect.deleteProperty(window, 'go');
-    Reflect.deleteProperty(window, 'runtime');
-
 });
 
 describe('aggregate import completion', () => {
@@ -198,17 +189,13 @@ describe('native file drop', () => {
         });
         state.currentFolderId = 'folder-7';
 
-
-        // Without this hook WebKit refuses the drag and WebView2 never reports paths.
-        expect(window.runtime.OnFileDrop).toHaveBeenCalledWith(expect.any(Function), true);
-
         handlers.get('files_dropped')?.({ x: 40, y: 80, paths: ['/tmp/movie.mkv'] });
-        await vi.waitFor(() => expect(window.go.main.App.PlanImport).toHaveBeenCalledWith(['/tmp/movie.mkv'], false, false));
+        await vi.waitFor(() => expect(app.PlanImport).toHaveBeenCalledWith(['/tmp/movie.mkv'], false, false));
 
         underPointer = document.getElementById('sidebar');
         handlers.get('files_dropped')?.({ x: 5, y: 5, paths: ['/tmp/ignored.txt'] });
         await new Promise((resolve) => setTimeout(resolve, 0));
-        expect(window.go.main.App.PlanImport).toHaveBeenCalledTimes(1);
+        expect(app.PlanImport).toHaveBeenCalledTimes(1);
 
         Reflect.deleteProperty(document, 'elementFromPoint');
         state.currentFolderId = '';

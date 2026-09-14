@@ -2,7 +2,7 @@ import { beforeEach, describe, it, expect, vi } from "vitest";
 
 // Mock the generated Wails bindings so the gallery API functions can be tested
 // without a live backend. Only the names api.ts imports need to exist.
-vi.mock("../wailsjs/go/main/App", () => ({
+vi.mock("../bindings/TDrive/app", () => ({
     AttachNativeMedia: vi.fn(),
     CloseMedia: vi.fn(),
     CloseNativeMedia: vi.fn(),
@@ -60,7 +60,7 @@ import {
     ShowNativeSeekThumbnail,
     Thumbnail,
     UpdateMediaPlayback,
-} from "../wailsjs/go/main/App";
+} from "../bindings/TDrive/app";
 
 beforeEach(() => {
     vi.clearAllMocks();

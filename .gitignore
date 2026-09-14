@@ -1,4 +1,3 @@
-build/bin
 node_modules
 frontend/dist
 frontend/coverage
@@ -14,10 +13,17 @@ secret.json
 /config.json
 /cli.json
 
-# --- Wails / Build Artifacts ---
+# --- Wails v3 / Build Artifacts ---
+# NOTE: frontend/bindings/ is intentionally NOT ignored - the generated
+# TS bindings are committed, same as wailsjs/ was under Wails v2.
 build/bin/
+# `wails3 build` (used internally by `wails3 dev`, distinct from our
+# `wails3 task build` which respects BIN_DIR=build/bin) defaults here.
+/bin/
+.task/
 frontend/dist/
-wailsjs/
+# Transient Windows resource file generated (and removed) by windows:generate:syso
+*.syso
 
 # --- Dependencies ---
 node_modules/

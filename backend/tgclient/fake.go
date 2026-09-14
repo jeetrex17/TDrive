@@ -44,6 +44,21 @@ type Fake struct {
 	users          map[int64]UserProfile
 	selfCalls      int
 	resolveCalls   int
+
+	pts                  int64 // channel pts counter; incremented on every history-mutating event
+	events               []fakeEvent
+	tooLongDifference    int // counter; next n GetChannelDifference calls return TooLong
+	differenceCalls      int
+	missingMessagesCalls int
+	fullChannelCalls     int
+}
+
+// fakeEvent is one pts-numbered change to channel history: either a new
+// message or a batch of deletions. GetChannelDifference replays these.
+type fakeEvent struct {
+	pts     int64
+	msg     *HistoryMessage
+	deleted []int64
 }
 
 type SentControl struct {
@@ -93,6 +108,7 @@ func NewFake(selfID int64) *Fake {
 		self:          selfID,
 		nextMsgID:     100,
 		nextChannelID: 10000,
+		pts:           1,
 		fileBodies:    make(map[int64][]byte),
 		controlSends:  make(map[sendDedupeKey]int64),
 		fileSends:     make(map[sendDedupeKey]SendFileResult),
@@ -101,6 +117,16 @@ func NewFake(selfID int64) *Fake {
 		joinRequests:  make(map[int64][]JoinRequest),
 		users:         make(map[int64]UserProfile),
 	}
+}
+
+// recordMessageEvent must be called with f.mu held. It appends msg to
+// history, bumps pts, and logs the event so GetChannelDifference can replay
+// it later.
+func (f *Fake) recordMessageEvent(msg HistoryMessage) {
+	f.history = append(f.history, msg)
+	f.pts++
+	logged := msg
+	f.events = append(f.events, fakeEvent{pts: f.pts, msg: &logged})
 }
 
 // InjectTransientFailures makes the next n send attempts fail with
@@ -125,7 +151,9 @@ func (f *Fake) Close() {}
 func (f *Fake) SeedHistory(msgs ...HistoryMessage) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.history = append(f.history, msgs...)
+	for _, m := range msgs {
+		f.recordMessageEvent(m)
+	}
 	sort.Slice(f.history, func(i, j int) bool { return f.history[i].MsgID < f.history[j].MsgID })
 	for _, m := range f.history {
 		if m.MsgID >= f.nextMsgID {
@@ -148,6 +176,15 @@ func (f *Fake) InjectReadFloodWaits(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.readFloodWait = n
+}
+
+// InjectDifferenceTooLong causes the next n GetChannelDifference calls to
+// return TooLong: true, as Telegram does when it refuses to diff and the
+// caller must rescan history instead.
+func (f *Fake) InjectDifferenceTooLong(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tooLongDifference = n
 }
 
 // FailNextSend causes the next send to fail with ErrInjectedSend, then
@@ -275,6 +312,29 @@ func (f *Fake) ResolveUsersFromMessagesCalls() int {
 	return f.resolveCalls
 }
 
+// DifferenceCalls reports how many times GetChannelDifference was called.
+func (f *Fake) DifferenceCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.differenceCalls
+}
+
+// MissingMessagesCalls reports how many times MissingMessages was called.
+// Tests use it to assert the diff-based sync path avoids the older
+// existence-probing path.
+func (f *Fake) MissingMessagesCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.missingMessagesCalls
+}
+
+// FullChannelCalls reports how many times GetChannelPts was called.
+func (f *Fake) FullChannelCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fullChannelCalls
+}
+
 // EditLastControlText simulates a member editing a TDX1 caption from the
 // regular Telegram client. The history record's text changes; msg_id stays
 // the same. Returns the msg_id mutated.
@@ -354,7 +414,7 @@ func (f *Fake) SendControlWithRandomID(ctx context.Context, peer InputPeer, text
 	f.nextMsgID++
 	f.controlSends[key] = id
 	f.sentControls = append(f.sentControls, SentControl{Peer: peer, Text: text, Silent: silent, MsgID: id, RandomID: sendRandomID})
-	f.history = append(f.history, HistoryMessage{
+	f.recordMessageEvent(HistoryMessage{
 		MsgID:     id,
 		Date:      0,
 		FromID:    f.self,
@@ -430,7 +490,7 @@ func (f *Fake) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 	f.fileSends[key] = result
 	f.sentFiles = append(f.sentFiles, SentFile{Peer: peer, Name: name, Caption: caption, Size: totalSize, MsgID: id, RandomID: sendRandomID})
 	f.fileBodies[id] = append([]byte(nil), body.Bytes()...)
-	f.history = append(f.history, HistoryMessage{
+	f.recordMessageEvent(HistoryMessage{
 		MsgID:        id,
 		Date:         0,
 		FromID:       f.self,
@@ -657,6 +717,9 @@ func (f *Fake) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 		kept = append(kept, m)
 	}
 	f.history = kept
+
+	f.pts++
+	f.events = append(f.events, fakeEvent{pts: f.pts, deleted: cp})
 	return nil
 }
 
@@ -667,6 +730,7 @@ func (f *Fake) DeleteMessages(ctx context.Context, peer InputPeer, msgIDs []int6
 func (f *Fake) MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int64) ([]int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.missingMessagesCalls++
 	present := make(map[int64]struct{}, len(f.history))
 	for _, m := range f.history {
 		present[m.MsgID] = struct{}{}
@@ -678,6 +742,61 @@ func (f *Fake) MissingMessages(ctx context.Context, peer InputPeer, msgIDs []int
 		}
 	}
 	return missing, nil
+}
+
+// GetChannelDifference replays the fake's event log, returning events logged
+// after pts (at most limit of them). Pts on the result is the pts of the last
+// event returned, or the current pts when there is nothing to return. Final
+// is true once the replay has caught up to the event log's end.
+func (f *Fake) GetChannelDifference(ctx context.Context, peer InputPeer, pts int64, limit int) (ChannelDifference, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.differenceCalls++
+
+	if f.readFloodWait > 0 {
+		f.readFloodWait--
+		return ChannelDifference{}, NewFloodWaitError(time.Millisecond)
+	}
+	if f.tooLongDifference > 0 {
+		f.tooLongDifference--
+		return ChannelDifference{TooLong: true, Final: true, Pts: f.pts}, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	var pending []fakeEvent
+	for _, ev := range f.events {
+		if ev.pts > pts {
+			pending = append(pending, ev)
+		}
+	}
+	if len(pending) == 0 {
+		return ChannelDifference{Pts: f.pts, Final: true}, nil
+	}
+
+	take := pending
+	if len(take) > limit {
+		take = take[:limit]
+	}
+	var out ChannelDifference
+	for _, ev := range take {
+		if ev.msg != nil {
+			out.NewMessages = append(out.NewMessages, *ev.msg)
+		}
+		out.DeletedIDs = append(out.DeletedIDs, ev.deleted...)
+	}
+	out.Pts = take[len(take)-1].pts
+	out.Final = len(take) == len(pending)
+	return out, nil
+}
+
+// GetChannelPts returns the fake's current channel pts.
+func (f *Fake) GetChannelPts(ctx context.Context, peer InputPeer) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fullChannelCalls++
+	return f.pts, nil
 }
 
 func (f *Fake) ListOwnedBroadcastChannels(context.Context) ([]OwnedBroadcastChannel, error) {

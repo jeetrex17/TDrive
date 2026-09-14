@@ -245,7 +245,7 @@ func TestAppShutdownClosesMountController(t *testing.T) {
 
 	controller := &fakeAppMountController{}
 	app := &App{ctx: context.Background(), mountController: controller}
-	app.shutdown(context.Background())
+	app.ServiceShutdown()
 	if controller.closeCalls != 1 {
 		t.Fatalf("Close calls = %d, want 1", controller.closeCalls)
 	}

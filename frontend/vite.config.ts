@@ -2,9 +2,16 @@
 import { resolve } from 'node:path';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
+import wails from '@wailsio/runtime/plugins/vite';
 
 export default defineConfig({
-    plugins: [svelte()],
+    plugins: [svelte(), wails('./bindings')],
+    // wails3 dev proxies to 127.0.0.1; without this Vite 8 binds only ::1.
+    server: {
+        host: '127.0.0.1',
+        port: Number(process.env.WAILS_VITE_PORT) || 9245,
+        strictPort: true,
+    },
     build: {
         rollupOptions: {
             input: {

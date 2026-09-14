@@ -14,8 +14,9 @@ import {
     ShowNativeSeekThumbnail as rawShowNativeSeekThumbnail,
     Thumbnail as rawThumbnail,
     UpdateMediaPlayback as rawUpdateMediaPlayback,
-} from "../../wailsjs/go/main/App";
-import type { main, media } from "../../wailsjs/go/models";
+} from "../../bindings/TDrive/app";
+import type { LogicalFile, OpenResult, ThroughputStats as MediaThroughputStats } from "../../bindings/TDrive/backend/media/models";
+import type { NativeMediaResult } from "../../bindings/TDrive/models";
 import type { FileItem } from "../types";
 import { toFileItem } from "./files";
 import { invokeBackend } from "./gateway";
@@ -125,7 +126,7 @@ export async function openStream(msgId: number): Promise<MediaOpenResult> {
     return normalizeMediaOpenResult(opened);
 }
 
-function normalizeMediaOpenResult(opened?: media.OpenResult): MediaOpenResult {
+function normalizeMediaOpenResult(opened?: OpenResult): MediaOpenResult {
     return {
         token: String(opened?.token ?? ""),
         url: String(opened?.url ?? ""),
@@ -138,7 +139,7 @@ function normalizeMediaOpenResult(opened?: media.OpenResult): MediaOpenResult {
     };
 }
 
-function normalizeMediaOpenInfo(info?: media.LogicalFile, fallbackName?: string): MediaOpenInfo {
+function normalizeMediaOpenInfo(info?: LogicalFile, fallbackName?: string): MediaOpenInfo {
     return {
         channelId: Number(info?.channel_id ?? 0),
         fileId: Number(info?.file_id ?? 0),
@@ -170,7 +171,7 @@ export async function attachNativeMedia(token: string, rect: NativeMediaRect): P
     return normalizeNativeMediaOpenResult(opened);
 }
 
-function normalizeNativeMediaOpenResult(opened?: main.NativeMediaResult): NativeMediaOpenResult {
+function normalizeNativeMediaOpenResult(opened?: NativeMediaResult): NativeMediaOpenResult {
     const token = String(opened?.token ?? "");
     const rawInitialState = opened?.initial_state;
     const initialStateRecord = rawInitialState !== null
@@ -235,7 +236,7 @@ export async function updateMediaPlayback(update: MediaPlaybackUpdate): Promise<
     });
 }
 
-function toThroughputStats(stats?: media.ThroughputStats): ThroughputStats {
+function toThroughputStats(stats?: MediaThroughputStats): ThroughputStats {
     return {
         bytesPerSecond: Number(stats?.bytes_per_second ?? 0),
         recentFloodWait: Boolean(stats?.recent_flood_wait),

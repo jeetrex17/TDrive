@@ -135,7 +135,7 @@ func ListChannels(db *sql.DB) ([]Channel, error) {
 	rows, err := db.Query(`
 		SELECT channel_id, access_hash, title, kind, COALESCE(invite_link, ''), joined_at,
 		       last_synced_msg, last_viewed_msg, has_unseen_content,
-		       initial_sync_done, personal_backfill_done
+		       initial_sync_done, personal_backfill_done, pts
 		FROM channels
 		ORDER BY CASE kind WHEN ? THEN 0 ELSE 1 END, joined_at ASC, channel_id ASC
 	`, KindPersonal)
@@ -153,7 +153,7 @@ func ListChannels(db *sql.DB) ([]Channel, error) {
 		if err := rows.Scan(
 			&c.ChannelID, &c.AccessHash, &c.Title, &c.Kind, &c.InviteLink, &c.JoinedAt,
 			&c.LastSyncedMsg, &c.LastViewedMsg, &hasUnseen,
-			&initialSyncDone, &personalBackfillDone,
+			&initialSyncDone, &personalBackfillDone, &c.Pts,
 		); err != nil {
 			return nil, fmt.Errorf("projection: scan channel: %w", err)
 		}
@@ -175,12 +175,12 @@ func GetChannel(db *sql.DB, channelID int64) (Channel, error) {
 	err := db.QueryRow(`
 		SELECT channel_id, access_hash, title, kind, COALESCE(invite_link, ''), joined_at,
 		       last_synced_msg, last_viewed_msg, has_unseen_content,
-		       initial_sync_done, personal_backfill_done, needs_projection_rebuild
+		       initial_sync_done, personal_backfill_done, needs_projection_rebuild, pts
 		FROM channels WHERE channel_id = ?
 	`, channelID).Scan(
 		&c.ChannelID, &c.AccessHash, &c.Title, &c.Kind, &c.InviteLink, &c.JoinedAt,
 		&c.LastSyncedMsg, &c.LastViewedMsg, &hasUnseen,
-		&initialSyncDone, &personalBackfillDone, &needsRebuild,
+		&initialSyncDone, &personalBackfillDone, &needsRebuild, &c.Pts,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Channel{}, fmt.Errorf("projection: channel %d not found", channelID)
@@ -215,6 +215,26 @@ func UpdateAccessHash(db *sql.DB, channelID, accessHash int64) error {
 		return fmt.Errorf("projection: update access hash: %w", err)
 	}
 	slog.Debug("projection: channel access hash refreshed", "channel_id", channelID)
+	return nil
+}
+
+// SetChannelPtsTx persists the Telegram channel update counter (pts) inside
+// an existing transaction, e.g. alongside applying the ops from a difference.
+func SetChannelPtsTx(tx *sql.Tx, channelID, pts int64) error {
+	_, err := tx.Exec(`UPDATE channels SET pts = ? WHERE channel_id = ?`, pts, channelID)
+	if err != nil {
+		return fmt.Errorf("projection: set channel pts: %w", err)
+	}
+	return nil
+}
+
+// SetChannelPts persists the Telegram channel update counter (pts) outside
+// of any existing transaction.
+func SetChannelPts(db *sql.DB, channelID, pts int64) error {
+	_, err := db.Exec(`UPDATE channels SET pts = ? WHERE channel_id = ?`, pts, channelID)
+	if err != nil {
+		return fmt.Errorf("projection: set channel pts: %w", err)
+	}
 	return nil
 }
 

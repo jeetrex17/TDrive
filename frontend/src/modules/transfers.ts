@@ -6,7 +6,7 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
-import { downloadFile, downloadFolder, importPaths, onNativeFileDrop, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { downloadFile, downloadFolder, importPaths, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
 import type { ImportPlan, OperationError } from '../types';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
@@ -749,9 +749,9 @@ export function chooseFolderForCurrentFolder(): void {
 }
 
 function activateFileDropEvents(): void {
-    // Modern WebKit rejects unhandled page drags, and WebView2 reports native
-    // paths through Wails. Register the native drop target before the event.
-    transferUnsubscribers.push(onNativeFileDrop(() => {}));
+    // The drop target itself is opted in via the `data-file-drop-target`
+    // attribute on #file-list (AppShell.svelte); Go delivers native drops as
+    // the ordinary files_dropped event below.
     subscribeTransferEvent('files_dropped', (payload) => {
         // If an in-app drag-to-move is underway, ignore native drops entirely
         // (macOS can still fire one for the internal drag).
