@@ -222,7 +222,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 14px;
     min-width: 0;
 }
@@ -235,7 +235,8 @@
 }
 
 .video-primary-cluster {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-width: 0;
 }
 
 .video-secondary-cluster {
@@ -652,11 +653,11 @@
 
 .video-volume-slider {
     position: relative;
-    width: 100px;
-    margin-left: 12px;
+    width: 0;
+    margin-left: 0;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 180ms ease;
+    transition: width 180ms ease, margin-left 180ms ease, opacity 180ms ease;
     height: 28px;
     cursor: pointer;
     outline: none;
@@ -675,6 +676,8 @@
 
 .video-volume-group:hover .video-volume-slider,
 .video-volume-group:focus-within .video-volume-slider {
+    width: 100px;
+    margin-left: 12px;
     opacity: 1;
     pointer-events: auto;
 }
@@ -1242,6 +1245,11 @@
        row is this tight. Mute and the arrow keys still adjust volume. */
     .video-volume-slider {
         display: none;
+    }
+
+    /* Compact layouts hide the slider, so wrapping is free again here. */
+    .video-primary-cluster {
+        flex-wrap: wrap;
     }
 
     .video-secondary-cluster {
