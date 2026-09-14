@@ -11,11 +11,16 @@ permissions:
 
 env:
   CGO_ENABLED: 1
+  # main (and anything importing it) needs the gtk3 build tag on Linux - see
+  # build/linux/Taskfile.yml for why wails v3 is built against GTK3 +
+  # WebKit2GTK-4.1 here instead of its new GTK4 default.
+  GOFLAGS: "-tags=gtk3"
 
 jobs:
   build:
     name: Build (${{ matrix.platform }})
-    # FIX 1: Pinning to ubuntu-22.04 ensures webkit2gtk-4.0 is available
+    # Pinning to ubuntu-22.04 ensures webkit2gtk-4.1 is available (see the
+    # gtk3 build tag note on GOFLAGS above).
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -23,15 +28,12 @@ jobs:
         include:
           - os: ubuntu-22.04
             platform: linux/amd64
-            output_name: TDrive-linux-amd64
 
           - os: windows-latest
             platform: windows/amd64
-            output_name: TDrive-windows-amd64.exe
 
           - os: macos-15
             platform: darwin/arm64
-            output_name: TDrive-macos-arm64
 
     steps:
       - name: Checkout
@@ -68,8 +70,7 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          # FIX 1: Explicitly install the 4.0 version which Wails expects
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libx11-dev mpv
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev mpv
 
       # Uses the checksum-pinned runtime archive when the repository variables
       # are set and the runner's package-manager mpv otherwise; the bundle
@@ -88,7 +89,7 @@ jobs:
       - name: Install Wails
         shell: bash
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Stamp release version
@@ -96,15 +97,30 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          tmp="$(mktemp)"
-          jq --arg v "$version" '.info.productVersion = $v' wails.json > "$tmp"
-          mv "$tmp" wails.json
+          yq -i ".info.version = \"${version}\"" build/config.yml
+          # v3 build assets are static files, not templates, so the bundle
+          # plist has to be stamped too or the .app keeps the checked-in version.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            for plist in build/darwin/Info.plist build/darwin/Info.dev.plist; do
+              plutil -replace CFBundleShortVersionString -string "$version" "$plist"
+              plutil -replace CFBundleVersion -string "$version" "$plist"
+            done
+          fi
 
+      # macOS packages a `.app` bundle (`package`); Linux/Windows only need the
+      # bare binary here (`build`) - they're packaged as an AppImage/zip by the
+      # steps below rather than through linux:package/windows:package.
+      # Always produces build/bin/TDrive(.exe)(.app) - wails v3's Taskfile
+      # build has no per-platform -o equivalent, unlike `wails build -o`.
       - name: Build
         shell: bash
         run: |
-          wails build -clean -platform "${{ matrix.platform }}" -o "${{ matrix.output_name }}" \
-            -ldflags "-X main.appVersion=${{ github.ref_name }}"
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            wails3 task package VERSION="${{ github.ref_name }}"
+          else
+            wails3 task build VERSION="${{ github.ref_name }}"
+          fi
 
       - name: Acquire AppImage tool
         if: runner.os == 'Linux'
@@ -155,7 +171,7 @@ jobs:
                    "$APPDIR/usr/share/icons/hicolor/256x256/apps"
 
           # App binary
-          cp "build/bin/${{ matrix.output_name }}" "$APPDIR/usr/bin/TDrive"
+          cp "build/bin/TDrive" "$APPDIR/usr/bin/TDrive"
           chmod +x "$APPDIR/usr/bin/TDrive"
 
           # Icon from the canonical appicon.png (AppDir root + hicolor theme path)
@@ -193,8 +209,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          ./scripts/package-mpv-windows.ps1 "build/bin/${{ matrix.output_name }}"
-          Compress-Archive -Force -Path "build/bin/${{ matrix.output_name }}", "build/bin/media" -DestinationPath "dist/TDrive-$env:TDRIVE_ARTIFACT_VERSION-windows-amd64.zip"
+          ./scripts/package-mpv-windows.ps1 "build/bin/TDrive.exe"
+          Compress-Archive -Force -Path "build/bin/TDrive.exe", "build/bin/media" -DestinationPath "dist/TDrive-$env:TDRIVE_ARTIFACT_VERSION-windows-amd64.zip"
 
       - name: Package CLI (Windows)
         if: runner.os == 'Windows'
@@ -206,14 +222,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          # FIX 3: Wails usually outputs "TDrive.app" regardless of the -o flag.
-          # We check if the custom named one exists, if not, we use the default.
-          if [ -d "build/bin/${{ matrix.output_name }}.app" ]; then
-            APP_PATH="build/bin/${{ matrix.output_name }}.app"
-          else
-            APP_PATH="build/bin/TDrive.app"
-          fi
-          
+          APP_PATH="build/bin/TDrive.app"
+
           echo "Packaging application from: $APP_PATH"
           ./scripts/package-mpv-darwin.sh "$APP_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "dist/TDrive-${TDRIVE_ARTIFACT_VERSION}-macos-arm64.zip"
