@@ -21,7 +21,25 @@
 .video-settings-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; padding: 0 10px 10px; border-bottom: 1px solid #ffffff12; }
 .video-settings-tabs button { color: #a8b2c5; background: transparent; border: 0; border-radius: 8px; padding: 9px 2px; cursor: pointer; font-size: 12px; }
 .video-settings-tabs button[aria-pressed=true] { color: #dce8ff; background: #7aa5ff24; }
-.video-settings-body { overflow: auto; padding: 14px; min-height: 0; scrollbar-width: thin; }
+.video-settings-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 14px;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(145, 180, 255, 0.62) rgba(255, 255, 255, 0.06);
+    /* A restrained edge shadow keeps the scroll boundary legible when the
+       platform hides overlay scrollbars until the panel is scrolled. */
+    box-shadow: inset 0 -14px 14px -18px rgba(0, 0, 0, 0.9);
+}
+.video-settings-body::-webkit-scrollbar { width: 7px; }
+.video-settings-body::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.06); border-radius: 999px; }
+.video-settings-body::-webkit-scrollbar-thumb { min-height: 28px; border: 1px solid #11151f; border-radius: 999px; background: rgba(145, 180, 255, 0.62); }
+.video-settings-body::-webkit-scrollbar-thumb:hover { background: rgba(170, 199, 255, 0.82); }
 .video-settings-section h3 { font-size: 14px; margin: 0 0 10px; }
 .video-settings-note { color: #a8b2c5; font-size: 12px; line-height: 1.5; margin: 8px 0 14px; }
 .video-settings-panel .video-menu { position: static; width: 100%; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; }
@@ -53,7 +71,19 @@
 .video-settings-check { display: flex; align-items: center; gap: 9px; font-size: 12px; margin: 13px 0; }
 .video-settings-check input { accent-color: #8aacff; }
 .video-settings-reset { color: #bfceeb; border: 1px solid #ffffff25; background: transparent; border-radius: 8px; padding: 9px 12px; font-size: 12px; cursor: pointer; }
-.video-subtitle-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; margin: 18px 0 10px; }
+.video-subtitle-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 10px;
+    margin: 18px -14px -14px;
+    padding: 10px 14px 14px;
+    border-top: 1px solid #ffffff14;
+    background: #11151ff2;
+}
 .video-settings-save { border: 1px solid #7aa5ff; border-radius: 8px; padding: 10px 14px; background: #7aa5ff; color: #080b12; font-size: 12px; font-weight: 800; cursor: pointer; }
 .video-settings-save:hover { background: #9abbff; }
 .video-settings-panel :focus-visible { outline: 2px solid #91b4ff; outline-offset: 2px; }
