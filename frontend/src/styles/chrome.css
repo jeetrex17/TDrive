@@ -70,12 +70,12 @@
     flex-direction: column;
     gap: 4px;
     margin-top: auto;
-    padding: 14px 0 18px; border-top: 1px solid var(--border);
+    padding: 14px 0 18px;
 }
 .drive-action-btn {
-    display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid transparent;
+    display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid var(--border);
     color: var(--text-muted); padding: 8px 12px; border-radius: var(--radius-md); cursor: pointer;
-    font-size: var(--type-sm); text-align: left; transition: color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard);
+    font-size: var(--type-sm); text-align: left; transition: color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
 .drive-action-btn:hover,
 .drive-action-btn:focus-visible {
