@@ -349,6 +349,75 @@ func TestMigrateOnFreshInstall(t *testing.T) {
 	if v != currentSchemaVersion {
 		t.Fatalf("version = %d, want %d", v, currentSchemaVersion)
 	}
+
+	ch, err := GetChannel(db, migPersonalChan)
+	if err != nil {
+		t.Fatalf("get channel: %v", err)
+	}
+	if ch.Pts != 0 {
+		t.Fatalf("fresh channel pts = %d, want 0", ch.Pts)
+	}
+}
+
+func TestMigrateAddsChannelPtsColumn(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	stmts := []string{
+		`CREATE TABLE schema_version (version INTEGER PRIMARY KEY);`,
+		`INSERT INTO schema_version (version) VALUES (12);`,
+		`CREATE TABLE channels (
+			channel_id             INTEGER PRIMARY KEY,
+			access_hash            INTEGER NOT NULL DEFAULT 0,
+			title                  TEXT NOT NULL,
+			kind                   TEXT NOT NULL,
+			invite_link            TEXT,
+			joined_at              INTEGER NOT NULL,
+			last_synced_msg        INTEGER NOT NULL DEFAULT 0,
+			last_viewed_msg        INTEGER NOT NULL DEFAULT 0,
+			has_unseen_content     INTEGER NOT NULL DEFAULT 0,
+			initial_sync_done      INTEGER NOT NULL DEFAULT 0,
+			personal_backfill_done INTEGER NOT NULL DEFAULT 0,
+			needs_projection_rebuild INTEGER NOT NULL DEFAULT 0
+		);`,
+		`INSERT INTO channels (channel_id, title, kind, joined_at) VALUES (12345, 'Mine', 'personal', 0);`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	if err := MigratePersonalChannel(db, 12345); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	cols, err := topLevelColumnSet(db, "channels")
+	if err != nil {
+		t.Fatalf("columns: %v", err)
+	}
+	if _, ok := cols["pts"]; !ok {
+		t.Fatalf("pts column missing")
+	}
+
+	ch, err := GetChannel(db, 12345)
+	if err != nil {
+		t.Fatalf("get channel: %v", err)
+	}
+	if ch.Pts != 0 {
+		t.Fatalf("pts = %d, want 0", ch.Pts)
+	}
+
+	var v int
+	if err := db.QueryRow(`SELECT version FROM schema_version`).Scan(&v); err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if v != currentSchemaVersion {
+		t.Fatalf("version = %d, want %d", v, currentSchemaVersion)
+	}
 }
 
 func TestMigrateAddsEncryptionHintColumn(t *testing.T) {

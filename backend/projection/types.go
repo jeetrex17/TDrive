@@ -121,6 +121,9 @@ type Channel struct {
 	// missing history. The next full scan re-reads the channel and replays the
 	// completed log from scratch, then clears the flag.
 	NeedsProjectionRebuild bool
+	// Pts is the last known Telegram channel update counter (pts), used to
+	// request a difference since the last sync instead of a full history read.
+	Pts int64
 }
 
 type Folder struct {
