@@ -812,7 +812,7 @@ describe("playback settings dock", () => {
         await videoModule.closeVideoModal();
     });
 
-    it("opens speed choices from its pill without changing the rate and synchronizes aspect cycling with picture settings", async () => {
+    it("cycles the rate from the speed pill and synchronizes aspect cycling with picture settings", async () => {
         const saved = new Map<string, string>();
         vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) });
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(34, SHARED_SESSION_ID));
@@ -824,17 +824,30 @@ describe("playback settings dock", () => {
         const speedMenu = document.querySelector<HTMLElement>("#video-speed-menu")!;
         const slider = document.querySelector<HTMLInputElement>("#video-speed-slider")!;
         const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        // The pill steps through the presets in place; the settings tab keeps
+        // the slider for anything between them.
         video.playbackRate = 1.65;
         video.dispatchEvent(new Event("ratechange"));
         speed.click();
         await nextTasks();
-        expect(video.playbackRate).toBe(1.65);
-        expect(speed.title).toBe("Choose playback speed: 1.65x");
+        expect(video.playbackRate).toBe(2);
+        expect(speed.textContent).toBe("2x");
+        expect(speed.title).toBe("Playback speed: 2x. Click to cycle");
         expect(speed.getAttribute("aria-label")).toBe(speed.title);
-        expect(speed.title).not.toContain("Click to cycle");
+        expect(speedMenu.classList.contains("is-open")).toBe(false);
+        expect(panel.hidden).toBe(true);
+
+        for (const rate of [0.5, 0.75, 1, 1.25, 1.5, 2]) {
+            speed.click();
+            await nextTasks();
+            expect([rate, video.playbackRate]).toEqual([rate, rate]);
+        }
+        expect(panel.hidden).toBe(true);
+
+        openSettings("speed");
+        await nextTasks();
         expect(speedMenu.classList.contains("is-open")).toBe(true);
         expect(Array.from(speedMenu.querySelectorAll<HTMLButtonElement>("[data-rate]")).map((button) => button.dataset.rate)).toEqual(["0.5", "0.75", "1", "1.25", "1.5", "2"]);
-        expect(panel.hidden).toBe(false);
         expect(document.activeElement).toBe(slider);
         slider.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
         expect(panel.hidden).toBe(true);
@@ -1556,6 +1569,56 @@ describe("folder video playlist", () => {
         await nextTasks();
         expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
         expect(document.querySelector<HTMLElement>("#video-modal")?.classList.contains("is-video-chrome-visible")).toBe(true);
+    });
+
+    it("warms the next item near the end and reuses that session to advance", async () => {
+        apiMocks.openMedia.mockImplementation(async (id: number) => mediaOpenResult(id, `warm-${id}`));
+        const warmedUrls: string[] = [];
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+            warmedUrls.push(String(input));
+            return { arrayBuffer: async () => new ArrayBuffer(8) };
+        });
+        vi.stubGlobal("fetch", fetchMock);
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal(
+            { id: 60, name: "lesson-1.mp4" },
+            {
+                title: "Videos in Course",
+                currentIndex: 0,
+                items: [
+                    { id: 60, name: "lesson-1.mp4" },
+                    { id: 61, name: "lesson-2.mp4" },
+                ],
+            },
+        );
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(1));
+
+        const video = document.querySelector<HTMLVideoElement>("#video-player")!;
+        Object.defineProperty(video, "duration", { configurable: true, get: () => 600 });
+        Object.defineProperty(video, "buffered", {
+            configurable: true,
+            get: () => ({ length: 1, start: () => 0, end: () => 600 }),
+        });
+        paused.set(video, false);
+        video.currentTime = 590;
+        video.dispatchEvent(new Event("timeupdate"));
+
+        // Near the end with the rest already buffered, the next item is opened
+        // ahead of time and its first bytes pulled.
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 61);
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+        expect(warmedUrls[0]).toContain("61");
+
+        // Advancing hands that warmed session to the player instead of opening
+        // the file a second time.
+        video.dispatchEvent(new Event("ended"));
+        await vi.waitFor(() => expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2"));
+        await nextTasks();
+        expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
+        expect(apiMocks.closeMedia).not.toHaveBeenCalledWith("warm-61");
     });
 
     it("does not advance when auto-next is disabled", async () => {

@@ -38,6 +38,7 @@ import {
     type PlayerAdapter,
     type PlayerState,
 } from "../video/player-adapters";
+import { MediaPrefetcher, readyToPrefetch, warmMediaHead } from "../video/video-prefetch";
 import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
@@ -389,7 +390,7 @@ function syncSpeed(state: PlayerState) {
     const customInput = byID<HTMLInputElement>("video-speed-custom-input");
     if (speedBtnEl) {
         speedBtnEl.textContent = `${formatRate(state.rate)}x`;
-        speedBtnEl.title = `Choose playback speed: ${formatRate(state.rate)}x`;
+        speedBtnEl.title = `Playback speed: ${formatRate(state.rate)}x. Click to cycle`;
         speedBtnEl.setAttribute("aria-label", speedBtnEl.title);
     }
     if (customInput && document.activeElement !== customInput) {
@@ -867,6 +868,28 @@ function parseCustomPlaybackRate(value: string) {
     return clampPlaybackRate(rate);
 }
 
+// The next playlist item is opened and warmed once the current one is close to
+// the end and fully buffered, so auto-next starts without a cold round-trip to
+// Telegram. A single slot is enough: only the immediate next item is useful.
+const mediaPrefetcher = new MediaPrefetcher<MediaOpenResult>({
+    open: (id) => openMedia(id),
+    close: (token) => safelyCloseMedia(token),
+    warm: (url) => warmMediaHead(url),
+});
+
+function nextPlaylistTarget(): VideoOpenTarget | null {
+    if (!activePlaylist?.autoNext) return null;
+    const next = activePlaylist.items[activePlaylist.currentIndex + 1];
+    return next ? normalizeVideoTarget(next) : null;
+}
+
+function maybePrefetchNext(state: PlayerState) {
+    if (!isOpen() || hasError || !readyToPrefetch(state)) return;
+    const next = nextPlaylistTarget();
+    if (!next || mediaPrefetcher.holds(next.id)) return;
+    void mediaPrefetcher.prepare(next.id);
+}
+
 function applyState(state: PlayerState) {
     const wasPaused = currentState.paused;
     currentState = state;
@@ -880,6 +903,7 @@ function applyState(state: PlayerState) {
     applyHtmlPicture();
     setLoading(state.loading);
     syncMediaStatsPolling();
+    maybePrefetchNext(state);
     if (state.paused || hasError) {
         clearChromeTimer();
         setChromeVisible(true);
@@ -1124,6 +1148,7 @@ function syncPlaylistSnapshot() {
 
 function installVideoPlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch) {
     hideVideoPlaylist();
+    void mediaPrefetcher.discard();
     activePlaylist = createActivePlaylist(target, launch);
     syncPlaylistSnapshot();
 }
@@ -1143,6 +1168,7 @@ async function switchVideoPlaylistItem(index: number, closePanel: boolean): Prom
         return;
     }
     const target = playlist.items[index];
+    if (index !== playlist.currentIndex + 1) await mediaPrefetcher.discard();
     const intent = nextPlaylistPlaybackIntent();
     playlist.currentIndex = index;
     setVideoPlaylistCurrentIndex(index);
@@ -1165,6 +1191,8 @@ export function selectVideoPlaylistItem(index: number): void {
 export function updateVideoAutoNext(enabled: boolean): void {
     if (activePlaylist) activePlaylist.autoNext = Boolean(enabled);
     setVideoPlaylistAutoNext(Boolean(enabled));
+    // Nothing is queued up any more, so stop holding a reader open for it.
+    if (!enabled) void mediaPrefetcher.discard();
 }
 
 function handleNaturalMediaEnd(attempt: VideoOpenAttempt, adapter: PlayerAdapter) {
@@ -1189,7 +1217,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
     let opened: MediaOpenResult | null = null;
     let adapter: HtmlVideoAdapter | null = null;
     try {
-        opened = await openMedia(attempt.target.id);
+        opened = mediaPrefetcher.take(attempt.target.id) ?? await openMedia(attempt.target.id);
         if (!isCurrent() || !isOpen()) {
             await safelyCloseMedia(opened.token);
             return;
@@ -1465,7 +1493,10 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         }
         const rect = await geometry?.prepareNativeRect(isCurrent);
         if (!rect || !isCurrent()) return;
-        await openNativePlayback(attempt, rect, isCurrent, null, attempt.playbackIntent);
+        // A warmed session is attached to rather than opened again, which skips
+        // the Telegram round-trip a fresh native open would repeat.
+        const warmed = mediaPrefetcher.take(attempt.target.id);
+        await openNativePlayback(attempt, rect, isCurrent, warmed, attempt.playbackIntent);
     });
 }
 
@@ -1482,6 +1513,7 @@ export async function openVideoModal(target: VideoOpenTarget, playlist?: VideoPl
 export async function closeVideoModal() {
     if (!modalEl) return;
     const generation = playbackTransitions.begin();
+    await mediaPrefetcher.discard();
     activeOpenAttempt = null;
     hideVideoPlaylist();
     activePlaylist = null;
@@ -1500,6 +1532,12 @@ export async function closeVideoModal() {
     setLoading(false);
 }
 
+
+// nextPresetRate steps to the first preset above the current rate and wraps at
+// the top, so a custom rate from the slider still lands on a sensible next step.
+function nextPresetRate(current: number) {
+    return RATE_OPTIONS.find((rate) => rate > current + 0.001) ?? RATE_OPTIONS[0];
+}
 
 function isSpeedMenuOpen() {
     return Boolean(speedMenuEl?.classList.contains("is-open"));
@@ -1536,7 +1574,8 @@ function closeSpeedMenu(restoreFocus = false) {
 function bindSpeedMenu() {
     speedBtnEl?.addEventListener("click", (event) => {
         event.stopPropagation();
-        setSpeedMenuOpen(true);
+        if (!activeAdapter) return;
+        activeAdapter.setSpeed(nextPresetRate(currentState.rate));
         revealChrome();
     });
     speedMenuEl?.addEventListener("click", (event) => {
