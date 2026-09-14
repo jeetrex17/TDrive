@@ -61,7 +61,16 @@
             <div id="video-loading-status" class="video-loading-status" role="status" aria-live="polite" aria-atomic="true">Opening video</div>
         </div>
 
-        <div id="video-error" class="video-error" role="alert" style="display: none;"></div>
+        <div id="video-error" class="video-error" role="alert" aria-atomic="true" style="display: none;">
+            <div class="video-error-copy">
+                <strong class="video-error-title">Unable to play video</strong>
+                <p id="video-error-message" class="video-error-message"></p>
+            </div>
+            <div class="video-error-actions">
+                <button id="video-error-retry" class="video-error-action video-error-retry" type="button">Retry</button>
+                <button id="video-error-close" class="video-error-action video-error-close" type="button">Close</button>
+            </div>
+        </div>
     </div>
 
     <aside id="video-settings-panel" class="video-settings-panel" aria-label="Playback settings" aria-hidden="true" inert hidden>

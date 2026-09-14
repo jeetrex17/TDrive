@@ -19,6 +19,9 @@ export interface VideoDOM {
     loading: HTMLElement | null;
     loadingStatus: HTMLElement | null;
     error: HTMLElement | null;
+    errorMessage: HTMLElement | null;
+    errorRetryButton: HTMLButtonElement | null;
+    errorCloseButton: HTMLButtonElement | null;
     centerControls: HTMLElement | null;
     centerPlayButton: HTMLButtonElement | null;
     centerSkipBackButton: HTMLButtonElement | null;
@@ -51,6 +54,7 @@ export interface VideoDOM {
 
 export interface VideoDOMHandlers {
     close(): void;
+    retry(): void;
     toggleFullscreen(): void;
     pointerMove(): void;
     stageClick(event: MouseEvent): void;
@@ -78,6 +82,9 @@ export function collectVideoDOM(): VideoDOM {
         loading: byID('video-loading'),
         loadingStatus: byID('video-loading-status'),
         error: byID('video-error'),
+        errorMessage: byID('video-error-message'),
+        errorRetryButton: byID('video-error-retry'),
+        errorCloseButton: byID('video-error-close'),
         centerControls: byID('video-center-controls'),
         centerPlayButton: byID('video-center-play'),
         centerSkipBackButton: byID('video-center-skip-back'),
@@ -127,6 +134,8 @@ export function bindVideoDOM(dom: VideoDOM, handlers: VideoDOMHandlers): () => v
         cleanups.push(() => target.removeEventListener(type, listener));
     };
     listen(dom.closeButton, 'click', handlers.close as EventListener);
+    listen(dom.errorCloseButton, 'click', handlers.close as EventListener);
+    listen(dom.errorRetryButton, 'click', handlers.retry as EventListener);
     listen(dom.fullscreenButton, 'click', handlers.toggleFullscreen as EventListener);
     listen(dom.modal, 'pointermove', handlers.pointerMove as EventListener);
     listen(dom.stage, 'click', handlers.stageClick as EventListener);

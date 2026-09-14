@@ -1053,17 +1053,94 @@
     position: absolute;
     left: 50%;
     top: 50%;
+    width: min(460px, calc(100vw - 32px));
     transform: translate(-50%, -50%);
-    max-width: min(560px, calc(100vw - 48px));
-    padding: 18px 20px;
-    border-radius: 8px;
-    color: #fff;
-    background: rgba(22, 25, 38, 0.92);
+    padding: 16px;
     border: 1px solid rgba(247, 118, 142, 0.38);
+    border-radius: 12px;
+    color: #fff;
+    background: linear-gradient(135deg, rgba(27, 30, 43, 0.98), rgba(15, 18, 29, 0.96));
     box-shadow: 0 18px 58px rgba(0, 0, 0, 0.42);
-    text-align: center;
-    font-weight: 700;
+    text-align: left;
     z-index: 5;
+}
+
+.video-error-copy {
+    min-width: 0;
+}
+
+.video-error-title {
+    display: block;
+    color: #fff;
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.25;
+}
+
+.video-error-message {
+    margin: 4px 0 0;
+    color: rgba(232, 236, 249, 0.76);
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.42;
+}
+
+.video-error-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.video-error-action {
+    min-width: 0;
+    min-height: 44px;
+    flex: 1;
+    padding: 0 16px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.video-error-retry {
+    color: #fff;
+    background: var(--video-accent);
+    border-color: var(--video-accent-border);
+}
+
+.video-error-retry:hover,
+.video-error-retry:focus-visible {
+    background: color-mix(in srgb, var(--video-accent) 88%, white);
+    border-color: rgba(191, 211, 255, 0.9);
+    outline: none;
+}
+
+.video-error-close {
+    color: rgba(244, 246, 255, 0.9);
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.16);
+}
+
+.video-error-close:hover,
+.video-error-close:focus-visible {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.34);
+    outline: none;
+}
+
+.video-error-action:focus-visible {
+    box-shadow: 0 0 0 3px var(--video-accent-ring);
+}
+
+.video-error-action:active {
+    transform: scale(0.98);
 }
 
 .video-overlay.is-video-fullscreen {
@@ -1117,6 +1194,7 @@
     .video-scrubber-played,
     .video-scrubber-thumb,
     .video-scrubber-tooltip,
+    .video-error-action,
     .video-volume-thumb {
         transition: none;
     }

@@ -258,7 +258,8 @@ describe("video HTML-to-native fallback", () => {
         expect(apiMocks.attachNativeMedia).toHaveBeenCalledOnce();
         expect(apiMocks.closeMedia).toHaveBeenCalledOnce();
         expect(apiMocks.closeNativeMedia).not.toHaveBeenCalled();
-        expect(document.querySelector("#video-error")?.textContent).toContain("native renderer unavailable");
+        expect(document.querySelector("#video-error")?.textContent).toContain("The compatible player could not open this video. Try again.");
+        expect(document.querySelector("#video-error")?.textContent).not.toContain("native renderer unavailable");
     });
 
     it("closes a stale promoted player before opening the newer request", async () => {
@@ -1268,5 +1269,92 @@ describe("video keyboard shortcuts", () => {
         panel.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
         expect(enter).not.toHaveBeenCalled();
         await videoModule.closeVideoModal();
+    });
+});
+
+describe("fatal video error card", () => {
+    it("retries the failed HTML target without exposing backend detail", async () => {
+        const retried = mediaOpenResult(44, "retry-html-token");
+        let resolveRetry: (() => void) | undefined;
+        apiMocks.openMedia
+            .mockRejectedValueOnce(new Error("developer-only HTML failure detail"))
+            .mockImplementationOnce(() => new Promise<ReturnType<typeof mediaOpenResult>>((resolve) => {
+                resolveRetry = () => resolve(retried);
+            }));
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const fileList = document.querySelector<HTMLElement>("#file-list")!;
+        fileList.focus();
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 44, name: "retry.html.mp4", size: 1024 });
+
+        const error = document.querySelector<HTMLElement>("#video-error");
+        const retry = document.querySelector<HTMLButtonElement>("#video-error-retry");
+        await vi.waitFor(() => expect(error?.style.display).toBe("block"));
+        expect(error?.getAttribute("role")).toBe("alert");
+        expect(error?.textContent).toContain("Could not open this video. Try again.");
+        expect(error?.textContent).not.toContain("developer-only HTML failure detail");
+        expect(retry).toBeTruthy();
+        expect(document.activeElement).toBe(retry);
+        expect(errorLog).toHaveBeenCalledWith("OpenMedia failed:", expect.any(Error));
+
+        retry?.click();
+
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(1, 44);
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 44);
+        expect(error?.style.display).toBe("none");
+        expect(document.querySelector<HTMLElement>("#video-modal")?.classList.contains("is-video-loading")).toBe(true);
+
+        resolveRetry?.();
+        await vi.waitFor(() => expect(document.querySelector<HTMLVideoElement>("#video-player")?.getAttribute("src")).toBe(retried.url));
+
+        await videoModule.closeVideoModal();
+        expect(apiMocks.closeMedia).toHaveBeenCalledWith(retried.token);
+    });
+
+    it("retries the failed native target through its native lifecycle", async () => {
+        const retried = nativeOpenResult(45, "retry-native-token");
+        apiMocks.openNativeMedia
+            .mockRejectedValueOnce(new Error("developer-only native failure detail"))
+            .mockResolvedValueOnce(retried);
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 45, name: "retry-native.mkv", size: 1024 });
+
+        const error = document.querySelector<HTMLElement>("#video-error");
+        const retry = document.querySelector<HTMLButtonElement>("#video-error-retry");
+        await vi.waitFor(() => expect(error?.style.display).toBe("block"));
+        retry?.click();
+
+        await vi.waitFor(() => expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openNativeMedia).toHaveBeenNthCalledWith(1, 45, expect.any(Object));
+        expect(apiMocks.openNativeMedia).toHaveBeenNthCalledWith(2, 45, expect.any(Object));
+        expect(error?.style.display).toBe("none");
+
+        await videoModule.closeVideoModal();
+        expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith(retried.token);
+    });
+
+    it("closes a fatal error through the normal modal teardown", async () => {
+        apiMocks.openMedia.mockRejectedValue(new Error("developer-only close failure detail"));
+        const fileList = document.querySelector<HTMLElement>("#file-list")!;
+        fileList.focus();
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 46, name: "close-error.mp4", size: 1024 });
+
+        const error = document.querySelector<HTMLElement>("#video-error");
+        const close = document.querySelector<HTMLButtonElement>("#video-error-close");
+        await vi.waitFor(() => expect(error?.style.display).toBe("block"));
+        expect(close).toBeTruthy();
+        close?.click();
+
+        await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#video-modal")?.style.display).toBe("none"));
+        await vi.waitFor(() => expect(error?.style.display).toBe("none"));
+        expect(document.activeElement).toBe(fileList);
     });
 });

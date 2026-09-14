@@ -81,6 +81,8 @@ let videoEl: HTMLVideoElement | null = null;
 let loadingEl: HTMLElement | null = null;
 let loadingStatusEl: HTMLElement | null = null;
 let errorEl: HTMLElement | null = null;
+let errorMessageEl: HTMLElement | null = null;
+let errorRetryBtnEl: HTMLButtonElement | null = null;
 let playBtnEl: HTMLButtonElement | null = null;
 let speedBtnEl: HTMLButtonElement | null = null;
 let speedMenuEl: HTMLElement | null = null;
@@ -126,9 +128,12 @@ function isOpen() {
     return Boolean(modalEl && modalEl.style.display !== "none");
 }
 
+function errorDetail(err: unknown) {
+    return err instanceof Error && err.message ? err.message : String(err || "");
+}
+
 function errorMessage(err: unknown, fallback: string) {
-    const raw = err instanceof Error && err.message ? err.message : String(err || "");
-    const normalized = raw.toLowerCase();
+    const normalized = errorDetail(err).toLowerCase();
     if (
         normalized.includes("resolve peer") ||
         normalized.includes("rpcdorequest") ||
@@ -138,9 +143,9 @@ function errorMessage(err: unknown, fallback: string) {
         return "Could not reach Telegram. Check your connection and try again.";
     }
     if (normalized.includes("context canceled")) {
-        return "The video request was canceled. Try opening it again.";
+        return "The video request was canceled. Try again.";
     }
-    return raw || fallback;
+    return fallback;
 }
 
 function isNativeFallbackActive() {
@@ -323,20 +328,32 @@ function setError(message: string) {
     loadingStatusOverride = "";
     setLoading(false);
     clearMediaStatsPolling();
-    if (!errorEl) return;
-    errorEl.textContent = message;
-    errorEl.style.display = "block";
+    if (errorMessageEl) errorMessageEl.textContent = message;
+    if (errorEl) errorEl.style.display = "block";
     modalEl?.classList.add("is-video-error");
     setChromeVisible(true);
     clearChromeTimer();
+    if (isOpen()) errorRetryBtnEl?.focus({ preventScroll: true });
 }
 
 function clearError() {
+    const restoreFocus = Boolean(errorEl?.contains(document.activeElement));
     hasError = false;
-    if (!errorEl) return;
-    errorEl.textContent = "";
-    errorEl.style.display = "none";
+    errorMessageEl?.replaceChildren();
+    if (errorEl) errorEl.style.display = "none";
     modalEl?.classList.remove("is-video-error");
+    if (restoreFocus && isOpen()) (closeBtnEl || playBtnEl)?.focus({ preventScroll: true });
+}
+
+function retryVideoOpen() {
+    const target = activeOpenAttempt?.target;
+    if (!target || !hasError || !isOpen()) return;
+    void openVideoModal(target);
+}
+
+function handleHtmlPlaybackError(detail: string) {
+    console.error("HTML video playback failed:", detail);
+    setError("The embedded player could not continue playing this video. Try again.");
 }
 
 
@@ -929,7 +946,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
 
         adapter = new HtmlVideoAdapter(videoEl!, opened, {
             mediaError: (code, state) => handleHtmlMediaError(attempt, adapter!, code, state),
-            playbackError: setError,
+            playbackError: handleHtmlPlaybackError,
             revealChrome,
         });
         activeAdapter = adapter;
@@ -947,7 +964,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         }
         if (!isCurrent()) return;
         console.error("OpenMedia failed:", err);
-        setError(errorMessage(err, "Could not open this video."));
+        setError(errorMessage(err, "Could not open this video. Try again."));
     }
 }
 
@@ -966,6 +983,7 @@ function handleHtmlMediaError(
         return;
     }
     attempt.htmlFailureHandled = true;
+    console.error("HTML media player failed:", { code, state });
 
     if (shouldFallbackFromHtmlMediaError(code)) {
         attempt.nativeFallbackRequested = true;
@@ -978,7 +996,7 @@ function handleHtmlMediaError(
 
     const message = code === 2
         ? "The video stream was interrupted. Check your connection and try again."
-        : "The embedded player could not continue playing this video.";
+        : "The embedded player could not continue playing this video. Try again.";
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
         if (isCurrent()) setError(message);
@@ -1057,12 +1075,12 @@ async function openNativePlayback(
         geometry?.setNativeLayout("none");
         // A closed loopback session also surfaces as an HTML media error, so the
         // handoff can race a dead token; report that as the interruption it is.
-        const sessionLost = Boolean(existing) && /session not found/i.test(errorMessage(err, ""));
+        const sessionLost = Boolean(existing) && /session not found/i.test(errorDetail(err));
         setError(sessionLost
             ? "The video stream was interrupted. Check your connection and try again."
             : errorMessage(err, existing
-                ? "This video could not be opened by the compatible player."
-                : "Could not open this video."));
+                ? "The compatible player could not open this video. Try again."
+                : "Could not open this video. Try again."));
     }
 }
 
@@ -1079,7 +1097,7 @@ function handleNativeMediaError(attempt: VideoOpenAttempt, token: string, detail
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         if (!isCurrent() || activeNative?.token !== token) return;
         if (isOpen()) {
-            setError("The compatible player stopped unexpectedly. Try opening the video again.");
+            setError("The compatible player stopped unexpectedly. Try again.");
         }
         await releaseActive();
     });
@@ -1441,6 +1459,8 @@ export function teardownVideoModal(): void {
     loadingEl = null;
     loadingStatusEl = null;
     errorEl = null;
+    errorMessageEl = null;
+    errorRetryBtnEl = null;
     playBtnEl = null;
     speedBtnEl = null;
     speedMenuEl = null;
@@ -1478,6 +1498,8 @@ export function activateVideoModal(): () => void {
         loading: loadingEl,
         loadingStatus: loadingStatusEl,
         error: errorEl,
+        errorMessage: errorMessageEl,
+        errorRetryButton: errorRetryBtnEl,
         playButton: playBtnEl,
         speedButton: speedBtnEl,
         speedMenu: speedMenuEl,
@@ -1507,7 +1529,7 @@ export function activateVideoModal(): () => void {
         isSettingsOpen: () => settingsSection !== null,
         settingsPanel: () => byID("video-settings-panel"),
         revealChrome,
-        reportSurfaceError: setError,
+        reportSurfaceError: () => setError("Could not prepare the video player. Try again."),
     });
     transport = new VideoTransportController({
         dom: videoDOM,
@@ -1551,6 +1573,7 @@ export function activateVideoModal(): () => void {
     bindSettingsPanel();
     unbindVideoDOM = bindVideoDOM(videoDOM, {
         close: () => { void closeVideoModal(); },
+        retry: retryVideoOpen,
         toggleFullscreen: () => { void geometry?.toggleFullscreen(); },
         pointerMove: handleVideoPointerMove,
         stageClick: handleStageClick,
