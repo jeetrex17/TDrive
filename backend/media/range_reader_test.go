@@ -134,8 +134,10 @@ func TestRangeReaderPrefetchesNextBlockWhenEnabled(t *testing.T) {
 	reader := NewRangeReader(RangeReaderConfig{Client: fake, PrefetchBlocks: 1})
 	defer reader.Close()
 
+	// Read past the opening window so this exercises the ordinary block path;
+	// the short opening prefix has its own test.
 	buf := make([]byte, 64)
-	if _, err := reader.ReadStoredAt(context.Background(), fake.ref(), buf, 128); err != nil {
+	if _, err := reader.ReadStoredAt(context.Background(), fake.ref(), buf, openingChunkBytes+128); err != nil {
 		t.Fatalf("ReadStoredAt: %v", err)
 	}
 
@@ -365,7 +367,8 @@ func TestRangeReaderEvictsLeastRecentlyUsedBlock(t *testing.T) {
 	defer reader.Close()
 	ref := fake.ref()
 
-	for _, off := range []int64{0, int64(tgclient.RangeReadMaxBytes), 0} {
+	// Offsets stay past the opening window so each read is a whole-block fetch.
+	for _, off := range []int64{openingChunkBytes, int64(tgclient.RangeReadMaxBytes), openingChunkBytes} {
 		if _, err := reader.ReadStoredAt(context.Background(), ref, make([]byte, 16), off); err != nil {
 			t.Fatalf("read at %d: %v", off, err)
 		}
