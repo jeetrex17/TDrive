@@ -6,10 +6,10 @@
     import MailIcon from '@lucide/svelte/icons/mail';
     import SettingsIcon from '@lucide/svelte/icons/settings';
     import { tick } from 'svelte';
+    import { authScreen } from '../app/app-store';
     import {
         authHint,
         authPhone,
-        authScreen,
         authSubmission,
         type AuthFlow,
     } from './auth-store';

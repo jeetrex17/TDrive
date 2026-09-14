@@ -1,10 +1,5 @@
 import type { Readable } from 'svelte/store';
-import {
-    Environment,
-    WindowSetBackgroundColour,
-    WindowSetDarkTheme,
-    WindowSetLightTheme,
-} from '../../../wailsjs/runtime/runtime';
+import { getRuntimeEnvironment, setNativeDarkTheme, setNativeLightTheme, setNativeWindowBackgroundColour } from '../../api';
 import { themeState, type ThemeState } from './theme-controller';
 import { getThemeDefinition } from './theme-model';
 
@@ -15,9 +10,9 @@ export interface NativeThemeRuntime {
 }
 
 const wailsThemeRuntime: NativeThemeRuntime = {
-    setBackgroundColour: WindowSetBackgroundColour,
-    setLightTheme: WindowSetLightTheme,
-    setDarkTheme: WindowSetDarkTheme,
+    setBackgroundColour: setNativeWindowBackgroundColour,
+    setLightTheme: setNativeLightTheme,
+    setDarkTheme: setNativeDarkTheme,
 };
 
 /**
@@ -48,7 +43,7 @@ export function connectNativeTheme(
 /** Starts native synchronization after the Wails runtime has become ready. */
 export async function initializeNativeTheme(): Promise<() => void> {
     try {
-        const environment = await Environment();
+        const environment = await getRuntimeEnvironment();
         return connectNativeTheme(themeState, environment.platform, wailsThemeRuntime);
     } catch (error) {
         // Vite's browser preview has no Wails runtime; the web theme still works.

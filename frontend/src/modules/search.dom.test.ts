@@ -49,7 +49,7 @@ vi.mock('./app-actions', () => ({
 }));
 
 import { state } from '../state';
-import { clearSearch, runGlobalSearch, setupSearchBar } from './search';
+import { activateSearchBar, clearSearch, runGlobalSearch } from './search';
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -59,33 +59,34 @@ function deferred<T>() {
     return { promise, resolve };
 }
 
-function resetSearchDom() {
-    document.body.innerHTML = '<input id="search-input"><div class="file-table-header"><span class="col-date">Uploaded</span></div><div id="file-list"></div>';
-    state.activeChannel = { id: 1, title: 'Personal', kind: 'personal' };
-    state.searchQuery = '';
-    state.telegramRootCache = null;
-    state.telegramRootCacheDriveKey = null;
-    mocks.search.mockReset();
-    mocks.search.mockResolvedValue([]);
-    mocks.getFileList.mockReset();
-    mocks.getFileList.mockResolvedValue([]);
-    mocks.refreshFiles.mockReset();
-    mocks.renderFileState.mockReset();
-    mocks.renderFileListRows.mockReset();
-    mocks.buildFolderRow.mockImplementation((_folder: unknown, _parent: string, overrides: Record<string, unknown>) => overrides);
-    mocks.buildFileRow.mockImplementation((_file: unknown, _parent: string, overrides: Record<string, unknown>) => overrides);
-    vi.useFakeTimers();
-}
+let deactivateSearchBar = () => {};
+
+function resetSearchDom() { document.body.innerHTML = '<input id="search-input"><div class="file-table-header"><span class="col-date">Uploaded</span></div><div id="file-list"></div>';
+state.activeChannel = { id: 1, title: 'Personal', kind: 'personal' };
+state.searchQuery = '';
+state.telegramRootCache = null;
+state.telegramRootCacheDriveKey = null;
+mocks.search.mockReset();
+mocks.search.mockResolvedValue([]);
+mocks.getFileList.mockReset();
+mocks.getFileList.mockResolvedValue([]);
+mocks.refreshFiles.mockReset();
+mocks.renderFileState.mockReset();
+mocks.renderFileListRows.mockReset();
+mocks.buildFolderRow.mockImplementation((_folder: unknown, _parent: string, overrides: Record<string, unknown>) => overrides);
+mocks.buildFileRow.mockImplementation((_file: unknown, _parent: string, overrides: Record<string, unknown>) => overrides);
+vi.useFakeTimers(); }
 
 describe('search scheduling', () => {
     beforeEach(resetSearchDom);
     afterEach(() => {
-        clearSearch({ refresh: false });
+        deactivateSearchBar();
+                clearSearch({ refresh: false });
         vi.useRealTimers();
     });
 
     it('does not run a second search when Enter fires before the debounce', async () => {
-        setupSearchBar();
+        deactivateSearchBar = activateSearchBar();
         const input = document.getElementById('search-input') as HTMLInputElement;
         input.value = 'report';
         input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -96,7 +97,7 @@ describe('search scheduling', () => {
     });
 
     it('cancels pending debounce work when the search is cleared', async () => {
-        setupSearchBar();
+        deactivateSearchBar = activateSearchBar();
         const input = document.getElementById('search-input') as HTMLInputElement;
         input.value = 'stale';
         input.dispatchEvent(new Event('input', { bubbles: true }));

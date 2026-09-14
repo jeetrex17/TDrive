@@ -8,16 +8,12 @@ import { notify, dismissNotification } from '../notifications';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
 import { callWithPasswordRetry } from './encryption-password';
-import DeleteModal from '../../ui/modals/DeleteModal.svelte';
 import { closeDeleteModalView, openDeleteModalView } from '../../ui/modals/delete-modal-store';
 import type {
     FileCommandItem,
     FileCommandTarget,
     FolderCommandItem,
 } from '../../ui/file-list/types';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
-
-let deleteModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let pendingTarget: FileCommandTarget | null = null;
 
 function successTitle(item: FileCommandItem): string {
@@ -82,18 +78,8 @@ export function openDeleteModal(target: FileCommandTarget): void {
     openDeleteModalView({ title, itemName, subtitle, confirmLabel });
 }
 
-export function setupDeleteModal(): void {
-    const modal = document.getElementById('delete-modal');
-    if (!modal || deleteModalHandle) return;
 
-    modal.replaceChildren();
-    deleteModalHandle = mountSvelte(DeleteModal, {
-        target: modal,
-        props: { onConfirm: confirmDelete },
-    });
-}
-
-async function confirmDelete(): Promise<void> {
+export async function confirmDelete(): Promise<void> {
     const target = pendingTarget;
     pendingTarget = null;
     closeDeleteModalView();

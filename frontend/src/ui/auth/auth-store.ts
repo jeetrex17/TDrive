@@ -1,10 +1,7 @@
 import { writable } from 'svelte/store';
+import type { AuthScreen } from '../app/app-store';
 
-// Which auth screen is visible. null means no auth screen (the wrapper is
-// hidden, or the dashboard is showing). modules/auth.ts drives this from the
-// login flow and the Telegram event stream.
-export type AuthScreen = 'setup' | 'phone' | 'code' | 'password' | 'drive' | null;
-export type AuthFlow = Exclude<AuthScreen, 'drive' | null>;
+export type AuthFlow = Exclude<AuthScreen, 'drive'>;
 
 export interface AuthSubmissionStatus {
     busy: boolean;
@@ -22,7 +19,6 @@ function initialSubmissionState(): AuthSubmissionState {
     };
 }
 
-export const authScreen = writable<AuthScreen>(null);
 
 // The submitted phone number, shown as the "Sent to" pill on the code screen.
 export const authPhone = writable('');

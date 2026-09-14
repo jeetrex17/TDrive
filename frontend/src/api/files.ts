@@ -50,6 +50,7 @@ import type {
 } from "../types";
 import { normalizeOperationResult, requireOperationSuccess } from "./operation";
 import { asRecord, nonNegativeNumber } from "./shared";
+import { invokeBackend } from "./gateway";
 
 export function normalizeEncryptionStatus(value: unknown): EncryptionStatusView {
     const raw = asRecord(value);
@@ -112,110 +113,110 @@ export function normalizeImportPlan(value: unknown): ImportPlan {
 }
 
 export async function createFolder(name: string, parentId: string): Promise<FolderItem> {
-    return toFolderItem(await rawCreateFolder(name, parentId));
+    return toFolderItem(await invokeBackend(rawCreateFolder, name, parentId));
 }
 
 export async function deleteFile(messageId: number): Promise<OperationResult> {
-    return normalizeOperationResult(await rawDeleteFile(messageId), "Could not delete file");
+    return normalizeOperationResult(await invokeBackend(rawDeleteFile, messageId), "Could not delete file");
 }
 
 export async function deleteFolder(folderId: string): Promise<OperationResult> {
-    return normalizeOperationResult(await rawDeleteFolder(folderId), "Could not delete folder");
+    return normalizeOperationResult(await invokeBackend(rawDeleteFolder, folderId), "Could not delete folder");
 }
 
 export async function getFolderSize(folderId: string): Promise<number> {
-    return nonNegativeNumber(await rawGetFolderSize(folderId));
+    return nonNegativeNumber(await invokeBackend(rawGetFolderSize, folderId));
 }
 
 export async function getFolderStats(parentId: string): Promise<FolderStat[]> {
-    const stats = await rawGetFolderStats(parentId);
+    const stats = await invokeBackend(rawGetFolderStats, parentId);
     return (stats ?? []).map(normalizeFolderStat).filter((entry) => entry.id !== "");
 }
 
 export async function getAllFsMsgIds(): Promise<number[]> {
-    const ids = await rawGetAllFsMsgIds();
+    const ids = await invokeBackend(rawGetAllFsMsgIds);
     return (ids ?? []).filter((id) => Number.isSafeInteger(id) && id > 0);
 }
 
 export async function getStorageUsed(): Promise<number> {
-    return rawGetStorageUsed();
+    return invokeBackend(rawGetStorageUsed);
 }
 
 export async function moveFile(messageId: number, parentId: string): Promise<OperationResult> {
-    return normalizeOperationResult(await rawMoveFile(messageId, parentId), "Could not move file");
+    return normalizeOperationResult(await invokeBackend(rawMoveFile, messageId, parentId), "Could not move file");
 }
 
 export async function moveFolder(folderId: string, parentId: string): Promise<OperationResult> {
-    return normalizeOperationResult(await rawMoveFolder(folderId, parentId), "Could not move folder");
+    return normalizeOperationResult(await invokeBackend(rawMoveFolder, folderId, parentId), "Could not move folder");
 }
 
 export async function addTelegramFileToDrive(messageId: number, name: string, size: number, parentId: string): Promise<OperationResult> {
     return normalizeOperationResult(
-        await rawMsgToTdriveSystem(messageId, name, size, parentId),
+        await invokeBackend(rawMsgToTdriveSystem, messageId, name, size, parentId),
         "Could not add file to drive",
     );
 }
 
 export async function renameFile(messageId: number, name: string): Promise<OperationResult> {
-    return normalizeOperationResult(await rawRenameFile(messageId, name), "Could not rename file");
+    return normalizeOperationResult(await invokeBackend(rawRenameFile, messageId, name), "Could not rename file");
 }
 
 export async function renameFolder(folderId: string, name: string): Promise<OperationResult> {
-    return normalizeOperationResult(await rawRenameFolder(folderId, name), "Could not rename folder");
+    return normalizeOperationResult(await invokeBackend(rawRenameFolder, folderId, name), "Could not rename folder");
 }
 
 export async function setFileDropEnabled(enabled: boolean): Promise<void> {
-    await rawSetFileDropEnabled(enabled);
+    await invokeBackend(rawSetFileDropEnabled, enabled);
 }
 
 export async function getEncryptionStatus(): Promise<EncryptionStatusView> {
-    return normalizeEncryptionStatus(await rawEncryptionStatus());
+    return normalizeEncryptionStatus(await invokeBackend(rawEncryptionStatus));
 }
 
 export async function createEncryptionPassword(password: string, hint: string): Promise<OperationResult> {
-    return normalizeOperationResult(await rawCreateEncryptionPassword(password, hint), "Could not create encryption password");
+    return normalizeOperationResult(await invokeBackend(rawCreateEncryptionPassword, password, hint), "Could not create encryption password");
 }
 
 export async function useEncryptionPassword(password: string): Promise<OperationResult> {
-    return normalizeOperationResult(await rawUseEncryptionPassword(password), "Could not unlock encryption");
+    return normalizeOperationResult(await invokeBackend(rawUseEncryptionPassword, password), "Could not unlock encryption");
 }
 
 export async function changeEncryptionPassword(currentPassword: string, newPassword: string, hint: string): Promise<OperationResult> {
     return normalizeOperationResult(
-        await rawChangeEncryptionPassword(currentPassword, newPassword, hint),
+        await invokeBackend(rawChangeEncryptionPassword, currentPassword, newPassword, hint),
         "Could not change encryption password",
     );
 }
 
 export async function selectFiles(): Promise<string[]> {
-    return rawSelectFiles();
+    return invokeBackend(rawSelectFiles);
 }
 
 export async function selectFolder(): Promise<string> {
-    return rawSelectFolder();
+    return invokeBackend(rawSelectFolder);
 }
 
 export async function downloadFile(messageId: number, accessHash: number): Promise<DownloadResult> {
-    return normalizeDownloadResult(await rawDownloadFile(messageId, accessHash));
+    return normalizeDownloadResult(await invokeBackend(rawDownloadFile, messageId, accessHash));
 }
 
 export async function downloadFolder(folderId: string): Promise<DownloadResult> {
-    return normalizeDownloadResult(await rawDownloadFolder(folderId));
+    return normalizeDownloadResult(await invokeBackend(rawDownloadFolder, folderId));
 }
 
 export async function planImport(paths: string[], encrypt: boolean, extract: boolean): Promise<ImportPlan> {
-    return normalizeImportPlan(await rawPlanImport(paths, encrypt, extract));
+    return normalizeImportPlan(await invokeBackend(rawPlanImport, paths, encrypt, extract));
 }
 
 export async function importPaths(paths: string[], parentId: string, encrypt: boolean, extract: boolean): Promise<OperationResult> {
     return normalizeOperationResult(
-        await rawImportPaths(paths, parentId, encrypt, extract),
+        await invokeBackend(rawImportPaths, paths, parentId, encrypt, extract),
         "Could not import selected paths",
     );
 }
 
 export async function uploadToDriveFs(paths: string[], parentIds: string[], encrypt: boolean): Promise<UploadResult> {
-    const raw = asRecord(await rawUploadToDriveFs(paths, parentIds, encrypt));
+    const raw = asRecord(await invokeBackend(rawUploadToDriveFs, paths, parentIds, encrypt));
     const files = Array.isArray(raw.files) ? raw.files as backend.FileMetaData[] : [];
     return {
         result: normalizeOperationResult(raw.result, "Could not upload selected files"),
@@ -224,21 +225,21 @@ export async function uploadToDriveFs(paths: string[], parentIds: string[], encr
 }
 
 export async function cancelDownload(): Promise<void> {
-    await rawCancelDownload();
+    await invokeBackend(rawCancelDownload);
 }
 
 export async function cancelUpload(): Promise<void> {
-    await rawCancelUpload();
+    await invokeBackend(rawCancelUpload);
 }
 
 export async function getPreviewFile(messageId: number): Promise<PreviewPayload> {
-    const preview = normalizePreviewResult(await rawPreviewFile(messageId), "Could not preview file");
+    const preview = normalizePreviewResult(await invokeBackend(rawPreviewFile, messageId), "Could not preview file");
     requireOperationSuccess(preview.result);
     return preview.payload;
 }
 
 export async function getPreviewThumbnail(messageId: number): Promise<PreviewPayload> {
-    const preview = normalizePreviewResult(await rawPreviewThumbnail(messageId), "Could not preview thumbnail");
+    const preview = normalizePreviewResult(await invokeBackend(rawPreviewThumbnail, messageId), "Could not preview thumbnail");
     requireOperationSuccess(preview.result);
     return preview.payload;
 }
@@ -293,7 +294,7 @@ export function toSearchHit(h: backend.SearchResult): SearchHit {
 
 /** Subfolders and files under a parent folder, normalized. */
 export async function getFolderContents(parentId: string): Promise<FolderContents> {
-    const fs = await rawGetFolderContents(parentId);
+    const fs = await invokeBackend(rawGetFolderContents, parentId);
     return {
         folders: (fs?.folders ?? []).map(toFolderItem),
         files: (fs?.files ?? []).map(toFileItem),
@@ -302,12 +303,12 @@ export async function getFolderContents(parentId: string): Promise<FolderContent
 
 /** Flat list of root files read straight from Telegram history, normalized. */
 export async function getFileList(): Promise<RootFile[]> {
-    const files = await rawGetFileList();
+    const files = await invokeBackend(rawGetFileList);
     return (files ?? []).map(toRootFile);
 }
 
 /** Search files and folders in the active drive, normalized. */
 export async function search(query: string, limit: number): Promise<SearchHit[]> {
-    const hits = await rawSearch(query, limit);
+    const hits = await invokeBackend(rawSearch, query, limit);
     return (hits ?? []).map(toSearchHit);
 }

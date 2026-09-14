@@ -18,6 +18,7 @@ import {
 import type { main, media } from "../../wailsjs/go/models";
 import type { FileItem } from "../types";
 import { toFileItem } from "./files";
+import { invokeBackend } from "./gateway";
 
 export interface MediaOpenInfo {
     channelId: number;
@@ -95,7 +96,7 @@ export interface MediaStats {
 
 /** Every image in the active drive, newest first, for the Photos gallery. */
 export async function getMedia(): Promise<FileItem[]> {
-    const files = await rawListMedia();
+    const files = await invokeBackend(rawListMedia);
     return (files ?? []).map(toFileItem);
 }
 
@@ -105,7 +106,7 @@ export async function getMedia(): Promise<FileItem[]> {
  * locked encrypted drive) so the caller can render the right placeholder.
  */
 export async function getThumbnail(msgId: number): Promise<string> {
-    const payload = await rawThumbnail(msgId);
+    const payload = await invokeBackend(rawThumbnail, msgId);
     const dataBase64 = String(payload?.data_base64 ?? "");
     const mimeType = String(payload?.mime_type ?? "");
     if (!dataBase64 || !mimeType) throw new Error("thumbnail unavailable");
@@ -114,13 +115,13 @@ export async function getThumbnail(msgId: number): Promise<string> {
 
 /** Open a short-lived loopback media URL for a projected file. */
 export async function openMedia(msgId: number): Promise<MediaOpenResult> {
-    const opened = await rawOpenMedia(msgId);
+    const opened = await invokeBackend(rawOpenMedia, msgId);
     return normalizeMediaOpenResult(opened);
 }
 
 /** Open a loopback stream URL for a projected audio/PDF/text file. */
 export async function openStream(msgId: number): Promise<MediaOpenResult> {
-    const opened = await rawOpenStream(msgId);
+    const opened = await invokeBackend(rawOpenStream, msgId);
     return normalizeMediaOpenResult(opened);
 }
 
@@ -153,19 +154,19 @@ function normalizeMediaOpenInfo(info?: media.LogicalFile, fallbackName?: string)
 /** Release the media session and its range-reader cache. */
 export async function closeMedia(token: string): Promise<void> {
     if (!token) return;
-    await rawCloseMedia(token);
+    await invokeBackend(rawCloseMedia, token);
 }
 
 /** Open a native all-format player for one projected file. */
 export async function openNativeMedia(msgId: number, rect: NativeMediaRect): Promise<NativeMediaOpenResult> {
-    const opened = await rawOpenNativeMedia(msgId, rect);
+    const opened = await invokeBackend(rawOpenNativeMedia, msgId, rect);
     return normalizeNativeMediaOpenResult(opened);
 }
 
 /** Promote an existing webview stream to native playback without reopening it. */
 export async function attachNativeMedia(token: string, rect: NativeMediaRect): Promise<NativeMediaOpenResult> {
     if (!token) throw new Error("Media session is required.");
-    const opened = await rawAttachNativeMedia(token, rect);
+    const opened = await invokeBackend(rawAttachNativeMedia, token, rect);
     return normalizeNativeMediaOpenResult(opened);
 }
 
@@ -193,17 +194,17 @@ function normalizeNativeMediaOpenResult(opened?: main.NativeMediaResult): Native
 
 export async function resizeNativeMedia(token: string, rect: NativeMediaRect): Promise<void> {
     if (!token) return;
-    await rawResizeNativeMedia(token, rect);
+    await invokeBackend(rawResizeNativeMedia, token, rect);
 }
 
 export async function nativeMediaCommand(token: string, command: string[]): Promise<void> {
     if (!token || command.length === 0) return;
-    await rawNativeMediaCommand(token, command);
+    await invokeBackend(rawNativeMediaCommand, token, command);
 }
 
 export async function closeNativeMedia(token: string): Promise<void> {
     if (!token) return;
-    await rawCloseNativeMedia(token);
+    await invokeBackend(rawCloseNativeMedia, token);
 }
 
 // Windows paints seek previews above its child mpv window because the webview
@@ -211,22 +212,22 @@ export async function closeNativeMedia(token: string): Promise<void> {
 // imageBase64 is a JPEG/PNG frame; rect is the preview box in CSS pixels.
 export async function showNativeSeekThumbnail(token: string, imageBase64: string, rect: NativeMediaRect): Promise<void> {
     if (!token || !imageBase64) return;
-    await rawShowNativeSeekThumbnail(token, imageBase64, rect);
+    await invokeBackend(rawShowNativeSeekThumbnail, token, imageBase64, rect);
 }
 
 export async function moveNativeSeekThumbnail(token: string, rect: NativeMediaRect): Promise<void> {
     if (!token) return;
-    await rawMoveNativeSeekThumbnail(token, rect);
+    await invokeBackend(rawMoveNativeSeekThumbnail, token, rect);
 }
 
 export async function hideNativeSeekThumbnail(token: string): Promise<void> {
     if (!token) return;
-    await rawHideNativeSeekThumbnail(token);
+    await invokeBackend(rawHideNativeSeekThumbnail, token);
 }
 
 export async function updateMediaPlayback(update: MediaPlaybackUpdate): Promise<void> {
     if (!update.token) return;
-    await rawUpdateMediaPlayback({
+    await invokeBackend(rawUpdateMediaPlayback, {
         token: update.token,
         current_time: update.currentTime,
         duration: update.duration,
@@ -249,7 +250,7 @@ export async function getMediaStats(token: string): Promise<MediaStats> {
             thumbnails: toThroughputStats(),
         };
     }
-    const stats = await rawGetMediaStats(token);
+    const stats = await invokeBackend(rawGetMediaStats, token);
     return {
         playback: toThroughputStats(stats?.playback),
         thumbnails: toThroughputStats(stats?.thumbnails),

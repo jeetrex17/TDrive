@@ -378,16 +378,16 @@ test('a late preview completion cannot overwrite rapid gallery navigation', asyn
     await expect(page.locator('#preview-filename')).toHaveText('second.jpg');
 });
 
-test('startup failures use the dismissible error-toast flow', async ({ page }) => {
+test('startup failures show the fatal recovery screen', async ({ page }) => {
     await bootTDrive(page, {
         CheckSystemStatus: rejects('mock startup failure'),
     });
 
-    const alert = page.getByRole('alert').filter({ hasText: 'Startup error' });
-    await expect(alert).toBeVisible();
-    await expect(alert).toContainText('mock startup failure');
-    await alert.getByRole('button', { name: 'Dismiss' }).click();
-    await expect(alert).toBeHidden();
+    const recovery = page.getByRole('alert').filter({ hasText: 'TDrive could not start' });
+    await expect(recovery).toBeVisible();
+    await expect(recovery).toContainText("TDrive could not finish starting. Reload the app and try again.");
+
+    await expect(recovery.getByRole('button', { name: 'Reload TDrive' })).toBeVisible();
 });
 
 test('prefers-reduced-motion disables entrance motion in Chromium', async ({ page }) => {

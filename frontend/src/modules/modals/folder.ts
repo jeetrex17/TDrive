@@ -5,31 +5,15 @@ import { createFolder } from '../../api';
 import { notify } from '../notifications';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
-import FolderModal from '../../ui/modals/FolderModal.svelte';
 import {
     closeFolderModalView,
     openFolderModalView,
     setFolderModalInFlight,
 } from '../../ui/modals/folder-modal-store';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
-
-let folderModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let inFlight = false;
 
-export function setupFolderModal() {
-    const modal = document.getElementById("folder-modal");
-    if (!modal || folderModalHandle) return;
 
-    modal.replaceChildren();
-    folderModalHandle = mountSvelte(FolderModal, {
-        target: modal,
-        props: {
-            onSubmit: submitFolder,
-        },
-    });
-}
-
-async function submitFolder(name: string): Promise<void> {
+export async function submitFolder(name: string): Promise<void> {
     if (inFlight) return;
 
     const trimmed = name.trim();

@@ -3,20 +3,17 @@
 // archives, and (on My Drive) Encrypt vs plain. Toggling either option re-plans
 // so the counts stay accurate. Resolves to { encrypt, extract } or null.
 
-import ImportOptionsModal from '../../ui/modals/ImportOptionsModal.svelte';
 import {
     importOptionsModal,
     type ImportOptionsPayload,
     type ImportOptionsPlan,
 } from '../../ui/modals/import-options-modal-store';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
 export type ImportPlan = ImportOptionsPlan;
 
 type ReplanFn = (encrypt: boolean, extract: boolean) => Promise<ImportPlan>;
 type ImportChoice = { encrypt: boolean; extract: boolean };
 
-let importOptionsModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let pending: ((result: ImportChoice | null) => void) | null = null;
 let currentPayload: ImportOptionsPayload | null = null;
 let currentReplan: ReplanFn | null = null;
@@ -33,6 +30,18 @@ function finish(result: ImportChoice | null): void {
         resolve(result);
     }
 }
+export function cancelImportOptions(): void {
+    finish(null);
+}
+
+export function confirmImportOptions(choice: ImportChoice): void {
+    finish(choice);
+}
+
+export function replanImportOptions(encrypt: boolean, extract: boolean): void {
+    void refreshPlan(encrypt, extract);
+}
+
 
 // refreshPlan re-plans after an option toggle so the summary counts stay
 // accurate (e.g. extracting archives changes the file count and total bytes).
@@ -57,22 +66,6 @@ async function refreshPlan(encrypt: boolean, extract: boolean): Promise<void> {
     }
 }
 
-export function setupImportOptionsModal() {
-    const modal = document.getElementById('import-options-modal');
-    if (!modal || importOptionsModalHandle) return;
-
-    modal.replaceChildren();
-    importOptionsModalHandle = mountSvelte(ImportOptionsModal, {
-        target: modal,
-        props: {
-            onCancel: () => finish(null),
-            onConfirm: (choice: ImportChoice) => finish(choice),
-            onToggle: (encrypt: boolean, extract: boolean) => {
-                void refreshPlan(encrypt, extract);
-            },
-        },
-    });
-}
 
 export function openImportOptionsModal(opts: {
     plan: ImportPlan;

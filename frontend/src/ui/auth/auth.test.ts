@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import AuthScreens from './AuthScreens.svelte';
+import { showAuthView, showStartupView } from '../app/app-store';
 import {
     authHint,
     authPhone,
-    authScreen,
     beginAuthSubmission,
     failAuthSubmission,
     resetAuthSubmissions,
@@ -20,7 +20,7 @@ const props = {
 };
 
 afterEach(() => {
-    authScreen.set(null);
+    showStartupView();
     authPhone.set('');
     authHint.set('');
     resetAuthSubmissions();
@@ -28,12 +28,12 @@ afterEach(() => {
 
 describe('AuthScreens', () => {
     it('renders no auth form when no screen is active', () => {
-        authScreen.set(null);
+        showStartupView();
         expect(render(AuthScreens, { props }).body).not.toContain('auth-form');
     });
 
     it('renders setup as a labelled credential form with local-storage guidance', () => {
-        authScreen.set('setup');
+        showAuthView('setup');
         const { body } = render(AuthScreens, { props });
 
         expect(body).toContain('<form');
@@ -54,7 +54,7 @@ describe('AuthScreens', () => {
 
 
     it('shows the destination and one-time-code semantics on the code step', () => {
-        authScreen.set('code');
+        showAuthView('code');
         expect(render(AuthScreens, { props }).body).not.toContain('auth-helper-pill');
 
         authPhone.set('+15551234567');
@@ -70,7 +70,7 @@ describe('AuthScreens', () => {
     });
 
     it('associates the escaped 2FA hint with the password field', () => {
-        authScreen.set('password');
+        showAuthView('password');
         authHint.set('<img src=x>');
         const { body } = render(AuthScreens, { props });
 
@@ -83,7 +83,7 @@ describe('AuthScreens', () => {
     });
 
     it('renders each flow error inline and exposes its busy state', () => {
-        authScreen.set('code');
+        showAuthView('code');
         beginAuthSubmission('code');
         let body = render(AuthScreens, { props }).body;
         expect(body).toContain('aria-busy="true"');

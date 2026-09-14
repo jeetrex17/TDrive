@@ -3,11 +3,7 @@
 import { state } from '../state';
 import { canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import { appActions } from './app-actions';
-import Breadcrumb from '../ui/chrome/Breadcrumb.svelte';
 import { breadcrumbPath, type BreadcrumbDrag } from '../ui/chrome/breadcrumb-store';
-import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
-
-let breadcrumbHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 // renderBreadcrumb mirrors state.folderPath (the source of truth, mutated by
 // several modules) into the breadcrumb store.
@@ -15,7 +11,7 @@ export function renderBreadcrumb() {
     breadcrumbPath.set(state.folderPath.map((f) => ({ id: f.id, name: f.name })));
 }
 
-const drag: BreadcrumbDrag = {
+export const breadcrumbDrag: BreadcrumbDrag = {
     isActive: () => Boolean(state.dragState),
     canDrop: (folderId) => canDropOnFolder(folderId),
     highlight: (el, allowed) => setDropHighlight(el, allowed),
@@ -37,7 +33,7 @@ const drag: BreadcrumbDrag = {
     },
 };
 
-function navigateToIndex(index: number) {
+export function navigateToIndex(index: number): void {
     if (index < 0) {
         state.folderPath = [];
         state.currentFolderId = '';
@@ -51,7 +47,7 @@ function navigateToIndex(index: number) {
     appActions().refreshFiles();
 }
 
-function navigateBack() {
+export function navigateBack(): void {
     if (state.folderPath.length === 0) return;
     state.folderPath = state.folderPath.slice(0, -1);
     state.currentFolderId = state.folderPath.length ? state.folderPath[state.folderPath.length - 1].id : '';
@@ -60,21 +56,6 @@ function navigateBack() {
     appActions().refreshFiles();
 }
 
-export function setupBreadcrumb() {
-    const host = document.getElementById('breadcrumb-root');
-    if (!host || breadcrumbHandle) return;
-
-    host.replaceChildren();
-    breadcrumbHandle = mountSvelte(Breadcrumb, {
-        target: host,
-        props: {
-            onNavigate: navigateToIndex,
-            onBack: navigateBack,
-            drag,
-        },
-    });
-    renderBreadcrumb();
-}
 
 export function navigateToFolder(folderID: string, folderName: string) {
     state.folderPath = [...state.folderPath, { id: folderID, name: folderName }];

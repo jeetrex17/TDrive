@@ -4,29 +4,13 @@ import { approveJoinRequest, listJoinRequests, rejectJoinRequest } from '../chan
 import type { DriveChannel, JoinRequest } from '../../types';
 import { notify } from '../notifications';
 import { humanizeBackendError } from '../errors';
-import JoinRequestsModal from '../../ui/modals/JoinRequestsModal.svelte';
 import {
     joinRequestsList,
     joinRequestsModal,
     type JoinRequestRow,
 } from '../../ui/modals/join-requests-modal-store';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
-
-let joinRequestsModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let activeDriveId = 0;
 
-export function setupJoinRequestsModal() {
-    const modal = document.getElementById('join-requests-modal');
-    if (!modal || joinRequestsModalHandle) return;
-
-    modal.replaceChildren();
-    joinRequestsModalHandle = mountSvelte(JoinRequestsModal, {
-        target: modal,
-        props: {
-            onAction: resolveRequest,
-        },
-    });
-}
 
 export async function openJoinRequestsModal(drive: Pick<DriveChannel, 'id' | 'title'>): Promise<void> {
     const driveId = Number(drive?.id || 0);
@@ -65,7 +49,7 @@ async function loadRequests(): Promise<void> {
     }
 }
 
-async function resolveRequest(userId: number, approved: boolean): Promise<void> {
+export async function resolveRequest(userId: number, approved: boolean): Promise<void> {
     const driveId = activeDriveId;
     if (!driveId || !userId) return;
 

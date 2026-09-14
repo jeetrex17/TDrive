@@ -10,12 +10,8 @@ import { navigateToFolder } from './navigation';
 import { enqueueDownload, enqueueFolderDownload, importFolderWithParentID, uploadWithParentID } from './transfers';
 import { canOpenFileViewer, isVideoFile } from './media-types';
 import { appActions } from './app-actions';
-import ContextMenu from '../ui/menus/ContextMenu.svelte';
 import { hideContextMenu, showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
 import type { FileCommandItem } from '../ui/file-list/types';
-import { mountSvelte } from '../ui';
-
-let contextMenuMounted = false;
 
 export function buildFolderContextMenuItems(folderID: string, folderName: string): ContextMenuItem[] {
     return [
@@ -32,20 +28,12 @@ export function buildFolderContextMenuItems(folderID: string, folderName: string
     ];
 }
 
-function mountContextMenu(menu: HTMLElement) {
-    if (contextMenuMounted) return;
-    menu.replaceChildren();
-    mountSvelte(ContextMenu, { target: menu, props: {} });
-    contextMenuMounted = true;
-}
 
-export function setupContextMenu() {
-    const menu = document.getElementById("context-menu");
-    const list = document.getElementById("file-list");
-    if (!menu || !list) return;
-    mountContextMenu(menu);
+export function activateContextMenu(): () => void {
+    const list = document.getElementById('file-list');
+    if (!list) return () => {};
 
-    list.addEventListener("contextmenu", (e) => {
+    const onContextMenu = (e: MouseEvent) => {
         e.preventDefault();
         const row = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
         const type = row?.dataset?.type || "background";
@@ -135,7 +123,13 @@ export function setupContextMenu() {
             { label: "Upload folder", action: () => { void importFolderWithParentID(state.currentFolderId); } },
             { label: "Refresh", action: () => { void appActions().triggerRefresh(); } },
         ]);
-    });
+    };
+
+    list.addEventListener('contextmenu', onContextMenu);
+    return () => {
+        list.removeEventListener('contextmenu', onContextMenu);
+        hideContextMenu();
+    };
 }
 
 export { hideContextMenu, showContextMenu };

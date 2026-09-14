@@ -18,36 +18,34 @@ import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
 import { enterPhotos, exitPhotos } from './gallery';
 import { showContextMenu, type ContextMenuItem } from './context-menu';
-import DriveList from '../ui/sidebar/DriveList.svelte';
 import {
     setSidebarState,
     type SidebarActionMenuRequest,
 } from '../ui/sidebar/sidebar-store';
-import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 import type { DriveChannel, PendingJoin } from '../types';
 
-let personalEl: HTMLElement | null = null;
-let sharedEl: HTMLElement | null = null;
-let personalDriveList: SvelteMountHandle<Record<string, unknown>> | null = null;
-let sharedDriveList: SvelteMountHandle<Record<string, unknown>> | null = null;
 
-export function setupSidebar() {
-    personalEl = document.getElementById('drives-personal');
-    sharedEl = document.getElementById('drives-shared');
-    mountDriveLists();
+export function activateSidebar(): () => void {
+    const newButton = document.getElementById('open-new-drive');
+    const joinButton = document.getElementById('open-join-drive');
+    const photosButton = document.getElementById('nav-photos');
+    const onNewDrive = () => openNewDriveModal();
+    const onJoinDrive = () => openJoinDriveModal();
+    const onPhotos = () => enterPhotos();
 
-    const newBtn = document.getElementById('open-new-drive');
-    if (newBtn) newBtn.addEventListener('click', () => openNewDriveModal());
-    const joinBtn = document.getElementById('open-join-drive');
-    if (joinBtn) joinBtn.addEventListener('click', () => openJoinDriveModal());
-    const photosBtn = document.getElementById('nav-photos');
-    if (photosBtn) photosBtn.addEventListener('click', () => enterPhotos());
-
+    newButton?.addEventListener('click', onNewDrive);
+    joinButton?.addEventListener('click', onJoinDrive);
+    photosButton?.addEventListener('click', onPhotos);
     renderSidebar();
+
+    return () => {
+        newButton?.removeEventListener('click', onNewDrive);
+        joinButton?.removeEventListener('click', onJoinDrive);
+        photosButton?.removeEventListener('click', onPhotos);
+    };
 }
 
 export function renderSidebar() {
-    if (!personalEl || !sharedEl) return;
 
     const channels = state.channels || [];
     const personal = channels.filter((channel) => channel.kind === 'personal');
@@ -70,34 +68,8 @@ export function renderSidebar() {
     else photosNav?.removeAttribute('aria-current');
 }
 
-function mountDriveLists(): void {
-    if (personalEl && !personalDriveList) {
-        personalEl.replaceChildren();
-        personalDriveList = mountSvelte(DriveList, {
-            target: personalEl,
-            props: {
-                kind: 'personal' as const,
-                onDriveClick: handleDriveClick,
-            },
-        });
-    }
 
-    if (sharedEl && !sharedDriveList) {
-        sharedEl.replaceChildren();
-        sharedDriveList = mountSvelte(DriveList, {
-            target: sharedEl,
-            props: {
-                kind: 'shared' as const,
-                onDriveClick: handleDriveClick,
-                onDriveActions: showSharedActionsMenu,
-                onPendingClick: handlePendingClick,
-                onPendingActions: showPendingActionsMenu,
-            },
-        });
-    }
-}
-
-function handleDriveClick(channelId: number): void {
+export function handleDriveClick(channelId: number): void {
     if (Number(channelId) === Number(state.activeChannel?.id)) {
         // Clicking the already-active drive while in Photos returns to its files.
         if (state.virtualView === 'photos') exitPhotos();
@@ -106,7 +78,7 @@ function handleDriveClick(channelId: number): void {
     void switchActiveChannel(Number(channelId));
 }
 
-async function handlePendingClick(inviteHash: string): Promise<void> {
+export async function handlePendingClick(inviteHash: string): Promise<void> {
     const pending = state.pendingJoins.find((item) => item.inviteHash === inviteHash);
     if (!pending) return;
 
@@ -135,7 +107,7 @@ async function handlePendingClick(inviteHash: string): Promise<void> {
     }
 }
 
-function showSharedActionsMenu(request: SidebarActionMenuRequest, c: DriveChannel) {
+export function showSharedActionsMenu(request: SidebarActionMenuRequest, c: DriveChannel): void {
     const items: ContextMenuItem[] = [
         {
             label: 'Copy invite link',
@@ -180,7 +152,7 @@ function showSharedActionsMenu(request: SidebarActionMenuRequest, c: DriveChanne
     showContextMenu(request.x, request.y, items);
 }
 
-function showPendingActionsMenu(request: SidebarActionMenuRequest, p: PendingJoin) {
+export function showPendingActionsMenu(request: SidebarActionMenuRequest, p: PendingJoin): void {
     showContextMenu(request.x, request.y, [
         {
             label: 'Check now',

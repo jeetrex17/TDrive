@@ -1,12 +1,13 @@
 <script lang="ts">
-    import { untrack } from "svelte";
     import VideoSettingsPanel from "./VideoSettingsPanel.svelte";
-    import { DEFAULT_PLAYBACK_PREFERENCES, type PlaybackPreferences } from "../../modules/video/playback-preferences";
-    let { initialPreferences = DEFAULT_PLAYBACK_PREFERENCES, onPreferencesChange = () => undefined }: { initialPreferences?: PlaybackPreferences; onPreferencesChange?: (value: PlaybackPreferences) => void } = $props();
-    let preferences = $state(untrack(() => initialPreferences));
-    export function setPreferences(value: PlaybackPreferences) { preferences = value; }
-    function updatePreferences(value: PlaybackPreferences) {
-        preferences = value;
+    import type { PlaybackPreferences } from "../../modules/video/playback-preferences";
+    import { videoPlaybackPreferences } from "./video-preferences-store";
+
+    let { onPreferencesChange = () => undefined }: { onPreferencesChange?: (value: PlaybackPreferences) => void } = $props();
+    let preferences = $derived($videoPlaybackPreferences);
+
+    function updatePreferences(value: PlaybackPreferences): void {
+        videoPlaybackPreferences.set(value);
         onPreferencesChange(value);
     }
     import AudioLinesIcon from '@lucide/svelte/icons/audio-lines';

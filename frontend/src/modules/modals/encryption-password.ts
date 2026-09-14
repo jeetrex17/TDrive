@@ -6,11 +6,7 @@ import { useEncryptionPassword, type OperationResult } from '../../api';
 import { loadEncryptionStatus } from '../encryption';
 import { humanizeBackendError } from '../errors';
 import { state } from '../../state';
-import EncryptionPasswordModal from '../../ui/modals/EncryptionPasswordModal.svelte';
 import { encryptionPasswordModal } from '../../ui/modals/encryption-password-modal-store';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
-
-let encryptionPasswordModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let pending: ((ok: boolean) => void) | null = null;
 
 function finish(ok: boolean): void {
@@ -21,22 +17,13 @@ function finish(ok: boolean): void {
         resolve(ok);
     }
 }
-
-export function setupEncryptionPasswordModal() {
-    const modal = document.getElementById('encryption-password-modal');
-    if (!modal || encryptionPasswordModalHandle) return;
-
-    modal.replaceChildren();
-    encryptionPasswordModalHandle = mountSvelte(EncryptionPasswordModal, {
-        target: modal,
-        props: {
-            onCancel: () => finish(false),
-            onSubmit: submitPassword,
-        },
-    });
+export function cancelEncryptionPassword(): void {
+    finish(false);
 }
 
-async function submitPassword(password: string): Promise<void> {
+
+
+export async function submitEncryptionPassword(password: string): Promise<void> {
     if (!password) {
         encryptionPasswordModal.setError('Enter your encryption password.');
         return;

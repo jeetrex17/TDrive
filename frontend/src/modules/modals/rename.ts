@@ -5,7 +5,6 @@ import { invalidateFolderIndex } from '../../state';
 import { callWithPasswordRetry } from './encryption-password';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
-import RenameModal from '../../ui/modals/RenameModal.svelte';
 import {
     closeRenameModalView,
     openRenameModalView,
@@ -14,9 +13,6 @@ import {
     type RenameModalTarget,
 } from '../../ui/modals/rename-modal-store';
 import type { FileCommandItem } from '../../ui/file-list/types';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
-
-let renameModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 async function ensureFileInTdriveSystem(target: RenameModalTarget): Promise<void> {
     if (target.type !== 'file' || target.source !== 'tg') return;
@@ -31,24 +27,12 @@ async function ensureFileInTdriveSystem(target: RenameModalTarget): Promise<void
     if (!result.ok) throw new Error(humanizeBackendError(result.error));
 }
 
-export function setupRenameModal() {
-    const modal = document.getElementById('rename-modal');
-    if (!modal || renameModalHandle) return;
-
-    modal.replaceChildren();
-    renameModalHandle = mountSvelte(RenameModal, {
-        target: modal,
-        props: {
-            onSubmit: submitRename,
-        },
-    });
-}
 
 export function openRenameModal(target: FileCommandItem): void {
     openRenameModalView(target);
 }
 
-async function submitRename(target: RenameModalTarget, rawName: string): Promise<void> {
+export async function submitRename(target: RenameModalTarget, rawName: string): Promise<void> {
     const nextName = (rawName || '').trim();
     if (!nextName) {
         setRenameModalError("Name can't be empty.");

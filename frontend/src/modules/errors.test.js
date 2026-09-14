@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { humanizeBackendError } from "./errors";
+import {
+    formatAppErrorDiagnostic,
+    humanizeBackendError,
+    toAppError,
+} from "./errors";
 
 describe("humanizeBackendError", () => {
     it("strips the Error: prefix", () => {
@@ -52,5 +56,63 @@ describe("humanizeBackendError", () => {
     });
     it("caps unexpected backend detail", () => {
         expect(humanizeBackendError("x".repeat(500))).toHaveLength(240);
+    });
+});
+describe("AppError", () => {
+    it("classifies a stable operation code through an Error cause without losing it", () => {
+        const operationError = {
+            code: "deadline_exceeded",
+            message: "backend wording callers must not parse",
+        };
+        const gatewayError = new Error("Backend invocation failed", { cause: operationError });
+
+        const error = toAppError(gatewayError, { source: "backend" });
+
+        expect(error).toMatchObject({
+            kind: "timeout",
+            source: "backend",
+            code: "deadline_exceeded",
+            retryable: true,
+            message: "The request took too long. Try again.",
+        });
+        expect(error.cause).toBe(gatewayError);
+    });
+
+    it("never stringifies an arbitrary thrown object into user copy", () => {
+        const error = toAppError({ privatePayload: "do not display" });
+
+        expect(error.message).toBe("Something went wrong. Try again.");
+        expect(error.details).toEqual({ name: "UnknownError" });
+        expect(error.message).not.toContain("[object Object]");
+    });
+
+    it("redacts diagnostics while retaining useful structured fields", () => {
+        const cause = new Error("token=super-secret failed at /Users/alice/TDrive/cache.db");
+        cause.stack = "Error: token=super-secret\n    at open (/Users/alice/TDrive/src/open.ts:12:4)";
+        Object.assign(cause, { code: "network_unavailable" });
+
+        const error = toAppError(cause, { source: "backend" });
+        const diagnostic = formatAppErrorDiagnostic(error);
+
+        expect(diagnostic).toContain("Code: network_unavailable");
+        expect(diagnostic).toContain("token=[redacted]");
+        expect(diagnostic).toContain("[local path]");
+        expect(diagnostic).not.toContain("super-secret");
+        expect(diagnostic).not.toContain("/Users/alice");
+    });
+
+    it("keeps startup implementation details out of the recovery message", () => {
+        const error = toAppError(new Error("binding crashed with password=hunter2"), {
+            source: "startup",
+        });
+
+        expect(error).toMatchObject({
+            kind: "unavailable",
+            title: "TDrive could not start",
+            retryable: true,
+            message: "TDrive could not finish starting. Reload the app and try again.",
+        });
+        expect(error.details.message).toContain("password=[redacted]");
+        expect(error.details.message).not.toContain("hunter2");
     });
 });

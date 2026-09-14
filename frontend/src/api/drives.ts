@@ -16,6 +16,7 @@ import {
 } from "../../wailsjs/go/main/App";
 import type { DriveChannel, JoinDriveResult, JoinRequest, PendingJoin } from "../types";
 import { asRecord, finiteNumber } from "./shared";
+import { invokeBackend } from "./gateway";
 
 function normalizeDriveKind(value: unknown): DriveChannel["kind"] {
     return value === "personal" || value === "shared" ? value : "unknown";
@@ -65,60 +66,60 @@ export function normalizeJoinRequest(value: unknown): JoinRequest {
     };
 }
 export async function listChannels(): Promise<DriveChannel[]> {
-    const channels = await rawListChannels();
+    const channels = await invokeBackend(rawListChannels);
     return (channels ?? []).map(normalizeDriveChannel);
 }
 
 export async function createSharedDrive(title: string, requireApproval: boolean): Promise<DriveChannel> {
-    return normalizeDriveChannel(await rawCreateSharedDrive(title, requireApproval));
+    return normalizeDriveChannel(await invokeBackend(rawCreateSharedDrive, title, requireApproval));
 }
 
 export async function joinSharedDrive(inviteLink: string): Promise<JoinDriveResult> {
-    return normalizeJoinDriveResult(await rawJoinSharedDrive(inviteLink));
+    return normalizeJoinDriveResult(await invokeBackend(rawJoinSharedDrive, inviteLink));
 }
 
 export async function getInviteLink(channelId: number): Promise<string> {
-    return rawGetInviteLink(channelId);
+    return invokeBackend(rawGetInviteLink, channelId);
 }
 
 export async function getApprovalInviteLink(channelId: number): Promise<string> {
-    return rawGetApprovalInviteLink(channelId);
+    return invokeBackend(rawGetApprovalInviteLink, channelId);
 }
 
 export async function leaveSharedDrive(channelId: number): Promise<void> {
-    await rawLeaveSharedDrive(channelId);
+    await invokeBackend(rawLeaveSharedDrive, channelId);
 }
 
 export async function listPendingJoins(): Promise<PendingJoin[]> {
-    const pending = await rawListPendingJoins();
+    const pending = await invokeBackend(rawListPendingJoins);
     return (pending ?? []).map(normalizePendingJoin);
 }
 
 export async function checkPendingJoin(inviteHash: string): Promise<JoinDriveResult> {
-    return normalizeJoinDriveResult(await rawCheckPendingJoin(inviteHash));
+    return normalizeJoinDriveResult(await invokeBackend(rawCheckPendingJoin, inviteHash));
 }
 
 export async function removePendingJoin(inviteHash: string): Promise<void> {
-    await rawRemovePendingJoin(inviteHash);
+    await invokeBackend(rawRemovePendingJoin, inviteHash);
 }
 
 export async function listJoinRequests(channelId: number): Promise<JoinRequest[]> {
-    const requests = await rawListJoinRequests(channelId);
+    const requests = await invokeBackend(rawListJoinRequests, channelId);
     return (requests ?? []).map(normalizeJoinRequest);
 }
 
 export async function approveJoinRequest(channelId: number, userId: number): Promise<void> {
-    await rawApproveJoinRequest(channelId, userId);
+    await invokeBackend(rawApproveJoinRequest, channelId, userId);
 }
 
 export async function rejectJoinRequest(channelId: number, userId: number): Promise<void> {
-    await rawRejectJoinRequest(channelId, userId);
+    await invokeBackend(rawRejectJoinRequest, channelId, userId);
 }
 
 export async function setActiveChannel(channelId: number): Promise<void> {
-    await rawSetActiveChannel(channelId);
+    await invokeBackend(rawSetActiveChannel, channelId);
 }
 
 export async function syncChannel(channelId: number): Promise<void> {
-    await rawSyncChannel(channelId);
+    await invokeBackend(rawSyncChannel, channelId);
 }

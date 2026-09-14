@@ -4,8 +4,10 @@
 // ghost row on screen. The bulk-delete path already refreshed unconditionally;
 // this covers the single-item path, which used to return early on failure.
 
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { flushSync } from 'svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import DeleteModal from '../../ui/modals/DeleteModal.svelte';
+import { closeDeleteModalView } from '../../ui/modals/delete-modal-store';
 
 const deleteFileMock = vi.fn();
 const appActionMocks = vi.hoisted(() => ({ refreshFiles: vi.fn() }));
@@ -17,9 +19,10 @@ vi.mock('../drive-data', () => ({
 }));
 vi.mock('../app-actions', () => ({ appActions: () => appActionMocks }));
 
-import { openDeleteModal, setupDeleteModal } from './delete';
+import { confirmDelete, openDeleteModal } from './delete';
 
 let host: HTMLElement;
+let app: Record<string, unknown> | null = null;
 
 function click(selector: string): void {
     const el = host.querySelector(selector) as HTMLElement | null;
@@ -28,14 +31,20 @@ function click(selector: string): void {
     flushSync();
 }
 
-beforeAll(() => {
+beforeEach(() => {
     host = document.createElement('div');
     host.id = 'delete-modal';
     document.body.appendChild(host);
-    setupDeleteModal();
+    app = mount(DeleteModal, { target: host, props: { onConfirm: confirmDelete } });
+    flushSync();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    closeDeleteModalView();
+    flushSync();
+    if (app) await unmount(app);
+    app = null;
+    host.remove();
     deleteFileMock.mockReset();
     appActionMocks.refreshFiles.mockReset();
 });

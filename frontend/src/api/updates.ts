@@ -9,7 +9,8 @@ import {
 } from "../../wailsjs/go/main/App";
 import type { AppVersion, UpdateSnapshot } from "../types";
 import { asRecord, nonNegativeNumber } from "./shared";
-import { onRuntimeEvent } from "./runtime";
+import { onRuntimeEvent, type RuntimeUnsubscribe } from "./runtime";
+import { invokeBackend } from "./gateway";
 
 function normalizeUpdateRelease(value: unknown): UpdateSnapshot["latest"] {
     if (value == null) return null;
@@ -55,7 +56,7 @@ export function normalizeUpdateSnapshot(value: unknown): UpdateSnapshot {
     };
 }
 export async function getAppVersion(): Promise<AppVersion> {
-    const raw = await rawAppVersion();
+    const raw = await invokeBackend(rawAppVersion);
     return {
         version: String(raw?.version ?? ""),
         os: String(raw?.os ?? ""),
@@ -65,28 +66,26 @@ export async function getAppVersion(): Promise<AppVersion> {
 }
 
 export async function getUpdateState(): Promise<UpdateSnapshot> {
-    return normalizeUpdateSnapshot(await rawGetUpdateState());
+    return normalizeUpdateSnapshot(await invokeBackend(rawGetUpdateState));
 }
 
 export async function checkForUpdate(): Promise<UpdateSnapshot> {
-    return normalizeUpdateSnapshot(await rawCheckForUpdate());
+    return normalizeUpdateSnapshot(await invokeBackend(rawCheckForUpdate));
 }
 
 export async function downloadUpdate(): Promise<void> {
-    await rawDownloadUpdate();
+    await invokeBackend(rawDownloadUpdate);
 }
 
 export async function cancelUpdateDownload(): Promise<void> {
-    await rawCancelUpdateDownload();
+    await invokeBackend(rawCancelUpdateDownload);
 }
 
 export async function installUpdateAndRestart(): Promise<void> {
-    await rawInstallUpdateAndRestart();
+    await invokeBackend(rawInstallUpdateAndRestart);
 }
 
 export async function openUpdatePage(): Promise<void> {
-    await rawOpenUpdatePage();
+    await invokeBackend(rawOpenUpdatePage);
 }
-export function onUpdateState(callback: (snapshot: UpdateSnapshot) => void): (() => void) | null {
-    return onRuntimeEvent<[unknown]>("update_state", (payload) => callback(normalizeUpdateSnapshot(payload)));
-}
+export function onUpdateState(callback: (snapshot: UpdateSnapshot) => void): RuntimeUnsubscribe { return onRuntimeEvent("update_state", (payload) => callback(normalizeUpdateSnapshot(payload))); }

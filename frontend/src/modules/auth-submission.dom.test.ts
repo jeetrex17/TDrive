@@ -1,15 +1,7 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
-
-interface AuthProps {
-    onSetup: (apiId: string, apiHash: string) => Promise<void>;
-    onPhone: (phone: string) => Promise<void>;
-    onCode: (code: string) => Promise<void>;
-    onPassword: (password: string) => Promise<void>;
-    onBackToPhone: () => void;
-}
-
 type RuntimeListener = (...args: unknown[]) => void;
+type RuntimeDisconnector = ReturnType<typeof vi.fn<() => void>>;
 
 const authApi = vi.hoisted(() => ({
     checkSystemStatus: vi.fn(),
@@ -36,8 +28,8 @@ const collaborators = vi.hoisted(() => ({
 }));
 
 const harness = vi.hoisted(() => ({
-    props: null as AuthProps | null,
     events: new Map<string, RuntimeListener>(),
+    disconnectors: [] as RuntimeDisconnector[],
 }));
 
 vi.mock('../api', () => authApi);
@@ -49,19 +41,11 @@ vi.mock('./notifications', () => ({
     notify: collaborators.notify,
     dismissNotification: vi.fn(),
 }));
-vi.mock('../ui/mount', () => ({
-    mountSvelte: vi.fn((_component: unknown, options: { props: AuthProps }) => {
-        harness.props = options.props;
-        return { destroy: vi.fn() };
-    }),
-}));
 
-import { setupAuthWindowBindings } from './auth';
-import {
-    authScreen,
-    authSubmission,
-    resetAuthSubmissions,
-} from '../ui/auth/auth-store';
+import { authScreenActions, connectAuthEvents } from './auth';
+import { authScreen, showAuthView, showStartupView } from '../ui/app/app-store';
+import { authSubmission, resetAuthSubmissions } from '../ui/auth/auth-store';
+let disconnectAuthEvents: () => void = () => {};
 
 function deferred<T>() {
     let resolve!: (value: T | PromiseLike<T>) => void;
@@ -73,9 +57,8 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
-function props(): AuthProps {
-    if (!harness.props) throw new Error('auth callbacks were not mounted');
-    return harness.props;
+function props(): typeof authScreenActions {
+    return authScreenActions;
 }
 
 function emit(name: string, ...args: unknown[]): void {
@@ -84,30 +67,32 @@ function emit(name: string, ...args: unknown[]): void {
     listener(...args);
 }
 
-beforeAll(() => {
-    document.body.innerHTML = '<div id="auth-wrapper"></div><div id="success-screen"></div>';
-    authApi.onRuntimeEvent.mockImplementation((name: string, listener: RuntimeListener) => {
-        harness.events.set(name, listener);
-        return () => undefined;
-    });
-    setupAuthWindowBindings();
-});
-
 beforeEach(() => {
     vi.clearAllMocks();
-    authScreen.set('phone');
+    harness.events.clear();
+    harness.disconnectors.length = 0;
+    authApi.onRuntimeEvent.mockImplementation((name: string, listener: RuntimeListener) => {
+        harness.events.set(name, listener);
+        const disconnect = vi.fn<() => void>(() => {
+            if (harness.events.get(name) === listener) harness.events.delete(name);
+        });
+        harness.disconnectors.push(disconnect);
+        return disconnect;
+    });
+    disconnectAuthEvents = connectAuthEvents();
+    showAuthView('phone');
     resetAuthSubmissions();
 });
 
-afterAll(() => {
-    authScreen.set(null);
+afterEach(() => {
+    disconnectAuthEvents();
+    showStartupView();
     resetAuthSubmissions();
-    document.body.innerHTML = '';
 });
 
 describe('auth submission lifecycle', () => {
     it('rejects a malformed API ID inline without calling the backend', async () => {
-        authScreen.set('setup');
+        showAuthView('setup');
 
         await props().onSetup('123abc', 'hash-value');
 
@@ -140,7 +125,7 @@ describe('auth submission lifecycle', () => {
     });
 
     it('keeps code submission busy until Telegram accepts or rejects it', async () => {
-        authScreen.set('code');
+        showAuthView('code');
         authApi.submitCode.mockResolvedValue(undefined);
 
         await props().onCode(' 12345 ');
@@ -159,7 +144,7 @@ describe('auth submission lifecycle', () => {
     });
 
     it('moves code busy state to the password flow and surfaces terminal errors inline', async () => {
-        authScreen.set('code');
+        showAuthView('code');
         authApi.submitCode.mockResolvedValue(undefined);
         authApi.submitPassword.mockResolvedValue(undefined);
         await props().onCode('12345');
@@ -178,4 +163,16 @@ describe('auth submission lifecycle', () => {
         });
         expect(collaborators.notify).not.toHaveBeenCalled();
     });
+    it('tears down every auth event subscription exactly once', () => {
+        expect(harness.events.size).toBe(6);
+
+        disconnectAuthEvents();
+        disconnectAuthEvents();
+
+        expect(harness.events.size).toBe(0);
+        for (const disconnect of harness.disconnectors) {
+            expect(disconnect).toHaveBeenCalledOnce();
+        }
+    });
+
 });

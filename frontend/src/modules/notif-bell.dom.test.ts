@@ -2,15 +2,16 @@
 // mode, the panel opens with sections and clears the unread badge, and
 // terminal transfer updates are idempotent.
 
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { flushSync } from 'svelte';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import NotifBell from '../ui/notifications/NotifBell.svelte';
 import { get } from 'svelte/store';
 import {
+    cancelTransfersInDirection,
     clearHistory,
     markTransferDone,
     pushHistoryEvent,
     pushTransferStart,
-    setupNotifBell,
     updateTransferProgress,
 } from './notif-bell';
 import {
@@ -21,6 +22,8 @@ import {
 } from '../ui/notifications/notif-store';
 
 
+let host: HTMLElement;
+let app: Record<string, unknown> | null = null;
 
 function bell(): HTMLElement {
     const el = document.getElementById('notif-bell');
@@ -35,15 +38,26 @@ function reset(): void {
     flushSync();
 }
 
-beforeAll(() => {
-    const host = document.createElement('div');
+beforeEach(() => {
+    host = document.createElement('div');
     host.id = 'notif-bell-root';
     document.body.appendChild(host);
-    setupNotifBell();
+    app = mount(NotifBell, {
+        target: host,
+        props: {
+            onCancelDirection: cancelTransfersInDirection,
+            onClearHistory: clearHistory,
+        },
+    });
     flushSync();
 });
 
-afterEach(reset);
+afterEach(async () => {
+    reset();
+    if (app) await unmount(app);
+    app = null;
+    host.remove();
+});
 
 describe('notif-bell', () => {
     it('reflects transfer and error state in the bell mode', () => {

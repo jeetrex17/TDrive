@@ -1,15 +1,24 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync } from 'svelte';
+import { flushSync, mount, unmount } from 'svelte';
+import ToastStack from '../ui/notifications/ToastStack.svelte';
 import { get } from 'svelte/store';
 import {
+    activateNotificationEffects,
     clearAllNotifications,
     dismissNotification,
     notify,
-    setupNotifications,
+    pauseAllNotifications,
+    pauseToast,
+    resumeAllNotifications,
+    resumeToast,
 } from './notifications';
 import { toasts } from '../ui/notifications/toast-store';
 
 const START_TIME = new Date('2026-01-01T00:00:00.000Z');
+
+let host: HTMLElement;
+let app: Record<string, unknown> | null = null;
+let disposeNotificationEffects: (() => void) | undefined;
 
 function toast(id: string): HTMLElement | null {
     return document.querySelector<HTMLElement>(`.toast[data-id="${id}"]`);
@@ -18,7 +27,22 @@ function toast(id: string): HTMLElement | null {
 beforeAll(() => {
     vi.useFakeTimers();
     vi.setSystemTime(START_TIME);
-    setupNotifications();
+    host = document.createElement('div');
+    host.id = 'toast-stack';
+    host.setAttribute('role', 'status');
+    host.setAttribute('aria-live', 'polite');
+    document.body.appendChild(host);
+    app = mount(ToastStack, {
+        target: host,
+        props: {
+            onDismiss: dismissNotification,
+            onPauseToast: pauseToast,
+            onResumeToast: resumeToast,
+            onPauseAll: pauseAllNotifications,
+            onResumeAll: resumeAllNotifications,
+        },
+    });
+    disposeNotificationEffects = activateNotificationEffects();
     flushSync();
 });
 
@@ -28,10 +52,14 @@ beforeEach(() => {
     flushSync();
 });
 
-afterAll(() => {
+afterAll(async () => {
+    disposeNotificationEffects?.();
+    disposeNotificationEffects = undefined;
     clearAllNotifications();
+    if (app) await unmount(app);
+    app = null;
+    host.remove();
     vi.useRealTimers();
-    document.getElementById('toast-stack')?.remove();
 });
 
 describe('notification expiry scheduling', () => {

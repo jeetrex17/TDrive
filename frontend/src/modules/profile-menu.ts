@@ -3,34 +3,9 @@
 
 import { get } from 'svelte/store';
 import { getSelfUser } from '../api';
-import { renderEncryptionSettingsEntry } from './encryption';
-import { openLogoutModal } from './modals/logout';
-import { openEncryptionSettingsModal } from './modals/encryption-settings';
-import ProfileMenu from '../ui/chrome/ProfileMenu.svelte';
 import { profileLoaded, profileUser, type ProfileUser } from '../ui/chrome/profile-store';
-import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
-
-let profileMenuHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let selfUserPromise: Promise<ProfileUser | null> | null = null;
 
-export function setupProfileMenu() {
-    const host = document.getElementById('profile-root');
-    if (!host || profileMenuHandle) return;
-
-    host.replaceChildren();
-    profileMenuHandle = mountSvelte(ProfileMenu, {
-        target: host,
-        props: {
-            onOpen: () => {
-                void ensureProfileLoaded();
-            },
-            onEncryptionSettings: openEncryptionSettingsModal,
-            onLogout: openLogoutModal,
-        },
-    });
-
-    renderEncryptionSettingsEntry();
-}
 
 // loadSelfUser fetches the logged-in user once after dashboard mount and
 // hydrates both avatars + the menu header. Called from auth.ts after
@@ -52,7 +27,7 @@ export async function loadSelfUser(): Promise<ProfileUser | null> {
     return selfUserPromise;
 }
 
-async function ensureProfileLoaded(): Promise<void> {
+export async function ensureProfileLoaded(): Promise<void> {
     if (get(profileUser)) return; // already hydrated; menu opens use the cache
     await loadSelfUser();
 }

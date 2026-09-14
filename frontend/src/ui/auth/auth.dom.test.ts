@@ -3,9 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import AuthScreens from './AuthScreens.svelte';
+import { showAuthView, showStartupView } from '../app/app-store';
 import {
     authPhone,
-    authScreen,
     beginAuthSubmission,
     failAuthSubmission,
     resetAuthSubmissions,
@@ -22,7 +22,7 @@ function codeInput(): HTMLInputElement {
 }
 
 beforeEach(() => {
-    authScreen.set(null);
+    showStartupView();
     authPhone.set('');
     resetAuthSubmissions();
     onCode = vi.fn(() => { void beginAuthSubmission('code'); });
@@ -41,7 +41,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-    authScreen.set(null);
+    showStartupView();
     resetAuthSubmissions();
     flushSync();
     await unmount(app);
@@ -50,7 +50,7 @@ afterEach(async () => {
 
 describe('AuthScreens interactions', () => {
     it('clears the code field when transitioning onto the code screen', () => {
-        authScreen.set('code');
+        showAuthView('code');
         flushSync();
         const input = codeInput();
         input.value = '123';
@@ -58,16 +58,16 @@ describe('AuthScreens interactions', () => {
         flushSync();
 
         // Leave and return: the transition back clears the field.
-        authScreen.set('phone');
+        showAuthView('phone');
         flushSync();
-        authScreen.set('code');
+        showAuthView('code');
         flushSync();
 
         expect(codeInput().value).toBe('');
     });
 
     it('keeps the entered code when Telegram rejects it and announces the error inline', () => {
-        authScreen.set('code');
+        showAuthView('code');
         flushSync();
         const input = codeInput();
         input.value = '999';
@@ -82,7 +82,7 @@ describe('AuthScreens interactions', () => {
     });
 
     it('blocks a duplicate form submission and disables the active flow controls', () => {
-        authScreen.set('code');
+        showAuthView('code');
         flushSync();
         const form = host.querySelector<HTMLFormElement>('form');
         if (!form) throw new Error('code form not rendered');

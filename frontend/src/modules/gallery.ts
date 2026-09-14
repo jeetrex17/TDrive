@@ -13,40 +13,32 @@ import { state } from '../state';
 import { getMedia } from '../api';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
-import Gallery from '../ui/gallery/Gallery.svelte';
 import { beginRender, cachedThumb, rearmLocked, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
 import { galleryView, type GalleryGroup } from '../ui/gallery/gallery-store';
-import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
 import type { FileItem } from '../types';
 
 let galleryEl: HTMLElement | null = null;
-let galleryHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let renderToken = 0;
 let backgroundRenderToken = 0;
 let currentItems: FileItem[] = [];
 let currentChannelId = 0;
 
-export function setupGallery(): boolean {
+export function activateGallery(): () => void {
     const host = document.getElementById('gallery-view');
-    if (!host) {
-        if (galleryEl || galleryHandle) teardownGallery();
-        return false;
-    }
-    if (galleryEl === host && galleryHandle) return true;
-    if (galleryEl || galleryHandle) teardownGallery();
+    if (!host) return () => {};
 
+    if (galleryEl) teardownGallery();
     galleryEl = host;
-    setRoot(galleryEl);
-    galleryEl.replaceChildren();
-    galleryHandle = mountSvelte(Gallery, { target: galleryEl, props: {} });
+    setRoot(host);
 
     // Click delegation stays on the stable host, matching the pre-Svelte path.
-    galleryEl.addEventListener('click', onGalleryClick);
+    host.addEventListener('click', onGalleryClick);
     // When the vault unlocks (e.g. from the lightbox), let locked cells retry
     // without waiting for a full gallery refresh.
     window.addEventListener('tdrive:unlocked', rearmLocked);
-    return true;
+
+    return teardownGallery;
 }
 
 export function teardownGallery(): void {
@@ -55,8 +47,6 @@ export function teardownGallery(): void {
     galleryEl?.removeEventListener('click', onGalleryClick);
     window.removeEventListener('tdrive:unlocked', rearmLocked);
     teardownGalleryController();
-    void galleryHandle?.destroy();
-    galleryHandle = null;
     galleryEl = null;
     currentItems = [];
     currentChannelId = 0;
@@ -87,12 +77,7 @@ interface GalleryRefreshOptions {
 }
 
 export async function renderGallery({ background = false }: GalleryRefreshOptions = {}): Promise<void> {
-    if (!galleryEl) setupGallery();
-    if (!galleryEl) return;
-
-    const host = document.getElementById('gallery-view');
-    if (galleryEl !== host || !galleryHandle) setupGallery();
-    if (!galleryEl) return;
+    if (!galleryEl || galleryEl !== document.getElementById('gallery-view')) return;
 
     const token = background ? renderToken : ++renderToken;
     const backgroundToken = background ? ++backgroundRenderToken : 0;
@@ -152,7 +137,7 @@ async function openGalleryLightbox(index: number): Promise<void> {
         thumbUrl: cachedThumb(channelId, it.msgId),
     }));
     const preview = await import('./modals/preview');
-    preview.setupPreviewModal();
+    preview.activatePreviewModal();
     await preview.openPreviewList(items, index);
 }
 

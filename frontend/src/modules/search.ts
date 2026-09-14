@@ -22,6 +22,7 @@ import type { RootFile, SearchHit } from '../types';
 
 let activeToken = 0;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let disconnectSearchBar: (() => void) | null = null;
 let colDateEl: HTMLElement | null = null;
 let telegramRootRequest: Promise<RootFile[]> | null = null;
 let telegramRootRequestDriveKey: string | null = null;
@@ -353,35 +354,47 @@ function scheduleSearch() {
     }, 160);
 }
 
-export function setupSearchBar() {
+export function activateSearchBar(): () => void {
+    disconnectSearchBar?.();
     const input = getSearchInput();
-    if (!input) return;
+    if (!input) return () => {};
 
-    input.value = String(state.searchQuery || "");
-
-    input.addEventListener("input", () => {
-        state.searchQuery = String(input.value || "");
+    input.value = String(state.searchQuery || '');
+    const handleInput = () => {
+        state.searchQuery = String(input.value || '');
         scheduleSearch();
-    });
-
-    input.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") {
-            if (!String(state.searchQuery || "").trim()) return;
-            e.preventDefault();
+    };
+    const handleKeydown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+            if (!String(state.searchQuery || '').trim()) return;
+            event.preventDefault();
             clearSearch();
-        } else if (e.key === "Enter") {
-            if (!String(state.searchQuery || "").trim()) return;
-            e.preventDefault();
-            runGlobalSearch();
+        } else if (event.key === 'Enter') {
+            if (!String(state.searchQuery || '').trim()) return;
+            event.preventDefault();
+            void runGlobalSearch();
         }
-    });
-
-    window.addEventListener("keydown", (e) => {
-        const isFind = (e.metaKey || e.ctrlKey) && (e.key === "f" || e.key === "F");
-        if (!isFind) return;
-        if (document.activeElement === input) return;
-        e.preventDefault();
+    };
+    const handleFindShortcut = (event: KeyboardEvent) => {
+        const isFind = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f';
+        if (!isFind || document.activeElement === input) return;
+        event.preventDefault();
         input.focus();
         input.select();
-    });
+    };
+
+    input.addEventListener('input', handleInput);
+    input.addEventListener('keydown', handleKeydown);
+    window.addEventListener('keydown', handleFindShortcut);
+
+    const disconnect = () => {
+        if (disconnectSearchBar !== disconnect) return;
+        disconnectSearchBar = null;
+        cancelScheduledSearch();
+        input.removeEventListener('input', handleInput);
+        input.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('keydown', handleFindShortcut);
+    };
+    disconnectSearchBar = disconnect;
+    return disconnect;
 }

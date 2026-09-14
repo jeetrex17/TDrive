@@ -6,6 +6,7 @@ export * from "./api/media";
 export * from "./api/mount";
 export * from "./api/operation";
 export * from "./api/runtime";
+export { BackendInvocationError } from "./api/gateway";
 export * from "./api/session";
 export * from "./api/updates";
 

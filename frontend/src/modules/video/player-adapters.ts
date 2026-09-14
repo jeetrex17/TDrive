@@ -580,7 +580,7 @@ export class NativeMediaStateRouter {
 
     bind(): void {
         if (this.unsubscribe) return;
-        this.unsubscribe = onRuntimeEvent<[unknown]>('native_media_state', (value) => this.route(value));
+        this.unsubscribe = onRuntimeEvent('native_media_state', (value) => this.route(value));
     }
 
     unbind(): void {

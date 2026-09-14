@@ -22,118 +22,135 @@
 // the store.
 
 import { get } from 'svelte/store';
+import { toAppError, type AppErrorSource } from './errors';
 import { pushHistoryEvent } from './notif-bell';
-import ToastStack from '../ui/notifications/ToastStack.svelte';
 import { toasts, type ToastItem, type ToastLevel } from '../ui/notifications/toast-store';
-import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 const MAX_VISIBLE = 5;
 const DEFAULT_DURATION = 4000;
 const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
 const LEVELS: readonly ToastLevel[] = ['info', 'success', 'warning', 'error'];
 
-let stackHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 let allPaused = false;
 const individuallyPaused = new Set<string>();
 
-export function setupNotifications() {
-    if (stackHandle) return;
+function handleToastEscape(event: KeyboardEvent): void {
+    if (event.key !== 'Escape') return;
+    const lastError = [...get(toasts)].reverse().find((toast) => toast.level === 'error');
+    if (lastError) dismissNotification(lastError.id);
+}
 
-    const stackEl = document.createElement('div');
-    stackEl.id = 'toast-stack';
-    stackEl.className = 'toast-stack';
-    stackEl.setAttribute('role', 'status');
-    stackEl.setAttribute('aria-live', 'polite');
-    document.body.appendChild(stackEl);
-
-    stackHandle = mountSvelte(ToastStack, {
-        target: stackEl,
-        props: {
-            onDismiss: dismissNotification,
-            onPauseToast: pauseToast,
-            onResumeToast: resumeToast,
-            onPauseAll: () => setAllPaused(true),
-            onResumeAll: () => setAllPaused(false),
-        },
-    });
-
-    // Esc clears the most recent error toast (sticky errors otherwise
-    // require a manual click). A modal's own Escape handling runs in the
-    // capture phase and stops propagation, so this never fires behind one.
-    window.addEventListener('keydown', (e) => {
-        if (e.key !== 'Escape') return;
-        const lastError = [...get(toasts)].reverse().find((t) => t.level === 'error');
-        if (lastError) dismissNotification(lastError.id);
-    });
-
-    // A suspended WebView can wake long after a timeout's deadline. Reconcile
-    // against wall-clock time immediately instead of waiting for a clamped
-    // background timer to run.
+export function activateNotificationEffects(): () => void {
+    window.addEventListener('keydown', handleToastEscape);
     document.addEventListener('visibilitychange', handleAppWake);
     window.addEventListener('focus', handleAppWake);
     window.addEventListener('pageshow', handleAppWake);
-
     rescheduleExpiry();
+
+    return () => {
+        window.removeEventListener('keydown', handleToastEscape);
+        document.removeEventListener('visibilitychange', handleAppWake);
+        window.removeEventListener('focus', handleAppWake);
+        window.removeEventListener('pageshow', handleAppWake);
+        clearExpiryTimer();
+    };
+}
+
+export function pauseAllNotifications(): void {
+    setAllPaused(true);
+}
+
+export function resumeAllNotifications(): void {
+    setAllPaused(false);
 }
 
 // notify enqueues a toast. Returns its id; pass the same id back via
 // `notify({ id })` to replace an existing entry in place (used for
 // long-running operations).
-export function notify(opts: any = {}) {
-    const level: ToastLevel = LEVELS.includes(opts.level) ? opts.level : 'info';
-    const id = opts.id || `t${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const sticky = opts.sticky === true || level === 'error' || opts.durationMs === 0;
-    const duration = sticky ? 0 : (Number.isFinite(opts.durationMs) ? opts.durationMs : DEFAULT_DURATION);
-    const now = Date.now();
-    const paused = allPaused || individuallyPaused.has(id);
-    const entry: ToastItem = {
-        id,
-        level,
-        title: String(opts.title || ''),
-        body: opts.body ? String(opts.body) : '',
-        sticky,
-        durationMs: duration,
-        expiresAt: duration > 0 ? now + duration : 0,
-        paused,
-        ...(paused && duration > 0 ? { remainingMs: duration } : {}),
-        spinner: opts.spinner === true,
-    };
+export interface NotifyOptions {
+    id?: string;
+    level?: ToastLevel;
+    title?: string;
+    body?: string;
+    sticky?: boolean;
+    durationMs?: number;
+    spinner?: boolean;
+}
 
-    // Mirror non-spinner toasts into the bell history. In-progress sticky
-    // toasts (spinners) are skipped because their final success/failure
-    // version replaces them; the panel doesn't need both.
-    if (!entry.spinner && entry.title) {
-        pushHistoryEvent({
-            level: entry.level,
-            title: entry.title,
-            body: entry.body,
-            ts: now,
-        });
-    }
+export function notify(opts: NotifyOptions = {}) { const level: ToastLevel = opts.level && LEVELS.includes(opts.level) ? opts.level : 'info';
+const id = opts.id || `t${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+const sticky = opts.sticky === true || level === 'error' || opts.durationMs === 0;
+const duration = sticky ? 0 : (typeof opts.durationMs === 'number' && Number.isFinite(opts.durationMs) ? opts.durationMs : DEFAULT_DURATION);
+const now = Date.now();
+const paused = allPaused || individuallyPaused.has(id);
+const entry: ToastItem = {
+    id,
+    level,
+    title: String(opts.title || ''),
+    body: opts.body ? String(opts.body) : '',
+    sticky,
+    durationMs: duration,
+    expiresAt: duration > 0 ? now + duration : 0,
+    paused,
+    ...(paused && duration > 0 ? { remainingMs: duration } : {}),
+    spinner: opts.spinner === true,
+};
 
-    let evictedID = '';
-    toasts.update((list) => {
-        const idx = list.findIndex((t) => t.id === id);
-        if (idx >= 0) {
-            // Replace in place; the keyed each block morphs the same node.
-            const next = [...list];
-            next[idx] = entry;
-            return next;
-        }
-        // Cap the visible queue; if exceeded, the oldest non-sticky entry
-        // is dismissed early so urgent ones aren't drowned.
-        const next = [...list];
-        if (next.length >= MAX_VISIBLE) {
-            const stalest = next.findIndex((t) => !t.sticky);
-            [evictedID] = next.splice(stalest >= 0 ? stalest : 0, 1).map((toast) => toast.id);
-        }
-        next.push(entry);
-        return next;
+// Mirror non-spinner toasts into the bell history. In-progress sticky
+// toasts (spinners) are skipped because their final success/failure
+// version replaces them; the panel doesn't need both.
+if (!entry.spinner && entry.title) {
+    pushHistoryEvent({
+        level: entry.level,
+        title: entry.title,
+        body: entry.body,
+        ts: now,
     });
-    if (evictedID) individuallyPaused.delete(evictedID);
-    rescheduleExpiry();
-    return id;
+}
+
+let evictedID = '';
+toasts.update((list) => {
+    const idx = list.findIndex((t) => t.id === id);
+    if (idx >= 0) {
+        // Replace in place; the keyed each block morphs the same node.
+        const next = [...list];
+        next[idx] = entry;
+        return next;
+    }
+    // Cap the visible queue; if exceeded, the oldest non-sticky entry
+    // is dismissed early so urgent ones aren't drowned.
+    const next = [...list];
+    if (next.length >= MAX_VISIBLE) {
+        const stalest = next.findIndex((t) => !t.sticky);
+        [evictedID] = next.splice(stalest >= 0 ? stalest : 0, 1).map((toast) => toast.id);
+    }
+    next.push(entry);
+    return next;
+});
+if (evictedID) individuallyPaused.delete(evictedID);
+rescheduleExpiry();
+return id; }
+export interface AppErrorNotificationOptions {
+    id?: string;
+    title?: string;
+    source?: AppErrorSource;
+}
+
+/** Reports only normalized copy and contains notification-renderer failures. */
+export function notifyAppError(error: unknown, options: AppErrorNotificationOptions = {}): string | null {
+    const appError = toAppError(error, { source: options.source });
+    try {
+        return notify({
+            id: options.id,
+            level: 'error',
+            title: options.title ?? appError.title,
+            body: appError.message,
+            sticky: true,
+        });
+    } catch {
+        return null;
+    }
 }
 
 export function dismissNotification(id: string) {
@@ -158,7 +175,7 @@ export function clearAllNotifications() {
 // pauseToast freezes one toast's countdown while it is hovered. Stack and
 // toast hover states are tracked separately so moving between child toasts
 // cannot accidentally restart a countdown while the stack remains hovered.
-function pauseToast(id: string) {
+export function pauseToast(id: string): void {
     individuallyPaused.add(id);
     const now = Date.now();
     toasts.update((list) => list.map((toast) => {
@@ -168,7 +185,7 @@ function pauseToast(id: string) {
     rescheduleExpiry();
 }
 
-function resumeToast(id: string) {
+export function resumeToast(id: string): void {
     individuallyPaused.delete(id);
     if (allPaused) {
         rescheduleExpiry();

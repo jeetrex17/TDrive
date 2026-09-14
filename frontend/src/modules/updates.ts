@@ -19,11 +19,7 @@ import {
 import { state } from '../state';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
-import {
-    isVersionSkipped,
-    type AppVersionInfo,
-    type UpdateState,
-} from '../ui/updates/update-model';
+import { isVersionSkipped, type UpdateState } from '../ui/updates/update-model';
 import {
     appVersionInfo,
     requestUpdatesPanel,
@@ -48,8 +44,8 @@ let stopOpenUpdates: (() => void) | null = null;
 const announced = new Set<string>();
 const autoDownloaded = new Set<string>();
 
-export function setupUpdates(): void {
-    if (started) return;
+export function activateUpdates(): () => void {
+    if (started) return teardownUpdates;
     started = true;
 
     stopUpdateState = onUpdateState(applyState);
@@ -65,6 +61,7 @@ export function setupUpdates(): void {
         .catch((err) => console.warn('GetUpdateState failed:', err));
 
     scheduleChecks();
+    return teardownUpdates;
 }
 
 export function teardownUpdates(): void {

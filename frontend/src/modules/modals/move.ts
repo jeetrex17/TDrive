@@ -14,7 +14,6 @@ import { clearSelection } from '../selection';
 import { buildFolderIndex, collectDescendants } from '../folder-index';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
-import MoveModal from '../../ui/modals/MoveModal.svelte';
 import {
     moveBrowse,
     moveModal,
@@ -26,9 +25,6 @@ import type {
     FileCommandTarget,
     FolderCommandItem,
 } from '../../ui/file-list/types';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
-
-let moveModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let pendingTarget: FileCommandTarget | null = null;
 let browseEpoch = 0;
 
@@ -99,30 +95,21 @@ async function computeBlocked(target: FileCommandTarget): Promise<void> {
     }
     moveBrowse.update((browse) => ({ ...browse, blocked }));
 }
-
-export function setupMoveModal(): void {
-    const modal = document.getElementById('move-modal');
-    if (!modal || moveModalHandle) return;
-
-    modal.replaceChildren();
-    moveModalHandle = mountSvelte(MoveModal, {
-        target: modal,
-        props: {
-            onOpenFolder: (entry: MoveFolderEntry) => {
-                void browseTo([...get(moveBrowse).path, entry]);
-            },
-            onCrumb: (crumbIndex: number) => {
-                const path = get(moveBrowse).path;
-                void browseTo(crumbIndex < 0 ? [] : path.slice(0, crumbIndex + 1));
-            },
-            onBack: () => {
-                const path = get(moveBrowse).path;
-                if (path.length) void browseTo(path.slice(0, -1));
-            },
-            onConfirm: confirmMove,
-        },
-    });
+export function openMoveFolder(entry: MoveFolderEntry): void {
+    void browseTo([...get(moveBrowse).path, entry]);
 }
+
+export function navigateMoveCrumb(crumbIndex: number): void {
+    const path = get(moveBrowse).path;
+    void browseTo(crumbIndex < 0 ? [] : path.slice(0, crumbIndex + 1));
+}
+
+export function navigateMoveBack(): void {
+    const path = get(moveBrowse).path;
+    if (path.length) void browseTo(path.slice(0, -1));
+}
+
+
 
 export function openMoveModal(target: FileCommandTarget): void {
     pendingTarget = target;
@@ -132,7 +119,7 @@ export function openMoveModal(target: FileCommandTarget): void {
     void computeBlocked(target);
 }
 
-async function confirmMove(): Promise<void> {
+export async function confirmMove(): Promise<void> {
     const target = pendingTarget;
     if (!target) return;
     const browse = get(moveBrowse);

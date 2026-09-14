@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flushSync } from "svelte";
+import { flushSync, mount, unmount } from "svelte";
+import VideoModal from '../../ui/video/VideoModal.svelte';
+import { DEFAULT_PLAYBACK_PREFERENCES } from '../video/playback-preferences';
+import { updatePlaybackPreferences } from './video';
 
 const apiMocks = vi.hoisted(() => ({
     attachNativeMedia: vi.fn(),
@@ -34,6 +37,8 @@ const SHARED_SESSION_ID = "shared-session-id";
 const MKV_SESSION_ID = "mkv-session-id";
 const OLD_MKV_SESSION_ID = "old-mkv-session-id";
 const FAILED_NATIVE_SESSION_ID = "failed-native-session-id";
+let videoComponent: Record<string, unknown> | null = null;
+let deactivateVideo = () => {};
 
 vi.mock("../../api", () => apiMocks);
 
@@ -124,8 +129,8 @@ async function nextTasks(): Promise<void> {
     flushSync();
 }
 
-beforeEach(() => {
-    vi.resetModules();
+beforeEach(async () => {
+
     vi.clearAllMocks();
     runtimeMocks.events.clear();
     document.body.innerHTML = '<div id="file-list" tabindex="-1"></div><div id="video-modal" style="display:none"></div>';
@@ -141,9 +146,21 @@ beforeEach(() => {
     apiMocks.resizeNativeMedia.mockResolvedValue(undefined);
     apiMocks.showNativeSeekThumbnail.mockResolvedValue(undefined);
     apiMocks.updateMediaPlayback.mockResolvedValue(undefined);
+
+    const videoModule = await import('./video');
+        videoModule.updatePlaybackPreferences({ ...DEFAULT_PLAYBACK_PREFERENCES });
+        videoComponent = mount(VideoModal, {
+            target: document.getElementById('video-modal')!,
+            props: { onPreferencesChange: videoModule.updatePlaybackPreferences },
+        });
+    flushSync();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    deactivateVideo();
+    deactivateVideo = () => {};
+    if (videoComponent) await unmount(videoComponent);
+    videoComponent = null;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     document.body.replaceChildren();
@@ -163,7 +180,7 @@ describe("video HTML-to-native fallback", () => {
         });
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 7, name: "clip-7.mp4", size: 1024, encrypted: true });
 
         const video = document.querySelector<HTMLVideoElement>("#video-player");
@@ -224,7 +241,7 @@ describe("video HTML-to-native fallback", () => {
         apiMocks.attachNativeMedia.mockRejectedValue(new Error("native renderer unavailable"));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 8, name: "clip-8.mp4", size: 1024 });
 
         const video = document.querySelector<HTMLVideoElement>("#video-player");
@@ -254,7 +271,7 @@ describe("video HTML-to-native fallback", () => {
         }));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 9, name: "clip-9.mp4", size: 1024 });
 
         const video = document.querySelector<HTMLVideoElement>("#video-player");
@@ -289,7 +306,7 @@ describe("macOS native video layering", () => {
         apiMocks.openNativeMedia.mockResolvedValue(opened);
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 19, name: "movie-19.mkv", size: 1024 });
 
         expect(document.documentElement.classList.contains("native-video-active")).toBe(true);
@@ -309,7 +326,7 @@ describe("native seek preview platform capability", () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(23, "windows-overlay-session"));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 23, name: "windows.mkv", size: 1024 });
 
         expect(document.querySelector("#video-modal")?.classList.contains("has-native-seek-overlay")).toBe(true);
@@ -322,7 +339,7 @@ describe("native seek preview platform capability", () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(24, "linux-fallback-session"));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 24, name: "linux.mkv", size: 1024 });
 
         expect(document.querySelector("#video-modal")?.classList.contains("has-native-seek-overlay")).toBe(false);
@@ -347,8 +364,8 @@ describe("native video track pickers", () => {
         apiMocks.openNativeMedia.mockResolvedValue(opened);
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 20, name: "movie-20.mkv", size: 1024 });
 
         runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, paused: false, duration: 240, tracks });
@@ -409,7 +426,7 @@ describe("native video track pickers", () => {
     it("cycles native tracks by actual IDs, wraps through Off, and never opens settings", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(23, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 23, name: "movie.mkv" });
         runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: [
             { ...tracks[0], id: 7 }, { ...tracks[1], id: 42 },
@@ -450,7 +467,7 @@ describe("native video track pickers", () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(26, MKV_SESSION_ID));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 26, name: "movie-26.mkv", size: 1024 });
         await nextTasks();
         apiMocks.nativeMediaCommand.mockClear();
@@ -494,7 +511,7 @@ describe("native video track pickers", () => {
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(22, "html-token"));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 21, name: "movie-21.mkv", size: 1024 });
 
         const staleStateCallback = runtimeMocks.events.get("native_media_state");
@@ -553,7 +570,7 @@ describe("native video track pickers", () => {
         });
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 27, name: "movie-27.mkv", size: 1024 });
         runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks });
         await nextTasks();
@@ -576,7 +593,7 @@ describe("video picture settings", () => {
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(28, "html-aspect-token"));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 28, name: "clip-28.mp4", size: 1024 });
 
         const video = document.querySelector<HTMLVideoElement>("#video-player");
@@ -602,7 +619,7 @@ describe("video picture settings", () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(29, MKV_SESSION_ID));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 29, name: "movie-29.mkv", size: 1024 });
         runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks });
         await nextTasks();
@@ -624,8 +641,8 @@ describe("encrypted media lifecycle", () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(30, "encrypted-token"));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
 
         expect(runtimeMocks.eventsOn.mock.calls.filter(([name]) => name === "encrypted_media_sessions_closed")).toHaveLength(1);
 
@@ -642,7 +659,7 @@ describe("encrypted media lifecycle", () => {
         apiMocks.openNativeMedia.mockResolvedValue(opened);
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 31, name: "encrypted-from-backend.mkv", size: 1024 });
         runtimeMocks.events.get("encrypted_media_sessions_closed")?.({});
 
@@ -668,7 +685,7 @@ describe("native player failures", () => {
         });
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 39, name: "early-failed.mkv", size: 1024 });
 
         await vi.waitFor(() => expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith(opened.token));
@@ -682,7 +699,7 @@ describe("native player failures", () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(40, FAILED_NATIVE_SESSION_ID));
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 40, name: "failed.mkv", size: 1024 });
 
         const stateCallback = runtimeMocks.events.get("native_media_state");
@@ -720,7 +737,7 @@ describe("native player failures", () => {
         apiMocks.openNativeMedia.mockResolvedValue(opened);
 
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 41, name: "wayland.mkv", size: 1024 });
         await nextTasks();
 
@@ -748,7 +765,7 @@ describe("playback settings dock", () => {
     it("shows every track without search and returns focus to the gear on Escape", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(31, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 31, name: "movie.mkv" });
         runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: Array.from({ length: 50 }, (_, index) => ({ id: index + 1, type: "subtitle", title: `Language ${index + 1}`, selected: index === 29 })) });
         await nextTasks();
@@ -774,7 +791,7 @@ describe("playback settings dock", () => {
         vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) });
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(34, SHARED_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 34, name: "clip.mp4" });
         const video = document.querySelector<HTMLVideoElement>("#video-player")!;
         const speed = document.querySelector<HTMLButtonElement>("#video-speed-button")!;
@@ -820,7 +837,7 @@ describe("playback settings dock", () => {
         vi.stubGlobal("localStorage", { getItem: () => null, setItem });
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 32, name: "styled-subtitles.mkv" });
         await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sub-ass-override", "scale"]));
         openSettings("subtitle");
@@ -856,7 +873,7 @@ describe("playback settings dock", () => {
         vi.stubGlobal("localStorage", { getItem: () => null, setItem });
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 32, name: "background.mkv" });
         await nextTasks();
         openSettings("subtitle");
@@ -903,12 +920,13 @@ describe("playback settings dock", () => {
     });
 
     it("saves unchanged legacy custom appearance and keeps drafts separate from picture changes", async () => {
-        const legacy = { pictureMode: "fit", subtitleFontSize: 52, subtitleColor: "#FF0000", subtitleOutlineSize: 3, subtitleBackground: true, overrideStyledSubtitles: false };
+        const legacy = { pictureMode: "fit" as const, subtitleFontSize: 52, subtitleColor: "#FF0000", subtitleOutlineSize: 3, subtitleBackground: true, overrideStyledSubtitles: false };
         const setItem = vi.fn();
         vi.stubGlobal("localStorage", { getItem: () => JSON.stringify(legacy), setItem });
+                updatePlaybackPreferences({ ...legacy, subtitleBackgroundColor: "#000000", subtitleBackgroundTransparency: 31 });
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 32, name: "legacy.mkv" });
         await nextTasks();
         openSettings("subtitle");
@@ -939,7 +957,7 @@ describe("playback settings dock", () => {
     it("explains when the selected subtitle track cannot use text styling", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 32, name: "image-subtitles.mkv" });
         runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: [
             { id: 1, type: "subtitle", codec: "hdmv_pgs_subtitle", selected: true },
@@ -958,7 +976,7 @@ describe("playback settings dock", () => {
     it("applies picture and subtitle preferences, resets appearance, and uses an exact native speed", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(32, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 32, name: "movie.mkv", size: 1024 });
         await nextTasks();
         document.querySelector<HTMLButtonElement>("#video-picture-button")?.click();
@@ -1001,7 +1019,7 @@ describe("playback settings dock", () => {
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(34, SHARED_SESSION_ID));
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(35, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 34, name: "clip.mp4", size: 1024 });
         document.querySelector<HTMLButtonElement>("#video-picture-button")?.click();
         document.querySelector<HTMLButtonElement>('[data-picture-mode="fill"]')?.click();
@@ -1041,7 +1059,7 @@ describe("playback settings dock", () => {
         });
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(33, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 33, name: "movie.mkv", size: 1024 });
         await nextTasks();
         const viewport = document.querySelector<HTMLElement>("#video-native-viewport")!;
@@ -1083,7 +1101,7 @@ describe("playback speed slider", () => {
     it("changes native speed without closing the panel or hijacking arrow keys", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(40, MKV_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 40, name: "movie.mkv", size: 1024 });
         await nextTasks();
         openSettings("speed");
@@ -1114,7 +1132,7 @@ describe("video finish time", () => {
     it("toggles a local estimate and updates for rate, seek, pause, midnight and unknown duration", async () => {
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(7, SHARED_SESSION_ID));
         const videoModule = await import("./video");
-        videoModule.setupVideoModal();
+        deactivateVideo = videoModule.activateVideoModal();
         await videoModule.openVideoModal({ id: 7, name: "clip-7.mp4" });
         vi.useFakeTimers();
         vi.setSystemTime(new Date(2026, 8, 5, 23, 50, 0));

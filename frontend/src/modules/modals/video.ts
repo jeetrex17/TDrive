@@ -42,8 +42,7 @@ import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from "../../ui/modals/modal-a11y";
-import VideoModal from "../../ui/video/VideoModal.svelte";
-import { mountSvelte, type SvelteMountHandle } from "../../ui/mount";
+import { videoPlaybackPreferences } from "../../ui/video/video-preferences-store";
 
 const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
@@ -113,7 +112,7 @@ let streamActivityAt = 0;
 let mediaMetaBaseText = "";
 let mediaMetaBytes = 0;
 let a11y: ReturnType<typeof installModalA11y> | null = null;
-let videoMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let videoHostObserver: MutationObserver | null = null;
 let videoHostEl: HTMLElement | null = null;
 let unbindVideoDOM: (() => void) | null = null;
 let unbindSpeedMenu: (() => void) | null = null;
@@ -540,10 +539,10 @@ class TrackPicker {
     }
 }
 
-function updatePlaybackPreferences(value: PlaybackPreferences) {
+export function updatePlaybackPreferences(value: PlaybackPreferences): void {
     playbackPreferences = normalizePlaybackPreferences(value);
+    videoPlaybackPreferences.set(playbackPreferences);
     savePlaybackPreferences(playbackPreferences);
-    (videoMarkupHandle?.instance.setPreferences as ((value: PlaybackPreferences) => void) | undefined)?.(playbackPreferences);
     syncAspectButton();
     if (activeAdapter instanceof NativeMpvAdapter) activeAdapter.applyPreferences(playbackPreferences);
     applyHtmlPicture();
@@ -1147,7 +1146,7 @@ function activateNativePlayback(
 
 export async function openVideoModal(target: VideoOpenTarget) {
     const host = byID<HTMLElement>("video-modal");
-    if (videoHostEl !== host || !videoSetupComplete) setupVideoModal();
+    if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
     if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
     const id = Number(target.id || 0);
     if (!id) return;
@@ -1426,9 +1425,8 @@ export function teardownVideoModal(): void {
     audioPicker = null;
     subtitlePicker = null;
 
-    const markupHandle = videoMarkupHandle;
-    videoMarkupHandle = null;
-    void markupHandle?.destroy();
+    videoHostObserver?.disconnect();
+    videoHostObserver = null;
 
     modalEl = null;
     stageEl = null;
@@ -1450,18 +1448,20 @@ export function teardownVideoModal(): void {
     videoSetupComplete = false;
 }
 
-export function setupVideoModal(): boolean {
+export function activateVideoModal(): () => void {
     const host = byID<HTMLElement>("video-modal");
     if (!host) {
-        if (videoSetupComplete || videoHostEl || videoMarkupHandle) teardownVideoModal();
-        return false;
+        if (videoSetupComplete || videoHostEl) teardownVideoModal();
+        return () => {};
     }
-    if (videoSetupComplete && videoHostEl === host && videoDOM?.modal === host) return true;
-    if (videoSetupComplete || videoHostEl || videoMarkupHandle) teardownVideoModal();
+    if (videoSetupComplete && videoHostEl === host && videoDOM?.modal === host) return teardownVideoModal;
+    if (videoSetupComplete || videoHostEl) teardownVideoModal();
 
-    host.replaceChildren();
-    videoMarkupHandle = mountSvelte(VideoModal, { target: host, props: { initialPreferences: playbackPreferences, onPreferencesChange: updatePlaybackPreferences } });
     videoHostEl = host;
+    videoHostObserver = new MutationObserver(() => {
+        if (!host.isConnected) teardownVideoModal();
+    });
+    videoHostObserver.observe(document.body, { childList: true, subtree: true });
 
     videoDOM = collectVideoDOM();
     ({
@@ -1493,7 +1493,7 @@ export function setupVideoModal(): boolean {
     if (!modalEl || !videoEl || !stageEl) {
         console.error("Video modal setup failed. Missing #video-modal, #video-stage, or #video-player.");
         teardownVideoModal();
-        return false;
+        return () => {};
     }
 
     geometry = new VideoGeometryController({
@@ -1563,5 +1563,5 @@ export function setupVideoModal(): boolean {
         applyHtmlPicture();
     });
     applyState(EMPTY_PLAYER_STATE);
-    return true;
+    return teardownVideoModal;
 }

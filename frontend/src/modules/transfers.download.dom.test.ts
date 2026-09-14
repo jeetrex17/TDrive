@@ -74,7 +74,7 @@ async function loadModule() {
     state.transferActivity = idleTransferActivity;
     state.cancelingDownload = false;
     const mod = await import('./transfers');
-    mod.setupDownloadProgress();
+    mod.activateTransferSurfaces();
     return { mod, state, listeners };
 }
 

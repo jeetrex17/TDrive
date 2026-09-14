@@ -3,14 +3,11 @@
 import { state } from '../state';
 import { openDeleteModal } from './modals/delete';
 import { openMoveModal } from './modals/move';
-import SelectionBar from '../ui/selection/SelectionBar.svelte';
 import { setSelectionCount } from '../ui/selection/selection-bar-store';
 import { setSelectedFileRowKeys } from '../ui/file-list/row-state-store';
 import type { FileCommandItem, FileListFileRow, FileSource, FolderListRow } from '../ui/file-list/types';
-import { mountSvelte } from '../ui';
 
 const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
-let selectionBarMounted = false;
 let selectionAnchorKey = '';
 
 type LogicalFileListRow = FolderListRow | FileListFileRow;
@@ -309,38 +306,38 @@ export function getSelectionPayload(): FileCommandItem[] {
     });
 }
 
-export function setupSelectionBar(): void {
-    state.selectionBarEl = document.getElementById('selection-bar');
-    if (!state.selectionBarEl) return;
+export function openSelectedItemsDelete(): void {
+    if (state.selectedItems.size === 0) return;
+    openDeleteModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
+}
 
-    if (!selectionBarMounted) {
-        state.selectionBarEl.replaceChildren();
-        mountSvelte(SelectionBar, {
-            target: state.selectionBarEl,
-            props: {
-                onClear: () => clearSelection(),
-                onDelete: () => {
-                    if (state.selectedItems.size === 0) return;
-                    openDeleteModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
-                },
-                onMove: () => {
-                    if (state.selectedItems.size === 0) return;
-                    openMoveModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
-                },
-            },
-        });
-        selectionBarMounted = true;
-    }
+export function openSelectedItemsMove(): void {
+    if (state.selectedItems.size === 0) return;
+    openMoveModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
+}
 
+export function activateSelectionBar(): () => void {
+    const selectionBar = document.getElementById('selection-bar');
+    if (!selectionBar) return () => {};
+
+    state.selectionBarEl = selectionBar;
     const list = document.getElementById('file-list');
-    list?.addEventListener('click', (event) => {
+    const onListClick = (event: MouseEvent) => {
         if ((event.target as HTMLElement).closest('.drive-row')) return;
         clearSelection();
-    });
-
-    window.addEventListener('keydown', (event) => {
+    };
+    const onKeydown = (event: KeyboardEvent) => {
         if (event.key === 'Escape') clearSelection();
-    });
+    };
 
+    list?.addEventListener('click', onListClick);
+    window.addEventListener('keydown', onKeydown);
     updateSelectionBar();
+
+    return () => {
+        list?.removeEventListener('click', onListClick);
+        window.removeEventListener('keydown', onKeydown);
+        clearSelection();
+        if (state.selectionBarEl === selectionBar) state.selectionBarEl = null;
+    };
 }

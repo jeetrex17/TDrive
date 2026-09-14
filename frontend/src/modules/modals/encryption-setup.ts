@@ -6,11 +6,7 @@ import { createEncryptionPassword } from '../../api';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
 import { humanizeBackendError } from '../errors';
-import EncryptionSetupModal from '../../ui/modals/EncryptionSetupModal.svelte';
 import { encryptionSetupModal } from '../../ui/modals/encryption-setup-modal-store';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
-
-let encryptionSetupModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let pending: ((ok: boolean) => void) | null = null;
 
 function finish(ok: boolean): void {
@@ -21,22 +17,13 @@ function finish(ok: boolean): void {
         resolve(ok);
     }
 }
-
-export function setupEncryptionSetupModal() {
-    const modal = document.getElementById('encryption-setup-modal');
-    if (!modal || encryptionSetupModalHandle) return;
-
-    modal.replaceChildren();
-    encryptionSetupModalHandle = mountSvelte(EncryptionSetupModal, {
-        target: modal,
-        props: {
-            onCancel: () => finish(false),
-            onSubmit: submitSetup,
-        },
-    });
+export function cancelEncryptionSetup(): void {
+    finish(false);
 }
 
-async function submitSetup(password: string, confirmPassword: string, hint: string): Promise<void> {
+
+
+export async function submitEncryptionSetup(password: string, confirmPassword: string, hint: string): Promise<void> {
     if (password.length < 8) {
         encryptionSetupModal.setError('Use at least 8 characters.');
         return;

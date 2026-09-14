@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import { get } from 'svelte/store';
 
@@ -35,14 +35,13 @@ vi.mock('./notifications', () => ({
     notify: collaborators.notify,
     dismissNotification: collaborators.dismissNotification,
 }));
-vi.mock('../ui/mount', () => ({ mountSvelte: vi.fn(() => ({ destroy: vi.fn() })) }));
 
 import {
     createPersonalDrive,
     preparePersonalDriveAndContinue,
     selectPersonalDrive,
 } from './auth';
-import { authScreen } from '../ui/auth/auth-store';
+import { appView, authScreen, showAuthView, showStartupView } from '../ui/app/app-store';
 import { personalDriveSetup } from '../ui/auth/personal-drive-store';
 import { state } from '../state';
 
@@ -58,10 +57,6 @@ function deferred<T>() {
 
 beforeEach(() => {
     vi.clearAllMocks();
-    document.body.innerHTML = `
-        <div id="auth-wrapper" style="display: flex"></div>
-        <div id="success-screen" style="display: none"></div>
-    `;
     Object.defineProperty(window, 'triggerRefresh', {
         configurable: true,
         value: vi.fn(async () => undefined),
@@ -70,12 +65,8 @@ beforeEach(() => {
     authApi.syncChannel.mockResolvedValue(undefined);
     collaborators.loadChannels.mockResolvedValue(undefined);
     collaborators.loadEncryptionStatus.mockResolvedValue(undefined);
-    authScreen.set(null);
+    showStartupView();
     personalDriveSetup.reset();
-});
-
-afterEach(() => {
-    document.body.innerHTML = '';
 });
 
 describe('personal drive startup gate', () => {
@@ -91,7 +82,7 @@ describe('personal drive startup gate', () => {
         expect(authApi.discoverPersonalDrives).not.toHaveBeenCalled();
         expect(screens).not.toContain('drive');
         expect(get(authScreen)).toBeNull();
-        expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('flex');
+        expect(get(appView)).toEqual({ kind: 'dashboard' });
         expect(collaborators.loadChannels).toHaveBeenCalledOnce();
     });
 
@@ -108,7 +99,6 @@ describe('personal drive startup gate', () => {
         expect(authApi.discoverPersonalDrives).toHaveBeenCalledOnce();
         expect(get(authScreen)).toBe('drive');
         expect(get(personalDriveSetup).candidates).toHaveLength(1);
-        expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
         expect(authApi.createPersonalDrive).not.toHaveBeenCalled();
         expect(collaborators.loadChannels).not.toHaveBeenCalled();
     });
@@ -126,7 +116,6 @@ describe('personal drive startup gate', () => {
             detail: 'rpc error code 420: FLOOD_WAIT_30',
         });
         expect(authApi.createPersonalDrive).not.toHaveBeenCalled();
-        expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
     });
 
     it('surfaces a failed saved-drive activation instead of a connection hint', async () => {
@@ -166,7 +155,6 @@ describe('personal drive startup gate', () => {
 
         expect(get(authScreen)).toBe('drive');
         expect(get(personalDriveSetup).candidates).toEqual([expect.objectContaining({ id: '8300' })]);
-        expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
         expect(collaborators.loadChannels).not.toHaveBeenCalled();
     });
 
@@ -175,13 +163,13 @@ describe('personal drive startup gate', () => {
             id: '8200', title: 'TDrive', createdAt: 100,
             hasActivity: true, recommended: true,
         }]);
-        authScreen.set('drive');
+        showAuthView('drive');
         authApi.selectPersonalDrive.mockResolvedValue(undefined);
 
         await selectPersonalDrive('8200');
 
         expect(authApi.selectPersonalDrive).toHaveBeenCalledWith('8200');
-        expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('flex');
+        expect(get(appView)).toEqual({ kind: 'dashboard' });
     });
 
     it('keeps the picker active when selection fails', async () => {
@@ -189,7 +177,7 @@ describe('personal drive startup gate', () => {
             id: '8200', title: 'TDrive', createdAt: 100,
             hasActivity: true, recommended: true,
         }]);
-        authScreen.set('drive');
+        showAuthView('drive');
         authApi.selectPersonalDrive.mockRejectedValue(new Error('sync failed'));
 
         await selectPersonalDrive('8200');
@@ -198,23 +186,22 @@ describe('personal drive startup gate', () => {
         expect(get(personalDriveSetup).phase).toBe('ready');
         expect(get(personalDriveSetup).error).toContain('Could not recover');
         expect(get(personalDriveSetup).detail).toBe('sync failed');
-        expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
     });
 
     it('creates only from the explicit create action', async () => {
         personalDriveSetup.showCandidates([]);
-        authScreen.set('drive');
+        showAuthView('drive');
         authApi.createPersonalDrive.mockResolvedValue(undefined);
 
         await createPersonalDrive();
 
         expect(authApi.createPersonalDrive).toHaveBeenCalledOnce();
-        expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('flex');
+        expect(get(appView)).toEqual({ kind: 'dashboard' });
     });
 
     it('offers an honest setup retry after creation does not finish', async () => {
         personalDriveSetup.showCandidates([]);
-        authScreen.set('drive');
+        showAuthView('drive');
         authApi.createPersonalDrive.mockRejectedValue(new Error('sync failed'));
 
         await createPersonalDrive();
@@ -224,7 +211,6 @@ describe('personal drive startup gate', () => {
             createRetry: true,
         });
         expect(get(personalDriveSetup).error).toContain('previous attempt');
-        expect(document.querySelector<HTMLElement>('#success-screen')?.style.display).toBe('none');
     });
 
     it('does not publish identity from a superseded dashboard flow', async () => {

@@ -68,31 +68,32 @@ beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
     runtime.callbacks.clear();
-    document.body.innerHTML = '<div id="preview-modal" class="modal-overlay" style="display:none" aria-hidden="true"></div>';
+    document.body.innerHTML = `<div id="preview-modal" class="modal-overlay" style="display:none" aria-hidden="true">${PREVIEW_MARKUP}</div>`;
 });
 
 describe('preview modal lifecycle', () => {
     it('binds setup listeners and the progress subscription once per host', async () => {
         const preview = await import('./preview');
 
-        expect(preview.setupPreviewModal()).toBe(true);
-        expect(preview.setupPreviewModal()).toBe(true);
+        preview.activatePreviewModal();
+        preview.activatePreviewModal();
 
         expect(runtime.onRuntimeEvent).toHaveBeenCalledTimes(1);
     });
 
     it('tears down the old host before binding a replacement host', async () => {
         const preview = await import('./preview');
-        expect(preview.setupPreviewModal()).toBe(true);
+        preview.activatePreviewModal();
         const oldHost = document.getElementById('preview-modal')!;
         const replacement = document.createElement('div');
         replacement.id = 'preview-modal';
         replacement.className = 'modal-overlay';
         replacement.style.display = 'none';
         replacement.setAttribute('aria-hidden', 'true');
-        oldHost.replaceWith(replacement);
+        replacement.innerHTML = PREVIEW_MARKUP;
+                oldHost.replaceWith(replacement);
 
-        expect(preview.setupPreviewModal()).toBe(true);
+        preview.activatePreviewModal();
         expect(runtime.onRuntimeEvent).toHaveBeenCalledTimes(2);
     });
 });

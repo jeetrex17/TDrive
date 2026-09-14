@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { normalizeOperationResult, requireOperationSuccess } from "./operation";
 import { asRecord, boundedText } from "./shared";
+import { invokeBackend } from "./gateway";
 
 export const MOUNT_LABEL = "Tdrive personal" as const;
 
@@ -135,24 +136,24 @@ export function normalizeMountResult(value: unknown): MountStatusView {
 }
 
 export async function mountDrive(): Promise<MountStatusView> {
-    return normalizeMountResult(await rawMountDrive());
+    return normalizeMountResult(await invokeBackend(rawMountDrive));
 }
 
 export async function listMountableDrives(): Promise<MountableDrive[]> {
-    return normalizeMountableDrives(await rawListChannels());
+    return normalizeMountableDrives(await invokeBackend(rawListChannels));
 }
 
 export async function mountDrives(channelIds: readonly number[]): Promise<MountStatusView> {
     const selected = [...new Set(channelIds)]
         .filter((id) => Number.isSafeInteger(id) && id > 0);
     if (selected.length === 0) throw new Error('Select at least one drive to mount.');
-    return normalizeMountResult(await rawMountDrives(selected));
+    return normalizeMountResult(await invokeBackend(rawMountDrives, selected));
 }
 
 export async function getMountStatus(): Promise<MountStatusView> {
-    return normalizeMountStatus(await rawMountStatus());
+    return normalizeMountStatus(await invokeBackend(rawMountStatus));
 }
 
 export async function unmountDrive(): Promise<MountStatusView> {
-    return normalizeMountStatus(await rawUnmountDrive());
+    return normalizeMountStatus(await invokeBackend(rawUnmountDrive));
 }

@@ -14,7 +14,7 @@
 
 import { get } from 'svelte/store';
 import { state } from '../state';
-import NotifBell from '../ui/notifications/NotifBell.svelte';
+import { cancelDownload, cancelUpload } from '../api';
 import {
     historyEvents,
     notifPanelOpen,
@@ -24,11 +24,9 @@ import {
     type TransferEvent,
     type TransferStatus,
 } from '../ui/notifications/notif-store';
-import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 const HISTORY_CAP = 100;
 
-let bellHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 // Per-transfer speed sampling. Progress events arrive far more often than the
 // rounded percent changes; samples land in this O(1) sidecar on every tick,
@@ -36,19 +34,6 @@ let bellHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 // when the percent actually moves.
 const speedSamples = new Map<string, { at: number; bytes: number; speed: number }>();
 
-export function setupNotifBell() {
-    const host = document.getElementById('notif-bell-root');
-    if (!host || bellHandle) return;
-
-    host.replaceChildren();
-    bellHandle = mountSvelte(NotifBell, {
-        target: host,
-        props: {
-            onCancelDirection: cancelTransfersInDirection,
-            onClearHistory: clearHistory,
-        },
-    });
-}
 
 // pushHistoryEvent enqueues a non-transfer event (folder created, drive
 // joined, error, etc.). Returns the event id so callers can dedupe by
@@ -205,17 +190,15 @@ export function clearHistory() {
 // Rows are not marked here: the backend reports the real per-file outcome, so
 // a file that already finished (and committed) ends as Done while aborted
 // ones end as Canceled (see the upload_error / download handlers).
-function cancelTransfersInDirection(direction: TransferDirection) {
-    const app = (window as any)?.go?.main?.App;
-    try {
-        if (direction === 'down') {
-            app?.CancelDownload?.();
-            state.cancelingDownload = true;
-        } else {
-            app?.CancelUpload?.();
-            state.cancelingUpload = true;
-        }
-    } catch { /* binding optional */ }
+export function cancelTransfersInDirection(direction: TransferDirection): void {
+    if (direction === 'down') {
+        state.cancelingDownload = true;
+        void cancelDownload().catch(() => undefined);
+        return;
+    }
+
+    state.cancelingUpload = true;
+    void cancelUpload().catch(() => undefined);
 }
 
 function transferKey(direction: TransferDirection, id: string | number): string {

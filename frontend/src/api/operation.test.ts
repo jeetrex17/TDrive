@@ -33,6 +33,27 @@ describe('operation result contract', () => {
         }
     });
 
+    it('keeps raw backend details as the failure cause', () => {
+        const rawError = {
+            code: 'permission_denied',
+            message: 'Access is denied',
+            details: { requestId: 'req-7' },
+        };
+        const result = normalizeOperationResult({ ok: false, error: rawError });
+        let failure: unknown;
+
+        try {
+            requireOperationSuccess(result);
+        } catch (error) {
+            failure = error;
+        }
+
+        expect(failure).toBeInstanceOf(OperationFailure);
+        if (failure instanceof OperationFailure) {
+            expect(failure.cause).toBe(rawError);
+        }
+    });
+
     it('normalizes unknown backend codes without exposing them to control flow', () => {
         expect(normalizeOperationResult({
             ok: false,
@@ -43,9 +64,23 @@ describe('operation result contract', () => {
         });
     });
 
-    it('accepts successful operations without manufacturing an error', () => {
-        const result = normalizeOperationResult({ ok: true });
+    it('does not coerce arbitrary backend error values', () => {
+            const uncoercible = {
+                toString() {
+                    throw new Error('backend value must stay opaque');
+                },
+            };
+
+            expect(normalizeOperationResult({
+                ok: false,
+                error: { code: uncoercible, message: uncoercible },
+            }, 'Safe fallback')).toEqual({
+                ok: false,
+                error: { code: 'operation_failed', message: 'Safe fallback' },
+            });
+        });
+
+        it('accepts successful operations without manufacturing an error', () => { const result = normalizeOperationResult({ ok: true });
         expect(() => requireOperationSuccess(result)).not.toThrow();
-        expect(result).toEqual({ ok: true });
-    });
+        expect(result).toEqual({ ok: true }); });
 });

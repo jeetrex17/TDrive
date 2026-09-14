@@ -7,31 +7,18 @@ import { state } from '../../state';
 import { loadEncryptionStatus } from '../encryption';
 import { notify } from '../notifications';
 import { humanizeBackendError } from '../errors';
-import EncryptionSettingsModal from '../../ui/modals/EncryptionSettingsModal.svelte';
 import { encryptionSettingsModal } from '../../ui/modals/encryption-settings-modal-store';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
-
-let encryptionSettingsModalHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
-
-export function setupEncryptionSettingsModal() {
-    const modal = document.getElementById('encryption-settings-modal');
-    if (!modal || encryptionSettingsModalHandle) return;
-
-    modal.replaceChildren();
-    encryptionSettingsModalHandle = mountSvelte(EncryptionSettingsModal, {
-        target: modal,
-        props: {
-            onCancel: () => encryptionSettingsModal.close(),
-            onSubmit: submitChange,
-        },
-    });
+export function cancelEncryptionSettings(): void {
+    encryptionSettingsModal.close();
 }
+
+
 
 export function openEncryptionSettingsModal() {
     encryptionSettingsModal.open({ hint: String(state.encryption?.hint || '') });
 }
 
-async function submitChange(
+export async function submitEncryptionSettings(
     currentPassword: string,
     newPassword: string,
     confirmPassword: string,

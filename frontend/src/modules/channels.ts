@@ -20,6 +20,7 @@ import {
     onRuntimeEvent,
     rejectJoinRequest as rejectJoinRequestApi,
     removePendingJoin as removePendingJoinApi,
+    runtimeEventsAvailable,
     setActiveChannel,
     syncChannel,
 } from '../api';
@@ -32,16 +33,13 @@ interface ChannelRenderers {
     onActiveDriveChanged: (options?: RefreshFilesOptions) => void | Promise<void>;
 }
 
-interface LiveSyncPayload {
-    channel_id?: unknown;
-    error?: unknown;
-}
+
 
 let renderSidebar: () => void = () => undefined;
 let refreshFilesView: (options?: RefreshFilesOptions) => void | Promise<void> = () => undefined;
 const pendingLiveSyncChannels = new Set<number>();
 let processingLiveSyncRefresh = false;
-let liveSyncEventsBound = false;
+let disconnectLiveSyncEvents: (() => void) | null = null;
 
 export function bindChannelsRenderers({ onSidebarUpdate, onActiveDriveChanged }: ChannelRenderers): void {
     renderSidebar = onSidebarUpdate;
@@ -90,23 +88,42 @@ export async function loadChannels(): Promise<void> {
     }
 }
 
-export function setupLiveSyncEvents(): void {
-    if (liveSyncEventsBound) return;
-    const offCompleted = onRuntimeEvent<[LiveSyncPayload]>("live_sync_completed", (payload) => {
+export function activateLiveSyncEvents(): () => void {
+    disconnectLiveSyncEvents?.();
+    if (!runtimeEventsAvailable()) return () => {};
+
+    const stopCompleted = onRuntimeEvent('live_sync_completed', (payload) => {
         queueLiveSyncRefresh(payload);
     });
-    if (!offCompleted) return;
-    liveSyncEventsBound = true;
-    onRuntimeEvent<[LiveSyncPayload]>("live_sync_failed", (payload) => {
-        const channelId = Number(payload?.channel_id ?? 0);
+    const stopFailed = onRuntimeEvent('live_sync_failed', (payload) => {
+        const channelId = liveSyncChannelId(payload);
         const activeId = Number(state.activeChannel?.id ?? 0);
         if (channelId && channelId !== activeId) return;
-        console.warn("live sync failed:", payload?.error ?? payload);
+        console.warn('live sync failed:', liveSyncFailure(payload));
     });
+    const disconnect = () => {
+        if (disconnectLiveSyncEvents !== disconnect) return;
+        disconnectLiveSyncEvents = null;
+        stopCompleted();
+        stopFailed();
+        pendingLiveSyncChannels.clear();
+    };
+    disconnectLiveSyncEvents = disconnect;
+    return disconnect;
 }
 
-function queueLiveSyncRefresh(payload: LiveSyncPayload): void {
-    const channelId = Number(payload?.channel_id ?? 0);
+function liveSyncChannelId(payload: unknown): number {
+    if (payload === null || typeof payload !== "object" || !("channel_id" in payload)) return 0;
+    return Number(payload.channel_id ?? 0);
+}
+
+function liveSyncFailure(payload: unknown): unknown {
+    if (payload === null || typeof payload !== "object" || !("error" in payload)) return payload;
+    return payload.error;
+}
+
+function queueLiveSyncRefresh(payload: unknown): void {
+    const channelId = liveSyncChannelId(payload);
     if (!channelId) return;
     pendingLiveSyncChannels.add(channelId);
     if (processingLiveSyncRefresh) return;

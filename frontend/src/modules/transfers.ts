@@ -6,7 +6,7 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
-import { downloadFile, downloadFolder, importPaths, onNativeFileDrop, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs } from '../api';
+import { downloadFile, downloadFolder, importPaths, onNativeFileDrop, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
 import type { ImportPlan, OperationError } from '../types';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
@@ -23,15 +23,18 @@ import {
     updateTransferName,
     markTransferDone,
 } from './notif-bell';
-import UploadMenu from '../ui/chrome/UploadMenu.svelte';
-import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
 
 
-function subscribeTransferEvent<TArgs extends unknown[]>(eventName: string, callback: (...data: TArgs) => void): void {
-    onRuntimeEvent<TArgs>(eventName, callback);
+let transferUnsubscribers: RuntimeUnsubscribe[] = [];
+
+function subscribeTransferEvent<K extends keyof RuntimeEventMap>(
+    eventName: K,
+    callback: (...data: RuntimeEventMap[K]) => void,
+): RuntimeUnsubscribe {
+    const unsubscribe = onRuntimeEvent(eventName, callback);
+    transferUnsubscribers.push(unsubscribe);
+    return unsubscribe;
 }
-
-let uploadMenuHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 
 
 
@@ -60,8 +63,8 @@ function asObjectRecord(value: unknown): Record<string, unknown> {
 }
 
 
-export function setupDownloadProgress() {
-    subscribeTransferEvent<[unknown]>("download_progress", (percent) => {
+function activateDownloadProgressEvents(): void {
+    subscribeTransferEvent("download_progress", (percent) => {
         const activeKey = state.activeDownloadId;
         if (activeKey === null) return;
         const value = Number(percent);
@@ -79,7 +82,7 @@ export function setupDownloadProgress() {
         updateTransferProgress({ id: item.key, direction: 'down', progress: nextProgress });
     });
 
-    subscribeTransferEvent<[unknown]>("folder_download_progress", (rawPayload) => {
+    subscribeTransferEvent("folder_download_progress", (rawPayload) => {
         const activeKey = state.activeDownloadId;
         if (activeKey === null) return;
         const item = state.downloadQueue.find((entry) => entry.key === activeKey);
@@ -303,8 +306,8 @@ function refreshImportRow() {
     }
 }
 
-export function setupUploadProgress() {
-    subscribeTransferEvent<[unknown, unknown, unknown, unknown]>("upload_start", (id, name, size, parentId) => {
+function activateUploadProgressEvents(): void {
+    subscribeTransferEvent("upload_start", (id, name, size, parentId) => {
         // New backends suppress detailed events during imports. Ignore any
         // strays from an older backend so a large import still keeps one row.
         if (state.importBatch) {
@@ -336,7 +339,7 @@ export function setupUploadProgress() {
         pushTransferStart({ id: uploadId, direction: 'up', name: filename, total: Number(size) || 0 });
     });
 
-    subscribeTransferEvent<[unknown, unknown]>("upload_progress", (id, percent) => {
+    subscribeTransferEvent("upload_progress", (id, percent) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         const value = Number(percent);
@@ -353,7 +356,7 @@ export function setupUploadProgress() {
         updateTransferProgress({ id: uploadId, direction: 'up', progress: clamped });
     });
 
-    subscribeTransferEvent<[unknown, unknown]>("upload_complete", (id, name) => {
+    subscribeTransferEvent("upload_complete", (id, name) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         if (state.importBatch) {
@@ -386,7 +389,7 @@ export function setupUploadProgress() {
         }
     });
 
-    subscribeTransferEvent<[unknown, unknown, unknown]>("upload_error", (id, name, message) => {
+    subscribeTransferEvent("upload_error", (id, name, message) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         if (state.importBatch) {
@@ -442,7 +445,7 @@ export function setupUploadProgress() {
     });
 
     // Live phase label: "Extracting backup.zip", "Adding Photos", etc.
-    subscribeTransferEvent<[unknown]>("import_progress", (info) => {
+    subscribeTransferEvent("import_progress", (info) => {
         if (!state.importBatch) return;
         const payload = asObjectRecord(info);
         const label = String(payload.label ?? "").trim();
@@ -450,7 +453,7 @@ export function setupUploadProgress() {
     });
 
     // Folders done, uploads begin: now we know the real file count.
-    subscribeTransferEvent<[unknown]>("import_uploading", (info) => {
+    subscribeTransferEvent("import_uploading", (info) => {
         if (!state.importBatch) return;
         const payload = asObjectRecord(info);
         const files = Number(payload.files) || 0;
@@ -463,13 +466,13 @@ export function setupUploadProgress() {
         refreshImportRow();
     });
 
-    subscribeTransferEvent<[unknown]>("import_upload_progress", (info) => {
+    subscribeTransferEvent("import_upload_progress", (info) => {
         if (!state.importBatch) return;
         state.importBatch = reduceImportProgress(state.importBatch, asObjectRecord(info));
         refreshImportRow();
     });
 
-    subscribeTransferEvent<[unknown]>("import_complete", (info) => {
+    subscribeTransferEvent("import_complete", (info) => {
         importCompleteReceived = true;
         const payload = asObjectRecord(info);
         const failedUploads = Math.max(Number(payload.failed) || 0, state.importBatch?.failed || 0);
@@ -737,34 +740,19 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
 
 
 
-// setupUploadMenu wires the Upload button's popover (Files / Folder). The OS
-// dialogs cannot select files and folders together, so the entry point splits
-// them; drag-drop covers truly mixed selections.
-export function setupUploadMenu() {
-    const host = document.getElementById('upload-menu-root');
-    if (!host || uploadMenuHandle) return;
-
-    host.replaceChildren();
-    uploadMenuHandle = mountSvelte(UploadMenu, {
-        target: host,
-        props: {
-            onFiles: () => {
-                void uploadWithParentID(state.currentFolderId);
-            },
-            onFolder: () => {
-                void importFolderWithParentID(state.currentFolderId);
-            },
-        },
-    });
+export function chooseFilesForCurrentFolder(): void {
+    void uploadWithParentID(state.currentFolderId);
 }
 
-// setupFileDrop handles native OS file drops (mixed files + folders) forwarded
-// by the Go side. The drop target is the current folder.
-export function setupFileDrop() {
+export function chooseFolderForCurrentFolder(): void {
+    void importFolderWithParentID(state.currentFolderId);
+}
+
+function activateFileDropEvents(): void {
     // Modern WebKit rejects unhandled page drags, and WebView2 reports native
     // paths through Wails. Register the native drop target before the event.
-    onNativeFileDrop(() => {});
-    subscribeTransferEvent<[unknown]>('files_dropped', (payload) => {
+    transferUnsubscribers.push(onNativeFileDrop(() => {}));
+    subscribeTransferEvent('files_dropped', (payload) => {
         // If an in-app drag-to-move is underway, ignore native drops entirely
         // (macOS can still fire one for the internal drag).
         if (state.dragState) return;
@@ -780,4 +768,18 @@ export function setupFileDrop() {
         if (!target || !(target as HTMLElement).closest('#file-list')) return;
         void runImportFlow(state.currentFolderId, paths);
     });
+}
+
+export function activateTransferSurfaces(): () => void {
+    teardownTransferSurfaces();
+    activateDownloadProgressEvents();
+    activateUploadProgressEvents();
+    activateFileDropEvents();
+    return teardownTransferSurfaces;
+}
+
+export function teardownTransferSurfaces(): void {
+    const unsubscribers = transferUnsubscribers;
+    transferUnsubscribers = [];
+    for (const unsubscribe of unsubscribers) unsubscribe();
 }

@@ -4,8 +4,6 @@ import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
-import PreviewModal from '../../ui/preview/PreviewModal.svelte';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
 import type { PreviewPayload } from '../../types';
 import type { FileCommandItem } from '../../ui/file-list/types';
@@ -89,7 +87,7 @@ let activePreviewKey = "";
 let activePreviewMsgID = 0;
 let activePreviewItem: any = null;
 let chromeHideTimer: any = null;
-let previewMarkupHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let previewHostObserver: MutationObserver | null = null;
 let previewHostEl: HTMLElement | null = null;
 let previewA11y: ReturnType<typeof installModalA11y> | null = null;
 let previewProgressUnsubscribe: (() => void) | null = null;
@@ -1021,8 +1019,8 @@ export function teardownPreviewModal(): void {
         previewListenerCleanups[i]();
     }
     previewListenerCleanups.length = 0;
-    void previewMarkupHandle?.destroy();
-    previewMarkupHandle = null;
+    previewHostObserver?.disconnect();
+    previewHostObserver = null;
     previewHostEl = null;
     previewReady = false;
     previewTransition.cancel();
@@ -1056,12 +1054,11 @@ export function teardownPreviewModal(): void {
     lockedHintTextEl = null;
 }
 
-export function setupPreviewModal(): boolean {
+export function activatePreviewModal(): () => void {
     const host = document.getElementById("preview-modal");
     if (!host) {
-        if (previewHostEl || previewMarkupHandle) teardownPreviewModal();
-        previewReady = false;
-        return false;
+        if (previewHostEl) teardownPreviewModal();
+        return () => {};
     }
 
     const canReuse = previewHostEl === host
@@ -1069,19 +1066,21 @@ export function setupPreviewModal(): boolean {
         && REQUIRED_ELEMENT_IDS.every((id) => Boolean(document.getElementById(id)));
     if (canReuse) {
         updateNavChrome();
-        return true;
+        return teardownPreviewModal;
     }
-    if (previewHostEl || previewMarkupHandle || previewReady) teardownPreviewModal();
+    if (previewHostEl || previewReady) teardownPreviewModal();
 
-    host.replaceChildren();
-    previewMarkupHandle = mountSvelte(PreviewModal, { target: host, props: {} });
     previewHostEl = host;
+    previewHostObserver = new MutationObserver(() => {
+        if (!host.isConnected) teardownPreviewModal();
+    });
+    previewHostObserver.observe(document.body, { childList: true, subtree: true });
 
     const missing = REQUIRED_ELEMENT_IDS.filter((id) => !document.getElementById(id));
     if (missing.length) {
-        previewReady = false;
         console.error("Preview modal setup failed. Missing DOM elements: " + missing.join(", "));
-        return false;
+        teardownPreviewModal();
+        return () => {};
     }
 
     modalEl = document.getElementById("preview-modal");
@@ -1187,7 +1186,7 @@ export function setupPreviewModal(): boolean {
     listenPreview(imageEl, "load", (() => {
         if (infoOpen) refreshInfoPanel();
     }) as EventListener);
-    previewProgressUnsubscribe = onRuntimeEvent<[unknown, unknown]>("preview_progress", (msgID, percent) => {
+    previewProgressUnsubscribe = onRuntimeEvent("preview_progress", (msgID, percent) => {
         if (!isPreviewOpen()) return;
         const targetID = Number(msgID);
         if (!Number.isFinite(targetID) || targetID !== activePreviewMsgID) return;
@@ -1197,5 +1196,5 @@ export function setupPreviewModal(): boolean {
         void handlePreviewKeydown(event);
     }) as EventListener, true);
     updateNavChrome();
-    return true;
+    return teardownPreviewModal;
 }

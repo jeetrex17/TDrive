@@ -18,26 +18,31 @@ const OPERATION_ERROR_CODES: Record<OperationErrorCode, true> = {
     file_too_large: true,
 };
 
+const operationErrorCauses = new WeakMap<OperationError, unknown>();
+
 export function normalizeOperationResult(value: unknown, fallbackMessage = "Operation failed"): OperationResult {
     const raw = asRecord(value);
     if (raw.ok === true) return { ok: true };
 
-    const rawError = asRecord(raw.error);
-    const rawCode = String(rawError.code ?? "");
-    const code: OperationErrorCode = Object.prototype.hasOwnProperty.call(OPERATION_ERROR_CODES, rawCode)
-        ? rawCode as OperationErrorCode
-        : 'operation_failed';
-    const message = String(rawError.message ?? fallbackMessage).trim() || fallbackMessage;
-    return { ok: false, error: { code, message } };
+    const originalError = raw.error;
+    const rawError = asRecord(originalError);
+    const error: OperationError = {
+        code: operationCode(rawError.code),
+        message: operationMessage(rawError.message, fallbackMessage),
+    };
+    operationErrorCauses.set(error, originalError);
+    return { ok: false, error };
 }
 
 export class OperationFailure extends Error {
     readonly code: OperationErrorCode;
+    readonly cause: unknown;
 
     constructor(error: OperationError) {
         super(error.message);
-        this.name = 'OperationFailure';
+        this.name = "OperationFailure";
         this.code = error.code;
+        this.cause = operationErrorCauses.get(error) ?? error;
     }
 }
 
@@ -47,4 +52,15 @@ export function requireOperationSuccess(result: OperationResult): void {
 
 export function hasOperationErrorCode(error: unknown, code: OperationErrorCode): error is OperationFailure {
     return error instanceof OperationFailure && error.code === code;
+}
+
+function operationCode(value: unknown): OperationErrorCode {
+    return typeof value === "string" && Object.prototype.hasOwnProperty.call(OPERATION_ERROR_CODES, value)
+        ? value as OperationErrorCode
+        : "operation_failed";
+}
+
+function operationMessage(value: unknown, fallbackMessage: string): string {
+    if (typeof value !== "string") return fallbackMessage;
+    return value.trim() || fallbackMessage;
 }

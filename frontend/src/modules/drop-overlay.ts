@@ -113,12 +113,12 @@ export function teardownDropOverlay(): void {
     disposeOverlay?.();
 }
 
-export function setupDropOverlay(): (() => void) | undefined {
+export function activateDropOverlay(): () => void {
     teardownDropOverlay();
     overlayEl = document.getElementById('drop-overlay');
     titleEl = document.getElementById('drop-overlay-title');
     listEl = document.getElementById('file-list');
-    if (!overlayEl || !listEl) return undefined;
+    if (!overlayEl || !listEl) return () => {};
 
     const onDragOver = (event: DragEvent) => {
         if (!isFileDrag(event) || state.dragState || !state.activeChannel) return;

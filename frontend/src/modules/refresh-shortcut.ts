@@ -33,8 +33,15 @@ export function handleRefreshShortcut(
     return true;
 }
 
-export function setupRefreshShortcut(): void {
-    if (installed) return;
+export function activateRefreshShortcut(): () => void {
+    if (installed) return deactivateRefreshShortcut;
     installed = true;
     window.addEventListener('keydown', handleRefreshShortcut);
+    return deactivateRefreshShortcut;
+}
+
+function deactivateRefreshShortcut(): void {
+    if (!installed) return;
+    installed = false;
+    window.removeEventListener('keydown', handleRefreshShortcut);
 }

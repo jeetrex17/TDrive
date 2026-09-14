@@ -22,11 +22,9 @@ import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { canOpenFileViewer, isVideoFile } from './media-types';
 import { appActions, type RefreshFilesOptions } from './app-actions';
-import FileList from '../ui/file-list/FileList.svelte';
 import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
 import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
-import { mountSvelte, type SvelteMountHandle } from '../ui';
 
 type FileRowInput = {
     id?: string | number;
@@ -116,7 +114,6 @@ export function canOwnerActOnFile(file: Pick<FileRowInput, 'uploaderID' | 'uploa
 // a refresh keeps the current grid visible. It intentionally includes the drive
 // so two root folders from different drives never share scroll or selection.
 let lastRenderedFileView: FileViewIdentity | null = null;
-let fileListHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
 let fileRefreshToken = 0;
 
 function sameFileView(left: FileViewIdentity | null, right: FileViewIdentity): boolean {
@@ -127,14 +124,6 @@ export function resetFileListScrollRestore(): void {
     lastRenderedFileView = null;
 }
 
-function ensureFileListView(list: HTMLElement) {
-    if (fileListHandle) return;
-    list.replaceChildren();
-    fileListHandle = mountSvelte(FileList, {
-        target: list,
-        props: {},
-    });
-}
 
 type FileStateKind = "loading" | "empty" | "error";
 
@@ -145,7 +134,6 @@ export function renderFileState(
     body = "",
     action?: { label: string; onClick: () => void },
 ) {
-    ensureFileListView(list);
     list.removeAttribute('aria-rowcount');
     showFileListState({
         stateKind: kind,
@@ -164,7 +152,6 @@ function afterFileListPaint(list: HTMLElement, callback: () => void) {
 }
 
 export function renderFileListRows(list: HTMLElement, rows: FileListRow[], afterRender?: () => void) {
-    ensureFileListView(list);
     list.setAttribute('aria-rowcount', String(rows.length + 1));
     showFileListRows(rows);
     if (afterRender) afterFileListPaint(list, afterRender);
@@ -883,20 +870,31 @@ async function handleListDrop(e: DragEvent) {
     await performDropMove(folderID);
 }
 
-export function setupFileList() {
-    const list = document.getElementById("file-list");
-    if (list) {
-        list.addEventListener("click", handleListClick);
-        list.addEventListener("dblclick", handleListDblClick);
-        list.addEventListener("keydown", handleListKeyDown);
-        list.addEventListener("dragstart", handleListDragStart);
-        list.addEventListener("dragend", endRowDrag);
-        list.addEventListener("dragover", handleListDragOver);
-        list.addEventListener("dragleave", handleListDragLeave);
-        list.addEventListener("drop", (event) => {
-            void handleListDrop(event);
-        });
-    }
+export function activateFileList(): () => void {
+    const list = document.getElementById('file-list');
+    if (!list) return () => {};
 
+    const onDrop = (event: DragEvent) => {
+        void handleListDrop(event);
+    };
 
+    list.addEventListener('click', handleListClick);
+    list.addEventListener('dblclick', handleListDblClick);
+    list.addEventListener('keydown', handleListKeyDown);
+    list.addEventListener('dragstart', handleListDragStart);
+    list.addEventListener('dragend', endRowDrag);
+    list.addEventListener('dragover', handleListDragOver);
+    list.addEventListener('dragleave', handleListDragLeave);
+    list.addEventListener('drop', onDrop);
+
+    return () => {
+        list.removeEventListener('click', handleListClick);
+        list.removeEventListener('dblclick', handleListDblClick);
+        list.removeEventListener('keydown', handleListKeyDown);
+        list.removeEventListener('dragstart', handleListDragStart);
+        list.removeEventListener('dragend', endRowDrag);
+        list.removeEventListener('dragover', handleListDragOver);
+        list.removeEventListener('dragleave', handleListDragLeave);
+        list.removeEventListener('drop', onDrop);
+    };
 }

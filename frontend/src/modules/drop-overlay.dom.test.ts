@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { state } from '../state';
-import { setupDropOverlay, teardownDropOverlay } from './drop-overlay';
+import { activateDropOverlay } from './drop-overlay';
+
+let disposeDropOverlay: (() => void) | undefined;
 
 function fileDrag(type: string, kinds: string[]) {
     const event = new Event(type, { bubbles: true, cancelable: true });
@@ -21,11 +23,12 @@ describe('drop overlay', () => {
         state.activeChannel = { id: 1, title: 'Personal', kind: 'personal' };
         state.folderPath = [{ id: 'a', name: 'Photos' }];
         state.dragState = null;
-        setupDropOverlay();
+        disposeDropOverlay = activateDropOverlay();
     });
 
     afterEach(() => {
-        teardownDropOverlay();
+        disposeDropOverlay?.();
+        disposeDropOverlay = undefined;
         vi.useRealTimers();
         state.activeChannel = null;
         state.folderPath = [];

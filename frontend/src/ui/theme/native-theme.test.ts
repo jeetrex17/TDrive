@@ -1,11 +1,11 @@
-import { readFileSync } from 'node:fs';
+
 import { writable } from 'svelte/store';
 import { describe, expect, it, vi } from 'vitest';
 import type { ThemeState } from './theme-controller';
 import { connectNativeTheme, type NativeThemeRuntime } from './native-theme';
 import { getThemeDefinition, normalizeThemePreference, type ThemeMode } from './theme-model';
 
-const nativeThemeSource = readFileSync(new URL('./native-theme.ts', import.meta.url), 'utf8');
+
 
 function state(mode: ThemeMode, resolvedThemeId: ThemeState['resolvedThemeId']): ThemeState {
     const activeTheme = getThemeDefinition(resolvedThemeId);
@@ -83,10 +83,7 @@ describe('native theme bridge', () => {
         disconnect();
     });
 
-    it('does not retain the removed native System-theme runtime surface', () => {
-        expect(nativeThemeSource).not.toContain('WindowSetSystemDefaultTheme');
-        expect(nativeThemeSource).not.toContain('setSystemTheme');
-    });
+
 
     it('isolates native-window teardown errors from frontend theme state', () => {
         const theme = writable(state('dark', 'tokyo-night'));

@@ -1,12 +1,14 @@
-import AppShell from '../ui/AppShell.svelte';
-import { mountSvelte, type SvelteMountHandle } from '../ui/mount';
+import AppRoot from '../ui/app/AppRoot.svelte';
+import type { AppLifecycle } from '../ui/app/app-store';
+import { mountSvelte } from '../ui/mount';
 
-let shellHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+export function mountApplication(lifecycle: AppLifecycle) {
+    const target = document.getElementById('app');
+    if (!target) throw new Error('Application root #app is missing.');
 
-export function setupAppShell(): void {
-    const root = document.getElementById('app');
-    if (!root || shellHandle) return;
-
-    root.replaceChildren();
-    shellHandle = mountSvelte(AppShell, { target: root, props: {} });
+    target.replaceChildren();
+    return mountSvelte(AppRoot, {
+        target,
+        props: { lifecycle },
+    });
 }

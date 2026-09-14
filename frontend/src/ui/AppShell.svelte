@@ -1,7 +1,6 @@
 <script lang="ts">
     import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
-    import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import ImagesIcon from '@lucide/svelte/icons/images';
     import Link2Icon from '@lucide/svelte/icons/link-2';
@@ -10,6 +9,13 @@
     import { setFileSortKey, fileSortState } from './file-list/file-sort-store';
     import type { FileSortKey } from './file-list/file-sort';
     import MountControl from './mount/MountControl.svelte';
+    import FeatureLayer from './app/FeatureLayer.svelte';
+
+    interface Props {
+        dashboardVisible: boolean;
+    }
+
+    let { dashboardVisible }: Props = $props();
 
     function sortButtonLabel(key: FileSortKey): string {
         const active = $fileSortState.key === key;
@@ -34,11 +40,14 @@
     {/if}
 {/snippet}
 
-<!-- Application chrome and stable mount hosts. Runtime behavior stays in the
-     TypeScript modules that mount into these IDs. -->
-<div id="auth-wrapper"></div>
-
-<div id="success-screen" class="dashboard-container" style="display: none;">
+<!-- Semantic dashboard chrome remains mounted after runtime startup. The typed
+     root owns visibility; FeatureLayer owns persistent interactive surfaces. -->
+<div
+    id="success-screen"
+    class="dashboard-container"
+    hidden={!dashboardVisible}
+    aria-hidden={dashboardVisible ? undefined : 'true'}
+>
     <aside class="sidebar">
         <div class="logo">TDrive</div>
 
@@ -70,7 +79,9 @@
                     <Link2Icon class="icon" size={16} strokeWidth={2} aria-hidden="true" />
                     Join with link
                 </button>
-                <MountControl variant="sidebar" loadDrives={listMountableDrives} />
+                {#if dashboardVisible}
+                    <MountControl variant="sidebar" loadDrives={listMountableDrives} />
+                {/if}
             </div>
         </nav>
 
@@ -142,40 +153,10 @@
             </div>
         </div>
 
-        <div id="file-list" class="file-list-box" role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4">
-            <div class="empty-state">Loading...</div>
-        </div>
+        <div id="file-list" class="file-list-box" role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4"></div>
 
         <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos"></div>
     </main>
 </div>
 
-<div id="drop-overlay" class="drop-overlay" aria-hidden="true" hidden>
-    <div class="drop-overlay-card">
-        <CloudUploadIcon size={30} aria-hidden="true" />
-        <strong id="drop-overlay-title">Drop to add here</strong>
-        <span>Files and folders go into the open folder</span>
-    </div>
-</div>
-
-<div id="context-menu" class="context-menu"></div>
-
-<div id="folder-modal" class="modal-overlay" style="display: none;"></div>
-<div id="delete-modal" class="modal-overlay" style="display: none;"></div>
-<div id="rename-modal" class="modal-overlay" style="display: none;"></div>
-<div id="move-modal" class="modal-overlay" style="display: none;"></div>
-<div id="preview-modal" class="modal-overlay preview-overlay" style="display: none;" aria-hidden="true"></div>
-<div id="video-modal" class="modal-overlay video-overlay" style="display: none;" aria-hidden="true"></div>
-<div id="viewer-modal" class="modal-overlay file-viewer-overlay" style="display: none;" aria-hidden="true"></div>
-<div id="new-drive-modal" class="modal-overlay" style="display: none;"></div>
-<div id="join-drive-modal" class="modal-overlay" style="display: none;"></div>
-<div id="share-drive-modal" class="modal-overlay" style="display: none;"></div>
-<div id="join-requests-modal" class="modal-overlay" style="display: none;"></div>
-<div id="upload-options-modal" class="modal-overlay" style="display: none;"></div>
-<div id="import-options-modal" class="modal-overlay" style="display: none;"></div>
-<div id="encryption-setup-modal" class="modal-overlay" style="display: none;"></div>
-<div id="encryption-password-modal" class="modal-overlay" style="display: none;"></div>
-<div id="encryption-settings-modal" class="modal-overlay" style="display: none;"></div>
-<div id="mount-selection-modal" class="modal-overlay" style="display: none;" aria-hidden="true"></div>
-<div id="logout-modal" class="modal-overlay" style="display: none;"></div>
-<div id="leave-drive-modal" class="modal-overlay" style="display: none;"></div>
+<FeatureLayer />

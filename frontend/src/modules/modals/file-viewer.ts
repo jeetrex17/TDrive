@@ -3,7 +3,6 @@ import { formatBytes } from '../../utils';
 import { enqueueDownload } from '../transfers';
 import { notify } from '../notifications';
 import { canOpenFileViewer, fileKindLabel, fileOpenKind } from '../media-types';
-import FileViewerModal from '../../ui/viewers/FileViewerModal.svelte';
 import {
     closeFileViewerView,
     openFileViewerView,
@@ -11,7 +10,6 @@ import {
     setFileViewerLoading,
     type FileViewerKind,
 } from '../../ui/viewers/file-viewer-store';
-import { mountSvelte, type SvelteMountHandle } from '../../ui/mount';
 
 export interface FileViewerTarget {
     id: number;
@@ -22,7 +20,8 @@ export interface FileViewerTarget {
 
 
 
-let viewerHandle: SvelteMountHandle<Record<string, unknown>> | null = null;
+let viewerHost: HTMLElement | null = null;
+let lifecycleObserver: MutationObserver | null = null;
 let activeToken = '';
 let activeTarget: FileViewerTarget | null = null;
 let openSeq = 0;
@@ -37,19 +36,28 @@ function bindEncryptedMediaLifecycle(): void {
     });
 }
 
-export function setupFileViewerModal(): void {
-    bindEncryptedMediaLifecycle();
+export function activateFileViewerModal(): () => void {
     const host = document.getElementById('viewer-modal');
-    if (!host || viewerHandle) return;
+    if (!host) return () => {};
+    if (viewerHost === host) return teardownFileViewerModal;
 
-    host.replaceChildren();
-    viewerHandle = mountSvelte(FileViewerModal, {
-        target: host,
-        props: {
-            onClose: closeFileViewer,
-            onDownload: downloadActiveFile,
-        },
+    teardownFileViewerModal();
+    viewerHost = host;
+    bindEncryptedMediaLifecycle();
+    lifecycleObserver = new MutationObserver(() => {
+        if (!host.isConnected) teardownFileViewerModal();
     });
+    lifecycleObserver.observe(document.body, { childList: true, subtree: true });
+    return teardownFileViewerModal;
+}
+
+export function teardownFileViewerModal(): void {
+    lifecycleObserver?.disconnect();
+    lifecycleObserver = null;
+    viewerHost = null;
+    unsubscribeEncryptedSessionsClosed?.();
+    unsubscribeEncryptedSessionsClosed = null;
+    closeFileViewer();
 }
 
 
@@ -60,7 +68,6 @@ export async function openFileViewer(target: FileViewerTarget): Promise<void> {
         notify({ level: 'warning', title: `${fileKindLabel(target.name)} files cannot be opened yet` });
         return;
     }
-    bindEncryptedMediaLifecycle();
     const seq = ++openSeq;
     // The backend can reveal encryption only after a pending open completes.
     const encryptedEpoch = encryptedSessionsEpoch;
@@ -137,7 +144,7 @@ export function closeFileViewer(): void {
     closeFileViewerView();
 }
 
-function downloadActiveFile(): void {
+export function downloadActiveFile(): void {
     if (!activeTarget) return;
     enqueueDownload(activeTarget.id, activeTarget.name, activeTarget.size);
 }

@@ -3,12 +3,18 @@
 // open while one is pending joins the same visible prompt instead of
 // stranding either caller.
 
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { flushSync } from 'svelte';
-import { openUploadOptionsModal, setupUploadOptionsModal } from './upload-options';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import UploadOptionsModal from '../../ui/modals/UploadOptionsModal.svelte';
 import { uploadOptionsModal } from '../../ui/modals/upload-options-modal-store';
+import {
+    cancelUploadOptions,
+    confirmUploadOptions,
+    openUploadOptionsModal,
+} from './upload-options';
 
 let host: HTMLElement;
+let app: Record<string, unknown> | null = null;
 
 function click(selector: string): void {
     const el = host.querySelector(selector) as HTMLElement | null;
@@ -17,18 +23,24 @@ function click(selector: string): void {
     flushSync();
 }
 
-// setup mounts once for the app lifetime, so the fixture mirrors that:
-// one host and one setup call shared by every test in this file.
-beforeAll(() => {
+beforeEach(() => {
     host = document.createElement('div');
     host.id = 'upload-options-modal';
     document.body.appendChild(host);
-    setupUploadOptionsModal();
+    app = mount(UploadOptionsModal, {
+        target: host,
+        props: { onCancel: cancelUploadOptions, onConfirm: confirmUploadOptions },
+    });
+    flushSync();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    cancelUploadOptions();
     uploadOptionsModal.close();
     flushSync();
+    if (app) await unmount(app);
+    app = null;
+    host.remove();
 });
 
 describe('openUploadOptionsModal', () => {

@@ -1,171 +1,85 @@
-// TDrive Frontend - Entry Point
-// This file bootstraps the application by importing and initializing all modules
-
+import { RuntimeUnavailableError, waitForGatewayReady } from './api';
 import { state } from './state';
-import { setupAppShell } from './modules/app-shell';
 import { configureAppActions } from './modules/app-actions';
-
-// Import setup functions from modules
-import { setupSelectionBar } from './modules/selection';
-import { setupDownloadProgress, setupUploadProgress, setupUploadMenu, setupFileDrop } from './modules/transfers';
-import { setupBreadcrumb } from './modules/navigation';
-import { setupContextMenu } from './modules/context-menu';
-import { setupAuthWindowBindings, checkStatusAndShowScreen, hideAllScreens } from './modules/auth';
-import { refreshFiles, setupFileList } from './modules/file-list';
-import { setupDropOverlay } from './modules/drop-overlay';
-import { setupGallery } from './modules/gallery';
-import { setupSearchBar, runGlobalSearch } from './modules/search';
-import { setupRefreshShortcut } from './modules/refresh-shortcut';
-import { initializeTheme } from './ui/theme/theme-controller';
+import { mountApplication } from './modules/app-shell';
+import { connectAuthEvents, initializeSession } from './modules/auth';
+import { bindChannelsRenderers, refreshActiveDrive } from './modules/channels';
+import { refreshFiles } from './modules/file-list';
+import { runGlobalSearch } from './modules/search';
+import { renderSidebar } from './modules/sidebar';
+import type { AppLifecycle } from './ui/app/app-store';
 import { initializeNativeTheme } from './ui/theme/native-theme';
+import { initializeTheme } from './ui/theme/theme-controller';
 
-// Import modal setup functions
-import { setupDeleteModal } from './modules/modals/delete';
-import { setupRenameModal } from './modules/modals/rename';
-import { setupMoveModal } from './modules/modals/move';
-import { setupFolderModal } from './modules/modals/folder';
+const disposers: Array<() => void> = [initializeTheme()];
+let started = false;
+let stopped = false;
 
-import { setupNewDriveModal } from './modules/modals/new-drive';
-import { setupJoinDriveModal } from './modules/modals/join-drive';
-import { setupShareDriveModal } from './modules/modals/share-drive';
-import { setupLeaveDriveModal } from './modules/modals/leave-drive';
-import { setupJoinRequestsModal } from './modules/modals/join-requests';
-import { setupEncryptionSetupModal } from './modules/modals/encryption-setup';
-import { setupEncryptionPasswordModal } from './modules/modals/encryption-password';
-import { setupEncryptionSettingsModal } from './modules/modals/encryption-settings';
-import { setupUploadOptionsModal } from './modules/modals/upload-options';
-import { setupImportOptionsModal } from './modules/modals/import-options';
-import { setupLogoutModal } from './modules/modals/logout';
-import { setupMountSelectionModal } from './modules/modals/mount-selection';
-
-// Sidebar / drives
-import { setupSidebar, renderSidebar } from './modules/sidebar';
-import { bindChannelsRenderers, refreshActiveDrive, setupLiveSyncEvents } from './modules/channels';
-
-// Notifications
-import { setupNotifications } from './modules/notifications';
-import { setupNotifBell } from './modules/notif-bell';
-
-// Profile menu (top-right avatar dropdown)
-import { setupProfileMenu } from './modules/profile-menu';
-
-// In-app updater (GitHub releases)
-import { setupUpdates } from './modules/updates';
-
-// Apply persisted/system appearance before waiting for the native runtime so
-// authentication and startup screens never render in the wrong palette.
-const disconnectTheme = initializeTheme();
-let disconnectNativeTheme = () => {};
-
-configureAppActions({
-    refreshFiles,
-    triggerRefresh: async () => {
-        if (String(state.searchQuery || "").trim()) {
-            await runGlobalSearch();
-            return;
-        }
-        await refreshActiveDrive();
-    },
-    openFile: async (target) => {
-        const viewer = await import('./modules/modals/file-viewer');
-        viewer.setupFileViewerModal();
-        await viewer.openFileViewer(target);
-    },
-    playVideo: async (target) => {
-        const video = await import('./modules/modals/video');
-        video.setupVideoModal();
-        await video.openVideoModal(target);
-    },
-});
-
-// The Wails runtime (`window.runtime`) and bound Go methods (`window.go`) are
-// injected by the webview, not bundled by us. With the Vite dev server they can
-// land a tick after `window.onload` fires, and until then any `window.runtime`
-// access throws — which aborts the whole boot before any screen is shown and
-// leaves a blank window. Wait for them first. A packaged build has them
-// immediately (resolves at once); the timeout stops a genuinely missing runtime
-// from hanging boot forever, letting the startup error toast surface instead.
-function waitForWailsRuntime(timeoutMs = 4000): Promise<void> {
-    const ready = () => Boolean(window.runtime?.EventsOn && window.go?.main?.App);
-    if (ready()) return Promise.resolve();
-    return new Promise((resolve) => {
-        const start = Date.now();
-        const tick = () => {
-            if (ready() || Date.now() - start >= timeoutMs) resolve();
-            else setTimeout(tick, 30);
-        };
-        tick();
-    });
+function registerDisposer(dispose: () => void): void {
+    if (stopped) {
+        dispose();
+        return;
+    }
+    disposers.push(dispose);
 }
 
-// Application initialization
-window.onload = async function() {
-    console.log("App loaded. Checking Status...");
-    await waitForWailsRuntime();
-    disconnectNativeTheme = await initializeNativeTheme();
-    setupAppShell();
-    hideAllScreens();
+const lifecycle: AppLifecycle = {
+    async start(): Promise<void> {
+        if (started) return;
+        started = true;
 
-    // Notifications surface — must be set up before any other module that
-    // might emit toasts. Bell is the unified history; toasts feed into it.
-    setupNotifBell();
-    setupNotifications();
+        configureAppActions({
+            refreshFiles,
+            triggerRefresh: async () => {
+                if (state.searchQuery.trim()) {
+                    await runGlobalSearch();
+                    return;
+                }
+                await refreshActiveDrive();
+            },
+            openFile: async (target) => {
+                // Keep the media controller out of startup; it pulls in viewer-only dependencies.
+                const viewer = await import('./modules/modals/file-viewer');
+                viewer.activateFileViewerModal();
+                await viewer.openFileViewer(target);
+            },
+            playVideo: async (target) => {
+                // Video transport and player adapters stay lazy until playback is requested.
+                const video = await import('./modules/modals/video');
+                video.activateVideoModal();
+                await video.openVideoModal(target);
+            },
+        });
+        bindChannelsRenderers({
+            onSidebarUpdate: renderSidebar,
+            onActiveDriveChanged: refreshFiles,
+        });
 
-    // Setup all modals
-    setupDeleteModal();
-    setupFolderModal();
-    setupRenameModal();
-    setupMoveModal();
+        if (!(await waitForGatewayReady())) {
+            throw new RuntimeUnavailableError('App / EventsOn');
+        }
+        if (stopped) return;
 
-    setupNewDriveModal();
-    setupJoinDriveModal();
-    setupShareDriveModal();
-    setupLeaveDriveModal();
-    setupJoinRequestsModal();
-    setupEncryptionSetupModal();
-    setupEncryptionPasswordModal();
-    setupEncryptionSettingsModal();
-    setupUploadOptionsModal();
-    setupImportOptionsModal();
-    setupLogoutModal();
-    setupMountSelectionModal();
-    setupProfileMenu();
+        registerDisposer(await initializeNativeTheme());
+        if (stopped) return;
 
-    // Updater: hydrates version, listens for backend update-state events, and
-    // schedules background checks. Must follow setupNotifications (it toasts).
-    setupUpdates();
+        registerDisposer(connectAuthEvents());
+        await initializeSession();
+    },
 
-    // Setup UI components
-    setupBreadcrumb();
-    setupContextMenu();
-    setupSelectionBar();
-    setupDownloadProgress();
-    setupUploadProgress();
-    setupUploadMenu();
-    setupFileDrop();
-    setupDropOverlay();
-    setupSearchBar();
-    setupRefreshShortcut();
-    setupGallery();
-
-    // Sidebar — wire renderers BEFORE setup so the first render finds the
-    // right callbacks. setupSidebar will trigger an initial empty render;
-    // auth.js loads channels after InitDrive succeeds.
-    bindChannelsRenderers({
-        onSidebarUpdate: () => renderSidebar(),
-        onActiveDriveChanged: (options) => refreshFiles(options),
-    });
-    setupSidebar();
-
-    setupAuthWindowBindings();
-    setupFileList();
-    setupLiveSyncEvents();
-
-    // Check status and show appropriate screen
-    await checkStatusAndShowScreen();
+    stop(): void {
+        if (stopped) return;
+        stopped = true;
+        for (let index = disposers.length - 1; index >= 0; index -= 1) {
+            disposers[index]();
+        }
+        disposers.length = 0;
+    },
 };
 
+const application = mountApplication(lifecycle);
+
 window.addEventListener('beforeunload', () => {
-    disconnectTheme();
-    disconnectNativeTheme();
+    lifecycle.stop();
+    void application.destroy();
 }, { once: true });

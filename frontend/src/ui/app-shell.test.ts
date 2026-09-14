@@ -3,11 +3,10 @@ import { render } from 'svelte/server';
 import AppShell from './AppShell.svelte';
 
 describe('AppShell', () => {
-    it('renders the stable hosts the TypeScript modules mount into', () => {
-        const { body } = render(AppShell);
+    it('renders the semantic dashboard and its stable controller targets', () => {
+        const { body } = render(AppShell, { props: { dashboardVisible: true } });
 
         for (const id of [
-            'auth-wrapper',
             'success-screen',
             'drives-nav',
             'drives-personal',
@@ -19,11 +18,6 @@ describe('AppShell', () => {
             'selection-bar',
             'file-list',
             'gallery-view',
-            'context-menu',
-            'preview-modal',
-            'video-modal',
-            'mount-selection-modal',
-            'logout-modal',
         ]) {
             expect(body).toContain(`id="${id}"`);
         }

@@ -16,6 +16,7 @@ import {
 } from "../../wailsjs/go/main/App";
 import type { PersonalDriveCandidate, PersonalDriveSetup, SelfUser } from "../types";
 import { asRecord, finiteNumber } from "./shared";
+import { invokeBackend } from "./gateway";
 
 function normalizePersonalDriveCandidate(value: unknown): PersonalDriveCandidate {
     const raw = asRecord(value);
@@ -46,58 +47,58 @@ export function normalizeSelfUser(value: unknown): SelfUser {
     };
 }
 export async function checkSystemStatus(): Promise<string> {
-    return rawCheckSystemStatus();
+    return invokeBackend(rawCheckSystemStatus);
 }
 
 export async function saveSetup(apiId: number, apiHash: string): Promise<string> {
-    return rawSaveSetup(apiId, apiHash);
+    return invokeBackend(rawSaveSetup, apiId, apiHash);
 }
 
 export async function loginPhoneNumber(phone: string): Promise<void> {
-    await rawLoginPhoneNumber(phone);
+    await invokeBackend(rawLoginPhoneNumber, phone);
 }
 
 export async function submitCode(code: string): Promise<void> {
-    await rawSubmitCode(code);
+    await invokeBackend(rawSubmitCode, code);
 }
 
 export async function submitPassword(password: string): Promise<void> {
-    await rawSubmitPassword(password);
+    await invokeBackend(rawSubmitPassword, password);
 }
 
 export async function checkLoginStatus(): Promise<boolean> {
-    return rawCheckLoginStatus();
+    return invokeBackend(rawCheckLoginStatus);
 }
 
 export async function preparePersonalDrive(): Promise<PersonalDriveSetup> {
-    return normalizePersonalDriveSetup(await rawPreparePersonalDrive());
+    return normalizePersonalDriveSetup(await invokeBackend(rawPreparePersonalDrive));
 }
 
 export async function discoverPersonalDrives(): Promise<PersonalDriveCandidate[]> {
-    const drives = await rawDiscoverPersonalDrives();
+    const drives = await invokeBackend(rawDiscoverPersonalDrives);
     return (drives ?? []).map(normalizePersonalDriveCandidate);
 }
 
 export async function selectPersonalDrive(channelId: string): Promise<void> {
-    await rawSelectPersonalDrive(channelId);
+    await invokeBackend(rawSelectPersonalDrive, channelId);
 }
 
 export async function createPersonalDrive(): Promise<void> {
-    await rawCreatePersonalDrive();
+    await invokeBackend(rawCreatePersonalDrive);
 }
 
 export async function getMyUserId(): Promise<number> {
-    return rawMyUserId();
+    return invokeBackend(rawMyUserId);
 }
 export async function logout(mode: string): Promise<void> {
-    await rawLogout(mode);
+    await invokeBackend(rawLogout, mode);
 }
 
 export async function getSelfUser(): Promise<SelfUser> {
-    return normalizeSelfUser(await rawMe());
+    return normalizeSelfUser(await invokeBackend(rawMe));
 }
 
 export async function resolveUsernames(userIds: number[]): Promise<Record<string, string>> {
-    const resolved = await rawResolveUsernames(userIds);
+    const resolved = await invokeBackend(rawResolveUsernames, userIds);
     return Object.fromEntries(Object.entries(resolved ?? {}).map(([id, name]) => [id, String(name)]));
 }
