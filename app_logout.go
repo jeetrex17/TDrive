@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"TDrive/backend/auth"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // Logout signs the user out of TDrive.
@@ -53,9 +51,10 @@ func (a *App) Logout(mode string) error {
 	}); err != nil {
 		return fmt.Errorf("logout: %w", err)
 	}
-	// Quit may synchronously invoke shutdown. The terminal lifecycle bit was set
-	// under the gate above, so shutdown observes it without re-closing the mount.
-	runtime.Quit(a.ctx)
+	// Quit may synchronously invoke ServiceShutdown. The terminal lifecycle bit
+	// was set under the gate above, so shutdown observes it without re-closing
+	// the mount.
+	a.wails.Quit()
 	return nil
 }
 

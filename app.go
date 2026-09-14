@@ -23,11 +23,18 @@ import (
 	"TDrive/backend/updater"
 
 	"github.com/gotd/td/telegram"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 type App struct {
-	ctx         context.Context
+	// ctx is the lifecycle context handed to ServiceStartup. It stays valid
+	// for the life of the app and is cancelled right before shutdown; engine
+	// and service calls thread it through for cancellation, not for reaching
+	// the webview (that goes through wails below).
+	ctx context.Context
+	// wails is the running application handle, set once main() has created
+	// it. Dialogs, events, the browser opener and Quit all go through it.
+	wails       *application.App
 	engine      *core.Engine
 	Client      *telegram.Client
 	backendLock *processlock.Lock
@@ -87,14 +94,19 @@ func (s runtimeEventSink) Emit(name string, args ...any) {
 	s.app.emit(name, args...)
 }
 
-// emit forwards an event to the webview. It is a no-op until Wails has provided
-// its lifecycle context: tests and early shutdown paths hold plain contexts,
-// which runtime.EventsEmit treats as fatal rather than ignoring.
+// emit forwards an event to the webview. It is a no-op until main has wired
+// up the running application: tests and the pre-startup window construct
+// plain *App values with no wails handle.
 func (a *App) emit(name string, args ...any) {
-	if a == nil || a.ctx == nil || a.ctx.Value("events") == nil {
+	if a == nil || a.wails == nil {
 		return
 	}
-	runtime.EventsEmit(a.ctx, name, args...)
+	if args == nil {
+		args = []any{}
+	}
+	// Pass args as ONE payload: the frontend always receives a JSON array
+	// and spreads it, matching core.EventSink's variadic Emit contract.
+	a.wails.Event.Emit(name, args)
 }
 
 // resolvePeer satisfies tdsync.PeerResolver through peerResolverFn. Keeping
@@ -185,9 +197,9 @@ func (a *App) CheckLoginStatus() bool {
 }
 
 func (a *App) SelectFiles() ([]string, error) {
-	uploadfilepaths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select files to upload",
-	})
+	uploadfilepaths, err := a.wails.Dialog.OpenFile().
+		SetTitle("Select files to upload").
+		PromptForMultipleSelection()
 	if err != nil {
 		return nil, err
 	}
@@ -197,9 +209,11 @@ func (a *App) SelectFiles() ([]string, error) {
 // SelectFolder opens a directory picker and returns the chosen folder path
 // (empty if the user cancels). Folder import walks it on the Go side.
 func (a *App) SelectFolder() (string, error) {
-	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select a folder to upload",
-	})
+	return a.wails.Dialog.OpenFile().
+		CanChooseFiles(false).
+		CanChooseDirectories(true).
+		SetTitle("Select a folder to upload").
+		PromptForSingleSelection()
 }
 
 // UploadToDriveFS uploads each chosen file to the active drive. The
@@ -470,10 +484,10 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 	ctx := a.beginDownload()
 	defer a.endDownload()
 	result := svc.Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, func(defaultName string) (string, error) {
-		return runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-			DefaultFilename: defaultName,
-			Title:           "Save File As...",
-		})
+		return a.wails.Dialog.SaveFileWithOptions(&application.SaveFileDialogOptions{
+			Filename: defaultName,
+			Title:    "Save File As...",
+		}).PromptForSingleSelection()
 	})
 	return downloadOperationResult(result)
 }
@@ -490,9 +504,11 @@ func (a *App) DownloadFolder(folderID string) DownloadResult {
 	ctx := a.beginDownload()
 	defer a.endDownload()
 	result := svc.DownloadFolder(ctx, a.ActiveChannelID(), folderID, func(defaultName string) (string, error) {
-		return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-			Title: fmt.Sprintf("Choose where to save %q", defaultName),
-		})
+		return a.wails.Dialog.OpenFile().
+			CanChooseFiles(false).
+			CanChooseDirectories(true).
+			SetTitle(fmt.Sprintf("Choose where to save %q", defaultName)).
+			PromptForSingleSelection()
 	})
 	return downloadOperationResult(result)
 }
@@ -514,14 +530,6 @@ func (a *App) GetStorageUsed() (int64, error) {
 		return 0, err
 	}
 	return svc.StorageUsed(a.ActiveChannelID())
-}
-
-func (a *App) GetCodech() chan string {
-	return a.authService().Codech()
-}
-
-func (a *App) GetPassch() chan string {
-	return a.authService().Passch()
 }
 
 func NewApp() *App {
@@ -565,9 +573,9 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 	}, nil
 }
 
-// shutdown runs on app exit. Tear down the shared Telegram connection so the
-// background Run scope's goroutine exits cleanly.
-func (a *App) shutdown(ctx context.Context) {
+// ServiceShutdown runs on app exit. Tear down the shared Telegram connection
+// so the background Run scope's goroutine exits cleanly.
+func (a *App) ServiceShutdown() error {
 	mountCtx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	if err := a.shutdownMountController(mountCtx); err != nil {
 		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
@@ -584,45 +592,29 @@ func (a *App) shutdown(ctx context.Context) {
 		}
 		a.backendLock = nil
 	}
+	return nil
 }
 
-// enableFileDrop registers the native OS file-drop handler (idempotent).
-func (a *App) enableFileDrop() {
-	a.fileDropMu.Lock()
-	defer a.fileDropMu.Unlock()
-	if a.fileDropEnabled {
-		return
-	}
-	runtime.OnFileDrop(a.ctx, func(x, y int, paths []string) {
-		if len(paths) > 0 {
-			runtime.EventsEmit(a.ctx, "files_dropped", map[string]any{
-				"x":     x,
-				"y":     y,
-				"paths": paths,
-			})
-		}
-	})
-	a.fileDropEnabled = true
-}
-
-// SetFileDropEnabled toggles the native OS file-drop handler. The frontend turns
-// it off for the duration of an internal drag-to-move: on macOS the webview's
-// native drop destination otherwise intercepts the in-app HTML5 drag, which
-// breaks the move and pops the upload dialog.
+// SetFileDropEnabled toggles whether the native OS file-drop handler (wired
+// up once in main.go against the window) forwards drops to the frontend. The
+// frontend turns it off for the duration of an internal drag-to-move: on
+// macOS the webview's native drop destination otherwise intercepts the
+// in-app HTML5 drag, which breaks the move and pops the upload dialog.
 func (a *App) SetFileDropEnabled(enabled bool) {
-	if enabled {
-		a.enableFileDrop()
-		return
-	}
 	a.fileDropMu.Lock()
-	defer a.fileDropMu.Unlock()
-	if a.fileDropEnabled {
-		runtime.OnFileDropOff(a.ctx)
-		a.fileDropEnabled = false
-	}
+	a.fileDropEnabled = enabled
+	a.fileDropMu.Unlock()
 }
 
-func (a *App) startup(ctx context.Context) {
+// fileDropAllowed reports whether the native file-drop handler in main.go
+// should forward the current drop to the frontend.
+func (a *App) fileDropAllowed() bool {
+	a.fileDropMu.Lock()
+	defer a.fileDropMu.Unlock()
+	return a.fileDropEnabled
+}
+
+func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
 	a.ctx = ctx
 
 	lock, err := processlock.Acquire("gui")
@@ -632,8 +624,8 @@ func (a *App) startup(ctx context.Context) {
 		} else {
 			fmt.Printf("Warning: Failed to acquire backend lock: %v\n", err)
 		}
-		runtime.Quit(ctx)
-		return
+		a.wails.Quit()
+		return nil
 	}
 	a.backendLock = lock
 	applog.Init()
@@ -641,8 +633,9 @@ func (a *App) startup(ctx context.Context) {
 
 	// Native file drop: hand the dropped absolute paths to the frontend, which
 	// resolves the target folder and runs the import flow. Drop zones opt in via
-	// the --wails-drop-target CSS property.
-	a.enableFileDrop()
+	// the data-file-drop-target attribute. main.go registers the OS-level
+	// handler once against the window; this just turns forwarding on.
+	a.SetFileDropEnabled(true)
 
 	engine, err := core.New(ctx, core.Config{
 		Events: runtimeEventSink{app: a},
@@ -658,8 +651,8 @@ func (a *App) startup(ctx context.Context) {
 			fmt.Printf("Warning: backend lock release failed: %v\n", releaseErr)
 		}
 		a.backendLock = nil
-		runtime.Quit(ctx)
-		return
+		a.wails.Quit()
+		return nil
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
@@ -670,6 +663,7 @@ func (a *App) startup(ctx context.Context) {
 
 	fmt.Println("TDrive DB ready!")
 	a.finishUpdateCleanup(mountInitErr)
+	return nil
 }
 
 // SyncChannel triggers an incremental sync for the given channel. Wails-bound

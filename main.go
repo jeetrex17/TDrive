@@ -2,16 +2,15 @@ package main
 
 import (
 	"embed"
+	"log"
 	"os"
 	"time"
 
 	"TDrive/backend/processlock"
 	"TDrive/backend/updater"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/mac"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 //go:embed all:frontend/dist
@@ -19,7 +18,7 @@ var assets embed.FS
 
 // appVersion is stamped by the release workflow:
 //
-//	wails build -ldflags "-X main.appVersion=vX.Y.Z"
+//	wails3 task build VERSION=vX.Y.Z
 //
 // Local builds keep "dev", which disables the updater.
 var appVersion = "dev"
@@ -36,48 +35,76 @@ func main() {
 		updater.WaitForExit(pid, relaunchWait, processlock.ProcessRunning)
 	}
 
-	// Create an instance of the app structure
 	app := NewApp()
 	app.version = appVersion
 
-	// Create application with options
-	err := wails.Run(&options.App{
+	wailsApp := application.New(application.Options{
+		Name: "TDrive",
+		// The default About panel reads Name/Description/Icon (there is no
+		// v2-style mac.AboutInfo any more), so the version lives here.
+		Description: "Version " + app.version + "\nTelegram-backed desktop drive.",
+		Services: []application.Service{
+			application.NewService(app),
+		},
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
+		},
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: true,
+		},
+	})
+	app.wails = wailsApp
+	// macOS only; nil elsewhere keeps Windows/Linux without a menu bar.
+	if menu := buildAppMenu(app, wailsApp); menu != nil {
+		wailsApp.Menu.Set(menu)
+	}
+
+	window := wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "TDrive",
 		Width:     1024,
 		Height:    768,
 		MinWidth:  800,
 		MinHeight: 600,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
 		// Match the no-preference TDrive Vault canvas during native window
 		// creation. The frontend synchronises this backdrop to the resolved
-		// light/dark palette as soon as the Wails runtime is ready.
-		BackgroundColour: &options.RGBA{R: 14, G: 23, B: 28, A: 255},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
+		// light/dark palette as soon as the runtime is ready.
+		BackgroundColour: application.NewRGB(14, 23, 28),
 		// Native file drop: dropped folders and files arrive as absolute paths,
 		// which is the only way to accept a mixed files+folders selection (the
-		// OS open dialogs cannot). Drop zones opt in via the --wails-drop-target
-		// CSS property in the frontend.
-		DragAndDrop: &options.DragAndDrop{
-			EnableFileDrop: true,
-		},
-		Bind: []interface{}{
-			app,
-		},
-		// macOS only; nil elsewhere keeps Windows/Linux without a menu bar.
-		Menu: buildAppMenu(app),
-		// macOS: explicit standard titlebar so the green zoom button is
-		// fully active. Without this, the default Wails behavior leaves
-		// the button visually dim until first manual resize.
-		Mac: &mac.Options{
-			TitleBar:             mac.TitleBarDefault(),
-			WebviewIsTransparent: true,
-			About:                macAbout(app.AppVersion().Version),
+		// OS open dialogs cannot). Drop zones opt in via data-file-drop-target.
+		EnableFileDrop: true,
+		URL:            "/",
+		Mac: application.MacWindow{
+			TitleBar: application.MacTitleBarDefault,
 		},
 	})
-	if err != nil {
-		println("Error:", err.Error())
+
+	// Native file drop: hand the dropped absolute paths to the frontend, which
+	// resolves the target folder and runs the import flow. The handler itself
+	// is always registered; ServiceStartup/SetFileDropEnabled gate whether it
+	// forwards drops, since the frontend turns forwarding off for the
+	// duration of an internal drag-to-move.
+	window.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
+		if !app.fileDropAllowed() {
+			return
+		}
+		ctx := e.Context()
+		paths := ctx.DroppedFiles()
+		if len(paths) == 0 {
+			return
+		}
+		var x, y int
+		if target := ctx.DropTargetDetails(); target != nil {
+			x, y = target.X, target.Y
+		}
+		app.emit("files_dropped", map[string]any{
+			"x":     x,
+			"y":     y,
+			"paths": paths,
+		})
+	})
+
+	if err := wailsApp.Run(); err != nil {
+		log.Fatal(err)
 	}
 }
