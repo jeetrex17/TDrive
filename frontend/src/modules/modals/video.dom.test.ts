@@ -1309,6 +1309,34 @@ describe("video chrome interactions", () => {
         await videoModule.closeVideoModal();
     });
 
+    it("keeps the audio section open when the track sync reports nothing to pick", async () => {
+        const opened = nativeOpenResult(92, MKV_SESSION_ID);
+        opened.htmlControls = true;
+        apiMocks.openNativeMedia.mockResolvedValue(opened);
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 92, name: "no-tracks.mkv", size: 1024 });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, paused: false, duration: 240, tracks: [] });
+        await nextTasks();
+
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        const menu = document.querySelector<HTMLElement>("#video-audio-menu")!;
+        document.querySelector<HTMLButtonElement>("#video-picture-button")!.click();
+        document.querySelector<HTMLButtonElement>('[data-settings-section="audio"]')!.click();
+        expect(panel.hidden).toBe(false);
+
+        // A later tick still reports nothing to pick, which hides the pill. The
+        // open section has to survive that and say why it is empty.
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, paused: false, duration: 240, tracks: [] });
+        await nextTasks();
+
+        expect(panel.hidden).toBe(false);
+        expect(menu.classList.contains("is-open")).toBe(true);
+        expect(menu.textContent).toContain("No audio tracks available.");
+        await videoModule.closeVideoModal();
+    });
+
     it("closes playback settings on Escape and restores focus to the gear", async () => {
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(42, SHARED_SESSION_ID));
         const videoModule = await import("./video");

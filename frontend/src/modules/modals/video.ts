@@ -469,7 +469,11 @@ class TrackPicker {
         this.tracks = tracks;
         if (this.els.wrap) this.els.wrap.hidden = !show;
         if (!show) {
-            this.close();
+            // Hiding the command-row pill must not take the settings panel with
+            // it: the section may be on screen, and "no tracks" is a legitimate
+            // thing for it to show.
+            if (settingsSection === this.section) this.setMenuOpen(true);
+            else this.close();
             if (tracks.length === 0) {
                 this.renderedSignature = "";
                 this.els.menu?.replaceChildren();

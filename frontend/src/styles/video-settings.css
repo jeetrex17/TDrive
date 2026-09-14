@@ -1,5 +1,5 @@
 /* Surface, anchoring and motion come from .video-popover. */
-.video-settings-panel { height: min(460px, var(--video-popover-available)); }
+.video-settings-panel { height: min(480px, var(--video-popover-available)); }
 .video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
 /* One segmented control, inset concentrically inside the popover corner. */
 .video-settings-tabs {

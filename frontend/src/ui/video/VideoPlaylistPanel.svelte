@@ -225,7 +225,7 @@
 
 <style>
     .video-playlist-panel {
-        --video-popover-max-height: 560px;
+        --video-popover-max-height: 660px;
     }
 
     .video-playlist-title {
@@ -239,11 +239,11 @@
     .video-playlist-row {
         width: 100%;
         display: grid;
-        grid-template-columns: 20px minmax(0, 1fr) 18px;
+        grid-template-columns: 22px minmax(0, 1fr) 18px;
         align-items: center;
-        gap: 10px;
-        min-height: 44px;
-        padding: 7px 8px;
+        gap: 11px;
+        min-height: 50px;
+        padding: 8px 10px;
         border: 0;
         border-radius: var(--video-popover-item-radius);
         background: transparent;
@@ -268,7 +268,7 @@
 
     .video-playlist-index {
         color: #7a889f;
-        font-size: 11px;
+        font-size: 11.5px;
         font-variant-numeric: tabular-nums;
         font-weight: 650;
         text-align: right;
@@ -287,7 +287,7 @@
     .video-playlist-row-name {
         overflow: hidden;
         color: #e4eaf6;
-        font-size: 12.5px;
+        font-size: 13.5px;
         font-weight: 650;
         line-height: 1.3;
         text-overflow: ellipsis;
@@ -303,7 +303,7 @@
         align-items: center;
         gap: 6px;
         color: #7a889f;
-        font-size: 11px;
+        font-size: 11.5px;
         line-height: 1.2;
     }
 
