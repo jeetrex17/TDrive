@@ -151,28 +151,31 @@ test('keeps foreground navigation failures visible', async ({ page }) => {
     await expect(page.getByRole('alert')).toContainText('Folder is unavailable');
 });
 
-test('moves row focus and reaches row actions with the keyboard', async ({ page }) => {
+test('moves row focus and previews a selected image with Space', async ({ page }) => {
     await bootTDrive(page, {
         GetFolderContents: resolves({
             folders: [],
             files: [
-                { name: 'older.txt', size: 1, msg_id: 1, parent_id: '', upload_time: 1, uploader_id: 7, encrypted: false, plaintext_size: 0 },
-                { name: 'newer.txt', size: 2, msg_id: 2, parent_id: '', upload_time: 2, uploader_id: 7, encrypted: false, plaintext_size: 0 },
+                { name: 'older.jpg', size: 1, msg_id: 1, parent_id: '', upload_time: 1, uploader_id: 7, encrypted: false, plaintext_size: 0 },
+                { name: 'newer.jpg', size: 2, msg_id: 2, parent_id: '', upload_time: 2, uploader_id: 7, encrypted: false, plaintext_size: 0 },
             ],
         }),
+        PreviewFile: resolves({ result: { ok: true }, payload: { data_base64: RED_BASE64, mime_type: 'image/svg+xml' } }),
     });
 
-    const newest = page.getByRole('row', { name: 'File: newer.txt' });
-    const older = page.getByRole('row', { name: 'File: older.txt' });
+    const newest = page.getByRole('row', { name: 'File: newer.jpg' });
+    const older = page.getByRole('row', { name: 'File: older.jpg' });
     await expect(newest).toBeVisible();
     await newest.focus();
     await page.keyboard.press('ArrowDown');
     await expect(older).toBeFocused();
     await page.keyboard.press('Space');
     await expect(older).toHaveAttribute('aria-selected', 'true');
-    await page.keyboard.press('ArrowRight');
-    await expect(older.getByRole('button', { name: 'Open file' })).toBeFocused();
-    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('Space');
+    await expect(page.getByRole('dialog', { name: 'older.jpg' })).toBeVisible();
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', RED_URL);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'older.jpg' })).toBeHidden();
     await expect(older).toBeFocused();
 });
 
@@ -290,7 +293,7 @@ test('a Photos click wins over a pending drive switch', async ({ page }) => {
 
 
 
-test('context menus and modals move focus, close on Escape, and restore the trigger', async ({ page }) => {
+test('context menus retain vertical actions, render notifications, and restore focus', async ({ page }) => {
     await bootTDrive(page, {
         ListChannels: resolves([
             PERSONAL_CHANNEL,
@@ -302,6 +305,7 @@ test('context menus and modals move focus, close on Escape, and restore the trig
                 invite_link: 'https://example.test/invite',
             },
         ]),
+        GetInviteLink: rejects('Invite link unavailable'),
     });
     await expect(page.locator('#success-screen')).toBeVisible();
 
@@ -309,10 +313,24 @@ test('context menus and modals move focus, close on Escape, and restore the trig
     await driveActions.click();
     const menu = page.getByRole('menu');
     await expect(menu).toBeVisible();
-    await expect(menu.getByRole('menuitem').first()).toBeFocused();
+    const firstMenuItem = menu.getByRole('menuitem').first();
+    const secondMenuItem = menu.getByRole('menuitem').nth(1);
+    await expect(firstMenuItem).toBeFocused();
+    const firstBox = await firstMenuItem.boundingBox();
+    const secondBox = await secondMenuItem.boundingBox();
+    expect(firstBox).not.toBeNull();
+    expect(secondBox).not.toBeNull();
+    expect(firstBox!.width).toBeGreaterThan(150);
+    expect(secondBox!.y).toBeGreaterThan(firstBox!.y);
     await page.keyboard.press('Escape');
     await expect(menu).toBeHidden();
     await expect(driveActions).toBeFocused();
+
+    await driveActions.click();
+    await menu.getByRole('menuitem').first().click();
+    const toastStack = page.locator('#toast-stack.toast-stack');
+    await expect(toastStack).toHaveCSS('position', 'fixed');
+    await expect(toastStack.getByRole('alert')).toContainText('Could not get invite link');
 
     const newDrive = page.getByRole('button', { name: 'New shared drive' });
     await newDrive.click();

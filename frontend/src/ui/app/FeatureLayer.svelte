@@ -130,12 +130,21 @@
             activateLiveSyncEvents(),
             activateUpdates(),
         ];
+        let previewActivationCancelled = false;
+        let deactivatePreview = () => {};
+
+        void import('../../modules/modals/preview').then(({ activatePreviewModal }) => {
+            if (previewActivationCancelled) return;
+            deactivatePreview = activatePreviewModal();
+        });
 
         renderBreadcrumb();
         renderEncryptionSettingsEntry();
         void ensureProfileLoaded();
 
         return () => {
+            previewActivationCancelled = true;
+            deactivatePreview();
             for (let index = disposers.length - 1; index >= 0; index -= 1) {
                 disposers[index]();
             }
@@ -143,13 +152,15 @@
     });
 </script>
 
-<ToastStack
-    onDismiss={dismissNotification}
-    onPauseToast={pauseToast}
-    onResumeToast={resumeToast}
-    onPauseAll={pauseAllNotifications}
-    onResumeAll={resumeAllNotifications}
-/>
+<div id="toast-stack" class="toast-stack" role="status" aria-live="polite">
+    <ToastStack
+        onDismiss={dismissNotification}
+        onPauseToast={pauseToast}
+        onResumeToast={resumeToast}
+        onPauseAll={pauseAllNotifications}
+        onResumeAll={resumeAllNotifications}
+    />
+</div>
 
 {#if $appView.kind === 'dashboard'}
     <FeaturePortal hostId="drives-personal">
@@ -194,7 +205,9 @@
         <Gallery />
     </FeaturePortal>
 
-    <ContextMenu />
+    <div id="context-menu" class="context-menu">
+        <ContextMenu />
+    </div>
     <DropOverlay />
     <UpdatesPanel />
     <div id="mount-selection-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
