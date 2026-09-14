@@ -1290,6 +1290,25 @@ describe("video finish time", () => {
 });
 
 describe("video chrome interactions", () => {
+    it("keeps the settings popover open while switching sections", async () => {
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(91, SHARED_SESSION_ID));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 91, name: "tabs.mp4", size: 1024 });
+
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        document.querySelector<HTMLButtonElement>("#video-picture-button")!.click();
+        expect(panel.hidden).toBe(false);
+
+        for (const name of ["audio", "subtitle", "speed", "picture"]) {
+            const tab = document.querySelector<HTMLButtonElement>(`[data-settings-section="${name}"]`)!;
+            tab.click();
+            expect([name, panel.hidden]).toEqual([name, false]);
+            expect([name, tab.getAttribute("aria-pressed")]).toEqual([name, "true"]);
+        }
+        await videoModule.closeVideoModal();
+    });
+
     it("closes playback settings on Escape and restores focus to the gear", async () => {
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(42, SHARED_SESSION_ID));
         const videoModule = await import("./video");

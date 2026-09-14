@@ -92,7 +92,9 @@ interface VideoOpenAttempt {
 }
 
 let playbackPreferences = loadPlaybackPreferences();
-let settingsSection: "picture" | "audio" | "subtitle" | "speed" | null = null;
+const SETTINGS_SECTIONS = ["picture", "audio", "subtitle", "speed"] as const;
+type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+let settingsSection: SettingsSection | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
 let playlistOpen = false;
 let playlistReturnFocus: HTMLElement | null = null;
@@ -488,19 +490,29 @@ class TrackPicker {
         return Boolean(this.els.menu?.classList.contains("is-open"));
     }
 
+    get section(): SettingsSection {
+        return this.offLabel === null ? "audio" : "subtitle";
+    }
+
+    // setMenuOpen shows or hides just this picker's list. It deliberately
+    // leaves the settings panel alone so a section swap never closes it.
+    setMenuOpen(open: boolean) {
+        this.els.menu?.classList.toggle("is-open", open);
+        if (!open) return;
+        clearChromeTimer();
+        requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
+    }
+
     setOpen(open: boolean) {
         if (open) {
             closeMenus(this);
-            showSettingsPanel(this.offLabel === null ? "audio" : "subtitle");
+            showSettingsPanel(this.section);
+            this.setMenuOpen(true);
+            return;
         }
-        this.els.menu?.classList.toggle("is-open", open);
-        if (open) {
-            clearChromeTimer();
-            requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
-        } else {
-            if (settingsSection === (this.offLabel === null ? "audio" : "subtitle")) hideSettingsPanel();
-            if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
-        }
+        this.setMenuOpen(false);
+        if (settingsSection === this.section) hideSettingsPanel();
+        if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
     }
 
     close(restoreFocus = false) {
@@ -621,7 +633,7 @@ function syncActivePanelGeometry() {
     geometry?.syncFallbackNativeViewportInsets();
 }
 
-function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
+function showSettingsPanel(section: SettingsSection) {
     const panel = byID("video-settings-panel");
     if (!panel) return;
     settingsReturnFocus = byID("video-picture-button");
@@ -737,12 +749,8 @@ function bindSettingsPanel() {
         const button = (event.target as HTMLElement).closest<HTMLElement>("[data-settings-section]");
         if (!button) return;
         const returnFocus = settingsReturnFocus;
-        closeMenus();
-        const section = button.dataset.settingsSection;
-        if (section === "audio") audioPicker?.setOpen(true);
-        else if (section === "subtitle") subtitlePicker?.setOpen(true);
-        else if (section === "speed") setSpeedMenuOpen(true);
-        else showSettingsPanel("picture");
+        const requested = button.dataset.settingsSection;
+        showSettingsSection(SETTINGS_SECTIONS.find((value) => value === requested) ?? "picture");
         settingsReturnFocus = returnFocus;
     });
     panel?.addEventListener("keydown", (event) => {
@@ -759,6 +767,26 @@ function trackPickers() {
 
 function isAnyMenuOpen() {
     return playlistOpen || settingsSection !== null || isSpeedMenuOpen() || trackPickers().some((picker) => picker.isOpen());
+}
+
+// showSettingsSection swaps which section the open panel is showing. Routing
+// through the pickers instead would close the panel first and reopen it, which
+// reads as the popover dismissing itself on a tab click.
+function showSettingsSection(section: SettingsSection) {
+    speedMenuEl?.classList.remove("is-open");
+    for (const picker of trackPickers()) picker.setMenuOpen(false);
+    showSettingsPanel(section);
+    if (section === "audio") audioPicker?.setMenuOpen(true);
+    else if (section === "subtitle") subtitlePicker?.setMenuOpen(true);
+    else if (section === "speed") {
+        speedMenuEl?.classList.add("is-open");
+        clearChromeTimer();
+        requestAnimationFrame(() => {
+            if (isSpeedMenuOpen() && !speedMenuEl?.contains(document.activeElement)) {
+                byID("video-speed-slider")?.focus({ preventScroll: true });
+            }
+        });
+    }
 }
 
 // closeMenus closes every popover except the one about to open.

@@ -263,7 +263,7 @@
        the equalizer is a second cue rather than the only one. */
     .video-playlist-row.is-active,
     .video-playlist-row.is-switching {
-        background: rgba(122, 162, 247, 0.16);
+        background: var(--video-accent-bg, rgba(122, 162, 247, 0.2));
     }
 
     .video-playlist-index {
@@ -275,7 +275,7 @@
     }
 
     .video-playlist-row.is-active .video-playlist-index {
-        color: #8fb5ff;
+        color: var(--video-accent, #7aa2f7);
     }
 
     .video-playlist-row-copy {
@@ -338,7 +338,7 @@
     .video-playlist-playing-mark > span {
         width: 2px;
         border-radius: 1px;
-        background: #8fb5ff;
+        background: var(--video-accent, #7aa2f7);
     }
 
     .video-playlist-playing-mark > span:nth-child(1) {
@@ -356,8 +356,8 @@
     .video-playlist-switching-mark {
         width: 12px;
         height: 12px;
-        border: 2px solid rgba(143, 181, 255, 0.24);
-        border-top-color: #8fb5ff;
+        border: 2px solid var(--video-accent-ring, rgba(122, 162, 247, 0.28));
+        border-top-color: var(--video-accent, #7aa2f7);
         border-radius: 50%;
         animation: video-playlist-spin 760ms linear infinite;
     }
@@ -424,7 +424,7 @@
     }
 
     .video-playlist-switch:checked + .video-playlist-switch-track {
-        background: #7aa5ff;
+        background: var(--video-accent, #7aa2f7);
     }
 
     .video-playlist-switch:checked + .video-playlist-switch-track .video-playlist-switch-thumb {
@@ -433,7 +433,7 @@
     }
 
     .video-playlist-switch:focus-visible + .video-playlist-switch-track {
-        outline: 2px solid #91b4ff;
+        outline: 2px solid var(--video-accent, #7aa2f7);
         outline-offset: 2px;
     }
 

@@ -18,7 +18,10 @@
     position: absolute;
     z-index: 15;
     right: 12px;
-    bottom: calc(var(--video-panel-bottom, 108px) + 10px);
+    /* --video-panel-bottom reaches the controls' padding box, which sits well
+       above the seek rail. Tuck into that padding so the popover reads as
+       attached to the command row instead of floating off it. */
+    bottom: calc(var(--video-panel-bottom, 108px) - 12px);
     display: flex;
     flex-direction: column;
     width: min(380px, calc(100vw - 24px));
@@ -164,7 +167,7 @@
 }
 
 .video-popover :focus-visible {
-    outline: 2px solid #91b4ff;
+    outline: 2px solid var(--video-accent, #7aa2f7);
     outline-offset: 2px;
 }
 
