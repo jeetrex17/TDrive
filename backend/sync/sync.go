@@ -83,30 +83,46 @@ type Engine struct {
 
 	mu    stdsync.Mutex
 	locks map[int64]*stdsync.Mutex
+	// deletionsCurrent marks channels whose last incremental pass applied
+	// deletions from a Telegram difference, so ReconcileDeletions can skip
+	// its per-message existence check. Guarded by mu.
+	deletionsCurrent map[int64]bool
 }
 
 // getHistory wraps tg.GetHistory with bounded FLOOD_WAIT retries. Telegram
 // rate-limits history reads on large channels; without this a single
 // FLOOD_WAIT would abort the whole sync pass.
 func (e *Engine) getHistory(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID, offsetID int64, limit int) ([]tgclient.HistoryMessage, error) {
+	var page []tgclient.HistoryMessage
+	err := e.retryFloodWait(ctx, channelID, "history read", func() error {
+		var err error
+		page, err = e.tg.GetHistory(ctx, peer, minID, offsetID, limit)
+		return err
+	})
+	return page, err
+}
+
+// retryFloodWait runs call, sleeping through bounded FLOOD_WAITs for as long
+// as Telegram asks (capped), so one rate limit does not abort a sync pass.
+func (e *Engine) retryFloodWait(ctx context.Context, channelID int64, what string, call func() error) error {
 	for attempt := 0; ; attempt++ {
-		page, err := e.tg.GetHistory(ctx, peer, minID, offsetID, limit)
+		err := call()
 		if err == nil {
-			return page, nil
+			return nil
 		}
 		wait, ok := tgclient.FloodWaitDuration(err)
 		if !ok || attempt >= maxFloodWaitRetries {
-			return nil, err
+			return err
 		}
 		if wait > maxFloodWaitSleep {
 			wait = maxFloodWaitSleep
 		}
-		slog.Warn("sync: FLOOD_WAIT on history read, retrying", "channel_id", channelID, "attempt", attempt+1, "wait", wait)
+		slog.Warn("sync: FLOOD_WAIT on "+what+", retrying", "channel_id", channelID, "attempt", attempt+1, "wait", wait)
 		e.report(Progress{ChannelID: channelID, Phase: ProgressWaiting, Wait: wait})
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
 }
@@ -193,21 +209,26 @@ func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
 // when a local writable commit was projected ahead of sync, in which case the
 // caller must replay the completed log before reporting successful sync.
 func (e *Engine) incrementalLockedWithReplayStatus(ctx context.Context, channelID int64) (bool, error) {
-	// A drive flagged for rebuild cannot be moved forward from its watermark:
-	// the ops below it were never read, and the ones above were applied against
-	// objects that did not exist. It needs the full scan, which owns the repair.
 	channel, err := projection.GetChannel(e.db, channelID)
 	if err != nil {
 		return false, fmt.Errorf("sync: read channel authority: %w", err)
 	}
-	if channel.NeedsProjectionRebuild {
-		slog.Info("sync: rebuild pending, escalating to a full history scan", "channel_id", channelID)
-		return false, e.authoritativeLocked(ctx, channelID)
-	}
-
 	peer, err := e.peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		return false, fmt.Errorf("sync: resolve peer: %w", err)
+	}
+
+	// A drive flagged for rebuild cannot be moved forward from its watermark:
+	// the ops below it were never read, and the ones above were applied against
+	// objects that did not exist. It needs the full scan, which owns the repair.
+	if channel.NeedsProjectionRebuild {
+		slog.Info("sync: rebuild pending, escalating to a full history scan", "channel_id", channelID)
+		pts := e.currentPts(ctx, channelID, peer)
+		e.setDeletionsCurrent(channelID, false)
+		if err := e.authoritativeLocked(ctx, channelID); err != nil {
+			return false, err
+		}
+		return false, e.storePts(channelID, pts)
 	}
 
 	watermark, err := readWatermark(e.db, channelID)
@@ -219,14 +240,46 @@ func (e *Engine) incrementalLockedWithReplayStatus(ctx context.Context, channelI
 		return false, err
 	}
 
+	// With a stored pts, Telegram tells us exactly what changed: new messages
+	// and deletions in one call, no history scan and no existence check. A
+	// zero watermark means the channel was reset and needs the scan regardless.
+	replayOverlap := false
+	if channel.Pts > 0 && watermark > 0 {
+		handled, overlap, err := e.differenceLocked(ctx, channelID, peer, channel.Pts, watermark, parseOpts)
+		if err != nil {
+			return false, err
+		}
+		if handled {
+			e.setDeletionsCurrent(channelID, true)
+			return overlap, nil
+		}
+		replayOverlap = overlap
+		if watermark, err = readWatermark(e.db, channelID); err != nil {
+			return false, err
+		}
+	}
+
+	// No usable pts: scan history from the watermark. Read the pts before the
+	// scan so anything landing mid-scan is still covered by the next
+	// difference; the watermark filter drops what the scan already applied.
+	pts := e.currentPts(ctx, channelID, peer)
+	e.setDeletionsCurrent(channelID, false)
+
 	plan, err := e.planHistory(ctx, channelID, peer, watermark)
 	if err != nil {
 		return false, err
 	}
 	if len(plan.upperBounds) == 0 {
-		return false, e.adoptRecentCaptionlessMedia(ctx, channelID, peer, parseOpts)
+		err = e.adoptRecentCaptionlessMedia(ctx, channelID, peer, parseOpts)
+	} else {
+		var overlap bool
+		overlap, err = e.applyHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
+		replayOverlap = replayOverlap || overlap
 	}
-	return e.applyHistoryPlan(ctx, channelID, peer, watermark, plan, parseOpts)
+	if err != nil {
+		return false, err
+	}
+	return replayOverlap, e.storePts(channelID, pts)
 }
 
 // ReconcileDeletions checks every locally-live file's backing Telegram
@@ -243,6 +296,11 @@ func (e *Engine) ReconcileDeletions(ctx context.Context, channelID int64) (int, 
 	lk := e.lockFor(channelID)
 	lk.Lock()
 	defer lk.Unlock()
+
+	if e.deletionsCurrentFor(channelID) {
+		slog.Debug("sync: deletions already applied from channel difference, skipping existence check", "channel_id", channelID)
+		return 0, nil
+	}
 
 	refs, err := projection.LiveFileMessageIDs(e.db, channelID)
 	if err != nil {
@@ -272,7 +330,14 @@ func (e *Engine) ReconcileDeletions(ctx context.Context, channelID int64) (int, 
 	for _, id := range missing {
 		missingSet[id] = struct{}{}
 	}
+	return e.tombstoneMissing(channelID, refs, missingSet), nil
+}
 
+// tombstoneMissing tombstones every file with at least one backing message
+// in missing and returns how many it tombstoned. Missing even one part makes
+// a multipart file's content unrecoverable, so any one missing backing
+// message tombstones the whole file.
+func (e *Engine) tombstoneMissing(channelID int64, refs []projection.FileMessageRefs, missingSet map[int64]struct{}) int {
 	tombstoned := 0
 	for _, ref := range refs {
 		gone := false
@@ -292,7 +357,7 @@ func (e *Engine) ReconcileDeletions(ctx context.Context, channelID int64) (int, 
 		}
 		tombstoned++
 	}
-	return tombstoned, nil
+	return tombstoned
 }
 
 // EnsureAuthoritative guarantees that the local projection has observed the
