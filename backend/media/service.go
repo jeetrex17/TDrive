@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -97,10 +98,14 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		s.server = NewServer(s)
 	}
 
+	started := time.Now()
 	file, err := s.Resolve(ctx, channelID, fileID)
 	if err != nil {
 		return OpenResult{}, err
 	}
+	defer func() {
+		slog.Debug("media: opened session", "channel_id", channelID, "file_id", fileID, "elapsed", time.Since(started))
+	}()
 	if file.Encrypted {
 		if file.EncryptionVersion != 1 {
 			return OpenResult{}, fmt.Errorf("%w: version %d", ErrEncryptedUnsupported, file.EncryptionVersion)

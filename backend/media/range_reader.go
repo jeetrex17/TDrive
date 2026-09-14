@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -282,6 +283,15 @@ func (r *RangeReader) fetchBlock(ctx context.Context, ref tgclient.DocumentRef, 
 	if limit <= 0 {
 		return nil, io.EOF
 	}
+
+	// Foreground block latency is what a viewer actually waits on when a stream
+	// opens or seeks, so it is worth being able to see it in the log.
+	started := time.Now()
+	defer func() {
+		if !background {
+			slog.Debug("media: fetched block from telegram", "offset", blockStart, "bytes", limit, "elapsed", time.Since(started))
+		}
+	}()
 
 	buf := make([]byte, limit)
 	err := r.retry.Do(ctx, func() error {
