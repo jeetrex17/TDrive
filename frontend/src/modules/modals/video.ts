@@ -344,7 +344,7 @@ function syncSpeed(state: PlayerState) {
     const customInput = byID<HTMLInputElement>("video-speed-custom-input");
     if (speedBtnEl) {
         speedBtnEl.textContent = `${formatRate(state.rate)}x`;
-        speedBtnEl.title = `Playback speed: ${formatRate(state.rate)}x. Click to cycle`;
+        speedBtnEl.title = `Choose playback speed: ${formatRate(state.rate)}x`;
         speedBtnEl.setAttribute("aria-label", speedBtnEl.title);
     }
     if (customInput && document.activeElement !== customInput) {
@@ -387,7 +387,7 @@ interface TrackPickerElements {
     menu: HTMLElement | null;
 }
 
-// TrackPicker provides direct cycling and full choices in the settings dock.
+// TrackPicker opens its full choices in the settings dock.
 class TrackPicker {
     private tracks: NativeMediaTrack[] = [];
     private renderedSignature = "";
@@ -400,7 +400,7 @@ class TrackPicker {
     ) {
         els.button?.addEventListener("click", (event) => {
             event.stopPropagation();
-            this.cycle();
+            this.setOpen(true);
             revealChrome();
         });
         els.menu?.addEventListener("click", (event) => {
@@ -495,13 +495,6 @@ class TrackPicker {
         revealChrome();
     }
 
-    private cycle() {
-        if (!this.visible || this.tracks.length === 0) return;
-        const options: Array<number | null> = this.tracks.map((track) => track.id);
-        const choices = this.offLabel === null ? options : [null, ...options];
-        const current = this.currentTrack()?.id ?? null;
-        this.select(choices[(choices.indexOf(current) + 1) % choices.length]);
-    }
 
     private items() {
         return Array.from(this.els.menu?.querySelectorAll<HTMLButtonElement>("[data-track]") || []);
@@ -533,7 +526,7 @@ class TrackPicker {
         if (this.els.label) this.els.label.textContent = short;
         if (this.els.button) {
             this.els.button.dataset.state = current ? "on" : "off";
-            this.els.button.title = `${this.title}: ${full}. Click to cycle`;
+            this.els.button.title = `Choose ${this.title.toLowerCase()}: ${full}`;
             this.els.button.setAttribute("aria-label", this.els.button.title);
         }
     }
@@ -1243,8 +1236,7 @@ function closeSpeedMenu(restoreFocus = false) {
 function bindSpeedMenu() {
     speedBtnEl?.addEventListener("click", (event) => {
         event.stopPropagation();
-        const next = RATE_OPTIONS.find((rate) => rate > currentState.rate) ?? RATE_OPTIONS[0];
-        activeAdapter?.setSpeed(next);
+        setSpeedMenuOpen(true);
         revealChrome();
     });
     speedMenuEl?.addEventListener("click", (event) => {

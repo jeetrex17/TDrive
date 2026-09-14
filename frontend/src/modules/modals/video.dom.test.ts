@@ -423,7 +423,7 @@ describe("native video track pickers", () => {
         await videoModule.closeVideoModal();
     });
 
-    it("cycles native tracks by actual IDs, wraps through Off, and never opens settings", async () => {
+    it("opens complete native track choices from their pills without changing tracks", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(23, MKV_SESSION_ID));
         const videoModule = await import("./video");
         deactivateVideo = videoModule.activateVideoModal();
@@ -435,26 +435,45 @@ describe("native video track pickers", () => {
         await nextTasks();
         const audio = document.querySelector<HTMLButtonElement>("#video-audio-button")!;
         const subtitle = document.querySelector<HTMLButtonElement>("#video-subtitle-button")!;
+        const audioMenu = document.querySelector<HTMLElement>("#video-audio-menu")!;
+        const subtitleMenu = document.querySelector<HTMLElement>("#video-subtitle-menu")!;
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
         apiMocks.nativeMediaCommand.mockClear();
+
         audio.click();
-        document.querySelector<HTMLButtonElement>("#video-speed-button")?.click();
-        audio.click();
-        subtitle.click(); subtitle.click(); subtitle.click();
-        expect(apiMocks.nativeMediaCommand.mock.calls.map(([, command]) => command).filter((command) => ["aid", "sid"].includes(command[1]))).toEqual([
-            ["set", "aid", "42"], ["set", "aid", "7"],
-            ["set", "sid", "19"], ["set", "sid", "83"], ["set", "sid", "no"],
-        ]);
-        expect(subtitle.title).toContain("Off");
-        expect(audio.title).toContain("Main");
-        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
-        expect(document.querySelector(".video-menu.is-open")).toBeNull();
-        expect(document.querySelector('input[type="search"]')).toBeNull();
-        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: [{ ...tracks[0], id: 99 }] });
-        audio.click();
-        expect(apiMocks.nativeMediaCommand).toHaveBeenLastCalledWith(MKV_SESSION_ID, ["set", "aid", "99"]);
-        document.querySelector<HTMLButtonElement>("#video-aspect-button")?.click();
-        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "panscan", "1"]));
-        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
+        await nextTasks();
+        const selectedAudio = audioMenu.querySelector<HTMLButtonElement>('[data-track="7"]')!;
+        expect(panel.hidden).toBe(false);
+        expect(audioMenu.classList.contains("is-open")).toBe(true);
+        expect(subtitleMenu.classList.contains("is-open")).toBe(false);
+        expect(document.activeElement).toBe(selectedAudio);
+        expect(audio.title).toBe("Choose audio: Main / ENG / AAC");
+        expect(audio.getAttribute("aria-label")).toBe(audio.title);
+        expect(audio.title).not.toContain("Click to cycle");
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
+
+        document.body.click();
+        expect(panel.hidden).toBe(true);
+        expect(audioMenu.classList.contains("is-open")).toBe(false);
+        expect(document.activeElement?.id).toBe("video-picture-button");
+
+        subtitle.click();
+        await nextTasks();
+        const off = subtitleMenu.querySelector<HTMLButtonElement>('[data-track="no"]')!;
+        expect(panel.hidden).toBe(false);
+        expect(subtitleMenu.classList.contains("is-open")).toBe(true);
+        expect(document.activeElement).toBe(off);
+        expect(subtitle.title).toBe("Choose subtitles: Off");
+        expect(subtitle.getAttribute("aria-label")).toBe(subtitle.title);
+        expect(subtitle.title).not.toContain("Click to cycle");
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
+
+        off.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(panel.hidden).toBe(true);
+        expect(document.activeElement?.id).toBe("video-picture-button");
+
+        document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "19"]));
         await videoModule.closeVideoModal();
     });
 
@@ -786,7 +805,7 @@ describe("playback settings dock", () => {
         await videoModule.closeVideoModal();
     });
 
-    it("cycles speed presets from custom values and synchronizes aspect cycling with picture settings", async () => {
+    it("opens speed choices from its pill without changing the rate and synchronizes aspect cycling with picture settings", async () => {
         const saved = new Map<string, string>();
         vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) });
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(34, SHARED_SESSION_ID));
@@ -795,19 +814,24 @@ describe("playback settings dock", () => {
         await videoModule.openVideoModal({ id: 34, name: "clip.mp4" });
         const video = document.querySelector<HTMLVideoElement>("#video-player")!;
         const speed = document.querySelector<HTMLButtonElement>("#video-speed-button")!;
-        for (const rate of [1.25, 1.5, 2, .5, .75, 1]) {
-            speed.click();
-            expect(video.playbackRate).toBe(rate);
-            expect(speed.getAttribute("aria-label")).toContain(`${rate}x`);
-        }
+        const speedMenu = document.querySelector<HTMLElement>("#video-speed-menu")!;
+        const slider = document.querySelector<HTMLInputElement>("#video-speed-slider")!;
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
         video.playbackRate = 1.65;
         video.dispatchEvent(new Event("ratechange"));
         speed.click();
-        expect(video.playbackRate).toBe(2);
-        video.playbackRate = 3;
-        video.dispatchEvent(new Event("ratechange"));
-        speed.click();
-        expect(video.playbackRate).toBe(.5);
+        await nextTasks();
+        expect(video.playbackRate).toBe(1.65);
+        expect(speed.title).toBe("Choose playback speed: 1.65x");
+        expect(speed.getAttribute("aria-label")).toBe(speed.title);
+        expect(speed.title).not.toContain("Click to cycle");
+        expect(speedMenu.classList.contains("is-open")).toBe(true);
+        expect(Array.from(speedMenu.querySelectorAll<HTMLButtonElement>("[data-rate]")).map((button) => button.dataset.rate)).toEqual(["0.5", "0.75", "1", "1.25", "1.5", "2"]);
+        expect(panel.hidden).toBe(false);
+        expect(document.activeElement).toBe(slider);
+        slider.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(panel.hidden).toBe(true);
+        expect(document.activeElement?.id).toBe("video-picture-button");
         const aspect = document.querySelector<HTMLButtonElement>("#video-aspect-button")!;
         for (const [mode, label] of [["fill", "Fill"], ["original", "Original"], ["16:9", "16:9"], ["4:3", "4:3"], ["fit", "Fit"]]) {
             aspect.click();
@@ -968,7 +992,11 @@ describe("playback settings dock", () => {
         const notice = document.querySelector<HTMLElement>("#video-subtitle-format-note")!;
         expect(notice.hidden).toBe(false);
         expect(notice.textContent).toContain("image-based");
-        document.querySelector<HTMLButtonElement>("#video-subtitle-button")?.click();
+        document.querySelector<HTMLButtonElement>('[data-track="2"]')?.click();
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: [
+            { id: 1, type: "subtitle", codec: "hdmv_pgs_subtitle", selected: false },
+            { id: 2, type: "subtitle", codec: "subrip", selected: true },
+        ] });
         expect(notice.hidden).toBe(true);
         await videoModule.closeVideoModal();
     });
