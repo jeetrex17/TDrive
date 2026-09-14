@@ -14,7 +14,17 @@ const transferEvents = vi.hoisted(() => ({
 }));
 const notifications = vi.hoisted(() => ({ notify: vi.fn() }));
 
-vi.mock('../../wailsjs/go/main/App', () => bindings);
+// Go always emits an event's payload as a JSON array of its original args
+// (see RuntimeEventMap in api/runtime.ts); mimic that instead of the removed
+// window.runtime.EventsOn bridge.
+const eventListeners = vi.hoisted(() => new Map<string, (...args: unknown[]) => void>());
+const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { name: string; data: unknown[] }) => void) => {
+    eventListeners.set(eventName, (...args: unknown[]) => callback({ name: eventName, data: args }));
+    return () => eventListeners.delete(eventName);
+}));
+
+vi.mock('../../bindings/TDrive/app', () => bindings);
+vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notif-bell', () => ({
     pushTransferStart: transferEvents.push,
     updateTransferProgress: transferEvents.progress,
@@ -62,12 +72,7 @@ async function settle(): Promise<void> {
 
 async function loadModule() {
     vi.resetModules();
-    const listeners = new Map<string, (payload: unknown) => void>();
-    window.runtime = {
-        EventsOn: vi.fn((name: string, callback: (payload: unknown) => void) => {
-            listeners.set(name, callback);
-        }),
-    };
+    eventListeners.clear();
     const { idleTransferActivity, state } = await import('../state');
     state.downloadQueue = [];
     state.activeDownloadId = null;
@@ -75,7 +80,7 @@ async function loadModule() {
     state.cancelingDownload = false;
     const mod = await import('./transfers');
     mod.activateTransferSurfaces();
-    return { mod, state, listeners };
+    return { mod, state, listeners: eventListeners };
 }
 
 beforeEach(() => {

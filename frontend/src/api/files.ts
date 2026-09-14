@@ -30,8 +30,9 @@ import {
     SetFileDropEnabled as rawSetFileDropEnabled,
     UploadToDriveFS as rawUploadToDriveFs,
     UseEncryptionPassword as rawUseEncryptionPassword,
-} from "../../wailsjs/go/main/App";
-import type { backend, main } from "../../wailsjs/go/models";
+} from "../../bindings/TDrive/app";
+import type { FileMetaData, Folder, SearchResult } from "../../bindings/TDrive/backend/models";
+import type { TDriveFile } from "../../bindings/TDrive/models";
 import type {
     DownloadResult,
     EncryptionStatusView,
@@ -189,7 +190,7 @@ export async function changeEncryptionPassword(currentPassword: string, newPassw
 }
 
 export async function selectFiles(): Promise<string[]> {
-    return invokeBackend(rawSelectFiles);
+    return (await invokeBackend(rawSelectFiles)) ?? [];
 }
 
 export async function selectFolder(): Promise<string> {
@@ -217,7 +218,7 @@ export async function importPaths(paths: string[], parentId: string, encrypt: bo
 
 export async function uploadToDriveFs(paths: string[], parentIds: string[], encrypt: boolean): Promise<UploadResult> {
     const raw = asRecord(await invokeBackend(rawUploadToDriveFs, paths, parentIds, encrypt));
-    const files = Array.isArray(raw.files) ? raw.files as backend.FileMetaData[] : [];
+    const files = Array.isArray(raw.files) ? raw.files as FileMetaData[] : [];
     return {
         result: normalizeOperationResult(raw.result, "Could not upload selected files"),
         files: files.map(toFileItem),
@@ -244,7 +245,7 @@ export async function getPreviewThumbnail(messageId: number): Promise<PreviewPay
     return preview.payload;
 }
 
-export function toFileItem(f: backend.FileMetaData): FileItem {
+export function toFileItem(f: FileMetaData): FileItem {
     return {
         msgId: Number(f.msg_id ?? 0),
         name: String(f.name ?? ""),
@@ -257,7 +258,7 @@ export function toFileItem(f: backend.FileMetaData): FileItem {
     };
 }
 
-export function toFolderItem(d: backend.Folder): FolderItem {
+export function toFolderItem(d: Folder): FolderItem {
     return {
         id: String(d.id ?? ""),
         name: String(d.name ?? ""),
@@ -265,7 +266,7 @@ export function toFolderItem(d: backend.Folder): FolderItem {
     };
 }
 
-export function toRootFile(f: main.TDriveFile): RootFile {
+export function toRootFile(f: TDriveFile): RootFile {
     return {
         msgId: Number(f.id ?? 0),
         name: String(f.name ?? ""),
@@ -275,7 +276,7 @@ export function toRootFile(f: main.TDriveFile): RootFile {
     };
 }
 
-export function toSearchHit(h: backend.SearchResult): SearchHit {
+export function toSearchHit(h: SearchResult): SearchHit {
     const type: SearchHitType = h.type === "folder" ? "folder" : "file";
     return {
         type,

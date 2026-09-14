@@ -13,7 +13,7 @@ import {
     SelectPersonalDrive as rawSelectPersonalDrive,
     SubmitCode as rawSubmitCode,
     SubmitPassword as rawSubmitPassword,
-} from "../../wailsjs/go/main/App";
+} from "../../bindings/TDrive/app";
 import type { PersonalDriveCandidate, PersonalDriveSetup, SelfUser } from "../types";
 import { asRecord, finiteNumber } from "./shared";
 import { invokeBackend } from "./gateway";

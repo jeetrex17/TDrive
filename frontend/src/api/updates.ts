@@ -6,7 +6,7 @@ import {
     GetUpdateState as rawGetUpdateState,
     InstallUpdateAndRestart as rawInstallUpdateAndRestart,
     OpenUpdatePage as rawOpenUpdatePage,
-} from "../../wailsjs/go/main/App";
+} from "../../bindings/TDrive/app";
 import type { AppVersion, UpdateSnapshot } from "../types";
 import { asRecord, nonNegativeNumber } from "./shared";
 import { onRuntimeEvent, type RuntimeUnsubscribe } from "./runtime";

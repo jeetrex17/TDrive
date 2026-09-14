@@ -2,9 +2,10 @@
 import { resolve } from 'node:path';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
+import wails from '@wailsio/runtime/plugins/vite';
 
 export default defineConfig({
-    plugins: [svelte()],
+    plugins: [svelte(), wails('./bindings')],
     build: {
         rollupOptions: {
             input: {

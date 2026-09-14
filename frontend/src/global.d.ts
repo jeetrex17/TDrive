@@ -1,42 +1,9 @@
-// Ambient declarations for the Wails bridge. The webview injects these at runtime,
-// so gateway code must still feature-detect every capability before invoking it.
-
-import type * as GeneratedAppBindings from "../wailsjs/go/main/App";
+// Ambient declarations for the Wails v3 webview. Bound methods and runtime
+// facilities are regular ES imports from "@wailsio/runtime" / the generated
+// bindings now, so there is no injected `window.go` / `window.runtime` bridge
+// to type here anymore.
 
 export {};
-
-type WailsBinding<Binding> = Binding extends (...args: infer Args) => Promise<infer Result>
-    ? (...args: Args) => Result | Promise<Result>
-    : never;
-
-/** Bound Go methods can be synchronous in test/dev bridges or promise-based in Wails. */
-export type WailsAppBridge = {
-    [Method in keyof typeof GeneratedAppBindings]: WailsBinding<typeof GeneratedAppBindings[Method]>;
-};
-
-export type WailsEventCallback = (...data: unknown[]) => void;
-export type WailsEventUnsubscribe = () => void;
-
-export interface WailsRuntimeEnvironment {
-    buildType: string;
-    platform: string;
-    arch: string;
-}
-
-export interface WailsRuntimeBridge {
-    EventsOn?: (eventName: string, callback: WailsEventCallback) => WailsEventUnsubscribe | void;
-    OnFileDrop?: (callback: (x: number, y: number, paths: string[]) => void, useDropTarget: boolean) => void;
-    OnFileDropOff?: () => void;
-    BrowserOpenURL?: (url: string) => void;
-    Environment?: () => WailsRuntimeEnvironment | Promise<WailsRuntimeEnvironment>;
-    WindowFullscreen?: () => void;
-    WindowUnfullscreen?: () => void;
-    WindowIsFullscreen?: () => boolean | Promise<boolean>;
-    WindowSetBackgroundColour?: (red: number, green: number, blue: number, alpha: number) => void;
-    WindowSetDarkTheme?: () => void;
-    WindowSetLightTheme?: () => void;
-    WindowSetSystemDefaultTheme?: () => void;
-}
 
 declare global {
     interface PromiseConstructor {
@@ -48,7 +15,21 @@ declare global {
     }
 
     interface Window {
-        go: { main: { App: WailsAppBridge } };
-        runtime: WailsRuntimeBridge;
+        /**
+         * Populated by Go (see wails/v3 internal/runtime/runtime_{dev,prod}.go)
+         * with an inline script that runs before the app bundle, in every real
+         * Wails webview. Absent in the plain Vite dev/preview browser, which is
+         * how the gateway readiness check tells a native webview from a browser
+         * preview. The `@wailsio/runtime` package declares a looser ambient
+         * `Window._wails` type of its own, but it is not reachable from this
+         * project's tsconfig (nothing imports it), so it is redeclared here.
+         */
+        _wails?: {
+            environment?: {
+                OS?: string;
+                Arch?: string;
+                Debug?: boolean;
+            };
+        };
     }
 }

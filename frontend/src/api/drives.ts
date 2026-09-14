@@ -13,7 +13,7 @@ import {
     RemovePendingJoin as rawRemovePendingJoin,
     SetActiveChannel as rawSetActiveChannel,
     SyncChannel as rawSyncChannel,
-} from "../../wailsjs/go/main/App";
+} from "../../bindings/TDrive/app";
 import type { DriveChannel, JoinDriveResult, JoinRequest, PendingJoin } from "../types";
 import { asRecord, finiteNumber } from "./shared";
 import { invokeBackend } from "./gateway";

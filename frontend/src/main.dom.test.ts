@@ -13,31 +13,30 @@ vi.mock('./ui/theme/native-theme', () => ({ initializeNativeTheme: vi.fn(async (
 vi.mock('./modules/app-shell', () => ({
     mountApplication: vi.fn(() => ({ destroy: vi.fn(async () => {}) })),
 }));
-
-
-
+vi.mock('../bindings/TDrive/app', () => ({ CheckSystemStatus: vi.fn(async () => 'NEEDS_SETUP') }));
 
 beforeEach(() => {
     vi.resetModules();
     themeLifecycle.disconnect.mockReset();
     themeLifecycle.initialize.mockReset();
     themeLifecycle.initialize.mockReturnValue(themeLifecycle.disconnect);
-        document.body.innerHTML = '<div id="app"></div>';
-        Object.defineProperty(window, 'runtime', {
-            configurable: true,
-            value: { EventsOn: vi.fn(() => vi.fn()) },
-        });
-        Object.defineProperty(window, 'go', {
-            configurable: true,
-            value: { main: { App: { CheckSystemStatus: vi.fn(async () => 'NEEDS_SETUP') } } },
-        });
+    document.body.innerHTML = '<div id="app"></div>';
+    // Go injects window._wails.environment before the app bundle loads in a
+    // real webview; its presence is how the gateway readiness check tells a
+    // real Wails window from the plain browser preview. @wailsio/runtime
+    // itself reassigns window._wails (`window._wails = window._wails || {}`),
+    // so the property must stay writable.
+    Object.defineProperty(window, '_wails', {
+        configurable: true,
+        writable: true,
+        value: { environment: { OS: 'darwin', Arch: 'arm64', Debug: true } },
+    });
 });
 
 afterEach(() => {
     window.onload = null;
-        document.body.replaceChildren();
-        Reflect.deleteProperty(window, 'runtime');
-        Reflect.deleteProperty(window, 'go');
+    document.body.replaceChildren();
+    Reflect.deleteProperty(window, '_wails');
 });
 
 describe('application appearance lifecycle', () => {

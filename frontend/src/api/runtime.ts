@@ -1,6 +1,5 @@
-import type { WailsEventCallback, WailsRuntimeBridge, WailsRuntimeEnvironment } from "../global";
+import { Browser, Events, System, Window } from "@wailsio/runtime";
 import {
-    invokeRuntime,
     invokeRuntimeAsync,
     noopRuntimeUnsubscribe,
     RuntimeInvocationError,
@@ -10,7 +9,13 @@ import {
 
 export { RuntimeInvocationError, RuntimeUnavailableError } from "./gateway";
 export type { RuntimeUnsubscribe } from "./gateway";
-export type RuntimeEnvironment = WailsRuntimeEnvironment;
+
+/** The bits of Wails' System.Environment() result the frontend actually uses. */
+export interface RuntimeEnvironment {
+    buildType: string;
+    platform: string;
+    arch: string;
+}
 
 /**
  * Every Wails event consumed by the frontend. Values remain unknown until the
@@ -49,20 +54,24 @@ export interface RuntimeEventMap {
 export type RuntimeEventName = keyof RuntimeEventMap;
 export type RuntimeEventCallback<EventName extends RuntimeEventName> = (...data: RuntimeEventMap[EventName]) => void;
 
-/** Registers a typed Wails event listener and always returns a callable teardown. */
+/**
+ * Registers a typed Wails event listener and always returns a callable
+ * teardown. The Go side always emits the event payload as a JSON array of the
+ * original variadic args (including `[]` for no-arg events), so the wrapped
+ * WailsEvent's `data` is spread back out to the typed callback.
+ */
 export function onRuntimeEvent<EventName extends RuntimeEventName>(
     eventName: EventName,
     callback: RuntimeEventCallback<EventName>,
 ): RuntimeUnsubscribe {
-    const runtime = nativeRuntime();
-    const eventsOn = runtime?.EventsOn;
-    if (!runtime || !eventsOn) return noopRuntimeUnsubscribe;
-
     let unsubscribe: RuntimeUnsubscribe | void;
     try {
-        unsubscribe = eventsOn.call(runtime, eventName, callback as WailsEventCallback);
+        unsubscribe = Events.On(eventName, (event) => {
+            const data = Array.isArray(event.data) ? event.data : (event.data == null ? [] : [event.data]);
+            (callback as (...args: unknown[]) => void)(...(data as unknown[]));
+        });
     } catch (cause) {
-        throw new RuntimeInvocationError(`EventsOn(${eventName})`, cause);
+        throw new RuntimeInvocationError(`Events.On(${eventName})`, cause);
     }
     if (typeof unsubscribe !== "function") return noopRuntimeUnsubscribe;
 
@@ -73,110 +82,81 @@ export function onRuntimeEvent<EventName extends RuntimeEventName>(
         try {
             unsubscribe();
         } catch (cause) {
-            throw new RuntimeInvocationError(`EventsOn(${eventName}) teardown`, cause);
+            throw new RuntimeInvocationError(`Events.On(${eventName}) teardown`, cause);
         }
     };
 }
 
 /**
- * Registers native file-drop handling when Wails exposes it. Browser previews
- * intentionally degrade to a no-op because no native drop transport exists.
+ * Registers native file-drop handling. Wails v3 has no JS-level "enable file
+ * drop" call: drops are delivered to Go as a native window event, and Go
+ * re-emits it to the frontend as the ordinary `files_dropped` custom event.
+ * This just gives that event a positional (x, y, paths) callback shape.
  */
 export function onNativeFileDrop(callback: (x: number, y: number, paths: string[]) => void): RuntimeUnsubscribe {
-    const runtime = nativeRuntime();
-    const onFileDrop = runtime?.OnFileDrop;
-    if (!runtime || !onFileDrop) return noopRuntimeUnsubscribe;
-
-    try {
-        invokeRuntime("OnFileDrop", runtime, onFileDrop, callback, true);
-    } catch {
-        return noopRuntimeUnsubscribe;
-    }
-
-    const offFileDrop = runtime.OnFileDropOff;
-    if (!offFileDrop) return noopRuntimeUnsubscribe;
-
-    let active = true;
-    return () => {
-        if (!active) return;
-        active = false;
-        invokeRuntime("OnFileDropOff", runtime, offFileDrop);
-    };
+    return onRuntimeEvent("files_dropped", (payload) => {
+        const record = payload !== null && typeof payload === "object" && !Array.isArray(payload)
+            ? payload as Record<string, unknown>
+            : {};
+        const paths = Array.isArray(record.paths)
+            ? record.paths.filter((path): path is string => typeof path === "string")
+            : [];
+        const x = Number(record.x);
+        const y = Number(record.y);
+        callback(Number.isFinite(x) ? x : 0, Number.isFinite(y) ? y : 0, paths);
+    });
 }
 
 /** Opens a URL natively when available and otherwise uses the browser fallback. */
 export function openExternalUrl(url: string): void {
-    const runtime = nativeRuntime();
-    const browserOpenUrl = runtime?.BrowserOpenURL;
-    if (runtime && browserOpenUrl) {
-        try {
-            invokeRuntime("BrowserOpenURL", runtime, browserOpenUrl, url);
-            return;
-        } catch {
-            // Browser fallback preserves the existing development-surface behavior.
-        }
+    if (isGatewayReady()) {
+        void Browser.OpenURL(url).catch((cause) => {
+            console.warn("Browser.OpenURL failed:", cause);
+            openExternalUrlInBrowser(url);
+        });
+        return;
     }
+    openExternalUrlInBrowser(url);
+}
 
-    if (typeof window !== "undefined") {
-        window.open(url, "_blank", "noopener,noreferrer");
-    }
+function openExternalUrlInBrowser(url: string): void {
+    if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
 }
 
 export function fullscreenAvailable(): boolean {
-    const runtime = nativeRuntime();
-    return Boolean(runtime?.WindowFullscreen && runtime.WindowUnfullscreen && runtime.WindowIsFullscreen);
+    return isGatewayReady();
 }
 
 export function enterFullscreen(): void {
-    const runtime = nativeRuntime();
-    const fullscreen = runtime?.WindowFullscreen;
-    if (!runtime || !fullscreen) throw new RuntimeUnavailableError("WindowFullscreen");
-    invokeRuntime("WindowFullscreen", runtime, fullscreen);
+    if (!isGatewayReady()) throw new RuntimeUnavailableError("Window.Fullscreen");
+    void Window.Fullscreen().catch((cause) => console.warn("Window.Fullscreen failed:", cause));
 }
 
 export function exitFullscreen(): void {
-    const runtime = nativeRuntime();
-    const unfullscreen = runtime?.WindowUnfullscreen;
-    if (!runtime || !unfullscreen) throw new RuntimeUnavailableError("WindowUnfullscreen");
-    invokeRuntime("WindowUnfullscreen", runtime, unfullscreen);
+    if (!isGatewayReady()) throw new RuntimeUnavailableError("Window.UnFullscreen");
+    void Window.UnFullscreen().catch((cause) => console.warn("Window.UnFullscreen failed:", cause));
 }
 
 export async function isFullscreen(): Promise<boolean> {
-    const runtime = nativeRuntime();
-    const isNativeFullscreen = runtime?.WindowIsFullscreen;
-    if (!runtime || !isNativeFullscreen) throw new RuntimeUnavailableError("WindowIsFullscreen");
-    return Boolean(await invokeRuntimeAsync("WindowIsFullscreen", runtime, isNativeFullscreen));
+    if (!isGatewayReady()) throw new RuntimeUnavailableError("Window.IsFullscreen");
+    return Boolean(await invokeRuntimeAsync("Window.IsFullscreen", Window, Window.IsFullscreen));
 }
 
-export function setNativeSystemTheme(): void {
-    const runtime = nativeRuntime();
-    const setSystemTheme = runtime?.WindowSetSystemDefaultTheme;
-    if (!runtime || !setSystemTheme) throw new RuntimeUnavailableError("WindowSetSystemDefaultTheme");
-    invokeRuntime("WindowSetSystemDefaultTheme", runtime, setSystemTheme);
-}
-
-export function setNativeLightTheme(): void {
-    const runtime = nativeRuntime();
-    const setLightTheme = runtime?.WindowSetLightTheme;
-    if (!runtime || !setLightTheme) throw new RuntimeUnavailableError("WindowSetLightTheme");
-    invokeRuntime("WindowSetLightTheme", runtime, setLightTheme);
-}
-
-export function setNativeDarkTheme(): void {
-    const runtime = nativeRuntime();
-    const setDarkTheme = runtime?.WindowSetDarkTheme;
-    if (!runtime || !setDarkTheme) throw new RuntimeUnavailableError("WindowSetDarkTheme");
-    invokeRuntime("WindowSetDarkTheme", runtime, setDarkTheme);
-}
+// Wails v3 has no titlebar light/dark/system theme API (window.ts exposes no
+// equivalent of v2's WindowSetLightTheme/WindowSetDarkTheme/
+// WindowSetSystemDefaultTheme). These stay as no-ops so native-theme.ts's call
+// sites keep working; only the background-colour sync below still applies.
+export function setNativeSystemTheme(): void {}
+export function setNativeLightTheme(): void {}
+export function setNativeDarkTheme(): void {}
 
 export function setNativeWindowBackgroundColour(red: number, green: number, blue: number, alpha: number): void {
-    const runtime = nativeRuntime();
-    const setBackgroundColour = runtime?.WindowSetBackgroundColour;
-    if (!runtime || !setBackgroundColour) throw new RuntimeUnavailableError("WindowSetBackgroundColour");
-    invokeRuntime("WindowSetBackgroundColour", runtime, setBackgroundColour, red, green, blue, alpha);
+    if (!isGatewayReady()) throw new RuntimeUnavailableError("Window.SetBackgroundColour");
+    void Window.SetBackgroundColour(red, green, blue, alpha)
+        .catch((cause) => console.warn("Window.SetBackgroundColour failed:", cause));
 }
 
-/** Resolves once the late-injected Wails App and event runtime are both usable. */
+/** Resolves once a real Wails webview (as opposed to the browser preview) is ready. */
 export function waitForGatewayReady(timeoutMs = 4000): Promise<boolean> {
     if (isGatewayReady()) return Promise.resolve(true);
     if (typeof window === "undefined") return Promise.resolve(false);
@@ -199,22 +179,28 @@ export function waitForGatewayReady(timeoutMs = 4000): Promise<boolean> {
 }
 
 export function runtimeEventsAvailable(): boolean {
-    return Boolean(nativeRuntime()?.EventsOn);
+    return isGatewayReady();
 }
 
+/**
+ * True inside a real Wails webview, false in the plain Vite dev/preview
+ * browser. `@wailsio/runtime` always wires up `Events.On`/bound methods as
+ * regular JS functions regardless of environment, so their mere presence
+ * can't tell the two apart. `window._wails.environment` can: Go injects it
+ * with an inline script before the app bundle loads, in every real webview
+ * (dev or built), and nothing sets it in a plain browser tab.
+ */
 export function isGatewayReady(): boolean {
     if (typeof window === "undefined") return false;
-    return Boolean(window.go?.main?.App && window.runtime?.EventsOn);
+    return Boolean(window._wails?.environment);
 }
 
 export async function getRuntimeEnvironment(): Promise<RuntimeEnvironment> {
-    const runtime = nativeRuntime();
-    const environment = runtime?.Environment;
-    if (!runtime || !environment) throw new RuntimeUnavailableError("Environment");
-    return await invokeRuntimeAsync("Environment", runtime, environment);
-}
-
-function nativeRuntime(): WailsRuntimeBridge | null {
-    if (typeof window === "undefined") return null;
-    return window.runtime ?? null;
+    if (!isGatewayReady()) throw new RuntimeUnavailableError("System.Environment");
+    const info = await invokeRuntimeAsync("System.Environment", System, System.Environment);
+    return {
+        buildType: info.Debug ? "dev" : "production",
+        platform: info.OS,
+        arch: info.Arch,
+    };
 }
