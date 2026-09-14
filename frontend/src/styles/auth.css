@@ -1,56 +1,5 @@
 /* === AUTH SCREENS === */
-#auth-wrapper { display: flex; justify-content: center; align-items: safe center; height: 100vh; padding: 64px 16px 24px; overflow-y: auto; background: var(--bg-dark); }
-
-.auth-appearance-control {
-    position: fixed;
-    top: 18px;
-    right: 18px;
-    z-index: calc(var(--z-popover) + 1);
-}
-.auth-appearance-trigger {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    color: var(--color-text-muted);
-    background: var(--glass-bg);
-    border: 1px solid var(--glass-border);
-    border-radius: 12px;
-    box-shadow: var(--shadow-sm), 0 1px 0 var(--glass-highlight) inset;
-    -webkit-backdrop-filter: blur(18px) saturate(150%);
-    backdrop-filter: blur(18px) saturate(150%);
-    cursor: pointer;
-    transition: color var(--motion-fast) var(--ease-standard),
-        background var(--motion-fast) var(--ease-standard),
-        transform var(--motion-fast) var(--ease-standard);
-}
-.auth-appearance-trigger:hover,
-.auth-appearance-trigger[aria-expanded="true"] {
-    color: var(--color-accent);
-    background: var(--color-surface-2);
-}
-.auth-appearance-trigger:active { transform: scale(0.95); }
-.auth-appearance-trigger:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.auth-appearance-popover {
-    position: absolute;
-    top: calc(100% + 10px);
-    right: 0;
-    width: min(390px, calc(100vw - 32px));
-    padding: 6px;
-    overflow: hidden;
-    background: var(--glass-bg);
-    border: 1px solid var(--glass-border);
-    border-radius: 14px;
-    box-shadow: var(--shadow-lg), 0 1px 0 var(--glass-highlight) inset;
-    -webkit-backdrop-filter: blur(28px) saturate(165%);
-    backdrop-filter: blur(28px) saturate(165%);
-    transform-origin: top right;
-    --motion-enter-y: -4px;
-    --motion-enter-scale: 0.985;
-    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
-}
+#auth-wrapper { display: flex; justify-content: center; align-items: safe center; height: 100vh; padding: 24px 16px; overflow-y: auto; background: var(--bg-dark); }
 
 .auth-box {
     background: var(--bg-sidebar); border: 1px solid var(--border);

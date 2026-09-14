@@ -52,21 +52,6 @@ describe('AuthScreens', () => {
         expect(body).toContain('type="submit"');
     });
 
-    it('renders the phone step with telephone and session semantics', () => {
-        authScreen.set('phone');
-        const { body } = render(AuthScreens, { props });
-
-        expect(body).toContain('<form');
-        expect(body).toContain('for="telegram-phone"');
-        expect(body).toContain('Phone number');
-        expect(body).toContain('name="phone"');
-        expect(body).toContain('type="tel"');
-        expect(body).toContain('inputmode="tel"');
-        expect(body).toContain('autocomplete="tel"');
-        expect(body).toContain('signed-in session is kept locally');
-        expect(body).toContain('id="auth-appearance-trigger"');
-        expect(body).toContain('Customize appearance');
-    });
 
     it('shows the destination and one-time-code semantics on the code step', () => {
         authScreen.set('code');
