@@ -4,10 +4,11 @@ package nativeplayer
 
 /*
 #cgo darwin CFLAGS: -x objective-c -fblocks -DGL_SILENCE_DEPRECATION
-#cgo darwin LDFLAGS: -framework Cocoa -framework QuartzCore -framework OpenGL
+#cgo darwin LDFLAGS: -framework Cocoa -framework QuartzCore -framework OpenGL -framework WebKit
 #cgo darwin pkg-config: mpv
 
 #import <Cocoa/Cocoa.h>
+#import <WebKit/WebKit.h>
 #import <math.h>
 #import <OpenGL/gl3.h>
 #import <QuartzCore/QuartzCore.h>
