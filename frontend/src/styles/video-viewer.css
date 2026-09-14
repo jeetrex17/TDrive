@@ -651,12 +651,16 @@
 }
 
 .video-volume-slider {
-    position: relative;
-    width: 0;
-    margin-left: 0;
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    z-index: 3;
+    width: 100px;
+    margin-left: 12px;
+    translate: 0 -50%;
     opacity: 0;
     pointer-events: none;
-    transition: width 180ms ease, margin-left 180ms ease, opacity 180ms ease;
+    transition: opacity 180ms ease;
     height: 28px;
     cursor: pointer;
     outline: none;
@@ -675,8 +679,6 @@
 
 .video-volume-group:hover .video-volume-slider,
 .video-volume-group:focus-within .video-volume-slider {
-    width: 100px;
-    margin-left: 12px;
     opacity: 1;
     pointer-events: auto;
 }

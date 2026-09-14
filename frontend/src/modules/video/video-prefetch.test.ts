@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_PLAYER_STATE, type PlayerState } from './player-adapters';
-import { MediaPrefetcher, PREFETCH_LEAD_SECONDS, readyToPrefetch } from './video-prefetch';
+import {
+    MediaPrefetcher,
+    PREFETCH_HEAD_BYTES,
+    PREFETCH_LEAD_SECONDS,
+    PREFETCH_TAIL_BYTES,
+    readyToPrefetch,
+    warmMediaEdges,
+} from './video-prefetch';
 
 function state(overrides: Partial<PlayerState>): PlayerState {
     return { ...EMPTY_PLAYER_STATE, paused: false, duration: 600, currentTime: 590, ...overrides };
@@ -48,7 +55,7 @@ describe('MediaPrefetcher', () => {
         await prefetcher.prepare(7);
 
         expect(open).toHaveBeenCalledTimes(1);
-        expect(warm).toHaveBeenCalledWith('http://127.0.0.1/media/7');
+        expect(warm).toHaveBeenCalledWith(session(7));
         expect(prefetcher.take(7)).toEqual(session(7));
         // The slot is empty afterwards, so the player cannot use it twice.
         expect(prefetcher.take(7)).toBeNull();
@@ -89,5 +96,35 @@ describe('MediaPrefetcher', () => {
         await expect(failing.prepare(7)).resolves.toBeUndefined();
         expect(failing.holds(7)).toBe(false);
         expect(failing.take(7)).toBeNull();
+    });
+});
+
+describe('warmMediaEdges', () => {
+    function fetchSpy() {
+        const ranges: string[] = [];
+        const spy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            ranges.push(String((init?.headers as Record<string, string>)?.Range));
+            return { arrayBuffer: async () => new ArrayBuffer(8) } as unknown as Response;
+        });
+        vi.stubGlobal('fetch', spy);
+        return { ranges, spy };
+    }
+
+    it('pulls the head and the container index at the tail together', async () => {
+        const { ranges } = fetchSpy();
+        const size = 240 * 1024 * 1024;
+
+        await warmMediaEdges('http://127.0.0.1/media/7', size);
+
+        expect(ranges).toEqual([
+            `bytes=0-${PREFETCH_HEAD_BYTES - 1}`,
+            `bytes=${size - PREFETCH_TAIL_BYTES}-${size - 1}`,
+        ]);
+    });
+
+    it('pulls only the head when the file is smaller than both windows', async () => {
+        const { ranges } = fetchSpy();
+        await warmMediaEdges('http://127.0.0.1/media/7', 512 * 1024);
+        expect(ranges).toEqual([`bytes=0-${PREFETCH_HEAD_BYTES - 1}`]);
     });
 });

@@ -38,7 +38,7 @@ import {
     type PlayerAdapter,
     type PlayerState,
 } from "../video/player-adapters";
-import { MediaPrefetcher, readyToPrefetch, warmMediaHead } from "../video/video-prefetch";
+import { MediaPrefetcher, readyToPrefetch, warmMediaEdges } from "../video/video-prefetch";
 import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
@@ -874,7 +874,7 @@ function parseCustomPlaybackRate(value: string) {
 const mediaPrefetcher = new MediaPrefetcher<MediaOpenResult>({
     open: (id) => openMedia(id),
     close: (token) => safelyCloseMedia(token),
-    warm: (url) => warmMediaHead(url),
+    warm: (session) => warmMediaEdges(session.url, session.info.plaintextSize || session.info.storedSize || 0),
 });
 
 function nextPlaylistTarget(): VideoOpenTarget | null {

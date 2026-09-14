@@ -4,11 +4,18 @@ import type { PlayerState } from './player-adapters';
 export const PREFETCH_LEAD_SECONDS = 25;
 
 /**
- * How much of the next file to pull. Enough for the backend to resolve the
- * Telegram file and fill its first read-ahead chunks, which is what makes the
- * switch feel instant; not so much that it competes for bandwidth.
+ * How much of the next file's head to pull. Enough for the backend to fill its
+ * first read-ahead chunks; not so much that it competes for bandwidth.
  */
 export const PREFETCH_HEAD_BYTES = 2 * 1024 * 1024;
+
+/**
+ * How much of the tail to pull. Players read the container index before the
+ * first frame, and in MP4 and MKV that index lives at the end of the file. The
+ * log shows that read costing a second or more on its own, serialised after the
+ * head, so warming both edges is what actually removes the wait.
+ */
+export const PREFETCH_TAIL_BYTES = 1024 * 1024;
 
 /** Slack allowed when deciding the current file is buffered to its end. */
 const BUFFER_TAIL_TOLERANCE_SECONDS = 1.5;
@@ -55,7 +62,7 @@ export class MediaPrefetcher<Result extends { token: string; url: string }> {
         private readonly deps: {
             open: (id: number) => Promise<Result>;
             close: (token: string) => Promise<void>;
-            warm: (url: string) => Promise<void>;
+            warm: (session: Result) => Promise<void>;
         },
     ) {}
 
@@ -80,7 +87,7 @@ export class MediaPrefetcher<Result extends { token: string; url: string }> {
             }
             this.session = { id, result };
             this.pending = null;
-            if (result.url) await this.deps.warm(result.url);
+            if (result.url) await this.deps.warm(result);
         } catch {
             if (this.pending === id) this.pending = null;
         }
@@ -105,14 +112,18 @@ export class MediaPrefetcher<Result extends { token: string; url: string }> {
 }
 
 /**
- * warmMediaHead pulls the first bytes of a loopback URL so the backend has an
- * open reader and a filled chunk before playback asks for anything.
+ * warmMediaEdges pulls both ends of a loopback URL so the backend already holds
+ * the blocks a player reads first: the head, and the container index at the
+ * tail. They are fetched together so neither waits on the other.
  */
-export async function warmMediaHead(url: string, signal?: AbortSignal): Promise<void> {
-    const response = await fetch(url, {
-        headers: { Range: `bytes=0-${PREFETCH_HEAD_BYTES - 1}` },
-        signal,
-    });
-    // The body has to be drained, or the range reader never actually runs.
-    await response.arrayBuffer();
+export async function warmMediaEdges(url: string, size: number, signal?: AbortSignal): Promise<void> {
+    const ranges = [`bytes=0-${PREFETCH_HEAD_BYTES - 1}`];
+    if (size > PREFETCH_HEAD_BYTES + PREFETCH_TAIL_BYTES) {
+        ranges.push(`bytes=${size - PREFETCH_TAIL_BYTES}-${size - 1}`);
+    }
+    await Promise.all(ranges.map(async (range) => {
+        const response = await fetch(url, { headers: { Range: range }, signal });
+        // The body has to be drained, or the range reader never actually runs.
+        await response.arrayBuffer();
+    }));
 }
