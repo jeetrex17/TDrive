@@ -276,7 +276,9 @@ func (r *RangeReader) openingSpan(ctx context.Context, ref tgclient.DocumentRef)
 	if err != nil {
 		return nil, err
 	}
-	// The remainder of the block follows behind, so the next read is warm.
+	// The full block follows behind so the next read is warm. It re-transfers
+	// the prefix, which is a deliberate trade: 256 KB of duplicate background
+	// traffic against roughly a four-fold cut in how long a video takes to start.
 	r.prefetchBlock(ref, 0)
 	return data, nil
 }

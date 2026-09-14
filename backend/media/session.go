@@ -62,6 +62,11 @@ func (s *Session) warmContainerIndex() {
 	if s == nil || s.reader == nil || len(s.segments) == 0 {
 		return
 	}
+	// A file that fits in one block has nothing to overlap: the head read the
+	// player makes first already covers the index.
+	if s.file.StoredSize <= rangeUploadBoundary {
+		return
+	}
 	last := s.segments[len(s.segments)-1]
 	if last.ref.Size <= 0 {
 		return
