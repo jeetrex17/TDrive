@@ -44,7 +44,7 @@
 </script>
 
 {#if $appView.kind === 'startup'}
-    <div class="app-state-screen">
+    <div class="app-state-screen app-state-startup">
         <AppSkeleton label="Starting TDrive" />
     </div>
 {:else if $appView.kind === 'fatal'}
@@ -92,5 +92,9 @@
 
     .app-state-overlay {
         z-index: 9999;
+        background: var(--scrim);
+        backdrop-filter: blur(4px);
     }
+
+    .app-state-startup { padding: 0; }
 </style>

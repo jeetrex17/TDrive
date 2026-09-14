@@ -24,8 +24,16 @@
 <div class={`file-state is-${kind}`} role={kind === 'error' ? 'alert' : 'status'} aria-busy={kind === 'loading' ? 'true' : 'false'}>
     {#if kind === 'loading'}
             <div class="file-state-skeleton" aria-hidden="true">
-                {#each [96, 74, 88, 61, 80] as width (width)}
-                    <span class="file-state-skeleton-row"><i></i><b style={`--skeleton-width: ${width}%`}></b><em></em></span>
+                {#each [74, 56, 68, 48, 62] as width, index (width)}
+                    <div class="file-state-skeleton-row" style={`--skeleton-delay: ${index * 65}ms`}>
+                        <span class="file-state-skeleton-name">
+                            <span class="file-state-skeleton-icon"></span>
+                            <span class="file-state-skeleton-bar" style={`--skeleton-width: ${width}%`}></span>
+                        </span>
+                        <span class="file-state-skeleton-meta"></span>
+                        <span class="file-state-skeleton-meta"></span>
+                        <span class="file-state-skeleton-action"></span>
+                    </div>
                 {/each}
             </div>
         {:else}

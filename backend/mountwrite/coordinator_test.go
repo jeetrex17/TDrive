@@ -863,12 +863,15 @@ func TestCoordinatorPersistsCleanupWhenHiddenDiscardFails(t *testing.T) {
 
 func TestCoordinatorRejectsNewWorkAfterDrainAndWaitsForActiveOperation(t *testing.T) {
 	t.Parallel()
-
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	remote := &fakeRemote{commitStarted: make(chan struct{}), commitRelease: make(chan struct{})}
+	releaseCommit := sync.OnceFunc(func() { close(remote.commitRelease) })
+	defer releaseCommit()
 	coordinator, _, _ := newTestCoordinator(t, remote, &fakeInvalidator{})
 	moveDone := make(chan error, 1)
 	go func() {
-		_, err := coordinator.Move(context.Background(), MoveRequest{
+		_, err := coordinator.Move(ctx, MoveRequest{
 			OperationID:         "active-move",
 			DriveID:             42,
 			ObjectID:            "file-1",
@@ -878,39 +881,44 @@ func TestCoordinatorRejectsNewWorkAfterDrainAndWaitsForActiveOperation(t *testin
 		})
 		moveDone <- err
 	}()
+
 	select {
 	case <-remote.commitStarted:
-	case <-time.After(time.Second):
-		t.Fatal("operation did not reach commit")
+	case <-ctx.Done():
+		t.Fatalf("operation did not reach commit: %v", ctx.Err())
 	}
 
 	drainDone := make(chan error, 1)
-	go func() { drainDone <- coordinator.Drain(context.Background()) }()
-	for i := 0; i < 100 && coordinator.Status().Accepting; i++ {
-		time.Sleep(time.Millisecond)
-	}
-	if coordinator.Status().Accepting {
-		t.Fatal("coordinator did not enter draining state")
-	}
-	if _, err := coordinator.Mkdir(context.Background(), MkdirRequest{DriveID: 42, ParentID: "", Name: "new"}); !errors.Is(err, ErrDraining) {
+	go func() { drainDone <- coordinator.Drain(ctx) }()
+	waitForStatus(ctx, t, coordinator, Status{Accepting: false, Active: 1})
+
+	if _, err := coordinator.Mkdir(ctx, MkdirRequest{DriveID: 42, ParentID: "", Name: "new"}); !errors.Is(err, ErrDraining) {
 		t.Fatalf("new operation error = %v, want ErrDraining", err)
 	}
 	select {
 	case err := <-drainDone:
 		t.Fatalf("drain returned before active operation: %v", err)
-	case <-time.After(20 * time.Millisecond):
+	default:
 	}
-	close(remote.commitRelease)
-	if err := <-moveDone; err != nil {
-		t.Fatalf("move: %v", err)
+
+	releaseCommit()
+	select {
+	case err := <-moveDone:
+		if err != nil {
+			t.Fatalf("move: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("move did not finish: %v", ctx.Err())
 	}
-	if err := <-drainDone; err != nil {
-		t.Fatalf("drain: %v", err)
+	select {
+	case err := <-drainDone:
+		if err != nil {
+			t.Fatalf("drain: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("drain did not finish: %v", ctx.Err())
 	}
-	status := coordinator.Status()
-	if status.Accepting || status.Active != 0 {
-		t.Fatalf("status after drain = %#v", status)
-	}
+	waitForStatus(ctx, t, coordinator, Status{})
 }
 
 func TestCoordinatorConstructorAndCloseValidation(t *testing.T) {

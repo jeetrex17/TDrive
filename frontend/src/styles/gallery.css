@@ -53,6 +53,8 @@
     grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
     gap: 5px;
 }
+.gallery-window-chunk + .gallery-window-chunk { margin-top: 5px; }
+.gallery-window-placeholder { width: 100%; pointer-events: none; }
 
 .gallery-cell {
     appearance: none;
@@ -68,7 +70,7 @@
     overflow: hidden;
     cursor: pointer;
     background: var(--bg-panel);
-    transition: transform 0.14s ease, box-shadow 0.14s ease;
+    transition: transform 140ms var(--ease-standard), box-shadow 140ms var(--ease-standard);
 }
 .gallery-cell:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
 .gallery-cell:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -79,7 +81,7 @@
     object-fit: cover;
     display: block;
     opacity: 0;
-    transition: opacity 0.3s ease;
+    transition: opacity 180ms var(--ease-enter);
 }
 .gallery-cell.is-loaded .gallery-thumb { opacity: 1; }
 
@@ -87,11 +89,17 @@
 .gallery-cell.is-loading {
     background-image: linear-gradient(100deg, var(--bg-panel) 30%, var(--overlay-accent-1) 50%, var(--bg-panel) 70%);
     background-size: 200% 100%;
-    animation: gallery-shimmer 1.3s ease-in-out infinite;
+    animation: gallery-shimmer 1.3s linear infinite;
 }
 @keyframes gallery-shimmer {
     0% { background-position: 200% 0; }
     100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gallery-cell.is-loading { animation: none; }
+    .gallery-cell, .gallery-thumb { transition: none; }
+    .gallery-cell:hover { transform: none; }
 }
 
 /* Encrypted badge + non-renderable / locked placeholders. */

@@ -1,9 +1,9 @@
 // Imperative machinery behind the photos gallery: one IntersectionObserver
 // for lazy thumbnail loading, an LRU thumbnail-URL cache, and FIFO eviction of
-// decoded <img> bitmaps so memory stays flat on large libraries. The Svelte
-// components render structure and register each cell here; this controller
-// owns every load, cache, and eviction decision so that behavior is identical
-// to the pre-Svelte gallery.
+// decoded <img> bitmaps so memory stays flat on large libraries. Mounted
+// window cells register here; this controller owns every load, cache, and
+// eviction decision so behavior stays consistent as chunks enter and leave
+// the DOM.
 //
 // It is a module singleton because the caches must outlive any single render:
 // scrolling away and back, or switching drives and returning, reuses thumbs.

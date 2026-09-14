@@ -427,3 +427,33 @@ test('prefers-reduced-motion disables entrance motion in Chromium', async ({ pag
     expect(motion.scrollBehavior).toBe('auto');
     expect(Number.parseFloat(motion.transitionDuration) * 1_000).toBeLessThanOrEqual(0.01);
 });
+
+test('large galleries keep DOM and thumbnail observers windowed while scrolling', async ({ page }) => {
+    const photoCount = 2_000;
+    const media = Array.from({ length: photoCount }, (_, index) => ({
+        ...FIRST_PHOTO,
+        name: `photo-${index}.jpg`,
+        msg_id: 1_000 + index,
+    }));
+    await bootTDrive(page, {
+        ListMedia: resolves(media),
+        Thumbnail: returnsSynchronously({ data_base64: GOLD_BASE64, mime_type: 'image/svg+xml' }),
+    });
+
+    await expect(page.locator('#success-screen')).toBeVisible();
+    await page.getByRole('button', { name: 'Photos' }).click();
+    const gallery = page.locator('#gallery-view');
+    await expect.poll(() => gallery.locator('.gallery-cell').count()).toBeGreaterThan(0);
+    expect(await gallery.locator('.gallery-cell').count()).toBeLessThan(300);
+
+    const extent = await gallery.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+    }));
+    expect(extent.scrollHeight).toBeGreaterThan(extent.clientHeight * 20);
+    await gallery.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+
+    const lastPhoto = page.getByRole('button', { name: `photo-${photoCount - 1}.jpg` });
+    await expect(lastPhoto).toBeVisible();
+    expect(await gallery.locator('.gallery-cell').count()).toBeLessThan(300);
+});
