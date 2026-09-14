@@ -225,7 +225,7 @@
 
 <style>
     .video-playlist-panel {
-        width: min(340px, calc(100vw - 24px));
+        --video-popover-max-height: 560px;
     }
 
     .video-playlist-title {

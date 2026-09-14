@@ -97,7 +97,6 @@
             <button type="button" data-settings-section="audio">Audio</button>
             <button type="button" data-settings-section="subtitle">Subtitles</button>
             <button type="button" data-settings-section="speed">Speed</button>
-            <button type="button" data-settings-section="shortcuts">Shortcuts</button>
         </nav>
         <div class="video-popover-body video-settings-body">
             <div id="video-audio-menu" class="video-menu video-track-menu" role="group" aria-label="Audio track"></div>

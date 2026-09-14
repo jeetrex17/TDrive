@@ -8,21 +8,26 @@
     --video-popover-inset: 6px;
     --video-popover-item-radius: 10px;
 
+    /* Room between the topbar and the command row, shared so a panel can either
+       cap against it or take a fixed slice of it. */
+    --video-popover-available: calc(
+        100% - var(--video-panel-top, 76px) - var(--video-panel-bottom, 108px) - 20px
+    );
+    --video-popover-max-height: 440px;
+
     position: absolute;
     z-index: 15;
     right: 12px;
     bottom: calc(var(--video-panel-bottom, 108px) + 10px);
     display: flex;
     flex-direction: column;
+    width: min(380px, calc(100vw - 24px));
     min-width: 0;
     min-height: 0;
-    max-height: min(
-        440px,
-        calc(100% - var(--video-panel-top, 76px) - var(--video-panel-bottom, 108px) - 20px)
-    );
+    max-height: min(var(--video-popover-max-height), var(--video-popover-available));
     overflow: hidden;
     border-radius: var(--video-popover-radius);
-    background: rgba(13, 17, 26, 0.86);
+    background: rgba(13, 17, 26, 0.94);
     color: #edf1fa;
     /* A hairline ring carries the edge and one ambient layer carries the lift.
        A solid border would read as a hard seam over moving picture. */
@@ -39,9 +44,9 @@
 
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
     .video-popover {
-        background: rgba(13, 17, 26, 0.64);
-        -webkit-backdrop-filter: blur(20px) saturate(160%);
-        backdrop-filter: blur(20px) saturate(160%);
+        background: rgba(13, 17, 26, 0.85);
+        -webkit-backdrop-filter: blur(24px) saturate(150%);
+        backdrop-filter: blur(24px) saturate(150%);
     }
 }
 
@@ -185,6 +190,7 @@
     .video-popover {
         right: 10px;
         left: 10px;
+        width: auto;
         max-height: min(
             52vh,
             calc(100% - var(--video-panel-top, 76px) - var(--video-panel-bottom, 108px) - 16px)

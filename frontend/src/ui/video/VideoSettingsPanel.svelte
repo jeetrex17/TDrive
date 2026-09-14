@@ -51,19 +51,6 @@
         {/each}
     </div>
 </div>
-<div id="video-shortcuts-settings" class="video-settings-section" hidden>
-    <h3>Keyboard shortcuts</h3>
-    <p class="video-settings-note">Use these while the player is focused. Controls and settings keep their own keys.</p>
-    <dl class="video-shortcuts-list" aria-label="Video keyboard shortcuts">
-        <div><dt><kbd>Space</kbd><span>or</span><kbd>K</kbd></dt><dd>Play or pause</dd></div>
-        <div><dt><kbd>J</kbd><span>or</span><kbd>←</kbd></dt><dd>Seek back 10 seconds</dd></div>
-        <div><dt><kbd>L</kbd><span>or</span><kbd>→</kbd></dt><dd>Seek forward 10 seconds</dd></div>
-        <div><dt><kbd>↑</kbd><span>or</span><kbd>↓</kbd></dt><dd>Adjust volume</dd></div>
-        <div><dt><kbd>M</kbd></dt><dd>Mute or unmute</dd></div>
-        <div><dt><kbd>F</kbd></dt><dd>Toggle fullscreen</dd></div>
-        <div><dt><kbd>C</kbd></dt><dd>Toggle subtitles</dd></div>
-    </dl>
-</div>
 <div id="video-subtitle-settings" class="video-settings-section" hidden>
     <div class="video-subtitle-appearance">
     <h3>Subtitle appearance</h3>

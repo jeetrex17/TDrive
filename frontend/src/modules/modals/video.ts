@@ -92,7 +92,7 @@ interface VideoOpenAttempt {
 }
 
 let playbackPreferences = loadPlaybackPreferences();
-let settingsSection: "picture" | "audio" | "subtitle" | "speed" | "shortcuts" | null = null;
+let settingsSection: "picture" | "audio" | "subtitle" | "speed" | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
 let playlistOpen = false;
 let playlistReturnFocus: HTMLElement | null = null;
@@ -634,10 +634,8 @@ function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
     byID("video-picture-button")?.setAttribute("aria-expanded", "true");
     const picture = byID("video-picture-settings");
     const appearance = byID("video-subtitle-settings");
-    const shortcuts = byID("video-shortcuts-settings");
     if (picture) picture.hidden = section !== "picture";
     if (appearance) appearance.hidden = section !== "subtitle";
-    if (shortcuts) shortcuts.hidden = section !== "shortcuts";
     for (const button of panel.querySelectorAll<HTMLElement>("[data-settings-section]")) {
         button.setAttribute("aria-pressed", button.dataset.settingsSection === section ? "true" : "false");
     }
@@ -744,7 +742,6 @@ function bindSettingsPanel() {
         if (section === "audio") audioPicker?.setOpen(true);
         else if (section === "subtitle") subtitlePicker?.setOpen(true);
         else if (section === "speed") setSpeedMenuOpen(true);
-        else if (section === "shortcuts") showSettingsPanel("shortcuts");
         else showSettingsPanel("picture");
         settingsReturnFocus = returnFocus;
     });

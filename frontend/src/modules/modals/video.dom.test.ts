@@ -1289,8 +1289,8 @@ describe("video finish time", () => {
     });
 });
 
-describe("video keyboard shortcuts", () => {
-    it("makes shortcuts discoverable from playback settings and restores focus", async () => {
+describe("video chrome interactions", () => {
+    it("closes playback settings on Escape and restores focus to the gear", async () => {
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(42, SHARED_SESSION_ID));
         const videoModule = await import("./video");
         deactivateVideo = videoModule.activateVideoModal();
@@ -1300,20 +1300,11 @@ describe("video keyboard shortcuts", () => {
         const gear = document.querySelector<HTMLButtonElement>("#video-picture-button")!;
         expect(panel.hidden).toBe(true);
         gear.click();
-        const tab = document.querySelector<HTMLButtonElement>('[data-settings-section="shortcuts"]')!;
-        const section = document.querySelector<HTMLElement>("#video-shortcuts-settings")!;
-        expect(tab).toBeTruthy();
-        expect(section.hidden).toBe(true);
+        expect(panel.hidden).toBe(false);
 
-        tab.click();
-        expect(section.hidden).toBe(false);
+        const tab = document.querySelector<HTMLButtonElement>('[data-settings-section="picture"]')!;
         expect(tab.getAttribute("aria-pressed")).toBe("true");
-        expect(section.textContent).toContain("Space");
-        expect(section.textContent).toContain("Seek back 10 seconds");
-        expect(section.textContent).toContain("Seek forward 10 seconds");
-        expect(section.textContent).toContain("Adjust volume");
-        expect(section.textContent).toContain("Toggle fullscreen");
-        expect(section.textContent).toContain("Toggle subtitles");
+        expect(document.querySelector('[data-settings-section="shortcuts"]')).toBeNull();
 
         tab.focus();
         tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

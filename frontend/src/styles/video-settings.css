@@ -1,11 +1,11 @@
 /* Surface, anchoring and motion come from .video-popover. */
-.video-settings-panel { width: min(340px, calc(100vw - 24px)); }
+.video-settings-panel { height: min(460px, var(--video-popover-available)); }
 .video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
 /* One segmented control, inset concentrically inside the popover corner. */
 .video-settings-tabs {
     flex: 0 0 auto;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 2px;
     margin: 0 var(--video-popover-inset) 8px;
     padding: 2px;
@@ -64,13 +64,6 @@
 .video-picture-options button:hover { background: rgba(255, 255, 255, 0.08); }
 .video-picture-options button small { color: #a8b2c5; font-size: 11px; }
 .video-picture-options button.is-selected { border-color: rgba(122, 162, 247, 0.55); background: rgba(122, 162, 247, 0.16); }
-.video-shortcuts-list { display: grid; gap: 1px; margin: 0; }
-.video-shortcuts-list > div { display: grid; grid-template-columns: minmax(112px, auto) 1fr; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #ffffff12; }
-.video-shortcuts-list > div:last-child { border-bottom: 0; }
-.video-shortcuts-list dt { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: #dce8ff; font-size: 12px; }
-.video-shortcuts-list dt span { color: #72809a; font-size: 11px; }
-.video-shortcuts-list kbd { display: inline-grid; min-width: 24px; height: 24px; box-sizing: border-box; place-items: center; padding: 0 6px; border: 1px solid #ffffff2b; border-bottom-color: #ffffff46; border-radius: 5px; background: #ffffff0a; color: #edf3ff; font: 600 11px/1 Nunito, sans-serif; }
-.video-shortcuts-list dd { margin: 0; color: #a8b2c5; font-size: 12px; line-height: 1.4; }
 .video-subtitle-preview { display: grid; place-items: center; min-height: 84px; background: transparent; border-radius: 9px; padding: 10px; text-align: center; margin-bottom: 14px; }
 .video-subtitle-preview span { padding: 3px 6px; border-radius: 3px; }
 .video-settings-field { display: grid; gap: 9px; margin: 15px 0; font-size: 13px; }
@@ -112,7 +105,7 @@
    its window paints above the webview and would otherwise cover the dock. */
 .video-overlay.is-video-native-fallback .video-native-viewport { right: var(--video-native-right-inset, var(--video-native-side-inset, 0)); }
 @media (max-width: 760px) {
-    .video-settings-panel { width: auto; }
+    .video-settings-panel { height: min(52vh, var(--video-popover-available)); }
     .video-secondary-cluster { display: flex; }
     .video-controls .video-menu-wrap:not([hidden]), .video-controls .video-fullscreen-btn { display: flex; }
     .video-command-row { flex-wrap: wrap; gap: 8px; }
