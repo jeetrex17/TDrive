@@ -558,6 +558,15 @@ export function SetFileDropEnabled(enabled: boolean): $CancellablePromise<void> 
 }
 
 /**
+ * ShareFile opens the platform share sheet for a file TDrive wrote into its
+ * own data directory. Anything outside it is refused so the webview cannot
+ * hand arbitrary files to other apps. Desktop reports unsupported.
+ */
+export function ShareFile(path: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(3239681846, path);
+}
+
+/**
  * ShowNativeSeekThumbnail paints a seek-preview thumbnail over the native video.
  * imageBase64 is the raw base64 of the JPEG frame the backend's own thumbnailer
  * produced and the frontend already holds; rect is the desired preview box in

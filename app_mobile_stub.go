@@ -2,8 +2,18 @@
 
 package main
 
-import "github.com/wailsapp/wails/v3/pkg/application"
+import (
+	"errors"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
 
 // registerMobileLifecycle is a no-op on desktop, where the OS does not suspend
 // the app the way a phone does.
 func registerMobileLifecycle(_ *App, _ *application.App) {}
+
+// shareFileNative has no desktop counterpart: downloads there go through the
+// save dialog and never need a share sheet.
+func shareFileNative(string) error {
+	return errors.New("sharing is only available on iOS and Android")
+}

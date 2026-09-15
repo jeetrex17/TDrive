@@ -484,12 +484,14 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 	}
 	ctx := a.beginDownload()
 	defer a.endDownload()
-	result := svc.Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, func(defaultName string) (string, error) {
-		return a.wails.Dialog.SaveFileWithOptions(&application.SaveFileDialogOptions{
-			Filename: defaultName,
-			Title:    "Save File As...",
-		}).PromptForSingleSelection()
-	})
+	result := svc.Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, a.chooseDownloadPath)
+	// A phone download lands in the sandbox, so the share sheet is the only way
+	// the user can see the file; open it as soon as the bytes are on disk.
+	if application.System.IsMobile() && result.Status == "success" && result.SavedPath != "" {
+		if err := shareFileNative(result.SavedPath); err != nil {
+			fmt.Printf("Warning: share sheet failed: %v\n", err)
+		}
+	}
 	return downloadOperationResult(result)
 }
 
@@ -504,13 +506,7 @@ func (a *App) DownloadFolder(folderID string) DownloadResult {
 	}
 	ctx := a.beginDownload()
 	defer a.endDownload()
-	result := svc.DownloadFolder(ctx, a.ActiveChannelID(), folderID, func(defaultName string) (string, error) {
-		return a.wails.Dialog.OpenFile().
-			CanChooseFiles(false).
-			CanChooseDirectories(true).
-			SetTitle(fmt.Sprintf("Choose where to save %q", defaultName)).
-			PromptForSingleSelection()
-	})
+	result := svc.DownloadFolder(ctx, a.ActiveChannelID(), folderID, a.chooseDownloadDir)
 	return downloadOperationResult(result)
 }
 
