@@ -9,6 +9,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/applog"
 	"TDrive/backend/core"
+	"TDrive/backend/datadir"
 	"TDrive/backend/mountcontroller"
 	"TDrive/backend/mountlifecycle"
 	"TDrive/backend/processlock"
@@ -616,6 +617,20 @@ func (a *App) fileDropAllowed() bool {
 
 func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
 	a.ctx = ctx
+
+	// Android's home dir is /sdcard when HOME is unset, so os.UserConfigDir /
+	// os.UserCacheDir land on shared external storage; point both at the
+	// app-private sandbox instead. iOS resolves inside the app container
+	// already and keeps its cache default (Library/Caches, excluded from
+	// backups), but its data dir is pinned to the same place Wails reports.
+	if application.System.IsMobile() {
+		if p := application.Mobile.StoragePath(); p != "" {
+			datadir.Set(p)
+			if application.System.IsPlatform(application.PlatformAndroid) {
+				datadir.SetCache(p)
+			}
+		}
+	}
 
 	lock, err := processlock.Acquire("gui")
 	if err != nil {

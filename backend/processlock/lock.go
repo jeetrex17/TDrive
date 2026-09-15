@@ -7,10 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"TDrive/backend/datadir"
 )
 
 const (
-	dirMode  os.FileMode = 0o700
 	fileMode os.FileMode = 0o600
 )
 
@@ -36,10 +37,6 @@ func Acquire(role string) (*Lock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), dirMode); err != nil {
-		return nil, fmt.Errorf("backend lock: create config dir: %w", err)
-	}
-	_ = os.Chmod(filepath.Dir(path), dirMode)
 
 	f, err := createLockFile(path)
 	if err != nil {
@@ -119,11 +116,11 @@ func (l *Lock) Info() Info {
 }
 
 func Path() (string, error) {
-	base, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return "", fmt.Errorf("backend lock: config dir: %w", err)
 	}
-	return filepath.Join(base, "TDrive", "backend.lock"), nil
+	return filepath.Join(dir, "backend.lock"), nil
 }
 
 func Read() (Info, error) {

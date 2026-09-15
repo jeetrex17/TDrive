@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"TDrive/backend/datadir"
 )
 
 // ErrConfigInvalid marks a config.json that exists but cannot be parsed.
@@ -26,11 +28,11 @@ func SaveConfig(id int64) error {
 		return err
 	}
 
-	base, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return fmt.Errorf("error getting config dir: %v", err)
 	}
-	path := filepath.Join(base, "TDrive", "config.json")
+	path := filepath.Join(dir, "config.json")
 
 	if err := writePrivateFile(path, jsonData); err != nil {
 		return fmt.Errorf("write config: %w", err)
@@ -39,12 +41,12 @@ func SaveConfig(id int64) error {
 }
 
 func LoadConfig() (int64, error) {
-	path, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return 0, fmt.Errorf("error getting config dir: %v", err)
 	}
 
-	path = filepath.Join(path, "TDrive", "config.json")
+	path := filepath.Join(dir, "config.json")
 
 	file, err := os.ReadFile(path)
 

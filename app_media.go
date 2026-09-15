@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"TDrive/backend"
+	"TDrive/backend/datadir"
 	"TDrive/backend/media"
 	"TDrive/backend/thumbnail"
 )
@@ -18,11 +19,11 @@ const thumbnailCacheMaxBytes int64 = 512 * 1024 * 1024
 // cache directory because the contents are disposable; encrypted-drive
 // thumbnails are stored as ciphertext regardless.
 func thumbnailCacheDir() string {
-	base, err := os.UserCacheDir()
+	base, err := datadir.CacheDir()
 	if err != nil || base == "" {
-		base = os.TempDir()
+		base = filepath.Join(os.TempDir(), "TDrive")
 	}
-	return filepath.Join(base, "TDrive", "thumbnails")
+	return filepath.Join(base, "thumbnails")
 }
 
 func newThumbnailCache() *thumbnail.Cache {
