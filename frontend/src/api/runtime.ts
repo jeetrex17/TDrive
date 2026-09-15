@@ -136,9 +136,22 @@ function mobileOverride(): "mobile" | "ios" | "android" | null {
     return value === "1" ? "mobile" : null;
 }
 
+/**
+ * The Android host answers `wails.platform()` synchronously from its
+ * JavascriptInterface, which makes it usable before the environment has been
+ * hydrated. The other hosts have no such call, so this only ever says
+ * "android" or nothing.
+ */
+function bridgePlatform(): string | null {
+    if (typeof window === "undefined") return null;
+    const platform = window.wails?.platform;
+    return typeof platform === "function" ? platform() : null;
+}
+
 /** True on iOS and Android (real or previewed); false until the gateway is ready. */
 export function isMobilePlatform(): boolean {
-    return mobileOverride() !== null || (isGatewayReady() && System.IsMobile());
+    return mobileOverride() !== null
+        || (isGatewayReady() && (System.IsMobile() || bridgePlatform() === "android"));
 }
 
 export function isIOSPlatform(): boolean {
@@ -150,7 +163,7 @@ export function isIOSPlatform(): boolean {
 export function isAndroidPlatform(): boolean {
     const override = mobileOverride();
     if (override) return override === "android";
-    return isGatewayReady() && System.IsAndroid();
+    return isGatewayReady() && (System.IsAndroid() || bridgePlatform() === "android");
 }
 
 /** Wails window fullscreen is a desktop feature; on a phone it is a no-op. */
@@ -188,25 +201,33 @@ export function setNativeWindowBackgroundColour(red: number, green: number, blue
 }
 
 /** Resolves once a real Wails webview (as opposed to the browser preview) is ready. */
-export function waitForGatewayReady(timeoutMs = 4000): Promise<boolean> {
-    if (isGatewayReady()) return Promise.resolve(true);
-    if (typeof window === "undefined") return Promise.resolve(false);
+export async function waitForGatewayReady(timeoutMs = 4000): Promise<boolean> {
+    if (typeof window === "undefined") return false;
 
     const deadline = Date.now() + Math.max(0, timeoutMs);
-    const { promise, resolve } = Promise.withResolvers<boolean>();
-    const tick = () => {
-        if (isGatewayReady()) {
-            resolve(true);
-            return;
-        }
-        if (Date.now() >= deadline) {
-            resolve(false);
-            return;
-        }
-        window.setTimeout(tick, 30);
-    };
-    tick();
-    return promise;
+    while (!isGatewayReady()) {
+        if (Date.now() >= deadline) return false;
+        await new Promise((resolve) => window.setTimeout(resolve, 30));
+    }
+    await hydrateEnvironment();
+    return true;
+}
+
+/**
+ * Fills `window._wails.environment` on hosts that do not inject it (iOS and
+ * Android in Wails 3 beta.22), so the runtime's `System.Is*` helpers and the
+ * platform gating built on them answer correctly everywhere. A failure leaves
+ * the platform helpers on their bridge fallbacks and is not fatal.
+ */
+async function hydrateEnvironment(): Promise<void> {
+    if (window._wails?.environment) return;
+    try {
+        const info = await System.Environment();
+        window._wails = window._wails ?? {};
+        window._wails.environment = { OS: info.OS, Arch: info.Arch, Debug: info.Debug };
+    } catch (cause) {
+        console.warn("System.Environment failed:", cause);
+    }
 }
 
 export function runtimeEventsAvailable(): boolean {
@@ -217,13 +238,28 @@ export function runtimeEventsAvailable(): boolean {
  * True inside a real Wails webview, false in the plain Vite dev/preview
  * browser. `@wailsio/runtime` always wires up `Events.On`/bound methods as
  * regular JS functions regardless of environment, so their mere presence
- * can't tell the two apart. `window._wails.environment` can: Go injects it
- * with an inline script before the app bundle loads, in every real webview
- * (dev or built), and nothing sets it in a plain browser tab.
+ * can't tell the two apart. `window._wails.environment` can on desktop, where
+ * Go injects it with an inline script before the app bundle loads; the phone
+ * hosts skip that script, so their message bridge stands in for it. Nothing
+ * sets either in a plain browser tab.
  */
 export function isGatewayReady(): boolean {
     if (typeof window === "undefined") return false;
-    return Boolean(window._wails?.environment);
+    return Boolean(window._wails?.environment) || nativeBridgePresent();
+}
+
+/**
+ * The message bridge each Wails host installs before the page runs: WebView2
+ * on Windows, the WKWebView handler on macOS and iOS, the JavascriptInterface
+ * on Android. It is the readiness signal on the phones, where beta.22 never
+ * injects `_wails.environment`.
+ */
+function nativeBridgePresent(): boolean {
+    return Boolean(
+        window.chrome?.webview?.postMessage
+        || window.webkit?.messageHandlers?.external?.postMessage
+        || window.wails?.invoke,
+    );
 }
 
 export async function getRuntimeEnvironment(): Promise<RuntimeEnvironment> {
