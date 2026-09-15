@@ -1,6 +1,7 @@
 <script lang="ts">
     import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+    import Share2Icon from '@lucide/svelte/icons/share-2';
     import XIcon from '@lucide/svelte/icons/x';
     import { formatBytes } from '../../utils';
     import type { TransferEvent } from './notif-store';
@@ -8,9 +9,14 @@
     interface Props {
         transfer: TransferEvent;
         onCancel?: (direction: TransferEvent['direction']) => void;
+        // Mobile Transfers tab only: reopens the share sheet for a finished
+        // single-file download. Absent on desktop, so no action renders there.
+        onShare?: () => void;
     }
 
-    let { transfer, onCancel }: Props = $props();
+    let { transfer, onCancel, onShare }: Props = $props();
+
+    const canShare = $derived(Boolean(onShare) && transfer.status === 'done' && transfer.direction === 'down');
 
     const direction = $derived(transfer.direction === 'up' ? 'upload' : 'download');
     const dirLabel = $derived(transfer.direction === 'up' ? 'Uploading' : 'Downloading');
@@ -90,6 +96,16 @@
             onclick={cancel}
         >
             <XIcon size={12} strokeWidth={2} aria-hidden="true" />
+        </button>
+    {:else if canShare}
+        <button
+            class="notif-row-share"
+            type="button"
+            aria-label={`Share ${transfer.name || 'file'}`}
+            title="Share"
+            onclick={(event) => { event.stopPropagation(); onShare?.(); }}
+        >
+            <Share2Icon size={13} strokeWidth={2} aria-hidden="true" />
         </button>
     {/if}
 </div>

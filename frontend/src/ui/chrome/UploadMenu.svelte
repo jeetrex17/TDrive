@@ -1,5 +1,6 @@
 <script lang="ts">
     import FileUpIcon from '@lucide/svelte/icons/file-up';
+    import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import FolderUpIcon from '@lucide/svelte/icons/folder-up';
     import UploadIcon from '@lucide/svelte/icons/upload';
     import { tick } from 'svelte';
@@ -8,14 +9,17 @@
         onFiles: () => void;
         // Left out where the platform has no directory picker (Android).
         onFolder?: () => void;
+        // Only the phone menu surfaces New folder here; desktop omits it.
+        onNewFolder?: () => void;
     }
 
-    let { onFiles, onFolder }: Props = $props();
+    let { onFiles, onFolder, onNewFolder }: Props = $props();
 
     let open = $state(false);
     let buttonEl = $state<HTMLButtonElement | null>(null);
     let menuEl = $state<HTMLElement | null>(null);
     let filesEl = $state<HTMLButtonElement | null>(null);
+    let newFolderEl = $state<HTMLButtonElement | null>(null);
     let folderEl = $state<HTMLButtonElement | null>(null);
 
     async function openMenu(): Promise<void> {
@@ -38,6 +42,10 @@
         if (onFolder) activate(onFolder);
     }
 
+    function chooseNewFolder(): void {
+        if (onNewFolder) activate(onNewFolder);
+    }
+
     function onWindowKeydown(event: KeyboardEvent): void {
         if (event.key === 'Escape' && open) closeMenu(true);
     }
@@ -53,7 +61,7 @@
     function onMenuKeydown(event: KeyboardEvent): void {
         if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
         event.preventDefault();
-        const items = [filesEl, folderEl].filter(Boolean) as HTMLElement[];
+        const items = [filesEl, newFolderEl, folderEl].filter(Boolean) as HTMLElement[];
         if (!items.length) return;
         const idx = items.indexOf(document.activeElement as HTMLElement);
         const next = event.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length;
@@ -92,12 +100,18 @@
 >
     <button bind:this={filesEl} id="upload-menu-files" class="upload-menu-item" type="button" role="menuitem" onclick={() => activate(onFiles)}>
         <FileUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
-        Files
+        {onNewFolder ? 'Upload files' : 'Files'}
     </button>
+    {#if onNewFolder}
+        <button bind:this={newFolderEl} id="upload-menu-new-folder" class="upload-menu-item" type="button" role="menuitem" onclick={chooseNewFolder}>
+            <FolderPlusIcon size={18} strokeWidth={1.8} aria-hidden="true" />
+            New folder
+        </button>
+    {/if}
     {#if onFolder}
         <button bind:this={folderEl} id="upload-menu-folder" class="upload-menu-item" type="button" role="menuitem" onclick={chooseFolder}>
             <FolderUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
-            Folder
+            {onNewFolder ? 'Upload folder' : 'Folder'}
         </button>
     {/if}
 </div>

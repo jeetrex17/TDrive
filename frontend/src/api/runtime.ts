@@ -144,8 +144,16 @@ function mobileOverride(): "mobile" | "ios" | "android" | null {
  */
 function bridgePlatform(): string | null {
     if (typeof window === "undefined") return null;
-    const platform = window.wails?.platform;
-    return typeof platform === "function" ? platform() : null;
+    const bridge = window.wails;
+    // Android throws "Java bridge method can't be invoked on a non-injected
+    // object" when an interface method is called without its receiver, so the
+    // call has to stay attached to `window.wails`.
+    if (!bridge || typeof bridge.platform !== "function") return null;
+    try {
+        return bridge.platform();
+    } catch {
+        return null;
+    }
 }
 
 /** True on iOS and Android (real or previewed); false until the gateway is ready. */

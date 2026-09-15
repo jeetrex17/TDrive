@@ -6,7 +6,8 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
-import { downloadFile, downloadFolder, importPaths, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { downloadFile, downloadFolder, importPaths, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import type { ImportPlan, OperationError } from '../types';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
@@ -149,12 +150,21 @@ async function startNextDownload() {
 
         if (result.result.ok) {
             finalizeDownload(next.key, 'done');
+            const mobile = isMobilePlatform();
             if (next.kind === 'folder') {
                 notify({
                     level: 'success',
                     title: 'Folder downloaded',
-                    body: result.savedPath ? 'Saved to ' + result.savedPath : next.name + ' saved',
+                    // The raw sandbox path means nothing on a phone; desktop keeps it.
+                    body: mobile
+                        ? 'Saved to your device.'
+                        : (result.savedPath ? 'Saved to ' + result.savedPath : next.name + ' saved'),
                 });
+            } else if (mobile) {
+                // Go opens the share sheet right after a single-file download; keep
+                // the saved path so the Transfers tab can reshare it later.
+                if (result.savedPath) rememberDownloadSharePath(`xfer:down:${next.key}`, result.savedPath);
+                notify({ level: 'success', title: 'Downloaded', body: 'Saved. The share sheet is open.' });
             }
         } else if (result.result.error.code === 'canceled') {
             finalizeDownload(next.key, 'canceled');

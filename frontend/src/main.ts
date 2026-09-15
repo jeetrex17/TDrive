@@ -8,11 +8,17 @@ import { refreshFiles } from './modules/file-list';
 import { runGlobalSearch } from './modules/search';
 import { renderSidebar } from './modules/sidebar';
 import type { AppLifecycle } from './ui/app/app-store';
+import { applyMobilePlatformClasses } from './ui/mobile/platform-classes';
 import { initializeNativeTheme } from './ui/theme/native-theme';
 import { initializeTheme } from './ui/theme/theme-controller';
 import { deriveVideoPlaylist } from './modules/video/video-playlist';
 import { getInteractiveFileListRows } from './ui/file-list/file-list-store';
 import type { FileListFileRow } from './ui/file-list/types';
+
+// Stamp the phone classes at module load so the `?mobile=` browser/harness
+// override paints the mobile shell before mount; a no-op on a real device this
+// early, where the platform is only known once the gateway hydrates below.
+applyMobilePlatformClasses();
 
 const disposers: Array<() => void> = [initializeTheme()];
 let started = false;
@@ -94,6 +100,10 @@ const lifecycle: AppLifecycle = {
             throw new RuntimeUnavailableError('App / EventsOn');
         }
         if (stopped) return;
+
+        // Now that the gateway has hydrated, iOS and Android report their real
+        // platform; add the phone classes here for actual devices.
+        applyMobilePlatformClasses();
 
         registerDisposer(await initializeNativeTheme());
         if (stopped) return;

@@ -18,3 +18,5 @@
 @import './styles/video-settings.css';
 @import './styles/glass.css';
 @import './styles/accessibility.css';
+/* Phone shell, scoped to html.mobile; last so it can adjust shared chrome. */
+@import './styles/mobile.css';
