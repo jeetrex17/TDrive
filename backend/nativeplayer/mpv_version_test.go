@@ -7,9 +7,9 @@ func TestParseMPVVersionReadsReleaseAndGitBanners(t *testing.T) {
 
 	cases := map[string]mpvVersion{
 		"mpv 0.34.1 Copyright © 2000-2021 mpv/MPlayer/mplayer2 projects\n built on Unknown\nFFmpeg library versions:\n libavutil 56.70.100": {0, 34},
-		"mpv v0.41.0-12-gdeadbeef Copyright © 2000-2025 mpv/MPlayer/mplayer2 projects":                                                       {0, 41},
-		"mpv 1.2.0 Copyright":                                                                                                                {1, 2},
-		"error while loading shared libraries: libavcodec.so.61":                                                                             {},
+		"mpv v0.41.0-12-gdeadbeef Copyright © 2000-2025 mpv/MPlayer/mplayer2 projects":                                                      {0, 41},
+		"mpv 1.2.0 Copyright": {1, 2},
+		"error while loading shared libraries: libavcodec.so.61": {},
 		"": {},
 	}
 	for banner, want := range cases {
