@@ -6,6 +6,7 @@
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import SearchIcon from '@lucide/svelte/icons/search';
     import { listMountableDrives } from '../api';
+    import tdriveLogo from '../assets/images/tdrive-logo.png';
     import { setFileSortKey, fileSortState } from './file-list/file-sort-store';
     import type { FileSortKey } from './file-list/file-sort';
     import MountControl from './mount/MountControl.svelte';
@@ -49,7 +50,10 @@
     aria-hidden={dashboardVisible ? undefined : 'true'}
 >
     <aside class="sidebar">
-        <div class="logo">TDrive</div>
+        <div class="logo">
+            <img class="logo-mark" src={tdriveLogo} alt="" width="44" height="28" />
+            <span>TDrive</span>
+        </div>
 
         <nav id="drives-nav" class="drives-nav" tabindex="-1" aria-label="Drives">
             <div class="drives-scroll">

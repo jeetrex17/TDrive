@@ -337,7 +337,14 @@
 
 .action-icon {
     width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
-    border-radius: 6px; cursor: pointer; transition: all 0.2s;
+    border-radius: 6px; cursor: pointer;
+    /* Named properties, not `all`: `all` animates layout and paint properties
+       nothing here intends to change, and it is the one transition in the app
+       that can stutter under a long list. */
+    transition: background var(--motion-fast) var(--ease-standard),
+                border-color var(--motion-fast) var(--ease-standard),
+                color var(--motion-fast) var(--ease-standard),
+                transform var(--motion-fast) var(--ease-standard);
     background: var(--overlay-white-1); border: 1px solid var(--border);
     color: var(--text-main);
     padding: 0;

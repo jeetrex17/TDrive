@@ -5,7 +5,26 @@
     width: 240px; flex-shrink: 0; background: var(--bg-sidebar); border-right: 1px solid var(--color-surface-1);
     padding: 20px; display: flex; flex-direction: column; min-height: 0;
 }
-.logo { font-size: 1.2rem; font-weight: 800; color: var(--color-text); margin-bottom: 40px; letter-spacing: -0.5px; }
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 40px;
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: var(--color-text);
+    letter-spacing: -0.5px;
+}
+
+/* The mark is the one piece of warmth in an otherwise severe column, so it is
+   sized to the wordmark's cap height rather than shrunk into a favicon. */
+.logo-mark {
+    width: 44px;
+    height: 28px;
+    flex: 0 0 auto;
+    display: block;
+    object-fit: contain;
+}
 
 .storage-info { padding-top: 20px; border-top: 1px solid var(--border); }
 .storage-info p { font-size: var(--type-xs); color: var(--text-muted); display: flex; justify-content: space-between; gap: var(--space-2); }
