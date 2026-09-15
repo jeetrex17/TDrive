@@ -3,11 +3,24 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
+
+// shareFileNative hands a sandbox file to the OS share sheet: the activity
+// view controller on iOS, the send chooser on Android, where the host turns a
+// file URL into a FileProvider content URI (see build/android WailsBridge).
+func shareFileNative(path string) error {
+	payload, err := json.Marshal(map[string]string{"url": fileURL(path)})
+	if err != nil {
+		return err
+	}
+	application.Mobile.Share(string(payload))
+	return nil
+}
 
 // registerMobileLifecycle ties OS suspend/resume to the engine. Backgrounding a
 // phone drops the Telegram update loop and stops serving decrypted media over

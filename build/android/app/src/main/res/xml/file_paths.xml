@@ -3,4 +3,6 @@
     <!-- Camera captures are written here and shared with the camera app via the
          FileProvider. -->
     <cache-path name="captures" path="captures/" />
+    <!-- TDrive downloads land in the sandbox and leave through the share sheet. -->
+    <files-path name="downloads" path="TDrive/Downloads/" />
 </paths>

@@ -431,6 +431,12 @@ public class WailsBridge {
                 JSONObject opts = new JSONObject(json);
                 String text = opts.optString("text", "");
                 String url = opts.optString("url", "");
+                // TDrive: a file URL inside the sandbox is shared as a document
+                // through the FileProvider, not pasted as text.
+                if (url.startsWith("file://")) {
+                    shareFile(Uri.parse(url));
+                    return;
+                }
                 StringBuilder body = new StringBuilder();
                 if (!text.isEmpty()) body.append(text);
                 if (!url.isEmpty()) {
@@ -448,6 +454,30 @@ public class WailsBridge {
                 Log.e(TAG, "share failed", e);
             }
         });
+    }
+
+    /**
+     * TDrive: share a file the Go side wrote under the app's files dir (the
+     * paths the FileProvider exports are listed in res/xml/file_paths.xml).
+     */
+    private void shareFile(Uri fileUri) {
+        String path = fileUri.getPath();
+        if (path == null) return;
+        java.io.File file = new java.io.File(path);
+        Uri content = androidx.core.content.FileProvider.getUriForFile(
+                activity, activity.getPackageName() + ".fileprovider", file);
+        String ext = android.webkit.MimeTypeMap.getFileExtensionFromUrl(fileUri.toString());
+        String mime = null;
+        if (ext != null && !ext.isEmpty()) {
+            mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.toLowerCase());
+        }
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType(mime != null ? mime : "application/octet-stream");
+        send.putExtra(Intent.EXTRA_STREAM, content);
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        Intent chooser = Intent.createChooser(send, file.getName());
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        activity.startActivity(chooser);
     }
 
     /**
