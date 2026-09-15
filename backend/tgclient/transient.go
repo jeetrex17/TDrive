@@ -31,6 +31,8 @@ var transientTransportPatterns = []string{
 	"connection aborted",
 	"connection refused",
 	"connection dead",
+	"dc is closed",
+	"dc closed",
 	"broken pipe",
 	"unexpected eof",
 	"i/o timeout",
