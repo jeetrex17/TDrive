@@ -53,13 +53,13 @@ tasks:
       GOARCH: '{{.ARCH | default ARCH}}'
 
   package:
-    summary: Packages the application (NSIS installer)
+    summary: Builds the application and packages it as an NSIS installer
     cmds:
       - task: create:nsis:installer
         vars:
-          INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
+          INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
     vars:
-      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
+      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
 
   generate:syso:
     summary: Generates Windows `.syso` file
@@ -70,28 +70,48 @@ tasks:
       ARCH: '{{.ARCH | default ARCH}}'
 
   create:nsis:installer:
-    summary: Creates an NSIS installer
-    dir: build/windows/installer
+    summary: Builds the application, then creates the NSIS installer
     deps:
       - task: build
         vars:
           VERSION: '{{.VERSION}}'
+    cmds:
+      - task: installer
+        vars:
+          ARCH: '{{.ARCH}}'
+          INSTALL_SCOPE: '{{.INSTALL_SCOPE}}'
+          PRODUCT_VERSION: '{{.PRODUCT_VERSION}}'
+    vars:
+      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
+
+  # Installs per user by default. The in-app updater swaps the exe and the
+  # media folder in place next to the running app, which works in the user's
+  # own Programs folder and would need elevation under Program Files.
+  installer:
+    summary: Creates the NSIS installer from build/bin (build and package the media runtime first)
+    dir: build/windows/installer
     preconditions:
       - sh: '[ "{{.INSTALL_SCOPE}}" = "user" ] || [ "{{.INSTALL_SCOPE}}" = "machine" ]'
         msg: "INSTALL_SCOPE must be 'user' or 'machine', got '{{.INSTALL_SCOPE}}'"
+      - sh: 'test -f "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe"'
+        msg: "{{.BIN_DIR}}/{{.APP_NAME}}.exe is missing; run `wails3 task windows:build` first"
     cmds:
       # Create the Microsoft WebView2 bootstrapper if it doesn't exist
       - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/installer"
       - |
         {{if eq OS "windows"}}
-        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" project.nsi
+        makensis {{.SCOPE_DEFINES}}{{.VERSION_DEFINE}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" project.nsi
         {{else}}
-        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" project.nsi
+        makensis {{.SCOPE_DEFINES}}{{.VERSION_DEFINE}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" project.nsi
         {{end}}
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
       ARG_FLAG: '{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}'
-      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
+      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
+      SCOPE_DEFINES: '{{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}'
+      # PRODUCT_VERSION (x.y.z) stamps the installer's own version metadata;
+      # unset keeps the one generated into wails_tools.nsh from build/config.yml.
+      VERSION_DEFINE: '{{if .PRODUCT_VERSION}}-DINFO_PRODUCTVERSION={{.PRODUCT_VERSION}} {{end}}'
 
   run:
     cmds:
@@ -119,8 +139,8 @@ tasks:
     deps:
       - task: create:nsis:installer
         vars:
-          INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
+          INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
     vars:
-      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
+      INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
     cmds:
       - wails3 tool sign --input "build/windows/installer/{{.APP_NAME}}-installer.exe" {{if .SIGN_CERTIFICATE}}--certificate "{{.SIGN_CERTIFICATE}}"{{end}} {{if .SIGN_THUMBPRINT}}--thumbprint "{{.SIGN_THUMBPRINT}}"{{end}} {{if .TIMESTAMP_SERVER}}--timestamp "{{.TIMESTAMP_SERVER}}"{{end}}

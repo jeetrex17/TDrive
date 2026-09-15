@@ -90,6 +90,17 @@ Section
 
     !insertmacro wails.files
 
+    # mpv, the native video player. scripts/package-mpv-windows.ps1 lays it
+    # out in build/bin/media before the installer is built, and the app looks
+    # for it in the media folder next to its exe.
+    !if /FileExists "..\..\bin\media\mpv.exe"
+        SetOutPath "$INSTDIR\media"
+        File /r "..\..\bin\media\*.*"
+        SetOutPath "$INSTDIR"
+    !else
+        !warning "build/bin/media/mpv.exe is missing: this installer ships without the video player"
+    !endif
+
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 

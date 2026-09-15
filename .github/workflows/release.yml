@@ -92,12 +92,18 @@ jobs:
           go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      # Tag builds only; a dispatched branch build keeps the checked-in version.
       - name: Stamp release version
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          yq -i ".info.version = \"${version}\"" build/config.yml
+          # Only the version line inside the info block: the top-level one is
+          # the config schema. sed rather than yq, which the Windows runner lacks.
+          sed -i.bak -E "/^info:/,/^[^[:space:]]/ s/^([[:space:]]+version:[[:space:]]*).*/\1\"${version}\"/" build/config.yml
+          rm -f build/config.yml.bak
+          grep -Fqx "  version: \"${version}\"" build/config.yml
           # v3 build assets are static files, not templates, so the bundle
           # plist has to be stamped too or the .app keeps the checked-in version.
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -211,6 +217,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           ./scripts/package-mpv-windows.ps1 "build/bin/TDrive.exe"
           Compress-Archive -Force -Path "build/bin/TDrive.exe", "build/bin/media" -DestinationPath "dist/TDrive-$env:TDRIVE_ARTIFACT_VERSION-windows-amd64.zip"
+
+          # Per-user installer with the same exe and media folder. Its version
+          # metadata needs x.y.z, so branch builds keep the checked-in version.
+          $installerArgs = @("task", "windows:installer", "INSTALL_SCOPE=user")
+          $version = $env:TDRIVE_ARTIFACT_VERSION -replace '^v', ''
+          if ($version -match '^\d+\.\d+\.\d+$') { $installerArgs += "PRODUCT_VERSION=$version" }
+          & wails3 @installerArgs
+          if ($LASTEXITCODE -ne 0) { throw "windows installer build failed" }
+          Move-Item -Force "build/bin/TDrive-amd64-installer.exe" "dist/TDrive-$env:TDRIVE_ARTIFACT_VERSION-windows-amd64-setup.exe"
 
       - name: Package CLI (Windows)
         if: runner.os == 'Windows'
