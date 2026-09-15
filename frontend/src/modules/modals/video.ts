@@ -16,6 +16,7 @@ import {
 
 import { formatBytes } from "../../utils";
 import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
+import { prefersNativePlayer, rememberNativePlayer } from "../video/native-memory";
 import {
     SerialPlaybackTransitions,
     capturePlaybackIntent,
@@ -1283,6 +1284,7 @@ function handleHtmlMediaError(
     console.error("HTML media player failed:", { code, state });
 
     if (shouldFallbackFromHtmlMediaError(code)) {
+        rememberNativePlayer(attempt.target);
         attempt.nativeFallbackRequested = true;
         const intent = capturePlaybackIntent(state, attempt.pausedByUser);
         setLoadingStatusOverride("Switching to a compatible player...");
@@ -1487,7 +1489,10 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         if (!isCurrent() || !isOpen()) return;
         setLoadingStatusOverride("");
         setLoading(true);
-        if (isWebviewDirectVideo(attempt.target.name)) {
+        // A container the webview handles goes to the HTML player, unless it
+        // already failed to decode this very file: then the native player
+        // opens first and the failed attempt is not paid again.
+        if (isWebviewDirectVideo(attempt.target.name) && !prefersNativePlayer(attempt.target)) {
             await openHtmlPlayback(attempt, isCurrent);
             return;
         }

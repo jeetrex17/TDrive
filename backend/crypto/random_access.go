@@ -356,6 +356,20 @@ func (decryptor *RandomAccessDecryptor) Close() error {
 	return nil
 }
 
+// StoredOffset maps a plaintext offset to where its bytes begin in the TDE1
+// stream: after the header and the tag of every chunk before it. Media
+// playback uses it to warm the stored blocks behind a container index.
+func StoredOffset(plaintextOffset int64) (int64, bool) {
+	if plaintextOffset < 0 {
+		return 0, false
+	}
+	base, ok := ciphertextChunkOffset(plaintextOffset / chunkSizePlain)
+	if !ok {
+		return 0, false
+	}
+	return base + plaintextOffset%chunkSizePlain, true
+}
+
 func ciphertextChunkOffset(chunkIndex int64) (int64, bool) {
 	if chunkIndex < 0 {
 		return 0, false

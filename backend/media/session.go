@@ -35,6 +35,11 @@ type Session struct {
 	thumbDecryptor *tdcrypto.RandomAccessDecryptor
 	thumbs         *videoThumbnailer
 
+	// ctx bounds work the session starts on its own behalf, such as warming
+	// the container index; Close cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu        sync.Mutex
 	lastTouch time.Time
 	closed    bool
@@ -87,10 +92,13 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		return nil, err
 	}
 	copied := append([]resolvedSegment(nil), segments...)
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		token:     token,
 		file:      file,
 		segments:  copied,
+		ctx:       ctx,
+		cancel:    cancel,
 		lastTouch: time.Now(),
 	}
 	s.reader = NewRangeReader(RangeReaderConfig{
@@ -155,6 +163,7 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 			s.thumbDecryptor = thumbDecryptor
 		}
 	}
+	go s.warmIndex()
 	return s, nil
 }
 
@@ -264,6 +273,9 @@ func (s *Session) Close() {
 	}
 	s.closed = true
 	s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.decryptor != nil {
 		_ = s.decryptor.Close()
 	}

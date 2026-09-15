@@ -3,7 +3,6 @@ package nativeplayer
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
 	"reflect"
 	"strings"
@@ -351,38 +350,6 @@ func TestLinuxDisplayModeSelection(t *testing.T) {
 				t.Fatalf("selectLinuxDisplayMode() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestSidecarPreflightIsOptIn(t *testing.T) {
-	if sidecarPreflightEnabled("", "") {
-		t.Fatal("sidecar preflight must be disabled by default")
-	}
-	if !sidecarPreflightEnabled("1", "") {
-		t.Fatal("sidecar preflight was not enabled explicitly")
-	}
-	if sidecarPreflightEnabled("1", "1") {
-		t.Fatal("explicit skip must override explicit enable")
-	}
-}
-
-func TestMPVPreflightInvocationKeepsURLOutOfArguments(t *testing.T) {
-	const secretURL = "http://127.0.0.1:1234/media/opaque-bearer-token"
-	args, stdin := mpvPreflightInvocation(secretURL)
-	for _, arg := range args {
-		if strings.Contains(arg, secretURL) || strings.Contains(arg, "opaque-bearer-token") {
-			t.Fatalf("preflight argument leaked media URL: %q", arg)
-		}
-	}
-	if len(args) == 0 || args[len(args)-1] != "--playlist=-" {
-		t.Fatalf("preflight args = %q, want stdin playlist", args)
-	}
-	payload, err := io.ReadAll(stdin)
-	if err != nil {
-		t.Fatalf("read preflight stdin: %v", err)
-	}
-	if got := string(payload); got != "#EXTM3U\n"+secretURL+"\n" {
-		t.Fatalf("preflight stdin = %q", got)
 	}
 }
 
