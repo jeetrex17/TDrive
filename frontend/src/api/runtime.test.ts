@@ -112,6 +112,42 @@ describe('typed gateway runtime boundary', () => {
         await expect(isFullscreen()).rejects.toBeInstanceOf(RuntimeUnavailableError);
     });
 
+    it('treats a native bridge without an injected environment as ready and hydrates it', async () => {
+        // The Android and iOS hosts in Wails 3 beta.22 install their bridge but
+        // never run the desktop-only script that sets window._wails.environment.
+        const environment = vi.fn().mockResolvedValue({ OS: 'android', Arch: 'arm64', Debug: true });
+        const runtime = await import('@wailsio/runtime');
+        vi.mocked(runtime.System.Environment).mockImplementation(environment);
+        vi.stubGlobal('window', {
+            wails: { invoke: vi.fn(), platform: () => 'android' },
+            location: { search: '' },
+            setTimeout: globalThis.setTimeout,
+        });
+
+        expect(isAndroidPlatform()).toBe(true);
+        expect(isMobilePlatform()).toBe(true);
+        await expect(waitForGatewayReady(0)).resolves.toBe(true);
+
+        expect(environment).toHaveBeenCalledOnce();
+        expect(window._wails?.environment).toEqual({ OS: 'android', Arch: 'arm64', Debug: true });
+        expect(isIOSPlatform()).toBe(false);
+    });
+
+    it('keeps the bridge fallbacks when the environment call fails', async () => {
+        const runtime = await import('@wailsio/runtime');
+        vi.mocked(runtime.System.Environment).mockRejectedValue(new Error('bridge down'));
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.stubGlobal('window', {
+            webkit: { messageHandlers: { external: { postMessage: vi.fn() } } },
+            location: { search: '' },
+            setTimeout: globalThis.setTimeout,
+        });
+
+        await expect(waitForGatewayReady(0)).resolves.toBe(true);
+        expect(window._wails?.environment).toBeUndefined();
+        expect(isMobilePlatform()).toBe(false);
+    });
+
     it('forwards each typed event tuple and tears down its native listener once', () => {
         const stop = vi.fn();
         let listener: ((event: { name: string; data: unknown }) => void) | undefined;
