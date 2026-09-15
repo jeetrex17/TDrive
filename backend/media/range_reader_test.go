@@ -131,7 +131,7 @@ func TestRangeReaderCachesBlocks(t *testing.T) {
 func TestRangeReaderPrefetchesNextBlockWhenEnabled(t *testing.T) {
 	data := testBytes(tgclient.RangeReadMaxBytes*3 + 1)
 	fake := newStrictRangeFake(data)
-	reader := NewRangeReader(RangeReaderConfig{Client: fake, PrefetchBlocks: 1})
+	reader := NewRangeReader(RangeReaderConfig{Client: fake, ReadAhead: 1})
 	defer reader.Close()
 
 	// Read past the opening window so this exercises the ordinary block path;
@@ -164,10 +164,7 @@ func TestRangeReaderCoalescesConcurrentBlockReads(t *testing.T) {
 	data := testBytes(tgclient.RangeReadMaxBytes)
 	fake := newStrictRangeFake(data)
 	fake.delay = 20 * time.Millisecond
-	reader := NewRangeReader(RangeReaderConfig{
-		Client:         fake,
-		MaxConcurrency: 8,
-	})
+	reader := NewRangeReader(RangeReaderConfig{Client: fake})
 	defer reader.Close()
 	ref := fake.ref()
 
@@ -267,51 +264,59 @@ func TestRangeReaderCallerCancellationDoesNotPoisonCoalescedWaiter(t *testing.T)
 	}
 }
 
-func TestRangeReaderForegroundDoesNotJoinBlockedBackgroundFlight(t *testing.T) {
+// A player read that catches up with a fetch already on the wire waits for
+// that fetch instead of transferring the block a second time.
+func TestRangeReaderForegroundJoinsBackgroundFlightOnTheWire(t *testing.T) {
 	data := testBytes(tgclient.RangeReadMaxBytes)
 	fake := &priorityRangeFake{
 		data:      data,
 		bgEntered: make(chan struct{}),
 		bgRelease: make(chan struct{}),
 	}
-	reader := NewRangeReader(RangeReaderConfig{
-		Client:         fake,
-		MaxConcurrency: 2,
-	})
+	reader := NewRangeReader(RangeReaderConfig{Client: fake})
 	defer reader.Close()
 	ref := fake.ref()
 
-	bgErr := make(chan error, 1)
-	go func() {
-		_, err := reader.block(context.Background(), ref, 0, true)
-		bgErr <- err
-	}()
-
+	reader.prefetchBlock(ref, 0)
 	select {
 	case <-fake.bgEntered:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for background block fetch")
 	}
 
-	block, err := reader.block(context.Background(), ref, 0, false)
-	if err != nil {
-		t.Fatalf("foreground block: %v", err)
+	type result struct {
+		block []byte
+		err   error
 	}
-	if !bytes.Equal(block, data) {
-		t.Fatal("foreground block bytes mismatch")
+	foreground := make(chan result, 1)
+	go func() {
+		block, err := reader.block(context.Background(), ref, 0)
+		foreground <- result{block: block, err: err}
+	}()
+
+	select {
+	case res := <-foreground:
+		t.Fatalf("foreground read finished before the shared fetch: %+v", res)
+	case <-time.After(50 * time.Millisecond):
 	}
-	if calls := fake.calls(); len(calls) != 2 {
-		t.Fatalf("calls = %+v, want bounded duplicate fetch instead of joining blocked background flight", calls)
+	if calls := fake.calls(); len(calls) != 1 {
+		t.Fatalf("calls = %+v, want the foreground read to join the single fetch", calls)
 	}
 
 	close(fake.bgRelease)
 	select {
-	case err := <-bgErr:
-		if err != nil {
-			t.Fatalf("background block: %v", err)
+	case res := <-foreground:
+		if res.err != nil {
+			t.Fatalf("foreground block: %v", res.err)
+		}
+		if !bytes.Equal(res.block, data) {
+			t.Fatal("foreground block bytes mismatch")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for background block")
+		t.Fatal("timed out waiting for foreground block")
+	}
+	if calls := fake.calls(); len(calls) != 1 {
+		t.Fatalf("calls = %+v, want one shared fetch", calls)
 	}
 }
 
