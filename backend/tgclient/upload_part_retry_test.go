@@ -117,3 +117,56 @@ func TestRetryingUploadClientDoesNotRetryPermanentRPCError(t *testing.T) {
 		t.Fatalf("error=%v calls=%d, want permanent error after one call", err, partClient.calls)
 	}
 }
+
+// Every upload draws parts from one budget, so a file that arrives while the
+// budget is spent waits for a slot rather than piling more parts onto the link.
+func TestRetryingUploadClientSharesOnePartBudget(t *testing.T) {
+	ctx := context.Background()
+	var held []func()
+	for range UploadThreads {
+		release, err := acquireUploadPartSlot(ctx)
+		if err != nil {
+			t.Fatalf("acquire budget: %v", err)
+		}
+		held = append(held, release)
+	}
+	defer func() {
+		for _, release := range held {
+			release()
+		}
+	}()
+
+	sent := make(chan struct{}, 1)
+	client := &retryingUploadClient{
+		policy: DefaultWriteFloodWaitRetryPolicy(),
+		run: func(ctx context.Context, action func(uploader.Client) error) error {
+			sent <- struct{}{}
+			return action(&transientUploadPartClient{calls: 1})
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.UploadSaveBigFilePart(ctx, &tg.UploadSaveBigFilePartRequest{FilePart: 3})
+		done <- err
+	}()
+
+	select {
+	case <-sent:
+		t.Fatal("a part was sent while the upload budget was spent")
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	held[0]()
+	held = held[1:]
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("part after a slot freed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("freed slot did not admit the waiting part")
+	}
+	if len(sent) != 1 {
+		t.Fatalf("parts sent = %d, want exactly one", len(sent))
+	}
+}
