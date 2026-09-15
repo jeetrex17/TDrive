@@ -1,5 +1,11 @@
 import { writable, type Writable } from 'svelte/store';
 
+// Android BACK ownership for bottom sheets lives next door; re-exported here so
+// the shell can reach it through the modal store it already imports. The shell
+// calls closeTopSheetFromHistory() from its own popstate handler and only pops
+// a folder level when it returns false.
+export { closeTopSheetFromHistory, hasOpenSheet } from './sheet-history';
+
 // Shared view-state shape for ModalShell-based dialogs: open/close, a busy
 // flag that in-flight submits use to lock the controls, an inline error line,
 // and an arbitrary payload set at open time. Business logic stays in

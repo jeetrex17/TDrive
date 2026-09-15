@@ -77,7 +77,7 @@
             disabled={$folderModalState.inFlight || !name.trim()}
             onclick={submit}
         >
-            Create
+            Create folder
         </button>
     {/snippet}
 </ModalShell>

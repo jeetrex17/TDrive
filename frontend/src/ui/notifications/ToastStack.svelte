@@ -79,3 +79,42 @@
         </div>
     {/each}
 </div>
+
+<style>
+    /* Mobile: the stack sits above the tab bar and safe area, spans the width
+       with gutters, and toasts read as a single line. The module caps the
+       queue at two on a phone. Opaque, no blur, matching the mobile bars. */
+    :global(html.mobile .toast-stack) {
+        left: var(--space-4);
+        right: var(--space-4);
+        bottom: calc(var(--tabbar-height, 49px) + env(safe-area-inset-bottom, 0px) + var(--space-3));
+        width: auto;
+        max-width: none;
+    }
+    :global(html.mobile .toast) {
+        background: var(--color-surface-2);
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        align-items: center;
+    }
+    /* Single line: title and its action sit on one row, the multi-line body
+       is dropped. */
+    :global(html.mobile .toast-content) {
+        flex-direction: row;
+        align-items: center;
+        gap: var(--space-2);
+    }
+    :global(html.mobile .toast-title) {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    :global(html.mobile .toast-action) {
+        flex: 0 0 auto;
+        margin-top: 0;
+        align-self: center;
+    }
+    :global(html.mobile .toast-body) { display: none; }
+</style>

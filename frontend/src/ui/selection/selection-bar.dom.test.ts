@@ -73,4 +73,14 @@ describe('SelectionBar', () => {
         expect(callbacks.onDelete).toHaveBeenCalledTimes(1);
         expect(callbacks.onClear).toHaveBeenCalledTimes(1);
     });
+
+    it('carries a labelled glyph on Move and Delete for the mobile action bar', () => {
+        setup();
+
+        for (const id of ['#selection-move', '#selection-delete']) {
+            const button = host?.querySelector<HTMLButtonElement>(id);
+            expect(button?.querySelector('.selection-btn-icon')).not.toBeNull();
+            expect(button?.querySelector('.selection-btn-label')?.textContent).toBeTruthy();
+        }
+    });
 });

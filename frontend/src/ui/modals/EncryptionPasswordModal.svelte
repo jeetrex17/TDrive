@@ -87,7 +87,7 @@
             Cancel
         </button>
         <button id="encryption-password-confirm" class="primary-btn" type="button" disabled={$view.busy} onclick={submit}>
-            Continue
+            Unlock
         </button>
     {/snippet}
 </ModalShell>

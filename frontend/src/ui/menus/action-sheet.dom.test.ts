@@ -1,0 +1,96 @@
+// The context menu renders as a bottom action sheet on a phone, fed by the same
+// store: an item header, plain rows, a separated destructive row and an explicit
+// Cancel. isMobilePlatform is forced true so the mobile branch renders.
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, tick, unmount } from 'svelte';
+
+vi.mock('../../api', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../api')>();
+    return { ...actual, isMobilePlatform: () => true };
+});
+
+import ContextMenu from './ContextMenu.svelte';
+import { contextMenuState, hideContextMenu, showContextMenu } from './context-menu-store';
+
+let app: Record<string, unknown> | null = null;
+let host: HTMLElement | null = null;
+
+async function settle(): Promise<void> {
+    flushSync();
+    await tick();
+    await Promise.resolve();
+    await tick();
+    flushSync();
+}
+
+function rows(): HTMLButtonElement[] {
+    return Array.from(document.querySelectorAll<HTMLButtonElement>('.action-sheet-row'));
+}
+
+beforeEach(() => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    app = mount(ContextMenu, { target: host, props: {} });
+});
+
+afterEach(async () => {
+    hideContextMenu();
+    flushSync();
+    if (app) await unmount(app);
+    host?.remove();
+    app = null;
+    host = null;
+    contextMenuState.set({ open: false, x: 0, y: 0, items: [], header: null, focusVersion: 0 });
+});
+
+describe('ContextMenu action sheet (mobile)', () => {
+    it('renders the header, action rows, a separator and Cancel', async () => {
+        showContextMenu(0, 0, [
+            { label: 'Open', action: vi.fn() },
+            { label: 'Download', action: vi.fn() },
+            { type: 'divider' },
+            { label: 'Delete', danger: true, action: vi.fn() },
+        ], { header: { title: 'Brand Guidelines.pdf', meta: '4.2 MB · PDF · Design Assets', kind: 'file' } });
+        await settle();
+
+        expect(document.querySelector('.action-sheet')).not.toBeNull();
+        expect(document.querySelector('.action-sheet-scrim')).not.toBeNull();
+        expect(document.querySelector('.action-sheet-title')?.textContent).toBe('Brand Guidelines.pdf');
+        expect(document.querySelector('.action-sheet-meta')?.textContent).toBe('4.2 MB · PDF · Design Assets');
+
+        const items = rows();
+        expect(items.map((b) => b.textContent?.trim())).toEqual(['Open', 'Download', 'Delete']);
+        expect(items[2].classList.contains('danger')).toBe(true);
+        expect(document.querySelectorAll('.action-sheet-sep')).toHaveLength(1);
+        expect(document.querySelector('.action-sheet-cancel')).not.toBeNull();
+        // Not the desktop popover.
+        expect(document.querySelector('.context-menu-panel')).toBeNull();
+    });
+
+    it('runs an item action once and closes', async () => {
+        const open = vi.fn();
+        showContextMenu(0, 0, [{ label: 'Open', action: open }], { header: { title: 'a.txt', kind: 'file' } });
+        await settle();
+
+        rows()[0].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        flushSync();
+
+        expect(open).toHaveBeenCalledTimes(1);
+        expect(document.querySelector('.action-sheet')).toBeNull();
+    });
+
+    it('closes on the Cancel row without running an action', async () => {
+        const action = vi.fn();
+        showContextMenu(0, 0, [{ label: 'Open', action }], { header: { title: 'a.txt', kind: 'file' } });
+        await settle();
+
+        (document.querySelector('.action-sheet-cancel') as HTMLButtonElement).dispatchEvent(
+            new MouseEvent('click', { bubbles: true }),
+        );
+        flushSync();
+
+        expect(action).not.toHaveBeenCalled();
+        expect(document.querySelector('.action-sheet')).toBeNull();
+    });
+});
