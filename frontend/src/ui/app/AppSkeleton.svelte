@@ -130,7 +130,7 @@
         min-height: 36px;
         padding: 0 12px;
     }
-    .skeleton-drive-icon { width: 18px; height: 18px; border-radius: 5px; }
+    .skeleton-drive-icon { width: 18px; height: 18px; border-radius: var(--radius-sm); }
     .skeleton-drive-name { width: var(--skeleton-width); height: 10px; }
 
     .startup-status {
@@ -244,7 +244,7 @@
         width: 30px;
         height: 30px;
         place-items: center;
-        border-radius: 9px;
+        border-radius: var(--radius-md);
         color: var(--color-on-accent);
         background: var(--accent);
         font-size: var(--type-sm);

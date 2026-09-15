@@ -72,31 +72,32 @@ body.native-video-active #app > .modal-overlay:not(#video-modal) {
     visibility: hidden;
 }
 
+/*
+ * Scrollbars are styled, not removed.
+ *
+ * The bar used to be hidden everywhere and handed back to four containers by
+ * name, which left every other scrolling surface -- dialogs, the notification
+ * panel, the document and PDF viewers, the error details -- with no sign that
+ * there was anything below the fold. A thin, low-contrast bar recedes until it
+ * is needed and is the only thing saying a panel scrolls at all, so showing
+ * one is the default and hiding it is a decision a surface has to make.
+ *
+ * The thumb is --color-border, not --color-surface-3: the surface tone sits at
+ * 1.3:1 against the panels a scrollbar actually appears on, which is a thumb
+ * nobody can find. Both spellings are kept, because Chromium and recent WebKit
+ * read the standard properties while older WebKitGTK only knows the
+ * pseudo-elements.
+ */
 * {
-    -ms-overflow-style: none;
-}
-*::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.file-list-box,
-.drives-scroll,
-.move-folder-list,
-.gallery-view {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-surface-3) transparent;
+    scrollbar-color: var(--color-border) transparent;
 }
-.file-list-box::-webkit-scrollbar,
-.drives-scroll::-webkit-scrollbar,
-.move-folder-list::-webkit-scrollbar,
-.gallery-view::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-    display: block;
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: var(--radius-pill);
 }
-.file-list-box::-webkit-scrollbar-thumb,
-.drives-scroll::-webkit-scrollbar-thumb,
-.move-folder-list::-webkit-scrollbar-thumb,
-.gallery-view::-webkit-scrollbar-thumb {
-    background: var(--color-surface-3);
-    border-radius: 999px;
-}
+*::-webkit-scrollbar-corner { background: transparent; }
 .dashboard-container, .main-content, .file-list-box { -webkit-user-drag: none; }
 

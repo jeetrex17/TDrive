@@ -11,7 +11,7 @@
 
 .auth-icon-box {
     width: 60px; height: 60px; margin: 0 auto 1.5rem auto;
-    background: var(--overlay-accent-1); border-radius: 12px;
+    background: var(--overlay-accent-1); border-radius: var(--radius-lg);
     display: flex; align-items: center; justify-content: center;
     color: var(--accent);
 }
@@ -43,7 +43,7 @@
     align-items: center;
     max-width: 230px;
     padding: 6px 10px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--overlay-white-1);
     border: 1px solid var(--border);
     color: var(--text-main);
@@ -62,7 +62,7 @@
     font-size: 0.85rem;
     cursor: pointer;
     padding: 4px 8px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     transition: background 0.15s ease, color 0.15s ease;
 }
 
@@ -83,7 +83,7 @@
 
 input {
     width: 100%; padding: 12px 15px; background: var(--bg-dark); border: 1px solid var(--border);
-    border-radius: 8px; color: var(--color-text); margin-bottom: 15px; font-size: 0.95rem; outline: none;
+    border-radius: var(--radius-md); color: var(--color-text); margin-bottom: 15px; font-size: 0.95rem; outline: none;
     transition:
         background-color var(--motion-med) var(--ease-standard),
         border-color var(--motion-med) var(--ease-standard),
@@ -107,7 +107,7 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     transform: translateY(-50%);
     width: 32px;
     height: 32px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     border: 1px solid transparent;
     background: transparent;
     color: var(--color-text-muted);

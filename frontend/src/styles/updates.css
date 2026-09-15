@@ -14,7 +14,7 @@
 .profile-menu-tag {
     margin-left: auto;
     padding: 2px 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--overlay-accent-1);
     color: var(--color-accent);
     font-size: 0.68rem;
@@ -41,7 +41,7 @@
     color: var(--color-text-muted);
     background: var(--glass-bg);
     border: 1px solid var(--glass-border);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     box-shadow: var(--shadow-sm);
     -webkit-backdrop-filter: blur(18px) saturate(150%);
     backdrop-filter: blur(18px) saturate(150%);

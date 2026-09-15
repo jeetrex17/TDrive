@@ -48,7 +48,7 @@ function rect(left: number, top: number, width: number, height: number): DOMRect
 }
 
 afterEach(async () => {
-    setPreferredTheme('light', 'tdrive-light');
+    setPreferredTheme('light', 'porcelain');
     setPreferredTheme('dark', 'tokyo-night');
     setThemeMode('dark');
     themeController.destroy();

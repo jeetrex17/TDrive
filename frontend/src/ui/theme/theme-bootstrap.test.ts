@@ -42,20 +42,20 @@ describe('pre-paint theme bootstrap', () => {
         expect(runBootstrap(saved)).toEqual({ theme: 'nord', themeAppearance: 'dark' });
     });
 
-    it('keeps legacy TDrive Light and Tokyo Night preferences during pre-paint boot', () => {
+    it('keeps legacy Porcelain and Tokyo Night preferences during pre-paint boot', () => {
         const saved = JSON.stringify({
             mode: 'light',
-            lightThemeId: 'tdrive-light',
+            lightThemeId: 'porcelain',
             darkThemeId: 'tokyo-night',
         });
 
-        expect(runBootstrap(saved)).toEqual({ theme: 'tdrive-light', themeAppearance: 'light' });
+        expect(runBootstrap(saved)).toEqual({ theme: 'porcelain', themeAppearance: 'light' });
     });
 
-    it('normalizes missing and unknown persisted values to TDrive Vault without OS lookup', () => {
+    it('normalizes missing and unknown persisted values to Quiet Relay without OS lookup', () => {
         const invalid = JSON.stringify({ mode: 'sepia', lightThemeId: 'dracula', darkThemeId: 'missing' });
-        expect(runBootstrap(null)).toEqual({ theme: 'tdrive-vault', themeAppearance: 'dark' });
-        expect(runBootstrap(invalid)).toEqual({ theme: 'tdrive-vault', themeAppearance: 'dark' });
+        expect(runBootstrap(null)).toEqual({ theme: 'quiet-relay', themeAppearance: 'dark' });
+        expect(runBootstrap(invalid)).toEqual({ theme: 'quiet-relay', themeAppearance: 'dark' });
         expect(bootstrap).not.toContain('matchMedia');
         expect(bootstrap).not.toContain('prefers-color-scheme');
     });

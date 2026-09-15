@@ -320,13 +320,13 @@
 
     .updates-progress {
         height: 6px;
-        border-radius: 999px;
+        border-radius: var(--radius-pill);
         background: var(--overlay-white-2);
         overflow: hidden;
     }
     .updates-progress-fill {
         height: 100%;
-        border-radius: 999px;
+        border-radius: var(--radius-pill);
         background: var(--color-accent);
         transition: width var(--motion-med) var(--ease-standard);
     }
@@ -348,7 +348,7 @@
         min-height: 31px;
         padding: 7px 12px;
         border: 1px solid transparent;
-        border-radius: 8px;
+        border-radius: var(--radius-md);
         font-size: 0.78rem;
         font-weight: 650;
         cursor: pointer;
@@ -390,7 +390,7 @@
         cursor: pointer;
     }
     .updates-link:hover { text-decoration: underline; }
-    .updates-link:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 4px; }
+    .updates-link:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-xs); }
     .updates-link.subtle { color: var(--color-text-subtle); font-weight: 600; }
     .updates-link.subtle:hover { color: var(--color-text-muted); }
     .updates-link:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
@@ -399,7 +399,7 @@
         padding: 10px;
         background: var(--overlay-white-1);
         border: 1px solid var(--color-border-soft);
-        border-radius: 10px;
+        border-radius: var(--radius-lg);
     }
     .updates-risks {
         margin: 0 0 10px;
@@ -418,7 +418,7 @@
         padding: 9px 10px;
         color: var(--color-danger);
         background: var(--overlay-danger-1);
-        border-radius: 9px;
+        border-radius: var(--radius-md);
         font-size: 0.78rem;
         line-height: 1.4;
     }
@@ -433,7 +433,7 @@
         padding: 10px 10px 10px 11px;
         background: var(--overlay-white-1);
         border: 1px solid var(--color-border-soft);
-        border-radius: 10px;
+        border-radius: var(--radius-lg);
     }
     .updates-preference-copy { min-width: 0; }
     .updates-preference-title {
@@ -456,7 +456,7 @@
         padding: 2px;
         background: var(--color-surface-3);
         border: none;
-        border-radius: 999px;
+        border-radius: var(--radius-pill);
         cursor: pointer;
         transition: background var(--motion-fast) var(--ease-standard);
     }
@@ -487,7 +487,7 @@
         color: var(--color-accent);
         background: transparent;
         border: none;
-        border-radius: 7px;
+        border-radius: var(--radius-sm);
         font-size: 0.72rem;
         font-weight: 600;
         cursor: pointer;

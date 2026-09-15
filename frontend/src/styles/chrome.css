@@ -54,7 +54,7 @@
 .drive-item {
     display: flex; align-items: center; gap: 12px; color: var(--text-muted);
     background: transparent; border: none; cursor: pointer;
-    padding: 9px 12px; border-radius: 8px; font-size: var(--type-base); font-weight: var(--weight-medium);
+    padding: 9px 12px; border-radius: var(--radius-md); font-size: var(--type-base); font-weight: var(--weight-medium);
     transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); text-align: left; width: 100%;
 }
 .drive-item:hover { background: var(--bg-panel); color: var(--text-main); }
@@ -81,7 +81,7 @@
     text-transform: uppercase;
     color: var(--accent);
     border: 1px solid var(--overlay-accent-3);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     padding: 2px 6px;
 }
 .drives-actions {
@@ -110,7 +110,7 @@
     overflow: hidden;
     margin-left: 10px;
     padding: 1px 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--overlay-accent-1);
     color: var(--text-muted);
     font-size: 0.72rem;

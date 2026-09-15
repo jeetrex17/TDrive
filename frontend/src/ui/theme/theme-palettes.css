@@ -5,7 +5,7 @@
  * mapping its visual language onto this contract. Keeping every theme here
  * makes palette changes cheap, predictable, and independent of layout CSS.
  *
- * The unscoped fallback is TDrive Vault, so first paint matches the native
+ * The unscoped fallback is Quiet Relay, so first paint matches the native
  * window before the theme controller starts.
  */
 
@@ -38,7 +38,7 @@
 }
 
 :root:not([data-theme]),
-:root[data-theme="tdrive-vault"] {
+:root[data-theme="quiet-relay"] {
     color-scheme: dark;
 
     /* Quiet Relay: a low-glare vault with blue reserved for live interaction. */
@@ -162,10 +162,10 @@
     --overlay-success-strong: var(--overlay-success-2);
 }
 
-:root[data-theme="tdrive-day"] {
+:root[data-theme="daybreak"] {
     color-scheme: light;
 
-    /* Quiet Relay daylight: cool, quiet surfaces with structural borders. */
+    /* Daybreak: Quiet Relay in daylight, cool surfaces with structural borders. */
     --color-canvas: #eef4f5;
     --color-surface-0: #f8fbfb;
     --color-surface-1: #ffffff;
@@ -224,7 +224,7 @@
     --overlay-success-strong: var(--overlay-success-2);
 }
 
-:root[data-theme="tdrive-light"] {
+:root[data-theme="porcelain"] {
     color-scheme: light;
 
     --color-canvas: #f3f5f9;
@@ -779,4 +779,314 @@
     --overlay-success-soft: var(--overlay-success-1);
     --overlay-success-strong: var(--overlay-success-2);
 
+}
+
+:root[data-theme="rose-pine-dawn"] {
+    color-scheme: light;
+
+    /* Rosé Pine Dawn: warm paper, the same iris accent taken down to ink weight. */
+    --color-canvas: #faf4ed;
+    --color-surface-0: #fffaf3;
+    --color-surface-1: #f6efe6;
+    --color-surface-2: #f2e9e1;
+    --color-surface-3: #e4dad1;
+    --color-text: #575279;
+    --color-text-soft: #6a6489;
+    --color-text-muted: #5f5b78;
+    --color-text-subtle: #636080;
+    --color-border: #cfc4bd;
+    --color-border-soft: #e6dbd2;
+    --color-accent: #7a5f95;
+    --color-accent-hover: #6b5184;
+    --color-accent-strong: #5c4573;
+    --color-on-accent: #ffffff;
+    --color-danger: #a3485f;
+    --color-on-danger: #ffffff;
+    --color-warning: #8a5a00;
+    --color-success: #1f6070;
+
+    --shadow-sm: 0 8px 24px rgba(87, 82, 121, 0.11);
+    --shadow-md: 0 18px 48px rgba(87, 82, 121, 0.16);
+    --shadow-lg: 0 28px 80px rgba(87, 82, 121, 0.21);
+    --focus-ring: 0 0 0 3px rgba(122, 95, 149, 0.24);
+    --glass-bg: rgba(255, 250, 243, 0.85);
+    --glass-border: rgba(87, 82, 121, 0.13);
+    --glass-highlight: rgba(255, 255, 255, 0.60);
+    --scrim: rgba(87, 82, 121, 0.45);
+
+    --overlay-neutral-1: rgba(87, 82, 121, 0.04);
+    --overlay-neutral-2: rgba(87, 82, 121, 0.08);
+    --overlay-neutral-3: rgba(87, 82, 121, 0.14);
+    --overlay-white-1: rgba(87, 82, 121, 0.04);
+    --overlay-white-2: rgba(87, 82, 121, 0.08);
+    --overlay-white-3: rgba(87, 82, 121, 0.14);
+    --overlay-accent-1: rgba(122, 95, 149, 0.09);
+    --overlay-accent-2: rgba(122, 95, 149, 0.15);
+    --overlay-accent-3: rgba(122, 95, 149, 0.28);
+    --overlay-danger-1: rgba(163, 72, 95, 0.09);
+    --overlay-danger-2: rgba(163, 72, 95, 0.23);
+    --overlay-warning-1: rgba(138, 90, 0, 0.10);
+    --overlay-warning-2: rgba(138, 90, 0, 0.24);
+    --overlay-success-1: rgba(31, 96, 112, 0.09);
+    --overlay-success-2: rgba(31, 96, 112, 0.22);
+
+    --overlay-neutral-soft: var(--overlay-neutral-1);
+    --overlay-neutral-hover: var(--overlay-neutral-2);
+    --overlay-neutral-strong: var(--overlay-neutral-3);
+    --overlay-accent-soft: var(--overlay-accent-1);
+    --overlay-accent-strong: var(--overlay-accent-3);
+    --overlay-danger-soft: var(--overlay-danger-1);
+    --overlay-danger-strong: var(--overlay-danger-2);
+    --overlay-warning-soft: var(--overlay-warning-1);
+    --overlay-warning-strong: var(--overlay-warning-2);
+    --overlay-success-soft: var(--overlay-success-1);
+    --overlay-success-strong: var(--overlay-success-2);
+}
+
+:root[data-theme="everforest-light"] {
+    color-scheme: light;
+
+    /* Everforest Light: soft cream with the foliage accent deepened for paper. */
+    --color-canvas: #fffbef;
+    --color-surface-0: #fffdf6;
+    --color-surface-1: #f8f5e4;
+    --color-surface-2: #f2efdf;
+    --color-surface-3: #e5e1cd;
+    --color-text: #5c6a72;
+    --color-text-soft: #68767e;
+    --color-text-muted: #535f65;
+    --color-text-subtle: #58646a;
+    --color-border: #cbc9b0;
+    --color-border-soft: #e3dfc8;
+    --color-accent: #4c7a1a;
+    --color-accent-hover: #3f6614;
+    --color-accent-strong: #35550f;
+    --color-on-accent: #ffffff;
+    --color-danger: #c4372f;
+    --color-on-danger: #ffffff;
+    --color-warning: #8a6100;
+    --color-success: #1d6247;
+
+    --shadow-sm: 0 8px 24px rgba(92, 106, 114, 0.11);
+    --shadow-md: 0 18px 48px rgba(92, 106, 114, 0.16);
+    --shadow-lg: 0 28px 80px rgba(92, 106, 114, 0.21);
+    --focus-ring: 0 0 0 3px rgba(76, 122, 26, 0.24);
+    --glass-bg: rgba(255, 253, 246, 0.85);
+    --glass-border: rgba(92, 106, 114, 0.13);
+    --glass-highlight: rgba(255, 255, 255, 0.60);
+    --scrim: rgba(92, 106, 114, 0.45);
+
+    --overlay-neutral-1: rgba(92, 106, 114, 0.04);
+    --overlay-neutral-2: rgba(92, 106, 114, 0.08);
+    --overlay-neutral-3: rgba(92, 106, 114, 0.14);
+    --overlay-white-1: rgba(92, 106, 114, 0.04);
+    --overlay-white-2: rgba(92, 106, 114, 0.08);
+    --overlay-white-3: rgba(92, 106, 114, 0.14);
+    --overlay-accent-1: rgba(76, 122, 26, 0.09);
+    --overlay-accent-2: rgba(76, 122, 26, 0.15);
+    --overlay-accent-3: rgba(76, 122, 26, 0.28);
+    --overlay-danger-1: rgba(196, 55, 47, 0.09);
+    --overlay-danger-2: rgba(196, 55, 47, 0.23);
+    --overlay-warning-1: rgba(138, 97, 0, 0.10);
+    --overlay-warning-2: rgba(138, 97, 0, 0.24);
+    --overlay-success-1: rgba(29, 98, 71, 0.09);
+    --overlay-success-2: rgba(29, 98, 71, 0.22);
+
+    --overlay-neutral-soft: var(--overlay-neutral-1);
+    --overlay-neutral-hover: var(--overlay-neutral-2);
+    --overlay-neutral-strong: var(--overlay-neutral-3);
+    --overlay-accent-soft: var(--overlay-accent-1);
+    --overlay-accent-strong: var(--overlay-accent-3);
+    --overlay-danger-soft: var(--overlay-danger-1);
+    --overlay-danger-strong: var(--overlay-danger-2);
+    --overlay-warning-soft: var(--overlay-warning-1);
+    --overlay-warning-strong: var(--overlay-warning-2);
+    --overlay-success-soft: var(--overlay-success-1);
+    --overlay-success-strong: var(--overlay-success-2);
+}
+
+:root[data-theme="everforest-dark"] {
+    color-scheme: dark;
+
+    /* Everforest: warm grey-green surfaces with a soft foliage accent. */
+    --color-canvas: #272e33;
+    --color-surface-0: #2d353b;
+    --color-surface-1: #343f44;
+    --color-surface-2: #3d484d;
+    --color-surface-3: #475258;
+    --color-text: #d3c6aa;
+    --color-text-soft: #c5b89c;
+    --color-text-muted: #b2bab0;
+    --color-text-subtle: #afb8ae;
+    --color-border: #4f5b62;
+    --color-border-soft: #3d484d;
+    --color-accent: #a7c080;
+    --color-accent-hover: #b9d194;
+    --color-accent-strong: #8fae6d;
+    --color-on-accent: #272e33;
+    --color-danger: #e67e80;
+    --color-on-danger: #272e33;
+    --color-warning: #dbbc7f;
+    --color-success: #83c092;
+
+    --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.24);
+    --shadow-md: 0 16px 44px rgba(0, 0, 0, 0.36);
+    --shadow-lg: 0 24px 72px rgba(0, 0, 0, 0.48);
+    --focus-ring: 0 0 0 3px rgba(167, 192, 128, 0.34);
+    --glass-bg: rgba(61, 72, 77, 0.88);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-highlight: rgba(255, 255, 255, 0.04);
+    --scrim: rgba(0, 0, 0, 0.55);
+
+    --overlay-neutral-1: rgba(255, 255, 255, 0.04);
+    --overlay-neutral-2: rgba(255, 255, 255, 0.08);
+    --overlay-neutral-3: rgba(255, 255, 255, 0.12);
+    --overlay-white-1: rgba(255, 255, 255, 0.04);
+    --overlay-white-2: rgba(255, 255, 255, 0.08);
+    --overlay-white-3: rgba(255, 255, 255, 0.12);
+    --overlay-accent-1: rgba(167, 192, 128, 0.10);
+    --overlay-accent-2: rgba(167, 192, 128, 0.16);
+    --overlay-accent-3: rgba(167, 192, 128, 0.32);
+    --overlay-danger-1: rgba(230, 126, 128, 0.10);
+    --overlay-danger-2: rgba(230, 126, 128, 0.28);
+    --overlay-warning-1: rgba(219, 188, 127, 0.12);
+    --overlay-warning-2: rgba(219, 188, 127, 0.30);
+    --overlay-success-1: rgba(131, 192, 146, 0.12);
+    --overlay-success-2: rgba(131, 192, 146, 0.30);
+
+    --overlay-neutral-soft: var(--overlay-neutral-1);
+    --overlay-neutral-hover: var(--overlay-neutral-2);
+    --overlay-neutral-strong: var(--overlay-neutral-3);
+    --overlay-accent-soft: var(--overlay-accent-1);
+    --overlay-accent-strong: var(--overlay-accent-3);
+    --overlay-danger-soft: var(--overlay-danger-1);
+    --overlay-danger-strong: var(--overlay-danger-2);
+    --overlay-warning-soft: var(--overlay-warning-1);
+    --overlay-warning-strong: var(--overlay-warning-2);
+    --overlay-success-soft: var(--overlay-success-1);
+    --overlay-success-strong: var(--overlay-success-2);
+}
+
+:root[data-theme="ayu-dark"] {
+    color-scheme: dark;
+
+    /* Ayu Dark: a near-black ground with one amber accent. */
+    --color-canvas: #0b0e14;
+    --color-surface-0: #0f131a;
+    --color-surface-1: #131721;
+    --color-surface-2: #1a1f2a;
+    --color-surface-3: #262d3b;
+    --color-text: #bfbdb6;
+    --color-text-soft: #aeaca6;
+    --color-text-muted: #9a9891;
+    --color-text-subtle: #8f8d87;
+    --color-border: #2d3546;
+    --color-border-soft: #1f2531;
+    --color-accent: #e6b450;
+    --color-accent-hover: #f0c264;
+    --color-accent-strong: #cf9c3c;
+    --color-on-accent: #0b0e14;
+    --color-danger: #f07178;
+    --color-on-danger: #0b0e14;
+    --color-warning: #ffb454;
+    --color-success: #aad94c;
+
+    --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.24);
+    --shadow-md: 0 16px 44px rgba(0, 0, 0, 0.36);
+    --shadow-lg: 0 24px 72px rgba(0, 0, 0, 0.48);
+    --focus-ring: 0 0 0 3px rgba(230, 180, 80, 0.34);
+    --glass-bg: rgba(26, 31, 42, 0.88);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-highlight: rgba(255, 255, 255, 0.04);
+    --scrim: rgba(0, 0, 0, 0.55);
+
+    --overlay-neutral-1: rgba(255, 255, 255, 0.04);
+    --overlay-neutral-2: rgba(255, 255, 255, 0.08);
+    --overlay-neutral-3: rgba(255, 255, 255, 0.12);
+    --overlay-white-1: rgba(255, 255, 255, 0.04);
+    --overlay-white-2: rgba(255, 255, 255, 0.08);
+    --overlay-white-3: rgba(255, 255, 255, 0.12);
+    --overlay-accent-1: rgba(230, 180, 80, 0.10);
+    --overlay-accent-2: rgba(230, 180, 80, 0.16);
+    --overlay-accent-3: rgba(230, 180, 80, 0.32);
+    --overlay-danger-1: rgba(240, 113, 120, 0.10);
+    --overlay-danger-2: rgba(240, 113, 120, 0.28);
+    --overlay-warning-1: rgba(255, 180, 84, 0.12);
+    --overlay-warning-2: rgba(255, 180, 84, 0.30);
+    --overlay-success-1: rgba(170, 217, 76, 0.12);
+    --overlay-success-2: rgba(170, 217, 76, 0.30);
+
+    --overlay-neutral-soft: var(--overlay-neutral-1);
+    --overlay-neutral-hover: var(--overlay-neutral-2);
+    --overlay-neutral-strong: var(--overlay-neutral-3);
+    --overlay-accent-soft: var(--overlay-accent-1);
+    --overlay-accent-strong: var(--overlay-accent-3);
+    --overlay-danger-soft: var(--overlay-danger-1);
+    --overlay-danger-strong: var(--overlay-danger-2);
+    --overlay-warning-soft: var(--overlay-warning-1);
+    --overlay-warning-strong: var(--overlay-warning-2);
+    --overlay-success-soft: var(--overlay-success-1);
+    --overlay-success-strong: var(--overlay-success-2);
+}
+
+:root[data-theme="rose-pine"] {
+    color-scheme: dark;
+
+    /* Rosé Pine: muted plum surfaces with an iris accent. */
+    --color-canvas: #191724;
+    --color-surface-0: #1f1d2e;
+    --color-surface-1: #232132;
+    --color-surface-2: #26233a;
+    --color-surface-3: #302d45;
+    --color-text: #e0def4;
+    --color-text-soft: #d0cde8;
+    --color-text-muted: #a9a4c7;
+    --color-text-subtle: #9d98bd;
+    --color-border: #403d58;
+    --color-border-soft: #2a2740;
+    --color-accent: #c4a7e7;
+    --color-accent-hover: #d3bcef;
+    --color-accent-strong: #a98fd0;
+    --color-on-accent: #191724;
+    --color-danger: #eb6f92;
+    --color-on-danger: #191724;
+    --color-warning: #f6c177;
+    --color-success: #9ccfd8;
+
+    --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.24);
+    --shadow-md: 0 16px 44px rgba(0, 0, 0, 0.36);
+    --shadow-lg: 0 24px 72px rgba(0, 0, 0, 0.48);
+    --focus-ring: 0 0 0 3px rgba(196, 167, 231, 0.34);
+    --glass-bg: rgba(38, 35, 58, 0.88);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-highlight: rgba(255, 255, 255, 0.04);
+    --scrim: rgba(0, 0, 0, 0.55);
+
+    --overlay-neutral-1: rgba(255, 255, 255, 0.04);
+    --overlay-neutral-2: rgba(255, 255, 255, 0.08);
+    --overlay-neutral-3: rgba(255, 255, 255, 0.12);
+    --overlay-white-1: rgba(255, 255, 255, 0.04);
+    --overlay-white-2: rgba(255, 255, 255, 0.08);
+    --overlay-white-3: rgba(255, 255, 255, 0.12);
+    --overlay-accent-1: rgba(196, 167, 231, 0.10);
+    --overlay-accent-2: rgba(196, 167, 231, 0.16);
+    --overlay-accent-3: rgba(196, 167, 231, 0.32);
+    --overlay-danger-1: rgba(235, 111, 146, 0.10);
+    --overlay-danger-2: rgba(235, 111, 146, 0.28);
+    --overlay-warning-1: rgba(246, 193, 119, 0.12);
+    --overlay-warning-2: rgba(246, 193, 119, 0.30);
+    --overlay-success-1: rgba(156, 207, 216, 0.12);
+    --overlay-success-2: rgba(156, 207, 216, 0.30);
+
+    --overlay-neutral-soft: var(--overlay-neutral-1);
+    --overlay-neutral-hover: var(--overlay-neutral-2);
+    --overlay-neutral-strong: var(--overlay-neutral-3);
+    --overlay-accent-soft: var(--overlay-accent-1);
+    --overlay-accent-strong: var(--overlay-accent-3);
+    --overlay-danger-soft: var(--overlay-danger-1);
+    --overlay-danger-strong: var(--overlay-danger-2);
+    --overlay-warning-soft: var(--overlay-warning-1);
+    --overlay-warning-strong: var(--overlay-warning-2);
+    --overlay-success-soft: var(--overlay-success-1);
+    --overlay-success-strong: var(--overlay-success-2);
 }

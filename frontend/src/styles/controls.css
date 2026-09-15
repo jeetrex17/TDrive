@@ -46,7 +46,7 @@
 
 .icon-btn {
     background: transparent; border: 1px solid var(--border); color: var(--text-muted);
-    width: 36px; height: 36px; border-radius: 8px; cursor: pointer;
+    width: 36px; height: 36px; border-radius: var(--radius-md); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     transition:
         background-color var(--motion-med) var(--ease-standard),

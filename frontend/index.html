@@ -11,12 +11,14 @@
         // exists solely to prevent a bright/dark flash between native window
         // creation and the Svelte application starting.
         (() => {
-            const lightThemes = ['tdrive-day', 'tdrive-light', 'catppuccin-latte', 'solarized-light', 'gruvbox-light'];
-            const darkThemes = ['tdrive-vault', 'tokyo-night', 'catppuccin-mocha', 'dracula', 'solarized-dark', 'gruvbox-dark', 'nord'];
+            const lightThemes = ['daybreak', 'porcelain', 'catppuccin-latte', 'solarized-light',
+                'gruvbox-light', 'rose-pine-dawn', 'everforest-light'];
+            const darkThemes = ['quiet-relay', 'tokyo-night', 'catppuccin-mocha', 'dracula', 'solarized-dark',
+                'gruvbox-dark', 'nord', 'everforest-dark', 'ayu-dark', 'rose-pine'];
             const fallback = {
                 mode: 'dark',
-                lightThemeId: 'tdrive-day',
-                darkThemeId: 'tdrive-vault',
+                lightThemeId: 'daybreak',
+                darkThemeId: 'quiet-relay',
             };
             let saved = fallback;
 

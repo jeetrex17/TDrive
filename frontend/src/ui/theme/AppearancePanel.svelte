@@ -137,7 +137,6 @@
     <div id="appearance-palette-panel" class="appearance-section palette-section">
         <div class="section-heading">
             <span>{activeAppearance === 'light' ? 'Light palettes' : 'Dark palettes'}</span>
-            <span class="theme-count">{visibleThemes.length}</span>
         </div>
         <div class="theme-grid" role="radiogroup" aria-label="Theme palette">
             {#each visibleThemes as theme, index (theme.id)}
@@ -244,7 +243,7 @@
         color: var(--color-text-muted);
         background: var(--overlay-white-1);
         border: 1px solid var(--color-border-soft);
-        border-radius: 12px;
+        border-radius: var(--radius-lg);
         font-size: 0.75rem;
         font-weight: 750;
         cursor: pointer;
@@ -271,26 +270,13 @@
         justify-content: center;
         width: 26px;
         height: 26px;
-        border-radius: 8px;
+        border-radius: var(--radius-md);
         background: var(--overlay-white-1);
     }
 
     .mode-card.selected .mode-icon { background: var(--overlay-accent-2); }
 
     .palette-section { padding-bottom: 9px; }
-    .theme-count {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 20px;
-        height: 18px;
-        padding: 0 5px;
-        color: var(--color-text-subtle);
-        background: var(--overlay-white-1);
-        border-radius: 999px;
-        font-size: 0.68rem;
-    }
-
     .theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 
     .theme-card {
@@ -305,7 +291,7 @@
         text-align: left;
         background: var(--overlay-white-1);
         border: 1px solid var(--color-border-soft);
-        border-radius: 13px;
+        border-radius: var(--radius-lg);
         cursor: pointer;
         transition: transform var(--motion-med) var(--ease-standard),
             border-color var(--motion-med) var(--ease-standard),
@@ -331,7 +317,7 @@
         overflow: hidden;
         background: var(--preview-canvas);
         border: 1px solid color-mix(in srgb, var(--preview-text) 13%, transparent);
-        border-radius: 9px;
+        border-radius: var(--radius-md);
         box-shadow: var(--shadow-sm);
     }
 
@@ -343,6 +329,9 @@
         background: var(--preview-surface);
     }
 
+    /* The swatch is a 62px drawing of the app, not app chrome, so its parts
+       keep their own radii. The shared scale starts at 4px, which on a 3px
+       bar is already a pill. */
     .preview-sidebar span { width: 100%; height: 3px; background: color-mix(in srgb, var(--preview-text) 22%, transparent); border-radius: 3px; }
     .preview-sidebar span:first-child { background: var(--preview-accent); }
     .preview-sidebar span:last-child { width: 70%; }
@@ -381,7 +370,7 @@
         color: var(--color-on-accent);
         background: var(--color-accent);
         border: 2px solid var(--preview-canvas);
-        border-radius: 999px;
+        border-radius: var(--radius-pill);
         opacity: 0;
         transform: scale(0.75);
         transition: opacity var(--motion-med) var(--ease-standard), transform var(--motion-med) var(--ease-standard);

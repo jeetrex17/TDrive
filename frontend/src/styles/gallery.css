@@ -66,7 +66,7 @@
     color: inherit;
     position: relative;
     aspect-ratio: 1 / 1;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     cursor: pointer;
     background: var(--bg-panel);
@@ -113,7 +113,7 @@
 .gallery-lock {
     top: 8px; right: 8px;
     width: 22px; height: 22px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: rgba(12, 14, 22, 0.55);
     -webkit-backdrop-filter: blur(6px);
     backdrop-filter: blur(6px);
@@ -130,7 +130,7 @@
     flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(12, 14, 22, 0.56);
     color: rgba(255, 255, 255, 0.9);
     cursor: pointer;
@@ -155,7 +155,7 @@
     width: 52px; height: 52px;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(12, 14, 22, 0.5);
     color: rgba(255, 255, 255, 0.92);
     cursor: pointer;
@@ -178,7 +178,7 @@
     transform: translateX(-50%);
     z-index: 2;
     padding: 7px 14px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(12, 14, 22, 0.56);
     border: 1px solid rgba(255, 255, 255, 0.08);
     color: rgba(255, 255, 255, 0.86);
@@ -202,7 +202,7 @@
     width: 332px;
     max-width: calc(100vw - 32px);
     overflow: hidden;
-    border-radius: 20px;
+    border-radius: var(--radius-xl);
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
     isolation: isolate;
@@ -244,7 +244,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(255, 255, 255, 0.06);
     color: rgba(255, 255, 255, 0.8);
     font-size: 0.95rem;
@@ -285,7 +285,7 @@
     display: inline-block;
     margin-top: 16px;
     padding: 7px 12px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(255, 255, 255, 0.04);
     color: var(--viewer-accent);
@@ -348,7 +348,7 @@
     gap: 6px;
     width: 100%;
     padding: 7px 7px 7px 17px;
-    border-radius: 18px;
+    border-radius: var(--radius-xl);
     background: rgba(18, 20, 30, 0.78);
     border: 1px solid rgba(122, 162, 247, 0.26);
     -webkit-backdrop-filter: blur(28px) saturate(1.4);
@@ -382,7 +382,7 @@
     align-items: center;
     justify-content: center;
     border: none;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--viewer-text-muted);
     cursor: pointer;
@@ -399,7 +399,7 @@
     align-items: center;
     justify-content: center;
     border: none;
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: var(--viewer-accent);
     color: var(--viewer-on-accent);
     cursor: pointer;

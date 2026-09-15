@@ -321,7 +321,7 @@
         font-weight: 700;
         letter-spacing: 0.02em;
         background: var(--overlay-accent-1);
-        border-radius: 999px;
+        border-radius: var(--radius-pill);
     }
     .drive-choice-meta { display: flex; flex-wrap: wrap; color: var(--text-muted); font-size: 0.76rem; }
     .drive-choice-meta > span + span::before { margin: 0 6px; content: '·'; }
@@ -364,7 +364,7 @@
         height: 4px;
         overflow: hidden;
         background: var(--color-surface-2);
-        border-radius: 999px;
+        border-radius: var(--radius-pill);
     }
     .drive-scan-fill {
         display: block;

@@ -25,10 +25,15 @@
     --ease-standard: cubic-bezier(0.2, 0, 0, 1);
     --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
 
+    /* One stacking ladder, listed in the order these surfaces may cover each
+       other: nothing on a lower rung may hide something on a higher one. The
+       gaps leave room for calc(rung + 1) without reaching the next rung.
+       Stacking that is local to one component keeps its own small numbers. */
     --z-selection: 20;
-    --z-popover: 10000;
-    --z-video: 2400;
-    --z-modal: 20000;
+    --z-popover: 300;
+    --z-modal: 400;
+    --z-toast: 500;
+    --z-app-state: 600;
 
     --type-xs: 0.75rem;
     --type-sm: 0.85rem;

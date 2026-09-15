@@ -26,7 +26,7 @@
 .move-back-btn {
     width: 30px;
     height: 30px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--overlay-white-1);
     color: var(--text-main);
@@ -55,7 +55,7 @@
     background: transparent;
     border: none;
     padding: 4px 8px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     color: var(--text-main);
     font-weight: 600;
     cursor: pointer;
@@ -80,7 +80,7 @@
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-main);
@@ -227,7 +227,7 @@
     min-width: 0;
     max-width: min(68vw, 760px);
     padding: 11px 16px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(12, 14, 22, 0.56);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 14px 40px rgba(0,0,0,0.22);
@@ -245,7 +245,7 @@
     height: 46px;
     flex-shrink: 0;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(12, 14, 22, 0.56);
     color: rgba(255, 255, 255, 0.9);
     font-size: 1.45rem;
@@ -303,7 +303,7 @@
 .preview-loading-track {
     width: 100%;
     height: 4px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(255, 255, 255, 0.1);
     overflow: hidden;
 }
@@ -311,7 +311,7 @@
 .preview-loading-fill {
     width: 0%;
     height: 100%;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: linear-gradient(90deg, rgba(122, 162, 247, 0.35), rgba(122, 162, 247, 0.96), rgba(122, 162, 247, 0.72));
     box-shadow: 0 0 18px rgba(122, 162, 247, 0.4);
     transition: width 0.12s linear;
@@ -324,7 +324,7 @@
     transform: translate(-50%, -50%);
     max-width: min(460px, calc(100vw - 48px));
     padding: 14px 18px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(18, 20, 29, 0.82);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 20px 48px rgba(0,0,0,0.24);
@@ -383,7 +383,7 @@
 
     .preview-error {
         max-width: calc(100vw - 32px);
-        border-radius: 20px;
+        border-radius: var(--radius-xl);
     }
 }
 

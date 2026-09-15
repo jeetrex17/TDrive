@@ -41,7 +41,7 @@ body {
     transform: translateX(-50%);
     padding: 10px 16px;
     border: 1px solid rgba(143, 155, 206, 0.22);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(11, 14, 24, 0.88);
     color: rgba(245, 247, 255, 0.82);
     font-size: 13px;

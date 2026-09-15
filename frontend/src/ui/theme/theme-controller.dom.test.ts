@@ -68,7 +68,7 @@ describe('theme controller', () => {
         });
 
         controller.start();
-        expect(document.documentElement.dataset.theme).toBe('tdrive-vault');
+        expect(document.documentElement.dataset.theme).toBe('quiet-relay');
         expect(document.documentElement.dataset.themeAppearance).toBe('dark');
         expect(get(controller.state)).not.toHaveProperty('systemAppearance');
 
@@ -116,10 +116,10 @@ describe('theme controller', () => {
 
         const after = get(first.state).preference;
         expect(after).not.toBe(before);
-        expect(before.darkThemeId).toBe('tdrive-vault');
+        expect(before.darkThemeId).toBe('quiet-relay');
         expect(after).toEqual({
             mode: 'dark',
-            lightThemeId: 'tdrive-day',
+            lightThemeId: 'daybreak',
             darkThemeId: 'dracula',
         });
         expect(JSON.parse(storage.getItem(THEME_STORAGE_KEY) ?? '')).toEqual(after);
@@ -274,7 +274,7 @@ describe('theme controller', () => {
         (controller.setMode as (mode: string) => void)('sepia');
         (controller.setMode as (mode: string) => void)('system');
         controller.setPreferredTheme('light', 'dracula' as ThemeId);
-        controller.setPreferredTheme('sepia' as ThemeAppearance, 'tdrive-light');
+        controller.setPreferredTheme('sepia' as ThemeAppearance, 'porcelain');
         expect(get(controller.state)).toBe(initial);
 
         expect(() => controller.setMode('light')).not.toThrow();
@@ -305,7 +305,7 @@ describe('theme controller', () => {
         expect(get(controller.state).preference).toEqual({
             mode: 'light',
             lightThemeId: 'catppuccin-latte',
-            darkThemeId: 'tdrive-vault',
+            darkThemeId: 'quiet-relay',
         });
         expect(document.documentElement.dataset.theme).toBe('catppuccin-latte');
         controller.destroy();

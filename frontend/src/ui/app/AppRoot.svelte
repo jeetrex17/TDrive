@@ -81,7 +81,7 @@
     .app-state-screen {
         position: fixed;
         inset: 0;
-        z-index: 10000;
+        z-index: var(--z-app-state);
         display: grid;
         place-items: center;
         min-width: 0;
@@ -90,8 +90,9 @@
         background: var(--bg-dark);
     }
 
+    /* Always worn together with .app-state-screen, so it inherits that rung
+       and only adds the scrim. */
     .app-state-overlay {
-        z-index: 9999;
         background: var(--scrim);
         backdrop-filter: blur(4px);
     }

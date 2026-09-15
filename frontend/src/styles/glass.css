@@ -1,0 +1,58 @@
+/*
+ * The frosted popover material.
+ *
+ * Written once, because it had drifted three ways. The notification panel
+ * carried the real recipe. The profile menu applied a blur on top of a full
+ * strength --glass-bg, which is opaque in every theme whose glass token has no
+ * alpha, so the blur did nothing and the panel read as a solid slab. The
+ * upload menu was a plain --bg-panel surface with no blur at all.
+ *
+ * The fill only drops to 14% inside @supports. A browser that cannot blur
+ * would otherwise be handed a near-transparent panel with the file list
+ * showing through the text, so it keeps the opaque --glass-bg each surface
+ * already sets for itself.
+ *
+ * Imported after the component stylesheets on purpose: those set `background`
+ * as a shorthand, which would reset background-color and background-image
+ * back to the opaque fallback if this rule came first.
+ */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .notif-panel,
+    .profile-menu,
+    .upload-menu {
+        background-color: color-mix(in srgb, var(--glass-bg) 14%, transparent);
+        background-image: linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--text-main) 6%, transparent),
+            transparent 44%
+        );
+        -webkit-backdrop-filter: blur(16px) saturate(145%);
+        backdrop-filter: blur(16px) saturate(145%);
+    }
+}
+
+/*
+ * While the palette is changing, the glass comes off.
+ *
+ * A theme change animates the whole root, and for the length of that animation
+ * the page is a flat snapshot with the wipe drawn across it. Anything sitting
+ * at 14% lets the wipe through, so the open menu reads as see-through for a
+ * few hundred milliseconds -- the background behind it is briefly all you see.
+ * The controller already marks the window with these two classes.
+ *
+ * The fill is --glass-bg painted over an opaque --color-surface-0 rather than
+ * used on its own: several palettes define the glass colour with alpha, and a
+ * panel that is still 12% transparent would show a fainter version of the same
+ * artefact.
+ */
+html.theme-transition-active .notif-panel,
+html.theme-transition-active .profile-menu,
+html.theme-transition-active .upload-menu,
+html.theme-transition-fallback .notif-panel,
+html.theme-transition-fallback .profile-menu,
+html.theme-transition-fallback .upload-menu {
+    background-color: var(--color-surface-0);
+    background-image: linear-gradient(var(--glass-bg), var(--glass-bg));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}

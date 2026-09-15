@@ -7,7 +7,7 @@
     gap: 6px;
     background: transparent;
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     padding: 3px 8px 3px 3px;
     cursor: pointer;
     color: var(--text-muted);
@@ -55,13 +55,11 @@
     min-width: 260px;
     background: var(--glass-bg);
     border: 1px solid var(--glass-border);
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg), 0 1px 0 var(--glass-highlight) inset;
     padding: 6px;
-    z-index: 60;
+    z-index: var(--z-popover);
     overflow: hidden;
-    -webkit-backdrop-filter: blur(28px) saturate(165%);
-    backdrop-filter: blur(28px) saturate(165%);
     transform-origin: top right;
     --motion-enter-y: -4px;
     --motion-enter-scale: 0.985;
@@ -105,7 +103,7 @@
     width: 100%;
     background: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 9px 10px;
     color: var(--text-main);
     font-size: 0.88rem;
@@ -113,10 +111,15 @@
     text-align: left;
 }
 .profile-menu-item[hidden] { display: none; }
-.profile-menu-item:hover,
+.profile-menu-item:hover {
+    background: var(--overlay-white-2);
+}
+/* Split from :hover deliberately. A keyboard user never sees hover, so sharing
+   its one tint left them with no way to tell which item Enter would fire. */
 .profile-menu-item:focus-visible {
     background: var(--overlay-white-2);
     outline: none;
+    box-shadow: var(--focus-ring);
 }
 .profile-menu-item:active { transform: translateY(0.5px); }
 .profile-menu-item svg {
@@ -152,7 +155,7 @@
     gap: 12px;
     padding: 10px 12px;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: var(--overlay-white-1);
 }
 .join-request-meta { min-width: 0; }

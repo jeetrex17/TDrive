@@ -12,8 +12,8 @@ function state(mode: ThemeMode, resolvedThemeId: ThemeState['resolvedThemeId']):
     return {
         preference: normalizeThemePreference({
             mode,
-            lightThemeId: activeTheme.appearance === 'light' ? resolvedThemeId : 'tdrive-day',
-            darkThemeId: activeTheme.appearance === 'dark' ? resolvedThemeId : 'tdrive-vault',
+            lightThemeId: activeTheme.appearance === 'light' ? resolvedThemeId : 'daybreak',
+            darkThemeId: activeTheme.appearance === 'dark' ? resolvedThemeId : 'quiet-relay',
         }),
         resolvedAppearance: activeTheme.appearance,
         resolvedThemeId,
@@ -30,7 +30,7 @@ function runtime() {
 
 describe('native theme bridge', () => {
     it('keeps the native window backdrop aligned with the active palette', () => {
-        const theme = writable(state('light', 'tdrive-light'));
+        const theme = writable(state('light', 'porcelain'));
         const native = runtime();
 
         const disconnect = connectNativeTheme(theme, 'darwin', native);
@@ -40,8 +40,8 @@ describe('native theme bridge', () => {
         disconnect();
     });
 
-    it('uses the TDrive Day canvas for the default light palette backdrop', () => {
-        const theme = writable(state('light', 'tdrive-day'));
+    it('uses the Daybreak canvas for the default light palette backdrop', () => {
+        const theme = writable(state('light', 'daybreak'));
         const native = runtime();
 
         const disconnect = connectNativeTheme(theme, 'darwin', native);
@@ -50,8 +50,8 @@ describe('native theme bridge', () => {
         disconnect();
     });
 
-    it('uses the TDrive Vault canvas for the default native backdrop', () => {
-        const theme = writable(state('dark', 'tdrive-vault'));
+    it('uses the Quiet Relay canvas for the default native backdrop', () => {
+        const theme = writable(state('dark', 'quiet-relay'));
         const native = runtime();
 
         const disconnect = connectNativeTheme(theme, 'darwin', native);
@@ -61,7 +61,7 @@ describe('native theme bridge', () => {
     });
 
     it('synchronizes the Windows titlebar from explicit light and dark modes', () => {
-        const theme = writable(state('light', 'tdrive-light'));
+        const theme = writable(state('light', 'porcelain'));
         const native = runtime();
         const disconnect = connectNativeTheme(theme, 'windows', native);
 
@@ -74,7 +74,7 @@ describe('native theme bridge', () => {
     });
 
     it('selects the Windows light titlebar for a fixed light theme', () => {
-        const theme = writable(state('light', 'tdrive-light'));
+        const theme = writable(state('light', 'porcelain'));
         const native = runtime();
 
         const disconnect = connectNativeTheme(theme, 'windows', native);
@@ -103,7 +103,7 @@ describe('native theme bridge', () => {
         const callsBeforeDisconnect = native.setBackgroundColour.mock.calls.length;
 
         disconnect();
-        theme.set(state('light', 'tdrive-light'));
+        theme.set(state('light', 'porcelain'));
 
         expect(native.setBackgroundColour).toHaveBeenCalledTimes(callsBeforeDisconnect);
     });

@@ -17,21 +17,21 @@ describe('theme model', () => {
         expect(themesForAppearance('dark').length).toBeGreaterThanOrEqual(6);
         expect(THEME_DEFINITIONS.every((theme) => theme.preview.length === 4)).toBe(true);
         expect(THEME_DEFINITIONS.every((theme) => !('description' in theme))).toBe(true);
-        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'tdrive-day')).toMatchObject({
-            name: 'TDrive Day',
+        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'daybreak')).toMatchObject({
+            name: 'Daybreak',
             appearance: 'light',
         });
-        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'tdrive-light')).toMatchObject({
-            name: 'TDrive Light',
+        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'porcelain')).toMatchObject({
+            name: 'Porcelain',
             appearance: 'light',
         });
-        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'tdrive-vault')).toMatchObject({
-            name: 'TDrive Vault',
+        expect(THEME_DEFINITIONS.find((theme) => theme.id === 'quiet-relay')).toMatchObject({
+            name: 'Quiet Relay',
             appearance: 'dark',
         });
 
         const previousThemeIds = [
-            'tdrive-light',
+            'porcelain',
             'catppuccin-latte',
             'solarized-light',
             'gruvbox-light',
@@ -48,8 +48,8 @@ describe('theme model', () => {
     it('defaults unknown or appearance-incompatible persisted values to the TDrive pair', () => {
         expect(DEFAULT_THEME_PREFERENCE).toEqual({
             mode: 'dark',
-            lightThemeId: 'tdrive-day',
-            darkThemeId: 'tdrive-vault',
+            lightThemeId: 'daybreak',
+            darkThemeId: 'quiet-relay',
         });
         expect(
             normalizeThemePreference({
@@ -60,10 +60,10 @@ describe('theme model', () => {
         ).toEqual(DEFAULT_THEME_PREFERENCE);
     });
 
-    it('preserves the previous TDrive Light and Tokyo Night stored preference IDs', () => {
+    it('preserves the previous Porcelain and Tokyo Night stored preference IDs', () => {
         const persisted = {
             mode: 'dark',
-            lightThemeId: 'tdrive-light',
+            lightThemeId: 'porcelain',
             darkThemeId: 'tokyo-night',
         } as const;
 

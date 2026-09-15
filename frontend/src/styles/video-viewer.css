@@ -6,7 +6,6 @@
     --video-accent-ring: rgba(122, 162, 247, 0.28);
     background: var(--viewer-scrim);
     backdrop-filter: blur(16px);
-    z-index: 2400;
     align-items: stretch;
     justify-content: stretch;
 }
@@ -133,7 +132,7 @@
     gap: 6px;
     max-width: min(420px, calc(100vw - 48px));
     padding: 14px 18px;
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     color: #fff;
     background: rgba(11, 14, 24, 0.96);
     border: 1px solid rgba(255, 255, 255, 0.14);
@@ -284,7 +283,7 @@
     width: 44px;
     height: 44px;
     border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -365,7 +364,7 @@
 .video-center-play,
 .video-center-skip {
     border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -441,7 +440,7 @@
 .video-skip-feedback span {
     min-width: 76px;
     padding: 11px 16px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     color: #fff;
     background: rgba(9, 12, 21, 0.72);
     border: 1px solid rgba(255, 255, 255, 0.16);
@@ -516,7 +515,7 @@
     left: 0;
     top: 50%;
     height: 4px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     transform: translateY(-50%);
     transition: height 160ms ease;
 }
@@ -536,7 +535,7 @@
     top: 0;
     height: 100%;
     min-width: 2px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgba(255, 255, 255, 0.14);
 }
 
@@ -551,11 +550,17 @@
     top: 50%;
     width: 14px;
     height: 14px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: #fff;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-    transform: translate(-50%, -50%) scale(0);
-    transition: transform 160ms ease;
+    /* Small and faded rather than collapsed to nothing. A 14px dot unfolding
+       from zero reads as a glitch at this duration; a small dot growing reads
+       as the handle arriving. */
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.4);
+    transition:
+        transform 160ms var(--ease-standard),
+        opacity 120ms var(--ease-standard);
 }
 
 .video-scrubber-tooltip {
@@ -568,7 +573,7 @@
     gap: 5px;
     min-width: 42px;
     padding: 4px 7px;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     color: #fff;
     background: rgba(8, 10, 16, 0.92);
     border: 1px solid rgba(255, 255, 255, 0.14);
@@ -586,7 +591,7 @@
 .video-scrubber-tooltip.is-thumbnail-pending {
     width: 178px;
     padding: 6px;
-    border-radius: 10px;
+    border-radius: var(--radius-sm);
     background: rgba(7, 9, 15, 0.96);
 }
 
@@ -595,7 +600,7 @@
     display: block;
     width: 166px;
     aspect-ratio: 16 / 9;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     background: rgba(255, 255, 255, 0.08);
     animation: video-thumbnail-pulse 1100ms ease-in-out infinite;
 }
@@ -604,7 +609,7 @@
     display: none;
     width: 166px;
     aspect-ratio: 16 / 9;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     object-fit: cover;
     background: rgba(255, 255, 255, 0.08);
 }
@@ -629,6 +634,7 @@
 .video-scrubber.is-hovered .video-scrubber-thumb,
 .video-scrubber.is-dragging .video-scrubber-thumb,
 .video-scrubber:focus-visible .video-scrubber-thumb {
+    opacity: 1;
     transform: translate(-50%, -50%) scale(1);
 }
 
@@ -668,7 +674,7 @@
     left: 0;
     top: 50%;
     height: 5px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     transform: translateY(-50%);
 }
 
@@ -681,7 +687,7 @@
 }
 .video-time-display {
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     padding: 8px 12px;
     background: transparent;
     color: #fff;
@@ -735,7 +741,7 @@
     top: 50%;
     width: 14px;
     height: 14px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: #fff;
     box-shadow: 0 5px 16px rgba(0, 0, 0, 0.36);
     transform: translate(-50%, -50%) scale(0.74);
@@ -765,7 +771,7 @@
     min-width: 58px;
     height: 36px;
     border: 1px solid rgba(255, 255, 255, 0.18);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     padding: 0 12px;
     color: #fff;
     background: rgba(16, 19, 30, 0.64);
@@ -829,7 +835,7 @@
     display: none;
     min-width: 196px;
     padding: 6px;
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     background: rgba(11, 14, 24, 0.96);
     border: 1px solid rgba(255, 255, 255, 0.14);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.42);
@@ -860,7 +866,7 @@
 .video-menu button {
     height: 30px;
     border: none;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     padding: 0 9px;
     display: grid;
     grid-template-columns: 16px minmax(0, 1fr);
@@ -933,7 +939,7 @@
     height: 36px;
     padding: 0 10px;
     border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     background: rgba(255, 255, 255, 0.06);
     color: #fff;
     font-size: 12px;
@@ -979,7 +985,7 @@
     text-align: center;
     color: #fff;
     background: var(--video-accent);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     font-size: 12px;
     font-weight: 800;
     line-height: 1;
@@ -1023,7 +1029,7 @@
 .video-spinner {
     width: 42px;
     height: 42px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     border: 3px solid rgba(255, 255, 255, 0.18);
     border-top-color: var(--video-accent);
     animation: video-spin 900ms linear infinite;
@@ -1049,7 +1055,7 @@
     transform: translate(-50%, -50%);
     max-width: min(560px, calc(100vw - 48px));
     padding: 18px 20px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     color: #fff;
     background: rgba(22, 25, 38, 0.92);
     border: 1px solid rgba(247, 118, 142, 0.38);

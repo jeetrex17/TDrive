@@ -112,9 +112,9 @@ function expectReadablePair(
 }
 
 describe('theme palettes', () => {
-    it('uses TDrive Vault as the deterministic pre-controller fallback', () => {
+    it('uses Quiet Relay as the deterministic pre-controller fallback', () => {
         expect(paletteSource).toContain(':root:not([data-theme]),');
-        expect(paletteSource).toContain(':root[data-theme="tdrive-vault"] {');
+        expect(paletteSource).toContain(':root[data-theme="quiet-relay"] {');
         expect(paletteSource).not.toContain('prefers-color-scheme');
     });
 
@@ -232,8 +232,8 @@ describe('theme palettes', () => {
     });
 
     it('maps the reviewed Quiet Relay anchors onto the existing semantic contract', () => {
-        const vault = paletteBlock('tdrive-vault');
-        const day = paletteBlock('tdrive-day');
+        const vault = paletteBlock('quiet-relay');
+        const day = paletteBlock('daybreak');
 
         expect([
             tokenValue(vault, '--color-canvas'),
@@ -262,8 +262,8 @@ describe('theme palettes', () => {
         }
     });
 
-    it('preserves the existing TDrive Light and Tokyo Night foundations', () => {
-        const tdriveLight = paletteBlock('tdrive-light');
+    it('preserves the existing Porcelain and Tokyo Night foundations', () => {
+        const tdriveLight = paletteBlock('porcelain');
         const tokyoNight = paletteBlock('tokyo-night');
 
         expect(tokenValue(tdriveLight, '--color-canvas')).toBe('#f3f5f9');

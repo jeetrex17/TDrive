@@ -252,7 +252,7 @@
         padding: 0;
         place-items: center;
         border: 0;
-        border-radius: 6px;
+        border-radius: var(--radius-sm);
         color: var(--text-muted);
         background: transparent;
         cursor: pointer;

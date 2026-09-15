@@ -515,7 +515,7 @@
 .text-viewer-body.is-markdown code {
     padding: 0.14em 0.4em;
     border: 1px solid var(--viewer-border-soft);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--viewer-overlay-1);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     font-size: 0.9em;

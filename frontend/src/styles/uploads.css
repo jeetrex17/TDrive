@@ -4,14 +4,14 @@
     position: absolute;
     top: calc(100% + 6px);
     right: 0;
-    z-index: 50;
+    z-index: var(--z-popover);
     display: flex;
     flex-direction: column;
     min-width: 170px;
     padding: 6px;
-    border-radius: 12px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
     box-shadow: var(--shadow-md);
     transform-origin: top right;
     --motion-enter-y: -4px;
@@ -25,7 +25,7 @@
     width: 100%;
     padding: 9px 10px;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--text-main);
     font-size: 0.9rem;
@@ -34,8 +34,15 @@
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
 }
-.upload-menu-item:hover,
-.upload-menu-item:focus-visible { background: var(--overlay-accent-1); color: var(--accent); outline: none; }
+.upload-menu-item:hover { background: var(--overlay-accent-1); color: var(--accent); }
+/* Focus carries the ring on top of the hover tint; hover alone is not a focus
+   indicator, because a keyboard user never produces one. */
+.upload-menu-item:focus-visible {
+    background: var(--overlay-accent-1);
+    color: var(--accent);
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
 .upload-menu-item svg { width: 18px; height: 18px; flex-shrink: 0; }
 
 /* Import dialog: the "will be skipped" note for oversize files. */
@@ -83,7 +90,7 @@
     box-sizing: border-box;
     padding: 24px;
     border: 1.5px dashed color-mix(in srgb, var(--accent) 65%, transparent);
-    border-radius: 14px;
+    border-radius: var(--radius-lg);
     color: var(--text-main);
     background: color-mix(in srgb, var(--accent) 7%, transparent);
     text-align: center;

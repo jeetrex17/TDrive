@@ -1,6 +1,6 @@
 /* MODAL */
 .modal-overlay {
-    position: fixed; inset: 0; z-index: 20000;
+    position: fixed; inset: 0; z-index: var(--z-modal);
     display: flex; align-items: center; justify-content: center;
     background: var(--scrim);
     padding: 24px;
@@ -8,7 +8,7 @@
 .modal-card {
     width: 100%; max-width: 440px;
     background: var(--bg-sidebar); border: 1px solid var(--border);
-    border-radius: 16px; padding: 20px;
+    border-radius: var(--radius-xl); padding: 20px;
     box-shadow: var(--shadow-lg);
     --motion-enter-scale: 0.985;
     animation: tdrive-surface-enter var(--motion-slow) var(--ease-enter) both;
@@ -43,7 +43,7 @@
     color: var(--text-muted);
     font-size: 0.9rem;
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     background: var(--overlay-white-1);
 }
 .modal-choice-row {
@@ -52,7 +52,7 @@
     gap: 10px;
     color: var(--text-main);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     padding: 12px;
     margin: -4px 0 18px;
     cursor: pointer;

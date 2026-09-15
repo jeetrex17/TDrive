@@ -44,7 +44,7 @@
 }
 .file-lock-badge svg { width: 14px; height: 14px; }
 .breadcrumb-link {
-    background: transparent; border: none; padding: 6px 8px; border-radius: 8px;
+    background: transparent; border: none; padding: 6px 8px; border-radius: var(--radius-md);
     color: var(--text-main); font-weight: 600; cursor: pointer; transition: background 0.15s ease;
     max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -284,7 +284,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--overlay-white-1);
     border: 1px solid var(--border);
     /* The glyph is the only thing telling one file from another, so it sits at
@@ -292,7 +292,6 @@
     color: var(--text-main);
 }
 
-.file-type-icon svg { width: 17px; height: 17px; }
 
 .row-name {
     min-width: 0;
@@ -331,13 +330,17 @@
     flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     background: var(--overlay-accent-1);
     border: 1px solid var(--overlay-accent-2);
-    border-radius: 6px; color: var(--accent);
+    border-radius: var(--radius-sm); color: var(--accent);
 }
-.folder-chip svg { width: 16px; height: 16px; }
+/* One rule for both chips. A folder and a file type share a column, so any
+   difference in size or stroke between them reads as one of the two being
+   wrong rather than as two kinds of thing. */
+.folder-chip svg,
+.file-type-icon svg { width: 17px; height: 17px; stroke-width: 1.5; }
 
 .action-icon {
     width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
-    border-radius: 6px; cursor: pointer;
+    border-radius: var(--radius-sm); cursor: pointer;
     /* Named properties, not `all`: `all` animates layout and paint properties
        nothing here intends to change, and it is the one transition in the app
        that can stutter under a long list. */

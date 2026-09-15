@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import AppearancePanel from './AppearancePanel.svelte';
 import { setPreferredTheme, setThemeMode, themeController, themeState } from './theme-controller';
+import { themesForAppearance } from './theme-model';
 
 let component: Record<string, unknown> | null = null;
 let host: HTMLElement | null = null;
@@ -22,7 +23,7 @@ function click(selector: string): void {
 }
 
 afterEach(async () => {
-    setPreferredTheme('light', 'tdrive-light');
+    setPreferredTheme('light', 'porcelain');
     setPreferredTheme('dark', 'tokyo-night');
     setThemeMode('dark');
     themeController.destroy();
@@ -83,30 +84,37 @@ describe('AppearancePanel behavior', () => {
         flushSync();
         expect(get(themeState).preference.mode).toBe('dark');
 
+        // Read the boundaries off the catalogue: this covers Home/End/wrap,
+        // not the identity of whichever palette currently sits at either end.
+        const darkThemes = themesForAppearance('dark');
+        const firstDark = darkThemes[0].id;
+        const lastDark = darkThemes[darkThemes.length - 1].id;
+        const penultimateDark = darkThemes[darkThemes.length - 2].id;
+
         const tokyoNight = host?.querySelector<HTMLElement>('#appearance-theme-tokyo-night');
         if (!tokyoNight) throw new Error('missing Tokyo Night theme');
         tokyoNight.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
         tokyoNight.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
         flushSync();
-        expect(get(themeState).preference.darkThemeId).toBe('nord');
+        expect(get(themeState).preference.darkThemeId).toBe(lastDark);
 
-        host?.querySelector<HTMLElement>('#appearance-theme-nord')?.dispatchEvent(
+        host?.querySelector<HTMLElement>(`#appearance-theme-${lastDark}`)?.dispatchEvent(
             new KeyboardEvent('keydown', { key: 'Home', bubbles: true }),
         );
         flushSync();
-        expect(get(themeState).preference.darkThemeId).toBe('tdrive-vault');
+        expect(get(themeState).preference.darkThemeId).toBe(firstDark);
 
-        host?.querySelector<HTMLElement>('#appearance-theme-tdrive-vault')?.dispatchEvent(
+        host?.querySelector<HTMLElement>(`#appearance-theme-${firstDark}`)?.dispatchEvent(
             new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
         );
         flushSync();
-        expect(get(themeState).preference.darkThemeId).toBe('nord');
+        expect(get(themeState).preference.darkThemeId).toBe(lastDark);
 
-        host?.querySelector<HTMLElement>('#appearance-theme-nord')?.dispatchEvent(
+        host?.querySelector<HTMLElement>(`#appearance-theme-${lastDark}`)?.dispatchEvent(
             new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }),
         );
         flushSync();
-        expect(get(themeState).preference.darkThemeId).toBe('gruvbox-dark');
+        expect(get(themeState).preference.darkThemeId).toBe(penultimateDark);
     });
 
     it('remembers palette choices while switching between Light and Dark', () => {
@@ -133,13 +141,13 @@ describe('AppearancePanel behavior', () => {
         const tokyoNight = host?.querySelector('#appearance-theme-tokyo-night');
         const preview = tokyoNight?.querySelector('.theme-preview');
         const label = tokyoNight?.querySelector('.theme-label');
-        expect(host?.textContent).toContain('TDrive Vault');
+        expect(host?.textContent).toContain('Quiet Relay');
         expect(host?.textContent).toContain('Tokyo Night');
         expect(label?.previousElementSibling).toBe(preview);
 
         click('#appearance-mode-light');
-        expect(host?.textContent).toContain('TDrive Day');
-        expect(host?.textContent).toContain('TDrive Light');
+        expect(host?.textContent).toContain('Daybreak');
+        expect(host?.textContent).toContain('Porcelain');
         expect(host?.textContent).not.toContain('TDrive’s original midnight-blue glow.');
         expect(host?.textContent).not.toContain('Changes are previewed instantly and saved on this device.');
         expect(host?.querySelector('.theme-description')).toBeNull();

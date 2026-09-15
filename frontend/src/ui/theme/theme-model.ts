@@ -1,16 +1,21 @@
 export const THEME_IDS = [
-    'tdrive-day',
-    'tdrive-light',
+    'daybreak',
+    'porcelain',
     'catppuccin-latte',
     'solarized-light',
     'gruvbox-light',
-    'tdrive-vault',
+    'rose-pine-dawn',
+    'everforest-light',
+    'quiet-relay',
     'tokyo-night',
     'catppuccin-mocha',
     'dracula',
     'solarized-dark',
     'gruvbox-dark',
     'nord',
+    'everforest-dark',
+    'ayu-dark',
+    'rose-pine',
 ] as const;
 
 export type ThemeId = (typeof THEME_IDS)[number];
@@ -45,14 +50,14 @@ function defineTheme(definition: ThemeDefinition): ThemeDefinition {
  */
 export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
     defineTheme({
-        id: 'tdrive-day',
-        name: 'TDrive Day',
+        id: 'daybreak',
+        name: 'Daybreak',
         appearance: 'light',
         preview: ['#eef4f5', '#e6eef0', '#1689be', '#17262c'],
     }),
     defineTheme({
-        id: 'tdrive-light',
-        name: 'TDrive Light',
+        id: 'porcelain',
+        name: 'Porcelain',
         appearance: 'light',
         preview: ['#f3f5f9', '#eceff5', '#315fc4', '#101828'],
     }),
@@ -75,8 +80,20 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         preview: ['#fbf1c7', '#ebdbb2', '#076678', '#282828'],
     }),
     defineTheme({
-        id: 'tdrive-vault',
-        name: 'TDrive Vault',
+        id: 'rose-pine-dawn',
+        name: 'Rosé Pine Dawn',
+        appearance: 'light',
+        preview: ['#faf4ed', '#f2e9e1', '#7a5f95', '#575279'],
+    }),
+    defineTheme({
+        id: 'everforest-light',
+        name: 'Everforest Light',
+        appearance: 'light',
+        preview: ['#fffbef', '#f2efdf', '#4c7a1a', '#5c6a72'],
+    }),
+    defineTheme({
+        id: 'quiet-relay',
+        name: 'Quiet Relay',
         appearance: 'dark',
         preview: ['#0e171c', '#20343d', '#2aabee', '#e7f0f2'],
     }),
@@ -116,12 +133,30 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         appearance: 'dark',
         preview: ['#2e3440', '#3b4252', '#88c0d0', '#eceff4'],
     }),
+    defineTheme({
+        id: 'everforest-dark',
+        name: 'Everforest Dark',
+        appearance: 'dark',
+        preview: ['#272e33', '#3d484d', '#a7c080', '#d3c6aa'],
+    }),
+    defineTheme({
+        id: 'ayu-dark',
+        name: 'Ayu Dark',
+        appearance: 'dark',
+        preview: ['#0b0e14', '#1a1f2a', '#e6b450', '#bfbdb6'],
+    }),
+    defineTheme({
+        id: 'rose-pine',
+        name: 'Rosé Pine',
+        appearance: 'dark',
+        preview: ['#191724', '#26233a', '#c4a7e7', '#e0def4'],
+    }),
 ]);
 
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = Object.freeze({
     mode: 'dark',
-    lightThemeId: 'tdrive-day',
-    darkThemeId: 'tdrive-vault',
+    lightThemeId: 'daybreak',
+    darkThemeId: 'quiet-relay',
 });
 
 const THEME_ID_SET: ReadonlySet<string> = new Set(THEME_IDS);
