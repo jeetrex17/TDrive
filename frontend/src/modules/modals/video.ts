@@ -4,6 +4,7 @@ import {
     closeMedia,
     closeNativeMedia,
     getMediaStats,
+    isMobilePlatform,
     onRuntimeEvent,
     openMedia,
     openNativeMedia,
@@ -1285,7 +1286,9 @@ function handleHtmlMediaError(
     attempt.htmlFailureHandled = true;
     console.error("HTML media player failed:", { code, state });
 
-    if (shouldFallbackFromHtmlMediaError(code)) {
+    // Phones have no native player to promote to; the HTML error is final there.
+    const undecodable = shouldFallbackFromHtmlMediaError(code);
+    if (undecodable && !isMobilePlatform()) {
         rememberNativePlayer(attempt.target);
         attempt.nativeFallbackRequested = true;
         const intent = capturePlaybackIntent(state, attempt.pausedByUser);
@@ -1297,7 +1300,9 @@ function handleHtmlMediaError(
 
     const message = code === 2
         ? "The video stream was interrupted. Check your connection and try again."
-        : "The embedded player could not continue playing this video. Try again.";
+        : undecodable
+            ? "This video can't be played on this device."
+            : "The embedded player could not continue playing this video. Try again.";
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
         if (isCurrent()) setError(message);
@@ -1493,8 +1498,9 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         setLoading(true);
         // A container the webview handles goes to the HTML player, unless it
         // already failed to decode this very file: then the native player
-        // opens first and the failed attempt is not paid again.
-        if (isWebviewDirectVideo(attempt.target.name) && !prefersNativePlayer(attempt.target)) {
+        // opens first and the failed attempt is not paid again. Phones have
+        // no native player, so every container goes through <video>.
+        if (isMobilePlatform() || (isWebviewDirectVideo(attempt.target.name) && !prefersNativePlayer(attempt.target))) {
             await openHtmlPlayback(attempt, isCurrent);
             return;
         }

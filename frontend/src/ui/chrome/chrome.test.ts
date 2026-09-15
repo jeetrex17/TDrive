@@ -101,6 +101,14 @@ describe('ProfileMenu', () => {
         expect(logoutIndex).toBeGreaterThan(encryptionIndex);
         expect(body).not.toContain('id="mount-drive-button"');
     });
+
+    it('leaves out the updates entry where the updater is unavailable', () => {
+        const { body } = render(ProfileMenu, { props: { ...profileProps, updaterAvailable: false } });
+
+        expect(body).not.toContain('id="profile-menu-updates"');
+        expect(body).toContain('id="profile-menu-appearance"');
+        expect(body).toContain('id="profile-menu-logout"');
+    });
 });
 
 describe('UploadMenu', () => {
@@ -112,5 +120,12 @@ describe('UploadMenu', () => {
         expect(body).toContain('display: none');
         expect(body).toContain('id="upload-menu-files"');
         expect(body).toContain('id="upload-menu-folder"');
+    });
+
+    it('offers only file uploads without a folder handler', () => {
+        const { body } = render(UploadMenu, { props: { onFiles: noop } });
+
+        expect(body).toContain('id="upload-menu-files"');
+        expect(body).not.toContain('id="upload-menu-folder"');
     });
 });

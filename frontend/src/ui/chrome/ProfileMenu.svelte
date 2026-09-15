@@ -19,9 +19,11 @@
         onOpen: () => void;
         onEncryptionSettings: () => void;
         onLogout: () => void;
+        // False on phones, which update through their app stores.
+        updaterAvailable?: boolean;
     }
 
-    let { onOpen, onEncryptionSettings, onLogout }: Props = $props();
+    let { onOpen, onEncryptionSettings, onLogout, updaterAvailable = true }: Props = $props();
 
     type MenuView = 'account' | 'appearance' | 'updates';
 
@@ -39,6 +41,7 @@
     // menu straight to the update view. Guarded so it only reacts to changes.
     let lastPanelRequest = 0;
     $effect(() => {
+        if (!updaterAvailable) return;
         const nonce = $updatesPanelRequest;
         if (nonce === lastPanelRequest) return;
         lastPanelRequest = nonce;
@@ -225,19 +228,21 @@
             </div>
         </div>
         <div class="profile-menu-divider" role="separator"></div>
-        <button
-            id="profile-menu-updates"
-            class="profile-menu-item"
-            type="button"
-            role="menuitem"
-            onclick={() => void openUpdates()}
-        >
-            <DownloadIcon size={20} strokeWidth={2} aria-hidden="true" />
-            <span>Check for updates</span>
-            {#if $updateBadge === 'ready'}
-                <span class="profile-menu-tag" aria-label="Update ready">Ready</span>
-            {/if}
-        </button>
+        {#if updaterAvailable}
+            <button
+                id="profile-menu-updates"
+                class="profile-menu-item"
+                type="button"
+                role="menuitem"
+                onclick={() => void openUpdates()}
+            >
+                <DownloadIcon size={20} strokeWidth={2} aria-hidden="true" />
+                <span>Check for updates</span>
+                {#if $updateBadge === 'ready'}
+                    <span class="profile-menu-tag" aria-label="Update ready">Ready</span>
+                {/if}
+            </button>
+        {/if}
         <button
             id="profile-menu-appearance"
             class="profile-menu-item"

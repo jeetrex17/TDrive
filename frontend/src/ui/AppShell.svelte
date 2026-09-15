@@ -5,7 +5,7 @@
     import ImagesIcon from '@lucide/svelte/icons/images';
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import SearchIcon from '@lucide/svelte/icons/search';
-    import { listMountableDrives } from '../api';
+    import { isMobilePlatform, listMountableDrives } from '../api';
     import tdriveLogo from '../assets/images/tdrive-logo.png';
     import { setFileSortKey, fileSortState } from './file-list/file-sort-store';
     import type { FileSortKey } from './file-list/file-sort';
@@ -17,6 +17,9 @@
     }
 
     let { dashboardVisible }: Props = $props();
+
+    // OS mounts are desktop-only; the phone builds ship no WebDAV connector.
+    const mountAvailable = !isMobilePlatform();
 
     function sortButtonLabel(key: FileSortKey): string {
         const active = $fileSortState.key === key;
@@ -83,7 +86,7 @@
                     <Link2Icon class="icon" size={16} strokeWidth={2} aria-hidden="true" />
                     Join with link
                 </button>
-                {#if dashboardVisible}
+                {#if dashboardVisible && mountAvailable}
                     <MountControl variant="sidebar" loadDrives={listMountableDrives} />
                 {/if}
             </div>

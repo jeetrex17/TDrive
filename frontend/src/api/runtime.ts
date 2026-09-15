@@ -123,8 +123,39 @@ function openExternalUrlInBrowser(url: string): void {
     if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
 }
 
+/**
+ * Browser-preview override so the mobile branches can be exercised in Vite
+ * without a device: `?mobile=1` previews a generic phone, `?mobile=ios` or
+ * `?mobile=android` a specific one. A real webview loads the app without a
+ * query string, so it never applies there.
+ */
+function mobileOverride(): "mobile" | "ios" | "android" | null {
+    if (typeof window === "undefined") return null;
+    const value = new URLSearchParams(window.location?.search ?? "").get("mobile");
+    if (value === "ios" || value === "android") return value;
+    return value === "1" ? "mobile" : null;
+}
+
+/** True on iOS and Android (real or previewed); false until the gateway is ready. */
+export function isMobilePlatform(): boolean {
+    return mobileOverride() !== null || (isGatewayReady() && System.IsMobile());
+}
+
+export function isIOSPlatform(): boolean {
+    const override = mobileOverride();
+    if (override) return override === "ios";
+    return isGatewayReady() && System.IsIOS();
+}
+
+export function isAndroidPlatform(): boolean {
+    const override = mobileOverride();
+    if (override) return override === "android";
+    return isGatewayReady() && System.IsAndroid();
+}
+
+/** Wails window fullscreen is a desktop feature; on a phone it is a no-op. */
 export function fullscreenAvailable(): boolean {
-    return isGatewayReady();
+    return isGatewayReady() && !isMobilePlatform();
 }
 
 export function enterFullscreen(): void {
