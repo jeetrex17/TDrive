@@ -101,8 +101,13 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		cancel:    cancel,
 		lastTouch: time.Now(),
 	}
+	// Playback and the thumbnail extractor share one block cache: the
+	// extractor reads the same head and index blocks playback already holds,
+	// and the blocks it pulls for a preview are where the viewer may seek next.
+	blocks := newBlockCache(defaultRangeCacheBytes)
 	s.reader = NewRangeReader(RangeReaderConfig{
 		Client:    ranges,
+		Cache:     blocks,
 		ReadAhead: playbackReadAhead,
 	})
 	s.warmContainerIndex()
@@ -115,9 +120,9 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 			thumbnailCache = nil
 		}
 		s.thumbReader = NewRangeReader(RangeReaderConfig{
-			Client:        ranges,
-			MaxCacheBytes: 8 * 1024 * 1024,
-			Background:    true,
+			Client:     ranges,
+			Cache:      blocks,
+			Background: true,
 			OnFloodWait: func(wait time.Duration) {
 				if s.thumbs != nil {
 					s.thumbs.NoteFloodWait(wait)
