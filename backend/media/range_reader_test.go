@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"TDrive/backend/tgclient"
+
+	"github.com/gotd/td/tgerr"
 )
 
 func TestRangeReaderSplitsAcrossUploadBoundaries(t *testing.T) {
@@ -414,6 +416,11 @@ type strictRangeFake struct {
 	entered                   chan struct{}
 	release                   chan struct{}
 	enterOnce                 sync.Once
+	// refVersion is the file reference Telegram currently accepts; reads
+	// carrying an older one are rejected as expired. resolves counts how often
+	// the reader asked for a fresh reference.
+	refVersion byte
+	resolves   int
 }
 
 func newStrictRangeFake(data []byte) *strictRangeFake {
@@ -421,16 +428,39 @@ func newStrictRangeFake(data []byte) *strictRangeFake {
 }
 
 func (f *strictRangeFake) ref() tgclient.DocumentRef {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.refLocked()
+}
+
+func (f *strictRangeFake) refLocked() tgclient.DocumentRef {
 	return tgclient.DocumentRef{
-		Peer:  tgclient.InputPeer{ChannelID: 42},
-		MsgID: 99,
-		Size:  int64(len(f.data)),
-		Name:  "video.bin",
+		Peer:          tgclient.InputPeer{ChannelID: 42},
+		MsgID:         99,
+		Size:          int64(len(f.data)),
+		Name:          "video.bin",
+		FileReference: []byte{f.refVersion},
 	}
 }
 
+// expireReference makes every reference handed out so far stale.
+func (f *strictRangeFake) expireReference() {
+	f.mu.Lock()
+	f.refVersion++
+	f.mu.Unlock()
+}
+
+func (f *strictRangeFake) resolveCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resolves
+}
+
 func (f *strictRangeFake) ResolveDocument(context.Context, tgclient.InputPeer, int64) (tgclient.DocumentRef, error) {
-	return f.ref(), nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolves++
+	return f.refLocked(), nil
 }
 
 func (f *strictRangeFake) ReadDocumentRange(ctx context.Context, ref tgclient.DocumentRef, offset int64, dst []byte) (int, error) {
@@ -442,6 +472,10 @@ func (f *strictRangeFake) ReadDocumentRange(ctx context.Context, ref tgclient.Do
 	f.callLog = append(f.callLog, rangeCall{offset: offset, length: len(dst)})
 	if f.entered != nil {
 		f.enterOnce.Do(func() { close(f.entered) })
+	}
+	if len(ref.FileReference) != 1 || ref.FileReference[0] != f.refVersion {
+		f.mu.Unlock()
+		return 0, tgerr.New(400, "FILE_REFERENCE_EXPIRED")
 	}
 	if f.floodWaits > 0 {
 		f.floodWaits--
