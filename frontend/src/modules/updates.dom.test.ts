@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
 
 // Backend bindings and the toast surface are mocked; the module factories are
 // hoisted so both static and dynamic (per-test) imports see them.
@@ -154,5 +155,38 @@ describe('update policy', () => {
         bindings.MountStatus.mockResolvedValue({ mounted: false });
         const { mod } = await loadModule();
         expect(await mod.getRestartRisks()).toEqual([]);
+    });
+});
+
+describe('activation', () => {
+    it('starts the updater on desktop', async () => {
+        const { mod } = await loadModule();
+
+        const teardown = mod.activateUpdates();
+        teardown();
+
+        expect(bindings.GetUpdateState).toHaveBeenCalledOnce();
+        expect(bindings.AppVersion).toHaveBeenCalledOnce();
+    });
+
+    it('never starts the updater or opens its panel on a phone', async () => {
+        // Go injects window._wails.environment before the bundle loads and the
+        // platform helpers read its OS; keep the runtime's own hooks intact.
+        const previous = window._wails;
+        window._wails = { ...previous, environment: { OS: 'android', Arch: 'arm64', Debug: false } };
+        try {
+            const { mod, store } = await loadModule();
+
+            const teardown = mod.activateUpdates();
+            await mod.openUpdatesUI();
+            teardown();
+
+            expect(bindings.GetUpdateState).not.toHaveBeenCalled();
+            expect(bindings.AppVersion).not.toHaveBeenCalled();
+            expect(bindings.CheckForUpdate).not.toHaveBeenCalled();
+            expect(get(store.updatesPanelRequest)).toBe(0);
+        } finally {
+            window._wails = previous;
+        }
     });
 });

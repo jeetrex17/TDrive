@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { isAndroidPlatform, isMobilePlatform } from '../../api';
     import { activateLiveSyncEvents } from '../../modules/channels';
     import { activateContextMenu } from '../../modules/context-menu';
     import { activateDropOverlay } from '../../modules/drop-overlay';
@@ -113,6 +114,11 @@
     import { appView } from './app-store';
     import FeaturePortal from './FeaturePortal.svelte';
 
+    // Desktop-only chrome: phones update through their app stores, and
+    // Android has no directory picker for folder uploads.
+    const updaterAvailable = !isMobilePlatform();
+    const chooseFolder = isAndroidPlatform() ? undefined : chooseFolderForCurrentFolder;
+
     $effect(() => activateNotificationEffects());
 
     $effect(() => {
@@ -181,10 +187,11 @@
         <NotifBell onCancelDirection={cancelTransfersInDirection} onClearHistory={clearHistory} />
     </FeaturePortal>
     <FeaturePortal hostId="upload-menu-root">
-        <UploadMenu onFiles={chooseFilesForCurrentFolder} onFolder={chooseFolderForCurrentFolder} />
+        <UploadMenu onFiles={chooseFilesForCurrentFolder} onFolder={chooseFolder} />
     </FeaturePortal>
     <FeaturePortal hostId="profile-root">
         <ProfileMenu
+            {updaterAvailable}
             onOpen={ensureProfileLoaded}
             onEncryptionSettings={openEncryptionSettingsModal}
             onLogout={openLogoutModal}

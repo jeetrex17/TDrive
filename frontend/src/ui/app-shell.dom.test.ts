@@ -73,6 +73,21 @@ describe('AppShell behavior', () => {
         expect(join.compareDocumentPosition(mount) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
+    it('leaves the mount control out of the sidebar on mobile', () => {
+        // Go injects window._wails.environment before the bundle loads and the
+        // platform helpers read its OS; keep the runtime's own hooks intact.
+        const previous = window._wails;
+        window._wails = { ...previous, environment: { OS: 'ios', Arch: 'arm64', Debug: false } };
+        try {
+            setup();
+
+            expect(host?.querySelector('#open-join-drive')).not.toBeNull();
+            expect(host?.querySelector('#mount-drive-button')).toBeNull();
+        } finally {
+            window._wails = previous;
+        }
+    });
+
     it('leaves selection bar contents owned by the Svelte SelectionBar island', () => {
         setup();
 

@@ -6,7 +6,8 @@
 
     interface Props {
         onFiles: () => void;
-        onFolder: () => void;
+        // Left out where the platform has no directory picker (Android).
+        onFolder?: () => void;
     }
 
     let { onFiles, onFolder }: Props = $props();
@@ -33,6 +34,10 @@
         action();
     }
 
+    function chooseFolder(): void {
+        if (onFolder) activate(onFolder);
+    }
+
     function onWindowKeydown(event: KeyboardEvent): void {
         if (event.key === 'Escape' && open) closeMenu(true);
     }
@@ -44,7 +49,7 @@
         closeMenu();
     }
 
-    // Arrow-key navigation between the two menu items.
+    // Arrow-key navigation between the menu items.
     function onMenuKeydown(event: KeyboardEvent): void {
         if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
         event.preventDefault();
@@ -89,8 +94,10 @@
         <FileUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
         Files
     </button>
-    <button bind:this={folderEl} id="upload-menu-folder" class="upload-menu-item" type="button" role="menuitem" onclick={() => activate(onFolder)}>
-        <FolderUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
-        Folder
-    </button>
+    {#if onFolder}
+        <button bind:this={folderEl} id="upload-menu-folder" class="upload-menu-item" type="button" role="menuitem" onclick={chooseFolder}>
+            <FolderUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
+            Folder
+        </button>
+    {/if}
 </div>

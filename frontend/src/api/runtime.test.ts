@@ -9,20 +9,33 @@ import {
 // runtime.ts is a thin wrapper over @wailsio/runtime's Events/Browser/System/
 // Window modules; mock those instead of the removed window.runtime bridge.
 const eventsOn = vi.hoisted(() => vi.fn());
-vi.mock('@wailsio/runtime', () => ({
-    Events: { On: eventsOn },
-    Browser: { OpenURL: vi.fn() },
-    System: { Environment: vi.fn() },
-    Window: {
-        Fullscreen: vi.fn(),
-        UnFullscreen: vi.fn(),
-        IsFullscreen: vi.fn(),
-        SetBackgroundColour: vi.fn(),
-    },
-}));
+vi.mock('@wailsio/runtime', () => {
+    // The real platform helpers read the OS Go injects into window._wails.environment.
+    const os = () => (typeof window === 'undefined' ? undefined : window._wails?.environment?.OS);
+    return {
+        Events: { On: eventsOn },
+        Browser: { OpenURL: vi.fn() },
+        System: {
+            Environment: vi.fn(),
+            IsIOS: () => os() === 'ios',
+            IsAndroid: () => os() === 'android',
+            IsMobile: () => os() === 'ios' || os() === 'android',
+        },
+        Window: {
+            Fullscreen: vi.fn(),
+            UnFullscreen: vi.fn(),
+            IsFullscreen: vi.fn(),
+            SetBackgroundColour: vi.fn(),
+        },
+    };
+});
 
 import {
+    fullscreenAvailable,
+    isAndroidPlatform,
     isFullscreen,
+    isIOSPlatform,
+    isMobilePlatform,
     onRuntimeEvent,
     RuntimeUnavailableError,
     waitForGatewayReady,
@@ -116,5 +129,50 @@ describe('typed gateway runtime boundary', () => {
 
         expect(callback).toHaveBeenCalledExactlyOnceWith(42, 75);
         expect(stop).toHaveBeenCalledOnce();
+    });
+});
+
+describe('platform helpers', () => {
+    it('report a desktop while the gateway is not ready', () => {
+        vi.stubGlobal('window', { location: { search: '' } });
+
+        expect(isMobilePlatform()).toBe(false);
+        expect(isIOSPlatform()).toBe(false);
+        expect(isAndroidPlatform()).toBe(false);
+        expect(fullscreenAvailable()).toBe(false);
+    });
+
+    it('read the injected OS once the gateway is ready', () => {
+        vi.stubGlobal('window', { _wails: { environment: { OS: 'android' } }, location: { search: '' } });
+
+        expect(isMobilePlatform()).toBe(true);
+        expect(isAndroidPlatform()).toBe(true);
+        expect(isIOSPlatform()).toBe(false);
+        expect(fullscreenAvailable()).toBe(false);
+
+        vi.stubGlobal('window', { _wails: { environment: { OS: 'darwin' } }, location: { search: '' } });
+
+        expect(isMobilePlatform()).toBe(false);
+        expect(fullscreenAvailable()).toBe(true);
+    });
+
+    it('honour the ?mobile browser-preview override ahead of the gateway', () => {
+        vi.stubGlobal('window', { location: { search: '?mobile=1' } });
+
+        expect(isMobilePlatform()).toBe(true);
+        expect(isIOSPlatform()).toBe(false);
+        expect(isAndroidPlatform()).toBe(false);
+        expect(fullscreenAvailable()).toBe(false);
+
+        vi.stubGlobal('window', { location: { search: '?mobile=ios' } });
+
+        expect(isIOSPlatform()).toBe(true);
+        expect(isAndroidPlatform()).toBe(false);
+
+        vi.stubGlobal('window', { _wails: { environment: { OS: 'darwin' } }, location: { search: '?mobile=android' } });
+
+        expect(isMobilePlatform()).toBe(true);
+        expect(isAndroidPlatform()).toBe(true);
+        expect(isIOSPlatform()).toBe(false);
     });
 });

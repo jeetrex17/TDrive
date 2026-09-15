@@ -23,6 +23,7 @@ const apiMocks = vi.hoisted(() => ({
     enterFullscreen: vi.fn(),
     exitFullscreen: vi.fn(),
     fullscreenAvailable: vi.fn(() => true),
+    isMobilePlatform: vi.fn(() => false),
     isFullscreen: vi.fn(async () => false),
     onRuntimeEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
         runtimeMocks.eventsOn(name, callback);
@@ -148,6 +149,7 @@ beforeEach(async () => {
     apiMocks.resizeNativeMedia.mockResolvedValue(undefined);
     apiMocks.showNativeSeekThumbnail.mockResolvedValue(undefined);
     apiMocks.updateMediaPlayback.mockResolvedValue(undefined);
+    apiMocks.isMobilePlatform.mockReturnValue(false);
 
     const videoModule = await import('./video');
     videoModule.updatePlaybackPreferences({ ...DEFAULT_PLAYBACK_PREFERENCES });
@@ -1708,5 +1710,31 @@ describe("folder video playlist", () => {
         document.querySelector<HTMLVideoElement>("#video-player")?.dispatchEvent(new Event("ended"));
         await nextTasks();
         expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("video on a phone", () => {
+    it("plays every container in <video> and never promotes to the native player", async () => {
+        apiMocks.isMobilePlatform.mockReturnValue(true);
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(12, "phone-token"));
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 12, name: "movie-12.mkv", size: 1024 });
+
+        expect(apiMocks.openMedia).toHaveBeenCalledOnce();
+        expect(apiMocks.openNativeMedia).not.toHaveBeenCalled();
+
+        const video = document.querySelector<HTMLVideoElement>("#video-player");
+        if (!video) throw new Error("missing video element");
+        Object.defineProperty(video, "error", {
+            configurable: true,
+            value: { code: 4, message: "source not supported" },
+        });
+        video.dispatchEvent(new Event("error"));
+
+        await vi.waitFor(() => expect(document.querySelector("#video-error")?.textContent).toContain("can't be played on this device"));
+        expect(apiMocks.attachNativeMedia).not.toHaveBeenCalled();
+        expect(apiMocks.openNativeMedia).not.toHaveBeenCalled();
     });
 });
