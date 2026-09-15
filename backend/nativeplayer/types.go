@@ -12,7 +12,6 @@ import (
 )
 
 var ErrUnsupported = errors.New("native player is not supported on this platform")
-var ErrDecoderUnsafe = errors.New("native player decoder preflight failed")
 var ErrPlayerExited = errors.New("native media player exited unexpectedly")
 var errIPCWriteTimeout = errors.New("native player: mpv IPC write timed out")
 
@@ -435,26 +434,6 @@ func mpvCommandPayload(command ...string) []byte {
 		Command []string `json:"command"`
 	}{Command: command})
 	return append(payload, '\n')
-}
-
-func sidecarPreflightEnabled(enable, skip string) bool {
-	return enable == "1" && skip != "1"
-}
-
-func mpvPreflightInvocation(url string) ([]string, *strings.Reader) {
-	args := []string{
-		"--no-config",
-		"--really-quiet",
-		"--terminal=no",
-		"--force-window=no",
-		"--vo=null",
-		"--ao=null",
-		"--frames=1",
-		"--demuxer-readahead-secs=0.5",
-		"--demuxer-max-bytes=2097152",
-		"--playlist=-",
-	}
-	return args, strings.NewReader("#EXTM3U\n" + url + "\n")
 }
 
 func tracksFromProperty(value any) []Track {

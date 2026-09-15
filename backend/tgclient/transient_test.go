@@ -35,6 +35,8 @@ func TestIsTransientTransport(t *testing.T) {
 		{"explicit liveConn close is not retried", errScopeClosed, false},
 		{"typed gotd engine closed", fmt.Errorf("rpc: %w", rpc.ErrEngineClosed), true},
 		{"typed gotd pooled connection dead", fmt.Errorf("pool: %w", pool.ErrConnDead), true},
+		{"pool closed under a request", errors.New("invoke pool: DC is closed"), true},
+		{"pool closed while acquiring", fmt.Errorf("acquire connection: DC closed: %w", context.Canceled), true},
 		{"typed connection reset", fmt.Errorf("read tcp: %w", syscall.ECONNRESET), true},
 		{"typed broken pipe", fmt.Errorf("write tcp: %w", syscall.EPIPE), true},
 		{"typed connection aborted", fmt.Errorf("read tcp: %w", syscall.ECONNABORTED), true},

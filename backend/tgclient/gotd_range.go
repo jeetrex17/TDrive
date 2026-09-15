@@ -29,6 +29,49 @@ func (g *Gotd) ResolveDocument(ctx context.Context, peer InputPeer, msgID int64)
 	return ref, err
 }
 
+// ResolveDocuments resolves every message in msgIDs with as few round trips
+// as Telegram allows and returns the refs in the same order.
+func (g *Gotd) ResolveDocuments(ctx context.Context, peer InputPeer, msgIDs []int64) ([]DocumentRef, error) {
+	refs := make([]DocumentRef, 0, len(msgIDs))
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		for start := 0; start < len(msgIDs); start += channelsGetMessagesLimit {
+			batch := msgIDs[start:min(start+channelsGetMessagesLimit, len(msgIDs))]
+			messages, err := channelMessages(ctx, api, peer, batch)
+			if err != nil {
+				return err
+			}
+			batchRefs, err := documentRefsInOrder(peer, batch, messages)
+			if err != nil {
+				return err
+			}
+			refs = append(refs, batchRefs...)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+// documentRefsInOrder turns fetched messages into refs ordered like msgIDs,
+// naming the first message that is missing or does not carry a document.
+func documentRefsInOrder(peer InputPeer, msgIDs []int64, messages map[int64]tg.MessageClass) ([]DocumentRef, error) {
+	refs := make([]DocumentRef, 0, len(msgIDs))
+	for _, id := range msgIDs {
+		msg, ok := messages[id]
+		if !ok {
+			return nil, fmt.Errorf("message %d: %w", id, ErrMessageNotFound)
+		}
+		doc, name, err := documentOf(msg)
+		if err != nil {
+			return nil, fmt.Errorf("message %d: %w", id, err)
+		}
+		refs = append(refs, documentRefFromTG(peer, id, doc, name))
+	}
+	return refs, nil
+}
+
 func (g *Gotd) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset int64, dst []byte) (int, error) {
 	if len(dst) == 0 {
 		return 0, nil
@@ -60,34 +103,11 @@ func (g *Gotd) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset in
 	var n int
 	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
 		clientWait = time.Since(started)
-		current := ref
-		for attempt := 0; attempt < 2; attempt++ {
-			read, err := g.readDocumentRange(ctx, client, current, offset, dst)
-			if err == nil {
-				n = read
-				return nil
-			}
-			if attempt == 0 && isFileReferenceError(err) {
-				refreshed, refreshErr := resolveDocumentRef(ctx, client.API(), ref.Peer, ref.MsgID)
-				if refreshErr != nil {
-					return fmt.Errorf("tgclient: refresh file reference after %v: %w", err, refreshErr)
-				}
-				current = refreshed
-				continue
-			}
-			return err
-		}
-		return nil
+		read, err := g.readDocumentRange(ctx, client, ref, offset, dst)
+		n = read
+		return err
 	})
 	return n, err
-}
-
-func resolveDocumentRef(ctx context.Context, api *tg.Client, peer InputPeer, msgID int64) (DocumentRef, error) {
-	doc, name, err := getDocumentByMessageID(ctx, api, peer, msgID)
-	if err != nil {
-		return DocumentRef{}, err
-	}
-	return documentRefFromTG(peer, msgID, doc, name), nil
 }
 
 func documentRefFromTG(peer InputPeer, msgID int64, doc *tg.Document, name string) DocumentRef {
@@ -99,10 +119,23 @@ func documentRefFromTG(peer InputPeer, msgID int64, doc *tg.Document, name strin
 		DocumentID:    doc.ID,
 		AccessHash:    doc.AccessHash,
 		FileReference: append([]byte(nil), doc.FileReference...),
+		DCID:          doc.DCID,
 	}
 }
 
+// readDocumentRange reads one block over the pool for the document's data
+// center. Should that data center turn out to be wrong, the primary connection
+// repeats the read and follows Telegram's redirect.
 func (g *Gotd) readDocumentRange(ctx context.Context, client *telegram.Client, ref DocumentRef, offset int64, dst []byte) (int, error) {
+	api, pooled := g.fileAPI(ctx, client, ref.DCID)
+	n, err := g.readDocumentRangeVia(ctx, client, api, ref, offset, dst)
+	if pooled && isFileMigrate(err) {
+		return g.readDocumentRangeVia(ctx, client, client.API(), ref, offset, dst)
+	}
+	return n, err
+}
+
+func (g *Gotd) readDocumentRangeVia(ctx context.Context, client *telegram.Client, api *tg.Client, ref DocumentRef, offset int64, dst []byte) (int, error) {
 	limit := roundedTelegramLimit(len(dst))
 	req := &tg.UploadGetFileRequest{
 		Location: &tg.InputDocumentFileLocation{
@@ -116,10 +149,9 @@ func (g *Gotd) readDocumentRange(ctx context.Context, client *telegram.Client, r
 	req.SetPrecise(true)
 	req.SetCDNSupported(true)
 
-	// client.API() is backed by telegram.Client.invokeDirect, so gotd follows
-	// FILE_MIGRATE by invoking upload.getFile on the target data center before
-	// returning here.
-	result, err := client.API().UploadGetFile(ctx, req)
+	// The primary connection (client.API()) is backed by invokeDirect, so
+	// gotd follows FILE_MIGRATE on it; a pool invokes on its data center only.
+	result, err := api.UploadGetFile(ctx, req)
 	if err != nil {
 		return 0, err
 	}
@@ -180,26 +212,26 @@ func (g *Gotd) readCDNPlain(ctx context.Context, client *telegram.Client, cdn *t
 }
 
 func (g *Gotd) cdnClient(ctx context.Context, client *telegram.Client, dcID int) (*tg.Client, error) {
-	g.cdnMu.Lock()
+	g.mediaMu.Lock()
 	if invoker, ok := g.cdn[dcID]; ok {
-		g.cdnMu.Unlock()
+		g.mediaMu.Unlock()
 		return tg.NewClient(invoker), nil
 	}
-	g.cdnMu.Unlock()
+	g.mediaMu.Unlock()
 
 	invoker, err := client.MediaOnly(ctx, dcID, 2)
 	if err != nil {
 		return nil, fmt.Errorf("tgclient: cdn dc %d: %w", dcID, err)
 	}
 
-	g.cdnMu.Lock()
+	g.mediaMu.Lock()
 	if existing, ok := g.cdn[dcID]; ok {
-		g.cdnMu.Unlock()
+		g.mediaMu.Unlock()
 		_ = invoker.Close()
 		return tg.NewClient(existing), nil
 	}
 	g.cdn[dcID] = invoker
-	g.cdnMu.Unlock()
+	g.mediaMu.Unlock()
 	return tg.NewClient(invoker), nil
 }
 
@@ -340,6 +372,9 @@ func crossesRangeBoundary(offset int64, length int) bool {
 	return start != end
 }
 
-func isFileReferenceError(err error) bool {
+// IsFileReferenceError reports whether Telegram rejected a read because the
+// document's file reference is stale. The caller re-resolves the document and
+// retries with the fresh reference.
+func IsFileReferenceError(err error) bool {
 	return tg.IsFileReferenceEmpty(err) || tg.IsFileReferenceExpired(err) || tg.IsFileReferenceInvalid(err)
 }

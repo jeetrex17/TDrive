@@ -10,11 +10,11 @@
         <key>CFBundleIdentifier</key>
         <string>com.jeetraj.tdrive</string>
         <key>CFBundleVersion</key>
-        <string>1.8.1</string>
+        <string>1.9.0</string>
         <key>CFBundleGetInfoString</key>
         <string>Use a private Telegram channel as cloud storage</string>
         <key>CFBundleShortVersionString</key>
-        <string>1.8.1</string>
+        <string>1.9.0</string>
         <key>CFBundleIconFile</key>
         <string>icons</string>
         <key>LSMinimumSystemVersion</key>

@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "1.8.1"
+		"file_version": "1.9.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "1.8.1",
+			"ProductVersion": "1.9.0",
 			"CompanyName": "Jeetraj",
 			"FileDescription": "Use a private Telegram channel as cloud storage",
 			"LegalCopyright": "© 2026, Jeetraj",

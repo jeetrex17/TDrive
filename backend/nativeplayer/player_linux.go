@@ -329,7 +329,7 @@ type Player struct {
 
 func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, error) {
 	if !linuxNativePlayerEnabled() {
-		linuxNativeLogf("start rejected: explicit opt-in required with %s=1", linuxNativePlayerFlag)
+		linuxNativeLogf("start rejected: native playback disabled with %s=0", linuxNativePlayerFlag)
 		return nil, ErrUnsupported
 	}
 	if !rect.Valid() {
@@ -389,7 +389,7 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 }
 
 func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr, opts Options) error {
-	mpvPath, err := findLinuxMPV()
+	mpvPath, version, err := findLinuxMPV()
 	if err != nil {
 		linuxNativeLogf("mpv lookup failed: %v", err)
 		return err
@@ -403,59 +403,14 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 	p.ipcDir = ipcDir
 	p.ipcPath = filepath.Join(ipcDir, fmt.Sprintf("mpv-%d.sock", os.Getpid()))
 	_ = os.Remove(p.ipcPath)
-	args := []string{
-		"--no-config",
-		// Terminal messages stay on so a startup failure is reported by mpv
-		// itself; the output is captured below rather than printed.
-		"--terminal=yes",
-		"--msg-level=all=error",
-		"--ytdl=no",
-		"--hwdec=auto-safe",
-		"--cache=yes",
-		"--demuxer-readahead-secs=20",
-		"--demuxer-max-bytes=67108864",
-		"--demuxer-max-back-bytes=33554432",
-		"--keepaspect=yes",
-		"--force-window=immediate",
-		"--input-terminal=no",
-		"--idle=yes",
-		"--keep-open=yes",
-		"--input-ipc-server=" + p.ipcPath,
-	}
-	if windowID != 0 {
-		args = append(args,
-			"--keepaspect-window=no",
-			"--auto-window-resize=no",
-			"--video-align-x=0",
-			"--video-align-y=0",
-			"--osc=no",
-			"--osd-bar=no",
-			"--osd-level=0",
-			"--cursor-autohide=no",
-			"--no-input-default-bindings",
-			"--input-vo-keyboard=no",
-			fmt.Sprintf("--wid=%d", windowID),
-		)
-	} else {
-		// Wayland does not provide the cross-process child-window embedding
-		// primitive used on X11. Keep playback reliable in an honest standalone
-		// mpv window and leave its native controls enabled.
-		args = append(args,
-			"--title=TDrive Video",
-			"--osc=yes",
-			"--osd-bar=yes",
-			"--osd-level=1",
-			"--input-default-bindings=yes",
-			"--input-vo-keyboard=yes",
-		)
-	}
+	args := linuxMPVArgs(version, p.ipcPath, windowID)
 
 	output := &mpvOutput{}
 	cmd := exec.CommandContext(ctx, mpvPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = output
 	cmd.Stderr = output
-	linuxNativeLogf("mpv start: path=%s wid=%d ipc=%s", mpvPath, windowID, p.ipcPath)
+	linuxNativeLogf("mpv start: path=%s version=%s wid=%d ipc=%s", mpvPath, version, windowID, p.ipcPath)
 	if err := cmd.Start(); err != nil {
 		_ = os.RemoveAll(p.ipcDir)
 		linuxNativeLogf("mpv start failed: %v", err)

@@ -122,13 +122,6 @@ func (a *App) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect)
 		}
 	}()
 
-	if err := nativeplayer.PreflightDecode(a.ctx, opened.URL); err != nil {
-		if errors.Is(err, nativeplayer.ErrDecoderUnsafe) {
-			return NativeMediaResult{}, fmt.Errorf("the native decoder crashed while checking this video, so playback was blocked for safety")
-		}
-		return NativeMediaResult{}, err
-	}
-
 	token := opened.Token
 	htmlControls := nativeHTMLControlsEnabled() && nativeplayer.SupportsHTMLControls()
 	opts := nativeplayer.Options{

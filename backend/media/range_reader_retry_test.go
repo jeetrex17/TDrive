@@ -199,8 +199,7 @@ func TestRangeReaderReleasesConcurrencyBeforeTransientBackoff(t *testing.T) {
 	releaseSleep := make(chan struct{})
 	var sleepOnce sync.Once
 	reader := NewRangeReader(RangeReaderConfig{
-		Client:         fake,
-		MaxConcurrency: 1,
+		Client: fake,
 		Retry: testRetryPolicy(func(ctx context.Context, wait time.Duration) error {
 			sleepOnce.Do(func() { close(firstSleeping) })
 			select {

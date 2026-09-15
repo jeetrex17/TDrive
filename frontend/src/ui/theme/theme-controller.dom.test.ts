@@ -1,6 +1,6 @@
 import { get } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createThemeController, THEME_STORAGE_KEY } from './theme-controller';
+import { createThemeController, THEME_STORAGE_KEY, LINUX_WEBKIT_CLASS } from './theme-controller';
 import type { ThemeAppearance, ThemeId } from './theme-model';
 
 type MediaChangeListener = (event: MediaQueryListEvent) => void;
@@ -60,6 +60,21 @@ afterEach(() => {
 });
 
 describe('theme controller', () => {
+    it('marks the Linux webview on the root so popovers stay opaque there', () => {
+        const webkitGtk = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+        const linux = createThemeController({ document, storage, reducedMotion: createMediaQuery(true), userAgent: webkitGtk });
+        linux.start();
+        expect(document.documentElement.classList.contains(LINUX_WEBKIT_CLASS)).toBe(true);
+        linux.destroy();
+        expect(document.documentElement.classList.contains(LINUX_WEBKIT_CLASS)).toBe(false);
+
+        const safari = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+        const mac = createThemeController({ document, storage, reducedMotion: createMediaQuery(true), userAgent: safari });
+        mac.start();
+        expect(document.documentElement.classList.contains(LINUX_WEBKIT_CLASS)).toBe(false);
+        mac.destroy();
+    });
+
     it('applies the explicit dark default without exposing OS appearance state', () => {
         const controller = createThemeController({
             document,

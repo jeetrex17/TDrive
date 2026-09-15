@@ -352,11 +352,59 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Compress-Archive -Force -Path $app.FullName, "build/bin/media" -DestinationPath "dist/TDrive-windows-amd64-ci.zip"
 
+      # The runner image has no NSIS; the Chocolatey package installs under
+      # Program Files (x86) without touching PATH. Keep in sync with release.yml.
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ${env:ProgramFiles(x86)} "NSIS"
+          if (-not (Test-Path -LiteralPath (Join-Path $nsis "makensis.exe") -PathType Leaf)) {
+            choco install nsis -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "nsis install failed" }
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $nsis
+          & (Join-Path $nsis "makensis.exe") /VERSION
+
+      # The installer is exercised for real: a silent install into a scratch
+      # folder must lay out the exe and the media runtime, and the silent
+      # uninstall must take them away again.
+      - name: Build and verify Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          wails3 task windows:installer INSTALL_SCOPE=user
+          if ($LASTEXITCODE -ne 0) { throw "windows installer build failed" }
+          $setup = (Resolve-Path "build/bin/TDrive-amd64-installer.exe").Path
+          $target = Join-Path $env:RUNNER_TEMP "tdrive-installed"
+
+          # NSIS: /S is silent; /D= must be the last argument and unquoted.
+          $install = Start-Process -Wait -PassThru -FilePath $setup -ArgumentList "/S", "/D=$target"
+          if ($install.ExitCode -ne 0) { throw "silent install exited with $($install.ExitCode)" }
+          foreach ($file in @("TDrive.exe", "uninstall.exe", "media\mpv.exe", "media\media-runtime.sha256")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $target $file) -PathType Leaf)) {
+              throw "installed layout is missing $file"
+            }
+          }
+
+          # _?= runs the uninstaller in place so it can be waited on.
+          $uninstall = Start-Process -Wait -PassThru -FilePath (Join-Path $target "uninstall.exe") -ArgumentList "/S", "_?=$target"
+          if ($uninstall.ExitCode -ne 0) { throw "silent uninstall exited with $($uninstall.ExitCode)" }
+          foreach ($file in @("TDrive.exe", "media\mpv.exe")) {
+            if (Test-Path -LiteralPath (Join-Path $target $file)) {
+              throw "uninstall left $file behind"
+            }
+          }
+
+          Copy-Item -LiteralPath $setup -Destination "dist/TDrive-windows-amd64-ci-setup.exe"
+
       - name: Upload Windows CI package
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: TDrive-windows-amd64-ci
-          path: dist/TDrive-windows-amd64-ci.zip
+          path: |
+            dist/TDrive-windows-amd64-ci.zip
+            dist/TDrive-windows-amd64-ci-setup.exe
           if-no-files-found: error
           retention-days: 7

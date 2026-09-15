@@ -12,8 +12,9 @@ const (
 )
 
 // DocumentRef is the stable Telegram document identity needed for ranged
-// reads. Implementations may refresh FileReference internally when Telegram
-// expires it; callers should treat this as an opaque descriptor.
+// reads. FileReference expires; backend/media.RangeReader re-resolves the
+// document when a read is rejected and keeps the fresh reference for the rest
+// of the session, so callers can treat this as an opaque descriptor.
 type DocumentRef struct {
 	Peer          InputPeer
 	MsgID         int64
@@ -22,6 +23,18 @@ type DocumentRef struct {
 	DocumentID    int64
 	AccessHash    int64
 	FileReference []byte
+	// DCID is the data center holding the document's bytes. Range reads go
+	// straight there over a pooled connection; zero means unknown, which falls
+	// back to the primary connection and Telegram's FILE_MIGRATE redirect.
+	DCID int
+}
+
+// DocumentBatchResolver resolves several messages of one channel in a single
+// Telegram call. A multipart file has one segment per part, and opening it
+// should not cost a round trip per part. Refs come back in msgIDs order; a
+// missing or non-document message fails the whole batch.
+type DocumentBatchResolver interface {
+	ResolveDocuments(ctx context.Context, peer InputPeer, msgIDs []int64) ([]DocumentRef, error)
 }
 
 // RangeClient is the low-level byte-range surface used by media playback. It

@@ -133,18 +133,14 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 	if err != nil {
 		return OpenResult{}, fmt.Errorf("media: resolve peer: %w", err)
 	}
+	refs, err := s.resolveSegments(ctx, peer, file.Segments)
+	if err != nil {
+		return OpenResult{}, err
+	}
 	segments := make([]resolvedSegment, 0, len(file.Segments))
 	var start int64
-	for _, seg := range file.Segments {
-		var ref tgclient.DocumentRef
-		err := s.resolveRetry.Do(ctx, func() error {
-			var resolveErr error
-			ref, resolveErr = s.ranges.ResolveDocument(ctx, peer, seg.MsgID)
-			return resolveErr
-		})
-		if err != nil {
-			return OpenResult{}, fmt.Errorf("media: resolve segment %d: %w", seg.MsgID, err)
-		}
+	for i, seg := range file.Segments {
+		ref := refs[i]
 		if seg.Size > 0 && ref.Size != seg.Size {
 			return OpenResult{}, fmt.Errorf("media: segment %d size mismatch: projection=%d telegram=%d", seg.MsgID, seg.Size, ref.Size)
 		}
@@ -219,6 +215,45 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		SupportsRange: true,
 		Info:          file,
 	}, nil
+}
+
+// resolveSegments maps projected segments to Telegram document refs. A client
+// that can batch answers for every part in one round trip; otherwise each part
+// is resolved in turn. Both honor FLOOD_WAIT through the open retry policy.
+func (s *Service) resolveSegments(ctx context.Context, peer tgclient.InputPeer, segments []Segment) ([]tgclient.DocumentRef, error) {
+	ids := make([]int64, len(segments))
+	for i, seg := range segments {
+		ids[i] = seg.MsgID
+	}
+	if batch, ok := s.ranges.(tgclient.DocumentBatchResolver); ok {
+		var refs []tgclient.DocumentRef
+		err := s.resolveRetry.Do(ctx, func() error {
+			var resolveErr error
+			refs, resolveErr = batch.ResolveDocuments(ctx, peer, ids)
+			return resolveErr
+		})
+		if err != nil {
+			return nil, fmt.Errorf("media: resolve segments: %w", err)
+		}
+		if len(refs) != len(ids) {
+			return nil, fmt.Errorf("media: resolved %d segments, want %d", len(refs), len(ids))
+		}
+		return refs, nil
+	}
+	refs := make([]tgclient.DocumentRef, 0, len(ids))
+	for _, id := range ids {
+		var ref tgclient.DocumentRef
+		err := s.resolveRetry.Do(ctx, func() error {
+			var resolveErr error
+			ref, resolveErr = s.ranges.ResolveDocument(ctx, peer, id)
+			return resolveErr
+		})
+		if err != nil {
+			return nil, fmt.Errorf("media: resolve segment %d: %w", id, err)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
 }
 
 // OpenResultForToken safely snapshots an active loopback session without

@@ -436,7 +436,7 @@ describe("native video track pickers", () => {
         await videoModule.closeVideoModal();
     });
 
-    it("opens complete native track choices from their pills without changing tracks", async () => {
+    it("cycles tracks from their pills without opening the settings panel", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(23, MKV_SESSION_ID));
         const videoModule = await import("./video");
         deactivateVideo = videoModule.activateVideoModal();
@@ -452,41 +452,40 @@ describe("native video track pickers", () => {
         const subtitleMenu = document.querySelector<HTMLElement>("#video-subtitle-menu")!;
         const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
         apiMocks.nativeMediaCommand.mockClear();
+        expect(audio.title).toBe("Audio: Main / ENG / AAC. Click to cycle");
+        expect(subtitle.title).toBe("Subtitles: Off. Click to cycle");
 
         audio.click();
-        await nextTasks();
-        const selectedAudio = audioMenu.querySelector<HTMLButtonElement>('[data-track="7"]')!;
-        expect(panel.hidden).toBe(false);
-        expect(audioMenu.classList.contains("is-open")).toBe(true);
-        expect(subtitleMenu.classList.contains("is-open")).toBe(false);
-        expect(document.activeElement).toBe(selectedAudio);
-        expect(audio.title).toBe("Choose audio: Main / ENG / AAC");
-        expect(audio.getAttribute("aria-label")).toBe(audio.title);
-        expect(audio.title).not.toContain("Click to cycle");
-        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
-
-        document.body.click();
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "aid", "42"]));
         expect(panel.hidden).toBe(true);
         expect(audioMenu.classList.contains("is-open")).toBe(false);
-        expect(document.activeElement?.id).toBe("video-picture-button");
+        expect(audio.title).toBe("Audio: Commentary / ENG / OPUS. Click to cycle");
+        expect(audio.getAttribute("aria-label")).toBe(audio.title);
+        audio.click();
+        await vi.waitFor(() => expect(commandCount(["set", "aid", "7"])).toBe(1));
 
         subtitle.click();
-        await nextTasks();
-        const off = subtitleMenu.querySelector<HTMLButtonElement>('[data-track="no"]')!;
-        expect(panel.hidden).toBe(false);
-        expect(subtitleMenu.classList.contains("is-open")).toBe(true);
-        expect(document.activeElement).toBe(off);
-        expect(subtitle.title).toBe("Choose subtitles: Off");
-        expect(subtitle.getAttribute("aria-label")).toBe(subtitle.title);
-        expect(subtitle.title).not.toContain("Click to cycle");
-        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
-
-        off.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await vi.waitFor(() => expect(commandCount(["set", "sid", "19"])).toBe(1));
+        expect(subtitle.dataset.state).toBe("on");
+        subtitle.click();
+        await vi.waitFor(() => expect(commandCount(["set", "sid", "83"])).toBe(1));
+        expect(document.querySelector("#video-subtitle-label")?.textContent).toBe("FRA");
+        subtitle.click();
+        await vi.waitFor(() => expect(commandCount(["set", "sid", "no"])).toBe(1));
+        expect(document.querySelector("#video-subtitle-label")?.textContent).toBe("Off");
         expect(panel.hidden).toBe(true);
-        expect(document.activeElement?.id).toBe("video-picture-button");
+        expect(subtitleMenu.classList.contains("is-open")).toBe(false);
+        expect(apiMocks.nativeMediaCommand).toHaveBeenCalledTimes(5);
+
+        openSettings("subtitle");
+        expect(subtitleMenu.classList.contains("is-open")).toBe(true);
+        expect(menuLabels(subtitleMenu)).toEqual(["Off", "English SDH / ENG / ASS", "French / FRA / ASS"]);
+        expect(subtitleMenu.querySelector('[data-track="no"]')?.getAttribute("aria-checked")).toBe("true");
+        document.body.click();
+        expect(panel.hidden).toBe(true);
 
         document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
-        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "19"]));
+        await vi.waitFor(() => expect(commandCount(["set", "sid", "19"])).toBe(2));
         await videoModule.closeVideoModal();
     });
 

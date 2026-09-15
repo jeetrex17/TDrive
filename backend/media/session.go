@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tdcrypto "TDrive/backend/crypto"
@@ -35,15 +37,28 @@ type Session struct {
 	thumbDecryptor *tdcrypto.RandomAccessDecryptor
 	thumbs         *videoThumbnailer
 
+	// ctx bounds work the session starts on its own behalf, such as warming
+	// the container index; Close cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	mu        sync.Mutex
 	lastTouch time.Time
 	closed    bool
+	served    atomic.Int64 // plaintext bytes handed to players
 }
 
 type MediaStats struct {
 	Playback   ThroughputStats `json:"playback"`
 	Thumbnails ThroughputStats `json:"thumbnails"`
 }
+
+// playbackReadAhead is how many 1 MiB blocks stay in flight beyond the block
+// the player is reading. Throughput is blocks in flight divided by Telegram's
+// per-request latency, so this and the connection pool are what set the
+// ceiling: eight blocks cover a second of a high-bitrate remux on a slow link
+// while staying well inside the block cache.
+const playbackReadAhead = 8
 
 type SessionOptions struct {
 	Context               context.Context
@@ -80,15 +95,23 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		return nil, err
 	}
 	copied := append([]resolvedSegment(nil), segments...)
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		token:     token,
 		file:      file,
 		segments:  copied,
+		ctx:       ctx,
+		cancel:    cancel,
 		lastTouch: time.Now(),
 	}
+	// Playback and the thumbnail extractor share one block cache: the
+	// extractor reads the same head and index blocks playback already holds,
+	// and the blocks it pulls for a preview are where the viewer may seek next.
+	blocks := newBlockCache(defaultRangeCacheBytes)
 	s.reader = NewRangeReader(RangeReaderConfig{
-		Client:         ranges,
-		PrefetchBlocks: 2,
+		Client:    ranges,
+		Cache:     blocks,
+		ReadAhead: playbackReadAhead,
 	})
 	s.warmContainerIndex()
 	if opts.EnableVideoThumbnails {
@@ -100,10 +123,9 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 			thumbnailCache = nil
 		}
 		s.thumbReader = NewRangeReader(RangeReaderConfig{
-			Client:         ranges,
-			MaxCacheBytes:  8 * 1024 * 1024,
-			MaxConcurrency: 3,
-			Background:     true,
+			Client:     ranges,
+			Cache:      blocks,
+			Background: true,
 			OnFloodWait: func(wait time.Duration) {
 				if s.thumbs != nil {
 					s.thumbs.NoteFloodWait(wait)
@@ -149,6 +171,7 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 			s.thumbDecryptor = thumbDecryptor
 		}
 	}
+	go s.warmIndex()
 	return s, nil
 }
 
@@ -258,6 +281,10 @@ func (s *Session) Close() {
 	}
 	s.closed = true
 	s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.logSummary()
 	if s.decryptor != nil {
 		_ = s.decryptor.Close()
 	}
@@ -348,9 +375,36 @@ func (s *Session) readPlainAt(ctx context.Context, reader *RangeReader, decrypto
 		if n > 0 || err == nil {
 			s.touch()
 		}
+		if reader == s.reader {
+			s.served.Add(int64(n))
+		}
 		return n, err
 	}
-	return s.readStoredAt(ctx, reader, p, off, s.Size())
+	n, err := s.readStoredAt(ctx, reader, p, off, s.Size())
+	if reader == s.reader {
+		s.served.Add(int64(n))
+	}
+	return n, err
+}
+
+// logSummary records what playback cost, so a slow stream can be attributed
+// from the log: bytes served against blocks fetched says how well the cache
+// and read-ahead did, cancellations count seeks that outran the window, and
+// the block percentiles are Telegram's own latency on this link.
+func (s *Session) logSummary() {
+	if s.reader == nil {
+		return
+	}
+	stats := s.reader.Stats()
+	slog.Info("media: session closed",
+		"name", s.file.Name,
+		"served_mib", s.served.Load()>>20,
+		"fetched_blocks", stats.Fetched,
+		"cancelled_blocks", stats.Cancelled,
+		"cache_hits", stats.CacheHits,
+		"peak_in_flight", stats.PeakInFlight,
+		"block_p50", stats.BlockP50.Round(time.Millisecond),
+		"block_p95", stats.BlockP95.Round(time.Millisecond))
 }
 
 func (s *Session) validateRead(reader *RangeReader, off int64) error {
