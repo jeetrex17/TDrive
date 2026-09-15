@@ -2,6 +2,7 @@ package tgclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -109,8 +110,13 @@ func (g *Gotd) dialFilePool(ctx context.Context, client *telegram.Client, dcID i
 	g.mediaMu.Lock()
 	defer g.mediaMu.Unlock()
 	if err != nil {
-		g.poolRetryAt[dcID] = time.Now().Add(poolRetryAfter)
-		slog.Warn("tgclient: file pool unavailable, reading over the primary connection", "dc", dcID, "error", err)
+		// Cancellation, whether the caller's or a run scope that already
+		// ended, says nothing about the data center; only a refused dial
+		// earns the backoff.
+		if !errors.Is(err, context.Canceled) {
+			g.poolRetryAt[dcID] = time.Now().Add(poolRetryAfter)
+			slog.Warn("tgclient: file pool unavailable, reading over the primary connection", "dc", dcID, "error", err)
+		}
 		return nil, fmt.Errorf("tgclient: file pool dc %d: %w", dcID, err)
 	}
 	if existing, ok := g.pools[dcID]; ok {

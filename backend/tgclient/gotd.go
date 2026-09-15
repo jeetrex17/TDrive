@@ -491,7 +491,7 @@ func (g *Gotd) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error {
 	slog.Debug("tgclient: DownloadFile starting", "channel_id", peer.ChannelID, "msg_id", msgID)
 	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
-		doc, _, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
+		doc, name, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
 		if err != nil {
 			return err
 		}
@@ -509,13 +509,7 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 		}
 		defer release()
 
-		return g.downloadVia(ctx, client, doc, func(api *tg.Client) error {
-			d := downloader.NewDownloader()
-			if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, dst); err != nil {
-				return fmt.Errorf("tgclient: download: %w", err)
-			}
-			return nil
-		})
+		return g.newDownload(documentRefFromTG(peer, msgID, doc, name)).stream(ctx, dst)
 	})
 	if err != nil {
 		slog.Error("tgclient: DownloadFile failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
@@ -527,8 +521,9 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 
 func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, w io.WriterAt, baseOffset int64, onProgress func(done, total int64)) error {
 	slog.Debug("tgclient: DownloadFileAt starting", "channel_id", peer.ChannelID, "msg_id", msgID, "base_offset", baseOffset)
+	var retried int64
 	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
-		doc, _, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
+		doc, name, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
 		if err != nil {
 			return err
 		}
@@ -548,13 +543,9 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 				onProgress: onProgress,
 			}
 		}
-		err = g.downloadVia(ctx, client, doc, func(api *tg.Client) error {
-			d := downloader.NewDownloader()
-			if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).WithThreads(threads).Parallel(ctx, dst); err != nil {
-				return fmt.Errorf("tgclient: download: %w", err)
-			}
-			return nil
-		})
+		download := g.newDownload(documentRefFromTG(peer, msgID, doc, name))
+		err = download.parallel(ctx, dst, threads)
+		retried = download.retries.Load()
 		if err != nil {
 			return err
 		}
@@ -564,9 +555,9 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 		return nil
 	})
 	if err != nil {
-		slog.Error("tgclient: DownloadFileAt failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
+		slog.Error("tgclient: DownloadFileAt failed", "channel_id", peer.ChannelID, "msg_id", msgID, "block_retries", retried, "error", err)
 	} else {
-		slog.Debug("tgclient: DownloadFileAt completed", "channel_id", peer.ChannelID, "msg_id", msgID)
+		slog.Debug("tgclient: DownloadFileAt completed", "channel_id", peer.ChannelID, "msg_id", msgID, "block_retries", retried)
 	}
 	return err
 }
