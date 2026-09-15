@@ -28,6 +28,7 @@ import {
     SelectFiles as rawSelectFiles,
     SelectFolder as rawSelectFolder,
     SetFileDropEnabled as rawSetFileDropEnabled,
+    ShareFile as rawShareFile,
     UploadToDriveFS as rawUploadToDriveFs,
     UseEncryptionPassword as rawUseEncryptionPassword,
 } from "../../bindings/TDrive/app";
@@ -203,6 +204,12 @@ export async function downloadFile(messageId: number, accessHash: number): Promi
 
 export async function downloadFolder(folderId: string): Promise<DownloadResult> {
     return normalizeDownloadResult(await invokeBackend(rawDownloadFolder, folderId));
+}
+
+// Opens the OS share sheet for a file TDrive already wrote into its sandbox.
+// Mobile only in practice; desktop downloads land wherever the user chose.
+export async function shareFile(path: string): Promise<OperationResult> {
+    return normalizeOperationResult(await invokeBackend(rawShareFile, path), "Could not open the share sheet");
 }
 
 export async function planImport(paths: string[], encrypt: boolean, extract: boolean): Promise<ImportPlan> {

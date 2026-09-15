@@ -2,7 +2,9 @@
     import { onMount } from 'svelte';
     import { formatAppErrorDiagnostic, toAppError } from '../../modules/errors';
     import { authScreenActions } from '../../modules/auth';
+    import { isMobilePlatform } from '../../api';
     import AppShell from '../AppShell.svelte';
+    import MobileShell from '../mobile/MobileShell.svelte';
     import AuthScreens from '../auth/AuthScreens.svelte';
     import Button from '../Button.svelte';
     import ErrorBoundary from '../errors/ErrorBoundary.svelte';
@@ -14,6 +16,19 @@
     }
 
     let { lifecycle }: Props = $props();
+
+    // Choose the shell the first time the view leaves startup and never flip
+    // after: on iOS the platform is only known once the gateway hydrates, which
+    // lands before the auth or dashboard view shows, so this reads true by then.
+    // The cache latch is a plain memo, so desktop resolves synchronously with no
+    // flash and mobile stays mobile for the session.
+    let frozenShell: 'mobile' | 'desktop' | null = null;
+    const shell = $derived.by((): 'mobile' | 'desktop' | null => {
+        if (frozenShell) return frozenShell;
+        if ($appView.kind === 'startup') return null;
+        frozenShell = isMobilePlatform() ? 'mobile' : 'desktop';
+        return frozenShell;
+    });
 
     onMount(() => {
         let mounted = true;
@@ -63,7 +78,11 @@
                 <AuthScreens {...authScreenActions} />
             </div>
 
-            <AppShell dashboardVisible={$appView.kind === 'dashboard'} />
+            {#if shell === 'mobile'}
+                <MobileShell dashboardVisible={$appView.kind === 'dashboard'} />
+            {:else}
+                <AppShell dashboardVisible={$appView.kind === 'dashboard'} />
+            {/if}
 
             {#if $appView.kind === 'loading'}
                 <div class="app-state-screen app-state-overlay">

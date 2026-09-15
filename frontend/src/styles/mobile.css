@@ -1,0 +1,669 @@
+/*
+ * TDrive phone shell.
+ *
+ * Everything here is scoped to html.mobile, which main.ts stamps on iOS and
+ * Android (and on the ?mobile= browser/harness preview). Desktop never matches
+ * these rules, so the desktop UI stays byte-identical. Tokens only, opaque bars
+ * with a single hairline, no backdrop blur on scrolling chrome, and safe-area
+ * insets on the shell edges (spec 2.3, 2.11). Imported last in style.css.
+ */
+
+/* The shell root and the tab panels set display:flex, which would otherwise
+   beat the `hidden` attribute they toggle with; the [hidden] variants are more
+   specific than those rules, so the panels collapse without a broad !important. */
+html.mobile #success-screen.mobile-shell[hidden],
+html.mobile .mobile-panel[hidden] { display: none; }
+
+/* ============================ SHELL ============================ */
+html.mobile #success-screen.mobile-shell {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--color-canvas);
+    overflow: hidden;
+}
+
+html.mobile .mobile-body {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+html.mobile .mobile-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* The desktop .main-content keeps its flex column; only reset its desktop
+   chrome that has no place on a phone. */
+html.mobile .main-content { min-height: 0; padding: 0; }
+
+html.mobile .mobile-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: var(--space-4) var(--space-4) calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+}
+
+/* ============================ TOP BAR ============================ */
+html.mobile .mobile-topbar {
+    flex: 0 0 auto;
+    background: var(--color-surface-0);
+    border-bottom: 1px solid var(--color-border-soft);
+    padding-top: env(safe-area-inset-top, 0px);
+}
+
+html.mobile .topbar-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 44px;
+    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+}
+
+html.mobile .topbar-plain .topbar-row { min-height: 52px; }
+
+html.mobile .topbar-title {
+    font-size: 1.375rem;
+    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+}
+
+html.mobile .topbar-plain-titles { display: flex; flex-direction: column; gap: 1px; }
+html.mobile .topbar-subtitle { font-size: 0.8125rem; color: var(--color-text-muted); }
+
+/* Drive header: the one bold element (spec 2.2). Name, live sync ring, then the
+   kind and item count on a quiet second line. The whole block opens the switcher. */
+html.mobile .drive-header {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 4px 0;
+    background: transparent;
+    border: 0;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+}
+html.mobile .drive-header-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+html.mobile .drive-header-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 1.375rem;
+    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+}
+html.mobile .drive-header-meta { font-size: 0.8125rem; color: var(--color-text-muted); }
+html.mobile .drive-header:active { opacity: 0.7; }
+
+html.mobile .topbar-folder-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 1.25rem;
+    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    letter-spacing: -0.01em;
+}
+
+html.mobile .topbar-back {
+    flex: 0 0 auto;
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin-left: -10px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .topbar-back:active { background: var(--overlay-neutral-2); }
+
+html.mobile .topbar-actions { flex: 0 0 auto; display: flex; align-items: center; }
+html.mobile .topbar-menu-wrap { position: relative; }
+html.mobile .topbar-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-soft);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .topbar-icon-btn:active,
+html.mobile .topbar-icon-btn[aria-expanded='true'] { background: var(--overlay-neutral-2); color: var(--color-text); }
+
+/* Overflow menu (sort). Popover material, not a scrolling surface, so a shadow
+   is fine here. */
+html.mobile .topbar-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 4px;
+    z-index: var(--z-popover);
+    min-width: 180px;
+    padding: var(--space-1);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+}
+html.mobile .topbar-menu-label {
+    padding: 8px 12px 4px;
+    font-size: 0.75rem;
+    font-weight: var(--weight-semibold);
+    color: var(--color-text-muted);
+}
+html.mobile .topbar-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-soft);
+    font-size: 0.9375rem;
+    text-align: left;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+html.mobile .topbar-menu-item[aria-checked='true'] { color: var(--color-accent); }
+html.mobile .topbar-menu-item:active { background: var(--overlay-neutral-2); }
+
+/* Search field. 16px minimum so iOS does not zoom on focus (spec 2.3). */
+html.mobile .topbar-search {
+    position: relative;
+    padding: 0 var(--space-4) var(--space-3);
+}
+html.mobile .topbar-search-icon {
+    position: absolute;
+    left: calc(var(--space-4) + 12px);
+    top: 50%;
+    transform: translateY(calc(-50% - 6px));
+    color: var(--color-text-muted);
+    pointer-events: none;
+}
+html.mobile .topbar-search input {
+    width: 100%;
+    height: 40px;
+    margin: 0;
+    padding: 0 14px 0 40px;
+    font-size: 1rem;
+    color: var(--color-text);
+    background: var(--color-surface-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+}
+html.mobile .topbar-search input::placeholder { color: var(--color-text-muted); }
+html.mobile .topbar-search input:focus-visible {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: var(--focus-ring);
+}
+
+/* ============================ TAB BAR ============================ */
+html.mobile .mobile-tabbar-slot { flex: 0 0 auto; }
+html.mobile .tab-bar {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    height: calc(49px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--color-surface-0);
+    border-top: 1px solid var(--color-border-soft);
+}
+html.mobile .tab-item {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    padding: 6px 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .tab-item.active { color: var(--color-accent); }
+html.mobile .tab-icon { position: relative; display: inline-grid; place-items: center; }
+html.mobile .tab-label { font-size: 0.6875rem; font-weight: var(--weight-semibold); letter-spacing: 0.01em; }
+
+/* The active indicator slides between the four items (motion-17). */
+html.mobile .tab-indicator {
+    position: absolute;
+    top: 6px;
+    left: 0;
+    width: 25%;
+    height: 32px;
+    pointer-events: none;
+    transition: transform var(--motion-med) var(--ease-standard);
+}
+html.mobile .tab-indicator::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto;
+    left: 50%;
+    top: 0;
+    width: 48px;
+    height: 32px;
+    transform: translateX(-50%);
+    background: var(--overlay-accent-1);
+    border-radius: var(--radius-pill);
+}
+
+html.mobile .tab-badge {
+    position: absolute;
+    top: -4px;
+    left: 14px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    display: inline-grid;
+    place-items: center;
+    font-size: 0.625rem;
+    font-weight: var(--weight-strong);
+    line-height: 1;
+    color: var(--color-on-accent);
+    background: var(--color-accent);
+    border-radius: var(--radius-pill);
+}
+
+/* ============================ FAB ============================ */
+/* The upload menu portals into #upload-menu-root; the shell positions that host
+   as the FAB and restyles the menu's own trigger into the accent pill. */
+html.mobile .mobile-fab {
+    position: absolute;
+    right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    z-index: var(--z-selection);
+    transition: transform var(--motion-med) var(--ease-standard), opacity var(--motion-med) var(--ease-standard);
+}
+html.mobile .mobile-fab.is-hidden {
+    transform: translateY(140%);
+    opacity: 0;
+    pointer-events: none;
+}
+html.mobile .mobile-fab .upload-btn,
+html.mobile .mobile-fab .primary-btn.upload-btn {
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    gap: 0;
+    display: inline-grid;
+    place-items: center;
+    font-size: 0;
+    border-radius: var(--radius-pill);
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+    box-shadow: var(--shadow-md);
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+html.mobile .mobile-fab .upload-btn:active { transform: scale(0.97); }
+html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
+
+/* The FAB menu opens upward as a small sheet anchored to the FAB. */
+html.mobile .mobile-fab .upload-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(56px + 10px);
+    left: auto;
+    min-width: 220px;
+    flex-direction: column;
+    padding: var(--space-1);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+}
+html.mobile .mobile-fab .upload-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 14px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-soft);
+    font-size: 0.9375rem;
+    text-align: left;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+html.mobile .mobile-fab .upload-menu-item:active { background: var(--overlay-neutral-2); color: var(--color-text); }
+
+/* ============================ SELECTION BAR ============================ */
+/* The controller flips display:flex/none inline; the shell only positions it as
+   a bottom bar that replaces the tab bar. */
+html.mobile .mobile-selection-bar {
+    position: absolute;
+    inset: auto 0 0 0;
+    z-index: var(--z-selection);
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    background: var(--color-surface-0);
+    border-top: 1px solid var(--color-border-soft);
+}
+
+/* ============================ TRANSFERS TAB ============================ */
+html.mobile .transfers-tab { padding-top: var(--space-2); }
+html.mobile .transfers-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: var(--space-4) var(--space-1) var(--space-2);
+}
+html.mobile .transfers-section-head:first-child { padding-top: var(--space-1); }
+html.mobile .transfers-clear {
+    border: 0;
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 0.8125rem;
+    font-weight: var(--weight-semibold);
+    padding: 6px 8px;
+    cursor: pointer;
+}
+html.mobile .transfers-group {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface-1);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+html.mobile .transfers-group .notif-row { padding: 12px 14px; }
+html.mobile .transfers-group .notif-row + .notif-row { border-top: 1px solid var(--color-border-soft); }
+
+/* Share action on a finished download row. */
+html.mobile .notif-row-share {
+    flex: 0 0 auto;
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    margin-left: 4px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: var(--overlay-accent-1);
+    color: var(--color-accent);
+    cursor: pointer;
+}
+html.mobile .notif-row-share:active { background: var(--overlay-accent-2); }
+
+/* ============================ ACCOUNT TAB ============================ */
+html.mobile .account-identity {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-2) var(--space-5);
+}
+html.mobile .account-identity-meta { min-width: 0; }
+html.mobile .account-name {
+    font-size: 1.25rem;
+    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    line-height: 1.2;
+}
+html.mobile .account-handle { font-size: 0.875rem; color: var(--color-text-muted); }
+
+html.mobile .account-group { margin-bottom: var(--space-6); }
+html.mobile .mobile-section-label {
+    padding: 0 var(--space-2) var(--space-2);
+    font-size: 0.8125rem;
+    font-weight: var(--weight-semibold);
+    color: var(--color-text-muted);
+}
+html.mobile .account-card {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface-1);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+html.mobile .account-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 52px;
+    padding: 0 14px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    font-size: 0.9375rem;
+    text-align: left;
+    cursor: pointer;
+}
+html.mobile .account-row + .account-row { border-top: 1px solid var(--color-border-soft); }
+html.mobile .account-row:active { background: var(--overlay-neutral-2); }
+html.mobile .account-row .account-row-icon { flex: 0 0 auto; color: var(--color-text-muted); }
+html.mobile .account-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.mobile .account-row-value { flex: 0 0 auto; color: var(--color-text-muted); font-size: 0.8125rem; }
+html.mobile .account-row .account-row-chevron { flex: 0 0 auto; color: var(--color-text-subtle); }
+
+html.mobile .account-about { padding: 16px; gap: 4px; }
+html.mobile .account-about-name { font-size: 1rem; font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .account-about-tagline { font-size: 0.875rem; color: var(--color-text-muted); }
+
+html.mobile .account-logout {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 52px;
+    border: 0;
+    background: var(--color-surface-1);
+    color: var(--color-danger);
+    font-size: 0.9375rem;
+    font-weight: var(--weight-semibold);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+}
+html.mobile .account-logout:active { background: var(--overlay-danger-1); }
+
+/* The embedded appearance panel drops its desktop popover frame, and its title
+   is toned down to read as a peer of the Drives and Vault section labels. */
+html.mobile .account-tab .appearance-panel {
+    width: auto;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+html.mobile .account-tab .appearance-header {
+    padding: 0 var(--space-2) var(--space-2);
+    border: 0;
+}
+html.mobile .account-tab #appearance-title {
+    font-size: 0.8125rem;
+    font-weight: var(--weight-semibold);
+    color: var(--color-text-muted);
+    letter-spacing: 0;
+}
+
+/* ============================ DRIVE SWITCHER SHEET ============================ */
+html.mobile .sheet-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    background: var(--scrim);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--motion-med) var(--ease-standard);
+}
+html.mobile .sheet-scrim.open { opacity: 1; pointer-events: auto; }
+
+html.mobile .mobile-sheet {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: var(--z-modal);
+    display: flex;
+    flex-direction: column;
+    max-height: 88dvh;
+    margin: 0 auto;
+    max-width: 640px;
+    padding: 0 var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+    background: var(--color-surface-1);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    transform: translateY(100%);
+    transition: transform var(--motion-slow) var(--ease-enter);
+}
+html.mobile .mobile-sheet.open { transform: translateY(0); }
+
+html.mobile .switcher-grip {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    padding: 8px 0 6px;
+}
+html.mobile .switcher-grip span {
+    width: 36px;
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-border);
+}
+html.mobile .switcher-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0 12px;
+}
+html.mobile .switcher-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .switcher-close {
+    display: inline-grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: var(--overlay-neutral-2);
+    color: var(--color-text-soft);
+    cursor: pointer;
+}
+html.mobile .switcher-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    outline: none;
+}
+html.mobile .switcher-group { display: flex; flex-direction: column; gap: 2px; }
+html.mobile .switcher-group:empty { display: none; }
+/* Touch-size the portaled drive rows without touching the desktop chrome. */
+html.mobile .switcher-list .drive-item {
+    min-height: 52px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    font-size: 1rem;
+    color: var(--color-text);
+}
+html.mobile .switcher-list .drive-item.active { background: var(--overlay-accent-1); color: var(--color-accent); }
+html.mobile .switcher-list .drive-actions-trigger { width: 44px; height: 44px; }
+
+html.mobile .switcher-actions {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: var(--space-3);
+    margin-top: var(--space-2);
+    border-top: 1px solid var(--color-border-soft);
+}
+html.mobile .switcher-action {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 52px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    font-size: 0.9375rem;
+    text-align: left;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .switcher-action svg { color: var(--color-text-muted); }
+html.mobile .switcher-action:active { background: var(--overlay-neutral-2); }
+
+/* ============================ SHARED PIECES ============================ */
+html.mobile .mobile-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 6px;
+    padding: 22dvh var(--space-6) 0;
+}
+html.mobile .mobile-empty-glyph { color: var(--color-border); margin-bottom: 4px; }
+html.mobile .mobile-empty-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .mobile-empty-body { font-size: 0.875rem; color: var(--color-text-muted); max-width: 36ch; }
+
+/* Hosts kept in the DOM for the controllers but never shown on a phone. */
+html.mobile .mobile-hidden-hosts { display: none; }
+
+/* Toasts sit above the tab bar, centered, out of the thumb's way. */
+html.mobile #toast-stack.toast-stack {
+    left: 50%;
+    right: auto;
+    bottom: calc(49px + env(safe-area-inset-bottom, 0px) + 12px);
+    transform: translateX(-50%);
+    width: min(92vw, 420px);
+    align-items: stretch;
+}
+
+/* Focus rings stay visible for keyboard users on tablets and hardware keyboards
+   (accessibility-1). */
+html.mobile .tab-item:focus-visible,
+html.mobile .drive-header:focus-visible,
+html.mobile .topbar-back:focus-visible,
+html.mobile .topbar-icon-btn:focus-visible,
+html.mobile .account-row:focus-visible,
+html.mobile .account-logout:focus-visible,
+html.mobile .switcher-action:focus-visible,
+html.mobile .switcher-close:focus-visible,
+html.mobile .transfers-clear:focus-visible,
+html.mobile .topbar-menu-item:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+    border-radius: var(--radius-md);
+}
+
+/* ============================ REDUCED MOTION ============================ */
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .tab-indicator,
+    html.mobile .mobile-sheet,
+    html.mobile .sheet-scrim,
+    html.mobile .mobile-fab { transition: none; }
+}

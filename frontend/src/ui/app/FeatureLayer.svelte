@@ -58,7 +58,7 @@
         cancelEncryptionSetup,
         submitEncryptionSetup,
     } from '../../modules/modals/encryption-setup';
-    import { submitFolder } from '../../modules/modals/folder';
+    import { openNewFolderModal, submitFolder } from '../../modules/modals/folder';
     import {
         cancelImportOptions,
         confirmImportOptions,
@@ -118,6 +118,9 @@
     // Android has no directory picker for folder uploads.
     const updaterAvailable = !isMobilePlatform();
     const chooseFolder = isAndroidPlatform() ? undefined : chooseFolderForCurrentFolder;
+    // The phone's FAB menu adds New folder; desktop creates folders from the
+    // context menu, so it stays out of the upload button there.
+    const newFolder = isMobilePlatform() ? openNewFolderModal : undefined;
 
     $effect(() => activateNotificationEffects());
 
@@ -187,7 +190,7 @@
         <NotifBell onCancelDirection={cancelTransfersInDirection} onClearHistory={clearHistory} />
     </FeaturePortal>
     <FeaturePortal hostId="upload-menu-root">
-        <UploadMenu onFiles={chooseFilesForCurrentFolder} onFolder={chooseFolder} />
+        <UploadMenu onFiles={chooseFilesForCurrentFolder} onFolder={chooseFolder} onNewFolder={newFolder} />
     </FeaturePortal>
     <FeaturePortal hostId="profile-root">
         <ProfileMenu
@@ -218,7 +221,11 @@
         <ContextMenu />
     </div>
     <DropOverlay />
-    <UpdatesPanel />
+    <!-- The in-app updater is off on phones (store updates), and this top-level
+         panel is an always-in-flow node that would bleed onto the phone shell. -->
+    {#if updaterAvailable}
+        <UpdatesPanel />
+    {/if}
     <div id="mount-selection-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <MountSelectionModal />
     </div>
