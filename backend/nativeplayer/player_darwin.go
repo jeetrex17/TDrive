@@ -169,6 +169,9 @@ static void tdrive_mpv_render_update(void *ctx) {
 	mpv_set_option_string(_mpv, "demuxer-readahead-secs", "20");
 	mpv_set_option_string(_mpv, "demuxer-max-bytes", "67108864");
 	mpv_set_option_string(_mpv, "demuxer-max-back-bytes", "33554432");
+	// After an underrun, wait for three seconds of buffer before resuming
+	// instead of one, so playback does not flap on links just under the bitrate.
+	mpv_set_option_string(_mpv, "cache-pause-wait", "3");
 	mpv_set_option_string(_mpv, "idle", "yes");
 	mpv_set_option_string(_mpv, "keep-open", "yes");
 	mpv_set_option_string(_mpv, "keep-open-pause", "yes");
