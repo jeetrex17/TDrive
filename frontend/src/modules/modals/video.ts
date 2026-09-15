@@ -434,7 +434,8 @@ interface TrackPickerElements {
     menu: HTMLElement | null;
 }
 
-// TrackPicker opens its full choices in the settings dock.
+// TrackPicker's pill steps to the next track on each click; the full list
+// lives in the settings dock, where the picker renders it.
 class TrackPicker {
     private tracks: NativeMediaTrack[] = [];
     private renderedSignature = "";
@@ -447,7 +448,7 @@ class TrackPicker {
     ) {
         els.button?.addEventListener("click", (event) => {
             event.stopPropagation();
-            this.setOpen(true);
+            this.cycle();
             revealChrome();
         });
         els.menu?.addEventListener("click", (event) => {
@@ -509,26 +510,26 @@ class TrackPicker {
         requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
     }
 
-    setOpen(open: boolean) {
-        if (open) {
-            closeMenus(this);
-            showSettingsPanel(this.section);
-            this.setMenuOpen(true);
-            return;
-        }
+    close(restoreFocus = false) {
+        if (!this.isOpen()) return;
         this.setMenuOpen(false);
         if (settingsSection === this.section) hideSettingsPanel();
         if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
-    }
-
-    close(restoreFocus = false) {
-        if (!this.isOpen()) return;
-        this.setOpen(false);
         if (restoreFocus) byID("video-picture-button")?.focus({ preventScroll: true });
     }
 
     contains(target: Node | null) {
         return Boolean(target && (this.els.menu?.contains(target) || this.els.button?.contains(target)));
+    }
+
+    // cycle steps to the next track in order; an optional track (subtitles)
+    // has "off" as one of the stops, a required one wraps to the first.
+    cycle() {
+        if (!this.visible || this.tracks.length === 0) return;
+        const current = this.currentTrack();
+        const next = this.tracks[(current ? this.tracks.indexOf(current) : -1) + 1];
+        const target = next?.id ?? (this.offLabel === null ? this.tracks[0].id : null);
+        if (target !== (current?.id ?? null)) this.select(target);
     }
 
     // toggle switches an optional track (subtitles) between off and its default.
@@ -586,8 +587,9 @@ class TrackPicker {
         const full = current ? nativeTrackLabel(current, index) : this.offLabel ?? "";
         if (this.els.label) this.els.label.textContent = short;
         if (this.els.button) {
+            const choices = this.tracks.length + (this.offLabel === null ? 0 : 1);
             this.els.button.dataset.state = current ? "on" : "off";
-            this.els.button.title = `Choose ${this.title.toLowerCase()}: ${full}`;
+            this.els.button.title = `${this.title}: ${full}${choices > 1 ? ". Click to cycle" : ""}`;
             this.els.button.setAttribute("aria-label", this.els.button.title);
         }
     }
