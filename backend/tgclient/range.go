@@ -22,6 +22,18 @@ type DocumentRef struct {
 	DocumentID    int64
 	AccessHash    int64
 	FileReference []byte
+	// DCID is the data center holding the document's bytes. Range reads go
+	// straight there over a pooled connection; zero means unknown, which falls
+	// back to the primary connection and Telegram's FILE_MIGRATE redirect.
+	DCID int
+}
+
+// DocumentBatchResolver resolves several messages of one channel in a single
+// Telegram call. A multipart file has one segment per part, and opening it
+// should not cost a round trip per part. Refs come back in msgIDs order; a
+// missing or non-document message fails the whole batch.
+type DocumentBatchResolver interface {
+	ResolveDocuments(ctx context.Context, peer InputPeer, msgIDs []int64) ([]DocumentRef, error)
 }
 
 // RangeClient is the low-level byte-range surface used by media playback. It

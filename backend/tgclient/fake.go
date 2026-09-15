@@ -569,6 +569,20 @@ func (f *Fake) ResolveDocument(ctx context.Context, peer InputPeer, msgID int64)
 	}, nil
 }
 
+// ResolveDocuments mirrors the production batch resolver: refs in msgIDs
+// order, failing on the first message that is not a document.
+func (f *Fake) ResolveDocuments(ctx context.Context, peer InputPeer, msgIDs []int64) ([]DocumentRef, error) {
+	refs := make([]DocumentRef, 0, len(msgIDs))
+	for _, msgID := range msgIDs {
+		ref, err := f.ResolveDocument(ctx, peer, msgID)
+		if err != nil {
+			return nil, fmt.Errorf("message %d: %w", msgID, err)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
 func (f *Fake) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset int64, dst []byte) (int, error) {
 	if len(dst) == 0 {
 		return 0, nil

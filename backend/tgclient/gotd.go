@@ -910,27 +910,41 @@ func extractMsgIDFromUpdates(updates []tg.UpdateClass, randomID int64) int64 {
 	return 0
 }
 
-func getDocumentByMessageID(ctx context.Context, api *tg.Client, peer InputPeer, msgID int64) (*tg.Document, string, error) {
-	messageResult, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+// channelsGetMessagesLimit is how many ids one channels.getMessages accepts.
+const channelsGetMessagesLimit = 100
+
+// channelMessages fetches msgIDs from one channel in a single call. Telegram
+// returns the messages it found in no particular order and substitutes an
+// empty placeholder for deleted ones, so the result is keyed by id.
+func channelMessages(ctx context.Context, api *tg.Client, peer InputPeer, msgIDs []int64) (map[int64]tg.MessageClass, error) {
+	ids := make([]tg.InputMessageClass, 0, len(msgIDs))
+	for _, id := range msgIDs {
+		ids = append(ids, &tg.InputMessageID{ID: int(id)})
+	}
+	result, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
 		Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
-		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: int(msgID)}},
+		ID:      ids,
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-
-	var targetMsg *tg.Message
-	switch m := messageResult.(type) {
-	case *tg.MessagesChannelMessages:
-		if len(m.Messages) > 0 {
-			targetMsg, _ = m.Messages[0].(*tg.Message)
+	found := make(map[int64]tg.MessageClass, len(msgIDs))
+	if messages, ok := result.(*tg.MessagesChannelMessages); ok {
+		for _, msg := range messages.Messages {
+			found[int64(msg.GetID())] = msg
 		}
 	}
-	if targetMsg == nil {
+	return found, nil
+}
+
+// documentOf extracts the document a channel message carries, plus its file
+// name. Deleted messages arrive as empty placeholders, which read as missing.
+func documentOf(msg tg.MessageClass) (*tg.Document, string, error) {
+	full, ok := msg.(*tg.Message)
+	if !ok {
 		return nil, "", ErrMessageNotFound
 	}
-
-	docMedia, ok := targetMsg.Media.(*tg.MessageMediaDocument)
+	docMedia, ok := full.Media.(*tg.MessageMediaDocument)
 	if !ok {
 		return nil, "", ErrNotFile
 	}
@@ -938,7 +952,6 @@ func getDocumentByMessageID(ctx context.Context, api *tg.Client, peer InputPeer,
 	if !ok {
 		return nil, "", ErrEmptyDocument
 	}
-
 	name := "tdrive_download"
 	for _, attr := range doc.Attributes {
 		if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
@@ -947,6 +960,18 @@ func getDocumentByMessageID(ctx context.Context, api *tg.Client, peer InputPeer,
 		}
 	}
 	return doc, name, nil
+}
+
+func getDocumentByMessageID(ctx context.Context, api *tg.Client, peer InputPeer, msgID int64) (*tg.Document, string, error) {
+	messages, err := channelMessages(ctx, api, peer, []int64{msgID})
+	if err != nil {
+		return nil, "", err
+	}
+	msg, ok := messages[msgID]
+	if !ok {
+		return nil, "", ErrMessageNotFound
+	}
+	return documentOf(msg)
 }
 
 func fileThumbsFromDocument(doc *tg.Document) []FileThumb {

@@ -29,6 +29,49 @@ func (g *Gotd) ResolveDocument(ctx context.Context, peer InputPeer, msgID int64)
 	return ref, err
 }
 
+// ResolveDocuments resolves every message in msgIDs with as few round trips
+// as Telegram allows and returns the refs in the same order.
+func (g *Gotd) ResolveDocuments(ctx context.Context, peer InputPeer, msgIDs []int64) ([]DocumentRef, error) {
+	refs := make([]DocumentRef, 0, len(msgIDs))
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		for start := 0; start < len(msgIDs); start += channelsGetMessagesLimit {
+			batch := msgIDs[start:min(start+channelsGetMessagesLimit, len(msgIDs))]
+			messages, err := channelMessages(ctx, api, peer, batch)
+			if err != nil {
+				return err
+			}
+			batchRefs, err := documentRefsInOrder(peer, batch, messages)
+			if err != nil {
+				return err
+			}
+			refs = append(refs, batchRefs...)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+// documentRefsInOrder turns fetched messages into refs ordered like msgIDs,
+// naming the first message that is missing or does not carry a document.
+func documentRefsInOrder(peer InputPeer, msgIDs []int64, messages map[int64]tg.MessageClass) ([]DocumentRef, error) {
+	refs := make([]DocumentRef, 0, len(msgIDs))
+	for _, id := range msgIDs {
+		msg, ok := messages[id]
+		if !ok {
+			return nil, fmt.Errorf("message %d: %w", id, ErrMessageNotFound)
+		}
+		doc, name, err := documentOf(msg)
+		if err != nil {
+			return nil, fmt.Errorf("message %d: %w", id, err)
+		}
+		refs = append(refs, documentRefFromTG(peer, id, doc, name))
+	}
+	return refs, nil
+}
+
 func (g *Gotd) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset int64, dst []byte) (int, error) {
 	if len(dst) == 0 {
 		return 0, nil
@@ -99,6 +142,7 @@ func documentRefFromTG(peer InputPeer, msgID int64, doc *tg.Document, name strin
 		DocumentID:    doc.ID,
 		AccessHash:    doc.AccessHash,
 		FileReference: append([]byte(nil), doc.FileReference...),
+		DCID:          doc.DCID,
 	}
 }
 
