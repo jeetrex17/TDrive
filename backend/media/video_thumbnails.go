@@ -36,7 +36,8 @@ const (
 	// Playback-buffer watermarks (seconds ahead of the playhead) govern how much
 	// the background thumbnail builder may steal from the shared pipe. Foreground
 	// playback reads are already reserved at the limiter; these bands keep the
-	// *background* precompute from competing while the buffer is at risk.
+	// *background* precompute from competing while the buffer is at risk, and
+	// nothing runs until the first buffer signal says playback is under way.
 	//
 	// HealthyStart/HealthyStop form a hysteresis band so precompute does not flap:
 	// it ramps to full speed at HealthyStart and keeps going until the buffer
@@ -405,8 +406,10 @@ func (t *videoThumbnailer) precomputeAllowedLocked(now time.Time) bool {
 		return false
 	}
 	if !t.playbackKnown {
-		// Build immediately on open, before the first buffer signal arrives.
-		return true
+		// Nothing has played yet. Precompute waits for the first buffer
+		// signal instead of pulling random blocks while the player is still
+		// fetching its opening seconds over the same connections.
+		return false
 	}
 	if t.playbackBufferAhead < thumbBufferEmergency {
 		return false

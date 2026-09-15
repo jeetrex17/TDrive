@@ -305,6 +305,35 @@ func TestVideoThumbnailerBackgroundPrecomputeGenerates(t *testing.T) {
 	}
 }
 
+// The extractor must not fetch random blocks while the player is still
+// pulling its opening seconds over the same connections: precompute waits
+// for the first buffer signal.
+func TestVideoThumbnailerPrecomputeWaitsForFirstPlaybackSignal(t *testing.T) {
+	gen := &recordingVideoThumbGenerator{available: true, entered: make(chan int, 4)}
+	session := testVideoThumbSession()
+	session.setThumbnailURLs("http://127.0.0.1/thumb-source", "http://127.0.0.1/thumb")
+
+	thumbs := newVideoThumbnailer(session, thumbnail.NewCache(t.TempDir(), 1<<20), gen)
+	defer thumbs.Close()
+
+	thumbs.mu.Lock()
+	allowed := thumbs.precomputeAllowedLocked(time.Now())
+	thumbs.mu.Unlock()
+	if allowed {
+		t.Fatal("precompute was allowed before playback reported a buffer")
+	}
+	select {
+	case got := <-gen.entered:
+		t.Fatalf("precompute generated bucket %d before playback reported a buffer", got)
+	case <-time.After(videoThumbPrecomputeIdle + 300*time.Millisecond):
+	}
+
+	thumbs.UpdatePlayback(0, 120, 60)
+	if got := waitForGeneratorEntry(t, gen.entered); got != 0 {
+		t.Fatalf("first precomputed bucket = %d, want 0", got)
+	}
+}
+
 func TestVideoThumbnailerBackgroundPrecomputeYieldsToForeground(t *testing.T) {
 	gen := &recordingVideoThumbGenerator{available: true, entered: make(chan int, 4)}
 	session := testVideoThumbSession()
@@ -339,6 +368,9 @@ func TestVideoThumbnailerSerializesPersistentForegroundAndPrecompute(t *testing.
 
 	thumbs := newVideoThumbnailer(session, thumbnail.NewCache(t.TempDir(), 1<<20), gen)
 	defer thumbs.Close()
+	// A healthy buffer lets the manual precompute below run; the unknown
+	// duration keeps the precompute worker from picking buckets of its own.
+	thumbs.UpdatePlayback(0, 0, 60)
 
 	backgroundDone := make(chan struct{})
 	go func() {
