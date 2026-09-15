@@ -15,11 +15,16 @@
  * Imported after the component stylesheets on purpose: those set `background`
  * as a shorthand, which would reset background-color and background-image
  * back to the opaque fallback if this rule came first.
+ *
+ * The Wails Linux webview is excluded by the root marker the theme controller
+ * sets: WebKitGTK passes the @supports test, then paints no blur without
+ * accelerated compositing, and the file list showed through the profile menu
+ * at 86% strength. It keeps the opaque surface instead.
  */
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-    .notif-panel,
-    .profile-menu,
-    .upload-menu {
+    html:not(.linux-webkit) .notif-panel,
+    html:not(.linux-webkit) .profile-menu,
+    html:not(.linux-webkit) .upload-menu {
         background-color: color-mix(in srgb, var(--glass-bg) 14%, transparent);
         background-image: linear-gradient(
             135deg,

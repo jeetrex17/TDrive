@@ -15,6 +15,13 @@ import {
 export const THEME_STORAGE_KEY = 'tdrive.appearance.v1';
 export const THEME_TRANSITION_CLASS = 'theme-transition-active';
 export const THEME_FALLBACK_CLASS = 'theme-transition-fallback';
+/**
+ * Marks the Wails Linux webview on the root element. WebKitGTK reports
+ * backdrop-filter support, but without accelerated compositing it applies no
+ * blur, so a frosted popover is just a 14% fill with the page showing through
+ * it. The stylesheet keeps popovers opaque under this class.
+ */
+export const LINUX_WEBKIT_CLASS = 'linux-webkit';
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 // Keep the fallback class just beyond the 1.2s CSS animation so WebViews that
@@ -176,6 +183,7 @@ export function createThemeController(
 
         activeEnvironment = resolved;
         started = true;
+        resolved.document?.documentElement.classList.toggle(LINUX_WEBKIT_CLASS, isLinuxWebKit(resolved.userAgent));
         const preference = readPreference(resolved.storage);
         latestPreference = preference;
         applyInstantly(createThemeState(preference));
@@ -183,6 +191,7 @@ export function createThemeController(
 
     function destroy(): void {
         stopTransition();
+        activeEnvironment?.document?.documentElement.classList.remove(LINUX_WEBKIT_CLASS);
         activeEnvironment = undefined;
         started = false;
     }
