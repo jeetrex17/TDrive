@@ -1,5 +1,7 @@
 <script lang="ts">
     import type { Snippet } from 'svelte';
+    import InboxIcon from '@lucide/svelte/icons/inbox';
+    import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 
     type Tone = 'loading' | 'empty' | 'error';
 
@@ -32,9 +34,9 @@
         {#if tone === 'loading'}
             <span class="state-spinner"></span>
         {:else if tone === 'error'}
-            !
+            <TriangleAlertIcon size={16} strokeWidth={2} aria-hidden="true" />
         {:else}
-            —
+            <InboxIcon size={16} strokeWidth={2} aria-hidden="true" />
         {/if}
     </div>
     <div class="state-copy">
@@ -68,8 +70,6 @@
         place-items: center;
         color: var(--text-muted);
         background: var(--surface-control);
-        font-size: var(--font-size-sm);
-        font-weight: 800;
     }
 
     .state-spinner {
