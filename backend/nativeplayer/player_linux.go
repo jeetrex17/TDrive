@@ -415,6 +415,10 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		"--demuxer-readahead-secs=20",
 		"--demuxer-max-bytes=67108864",
 		"--demuxer-max-back-bytes=33554432",
+		// After an underrun, wait for three seconds of buffer before resuming
+		// instead of one, so playback does not flap on links just under the
+		// bitrate.
+		"--cache-pause-wait=3",
 		"--keepaspect=yes",
 		"--force-window=immediate",
 		"--input-terminal=no",

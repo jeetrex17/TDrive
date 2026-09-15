@@ -145,10 +145,16 @@ func (p *Player) startProcess(ctx context.Context, url string, opts Options) err
 		"--msg-level=all=warn",
 		"--ytdl=no",
 		"--hwdec=auto-safe",
+		// Same demuxer budget as the other platforms: a link that is barely
+		// keeping up needs seconds of slack, not four, to ride out jitter.
 		"--cache=yes",
-		"--demuxer-readahead-secs=4",
-		"--demuxer-max-bytes=8388608",
-		"--demuxer-max-back-bytes=4194304",
+		"--demuxer-readahead-secs=20",
+		"--demuxer-max-bytes=67108864",
+		"--demuxer-max-back-bytes=33554432",
+		// After an underrun, wait for three seconds of buffer before resuming
+		// instead of one, so playback does not flap on links just under the
+		// bitrate.
+		"--cache-pause-wait=3",
 		"--keepaspect=yes",
 		"--keepaspect-window=no",
 		"--auto-window-resize=no",
