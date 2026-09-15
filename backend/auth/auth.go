@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"TDrive/backend/datadir"
+
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
@@ -35,11 +37,11 @@ type getChannel interface {
 }
 
 func GetConfigPath() string {
-	path, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return err.Error()
 	}
-	return filepath.Join(path, "TDrive", "imp_config.json")
+	return filepath.Join(dir, "imp_config.json")
 }
 
 func SaveImpCredentials(id int, hash string) error {
@@ -87,17 +89,9 @@ func ConnectWithOptions(options telegram.Options) (*telegram.Client, error) {
 		return nil, fmt.Errorf("API credentials are not configured")
 	}
 
-	path, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return nil, fmt.Errorf("error getting config dir for session: %v", err)
-	}
-
-	dir := filepath.Join(path, "TDrive")
-	if err := os.MkdirAll(dir, privateDirMode); err != nil {
-		return nil, fmt.Errorf("could not create config folder: %v", err)
-	}
-	if err := os.Chmod(dir, privateDirMode); err != nil {
-		return nil, fmt.Errorf("could not secure config folder: %w", err)
 	}
 
 	sessionPath := filepath.Join(dir, "session.json")

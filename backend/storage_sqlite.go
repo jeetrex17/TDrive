@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"TDrive/backend/datadir"
 	"TDrive/backend/projection"
 
 	_ "modernc.org/sqlite"
@@ -14,23 +15,14 @@ import (
 var DB *sql.DB
 
 const (
-	privateDirMode  os.FileMode = 0o700
 	privateFileMode os.FileMode = 0o600
 )
 
 func getDBPath() (string, error) {
-	configDir, err := os.UserConfigDir()
+	appFolder, err := datadir.Dir()
 	if err != nil {
 		return "", err
 	}
-
-	appFolder := filepath.Join(configDir, "TDrive")
-
-	if err := os.MkdirAll(appFolder, privateDirMode); err != nil {
-		return "", err
-	}
-	_ = os.Chmod(appFolder, privateDirMode)
-
 	return filepath.Join(appFolder, "tdrive.db"), nil
 }
 

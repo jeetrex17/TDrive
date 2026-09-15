@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"TDrive/backend/datadir"
 )
 
 type LogoutMode string
@@ -47,9 +49,9 @@ func ClearUserData(mode LogoutMode) error {
 }
 
 func tdriveConfigDir() (string, error) {
-	base, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return "", fmt.Errorf("auth: locate config dir: %w", err)
 	}
-	return filepath.Join(base, "TDrive"), nil
+	return dir, nil
 }
