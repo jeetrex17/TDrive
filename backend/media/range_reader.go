@@ -118,6 +118,7 @@ type RangeReader struct {
 
 	mu      sync.Mutex
 	flights map[string]*flight
+	stats   rangeStats
 
 	// refs holds the freshest reference seen per document. Telegram expires
 	// file references; re-resolving once and remembering the result keeps
@@ -126,6 +127,83 @@ type RangeReader struct {
 	refMu        sync.Mutex
 	refs         map[string]tgclient.DocumentRef
 	refreshGroup singleflight.Group
+}
+
+// RangeStats summarizes a reader's life for the log: how many blocks it
+// fetched and abandoned, how often the cache answered, how deep the pipeline
+// got, and how long Telegram took per block.
+type RangeStats struct {
+	Fetched      int
+	Cancelled    int
+	CacheHits    int
+	PeakInFlight int
+	BlockP50     time.Duration
+	BlockP95     time.Duration
+}
+
+// statsLatencySamples is how many recent block latencies feed the percentiles.
+const statsLatencySamples = 128
+
+type rangeStats struct {
+	mu           sync.Mutex
+	fetched      int
+	cancelled    int
+	cacheHits    int
+	inFlight     int
+	peakInFlight int
+	latencies    []time.Duration
+	next         int
+}
+
+func (s *rangeStats) hit() {
+	s.mu.Lock()
+	s.cacheHits++
+	s.mu.Unlock()
+}
+
+func (s *rangeStats) begin() {
+	s.mu.Lock()
+	s.inFlight++
+	s.peakInFlight = max(s.peakInFlight, s.inFlight)
+	s.mu.Unlock()
+}
+
+func (s *rangeStats) end(err error) {
+	s.mu.Lock()
+	s.inFlight--
+	switch {
+	case err == nil:
+		s.fetched++
+	case errors.Is(err, context.Canceled):
+		s.cancelled++
+	}
+	s.mu.Unlock()
+}
+
+// observe records one successful request's latency in a fixed ring.
+func (s *rangeStats) observe(d time.Duration) {
+	s.mu.Lock()
+	if len(s.latencies) < statsLatencySamples {
+		s.latencies = append(s.latencies, d)
+	} else {
+		s.latencies[s.next] = d
+		s.next = (s.next + 1) % statsLatencySamples
+	}
+	s.mu.Unlock()
+}
+
+func (s *rangeStats) snapshot() RangeStats {
+	s.mu.Lock()
+	out := RangeStats{Fetched: s.fetched, Cancelled: s.cancelled, CacheHits: s.cacheHits, PeakInFlight: s.peakInFlight}
+	sorted := slices.Clone(s.latencies)
+	s.mu.Unlock()
+	if len(sorted) == 0 {
+		return out
+	}
+	slices.Sort(sorted)
+	out.BlockP50 = sorted[len(sorted)/2]
+	out.BlockP95 = sorted[min(len(sorted)*95/100, len(sorted)-1)]
+	return out
 }
 
 // flight is one in-progress block fetch. It carries the priority its creator
@@ -236,6 +314,14 @@ func (r *RangeReader) Throughput() ThroughputStats {
 		return ThroughputStats{}
 	}
 	return r.meter.Stats()
+}
+
+// Stats reports what the reader did so far.
+func (r *RangeReader) Stats() RangeStats {
+	if r == nil {
+		return RangeStats{}
+	}
+	return r.stats.snapshot()
 }
 
 // ReadStoredAt reads stored Telegram bytes from ref into p. It follows
@@ -437,6 +523,7 @@ func (r *RangeReader) fetch(ctx context.Context, ref tgclient.DocumentRef, key s
 	// so one retry is all it ever takes.
 	for attempt := 0; attempt < 2; attempt++ {
 		if data, ok := r.cache.get(key); ok {
+			r.stats.hit()
 			return data, nil
 		}
 		if err := r.ctx.Err(); err != nil {
@@ -482,7 +569,9 @@ func (r *RangeReader) flightFor(key string, ref tgclient.DocumentRef, start int6
 // before the flight leaves the map, so a reader arriving in between finds one
 // or the other and never starts a duplicate fetch.
 func (r *RangeReader) run(f *flight, ref tgclient.DocumentRef, key string, limit int) {
+	r.stats.begin()
 	data, err := r.fetchSpan(f, ref, limit)
+	r.stats.end(err)
 	if err == nil {
 		r.cache.put(key, data)
 	}
@@ -544,7 +633,11 @@ func (r *RangeReader) fetchBlockOnce(f *flight, ref tgclient.DocumentRef, buf []
 	}
 	defer release()
 	current := r.currentRef(ref)
+	started := time.Now()
 	n, err := r.client.ReadDocumentRange(f.ctx, current, f.start, buf)
+	if err == nil {
+		r.stats.observe(time.Since(started))
+	}
 	if !tgclient.IsFileReferenceError(err) {
 		return n, err
 	}
