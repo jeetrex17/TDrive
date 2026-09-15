@@ -37,7 +37,22 @@ const (
 var (
 	getFileSlots           = semaphore.NewWeighted(MaxConcurrentGetFile)
 	backgroundGetFileSlots = semaphore.NewWeighted(MaxConcurrentBackgroundGetFile)
+
+	// uploadPartSlots is one budget of parts in flight shared by every upload.
+	// Three files each keeping UploadThreads parts in flight saturate the link
+	// just as well as eight parts in total do, but a small file then waits
+	// behind the big ones' queue and takes seconds to finish. Waiters are
+	// served in order, so the files take turns part by part.
+	uploadPartSlots = semaphore.NewWeighted(UploadThreads)
 )
+
+// acquireUploadPartSlot reserves room for one upload part request.
+func acquireUploadPartSlot(ctx context.Context) (func(), error) {
+	if err := uploadPartSlots.Acquire(ctx, 1); err != nil {
+		return nil, err
+	}
+	return func() { uploadPartSlots.Release(1) }, nil
+}
 
 // AcquireGetFileSlots reserves n global getFile slots for foreground media
 // playback reads. Background work (downloads, thumbnails, read-ahead) must use

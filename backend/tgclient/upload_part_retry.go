@@ -29,9 +29,16 @@ func (c *retryingUploadClient) UploadSaveBigFilePart(ctx context.Context, reques
 	})
 }
 
+// savePart sends one part attempt under the shared upload budget. The slot is
+// held for the request only, never across a retry backoff.
 func (c *retryingUploadClient) savePart(ctx context.Context, action func(uploader.Client) (bool, error)) (bool, error) {
 	var accepted bool
 	err := c.policy.Do(ctx, func() error {
+		release, err := acquireUploadPartSlot(ctx)
+		if err != nil {
+			return err
+		}
+		defer release()
 		return c.run(ctx, func(client uploader.Client) error {
 			var err error
 			accepted, err = action(client)
