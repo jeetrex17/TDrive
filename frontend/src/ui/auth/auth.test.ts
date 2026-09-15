@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'svelte/server';
 import AuthScreens from './AuthScreens.svelte';
 import { showAuthView, showStartupView } from '../app/app-store';
@@ -20,11 +20,18 @@ const props = {
 };
 
 afterEach(() => {
+    vi.unstubAllGlobals();
     showStartupView();
     authPhone.set('');
     authHint.set('');
     resetAuthSubmissions();
 });
+
+// The platform helpers read the browser-preview override off the URL; a
+// server render has no window, so this is the whole phone.
+function previewPhone(): void {
+    vi.stubGlobal('window', { location: { search: '?mobile=1' } });
+}
 
 describe('AuthScreens', () => {
     it('renders no auth form when no screen is active', () => {
@@ -96,5 +103,35 @@ describe('AuthScreens', () => {
         expect(body).toContain('aria-live="polite"');
         expect(body).toContain('aria-invalid="true"');
         expect(body).toContain('That code was incorrect.');
+    });
+
+    it('keeps the desktop card free of phone-only markup', () => {
+        showAuthView('setup');
+        const { body } = render(AuthScreens, { props });
+        expect(body).not.toContain('auth-welcome');
+        expect(body).not.toContain('enterkeyhint');
+        expect(body).not.toContain('input-with-action');
+        expect(body).not.toContain('auth-inline-link');
+        expect(body).toContain('auth-page-body');
+        expect(body).toContain('auth-actions');
+    });
+
+    it('renders the phone welcome page in front of setup', () => {
+        previewPhone();
+        showAuthView('setup');
+        const { body } = render(AuthScreens, { props });
+        expect(body).toContain('auth-welcome');
+        expect(body).toContain('Your Telegram, as a drive.');
+        expect(body).toContain('Continue');
+        expect(body).not.toContain('<form');
+    });
+
+    it('renders phone keyboard hints and the external credentials link', () => {
+        previewPhone();
+        showAuthView('code');
+        expect(render(AuthScreens, { props }).body).toContain('enterkeyhint="go"');
+
+        showAuthView('phone');
+        expect(render(AuthScreens, { props }).body).toContain('enterkeyhint="send"');
     });
 });
