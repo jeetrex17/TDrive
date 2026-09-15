@@ -3,6 +3,7 @@
     import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import FolderIcon from '@lucide/svelte/icons/folder';
     import ModalShell from './ModalShell.svelte';
+    import { isMobilePlatform } from '../../api';
     import { moveBrowse, moveModal, type MoveFolderEntry } from './move-modal-store';
 
     interface Props {
@@ -19,7 +20,10 @@
     const browse = moveBrowse;
 
     const currentId = $derived($browse.path[$browse.path.length - 1]?.id ?? '');
+    // The phone sheet shows the destination in its breadcrumb, so its button
+    // is the short verb; the desktop dialog keeps naming the target folder.
     const currentName = $derived($browse.path[$browse.path.length - 1]?.name ?? 'My Drive');
+    const confirmLabel = $derived(isMobilePlatform() ? 'Move here' : `Move to "${currentName}"`);
     const confirmDisabled = $derived(
         $view.busy || $browse.blocked.has(currentId) || currentId === $browse.sourceParent,
     );
@@ -118,7 +122,7 @@
             Cancel
         </button>
         <button id="move-confirm" class="primary-btn" type="button" disabled={confirmDisabled} onclick={confirm}>
-            Move to "{currentName}"
+            {confirmLabel}
         </button>
     {/snippet}
 </ModalShell>

@@ -439,3 +439,162 @@
     margin: var(--space-1) var(--space-2);
 }
 
+/* === MOBILE: context menu becomes a bottom action sheet =============== */
+/* Gated on html.mobile; the desktop popover above is untouched. The sheet and
+   its scrim render inside the always-present #context-menu host, so the host
+   is lifted to the modal rung only on a phone. */
+html.mobile .context-menu { z-index: var(--z-modal); }
+
+html.mobile .action-sheet-scrim {
+    position: fixed;
+    inset: 0;
+    pointer-events: auto;
+    background: var(--scrim);
+    animation: tdrive-scrim-in var(--motion-med) var(--ease-standard) both;
+}
+
+html.mobile .action-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1;
+    pointer-events: auto;
+    outline: none;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto;
+    max-height: 82dvh;
+    padding: var(--space-1) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    background: var(--color-surface-0);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    animation: tdrive-sheet-enter var(--motion-slow) var(--ease-enter) both;
+    touch-action: pan-y;
+}
+
+@keyframes tdrive-scrim-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+html.mobile .action-sheet-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-1) var(--space-3);
+    margin-bottom: var(--space-1);
+    border-bottom: 1px solid var(--color-border-soft);
+}
+html.mobile .action-sheet-icon {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+    background: var(--overlay-white-1);
+    color: var(--accent);
+}
+html.mobile .action-sheet-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+html.mobile .action-sheet-title {
+    font-weight: 700;
+    font-size: var(--type-base);
+    color: var(--color-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+html.mobile .action-sheet-meta {
+    font-size: var(--type-sm);
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+html.mobile .action-sheet-items {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+}
+html.mobile .action-sheet-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 var(--space-2);
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-main);
+    font-weight: 600;
+    font-size: var(--type-md);
+    text-align: left;
+    cursor: pointer;
+}
+html.mobile .action-sheet-row:active { background: var(--overlay-neutral-2); }
+html.mobile .action-sheet-row:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--overlay-accent-3);
+}
+html.mobile .action-sheet-row.danger { color: var(--color-danger); }
+html.mobile .action-sheet-row:disabled { opacity: 0.4; cursor: not-allowed; }
+html.mobile .action-sheet-sep {
+    height: 1px;
+    background: var(--color-border-soft);
+    margin: var(--space-1) 0;
+}
+
+html.mobile .action-sheet-cancel {
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 48px;
+    margin-top: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--overlay-white-1);
+    color: var(--text-main);
+    font-weight: 700;
+    font-size: var(--type-md);
+    cursor: pointer;
+}
+html.mobile .action-sheet-cancel:active { background: var(--bg-panel); }
+html.mobile .action-sheet-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .action-sheet,
+    html.mobile .action-sheet-scrim { animation: none; }
+}
+
+/* Move sheet: the drill-down card owns its own padded sections, so drop the
+   sheet's horizontal padding and let it fill; the footer stacks like other
+   sheet actions. */
+html.mobile .move-modal-card.modal-sheet {
+    padding-left: 0;
+    padding-right: 0;
+    max-width: 100%;
+}
+html.mobile .move-modal-card .modal-sheet-body { padding: 0; }
+html.mobile .move-modal-footer {
+    flex-direction: column-reverse;
+    gap: var(--space-2);
+}
+html.mobile .move-modal-footer .primary-btn,
+html.mobile .move-modal-footer .secondary-btn {
+    width: 100%;
+    min-height: 48px;
+}
+

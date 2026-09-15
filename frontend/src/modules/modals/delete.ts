@@ -67,12 +67,12 @@ export function openDeleteModal(target: FileCommandTarget): void {
         title = 'Delete folder?';
         itemName = target.name.trim();
         subtitle = "This will delete the folder and every file inside it from Telegram. This action can't be undone.";
-        confirmLabel = 'Delete folder and files';
+        confirmLabel = 'Delete';
     } else {
         title = 'Delete file?';
         itemName = target.name.trim();
         subtitle = "This will remove the file from your Telegram channel. The action can't be undone.";
-        confirmLabel = 'Delete file';
+        confirmLabel = 'Delete';
     }
 
     openDeleteModalView({ title, itemName, subtitle, confirmLabel });

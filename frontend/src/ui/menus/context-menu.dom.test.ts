@@ -49,6 +49,7 @@ afterEach(async () => {
         x: 0,
         y: 0,
         items: [],
+        header: null,
         focusVersion: 0,
     });
 });

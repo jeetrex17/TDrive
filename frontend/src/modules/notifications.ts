@@ -22,11 +22,17 @@
 // the store.
 
 import { get } from 'svelte/store';
+import { isMobilePlatform } from '../api';
 import { toAppError, type AppErrorSource } from './errors';
 import { pushHistoryEvent } from './notif-bell';
 import { toasts, type ToastAction, type ToastItem, type ToastLevel } from '../ui/notifications/toast-store';
 
 const MAX_VISIBLE = 5;
+// A phone shows a shorter stack above the tab bar (spec 2.6): at most two.
+const MAX_VISIBLE_MOBILE = 2;
+function visibleCap(): number {
+    return isMobilePlatform() ? MAX_VISIBLE_MOBILE : MAX_VISIBLE;
+}
 const DEFAULT_DURATION = 4000;
 const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
 const LEVELS: readonly ToastLevel[] = ['info', 'success', 'warning', 'error'];
@@ -125,7 +131,7 @@ toasts.update((list) => {
     // Cap the visible queue; if exceeded, the oldest non-sticky entry
     // is dismissed early so urgent ones aren't drowned.
     const next = [...list];
-    if (next.length >= MAX_VISIBLE) {
+    if (next.length >= visibleCap()) {
         const stalest = next.findIndex((t) => !t.sticky);
         [evictedID] = next.splice(stalest >= 0 ? stalest : 0, 1).map((toast) => toast.id);
     }
