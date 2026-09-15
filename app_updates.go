@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"TDrive/backend/updater"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // updateRepo is where desktop releases are published.
@@ -29,6 +31,11 @@ type AppVersionInfo struct {
 // changes can be forwarded as runtime events. It never touches the network
 // on its own; the frontend owns the schedule.
 func (a *App) initUpdater() {
+	// Mobile stores own the update path, so leave a.updates nil: every entry
+	// point then reports PhaseDisabled, exactly like a "dev" desktop build.
+	if application.System.IsMobile() {
+		return
+	}
 	a.updates = updater.New(updater.Options{
 		CurrentVersion: a.version,
 		Source:         updater.NewGitHubSource(updateRepo, "TDrive/"+a.version, nil),

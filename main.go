@@ -52,8 +52,21 @@ func main() {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
+		// Match the window BackgroundColour below so the phone shows the TDrive
+		// Vault backdrop, not a white flash, before the WebView paints.
+		IOS: application.IOSOptions{
+			EnableInlineMediaPlayback: true,
+			DisableBounce:             true,
+			BackgroundColour:          application.NewRGB(14, 23, 28),
+		},
+		Android: application.AndroidOptions{
+			DisableOverscroll: true,
+			BackgroundColour:  application.NewRGB(14, 23, 28),
+		},
 	})
 	app.wails = wailsApp
+	// Wire OS suspend/resume on phones; a no-op on desktop.
+	registerMobileLifecycle(app, wailsApp)
 	// macOS only; nil elsewhere keeps Windows/Linux without a menu bar.
 	if menu := buildAppMenu(app, wailsApp); menu != nil {
 		wailsApp.Menu.Set(menu)
