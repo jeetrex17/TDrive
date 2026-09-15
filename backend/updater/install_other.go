@@ -1,4 +1,4 @@
-//go:build !darwin && !windows && !linux
+//go:build (!darwin && !windows && !linux) || ios || android
 
 package updater
 
