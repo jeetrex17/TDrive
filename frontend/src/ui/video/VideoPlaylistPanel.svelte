@@ -153,9 +153,6 @@
     <header class="video-popover-header">
         <div class="video-popover-heading">
             <h2 id="video-playlist-title" class="video-popover-title video-playlist-title">{playlist.title}</h2>
-            <span class="video-popover-count video-playlist-count" aria-label={`${playlist.items.length} videos`}>
-                {playlist.items.length}
-            </span>
         </div>
         <button class="video-popover-close video-playlist-close" type="button" aria-label="Close playlist" title="Close playlist" onclick={close}>
             <XIcon size={16} strokeWidth={2} aria-hidden="true" />

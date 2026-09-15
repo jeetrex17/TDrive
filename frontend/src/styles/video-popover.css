@@ -95,13 +95,6 @@
     white-space: nowrap;
 }
 
-.video-popover-count {
-    flex: 0 0 auto;
-    color: #8593ab;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-}
-
 .video-popover-close {
     flex: 0 0 auto;
     display: grid;

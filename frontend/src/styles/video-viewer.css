@@ -1,14 +1,27 @@
 /* ----- Video player ----- */
 .video-overlay {
-    --video-accent: var(--viewer-accent);
-    --video-accent-bg: rgba(122, 162, 247, 0.2);
-    --video-accent-border: rgba(122, 162, 247, 0.58);
-    --video-accent-ring: rgba(122, 162, 247, 0.28);
+    /* The player stays dark whatever the palette does, because a lit surface
+       behind moving picture is worse to watch. Its accent still follows the
+       theme, so the scrubber, the active row and every selected state carry
+       the colour the rest of the app is using. */
+    --video-accent: var(--color-accent, #7aa2f7);
+    --video-accent-bg: color-mix(in srgb, var(--video-accent) 22%, transparent);
+    --video-accent-border: color-mix(in srgb, var(--video-accent) 58%, transparent);
+    --video-accent-ring: color-mix(in srgb, var(--video-accent) 30%, transparent);
     background: var(--viewer-scrim);
     backdrop-filter: blur(16px);
     z-index: 2400;
     align-items: stretch;
     justify-content: stretch;
+}
+
+/*
+ * A light palette picks an accent that has to hold up against a white page, so
+ * it is usually too dark to read on the player, which stays dark in every
+ * theme. Lifting it here keeps the same hue without losing the glyphs.
+ */
+:root[data-theme-appearance="light"] .video-overlay {
+    --video-accent: color-mix(in srgb, var(--color-accent, #7aa2f7) 62%, white);
 }
 
 .video-overlay.is-video-native {

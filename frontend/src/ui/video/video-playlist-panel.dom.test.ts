@@ -54,7 +54,8 @@ describe('VideoPlaylistPanel behavior', () => {
         await setup();
 
         expect(host?.querySelector('.video-playlist-title')?.textContent).toBe('Course videos');
-        expect(host?.querySelector('.video-playlist-count')?.textContent?.trim()).toBe('3');
+        // The row count is not shown: each row already carries its own index.
+        expect(host?.querySelector('.video-playlist-count')).toBeNull();
         expect(host?.querySelectorAll('.video-playlist-row')).toHaveLength(3);
         expect(host?.querySelector('.video-playlist-row[aria-current="true"]')?.getAttribute('data-playlist-index')).toBe('1');
         // Position shows as a standalone index column; the full "2 of 3" phrasing
