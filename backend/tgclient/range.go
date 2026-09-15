@@ -12,8 +12,9 @@ const (
 )
 
 // DocumentRef is the stable Telegram document identity needed for ranged
-// reads. Implementations may refresh FileReference internally when Telegram
-// expires it; callers should treat this as an opaque descriptor.
+// reads. FileReference expires; backend/media.RangeReader re-resolves the
+// document when a read is rejected and keeps the fresh reference for the rest
+// of the session, so callers can treat this as an opaque descriptor.
 type DocumentRef struct {
 	Peer          InputPeer
 	MsgID         int64

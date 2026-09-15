@@ -103,34 +103,11 @@ func (g *Gotd) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset in
 	var n int
 	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
 		clientWait = time.Since(started)
-		current := ref
-		for attempt := 0; attempt < 2; attempt++ {
-			read, err := g.readDocumentRange(ctx, client, current, offset, dst)
-			if err == nil {
-				n = read
-				return nil
-			}
-			if attempt == 0 && isFileReferenceError(err) {
-				refreshed, refreshErr := resolveDocumentRef(ctx, client.API(), ref.Peer, ref.MsgID)
-				if refreshErr != nil {
-					return fmt.Errorf("tgclient: refresh file reference after %v: %w", err, refreshErr)
-				}
-				current = refreshed
-				continue
-			}
-			return err
-		}
-		return nil
+		read, err := g.readDocumentRange(ctx, client, ref, offset, dst)
+		n = read
+		return err
 	})
 	return n, err
-}
-
-func resolveDocumentRef(ctx context.Context, api *tg.Client, peer InputPeer, msgID int64) (DocumentRef, error) {
-	doc, name, err := getDocumentByMessageID(ctx, api, peer, msgID)
-	if err != nil {
-		return DocumentRef{}, err
-	}
-	return documentRefFromTG(peer, msgID, doc, name), nil
 }
 
 func documentRefFromTG(peer InputPeer, msgID int64, doc *tg.Document, name string) DocumentRef {
@@ -384,6 +361,9 @@ func crossesRangeBoundary(offset int64, length int) bool {
 	return start != end
 }
 
-func isFileReferenceError(err error) bool {
+// IsFileReferenceError reports whether Telegram rejected a read because the
+// document's file reference is stale. The caller re-resolves the document and
+// retries with the fresh reference.
+func IsFileReferenceError(err error) bool {
 	return tg.IsFileReferenceEmpty(err) || tg.IsFileReferenceExpired(err) || tg.IsFileReferenceInvalid(err)
 }

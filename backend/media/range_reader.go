@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"TDrive/backend/tgclient"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -94,9 +97,9 @@ type RangeReaderConfig struct {
 // Every block in flight is one flight, shared by everyone who needs it. A
 // player read that catches up with read-ahead joins the flight already
 // running for that block, promoting it to playback priority if it is still
-// waiting for a slot, instead of transferring the block a second time. A read
-// that lands outside the current window is a seek: the window's unclaimed
-// flights are cancelled so the new position gets the connections.
+// waiting for a slot, instead of transferring the block a second time. When a
+// seek needs more lane slots than are free, unclaimed read-ahead for the
+// position the player left is cancelled to make room.
 type RangeReader struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -115,6 +118,14 @@ type RangeReader struct {
 
 	mu      sync.Mutex
 	flights map[string]*flight
+
+	// refs holds the freshest reference seen per document. Telegram expires
+	// file references; re-resolving once and remembering the result keeps
+	// every later block at one request instead of a rejected one, a resolve,
+	// and a retry.
+	refMu        sync.Mutex
+	refs         map[string]tgclient.DocumentRef
+	refreshGroup singleflight.Group
 }
 
 // flight is one in-progress block fetch. It carries the priority its creator
@@ -210,6 +221,7 @@ func NewRangeReader(cfg RangeReaderConfig) *RangeReader {
 		readAhead:   max(cfg.ReadAhead, 0),
 		bgSlots:     make(chan struct{}, max(cfg.ReadAhead, defaultBackgroundSlots)),
 		flights:     make(map[string]*flight),
+		refs:        make(map[string]tgclient.DocumentRef),
 	}
 }
 
@@ -523,14 +535,58 @@ func (r *RangeReader) fetchSpan(f *flight, ref tgclient.DocumentRef, limit int) 
 }
 
 // fetchBlockOnce is one attempt at a flight's block. Slots are held only for
-// the request itself, never across a retry backoff.
+// the request itself, never across a retry backoff. A rejected file reference
+// is refreshed and the request repeated once within the same attempt.
 func (r *RangeReader) fetchBlockOnce(f *flight, ref tgclient.DocumentRef, buf []byte) (int, error) {
 	release, err := r.acquireSlot(f)
 	if err != nil {
 		return 0, err
 	}
 	defer release()
-	return r.client.ReadDocumentRange(f.ctx, ref, f.start, buf)
+	current := r.currentRef(ref)
+	n, err := r.client.ReadDocumentRange(f.ctx, current, f.start, buf)
+	if !tgclient.IsFileReferenceError(err) {
+		return n, err
+	}
+	fresh, refreshErr := r.refreshRef(f.ctx, current)
+	if refreshErr != nil {
+		return 0, fmt.Errorf("media: refresh file reference after %v: %w", err, refreshErr)
+	}
+	return r.client.ReadDocumentRange(f.ctx, fresh, f.start, buf)
+}
+
+// currentRef returns the freshest reference known for ref's document.
+func (r *RangeReader) currentRef(ref tgclient.DocumentRef) tgclient.DocumentRef {
+	r.refMu.Lock()
+	defer r.refMu.Unlock()
+	if fresh, ok := r.refs[docKey(ref)]; ok {
+		return fresh
+	}
+	return ref
+}
+
+// refreshRef re-resolves a document whose file reference Telegram rejected.
+// Concurrent block reads share one resolve, and a reference that another
+// read already replaced is handed back without a request.
+func (r *RangeReader) refreshRef(ctx context.Context, stale tgclient.DocumentRef) (tgclient.DocumentRef, error) {
+	key := docKey(stale)
+	result, err, _ := r.refreshGroup.Do(key, func() (any, error) {
+		if fresh := r.currentRef(stale); !bytes.Equal(fresh.FileReference, stale.FileReference) {
+			return fresh, nil
+		}
+		fresh, err := r.client.ResolveDocument(ctx, stale.Peer, stale.MsgID)
+		if err != nil {
+			return nil, err
+		}
+		r.refMu.Lock()
+		r.refs[key] = fresh
+		r.refMu.Unlock()
+		return fresh, nil
+	})
+	if err != nil {
+		return tgclient.DocumentRef{}, err
+	}
+	return result.(tgclient.DocumentRef), nil
 }
 
 // acquireSlot reserves a getFile slot for one attempt of f under its current
