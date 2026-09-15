@@ -10,6 +10,9 @@ export type FileListAction = {
 
 export type FileListUploaderChip = {
     label: string;
+    // The phone row shows initials plus a first name instead of the label.
+    firstName?: string;
+    initials?: string;
 };
 
 type BaseInteractiveRow = {
@@ -67,6 +70,8 @@ export type FileListStateView = {
     body?: string;
     actionLabel?: string;
     onAction?: () => void;
+    secondaryActionLabel?: string;
+    onSecondaryAction?: () => void;
 };
 
 export type FileListRowsView = {

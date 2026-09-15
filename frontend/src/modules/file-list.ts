@@ -4,9 +4,10 @@ import { state, resetFolderCaches } from '../state';
 import { splitNameAndExt, formatDate, formatBytes } from '../utils';
 import { isOffline } from './connectivity';
 import { tick } from 'svelte';
-import { clearSelection, handleRowSelection, reconcileSelection, selectRow, getRowKey } from './selection';
+import { clearSelection, deselectRow, handleRowSelection, isRowSelected, reconcileSelection, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
+import { openNewFolderModal } from './modals/folder';
 import { navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
@@ -14,6 +15,7 @@ import {
     getFileList,
     getFolderContents as apiGetFolderContents,
     getStorageUsed,
+    isMobilePlatform,
 } from '../api';
 import { calculateVisibleFolderStats } from './drive-data';
 import type { FileItem, FolderItem, FolderStat, RootFile } from '../types';
@@ -21,11 +23,14 @@ import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { chooseFilesForCurrentFolder, enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
-import { canOpenFileViewer, isVideoFile } from './media-types';
+import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
 import { appActions, type RefreshFilesOptions } from './app-actions';
 import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
-import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
+import { rowMetaLine } from '../ui/file-list/row-meta';
+import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
+import { showRowContextMenu } from './context-menu';
+import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FileListUploaderChip, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
 
 type FileRowInput = {
     id?: string | number;
@@ -134,6 +139,7 @@ export function renderFileState(
     title: string,
     body = "",
     action?: { label: string; onClick: () => void },
+    secondaryAction?: { label: string; onClick: () => void },
 ) {
     list.removeAttribute('aria-rowcount');
     showFileListState({
@@ -142,6 +148,8 @@ export function renderFileState(
         body,
         actionLabel: action?.label ?? '',
         onAction: action?.onClick,
+        secondaryActionLabel: secondaryAction?.label ?? '',
+        onSecondaryAction: secondaryAction?.onClick,
     });
 }
 
@@ -158,12 +166,21 @@ export function renderFileListRows(list: HTMLElement, rows: FileListRow[], after
     if (afterRender) afterFileListPaint(list, afterRender);
 }
 
+// The phone row has no room for the "Name · 2h ago" label, so the chip also
+// carries the uploader's initials and first name from the same name cache.
+function uploaderChipFor(uploaderID: number, uploadTime: number): FileListUploaderChip | null {
+    const label = uploaderChipLabel({ uploaderID, uploadTime });
+    if (!label) return null;
+    const parts = (state.userNames.get(String(uploaderID)) ?? '').trim().split(/\s+/).filter(Boolean);
+    return {
+        label,
+        firstName: parts[0] ?? '',
+        initials: parts.slice(0, 2).map((part) => part[0]).join('').toUpperCase(),
+    };
+}
+
 function chipForFileRow(row: FileListFileRow) {
-    const label = uploaderChipLabel({
-        uploaderID: row.uploaderID,
-        uploadTime: row.uploadTime,
-    });
-    return label ? { label } : null;
+    return uploaderChipFor(row.uploaderID, row.uploadTime);
 }
 
 export function resolveUploaderChipsForRows(rows: FileListRow[], isCurrent: () => boolean) {
@@ -257,7 +274,6 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
     const encrypted = Boolean(file.encrypted ?? overrides.encrypted ?? false);
     const canDelete = Boolean(file.canDelete ?? overrides.canDelete ?? canOwnerActOnFile(file));
     const canRename = Boolean(file.canRename ?? overrides.canRename ?? canDelete);
-    const uploaderLabel = uploaderChipLabel({ uploaderID, uploadTime });
 
     return {
         kind: 'file',
@@ -280,7 +296,7 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         canRename,
         uploaderChip: overrides.uploaderChip !== undefined
             ? overrides.uploaderChip
-            : uploaderLabel ? { label: uploaderLabel } : null,
+            : uploaderChipFor(uploaderID, uploadTime),
         actions: overrides.actions ?? fileActions(name),
         onClick: overrides.onClick,
         onDoubleClick: overrides.onDoubleClick,
@@ -363,6 +379,45 @@ function triggerRowContextMenu(row: HTMLElement) {
     }));
 }
 
+// A long press or the overflow button opens the item's own action sheet. It
+// never selects the row: on a phone the selection belongs to the reader, not
+// the menu, and the sheet header names what the actions apply to.
+function openRowMenu(row: HTMLElement, clientX: number, clientY: number): void {
+    const logical = getInteractiveFileListRows().find((candidate) => candidate.selectionKey === getRowKey(row));
+    showRowContextMenu(row, clientX, clientY, {
+        header: logical ? { title: logical.name, meta: rowMetaLine(logical), kind: logical.kind } : undefined,
+    });
+}
+
+function toggleRowSelection(row: HTMLElement): void {
+    if (isRowSelected(row)) {
+        deselectRow(row);
+        return;
+    }
+    const index = getInteractiveFileListRows().findIndex((candidate) => candidate.selectionKey === getRowKey(row));
+    selectRow(row, index);
+}
+
+// The phone previews an image in the context of its folder, so swiping moves
+// through the other images here in list order.
+async function openImagePreview(row: HTMLElement): Promise<void> {
+    const images = getInteractiveFileListRows()
+        .filter((candidate): candidate is FileListFileRow => candidate.kind === 'file' && isImageFile(candidate.name))
+        .map((image) => ({
+            type: 'file',
+            id: Number(image.id),
+            name: image.name,
+            size: image.size,
+            encrypted: image.encrypted,
+            uploaderId: image.uploaderID,
+            uploadTime: image.uploadTime,
+        }));
+    const index = Math.max(0, images.findIndex((image) => String(image.id) === row.dataset.id));
+    const preview = await import('./modals/preview');
+    preview.activatePreviewModal();
+    await preview.openPreviewList(images, index);
+}
+
 function deleteRow(row: HTMLElement) {
     if (row.dataset.type === "folder") {
         openDeleteModal({
@@ -419,6 +474,10 @@ function activateRow(row: HTMLElement) {
     const target = fileTargetForRow(row);
     if (isVideoFile(target.name)) {
         void appActions().playVideo(target);
+        return;
+    }
+    if (isMobilePlatform() && isImageFile(target.name)) {
+        void openImagePreview(row);
         return;
     }
     if (canOpenFileViewer(target.name)) {
@@ -573,13 +632,24 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
     if (rows.length === 0) {
         // An empty folder is the one place a reader is certain to want the
         // upload picker, so it is offered here instead of only in the toolbar.
-        renderFileState(
-            list,
-            'empty',
-            'This folder is empty',
-            'Upload files or create a folder to start organizing this drive.',
-            { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
-        );
+        if (isMobilePlatform()) {
+            renderFileState(
+                list,
+                'empty',
+                'No files yet.',
+                '',
+                { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
+                { label: 'Create folder', onClick: openNewFolderModal },
+            );
+        } else {
+            renderFileState(
+                list,
+                'empty',
+                'This folder is empty',
+                'Upload files or create a folder to start organizing this drive.',
+                { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
+            );
+        }
         afterFileListPaint(list, afterPublish);
         return;
     }
@@ -658,6 +728,26 @@ function isSearchMode() {
     return String(state.searchQuery || "").trim() !== "";
 }
 
+// On a phone a tap opens the row (the desktop double click) unless something is
+// already selected, when it toggles the row instead, and the trailing button
+// opens the row's menu.
+function handleMobileTap(e: MouseEvent, row: HTMLElement) {
+    const target = e.target as HTMLElement;
+    const more = target.closest<HTMLButtonElement>('button.row-more');
+    if (more) {
+        const rect = more.getBoundingClientRect();
+        openRowMenu(row, rect.left + rect.width / 2, rect.bottom);
+        return;
+    }
+    if (target.closest('button')) return;
+    setFocusedRow(row, { preventScroll: true });
+    if (state.selectedItems.size > 0) {
+        toggleRowSelection(row);
+        return;
+    }
+    activateRow(row);
+}
+
 function handleListClick(e: MouseEvent) {
     // Search results still own their row handlers. Ignore those events here
     // so downloads/open/double-click navigation do not fire twice.
@@ -665,6 +755,12 @@ function handleListClick(e: MouseEvent) {
 
     const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
     if (!row) return;
+    if (row.dataset.type !== "folder" && row.dataset.type !== "file") return;
+
+    if (isMobilePlatform()) {
+        handleMobileTap(e, row);
+        return;
+    }
 
     if (row.dataset.type === "folder") {
         if ((e.target as HTMLElement).closest("button.download-folder")) {
@@ -773,7 +869,9 @@ function handleListKeyDown(e: KeyboardEvent) {
 }
 
 function handleListDblClick(e: MouseEvent) {
-    if (isSearchMode()) return;
+    // A phone tap already opened the row; the second tap of a quick pair is not
+    // a rename request.
+    if (isSearchMode() || isMobilePlatform()) return;
 
     const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
     if (!row) return;
@@ -902,7 +1000,23 @@ export function activateFileList(): () => void {
     list.addEventListener('dragleave', handleListDragLeave);
     list.addEventListener('drop', onDrop);
 
+    // Phone gestures: a long press on the leading icon selects the row, a long
+    // press anywhere else opens its menu, and a pull from the top refreshes.
+    const touchCleanups = isMobilePlatform()
+        ? [
+            bindLongPress(list, '.drive-row[data-type="folder"], .drive-row[data-type="file"]', (row, x, y, origin) => {
+                if (origin?.closest('.file-type-icon, .folder-chip, .row-check')) {
+                    toggleRowSelection(row);
+                    return;
+                }
+                openRowMenu(row, x, y);
+            }),
+            bindPullToRefresh(list, () => appActions().triggerRefresh()),
+        ]
+        : [];
+
     return () => {
+        for (const cleanup of touchCleanups) cleanup();
         list.removeEventListener('click', handleListClick);
         list.removeEventListener('dblclick', handleListDblClick);
         list.removeEventListener('keydown', handleListKeyDown);

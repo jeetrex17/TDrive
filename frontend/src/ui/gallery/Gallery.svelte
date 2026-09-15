@@ -5,6 +5,9 @@
     import { onMount } from 'svelte';
     import { SvelteMap, SvelteSet } from 'svelte/reactivity';
     import ImageIcon from '@lucide/svelte/icons/image';
+    import { isMobilePlatform } from '../../api';
+    import { appActions } from '../../modules/app-actions';
+    import { chooseFilesForCurrentFolder } from '../../modules/transfers';
     import GalleryCell from './GalleryCell.svelte';
     import { galleryView, type GalleryCellModel, type GalleryGroup } from './gallery-store';
 
@@ -14,9 +17,13 @@
         height: number;
     }
 
-    const MIN_CELL_WIDTH = 172;
-    const GRID_GAP = 5;
+    // The phone grid is denser (three cells across at 390pt) and its cells sit
+    // 2px apart, so the chunk geometry has to follow gallery.css.
+    const mobile = isMobilePlatform();
+    const MIN_CELL_WIDTH = mobile ? 112 : 172;
+    const GRID_GAP = mobile ? 2 : 5;
     const ROWS_PER_CHUNK = 8;
+    const SKELETON_CELLS = Array.from({ length: 12 }, (_, index) => index);
 
     let columnCount = $state(1);
     let gridWidth = $state(MIN_CELL_WIDTH);
@@ -115,16 +122,41 @@
 </script>
 
 {#if $galleryView.status === 'loading'}
-    <div class="gallery-status">Loading photos…</div>
+    {#if mobile}
+        <div class="gallery-grid gallery-skeleton" role="status" aria-label="Loading photos" aria-busy="true">
+            {#each SKELETON_CELLS as index (index)}
+                <div class="gallery-skeleton-cell" style={`--skeleton-delay: ${index * 45}ms`} aria-hidden="true"></div>
+            {/each}
+        </div>
+    {:else}
+        <div class="gallery-status">Loading photos…</div>
+    {/if}
 {:else if $galleryView.status === 'error'}
-    <div class="gallery-status">Could not load photos.</div>
+    {#if mobile}
+        <div class="gallery-empty" role="alert">
+            <div class="gallery-empty-title">Could not load photos.</div>
+            <div class="gallery-empty-sub">Check your connection and try again.</div>
+            <div class="gallery-empty-actions">
+                <button class="primary-btn" type="button" onclick={() => appActions().refreshFiles()}>Retry</button>
+            </div>
+        </div>
+    {:else}
+        <div class="gallery-status">Could not load photos.</div>
+    {/if}
 {:else if $galleryView.status === 'empty'}
     <div class="gallery-empty">
         <div class="gallery-empty-icon">
             <ImageIcon size={48} strokeWidth={1.5} aria-hidden="true" />
         </div>
-        <div class="gallery-empty-title">No photos yet</div>
-        <div class="gallery-empty-sub">Images you upload to this drive show up here.</div>
+        {#if mobile}
+            <div class="gallery-empty-title">No photos in this drive.</div>
+            <div class="gallery-empty-actions">
+                <button class="primary-btn" type="button" onclick={() => chooseFilesForCurrentFolder()}>Upload photos</button>
+            </div>
+        {:else}
+            <div class="gallery-empty-title">No photos yet</div>
+            <div class="gallery-empty-sub">Images you upload to this drive show up here.</div>
+        {/if}
     </div>
 {:else}
     {#each $galleryView.groups as group, groupIndex (group.cells[0].index)}

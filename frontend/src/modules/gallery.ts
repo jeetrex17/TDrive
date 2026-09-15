@@ -10,11 +10,14 @@
 // owns the IntersectionObserver rooted on the stable #gallery-view host.
 
 import { state } from '../state';
-import { getMedia } from '../api';
+import { getMedia, isMobilePlatform } from '../api';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
+import { canOwnerActOnFile } from './file-list';
+import { updateSelectionBar } from './selection';
 import { beginRender, cachedThumb, rearmLocked, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
 import { galleryView, type GalleryGroup } from '../ui/gallery/gallery-store';
+import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
 import type { FileItem } from '../types';
 
@@ -23,6 +26,7 @@ let renderToken = 0;
 let backgroundRenderToken = 0;
 let currentItems: FileItem[] = [];
 let currentChannelId = 0;
+let touchCleanups: Array<() => void> = [];
 
 export function activateGallery(): () => void {
     const host = document.getElementById('gallery-view');
@@ -37,6 +41,14 @@ export function activateGallery(): () => void {
     // When the vault unlocks (e.g. from the lightbox), let locked cells retry
     // without waiting for a full gallery refresh.
     window.addEventListener('tdrive:unlocked', rearmLocked);
+    // Phone gestures: a long press starts a selection, a pull from the top
+    // refreshes. Both share the file list's helpers so they feel the same.
+    if (isMobilePlatform()) {
+        touchCleanups = [
+            bindLongPress(host, '.gallery-cell', (cell) => toggleGallerySelection(Number(cell.dataset.index ?? -1))),
+            bindPullToRefresh(host, () => appActions().triggerRefresh()),
+        ];
+    }
 
     return teardownGallery;
 }
@@ -46,10 +58,36 @@ export function teardownGallery(): void {
     backgroundRenderToken += 1;
     galleryEl?.removeEventListener('click', onGalleryClick);
     window.removeEventListener('tdrive:unlocked', rearmLocked);
+    for (const cleanup of touchCleanups.splice(0)) cleanup();
     teardownGalleryController();
     galleryEl = null;
     currentItems = [];
     currentChannelId = 0;
+}
+
+// The gallery reuses the file list's selection, keyed the way its rows are,
+// so the selection bar's Move and Delete work on photos unchanged.
+export function toggleGallerySelection(index: number): void {
+    const item = currentItems[index];
+    if (!item) return;
+    const key = `file:${item.msgId}`;
+    if (state.selectedItems.has(key)) {
+        state.selectedItems.delete(key);
+    } else {
+        const mine = canOwnerActOnFile(item);
+        state.selectedItems.set(key, {
+            type: 'file',
+            id: item.msgId,
+            name: item.name,
+            size: item.encrypted && item.plaintextSize > 0 ? item.plaintextSize : item.size,
+            source: 'fs',
+            parentId: item.parentId,
+            uploaderID: item.uploaderId,
+            canDelete: mine,
+            canRename: mine,
+        });
+    }
+    updateSelectionBar();
 }
 
 // setPhotosMode toggles the whole main view between the file list and the
@@ -118,6 +156,10 @@ function onGalleryClick(event: MouseEvent): void {
     if (!cell) return;
     const index = Number(cell.dataset.index ?? -1);
     if (index < 0 || index >= currentItems.length) return;
+    if (isMobilePlatform() && state.selectedItems.size > 0) {
+        toggleGallerySelection(index);
+        return;
+    }
     void openGalleryLightbox(index);
 }
 

@@ -359,3 +359,305 @@
 .action-icon.del { color: var(--danger); border-color: var(--overlay-danger-2); }
 .action-icon.del:hover { background: var(--overlay-danger-1); }
 
+
+/* ====================== PHONE ROWS ====================== */
+/* Scoped to html.mobile, which the shell sets on iOS and Android. The list
+   becomes a two-line list: a 32px type icon, the name over one meta line, and
+   a trailing overflow button. Rows are full-bleed with a single hairline inset
+   to the text column, tinted for 80ms on press, and never hover on touch. */
+html.mobile .file-list-box {
+    padding: 0;
+    touch-action: pan-y;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+}
+html.mobile .file-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 56px;
+    margin: 0;
+    padding: 8px 4px 8px 16px;
+    border-radius: 0;
+    transition: background-color 80ms var(--ease-standard);
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+html.mobile .file-row + .file-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 60px;
+    right: 0;
+    height: 1px;
+    background: var(--color-border-soft);
+}
+html.mobile .file-row:hover:not(.is-selected) { background: transparent; }
+@media (hover: hover) {
+    html.mobile .file-row:hover:not(.is-selected) { background: var(--bg-panel); }
+}
+html.mobile .file-row:active:not(.is-selected) { background: var(--overlay-neutral-2); }
+html.mobile .drive-row.is-selected { box-shadow: none; }
+html.mobile .file-row.is-keyboard-active:not(.is-selected) { box-shadow: none; }
+
+html.mobile .row-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 12px;
+    color: var(--color-text);
+    font-size: 15px;
+    font-weight: var(--weight-semibold);
+    line-height: 1.35;
+    user-select: none;
+    -webkit-user-select: none;
+}
+html.mobile .row-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+/* Middle truncation: the head gives way, the tail keeps the extension. */
+html.mobile .row-label {
+    display: flex;
+    min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+}
+/* pre, not nowrap: the seam between head and tail can be a space, and
+   nowrap would drop it as a hanging space at the end of the head. */
+html.mobile .row-label-head {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+}
+html.mobile .row-label-tail {
+    flex: 0 0 auto;
+    white-space: pre;
+}
+html.mobile .row-sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: var(--weight-medium);
+    line-height: 1.35;
+}
+html.mobile .row-sub-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+html.mobile .file-lock-badge { margin: 0; }
+html.mobile .file-lock-badge svg { width: 12px; height: 12px; }
+html.mobile .uploader-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    max-width: 12ch;
+    height: 20px;
+    margin: 0;
+    padding: 0 8px 0 2px;
+    border-radius: var(--radius-pill);
+    background: var(--overlay-neutral-2);
+    color: var(--text-main);
+    font-size: 12px;
+    font-weight: var(--weight-semibold);
+    line-height: 1;
+    vertical-align: baseline;
+}
+html.mobile .uploader-initials {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-pill);
+    background: var(--overlay-accent-3);
+    color: var(--color-text);
+    font-size: 9px;
+    font-weight: var(--weight-strong);
+    letter-spacing: 0.02em;
+}
+
+html.mobile .file-type-icon,
+html.mobile .folder-chip {
+    width: 32px;
+    height: 32px;
+    margin: 0;
+    border-radius: var(--radius-md);
+}
+html.mobile .folder-chip svg,
+html.mobile .file-type-icon svg { width: 20px; height: 20px; stroke-width: 1.75; }
+
+/* Selection mode: every row grows a check so a tap reads as a toggle. The
+   column slides open rather than popping in (motion-12). */
+html.mobile .row-check {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius-pill);
+    color: var(--color-on-accent);
+    --motion-enter-x: -6px;
+    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
+    transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .row-check svg { opacity: 0; }
+html.mobile .is-selected .row-check {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+html.mobile .is-selected .row-check svg { opacity: 1; }
+
+html.mobile .row-actions { flex: 0 0 auto; gap: 0; }
+html.mobile .action-icon.row-more {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-muted);
+    -webkit-tap-highlight-color: transparent;
+}
+/* A 32px glyph with a 44px target (accessibility-7). */
+html.mobile .action-icon.row-more::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+}
+html.mobile .action-icon.row-more:hover { background: transparent; }
+@media (hover: hover) {
+    html.mobile .action-icon.row-more:hover { background: var(--overlay-neutral-2); color: var(--text-main); }
+}
+html.mobile .action-icon.row-more:active { background: var(--overlay-neutral-2); color: var(--text-main); transform: none; }
+html.mobile .action-icon.row-more svg { width: 20px; height: 20px; }
+html.mobile .pending-folder .pending-indicator { margin: 0; }
+
+/* Empty and error states: one sentence, then the next action. */
+html.mobile .file-state {
+    min-height: 60vh;
+    padding: 32px 24px;
+    gap: 6px;
+}
+html.mobile .file-state-icon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 6px;
+    border-radius: var(--radius-lg);
+}
+html.mobile .file-state-icon svg { width: 24px; height: 24px; }
+html.mobile .file-state-title {
+    font-size: 17px;
+    font-weight: var(--weight-strong);
+    text-wrap: balance;
+}
+html.mobile .file-state-body {
+    font-size: 15px;
+    line-height: 1.5;
+    text-wrap: pretty;
+}
+html.mobile .file-state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 14px;
+}
+html.mobile .file-state-actions .secondary-btn {
+    min-height: 44px;
+    padding: 0 18px;
+    font-size: 15px;
+}
+html.mobile .file-state-actions .secondary-btn:first-child {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--color-on-accent);
+}
+html.mobile .file-state-actions .secondary-btn:active { transform: scale(0.97); }
+
+/* First-load skeleton in the phone row's own shape. */
+html.mobile .file-state.is-loading { padding: 0; }
+html.mobile .file-state-skeleton-row {
+    position: relative;
+    grid-template-columns: 32px minmax(0, 1fr);
+    grid-template-areas: "icon bar" "icon meta";
+    gap: 4px 12px;
+    align-content: center;
+    min-height: 56px;
+    padding: 0 16px;
+    border-bottom: 0;
+}
+html.mobile .file-state-skeleton-row + .file-state-skeleton-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 60px;
+    right: 0;
+    height: 1px;
+    background: var(--color-border-soft);
+}
+html.mobile .file-state-skeleton-name { display: contents; }
+html.mobile .file-state-skeleton-icon { grid-area: icon; align-self: center; width: 32px; height: 32px; border-radius: var(--radius-md); }
+html.mobile .file-state-skeleton-bar { grid-area: bar; align-self: end; height: 12px; }
+html.mobile .file-state-skeleton-meta { grid-area: meta; align-self: start; width: 38%; height: 9px; }
+html.mobile .file-state-skeleton-meta + .file-state-skeleton-meta,
+html.mobile .file-state-skeleton-action { display: none; }
+
+/* Pull to refresh: a small ring slides in over the first rows as the pull
+   grows, snaps to its resting spot once armed and spins until the refresh
+   settles. The rows never move, so the virtualised list stays untouched. */
+html.mobile .pull-refresh {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    display: flex;
+    justify-content: center;
+    height: 0;
+    overflow: visible;
+    pointer-events: none;
+}
+html.mobile .pull-refresh-disc {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-2);
+    color: var(--accent);
+    opacity: 0;
+    transform: translateY(calc(var(--pull, 0px) - 44px));
+    transition: transform var(--motion-med) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard);
+}
+html.mobile .pull-refresh.is-pulling .pull-refresh-disc { transition: opacity var(--motion-fast) var(--ease-standard); }
+html.mobile .pull-refresh.is-pulling .pull-refresh-disc,
+html.mobile .pull-refresh.is-refreshing .pull-refresh-disc { opacity: 1; }
+html.mobile .pull-refresh svg {
+    width: 18px;
+    height: 18px;
+    opacity: calc(0.35 + var(--pull-progress, 0) * 0.65);
+    transform: rotate(calc(var(--pull-progress, 0) * 360deg)) scale(calc(0.7 + var(--pull-progress, 0) * 0.3));
+}
+html.mobile .pull-refresh.is-refreshing svg {
+    opacity: 1;
+    animation: pull-refresh-spin 1.2s linear infinite;
+}
+@keyframes pull-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .pull-refresh.is-refreshing svg { animation: none; transform: rotate(270deg); }
+    html.mobile .row-check { animation: none; }
+}

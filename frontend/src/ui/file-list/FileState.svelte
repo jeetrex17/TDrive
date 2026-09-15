@@ -10,6 +10,8 @@
         body?: string;
         actionLabel?: string;
         onAction?: () => void;
+        secondaryActionLabel?: string;
+        onSecondaryAction?: () => void;
     }
 
     let {
@@ -18,6 +20,8 @@
         body = '',
         actionLabel = '',
         onAction,
+        secondaryActionLabel = '',
+        onSecondaryAction,
     }: FileStateProps = $props();
 </script>
 
@@ -50,6 +54,9 @@
     {#if actionLabel && onAction}
         <div class="file-state-actions">
             <button class="secondary-btn" type="button" onclick={onAction}>{actionLabel}</button>
+            {#if secondaryActionLabel && onSecondaryAction}
+                <button class="secondary-btn" type="button" onclick={onSecondaryAction}>{secondaryActionLabel}</button>
+            {/if}
         </div>
     {/if}
 </div>
