@@ -112,6 +112,17 @@
         background: color-mix(in srgb, var(--danger) 12%, transparent);
     }
 
+    /* Phones read this at arm's length: section and body sizes from the
+       mobile type scale, nothing else changes. */
+    :global(html.mobile) .state-title {
+        font-size: 1.0625rem;
+    }
+
+    :global(html.mobile) .state-body {
+        font-size: 0.9375rem;
+        line-height: 1.5;
+    }
+
     @keyframes state-spin {
         to { transform: rotate(360deg); }
     }

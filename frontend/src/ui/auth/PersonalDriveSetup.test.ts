@@ -18,7 +18,10 @@ function renderSetup(overrides: Record<string, unknown> = {}) {
     }).body;
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+});
 
 describe('PersonalDriveSetup', () => {
     it('renders an announced loading state', () => {
@@ -98,5 +101,21 @@ describe('PersonalDriveSetup', () => {
         expect(body).toContain('class="drive-title-text ');
         expect(body).toContain('title="TDrive-with-a-very-long-unbroken-channel-name"');
         expect(body).toContain('Recommended');
+    });
+
+    it('keeps Continue in reading order on desktop and moves it to the phone bar', () => {
+        const candidate = { id: '8200', title: 'TDrive', createdAt: 100, hasActivity: true, recommended: true };
+        const desktop = renderSetup({ candidates: [candidate] });
+        expect(desktop).toContain('Continue');
+        expect(desktop).not.toContain('Use this drive');
+        expect(desktop.indexOf('data-drive-continue')).toBeLessThan(desktop.indexOf('data-drive-scan') === -1
+            ? desktop.indexOf('data-drive-create-request')
+            : desktop.indexOf('data-drive-scan'));
+
+        vi.stubGlobal('window', { location: { search: '?mobile=1' } });
+        const phone = renderSetup({ candidates: [candidate] });
+        expect(phone).toContain('Use this drive');
+        expect(phone).not.toContain('>Continue<');
+        expect(phone.indexOf('class="auth-actions"')).toBeLessThan(phone.indexOf('data-drive-continue'));
     });
 });

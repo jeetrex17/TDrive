@@ -401,7 +401,7 @@ export function connectAuthEvents(): () => void {
         // visible so the user can correct it without requesting another code.
         onRuntimeEvent('login-code-invalid', () => {
             showAuthView('code');
-            failAuthSubmission('code', 'That code was incorrect. Check it and try again.');
+            failAuthSubmission('code', 'That code was incorrect. Check the Telegram message and try again.');
         }),
         onRuntimeEvent('gothint', (hint) => {
             const text = (hint ?? '').toString().trim();

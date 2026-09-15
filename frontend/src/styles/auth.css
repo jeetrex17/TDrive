@@ -133,3 +133,160 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .input-with-action .input-action-btn[data-state="visible"] .icon-eye { display: none; }
 .input-with-action .input-action-btn[data-state="visible"] .icon-eye-off { display: block; }
 
+
+/* === AUTH SCREENS ON PHONES === */
+/* The phone hosts put html.mobile on the root; nothing below applies on the
+   desktop card. A step is a full-bleed page instead: the body scrolls between
+   the safe areas and the primary button lives in a bar at the bottom, which
+   the keyboard action keeps above the keyboard through --auth-keyboard-inset.
+   On desktop the two page containers are display: contents, so the card's
+   flex layout is untouched. */
+.auth-page-body,
+.auth-actions { display: contents; }
+
+html.mobile #auth-wrapper {
+    display: block;
+    padding: 0;
+}
+
+html.mobile .auth-box {
+    --auth-keyboard-inset: 0px;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: none;
+    height: calc(100% - var(--auth-keyboard-inset));
+    padding: 0;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    --motion-enter-x: 8px;
+    --motion-enter-y: 0;
+}
+
+html.mobile .auth-page-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    padding: calc(env(safe-area-inset-top, 0px) + 40px) 16px 8px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+/* The welcome is the one screen without a field to keep near the top. */
+html.mobile .auth-welcome .auth-page-body { justify-content: center; }
+
+html.mobile .auth-actions {
+    display: block;
+    flex: none;
+    padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+}
+
+html.mobile .auth-icon-box { display: none; }
+
+html.mobile .auth-box h2 {
+    margin-bottom: 8px;
+    font-size: 1.375rem;
+    font-weight: 700;
+    line-height: 1.2;
+    text-wrap: balance;
+}
+
+html.mobile .auth-box p {
+    font-size: 0.9375rem;
+    line-height: 1.5;
+}
+
+html.mobile .auth-box input {
+    min-height: 48px;
+    padding: 12px 14px;
+    margin-bottom: 0;
+    /* 16px is the floor: iOS zooms the page into anything smaller. */
+    font-size: 1rem;
+    background: var(--color-surface-1);
+    border-radius: var(--radius-lg);
+}
+
+html.mobile .auth-box input::placeholder { color: var(--color-text-subtle); }
+
+html.mobile .auth-box .code-input {
+    font-size: 1.375rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.2em;
+}
+
+html.mobile .auth-box .code-input::placeholder {
+    font-weight: 500;
+    letter-spacing: 0.2em;
+}
+
+html.mobile .auth-actions .primary-btn {
+    min-height: 50px;
+    padding: 0 16px;
+    font-size: 1rem;
+    border-radius: var(--radius-lg);
+}
+
+html.mobile .auth-actions .primary-btn:hover { transform: none; }
+html.mobile .auth-actions .primary-btn:active:not(:disabled) { transform: scale(0.98); }
+
+html.mobile .auth-helper-row {
+    justify-content: flex-start;
+    margin: -8px 0 20px;
+    font-size: 0.9375rem;
+}
+
+html.mobile .auth-helper-pill {
+    padding: 4px 10px;
+    font-size: 0.9375rem;
+    background: var(--color-surface-1);
+}
+
+html.mobile .auth-link {
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 0.9375rem;
+}
+
+html.mobile .auth-caption {
+    margin-top: -12px;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+html.mobile .auth-box .input-with-action { margin-bottom: 0; }
+html.mobile .auth-box .input-with-action input { padding-right: 56px; }
+html.mobile .auth-box .input-with-action .input-action-btn {
+    right: 2px;
+    width: 44px;
+    height: 44px;
+}
+html.mobile .auth-box .input-with-action .input-action-btn:hover {
+    background: transparent;
+    border-color: transparent;
+}
+html.mobile .auth-box .input-with-action .input-action-btn:active {
+    transform: translateY(-50%);
+    background: var(--overlay-neutral-2);
+}
+
+/* The Paste control is a word, not a glyph, so it keeps its own width. */
+html.mobile .auth-box .input-with-action .input-action-text {
+    width: auto;
+    padding: 0 12px;
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.9375rem;
+    font-weight: 600;
+}
+html.mobile .auth-box .input-with-action:has(.input-action-text) input { padding-right: 76px; }
+
+html.mobile .auth-box button:focus-visible,
+html.mobile .auth-box input:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
