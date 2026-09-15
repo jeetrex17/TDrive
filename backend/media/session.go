@@ -45,6 +45,13 @@ type MediaStats struct {
 	Thumbnails ThroughputStats `json:"thumbnails"`
 }
 
+// playbackReadAhead is how many 1 MiB blocks stay in flight beyond the block
+// the player is reading. Throughput is blocks in flight divided by Telegram's
+// per-request latency, so this and the connection pool are what set the
+// ceiling: eight blocks cover a second of a high-bitrate remux on a slow link
+// while staying well inside the block cache.
+const playbackReadAhead = 8
+
 type SessionOptions struct {
 	Context               context.Context
 	EnableVideoThumbnails bool
@@ -87,8 +94,8 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		lastTouch: time.Now(),
 	}
 	s.reader = NewRangeReader(RangeReaderConfig{
-		Client:         ranges,
-		PrefetchBlocks: 2,
+		Client:    ranges,
+		ReadAhead: playbackReadAhead,
 	})
 	s.warmContainerIndex()
 	if opts.EnableVideoThumbnails {
@@ -100,10 +107,9 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 			thumbnailCache = nil
 		}
 		s.thumbReader = NewRangeReader(RangeReaderConfig{
-			Client:         ranges,
-			MaxCacheBytes:  8 * 1024 * 1024,
-			MaxConcurrency: 3,
-			Background:     true,
+			Client:        ranges,
+			MaxCacheBytes: 8 * 1024 * 1024,
+			Background:    true,
 			OnFloodWait: func(wait time.Duration) {
 				if s.thumbs != nil {
 					s.thumbs.NoteFloodWait(wait)

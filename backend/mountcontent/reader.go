@@ -111,9 +111,9 @@ func New(cfg Config) (*Opener, error) {
 		documentResolutions: mountcache.NewCoalescer[documentRefKey, tgclient.DocumentRef](0),
 		encryptedReaders:    make(map[*Reader]struct{}),
 		reader: media.NewRangeReader(media.RangeReaderConfig{
-			Client:         cfg.Ranges,
-			PrefetchBlocks: 1,
-			Background:     true,
+			Client:     cfg.Ranges,
+			ReadAhead:  1,
+			Background: true,
 		}),
 	}, nil
 }
