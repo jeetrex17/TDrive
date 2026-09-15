@@ -17,6 +17,7 @@ import (
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
+	"golang.org/x/sync/singleflight"
 )
 
 // Gotd is the production Client implementation. It keeps one long-lived gotd
@@ -31,17 +32,26 @@ type Gotd struct {
 	mu     sync.Mutex
 	client *telegram.Client
 
-	cdnMu sync.Mutex
-	cdn   map[int]telegram.CloseInvoker
+	// mediaMu guards the per-data-center connections that carry file bytes:
+	// CDN invokers and upload.getFile pools. They belong to the run scope and
+	// are closed with it; poolRetryAt backs off a data center whose pool could
+	// not be dialed, and poolFlights lets concurrent first reads share a dial.
+	mediaMu     sync.Mutex
+	cdn         map[int]telegram.CloseInvoker
+	pools       map[int]telegram.CloseInvoker
+	poolRetryAt map[int]time.Time
+	poolFlights singleflight.Group
 }
 
 // NewGotd constructs a Client that dispatches onto one shared connection built
 // from the given factory. In production wire this to auth.Connect.
 func NewGotd(connect func() (*telegram.Client, error)) *Gotd {
 	g := &Gotd{
-		connect: connect,
-		cdn:     make(map[int]telegram.CloseInvoker),
-		writes:  newWriteCoordinator(time.Now, sleepContext),
+		connect:     connect,
+		cdn:         make(map[int]telegram.CloseInvoker),
+		pools:       make(map[int]telegram.CloseInvoker),
+		poolRetryAt: make(map[int]time.Time),
+		writes:      newWriteCoordinator(time.Now, sleepContext),
 	}
 	g.conn = newLiveConn(g.scope)
 	return g
@@ -56,7 +66,7 @@ func (g *Gotd) scope(runCtx context.Context, ready func()) error {
 		return fmt.Errorf("tgclient: connect: %w", err)
 	}
 	return client.Run(runCtx, func(rctx context.Context) error {
-		defer g.closeCDN()
+		defer g.closeMediaConns()
 		g.mu.Lock()
 		g.client = client
 		g.mu.Unlock()
@@ -100,15 +110,24 @@ func (g *Gotd) runClient(ctx context.Context, fn func(ctx context.Context, clien
 
 // Close tears down the shared connection. Safe to call once at shutdown.
 func (g *Gotd) Close() {
-	g.closeCDN()
+	g.closeMediaConns()
 	g.conn.Close()
 }
 
-func (g *Gotd) closeCDN() {
-	g.cdnMu.Lock()
-	conns := g.cdn
+// closeMediaConns drops every CDN invoker and getFile pool. They are dialed
+// again on demand by the next run scope.
+func (g *Gotd) closeMediaConns() {
+	g.mediaMu.Lock()
+	conns := make([]telegram.CloseInvoker, 0, len(g.cdn)+len(g.pools))
+	for _, conn := range g.cdn {
+		conns = append(conns, conn)
+	}
+	for _, pool := range g.pools {
+		conns = append(conns, pool)
+	}
 	g.cdn = make(map[int]telegram.CloseInvoker)
-	g.cdnMu.Unlock()
+	g.pools = make(map[int]telegram.CloseInvoker)
+	g.mediaMu.Unlock()
 	for _, conn := range conns {
 		_ = conn.Close()
 	}
