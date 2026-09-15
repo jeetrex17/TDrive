@@ -6,6 +6,7 @@
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import PlayIcon from '@lucide/svelte/icons/play';
     import FileState from './FileState.svelte';
+    import { fileTypeFamily, fileTypeIcon } from './file-type';
     import { sortFileListRows } from './file-sort';
     import { fileListView } from './file-list-store';
     import { fileSortState } from './file-sort-store';
@@ -179,13 +180,18 @@
                         </span>
                         <span class="row-label">{row.name}</span>
                     {:else}
-                        <span class="file-ext-text" aria-hidden="true">{row.ext}</span>
+                        {@const family = fileTypeFamily(row.ext)}
+                        {@const TypeIcon = fileTypeIcon(family)}
+                        <span class="file-type-icon" data-family={family} aria-hidden="true">
+                            <TypeIcon size={18} strokeWidth={2} aria-hidden="true" />
+                        </span>
                         {#if row.encrypted}
                             <span class="file-lock-badge" title="Encrypted" aria-label="Encrypted">
                                 <LockKeyholeIcon size={12} strokeWidth={2} aria-hidden="true" />
                             </span>
                         {/if}
-                        <span class="row-label">{row.baseName}</span>
+                        <!-- The glyph says document or video; only the name says mkv or mp4. -->
+                        <span class="row-label">{row.name}</span>
                         {#if row.uploaderChip}
                             <span class="uploader-chip">{row.uploaderChip.label}</span>
                         {/if}

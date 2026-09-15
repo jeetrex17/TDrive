@@ -264,17 +264,43 @@
     background: var(--overlay-danger-1);
 }
 
-.file-ext-text {
-    display: inline-block;
-    flex: 0 0 auto;
-    min-width: 3.2ch;
+/*
+ * Type glyph. It takes the same 40px box the folder chip does, so names line up
+ * whatever a row holds, and stays a bare glyph rather than a capsule: the tinted
+ * chip is what marks a row as a folder.
+ *
+ * The hues are fixed rather than derived from the palette. A theme-derived set
+ * would collapse toward one another in the low-contrast palettes, which is the
+ * one thing this is here to prevent.
+ */
+.file-type-icon {
+    width: 40px;
+    height: 20px;
     margin-right: 12px;
-    font-size: 12px;
-    font-weight: var(--weight-strong);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--color-text-subtle);
-    opacity: 0.95;
+}
+
+.file-type-icon svg { width: 16px; height: 16px; }
+
+.file-type-icon[data-family="document"] { --file-type-color: #e0736a; }
+.file-type-icon[data-family="image"] { --file-type-color: #4bb5c9; }
+.file-type-icon[data-family="video"] { --file-type-color: #9a86e8; }
+.file-type-icon[data-family="audio"] { --file-type-color: #dba14f; }
+.file-type-icon[data-family="sheet"] { --file-type-color: #68b361; }
+.file-type-icon[data-family="code"] { --file-type-color: #5b9bea; }
+.file-type-icon[data-family="archive"] { --file-type-color: #b08968; }
+
+.file-type-icon[data-family]:not([data-family="other"]) {
+    color: var(--file-type-color);
+}
+
+/* The hues are tuned for a dark surface; on a light one they need weight. */
+:root[data-theme-appearance="light"] .file-type-icon[data-family]:not([data-family="other"]) {
+    color: color-mix(in srgb, var(--file-type-color) 76%, black);
 }
 
 .row-name {

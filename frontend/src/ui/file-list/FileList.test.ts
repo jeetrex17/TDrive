@@ -89,6 +89,25 @@ describe('FileList', () => {
         expect(body).not.toContain('data-uploader-slot');
     });
 
+    it('marks a file row with its type family and shows the name with its extension', () => {
+        showFileListRows([makeFileRow({ name: 'clip.mkv', baseName: 'clip', ext: 'MKV' })]);
+
+        const { body } = render(FileList);
+
+        expect(body).toContain('data-family="video"');
+        // The glyph cannot tell mkv from mp4, so the extension stays in the name.
+        expect(body).toContain('<span class="row-label">clip.mkv</span>');
+        expect(body).not.toContain('file-ext-text');
+    });
+
+    it('falls back to the neutral family for an unrecognised extension', () => {
+        showFileListRows([makeFileRow({ name: 'notes.xyzzy', baseName: 'notes', ext: 'XYZZY' })]);
+
+        const { body } = render(FileList);
+
+        expect(body).toContain('data-family="other"');
+    });
+
     it('renders long file names through a truncating label with a full-name tooltip', () => {
         const longName = '@Jesseverse_The_Mentalist_S02E05_720p_WEB_DL_x264_350MB_PaHe_in.mkv';
         showFileListRows([makeFileRow({
