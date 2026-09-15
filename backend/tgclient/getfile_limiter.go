@@ -26,10 +26,10 @@ const (
 	// The remaining global slots stay reserved for foreground playback reads.
 	MaxConcurrentBackgroundGetFile = MaxConcurrentGetFile - PlaybackGetFileReserve
 
-	// DefaultDownloadThreads is the per-download random-access thread budget. With
-	// two multipart parts in flight this fills the background pool while still
-	// preserving playback headroom under MaxConcurrentGetFile.
-	DefaultDownloadThreads = 3
+	// DefaultDownloadThreads is the per-download random-access thread budget:
+	// one block in flight per pooled connection. Two downloads fill the
+	// background pool between them while playback keeps its reserve.
+	DefaultDownloadThreads = MediaPoolSize
 
 	backgroundGlobalRetry = 10 * time.Millisecond
 )

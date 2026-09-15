@@ -33,7 +33,7 @@ func TestGetFileBudgetTracksPoolSize(t *testing.T) {
 	if MaxConcurrentGetFile != 3*MediaPoolSize || PlaybackGetFileReserve != MediaPoolSize {
 		t.Fatalf("budget = %d/%d for a pool of %d", MaxConcurrentGetFile, PlaybackGetFileReserve, MediaPoolSize)
 	}
-	if MaxConcurrentBackgroundGetFile <= 2*DefaultDownloadThreads {
+	if MaxConcurrentBackgroundGetFile < 2*DefaultDownloadThreads {
 		t.Fatalf("background pool %d cannot fit two downloads of %d threads", MaxConcurrentBackgroundGetFile, DefaultDownloadThreads)
 	}
 }

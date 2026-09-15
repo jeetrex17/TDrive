@@ -21,6 +21,11 @@ import (
 // WarmTransport pays at startup.
 const MediaPoolSize = 4
 
+// UploadThreads is how many 512 KiB parts one upload keeps in flight across
+// the home data center's pool. gotd's default is a single part, which makes
+// an upload wait a full round trip per part however fast the link is.
+const UploadThreads = 2 * MediaPoolSize
+
 // poolRetryAfter is how long a data center whose pool could not be dialed
 // keeps reading over the primary connection before another attempt.
 const poolRetryAfter = 30 * time.Second
@@ -38,6 +43,25 @@ func (g *Gotd) fileAPI(ctx context.Context, client *telegram.Client, dcID int) (
 		return client.API(), false
 	}
 	return tg.NewClient(invoker), true
+}
+
+// uploadAPI returns the pool for the home data center, where uploaded parts
+// are stored, or the primary connection while that pool cannot be dialed.
+func (g *Gotd) uploadAPI(ctx context.Context, client *telegram.Client) *tg.Client {
+	api, _ := g.fileAPI(ctx, client, client.Config().ThisDC)
+	return api
+}
+
+// downloadVia runs one whole-file transfer over the pool for the document's
+// data center, repeating it on the primary connection should Telegram answer
+// with a redirect the pool cannot follow.
+func (g *Gotd) downloadVia(ctx context.Context, client *telegram.Client, doc *tg.Document, transfer func(api *tg.Client) error) error {
+	api, pooled := g.fileAPI(ctx, client, doc.DCID)
+	err := transfer(api)
+	if pooled && isFileMigrate(err) {
+		return transfer(client.API())
+	}
+	return err
 }
 
 // filePool returns the connection pool for dcID, dialing it on first use.

@@ -291,18 +291,19 @@ func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 	// The uploader keeps each 512 KiB request buffer alive until its RPC
 	// returns. Reacquiring inside retryingUploadClient therefore retries only
 	// the failed Telegram part after a connection restart, rather than rereading
-	// the complete ~1.9 GiB TDrive segment.
+	// the complete ~1.9 GiB TDrive segment. Parts travel over the home data
+	// center's connection pool, several at a time.
 	partClient := &retryingUploadClient{
 		policy: DefaultWriteFloodWaitRetryPolicy(),
 		run: func(ctx context.Context, action func(uploader.Client) error) error {
 			return g.writes.Do(ctx, writeClassUploadPart, func() error {
-				return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-					return action(api)
+				return g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
+					return action(g.uploadAPI(ctx, client))
 				})
 			})
 		},
 	}
-	u := uploader.NewUploader(partClient).WithPartSize(uploader.MaximumPartSize)
+	u := uploader.NewUploader(partClient).WithPartSize(uploader.MaximumPartSize).WithThreads(UploadThreads)
 	var src io.Reader = r
 	if onProgress != nil {
 		src = &progressReader{
@@ -489,8 +490,8 @@ func (g *Gotd) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 
 func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error {
 	slog.Debug("tgclient: DownloadFile starting", "channel_id", peer.ChannelID, "msg_id", msgID)
-	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
+	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
+		doc, _, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
 		if err != nil {
 			return err
 		}
@@ -508,11 +509,13 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 		}
 		defer release()
 
-		d := downloader.NewDownloader()
-		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, dst); err != nil {
-			return fmt.Errorf("tgclient: download: %w", err)
-		}
-		return nil
+		return g.downloadVia(ctx, client, doc, func(api *tg.Client) error {
+			d := downloader.NewDownloader()
+			if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).Stream(ctx, dst); err != nil {
+				return fmt.Errorf("tgclient: download: %w", err)
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		slog.Error("tgclient: DownloadFile failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
@@ -524,8 +527,8 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 
 func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, w io.WriterAt, baseOffset int64, onProgress func(done, total int64)) error {
 	slog.Debug("tgclient: DownloadFileAt starting", "channel_id", peer.ChannelID, "msg_id", msgID, "base_offset", baseOffset)
-	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
+	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
+		doc, _, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
 		if err != nil {
 			return err
 		}
@@ -545,9 +548,15 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 				onProgress: onProgress,
 			}
 		}
-		d := downloader.NewDownloader()
-		if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).WithThreads(threads).Parallel(ctx, dst); err != nil {
-			return fmt.Errorf("tgclient: download: %w", err)
+		err = g.downloadVia(ctx, client, doc, func(api *tg.Client) error {
+			d := downloader.NewDownloader()
+			if _, err := d.Download(api, doc.AsInputDocumentFileLocation()).WithThreads(threads).Parallel(ctx, dst); err != nil {
+				return fmt.Errorf("tgclient: download: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 		if onProgress != nil {
 			onProgress(doc.Size, doc.Size)
@@ -563,8 +572,8 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 }
 
 func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {
-	return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		doc, _, err := getDocumentByMessageID(ctx, api, peer, msgID)
+	return g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
+		doc, _, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
 		if err != nil {
 			return err
 		}
@@ -574,17 +583,18 @@ func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID 
 		}
 		defer release()
 
-		d := downloader.NewDownloader()
 		location := &tg.InputDocumentFileLocation{
 			ID:            doc.ID,
 			AccessHash:    doc.AccessHash,
 			FileReference: doc.FileReference,
 			ThumbSize:     thumbType,
 		}
-		if _, err := d.Download(api, location).Stream(ctx, w); err != nil {
-			return fmt.Errorf("tgclient: download thumbnail: %w", err)
-		}
-		return nil
+		return g.downloadVia(ctx, client, doc, func(api *tg.Client) error {
+			if _, err := downloader.NewDownloader().Download(api, location).Stream(ctx, w); err != nil {
+				return fmt.Errorf("tgclient: download thumbnail: %w", err)
+			}
+			return nil
+		})
 	})
 }
 
