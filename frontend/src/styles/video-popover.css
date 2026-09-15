@@ -196,3 +196,23 @@
         transform-origin: 100% 100%;
     }
 }
+
+/* Phone: the popover is a sheet from the bottom edge, opaque so nothing has to
+   be blurred on a low-end device, padded past the home indicator. */
+html.mobile .video-popover {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    max-height: min(70vh, calc(100% - var(--video-panel-top, 76px) - 16px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    background: rgba(13, 17, 26, 0.98);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    transform-origin: 50% 100%;
+}
+html.mobile .video-popover[hidden],
+html.mobile .video-popover[data-state='closed'] { transform: translateY(16px); }
+html.mobile .video-popover-close { width: 44px; height: 44px; }

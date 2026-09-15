@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../api', () => ({
     openStream: mocks.openStream,
     closeMedia: mocks.closeMedia,
+    isMobilePlatform: () => false,
     onRuntimeEvent: (name: string, callback: () => void) => {
         mocks.eventsOn(name, callback);
         mocks.events.set(name, callback);

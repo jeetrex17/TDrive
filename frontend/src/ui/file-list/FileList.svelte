@@ -1,12 +1,16 @@
 <script lang="ts">
     import { onMount } from 'svelte';
+    import CheckIcon from '@lucide/svelte/icons/check';
     import DownloadIcon from '@lucide/svelte/icons/download';
+    import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
     import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
     import FolderIcon from '@lucide/svelte/icons/folder';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import PlayIcon from '@lucide/svelte/icons/play';
+    import { isMobilePlatform } from '../../api';
     import FileState from './FileState.svelte';
     import { fileTypeFamily, fileTypeIcon } from './file-type';
+    import { rowMetaLine, splitRowLabel } from './row-meta';
     import { sortFileListRows } from './file-sort';
     import { fileListView } from './file-list-store';
     import { fileSortState } from './file-sort-store';
@@ -14,6 +18,10 @@
     import type { FileListAction, FileListFileRow, FileListRow, FolderListRow } from './types';
 
     type InteractiveRow = FolderListRow | FileListFileRow;
+
+    // The phone row is a two-line list item rather than a table row; the
+    // desktop grid below is untouched.
+    const mobile = isMobilePlatform();
 
     function dataType(row: FileListRow) {
         return row.kind === 'pending-folder' ? 'pending-folder' : row.kind;
@@ -38,7 +46,7 @@
     // #file-list. This handler keeps that bubbling contract explicit to Svelte.
     function onGridRowKeydown(_event: KeyboardEvent): void {}
 
-    const ESTIMATED_ROW_HEIGHT = 54;
+    const ESTIMATED_ROW_HEIGHT = mobile ? 56 : 54;
     const WINDOW_OVERSCAN = 8;
     let scrollTop = $state(0);
     let viewportHeight = $state(0);
@@ -63,6 +71,9 @@
             after: (visibleRows.length - end) * rowHeight,
         };
     });
+    // Selection mode on the phone: once anything is selected every row shows
+    // its check so a tap reads as toggling rather than opening.
+    const selecting = $derived(mobile && $selectedFileRowKeys.size > 0);
 
     function updateViewport(): void {
         if (!list) return;
@@ -116,6 +127,17 @@
     });
 </script>
 
+{#snippet phoneLabel(name: string, split: boolean)}
+    {@const label = split ? splitRowLabel(name) : { head: name, tail: '' }}
+    <span class="row-label">
+        {#if label.tail}
+            <span class="row-label-head">{label.head}</span><span class="row-label-tail">{label.tail}</span>
+        {:else}
+            <span class="row-label-head">{name}</span>
+        {/if}
+    </span>
+{/snippet}
+
 {#if $fileListView.kind === 'state'}
     <FileState
         kind={$fileListView.stateKind}
@@ -123,7 +145,113 @@
         body={$fileListView.body ?? ''}
         actionLabel={$fileListView.actionLabel ?? ''}
         onAction={$fileListView.onAction}
+        secondaryActionLabel={$fileListView.secondaryActionLabel ?? ''}
+        onSecondaryAction={$fileListView.onSecondaryAction}
     />
+{:else if mobile}
+    <div aria-hidden="true" style:height={`${rowWindow.before}px`}></div>
+    {#each rowWindow.rows as row, rowIndex (row.key)}
+        {#if row.kind === 'pending-folder'}
+            <div
+                class="file-row drive-row folder-row pending-folder"
+                use:measureRow
+                data-type="pending-folder"
+                data-temp-id={row.tempId}
+                role="row"
+                aria-rowindex={rowWindow.start + rowIndex + 2}
+                title="Creating..."
+            >
+                <div class="row-name" role="gridcell" aria-colindex="1" title={row.name}>
+                    <span class="folder-chip" aria-hidden="true">
+                        <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
+                    </span>
+                    <span class="row-text">
+                        {@render phoneLabel(row.name, false)}
+                        <span class="row-sub"><span class="row-sub-text">Creating...</span><span class="pending-indicator" aria-hidden="true"></span></span>
+                    </span>
+                </div>
+                <div class="row-actions" role="gridcell" aria-colindex="4"></div>
+            </div>
+        {:else}
+            {@const selected = $selectedFileRowKeys.has(row.selectionKey)}
+            {@const meta = rowMetaLine(row)}
+            <div
+                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${selected ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}`}
+                use:measureRow
+                data-type={dataType(row)}
+                data-row-key={row.selectionKey}
+                data-id={row.id}
+                data-name={row.name}
+                data-parent-id={row.parentId}
+                data-source={row.kind === 'file' ? row.source : undefined}
+                data-size={row.kind === 'file' ? String(row.size) : undefined}
+                data-uploader-id={row.kind === 'file' ? String(row.uploaderID) : undefined}
+                data-upload-time={row.kind === 'file' ? String(row.uploadTime) : undefined}
+                data-encrypted={row.kind === 'file' ? String(row.encrypted) : undefined}
+                data-can-delete={row.kind === 'file' ? String(row.canDelete) : undefined}
+                data-can-rename={row.kind === 'file' ? String(row.canRename) : undefined}
+                role="row"
+                aria-rowindex={rowWindow.start + rowIndex + 2}
+                aria-selected={selected ? 'true' : 'false'}
+                aria-label={row.ariaLabel}
+                tabindex={$activeFileRowKey === row.selectionKey ? 0 : -1}
+                onclick={(event) => onRowClick(event, row)}
+                ondblclick={(event) => onRowDoubleClick(event, row)}
+                onkeydown={onGridRowKeydown}
+            >
+                <div class="row-name" role="gridcell" aria-colindex="1" title={row.name}>
+                    {#if selecting}
+                        <span class="row-check" aria-hidden="true">
+                            <CheckIcon size={14} strokeWidth={3} aria-hidden="true" />
+                        </span>
+                    {/if}
+                    {#if row.kind === 'folder'}
+                        <span class="folder-chip" aria-hidden="true">
+                            <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
+                        </span>
+                    {:else}
+                        {@const family = fileTypeFamily(row.ext)}
+                        {@const TypeIcon = fileTypeIcon(family)}
+                        <span class="file-type-icon" data-family={family} aria-hidden="true">
+                            <TypeIcon size={20} strokeWidth={1.75} aria-hidden="true" />
+                        </span>
+                    {/if}
+                    <span class="row-text">
+                        {@render phoneLabel(row.name, row.kind === 'file')}
+                        {#if meta || (row.kind === 'file' && (row.encrypted || row.uploaderChip?.firstName))}
+                            <span class="row-sub">
+                                {#if meta}
+                                    <span class="row-sub-text">{meta}</span>
+                                {/if}
+                                {#if row.kind === 'file' && row.encrypted}
+                                    <span class="file-lock-badge" title="Encrypted" aria-label="Encrypted">
+                                        <LockKeyholeIcon size={12} strokeWidth={2} aria-hidden="true" />
+                                    </span>
+                                {/if}
+                                {#if row.kind === 'file' && row.uploaderChip?.firstName}
+                                    <span class="uploader-chip">
+                                        <span class="uploader-initials" aria-hidden="true">{row.uploaderChip.initials}</span>
+                                        {row.uploaderChip.firstName}
+                                    </span>
+                                {/if}
+                            </span>
+                        {/if}
+                    </span>
+                </div>
+                <div class="row-actions" role="gridcell" aria-colindex="4">
+                    <button
+                        class="action-icon row-more"
+                        type="button"
+                        aria-label={`More actions for ${row.name}`}
+                        aria-haspopup="menu"
+                    >
+                        <EllipsisIcon size={20} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                </div>
+            </div>
+        {/if}
+    {/each}
+    <div aria-hidden="true" style:height={`${rowWindow.after}px`}></div>
 {:else}
     <div aria-hidden="true" style:height={`${rowWindow.before}px`}></div>
     {#each rowWindow.rows as row, rowIndex (row.key)}

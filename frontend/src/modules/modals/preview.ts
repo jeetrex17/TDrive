@@ -1,10 +1,11 @@
-import { getPreviewFile, getPreviewThumbnail, hasOperationErrorCode, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
+import { getPreviewFile, getPreviewThumbnail, hasOperationErrorCode, isMobilePlatform, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
 import { state } from '../../state';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
+import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/touch-gestures';
 import type { PreviewPayload } from '../../types';
 import type { FileCommandItem } from '../../ui/file-list/types';
 import {
@@ -70,6 +71,9 @@ let panMoved = false;
 let panPointerId = -1;
 let panStartX = 0;
 let panStartY = 0;
+// Touch double taps go through the phone recogniser; the dblclick the browser
+// synthesises for them must not zoom a second time.
+let lastPointerType = "mouse";
 
 // Full-resolution data URLs keyed by drive + msgID, with neighbor prefetch so
 // next/prev is instant. Telegram message ids are scoped to a channel, so using
@@ -844,6 +848,7 @@ function handleZoomWheel(e: any) {
 
 function handleZoomDblClick(e: any) {
     if (!isPreviewVisible()) return;
+    if (lastPointerType === "touch" && isMobilePlatform()) return;
     e.preventDefault();
     if (zoomScale > 1) resetZoom();
     else zoomAt(e.clientX, e.clientY, 2.5);
@@ -880,6 +885,79 @@ function handlePanEnd(e: any) {
         imageEl.releasePointerCapture(e.pointerId);
     } catch {}
     if (imageEl) imageEl.style.cursor = zoomScale > 1 ? "grab" : "zoom-in";
+}
+
+// --- phone gestures: a tap toggles the chrome, a double tap and a pinch zoom,
+// a sideways swipe moves through the set and a swipe down closes. ---
+
+// A second finger turns a pan into a pinch, so the pan lets go of its pointer.
+function endPan() {
+    if (!panning) return;
+    panning = false;
+    try {
+        imageEl?.releasePointerCapture(panPointerId);
+    } catch {}
+    panPointerId = -1;
+}
+
+function settleDrag(animated: boolean) {
+    if (!imageEl || !modalEl) return;
+    const from = imageEl.style.transform;
+    imageEl.style.transform = "";
+    modalEl.style.removeProperty("--preview-dismiss");
+    if (!animated || !from || typeof imageEl.animate !== "function") return;
+    const reduceMotion = typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) return;
+    imageEl.animate([{ transform: from }, { transform: "none" }], { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" });
+}
+
+function previewTouchHandlers(): TouchGestureHandlers {
+    return {
+        tap: () => {
+            if (!isPreviewOpen() || !modalEl) return;
+            clearChromeHideTimer();
+            setChromeVisible(!modalEl.classList.contains("is-chrome-visible"));
+        },
+        doubleTap: (x, y) => {
+            if (!isPreviewVisible()) return;
+            if (zoomScale > 1) resetZoom();
+            else zoomAt(x, y, 2.5);
+        },
+        pinchStart: endPan,
+        pinch: (factor, x, y) => zoomAt(x, y, factor),
+        // A zoomed picture pans instead; the pan handlers above own that pointer.
+        dragStart: () => zoomScale === 1 && isPreviewVisible() && !modalEl?.classList.contains("is-preview-locked"),
+        drag: (dx, dy, axis) => {
+            if (!imageEl || !modalEl) return;
+            if (axis === "x") {
+                imageEl.style.transform = `translate3d(${dx}px, 0, 0)`;
+                return;
+            }
+            const drop = Math.max(0, dy);
+            imageEl.style.transform = `translate3d(0, ${drop}px, 0) scale(${Math.max(0.82, 1 - drop / 1400)})`;
+            modalEl.style.setProperty("--preview-dismiss", String(Math.min(1, drop / 240)));
+        },
+        dragEnd: (dx, dy, axis, velocity) => {
+            if (axis === "x") {
+                const step = dx < 0 ? 1 : -1;
+                const next = navIndex + step;
+                if ((Math.abs(dx) > 56 || velocity > 0.5) && next >= 0 && next < navItems.length) {
+                    settleDrag(false);
+                    void navigatePreview(step);
+                    return;
+                }
+                settleDrag(true);
+                return;
+            }
+            if (dy > 96 || (dy > 24 && velocity > 0.6)) {
+                settleDrag(false);
+                closePreviewModal();
+                return;
+            }
+            settleDrag(true);
+        },
+    };
 }
 
 // --- full-image cache + neighbor prefetch ---
@@ -1164,11 +1242,21 @@ export function activatePreviewModal(): () => void {
             panMoved = false;
             return;
         }
+        // On a phone a tap on the picture toggles the chrome; the X and a swipe
+        // down close.
+        if (isMobilePlatform()) return;
         if (event.target === modalEl || event.target === shellEl || event.target === stageEl) closePreviewModal();
     }) as EventListener);
-    listenPreview(modalEl, "pointermove", (() => {
+    listenPreview(modalEl, "pointermove", ((event: PointerEvent) => {
+        if (event.pointerType === "touch" && isMobilePlatform()) return;
         if (isPreviewOpen()) revealChrome();
     }) as EventListener);
+    if (isMobilePlatform()) {
+        listenPreview(stageEl, "pointerdown", ((event: PointerEvent) => {
+            lastPointerType = event.pointerType;
+        }) as EventListener, true);
+        previewListenerCleanups.push(bindTouchGestures(stageEl, previewTouchHandlers()));
+    }
     listenPreview(stageEl, "wheel", handleZoomWheel as EventListener, { passive: false });
     listenPreview(imageEl, "dblclick", handleZoomDblClick as EventListener);
     listenPreview(imageEl, "pointerdown", handlePanStart as EventListener);

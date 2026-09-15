@@ -45,6 +45,7 @@ import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from "../../ui/modals/modal-a11y";
+import { bindTouchGestures, type TouchGestureHandlers } from "../../ui/preview/touch-gestures";
 import { videoPlaybackPreferences } from "../../ui/video/video-preferences-store";
 import { loadAutoNextPreference } from "../video/video-playlist";
 import {
@@ -150,6 +151,11 @@ let videoHostObserver: MutationObserver | null = null;
 let videoHostEl: HTMLElement | null = null;
 let unbindVideoDOM: (() => void) | null = null;
 let unbindSpeedMenu: (() => void) | null = null;
+let unbindTouchGestures: (() => void) | null = null;
+// Where the last stage pointer came from: touch taps go through the phone
+// recogniser, and a tap that began on the chrome is the chrome's to handle.
+let stagePointerTouch = false;
+let stagePointerOnChrome = false;
 let videoDOM: VideoDOM | null = null;
 let geometry: VideoGeometryController | null = null;
 let transport: VideoTransportController | null = null;
@@ -1236,6 +1242,9 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
         updateMediaText(displayName, displaySize);
         transport?.beginSession(opened.thumbnailUrl);
+        // The phone shows the first-frame thumbnail, blurred, until the stream
+        // paints (design-5).
+        if (isMobilePlatform() && videoEl && opened.thumbnailUrl) videoEl.poster = `${opened.thumbnailUrl}?t=0`;
         activeMediaToken = opened.token;
         activeMediaEncrypted = Boolean(opened.info.encrypted);
 
@@ -1481,6 +1490,7 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     activeOpenAttempt = attempt;
 
     updateMediaText(target.name || "Video", target.size || 0);
+    videoEl.removeAttribute("poster");
     clearError();
     setLoadingStatusOverride("");
     setLoading(true);
@@ -1704,7 +1714,10 @@ function handleVideoShortcut(event: KeyboardEvent) {
     }
 }
 
-function handleVideoPointerMove() {
+function handleVideoPointerMove(event: PointerEvent) {
+    // A finger dragging across the phone player is a gesture, not a request
+    // for the controls.
+    if (event.pointerType === "touch" && isMobilePlatform()) return;
     revealChrome();
 }
 
@@ -1715,15 +1728,65 @@ function targetIsVideoChrome(target: EventTarget | null) {
 
 function handleStageClick(event: MouseEvent) {
     if (activeNative?.presentation === "standalone") return;
+    if (stagePointerTouch && isMobilePlatform()) return;
     if (targetIsVideoChrome(event.target)) return;
     transport?.togglePlayback();
 }
 
 function handleStageDoubleClick(event: MouseEvent) {
     if (activeNative?.presentation === "standalone") return;
+    if (stagePointerTouch && isMobilePlatform()) return;
     if (targetIsVideoChrome(event.target)) return;
     event.preventDefault();
     void geometry?.toggleFullscreen();
+}
+
+function trackStagePointer(event: PointerEvent) {
+    stagePointerTouch = event.pointerType === "touch";
+    stagePointerOnChrome = targetIsVideoChrome(event.target);
+}
+
+// Phone gestures: a tap toggles the controls, a double tap on either side
+// seeks ten seconds (in the middle it toggles playback) and a swipe down
+// closes the player.
+function videoTouchHandlers(): TouchGestureHandlers {
+    const shell = () => byID<HTMLElement>("video-shell");
+    return {
+        tap: () => {
+            if (!isOpen() || hasError || stagePointerOnChrome) return;
+            if (modalEl?.classList.contains("is-video-chrome-visible")) {
+                clearChromeTimer();
+                setChromeVisible(false);
+            } else {
+                revealChrome();
+            }
+        },
+        doubleTap: (x) => {
+            if (!isOpen() || hasError || stagePointerOnChrome || !stageEl) return;
+            const { left, width } = stageEl.getBoundingClientRect();
+            const across = (x - left) / Math.max(1, width);
+            if (across < 1 / 3) transport?.seekBy(-SEEK_STEP_SECONDS);
+            else if (across > 2 / 3) transport?.seekBy(SEEK_STEP_SECONDS);
+            else transport?.togglePlayback();
+        },
+        dragStart: (axis) => axis === "y" && isOpen() && !stagePointerOnChrome && !isAnyMenuOpen(),
+        drag: (_dx, dy) => {
+            const el = shell();
+            if (!el) return;
+            const drop = Math.max(0, dy);
+            el.style.transition = "none";
+            el.style.transform = `translate3d(0, ${drop}px, 0)`;
+            el.style.opacity = String(Math.max(0.4, 1 - drop / 480));
+        },
+        dragEnd: (_dx, dy, _axis, velocity) => {
+            const el = shell();
+            if (!el) return;
+            el.style.transition = "";
+            el.style.transform = "";
+            el.style.opacity = "";
+            if (dy > 120 || (dy > 32 && velocity > 0.6)) void closeVideoModal();
+        },
+    };
 }
 
 function bindEncryptedMediaLifecycle() {
@@ -1768,6 +1831,9 @@ export function teardownVideoModal(): void {
     unbindVideoDOM = null;
     unbindSpeedMenu?.();
     unbindSpeedMenu = null;
+    unbindTouchGestures?.();
+    unbindTouchGestures = null;
+    stageEl?.removeEventListener("pointerdown", trackStagePointer);
     nativeStateRouter.unbind();
     unsubscribeEncryptedMediaSessionsClosed?.();
     unsubscribeEncryptedMediaSessionsClosed = null;
@@ -1929,6 +1995,10 @@ export function activateVideoModal(): () => void {
         syncActivePanelGeometry();
         applyHtmlPicture();
     });
+    if (isMobilePlatform()) {
+        stageEl.addEventListener("pointerdown", trackStagePointer);
+        unbindTouchGestures = bindTouchGestures(stageEl, videoTouchHandlers());
+    }
     applyState(EMPTY_PLAYER_STATE);
     return teardownVideoModal;
 }

@@ -12,6 +12,7 @@ vi.mock('../../api', () => ({
     getPreviewFile: vi.fn(),
     getPreviewThumbnail: vi.fn(),
     hasOperationErrorCode: vi.fn(),
+    isMobilePlatform: vi.fn(() => false),
     onRuntimeEvent: runtime.onRuntimeEvent,
     openExternalUrl: vi.fn(),
     useEncryptionPassword: vi.fn(),

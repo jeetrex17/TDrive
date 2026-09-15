@@ -1331,3 +1331,83 @@
 }
 
 
+
+/* ====================== PHONE PLAYER ====================== */
+/* Scoped to html.mobile. The player is the screen: no window fullscreen (the
+   button goes), safe areas pad the bars, every control is 44px, the command
+   row keeps only what fits (double taps on the sides seek, the picture fit
+   lives in the settings sheet) and the poster stays blurred until the first
+   frame paints (design-5). A swipe down drags the shell away. */
+html.mobile .video-overlay {
+    background: #000;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
+html.mobile .video-shell,
+html.mobile .video-stage { background: #000; }
+html.mobile .video-shell {
+    transition: transform var(--motion-med) var(--ease-standard), opacity var(--motion-med) var(--ease-standard);
+}
+html.mobile .video-stage { touch-action: none; }
+html.mobile .video-player {
+    transition: filter var(--motion-slow) var(--ease-standard), transform var(--motion-slow) var(--ease-standard);
+}
+html.mobile .video-overlay.is-video-loading .video-player {
+    filter: blur(18px);
+    transform: scale(1.06);
+}
+html.mobile .video-topbar {
+    min-height: 0;
+    padding: calc(env(safe-area-inset-top, 0px) + 8px) 8px 14px 16px;
+    gap: 12px;
+}
+html.mobile .video-filename {
+    max-width: calc(100vw - 92px);
+    font-size: 15px;
+    font-weight: var(--weight-strong);
+}
+html.mobile .video-meta { margin-top: 2px; font-size: 12px; }
+html.mobile .video-controls {
+    gap: 4px;
+    padding: 8px 8px calc(env(safe-area-inset-bottom, 0px) + 10px);
+}
+html.mobile .video-timeline-row { padding: 0 10px; }
+html.mobile .video-scrubber,
+html.mobile .video-scrubber-hit { height: 44px; }
+html.mobile .video-scrubber-thumb { transform: translate(-50%, -50%) scale(1); }
+html.mobile .video-scrubber-tooltip { display: none; }
+html.mobile .video-scrubber.is-dragging .video-scrubber-tooltip { display: grid; }
+html.mobile .video-command-row { align-items: center; gap: 4px; }
+html.mobile .video-primary-cluster,
+html.mobile .video-secondary-cluster { flex-wrap: nowrap; gap: 0; }
+html.mobile .video-command-row .video-skip-btn,
+html.mobile .video-aspect-button,
+html.mobile .video-controls .video-fullscreen-btn,
+html.mobile .video-volume-group .video-volume-slider { display: none; }
+html.mobile .video-icon-btn,
+html.mobile .video-pill-button {
+    height: 44px;
+    -webkit-tap-highlight-color: transparent;
+}
+html.mobile .video-icon-btn { width: 44px; }
+html.mobile .video-play-btn { width: 48px; height: 48px; }
+html.mobile .video-pill-button { min-width: 44px; padding: 0 12px; font-size: 13px; }
+html.mobile .video-icon-btn:hover,
+html.mobile .video-pill-button:hover { background: transparent; }
+@media (hover: hover) {
+    html.mobile .video-icon-btn:hover,
+    html.mobile .video-pill-button:hover { background: rgba(255, 255, 255, 0.12); }
+}
+html.mobile .video-time-display { padding: 8px 6px; font-size: 13px; }
+html.mobile .video-center-controls { gap: 24px; }
+html.mobile .video-center-play { width: 76px; height: 76px; box-shadow: none; }
+html.mobile .video-center-skip { width: 56px; height: 56px; box-shadow: none; }
+html.mobile .video-center-skip svg { width: 26px; height: 26px; }
+html.mobile .video-skip-feedback.is-back { left: 25%; }
+html.mobile .video-skip-feedback.is-forward { left: 75%; }
+html.mobile .video-loading-status { font-size: 14px; }
+html.mobile .video-error {
+    width: min(460px, calc(100vw - 32px));
+    background: var(--viewer-surface-1);
+    box-shadow: none;
+}

@@ -435,3 +435,182 @@
     .preview-overlay.is-info-open .preview-nav-next { right: 12px; }
 }
 
+
+/* ====================== PHONE GALLERY ====================== */
+/* Scoped to html.mobile. Three square cells across at 390pt with 2px gaps,
+   an inset ring instead of a border (design-3), a check on every cell while
+   anything is selected, and skeleton cells for the first load. */
+html.mobile .gallery-view {
+    padding: 0 0 24px;
+    touch-action: pan-y;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+}
+/* The phone top bar already names the view. */
+html.mobile .main-content.photos-mode .gallery-title { display: none; }
+html.mobile .gallery-group { margin-bottom: 8px; }
+html.mobile .gallery-group-header {
+    padding: 14px 16px 8px;
+    font-size: 15px;
+    font-weight: var(--weight-semibold);
+}
+html.mobile .gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+    gap: 2px;
+}
+html.mobile .gallery-window-chunk + .gallery-window-chunk { margin-top: 2px; }
+html.mobile .gallery-cell {
+    border-radius: 0;
+    transition: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+}
+html.mobile .gallery-cell:hover { transform: none; box-shadow: none; }
+html.mobile .gallery-cell:focus-visible { box-shadow: inset var(--focus-ring); }
+html.mobile .gallery-cell::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 0 1px var(--overlay-neutral-2);
+    pointer-events: none;
+}
+html.mobile .gallery-cell:active .gallery-thumb { opacity: 0.82; }
+html.mobile .gallery-thumb { -webkit-user-drag: none; }
+html.mobile .gallery-lock {
+    top: 6px;
+    right: 6px;
+    width: 20px;
+    height: 20px;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(12, 14, 22, 0.62);
+}
+html.mobile .gallery-check {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 1.5px solid rgba(255, 255, 255, 0.92);
+    border-radius: var(--radius-pill);
+    background: rgba(12, 14, 22, 0.38);
+    color: var(--color-on-accent);
+    transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .gallery-check svg { opacity: 0; }
+html.mobile .gallery-cell.is-selected .gallery-check {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+html.mobile .gallery-cell.is-selected .gallery-check svg { opacity: 1; }
+html.mobile .gallery-cell.is-selected::after { box-shadow: inset 0 0 0 3px var(--accent); }
+html.mobile .gallery-cell.is-selected .gallery-thumb { opacity: 0.78; }
+
+html.mobile .gallery-skeleton { padding-top: 2px; }
+html.mobile .gallery-skeleton-cell {
+    aspect-ratio: 1 / 1;
+    background-color: var(--bg-panel);
+    background-image: linear-gradient(100deg, transparent 25%, var(--overlay-neutral-2) 48%, transparent 70%);
+    background-size: 240% 100%;
+    animation: file-skeleton-shimmer 1.65s linear var(--skeleton-delay, 0ms) infinite;
+}
+
+html.mobile .gallery-empty {
+    min-height: 60vh;
+    justify-content: center;
+    padding: 32px 24px;
+    gap: 6px;
+}
+html.mobile .gallery-empty-icon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 6px;
+    color: var(--color-text-subtle);
+}
+html.mobile .gallery-empty-title { font-size: 17px; text-wrap: balance; }
+html.mobile .gallery-empty-sub { font-size: 15px; line-height: 1.5; }
+html.mobile .gallery-empty-actions { margin-top: 14px; }
+html.mobile .gallery-empty-actions .primary-btn,
+html.mobile .gallery-empty-actions .secondary-btn {
+    width: auto;
+    min-height: 44px;
+    padding: 0 18px;
+    font-size: 15px;
+}
+html.mobile .gallery-empty-actions .primary-btn:active { transform: scale(0.97); }
+
+/* ----- Phone lightbox ----- */
+/* Fullscreen on the viewer palette, chrome that a tap toggles, no chevrons
+   (a swipe moves through the set) and the info card as a sheet. A swipe down
+   fades the backdrop through --preview-dismiss while the picture follows the
+   finger. Glass is dropped: nothing here needs a blur on a low-end phone. */
+html.mobile .preview-overlay::before {
+    background: var(--viewer-surface-0);
+    opacity: calc(1 - var(--preview-dismiss, 0) * 0.85);
+    transition: opacity var(--motion-med) var(--ease-standard);
+}
+html.mobile .preview-content {
+    min-height: 100%;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+}
+html.mobile .preview-content img {
+    max-width: 100vw;
+    max-height: 100vh;
+    max-height: 100dvh;
+    box-shadow: none;
+    -webkit-user-drag: none;
+}
+html.mobile .preview-chrome {
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    left: 12px;
+    right: 12px;
+    gap: 10px;
+}
+html.mobile .preview-filename,
+html.mobile .preview-close-btn,
+html.mobile .preview-icon-btn,
+html.mobile .preview-counter {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(12, 14, 22, 0.74);
+    box-shadow: none;
+}
+html.mobile .preview-filename {
+    flex: 1 1 auto;
+    max-width: none;
+    padding: 10px 14px;
+    font-size: 14px;
+}
+html.mobile .preview-close-btn,
+html.mobile .preview-icon-btn { width: 44px; height: 44px; }
+html.mobile .preview-chrome-actions { gap: 8px; }
+html.mobile .preview-nav { display: none; }
+html.mobile .preview-counter { bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+html.mobile .preview-loading { width: min(200px, calc(100vw - 80px)); }
+html.mobile .preview-locked { padding: 96px 20px calc(env(safe-area-inset-bottom, 0px) + 40px); }
+html.mobile .preview-info {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    max-width: none;
+    max-height: 60vh;
+    border-width: 1px 0 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    transform: translateY(24px);
+}
+html.mobile .preview-overlay.is-info-open .preview-info { transform: none; }
+html.mobile #preview-info-body { padding: 20px 20px calc(env(safe-area-inset-bottom, 0px) + 24px); }
+html.mobile .preview-info-close { top: 12px; right: 12px; width: 32px; height: 32px; }
+
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .gallery-skeleton-cell { animation: none; }
+}
