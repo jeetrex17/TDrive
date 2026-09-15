@@ -17,7 +17,9 @@
 
     position: absolute;
     z-index: 15;
-    right: 12px;
+    /* Flush with the command row's own gutter, so the popover's edge lines up
+       with the buttons it belongs to rather than hanging past them. */
+    right: 28px;
     /* --video-panel-bottom reaches the controls' padding box, which sits well
        above the seek rail. Tuck into that padding so the popover reads as
        attached to the command row instead of floating off it. */

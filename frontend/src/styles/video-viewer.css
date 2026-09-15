@@ -13,6 +13,11 @@
     z-index: 2400;
     align-items: stretch;
     justify-content: stretch;
+    /* A player is a surface in its own right, not a card floating in a scrim,
+       so it fills the window. The shared modal inset also used to survive only
+       until the native layer attached, which made the whole frame jump inward
+       while a file was still opening. */
+    padding: 0;
 }
 
 /*
@@ -22,10 +27,6 @@
  */
 :root[data-theme-appearance="light"] .video-overlay {
     --video-accent: color-mix(in srgb, var(--color-accent, #7aa2f7) 62%, white);
-}
-
-.video-overlay.is-video-native {
-    padding: 0;
 }
 
 .video-shell {
@@ -89,7 +90,6 @@
 }
 
 .video-overlay.is-video-native-fallback {
-    padding: 0;
     background: rgba(4, 6, 11, 0.94);
     backdrop-filter: blur(16px);
 }
