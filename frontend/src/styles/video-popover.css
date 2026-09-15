@@ -1,0 +1,198 @@
+/* Shared surface for the playback settings and playlist popovers.
+   Both rise from their trigger in the command row and float above the picture
+   instead of docking beside it, so opening one never reflows the video. */
+.video-popover {
+    /* Concentric radii: the shell inset is the difference between the two,
+       so rows sit inside the corner curve instead of fighting it. */
+    --video-popover-radius: 16px;
+    --video-popover-inset: 6px;
+    --video-popover-item-radius: 10px;
+
+    /* Room between the topbar and the command row, shared so a panel can either
+       cap against it or take a fixed slice of it. */
+    --video-popover-available: calc(
+        100% - var(--video-panel-top, 76px) - var(--video-panel-bottom, 108px) - 20px
+    );
+    --video-popover-max-height: 440px;
+
+    position: absolute;
+    z-index: 15;
+    /* Flush with the command row's own gutter, so the popover's edge lines up
+       with the buttons it belongs to rather than hanging past them. */
+    right: 28px;
+    /* --video-panel-bottom reaches the controls' padding box, which sits well
+       above the seek rail. Tuck into that padding so the popover reads as
+       attached to the command row instead of floating off it. */
+    bottom: calc(var(--video-panel-bottom, 108px) - 12px);
+    display: flex;
+    flex-direction: column;
+    width: min(420px, calc(100vw - 24px));
+    min-width: 0;
+    min-height: 0;
+    max-height: min(var(--video-popover-max-height), var(--video-popover-available));
+    overflow: hidden;
+    border-radius: var(--video-popover-radius);
+    background: rgba(13, 17, 26, 0.94);
+    color: #edf1fa;
+    /* A hairline ring carries the edge and one ambient layer carries the lift.
+       A solid border would read as a hard seam over moving picture. */
+    box-shadow:
+        0 0 0 1px oklch(1 0 0 / 0.08),
+        0 18px 44px -14px oklch(0 0 0 / 0.62);
+    user-select: none;
+    transform-origin: 100% 100%;
+    transition:
+        opacity 200ms var(--ease-standard),
+        transform 200ms var(--ease-standard),
+        visibility 200ms var(--ease-standard);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    .video-popover {
+        background: rgba(13, 17, 26, 0.85);
+        -webkit-backdrop-filter: blur(24px) saturate(150%);
+        backdrop-filter: blur(24px) saturate(150%);
+    }
+}
+
+/* `display` is restored so the close animates out; the UA sheet would drop the
+   element on the spot. Visibility still takes it out of the a11y tree. */
+.video-popover[hidden],
+.video-popover[data-state='closed'] {
+    display: flex;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: scale(0.96) translateY(4px);
+    /* Exits stay shorter than entrances: attention is already moving on. */
+    transition-duration: 140ms;
+}
+
+.video-popover-header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 12px 10px 14px;
+}
+
+.video-popover-heading {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+}
+
+.video-popover-title {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    color: #f2f5ff;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: -0.005em;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.video-popover-close {
+    flex: 0 0 auto;
+    display: grid;
+    width: 28px;
+    height: 28px;
+    place-items: center;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #96a2b8;
+    cursor: pointer;
+    transition:
+        color 120ms var(--ease-standard),
+        background-color 120ms var(--ease-standard),
+        scale 120ms var(--ease-standard);
+}
+
+.video-popover-close:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: #f2f5ff;
+}
+
+.video-popover-close:active {
+    scale: 0.96;
+}
+
+.video-popover-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+.video-popover-body::-webkit-scrollbar {
+    width: 8px;
+}
+
+.video-popover-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.video-popover-body::-webkit-scrollbar-thumb {
+    min-height: 28px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.22);
+    background-clip: content-box;
+}
+
+.video-popover-body::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.34);
+    background-clip: content-box;
+}
+
+.video-popover-footer {
+    flex: 0 0 auto;
+    padding: var(--video-popover-inset);
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.video-popover :focus-visible {
+    outline: 2px solid var(--video-accent, #7aa2f7);
+    outline-offset: 2px;
+}
+
+/* The native player on Windows and Linux paints its own window above the
+   webview, so a floating popover would be hidden behind the picture. There the
+   panel stays a solid full-height dock beside the reserved video surface. */
+.video-overlay.is-video-native-fallback .video-popover {
+    top: var(--video-panel-top, 76px);
+    bottom: var(--video-panel-bottom, 108px);
+    max-height: none;
+    background: #11151f;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    transform: none;
+}
+
+.video-overlay.is-video-native-fallback .video-popover[hidden],
+.video-overlay.is-video-native-fallback .video-popover[data-state='closed'] {
+    display: none;
+}
+
+@media (max-width: 760px) {
+    .video-popover {
+        right: 10px;
+        left: 10px;
+        width: auto;
+        max-height: min(
+            52vh,
+            calc(100% - var(--video-panel-top, 76px) - var(--video-panel-bottom, 108px) - 16px)
+        );
+        transform-origin: 100% 100%;
+    }
+}

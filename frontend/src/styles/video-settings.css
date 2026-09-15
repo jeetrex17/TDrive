@@ -1,30 +1,68 @@
-/* The settings dock reserves video space, including native child surfaces. */
-.video-settings-panel {
-    position: absolute;
-    z-index: 15;
-    top: var(--video-panel-top, 76px);
-    bottom: var(--video-panel-bottom, 108px);
-    right: 12px;
-    width: 330px;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    border: 1px solid #ffffff1c;
-    border-radius: var(--radius-xl);
-    background: #11151f;
-    color: #edf1fa;
-    box-shadow: 0 12px 36px #0005;
+/* Surface, anchoring and motion come from .video-popover. */
+.video-settings-panel { height: min(480px, var(--video-popover-available)); }
+.video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
+/* One segmented control, inset concentrically inside the popover corner. */
+.video-settings-tabs {
+    flex: 0 0 auto;
+    position: relative;
+    isolation: isolate;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 0 var(--video-popover-inset) 8px;
+    padding: 2px;
+    border-radius: var(--video-popover-item-radius);
+    background: rgba(255, 255, 255, 0.06);
 }
-.video-settings-panel[hidden], .video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
-.video-settings-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
-.video-settings-heading button { display: grid; place-items: center; background: transparent; color: inherit; border: 0; padding: 6px; border-radius: var(--radius-md); cursor: pointer; }
-.video-settings-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; padding: 0 10px 10px; border-bottom: 1px solid #ffffff12; }
-.video-settings-tabs button { color: #a8b2c5; background: transparent; border: 0; border-radius: var(--radius-md); padding: 9px 2px; cursor: pointer; font-size: 12px; }
-.video-settings-tabs button[aria-pressed=true] { color: #dce8ff; background: #7aa5ff24; }
-.video-settings-body { overflow: auto; padding: 14px; min-height: 0; scrollbar-width: thin; }
-.video-settings-section h3 { font-size: 14px; margin: 0 0 10px; }
+/* One pill that travels to the picked tab, rather than four that blink on and
+   off. The index comes from whichever segment is pressed. */
+.video-settings-tabs::before {
+    content: "";
+    position: absolute;
+    z-index: 0;
+    top: 2px;
+    bottom: 2px;
+    left: 2px;
+    width: calc((100% - 4px) / 4);
+    border-radius: calc(var(--video-popover-item-radius) - 2px);
+    background: var(--video-accent-bg, rgba(122, 162, 247, 0.2));
+    box-shadow: 0 0 0 1px var(--video-accent-ring, rgba(122, 162, 247, 0.28));
+    translate: calc(var(--video-settings-tab, 0) * 100%) 0;
+    transition: translate 260ms var(--ease-standard);
+}
+.video-settings-tabs:has(button:nth-child(1)[aria-pressed=true]) { --video-settings-tab: 0; }
+.video-settings-tabs:has(button:nth-child(2)[aria-pressed=true]) { --video-settings-tab: 1; }
+.video-settings-tabs:has(button:nth-child(3)[aria-pressed=true]) { --video-settings-tab: 2; }
+.video-settings-tabs:has(button:nth-child(4)[aria-pressed=true]) { --video-settings-tab: 3; }
+.video-settings-tabs button {
+    position: relative;
+    z-index: 1;
+    padding: 7px 2px;
+    border: 0;
+    border-radius: calc(var(--video-popover-item-radius) - 2px);
+    background: transparent;
+    color: #9aa6bd;
+    font-size: 11.5px;
+    font-weight: 650;
+    cursor: pointer;
+    transition: color 160ms var(--ease-standard);
+}
+.video-settings-tabs button:hover { color: #dbe4f7; }
+.video-settings-tabs button[aria-pressed=true] { color: #f2f5ff; }
+.video-settings-body { padding: 0 14px 14px; }
+.video-settings-section h3 {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+.video-settings-note { margin-top: 14px; }
 .video-settings-note { color: #a8b2c5; font-size: 12px; line-height: 1.5; margin: 8px 0 14px; }
 .video-settings-panel .video-menu { position: static; width: 100%; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; }
+.video-settings-panel .video-menu button { height: auto; min-height: 34px; border-radius: var(--video-popover-item-radius); padding: 7px 10px; }
 .video-overlay.is-video-native-fallback .video-settings-panel .video-menu.is-open { display: block; }
 .video-settings-panel .video-menu.is-open { display: block; }
 .video-settings-panel .video-menu:not(.is-open) { display: none; }
@@ -32,9 +70,22 @@
 .video-track-list button { width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .video-track-empty { font-size: 13px; color: #a8b2c5; padding: 8px; }
 .video-picture-options { display: grid; gap: 7px; }
-.video-picture-options button { display: flex; flex-direction: column; align-items: start; gap: 4px; padding: 11px 12px; border: 1px solid #ffffff16; border-radius: var(--radius-md); background: #ffffff04; color: inherit; cursor: pointer; }
+.video-picture-options button {
+    display: flex;
+    flex-direction: column;
+    align-items: start;
+    gap: 4px;
+    padding: 10px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--video-popover-item-radius);
+    background: rgba(255, 255, 255, 0.05);
+    color: inherit;
+    cursor: pointer;
+    transition: background-color 120ms var(--ease-standard), border-color 120ms var(--ease-standard);
+}
+.video-picture-options button:hover { background: rgba(255, 255, 255, 0.08); }
 .video-picture-options button small { color: #a8b2c5; font-size: 11px; }
-.video-picture-options button.is-selected { background: #7aa5ff20; border-color: #7aa5ff70; }
+.video-picture-options button.is-selected { border-color: var(--video-accent-border, rgba(122, 162, 247, 0.58)); background: var(--video-accent-bg, rgba(122, 162, 247, 0.2)); }
 .video-subtitle-preview { display: grid; place-items: center; min-height: 84px; background: transparent; border-radius: var(--radius-md); padding: 10px; text-align: center; margin-bottom: 14px; }
 .video-subtitle-preview span { padding: 3px 6px; border-radius: var(--radius-xs); }
 .video-settings-field { display: grid; gap: 9px; margin: 15px 0; font-size: 13px; }
@@ -44,32 +95,35 @@
 .video-settings-inline { display: flex; justify-content: space-between; align-items: center; }
 .video-settings-field input[type=color] { border: 1px solid #ffffff30; background: none; width: 42px; height: 30px; border-radius: var(--radius-sm); }
 .video-settings-check { display: flex; align-items: center; gap: 9px; font-size: 12px; margin: 13px 0; }
-.video-settings-check input { accent-color: #8aacff; }
+.video-settings-check input { accent-color: var(--video-accent, #7aa2f7); }
 .video-settings-reset { color: #bfceeb; border: 1px solid #ffffff25; background: transparent; border-radius: var(--radius-md); padding: 9px 12px; font-size: 12px; cursor: pointer; }
-.video-subtitle-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; margin: 18px 0 10px; }
-.video-settings-save { border: 1px solid #7aa5ff; border-radius: var(--radius-md); padding: 10px 14px; background: #7aa5ff; color: #080b12; font-size: 12px; font-weight: 800; cursor: pointer; }
-.video-settings-save:hover { background: #9abbff; }
-.video-settings-panel :focus-visible { outline: 2px solid #91b4ff; outline-offset: 2px; }
-.video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 354px; }
-/* The transparent macOS WebView exposes the window beneath the reserved dock.
-   Paint only that gutter, leaving the native video surface transparent. */
-.video-overlay.is-video-native:not(.is-video-native-fallback).has-video-settings .video-shell::before {
-    content: "";
-    position: absolute;
-    inset: 0 0 0 auto;
-    width: 354px;
-    background: #05070c;
-    pointer-events: none;
+.video-subtitle-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 10px;
+    margin: 16px 0 0;
+    padding: 14px 0 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
+.video-settings-save {
+    border: 0;
+    border-radius: var(--video-popover-item-radius);
+    padding: 9px 14px;
+    background: var(--video-accent, #7aa2f7);
+    color: #080b12;
+    font-size: 12px;
+    font-weight: 750;
+    cursor: pointer;
+    transition: background-color 120ms var(--ease-standard), scale 120ms var(--ease-standard);
+}
+.video-settings-save:active { scale: 0.96; }
+.video-settings-save:hover { filter: brightness(1.12); }
+/* The native player on Windows and Linux still needs the picture inset, since
+   its window paints above the webview and would otherwise cover the dock. */
 .video-overlay.is-video-native-fallback .video-native-viewport { right: var(--video-native-right-inset, var(--video-native-side-inset, 0)); }
 @media (max-width: 760px) {
-    .video-settings-panel { left: 10px; right: 10px; width: auto; top: auto; height: min(320px, 46vh); }
-    .video-overlay.has-video-settings:not(.is-video-native-fallback) .video-stage { right: 0; bottom: calc(min(320px, 46vh) + 110px); }
-    .video-overlay.is-video-native:not(.is-video-native-fallback).has-video-settings .video-shell::before {
-        inset: auto 0 0;
-        width: auto;
-        height: calc(min(320px, 46vh) + 110px);
-    }
+    .video-settings-panel { height: min(52vh, var(--video-popover-available)); }
     .video-secondary-cluster { display: flex; }
     .video-controls .video-menu-wrap:not([hidden]), .video-controls .video-fullscreen-btn { display: flex; }
     .video-command-row { flex-wrap: wrap; gap: 8px; }
@@ -169,4 +223,4 @@
 .video-speed-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 18px; }
 .video-settings-panel .video-speed-presets button { display: flex; justify-content: center; min-height: 36px; height: auto; padding: 8px 4px; border: 1px solid #ffffff20; border-radius: var(--radius-md); }
 .video-speed-presets .video-menu-check { display: none; }
-.video-settings-panel .video-speed-presets button.is-selected { border-color: var(--video-accent); background: var(--video-accent-bg); }
+.video-settings-panel .video-speed-presets button.is-selected { border-color: var(--video-accent); background: var(--video-accent-bg, rgba(122, 162, 247, 0.2)); }

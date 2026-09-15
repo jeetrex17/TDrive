@@ -18,8 +18,7 @@ interface VideoGeometryContext {
     hasActivePlayer(): boolean;
     hasError(): boolean;
     isOpen(): boolean;
-    isSettingsOpen(): boolean;
-    settingsPanel(): HTMLElement | null;
+    getActivePanel(): HTMLElement | null;
     revealChrome(): void;
     reportSurfaceError(message: string): void;
 }
@@ -142,9 +141,7 @@ export class VideoGeometryController {
         const top = Math.ceil(Math.max(0, topbarBottom - stageRect.top) + FALLBACK_NATIVE_GAP_PX);
         const bottom = Math.ceil(Math.max(0, stageRect.bottom - controlsTop) + FALLBACK_NATIVE_GAP_PX);
 
-        const panelRect = this.context.isSettingsOpen()
-            ? this.context.settingsPanel()?.getBoundingClientRect()
-            : null;
+        const panelRect = this.context.getActivePanel()?.getBoundingClientRect() ?? null;
         const panelWidth = panelRect && !compact
             ? Math.max(0, stageRect.right - panelRect.left + FALLBACK_NATIVE_GAP_PX)
             : side;

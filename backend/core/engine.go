@@ -195,6 +195,10 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		if err := e.lifecycle.UsePersonalChannel(e.ctx, savedID); err != nil {
 			e.warnf("Warning: migration failed: %v\n", err)
 		}
+		// Telegram answers the first file read of a run with FILE_MIGRATE, and
+		// reaching the file data center costs seconds. Pay it here, in the
+		// background, rather than when someone opens their first video.
+		go e.media.WarmTransport(e.ctx, savedID)
 	}
 
 	return e, nil

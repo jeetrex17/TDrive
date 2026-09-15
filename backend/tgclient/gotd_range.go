@@ -8,7 +8,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
@@ -44,8 +46,20 @@ func (g *Gotd) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset in
 		return 0, fmt.Errorf("tgclient: range crosses %d-byte boundary", RangeReadMaxBytes)
 	}
 
+	// Split the wait so a slow first read can be attributed. Time before the
+	// callback runs is spent getting a client; the rest is upload.getFile,
+	// which includes the FILE_MIGRATE hop to the file's data center.
+	started := time.Now()
+	var clientWait time.Duration
+	defer func() {
+		slog.Debug("tgclient: range read",
+			"offset", offset, "bytes", len(dst),
+			"client_wait", clientWait, "total", time.Since(started))
+	}()
+
 	var n int
 	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
+		clientWait = time.Since(started)
 		current := ref
 		for attempt := 0; attempt < 2; attempt++ {
 			read, err := g.readDocumentRange(ctx, client, current, offset, dst)

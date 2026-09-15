@@ -292,6 +292,21 @@
                     updatePlaybackPreferences(value),
                 );
             }}
+            onHidePlaylist={(restoreFocus) => {
+                void import('../../modules/modals/video').then(({ hideVideoPlaylist }) =>
+                    hideVideoPlaylist(restoreFocus),
+                );
+            }}
+            onSelectPlaylistItem={(index) => {
+                void import('../../modules/modals/video').then(({ selectVideoPlaylistItem }) =>
+                    selectVideoPlaylistItem(index),
+                );
+            }}
+            onUpdateVideoAutoNext={(enabled) => {
+                void import('../../modules/modals/video').then(({ updateVideoAutoNext }) =>
+                    updateVideoAutoNext(enabled),
+                );
+            }}
         />
     </div>
 {/if}

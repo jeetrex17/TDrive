@@ -122,11 +122,12 @@ func TestRangeReaderThroughputCountsNetworkFetchesOnly(t *testing.T) {
 	defer reader.Close()
 	ref := fake.ref()
 
+	// Past the opening window, so both reads land in the same full block.
 	buf := make([]byte, 64)
-	if _, err := reader.ReadStoredAt(context.Background(), ref, buf, 100); err != nil {
+	if _, err := reader.ReadStoredAt(context.Background(), ref, buf, openingChunkBytes+100); err != nil {
 		t.Fatalf("first read: %v", err)
 	}
-	if _, err := reader.ReadStoredAt(context.Background(), ref, buf, 128); err != nil {
+	if _, err := reader.ReadStoredAt(context.Background(), ref, buf, openingChunkBytes+128); err != nil {
 		t.Fatalf("cached read: %v", err)
 	}
 

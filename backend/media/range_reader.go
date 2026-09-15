@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -18,6 +19,16 @@ const (
 	defaultRangeCacheBytes        = 32 * 1024 * 1024
 	defaultRangeConcurrency       = 4
 	rangeUploadBoundary     int64 = int64(tgclient.RangeReadMaxBytes)
+
+	// openingChunkBytes bounds the first foreground read of a file.
+	//
+	// A player reads a small header before it can show anything, but a block is
+	// a megabyte because that is Telegram's per-request maximum. On a slow link
+	// most of a video's startup delay is spent waiting for the rest of that
+	// block. Serving a short prefix first cuts the wait, and the full block is
+	// filled behind it so later reads still hit the cache. Stays 4 KB-aligned,
+	// which upload.getFile requires.
+	openingChunkBytes int64 = 256 * 1024
 )
 
 // defaultRangeRetryPolicy tunes the shared tgclient retry policy for playback:
@@ -169,14 +180,14 @@ func (r *RangeReader) ReadStoredAt(ctx context.Context, ref tgclient.DocumentRef
 		}
 		absolute := off + int64(done)
 		blockStart := blockStartFor(absolute)
-		block, err := r.block(ctx, ref, blockStart, r.background)
+		block, blockOffset, err := r.span(ctx, ref, absolute, blockStart)
 		if err != nil {
 			if done > 0 {
 				return done, err
 			}
 			return 0, err
 		}
-		inside := int(absolute - blockStart)
+		inside := int(absolute - blockOffset)
 		if inside >= len(block) {
 			if done > 0 {
 				return done, io.EOF
@@ -232,8 +243,54 @@ func (r *RangeReader) prefetchBlock(ref tgclient.DocumentRef, blockStart int64) 
 	}()
 }
 
+// span returns bytes covering absolute together with the offset they start at.
+// Everything but the opening of a file is served a block at a time.
+func (r *RangeReader) span(ctx context.Context, ref tgclient.DocumentRef, absolute, blockStart int64) ([]byte, int64, error) {
+	if r.wantsOpeningPrefix(ref, absolute, blockStart) {
+		data, err := r.openingSpan(ctx, ref)
+		if err == nil {
+			return data, 0, nil
+		}
+		// Any failure falls through to the ordinary block read below.
+	}
+	data, err := r.block(ctx, ref, blockStart, r.background)
+	return data, blockStart, err
+}
+
+// wantsOpeningPrefix reports whether this read is the latency-critical first
+// touch of a file. Background readers are excluded: they are speculative, so a
+// short read would only cost them an extra request.
+func (r *RangeReader) wantsOpeningPrefix(ref tgclient.DocumentRef, absolute, blockStart int64) bool {
+	if r.background || blockStart != 0 || absolute >= openingChunkBytes {
+		return false
+	}
+	if ref.Size <= openingChunkBytes {
+		return false
+	}
+	_, full := r.cache.get(blockKey(ref, 0))
+	return !full
+}
+
+func (r *RangeReader) openingSpan(ctx context.Context, ref tgclient.DocumentRef) ([]byte, error) {
+	data, err := r.coalescedSpan(ctx, ref, openingKey(ref), 0, int(openingChunkBytes), false)
+	if err != nil {
+		return nil, err
+	}
+	// The full block follows behind so the next read is warm. It re-transfers
+	// the prefix, which is a deliberate trade: 256 KB of duplicate background
+	// traffic against roughly a four-fold cut in how long a video takes to start.
+	r.prefetchBlock(ref, 0)
+	return data, nil
+}
+
 func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, blockStart int64, background bool) ([]byte, error) {
-	key := blockKey(ref, blockStart)
+	return r.coalescedSpan(ctx, ref, blockKey(ref, blockStart), blockStart, blockLimit(ref.Size, blockStart), background)
+}
+
+func (r *RangeReader) coalescedSpan(ctx context.Context, ref tgclient.DocumentRef, key string, start int64, limit int, background bool) ([]byte, error) {
+	if limit <= 0 {
+		return nil, io.EOF
+	}
 	if data, ok := r.cache.get(key); ok {
 		return data, nil
 	}
@@ -252,7 +309,7 @@ func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, block
 		// The shared fetch is tied to the reader lifetime, not the first
 		// caller's request context. Otherwise one aborted HTTP request could
 		// poison coalesced waiters for the same block.
-		data, err := r.fetchBlock(r.ctx, ref, blockStart, background)
+		data, err := r.fetchSpan(r.ctx, ref, start, limit, background)
 		if err != nil {
 			return nil, err
 		}
@@ -277,15 +334,23 @@ func (r *RangeReader) block(ctx context.Context, ref tgclient.DocumentRef, block
 	}
 }
 
-func (r *RangeReader) fetchBlock(ctx context.Context, ref tgclient.DocumentRef, blockStart int64, background bool) ([]byte, error) {
-	limit := blockLimit(ref.Size, blockStart)
+func (r *RangeReader) fetchSpan(ctx context.Context, ref tgclient.DocumentRef, start int64, limit int, background bool) ([]byte, error) {
 	if limit <= 0 {
 		return nil, io.EOF
 	}
 
+	// Foreground latency is what a viewer actually waits on when a stream opens
+	// or seeks, so it is worth being able to see it in the log.
+	started := time.Now()
+	defer func() {
+		if !background {
+			slog.Debug("media: fetched block from telegram", "offset", start, "bytes", limit, "elapsed", time.Since(started))
+		}
+	}()
+
 	buf := make([]byte, limit)
 	err := r.retry.Do(ctx, func() error {
-		n, err := r.fetchBlockOnce(ctx, ref, blockStart, buf, background)
+		n, err := r.fetchBlockOnce(ctx, ref, start, buf, background)
 		if n > 0 && r.meter != nil {
 			r.meter.Add(n)
 		}
@@ -362,6 +427,11 @@ func blockLimit(size, blockStart int64) int {
 		return tgclient.RangeReadMaxBytes
 	}
 	return int(remaining)
+}
+
+// openingKey names the short prefix fetched ahead of a file's first block.
+func openingKey(ref tgclient.DocumentRef) string {
+	return blockKey(ref, 0) + ":open"
 }
 
 func blockKey(ref tgclient.DocumentRef, blockStart int64) string {

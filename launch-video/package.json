@@ -1,0 +1,11 @@
+{
+  "name": "tdrive-launch",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes hyperframes@0.8.40 preview",
+    "check": "npx --yes hyperframes@0.8.40 check",
+    "render": "npx --yes hyperframes@0.8.40 render",
+    "publish": "npx --yes hyperframes@0.8.40 publish"
+  }
+}

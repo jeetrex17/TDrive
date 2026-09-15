@@ -60,11 +60,13 @@ interface HtmlVideoAdapterCallbacks {
     mediaError(code: number | undefined, state: PlayerState): void;
     playbackError(message: string): void;
     revealChrome(): void;
+    mediaEnded(): void;
 }
 
 interface NativeMpvAdapterCallbacks {
     mediaError(detail: string): void;
     mediaClosed(): void;
+    mediaEnded(): void;
     dispose(adapter: NativeMpvAdapter): void;
 }
 
@@ -168,6 +170,8 @@ export class HtmlVideoAdapter implements PlayerAdapter {
     private readonly subscribers = new Set<(state: PlayerState) => void>();
     private readonly listeners: Array<() => void> = [];
     private closed = false;
+    private failureReported = false;
+    private naturalEndReported = false;
     private lastAudibleVolume: number;
 
     constructor(
@@ -197,11 +201,19 @@ export class HtmlVideoAdapter implements PlayerAdapter {
             this.listeners.push(() => video.removeEventListener(event, listener));
         }
         const errorListener = () => {
-            if (this.closed) return;
+            if (this.closed || this.failureReported || this.naturalEndReported) return;
+            this.failureReported = true;
             this.callbacks.mediaError(this.video.error?.code, this.snapshot());
         };
         video.addEventListener('error', errorListener);
         this.listeners.push(() => video.removeEventListener('error', errorListener));
+        const endedListener = () => {
+            if (this.closed || this.failureReported || this.naturalEndReported) return;
+            this.naturalEndReported = true;
+            this.callbacks.mediaEnded();
+        };
+        video.addEventListener('ended', endedListener);
+        this.listeners.push(() => video.removeEventListener('ended', endedListener));
     }
 
     load(): void {
@@ -338,6 +350,7 @@ export class NativeMpvAdapter implements PlayerAdapter {
     private lastAudibleVolume = 1;
     private failureReported = false;
     private closeReported = false;
+    private naturalEndReported = false;
     private lastSequence = 0;
     private pendingPreferences: PlaybackPreferences | null = null;
     private applyingPreferences = false;
@@ -459,6 +472,7 @@ export class NativeMpvAdapter implements PlayerAdapter {
     }
 
     private applyPayload(payload: NativeMediaStatePayload): void {
+        if (this.closed || this.failureReported || this.closeReported) return;
         const sequence = Number(payload.sequence ?? 0);
         if (sequence > 0) {
             if (sequence <= this.lastSequence) return;
@@ -479,9 +493,13 @@ export class NativeMpvAdapter implements PlayerAdapter {
             }
             return;
         }
+        const naturalEnd = payload.status === 'ended' || payload.eof === true;
+        const shouldReportNaturalEnd = naturalEnd && !this.naturalEndReported;
+        if (shouldReportNaturalEnd) this.naturalEndReported = true;
         this.state = nativePayloadToState(payload, this.state);
         if (!this.state.muted && this.state.volume > 0) this.lastAudibleVolume = this.state.volume;
         this.emit();
+        if (shouldReportNaturalEnd) this.callbacks.mediaEnded();
     }
 
     private async flushPreferences(): Promise<void> {

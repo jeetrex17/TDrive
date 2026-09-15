@@ -38,11 +38,22 @@ import {
     type PlayerAdapter,
     type PlayerState,
 } from "../video/player-adapters";
+import { MediaPrefetcher, readyToPrefetch, warmMediaEdges } from "../video/video-prefetch";
 import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from "../../ui/modals/modal-a11y";
 import { videoPlaybackPreferences } from "../../ui/video/video-preferences-store";
+import { loadAutoNextPreference } from "../video/video-playlist";
+import {
+    resetVideoPlaylist,
+    setVideoPlaylist,
+    setVideoPlaylistAutoNext,
+    setVideoPlaylistCurrentIndex,
+    setVideoPlaylistOpen,
+    setVideoPlaylistSwitching,
+    type VideoPlaylistViewItem,
+} from "../../ui/video/video-playlist-store";
 
 const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
@@ -54,8 +65,22 @@ const STREAM_ACTIVITY_HOLD_MS = 2000;
 interface VideoOpenTarget {
     id: number;
     name: string;
+    key?: string;
     size?: number;
     encrypted?: boolean;
+}
+
+export interface VideoPlaylistLaunch {
+    readonly items: readonly VideoOpenTarget[];
+    readonly currentIndex: number;
+    readonly title: string;
+}
+
+interface ActiveVideoPlaylist {
+    readonly items: readonly VideoOpenTarget[];
+    readonly title: string;
+    currentIndex: number;
+    autoNext: boolean;
 }
 
 interface VideoOpenAttempt {
@@ -64,12 +89,17 @@ interface VideoOpenAttempt {
     htmlFailureHandled: boolean;
     nativeFallbackRequested: boolean;
     pausedByUser: boolean;
+    playbackIntent: PlaybackIntent | null;
 }
 
-
 let playbackPreferences = loadPlaybackPreferences();
-let settingsSection: "picture" | "audio" | "subtitle" | "speed" | null = null;
+const SETTINGS_SECTIONS = ["picture", "audio", "subtitle", "speed"] as const;
+type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+let settingsSection: SettingsSection | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
+let playlistOpen = false;
+let playlistReturnFocus: HTMLElement | null = null;
+let activePlaylist: ActiveVideoPlaylist | null = null;
 let modalEl: HTMLElement | null = null;
 let stageEl: HTMLElement | null = null;
 let topbarEl: HTMLElement | null = null;
@@ -81,6 +111,8 @@ let videoEl: HTMLVideoElement | null = null;
 let loadingEl: HTMLElement | null = null;
 let loadingStatusEl: HTMLElement | null = null;
 let errorEl: HTMLElement | null = null;
+let errorMessageEl: HTMLElement | null = null;
+let errorRetryBtnEl: HTMLButtonElement | null = null;
 let playBtnEl: HTMLButtonElement | null = null;
 let speedBtnEl: HTMLButtonElement | null = null;
 let speedMenuEl: HTMLElement | null = null;
@@ -121,14 +153,16 @@ let geometry: VideoGeometryController | null = null;
 let transport: VideoTransportController | null = null;
 let videoSetupComplete = false;
 
-
 function isOpen() {
     return Boolean(modalEl && modalEl.style.display !== "none");
 }
 
+function errorDetail(err: unknown) {
+    return err instanceof Error && err.message ? err.message : String(err || "");
+}
+
 function errorMessage(err: unknown, fallback: string) {
-    const raw = err instanceof Error && err.message ? err.message : String(err || "");
-    const normalized = raw.toLowerCase();
+    const normalized = errorDetail(err).toLowerCase();
     if (
         normalized.includes("resolve peer") ||
         normalized.includes("rpcdorequest") ||
@@ -138,9 +172,9 @@ function errorMessage(err: unknown, fallback: string) {
         return "Could not reach Telegram. Check your connection and try again.";
     }
     if (normalized.includes("context canceled")) {
-        return "The video request was canceled. Try opening it again.";
+        return "The video request was canceled. Try again.";
     }
-    return raw || fallback;
+    return fallback;
 }
 
 function isNativeFallbackActive() {
@@ -323,20 +357,32 @@ function setError(message: string) {
     loadingStatusOverride = "";
     setLoading(false);
     clearMediaStatsPolling();
-    if (!errorEl) return;
-    errorEl.textContent = message;
-    errorEl.style.display = "block";
+    if (errorMessageEl) errorMessageEl.textContent = message;
+    if (errorEl) errorEl.style.display = "block";
     modalEl?.classList.add("is-video-error");
     setChromeVisible(true);
     clearChromeTimer();
+    if (isOpen()) errorRetryBtnEl?.focus({ preventScroll: true });
 }
 
 function clearError() {
+    const restoreFocus = Boolean(errorEl?.contains(document.activeElement));
     hasError = false;
-    if (!errorEl) return;
-    errorEl.textContent = "";
-    errorEl.style.display = "none";
+    errorMessageEl?.replaceChildren();
+    if (errorEl) errorEl.style.display = "none";
     modalEl?.classList.remove("is-video-error");
+    if (restoreFocus && isOpen()) (closeBtnEl || playBtnEl)?.focus({ preventScroll: true });
+}
+
+function retryVideoOpen() {
+    const target = activeOpenAttempt?.target;
+    if (!target || !hasError || !isOpen()) return;
+    void openVideoTarget(target, null);
+}
+
+function handleHtmlPlaybackError(detail: string) {
+    console.error("HTML video playback failed:", detail);
+    setError("The embedded player could not continue playing this video. Try again.");
 }
 
 
@@ -387,7 +433,7 @@ interface TrackPickerElements {
     menu: HTMLElement | null;
 }
 
-// TrackPicker provides direct cycling and full choices in the settings dock.
+// TrackPicker opens its full choices in the settings dock.
 class TrackPicker {
     private tracks: NativeMediaTrack[] = [];
     private renderedSignature = "";
@@ -400,7 +446,7 @@ class TrackPicker {
     ) {
         els.button?.addEventListener("click", (event) => {
             event.stopPropagation();
-            this.cycle();
+            this.setOpen(true);
             revealChrome();
         });
         els.menu?.addEventListener("click", (event) => {
@@ -424,7 +470,11 @@ class TrackPicker {
         this.tracks = tracks;
         if (this.els.wrap) this.els.wrap.hidden = !show;
         if (!show) {
-            this.close();
+            // Hiding the command-row pill must not take the settings panel with
+            // it: the section may be on screen, and "no tracks" is a legitimate
+            // thing for it to show.
+            if (settingsSection === this.section) this.setMenuOpen(true);
+            else this.close();
             if (tracks.length === 0) {
                 this.renderedSignature = "";
                 this.els.menu?.replaceChildren();
@@ -445,19 +495,29 @@ class TrackPicker {
         return Boolean(this.els.menu?.classList.contains("is-open"));
     }
 
+    get section(): SettingsSection {
+        return this.offLabel === null ? "audio" : "subtitle";
+    }
+
+    // setMenuOpen shows or hides just this picker's list. It deliberately
+    // leaves the settings panel alone so a section swap never closes it.
+    setMenuOpen(open: boolean) {
+        this.els.menu?.classList.toggle("is-open", open);
+        if (!open) return;
+        clearChromeTimer();
+        requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
+    }
+
     setOpen(open: boolean) {
         if (open) {
             closeMenus(this);
-            showSettingsPanel(this.offLabel === null ? "audio" : "subtitle");
+            showSettingsPanel(this.section);
+            this.setMenuOpen(true);
+            return;
         }
-        this.els.menu?.classList.toggle("is-open", open);
-        if (open) {
-            clearChromeTimer();
-            requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
-        } else {
-            if (settingsSection === (this.offLabel === null ? "audio" : "subtitle")) hideSettingsPanel();
-            if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
-        }
+        this.setMenuOpen(false);
+        if (settingsSection === this.section) hideSettingsPanel();
+        if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
     }
 
     close(restoreFocus = false) {
@@ -495,13 +555,6 @@ class TrackPicker {
         revealChrome();
     }
 
-    private cycle() {
-        if (!this.visible || this.tracks.length === 0) return;
-        const options: Array<number | null> = this.tracks.map((track) => track.id);
-        const choices = this.offLabel === null ? options : [null, ...options];
-        const current = this.currentTrack()?.id ?? null;
-        this.select(choices[(choices.indexOf(current) + 1) % choices.length]);
-    }
 
     private items() {
         return Array.from(this.els.menu?.querySelectorAll<HTMLButtonElement>("[data-track]") || []);
@@ -533,7 +586,7 @@ class TrackPicker {
         if (this.els.label) this.els.label.textContent = short;
         if (this.els.button) {
             this.els.button.dataset.state = current ? "on" : "off";
-            this.els.button.title = `${this.title}: ${full}. Click to cycle`;
+            this.els.button.title = `Choose ${this.title.toLowerCase()}: ${full}`;
             this.els.button.setAttribute("aria-label", this.els.button.title);
         }
     }
@@ -567,9 +620,15 @@ function applyHtmlPicture() {
     Object.assign(videoEl.style, style);
 }
 
-function syncSettingsGeometry() {
-    const panel = byID("video-settings-panel");
-    if (!panel || !modalEl || !settingsSection) return;
+function getActiveVideoPanel(): HTMLElement | null {
+    if (settingsSection !== null) return byID("video-settings-panel");
+    if (playlistOpen) return byID("video-playlist-panel");
+    return null;
+}
+
+function syncActivePanelGeometry() {
+    const panel = getActiveVideoPanel();
+    if (!panel || !modalEl) return;
     const shell = byID("video-shell")?.getBoundingClientRect();
     if (!shell) return;
     const top = Math.max(0, (topbarEl?.getBoundingClientRect().bottom ?? shell.top) - shell.top);
@@ -579,10 +638,11 @@ function syncSettingsGeometry() {
     geometry?.syncFallbackNativeViewportInsets();
 }
 
-function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
+function showSettingsPanel(section: SettingsSection) {
     const panel = byID("video-settings-panel");
     if (!panel) return;
     settingsReturnFocus = byID("video-picture-button");
+    hideVideoPlaylist();
     settingsSection = section;
     panel.hidden = false;
     panel.setAttribute("aria-hidden", "false");
@@ -596,10 +656,10 @@ function showSettingsPanel(section: NonNullable<typeof settingsSection>) {
     for (const button of panel.querySelectorAll<HTMLElement>("[data-settings-section]")) {
         button.setAttribute("aria-pressed", button.dataset.settingsSection === section ? "true" : "false");
     }
-    syncSettingsGeometry();
+    syncActivePanelGeometry();
     clearChromeTimer();
     revealChrome();
-    requestAnimationFrame(() => { syncSettingsGeometry(); geometry?.scheduleNativeResize(); applyHtmlPicture(); });
+    requestAnimationFrame(() => { syncActivePanelGeometry(); geometry?.scheduleNativeResize(); applyHtmlPicture(); });
 }
 
 function hideSettingsPanel(restoreFocus = false) {
@@ -619,6 +679,57 @@ function hideSettingsPanel(restoreFocus = false) {
     applyHtmlPicture();
 }
 
+function showVideoPlaylist() {
+    if (!activePlaylist || activePlaylist.items.length < 2) return;
+    closeMenus();
+    const panel = byID("video-playlist-panel");
+    if (!panel) return;
+    playlistReturnFocus = byID("video-playlist-button");
+    playlistOpen = true;
+    panel.hidden = false;
+    panel.inert = false;
+    panel.setAttribute("aria-hidden", "false");
+    modalEl?.classList.add("has-video-playlist");
+    byID("video-playlist-button")?.setAttribute("aria-expanded", "true");
+    setVideoPlaylistOpen(true);
+    syncActivePanelGeometry();
+    clearChromeTimer();
+    revealChrome();
+    requestAnimationFrame(() => {
+        syncActivePanelGeometry();
+        geometry?.scheduleNativeResize();
+        applyHtmlPicture();
+        panel.querySelector<HTMLElement>("[aria-current='true']")?.focus({ preventScroll: true });
+    });
+}
+
+export function hideVideoPlaylist(restoreFocus = false): void {
+    const panel = byID("video-playlist-panel");
+    const focusInside = Boolean(panel?.contains(document.activeElement));
+    playlistOpen = false;
+    if (panel) {
+        panel.hidden = true;
+        panel.inert = true;
+        panel.setAttribute("aria-hidden", "true");
+    }
+    modalEl?.classList.remove("has-video-playlist");
+    byID("video-playlist-button")?.setAttribute("aria-expanded", "false");
+    setVideoPlaylistOpen(false);
+    if ((restoreFocus || focusInside) && playlistReturnFocus?.isConnected) {
+        playlistReturnFocus.focus({ preventScroll: true });
+    }
+    geometry?.syncFallbackNativeViewportInsets();
+    geometry?.scheduleNativeResize();
+    applyHtmlPicture();
+}
+
+function bindVideoPlaylist() {
+    byID("video-playlist-button")?.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (playlistOpen) hideVideoPlaylist(true);
+        else showVideoPlaylist();
+    });
+}
 
 function bindSettingsPanel() {
     const panel = byID("video-settings-panel");
@@ -643,12 +754,8 @@ function bindSettingsPanel() {
         const button = (event.target as HTMLElement).closest<HTMLElement>("[data-settings-section]");
         if (!button) return;
         const returnFocus = settingsReturnFocus;
-        closeMenus();
-        const section = button.dataset.settingsSection;
-        if (section === "audio") audioPicker?.setOpen(true);
-        else if (section === "subtitle") subtitlePicker?.setOpen(true);
-        else if (section === "speed") setSpeedMenuOpen(true);
-        else showSettingsPanel("picture");
+        const requested = button.dataset.settingsSection;
+        showSettingsSection(SETTINGS_SECTIONS.find((value) => value === requested) ?? "picture");
         settingsReturnFocus = returnFocus;
     });
     panel?.addEventListener("keydown", (event) => {
@@ -664,20 +771,44 @@ function trackPickers() {
 }
 
 function isAnyMenuOpen() {
-    return settingsSection !== null || isSpeedMenuOpen() || trackPickers().some((picker) => picker.isOpen());
+    return playlistOpen || settingsSection !== null || isSpeedMenuOpen() || trackPickers().some((picker) => picker.isOpen());
+}
+
+// showSettingsSection swaps which section the open panel is showing. Routing
+// through the pickers instead would close the panel first and reopen it, which
+// reads as the popover dismissing itself on a tab click.
+function showSettingsSection(section: SettingsSection) {
+    speedMenuEl?.classList.remove("is-open");
+    for (const picker of trackPickers()) picker.setMenuOpen(false);
+    showSettingsPanel(section);
+    if (section === "audio") audioPicker?.setMenuOpen(true);
+    else if (section === "subtitle") subtitlePicker?.setMenuOpen(true);
+    else if (section === "speed") {
+        speedMenuEl?.classList.add("is-open");
+        clearChromeTimer();
+        requestAnimationFrame(() => {
+            if (isSpeedMenuOpen() && !speedMenuEl?.contains(document.activeElement)) {
+                byID("video-speed-slider")?.focus({ preventScroll: true });
+            }
+        });
+    }
 }
 
 // closeMenus closes every popover except the one about to open.
 function closeMenus(except: TrackPicker | "speed" | null = null) {
-    if (settingsSection === "picture") hideSettingsPanel();
+    if (settingsSection !== null) hideSettingsPanel();
     if (except !== "speed") closeSpeedMenu();
     for (const picker of trackPickers()) {
         if (picker !== except) picker.close();
     }
 }
 
-// closeOpenMenu closes whichever popover is open, returning whether one was.
+// closeOpenMenu closes whichever popover or panel is open, returning whether one was.
 function closeOpenMenu() {
+    if (playlistOpen) {
+        hideVideoPlaylist(true);
+        return true;
+    }
     if (!isAnyMenuOpen()) return false;
     closeSpeedMenu(true);
     for (const picker of trackPickers()) picker.close(true);
@@ -737,6 +868,28 @@ function parseCustomPlaybackRate(value: string) {
     return clampPlaybackRate(rate);
 }
 
+// The next playlist item is opened and warmed once the current one is close to
+// the end and fully buffered, so auto-next starts without a cold round-trip to
+// Telegram. A single slot is enough: only the immediate next item is useful.
+const mediaPrefetcher = new MediaPrefetcher<MediaOpenResult>({
+    open: (id) => openMedia(id),
+    close: (token) => safelyCloseMedia(token),
+    warm: (session) => warmMediaEdges(session.url, session.info.plaintextSize || session.info.storedSize || 0),
+});
+
+function nextPlaylistTarget(): VideoOpenTarget | null {
+    if (!activePlaylist?.autoNext) return null;
+    const next = activePlaylist.items[activePlaylist.currentIndex + 1];
+    return next ? normalizeVideoTarget(next) : null;
+}
+
+function maybePrefetchNext(state: PlayerState) {
+    if (!isOpen() || hasError || !readyToPrefetch(state)) return;
+    const next = nextPlaylistTarget();
+    if (!next || mediaPrefetcher.holds(next.id)) return;
+    void mediaPrefetcher.prepare(next.id);
+}
+
 function applyState(state: PlayerState) {
     const wasPaused = currentState.paused;
     currentState = state;
@@ -750,6 +903,7 @@ function applyState(state: PlayerState) {
     applyHtmlPicture();
     setLoading(state.loading);
     syncMediaStatsPolling();
+    maybePrefetchNext(state);
     if (state.paused || hasError) {
         clearChromeTimer();
         setChromeVisible(true);
@@ -908,12 +1062,162 @@ function renderMediaMeta() {
     metaEl.textContent = streamActivityText ? `${mediaMetaBaseText} · ${streamActivityText}` : mediaMetaBaseText;
 }
 
+function normalizeVideoTarget(target: VideoOpenTarget): VideoOpenTarget | null {
+    const id = Number(target.id || 0);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    const normalized = {
+        id,
+        name: String(target.name || "Video"),
+        size: Math.max(0, Number(target.size) || 0),
+        encrypted: Boolean(target.encrypted),
+    };
+    const key = String(target.key || "").trim();
+    return key ? { ...normalized, key } : normalized;
+}
+
+function createActivePlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch): ActiveVideoPlaylist {
+    const fallback = Object.freeze([{ ...target }]);
+    if (!launch) {
+        return { items: fallback, title: "Videos", currentIndex: 0, autoNext: loadAutoNextPreference() };
+    }
+
+    const items = launch.items
+        .map(normalizeVideoTarget)
+        .filter((item): item is VideoOpenTarget => item !== null);
+    let currentIndex = Number.isInteger(launch.currentIndex) ? launch.currentIndex : -1;
+    if (currentIndex < 0 || currentIndex >= items.length || items[currentIndex].id !== target.id) {
+        const matches = items.reduce<number[]>((indices, item, index) => {
+            if (item.id === target.id) indices.push(index);
+            return indices;
+        }, []);
+        currentIndex = matches.length === 1 ? matches[0] : -1;
+    }
+    if (currentIndex < 0) {
+        return { items: fallback, title: "Videos", currentIndex: 0, autoNext: loadAutoNextPreference() };
+    }
+    items[currentIndex] = { ...items[currentIndex], ...target };
+    return {
+        items: Object.freeze(items.map((item) => Object.freeze({ ...item }))),
+        title: String(launch.title || "Videos"),
+        currentIndex,
+        autoNext: loadAutoNextPreference(),
+    };
+}
+
+function playlistItemIdentity(item: VideoOpenTarget, index: number): string {
+    return item.key || `video:${item.id}:${index}`;
+}
+
+function playlistViewItems(playlist: ActiveVideoPlaylist): readonly VideoPlaylistViewItem[] {
+    return playlist.items.map((item, index) => ({
+        id: playlistItemIdentity(item, index),
+        name: item.name,
+        size: item.size || 0,
+        format: videoFormatLabel(item.name),
+        position: index + 1,
+    }));
+}
+
+function syncPlaylistButton() {
+    const button = byID<HTMLButtonElement>("video-playlist-button");
+    const count = activePlaylist?.items.length ?? 0;
+    const available = count > 1;
+    if (!button) return;
+    button.hidden = !available;
+    const position = available ? activePlaylist!.currentIndex + 1 : 0;
+    button.setAttribute("aria-label", available ? `Playlist, ${position} of ${count}` : "Playlist");
+    button.title = available ? `Playlist (${position} of ${count})` : "Playlist";
+}
+
+function syncPlaylistSnapshot() {
+    if (!activePlaylist) {
+        resetVideoPlaylist();
+        syncPlaylistButton();
+        return;
+    }
+    setVideoPlaylist({
+        open: playlistOpen && activePlaylist.items.length > 1,
+        title: activePlaylist.title,
+        items: playlistViewItems(activePlaylist),
+        currentIndex: activePlaylist.currentIndex,
+        autoNext: activePlaylist.autoNext,
+        switchingId: null,
+    });
+    syncPlaylistButton();
+}
+
+function installVideoPlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch) {
+    hideVideoPlaylist();
+    void mediaPrefetcher.discard();
+    activePlaylist = createActivePlaylist(target, launch);
+    syncPlaylistSnapshot();
+}
+
+function nextPlaylistPlaybackIntent(): PlaybackIntent {
+    const intent = capturePlaybackIntent(currentState, false);
+    intent.currentTime = 0;
+    intent.paused = false;
+    return intent;
+}
+
+async function switchVideoPlaylistItem(index: number, closePanel: boolean): Promise<void> {
+    const playlist = activePlaylist;
+    if (!playlist || index < 0 || index >= playlist.items.length) return;
+    if (index === playlist.currentIndex) {
+        if (closePanel) hideVideoPlaylist(true);
+        return;
+    }
+    const target = playlist.items[index];
+    if (index !== playlist.currentIndex + 1) await mediaPrefetcher.discard();
+    const intent = nextPlaylistPlaybackIntent();
+    playlist.currentIndex = index;
+    setVideoPlaylistCurrentIndex(index);
+    setVideoPlaylistSwitching(playlistItemIdentity(target, index));
+    syncPlaylistButton();
+    if (closePanel) hideVideoPlaylist(true);
+    try {
+        await openVideoTarget(target, intent);
+    } finally {
+        if (activePlaylist === playlist && playlist.currentIndex === index) {
+            setVideoPlaylistSwitching(null);
+        }
+    }
+}
+
+export function selectVideoPlaylistItem(index: number): void {
+    void switchVideoPlaylistItem(index, true);
+}
+
+export function updateVideoAutoNext(enabled: boolean): void {
+    if (activePlaylist) activePlaylist.autoNext = Boolean(enabled);
+    setVideoPlaylistAutoNext(Boolean(enabled));
+    // Nothing is queued up any more, so stop holding a reader open for it.
+    if (!enabled) void mediaPrefetcher.discard();
+}
+
+function handleNaturalMediaEnd(attempt: VideoOpenAttempt, adapter: PlayerAdapter) {
+    if (
+        activeOpenAttempt !== attempt ||
+        activeAdapter !== adapter ||
+        !playbackTransitions.isCurrent(attempt.generation) ||
+        !activePlaylist?.autoNext
+    ) {
+        return;
+    }
+    const nextIndex = activePlaylist.currentIndex + 1;
+    if (nextIndex >= activePlaylist.items.length) {
+        setChromeVisible(true);
+        clearChromeTimer();
+        return;
+    }
+    void switchVideoPlaylistItem(nextIndex, false);
+}
 
 async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => boolean) {
     let opened: MediaOpenResult | null = null;
     let adapter: HtmlVideoAdapter | null = null;
     try {
-        opened = await openMedia(attempt.target.id);
+        opened = mediaPrefetcher.take(attempt.target.id) ?? await openMedia(attempt.target.id);
         if (!isCurrent() || !isOpen()) {
             await safelyCloseMedia(opened.token);
             return;
@@ -933,8 +1237,9 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
 
         adapter = new HtmlVideoAdapter(videoEl!, opened, {
             mediaError: (code, state) => handleHtmlMediaError(attempt, adapter!, code, state),
-            playbackError: setError,
+            playbackError: handleHtmlPlaybackError,
             revealChrome,
+            mediaEnded: () => handleNaturalMediaEnd(attempt, adapter!),
         });
         activeAdapter = adapter;
         unsubscribeState = adapter.subscribe((state) => {
@@ -942,6 +1247,11 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             applyState(state);
         });
         adapter.load();
+        if (attempt.playbackIntent) {
+            adapter.setVolume(attempt.playbackIntent.volume);
+            adapter.setMuted(attempt.playbackIntent.muted);
+            adapter.setSpeed(attempt.playbackIntent.rate);
+        }
     } catch (err: unknown) {
         if (adapter && activeAdapter === adapter) {
             await releaseActive();
@@ -951,7 +1261,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         }
         if (!isCurrent()) return;
         console.error("OpenMedia failed:", err);
-        setError(errorMessage(err, "Could not open this video."));
+        setError(errorMessage(err, "Could not open this video. Try again."));
     }
 }
 
@@ -970,6 +1280,7 @@ function handleHtmlMediaError(
         return;
     }
     attempt.htmlFailureHandled = true;
+    console.error("HTML media player failed:", { code, state });
 
     if (shouldFallbackFromHtmlMediaError(code)) {
         attempt.nativeFallbackRequested = true;
@@ -982,7 +1293,7 @@ function handleHtmlMediaError(
 
     const message = code === 2
         ? "The video stream was interrupted. Check your connection and try again."
-        : "The embedded player could not continue playing this video.";
+        : "The embedded player could not continue playing this video. Try again.";
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
         if (isCurrent()) setError(message);
@@ -1061,12 +1372,12 @@ async function openNativePlayback(
         geometry?.setNativeLayout("none");
         // A closed loopback session also surfaces as an HTML media error, so the
         // handoff can race a dead token; report that as the interruption it is.
-        const sessionLost = Boolean(existing) && /session not found/i.test(errorMessage(err, ""));
+        const sessionLost = Boolean(existing) && /session not found/i.test(errorDetail(err));
         setError(sessionLost
             ? "The video stream was interrupted. Check your connection and try again."
             : errorMessage(err, existing
-                ? "This video could not be opened by the compatible player."
-                : "Could not open this video."));
+                ? "The compatible player could not open this video. Try again."
+                : "Could not open this video. Try again."));
     }
 }
 
@@ -1083,7 +1394,7 @@ function handleNativeMediaError(attempt: VideoOpenAttempt, token: string, detail
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         if (!isCurrent() || activeNative?.token !== token) return;
         if (isOpen()) {
-            setError("The compatible player stopped unexpectedly. Try opening the video again.");
+            setError("The compatible player stopped unexpectedly. Try again.");
         }
         await releaseActive();
     });
@@ -1119,6 +1430,7 @@ function activateNativePlayback(
     const adapter = new NativeMpvAdapter(opened, {
         mediaError: (detail) => handleNativeMediaError(attempt, opened.token, detail),
         mediaClosed: () => handleNativeMediaClosed(attempt, opened.token),
+        mediaEnded: () => handleNaturalMediaEnd(attempt, adapter),
         dispose: (disposed) => nativeStateRouter.deactivate(disposed),
     });
     activeAdapter = adapter;
@@ -1144,19 +1456,18 @@ function activateNativePlayback(
     if (!standalone) geometry?.scheduleNativeResize();
 }
 
-export async function openVideoModal(target: VideoOpenTarget) {
+async function openVideoTarget(target: VideoOpenTarget, playbackIntent: PlaybackIntent | null): Promise<void> {
     const host = byID<HTMLElement>("video-modal");
     if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
     if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
-    const id = Number(target.id || 0);
-    if (!id) return;
 
     const attempt: VideoOpenAttempt = {
         generation: playbackTransitions.begin(),
-        target: { ...target, id },
+        target,
         htmlFailureHandled: false,
         nativeFallbackRequested: false,
         pausedByUser: false,
+        playbackIntent,
     };
     activeOpenAttempt = attempt;
 
@@ -1171,7 +1482,7 @@ export async function openVideoModal(target: VideoOpenTarget) {
     a11y?.activate();
     void geometry?.syncFullscreenState();
 
-    return playbackTransitions.run(attempt.generation, async (isCurrent) => {
+    await playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
         if (!isCurrent() || !isOpen()) return;
         setLoadingStatusOverride("");
@@ -1182,14 +1493,31 @@ export async function openVideoModal(target: VideoOpenTarget) {
         }
         const rect = await geometry?.prepareNativeRect(isCurrent);
         if (!rect || !isCurrent()) return;
-        await openNativePlayback(attempt, rect, isCurrent);
+        // A warmed session is attached to rather than opened again, which skips
+        // the Telegram round-trip a fresh native open would repeat.
+        const warmed = mediaPrefetcher.take(attempt.target.id);
+        await openNativePlayback(attempt, rect, isCurrent, warmed, attempt.playbackIntent);
     });
+}
+
+export async function openVideoModal(target: VideoOpenTarget, playlist?: VideoPlaylistLaunch): Promise<void> {
+    const normalized = normalizeVideoTarget(target);
+    if (!normalized) return;
+    const host = byID<HTMLElement>("video-modal");
+    if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
+    if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
+    installVideoPlaylist(normalized, playlist);
+    await openVideoTarget(normalized, null);
 }
 
 export async function closeVideoModal() {
     if (!modalEl) return;
     const generation = playbackTransitions.begin();
+    await mediaPrefetcher.discard();
     activeOpenAttempt = null;
+    hideVideoPlaylist();
+    activePlaylist = null;
+    resetVideoPlaylist();
     clearChromeTimer();
     await geometry?.exitVideoFullscreen();
     if (!playbackTransitions.isCurrent(generation)) return;
@@ -1204,6 +1532,12 @@ export async function closeVideoModal() {
     setLoading(false);
 }
 
+
+// nextPresetRate steps to the first preset above the current rate and wraps at
+// the top, so a custom rate from the slider still lands on a sensible next step.
+function nextPresetRate(current: number) {
+    return RATE_OPTIONS.find((rate) => rate > current + 0.001) ?? RATE_OPTIONS[0];
+}
 
 function isSpeedMenuOpen() {
     return Boolean(speedMenuEl?.classList.contains("is-open"));
@@ -1240,8 +1574,8 @@ function closeSpeedMenu(restoreFocus = false) {
 function bindSpeedMenu() {
     speedBtnEl?.addEventListener("click", (event) => {
         event.stopPropagation();
-        const next = RATE_OPTIONS.find((rate) => rate > currentState.rate) ?? RATE_OPTIONS[0];
-        activeAdapter?.setSpeed(next);
+        if (!activeAdapter) return;
+        activeAdapter.setSpeed(nextPresetRate(currentState.rate));
         revealChrome();
     });
     speedMenuEl?.addEventListener("click", (event) => {
@@ -1301,7 +1635,7 @@ function bindSpeedMenu() {
 
 function targetShouldUseOwnKeyboard(target: HTMLElement | null, event: KeyboardEvent) {
     if (!(target instanceof HTMLElement)) return false;
-    if (target.isContentEditable || target.closest("#video-settings-panel")) return true;
+    if (target.isContentEditable || target.closest("#video-settings-panel, #video-playlist-panel")) return true;
     const tag = String(target.tagName || "").toUpperCase();
     if (tag === "BUTTON") {
         if (target.closest("#video-speed-menu")) return true;
@@ -1362,8 +1696,8 @@ function handleVideoPointerMove() {
 }
 
 function targetIsVideoChrome(target: EventTarget | null) {
-    const el = target instanceof HTMLElement ? target : null;
-    return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading, .video-settings-panel"));
+    const el = target instanceof Element ? target : null;
+    return Boolean(el?.closest(".video-topbar, .video-controls, .video-center-controls, .video-error, .video-loading, .video-settings-panel, .video-playlist-panel"));
 }
 
 function handleStageClick(event: MouseEvent) {
@@ -1372,6 +1706,12 @@ function handleStageClick(event: MouseEvent) {
     transport?.togglePlayback();
 }
 
+function handleStageDoubleClick(event: MouseEvent) {
+    if (activeNative?.presentation === "standalone") return;
+    if (targetIsVideoChrome(event.target)) return;
+    event.preventDefault();
+    void geometry?.toggleFullscreen();
+}
 
 function bindEncryptedMediaLifecycle() {
     if (unsubscribeEncryptedMediaSessionsClosed) return;
@@ -1380,7 +1720,6 @@ function bindEncryptedMediaLifecycle() {
         void closeVideoModal();
     });
 }
-
 
 function renderSpeedOptions() {
     if (!speedMenuEl) return;
@@ -1400,6 +1739,9 @@ function customSpeedMarkup() {
 export function teardownVideoModal(): void {
     playbackTransitions.begin();
     activeOpenAttempt = null;
+    hideVideoPlaylist();
+    activePlaylist = null;
+    resetVideoPlaylist();
     clearChromeTimer();
     if (modalEl) {
         modalEl.style.display = "none";
@@ -1439,11 +1781,15 @@ export function teardownVideoModal(): void {
     loadingEl = null;
     loadingStatusEl = null;
     errorEl = null;
+    errorMessageEl = null;
+    errorRetryBtnEl = null;
     playBtnEl = null;
     speedBtnEl = null;
     speedMenuEl = null;
     settingsSection = null;
     settingsReturnFocus = null;
+    playlistOpen = false;
+    playlistReturnFocus = null;
     videoHostEl = null;
     videoSetupComplete = false;
 }
@@ -1476,6 +1822,8 @@ export function activateVideoModal(): () => void {
         loading: loadingEl,
         loadingStatus: loadingStatusEl,
         error: errorEl,
+        errorMessage: errorMessageEl,
+        errorRetryButton: errorRetryBtnEl,
         playButton: playBtnEl,
         speedButton: speedBtnEl,
         speedMenu: speedMenuEl,
@@ -1502,10 +1850,9 @@ export function activateVideoModal(): () => void {
         hasActivePlayer: () => Boolean(activeAdapter),
         hasError: () => hasError,
         isOpen,
-        isSettingsOpen: () => settingsSection !== null,
-        settingsPanel: () => byID("video-settings-panel"),
+        getActivePanel: getActiveVideoPanel,
         revealChrome,
-        reportSurfaceError: setError,
+        reportSurfaceError: () => setError("Could not prepare the video player. Try again."),
     });
     transport = new VideoTransportController({
         dom: videoDOM,
@@ -1520,7 +1867,7 @@ export function activateVideoModal(): () => void {
         revealChrome,
         scheduleChromeHide,
         geometryChanged: () => {
-            syncSettingsGeometry();
+            syncActivePanelGeometry();
             geometry?.scheduleNativeResize();
         },
         refreshFullscreenAvailability: () => geometry?.refreshFullscreenAvailability(),
@@ -1529,6 +1876,10 @@ export function activateVideoModal(): () => void {
     videoSetupComplete = true;
     a11y = installModalA11y(modalEl, {
         requestClose: () => {
+            if (playlistOpen) {
+                hideVideoPlaylist(true);
+                return;
+            }
             const panel = byID<HTMLElement>("video-settings-panel");
             if (panel && !panel.hidden) {
                 closeOpenMenu();
@@ -1547,19 +1898,22 @@ export function activateVideoModal(): () => void {
     transport.bind();
     unbindSpeedMenu = bindSpeedMenu();
     bindSettingsPanel();
+    bindVideoPlaylist();
     unbindVideoDOM = bindVideoDOM(videoDOM, {
         close: () => { void closeVideoModal(); },
+        retry: retryVideoOpen,
         toggleFullscreen: () => { void geometry?.toggleFullscreen(); },
         pointerMove: handleVideoPointerMove,
         stageClick: handleStageClick,
+        stageDoubleClick: handleStageDoubleClick,
         keydown: handleVideoShortcut,
         resize: () => geometry?.handleWindowResize(() => {
-            syncSettingsGeometry();
+            syncActivePanelGeometry();
             applyHtmlPicture();
         }),
     });
     geometry.observeControlsSize(() => {
-        syncSettingsGeometry();
+        syncActivePanelGeometry();
         applyHtmlPicture();
     });
     applyState(EMPTY_PLAYER_STATE);

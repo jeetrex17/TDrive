@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import VideoModal from '../../ui/video/VideoModal.svelte';
 import { DEFAULT_PLAYBACK_PREFERENCES } from '../video/playback-preferences';
+import { VideoGeometryController } from '../video/video-geometry';
+import type { VideoDOM } from '../video/video-dom';
+import { AUTO_NEXT_STORAGE_KEY } from '../video/video-playlist';
 import { updatePlaybackPreferences } from './video';
 
 const apiMocks = vi.hoisted(() => ({
@@ -130,7 +133,6 @@ async function nextTasks(): Promise<void> {
 }
 
 beforeEach(async () => {
-
     vi.clearAllMocks();
     runtimeMocks.events.clear();
     document.body.innerHTML = '<div id="file-list" tabindex="-1"></div><div id="video-modal" style="display:none"></div>';
@@ -148,11 +150,16 @@ beforeEach(async () => {
     apiMocks.updateMediaPlayback.mockResolvedValue(undefined);
 
     const videoModule = await import('./video');
-        videoModule.updatePlaybackPreferences({ ...DEFAULT_PLAYBACK_PREFERENCES });
-        videoComponent = mount(VideoModal, {
-            target: document.getElementById('video-modal')!,
-            props: { onPreferencesChange: videoModule.updatePlaybackPreferences },
-        });
+    videoModule.updatePlaybackPreferences({ ...DEFAULT_PLAYBACK_PREFERENCES });
+    videoComponent = mount(VideoModal, {
+        target: document.getElementById('video-modal')!,
+        props: {
+            onPreferencesChange: videoModule.updatePlaybackPreferences,
+            onHidePlaylist: videoModule.hideVideoPlaylist,
+            onSelectPlaylistItem: videoModule.selectVideoPlaylistItem,
+            onUpdateVideoAutoNext: videoModule.updateVideoAutoNext,
+        },
+    });
     flushSync();
 });
 
@@ -163,6 +170,11 @@ afterEach(async () => {
     videoComponent = null;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    try {
+        window.localStorage.removeItem(AUTO_NEXT_STORAGE_KEY);
+    } catch {
+        // Storage is not available in every environment; nothing to clean up.
+    }
     document.body.replaceChildren();
 });
 
@@ -258,7 +270,8 @@ describe("video HTML-to-native fallback", () => {
         expect(apiMocks.attachNativeMedia).toHaveBeenCalledOnce();
         expect(apiMocks.closeMedia).toHaveBeenCalledOnce();
         expect(apiMocks.closeNativeMedia).not.toHaveBeenCalled();
-        expect(document.querySelector("#video-error")?.textContent).toContain("native renderer unavailable");
+        expect(document.querySelector("#video-error")?.textContent).toContain("The compatible player could not open this video. Try again.");
+        expect(document.querySelector("#video-error")?.textContent).not.toContain("native renderer unavailable");
     });
 
     it("closes a stale promoted player before opening the newer request", async () => {
@@ -423,7 +436,7 @@ describe("native video track pickers", () => {
         await videoModule.closeVideoModal();
     });
 
-    it("cycles native tracks by actual IDs, wraps through Off, and never opens settings", async () => {
+    it("opens complete native track choices from their pills without changing tracks", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(23, MKV_SESSION_ID));
         const videoModule = await import("./video");
         deactivateVideo = videoModule.activateVideoModal();
@@ -435,26 +448,45 @@ describe("native video track pickers", () => {
         await nextTasks();
         const audio = document.querySelector<HTMLButtonElement>("#video-audio-button")!;
         const subtitle = document.querySelector<HTMLButtonElement>("#video-subtitle-button")!;
+        const audioMenu = document.querySelector<HTMLElement>("#video-audio-menu")!;
+        const subtitleMenu = document.querySelector<HTMLElement>("#video-subtitle-menu")!;
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
         apiMocks.nativeMediaCommand.mockClear();
+
         audio.click();
-        document.querySelector<HTMLButtonElement>("#video-speed-button")?.click();
-        audio.click();
-        subtitle.click(); subtitle.click(); subtitle.click();
-        expect(apiMocks.nativeMediaCommand.mock.calls.map(([, command]) => command).filter((command) => ["aid", "sid"].includes(command[1]))).toEqual([
-            ["set", "aid", "42"], ["set", "aid", "7"],
-            ["set", "sid", "19"], ["set", "sid", "83"], ["set", "sid", "no"],
-        ]);
-        expect(subtitle.title).toContain("Off");
-        expect(audio.title).toContain("Main");
-        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
-        expect(document.querySelector(".video-menu.is-open")).toBeNull();
-        expect(document.querySelector('input[type="search"]')).toBeNull();
-        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: [{ ...tracks[0], id: 99 }] });
-        audio.click();
-        expect(apiMocks.nativeMediaCommand).toHaveBeenLastCalledWith(MKV_SESSION_ID, ["set", "aid", "99"]);
-        document.querySelector<HTMLButtonElement>("#video-aspect-button")?.click();
-        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "panscan", "1"]));
-        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(true);
+        await nextTasks();
+        const selectedAudio = audioMenu.querySelector<HTMLButtonElement>('[data-track="7"]')!;
+        expect(panel.hidden).toBe(false);
+        expect(audioMenu.classList.contains("is-open")).toBe(true);
+        expect(subtitleMenu.classList.contains("is-open")).toBe(false);
+        expect(document.activeElement).toBe(selectedAudio);
+        expect(audio.title).toBe("Choose audio: Main / ENG / AAC");
+        expect(audio.getAttribute("aria-label")).toBe(audio.title);
+        expect(audio.title).not.toContain("Click to cycle");
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
+
+        document.body.click();
+        expect(panel.hidden).toBe(true);
+        expect(audioMenu.classList.contains("is-open")).toBe(false);
+        expect(document.activeElement?.id).toBe("video-picture-button");
+
+        subtitle.click();
+        await nextTasks();
+        const off = subtitleMenu.querySelector<HTMLButtonElement>('[data-track="no"]')!;
+        expect(panel.hidden).toBe(false);
+        expect(subtitleMenu.classList.contains("is-open")).toBe(true);
+        expect(document.activeElement).toBe(off);
+        expect(subtitle.title).toBe("Choose subtitles: Off");
+        expect(subtitle.getAttribute("aria-label")).toBe(subtitle.title);
+        expect(subtitle.title).not.toContain("Click to cycle");
+        expect(apiMocks.nativeMediaCommand).not.toHaveBeenCalled();
+
+        off.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(panel.hidden).toBe(true);
+        expect(document.activeElement?.id).toBe("video-picture-button");
+
+        document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "c", bubbles: true }));
+        await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ["set", "sid", "19"]));
         await videoModule.closeVideoModal();
     });
 
@@ -786,7 +818,7 @@ describe("playback settings dock", () => {
         await videoModule.closeVideoModal();
     });
 
-    it("cycles speed presets from custom values and synchronizes aspect cycling with picture settings", async () => {
+    it("cycles the rate from the speed pill and synchronizes aspect cycling with picture settings", async () => {
         const saved = new Map<string, string>();
         vi.stubGlobal("localStorage", { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) });
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(34, SHARED_SESSION_ID));
@@ -795,19 +827,37 @@ describe("playback settings dock", () => {
         await videoModule.openVideoModal({ id: 34, name: "clip.mp4" });
         const video = document.querySelector<HTMLVideoElement>("#video-player")!;
         const speed = document.querySelector<HTMLButtonElement>("#video-speed-button")!;
-        for (const rate of [1.25, 1.5, 2, .5, .75, 1]) {
-            speed.click();
-            expect(video.playbackRate).toBe(rate);
-            expect(speed.getAttribute("aria-label")).toContain(`${rate}x`);
-        }
+        const speedMenu = document.querySelector<HTMLElement>("#video-speed-menu")!;
+        const slider = document.querySelector<HTMLInputElement>("#video-speed-slider")!;
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        // The pill steps through the presets in place; the settings tab keeps
+        // the slider for anything between them.
         video.playbackRate = 1.65;
         video.dispatchEvent(new Event("ratechange"));
         speed.click();
+        await nextTasks();
         expect(video.playbackRate).toBe(2);
-        video.playbackRate = 3;
-        video.dispatchEvent(new Event("ratechange"));
-        speed.click();
-        expect(video.playbackRate).toBe(.5);
+        expect(speed.textContent).toBe("2x");
+        expect(speed.title).toBe("Playback speed: 2x. Click to cycle");
+        expect(speed.getAttribute("aria-label")).toBe(speed.title);
+        expect(speedMenu.classList.contains("is-open")).toBe(false);
+        expect(panel.hidden).toBe(true);
+
+        for (const rate of [0.5, 0.75, 1, 1.25, 1.5, 2]) {
+            speed.click();
+            await nextTasks();
+            expect([rate, video.playbackRate]).toEqual([rate, rate]);
+        }
+        expect(panel.hidden).toBe(true);
+
+        openSettings("speed");
+        await nextTasks();
+        expect(speedMenu.classList.contains("is-open")).toBe(true);
+        expect(Array.from(speedMenu.querySelectorAll<HTMLButtonElement>("[data-rate]")).map((button) => button.dataset.rate)).toEqual(["0.5", "0.75", "1", "1.25", "1.5", "2"]);
+        expect(document.activeElement).toBe(slider);
+        slider.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(panel.hidden).toBe(true);
+        expect(document.activeElement?.id).toBe("video-picture-button");
         const aspect = document.querySelector<HTMLButtonElement>("#video-aspect-button")!;
         for (const [mode, label] of [["fill", "Fill"], ["original", "Original"], ["16:9", "16:9"], ["4:3", "4:3"], ["fit", "Fit"]]) {
             aspect.click();
@@ -968,7 +1018,11 @@ describe("playback settings dock", () => {
         const notice = document.querySelector<HTMLElement>("#video-subtitle-format-note")!;
         expect(notice.hidden).toBe(false);
         expect(notice.textContent).toContain("image-based");
-        document.querySelector<HTMLButtonElement>("#video-subtitle-button")?.click();
+        document.querySelector<HTMLButtonElement>('[data-track="2"]')?.click();
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, tracks: [
+            { id: 1, type: "subtitle", codec: "hdmv_pgs_subtitle", selected: false },
+            { id: 2, type: "subtitle", codec: "subrip", selected: true },
+        ] });
         expect(notice.hidden).toBe(true);
         await videoModule.closeVideoModal();
     });
@@ -1097,6 +1151,78 @@ describe("playback settings dock", () => {
 });
 
 
+describe("video geometry", () => {
+    it("uses either active video panel for desktop and compact native reservations", () => {
+        let compact = false;
+        vi.spyOn(window, "matchMedia").mockImplementation((query) => ({ matches: compact && query.includes("760"), media: query, onchange: null, addListener: vi.fn(), removeListener: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
+
+        const modal = document.createElement("div");
+        const stage = document.createElement("div");
+        const topbar = document.createElement("div");
+        const controls = document.createElement("div");
+        const nativeViewport = document.createElement("div");
+        const settingsPanel = document.createElement("div");
+        const playlistPanel = document.createElement("div");
+        document.body.append(modal);
+        modal.append(stage, topbar, controls, nativeViewport, settingsPanel, playlistPanel);
+        modal.classList.add("is-video-native-fallback");
+
+        const rect = (left: number, top: number, width: number, height: number) => ({
+            x: left,
+            y: top,
+            top,
+            right: left + width,
+            bottom: top + height,
+            left,
+            width,
+            height,
+            toJSON: () => ({}),
+        });
+        vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+            if (this === stage) return rect(0, 0, 1000, 700);
+            if (this === topbar) return rect(0, 0, 1000, 70);
+            if (this === controls) return rect(0, 600, 1000, 100);
+            if (this === settingsPanel) return rect(compact ? 10 : 658, compact ? 350 : 70, compact ? 980 : 330, compact ? 250 : 530);
+            if (this === playlistPanel) return rect(compact ? 10 : 600, compact ? 300 : 70, compact ? 980 : 400, compact ? 300 : 530);
+            return rect(0, 0, 1000, 700);
+        });
+
+        let activePanel: HTMLElement | null = settingsPanel;
+        const controller = new VideoGeometryController({
+            dom: { modal, stage, topbar, controls, nativeViewport } as unknown as VideoDOM,
+            getNative: () => null,
+            hasActivePlayer: () => false,
+            hasError: () => false,
+            isOpen: () => true,
+            getActivePanel: () => activePanel,
+            revealChrome: vi.fn(),
+            reportSurfaceError: vi.fn(),
+        });
+
+        try {
+            controller.syncFallbackNativeViewportInsets();
+            expect(nativeViewport.style.getPropertyValue("--video-native-right-inset")).toBe("346px");
+            expect(nativeViewport.style.getPropertyValue("--video-native-bottom-inset")).toBe("104px");
+
+            activePanel = playlistPanel;
+            controller.syncFallbackNativeViewportInsets();
+            expect(nativeViewport.style.getPropertyValue("--video-native-right-inset")).toBe("404px");
+
+            compact = true;
+            controller.syncFallbackNativeViewportInsets();
+            expect(nativeViewport.style.getPropertyValue("--video-native-right-inset")).toBe("0px");
+            expect(nativeViewport.style.getPropertyValue("--video-native-bottom-inset")).toBe("404px");
+
+            activePanel = null;
+            compact = false;
+            controller.syncFallbackNativeViewportInsets();
+            expect(nativeViewport.style.getPropertyValue("--video-native-right-inset")).toBe("0px");
+            expect(nativeViewport.style.getPropertyValue("--video-native-bottom-inset")).toBe("104px");
+        } finally {
+            controller.destroy();
+        }
+    });
+});
 describe("playback speed slider", () => {
     it("changes native speed without closing the panel or hijacking arrow keys", async () => {
         apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(40, MKV_SESSION_ID));
@@ -1159,7 +1285,9 @@ describe("video finish time", () => {
             video.dispatchEvent(new Event("seeked"));
             expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 5, 23, 55))}`);
             video.pause();
-            expect(button.title).toContain("resume now");
+            // The control carries no native tooltip; the label is the meaning.
+            expect(button.getAttribute("aria-label")).toContain("resume now");
+            expect(button.title).toBe("");
             await vi.advanceTimersByTimeAsync(60_000);
             expect(end.textContent).toBe(` · Ends at ${localTime(new Date(2026, 8, 5, 23, 56))}`);
             Object.defineProperty(video, "duration", { configurable: true, value: Infinity });
@@ -1179,5 +1307,407 @@ describe("video finish time", () => {
             vi.useRealTimers();
             await videoModule.closeVideoModal();
         }
+    });
+});
+
+describe("video chrome interactions", () => {
+    it("keeps the settings popover open while switching sections", async () => {
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(91, SHARED_SESSION_ID));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 91, name: "tabs.mp4", size: 1024 });
+
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        document.querySelector<HTMLButtonElement>("#video-picture-button")!.click();
+        expect(panel.hidden).toBe(false);
+
+        for (const name of ["audio", "subtitle", "speed", "picture"]) {
+            const tab = document.querySelector<HTMLButtonElement>(`[data-settings-section="${name}"]`)!;
+            tab.click();
+            expect([name, panel.hidden]).toEqual([name, false]);
+            expect([name, tab.getAttribute("aria-pressed")]).toEqual([name, "true"]);
+        }
+        await videoModule.closeVideoModal();
+    });
+
+    it("keeps the audio section open when the track sync reports nothing to pick", async () => {
+        const opened = nativeOpenResult(92, MKV_SESSION_ID);
+        opened.htmlControls = true;
+        apiMocks.openNativeMedia.mockResolvedValue(opened);
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 92, name: "no-tracks.mkv", size: 1024 });
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, paused: false, duration: 240, tracks: [] });
+        await nextTasks();
+
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        const menu = document.querySelector<HTMLElement>("#video-audio-menu")!;
+        document.querySelector<HTMLButtonElement>("#video-picture-button")!.click();
+        document.querySelector<HTMLButtonElement>('[data-settings-section="audio"]')!.click();
+        expect(panel.hidden).toBe(false);
+
+        // A later tick still reports nothing to pick, which hides the pill. The
+        // open section has to survive that and say why it is empty.
+        runtimeMocks.events.get("native_media_state")?.({ token: MKV_SESSION_ID, paused: false, duration: 240, tracks: [] });
+        await nextTasks();
+
+        expect(panel.hidden).toBe(false);
+        expect(menu.classList.contains("is-open")).toBe(true);
+        expect(menu.textContent).toContain("No audio tracks available.");
+        await videoModule.closeVideoModal();
+    });
+
+    it("closes playback settings on Escape and restores focus to the gear", async () => {
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(42, SHARED_SESSION_ID));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 42, name: "shortcuts.mp4", size: 1024 });
+
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        const gear = document.querySelector<HTMLButtonElement>("#video-picture-button")!;
+        expect(panel.hidden).toBe(true);
+        gear.click();
+        expect(panel.hidden).toBe(false);
+
+        const tab = document.querySelector<HTMLButtonElement>('[data-settings-section="picture"]')!;
+        expect(tab.getAttribute("aria-pressed")).toBe("true");
+        expect(document.querySelector('[data-settings-section="shortcuts"]')).toBeNull();
+
+        tab.focus();
+        tab.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        expect(panel.hidden).toBe(true);
+        expect(document.activeElement).toBe(gear);
+        await videoModule.closeVideoModal();
+    });
+
+    it("toggles fullscreen from the stage but ignores video chrome", async () => {
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(43, SHARED_SESSION_ID));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 43, name: "fullscreen.mp4", size: 1024 });
+
+        const stage = document.querySelector<HTMLElement>("#video-stage")!;
+        const enter = apiMocks.enterFullscreen;
+        enter.mockClear();
+        const stageDblClick = new MouseEvent("dblclick", { bubbles: true, cancelable: true });
+        stage.dispatchEvent(stageDblClick);
+        await vi.waitFor(() => expect(enter).toHaveBeenCalledOnce());
+        expect(stageDblClick.defaultPrevented).toBe(true);
+
+        enter.mockClear();
+        const centerGraphic = document.querySelector<SVGElement>("#video-center-play svg")!;
+        centerGraphic.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+        await nextTasks();
+        expect(enter).not.toHaveBeenCalled();
+
+        const panel = document.querySelector<HTMLElement>("#video-settings-panel")!;
+        document.querySelector<HTMLButtonElement>("#video-picture-button")!.click();
+        panel.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+        expect(enter).not.toHaveBeenCalled();
+        await videoModule.closeVideoModal();
+    });
+});
+
+describe("fatal video error card", () => {
+    it("retries the failed HTML target without exposing backend detail", async () => {
+        const retried = mediaOpenResult(44, "retry-html-token");
+        let resolveRetry: (() => void) | undefined;
+        apiMocks.openMedia
+            .mockRejectedValueOnce(new Error("developer-only HTML failure detail"))
+            .mockImplementationOnce(() => new Promise<ReturnType<typeof mediaOpenResult>>((resolve) => {
+                resolveRetry = () => resolve(retried);
+            }));
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const fileList = document.querySelector<HTMLElement>("#file-list")!;
+        fileList.focus();
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 44, name: "retry.html.mp4", size: 1024 });
+
+        const error = document.querySelector<HTMLElement>("#video-error");
+        const retry = document.querySelector<HTMLButtonElement>("#video-error-retry");
+        await vi.waitFor(() => expect(error?.style.display).toBe("block"));
+        expect(error?.getAttribute("role")).toBe("alert");
+        expect(error?.textContent).toContain("Could not open this video. Try again.");
+        expect(error?.textContent).not.toContain("developer-only HTML failure detail");
+        expect(retry).toBeTruthy();
+        expect(document.activeElement).toBe(retry);
+        expect(errorLog).toHaveBeenCalledWith("OpenMedia failed:", expect.any(Error));
+
+        retry?.click();
+
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(1, 44);
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 44);
+        expect(error?.style.display).toBe("none");
+        expect(document.querySelector<HTMLElement>("#video-modal")?.classList.contains("is-video-loading")).toBe(true);
+
+        resolveRetry?.();
+        await vi.waitFor(() => expect(document.querySelector<HTMLVideoElement>("#video-player")?.getAttribute("src")).toBe(retried.url));
+
+        await videoModule.closeVideoModal();
+        expect(apiMocks.closeMedia).toHaveBeenCalledWith(retried.token);
+    });
+
+    it("retries the failed native target through its native lifecycle", async () => {
+        const retried = nativeOpenResult(45, "retry-native-token");
+        apiMocks.openNativeMedia
+            .mockRejectedValueOnce(new Error("developer-only native failure detail"))
+            .mockResolvedValueOnce(retried);
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 45, name: "retry-native.mkv", size: 1024 });
+
+        const error = document.querySelector<HTMLElement>("#video-error");
+        const retry = document.querySelector<HTMLButtonElement>("#video-error-retry");
+        await vi.waitFor(() => expect(error?.style.display).toBe("block"));
+        retry?.click();
+
+        await vi.waitFor(() => expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openNativeMedia).toHaveBeenNthCalledWith(1, 45, expect.any(Object));
+        expect(apiMocks.openNativeMedia).toHaveBeenNthCalledWith(2, 45, expect.any(Object));
+        expect(error?.style.display).toBe("none");
+
+        await videoModule.closeVideoModal();
+        expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith(retried.token);
+    });
+
+    it("closes a fatal error through the normal modal teardown", async () => {
+        apiMocks.openMedia.mockRejectedValue(new Error("developer-only close failure detail"));
+        const fileList = document.querySelector<HTMLElement>("#file-list")!;
+        fileList.focus();
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 46, name: "close-error.mp4", size: 1024 });
+
+        const error = document.querySelector<HTMLElement>("#video-error");
+        const close = document.querySelector<HTMLButtonElement>("#video-error-close");
+        await vi.waitFor(() => expect(error?.style.display).toBe("block"));
+        expect(close).toBeTruthy();
+        close?.click();
+
+        await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#video-modal")?.style.display).toBe("none"));
+        await vi.waitFor(() => expect(error?.style.display).toBe("none"));
+        expect(document.activeElement).toBe(fileList);
+    });
+});
+
+describe("folder video playlist", () => {
+    it("opens the playlist, restores focus on Escape, and switches a selected row", async () => {
+        apiMocks.openMedia.mockImplementation(async (id: number) => mediaOpenResult(id, `playlist-${id}`));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal(
+            { id: 47, name: "lesson-1.mp4", size: 1_024 },
+            {
+                title: "Videos in Course",
+                currentIndex: 0,
+                items: [
+                    { id: 47, name: "lesson-1.mp4", size: 1_024 },
+                    { id: 48, name: "lesson-2.mp4", size: 2_048 },
+                    { id: 49, name: "lesson-3.mp4", size: 3_072 },
+                ],
+            },
+        );
+        await nextTasks();
+
+        const trigger = document.querySelector<HTMLButtonElement>("#video-playlist-button")!;
+        const panel = document.querySelector<HTMLElement>("#video-playlist-panel")!;
+        expect(trigger.hidden).toBe(false);
+        expect(trigger.getAttribute("aria-label")).toBe("Playlist, 1 of 3");
+
+        trigger.click();
+        await nextTasks();
+        expect(panel.hidden).toBe(false);
+        expect(panel.querySelectorAll(".video-playlist-row")).toHaveLength(3);
+
+        panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await nextTasks();
+        expect(panel.hidden).toBe(true);
+        expect(document.querySelector<HTMLElement>("#video-modal")?.style.display).toBe("flex");
+        expect(document.activeElement).toBe(trigger);
+
+        const player = document.querySelector<HTMLVideoElement>("#video-player")!;
+        player.volume = 0.42;
+        player.muted = true;
+        player.playbackRate = 1.5;
+        player.dispatchEvent(new Event("volumechange"));
+        player.dispatchEvent(new Event("ratechange"));
+
+        trigger.click();
+        await nextTasks();
+        panel.querySelector<HTMLButtonElement>('[data-playlist-index="1"]')?.click();
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 48);
+        expect(player.volume).toBe(0.42);
+        expect(player.muted).toBe(true);
+        expect(player.playbackRate).toBe(1.5);
+        expect(trigger.getAttribute("aria-label")).toBe("Playlist, 2 of 3");
+        expect(panel.hidden).toBe(true);
+        expect(panel.querySelector('[data-playlist-index="1"]')?.getAttribute("aria-current")).toBe("true");
+    });
+
+    it("advances on a natural HTML end and stops at the final item", async () => {
+        apiMocks.openMedia.mockImplementation(async (id: number) => mediaOpenResult(id, `auto-${id}`));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal(
+            { id: 50, name: "part-1.mp4" },
+            {
+                title: "Videos in Series",
+                currentIndex: 0,
+                items: [
+                    { id: 50, name: "part-1.mp4" },
+                    { id: 51, name: "part-2.mp4" },
+                ],
+            },
+        );
+
+        const video = document.querySelector<HTMLVideoElement>("#video-player")!;
+        video.dispatchEvent(new Event("ended"));
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 51);
+        expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2");
+
+        video.dispatchEvent(new Event("ended"));
+        await nextTasks();
+        expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
+        expect(document.querySelector<HTMLElement>("#video-modal")?.classList.contains("is-video-chrome-visible")).toBe(true);
+    });
+
+    it("warms the next item near the end and reuses that session to advance", async () => {
+        apiMocks.openMedia.mockImplementation(async (id: number) => mediaOpenResult(id, `warm-${id}`));
+        const warmedUrls: string[] = [];
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+            warmedUrls.push(String(input));
+            return { arrayBuffer: async () => new ArrayBuffer(8) };
+        });
+        vi.stubGlobal("fetch", fetchMock);
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal(
+            { id: 60, name: "lesson-1.mp4" },
+            {
+                title: "Videos in Course",
+                currentIndex: 0,
+                items: [
+                    { id: 60, name: "lesson-1.mp4" },
+                    { id: 61, name: "lesson-2.mp4" },
+                ],
+            },
+        );
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(1));
+
+        const video = document.querySelector<HTMLVideoElement>("#video-player")!;
+        Object.defineProperty(video, "duration", { configurable: true, get: () => 600 });
+        Object.defineProperty(video, "buffered", {
+            configurable: true,
+            get: () => ({ length: 1, start: () => 0, end: () => 600 }),
+        });
+        paused.set(video, false);
+        video.currentTime = 590;
+        video.dispatchEvent(new Event("timeupdate"));
+
+        // Near the end with the rest already buffered, the next item is opened
+        // ahead of time and its first bytes pulled.
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 61);
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+        expect(warmedUrls[0]).toContain("61");
+
+        // Advancing hands that warmed session to the player instead of opening
+        // the file a second time.
+        video.dispatchEvent(new Event("ended"));
+        await vi.waitFor(() => expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2"));
+        await nextTasks();
+        expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
+        expect(apiMocks.closeMedia).not.toHaveBeenCalledWith("warm-61");
+    });
+
+    it("does not advance when auto-next is disabled", async () => {
+        apiMocks.openMedia.mockImplementation(async (id: number) => mediaOpenResult(id, `manual-${id}`));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal(
+            { id: 52, name: "chapter-1.mp4" },
+            {
+                title: "Videos in Chapters",
+                currentIndex: 0,
+                items: [
+                    { id: 52, name: "chapter-1.mp4" },
+                    { id: 53, name: "chapter-2.mp4" },
+                ],
+            },
+        );
+        videoModule.updateVideoAutoNext(false);
+
+        document.querySelector<HTMLVideoElement>("#video-player")?.dispatchEvent(new Event("ended"));
+        await nextTasks();
+        expect(apiMocks.openMedia).toHaveBeenCalledTimes(1);
+        expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 1 of 2");
+    });
+
+    it("advances native playback once and rejects stale end events", async () => {
+        apiMocks.openNativeMedia.mockImplementation(async (id: number) => nativeOpenResult(id, `native-playlist-${id}`));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal(
+            { id: 54, name: "episode-1.mkv" },
+            {
+                title: "Videos in Episodes",
+                currentIndex: 0,
+                items: [
+                    { id: 54, name: "episode-1.mkv" },
+                    { id: 55, name: "episode-2.mkv" },
+                ],
+            },
+        );
+
+        const state = runtimeMocks.events.get("native_media_state");
+        const nativeSession = `native-playlist-${54}`;
+        state?.({ token: nativeSession, sequence: 2, status: "ended", eof: true, paused: true });
+        await vi.waitFor(() => expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openNativeMedia).toHaveBeenNthCalledWith(2, 55, expect.any(Object));
+
+        state?.({ token: nativeSession, sequence: 3, status: "ended", eof: true, paused: true });
+        await nextTasks();
+        expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2);
+        expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2");
+    });
+
+    it("stops on a failed next item instead of skipping the queue", async () => {
+        apiMocks.openMedia.mockImplementation(async (id: number) => {
+            if (id === 57) throw new Error("next item unavailable");
+            return mediaOpenResult(id, `failure-${id}`);
+        });
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal(
+            { id: 56, name: "segment-1.mp4" },
+            {
+                title: "Videos in Segments",
+                currentIndex: 0,
+                items: [
+                    { id: 56, name: "segment-1.mp4" },
+                    { id: 57, name: "segment-2.mp4" },
+                    { id: 58, name: "segment-3.mp4" },
+                ],
+            },
+        );
+
+        document.querySelector<HTMLVideoElement>("#video-player")?.dispatchEvent(new Event("ended"));
+        await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#video-error")?.style.display).toBe("block"));
+        expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
+        expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 57);
+        expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 3");
+
+        document.querySelector<HTMLVideoElement>("#video-player")?.dispatchEvent(new Event("ended"));
+        await nextTasks();
+        expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
     });
 });

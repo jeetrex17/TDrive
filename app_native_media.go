@@ -4,9 +4,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"strconv"
+	"time"
 
 	"TDrive/backend/media"
 	"TDrive/backend/nativeplayer"
@@ -138,7 +140,11 @@ func (a *App) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect)
 			}
 		},
 	}
+	// Player startup is the other half of what a viewer waits on when a video
+	// opens, so it is measured next to the media session.
+	playerStarted := time.Now()
 	player, err := nativeplayer.Start(a.ctx, opened.URL, rect, opts)
+	slog.Debug("native media: player start finished", "token", token, "html_controls", htmlControls, "elapsed", time.Since(playerStarted), "err", err)
 	if err != nil {
 		if errors.Is(err, nativeplayer.ErrUnsupported) {
 			return NativeMediaResult{}, fmt.Errorf("native playback is not available on this platform yet")

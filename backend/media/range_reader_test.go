@@ -134,8 +134,10 @@ func TestRangeReaderPrefetchesNextBlockWhenEnabled(t *testing.T) {
 	reader := NewRangeReader(RangeReaderConfig{Client: fake, PrefetchBlocks: 1})
 	defer reader.Close()
 
+	// Read past the opening window so this exercises the ordinary block path;
+	// the short opening prefix has its own test.
 	buf := make([]byte, 64)
-	if _, err := reader.ReadStoredAt(context.Background(), fake.ref(), buf, 128); err != nil {
+	if _, err := reader.ReadStoredAt(context.Background(), fake.ref(), buf, openingChunkBytes+128); err != nil {
 		t.Fatalf("ReadStoredAt: %v", err)
 	}
 
@@ -169,6 +171,9 @@ func TestRangeReaderCoalescesConcurrentBlockReads(t *testing.T) {
 	defer reader.Close()
 	ref := fake.ref()
 
+	// Past the opening window: coalescing is a whole-block property, and the
+	// short prefix plus the block behind it would race this test's call count.
+	const off = openingChunkBytes + 512
 	const readers = 12
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -179,12 +184,12 @@ func TestRangeReaderCoalescesConcurrentBlockReads(t *testing.T) {
 			defer wg.Done()
 			<-start
 			buf := make([]byte, 32)
-			_, err := reader.ReadStoredAt(context.Background(), ref, buf, 512)
+			_, err := reader.ReadStoredAt(context.Background(), ref, buf, off)
 			if err != nil {
 				errs <- err
 				return
 			}
-			if !bytes.Equal(buf, data[512:544]) {
+			if !bytes.Equal(buf, data[off:off+32]) {
 				errs <- fmt.Errorf("bytes mismatch")
 			}
 		}()
@@ -211,10 +216,14 @@ func TestRangeReaderCallerCancellationDoesNotPoisonCoalescedWaiter(t *testing.T)
 	defer reader.Close()
 	ref := fake.ref()
 
+	// Past the opening window: coalescing is a whole-block property, and the
+	// short prefix plus the block behind it would race this test's call count.
+	const off = openingChunkBytes
+
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	err1 := make(chan error, 1)
 	go func() {
-		_, err := reader.ReadStoredAt(ctx1, ref, make([]byte, 32), 0)
+		_, err := reader.ReadStoredAt(ctx1, ref, make([]byte, 32), off)
 		err1 <- err
 	}()
 
@@ -227,7 +236,7 @@ func TestRangeReaderCallerCancellationDoesNotPoisonCoalescedWaiter(t *testing.T)
 	buf2 := make([]byte, 32)
 	err2 := make(chan error, 1)
 	go func() {
-		_, err := reader.ReadStoredAt(context.Background(), ref, buf2, 0)
+		_, err := reader.ReadStoredAt(context.Background(), ref, buf2, off)
 		err2 <- err
 	}()
 
@@ -250,7 +259,7 @@ func TestRangeReaderCallerCancellationDoesNotPoisonCoalescedWaiter(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for coalesced second caller")
 	}
-	if !bytes.Equal(buf2, data[:32]) {
+	if !bytes.Equal(buf2, data[off:off+32]) {
 		t.Fatal("second caller bytes mismatch")
 	}
 	if calls := fake.calls(); len(calls) != 1 {
@@ -365,7 +374,8 @@ func TestRangeReaderEvictsLeastRecentlyUsedBlock(t *testing.T) {
 	defer reader.Close()
 	ref := fake.ref()
 
-	for _, off := range []int64{0, int64(tgclient.RangeReadMaxBytes), 0} {
+	// Offsets stay past the opening window so each read is a whole-block fetch.
+	for _, off := range []int64{openingChunkBytes, int64(tgclient.RangeReadMaxBytes), openingChunkBytes} {
 		if _, err := reader.ReadStoredAt(context.Background(), ref, make([]byte, 16), off); err != nil {
 			t.Fatalf("read at %d: %v", off, err)
 		}

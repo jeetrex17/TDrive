@@ -1,9 +1,23 @@
 <script lang="ts">
+    import ListVideoIcon from '@lucide/svelte/icons/list-video';
+    import VideoPlaylistPanel from "./VideoPlaylistPanel.svelte";
     import VideoSettingsPanel from "./VideoSettingsPanel.svelte";
     import type { PlaybackPreferences } from "../../modules/video/playback-preferences";
     import { videoPlaybackPreferences } from "./video-preferences-store";
 
-    let { onPreferencesChange = () => undefined }: { onPreferencesChange?: (value: PlaybackPreferences) => void } = $props();
+    interface Props {
+        onPreferencesChange?: (value: PlaybackPreferences) => void;
+        onHidePlaylist?: (restoreFocus?: boolean) => void;
+        onSelectPlaylistItem?: (index: number) => void;
+        onUpdateVideoAutoNext?: (enabled: boolean) => void;
+    }
+
+    let {
+        onPreferencesChange = () => undefined,
+        onHidePlaylist = () => undefined,
+        onSelectPlaylistItem = () => undefined,
+        onUpdateVideoAutoNext = () => undefined,
+    }: Props = $props();
     let preferences = $derived($videoPlaybackPreferences);
 
     function updatePreferences(value: PlaybackPreferences): void {
@@ -61,24 +75,42 @@
             <div id="video-loading-status" class="video-loading-status" role="status" aria-live="polite" aria-atomic="true">Opening video</div>
         </div>
 
-        <div id="video-error" class="video-error" role="alert" style="display: none;"></div>
+        <div id="video-error" class="video-error" role="alert" aria-atomic="true" style="display: none;">
+            <div class="video-error-copy">
+                <strong class="video-error-title">Unable to play video</strong>
+                <p id="video-error-message" class="video-error-message"></p>
+            </div>
+            <div class="video-error-actions">
+                <button id="video-error-retry" class="video-error-action video-error-retry" type="button">Retry</button>
+                <button id="video-error-close" class="video-error-action video-error-close" type="button">Close</button>
+            </div>
+        </div>
     </div>
 
-    <aside id="video-settings-panel" class="video-settings-panel" aria-label="Playback settings" aria-hidden="true" inert hidden>
-        <div class="video-settings-heading"><strong>Playback settings</strong><button id="video-settings-close" type="button" aria-label="Close playback settings"><XIcon size={18} aria-hidden="true" /></button></div>
+    <aside id="video-settings-panel" class="video-popover video-settings-panel" aria-label="Playback settings" aria-hidden="true" inert hidden>
+        <header class="video-popover-header">
+            <div class="video-popover-heading"><h2 class="video-popover-title">Playback</h2></div>
+            <button id="video-settings-close" class="video-popover-close" type="button" aria-label="Close playback settings"><XIcon size={16} strokeWidth={2} aria-hidden="true" /></button>
+        </header>
         <nav class="video-settings-tabs" aria-label="Playback settings sections">
             <button type="button" data-settings-section="picture">Picture</button>
             <button type="button" data-settings-section="audio">Audio</button>
             <button type="button" data-settings-section="subtitle">Subtitles</button>
             <button type="button" data-settings-section="speed">Speed</button>
         </nav>
-        <div class="video-settings-body">
+        <div class="video-popover-body video-settings-body">
             <div id="video-audio-menu" class="video-menu video-track-menu" role="group" aria-label="Audio track"></div>
             <div id="video-subtitle-menu" class="video-menu video-track-menu" role="group" aria-label="Subtitles"></div>
             <div id="video-speed-menu" class="video-menu video-speed-menu" role="group" aria-label="Playback speed"></div>
             <VideoSettingsPanel initialPreferences={preferences} onPreferencesChange={updatePreferences} />
         </div>
     </aside>
+
+    <VideoPlaylistPanel
+        onClose={() => onHidePlaylist(true)}
+        onSelect={onSelectPlaylistItem}
+        onAutoNextChange={onUpdateVideoAutoNext}
+    />
 
     <div class="video-controls" aria-label="Video controls">
         <div class="video-timeline-row">
@@ -109,7 +141,7 @@
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 5h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17.4 8.3A7 7 0 1012 19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><text x="12" y="15.2" text-anchor="middle" fill="currentColor" font-size="6.2" font-weight="800">10</text></svg>
                 </button>
                 <div class="video-volume-group">
-                    <button id="video-mute" class="video-icon-btn video-mute-btn" type="button" data-state="unmuted" aria-label="Mute" title="Mute">
+                    <button id="video-mute" class="video-icon-btn video-mute-btn" type="button" data-state="unmuted" aria-label="Mute">
                         <Volume2Icon class="video-mute-symbol video-symbol-volume" aria-hidden="true" />
                         <VolumeXIcon class="video-mute-symbol video-symbol-muted" aria-hidden="true" />
                     </button>
@@ -120,7 +152,7 @@
                     </div>
                 </div>
 
-                <button id="video-time-display" class="video-time-display" type="button" aria-pressed="false" aria-label="Show estimated finish time" aria-describedby="video-time video-duration" title="Show estimated finish time">
+                <button id="video-time-display" class="video-time-display" type="button" aria-pressed="false" aria-label="Show estimated finish time" aria-describedby="video-time video-duration">
                     <span id="video-time" class="video-time">0:00</span><span class="video-time-separator"> / </span><span id="video-duration" class="video-time">--:--</span>
                     <span id="video-end-time" class="video-end-time" aria-hidden="true"><span></span></span>
                 </button>
@@ -149,6 +181,10 @@
 
                 <button id="video-picture-button" class="video-pill-button video-picture-button" type="button" aria-label="Playback settings" aria-expanded="false" aria-controls="video-settings-panel" title="Playback settings">
                     <SettingsIcon size={18} aria-hidden="true" />
+                </button>
+
+                <button id="video-playlist-button" class="video-pill-button video-playlist-button" type="button" aria-label="Open video playlist" aria-expanded="false" aria-controls="video-playlist-panel" title="Open video playlist" hidden>
+                    <ListVideoIcon size={18} aria-hidden="true" />
                 </button>
 
                 <button id="video-fullscreen" class="video-icon-btn video-fullscreen-btn" type="button" data-state="windowed" aria-label="Enter fullscreen" title="Enter fullscreen">

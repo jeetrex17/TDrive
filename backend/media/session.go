@@ -51,6 +51,29 @@ type SessionOptions struct {
 	MasterKey             []byte
 }
 
+// warmContainerIndex speculatively pulls the last block of the file.
+//
+// Players read the container index before the first frame, and in MP4 and MKV
+// that index lives at the end. Left alone the player asks for it only after the
+// head has arrived, so the two reads run back to back and the viewer waits for
+// both. Starting the tail here overlaps it with the head instead. It is a
+// background read, so live playback always gets the getFile slots first.
+func (s *Session) warmContainerIndex() {
+	if s == nil || s.reader == nil || len(s.segments) == 0 {
+		return
+	}
+	// A file that fits in one block has nothing to overlap: the head read the
+	// player makes first already covers the index.
+	if s.file.StoredSize <= rangeUploadBoundary {
+		return
+	}
+	last := s.segments[len(s.segments)-1]
+	if last.ref.Size <= 0 {
+		return
+	}
+	s.reader.prefetchBlock(last.ref, blockStartFor(last.ref.Size-1))
+}
+
 func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.RangeClient, cache *thumbnail.Cache, generator VideoThumbnailGenerator, opts SessionOptions) (*Session, error) {
 	token, err := randomToken()
 	if err != nil {
@@ -67,6 +90,7 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		Client:         ranges,
 		PrefetchBlocks: 2,
 	})
+	s.warmContainerIndex()
 	if opts.EnableVideoThumbnails {
 		thumbnailCache := cache
 		if file.Encrypted {
