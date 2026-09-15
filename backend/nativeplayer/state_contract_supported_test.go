@@ -1,4 +1,4 @@
-//go:build darwin || windows || (linux && cgo)
+//go:build (darwin && !ios) || windows || (linux && cgo && !android)
 
 package nativeplayer
 
