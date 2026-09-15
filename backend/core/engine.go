@@ -268,6 +268,25 @@ func (e *Engine) startLiveSync(activity *livesync.TelegramActivity) {
 	e.liveSync.Start(e.ctx)
 }
 
+// PauseLiveSync stops the live-sync coordinator so a backgrounded mobile app
+// holds no Telegram update loop. It is a no-op when live sync never started.
+func (e *Engine) PauseLiveSync() {
+	if e == nil || e.liveSync == nil {
+		return
+	}
+	e.liveSync.Stop()
+}
+
+// ResumeLiveSync restarts the coordinator after PauseLiveSync. The coordinator's
+// Start is idempotent and reuses the engine context, so resuming an already
+// running coordinator does nothing.
+func (e *Engine) ResumeLiveSync() {
+	if e == nil || e.liveSync == nil {
+		return
+	}
+	e.liveSync.Start(e.ctx)
+}
+
 func (e *Engine) Close() {
 	if e != nil && e.liveSync != nil {
 		e.liveSync.Stop()
@@ -642,6 +661,18 @@ func (e *Engine) ClearEncryptionSession() {
 	if e.enc != nil {
 		e.enc.Clear()
 	}
+}
+
+// CloseMediaSessions closes active encrypted media sessions without locking the
+// vault. A backgrounded mobile app uses it to stop serving decrypted plaintext
+// over the loopback server while keeping the drive key, so playback resumes on
+// foreground. media.Service has no resumable close-all (Close tears the loopback
+// server down), so only the encrypted subset is closed here.
+func (e *Engine) CloseMediaSessions() {
+	if e == nil || e.media == nil {
+		return
+	}
+	e.media.CloseEncryptedSessions()
 }
 
 func (e *Engine) ClearUserCache() {
