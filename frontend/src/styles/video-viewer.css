@@ -274,33 +274,36 @@
 
 .video-meta {
     margin-top: 3px;
-    color: rgba(207, 214, 255, 0.72);
+    color: rgba(226, 232, 248, 0.58);
     font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+    font-weight: 600;
 }
 
 .video-icon-btn {
     width: 44px;
     height: 44px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    border: 0;
     border-radius: 999px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #fff;
-    background: rgba(16, 19, 30, 0.62);
+    color: rgba(255, 255, 255, 0.88);
+    background: transparent;
     cursor: pointer;
-    transition: background 180ms ease, transform 180ms ease, border-color 180ms ease;
+    transition: background-color 180ms ease, color 180ms ease, transform 180ms ease;
     flex-shrink: 0;
 }
 
-.video-icon-btn:hover,
+.video-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}
+
 .video-icon-btn:focus-visible {
-    background: var(--video-accent-bg);
-    border-color: var(--video-accent-border);
-    outline: none;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    outline: 2px solid var(--video-accent, #7aa2f7);
+    outline-offset: 2px;
 }
 
 .video-icon-btn:active { transform: scale(0.96); }
@@ -365,7 +368,7 @@
 
 .video-center-play,
 .video-center-skip {
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    border: 0;
     border-radius: 999px;
     display: inline-flex;
     align-items: center;
@@ -764,23 +767,30 @@
 }
 
 .video-pill-button {
-    min-width: 58px;
+    min-width: 44px;
     height: 36px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    border: 0;
     border-radius: 999px;
-    padding: 0 12px;
-    color: #fff;
-    background: rgba(16, 19, 30, 0.64);
+    padding: 0 10px;
+    color: rgba(255, 255, 255, 0.88);
+    background: transparent;
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 700;
     outline: none;
     cursor: pointer;
+    transition: background-color 180ms ease, color 180ms ease;
 }
 
-.video-pill-button:hover,
+.video-pill-button:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}
+
 .video-pill-button:focus-visible {
-    border-color: var(--video-accent-border);
-    background: var(--video-accent-bg);
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    outline: 2px solid var(--video-accent, #7aa2f7);
+    outline-offset: 2px;
 }
 
 .video-picture-button {
@@ -804,10 +814,6 @@
 .video-track-button svg {
     flex-shrink: 0;
     opacity: 0.86;
-}
-
-.video-track-button[data-state="on"] {
-    border-color: var(--video-accent-border);
 }
 
 .video-track-button[data-state="on"] svg {
