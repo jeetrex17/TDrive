@@ -10,6 +10,12 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
+// mobileKeepAwake overrides the idle timer while a transfer runs, so the
+// screen does not lock and suspend the app mid-upload.
+func mobileKeepAwake(on bool) {
+	application.Mobile.SetKeepAwake(on)
+}
+
 // shareFileNative hands a sandbox file to the OS share sheet: the activity
 // view controller on iOS, the send chooser on Android, where the host turns a
 // file URL into a FileProvider content URI (see build/android WailsBridge).

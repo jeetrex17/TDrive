@@ -79,6 +79,9 @@ type App struct {
 	transferMu     sync.Mutex
 	uploadCancel   context.CancelFunc
 	downloadCancel context.CancelFunc
+	// keepAwake mirrors the phone's idle-timer override so it is only toggled
+	// when the transfer state actually flips. Guarded by transferMu.
+	keepAwake bool
 
 	// nativeMedia owns out-of-webview player processes tied to media loopback
 	// sessions. Each token must be closed before the backend shuts down so the
@@ -231,6 +234,7 @@ func (a *App) beginUpload() context.Context {
 		a.uploadCancel()
 	}
 	a.uploadCancel = cancel
+	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
 	return ctx
 }
@@ -238,7 +242,20 @@ func (a *App) beginUpload() context.Context {
 func (a *App) endUpload() {
 	a.transferMu.Lock()
 	a.uploadCancel = nil
+	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
+}
+
+// syncTransferKeepAwakeLocked keeps a phone's screen on while an upload or a
+// download is running: the OS would otherwise suspend the app and drop the
+// transfer mid-way. Desktop is a no-op. Caller holds transferMu.
+func (a *App) syncTransferKeepAwakeLocked() {
+	active := a.uploadCancel != nil || a.downloadCancel != nil
+	if active == a.keepAwake {
+		return
+	}
+	a.keepAwake = active
+	mobileKeepAwake(active)
 }
 
 // sweepOrphanParts retries deleting the part bodies of already-deleted multipart
@@ -275,6 +292,7 @@ func (a *App) beginDownload() context.Context {
 		a.downloadCancel()
 	}
 	a.downloadCancel = cancel
+	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
 	return ctx
 }
@@ -282,6 +300,7 @@ func (a *App) beginDownload() context.Context {
 func (a *App) endDownload() {
 	a.transferMu.Lock()
 	a.downloadCancel = nil
+	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
 }
 

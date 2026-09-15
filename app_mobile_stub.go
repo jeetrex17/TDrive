@@ -12,6 +12,9 @@ import (
 // the app the way a phone does.
 func registerMobileLifecycle(_ *App, _ *application.App) {}
 
+// mobileKeepAwake is a no-op on desktop, which does not suspend transfers.
+func mobileKeepAwake(bool) {}
+
 // shareFileNative has no desktop counterpart: downloads there go through the
 // save dialog and never need a share sheet.
 func shareFileNative(string) error {
