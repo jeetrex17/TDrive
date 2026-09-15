@@ -54,6 +54,16 @@
                 {#if toast.body}
                     <div class="toast-body">{toast.body}</div>
                 {/if}
+                {#if toast.action}
+                    <button
+                        class="toast-action"
+                        type="button"
+                        onclick={(event) => {
+                            event.stopPropagation();
+                            toast.action?.run();
+                        }}
+                    >{toast.action.label}</button>
+                {/if}
             </div>
             <button
                 class="toast-close"

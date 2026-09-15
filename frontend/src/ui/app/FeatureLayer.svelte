@@ -21,6 +21,7 @@
     } from '../../modules/notifications';
     import { cancelTransfersInDirection, clearHistory } from '../../modules/notif-bell';
     import { ensureProfileLoaded } from '../../modules/profile-menu';
+    import { activateConnectivityWatch } from '../../modules/connectivity';
     import { activateRefreshShortcut } from '../../modules/refresh-shortcut';
     import { activateSearchBar } from '../../modules/search';
     import {
@@ -127,6 +128,7 @@
             activateTransferSurfaces(),
             activateSearchBar(),
             activateRefreshShortcut(),
+            activateConnectivityWatch(),
             activateLiveSyncEvents(),
             activateUpdates(),
         ];

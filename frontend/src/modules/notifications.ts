@@ -24,7 +24,7 @@
 import { get } from 'svelte/store';
 import { toAppError, type AppErrorSource } from './errors';
 import { pushHistoryEvent } from './notif-bell';
-import { toasts, type ToastItem, type ToastLevel } from '../ui/notifications/toast-store';
+import { toasts, type ToastAction, type ToastItem, type ToastLevel } from '../ui/notifications/toast-store';
 
 const MAX_VISIBLE = 5;
 const DEFAULT_DURATION = 4000;
@@ -76,6 +76,7 @@ export interface NotifyOptions {
     sticky?: boolean;
     durationMs?: number;
     spinner?: boolean;
+    action?: ToastAction;
 }
 
 export function notify(opts: NotifyOptions = {}) { const level: ToastLevel = opts.level && LEVELS.includes(opts.level) ? opts.level : 'info';
@@ -95,6 +96,9 @@ const entry: ToastItem = {
     paused,
     ...(paused && duration > 0 ? { remainingMs: duration } : {}),
     spinner: opts.spinner === true,
+    ...(opts.action && opts.action.label && typeof opts.action.run === 'function'
+        ? { action: { label: String(opts.action.label), run: opts.action.run } }
+        : {}),
 };
 
 // Mirror non-spinner toasts into the bell history. In-progress sticky

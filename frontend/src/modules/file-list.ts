@@ -2,6 +2,7 @@
 
 import { state, resetFolderCaches } from '../state';
 import { splitNameAndExt, formatDate, formatBytes } from '../utils';
+import { isOffline } from './connectivity';
 import { tick } from 'svelte';
 import { clearSelection, handleRowSelection, reconcileSelection, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
@@ -17,7 +18,7 @@ import {
 import { calculateVisibleFolderStats } from './drive-data';
 import type { FileItem, FolderItem, FolderStat, RootFile } from '../types';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
-import { enqueueDownload, enqueueFolderDownload } from './transfers';
+import { chooseFilesForCurrentFolder, enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { canOpenFileViewer, isVideoFile } from './media-types';
@@ -570,7 +571,15 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
     };
 
     if (rows.length === 0) {
-        renderFileState(list, 'empty', 'This folder is empty', 'Upload files or create a folder to start organizing this drive.');
+        // An empty folder is the one place a reader is certain to want the
+        // upload picker, so it is offered here instead of only in the toolbar.
+        renderFileState(
+            list,
+            'empty',
+            'This folder is empty',
+            'Upload files or create a folder to start organizing this drive.',
+            { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
+        );
         afterFileListPaint(list, afterPublish);
         return;
     }
@@ -589,10 +598,16 @@ function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, err
         console.warn('Same-view file refresh failed:', error);
         return;
     }
-    renderFileState(list, 'error', 'Could not load this folder', refreshErrorMessage(error), {
-        label: 'Retry',
-        onClick: () => appActions().refreshFiles(),
-    });
+    // A dead link is not a folder problem, and saying so saves the reader from
+    // hunting for a fault that is not there.
+    const offline = isOffline();
+    renderFileState(
+        list,
+        'error',
+        offline ? "You're offline" : 'Could not load this folder',
+        offline ? 'Reconnect to load this folder from Telegram.' : refreshErrorMessage(error),
+        { label: 'Retry', onClick: () => appActions().refreshFiles() },
+    );
 }
 
 export function refreshFiles({ background = false }: RefreshFilesOptions = {}): void {
