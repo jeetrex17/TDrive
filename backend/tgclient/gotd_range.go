@@ -123,7 +123,19 @@ func documentRefFromTG(peer InputPeer, msgID int64, doc *tg.Document, name strin
 	}
 }
 
+// readDocumentRange reads one block over the pool for the document's data
+// center. Should that data center turn out to be wrong, the primary connection
+// repeats the read and follows Telegram's redirect.
 func (g *Gotd) readDocumentRange(ctx context.Context, client *telegram.Client, ref DocumentRef, offset int64, dst []byte) (int, error) {
+	api, pooled := g.fileAPI(ctx, client, ref.DCID)
+	n, err := g.readDocumentRangeVia(ctx, client, api, ref, offset, dst)
+	if pooled && isFileMigrate(err) {
+		return g.readDocumentRangeVia(ctx, client, client.API(), ref, offset, dst)
+	}
+	return n, err
+}
+
+func (g *Gotd) readDocumentRangeVia(ctx context.Context, client *telegram.Client, api *tg.Client, ref DocumentRef, offset int64, dst []byte) (int, error) {
 	limit := roundedTelegramLimit(len(dst))
 	req := &tg.UploadGetFileRequest{
 		Location: &tg.InputDocumentFileLocation{
@@ -137,10 +149,9 @@ func (g *Gotd) readDocumentRange(ctx context.Context, client *telegram.Client, r
 	req.SetPrecise(true)
 	req.SetCDNSupported(true)
 
-	// client.API() is backed by telegram.Client.invokeDirect, so gotd follows
-	// FILE_MIGRATE by invoking upload.getFile on the target data center before
-	// returning here.
-	result, err := client.API().UploadGetFile(ctx, req)
+	// The primary connection (client.API()) is backed by invokeDirect, so
+	// gotd follows FILE_MIGRATE on it; a pool invokes on its data center only.
+	result, err := api.UploadGetFile(ctx, req)
 	if err != nil {
 		return 0, err
 	}
@@ -201,26 +212,26 @@ func (g *Gotd) readCDNPlain(ctx context.Context, client *telegram.Client, cdn *t
 }
 
 func (g *Gotd) cdnClient(ctx context.Context, client *telegram.Client, dcID int) (*tg.Client, error) {
-	g.cdnMu.Lock()
+	g.mediaMu.Lock()
 	if invoker, ok := g.cdn[dcID]; ok {
-		g.cdnMu.Unlock()
+		g.mediaMu.Unlock()
 		return tg.NewClient(invoker), nil
 	}
-	g.cdnMu.Unlock()
+	g.mediaMu.Unlock()
 
 	invoker, err := client.MediaOnly(ctx, dcID, 2)
 	if err != nil {
 		return nil, fmt.Errorf("tgclient: cdn dc %d: %w", dcID, err)
 	}
 
-	g.cdnMu.Lock()
+	g.mediaMu.Lock()
 	if existing, ok := g.cdn[dcID]; ok {
-		g.cdnMu.Unlock()
+		g.mediaMu.Unlock()
 		_ = invoker.Close()
 		return tg.NewClient(existing), nil
 	}
 	g.cdn[dcID] = invoker
-	g.cdnMu.Unlock()
+	g.mediaMu.Unlock()
 	return tg.NewClient(invoker), nil
 }
 

@@ -11,12 +11,15 @@ const (
 	// MaxConcurrentGetFile caps low-level Telegram upload.getFile pressure across
 	// every caller. Keeping it process-wide avoids multiplicative fan-out such as
 	// multipart parts * per-file threads, which would otherwise trip FLOOD_WAIT.
-	MaxConcurrentGetFile = 8
+	// Three requests per pooled connection keep every socket busy without
+	// queueing deep inside any one of them.
+	MaxConcurrentGetFile = 3 * MediaPoolSize
 
 	// PlaybackGetFileReserve is the number of global slots that background work can
 	// never consume, so foreground media playback always has headroom even while
-	// downloads or thumbnail generation are saturating everything else.
-	PlaybackGetFileReserve = 2
+	// downloads or thumbnail generation are saturating everything else. One per
+	// pooled connection lets a seek land on every socket at once.
+	PlaybackGetFileReserve = MediaPoolSize
 
 	// MaxConcurrentBackgroundGetFile is the budget shared by all background getFile
 	// work: disk downloads, seek-thumbnail generation, and playback read-ahead.

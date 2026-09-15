@@ -5,21 +5,25 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
+
+	"TDrive/backend/tgclient"
 )
 
 // warmReadBytes is the smallest range worth asking for. Nothing is kept; the
-// request exists only to make Telegram hand us a file-datacenter connection.
+// requests exist only to make Telegram hand us file-datacenter connections.
 const warmReadBytes = 4 * 1024
 
 // WarmTransport pays the first-read setup cost before a viewer is waiting on it.
 //
 // The first upload.getFile of a run is consistently seconds slower than the
-// ones after it: Telegram answers with FILE_MIGRATE and gotd has to reach the
-// file's data center before any bytes move. Measured on a real drive, a 256 KB
-// opening read took 4.9s while the 1 MB blocks behind it took 1.0-1.9s, so the
-// gap is setup, not transfer. Doing one tiny read at startup moves that cost
-// off the path a viewer sees.
+// ones after it: reaching the file's data center means a key exchange and an
+// authorization import per connection before any bytes move. Measured on a
+// real drive, a 256 KB opening read took 4.9s while the 1 MB blocks behind it
+// took 1.0-1.9s, so the gap is setup, not transfer. One tiny read per pooled
+// connection dials the whole pool at startup (gotd opens a connection for each
+// request that finds none free) and moves that cost off the path a viewer sees.
 //
 // Best effort throughout. A failure here only means the first video open pays
 // what it used to.
@@ -53,15 +57,27 @@ func (s *Service) WarmTransport(ctx context.Context, channelID int64) {
 		return
 	}
 
-	size := warmReadBytes
-	if ref.Size < int64(size) {
-		size = int(ref.Size)
+	// Distinct aligned offsets, so a small file still yields as many reads as
+	// it has room for.
+	var wg sync.WaitGroup
+	reads := 0
+	for i := range tgclient.MediaPoolSize {
+		offset := int64(i) * tgclient.RangeReadAlignment
+		if offset >= ref.Size {
+			break
+		}
+		size := int(min(int64(warmReadBytes), ref.Size-offset))
+		reads++
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := s.ranges.ReadDocumentRange(ctx, ref, offset, make([]byte, size)); err != nil {
+				slog.Debug("media: transport warm read failed", "channel_id", channelID, "offset", offset, "error", err)
+			}
+		}()
 	}
-	if _, err := s.ranges.ReadDocumentRange(ctx, ref, 0, make([]byte, size)); err != nil {
-		slog.Debug("media: transport warm read failed", "channel_id", channelID, "error", err)
-		return
-	}
-	slog.Info("media: transport warmed", "channel_id", channelID, "elapsed", time.Since(started))
+	wg.Wait()
+	slog.Info("media: transport warmed", "channel_id", channelID, "reads", reads, "elapsed", time.Since(started))
 }
 
 // anyPlayableFile picks one live file to warm with. Newest first, because that
