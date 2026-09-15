@@ -1,10 +1,10 @@
 /*
  * File-type families.
  *
- * A row used to announce its type as uppercase text in a single muted colour,
- * which made every file look alike while scanning. Grouping extensions into a
- * handful of families lets one glyph and one hue carry the type instead, and
- * keeps the vocabulary small enough to stay readable at a glance.
+ * A row used to announce its type as uppercase text, which made every file
+ * look alike while scanning. Grouping extensions into a handful of families
+ * lets a glyph carry the type instead, and keeps the vocabulary small enough
+ * that the shapes stay tellable apart at list size.
  *
  * Families are deliberately coarse. A viewer does not need to tell ODT from
  * RTF at list speed; they need to tell a document from a video.

@@ -265,13 +265,16 @@
 }
 
 /*
- * Type glyph. It takes the same 40px box the folder chip does, so names line up
- * whatever a row holds, and stays a bare glyph rather than a capsule: the tinted
- * chip is what marks a row as a folder.
+ * Type chip.
  *
- * The hues are fixed rather than derived from the palette. A theme-derived set
- * would collapse toward one another in the low-contrast palettes, which is the
- * one thing this is here to prevent.
+ * It borrows the folder chip's box exactly, so the leading column reads as one
+ * column instead of two competing systems. Folders keep the accent, which is
+ * what marks a row as somewhere you can go; files stay neutral and let the
+ * glyph shape carry the type.
+ *
+ * Deliberately no per-type hues. The rest of this app is one accent over grey,
+ * and a palette of seven unrelated colours here reads as a different product
+ * pasted into the list.
  */
 .file-type-icon {
     width: 40px;
@@ -281,27 +284,15 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: var(--color-text-subtle);
+    border-radius: 6px;
+    background: var(--overlay-white-1);
+    border: 1px solid var(--border);
+    /* The glyph is the only thing telling one file from another, so it sits at
+       label weight. At muted it reads as a smudge and the type is lost. */
+    color: var(--text-main);
 }
 
-.file-type-icon svg { width: 16px; height: 16px; }
-
-.file-type-icon[data-family="document"] { --file-type-color: #e0736a; }
-.file-type-icon[data-family="image"] { --file-type-color: #4bb5c9; }
-.file-type-icon[data-family="video"] { --file-type-color: #9a86e8; }
-.file-type-icon[data-family="audio"] { --file-type-color: #dba14f; }
-.file-type-icon[data-family="sheet"] { --file-type-color: #68b361; }
-.file-type-icon[data-family="code"] { --file-type-color: #5b9bea; }
-.file-type-icon[data-family="archive"] { --file-type-color: #b08968; }
-
-.file-type-icon[data-family]:not([data-family="other"]) {
-    color: var(--file-type-color);
-}
-
-/* The hues are tuned for a dark surface; on a light one they need weight. */
-:root[data-theme-appearance="light"] .file-type-icon[data-family]:not([data-family="other"]) {
-    color: color-mix(in srgb, var(--file-type-color) 76%, black);
-}
+.file-type-icon svg { width: 17px; height: 17px; }
 
 .row-name {
     min-width: 0;
