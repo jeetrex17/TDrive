@@ -125,6 +125,16 @@ function installMediaElementStubs(): void {
     });
 }
 
+/**
+ * Patience for assertions that sit behind a whole playback swap.
+ *
+ * Advancing releases the current session, waits a frame for the surface, then
+ * opens the next one. That chain fits inside vi.waitFor's 1s default on a fast
+ * machine but not on a loaded CI runner under coverage, where these assertions
+ * were failing while the behaviour itself was correct.
+ */
+const SWAP_TIMEOUT = { timeout: 8000 };
+
 async function nextTasks(): Promise<void> {
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1432,7 +1442,7 @@ describe("fatal video error card", () => {
 
         retry?.click();
 
-        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2), SWAP_TIMEOUT);
         expect(apiMocks.openMedia).toHaveBeenNthCalledWith(1, 44);
         expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 44);
         expect(error?.style.display).toBe("none");
@@ -1460,7 +1470,7 @@ describe("fatal video error card", () => {
         await vi.waitFor(() => expect(error?.style.display).toBe("block"));
         retry?.click();
 
-        await vi.waitFor(() => expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2), SWAP_TIMEOUT);
         expect(apiMocks.openNativeMedia).toHaveBeenNthCalledWith(1, 45, expect.any(Object));
         expect(apiMocks.openNativeMedia).toHaveBeenNthCalledWith(2, 45, expect.any(Object));
         expect(error?.style.display).toBe("none");
@@ -1535,7 +1545,7 @@ describe("folder video playlist", () => {
         trigger.click();
         await nextTasks();
         panel.querySelector<HTMLButtonElement>('[data-playlist-index="1"]')?.click();
-        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2), SWAP_TIMEOUT);
         expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 48);
         expect(player.volume).toBe(0.42);
         expect(player.muted).toBe(true);
@@ -1563,7 +1573,7 @@ describe("folder video playlist", () => {
 
         const video = document.querySelector<HTMLVideoElement>("#video-player")!;
         video.dispatchEvent(new Event("ended"));
-        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2), SWAP_TIMEOUT);
         expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 51);
         expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2");
 
@@ -1595,7 +1605,7 @@ describe("folder video playlist", () => {
                 ],
             },
         );
-        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(1), SWAP_TIMEOUT);
 
         const video = document.querySelector<HTMLVideoElement>("#video-player")!;
         Object.defineProperty(video, "duration", { configurable: true, get: () => 600 });
@@ -1609,15 +1619,15 @@ describe("folder video playlist", () => {
 
         // Near the end with the rest already buffered, the next item is opened
         // ahead of time and its first bytes pulled.
-        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2), SWAP_TIMEOUT);
         expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 61);
-        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1), SWAP_TIMEOUT);
         expect(warmedUrls[0]).toContain("61");
 
         // Advancing hands that warmed session to the player instead of opening
         // the file a second time.
         video.dispatchEvent(new Event("ended"));
-        await vi.waitFor(() => expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2"));
+        await vi.waitFor(() => expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2"), SWAP_TIMEOUT);
         await nextTasks();
         expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
         expect(apiMocks.closeMedia).not.toHaveBeenCalledWith("warm-61");
@@ -1665,7 +1675,7 @@ describe("folder video playlist", () => {
         const state = runtimeMocks.events.get("native_media_state");
         const nativeSession = `native-playlist-${54}`;
         state?.({ token: nativeSession, sequence: 2, status: "ended", eof: true, paused: true });
-        await vi.waitFor(() => expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2), SWAP_TIMEOUT);
         expect(apiMocks.openNativeMedia).toHaveBeenNthCalledWith(2, 55, expect.any(Object));
 
         state?.({ token: nativeSession, sequence: 3, status: "ended", eof: true, paused: true });
@@ -1695,7 +1705,7 @@ describe("folder video playlist", () => {
         );
 
         document.querySelector<HTMLVideoElement>("#video-player")?.dispatchEvent(new Event("ended"));
-        await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#video-error")?.style.display).toBe("block"));
+        await vi.waitFor(() => expect(document.querySelector<HTMLElement>("#video-error")?.style.display).toBe("block"), SWAP_TIMEOUT);
         expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
         expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 57);
         expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 3");
