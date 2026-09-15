@@ -135,6 +135,9 @@ function installMediaElementStubs(): void {
  */
 const SWAP_TIMEOUT = { timeout: 8000 };
 
+/** Per-test budget for the swap tests, which must outlive SWAP_TIMEOUT. */
+const SWAP_TEST_TIMEOUT_MS = 20_000;
+
 async function nextTasks(): Promise<void> {
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1682,7 +1685,7 @@ describe("folder video playlist", () => {
         await nextTasks();
         expect(apiMocks.openNativeMedia).toHaveBeenCalledTimes(2);
         expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2");
-    });
+    }, SWAP_TEST_TIMEOUT_MS);
 
     it("stops on a failed next item instead of skipping the queue", async () => {
         apiMocks.openMedia.mockImplementation(async (id: number) => {
@@ -1713,5 +1716,5 @@ describe("folder video playlist", () => {
         document.querySelector<HTMLVideoElement>("#video-player")?.dispatchEvent(new Event("ended"));
         await nextTasks();
         expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
-    });
+    }, SWAP_TEST_TIMEOUT_MS);
 });
