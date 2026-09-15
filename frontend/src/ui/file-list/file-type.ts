@@ -10,14 +10,14 @@
  * RTF at list speed; they need to tell a document from a video.
  */
 
+import ArchiveIcon from '@lucide/svelte/icons/archive';
+import CodeIcon from '@lucide/svelte/icons/code';
 import FileIcon from '@lucide/svelte/icons/file';
-import FileTextIcon from '@lucide/svelte/icons/file-text';
-import FileImageIcon from '@lucide/svelte/icons/file-image';
-import FilePlayIcon from '@lucide/svelte/icons/file-play';
-import FileHeadphoneIcon from '@lucide/svelte/icons/file-headphone';
-import FileSpreadsheetIcon from '@lucide/svelte/icons/file-spreadsheet';
-import FileCodeIcon from '@lucide/svelte/icons/file-code';
-import FileArchiveIcon from '@lucide/svelte/icons/file-archive';
+import ImageIcon from '@lucide/svelte/icons/image';
+import MusicIcon from '@lucide/svelte/icons/music';
+import TableIcon from '@lucide/svelte/icons/table';
+import TextLinesIcon from '@lucide/svelte/icons/text-align-start';
+import VideoIcon from '@lucide/svelte/icons/video';
 
 export type FileTypeFamily =
     | 'document'
@@ -50,14 +50,26 @@ const FAMILY_BY_EXTENSION: ReadonlyMap<string, FileTypeFamily> = new Map(
     ),
 );
 
+/*
+ * Content glyphs, not document-wrapper glyphs.
+ *
+ * Lucide's file-* set draws a page outline, a corner fold and a small badge
+ * inside it, which is three to six shapes crammed into the same box a folder
+ * fills with one. At list size that reads as a dense blot rather than a type.
+ * Naming the content directly costs two or three shapes instead of six.
+ *
+ * Documents are drawn as lines of text rather than a page, because the page is
+ * already what an unrecognised file gets. Lines against a page separates the
+ * two far better than a page against a page with lines on it.
+ */
 const ICONS: Readonly<Record<FileTypeFamily, typeof FileIcon>> = {
-    document: FileTextIcon,
-    image: FileImageIcon,
-    video: FilePlayIcon,
-    audio: FileHeadphoneIcon,
-    sheet: FileSpreadsheetIcon,
-    code: FileCodeIcon,
-    archive: FileArchiveIcon,
+    document: TextLinesIcon,
+    image: ImageIcon,
+    video: VideoIcon,
+    audio: MusicIcon,
+    sheet: TableIcon,
+    code: CodeIcon,
+    archive: ArchiveIcon,
     other: FileIcon,
 };
 

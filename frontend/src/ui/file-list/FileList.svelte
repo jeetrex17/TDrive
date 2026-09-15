@@ -183,7 +183,10 @@
                         {@const family = fileTypeFamily(row.ext)}
                         {@const TypeIcon = fileTypeIcon(family)}
                         <span class="file-type-icon" data-family={family} aria-hidden="true">
-                            <TypeIcon size={18} strokeWidth={2} aria-hidden="true" />
+                            <!-- Lighter than the app default: Lucide's stroke is fixed
+                                 against a 24px grid, so it reads heavier the smaller
+                                 the glyph is drawn. -->
+                            <TypeIcon size={18} strokeWidth={1.5} aria-hidden="true" />
                         </span>
                         {#if row.encrypted}
                             <span class="file-lock-badge" title="Encrypted" aria-label="Encrypted">
