@@ -405,8 +405,10 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 	_ = os.Remove(p.ipcPath)
 	args := []string{
 		"--no-config",
-		"--terminal=no",
-		"--msg-level=all=warn",
+		// Terminal messages stay on so a startup failure is reported by mpv
+		// itself; the output is captured below rather than printed.
+		"--terminal=yes",
+		"--msg-level=all=error",
 		"--ytdl=no",
 		"--hwdec=auto-safe",
 		"--cache=yes",
@@ -448,8 +450,11 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		)
 	}
 
+	output := &mpvOutput{}
 	cmd := exec.CommandContext(ctx, mpvPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = output
+	cmd.Stderr = output
 	linuxNativeLogf("mpv start: path=%s wid=%d ipc=%s", mpvPath, windowID, p.ipcPath)
 	if err := cmd.Start(); err != nil {
 		_ = os.RemoveAll(p.ipcDir)
@@ -457,17 +462,31 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		return fmt.Errorf("native player: start mpv: %w", err)
 	}
 	p.cmd = cmd
+	exited := make(chan struct{})
+	var exitErr error
+	go func() {
+		exitErr = cmd.Wait()
+		close(exited)
+	}()
+	abort := func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Process.Kill()
+		<-exited
+		p.cmd = nil
+		_ = os.RemoveAll(p.ipcDir)
+	}
 	p.onState = opts.OnState
 	if opts.OnState != nil {
 		p.emitState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
 	}
-	eventConn, err := dialLinuxMPVIPCWithAttempts(p.ipcPath, 80)
+	eventConn, err := dialLinuxMPVIPCWithAttempts(p.ipcPath, 80, exited)
 	if err != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		p.cmd = nil
-		_ = os.RemoveAll(p.ipcDir)
+		select {
+		case <-exited:
+			err = mpvStartupError(exitErr, output.Tail())
+		default:
+		}
+		abort()
 		return err
 	}
 	stateCtx, cancel := context.WithCancel(ctx)
@@ -479,11 +498,7 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 		if err := writeMPVObserveProperties(eventConn, mpvStatePropertyNames); err != nil {
 			cancel()
 			_ = eventConn.Close()
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-			p.cmd = nil
-			_ = os.RemoveAll(p.ipcDir)
+			abort()
 			return fmt.Errorf("native player: observe mpv state: %w", err)
 		}
 		_ = eventConn.SetWriteDeadline(time.Time{})
@@ -492,16 +507,13 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 	if err := writeMPVIPCWithAttempts(p.ipcPath, mpvCommandPayload("loadfile", url, "replace"), 80); err != nil {
 		cancel()
 		_ = eventConn.Close()
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		p.cmd = nil
-		_ = os.RemoveAll(p.ipcDir)
+		abort()
 		return fmt.Errorf("native player: initialize mpv IPC: %w", err)
 	}
 	go func() {
-		err := cmd.Wait()
-		linuxNativeLogf("mpv process exited")
+		<-exited
+		err := exitErr
+		linuxNativeLogf("mpv process exited: %v output=%q", err, output.Tail())
 		p.handleProcessExit(err)
 		p.done <- err
 		p.destroyView()
@@ -762,7 +774,7 @@ func (p *Player) updateObservedState(event mpvIPCEvent) {
 	p.emitState(stateFromMPVProperties(values))
 }
 
-func dialLinuxMPVIPCWithAttempts(path string, attempts int) (net.Conn, error) {
+func dialLinuxMPVIPCWithAttempts(path string, attempts int, exited <-chan struct{}) (net.Conn, error) {
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
 		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
@@ -770,7 +782,12 @@ func dialLinuxMPVIPCWithAttempts(path string, attempts int) (net.Conn, error) {
 			return conn, nil
 		}
 		lastErr = err
-		time.Sleep(25 * time.Millisecond)
+		select {
+		case <-exited:
+			// mpv is gone; further attempts can only repeat the same error.
+			return nil, fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
 	return nil, fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
 }
