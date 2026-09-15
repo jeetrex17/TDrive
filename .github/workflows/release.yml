@@ -210,6 +210,20 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
             "$TDRIVE_APPIMAGETOOL" "$APPDIR" "dist/TDrive-${TDRIVE_ARTIFACT_VERSION}-linux-amd64.AppImage"
 
+      # The runner image has no NSIS; the Chocolatey package installs under
+      # Program Files (x86) without touching PATH. Keep in sync with ci.yml.
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ${env:ProgramFiles(x86)} "NSIS"
+          if (-not (Test-Path -LiteralPath (Join-Path $nsis "makensis.exe") -PathType Leaf)) {
+            choco install nsis -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "nsis install failed" }
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $nsis
+          & (Join-Path $nsis "makensis.exe") /VERSION
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
