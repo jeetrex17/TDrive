@@ -653,21 +653,11 @@ html.mobile .action-sheet-sep {
     margin: var(--space-1) 0;
 }
 
-html.mobile .action-sheet-cancel {
-    flex: 0 0 auto;
-    width: 100%;
-    min-height: 48px;
-    margin-top: var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--overlay-white-1);
-    color: var(--text-main);
-    font-weight: 700;
-    font-size: var(--type-md);
-    cursor: pointer;
-}
-html.mobile .action-sheet-cancel:active { background: var(--bg-panel); }
-html.mobile .action-sheet-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* No Cancel button. A sheet on a phone is dismissed by the handle above it, a
+   swipe down, or a tap on the dimmed screen behind: three ways that are already
+   there and that people reach for first. A fourth, spelled out and occupying a
+   full row at the bottom, is the one place the thumb has furthest to travel and
+   it pushes the actions that matter further up the screen. */
 
 @media (prefers-reduced-motion: reduce) {
     html.mobile .action-sheet,

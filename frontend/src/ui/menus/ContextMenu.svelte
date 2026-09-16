@@ -380,9 +380,6 @@
                 {/each}
             </div>
 
-            <button type="button" class="action-sheet-cancel" onclick={() => void dismissAndRestoreFocus()}>
-                Cancel
-            </button>
         </div>
     {:else}
         <div
