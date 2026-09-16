@@ -47,7 +47,7 @@ describe('bindTouchGestures', () => {
         pointer('pointerdown', 1, 50, 60);
         pointer('pointerup', 1, 50, 60);
         expect(handlers.tap).not.toHaveBeenCalled();
-        vi.advanceTimersByTime(260);
+        vi.advanceTimersByTime(300);
         expect(handlers.tap).toHaveBeenCalledTimes(1);
 
         pointer('pointerdown', 1, 50, 60);
@@ -58,6 +58,19 @@ describe('bindTouchGestures', () => {
         vi.advanceTimersByTime(300);
         expect(handlers.doubleTap).toHaveBeenCalledWith(54, 62);
         expect(handlers.tap).toHaveBeenCalledTimes(1);
+    });
+
+    it('still pairs a second tap that lands late in the double-tap window', () => {
+        const handlers = bind({ tap: vi.fn(), doubleTap: vi.fn() });
+        pointer('pointerdown', 1, 50, 60);
+        pointer('pointerup', 1, 50, 60);
+        vi.advanceTimersByTime(280);
+        expect(handlers.tap).not.toHaveBeenCalled();
+        pointer('pointerdown', 1, 50, 60);
+        pointer('pointerup', 1, 50, 60);
+        expect(handlers.doubleTap).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(600);
+        expect(handlers.tap).not.toHaveBeenCalled();
     });
 
     it('locks a drag to its dominant axis and reports the release velocity', () => {
