@@ -26,11 +26,71 @@
 
 static void (*tdriveInsetLayout)(id, SEL) = NULL;
 
+// Whether the status bar is currently asked to be hidden. Owned by the Go
+// archive, which sets it from application.Mobile.SetStatusBar; Wails already
+// answers -prefersStatusBarHidden from it.
+extern BOOL mfStatusBarHidden(void);
+
+// The home indicator follows the status bar.
+//
+// A full-screen player asks for the system bars to go, and on Android that
+// takes the navigation bar with them. iOS has no navigation bar, but it does
+// draw the home indicator over the picture, and the only way to dim it is
+// -prefersHomeIndicatorAutoHidden, which Wails does not implement. Answering it
+// with the same state the status bar uses means one call from the page quiets
+// both edges, on both platforms.
+static BOOL tdriveHomeIndicatorAutoHidden(id self, SEL _cmd) {
+    (void)self; (void)_cmd;
+    return mfStatusBarHidden();
+}
+
+// The last value UIKit was told about, so the update is only requested when the
+// answer actually changes: asking for one from inside a layout pass that it can
+// itself provoke is how a layout loop starts.
+static BOOL tdriveHomeIndicatorState = NO;
+
+// iOS 16.4 stopped letting Safari's Web Inspector attach to a WKWebView unless
+// the view asks for it, and Wails never asks. Without it there is no way to
+// read the page on a simulator at all -- no console, no computed styles, no
+// measuring what actually shipped.
+//
+// Only the dev bundle opts in. Its identifier carries a .dev suffix that the
+// shipping one does not, so a release build stays uninspectable without any
+// build-flag plumbing to get wrong.
+static void tdriveMakeInspectable(WKWebView *webView) {
+    static BOOL done = NO;
+    if (done || webView == nil) {
+        return;
+    }
+    done = YES;
+    if (![[[NSBundle mainBundle] bundleIdentifier] hasSuffix:@".dev"]) {
+        return;
+    }
+    if (@available(iOS 16.4, *)) {
+        webView.inspectable = YES;
+    }
+}
+
 static void tdriveFullBleedLayout(id self, SEL _cmd) {
     if (tdriveInsetLayout != NULL) {
         tdriveInsetLayout(self, _cmd);
     }
     WailsViewController *controller = (WailsViewController *)self;
+
+    // Hiding the status bar relays out the window, so this pass is where the
+    // change arrives; nothing else tells us the page asked for it.
+    BOOL wanted = mfStatusBarHidden();
+    if (wanted != tdriveHomeIndicatorState) {
+        tdriveHomeIndicatorState = wanted;
+        if (@available(iOS 11.0, *)) {
+            [controller setNeedsUpdateOfHomeIndicatorAutoHidden];
+        }
+    }
+
+    if (controller.webView != nil) {
+        tdriveMakeInspectable(controller.webView);
+    }
+
     if (controller.tabBar != nil && !controller.tabBar.isHidden) {
         return;
     }
@@ -54,6 +114,14 @@ static void tdriveFullBleedLayout(id self, SEL _cmd) {
     }
     tdriveInsetLayout = (void (*)(id, SEL))method_getImplementation(layout);
     method_setImplementation(layout, (IMP)tdriveFullBleedLayout);
+
+    // Added rather than swizzled: Wails implements no home-indicator
+    // preference, so there is nothing to chain to and nothing to conflict
+    // with. class_addMethod leaves any future implementation of its own alone.
+    class_addMethod(controller,
+                    @selector(prefersHomeIndicatorAutoHidden),
+                    (IMP)tdriveHomeIndicatorAutoHidden,
+                    "c@:");
 }
 @end
 
