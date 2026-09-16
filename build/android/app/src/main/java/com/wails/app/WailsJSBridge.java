@@ -67,38 +67,76 @@ public class WailsJSBridge {
     }
 
     /**
+     * Ask the system for a folder and answer with what it holds.
+     *
+     * Called from JavaScript: wails.pickFolder(callbackId)
+     *
+     * This exists because Wails refuses directory selection on Android: the
+     * Storage Access Framework hands back document-tree URIs rather than
+     * filesystem paths, and its dialog API has nowhere to put one. The answer is
+     * a manifest, {"root":"Holiday","files":[{"id","rel","size"}]}, so a folder
+     * of any size costs a walk rather than a second copy of itself on disk. The
+     * uploader then asks for the bytes a batch at a time, through
+     * materializeFiles, and gives them back through releaseFiles.
+     *
+     * An empty string means the picker was dismissed, and only that: an empty
+     * folder answers with a manifest holding no files.
+     */
+    @JavascriptInterface
+    public void pickFolder(final String callbackId) {
+        final MainActivity activity = activity();
+        if (activity == null) {
+            sendCallback(callbackId, null, "folder picker unavailable");
+            return;
+        }
+        activity.runOnUiThread(() -> activity.launchFolderPicker(callbackId));
+    }
+
+    /**
+     * Copy a batch of the picked folder's files into the cache and answer with
+     * {"paths":{"<id>":"/abs/path"}}, so only the files about to be uploaded sit
+     * on disk. An id that will not open is left out of the map.
+     *
+     * Called from JavaScript: wails.materializeFiles(callbackId, idsJson)
+     */
+    @JavascriptInterface
+    public void materializeFiles(final String callbackId, final String idsJson) {
+        final MainActivity activity = activity();
+        if (activity == null) {
+            sendCallback(callbackId, null, "folder picker unavailable");
+            return;
+        }
+        activity.materializeFiles(callbackId, idsJson);
+    }
+
+    /**
+     * Drop the cached copies of a batch once it has uploaded. Answers with an
+     * empty string, and is happy with ids that were never copied.
+     *
+     * Called from JavaScript: wails.releaseFiles(callbackId, idsJson)
+     */
+    @JavascriptInterface
+    public void releaseFiles(final String callbackId, final String idsJson) {
+        final MainActivity activity = activity();
+        if (activity == null) {
+            sendCallback(callbackId, "", null);
+            return;
+        }
+        activity.releaseFiles(callbackId, idsJson);
+    }
+
+    private MainActivity activity() {
+        Context context = webView.getContext();
+        return context instanceof MainActivity ? (MainActivity) context : null;
+    }
+
+    /**
      * Log a message from JavaScript to Android's logcat
      * Called from JavaScript: wails.log(level, message)
      *
      * @param level The log level (debug, info, warn, error)
      * @param message The message to log
      */
-    /**
-     * Ask the system for a folder and copy it into the app cache, so Go is
-     * handed an ordinary directory path.
-     *
-     * Called from JavaScript: wails.pickFolder(callbackId)
-     *
-     * This exists because Wails refuses directory selection on Android: the
-     * Storage Access Framework hands back document-tree URIs rather than
-     * filesystem paths, and its dialog API has nowhere to put one. Copying the
-     * tree out first is the same answer it already uses for single files, and
-     * it means every importer above this stays as it is.
-     *
-     * Answers through window._wailsAndroidCallback with the copied folder's
-     * path, or with an empty string if the picker was dismissed.
-     */
-    @JavascriptInterface
-    public void pickFolder(final String callbackId) {
-        final Context context = webView.getContext();
-        if (!(context instanceof MainActivity)) {
-            sendCallback(callbackId, null, "folder picker unavailable");
-            return;
-        }
-        final MainActivity activity = (MainActivity) context;
-        activity.runOnUiThread(() -> activity.launchFolderPicker(callbackId));
-    }
-
     @JavascriptInterface
     public void log(String level, String message) {
         switch (level.toLowerCase()) {
