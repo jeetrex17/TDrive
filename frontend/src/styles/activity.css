@@ -418,16 +418,15 @@
     opacity: 0.55;
     pointer-events: none;          /* dim + non-interactive */
 }
+/* Spins the Lucide loader rather than drawing a ring out of borders, so every
+   spinner in the app is the same glyph at the same weight. */
 .pending-folder .pending-indicator {
-    display: inline-block;
+    display: inline-grid;
+    place-items: center;
     flex: 0 0 auto;
-    width: 10px; height: 10px;
     margin-left: 8px;
-    border-radius: 50%;
-    border: 2px solid var(--accent);
-    border-top-color: transparent;
+    color: var(--accent);
     animation: pending-spin 0.8s linear infinite;
-    vertical-align: -2px;
 }
 @keyframes pending-spin {
     to { transform: rotate(360deg); }

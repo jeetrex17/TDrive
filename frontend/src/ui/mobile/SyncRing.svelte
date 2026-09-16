@@ -1,5 +1,8 @@
 <script lang="ts">
     import CheckIcon from '@lucide/svelte/icons/check';
+    import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+    import CircleIcon from '@lucide/svelte/icons/circle';
+    import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
     import type { DriveSyncState } from './mobile-shell-store';
 
     interface Props {
@@ -8,26 +11,28 @@
 
     let { status }: Props = $props();
 
-    // One 16px ring carries every drive state (spec 2.7): a static track when
-    // idle, a spinning arc while syncing, a brief check on success, and a danger
-    // track on failure. The arc is a bordered circle with an open top (no raw SVG;
-    // the check is a Lucide glyph); only transform/opacity animate.
+    // One 16px mark carries every drive state (spec 2.7): a quiet circle when
+    // idle, a spinning loader while syncing, a check on success, and an alert on
+    // failure. Every state is a Lucide glyph at the same size and weight, so the
+    // mark keeps one shape language as it changes; only the spin animates, and
+    // reduced motion stops it.
     const label = $derived(
         status === 'syncing' ? 'Syncing'
         : status === 'synced' ? 'Synced'
         : status === 'failed' ? 'Sync failed'
         : 'In sync',
     );
+
+    const Glyph = $derived(
+        status === 'syncing' ? LoaderCircleIcon
+        : status === 'synced' ? CheckIcon
+        : status === 'failed' ? CircleAlertIcon
+        : CircleIcon,
+    );
 </script>
 
 <span class="sync-ring" data-state={status} role="img" aria-label={label}>
-    {#if status === 'synced'}
-        <CheckIcon size={12} strokeWidth={2.75} aria-hidden="true" />
-    {:else if status === 'syncing'}
-        <span class="sync-spin" aria-hidden="true"></span>
-    {:else}
-        <span class="sync-track" aria-hidden="true"></span>
-    {/if}
+    <Glyph size={14} strokeWidth={2.5} aria-hidden="true" />
 </span>
 
 <style>
@@ -39,24 +44,12 @@
         color: var(--color-text-muted);
     }
 
-    .sync-track,
-    .sync-spin {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        border: 2px solid currentColor;
-    }
-
-    .sync-track { opacity: 0.4; }
-
+    .sync-ring[data-state='idle'] { opacity: 0.5; }
     .sync-ring[data-state='syncing'] { color: var(--color-accent); }
     .sync-ring[data-state='synced'] { color: var(--color-success); }
     .sync-ring[data-state='failed'] { color: var(--color-danger); }
-    .sync-ring[data-state='failed'] .sync-track { opacity: 0.85; }
 
-    /* Open the top of the ring into an arc, then spin it. */
-    .sync-spin {
-        border-top-color: transparent;
+    .sync-ring[data-state='syncing'] :global(svg) {
         transform-origin: center;
         animation: sync-ring-spin 1.2s linear infinite;
     }
@@ -66,7 +59,7 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
-        /* Loops stop under reduced motion; the arc stays as a static marker. */
-        .sync-spin { animation: none; }
+        /* Loops stop under reduced motion; the loader stays as a static mark. */
+        .sync-ring[data-state='syncing'] :global(svg) { animation: none; }
     }
 </style>

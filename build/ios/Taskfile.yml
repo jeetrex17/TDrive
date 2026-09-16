@@ -296,7 +296,15 @@ tasks:
       - cp "{{.BIN_DIR}}/{{.APP_NAME | lower}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/{{.APP_NAME | lower}}"
       - cp build/ios/Info.dev.plist "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Info.plist"
       - |
-        # Compile asset catalog and embed icons for dev bundle
+        # Compile asset catalog and embed icons for dev bundle.
+        #
+        # actool refuses to run when every installed simulator runtime is older
+        # than the SDK ("No simulator runtime version from [...] available to
+        # use with iphonesimulator SDK version ..."), which happens whenever
+        # Xcode is newer than the runtime you actually have. The icon is
+        # cosmetic on a dev build, so a failure here must not stop the app from
+        # launching; the release path in create:app:bundle still treats it as
+        # fatal, because a shipped bundle needs its icon.
         APP_BUNDLE="{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
         AC_IN="build/ios/xcode/main/Assets.xcassets"
         if [ -d "$AC_IN" ]; then
@@ -310,7 +318,7 @@ tasks:
             --target-device iphone \
             --target-device ipad \
             --output-partial-info-plist "$APP_BUNDLE/assetcatalog_generated_info.plist" \
-            "$AC_IN"
+            "$AC_IN" >/dev/null 2>&1 || echo "note: app icon skipped (actool needs a simulator runtime matching the SDK)"
           if [ -f "$TMP_AC/Assets.car" ]; then
             cp -f "$TMP_AC/Assets.car" "$APP_BUNDLE/Assets.car"
           fi

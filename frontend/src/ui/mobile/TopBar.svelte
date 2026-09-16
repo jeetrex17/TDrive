@@ -160,7 +160,7 @@
                                 >
                                     <span>{option.label}</span>
                                     {#if $fileSortState.key === option.key}
-                                        <CheckIcon size={16} strokeWidth={2.4} aria-hidden="true" />
+                                        <CheckIcon size={16} strokeWidth={2.5} aria-hidden="true" />
                                     {/if}
                                 </button>
                             {/each}

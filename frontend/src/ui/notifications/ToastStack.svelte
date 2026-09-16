@@ -40,7 +40,7 @@
                 {#if toast.spinner}
                     <LoaderCircleIcon class="toast-spinner" size={16} strokeWidth={2.4} aria-hidden="true" />
                 {:else if toast.level === 'success'}
-                    <CheckIcon size={16} strokeWidth={2} aria-hidden="true" />
+                    <CheckIcon size={16} strokeWidth={2.5} aria-hidden="true" />
                 {:else if toast.level === 'warning'}
                     <TriangleAlertIcon size={16} strokeWidth={2} aria-hidden="true" />
                 {:else if toast.level === 'error'}

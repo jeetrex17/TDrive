@@ -5,6 +5,7 @@
     import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
     import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
     import FolderIcon from '@lucide/svelte/icons/folder';
+    import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import PlayIcon from '@lucide/svelte/icons/play';
     import { isMobilePlatform } from '../../api';
@@ -167,7 +168,7 @@
                     </span>
                     <span class="row-text">
                         {@render phoneLabel(row.name, false)}
-                        <span class="row-sub"><span class="row-sub-text">Creating...</span><span class="pending-indicator" aria-hidden="true"></span></span>
+                        <span class="row-sub"><span class="row-sub-text">Creating...</span><span class="pending-indicator" aria-hidden="true"><LoaderCircleIcon size={12} strokeWidth={2.25} aria-hidden="true" /></span></span>
                     </span>
                 </div>
                 <div class="row-actions" role="gridcell" aria-colindex="4"></div>
@@ -270,7 +271,7 @@
                         <FolderIcon size={17} strokeWidth={1.5} aria-hidden="true" />
                     </span>
                     <span class="row-label">{row.name}</span>
-                    <span class="pending-indicator" aria-hidden="true"></span>
+                    <span class="pending-indicator" aria-hidden="true"><LoaderCircleIcon size={12} strokeWidth={2.25} aria-hidden="true" /></span>
                 </div>
                 <div class="row-meta" role="gridcell" aria-colindex="2">Creating...</div>
                 <div class="row-meta" role="gridcell" aria-colindex="3"><span aria-hidden="true">…</span></div>

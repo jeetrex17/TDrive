@@ -54,7 +54,7 @@
 >
     <span class="notif-row-icon" data-kind={event.level} aria-hidden="true">
         {#if event.level === 'success'}
-            <CheckIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+            <CheckIcon size={14} strokeWidth={3} aria-hidden="true" />
         {:else if event.level === 'error'}
             <CircleXIcon size={14} strokeWidth={2} aria-hidden="true" />
         {:else if event.level === 'warning'}
