@@ -488,6 +488,32 @@ html.mobile .gallery-lock {
     backdrop-filter: none;
     background: rgba(12, 14, 22, 0.62);
 }
+/* A locked cell says so in words on a phone: the corner badge only means
+   "encrypted" (it shows on unlocked photos too) and there is no tooltip. */
+html.mobile .gallery-locked-pill {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    padding: 2px 7px;
+    border-radius: var(--radius-pill);
+    background: rgba(12, 14, 22, 0.74);
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 10px;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.01em;
+    line-height: 1.6;
+    pointer-events: none;
+}
+/* The baked-in stripe colour was one palette's accent; follow the live one. */
+html.mobile .gallery-cell.is-locked {
+    background: repeating-linear-gradient(
+        45deg,
+        var(--bg-panel),
+        var(--bg-panel) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 20px
+    );
+}
 html.mobile .gallery-check {
     position: absolute;
     top: 6px;
@@ -570,8 +596,10 @@ html.mobile .preview-content img {
 }
 html.mobile .preview-chrome {
     top: calc(var(--inset-top) + 10px);
-    left: 12px;
-    right: 12px;
+    /* Held sideways the sensor housing eats one edge, so the close button has
+       to start after it rather than under it. */
+    left: calc(var(--inset-left) + 12px);
+    right: calc(var(--inset-right) + 12px);
     gap: 10px;
 }
 html.mobile .preview-filename,
@@ -610,8 +638,47 @@ html.mobile .preview-info {
     transform: translateY(24px);
 }
 html.mobile .preview-overlay.is-info-open .preview-info { transform: none; }
-html.mobile #preview-info-body { padding: 20px 20px calc(var(--inset-bottom) + 24px); }
-html.mobile .preview-info-close { top: 12px; right: 12px; width: 32px; height: 32px; }
+/* 36 x 5 grabber, as on the app's other sheets: the affordance for the drag
+   that dismisses this one. */
+html.mobile .preview-info::after {
+    content: "";
+    position: absolute;
+    top: 9px;
+    left: 50%;
+    width: 36px;
+    height: 5px;
+    margin-left: -18px;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.26);
+    pointer-events: none;
+}
+html.mobile #preview-info-body {
+    /* The sheet's own drag starts at the top of this scroller, so it must not
+       hand the overscroll to the page behind. */
+    overscroll-behavior: contain;
+    padding: 26px calc(var(--inset-right) + 20px) calc(var(--inset-bottom) + 24px) calc(var(--inset-left) + 20px);
+}
+html.mobile .preview-info-close {
+    top: 8px;
+    right: calc(var(--inset-right) + 8px);
+    width: 44px;
+    height: 44px;
+}
+html.mobile .preview-info-close svg { width: 18px; height: 18px; }
+/* Clear the bigger close button. */
+html.mobile .info-date { padding-right: 46px; }
+
+/* ----- Phone locked lightbox ----- */
+/* The rest of the phone lightbox drops its glass; the locked state has to drop
+   it too. Both blurs here are invisible on a phone anyway -- the overlay's own
+   background is opaque, so a 60px backdrop blur is sampled and then painted
+   over, and the pill sits on that same flat colour -- but they still cost a
+   full-screen blur plus a second stacked one every frame. */
+html.mobile .preview-overlay.is-preview-locked::before,
+html.mobile .preview-unlock-bar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
 
 @media (prefers-reduced-motion: reduce) {
     html.mobile .gallery-skeleton-cell { animation: none; }

@@ -5,6 +5,7 @@ import { loadEncryptionStatus } from '../encryption';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
+import { pushSheet, type SheetHandle } from '../../ui/modals/sheet-stack';
 import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/touch-gestures';
 import type { PreviewPayload } from '../../types';
 import type { FileCommandItem } from '../../ui/file-list/types';
@@ -59,6 +60,9 @@ let lockedHintEl: any = null;
 let lockedHintTextEl: any = null;
 let activeFullSrc = "";
 let infoOpen = false;
+// On a phone the info card is a sheet, so Android's BACK has to dismiss it
+// before the preview under it.
+let infoSheetBack: SheetHandle | null = null;
 
 // Zoom/pan state for the displayed image. scale 1 = fit; tx/ty are screen-px
 // offsets from center. Reset on navigation and close.
@@ -656,8 +660,18 @@ function toggleInfoPanel() {
 function openInfoPanel() {
     if (!infoPanelEl || !modalEl) return;
     infoOpen = true;
+    // Clear whatever a drag left behind, so the sheet rises from the edge it
+    // was thrown to rather than jumping there first.
+    infoPanelEl.style.transition = "";
+    infoPanelEl.style.transform = "";
     modalEl.classList.add("is-info-open");
     infoBtnEl?.setAttribute("aria-pressed", "true");
+    if (isMobilePlatform() && !infoSheetBack) {
+        infoSheetBack = pushSheet(() => {
+            infoSheetBack = null;
+            closeInfoPanel();
+        });
+    }
     refreshInfoPanel();
 }
 
@@ -665,6 +679,8 @@ function closeInfoPanel() {
     infoOpen = false;
     modalEl?.classList.remove("is-info-open");
     infoBtnEl?.setAttribute("aria-pressed", "false");
+    infoSheetBack?.release();
+    infoSheetBack = null;
 }
 
 // refreshInfoPanel re-renders the panel for the active item. Dimensions are
@@ -912,10 +928,46 @@ function settleDrag(animated: boolean) {
     imageEl.animate([{ transform: from }, { transform: "none" }], { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" });
 }
 
+// The info card is a sheet on a phone, so it goes the way a sheet goes: a tap
+// on the picture behind it, a drag down, or BACK. It is a sibling of the stage,
+// so none of this touches the stage's own swipe.
+const INFO_DISMISS_PX = 96;
+const INFO_DISMISS_VELOCITY = 0.6;
+
+function settleInfoSheet(to: string) {
+    if (!infoPanelEl) return;
+    infoPanelEl.style.transition = "";
+    infoPanelEl.style.transform = to;
+}
+
+function infoTouchHandlers(): TouchGestureHandlers {
+    return {
+        dragStart: (axis) => axis === "y" && infoOpen && (infoBodyEl?.scrollTop || 0) <= 0,
+        drag: (_dx, dy) => {
+            if (!infoPanelEl || (infoBodyEl?.scrollTop || 0) > 0) return;
+            infoPanelEl.style.transition = "none";
+            infoPanelEl.style.transform = `translate3d(0, ${Math.max(0, dy)}px, 0)`;
+        },
+        dragEnd: (_dx, dy, _axis, velocity) => {
+            if (dy > INFO_DISMISS_PX || (dy > 24 && velocity > INFO_DISMISS_VELOCITY)) {
+                // Let the throw finish downwards while the card fades out.
+                settleInfoSheet("translateY(100%)");
+                closeInfoPanel();
+                return;
+            }
+            settleInfoSheet("");
+        },
+    };
+}
+
 function previewTouchHandlers(): TouchGestureHandlers {
     return {
         tap: () => {
             if (!isPreviewOpen() || !modalEl) return;
+            if (infoOpen) {
+                closeInfoPanel();
+                return;
+            }
             clearChromeHideTimer();
             setChromeVisible(!modalEl.classList.contains("is-chrome-visible"));
         },
@@ -1106,6 +1158,8 @@ export function teardownPreviewModal(): void {
     fullCache.clear();
     clearActivePreview();
     infoOpen = false;
+    infoSheetBack?.release();
+    infoSheetBack = null;
     modalEl = null;
     shellEl = null;
     stageEl = null;
@@ -1256,6 +1310,7 @@ export function activatePreviewModal(): () => void {
             lastPointerType = event.pointerType;
         }) as EventListener, true);
         previewListenerCleanups.push(bindTouchGestures(stageEl, previewTouchHandlers()));
+        previewListenerCleanups.push(bindTouchGestures(infoPanelEl, infoTouchHandlers()));
     }
     listenPreview(stageEl, "wheel", handleZoomWheel as EventListener, { passive: false });
     listenPreview(imageEl, "dblclick", handleZoomDblClick as EventListener);
