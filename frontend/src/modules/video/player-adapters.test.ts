@@ -143,11 +143,27 @@ describe("HTML video natural completion", () => {
         const video = new FakeVideo();
         const adapter = new HtmlVideoAdapter(video as unknown as HTMLVideoElement, htmlOpened(), callbacks);
 
+        video.error = { code: 3 } as MediaError;
         video.dispatchEvent(new Event("error"));
         video.dispatchEvent(new Event("ended"));
 
-        expect(callbacks.mediaError).toHaveBeenCalledTimes(1);
+        expect(callbacks.mediaError).toHaveBeenCalledWith(3, expect.anything());
         expect(callbacks.mediaEnded).not.toHaveBeenCalled();
+        await adapter.close();
+    });
+
+    it("ignores an error event that carries no MediaError, such as a failed poster", async () => {
+        vi.stubGlobal("HTMLMediaElement", { HAVE_FUTURE_DATA: 3 });
+        const callbacks = htmlCallbacks();
+        const video = new FakeVideo();
+        const adapter = new HtmlVideoAdapter(video as unknown as HTMLVideoElement, htmlOpened(), callbacks);
+
+        video.dispatchEvent(new Event("error"));
+        expect(callbacks.mediaError).not.toHaveBeenCalled();
+
+        video.error = { code: 2 } as MediaError;
+        video.dispatchEvent(new Event("error"));
+        expect(callbacks.mediaError).toHaveBeenCalledTimes(1);
         await adapter.close();
     });
 });
