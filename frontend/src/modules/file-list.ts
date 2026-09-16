@@ -32,6 +32,8 @@ import { getInteractiveFileListRows, showFileListRows, showFileListState, update
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
 import { rowMetaLine } from '../ui/file-list/row-meta';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
+import { bindSwipeActions } from '../ui/file-list/swipe-actions';
+import { openMoveModal } from './modals/move';
 import { showRowContextMenu } from './context-menu';
 import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FileListUploaderChip, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
 
@@ -487,6 +489,28 @@ function renameRow(row: HTMLElement) {
     } as Parameters<typeof openRenameModal>[0]);
 }
 
+/**
+ * Opens the move picker for one row, whichever kind it is. Used by the swipe
+ * action, which shows a single verb and so must resolve the target itself
+ * rather than leaning on the menu's branching.
+ */
+function openMoveForRow(row: HTMLElement): void {
+    const id = row.dataset.id ?? '';
+    const name = row.dataset.name || 'Item';
+    if (row.dataset.type === 'folder') {
+        openMoveModal({ type: 'folder', id, name, parentId: state.currentFolderId });
+        return;
+    }
+    openMoveModal({
+        type: 'file',
+        id: Number(id),
+        name,
+        parentId: row.dataset.parentId ?? state.currentFolderId,
+        size: Number(row.dataset.size || 0),
+        source: (row.dataset.source as 'fs') || 'fs',
+    });
+}
+
 function fileTargetForRow(row: HTMLElement) {
     return {
         id: Number(row.dataset.id),
@@ -768,6 +792,16 @@ function isSearchMode() {
 // opens the row's menu.
 function handleMobileTap(e: MouseEvent, row: HTMLElement) {
     const target = e.target as HTMLElement;
+    // The revealed swipe button commits and stops there: it must not also run
+    // the tap that would have opened the row underneath it.
+    const swipeAction = target.closest<HTMLButtonElement>('button[data-swipe-action]');
+    if (swipeAction) {
+        e.stopPropagation();
+        const swiped = swipeAction.closest<HTMLElement>('.drive-row');
+        if (swiped) openMoveForRow(swiped);
+        return;
+    }
+
     const more = target.closest<HTMLButtonElement>('button.row-more');
     if (more) {
         const rect = more.getBoundingClientRect();
@@ -1053,6 +1087,12 @@ export function activateFileList(): () => void {
                 openRowMenu(row, x, y);
             }),
             bindPullToRefresh(list, () => appActions().triggerRefresh()),
+            bindSwipeActions(list, '.drive-row[data-type="folder"], .drive-row[data-type="file"]', {
+                openWidth: (row) => row.querySelector<HTMLElement>('.row-swipe-actions')?.offsetWidth ?? 0,
+                // The class is what the row's own styling keys off; the binder
+                // owns the transform, so nothing else has to know the width.
+                onSettle: (row, open) => row.classList.toggle('is-swiped', open),
+            }),
         ]
         : [];
 
