@@ -362,15 +362,19 @@
 
 /* ====================== PHONE ROWS ====================== */
 /* Scoped to html.mobile, which the shell sets on iOS and Android. The list
-   becomes a two-line list: a 32px type icon, the name over one meta line, and
-   a trailing overflow button. Rows are full-bleed with a single hairline inset
-   to the text column, tinted for 80ms on press, and never hover on touch. */
+   becomes a two-line list: a 44px type icon, the name over one meta line, and
+   a trailing overflow button. The run of rows reads as one raised card inset
+   from the screen edges, divided by hairlines that start at the text column,
+   tinted for 80ms on press, and never hovering on touch. */
 /* overflow-x is clipped, not auto: an auto x-axis turns any stray pixel of
    overflow into a horizontal scroller with a visible bar on Android. The
    pull indicator is positioned against this box. */
 html.mobile .file-list-box {
     position: relative;
-    padding: 0;
+    /* Breathing room above the card, and enough below it that the last row can
+       scroll clear of the FAB: its 56px pill, its 16px gap, plus 16px. The tab
+       bar needs no allowance here, the shell already ends the body above it. */
+    padding: var(--space-2) 0 88px;
     overflow-x: hidden;
     touch-action: pan-y;
     overscroll-behavior-y: contain;
@@ -381,11 +385,14 @@ html.mobile .file-row {
     display: flex;
     align-items: center;
     gap: 12px;
-    min-height: 56px;
-    margin: 0;
-    /* 10px on the right: the overflow button's 44px hit area ends exactly at
-       the row edge instead of spilling into scrollable overflow. */
-    padding: 8px 10px 8px 16px;
+    min-height: 68px;
+    /* The side margin is what makes the run of rows read as a card rather than
+       a full-bleed list; the background is the card itself. */
+    margin: 0 var(--space-3);
+    /* 6px on the right: the overflow button's 44px hit area ends exactly at
+       the card edge instead of spilling into scrollable overflow. */
+    padding: 10px 6px 10px 12px;
+    background: var(--color-surface-0);
     border-radius: 0;
     transition: background-color 80ms var(--ease-standard);
     touch-action: manipulation;
@@ -394,11 +401,23 @@ html.mobile .file-row {
     user-select: none;
     -webkit-user-select: none;
 }
+/* The virtualiser wraps the rendered window in two spacer divs, so the ends of
+   the card are "a row next to something that is not a row". Setting the two
+   corner pairs independently also rounds a single-row list correctly. */
+html.mobile .file-list-box > :not(.file-row) + .file-row {
+    border-top-left-radius: var(--radius-xl);
+    border-top-right-radius: var(--radius-xl);
+}
+html.mobile .file-list-box > .file-row:has(+ :not(.file-row)) {
+    border-bottom-left-radius: var(--radius-xl);
+    border-bottom-right-radius: var(--radius-xl);
+}
 html.mobile .file-row + .file-row::before {
     content: "";
     position: absolute;
     top: 0;
-    left: 60px;
+    /* Starts at the text column: 12px padding + 44px icon + 12px gap. */
+    left: 68px;
     right: 0;
     height: 1px;
     background: var(--color-border-soft);
@@ -467,6 +486,7 @@ html.mobile .row-sub-text {
 }
 html.mobile .file-lock-badge { margin: 0; }
 html.mobile .file-lock-badge svg { width: 12px; height: 12px; }
+
 html.mobile .uploader-chip {
     display: inline-flex;
     align-items: center;
@@ -499,25 +519,29 @@ html.mobile .uploader-initials {
 
 html.mobile .file-type-icon,
 html.mobile .folder-chip {
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
     margin: 0;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-lg);
 }
 /* Opaque chip colours. The Android WebView mistiles a rounded box whose
    translucent border sits over a fill with an SVG inside, painting a stale
-   copy of the rows above it into the list. Mixing the overlay into the canvas
-   keeps the same tint without the alpha. */
+   copy of the rows above it into the list. Mixing the overlay into the row's
+   own surface keeps the same tint without the alpha. */
 html.mobile .file-type-icon {
-    background: var(--color-surface-1);
-    border-color: var(--color-border-soft);
+    background: var(--color-surface-2);
+    border-color: transparent;
+    color: var(--color-text-muted);
 }
+/* Folders carry the accent so the one structural distinction in the list, a
+   container versus a leaf, is readable before any text is. */
 html.mobile .folder-chip {
-    background: color-mix(in srgb, var(--color-accent) 12%, var(--color-canvas));
-    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-canvas));
+    background: color-mix(in srgb, var(--color-accent) 16%, var(--color-surface-0));
+    border-color: transparent;
+    color: var(--color-accent);
 }
 html.mobile .folder-chip svg,
-html.mobile .file-type-icon svg { width: 20px; height: 20px; stroke-width: 1.75; }
+html.mobile .file-type-icon svg { width: 22px; height: 22px; stroke-width: 1.75; }
 
 /* Selection mode: every row grows a check so a tap reads as a toggle. The
    column slides open rather than popping in (motion-12). */

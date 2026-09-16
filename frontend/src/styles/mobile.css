@@ -119,9 +119,18 @@ html.mobile .drive-header-name {
 html.mobile .drive-header-meta { font-size: 0.8125rem; color: var(--color-text-muted); }
 html.mobile .drive-header:active { opacity: 0.7; }
 
-html.mobile .topbar-folder-title {
+/* Folder header: the name over a count, matching the drive header's two-line
+   shape so the bar does not change height when you walk into a folder. */
+html.mobile .topbar-folder-titles {
     flex: 1 1 auto;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+html.mobile .topbar-folder-title {
+    min-width: 0;
+    margin: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -129,6 +138,14 @@ html.mobile .topbar-folder-title {
     font-weight: var(--weight-strong);
     color: var(--color-text);
     letter-spacing: -0.01em;
+}
+html.mobile .topbar-folder-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8125rem;
+    font-weight: var(--weight-medium);
+    color: var(--color-text-muted);
 }
 
 html.mobile .topbar-back {

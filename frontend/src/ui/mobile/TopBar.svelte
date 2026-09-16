@@ -32,10 +32,30 @@
         : $fileListCount === 1 ? '1 file'
         : `${$fileListCount} files`,
     );
+    // Inside a folder the row set mixes folders and files, so "items" is the
+    // honest noun where the drive header can say "files".
+    const itemsLabel = $derived(
+        $fileListCount === 0 ? 'Empty'
+        : $fileListCount === 1 ? '1 item'
+        : `${$fileListCount} items`,
+    );
 
     let sortOpen = $state(false);
     let sortMenuEl = $state<HTMLElement | null>(null);
     let sortButtonEl = $state<HTMLButtonElement | null>(null);
+    // The search field costs a permanent 52px band on every screen, so it stays
+    // collapsed behind its icon. It is hidden rather than unmounted: the
+    // imperative search controller binds to #search-input once at startup and
+    // that binding has to survive navigation.
+    let searchOpen = $state(false);
+    let searchInputEl = $state<HTMLInputElement | null>(null);
+
+    async function toggleSearch(): Promise<void> {
+        searchOpen = !searchOpen;
+        if (!searchOpen) return;
+        await tick();
+        searchInputEl?.focus();
+    }
 
     const sortOptions: Array<{ key: FileSortKey; label: string }> = [
         { key: 'name', label: 'Name' },
@@ -84,7 +104,10 @@
                 <button type="button" class="topbar-back" aria-label="Back" onclick={() => navigateBack()}>
                     <ChevronLeftIcon size={24} strokeWidth={2} aria-hidden="true" />
                 </button>
-                <h1 class="topbar-folder-title" title={folderName}>{folderName}</h1>
+                <span class="topbar-folder-titles">
+                    <h1 class="topbar-folder-title" title={folderName}>{folderName}</h1>
+                    <span class="topbar-folder-meta">{itemsLabel}</span>
+                </span>
             {:else}
                 <button
                     type="button"
@@ -102,6 +125,16 @@
             {/if}
 
             <div class="topbar-actions">
+                <button
+                    type="button"
+                    class="topbar-icon-btn"
+                    aria-expanded={searchOpen}
+                    aria-controls="search-input"
+                    aria-label={searchOpen ? 'Hide search' : 'Search files'}
+                    onclick={toggleSearch}
+                >
+                    <SearchIcon size={22} strokeWidth={2} aria-hidden="true" />
+                </button>
                 <div class="topbar-menu-wrap">
                     <button
                         bind:this={sortButtonEl}
@@ -137,9 +170,10 @@
             </div>
         </div>
 
-        <div class="topbar-search">
+        <div class="topbar-search" hidden={!searchOpen}>
             <SearchIcon class="topbar-search-icon" size={18} strokeWidth={2} aria-hidden="true" />
             <input
+                bind:this={searchInputEl}
                 id="search-input"
                 type="text"
                 placeholder="Search this drive"

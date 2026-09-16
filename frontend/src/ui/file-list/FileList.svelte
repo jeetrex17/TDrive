@@ -46,7 +46,7 @@
     // #file-list. This handler keeps that bubbling contract explicit to Svelte.
     function onGridRowKeydown(_event: KeyboardEvent): void {}
 
-    const ESTIMATED_ROW_HEIGHT = mobile ? 56 : 54;
+    const ESTIMATED_ROW_HEIGHT = mobile ? 68 : 54;
     const WINDOW_OVERSCAN = 8;
     let scrollTop = $state(0);
     let viewportHeight = $state(0);
