@@ -19,6 +19,15 @@ const THUMB_CACHE_MAX = 1500;
 // (they reload instantly from the thumb cache when scrolled back).
 const MAX_LOADED_CELLS = 240;
 
+// Telegram rate limits a burst of cold thumbnail downloads (FLOOD_WAIT), and a
+// fresh phone install has nothing cached, so loads go through a short queue
+// and a rate-limited cell keeps its shimmer and tries again after the wait
+// Telegram named instead of failing for good.
+const MAX_CONCURRENT_LOADS = 3;
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 8_000;
+const RETRY_MAX_MS = 90_000;
+
 export type CellStatus = 'idle' | 'loading' | 'loaded' | 'failed' | 'locked';
 
 export interface CellPatch {
@@ -35,9 +44,14 @@ export interface CellRegistration {
 interface CellHandle extends CellRegistration {
     node: HTMLElement;
     status: CellStatus;
+    attempt: number;
+    retryTimer: number;
 }
 
 const handles = new Map<HTMLElement, CellHandle>();
+// Cells waiting for a load slot, oldest first.
+const queue: CellHandle[] = [];
+let activeLoads = 0;
 // Cells currently holding a decoded image, oldest first (FIFO eviction). Kept
 // consistent across renders by register/unregister alone — never bulk-cleared,
 // because Svelte reuses keyed cells whose loaded state must keep being tracked.
@@ -69,6 +83,7 @@ export function teardown(): void {
     observer?.disconnect();
     observer = null;
     rootEl = null;
+    for (const handle of handles.values()) dropPending(handle);
     handles.clear();
     loadedHandles.length = 0;
 }
@@ -84,8 +99,9 @@ export function registerCell(node: HTMLElement, reg: CellRegistration): void {
     if (previous) {
         observer?.unobserve(node);
         removeLoaded(previous);
+        dropPending(previous);
     }
-    const handle: CellHandle = { node, msgId: reg.msgId, apply: reg.apply, status: 'idle' };
+    const handle: CellHandle = { node, msgId: reg.msgId, apply: reg.apply, status: 'idle', attempt: 0, retryTimer: 0 };
     handles.set(node, handle);
     observer?.observe(node);
 }
@@ -93,8 +109,18 @@ export function registerCell(node: HTMLElement, reg: CellRegistration): void {
 export function unregisterCell(node: HTMLElement): void {
     observer?.unobserve(node);
     const handle = handles.get(node);
-    if (handle) removeLoaded(handle);
+    if (handle) {
+        removeLoaded(handle);
+        dropPending(handle);
+    }
     handles.delete(node);
+}
+
+function dropPending(handle: CellHandle): void {
+    window.clearTimeout(handle.retryTimer);
+    handle.retryTimer = 0;
+    const index = queue.indexOf(handle);
+    if (index >= 0) queue.splice(index, 1);
 }
 
 
@@ -120,13 +146,32 @@ function onIntersect(entries: IntersectionObserverEntry[]): void {
         const node = entry.target as HTMLElement;
         observer?.unobserve(node);
         const handle = handles.get(node);
-        if (handle) void loadCell(handle);
+        if (handle) enqueue(handle);
+    }
+}
+
+// enqueue shows the shimmer at once; the load itself waits for a slot.
+function enqueue(handle: CellHandle): void {
+    if (handle.status === 'loaded' || queue.includes(handle)) return;
+    handle.status = 'loading';
+    handle.apply({ status: 'loading' });
+    queue.push(handle);
+    pump();
+}
+
+function pump(): void {
+    while (activeLoads < MAX_CONCURRENT_LOADS && queue.length > 0) {
+        const handle = queue.shift()!;
+        if (handles.get(handle.node) !== handle) continue;
+        activeLoads += 1;
+        void loadCell(handle).finally(() => {
+            activeLoads -= 1;
+            pump();
+        });
     }
 }
 
 async function loadCell(handle: CellHandle): Promise<void> {
-    if (handle.status === 'loaded' || handle.status === 'loading') return;
-
     const channelId = currentChannelId;
     const key = `${channelId}:${handle.msgId}`;
 
@@ -138,8 +183,6 @@ async function loadCell(handle: CellHandle): Promise<void> {
         return;
     }
 
-    handle.status = 'loading';
-    handle.apply({ status: 'loading' });
     try {
         const url = await getThumbnail(handle.msgId);
         // Discard if the drive changed mid-flight or the cell was unregistered
@@ -155,11 +198,31 @@ async function loadCell(handle: CellHandle): Promise<void> {
         if (/password required/i.test(String(err))) {
             handle.status = 'locked';
             handle.apply({ status: 'locked', title: 'locked, click to unlock' });
-        } else {
+            return;
+        }
+        const delay = retryDelay(err, handle.attempt);
+        if (delay === null) {
             handle.status = 'failed';
             handle.apply({ status: 'failed', title: "couldn't load" });
+            return;
         }
+        handle.attempt += 1;
+        handle.retryTimer = window.setTimeout(() => {
+            handle.retryTimer = 0;
+            if (handles.get(handle.node) !== handle || handle.status !== 'loading') return;
+            queue.push(handle);
+            pump();
+        }, delay);
     }
+}
+
+// retryDelay is the pause before another attempt at a rate-limited download,
+// preferring the wait Telegram named, or null when the failure is final.
+function retryDelay(err: unknown, attempt: number): number | null {
+    const message = String(err);
+    if (attempt >= MAX_RETRIES || !/flood|rate.?limit|timeout/i.test(message)) return null;
+    const advised = /wait:?\s*(\d+)\s*s/i.exec(message);
+    return Math.min(RETRY_MAX_MS, advised ? Number(advised[1]) * 1000 + 1000 : RETRY_BASE_MS * 2 ** attempt);
 }
 
 // registerLoaded tracks a cell holding a decoded image and unloads the oldest

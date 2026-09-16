@@ -184,4 +184,84 @@ describe('gallery-controller', () => {
         await flush();
         expect(cell.last()).toEqual({ status: 'loaded', src: 'data:url:50' });
     });
+
+    it('keeps a rate-limited cell shimmering and retries after the wait Telegram named', async () => {
+        vi.useFakeTimers();
+        try {
+            let calls = 0;
+            thumbnails.resolver = (msgId: number) => {
+                calls += 1;
+                return calls === 1
+                    ? Promise.reject(new Error('tgclient: GetFileDocument failed: tgclient: flood wait: 25s'))
+                    : Promise.resolve(`data:url:${msgId}`);
+            };
+
+            const cell = makeCell(60);
+            controller.registerCell(cell.node, { msgId: 60, apply: cell.apply });
+            fireIntersect(cell.node);
+            await flush();
+            expect(cell.last()).toEqual({ status: 'loading' });
+            expect(cell.patches.some((patch) => patch.status === 'failed')).toBe(false);
+
+            await vi.advanceTimersByTimeAsync(25_000);
+            expect(calls).toBe(1);
+            await vi.advanceTimersByTimeAsync(1_100);
+            await flush();
+            expect(calls).toBe(2);
+            expect(cell.last()).toEqual({ status: 'loaded', src: 'data:url:60' });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('fails a cell outright for a permanent error and after the retry budget', async () => {
+        vi.useFakeTimers();
+        try {
+            thumbnails.resolver = () => Promise.reject(new Error('unsupported image'));
+            const permanent = makeCell(70);
+            controller.registerCell(permanent.node, { msgId: 70, apply: permanent.apply });
+            fireIntersect(permanent.node);
+            await flush();
+            expect(permanent.last()).toMatchObject({ status: 'failed' });
+
+            let calls = 0;
+            thumbnails.resolver = () => {
+                calls += 1;
+                return Promise.reject(new Error('flood wait: 1s'));
+            };
+            const limited = makeCell(71);
+            controller.registerCell(limited.node, { msgId: 71, apply: limited.apply });
+            fireIntersect(limited.node);
+            await flush();
+            for (let round = 0; round < 3; round += 1) {
+                await vi.advanceTimersByTimeAsync(2_100);
+                await flush();
+            }
+            expect(calls).toBe(4);
+            expect(limited.last()).toMatchObject({ status: 'failed' });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('loads at most three thumbnails at a time', async () => {
+        const resolvers: Array<(value: string) => void> = [];
+        thumbnails.resolver = () => new Promise<string>((resolve) => { resolvers.push(resolve); });
+
+        const cells = [80, 81, 82, 83, 84].map((msgId) => {
+            const cell = makeCell(msgId);
+            controller.registerCell(cell.node, { msgId, apply: cell.apply });
+            fireIntersect(cell.node);
+            return cell;
+        });
+        await flush();
+        expect(resolvers).toHaveLength(3);
+        expect(cells.every((cell) => cell.last()?.status === 'loading')).toBe(true);
+
+        resolvers[0]('data:url:80');
+        await flush();
+        await flush();
+        expect(resolvers).toHaveLength(4);
+        expect(cells[0].last()).toEqual({ status: 'loaded', src: 'data:url:80' });
+    });
 });
