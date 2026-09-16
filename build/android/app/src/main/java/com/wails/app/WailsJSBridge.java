@@ -3,6 +3,7 @@ package com.wails.app;
 import android.util.Log;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import android.content.Context;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import com.wails.app.BuildConfig;
@@ -72,6 +73,32 @@ public class WailsJSBridge {
      * @param level The log level (debug, info, warn, error)
      * @param message The message to log
      */
+    /**
+     * Ask the system for a folder and copy it into the app cache, so Go is
+     * handed an ordinary directory path.
+     *
+     * Called from JavaScript: wails.pickFolder(callbackId)
+     *
+     * This exists because Wails refuses directory selection on Android: the
+     * Storage Access Framework hands back document-tree URIs rather than
+     * filesystem paths, and its dialog API has nowhere to put one. Copying the
+     * tree out first is the same answer it already uses for single files, and
+     * it means every importer above this stays as it is.
+     *
+     * Answers through window._wailsAndroidCallback with the copied folder's
+     * path, or with an empty string if the picker was dismissed.
+     */
+    @JavascriptInterface
+    public void pickFolder(final String callbackId) {
+        final Context context = webView.getContext();
+        if (!(context instanceof MainActivity)) {
+            sendCallback(callbackId, null, "folder picker unavailable");
+            return;
+        }
+        final MainActivity activity = (MainActivity) context;
+        activity.runOnUiThread(() -> activity.launchFolderPicker(callbackId));
+    }
+
     @JavascriptInterface
     public void log(String level, String message) {
         switch (level.toLowerCase()) {
@@ -118,7 +145,8 @@ public class WailsJSBridge {
     /**
      * Send a callback response to JavaScript
      */
-    private void sendCallback(String callbackId, String result, String error) {
+    /** Package visible so the activity can answer a picker it launched. */
+    void sendCallback(String callbackId, String result, String error) {
         final String js;
         if (error != null) {
             js = String.format(

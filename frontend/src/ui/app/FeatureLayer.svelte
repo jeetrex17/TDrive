@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { isAndroidPlatform, isMobilePlatform } from '../../api';
+    import { isMobilePlatform } from '../../api';
     import { activateLiveSyncEvents } from '../../modules/channels';
     import { activateContextMenu } from '../../modules/context-menu';
     import { activateDropOverlay } from '../../modules/drop-overlay';
@@ -117,7 +117,10 @@
     // Desktop-only chrome: phones update through their app stores, and
     // Android has no directory picker for folder uploads.
     const updaterAvailable = !isMobilePlatform();
-    const chooseFolder = isAndroidPlatform() ? undefined : chooseFolderForCurrentFolder;
+    // Android can pick a folder again: the app's own bridge copies the chosen
+    // tree into the cache and hands back a path, so the item is no longer a
+    // button that could only fail. See modules/android-folder.ts.
+    const chooseFolder = chooseFolderForCurrentFolder;
     // The phone's FAB menu adds New folder; desktop creates folders from the
     // context menu, so it stays out of the upload button there.
     const newFolder = isMobilePlatform() ? openNewFolderModal : undefined;
