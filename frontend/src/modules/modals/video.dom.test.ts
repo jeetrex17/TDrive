@@ -18,6 +18,7 @@ const apiMocks = vi.hoisted(() => ({
     openMedia: vi.fn(),
     openNativeMedia: vi.fn(),
     resizeNativeMedia: vi.fn(),
+    setImmersive: vi.fn(),
     showNativeSeekThumbnail: vi.fn(),
     updateMediaPlayback: vi.fn(),
     enterFullscreen: vi.fn(),
@@ -336,6 +337,36 @@ describe("macOS native video layering", () => {
 
         expect(document.documentElement.classList.contains("native-video-active")).toBe(false);
         expect(document.body.classList.contains("native-video-active")).toBe(false);
+    });
+});
+
+describe("the phone's system bars", () => {
+    it("are taken for the player and given straight back", async () => {
+        // On Android 15 this is not decoration. An app targeting SDK 35 is laid
+        // out edge to edge whether it asks or not, and the system paints a
+        // scrim behind three-button navigation that lands on top of the
+        // picture; hiding the bar is the only thing that removes it. Giving
+        // them back matters just as much -- a phone with no way out of the app
+        // is a worse bug than the band ever was.
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+
+        await videoModule.openVideoModal({ id: 31, name: "movie-31.mkv", size: 1024 });
+        expect(apiMocks.setImmersive).toHaveBeenCalledWith(true);
+
+        apiMocks.setImmersive.mockClear();
+        await videoModule.closeVideoModal();
+        expect(apiMocks.setImmersive).toHaveBeenCalledWith(false);
+    });
+
+    it("come back even when the player is torn down without being closed", async () => {
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "movie-32.mkv", size: 1024 });
+
+        apiMocks.setImmersive.mockClear();
+        videoModule.teardownVideoModal();
+        expect(apiMocks.setImmersive).toHaveBeenCalledWith(false);
     });
 });
 

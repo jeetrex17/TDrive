@@ -2,6 +2,7 @@ import { Browser, Events, System, Window } from "@wailsio/runtime";
 import {
     Haptic as rawHaptic,
     SafeAreaInsets as rawSafeAreaInsets,
+    SetImmersive as rawSetImmersive,
     SetKeyboardWatch as rawSetKeyboardWatch,
     SetScreenProtect as rawSetScreenProtect,
 } from "../../bindings/TDrive/app";
@@ -349,4 +350,16 @@ export function setScreenProtect(enabled: boolean): void {
 export function setKeyboardWatch(enabled: boolean): void {
     if (!isGatewayReady()) return;
     void invokeBackend(rawSetKeyboardWatch, enabled).catch(() => undefined);
+}
+
+/**
+ * Hides the phone's system bars for a full-screen surface, or gives them back.
+ *
+ * Only the video player asks. On Android 15 this is the only way to be rid of
+ * the grey band the system paints down the edge for three-button navigation,
+ * and on both platforms a picture with nothing over it is the point.
+ */
+export function setImmersive(enabled: boolean): void {
+    if (!isGatewayReady() || !isMobilePlatform()) return;
+    void invokeBackend(rawSetImmersive, enabled).catch(() => undefined);
 }
