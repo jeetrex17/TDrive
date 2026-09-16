@@ -75,6 +75,38 @@ describe('notif-bell', () => {
         expect(bell().dataset.mode).toBe('idle');
     });
 
+    it('clears the log but not the work: anything unfinished survives Clear', () => {
+        pushTransferStart({ id: 4, direction: 'up', name: 'running.bin', total: 10 });
+        pushHistoryEvent({ level: 'info', title: 'Folder created' });
+        // Queued and paused are part of the store's contract even though only
+        // 'active' is published today; Clear must not be the thing that quietly
+        // deletes them the day something does.
+        historyEvents.update((events) => [
+            {
+                kind: 'transfer',
+                id: 'xfer:down:file:9',
+                direction: 'down',
+                name: 'waiting.bin',
+                progress: 0,
+                total: 10,
+                bytes: 0,
+                speed: 0,
+                status: 'queued',
+                startedAt: 0,
+                finishedAt: 0,
+            },
+            ...events,
+        ]);
+        markTransferDone({ id: 4, direction: 'up', status: 'done' });
+
+        clearHistory();
+        flushSync();
+
+        const left = get(historyEvents);
+        expect(left).toHaveLength(1);
+        expect(left[0]).toMatchObject({ id: 'xfer:down:file:9', status: 'queued' });
+    });
+
     it('keeps terminal transfers immutable and byte math consistent', () => {
         pushTransferStart({ id: 2, direction: 'down', name: 'b.bin', total: 1000 });
         updateTransferProgress({ id: 2, direction: 'down', progress: 50 });
@@ -117,9 +149,11 @@ describe('notif-bell', () => {
         });
         bell().dispatchEvent(new MouseEvent('click', { bubbles: true }));
         flushSync();
-        expect(document.body.textContent).toContain('3 of 5 files');
-        // The pair names its unit once: "600 / 1000 B", not "600 B / 1000 B".
-        expect(document.body.textContent).toContain('600 / 1000 B');
+        // Desktop spelling, which the phone deliberately shortens. The bell is
+        // shared, so the compact forms live in transfer-row.mobile.dom.test.ts
+        // and this asserts the desktop row is untouched by them.
+        expect(document.body.textContent).toContain('3 / 5 files');
+        expect(document.body.textContent).toContain('600 B / 1000 B');
     });
 
     it('opens the full panel on hover and closes after the pointer leaves', () => {
