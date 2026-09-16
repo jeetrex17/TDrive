@@ -110,8 +110,30 @@ html.mobile .topbar-title {
 html.mobile .topbar-plain-titles { display: flex; flex-direction: column; gap: 1px; }
 html.mobile .topbar-subtitle { font-size: 0.8125rem; color: var(--color-text-muted); }
 
+/* Selection: the count and the only way out of the mode. The tab bar is gone
+   while selecting and the bottom bar keeps only Move and Delete, so Done has to
+   be on screen -- an iPhone has no hardware BACK to fall back on. */
+html.mobile .topbar-selection-count { flex: 1 1 auto; min-width: 0; }
+html.mobile .topbar-done {
+    display: inline-grid;
+    place-items: center;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 var(--space-2);
+    border: 0;
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 1rem;
+    font-weight: var(--weight-semibold);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .topbar-done:active { background: var(--overlay-accent-1); }
+
 /* Drive header: the one bold element (spec 2.2). Name, live sync ring, then the
-   kind and item count on a quiet second line. The whole block opens the switcher. */
+   kind and item count on a quiet second line. The name opens the switcher; the
+   ring beside it is the queue's own button, which is why the two are siblings
+   rather than one inside the other. */
 html.mobile .drive-header {
     flex: 1 1 auto;
     min-width: 0;
@@ -119,13 +141,24 @@ html.mobile .drive-header {
     flex-direction: column;
     gap: 1px;
     padding: 4px 0;
+}
+html.mobile .drive-header-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 44px tall, pulled back by the difference so the bar keeps the height the
+   name's own line gave it. The same trick the ring and the row badges use. */
+html.mobile .drive-header-btn {
+    display: flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin: -9px 0;
+    padding: 0;
     background: transparent;
     border: 0;
     text-align: left;
     cursor: pointer;
     color: inherit;
 }
-html.mobile .drive-header-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+html.mobile .drive-header-btn:active { opacity: 0.7; }
 html.mobile .drive-header-name {
     min-width: 0;
     overflow: hidden;
@@ -138,7 +171,6 @@ html.mobile .drive-header-name {
     line-height: 1.2;
 }
 html.mobile .drive-header-meta { font-size: 0.8125rem; color: var(--color-text-muted); }
-html.mobile .drive-header:active { opacity: 0.7; }
 
 /* Folder header: the name over a count, matching the drive header's two-line
    shape so the bar does not change height when you walk into a folder. */
@@ -924,8 +956,9 @@ html.mobile #toast-stack.toast-stack {
 /* Focus rings stay visible for keyboard users on tablets and hardware keyboards
    (accessibility-1). */
 html.mobile .tab-item:focus-visible,
-html.mobile .drive-header:focus-visible,
+html.mobile .drive-header-btn:focus-visible,
 html.mobile .topbar-back:focus-visible,
+html.mobile .topbar-done:focus-visible,
 html.mobile .topbar-icon-btn:focus-visible,
 html.mobile .account-row:focus-visible,
 html.mobile .account-logout:focus-visible,

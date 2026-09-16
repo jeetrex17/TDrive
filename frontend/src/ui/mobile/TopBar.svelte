@@ -9,7 +9,9 @@
     import type { FileSortKey } from '../file-list/file-sort';
     import { navigateBack } from '../../modules/navigation';
     import { clearSearch } from '../../modules/search';
+    import { clearSelection } from '../../modules/selection';
     import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
+    import { selectionBarState } from '../selection/selection-bar-store';
     import SyncRing from './SyncRing.svelte';
     import {
         activeDrive,
@@ -41,6 +43,15 @@
         $fileListCount === 0 ? 'Empty'
         : $fileListCount === 1 ? '1 item'
         : `${$fileListCount} items`,
+    );
+
+    // Selecting takes the tab bar away and the selection bar keeps only Move and
+    // Delete, so the count and the way out belong here. An iPhone has no
+    // hardware BACK: without a Done on screen there is no exit from the mode at
+    // all short of deselecting every row one at a time.
+    const selecting = $derived($selectionBarState.count > 0);
+    const selectionLabel = $derived(
+        $selectionBarState.count === 1 ? '1 selected' : `${$selectionBarState.count} selected`,
     );
 
     let sortOpen = $state(false);
@@ -140,10 +151,22 @@
 <svelte:document onclick={onDocumentClick} />
 
 <header class="mobile-topbar" data-tab={active}>
+    <!-- Selecting replaces the bar's contents rather than sitting beside them:
+         navigating mid-selection is not something to offer, and the count and
+         Done are what the mode needs. -->
+    <div class="topbar-context topbar-plain topbar-selection" hidden={!selecting}>
+        <div class="topbar-row">
+            <h1 class="topbar-title topbar-selection-count" aria-live="polite">{selectionLabel}</h1>
+            <div class="topbar-actions">
+                <button type="button" class="topbar-done" onclick={() => clearSelection()}>Done</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Files: drive header at the root, a back chevron and folder name inside a
          folder. The search field stays mounted across tabs so its controller
          binding survives navigation. -->
-    <div class="topbar-context topbar-files" hidden={active !== 'files'}>
+    <div class="topbar-context topbar-files" hidden={selecting || active !== 'files'}>
         <div class="topbar-row">
             {#if inFolder}
                 <button type="button" class="topbar-back" aria-label="Back" onclick={() => navigateBack()}>
@@ -154,19 +177,24 @@
                     <span class="topbar-folder-meta">{itemsLabel}</span>
                 </span>
             {:else}
-                <button
-                    type="button"
-                    class="drive-header"
-                    aria-haspopup="dialog"
-                    aria-label={`${driveName}, ${driveKind} drive, ${countLabel}. Switch drive`}
-                    onclick={openDriveSwitcher}
-                >
-                    <span class="drive-header-main">
-                        <span class="drive-header-name" title={driveName}>{driveName}</span>
+                <!-- The ring is the queue's own button, so it is a sibling of the
+                     switcher's, not a child of it: nested, one tap ran both and
+                     opened the switcher over the Transfers tab. -->
+                <div class="drive-header">
+                    <div class="drive-header-main">
+                        <button
+                            type="button"
+                            class="drive-header-btn"
+                            aria-haspopup="dialog"
+                            aria-label={`${driveName}, ${driveKind} drive, ${countLabel}. Switch drive`}
+                            onclick={openDriveSwitcher}
+                        >
+                            <span class="drive-header-name" title={driveName}>{driveName}</span>
+                        </button>
                         <SyncRing status={$ringState} onOpenQueue={() => activeTab.set('transfers')} />
-                    </span>
+                    </div>
                     <span class="drive-header-meta">{driveKind} · {countLabel}</span>
-                </button>
+                </div>
             {/if}
 
             <div class="topbar-actions">
@@ -237,7 +265,7 @@
     </div>
 
     <!-- Photos: the same drive, gallery view. -->
-    <div class="topbar-context topbar-plain" hidden={active !== 'photos'}>
+    <div class="topbar-context topbar-plain" hidden={selecting || active !== 'photos'}>
         <div class="topbar-row">
             <div class="topbar-plain-titles">
                 <h1 class="topbar-title">Photos</h1>
@@ -246,13 +274,13 @@
         </div>
     </div>
 
-    <div class="topbar-context topbar-plain" hidden={active !== 'transfers'}>
+    <div class="topbar-context topbar-plain" hidden={selecting || active !== 'transfers'}>
         <div class="topbar-row">
             <h1 class="topbar-title">Transfers</h1>
         </div>
     </div>
 
-    <div class="topbar-context topbar-plain" hidden={active !== 'account'}>
+    <div class="topbar-context topbar-plain" hidden={selecting || active !== 'account'}>
         <div class="topbar-row">
             <h1 class="topbar-title">Account</h1>
         </div>

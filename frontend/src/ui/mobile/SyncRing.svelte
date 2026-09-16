@@ -78,10 +78,12 @@
 
     .sync-ring.is-tappable {
         /* Grows to a real target without moving the mark or the title beside
-           it: the box is centred on the same 16px the glyph already occupies. */
+           it: the margins give back exactly the 28px the box gained. It grows
+           away from the leading edge rather than around it, so the target never
+           lands on the drive name's last few pixels and steals its tap. */
         width: 44px;
         height: 44px;
-        margin: -14px;
+        margin: -14px -20px -14px -8px;
         cursor: pointer;
     }
 
