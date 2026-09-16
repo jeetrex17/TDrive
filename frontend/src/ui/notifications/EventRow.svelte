@@ -64,7 +64,13 @@
         {/if}
     </span>
     <div class="notif-row-body">
-        <div class="notif-row-title">{event.title}</div>
+        <div class="notif-row-title">
+            {event.title}
+            {#if (event.repeats ?? 1) > 1}
+                <!-- Said once, with a count, rather than said again. -->
+                <span class="notif-row-repeats">&times;{event.repeats}</span>
+            {/if}
+        </div>
         {#if event.body}
             <div class="notif-row-sub">{event.body}</div>
         {/if}
