@@ -415,16 +415,16 @@ html.mobile .file-row {
     user-select: none;
     -webkit-user-select: none;
 }
-/* The virtualiser wraps the rendered window in two spacer divs, so the ends of
-   the card are "a row next to something that is not a row". Setting the two
-   corner pairs independently also rounds a single-row list correctly.
-   Descendant, not child: the list portals its rows into an inner wrapper, so
-   they are grandchildren of .file-list-box. */
-html.mobile .file-list-box :not(.file-row) + .file-row {
+/* The card's ends, marked by the list rather than read off the DOM. A sibling
+   selector can only see the rendered window, whose ends are the virtualiser's
+   spacers and not the list's -- so mid-list rows came out rounded while
+   scrolling. The two corner pairs stay independent so a single-row list still
+   rounds on both. */
+html.mobile .file-row.is-card-top {
     border-top-left-radius: var(--radius-xl);
     border-top-right-radius: var(--radius-xl);
 }
-html.mobile .file-list-box .file-row:has(+ :not(.file-row)) {
+html.mobile .file-row.is-card-bottom {
     border-bottom-left-radius: var(--radius-xl);
     border-bottom-right-radius: var(--radius-xl);
 }
@@ -500,8 +500,15 @@ html.mobile .row-label-head {
     text-overflow: ellipsis;
     white-space: pre;
 }
+/* The tail does not shrink, so the head is always the half that gives way
+   first -- but it is held to the column all the same. Without the cap a tail
+   wider than the name column has nowhere to go and paints over the status
+   badge and the overflow button instead of ellipsising. */
 html.mobile .row-label-tail {
     flex: 0 0 auto;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: pre;
 }
 html.mobile .row-sub {
@@ -519,6 +526,13 @@ html.mobile .row-sub-text {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+/* The one line in the row that is a sentence, not a label, so it wraps instead
+   of inheriting .row-name's nowrap -- which cut "The last transfer did not
+   finish." off mid-sentence on a narrow phone, with no ellipsis to admit it. */
+html.mobile .row-explain {
+    white-space: normal;
+    text-wrap: pretty;
 }
 html.mobile .file-lock-badge { margin: 0; }
 html.mobile .file-lock-badge svg { width: 12px; height: 12px; }
