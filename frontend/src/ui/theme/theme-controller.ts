@@ -123,10 +123,10 @@ export function createThemeController(
         const targetDocument = activeEnvironment?.document;
         const startViewTransition = targetDocument?.startViewTransition;
         if (!targetDocument || typeof startViewTransition !== 'function') return false;
-        // WebKitGTK exposes the API, but a root view transition forces the
-        // page into accelerated compositing that the Wails Linux webview does
-        // not have: the view paints black or the transition never settles.
-        if (isLinuxWebKit(activeEnvironment?.userAgent)) return false;
+        // Embedded WebKit cannot be trusted with a root view transition; see
+        // viewTransitionUnreliable. Both platforms fall through to the CSS
+        // transition, which only animates colour.
+        if (viewTransitionUnreliable(activeEnvironment?.userAgent)) return false;
 
         const generation = beginTransition(targetDocument, THEME_TRANSITION_CLASS, origin);
         let stateApplied = false;
@@ -271,6 +271,31 @@ function resolveEnvironment(environment: ThemeControllerEnvironment): ResolvedEn
         reducedMotion: environment.reducedMotion ?? queryMedia(targetWindow, REDUCED_MOTION_QUERY),
         userAgent: environment.userAgent ?? targetWindow?.navigator?.userAgent,
     };
+}
+
+/**
+ * True for an iOS or iPadOS webview. Matched on the platform tokens rather than
+ * Safari's, because every browser on iOS is WebKit underneath.
+ */
+export function isIOSWebKit(userAgent: string | undefined): boolean {
+    if (!userAgent) return false;
+    return /\b(?:iPhone|iPad|iPod)\b/.test(userAgent) && /AppleWebKit\//.test(userAgent);
+}
+
+/**
+ * Where a root view transition cannot be trusted to settle.
+ *
+ * Both cases are embedded WebKit. On Linux, WebKitGTK exposes the API but
+ * forces the page into accelerated compositing the Wails webview does not have,
+ * and the view paints black. On iOS the transition covers the whole screen for
+ * a change that is only colour, which reads as a stutter rather than a
+ * crossfade and has been seen to leave the new palette unapplied.
+ *
+ * Both fall back to the CSS transition path, which animates colour alone and
+ * behaves the same everywhere.
+ */
+export function viewTransitionUnreliable(userAgent: string | undefined): boolean {
+    return isLinuxWebKit(userAgent) || isIOSWebKit(userAgent);
 }
 
 /**
