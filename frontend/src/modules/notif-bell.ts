@@ -11,7 +11,7 @@
 
 import { get } from 'svelte/store';
 import { state } from '../state';
-import { cancelDownload, cancelUpload } from '../api';
+import { cancelDownload, cancelUpload, cancelUploadById } from '../api';
 import {
     historyEvents,
     isUnfinishedTransfer,
@@ -31,6 +31,12 @@ const HISTORY_CAP = 100;
 // and the visible entry (which notifies every store subscriber) only updates
 // when the percent actually moves.
 const speedSamples = new Map<string, { at: number; bytes: number; speed: number }>();
+
+// Uploads the user stopped one at a time. The backend reports a cancelled file
+// through the same error event as a real failure, so the row it belongs to
+// would otherwise end as Failed and raise an error toast the user just asked
+// for. Cleared when the id is reused by the next batch (see pushTransferStart).
+const canceledUploads = new Set<number>();
 
 
 // pushHistoryEvent enqueues a non-transfer event (folder created, drive
@@ -77,6 +83,9 @@ export function pushTransferStart({ id, direction, name, total = 0 }: { id: stri
     if (id == null || !direction) return;
     const key = transferKey(direction, id);
     speedSamples.delete(key);
+    // Upload IDs restart at 0 with every batch, so a mark left by the last
+    // batch must not make this file's first failure read as a cancellation.
+    if (direction === 'up') canceledUploads.delete(Number(id));
     const entry: TransferEvent = {
         kind: 'transfer',
         id: key,
@@ -216,6 +225,20 @@ export function cancelTransfersInDirection(direction: TransferDirection): void {
 
     state.cancelingUpload = true;
     void cancelUpload().catch(() => undefined);
+}
+
+// cancelSingleUpload stops one file of an upload batch. Several uploads run at
+// once, so the direction-wide cancel would take the others down with it. Like
+// that one, it leaves the row alone: the backend reports the real outcome, so a
+// file that beat the cancel to Telegram still ends as Done.
+export function cancelSingleUpload(uploadId: number): void {
+    if (!Number.isFinite(uploadId)) return;
+    canceledUploads.add(uploadId);
+    void cancelUploadById(uploadId).catch(() => undefined);
+}
+
+export function wasUploadCanceled(uploadId: number): boolean {
+    return canceledUploads.has(uploadId);
 }
 
 function transferKey(direction: TransferDirection, id: string | number): string {

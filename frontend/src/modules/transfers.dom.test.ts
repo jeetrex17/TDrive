@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     updateTransferName: vi.fn(),
     updateTransferProgress: vi.fn(),
     refreshFiles: vi.fn(),
+    wasUploadCanceled: vi.fn(() => false),
 }));
 
 // Go always emits an event's payload as a JSON array of its original args
@@ -38,6 +39,7 @@ vi.mock('./notif-bell', () => ({
     pushTransferStart: mocks.pushTransferStart,
     updateTransferName: mocks.updateTransferName,
     updateTransferProgress: mocks.updateTransferProgress,
+    wasUploadCanceled: mocks.wasUploadCanceled,
 }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('./modals/import-options', () => ({
@@ -69,6 +71,7 @@ beforeEach(() => {
     state.importBatch = null;
     state.uploadBatch = null;
     state.uploadTransfers = new Map();
+    mocks.wasUploadCanceled.mockReturnValue(false);
 
     mocks.openImportOptionsModal.mockResolvedValue({ encrypt: false, extract: false });
     app.SelectFolder.mockResolvedValue('/tmp/empty-folder');
@@ -234,5 +237,24 @@ describe('upload retry', () => {
         expect(mocks.notify).not.toHaveBeenCalledWith(
             expect.objectContaining({ title: 'A transfer is already in progress' }),
         );
+    });
+});
+
+describe('stopping one upload from its own row', () => {
+    it('ends that file as canceled and says nothing the user did not ask for', () => {
+        mocks.wasUploadCanceled.mockReturnValue(true);
+        handlers.get('upload_start')?.(1, 'holiday.mov', 1000, '');
+        handlers.get('upload_error')?.(1, 'holiday.mov', 'context canceled');
+
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 1, direction: 'up', status: 'canceled' });
+        expect(mocks.notify).not.toHaveBeenCalled();
+    });
+
+    it('still reports a real failure on a file nobody stopped', () => {
+        handlers.get('upload_start')?.(2, 'notes.txt', 10, '');
+        handlers.get('upload_error')?.(2, 'notes.txt', 'FLOOD_WAIT (420)');
+
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 2, direction: 'up', status: 'failed' });
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
     });
 });

@@ -1,6 +1,7 @@
 import {
     CancelDownload as rawCancelDownload,
     CancelUpload as rawCancelUpload,
+    CancelUploadByID as rawCancelUploadById,
     ChangeEncryptionPassword as rawChangeEncryptionPassword,
     CreateEncryptionPassword as rawCreateEncryptionPassword,
     CreateFolder as rawCreateFolder,
@@ -238,6 +239,12 @@ export async function cancelDownload(): Promise<void> {
 
 export async function cancelUpload(): Promise<void> {
     await invokeBackend(rawCancelUpload);
+}
+
+// Uploads run several at a time, so stopping one file means naming it. The id
+// is the one the backend puts on that upload's progress events.
+export async function cancelUploadById(uploadId: number): Promise<void> {
+    await invokeBackend(rawCancelUploadById, uploadId);
 }
 
 export async function getPreviewFile(messageId: number): Promise<PreviewPayload> {

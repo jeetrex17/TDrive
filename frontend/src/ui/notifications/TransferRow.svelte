@@ -5,11 +5,15 @@
     import Share2Icon from '@lucide/svelte/icons/share-2';
     import XIcon from '@lucide/svelte/icons/x';
     import { isMobilePlatform } from '../../api';
+    import { cancelSingleUpload } from '../../modules/notif-bell';
     import { formatBytes } from '../../utils';
     import { isUnfinishedTransfer, type TransferEvent } from './notif-store';
 
     interface Props {
         transfer: TransferEvent;
+        // Cancels everything moving in this row's direction. Used for a row the
+        // backend can only stop wholesale: a download, or an import's single
+        // aggregate row standing in for a batch.
         onCancel?: (direction: TransferEvent['direction']) => void;
         // Mobile Transfers tab only: reopens the share sheet for a finished
         // single-file download. Absent on desktop, so no action renders there.
@@ -18,9 +22,9 @@
         // desktop, and never supplied for an upload, which has no source path
         // left to retry from.
         onRetry?: () => void;
-        // Mobile Transfers tab only. The backend has one cancel handle per
-        // direction, so with several transfers running this button stops all of
-        // them; the caller says so rather than letting the row imply otherwise.
+        // Set when this row's × stops more than this row -- a download while
+        // others are queued behind it. An upload cancels on its own, so it
+        // leaves this unset and the button just says Cancel.
         cancelLabel?: string;
     }
 
@@ -90,8 +94,23 @@
     // own box; the desktop column reads them as the plain text it always did.
     const metaClass = $derived(mobile ? 'notif-row-size' : '');
 
+    /**
+     * A single file of an upload batch can be stopped on its own, and the row
+     * already carries the id the backend knows it by. Anything else -- a
+     * download, an import's aggregate row -- has no such id and falls back to
+     * stopping everything in its direction.
+     */
+    const uploadId = $derived.by(() => {
+        const match = /^xfer:up:(\d+)$/.exec(transfer.id);
+        return match ? Number(match[1]) : null;
+    });
+
     function cancel(event: MouseEvent): void {
         event.stopPropagation();
+        if (uploadId !== null) {
+            cancelSingleUpload(uploadId);
+            return;
+        }
         onCancel?.(transfer.direction);
     }
 </script>

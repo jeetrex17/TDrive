@@ -11,16 +11,15 @@
     import { downloadSharePaths } from './mobile-shell-store';
 
     /**
-     * What the row's x actually does. The backend keeps one cancel handle per
-     * direction, so with more than one transfer running it stops all of them --
-     * which is worth saying on the button rather than finding out afterwards.
+     * What the row's x actually does. An upload stops on its own now, so it
+     * just says Cancel. Downloads still share one cancel handle, so with more
+     * than one of them here the button takes the rest too -- worth saying on
+     * the button rather than finding out afterwards.
      */
     function cancelLabelFor(transfer: TransferEvent): string | undefined {
-        const together = $activeTransfers.filter((entry) => entry.direction === transfer.direction).length;
-        if (together <= 1) return undefined;
-        return transfer.direction === 'up'
-            ? `Cancel all ${together} uploads`
-            : `Cancel all ${together} downloads`;
+        if (transfer.direction === 'up') return undefined;
+        const together = $activeTransfers.filter((entry) => entry.direction === 'down').length;
+        return together > 1 ? `Cancel all ${together} downloads` : undefined;
     }
 
     // Finished single-file downloads keep their sandbox path so the share sheet

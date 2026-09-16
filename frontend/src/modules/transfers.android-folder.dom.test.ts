@@ -35,6 +35,7 @@ vi.mock('./notif-bell', () => ({
     pushTransferStart: mocks.pushTransferStart,
     updateTransferName: mocks.updateTransferName,
     updateTransferProgress: mocks.updateTransferProgress,
+    wasUploadCanceled: () => false,
 }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('./modals/import-options', () => ({ openImportOptionsModal: mocks.openImportOptionsModal }));
