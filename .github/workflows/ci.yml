@@ -360,3 +360,150 @@ jobs:
           path: dist/TDrive-windows-amd64-ci.zip
           if-no-files-found: error
           retention-days: 7
+
+  # The phone builds. Nothing above compiles them: the Android host is Java the
+  # Go toolchain never sees, the iOS host is Objective-C linked in at the very
+  # last step, and every Go file behind an `ios` or `android` build tag is
+  # invisible to a desktop build. A change to any of them can pass every other
+  # job here and still ship a phone app that does not compile.
+  android-build:
+    name: Android build (arm64-v8a)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      # gtk3 is the Linux desktop's tag and has no meaning when the target is
+      # Android; carrying it into a cross compile breaks the build.
+      GOFLAGS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Wails CLI
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The Taskfile finds the newest NDK under $ANDROID_HOME/ndk when this is
+      # unset, but the runner keeps its NDK elsewhere, so point at it directly.
+      - name: Point the build at the runner's NDK
+        run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      # ARCH is explicit: the Taskfile defaults it to the host, and the runner
+      # is x86_64, so leaving it out quietly builds the emulator's library and
+      # never produces the arm64-v8a one a real phone loads.
+      - name: Build the Go shared library
+        run: wails3 task android:build ARCH=arm64
+
+      - name: Assemble the APK
+        run: wails3 task android:assemble:apk
+
+      # Gradle reports success while packaging a .so it built earlier, so a
+      # frontend-only change can produce an APK that still serves the previous
+      # bundle. That has shipped twice by hand. The APK has to carry the
+      # stylesheet this run just built, or the build is a lie.
+      - name: Check the APK carries the frontend from this run
+        run: |
+          set -euo pipefail
+          built=$(basename frontend/dist/assets/main-*.css)
+          unzip -p build/bin/TDrive.apk lib/arm64-v8a/libwails.so > /tmp/libwails.so
+          # Dumped to a file rather than piped into grep: `grep -q` exits the
+          # moment it matches, strings takes a SIGPIPE for it, and pipefail
+          # then reports the whole pipeline as failed -- on success.
+          strings -a /tmp/libwails.so > /tmp/libwails.strings
+          if ! grep -qF "$built" /tmp/libwails.strings; then
+            echo "APK does not embed $built"
+            echo "it embeds: $(grep -oE 'main-[A-Za-z0-9_-]+\.css' /tmp/libwails.strings | sort -u)"
+            exit 1
+          fi
+          echo "APK embeds $built"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: TDrive-android-arm64-ci
+          path: build/bin/TDrive.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  ios-build:
+    name: iOS build (simulator bundle + device archive)
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GOFLAGS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Wails CLI
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The simulator bundle is ad-hoc signed, so it needs no Apple account and
+      # still exercises the whole chain: the cgo behind the ios build tag, the
+      # Wails Objective-C, and the link against build/ios/main.m.
+      - name: Build the simulator app bundle
+        run: wails3 task ios:package
+
+      # A device build uses a different SDK and a different minimum-version
+      # flag, and is the one a phone would actually run. Signing is left
+      # ad-hoc: a real identity is only needed to install, not to compile.
+      - name: Compile the device archive
+        run: wails3 task ios:build IOS_PLATFORM=device
+
+      - name: Upload the simulator bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: TDrive-ios-simulator-ci
+          path: build/bin/TDrive.app
+          if-no-files-found: error
+          retention-days: 7
