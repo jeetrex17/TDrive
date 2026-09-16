@@ -18,6 +18,7 @@
     import { activateSafeArea } from './safe-area';
     import { activeTab, activeTransferCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
+    import { breadcrumbPath } from '../chrome/breadcrumb-store';
 
     interface Props {
         dashboardVisible: boolean;
@@ -44,7 +45,24 @@
         }
     });
 
-    let fabHidden = $state(false);
+    // Walking into a folder pushes from the right and coming back pops to it,
+    // so the list carries the same sense of depth the back chevron promises.
+    // Only the direction lives here; the movement itself is CSS, which keeps it
+    // off the main thread and lets prefers-reduced-motion drop it wholesale.
+    let navDirection = $state<'forward' | 'back' | null>(null);
+    let lastDepth = -1;
+    let navTimer: ReturnType<typeof setTimeout> | undefined;
+
+    $effect(() => {
+        const depth = $breadcrumbPath.length;
+        if (lastDepth >= 0 && depth !== lastDepth) {
+            navDirection = depth > lastDepth ? 'forward' : 'back';
+            clearTimeout(navTimer);
+            // Cleared so a re-render mid-animation does not replay it.
+            navTimer = setTimeout(() => { navDirection = null; }, 280);
+        }
+        lastDepth = depth;
+    });
 
     function selectTab(tab: MobileTab): void {
         const reselect = get(activeTab) === tab;
@@ -56,7 +74,6 @@
             enterPhotos();
         }
         activeTab.set(tab);
-        fabHidden = false;
         if (reselect) resetTab(tab);
     }
 
@@ -80,22 +97,10 @@
         const disposeBack = activateMobileBack();
         const disposeSafeArea = activateSafeArea();
 
-        // The FAB slides away on scroll-down and returns on scroll-up (spec 2.6)
-        // so it never sits over the row a thumb is reaching for.
-        const list = document.getElementById('file-list');
-        let last = 0;
-        const onScroll = (): void => {
-            const top = list?.scrollTop ?? 0;
-            if (top > last + 8 && top > 56) fabHidden = true;
-            else if (top < last - 8) fabHidden = false;
-            last = top;
-        };
-        list?.addEventListener('scroll', onScroll, { passive: true });
-
         return () => {
             disposeBack();
             disposeSafeArea();
-            list?.removeEventListener('scroll', onScroll);
+            clearTimeout(navTimer);
         };
     });
 </script>
@@ -117,6 +122,7 @@
                 id="file-list"
                 class="file-list-box"
                 data-file-drop-target
+                data-nav={navDirection ?? undefined}
                 role="grid"
                 aria-label="Files"
                 aria-multiselectable="true"
@@ -143,10 +149,13 @@
         aria-live="polite"
     ></div>
 
-    <Fab hidden={$activeTab !== 'files' || selecting || fabHidden} />
-
+    <!-- The upload button is docked into the tab bar, so it lives in the same
+         slot and never slides away on scroll: it is part of the bar's shape,
+         and a gap opening and closing in the middle of it would read as a
+         glitch rather than a hint. -->
     <div class="mobile-tabbar-slot" hidden={selecting}>
         <TabBar active={$activeTab} transferBadge={$activeTransferCount} onSelect={selectTab} />
+        <Fab />
     </div>
 
     <DriveSwitcherSheet />

@@ -371,15 +371,29 @@
    pull indicator is positioned against this box. */
 html.mobile .file-list-box {
     position: relative;
-    /* Breathing room above the card, and enough below it that the last row can
-       scroll clear of the FAB: its 56px pill, its 16px gap, plus 16px. The tab
-       bar needs no allowance here, the shell already ends the body above it. */
-    padding: var(--space-2) 0 88px;
+    /* Breathing room above and below the card. Neither the tab bar nor the
+       upload button needs an allowance: the bar sits below the body and the
+       button is docked into it. */
+    padding: var(--space-2) 0 var(--space-6);
     overflow-x: hidden;
     touch-action: pan-y;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
 }
+/* Walking into a folder pushes the list in from the right, coming back pops it
+   in from the left. Short and transform-only, so it reads as depth rather than
+   as a page reload, and never blocks the rows becoming tappable. */
+html.mobile .file-list-box[data-nav="forward"] { animation: tdrive-nav-push var(--motion-slow) var(--ease-enter) both; }
+html.mobile .file-list-box[data-nav="back"] { animation: tdrive-nav-pop var(--motion-slow) var(--ease-enter) both; }
+@keyframes tdrive-nav-push {
+    from { opacity: 0; transform: translateX(18px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+@keyframes tdrive-nav-pop {
+    from { opacity: 0; transform: translateX(-18px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
 html.mobile .file-row {
     position: relative;
     display: flex;
@@ -403,15 +417,24 @@ html.mobile .file-row {
 }
 /* The virtualiser wraps the rendered window in two spacer divs, so the ends of
    the card are "a row next to something that is not a row". Setting the two
-   corner pairs independently also rounds a single-row list correctly. */
-html.mobile .file-list-box > :not(.file-row) + .file-row {
+   corner pairs independently also rounds a single-row list correctly.
+   Descendant, not child: the list portals its rows into an inner wrapper, so
+   they are grandchildren of .file-list-box. */
+html.mobile .file-list-box :not(.file-row) + .file-row {
     border-top-left-radius: var(--radius-xl);
     border-top-right-radius: var(--radius-xl);
 }
-html.mobile .file-list-box > .file-row:has(+ :not(.file-row)) {
+html.mobile .file-list-box .file-row:has(+ :not(.file-row)) {
     border-bottom-left-radius: var(--radius-xl);
     border-bottom-right-radius: var(--radius-xl);
 }
+/* A phone has no persistent scrollbar. The classic one steals 8px from the
+   right, which pushes the card off-centre against a 12px margin on the left. */
+html.mobile .file-list-box {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+html.mobile .file-list-box::-webkit-scrollbar { width: 0; height: 0; }
 html.mobile .file-row + .file-row::before {
     content: "";
     position: absolute;

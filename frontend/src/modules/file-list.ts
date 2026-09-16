@@ -395,12 +395,14 @@ function rowDetailLines(row: FolderListRow | FileListFileRow): ContextMenuDetail
     const type = row.kind === 'folder'
         ? 'Folder'
         : row.ext ? `${row.ext.toUpperCase()} file` : 'File';
-    const lines: ContextMenuDetail[] = [{ label: 'Type', value: type }];
+    const lines: ContextMenuDetail[] = [{ label: 'Type', value: type, icon: 'type' }];
     // A folder's size is an async subtree lookup that can still be zero, and a
     // blank line reads better than claiming the folder holds nothing.
-    if (row.size > 0) lines.push({ label: 'Size', value: formatBytes(row.size) });
-    if (added > 0) lines.push({ label: row.kind === 'folder' ? 'Updated' : 'Added', value: formatDate(added) });
-    lines.push({ label: 'Location', value: rowLocationLabel() });
+    if (row.size > 0) lines.push({ label: 'Size', value: formatBytes(row.size), icon: 'size' });
+    if (added > 0) {
+        lines.push({ label: row.kind === 'folder' ? 'Updated' : 'Added', value: formatDate(added), icon: 'added' });
+    }
+    lines.push({ label: 'Location', value: rowLocationLabel(), icon: 'location' });
     return lines;
 }
 

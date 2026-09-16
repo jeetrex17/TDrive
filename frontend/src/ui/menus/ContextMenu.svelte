@@ -11,8 +11,18 @@
     import UploadIcon from '@lucide/svelte/icons/upload';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+    import FileTextIcon from '@lucide/svelte/icons/file-text';
+    import DatabaseIcon from '@lucide/svelte/icons/database';
+    import CalendarIcon from '@lucide/svelte/icons/calendar';
+    import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import { IOS, Android } from '@wailsio/runtime';
-    import { contextMenuState, hideContextMenu, type ContextMenuIcon, type ContextMenuItem } from './context-menu-store';
+    import {
+        contextMenuState,
+        hideContextMenu,
+        type ContextMenuDetailIcon,
+        type ContextMenuIcon,
+        type ContextMenuItem,
+    } from './context-menu-store';
     import { fileTypeFamily, fileTypeIcon } from '../file-list/file-type';
     import { isAndroidPlatform, isGatewayReady, isIOSPlatform, isMobilePlatform } from '../../api';
 
@@ -28,6 +38,13 @@
         upload: UploadIcon,
         'folder-new': FolderPlusIcon,
         refresh: RefreshCwIcon,
+    };
+
+    const DETAIL_ICONS: Record<ContextMenuDetailIcon, typeof FileIcon> = {
+        type: FileTextIcon,
+        size: DatabaseIcon,
+        added: CalendarIcon,
+        location: FolderIcon,
     };
 
     /** The header glyph: the same type icon the row showed, not a generic page. */
@@ -313,8 +330,19 @@
                 <dl class="action-sheet-details">
                     {#each $contextMenuState.header.details as detail (detail.label)}
                         <div class="action-sheet-detail">
-                            <dt>{detail.label}</dt>
-                            <dd>{detail.value}</dd>
+                            <dt>
+                                {#if detail.icon}
+                                    {@const DetailIcon = DETAIL_ICONS[detail.icon]}
+                                    <DetailIcon size={16} strokeWidth={1.9} aria-hidden="true" />
+                                {/if}
+                                <span>{detail.label}</span>
+                            </dt>
+                            <dd>
+                                <span>{detail.value}</span>
+                                {#if detail.icon === 'location'}
+                                    <ChevronRightIcon size={15} strokeWidth={2} aria-hidden="true" />
+                                {/if}
+                            </dd>
                         </div>
                     {/each}
                 </dl>
