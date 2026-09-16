@@ -104,7 +104,7 @@ html.mobile .modal-sheet {
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     /* A 16 sheet with 4 padding holds 12 inner groups (design-1). */
     padding: var(--space-1) var(--space-4)
-        calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+        calc(var(--space-4) + var(--inset-bottom));
     box-shadow: var(--shadow-lg);
     animation: tdrive-sheet-enter var(--motion-slow) var(--ease-enter) both;
     touch-action: pan-y;

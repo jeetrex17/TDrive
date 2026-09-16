@@ -51,7 +51,7 @@ html.mobile .mobile-scroll {
     overflow-y: auto;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
-    padding: var(--space-4) var(--space-4) calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+    padding: var(--space-4) var(--space-4) calc(var(--space-6) + var(--inset-bottom));
 }
 
 /* ============================ TOP BAR ============================ */
@@ -59,7 +59,7 @@ html.mobile .mobile-topbar {
     flex: 0 0 auto;
     background: var(--color-surface-0);
     border-bottom: 1px solid var(--color-border-soft);
-    padding-top: env(safe-area-inset-top, 0px);
+    padding-top: var(--inset-top);
 }
 
 html.mobile .topbar-row {
@@ -232,8 +232,8 @@ html.mobile .tab-bar {
     position: relative;
     display: flex;
     align-items: stretch;
-    height: calc(49px + env(safe-area-inset-bottom, 0px));
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    height: calc(49px + var(--inset-bottom));
+    padding-bottom: var(--inset-bottom);
     background: var(--color-surface-0);
     border-top: 1px solid var(--color-border-soft);
 }
@@ -302,7 +302,7 @@ html.mobile .tab-badge {
 html.mobile .mobile-fab {
     position: absolute;
     right: 16px;
-    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(16px + var(--inset-bottom));
     z-index: var(--z-selection);
     transition: transform var(--motion-med) var(--ease-standard), opacity var(--motion-med) var(--ease-standard);
 }
@@ -369,7 +369,7 @@ html.mobile .mobile-selection-bar {
     z-index: var(--z-selection);
     flex-wrap: wrap;
     gap: var(--space-2);
-    padding: var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    padding: var(--space-3) var(--space-4) calc(var(--space-3) + var(--inset-bottom));
     background: var(--color-surface-0);
     border-top: 1px solid var(--color-border-soft);
 }
@@ -531,7 +531,7 @@ html.mobile .mobile-sheet {
     max-height: 88dvh;
     margin: 0 auto;
     max-width: 640px;
-    padding: 0 var(--space-4) calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+    padding: 0 var(--space-4) calc(var(--space-4) + var(--inset-bottom));
     background: var(--color-surface-1);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     box-shadow: var(--shadow-lg);
@@ -637,7 +637,7 @@ html.mobile .mobile-hidden-hosts { display: none; }
 html.mobile #toast-stack.toast-stack {
     left: 50%;
     right: auto;
-    bottom: calc(49px + env(safe-area-inset-bottom, 0px) + 12px);
+    bottom: calc(49px + var(--inset-bottom) + 12px);
     transform: translateX(-50%);
     width: min(92vw, 420px);
     align-items: stretch;

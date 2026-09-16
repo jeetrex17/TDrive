@@ -1,5 +1,13 @@
 
 :root {
+    /* How far the screen edges are unusable, from whichever source knows.
+       iOS and desktop answer with env(); Android's WebView reports zero there
+       because it only tracks display cutouts, not the status and navigation
+       bars the app draws behind, so its host publishes --android-inset-* (see
+       build/android MainActivity). Both are zero on desktop. */
+    --inset-top: max(env(safe-area-inset-top, 0px), var(--android-inset-top, 0px));
+    --inset-bottom: max(env(safe-area-inset-bottom, 0px), var(--android-inset-bottom, 0px));
+
     --font-ui: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --weight-medium: 500;
     --weight-semibold: 600;

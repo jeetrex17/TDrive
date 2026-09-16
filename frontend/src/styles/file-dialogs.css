@@ -467,7 +467,7 @@ html.mobile .action-sheet {
     max-width: 640px;
     margin: 0 auto;
     max-height: 82dvh;
-    padding: var(--space-1) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    padding: var(--space-1) var(--space-4) calc(var(--space-3) + var(--inset-bottom));
     background: var(--color-surface-0);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     box-shadow: var(--shadow-lg);

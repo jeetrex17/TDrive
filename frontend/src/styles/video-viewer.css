@@ -1358,7 +1358,7 @@ html.mobile .video-overlay.is-video-loading .video-player {
 }
 html.mobile .video-topbar {
     min-height: 0;
-    padding: calc(env(safe-area-inset-top, 0px) + 8px) 8px 14px 16px;
+    padding: calc(var(--inset-top) + 8px) 8px 14px 16px;
     gap: 12px;
 }
 html.mobile .video-filename {
@@ -1369,7 +1369,7 @@ html.mobile .video-filename {
 html.mobile .video-meta { margin-top: 2px; font-size: 12px; }
 html.mobile .video-controls {
     gap: 4px;
-    padding: 8px 8px calc(env(safe-area-inset-bottom, 0px) + 10px);
+    padding: 8px 8px calc(var(--inset-bottom) + 10px);
 }
 html.mobile .video-timeline-row { padding: 0 10px; }
 html.mobile .video-scrubber,

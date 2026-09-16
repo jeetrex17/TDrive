@@ -206,7 +206,7 @@ html.mobile .video-popover {
     left: 0;
     width: auto;
     max-height: min(70vh, calc(100% - var(--video-panel-top, 76px) - 16px));
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: var(--inset-bottom);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     background: rgba(13, 17, 26, 0.98);
     -webkit-backdrop-filter: none;
