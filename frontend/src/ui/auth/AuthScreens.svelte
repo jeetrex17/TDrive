@@ -1,4 +1,5 @@
 <script lang="ts">
+    import BrandMark from '../BrandMark.svelte';
     import EyeIcon from '@lucide/svelte/icons/eye';
     import EyeOffIcon from '@lucide/svelte/icons/eye-off';
     import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -7,7 +8,6 @@
     import SettingsIcon from '@lucide/svelte/icons/settings';
     import { tick } from 'svelte';
     import { isMobilePlatform, openExternalUrl } from '../../api';
-    import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import { authScreen } from '../app/app-store';
     import {
         authHint,
@@ -168,7 +168,11 @@
 {#if step === 'welcome'}
     <section class="auth-box auth-welcome" aria-labelledby="auth-welcome-title">
         <div class="auth-page-body">
-            <img class="auth-mark" src={tdriveLogo} alt="" width="52" height="33" />
+            <!-- One mark, shared with the desktop sidebar, so the app has a
+                 single identity. Muted rather than full-strength: the mark
+                 identifies, the headline speaks, and accent is left to the one
+                 button the reader is meant to press. -->
+            <BrandMark size={40} class="auth-mark" />
             <h2 id="auth-welcome-title">Your Telegram, as a drive.</h2>
             <p class="auth-intro">
                 TDrive keeps your files in a private channel on your own Telegram account. There is no TDrive
@@ -563,11 +567,26 @@
         margin-bottom: 0;
     }
 
-    :global(html.mobile) .auth-mark {
+    /* Optically centred, not mathematically. A block placed at exact centre on
+       a tall phone screen reads as having sunk, because the eye gives the upper
+       half more weight; lifting it by a tenth of the viewport puts it where it
+       looks centred. The padding is what does the lifting, so the block still
+       falls back to a true centre if the text grows enough to fill the space. */
+    :global(html.mobile) .auth-welcome .auth-page-body {
+        padding-bottom: 10vh;
+    }
+
+    /* Fully global: the class rides on the BrandMark component, so Svelte's
+       scoped-CSS pass cannot see it in this template. */
+    :global(html.mobile .auth-mark) {
         display: block;
-        width: 52px;
-        height: auto;
+        width: 40px;
+        height: 40px;
         margin-bottom: 1.5rem;
+        /* Muted rather than full-strength: the mark identifies, the headline
+           speaks. Giving both maximum contrast would leave the eye with two
+           things competing to be read first. */
+        color: var(--color-text-muted);
     }
 
     :global(html.mobile) .auth-welcome h2 {
