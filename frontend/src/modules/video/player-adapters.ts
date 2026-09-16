@@ -19,6 +19,7 @@ import {
     selectElementTextTrack,
     watchElementTracks,
 } from './element-tracks';
+import type { HlsSource } from './hls-source';
 
 /**
  * Which of a session's two URLs the element should load.
@@ -26,6 +27,10 @@ import {
  * The remuxed playlist is offered only where it is needed. Every other platform
  * demuxes the original container itself, and going through HLS there would add
  * a repackaging step and lose the byte-range seeking the direct URL already has.
+ *
+ * Android is the exception to the exception, and it is handled elsewhere: when a
+ * file carries more than one soundtrack the caller hands this adapter an
+ * HlsSource instead, because Chromium exposes no way to pick between them.
  */
 export function playbackSource(opened: MediaOpenResult): string {
     if (opened.hlsUrl && isIOSPlatform()) return opened.hlsUrl;
@@ -205,6 +210,12 @@ export class HtmlVideoAdapter implements PlayerAdapter, TrackSwitching {
         private readonly video: HTMLVideoElement,
         private readonly opened: MediaOpenResult,
         private readonly callbacks: HtmlVideoAdapterCallbacks,
+        /**
+         * Set when a JavaScript player is driving the stream instead of the
+         * element. It then owns both the source and the track lists, because
+         * the element knows nothing about renditions it never parsed.
+         */
+        private readonly hls: HlsSource | null = null,
     ) {
         this.lastAudibleVolume = video.volume > 0 ? video.volume : 1;
         const events = [
@@ -247,21 +258,32 @@ export class HtmlVideoAdapter implements PlayerAdapter, TrackSwitching {
         this.listeners.push(watchElementTracks(video, () => this.emit()));
     }
 
+    /** Republishes state after something outside the element changed it. */
+    refresh(): void {
+        this.emit();
+    }
+
     setAudioTrack(id: number): void {
-        selectElementAudioTrack(this.video, id);
+        if (this.hls) this.hls.setAudioTrack(id);
+        else selectElementAudioTrack(this.video, id);
         this.emit();
     }
 
     setSubtitleTrack(id: number | null): void {
-        selectElementTextTrack(this.video, id);
+        if (this.hls) this.hls.setSubtitleTrack(id);
+        else selectElementTextTrack(this.video, id);
         this.emit();
     }
 
     load(): void {
         this.video.pause();
-        this.video.removeAttribute('src');
-        this.video.load();
-        this.video.src = playbackSource(this.opened);
+        // A JavaScript player has already attached itself to the element and is
+        // feeding it; setting a src here would tear that out from under it.
+        if (!this.hls) {
+            this.video.removeAttribute('src');
+            this.video.load();
+            this.video.src = playbackSource(this.opened);
+        }
         this.video.playbackRate = 1;
         this.emit();
 
@@ -341,6 +363,7 @@ export class HtmlVideoAdapter implements PlayerAdapter, TrackSwitching {
     private detach(): boolean {
         if (this.closed) return false;
         this.closed = true;
+        this.hls?.destroy();
         for (const remove of this.listeners.splice(0)) remove();
         this.subscribers.clear();
         try {
@@ -370,7 +393,7 @@ export class HtmlVideoAdapter implements PlayerAdapter, TrackSwitching {
             muted: this.video.muted || this.video.volume === 0,
             rate: this.video.playbackRate || 1,
             loading: this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !this.video.paused,
-            tracks: elementTracks(this.video),
+            tracks: this.hls ? this.hls.tracks() : elementTracks(this.video),
         };
     }
 
