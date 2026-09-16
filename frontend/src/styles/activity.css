@@ -432,3 +432,16 @@
     to { transform: rotate(360deg); }
 }
 
+
+/* A notice that arrived more than once carries its count beside the title,
+   quietly: it is a detail about the message, not part of it. */
+.notif-row-repeats {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: var(--radius-pill);
+    background: var(--overlay-white-2);
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    font-weight: var(--weight-semibold);
+    font-variant-numeric: tabular-nums;
+}

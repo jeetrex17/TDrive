@@ -39,6 +39,12 @@ export interface NoticeEvent {
     title: string;
     body: string;
     ts: number;
+    /**
+     * How many times this same notice has arrived in a row. One means once, and
+     * the row says nothing about it; more and it carries a count instead of
+     * stacking identical rows down the list.
+     */
+    repeats?: number;
 }
 
 export type HistoryEvent = TransferEvent | NoticeEvent;

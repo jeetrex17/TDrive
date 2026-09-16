@@ -45,7 +45,24 @@ export function pushHistoryEvent({ level = 'info', title = '', body = '', ts }: 
         body: String(body || ''),
         ts: ts || Date.now(),
     };
-    historyEvents.update((events) => [entry, ...events].slice(0, HISTORY_CAP));
+    historyEvents.update((events) => {
+        // The same notice arriving again is one thing happening twice, not two
+        // things. Tapping upload while an upload runs says the same sentence
+        // every time, and a list that repeats it verbatim buries whatever else
+        // is in there. Only a run at the very top folds, so the history stays in
+        // arrival order and an older identical notice keeps its own place.
+        const newest = events[0];
+        if (newest?.kind === 'event' && newest.level === entry.level
+            && newest.title === entry.title && newest.body === entry.body) {
+            const folded: NoticeEvent = {
+                ...newest,
+                ts: entry.ts,
+                repeats: (newest.repeats ?? 1) + 1,
+            };
+            return [folded, ...events.slice(1)];
+        }
+        return [entry, ...events].slice(0, HISTORY_CAP);
+    });
     if (level === 'error' && !get(notifPanelOpen)) {
         notifUnreadErrors.update((n) => n + 1);
     }

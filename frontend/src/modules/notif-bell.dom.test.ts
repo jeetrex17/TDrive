@@ -154,6 +154,37 @@ describe('notif-bell', () => {
         }
     });
 
+    it('folds a repeated notice into the row already there', () => {
+        // Tapping upload while an upload runs says the same sentence every
+        // time. A list that repeats it verbatim buries whatever else is in it.
+        pushHistoryEvent({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish.' });
+        pushHistoryEvent({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish.' });
+        pushHistoryEvent({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish.' });
+
+        const events = get(historyEvents);
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ repeats: 3 });
+    });
+
+    it('only folds a run at the top, so history keeps its order', () => {
+        // An older identical notice keeps its own place: what folds is a thing
+        // happening twice in a row, not the same words appearing ever again.
+        pushHistoryEvent({ level: 'info', title: 'Upload blocked', body: 'Busy.' });
+        pushHistoryEvent({ level: 'success', title: 'Folder created', body: '' });
+        pushHistoryEvent({ level: 'info', title: 'Upload blocked', body: 'Busy.' });
+
+        const events = get(historyEvents);
+        expect(events).toHaveLength(3);
+        expect(events.every((event) => (event as { repeats?: number }).repeats === undefined)).toBe(true);
+    });
+
+    it('does not fold notices that only look alike', () => {
+        pushHistoryEvent({ level: 'info', title: 'Upload blocked', body: 'Busy.' });
+        pushHistoryEvent({ level: 'error', title: 'Upload blocked', body: 'Busy.' });
+
+        expect(get(historyEvents)).toHaveLength(2);
+    });
+
     it('caps history at 100 entries, newest first', () => {
         for (let i = 0; i < 120; i++) {
             pushHistoryEvent({ level: 'info', title: `event ${i}` });
