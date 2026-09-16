@@ -87,7 +87,7 @@
     :global(html.mobile .toast-stack) {
         left: var(--space-4);
         right: var(--space-4);
-        bottom: calc(var(--tabbar-height, 49px) + env(safe-area-inset-bottom, 0px) + var(--space-3));
+        bottom: calc(var(--tabbar-height, 49px) + var(--inset-bottom) + var(--space-3));
         width: auto;
         max-width: none;
     }

@@ -46,7 +46,7 @@
         position: fixed;
         inset: auto 0 0 0;
         height: auto;
-        padding: var(--space-2) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom, 0px));
+        padding: var(--space-2) var(--space-2) calc(var(--space-2) + var(--inset-bottom));
         justify-content: space-around;
         align-items: stretch;
         border-top: 1px solid var(--color-border-soft);

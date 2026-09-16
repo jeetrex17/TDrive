@@ -716,7 +716,7 @@ html.mobile .file-viewer-topbar.is-phone {
     align-items: center;
     gap: 4px;
     min-height: 44px;
-    padding: env(safe-area-inset-top, 0px) 8px 0;
+    padding: var(--inset-top) 8px 0;
 }
 html.mobile .file-viewer-topbar.is-phone .file-viewer-title {
     max-width: none;
@@ -751,9 +751,9 @@ html.mobile .file-viewer-subbar {
 html.mobile .file-viewer-subbar .text-viewer-toggle { width: min(100%, 240px); padding: 3px; }
 html.mobile .file-viewer-subbar .text-viewer-toggle button { flex: 1; min-height: 32px; padding: 0 12px; font-size: 14px; }
 html.mobile .file-viewer-stage { overscroll-behavior: contain; }
-html.mobile .pdf-frame-shell { padding-bottom: env(safe-area-inset-bottom, 0px); }
+html.mobile .pdf-frame-shell { padding-bottom: var(--inset-bottom); }
 html.mobile .text-viewer-scroll {
-    padding: 16px 16px calc(env(safe-area-inset-bottom, 0px) + 24px);
+    padding: 16px 16px calc(var(--inset-bottom) + 24px);
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
 }
@@ -767,10 +767,10 @@ html.mobile .text-viewer-body {
 }
 html.mobile .text-viewer-body.is-structured { font-size: 15px; line-height: 1.6; }
 html.mobile .text-viewer-body.is-markdown h1 { font-size: 1.4rem; }
-html.mobile .text-viewer-footer { padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 10px); }
+html.mobile .text-viewer-footer { padding: 10px 16px calc(var(--inset-bottom) + 10px); }
 html.mobile .text-viewer-footer .file-viewer-action { min-height: 44px; }
 html.mobile .file-viewer-state { min-height: 40vh; font-size: 15px; }
 html.mobile .audio-viewer {
     width: calc(100% - 32px);
-    padding: 32px 0 calc(env(safe-area-inset-bottom, 0px) + 32px);
+    padding: 32px 0 calc(var(--inset-bottom) + 32px);
 }

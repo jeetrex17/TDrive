@@ -171,7 +171,7 @@ html.mobile .auth-page-body {
     flex: 1 1 auto;
     flex-direction: column;
     min-height: 0;
-    padding: calc(env(safe-area-inset-top, 0px) + 40px) 16px 8px;
+    padding: calc(var(--inset-top) + 40px) 16px 8px;
     overflow-y: auto;
     overscroll-behavior: contain;
 }
@@ -182,7 +182,7 @@ html.mobile .auth-welcome .auth-page-body { justify-content: center; }
 html.mobile .auth-actions {
     display: block;
     flex: none;
-    padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+    padding: 12px 16px calc(var(--inset-bottom) + 12px);
 }
 
 html.mobile .auth-icon-box { display: none; }
