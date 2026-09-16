@@ -395,6 +395,129 @@
         .theme-grid { grid-template-columns: 1fr; }
     }
 
+    /* ---------------------------------------------------------------- phone */
+    /* The swatch above draws a desktop: a sidebar down the left, a window of
+       rows beside it. On a phone that is a picture of a machine the reader is
+       not holding, shrunk to the size of a stamp, and the narrow column it sits
+       in turns ten dark themes into ten screenfuls of scrolling.
+       So the phone gets its own drawing of its own app, and two columns to put
+       them in. */
+    :global(html.mobile) .appearance-panel {
+        width: 100%;
+        max-width: 100%;
+        max-height: none;
+        overflow: visible;
+    }
+    :global(html.mobile) .appearance-section { min-width: 0; }
+
+    /* One track, one moving indicator: the mode is a choice between two, and a
+       segmented control says that in a way two separate cards do not. */
+    :global(html.mobile) .mode-grid {
+        position: relative;
+        gap: 0;
+        padding: 3px;
+        background: var(--overlay-white-1);
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-pill);
+    }
+    :global(html.mobile) .mode-card {
+        justify-content: center;
+        min-height: 44px;
+        padding: 0 12px;
+        background: transparent;
+        border: 0;
+        border-radius: var(--radius-pill);
+    }
+    :global(html.mobile) .mode-card.selected {
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        box-shadow: none;
+    }
+    :global(html.mobile) .mode-card.selected .mode-icon {
+        background: transparent;
+        color: inherit;
+    }
+    :global(html.mobile) .mode-card:hover,
+    :global(html.mobile) .mode-card:active { transform: none; }
+
+    :global(html.mobile) .theme-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        min-width: 0;
+    }
+    :global(html.mobile) .theme-card {
+        gap: 9px;
+        padding: 8px;
+    }
+    :global(html.mobile) .theme-card:hover,
+    :global(html.mobile) .theme-card:active { transform: none; }
+    /* A ring rather than a one pixel border: at arm's length on a dark card,
+       a hairline is not an answer to "which one is on". */
+    :global(html.mobile) .theme-card.selected {
+        border-color: transparent;
+        box-shadow: 0 0 0 2px var(--color-accent);
+    }
+
+    /* Portrait, because the thing it is a picture of is. */
+    :global(html.mobile) .theme-preview {
+        flex-basis: 104px;
+        grid-template-columns: 1fr;
+        height: 104px;
+    }
+    :global(html.mobile) .preview-sidebar { display: none; }
+    :global(html.mobile) .preview-content {
+        position: relative;
+        gap: 9px;
+        padding: 9px 9px 22px;
+    }
+    /* The bar across the top, then two rows of files: what the reader actually
+       sees when they put this theme on. */
+    :global(html.mobile) .preview-topline {
+        width: 58%;
+        height: 5px;
+        background: color-mix(in srgb, var(--preview-text) 70%, transparent);
+    }
+    /* The row spans the swatch; without it the row is only as wide as the
+       icon inside it and the filename beside it has nowhere to go. */
+    :global(html.mobile) .preview-row { gap: 6px; width: 100%; }
+    :global(html.mobile) .preview-row i {
+        flex: 0 0 auto;
+        width: 12px;
+        height: 12px;
+        background: color-mix(in srgb, var(--preview-text) 16%, transparent);
+        border-radius: 3px;
+    }
+    :global(html.mobile) .preview-row b { width: 62%; height: 4px; }
+    :global(html.mobile) .preview-row.short b { width: 42%; }
+    /* The tab bar, with the upload action on it. It is the one piece of accent
+       colour on a phone screen, so leaving it out would make every palette look
+       the same. */
+    :global(html.mobile) .preview-content::after {
+        content: "";
+        position: absolute;
+        right: 9px;
+        bottom: 7px;
+        left: 9px;
+        height: 11px;
+        background: var(--preview-surface);
+        border-radius: var(--radius-pill);
+    }
+    :global(html.mobile) .preview-content::before {
+        content: "";
+        position: absolute;
+        bottom: 9px;
+        left: 50%;
+        z-index: 1;
+        width: 7px;
+        height: 7px;
+        margin-left: -3.5px;
+        background: var(--preview-accent);
+        border-radius: var(--radius-pill);
+    }
+
+    :global(html.mobile) .theme-name { font-size: 0.8125rem; }
+    :global(html.mobile) .theme-check { top: 14px; right: 14px; }
+
     @media (prefers-reduced-motion: reduce) {
         .appearance-panel { animation: none; }
 
