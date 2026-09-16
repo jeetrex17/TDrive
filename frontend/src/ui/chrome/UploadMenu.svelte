@@ -6,6 +6,8 @@
     import UploadIcon from '@lucide/svelte/icons/upload';
     import { tick } from 'svelte';
     import { isMobilePlatform } from '../../api';
+    import { prefersReducedMotion } from '../mobile/motion';
+    import { createSheetDrag, sheetOffset, shouldDismiss } from '../modals/sheet-gesture';
     import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
 
     // Desktop anchors this menu under its toolbar button. The phone cannot: the
@@ -78,6 +80,56 @@
         backEntry = null;
     });
 
+    // The downward swipe the sheet's grip promises, on the same physics the
+    // other sheets use. Without it the mark was decoration: the one gesture
+    // every phone user tries on a sheet did nothing at all.
+    let dragStartY = 0;
+    let dragDelta = 0;
+    let dragging = false;
+    const drag = createSheetDrag();
+
+    function onHandlePointerDown(event: PointerEvent): void {
+        if (!menuEl) return;
+        dragging = true;
+        dragStartY = event.clientY;
+        dragDelta = 0;
+        drag.start(event);
+        // Neither the entrance nor a previous spring-back may ease the sheet
+        // while a finger is on it: it tracks the thumb 1:1 or not at all.
+        menuEl.style.animation = 'none';
+        menuEl.style.transition = 'none';
+        (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+    }
+
+    function onHandlePointerMove(event: PointerEvent): void {
+        if (!dragging || !menuEl) return;
+        dragDelta = sheetOffset(event.clientY - dragStartY, menuEl.offsetHeight);
+        drag.track(event);
+        menuEl.style.transform = `translateY(${dragDelta}px)`;
+    }
+
+    function onHandlePointerUp(): void {
+        if (!dragging || !menuEl) return;
+        dragging = false;
+        const sheet = menuEl;
+        const threshold = Math.max(88, sheet.offsetHeight * 0.28);
+        const dismissed = shouldDismiss(dragDelta, drag.velocity(), threshold);
+        dragDelta = 0;
+        drag.reset();
+        sheet.style.animation = '';
+        if (dismissed) {
+            sheet.style.transform = '';
+            closeMenu();
+            return;
+        }
+        // A pull that did not reach the line slides back rather than snapping,
+        // so the sheet reads as an object the finger let go of.
+        sheet.style.transition = prefersReducedMotion()
+            ? 'none'
+            : 'transform var(--motion-med) var(--ease-standard)';
+        sheet.style.transform = '';
+    }
+
     // Arrow-key navigation between the menu items.
     function onMenuKeydown(event: KeyboardEvent): void {
         if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -139,7 +191,14 @@
     onkeydown={onMenuKeydown}
 >
     {#if asSheet}
-        <div class="sheet-handle" aria-hidden="true"><span></span></div>
+        <div
+            class="sheet-handle"
+            aria-hidden="true"
+            onpointerdown={onHandlePointerDown}
+            onpointermove={onHandlePointerMove}
+            onpointerup={onHandlePointerUp}
+            onpointercancel={onHandlePointerUp}
+        ><span></span></div>
     {/if}
     <button bind:this={filesEl} id="upload-menu-files" class="upload-menu-item" type="button" role="menuitem" onclick={() => activate(onFiles)}>
         <FileUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />

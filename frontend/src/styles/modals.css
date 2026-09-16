@@ -127,7 +127,11 @@ html.mobile .modal-sheet.is-closing {
     to { transform: translateY(0); }
 }
 
-/* 36 x 5 grabber in a 44-tall touch target. */
+/* 36 x 5 grabber in a 22px band across the full width of the sheet. Not 44:
+   above it is the scrim, which dismisses on a tap, and below it is the sheet's
+   first row, which in an action sheet is a menu item -- a taller grab area
+   would take its target from one of them. The drag is a shortcut anyway: the
+   scrim, Escape and hardware BACK all close the same sheet. */
 html.mobile .sheet-handle {
     flex: 0 0 auto;
     align-self: stretch;
