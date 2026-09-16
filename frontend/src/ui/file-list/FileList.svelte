@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { SvelteSet } from 'svelte/reactivity';
     import { onMount } from 'svelte';
     import CheckIcon from '@lucide/svelte/icons/check';
     import DownloadIcon from '@lucide/svelte/icons/download';
@@ -72,7 +73,7 @@
     // which holds a handful of entries, rather than by resolving a state for
     // every row in the folder.
     const explainedIds = $derived.by(() => {
-        const ids = new Set<string>();
+        const ids = new SvelteSet<string>();
         if (!mobile) return ids;
         for (const fileId of $transfersByFile.keys()) {
             if (itemStateDescriptor(itemStateFor($transfersByFile, fileId)).needsExplanation) ids.add(fileId);

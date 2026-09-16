@@ -101,6 +101,12 @@
      * stopping everything in its direction.
      */
     const uploadId = $derived.by(() => {
+        // Phone only. The desktop bell has no other cancel -- its rows are the
+        // whole affordance -- so narrowing the x there would leave a batch of
+        // twenty files with no way to stop: only three are active at a time, so
+        // only three rows exist, and the queue refills behind them. The phone
+        // gets the narrow x and a Cancel all beside the section title.
+        if (!mobile) return null;
         const match = /^xfer:up:(\d+)$/.exec(transfer.id);
         return match ? Number(match[1]) : null;
     });
