@@ -19,11 +19,13 @@
 /* The mark is the one piece of warmth in an otherwise severe column, so it is
    sized to the wordmark's cap height rather than shrunk into a favicon. */
 .logo-mark {
-    width: 44px;
-    height: 28px;
+    /* Square now that the mark is a drawn glyph rather than a wide raster, and
+       muted so the wordmark beside it stays the thing that is read. */
+    width: 22px;
+    height: 22px;
     flex: 0 0 auto;
     display: block;
-    object-fit: contain;
+    color: var(--color-text-muted);
 }
 
 .storage-info { padding-top: 20px; border-top: 1px solid var(--border); }
