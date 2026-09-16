@@ -109,34 +109,6 @@
         closeTimer = null;
     }
 
-    // visualViewport keeps the primary button above the on-screen keyboard: as
-    // the keyboard opens the visual viewport shrinks, and the difference lifts
-    // the sheet by that much. Hosts without visualViewport pad by nothing.
-    function updateKeyboardInset(): void {
-        if (!card) return;
-        const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-        if (!vv) {
-            card.style.setProperty('--sheet-keyboard-inset', '0px');
-            return;
-        }
-        const inset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-        card.style.setProperty('--sheet-keyboard-inset', `${inset}px`);
-    }
-
-    function attachViewport(): void {
-        const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-        if (!asSheet || !vv) return;
-        vv.addEventListener('resize', updateKeyboardInset);
-        vv.addEventListener('scroll', updateKeyboardInset);
-    }
-
-    function detachViewport(): void {
-        const vv = typeof window !== 'undefined' ? window.visualViewport : null;
-        if (!vv) return;
-        vv.removeEventListener('resize', updateKeyboardInset);
-        vv.removeEventListener('scroll', updateKeyboardInset);
-    }
-
     function setScrimProgress(value: number): void {
         host?.style.setProperty('--sheet-scrim', String(value));
     }
@@ -157,8 +129,6 @@
         void tick().then(() => {
             if (!open || !active) return;
             ensureA11y()?.activate();
-            attachViewport();
-            updateKeyboardInset();
         });
     }
 
@@ -172,7 +142,6 @@
     }
 
     function closeTransition(): void {
-        detachViewport();
         if (active) {
             active = false;
             a11y?.deactivate();
@@ -285,7 +254,6 @@
 
     onDestroy(() => {
         clearCloseTimer();
-        detachViewport();
         a11y?.deactivate();
         host?.removeEventListener('click', handleHostClick);
         if (host) {
