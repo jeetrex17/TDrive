@@ -35,6 +35,10 @@ build/android/build/
 build/android/.gradle/
 build/android/local.properties
 
+# Downloaded by windows:installer; release packaging output.
+build/windows/installer/MicrosoftEdgeWebview2Setup.exe
+dist/
+
 # --- Dependencies ---
 node_modules/
 

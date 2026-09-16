@@ -186,7 +186,15 @@ func TestDiskStagingStoreRejectsSameSizeCiphertextCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open staged ciphertext: %v", err)
 	}
-	if _, err := file.WriteAt([]byte{0xff}, 55); err != nil {
+	// Flip a ciphertext byte rather than overwrite it with a constant: the
+	// ciphertext is random, so a constant already matches it one run in 256
+	// and the tamper is a no-op.
+	var original [1]byte
+	if _, err := file.ReadAt(original[:], 55); err != nil {
+		_ = file.Close()
+		t.Fatalf("read staged ciphertext: %v", err)
+	}
+	if _, err := file.WriteAt([]byte{original[0] ^ 0x80}, 55); err != nil {
 		_ = file.Close()
 		t.Fatalf("tamper staged ciphertext: %v", err)
 	}
