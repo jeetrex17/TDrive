@@ -10,7 +10,8 @@ import { createFolder, downloadFile, downloadFolder, importPaths, isAndroidPlatf
 import { canSaveToDownloads, saveToDownloads } from './android-downloads';
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import type { ImportPlan, OperationError } from '../types';
-import { notify } from './notifications';
+import type { TransferEvent } from '../ui/notifications/notif-store';
+import { dismissNotification, notify } from './notifications';
 import {
     canPickFolder,
     folderPathFor,
@@ -310,18 +311,62 @@ function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | 
     // drops the item from the queue right after this, and a Retry that
     // referenced a removed entry would do nothing.
     const { kind, id, name, size } = item;
+    const toastId = `download-retry:${item.key}`;
     notify({
+        id: toastId,
         level: 'error',
         title: `Couldn't download ${item.name}`,
         body: reason || 'The download could not be completed.',
         action: {
             label: 'Retry',
-            run: () => {
+            // One shot. The toast is sticky, so without this it sits there
+            // offering to retry a download that is already running again, and
+            // a second tap re-queues a key that is mid-flight -- which resets
+            // the queue entry's progress under it.
+            run: oneShot(() => {
+                dismissNotification(toastId);
                 if (kind === 'folder') enqueueFolderDownload(id, name, size);
                 else enqueueDownload(id, name, size);
-            },
+            }),
         },
     });
+}
+
+/**
+ * The retry for a failed transfer row, or undefined when there is not one.
+ *
+ * Only downloads can be retried: everything a download needs is in the row
+ * itself, while an upload's source path is long gone by the time its row is on
+ * screen. Owning the id parse here keeps it next to the code that builds the
+ * key -- the Transfers tab only knows it is holding a failed transfer.
+ *
+ * Re-queuing reuses the same key, so the failed row turns back into a running
+ * one in place rather than leaving a dead twin behind it.
+ */
+export function downloadRetryFor(transfer: TransferEvent): (() => void) | undefined {
+    if (transfer.status !== 'failed' || transfer.direction !== 'down') return undefined;
+    if (!transfer.id.startsWith('xfer:down:')) return undefined;
+    const key = transfer.id.slice('xfer:down:'.length);
+    const { name, total } = transfer;
+    if (key.startsWith('file:')) {
+        const id = Number(key.slice('file:'.length));
+        return Number.isFinite(id) ? () => enqueueDownload(id, name, total) : undefined;
+    }
+    if (key.startsWith('folder:')) {
+        const id = key.slice('folder:'.length);
+        return id ? () => enqueueFolderDownload(id, name, total) : undefined;
+    }
+    return undefined;
+}
+
+/** Wraps a toast action so it runs at most once, however often it is tapped. */
+function oneShot(run: () => void): () => void {
+    let spent = false;
+    return () => {
+        if (spent) return;
+        spent = true;
+        run();
+    };
 }
 
 function dispatchDownload(item: DownloadQueueItem) {
@@ -1006,6 +1051,25 @@ async function runImportFlow(parentID: string, paths: string[]) {
     }
 }
 
+/**
+ * The Retry behind a failed upload toast. It re-enters the same batch, so it
+ * takes the same lock the picker and the drop target do: starting an upload
+ * while another is running cancels that one on the backend, and a retry is no
+ * more entitled to do that than any other trigger.
+ */
+async function retryUploadBatch(paths: string[], parentID: string, encrypt: boolean): Promise<void> {
+    if (flowBusy) {
+        notify({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish, then try again.' });
+        return;
+    }
+    flowBusy = true;
+    try {
+        await uploadPathsBatch(paths, parentID, encrypt);
+    } finally {
+        flowBusy = false;
+    }
+}
+
 // uploadPathsBatch runs the classic per-file upload (one bell row per file).
 async function uploadPathsBatch(paths: string[], parentID: string, encrypt: boolean) {
     if (activeTransferDriveId === null) activeTransferDriveId = state.activeChannel?.id ?? null;
@@ -1045,11 +1109,25 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
             // they are looking at it is that they still want the files up. The
             // retry re-runs the same batch with the same destination, so the
             // recovery is one tap rather than re-finding the files in a picker.
+            const toastId = `upload-retry:${Date.now()}`;
             notify({
+                id: toastId,
                 level: 'error',
                 title: 'Upload failed',
                 body: humanizeBackendError(error),
-                action: { label: 'Retry', run: () => { void uploadPathsBatch(paths, parentID, encrypt); } },
+                action: {
+                    label: 'Retry',
+                    // One shot, and gone from the screen the moment it is
+                    // taken. The toast is sticky, so a second tap would start a
+                    // second batch over the first: the backend keeps one cancel
+                    // handle per direction, so beginning again cancels the
+                    // retry already running, and the fresh uploadBatch counters
+                    // would be counting the wrong files.
+                    run: oneShot(() => {
+                        dismissNotification(toastId);
+                        void retryUploadBatch(paths, parentID, encrypt);
+                    }),
+                },
             });
         }
     } finally {

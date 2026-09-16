@@ -12,7 +12,7 @@ const transferEvents = vi.hoisted(() => ({
     rename: vi.fn(),
     done: vi.fn(),
 }));
-const notifications = vi.hoisted(() => ({ notify: vi.fn() }));
+const notifications = vi.hoisted(() => ({ notify: vi.fn(), dismissNotification: vi.fn() }));
 
 // Go always emits an event's payload as a JSON array of its original args
 // (see RuntimeEventMap in api/runtime.ts); mimic that instead of the removed
@@ -31,7 +31,10 @@ vi.mock('./notif-bell', () => ({
     updateTransferName: transferEvents.rename,
     markTransferDone: transferEvents.done,
 }));
-vi.mock('./notifications', () => ({ notify: notifications.notify }));
+vi.mock('./notifications', () => ({
+    notify: notifications.notify,
+    dismissNotification: notifications.dismissNotification,
+}));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn(async () => undefined) }));
 vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn() }));
 vi.mock('./modals/import-options', () => ({ openImportOptionsModal: vi.fn() }));
@@ -318,5 +321,86 @@ describe('folder download queue', () => {
             direction: 'down',
             status: 'canceled',
         });
+    });
+});
+describe('download retry', () => {
+    function retryAction(): { label: string; run: () => void } {
+        const failure = notifications.notify.mock.calls
+            .map(([options]) => options as { level?: string; action?: { label: string; run: () => void } })
+            .find((options) => options.level === 'error' && options.action);
+        if (!failure?.action) throw new Error('no retry action was offered');
+        return failure.action;
+    }
+
+    it('takes the retry down with it, so a sticky toast cannot start a second one', async () => {
+        const second = deferred<DownloadBindingResult>();
+        bindings.DownloadFile
+            .mockResolvedValueOnce(downloadFailure('io', 'disk full'))
+            .mockReturnValueOnce(second.promise);
+        const { mod, state } = await loadModule();
+
+        mod.enqueueDownload(42, 'plan.pdf', 10);
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+
+        const action = retryAction();
+        action.run();
+        await settle();
+        // The same sticky toast is still on screen until the dismiss lands, so
+        // the second tap is the one a thumb actually makes.
+        action.run();
+        await settle();
+
+        expect(notifications.dismissNotification).toHaveBeenCalledTimes(1);
+        expect(state.downloadQueue.filter((item) => item.key === 'file:42')).toHaveLength(1);
+        expect(bindings.DownloadFile).toHaveBeenCalledTimes(2);
+
+        second.resolve(downloadSuccess('/tmp/plan.pdf'));
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+    });
+
+    it('re-queues the download behind a failed row, and only a download', async () => {
+        const { mod, state } = await loadModule();
+
+        const failedFile = {
+            kind: 'transfer' as const,
+            id: 'xfer:down:file:42',
+            direction: 'down' as const,
+            name: 'plan.pdf',
+            progress: 0,
+            total: 10,
+            bytes: 0,
+            speed: 0,
+            status: 'failed' as const,
+            startedAt: 0,
+            finishedAt: 0,
+        };
+        const retry = mod.downloadRetryFor(failedFile);
+        expect(retry).toBeTypeOf('function');
+        retry?.();
+        expect(state.downloadQueue[0]).toMatchObject({ key: 'file:42', name: 'plan.pdf', size: 10 });
+
+        expect(mod.downloadRetryFor({ ...failedFile, status: 'done' })).toBeUndefined();
+        expect(mod.downloadRetryFor({ ...failedFile, direction: 'up', id: 'xfer:up:2' })).toBeUndefined();
+        expect(mod.downloadRetryFor({ ...failedFile, id: 'xfer:down:mystery' })).toBeUndefined();
+    });
+
+    it('re-queues a failed folder under the same key the row carries', async () => {
+        const { mod, state } = await loadModule();
+
+        const retry = mod.downloadRetryFor({
+            kind: 'transfer',
+            id: 'xfer:down:folder:d:project',
+            direction: 'down',
+            name: 'Project',
+            progress: 0,
+            total: 90,
+            bytes: 0,
+            speed: 0,
+            status: 'failed',
+            startedAt: 0,
+            finishedAt: 0,
+        });
+        retry?.();
+        expect(state.downloadQueue[0]).toMatchObject({ key: 'folder:d:project', kind: 'folder', name: 'Project' });
     });
 });
