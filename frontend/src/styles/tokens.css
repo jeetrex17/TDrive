@@ -1,12 +1,13 @@
 
 :root {
     /* How far the screen edges are unusable, from whichever source knows.
-       iOS and desktop answer with env(); Android's WebView reports zero there
-       because it only tracks display cutouts, not the status and navigation
-       bars the app draws behind, so its host publishes --android-inset-* (see
-       build/android MainActivity). Both are zero on desktop. */
-    --inset-top: max(env(safe-area-inset-top, 0px), var(--android-inset-top, 0px));
-    --inset-bottom: max(env(safe-area-inset-bottom, 0px), var(--android-inset-bottom, 0px));
+       iOS and desktop answer with env() alone. Android's WebView answers for
+       the top but reports zero for the gesture area at the bottom, so the
+       shell also publishes --mobile-inset-* from the window insets the backend
+       reads (see ui/mobile/safe-area.ts). Taking the larger of the two lets
+       each platform contribute what it actually knows. */
+    --inset-top: max(env(safe-area-inset-top, 0px), var(--mobile-inset-top, 0px));
+    --inset-bottom: max(env(safe-area-inset-bottom, 0px), var(--mobile-inset-bottom, 0px));
 
     --font-ui: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --weight-medium: 500;

@@ -227,6 +227,19 @@ export interface PreviewResult {
 }
 
 /**
+ * SafeAreaInsets is how much of each screen edge the OS reserves for its own
+ * chrome: the status bar and the gesture handle on a phone. Zero everywhere
+ * else. Android reports device pixels and iOS reports points, so the caller
+ * scales by the device pixel ratio; see ui/mobile/safe-area.ts.
+ */
+export interface SafeAreaInsets {
+    "top": number;
+    "bottom": number;
+    "left": number;
+    "right": number;
+}
+
+/**
  * SelfUser is a small projection of the logged-in Telegram user, shaped
  * for the frontend profile menu. Photo download is best-effort; an empty
  * PhotoBase64 means "no photo available" and the UI should fall back to

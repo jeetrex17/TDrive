@@ -27,6 +27,7 @@ export type {
     PersonalDriveSetupState,
     PreviewPayload,
     PreviewResult,
+    SafeAreaInsets,
     SelfUser,
     TDriveFile,
     UploadResult

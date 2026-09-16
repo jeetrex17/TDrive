@@ -15,6 +15,7 @@
     import TopBar from './TopBar.svelte';
     import TransfersTab from './TransfersTab.svelte';
     import { activateMobileBack } from './mobile-back';
+    import { activateSafeArea } from './safe-area';
     import { activeTab, activeTransferCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
 
@@ -77,6 +78,7 @@
 
     onMount(() => {
         const disposeBack = activateMobileBack();
+        const disposeSafeArea = activateSafeArea();
 
         // The FAB slides away on scroll-down and returns on scroll-up (spec 2.6)
         // so it never sits over the row a thumb is reaching for.
@@ -92,6 +94,7 @@
 
         return () => {
             disposeBack();
+            disposeSafeArea();
             list?.removeEventListener('scroll', onScroll);
         };
     });
