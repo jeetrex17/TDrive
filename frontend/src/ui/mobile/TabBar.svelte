@@ -8,11 +8,21 @@
 
     interface Props {
         active: MobileTab;
+        /**
+         * How many transfers need a person -- not how many are running. A badge
+         * is an interrupt, so it only appears when there is something to act on.
+         * Progress is ambient and belongs to the header ring.
+         */
         transferBadge: number;
         onSelect: (tab: MobileTab) => void;
     }
 
     let { active, transferBadge, onSelect }: Props = $props();
+
+    // Past nine the exact number stops changing the decision -- the user is
+    // going to open the queue either way -- so the badge stops counting and
+    // stays a fixed width instead of pushing the icon around.
+    const BADGE_CAP = 9;
 
     const tabs: Array<{ id: MobileTab; label: string; icon: Component }> = [
         { id: 'files', label: 'Files', icon: FolderIcon },
@@ -27,7 +37,7 @@
 
     function badgeLabel(tab: MobileTab): string {
         if (tab !== 'transfers' || transferBadge <= 0) return '';
-        return transferBadge === 1 ? ', 1 active transfer' : `, ${transferBadge} active transfers`;
+        return transferBadge === 1 ? ', 1 transfer needs attention' : `, ${transferBadge} transfers need attention`;
     }
 </script>
 
@@ -54,7 +64,7 @@
                 <span class="tab-pill" aria-hidden="true"></span>
                 <Icon size={24} strokeWidth={active === tab.id ? 2.2 : 1.9} aria-hidden="true" />
                 {#if tab.id === 'transfers' && transferBadge > 0}
-                    <span class="tab-badge" aria-hidden="true">{transferBadge > 9 ? '9+' : transferBadge}</span>
+                    <span class="tab-badge" aria-hidden="true">{transferBadge > BADGE_CAP ? `${BADGE_CAP}+` : transferBadge}</span>
                 {/if}
             </span>
             <span class="tab-label">{tab.label}</span>

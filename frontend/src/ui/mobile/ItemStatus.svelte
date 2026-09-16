@@ -34,7 +34,9 @@
     const tappable = $derived(Boolean(onOpenQueue) && opensQueue(state));
 </script>
 
-{#if tappable}
+{#if !info.marked}
+    <!-- The resting state draws nothing: see ItemStateDescriptor.marked. -->
+{:else if tappable}
     <button
         class="item-status is-tappable"
         data-tone={info.tone}

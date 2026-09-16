@@ -17,7 +17,7 @@
     import { activateMobileBack } from './mobile-back';
     import { activateSafeArea } from './safe-area';
     import { activateKeyboardInsets } from './keyboard-insets';
-    import { activeTab, activeTransferCount, type MobileTab } from './mobile-shell-store';
+    import { activeTab, transferAttentionCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
 
@@ -170,7 +170,7 @@
          and a gap opening and closing in the middle of it would read as a
          glitch rather than a hint. -->
     <div class="mobile-tabbar-slot" hidden={selecting}>
-        <TabBar active={$activeTab} transferBadge={$activeTransferCount} onSelect={selectTab} />
+        <TabBar active={$activeTab} transferBadge={$transferAttentionCount} onSelect={selectTab} />
         <Fab />
     </div>
 

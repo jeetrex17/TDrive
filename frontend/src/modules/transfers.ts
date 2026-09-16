@@ -253,10 +253,21 @@ function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | 
         notify({ level: 'warning', title: noun + ' already exists', body: reason });
         return;
     }
+    // The fields are read out now rather than closed over: finalizeDownload
+    // drops the item from the queue right after this, and a Retry that
+    // referenced a removed entry would do nothing.
+    const { kind, id, name, size } = item;
     notify({
         level: 'error',
         title: `Couldn't download ${item.name}`,
         body: reason || 'The download could not be completed.',
+        action: {
+            label: 'Retry',
+            run: () => {
+                if (kind === 'folder') enqueueFolderDownload(id, name, size);
+                else enqueueDownload(id, name, size);
+            },
+        },
     });
 }
 
@@ -724,7 +735,16 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
         uploadThrew = true;
         console.error('Upload failed:', error);
         if (!state.cancelingUpload) {
-            notify({ level: 'error', title: 'Upload failed', body: humanizeBackendError(error) });
+            // An error the user can only read is a dead end: the whole reason
+            // they are looking at it is that they still want the files up. The
+            // retry re-runs the same batch with the same destination, so the
+            // recovery is one tap rather than re-finding the files in a picker.
+            notify({
+                level: 'error',
+                title: 'Upload failed',
+                body: humanizeBackendError(error),
+                action: { label: 'Retry', run: () => { void uploadPathsBatch(paths, parentID, encrypt); } },
+            });
         }
     } finally {
         setTransferDirectionActive('upload', false);

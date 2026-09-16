@@ -45,6 +45,20 @@ export interface ItemStateDescriptor {
     readonly needsExplanation: boolean;
     /** Sentence shown on the explaining line and in the detail sheet. */
     readonly detail: string;
+    /**
+     * Whether this state is worth drawing a badge for.
+     *
+     * Only departures from the resting state earn a mark. Badging every row
+     * with the state nearly every row is in is the same as labelling every
+     * file "file": it costs a column and returns nothing, and it trains the
+     * eye to skip the place where the real signals appear.
+     *
+     * `online-only` is that resting state today, because nothing can be kept
+     * on the device yet. When pinning ships, some files will be local and some
+     * will not, the distinction starts carrying information, and this flips to
+     * true so online-only gets its cloud back.
+     */
+    readonly marked: boolean;
 }
 
 export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
@@ -55,6 +69,7 @@ export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
         spins: false,
         needsExplanation: false,
         detail: 'Stored in your vault. Opening it downloads it.',
+        marked: false,
     },
     queued: {
         glyph: 'clock',
@@ -63,6 +78,7 @@ export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
         spins: false,
         needsExplanation: false,
         detail: 'Waiting its turn in the transfer queue.',
+        marked: true,
     },
     downloading: {
         glyph: 'cloud-download',
@@ -71,6 +87,7 @@ export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
         spins: true,
         needsExplanation: false,
         detail: 'Coming down to this device now.',
+        marked: true,
     },
     'available-offline': {
         glyph: 'circle-check',
@@ -79,6 +96,7 @@ export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
         spins: false,
         needsExplanation: false,
         detail: 'On this device. Opens without a connection.',
+        marked: true,
     },
     syncing: {
         glyph: 'refresh-cw',
@@ -87,6 +105,7 @@ export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
         spins: true,
         needsExplanation: false,
         detail: 'Sending your change up to the vault.',
+        marked: true,
     },
     conflict: {
         glyph: 'triangle-alert',
@@ -95,6 +114,7 @@ export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
         spins: false,
         needsExplanation: true,
         detail: 'Changed in two places. Choose which version to keep.',
+        marked: true,
     },
     failed: {
         glyph: 'circle-alert',
@@ -103,6 +123,7 @@ export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
         spins: false,
         needsExplanation: true,
         detail: 'The last transfer did not finish.',
+        marked: true,
     },
 };
 
