@@ -24,6 +24,7 @@
     } from './context-menu-store';
     import { fileTypeFamily, fileTypeIcon } from '../file-list/file-type';
     import { createSheetDrag, sheetOffset, shouldDismiss, FLICK_SPEED } from '../modals/sheet-gesture';
+    import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
     import { isMobilePlatform } from '../../api';
     import { hapticPress } from '../mobile/haptics';
 
@@ -272,6 +273,19 @@
 
     $effect(() => {
         void positionHost();
+    });
+
+    // Android BACK dismisses this before whatever is under it, the same way
+    // Escape does. Registered from the open state rather than from each of the
+    // four ways out, so no exit path can forget.
+    let backEntry: SheetHandle | null = null;
+    $effect(() => {
+        if ($contextMenuState.open) {
+            backEntry ??= pushSheet(() => { void dismissAndRestoreFocus(); });
+            return;
+        }
+        backEntry?.release();
+        backEntry = null;
     });
 </script>
 

@@ -6,6 +6,7 @@
     import UploadIcon from '@lucide/svelte/icons/upload';
     import { tick } from 'svelte';
     import { isMobilePlatform } from '../../api';
+    import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
 
     // Desktop anchors this menu under its toolbar button. The phone cannot: the
     // trigger is docked into the middle of the tab bar, hard against the bottom
@@ -65,6 +66,17 @@
         if (buttonEl?.contains(target) || menuEl?.contains(target)) return;
         closeMenu();
     }
+
+    // Android BACK is the fourth way out the sheet promises.
+    let backEntry: SheetHandle | null = null;
+    $effect(() => {
+        if (open) {
+            backEntry ??= pushSheet(() => closeMenu());
+            return;
+        }
+        backEntry?.release();
+        backEntry = null;
+    });
 
     // Arrow-key navigation between the menu items.
     function onMenuKeydown(event: KeyboardEvent): void {
