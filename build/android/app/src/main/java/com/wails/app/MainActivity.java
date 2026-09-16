@@ -87,6 +87,9 @@ public class MainActivity extends AppCompatActivity {
     private static final int PHOTO_CAPTURE_REQUEST = 7002;
     private static final int VIDEO_CAPTURE_REQUEST = 7003;
     private static final int CAMERA_PERMISSION_REQUEST = 7010;
+    private static final int SAVE_PERMISSION_REQUEST = 7011;
+    private String pendingSaveCallbackId;
+    private String pendingSavePath;
     private File pendingCaptureFile;
     private boolean pendingCaptureIsVideo;
 
@@ -298,6 +301,21 @@ public class MainActivity extends AppCompatActivity {
                 launchCameraCapture(pendingCaptureIsVideo);
             } else {
                 bridge.emitEvent("common:capture", "{\"error\":\"camera permission denied\"}");
+            }
+            return;
+        }
+        if (requestCode == SAVE_PERMISSION_REQUEST) {
+            String callbackId = pendingSaveCallbackId;
+            String path = pendingSavePath;
+            pendingSaveCallbackId = null;
+            pendingSavePath = null;
+            if (callbackId == null) {
+                return;
+            }
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                runSaveToDownloads(callbackId, path);
+            } else {
+                jsBridge.sendCallback(callbackId, null, "TDrive needs permission to write to Downloads");
             }
             return;
         }
@@ -715,6 +733,62 @@ public class MainActivity extends AppCompatActivity {
                 Log.w(TAG, "Malformed release list", e);
             }
             jsBridge.sendCallback(callbackId, "", null);
+        }).start();
+    }
+
+    /**
+     * Moves a finished download out of the sandbox and into the phone's public
+     * Downloads folder, and answers {"location":"Download/plan.pdf"} with the
+     * name it really got.
+     *
+     * The Go side writes downloads under the app's own files directory, which
+     * since Android 11 no file manager will browse, so until this runs a
+     * finished download is somewhere the reader cannot reach.
+     */
+    public void saveToDownloads(String callbackId, String json) {
+        String path;
+        try {
+            path = new JSONObject(json).optString("path", "");
+        } catch (JSONException e) {
+            jsBridge.sendCallback(callbackId, null, "malformed save request");
+            return;
+        }
+        if (path.isEmpty()) {
+            jsBridge.sendCallback(callbackId, null, "nothing to save");
+            return;
+        }
+        // Before Android 10 the Downloads folder was an ordinary folder and
+        // writing to it needed asking. From 10 on, MediaStore owns it and no
+        // permission applies.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                && checkSelfPermission("android.permission.WRITE_EXTERNAL_STORAGE")
+                != PackageManager.PERMISSION_GRANTED) {
+            final String asked = path;
+            runOnUiThread(() -> {
+                pendingSaveCallbackId = callbackId;
+                pendingSavePath = asked;
+                requestPermissions(
+                        new String[]{"android.permission.WRITE_EXTERNAL_STORAGE"}, SAVE_PERMISSION_REQUEST);
+            });
+            return;
+        }
+        runSaveToDownloads(callbackId, path);
+    }
+
+    /** A folder download can be gigabytes, so none of this happens on the main thread. */
+    private void runSaveToDownloads(String callbackId, String path) {
+        new Thread(() -> {
+            try {
+                String location = DownloadExport.save(this, new File(path));
+                jsBridge.sendCallback(
+                        callbackId, new JSONObject().put("location", location).toString(), null);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to save " + path + " to Downloads", e);
+                String why = e.getMessage();
+                jsBridge.sendCallback(
+                        callbackId, null, why == null || why.isEmpty() ? "could not save to Downloads" : why);
+            }
         }).start();
     }
 

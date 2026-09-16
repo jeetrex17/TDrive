@@ -125,6 +125,25 @@ public class WailsJSBridge {
         activity.releaseFiles(callbackId, idsJson);
     }
 
+    /**
+     * Move a finished download into the phone's public Downloads folder and
+     * answer {"location":"Download/plan.pdf"} with the name it really got,
+     * which is not always the name it asked for. The path may be a file or a
+     * whole folder, and the sandbox copy is gone once every byte has landed.
+     *
+     * Called from JavaScript: wails.saveToDownloads(callbackId, json)
+     * with json {"path":"/data/.../files/TDrive/Downloads/plan.pdf"}.
+     */
+    @JavascriptInterface
+    public void saveToDownloads(final String callbackId, final String json) {
+        final MainActivity activity = activity();
+        if (activity == null) {
+            sendCallback(callbackId, null, "cannot save to Downloads right now");
+            return;
+        }
+        activity.saveToDownloads(callbackId, json);
+    }
+
     private MainActivity activity() {
         Context context = webView.getContext();
         return context instanceof MainActivity ? (MainActivity) context : null;
