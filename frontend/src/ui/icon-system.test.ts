@@ -20,10 +20,6 @@ function productionSourceFiles(directory: string): string[] {
 // by pattern, so adding a hand-drawn SVG is a deliberate act that shows up in
 // review instead of quietly widening the rule.
 const ALLOWED_RAW_SVG = [
-    // The brand mark is not an icon: no icon set ships a product's identity,
-    // and this one replaced a third party's trademark that should never have
-    // been standing in for it.
-    'ui/BrandMark.svelte',
     // The skip-10 controls draw an arc with a numeral inside it, which has no
     // Lucide equivalent.
     'ui/video/VideoModal.svelte',
@@ -33,7 +29,7 @@ const ALLOWED_RAW_SVG = [
 ];
 
 describe('icon system', () => {
-    it('uses Lucide except for the brand mark and the skip-10 controls', () => {
+    it('uses Lucide except for the exact skip-10 controls', () => {
         const rawSvgLocations = productionSourceFiles(sourceRoot).flatMap((path) => {
             const count = readFileSync(path, 'utf8').match(/<svg\b/g)?.length ?? 0;
             const displayPath = relative(sourceRoot, path).split(sep).join('/');
