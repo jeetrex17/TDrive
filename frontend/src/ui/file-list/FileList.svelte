@@ -3,6 +3,7 @@
     import CheckIcon from '@lucide/svelte/icons/check';
     import DownloadIcon from '@lucide/svelte/icons/download';
     import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+    import FolderInputIcon from '@lucide/svelte/icons/folder-input';
     import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
     import FolderIcon from '@lucide/svelte/icons/folder';
     import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
@@ -263,6 +264,24 @@
                         <EllipsisIcon size={20} strokeWidth={2} aria-hidden="true" />
                     </button>
                 </div>
+                {#if mobile}
+                    <!-- Revealed by a trailing swipe. One action, and a
+                         reversible one: a destructive button a careless thumb
+                         away from a scrolling list is the worst pattern in
+                         mobile file managers, and being the platform default
+                         does not make it safe. Delete stays in the overflow
+                         sheet behind a confirm.
+
+                         Hidden from assistive tech because it duplicates what
+                         the always-visible overflow button already offers; a
+                         screen reader should not meet the same action twice. -->
+                    <div class="row-swipe-actions" aria-hidden="true">
+                        <button class="row-swipe-btn" type="button" tabindex="-1" data-swipe-action="move">
+                            <FolderInputIcon size={20} strokeWidth={1.9} aria-hidden="true" />
+                            <span>Move</span>
+                        </button>
+                    </div>
+                {/if}
             </div>
         {/if}
     {/each}

@@ -858,6 +858,52 @@ html.mobile .item-status.is-tappable:focus-visible {
     border-radius: var(--radius-md);
 }
 
+/* ============================ ROW SWIPE ============================ */
+/* The strip lives just past the row's trailing edge and travels with it, so a
+   swipe reveals the action rather than pushing it in from nowhere. The list
+   clips horizontally, which is what keeps it invisible until it is wanted. */
+html.mobile .row-swipe-actions {
+    position: absolute;
+    left: 100%;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: stretch;
+    /* Sits behind the row's own surface while closed. */
+    z-index: -1;
+}
+
+html.mobile .row-swipe-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    /* Wide enough that the thumb cannot miss it once revealed, and the number
+       the binder measures for the open position. */
+    width: 88px;
+    border: none;
+    /* Not accent: accent means "bytes are moving" everywhere else in this app,
+       and a stationary button borrowing it would blunt that. */
+    background: var(--color-surface-2);
+    color: var(--color-text-soft);
+    font-family: var(--font-ui);
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
+}
+
+html.mobile .row-swipe-btn:active { background: var(--color-surface-1); }
+
+/* The row paints over the strip while closed, so the strip cannot show through
+   the gap between cards. */
+html.mobile .file-row { background-clip: padding-box; }
+
+@media (prefers-reduced-motion: reduce) {
+    /* The settle is travel, so it goes; the row still arrives where the
+       gesture asked, just without the glide. */
+    html.mobile .file-row { transition: none !important; }
+}
+
 /* ============================ REDUCED MOTION ============================ */
 @media (prefers-reduced-motion: reduce) {
     html.mobile .tab-pill,
