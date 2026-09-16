@@ -22,6 +22,20 @@ function successTitle(item: FileCommandItem): string {
     return item.type === 'folder' ? `Deleted folder "${name}"` : `Deleted "${name}"`;
 }
 
+/**
+ * One line for a whole batch. A selection of twelve used to answer with twelve
+ * toasts into a stack that holds two on a phone, so eleven of them evicted each
+ * other on the way past and the user read whichever happened to be last.
+ */
+function batchTitle(items: FileCommandItem[], verb: string): string {
+    if (items.length === 1) return verb === 'Deleted' ? successTitle(items[0]) : failureTitle(items[0]);
+    const folders = items.filter(isFolder).length;
+    const files = items.length - folders;
+    if (folders === 0) return `${verb} ${files} files`;
+    if (files === 0) return `${verb} ${folders} folders`;
+    return `${verb} ${items.length} items`;
+}
+
 function failureTitle(item: FileCommandItem): string {
     const name = item.name.trim();
     if (!name) return item.type === 'folder' ? 'Could not delete folder' : 'Could not delete file';
@@ -135,9 +149,21 @@ export async function confirmDelete(): Promise<void> {
 
             clearSelection();
             dismissNotification(progressId);
-            for (const item of succeeded) notify({ level: 'success', title: successTitle(item) });
-            for (const { item, error } of failures) {
-                notify({ level: 'error', title: failureTitle(item), body: error });
+            if (succeeded.length > 0) {
+                notify({ level: 'success', title: batchTitle(succeeded, 'Deleted') });
+            }
+            if (failures.length > 0) {
+                // The reasons are worth keeping, but only the first is worth a
+                // toast: past two or three they stop being read and start
+                // being dismissed. The rest stay in the bell's history.
+                const [first] = failures;
+                notify({
+                    level: 'error',
+                    title: batchTitle(failures.map((entry) => entry.item), 'Could not delete'),
+                    body: failures.length === 1
+                        ? first.error
+                        : `${first.error} Open Transfers for the rest.`,
+                });
             }
             if (succeeded.length > 0) invalidateFolderIndex();
             appActions().refreshFiles();

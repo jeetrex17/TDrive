@@ -62,6 +62,17 @@ afterAll(async () => {
     vi.useRealTimers();
 });
 
+/**
+ * Hovering is a pointer question now, not a mouse question: a finger reports
+ * pointerType "touch" and the stack has to ignore it, because a touch host
+ * sends mouseenter on a tap and never sends the matching mouseleave.
+ */
+function pointer(type: string, pointerType: 'mouse' | 'touch'): Event {
+    const event = new MouseEvent(type, { bubbles: false }) as MouseEvent & { pointerType?: string };
+    Object.defineProperty(event, 'pointerType', { value: pointerType });
+    return event;
+}
+
 describe('notification expiry scheduling', () => {
     it('expires at the nearest deadline without running an animation-frame loop', () => {
         const animationFrame = vi.spyOn(window, 'requestAnimationFrame');
@@ -117,12 +128,39 @@ describe('notification expiry scheduling', () => {
         expect(toast('later')).toBeNull();
     });
 
+    it('does not let a finger freeze a toast on screen', () => {
+        // A touch host fires mouseenter on a tap and withholds mouseleave until
+        // the next tap elsewhere, so pausing on it left phone toasts up for
+        // good -- and the stack sits right above the tab bar, where every tap
+        // lands. Verified on device before this was written.
+        notify({ id: 'tapped', title: 'Tapped', durationMs: 1_000 });
+        flushSync();
+
+        toast('tapped')?.dispatchEvent(pointer('pointerenter', 'touch'));
+        flushSync();
+        expect(get(toasts)[0]).toMatchObject({ paused: false });
+
+        vi.advanceTimersByTime(1_001);
+        flushSync();
+        expect(toast('tapped')).toBeNull();
+    });
+
+    it('still freezes for a pointer that can really hover', () => {
+        notify({ id: 'hovered', title: 'Hovered', durationMs: 1_000 });
+        flushSync();
+
+        toast('hovered')?.dispatchEvent(pointer('pointerenter', 'mouse'));
+        vi.advanceTimersByTime(5_000);
+        flushSync();
+        expect(toast('hovered')).not.toBeNull();
+    });
+
     it('freezes the exact remaining time while a toast is hovered', () => {
         notify({ id: 'paused', title: 'Paused', durationMs: 1_000 });
         flushSync();
         vi.advanceTimersByTime(400);
 
-        toast('paused')?.dispatchEvent(new MouseEvent('mouseenter'));
+        toast('paused')?.dispatchEvent(pointer('pointerenter', 'mouse'));
         flushSync();
         expect(get(toasts)[0]).toMatchObject({ paused: true, remainingMs: 600 });
 
@@ -130,7 +168,7 @@ describe('notification expiry scheduling', () => {
         flushSync();
         expect(toast('paused')).not.toBeNull();
 
-        toast('paused')?.dispatchEvent(new MouseEvent('mouseleave'));
+        toast('paused')?.dispatchEvent(pointer('pointerleave', 'mouse'));
         vi.advanceTimersByTime(599);
         flushSync();
         expect(toast('paused')).not.toBeNull();
@@ -147,16 +185,16 @@ describe('notification expiry scheduling', () => {
         vi.advanceTimersByTime(400);
 
         const stack = document.querySelector<HTMLElement>('.toast-stack-inner');
-        stack?.dispatchEvent(new MouseEvent('mouseenter'));
-        toast('short')?.dispatchEvent(new MouseEvent('mouseenter'));
-        toast('short')?.dispatchEvent(new MouseEvent('mouseleave'));
+        stack?.dispatchEvent(pointer('pointerenter', 'mouse'));
+        toast('short')?.dispatchEvent(pointer('pointerenter', 'mouse'));
+        toast('short')?.dispatchEvent(pointer('pointerleave', 'mouse'));
         vi.advanceTimersByTime(10_000);
         flushSync();
 
         expect(toast('short')).not.toBeNull();
         expect(toast('long')).not.toBeNull();
 
-        stack?.dispatchEvent(new MouseEvent('mouseleave'));
+        stack?.dispatchEvent(pointer('pointerleave', 'mouse'));
         vi.advanceTimersByTime(600);
         flushSync();
         expect(toast('short')).toBeNull();
