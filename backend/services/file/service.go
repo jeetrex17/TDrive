@@ -82,6 +82,12 @@ type Service struct {
 	MaxConcurrentUploads int
 	uploadOnce           sync.Once
 	uploadSem            chan struct{}
+	// uploadCancels holds a cancel handle per running upload, keyed by the
+	// upload ID its progress events carry, so one transfer row can be stopped
+	// without taking the rest of the batch with it. Only goroutines that hold
+	// an upload slot are registered, so it stays bounded by MaxConcurrentUploads.
+	uploadCancelMu sync.Mutex
+	uploadCancels  map[int]context.CancelFunc
 	previewMu            sync.Mutex
 	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
 	// package tests. It runs immediately after Telegram returns a positive

@@ -283,6 +283,15 @@ func (a *App) CancelUpload() {
 	}
 }
 
+// CancelUploadByID cancels one file of the running batch. Both cancels exist
+// because uploads run several at a time: a transfer row's × stops that one
+// file, while CancelUpload above is the deliberate "stop everything".
+func (a *App) CancelUploadByID(uploadID int) {
+	if svc := a.fileService(); svc != nil {
+		svc.CancelUpload(uploadID)
+	}
+}
+
 // beginDownload / endDownload / CancelDownload do the same for the active
 // download.
 func (a *App) beginDownload() context.Context {

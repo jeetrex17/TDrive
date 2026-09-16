@@ -76,6 +76,15 @@ export function CancelUpload(): $CancellablePromise<void> {
 }
 
 /**
+ * CancelUploadByID cancels one file of the running batch. Both cancels exist
+ * because uploads run several at a time: a transfer row's × stops that one
+ * file, while CancelUpload above is the deliberate "stop everything".
+ */
+export function CancelUploadByID(uploadID: number): $CancellablePromise<void> {
+    return $Call.ByID(2968075794, uploadID);
+}
+
+/**
  * ChangeEncryptionPassword verifies the current password, then re-wraps
  * the same master key with the new password. Existing encrypted files stay
  * decryptable; file contents are not re-encrypted.
