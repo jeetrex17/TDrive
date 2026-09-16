@@ -1,25 +1,32 @@
 // The Android BACK contract: the host asks the page what to dismiss and only
 // leaves the app when the page reports the press unhandled.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
 
 const exitPhotos = vi.hoisted(() => vi.fn());
 const navigateBack = vi.hoisted(() => vi.fn());
+const clearSelection = vi.hoisted(() => vi.fn());
 vi.mock('../../modules/gallery', () => ({ exitPhotos }));
 vi.mock('../../modules/navigation', () => ({ navigateBack }));
+vi.mock('../../modules/selection', () => ({ clearSelection }));
 
 import { breadcrumbPath } from '../chrome/breadcrumb-store';
 import { closeTopSheet, pushSheet } from '../modals/sheet-stack';
+import { selectionBarState } from '../selection/selection-bar-store';
 import { sidebarState } from '../sidebar/sidebar-store';
 import { activateMobileBack, BACK_BRIDGE, handleBackPress } from './mobile-back';
-import { driveSwitcherOpen } from './mobile-shell-store';
+import { activeTab, driveSwitcherOpen } from './mobile-shell-store';
 
 beforeEach(() => {
     while (closeTopSheet());
     driveSwitcherOpen.set(false);
     sidebarState.update((current) => ({ ...current, photosActive: false }));
+    selectionBarState.set({ count: 0 });
+    activeTab.set('files');
     breadcrumbPath.set([]);
     exitPhotos.mockClear();
     navigateBack.mockClear();
+    clearSelection.mockClear();
 });
 
 afterEach(() => {
@@ -45,12 +52,58 @@ describe('android back', () => {
         expect(navigateBack).not.toHaveBeenCalled();
     });
 
+    it('closes stacked sheets one press at a time, top first', () => {
+        const order: string[] = [];
+        pushSheet(() => order.push('player'));
+        pushSheet(() => order.push('menu'));
+
+        expect(handleBackPress()).toBe(true);
+        expect(handleBackPress()).toBe(true);
+        expect(order).toEqual(['menu', 'player']);
+        expect(handleBackPress()).toBe(false);
+    });
+
     it('closes the drive switcher before leaving the gallery', () => {
         driveSwitcherOpen.set(true);
         sidebarState.update((current) => ({ ...current, photosActive: true }));
 
         expect(handleBackPress()).toBe(true);
         expect(exitPhotos).not.toHaveBeenCalled();
+    });
+
+    it('cancels a selection before popping a folder', () => {
+        selectionBarState.set({ count: 3 });
+        breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
+
+        expect(handleBackPress()).toBe(true);
+        expect(clearSelection).toHaveBeenCalledOnce();
+        expect(navigateBack).not.toHaveBeenCalled();
+    });
+
+    it('returns to the files tab from transfers', () => {
+        activeTab.set('transfers');
+
+        expect(handleBackPress()).toBe(true);
+        expect(get(activeTab)).toBe('files');
+    });
+
+    it('returns to the files tab from the account tab', () => {
+        activeTab.set('account');
+        breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
+
+        expect(handleBackPress()).toBe(true);
+        expect(get(activeTab)).toBe('files');
+        // The folder the files tab was left in is still the folder it returns to.
+        expect(navigateBack).not.toHaveBeenCalled();
+    });
+
+    it('lands on files, not the gallery, when back leaves a tab', () => {
+        sidebarState.update((current) => ({ ...current, photosActive: true }));
+        activeTab.set('transfers');
+
+        expect(handleBackPress()).toBe(true);
+        expect(exitPhotos).toHaveBeenCalledOnce();
+        expect(get(activeTab)).toBe('files');
     });
 
     it('leaves the gallery before popping a folder', () => {
