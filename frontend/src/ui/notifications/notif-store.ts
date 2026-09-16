@@ -1,7 +1,20 @@
 import { derived, writable } from 'svelte/store';
 
 export type TransferDirection = 'up' | 'down';
-export type TransferStatus = 'active' | 'done' | 'failed' | 'canceled';
+/**
+ * A transfer's whole life, including the two states it spends most of its time
+ * in on a phone: waiting behind other work, and stopped because the connection
+ * went away. Without them the queue can only say "active", which is how a
+ * stalled upload ends up looking identical to one that is moving.
+ */
+export type TransferStatus = 'queued' | 'active' | 'paused' | 'done' | 'failed' | 'canceled';
+
+/** The statuses that still have somewhere to go; the rest are finished. */
+export const UNFINISHED_TRANSFER_STATUSES: readonly TransferStatus[] = ['queued', 'active', 'paused'];
+
+export function isUnfinishedTransfer(status: TransferStatus): boolean {
+    return UNFINISHED_TRANSFER_STATUSES.includes(status);
+}
 
 export interface TransferEvent {
     kind: 'transfer';
@@ -38,14 +51,17 @@ export const historyEvents = writable<HistoryEvent[]>([]);
 export const notifPanelOpen = writable(false);
 export const notifUnreadErrors = writable(0);
 
+// Everything still on its way, whether or not bytes are moving this second.
+// Queued and paused belong here, not in Recent: the work has not happened yet,
+// and filing it under "recent" is how a queue forgets what it still owes.
 export const activeTransfers = derived(historyEvents, (events) =>
-    events.filter((e): e is TransferEvent => e.kind === 'transfer' && e.status === 'active'),
+    events.filter((e): e is TransferEvent => e.kind === 'transfer' && isUnfinishedTransfer(e.status)),
 );
 
-// Everything that is not an in-flight transfer: notices plus finished
-// transfers, in arrival order (newest first).
+// Everything that is not still on its way: notices plus finished transfers,
+// in arrival order (newest first).
 export const recentEvents = derived(historyEvents, (events) =>
-    events.filter((e) => !(e.kind === 'transfer' && e.status === 'active')),
+    events.filter((e) => !(e.kind === 'transfer' && isUnfinishedTransfer(e.status))),
 );
 
 export const bellMode = derived(

@@ -15,7 +15,6 @@
     import DatabaseIcon from '@lucide/svelte/icons/database';
     import CalendarIcon from '@lucide/svelte/icons/calendar';
     import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
-    import { IOS, Android } from '@wailsio/runtime';
     import {
         contextMenuState,
         hideContextMenu,
@@ -25,7 +24,8 @@
     } from './context-menu-store';
     import { fileTypeFamily, fileTypeIcon } from '../file-list/file-type';
     import { createSheetDrag, sheetOffset, shouldDismiss, FLICK_SPEED } from '../modals/sheet-gesture';
-    import { isAndroidPlatform, isGatewayReady, isIOSPlatform, isMobilePlatform } from '../../api';
+    import { isMobilePlatform } from '../../api';
+    import { hapticPress } from '../mobile/haptics';
 
     // The store names an icon; this module owns what that name looks like, so
     // the action builders never import a component.
@@ -138,16 +138,11 @@
         focusInvoker();
     }
 
-    // Light impact when the action sheet appears. Guarded so the browser
-    // preview (no native bridge) never calls into the runtime and never throws.
+    // Light impact when the action sheet appears -- the same feedback the long
+    // press that opened it gives, from the same shared helper.
     function openHaptic(): void {
-        if (!asSheet || !isGatewayReady()) return;
-        try {
-            if (isIOSPlatform()) void IOS.Haptics.Impact('light').catch(() => {});
-            else if (isAndroidPlatform()) void Android.Haptics.Vibrate(20).catch(() => {});
-        } catch {
-            // A haptic is a courtesy; a missing generator must not break the menu.
-        }
+        if (!asSheet) return;
+        hapticPress();
     }
 
     async function positionHost(): Promise<void> {

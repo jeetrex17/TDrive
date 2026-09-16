@@ -4,8 +4,7 @@
 
 import { mount, unmount } from 'svelte';
 import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
-import { Android, IOS } from '@wailsio/runtime';
-import { isAndroidPlatform, isIOSPlatform } from '../../api';
+import { hapticPress } from '../mobile/haptics';
 
 const LONG_PRESS_MS = 350;
 const LONG_PRESS_SLOP_PX = 10;
@@ -16,15 +15,11 @@ const PULL_THRESHOLD_PX = 64;
 const PULL_MAX_PX = 96;
 const PULL_MIN_SPIN_MS = 500;
 
-/** A light impact on iOS and a short buzz on Android; silent in a browser preview. */
-export function lightHaptic(): void {
-    try {
-        if (isIOSPlatform()) void IOS.Haptics.Impact('light').catch(() => undefined);
-        else if (isAndroidPlatform()) void Android.Haptics.Vibrate(20).catch(() => undefined);
-    } catch {
-        // The browser preview has no bridge behind the runtime call.
-    }
-}
+/**
+ * Kept as the name the list code already calls. The behaviour now lives in
+ * ui/mobile/haptics, which both phone platforms reach through one binding.
+ */
+export const lightHaptic = hapticPress;
 
 export type LongPressHandler = (item: HTMLElement, clientX: number, clientY: number, origin: Element | null) => void;
 
