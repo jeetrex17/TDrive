@@ -99,9 +99,13 @@ tasks:
         sh: xcrun --sdk {{.IOS_SDK}} --show-sdk-path
     cmds:
       - |
-        MAIN_M=build/ios/xcode/main/main.m
+        # The project's own bootstrap wins over the generated one. `wails3 ios
+        # xcode:gen` rewrites build/ios/xcode/main/main.m from its template on
+        # every build, so anything this app needs at launch has to live in the
+        # copy the repo owns or it silently disappears on the next run.
+        MAIN_M=build/ios/main.m
         if [ ! -f "$MAIN_M" ]; then
-          MAIN_M=build/ios/main.m
+          MAIN_M=build/ios/xcode/main/main.m
         fi
         xcrun -sdk {{.IOS_SDK}} clang \
           -target {{.IOS_TARGET}} \
@@ -295,6 +299,11 @@ tasks:
       - build/ios/xcode/project.pbxproj
     cmds:
       - wails3 ios xcode:gen -outdir build/ios/xcode -config build/config.yml
+      # xcode:gen rewrites main.m from its own template, and Xcode compiles that
+      # copy rather than the repo's. Anything this app needs at launch lives in
+      # build/ios/main.m, so put it back or a build driven from Xcode quietly
+      # ships without it while a build driven from here has it.
+      - cp build/ios/main.m build/ios/xcode/main/main.m
 
   run:
     summary: Run the application in iOS Simulator
