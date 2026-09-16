@@ -224,3 +224,18 @@
 .video-settings-panel .video-speed-presets button { display: flex; justify-content: center; min-height: 36px; height: auto; padding: 8px 4px; border: 1px solid #ffffff20; border-radius: var(--radius-md); }
 .video-speed-presets .video-menu-check { display: none; }
 .video-settings-panel .video-speed-presets button.is-selected { border-color: var(--video-accent); background: var(--video-accent-bg, rgba(122, 162, 247, 0.2)); }
+
+/* ====================== PHONE ====================== */
+/* Everything in this panel was sized for a pointer: 30-40px rows that a thumb
+   lands between. On a phone every row a finger aims at gets the 44px minimum,
+   and the panel scrolls instead (it is a sheet, so it already does). */
+html.mobile .video-settings-tabs button,
+html.mobile .video-settings-panel .video-menu button,
+html.mobile .video-settings-panel .video-speed-presets button,
+html.mobile .video-settings-save,
+html.mobile .video-settings-reset {
+    min-height: 44px;
+}
+html.mobile .video-settings-check { min-height: 44px; }
+html.mobile .video-settings-panel .video-settings-range { height: 44px; }
+html.mobile .video-settings-field input[type=color] { width: 44px; height: 44px; }
