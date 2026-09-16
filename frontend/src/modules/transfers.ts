@@ -6,11 +6,20 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
-import { downloadFile, downloadFolder, importPaths, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { createFolder, downloadFile, downloadFolder, importPaths, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import type { ImportPlan, OperationError } from '../types';
 import { notify } from './notifications';
-import { canPickFolder, pickAndroidFolder } from './android-folder';
+import {
+    canPickFolder,
+    folderPathFor,
+    folderPathsFor,
+    materializeAndroidFiles,
+    pickAndroidFolder,
+    releaseAndroidFiles,
+    type AndroidFolderFile,
+    type AndroidFolderManifest,
+} from './android-folder';
 import { humanizeBackendError } from './errors';
 import { appActions } from './app-actions';
 import { loadEncryptionStatus } from './encryption';
@@ -573,12 +582,16 @@ export async function uploadWithParentID(parentID: string) {
 // importFolderWithParentID opens the directory picker and imports the chosen
 // folder tree into parentID.
 export async function importFolderWithParentID(parentID: string) {
+    // Android's picker answers through the app's own bridge with a manifest
+    // rather than a path, because Wails will not hand a document tree to its
+    // dialog API and because nothing has been copied out of the tree yet.
+    if (canPickFolder()) {
+        await importAndroidFolder(parentID);
+        return;
+    }
     let dir = "";
     try {
-        // Android's picker answers through the app's own bridge, because Wails
-        // will not hand a document tree to its dialog API. Either way what
-        // comes back is a directory path, so the import below is the same.
-        dir = canPickFolder() ? await pickAndroidFolder() : await selectFolder();
+        dir = await selectFolder();
     } catch (err) {
         console.error("SelectFolder failed:", err);
         notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err) });
@@ -586,6 +599,252 @@ export async function importFolderWithParentID(parentID: string) {
     }
     if (!dir) return;
     await runImportFlow(parentID, [dir]);
+}
+
+// Peak cache use is one window, which is the whole point: a handful of files
+// instead of the entire folder. Four also keeps the uploader busy, since a
+// batch goes up concurrently, so the copy the next window pays for is a small
+// share of the time rather than a stall between every single file.
+const ANDROID_UPLOAD_WINDOW = 4;
+
+// importAndroidFolder picks a folder and uploads it without ever copying the
+// whole tree into the cache.
+async function importAndroidFolder(parentID: string) {
+    if (flowBusy) {
+        notify({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish, then start another.' });
+        return;
+    }
+    flowBusy = true;
+    activeTransferDriveId = state.activeChannel?.id ?? null;
+    // The picker covers the app while it is open, so this row is only seen once
+    // it closes, which is exactly when the tree walk is still running and the
+    // screen would otherwise look frozen. Document-tree walks are slow enough
+    // on a deep folder for that to be seconds.
+    pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Reading folder…', total: 0 });
+    try {
+        let manifest: AndroidFolderManifest | null = null;
+        try {
+            manifest = await pickAndroidFolder();
+        } catch (err) {
+            console.error("PickFolder failed:", err);
+            markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
+            notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err) });
+            return;
+        }
+        if (!manifest) {
+            // Changing your mind is not an error and must not read as one.
+            markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'canceled' });
+            return;
+        }
+        await runAndroidImport(parentID, manifest);
+    } catch (err) {
+        // The row above is already on screen and would spin forever if one of
+        // the confirmation steps threw. markTransferDone leaves an entry that
+        // already ended alone, so this never rewrites a real outcome.
+        console.error('Android folder import failed:', err);
+        markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
+        notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(err) });
+    } finally {
+        flowBusy = false;
+        state.cancelingUpload = false;
+    }
+}
+
+// runAndroidImport recreates the manifest's folder tree, then uploads its files
+// a window at a time so the cache never holds more than one window.
+async function runAndroidImport(parentID: string, manifest: AndroidFolderManifest) {
+    const folderPaths = folderPathsFor(manifest);
+    const totalFiles = manifest.files.length;
+    const totalBytes = manifest.files.reduce((sum, file) => sum + file.size, 0);
+
+    const onPersonal = state.activeChannel?.kind === 'personal';
+    // Refresh the snapshot so the modal's follow-up steps see truth.
+    if (onPersonal) await loadEncryptionStatus();
+
+    const plan: ImportPlan = {
+        files: totalFiles,
+        folders: folderPaths.length,
+        bytes: totalBytes,
+        oversize: 0,
+        archives: 0,
+        ignored: 0,
+        maxBytes: 0,
+        maxItems: 0,
+        limitExceeded: false,
+        errorCount: 0,
+        errors: [],
+    };
+    const choice = await openImportOptionsModal({
+        plan,
+        personal: onPersonal,
+        hasArchives: false,
+        // Nothing here moves with the options: there are no archives to
+        // extract, and encrypting changes neither the file count nor which
+        // folder a file lands in.
+        replan: async () => plan,
+    });
+    if (!choice) {
+        markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'canceled' });
+        return;
+    }
+    if (choice.encrypt && !state.encryption.passwordRemembered) {
+        const ok = state.encryption.passwordSet
+            ? await openEncryptionPasswordModal()
+            : await openEncryptionSetupModal();
+        if (!ok) {
+            markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'canceled' });
+            return;
+        }
+    }
+
+    importFailureReasons.length = 0;
+    // The aggregate row is the only upload surface an import gets, and setting
+    // this is what makes the per-file upload events fold into it.
+    state.importBatch = reduceImportProgress(createImportProgress(), { total: totalFiles });
+    setTransferDirectionActive('upload', true);
+    updateTransferName({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Creating folders…' });
+
+    let done = 0;
+    let failed = 0;
+    let bytesDone = 0;
+    const report = () => {
+        const batch = state.importBatch;
+        if (!batch) return;
+        const next = reduceImportProgress(batch, {
+            total: totalFiles,
+            done,
+            failed,
+            progress: totalBytes > 0 ? (bytesDone / totalBytes) * 100 : 0,
+        });
+        state.importBatch = next;
+        updateTransferProgress({
+            id: IMPORT_TRANSFER_ID,
+            direction: 'up',
+            progress: next.progress,
+            bytes: bytesDone,
+            total: totalBytes,
+            itemsDone: done + failed,
+            itemsTotal: totalFiles,
+        });
+    };
+
+    let fatalError = '';
+    try {
+        const folderIds = await createAndroidFolderTree(parentID, folderPaths);
+        // Show the tree before the bytes arrive, so the user can navigate into
+        // it while a long upload runs.
+        invalidateTransferCaches();
+        appActions().refreshFiles();
+        updateTransferName({ id: IMPORT_TRANSFER_ID, direction: 'up', name: manifest.root || 'Folder' });
+        report();
+
+        for (let start = 0; start < totalFiles && !state.cancelingUpload; start += ANDROID_UPLOAD_WINDOW) {
+            const batch = manifest.files.slice(start, start + ANDROID_UPLOAD_WINDOW);
+            const outcome = await uploadAndroidWindow(batch, manifest.root, folderIds, parentID, choice.encrypt);
+            done += outcome.done;
+            failed += outcome.failed;
+            // Count the window's bytes however it ended: the bar tracks work
+            // gone through, and the failure count carries the outcome.
+            bytesDone += batch.reduce((sum, file) => sum + file.size, 0);
+            report();
+        }
+    } catch (err) {
+        console.error('Android folder import failed:', err);
+        fatalError = humanizeBackendError(err);
+    } finally {
+        setTransferDirectionActive('upload', false);
+        finishAndroidImport(done, failed, fatalError);
+    }
+}
+
+// createAndroidFolderTree maps every directory in the manifest to a drive
+// folder id. folderPathsFor orders parents before children, so each lookup of
+// a parent has already happened.
+async function createAndroidFolderTree(parentID: string, folderPaths: string[]): Promise<Map<string, string>> {
+    const folderIds = new Map<string, string>([['', parentID]]);
+    for (const path of folderPaths) {
+        if (state.cancelingUpload) break;
+        const cut = path.lastIndexOf('/');
+        const parent = folderIds.get(cut < 0 ? '' : path.slice(0, cut)) ?? parentID;
+        const folder = await createFolder(path.slice(cut + 1), parent);
+        folderIds.set(path, folder.id);
+    }
+    return folderIds;
+}
+
+// uploadAndroidWindow copies one window out of the document tree, uploads it,
+// and releases it again.
+async function uploadAndroidWindow(
+    files: AndroidFolderFile[],
+    root: string,
+    folderIds: Map<string, string>,
+    parentID: string,
+    encrypt: boolean,
+): Promise<{ done: number; failed: number }> {
+    const ids = files.map((file) => file.id);
+    try {
+        const materialized = await materializeAndroidFiles(ids);
+        const paths: string[] = [];
+        const parentIDs: string[] = [];
+        let unreadable = 0;
+        for (const file of files) {
+            const path = materialized.get(file.id);
+            if (!path) {
+                // One file the bridge could not read does not stop the window.
+                unreadable += 1;
+                recordImportFailureReason(file.rel, 'could not be read from the folder');
+                continue;
+            }
+            paths.push(path);
+            parentIDs.push(folderIds.get(folderPathFor(root, file.rel)) ?? parentID);
+        }
+        if (!paths.length) return { done: 0, failed: unreadable };
+
+        const upload = await uploadToDriveFs(paths, parentIDs, encrypt);
+        if (!upload.result.ok && upload.result.error.code === 'canceled') state.cancelingUpload = true;
+        return { done: upload.files.length, failed: unreadable + paths.length - upload.files.length };
+    } finally {
+        // Cache stays bounded only if every window is released, including the
+        // one that threw or was cancelled part way through. A release that
+        // fails must not mask the upload error or stop the next window.
+        try {
+            await releaseAndroidFiles(ids);
+        } catch (err) {
+            console.error('ReleaseFiles failed:', err);
+        }
+    }
+}
+
+function finishAndroidImport(done: number, failed: number, fatalError: string) {
+    const canceled = state.cancelingUpload;
+    const resultLabel = formatImportResultLabel(done, failed);
+    updateTransferName({
+        id: IMPORT_TRANSFER_ID,
+        direction: 'up',
+        name: canceled ? 'Import canceled' : (fatalError ? 'Import failed' : resultLabel),
+    });
+    markTransferDone({
+        id: IMPORT_TRANSFER_ID,
+        direction: 'up',
+        status: canceled ? 'canceled' : (fatalError || failed > 0 ? 'failed' : 'done'),
+    });
+    state.importBatch = null;
+    invalidateTransferCaches();
+    appActions().refreshFiles();
+
+    if (!canceled && (fatalError || failed > 0)) {
+        // The row carries only a status, so the reasons the backend gave for
+        // individual files are the only actionable thing the user gets.
+        const reasons = fatalError ? [fatalError, ...importFailureReasons] : [...importFailureReasons];
+        const bits = failed > 0 ? [`${failed} failed`] : [];
+        notify({
+            level: 'error',
+            title: fatalError ? 'Import failed' : resultLabel,
+            body: [...bits, ...reasons.slice(0, MAX_IMPORT_FAILURE_REASONS)].join('  ·  ')
+                || 'The import stopped before it could finish.',
+        });
+    }
+    importFailureReasons.length = 0;
 }
 
 // runImportFlow is the single entry point for any selection (file picker, folder
