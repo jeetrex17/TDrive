@@ -6,7 +6,8 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
-import { createFolder, downloadFile, downloadFolder, importPaths, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { createFolder, downloadFile, downloadFolder, importPaths, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { canSaveToDownloads, saveToDownloads } from './android-downloads';
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import type { ImportPlan, OperationError } from '../types';
 import { notify } from './notifications';
@@ -130,6 +131,56 @@ function activateDownloadProgressEvents(): void {
     });
 }
 
+/**
+ * Tells the user where a phone download went, after putting it somewhere they
+ * can actually get to.
+ *
+ * The two platforms need opposite things here. iOS has no shared storage, so
+ * the download stays in the app container and the answer is that the container
+ * is published to the Files app; the share sheet Go opens afterwards is for
+ * sending it on, not for finding it. Android has a real public Downloads
+ * folder but hides the sandbox completely, so the file has to be moved out
+ * before it exists as far as the user is concerned.
+ */
+async function announceMobileDownload(item: DownloadQueueItem, savedPath: string): Promise<void> {
+    const folder = item.kind === 'folder';
+    const title = folder ? 'Folder downloaded' : 'Downloaded';
+
+    if (isAndroidPlatform() && canSaveToDownloads()) {
+        try {
+            const location = await saveToDownloads(savedPath);
+            notify({
+                level: 'success',
+                title,
+                body: location ? `Saved to ${location}` : 'Saved to your Downloads folder.',
+            });
+            return;
+        } catch (err) {
+            // The bytes are downloaded either way, so this is a warning about
+            // where they are, not a failed transfer.
+            console.error('Could not move the download to Downloads:', err);
+            notify({
+                level: 'warning',
+                title,
+                body: 'Saved inside TDrive, but it could not be moved to your Downloads folder.',
+            });
+            return;
+        }
+    }
+
+    // Go opens the share sheet after a single file; keep the path so the
+    // Transfers tab can offer it again later. A folder has no share sheet --
+    // no phone share sheet takes a directory -- so Files is the only route.
+    if (!folder && savedPath) rememberDownloadSharePath(`xfer:down:${item.key}`, savedPath);
+    notify({
+        level: 'success',
+        title,
+        body: folder
+            ? 'Saved to Files › On My iPhone › TDrive › Downloads.'
+            : 'Saved to Files › TDrive › Downloads. The share sheet is open.',
+    });
+}
+
 async function startNextDownload() {
     if (state.activeDownloadId !== null) return;
     const next = state.downloadQueue.find((entry) => entry.state === 'queued');
@@ -160,21 +211,13 @@ async function startNextDownload() {
 
         if (result.result.ok) {
             finalizeDownload(next.key, 'done');
-            const mobile = isMobilePlatform();
-            if (next.kind === 'folder') {
+            if (isMobilePlatform()) await announceMobileDownload(next, result.savedPath);
+            else if (next.kind === 'folder') {
                 notify({
                     level: 'success',
                     title: 'Folder downloaded',
-                    // The raw sandbox path means nothing on a phone; desktop keeps it.
-                    body: mobile
-                        ? 'Saved to your device.'
-                        : (result.savedPath ? 'Saved to ' + result.savedPath : next.name + ' saved'),
+                    body: result.savedPath ? 'Saved to ' + result.savedPath : next.name + ' saved',
                 });
-            } else if (mobile) {
-                // Go opens the share sheet right after a single-file download; keep
-                // the saved path so the Transfers tab can reshare it later.
-                if (result.savedPath) rememberDownloadSharePath(`xfer:down:${next.key}`, result.savedPath);
-                notify({ level: 'success', title: 'Downloaded', body: 'Saved. The share sheet is open.' });
             }
         } else if (result.result.error.code === 'canceled') {
             finalizeDownload(next.key, 'canceled');

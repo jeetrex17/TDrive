@@ -53,7 +53,7 @@ interface BridgeWindow {
         releaseFiles?: (id: string, idsJson: string) => void;
     };
     _wailsAndroidCallback?: ((id: string, result: string | null, error: string | null) => void) | undefined;
-    _tdriveFolderCallbacks?: Record<string, unknown>;
+    _tdriveBridgeCallbacks?: Record<string, unknown>;
 }
 
 const host = window as unknown as BridgeWindow;
@@ -136,7 +136,7 @@ afterEach(() => {
     state.importBatch = null;
     delete host.wails;
     host._wailsAndroidCallback = undefined;
-    delete host._tdriveFolderCallbacks;
+    delete host._tdriveBridgeCallbacks;
     deactivateTransfers();
 });
 

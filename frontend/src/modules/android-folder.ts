@@ -13,6 +13,8 @@
  * window currently going up.
  */
 
+import { callBridge, hasBridgeMethod } from './android-bridge';
+
 /** One file in the picked tree. Nothing is copied until it is materialized. */
 export interface AndroidFolderFile {
     /** Opaque to us; the bridge resolves it back to a document URI. */
@@ -27,70 +29,9 @@ export interface AndroidFolderManifest {
     files: AndroidFolderFile[];
 }
 
-interface AndroidBridge {
-    pickFolder?(callbackId: string): void;
-    materializeFiles?(callbackId: string, idsJson: string): void;
-    releaseFiles?(callbackId: string, idsJson: string): void;
-}
-
-type CallbackTable = Record<string, (result: string | null, error: string | null) => void>;
-
-interface BridgeWindow {
-    wails?: AndroidBridge;
-    _wailsAndroidCallback?: (id: string, result: string | null, error: string | null) => void;
-    _tdriveFolderCallbacks?: CallbackTable;
-}
-
 /** Whether this build can ask for a folder at all. */
 export function canPickFolder(): boolean {
-    if (typeof window === 'undefined') return false;
-    return typeof (window as BridgeWindow).wails?.pickFolder === 'function';
-}
-
-/**
- * The bridge answers through one global the Wails runtime owns, so this chains
- * onto whatever is already installed rather than replacing it: taking that
- * global would silently break every other async call into the host.
- */
-function registerCallback(id: string, resolve: (result: string) => void, reject: (error: Error) => void): void {
-    const host = window as BridgeWindow;
-    const table: CallbackTable = host._tdriveFolderCallbacks ?? {};
-    host._tdriveFolderCallbacks = table;
-    table[id] = (result, error) => {
-        delete table[id];
-        if (error) reject(new Error(error));
-        else resolve(result ?? '');
-    };
-
-    if (!host._wailsAndroidCallback || !(host._wailsAndroidCallback as { tdriveChained?: boolean }).tdriveChained) {
-        const previous = host._wailsAndroidCallback;
-        const chained = (callbackId: string, result: string | null, error: string | null) => {
-            const mine = host._tdriveFolderCallbacks?.[callbackId];
-            if (mine) {
-                mine(result, error);
-                return;
-            }
-            previous?.(callbackId, result, error);
-        };
-        (chained as { tdriveChained?: boolean }).tdriveChained = true;
-        host._wailsAndroidCallback = chained;
-    }
-}
-
-function callBridge(name: keyof AndroidBridge, args: string[], unavailable: string): Promise<string> {
-    const host = window as BridgeWindow;
-    const method = host.wails?.[name];
-    if (typeof method !== 'function') return Promise.reject(new Error(unavailable));
-    const id = `tdrive-folder:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<string>((resolve, reject) => {
-        registerCallback(id, resolve, reject);
-        try {
-            (method as (...callArgs: string[]) => void).call(host.wails, id, ...args);
-        } catch (cause) {
-            delete host._tdriveFolderCallbacks?.[id];
-            reject(cause instanceof Error ? cause : new Error(String(cause)));
-        }
-    });
+    return hasBridgeMethod('pickFolder');
 }
 
 function parseManifest(raw: string): AndroidFolderManifest | null {
