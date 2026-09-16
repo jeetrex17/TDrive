@@ -38,6 +38,8 @@ import androidx.core.content.FileProvider;
 import androidx.core.view.WindowCompat;
 import androidx.webkit.WebViewAssetLoader;
 
+import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
@@ -48,6 +50,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * MainActivity hosts the WebView and manages the Wails application lifecycle.
@@ -72,6 +76,12 @@ public class MainActivity extends AppCompatActivity {
     // The Go-side dialog ID of the in-flight file picker (-1 when idle)
     private int pendingFilePickerCallbackID = -1;
     private String pendingFolderCallbackId = null;
+    // The tree the last folder pick returned, what it holds keyed by the id the
+    // manifest handed out, and where copies of it go. Written on the picker's
+    // thread and read on whichever thread the uploader asks from.
+    private volatile Uri pickedTree;
+    private volatile File pickedCache;
+    private final Map<String, PickedFile> pickedFiles = new ConcurrentHashMap<>();
     private WailsJSBridge jsBridge;
     private static final int FOLDER_PICKER_REQUEST = 7004;
     private static final int PHOTO_CAPTURE_REQUEST = 7002;
@@ -460,24 +470,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /**
-     * Launch the system document picker. Results are copied into the app's
-     * cache directory so Go receives real filesystem paths. Called by
-     * WailsBridge on the main thread.
-     */
-    /**
-     * Launch the system folder picker and mirror what it returns into the app
-     * cache, so Go is handed an ordinary directory path.
+     * Launch the system folder picker and answer with a manifest of what the
+     * chosen tree holds, without copying a byte.
      *
      * The Storage Access Framework gives a document-tree URI, which nothing
-     * above this understands. Copying the tree out is the same answer already
-     * used for single files, and it keeps the whole import pipeline, desktop
-     * and phone alike, working from one directory path.
+     * above this understands. Mirroring the whole tree into the cache first was
+     * the obvious answer and the wrong one: it wrote a second copy of the folder
+     * before a single byte uploaded. The uploader asks for its files a batch at
+     * a time instead, through materializeFiles.
      */
     public void launchFolderPicker(String callbackId) {
         synchronized (this) {
             if (pendingFolderCallbackId != null) {
                 // One at a time: a second tree arriving for the first one's
-                // callback would copy a folder nobody asked for.
+                // callback would replace the manifest the uploader is working
+                // through.
                 jsBridge.sendCallback(callbackId, null, "a folder picker is already open");
                 return;
             }
@@ -492,6 +499,11 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Launch the system document picker. Results are copied into the app's
+     * cache directory so Go receives real filesystem paths. Called by
+     * WailsBridge on the main thread.
+     */
     public void launchFilePicker(int callbackID, boolean multiple) {
         synchronized (this) {
             if (pendingFilePickerCallbackID != -1) {
@@ -566,34 +578,194 @@ public class MainActivity extends AppCompatActivity {
         }
         final Uri tree = (resultCode == RESULT_OK && data != null) ? data.getData() : null;
         if (tree == null) {
-            // Dismissed. An empty path is the answer, not an error: the reader
-            // changed their mind, and nothing went wrong.
+            // Dismissed. An empty answer is the answer, not an error: the reader
+            // changed their mind, and nothing went wrong. An empty folder is a
+            // manifest with no files, which is a different thing entirely.
             jsBridge.sendCallback(callbackId, "", null);
             return;
         }
-        // Off the main thread: a folder of any size would otherwise freeze the
-        // screen for as long as it takes to copy.
+        // Off the main thread: the walk costs two round trips to the provider per
+        // directory, which on a deep folder is long enough to freeze the screen.
         new Thread(() -> {
             try {
-                File root = mirrorTree(tree);
-                jsBridge.sendCallback(callbackId, root.getAbsolutePath(), null);
+                jsBridge.sendCallback(callbackId, readTree(tree).toString(), null);
             } catch (Exception e) {
-                Log.e(TAG, "Failed to copy the chosen folder", e);
+                Log.e(TAG, "Failed to read the chosen folder", e);
                 jsBridge.sendCallback(callbackId, null, "could not read that folder");
             }
         }).start();
     }
 
-    /** Copies a chosen document tree into the cache and returns its root. */
-    private File mirrorTree(Uri tree) throws IOException {
+    /**
+     * Lists every file in a chosen tree as {"root","files":[{"id","rel","size"}]}.
+     * The ids are this pick's own, and stay answerable until the next one.
+     */
+    private JSONObject readTree(Uri tree) throws JSONException {
+        holdTree(tree);
         String rootDocId = DocumentsContract.getTreeDocumentId(tree);
-        String name = treeDisplayName(tree, rootDocId);
-        File root = new File(getCacheDir(), "wails-folder/" + System.nanoTime() + "/" + name);
-        if (!root.mkdirs()) {
-            throw new IOException("could not create " + root);
+        JSONArray files = new JSONArray();
+        collectTree(tree, rootDocId, "", files);
+        JSONObject manifest = new JSONObject();
+        manifest.put("root", treeDisplayName(tree, rootDocId));
+        manifest.put("files", files);
+        return manifest;
+    }
+
+    /**
+     * Takes the tree for keeps and drops the one before it. The grant the picker
+     * returns dies with the activity, and a large folder is uploaded over far
+     * longer than that, so every id in the manifest would stop opening partway
+     * through.
+     */
+    private void holdTree(Uri tree) {
+        if (pickedTree != null) {
+            try {
+                getContentResolver().releasePersistableUriPermission(
+                        pickedTree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException ignored) {
+            }
         }
-        copyTreeChildren(tree, rootDocId, root);
-        return root;
+        try {
+            getContentResolver().takePersistableUriPermission(
+                    tree, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (SecurityException e) {
+            // Not every provider offers one. The transient grant still covers a
+            // folder that finishes uploading while the app is up.
+            Log.w(TAG, "No persistable permission for the chosen folder", e);
+        }
+        pickedTree = tree;
+        pickedFiles.clear();
+        pickedCache = new File(getCacheDir(), "wails-folder/" + System.nanoTime());
+    }
+
+    private void collectTree(Uri tree, String parentDocId, String prefix, JSONArray files)
+            throws JSONException {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId);
+        try (Cursor cursor = getContentResolver().query(children, new String[]{
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+        }, null, null, null)) {
+            if (cursor == null) {
+                return;
+            }
+            while (cursor.moveToNext()) {
+                String docId = cursor.getString(0);
+                String rawName = cursor.getString(1);
+                if (docId == null || rawName == null || rawName.isEmpty()) {
+                    continue;
+                }
+                String rel = prefix + safeName(rawName);
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(cursor.getString(2))) {
+                    collectTree(tree, docId, rel + "/", files);
+                    continue;
+                }
+                String id = String.valueOf(files.length());
+                pickedFiles.put(id, new PickedFile(docId, rel));
+                files.put(new JSONObject()
+                        .put("id", id)
+                        .put("rel", rel)
+                        .put("size", cursor.isNull(3) ? 0 : cursor.getLong(3)));
+            }
+        }
+    }
+
+    /**
+     * Copies the named documents into the cache and answers with where they
+     * landed, as {"paths":{"<id>":"/abs/path"}}. An id that will not open is left
+     * out rather than failing the batch, so one unreadable file does not stop the
+     * rest of the folder.
+     */
+    public void materializeFiles(String callbackId, String idsJson) {
+        new Thread(() -> {
+            JSONObject paths = new JSONObject();
+            try {
+                JSONArray ids = new JSONArray(idsJson);
+                for (int i = 0; i < ids.length(); i++) {
+                    String id = ids.getString(i);
+                    File copy = materialize(id);
+                    if (copy != null) {
+                        paths.put(id, copy.getAbsolutePath());
+                    }
+                }
+                jsBridge.sendCallback(callbackId, new JSONObject().put("paths", paths).toString(), null);
+            } catch (JSONException e) {
+                Log.e(TAG, "Malformed file list", e);
+                jsBridge.sendCallback(callbackId, null, "malformed file list");
+            }
+        }).start();
+    }
+
+    /** Deletes the cached copies of the named documents. Unknown ids are fine. */
+    public void releaseFiles(String callbackId, String idsJson) {
+        new Thread(() -> {
+            try {
+                JSONArray ids = new JSONArray(idsJson);
+                for (int i = 0; i < ids.length(); i++) {
+                    String id = ids.getString(i);
+                    PickedFile file = pickedFiles.get(id);
+                    if (file != null) {
+                        discard(cacheSlot(id, file));
+                    }
+                }
+            } catch (JSONException e) {
+                // A list that will not parse names no cached file, so there is
+                // nothing to delete and nothing to report.
+                Log.w(TAG, "Malformed release list", e);
+            }
+            jsBridge.sendCallback(callbackId, "", null);
+        }).start();
+    }
+
+    @Nullable
+    private File materialize(String id) {
+        PickedFile file = pickedFiles.get(id);
+        if (file == null || pickedTree == null) {
+            return null;
+        }
+        File out = cacheSlot(id, file);
+        File slot = out.getParentFile();
+        try {
+            if (!slot.isDirectory() && !slot.mkdirs()) {
+                return null;
+            }
+            copyDocument(DocumentsContract.buildDocumentUriUsingTree(pickedTree, file.docId), out);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to copy " + file.rel, e);
+            discard(out);
+            return null;
+        }
+        return out;
+    }
+
+    /**
+     * Where one document's copy lives. Each id gets a directory of its own
+     * because the copy has to keep the name the manifest reported, which is what
+     * the drive ends up calling it, and two folders in one batch can easily hold
+     * the same filename.
+     */
+    private File cacheSlot(String id, PickedFile file) {
+        return new File(pickedCache, id + "/" + file.rel.substring(file.rel.lastIndexOf('/') + 1));
+    }
+
+    private void discard(File copy) {
+        copy.delete();
+        File slot = copy.getParentFile();
+        if (slot != null) {
+            slot.delete();
+        }
+    }
+
+    /** One file in the picked tree: where to read it, and what to call the copy. */
+    private static final class PickedFile {
+        final String docId;
+        final String rel;
+
+        PickedFile(String docId, String rel) {
+            this.docId = docId;
+            this.rel = rel;
+        }
     }
 
     private String treeDisplayName(Uri tree, String docId) {
@@ -625,41 +797,12 @@ public class MainActivity extends AppCompatActivity {
         return bare;
     }
 
-    private void copyTreeChildren(Uri tree, String parentDocId, File dest) throws IOException {
-        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId);
-        try (Cursor cursor = getContentResolver().query(children, new String[]{
-                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE,
-        }, null, null, null)) {
-            if (cursor == null) {
-                return;
-            }
-            while (cursor.moveToNext()) {
-                String docId = cursor.getString(0);
-                String rawName = cursor.getString(1);
-                String mime = cursor.getString(2);
-                if (docId == null || rawName == null || rawName.isEmpty()) {
-                    continue;
-                }
-                File out = new File(dest, safeName(rawName));
-                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
-                    if (out.isDirectory() || out.mkdirs()) {
-                        copyTreeChildren(tree, docId, out);
-                    }
-                } else {
-                    copyDocument(DocumentsContract.buildDocumentUriUsingTree(tree, docId), out);
-                }
-            }
-        }
-    }
-
     /** Streams one document out of the provider and into the cache. */
     private void copyDocument(Uri uri, File out) throws IOException {
         try (InputStream in = getContentResolver().openInputStream(uri);
              OutputStream os = new FileOutputStream(out)) {
             if (in == null) {
-                return;
+                throw new IOException("nothing to read from " + uri);
             }
             byte[] buf = new byte[64 * 1024];
             int n;
