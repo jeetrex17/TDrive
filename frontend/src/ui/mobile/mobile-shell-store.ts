@@ -99,9 +99,11 @@ export const ringState = derived(
     },
 );
 
-// Sandbox paths of finished single-file downloads, keyed by the transfer event
-// id, so the Transfers tab can re-open the share sheet later. Populated by
-// modules/transfers.ts on mobile only; folder downloads are not shareable yet.
+// Paths of finished single-file downloads, keyed by the transfer event id, so
+// the Transfers tab can re-open the share sheet later. Populated by
+// modules/transfers.ts on iOS only: a folder is not shareable on either phone,
+// and an Android download has left the sandbox for public Downloads by the
+// time this would run, so there is no path left to hold on to.
 export const downloadSharePaths = writable<Map<string, string>>(new Map());
 
 export function rememberDownloadSharePath(transferId: string, path: string): void {
