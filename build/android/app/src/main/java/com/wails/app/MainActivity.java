@@ -32,9 +32,6 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
-import androidx.core.graphics.Insets;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 import androidx.webkit.WebViewAssetLoader;
 
 import org.json.JSONObject;
@@ -46,7 +43,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * MainActivity hosts the WebView and manages the Wails application lifecycle.
@@ -195,8 +191,6 @@ public class MainActivity extends AppCompatActivity {
                 super.onPageFinished(view, url);
                 if (DEBUG) Log.d(TAG, "Page loaded: " + url);
                 bridge.onPageFinished(url);
-                // A new document starts without the inset variables.
-                ViewCompat.requestApplyInsets(view);
                 // Now that JS listeners are mounted, push a snapshot of the
                 // current battery / network / theme so the UI starts populated.
                 emitSystemSnapshot();
@@ -207,7 +201,6 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new WailsJSBridge(bridge, webView), "wails");
 
         registerBackHandler();
-        publishWindowInsets();
     }
 
     private void loadApplication() {
@@ -830,31 +823,6 @@ public class MainActivity extends AppCompatActivity {
      * dispatcher rather than overriding onBackPressed() keeps this working
      * under the predictive back gesture.
      */
-    /**
-     * TDrive: the page keeps its bars clear of the status bar and the gesture
-     * handle, but env(safe-area-inset-*) is zero in this WebView: it only
-     * tracks display cutouts, not the system bars the app draws behind. Publish
-     * the real window insets as CSS variables instead; the stylesheets take
-     * whichever source is larger, so iOS keeps using env(). Insets are reported
-     * in device pixels and CSS wants layout pixels, hence the density divide.
-     */
-    private void publishWindowInsets() {
-        ViewCompat.setOnApplyWindowInsetsListener(webView, (view, windowInsets) -> {
-            Insets insets = windowInsets.getInsets(
-                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
-            float density = getResources().getDisplayMetrics().density;
-            String js = String.format(Locale.US,
-                    "(function(s){s.setProperty('--android-inset-top','%.2fpx');"
-                            + "s.setProperty('--android-inset-bottom','%.2fpx');})"
-                            + "(document.documentElement.style)",
-                    insets.top / density, insets.bottom / density);
-            webView.evaluateJavascript(js, null);
-            // Pass them on: consuming here would hide the insets from any other
-            // view in the tree.
-            return windowInsets;
-        });
-    }
-
     private void registerBackHandler() {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override

@@ -514,6 +514,15 @@ export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<
     return $Call.ByID(4195625464, userIDs);
 }
 
+/**
+ * SafeAreaInsets reports those reserved edges. The frontend asks for them
+ * because CSS cannot see all of them: Android's WebView fills
+ * env(safe-area-inset-top) but leaves the bottom gesture area at zero.
+ */
+export function SafeAreaInsets(): $CancellablePromise<$models.SafeAreaInsets> {
+    return $Call.ByID(1909123243);
+}
+
 export function SaveSetup(apiId: number, apiHash: string): $CancellablePromise<string> {
     return $Call.ByID(1847944557, apiId, apiHash);
 }

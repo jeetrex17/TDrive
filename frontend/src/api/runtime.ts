@@ -1,5 +1,7 @@
 import { Browser, Events, System, Window } from "@wailsio/runtime";
+import { SafeAreaInsets as rawSafeAreaInsets } from "../../bindings/TDrive/app";
 import {
+    invokeBackend,
     invokeRuntimeAsync,
     noopRuntimeUnsubscribe,
     RuntimeInvocationError,
@@ -268,6 +270,24 @@ function nativeBridgePresent(): boolean {
         || window.webkit?.messageHandlers?.external?.postMessage
         || window.wails?.invoke,
     );
+}
+
+/** Screen edges the OS reserves for its own chrome. Zero off a phone. */
+export interface SafeAreaInsets {
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+}
+
+export async function getSafeAreaInsets(): Promise<SafeAreaInsets> {
+    const raw = await invokeBackend(rawSafeAreaInsets);
+    return {
+        top: Number(raw?.top ?? 0),
+        bottom: Number(raw?.bottom ?? 0),
+        left: Number(raw?.left ?? 0),
+        right: Number(raw?.right ?? 0),
+    };
 }
 
 export async function getRuntimeEnvironment(): Promise<RuntimeEnvironment> {
