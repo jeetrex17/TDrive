@@ -4,6 +4,14 @@
     import FolderUpIcon from '@lucide/svelte/icons/folder-up';
     import UploadIcon from '@lucide/svelte/icons/upload';
     import { tick } from 'svelte';
+    import { isMobilePlatform } from '../../api';
+
+    // Desktop anchors this menu under its toolbar button. The phone cannot: the
+    // trigger is docked into the middle of the tab bar, hard against the bottom
+    // safe area, so a popover has nowhere to open into and collides with the bar
+    // it sits in. On a phone it becomes a bottom sheet instead, which is the
+    // same surface the row actions and the drive switcher already use.
+    const asSheet = isMobilePlatform();
 
     interface Props {
         onFiles: () => void;
@@ -89,15 +97,25 @@
     <UploadIcon class="btn-icon" size={16} strokeWidth={2} aria-hidden="true" />
     Upload
 </button>
+{#if asSheet && open}
+    <!-- Dimming the screen is what makes the sheet read as a layer rather than
+         a box floating over the bar. It is a real element, not a pseudo, so a
+         tap on it counts as outside the menu and closes it. -->
+    <div class="upload-scrim" aria-hidden="true" onclick={() => closeMenu()}></div>
+{/if}
 <div
     bind:this={menuEl}
     id="upload-menu"
     class="upload-menu"
+    class:is-sheet={asSheet}
     role="menu"
     tabindex="-1"
     style={`display: ${open ? 'flex' : 'none'};`}
     onkeydown={onMenuKeydown}
 >
+    {#if asSheet}
+        <div class="sheet-handle" aria-hidden="true"><span></span></div>
+    {/if}
     <button bind:this={filesEl} id="upload-menu-files" class="upload-menu-item" type="button" role="menuitem" onclick={() => activate(onFiles)}>
         <FileUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
         {onNewFolder ? 'Upload files' : 'Files'}
@@ -113,5 +131,8 @@
             <FolderUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
             {onNewFolder ? 'Upload folder' : 'Folder'}
         </button>
+    {/if}
+    {#if asSheet}
+        <button class="upload-menu-cancel" type="button" onclick={() => closeMenu(true)}>Cancel</button>
     {/if}
 </div>
