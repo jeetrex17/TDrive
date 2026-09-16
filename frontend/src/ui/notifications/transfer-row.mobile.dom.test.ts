@@ -7,6 +7,12 @@ import { flushSync, mount, unmount, type ComponentProps } from 'svelte';
 import TransferRow from './TransferRow.svelte';
 import type { TransferEvent, TransferStatus } from './notif-store';
 
+const cancelSingleUpload = vi.hoisted(() => vi.fn());
+vi.mock('../../modules/notif-bell', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../modules/notif-bell')>();
+    return { ...actual, cancelSingleUpload };
+});
+
 vi.mock('../../api', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../api')>();
     return { ...actual, isMobilePlatform: () => true };
@@ -40,6 +46,7 @@ function render(props: RowProps): void {
 }
 
 beforeEach(() => {
+    cancelSingleUpload.mockClear();
     host = document.createElement('div');
     document.body.append(host);
 });
@@ -93,5 +100,39 @@ describe('transfer row on a phone', () => {
         render({ transfer: transfer({ status: 'failed' }) });
         expect(host.querySelector('.notif-row-transfer.is-failed')).not.toBeNull();
         expect(host.querySelector('.notif-row-transfer.is-active')).toBeNull();
+    });
+});
+
+describe('cancelling one file of a batch', () => {
+    it('stops just that upload, because the phone also has a Cancel all', () => {
+        const onCancel = vi.fn();
+        render({ transfer: transfer({ id: 'xfer:up:1', direction: 'up', status: 'active' }), onCancel });
+        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+        if (!button) throw new Error('Missing cancel button');
+        button.click();
+        expect(cancelSingleUpload).toHaveBeenCalledExactlyOnceWith(1);
+        expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    // One row per case: render() appends to the same host, so a loop would
+    // leave the first row in place and click that one instead.
+    it('falls back to the whole direction for a download', () => {
+        const onCancel = vi.fn();
+        render({ transfer: transfer({ id: 'xfer:down:file:42', direction: 'down', status: 'active' }), onCancel });
+        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+        if (!button) throw new Error('Missing cancel button');
+        button.click();
+        expect(onCancel).toHaveBeenCalledExactlyOnceWith('down');
+        expect(cancelSingleUpload).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the whole direction for an import, which has no per-file id', () => {
+        const onCancel = vi.fn();
+        render({ transfer: transfer({ id: 'xfer:up:import', direction: 'up', status: 'active' }), onCancel });
+        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+        if (!button) throw new Error('Missing cancel button');
+        button.click();
+        expect(onCancel).toHaveBeenCalledExactlyOnceWith('up');
+        expect(cancelSingleUpload).not.toHaveBeenCalled();
     });
 });

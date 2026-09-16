@@ -39,6 +39,18 @@
                 });
         };
     }
+
+    /**
+     * The row's x stops one file. A batch needs its own way out: with three
+     * uploads running at a time, twenty files show three rows, and stopping
+     * those three just lets the next three start. Shown only when there is
+     * more than one upload, so a single transfer keeps one obvious control.
+     */
+    const activeUploads = $derived($activeTransfers.filter((t) => t.direction === 'up').length);
+
+    function cancelAllUploads(): void {
+        cancelTransfersInDirection('up');
+    }
 </script>
 
 <div class="mobile-scroll transfers-tab">
@@ -54,6 +66,11 @@
         {#if $activeTransfers.length > 0}
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Active</h2>
+                {#if activeUploads > 1}
+                    <button type="button" class="transfers-clear" onclick={cancelAllUploads}>
+                        Cancel all
+                    </button>
+                {/if}
             </div>
             <div class="transfers-group" role="list">
                 {#each $activeTransfers as transfer (transfer.id)}

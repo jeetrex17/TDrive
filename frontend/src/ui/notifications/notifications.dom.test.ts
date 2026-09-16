@@ -91,14 +91,18 @@ afterEach(async () => {
 });
 
 describe('notification interaction controls', () => {
-    it('stops one upload from its own row, leaving the rest of the batch alone', () => {
+    it('stops the whole direction from an upload row on desktop', () => {
+        // The narrow per-file cancel is the phone's, because the phone also has
+        // a Cancel all beside the section title. The bell's rows are its only
+        // cancel, and only three uploads run at once, so narrowing it here
+        // would leave a twenty-file batch with no way to stop.
         const onCancel = vi.fn();
         const host = mountComponent(TransferRow, { transfer: makeTransfer(), onCancel });
         const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
         if (!button) throw new Error('Missing cancel button');
         button.click();
-        expect(cancelSingleUpload).toHaveBeenCalledExactlyOnceWith(1);
-        expect(onCancel).not.toHaveBeenCalled();
+        expect(onCancel).toHaveBeenCalledExactlyOnceWith('up');
+        expect(cancelSingleUpload).not.toHaveBeenCalled();
     });
     it('cancels the whole direction for a row the backend cannot stop on its own', () => {
         for (const id of ['xfer:down:file:42', 'xfer:up:import']) {
