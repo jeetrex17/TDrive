@@ -10,14 +10,13 @@
     import FeatureLayer from '../app/FeatureLayer.svelte';
     import AccountTab from './AccountTab.svelte';
     import DriveSwitcherSheet from './DriveSwitcherSheet.svelte';
-    import Fab from './Fab.svelte';
     import TabBar from './TabBar.svelte';
     import TopBar from './TopBar.svelte';
     import TransfersTab from './TransfersTab.svelte';
     import { activateMobileBack } from './mobile-back';
     import { activateSafeArea } from './safe-area';
     import { activateKeyboardInsets } from './keyboard-insets';
-    import { activeTab, transferAttentionCount, type MobileTab } from './mobile-shell-store';
+    import { activeTab, keyboardOpen, transferAttentionCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
 
@@ -169,9 +168,8 @@
          slot and never slides away on scroll: it is part of the bar's shape,
          and a gap opening and closing in the middle of it would read as a
          glitch rather than a hint. -->
-    <div class="mobile-tabbar-slot" hidden={selecting}>
+    <div class="mobile-tabbar-slot" hidden={selecting || $keyboardOpen}>
         <TabBar active={$activeTab} transferBadge={$transferAttentionCount} onSelect={selectTab} />
-        <Fab />
     </div>
 
     <DriveSwitcherSheet />
