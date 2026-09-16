@@ -25,18 +25,33 @@ body { background-color: var(--bg-dark); color: var(--text-main); height: 100vh;
     animation: theme-new-reveal 1200ms cubic-bezier(0.16, 1, 0.3, 1) both;
     clip-path: circle(150vmax at var(--theme-origin-x, 50vw) var(--theme-origin-y, 50vh));
 }
-html.theme-transition-fallback #app {
-    animation: theme-app-settle 1200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+/* The fallback path, for webviews that cannot be trusted with a root view
+   transition (Linux WebKitGTK, iOS WKWebView).
+ 
+   It must never make the page translucent. #app sits straight on the canvas,
+   and the canvas has already taken the incoming palette by the time this runs,
+   so fading #app at all washes the whole screen in the new colour before the
+   content catches up -- a white flash going light, a black one going dark.
+   That flash was this rule. Colour crossfades instead, which is what the
+   surrounding comment always claimed it did.
+ 
+   The transition is set only while the class is on, and the class comes off
+   after FALLBACK_CLEANUP_DELAY_MS, so no element carries it afterwards and
+   nothing's own transition is displaced for longer than the swap. */
+html.theme-transition-fallback #app,
+html.theme-transition-fallback #app *:not(img):not(video):not(canvas) {
+    transition:
+        background-color 620ms var(--ease-standard),
+        border-color 620ms var(--ease-standard),
+        color 620ms var(--ease-standard),
+        fill 620ms var(--ease-standard),
+        stroke 620ms var(--ease-standard);
 }
 @keyframes theme-old-fade {
     to { opacity: 0.84; filter: saturate(0.92); }
 }
 @keyframes theme-new-reveal {
     from { clip-path: circle(0 at var(--theme-origin-x, 50vw) var(--theme-origin-y, 50vh)); }
-}
-@keyframes theme-app-settle {
-    from { opacity: 0.82; transform: scale(0.997); filter: saturate(0.9); }
-    to { opacity: 1; transform: scale(1); filter: saturate(1); }
 }
 @keyframes tdrive-surface-enter {
     from {
@@ -51,9 +66,12 @@ html.theme-transition-fallback #app {
 }
 @media (prefers-reduced-motion: reduce) {
     ::view-transition-old(root),
-    ::view-transition-new(root),
-    html.theme-transition-fallback #app {
+    ::view-transition-new(root) {
         animation: none;
+    }
+    html.theme-transition-fallback #app,
+    html.theme-transition-fallback #app *:not(img):not(video):not(canvas) {
+        transition: none;
     }
 }
 /* macOS layers libmpv *below* the transparent WebView, so every element that

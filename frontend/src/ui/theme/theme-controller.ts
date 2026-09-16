@@ -111,6 +111,14 @@ export function createThemeController(
         }
 
         const generation = beginTransition(targetDocument, THEME_FALLBACK_CLASS, origin);
+        // A transition only runs if there is a style recalculation where it is
+        // already armed and the old colour is still current. Adding the class
+        // and swapping the palette in one task gives the browser a single
+        // recalculation, so it animates nothing -- which is why this path used
+        // to reach for a keyframe animation, and why that animation had to fade
+        // the page to be visible at all. Reading a layout property forces the
+        // flush and lets the colours actually cross over.
+        void targetDocument.documentElement.offsetHeight;
         applyState(nextState);
         fallbackTimer = setTimeout(() => {
             if (generation !== transitionGeneration) return;
