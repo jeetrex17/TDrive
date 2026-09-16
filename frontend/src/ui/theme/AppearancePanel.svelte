@@ -433,10 +433,15 @@
         color: var(--color-on-accent);
         box-shadow: none;
     }
+    /* The pill already says which half is chosen. A chip behind the glyph is a
+       second answer to the same question, and on the half that is not chosen it
+       reads as a stray square floating over the track. The box stays the same
+       size so nothing shifts; only the fill goes. */
+    :global(html.mobile) .mode-card .mode-icon,
     :global(html.mobile) .mode-card.selected .mode-icon {
         background: transparent;
-        color: inherit;
     }
+    :global(html.mobile) .mode-card.selected .mode-icon { color: inherit; }
     :global(html.mobile) .mode-card:hover,
     :global(html.mobile) .mode-card:active { transform: none; }
 
