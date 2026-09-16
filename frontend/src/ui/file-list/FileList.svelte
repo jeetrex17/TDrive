@@ -12,6 +12,10 @@
     import FileState from './FileState.svelte';
     import { fileTypeFamily, fileTypeIcon } from './file-type';
     import { rowMetaLine, splitRowLabel } from './row-meta';
+    import ItemStatus from '../mobile/ItemStatus.svelte';
+    import { itemStateFor, transfersByFile } from '../mobile/item-state-store';
+    import { itemStateDescriptor } from '../mobile/item-state';
+    import { activeTab } from '../mobile/mobile-shell-store';
     import { sortFileListRows } from './file-sort';
     import { fileListView } from './file-list-store';
     import { fileSortState } from './file-sort-store';
@@ -176,8 +180,10 @@
         {:else}
             {@const selected = $selectedFileRowKeys.has(row.selectionKey)}
             {@const meta = rowMetaLine(row)}
+            {@const state = itemStateFor($transfersByFile, row.id)}
+            {@const stateInfo = itemStateDescriptor(state)}
             <div
-                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${selected ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}`}
+                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${selected ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}${mobile && stateInfo.needsExplanation ? ' needs-explanation' : ''}`}
                 use:measureRow
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}
@@ -237,8 +243,16 @@
                                 {/if}
                             </span>
                         {/if}
+                        {#if mobile && stateInfo.needsExplanation}
+                            <span class="row-explain" data-tone={stateInfo.tone}>{stateInfo.detail}</span>
+                        {/if}
                     </span>
                 </div>
+                {#if mobile}
+                    <div class="row-status" role="gridcell" aria-colindex="3">
+                        <ItemStatus state={state} onOpenQueue={() => activeTab.set('transfers')} />
+                    </div>
+                {/if}
                 <div class="row-actions" role="gridcell" aria-colindex="4">
                     <button
                         class="action-icon row-more"

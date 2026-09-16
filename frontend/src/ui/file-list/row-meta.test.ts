@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { relativeTimeLabel, rowMetaLine, splitRowLabel } from './row-meta';
+import { relativeTimeLabel, rowMetaLine, rowTypeLabel, splitRowLabel } from './row-meta';
 import type { FileListFileRow, FolderListRow } from './types';
 
 const NOW_MS = Date.UTC(2026, 8, 15, 12, 0, 0);
@@ -62,15 +62,26 @@ describe('relativeTimeLabel', () => {
     });
 });
 
+describe('rowTypeLabel', () => {
+    it('names the kind in plain words', () => {
+        expect(rowTypeLabel(fileRow())).toBe('PDF');
+        expect(rowTypeLabel(fileRow({ ext: '' }))).toBe('File');
+        expect(rowTypeLabel(folderRow())).toBe('Folder');
+    });
+});
+
 describe('rowMetaLine', () => {
-    it('joins size and age with one middle dot', () => {
-        expect(rowMetaLine(fileRow(), NOW_MS)).toBe('2 MB · 2 hours ago');
+    it('leads with the type, then size and age, joined by one middle dot', () => {
+        expect(rowMetaLine(fileRow(), NOW_MS)).toBe('PDF · 2 MB · 2 hours ago');
     });
 
-    it('leaves a folder without stats blank and drops unknown halves', () => {
-        expect(rowMetaLine(folderRow(), NOW_MS)).toBe('');
-        expect(rowMetaLine(folderRow({ size: 1_280_000_000, modifiedTime: NOW - 2 * 86_400 }), NOW_MS)).toBe('1.2 GB · 2 days ago');
-        expect(rowMetaLine(folderRow({ modifiedTime: NOW - 2 * 86_400 }), NOW_MS)).toBe('2 days ago');
+    it('keeps the type as the fixed first column when the rest is unknown', () => {
+        // A folder whose subtree stats have not resolved still says what it is,
+        // so the meta column never starts blank and then jumps to a size.
+        expect(rowMetaLine(folderRow(), NOW_MS)).toBe('Folder');
+        expect(rowMetaLine(folderRow({ size: 1_280_000_000, modifiedTime: NOW - 2 * 86_400 }), NOW_MS))
+            .toBe('Folder · 1.2 GB · 2 days ago');
+        expect(rowMetaLine(folderRow({ modifiedTime: NOW - 2 * 86_400 }), NOW_MS)).toBe('Folder · 2 days ago');
     });
 });
 
