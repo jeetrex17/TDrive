@@ -6,6 +6,13 @@ import { formatBytes, formatDate } from '../../utils';
 import type { FileListFileRow, FolderListRow } from './types';
 
 const TAIL_CHARS = 4;
+// The tail is the half that never shrinks -- keeping it is the whole point of
+// middle truncation -- so what counts as an extension has to be bounded here.
+// "Report 2026.09-final-annotated" has a 19-character "extension", and a tail
+// that long walks straight over the status badge and the overflow button on a
+// narrow screen. Six is the same limit utils.splitNameAndExt puts on the type
+// label, so both halves of the row agree on what an extension is.
+const MAX_EXT_CHARS = 6;
 
 /** "Just now", "3 minutes ago", "Yesterday", then the calendar date past a week. */
 export function relativeTimeLabel(unixSec: number, nowMs = Date.now()): string {
@@ -52,12 +59,14 @@ export function rowMetaLine(row: FolderListRow | FileListFileRow, nowMs = Date.n
 
 /**
  * Splits a name so the tail (the last few characters of the base plus the
- * extension) can stay while the head ellipsises. Names without an extension
- * keep the whole string in the head.
+ * extension) can stay while the head ellipsises. Names without an extension --
+ * or with a trailing run too long to be one -- keep the whole string in the
+ * head and give way from the end like any other label.
  */
 export function splitRowLabel(name: string): { head: string; tail: string } {
     const dot = name.lastIndexOf('.');
     if (dot <= 0 || dot === name.length - 1) return { head: name, tail: '' };
+    if (name.length - dot - 1 > MAX_EXT_CHARS) return { head: name, tail: '' };
     const cut = Math.max(0, dot - TAIL_CHARS);
     return { head: name.slice(0, cut), tail: name.slice(cut) };
 }

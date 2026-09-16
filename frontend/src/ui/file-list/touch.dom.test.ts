@@ -3,8 +3,12 @@ import { bindLongPress, bindPullToRefresh } from './touch';
 
 // Haptics now go through one binding rather than a per-platform runtime call,
 // so the mock only has to silence that.
+const playHaptic = vi.hoisted(() => vi.fn());
 vi.mock('../../api', () => ({
-    playHaptic: vi.fn(),
+    playHaptic,
+    // The row swipe shares its verdict with the pull, and only Android guards
+    // its trailing edge.
+    isAndroidPlatform: () => false,
 }));
 
 let host: HTMLElement;
@@ -23,15 +27,18 @@ function pointer(type: string, target: EventTarget, init: PointerEventInit = {})
     }));
 }
 
-function touch(type: string, clientY: number, cancelable = true): Event {
+// clientX matters as much as clientY now: the pull and the row swipe settle
+// which of them owns a gesture from the same two numbers.
+function touch(type: string, clientY: number, clientX = 200, cancelable = true): Event {
     const event = new Event(type, { bubbles: true, cancelable });
-    const touches = type === 'touchend' ? [] : [{ clientY }];
-    Object.assign(event, { touches, changedTouches: [{ clientY }] });
+    const touches = type === 'touchend' ? [] : [{ clientX, clientY }];
+    Object.assign(event, { touches, changedTouches: [{ clientX, clientY }] });
     host.dispatchEvent(event);
     return event;
 }
 
 beforeEach(() => {
+    playHaptic.mockClear();
     vi.useFakeTimers();
     host = document.createElement('div');
     host.id = 'file-list';
@@ -116,6 +123,21 @@ describe('bindLongPress', () => {
         expect(seen).toHaveBeenCalledTimes(1);
         expect(native.defaultPrevented).toBe(true);
     });
+
+    it('leaves the press alone away from the rows', () => {
+        // Swallowed across the whole host, this also took selection and lookup
+        // off the group headings and the empty space around the list, where the
+        // long press opens nothing of ours to replace them.
+        const heading = document.createElement('h2');
+        host.append(heading);
+        bindLongPress(host, '.drive-row', vi.fn());
+
+        const native = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+        Object.defineProperty(native, 'isTrusted', { value: true });
+        heading.dispatchEvent(native);
+
+        expect(native.defaultPrevented).toBe(false);
+    });
 });
 
 describe('bindPullToRefresh', () => {
@@ -144,6 +166,61 @@ describe('bindPullToRefresh', () => {
         await vi.advanceTimersByTimeAsync(600);
         expect(indicator.classList.contains('is-refreshing')).toBe(false);
         expect(indicator.classList.contains('is-pulling')).toBe(false);
+    });
+
+    it('leaves a sideways drag to the row that owns it', () => {
+        // Down and to the left used to run both recognisers: the row opened
+        // while the refresh ring slid in behind it.
+        const refresh = vi.fn();
+        bindPullToRefresh(host, refresh);
+        const indicator = host.querySelector<HTMLElement>('.pull-refresh')!;
+
+        touch('touchstart', 100, 200);
+        touch('touchmove', 130, 140);
+        touch('touchmove', 180, 60);
+
+        expect(indicator.classList.contains('is-pulling')).toBe(false);
+        expect(indicator.style.getPropertyValue('--pull')).not.toBe('40px');
+
+        touch('touchend', 180, 60);
+        expect(refresh).not.toHaveBeenCalled();
+    });
+
+    it('keeps the pull once the gesture has been read as vertical', () => {
+        // The verdict is taken once: a pull that drifts sideways later stays a
+        // pull rather than being handed over halfway down.
+        bindPullToRefresh(host, vi.fn());
+        const indicator = host.querySelector<HTMLElement>('.pull-refresh')!;
+
+        touch('touchstart', 100, 200);
+        touch('touchmove', 140, 198);
+        touch('touchmove', 180, 120);
+
+        expect(indicator.classList.contains('is-pulling')).toBe(true);
+        expect(indicator.style.getPropertyValue('--pull')).toBe('40px');
+    });
+
+    it('ticks once per pull however often the threshold is crossed', () => {
+        // A thumb resting on the line crosses it over and over; a buzz for
+        // every wobble is what teaches people to turn haptics off.
+        bindPullToRefresh(host, vi.fn());
+
+        touch('touchstart', 100);
+        touch('touchmove', 240);
+        expect(playHaptic).toHaveBeenCalledTimes(1);
+
+        touch('touchmove', 226);
+        touch('touchmove', 240);
+        touch('touchmove', 224);
+        touch('touchmove', 250);
+        expect(playHaptic).toHaveBeenCalledTimes(1);
+
+        // A new gesture gets its own tick.
+        touch('touchmove', 90);
+        touch('touchend', 90);
+        touch('touchstart', 100);
+        touch('touchmove', 240);
+        expect(playHaptic).toHaveBeenCalledTimes(2);
     });
 
     it('settles without refreshing when released early or scrolled', () => {
