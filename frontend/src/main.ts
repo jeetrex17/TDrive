@@ -46,6 +46,12 @@ const lifecycle: AppLifecycle = {
                 }
                 await refreshActiveDrive();
             },
+            downloadFile: (target) => {
+                // The transfer queue stays out of startup like the viewers do.
+                void import('./modules/transfers').then((transfers) => {
+                    transfers.enqueueDownload(target.id, target.name, target.size ?? 0);
+                });
+            },
             openFile: async (target) => {
                 // Keep the media controller out of startup; it pulls in viewer-only dependencies.
                 const viewer = await import('./modules/modals/file-viewer');

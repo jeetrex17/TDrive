@@ -4,6 +4,7 @@ import {
     closeMedia,
     closeNativeMedia,
     getMediaStats,
+    isIOSPlatform,
     isMobilePlatform,
     onRuntimeEvent,
     openMedia,
@@ -16,7 +17,8 @@ import {
 } from "../../api";
 
 import { formatBytes } from "../../utils";
-import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
+import { isIOSPlayableVideo, isWebviewDirectVideo, videoFormatLabel } from "../media-types";
+import { appActions } from "../app-actions";
 import { prefersNativePlayer, rememberNativePlayer } from "../video/native-memory";
 import {
     SerialPlaybackTransitions,
@@ -360,8 +362,17 @@ function clearStreamActivity() {
 }
 
 
-function setError(message: string) {
+/**
+ * What the error's primary button does. Null means Retry, which is right when
+ * the failure might not recur. A failure that will repeat identically forever
+ * gets an action that can actually help instead.
+ */
+let errorPrimaryAction: { label: string; run: () => void } | null = null;
+
+function setError(message: string, primary: { label: string; run: () => void } | null = null) {
     hasError = true;
+    errorPrimaryAction = primary;
+    if (errorRetryBtnEl) errorRetryBtnEl.textContent = primary ? primary.label : "Retry";
     loadingStatusOverride = "";
     setLoading(false);
     clearMediaStatsPolling();
@@ -376,6 +387,8 @@ function setError(message: string) {
 function clearError() {
     const restoreFocus = Boolean(errorEl?.contains(document.activeElement));
     hasError = false;
+    errorPrimaryAction = null;
+    if (errorRetryBtnEl) errorRetryBtnEl.textContent = "Retry";
     errorMessageEl?.replaceChildren();
     if (errorEl) errorEl.style.display = "none";
     modalEl?.classList.remove("is-video-error");
@@ -383,8 +396,14 @@ function clearError() {
 }
 
 function retryVideoOpen() {
+    if (!hasError || !isOpen()) return;
+    if (errorPrimaryAction) {
+        const run = errorPrimaryAction.run;
+        run();
+        return;
+    }
     const target = activeOpenAttempt?.target;
-    if (!target || !hasError || !isOpen()) return;
+    if (!target) return;
     void openVideoTarget(target, null);
 }
 
@@ -1510,6 +1529,23 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     activateModalOwnership(modalEl);
     a11y?.activate();
     void geometry?.syncFullscreenState();
+
+    // A container iOS cannot demux will fail no matter how long it is given, so
+    // do not open a media session for it: that would spend Telegram bandwidth
+    // and API calls to reach a guaranteed failure, and leave the reader looking
+    // at a Retry button that can never work. Offer the download instead, which
+    // hands the file to the share sheet and on to a player that can open it.
+    if (isIOSPlatform() && !isIOSPlayableVideo(target.name)) {
+        const format = videoFormatLabel(target.name);
+        setError(
+            `iOS cannot open ${format} files. Download it to play in another app.`,
+            { label: 'Download', run: () => {
+                appActions().downloadFile({ id: target.id, name: target.name, size: target.size || 0 });
+                void closeVideoModal();
+            } },
+        );
+        return;
+    }
 
     await playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
