@@ -30,6 +30,7 @@ vi.mock('./notif-bell', () => ({
     updateTransferProgress: transferEvents.progress,
     updateTransferName: transferEvents.rename,
     markTransferDone: transferEvents.done,
+    wasUploadCanceled: () => false,
 }));
 vi.mock('./notifications', () => ({
     notify: notifications.notify,

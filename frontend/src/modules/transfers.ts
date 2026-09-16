@@ -35,6 +35,7 @@ import {
     updateTransferProgress,
     updateTransferName,
     markTransferDone,
+    wasUploadCanceled,
 } from './notif-bell';
 
 
@@ -537,12 +538,16 @@ function activateUploadProgressEvents(): void {
         if (!hadItem) {
             pushTransferStart({ id: uploadId, direction: 'up', name: filename || 'Upload failed', total: 0 });
         }
-        markTransferDone({ id: uploadId, direction: 'up', status: state.cancelingUpload ? 'canceled' : 'failed' });
+        // A file the user stopped from its own row is already marked canceled;
+        // the backend reports it through this same error event, and neither the
+        // row nor a toast should call it a failure.
+        const canceled = state.cancelingUpload || wasUploadCanceled(uploadId);
+        markTransferDone({ id: uploadId, direction: 'up', status: canceled ? 'canceled' : 'failed' });
 
         // Surface the backend's actual failure reason. The bell row only shows
         // a generic "failed" state, which leaves the user with nothing to act on.
         const errorBody = humanizeBackendError(message);
-        if (errorBody && !state.cancelingUpload) {
+        if (errorBody && !canceled) {
             notify({
                 level: 'error',
                 title: filename ? `Couldn't upload "${filename}"` : 'Upload failed',

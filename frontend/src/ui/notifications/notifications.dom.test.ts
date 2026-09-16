@@ -6,6 +6,14 @@ import ToastStack from './ToastStack.svelte';
 import TransferRow from './TransferRow.svelte';
 import { historyEvents, notifPanelOpen, type NoticeEvent, type TransferEvent } from './notif-store';
 import { toasts, type ToastItem } from './toast-store';
+import { cancelSingleUpload } from '../../modules/notif-bell';
+
+// The row talks to the backend itself when it can stop just this one upload;
+// the rest of the module stays real so the stores behave as they do in the app.
+vi.mock('../../modules/notif-bell', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../modules/notif-bell')>();
+    return { ...actual, cancelSingleUpload: vi.fn() };
+});
 
 let mounts: Record<string, unknown>[] = [];
 let hosts: HTMLElement[] = [];
@@ -68,6 +76,7 @@ function makeToast(overrides: Partial<ToastItem> = {}): ToastItem {
 }
 
 afterEach(async () => {
+    vi.clearAllMocks();
     toasts.set([]);
     historyEvents.set([]);
     notifPanelOpen.set(false);
@@ -82,13 +91,26 @@ afterEach(async () => {
 });
 
 describe('notification interaction controls', () => {
-    it('cancels a transfer through native button activation', () => {
+    it('stops one upload from its own row, leaving the rest of the batch alone', () => {
         const onCancel = vi.fn();
         const host = mountComponent(TransferRow, { transfer: makeTransfer(), onCancel });
         const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
         if (!button) throw new Error('Missing cancel button');
         button.click();
-        expect(onCancel).toHaveBeenCalledExactlyOnceWith('up');
+        expect(cancelSingleUpload).toHaveBeenCalledExactlyOnceWith(1);
+        expect(onCancel).not.toHaveBeenCalled();
+    });
+    it('cancels the whole direction for a row the backend cannot stop on its own', () => {
+        for (const id of ['xfer:down:file:42', 'xfer:up:import']) {
+            const direction = id.startsWith('xfer:up:') ? 'up' as const : 'down' as const;
+            const onCancel = vi.fn();
+            const host = mountComponent(TransferRow, { transfer: makeTransfer({ id, direction }), onCancel });
+            const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+            if (!button) throw new Error('Missing cancel button');
+            button.click();
+            expect(onCancel).toHaveBeenCalledExactlyOnceWith(direction);
+            expect(cancelSingleUpload).not.toHaveBeenCalled();
+        }
     });
     it('copies error details only from the explicit Copy details button', async () => {
         clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
