@@ -15,7 +15,7 @@ interface TestWindow {
         releaseFiles?: (id: string, idsJson: string) => void;
     };
     _wailsAndroidCallback?: ((id: string, result: string | null, error: string | null) => void) | undefined;
-    _tdriveFolderCallbacks?: Record<string, unknown>;
+    _tdriveBridgeCallbacks?: Record<string, unknown>;
 }
 
 const host = window as unknown as TestWindow;
@@ -49,7 +49,7 @@ function answer(id: string, result: string | null, error: string | null = null):
 afterEach(() => {
     delete host.wails;
     host._wailsAndroidCallback = undefined;
-    delete host._tdriveFolderCallbacks;
+    delete host._tdriveBridgeCallbacks;
     calls = [];
 });
 
@@ -145,7 +145,7 @@ describe("asking Android for a folder", () => {
         answer(lastCall().id, JSON.stringify({ root: "Holiday", files: [] }));
         await picked;
 
-        expect(Object.keys(host._tdriveFolderCallbacks ?? {})).toHaveLength(0);
+        expect(Object.keys(host._tdriveBridgeCallbacks ?? {})).toHaveLength(0);
     });
 
     it("refuses on a build with no bridge", async () => {
