@@ -24,6 +24,7 @@
 
 import { isAndroidPlatform, onRuntimeEvent, setKeyboardWatch } from '../../api';
 import { keyboardOpen } from './mobile-shell-store';
+import { scrollBehavior } from './motion';
 
 const KEYBOARD = '--mobile-keyboard-inset';
 
@@ -124,6 +125,9 @@ export function isPlausibleKeyboard(height: number): boolean {
  * the nudge and Android is already where it should be -- running it twice is
  * harmless because scrollIntoView on an element already in view does nothing.
  *
+ * The glide goes under Reduce Motion, where a page that slides on its own while
+ * someone is typing is exactly what the setting is asking us not to do.
+ *
  * `nearest` rather than `center`: pulling a field to the middle of the screen
  * scrolls away the label above it, which is the context the user needs to know
  * what they are typing. Where the field stops is the page's business, not this
@@ -136,7 +140,7 @@ function revealFocused(): void {
     const active = document.activeElement;
     if (!(active instanceof HTMLElement)) return;
     if (!active.matches('input, textarea, [contenteditable="true"]')) return;
-    active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    active.scrollIntoView({ block: 'nearest', behavior: scrollBehavior() });
 }
 
 /**

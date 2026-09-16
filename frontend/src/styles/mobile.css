@@ -16,6 +16,14 @@ html.mobile {
     --tabbar-inset: 12px;
     /* Seated inside the bar as a peer of the tabs rather than floating over
        it, so 44 is the touch minimum, not a size chosen to be noticed. */
+
+    /* tokens.css folds the window insets the shell publishes into the top and
+       bottom edges; the sides need the same treatment and only a phone has
+       anything to add, so they are folded in here. A turned Android phone puts
+       the notch on one side and the navigation bar on the other, and its
+       WebView answers zero to env() for both. */
+    --inset-left: max(env(safe-area-inset-left, 0px), var(--mobile-inset-left, 0px));
+    --inset-right: max(env(safe-area-inset-right, 0px), var(--mobile-inset-right, 0px));
 }
 
 /* The shell root and the tab panels set display:flex, which would otherwise
@@ -52,8 +60,15 @@ html.mobile .mobile-panel {
 }
 
 /* The desktop .main-content keeps its flex column; only reset its desktop
-   chrome that has no place on a phone. */
-html.mobile .main-content { min-height: 0; padding: 0; }
+   chrome that has no place on a phone.
+   The side insets sit here rather than on the file list and the gallery inside
+   it, so one rule covers both surfaces and the canvas behind them still runs to
+   the glass. In portrait they are zero and nothing moves; turned, they are what
+   keeps the rows and the photo grid out from under the notch. */
+html.mobile .main-content {
+    min-height: 0;
+    padding: 0 var(--inset-right) 0 var(--inset-left);
+}
 
 html.mobile .mobile-scroll {
     flex: 1 1 auto;

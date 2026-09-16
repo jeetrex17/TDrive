@@ -16,10 +16,27 @@ import { derived, type Readable } from 'svelte/store';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
 import { resolveItemState, type ItemState } from './item-state';
 
-/** Pulls the file id back out of a "xfer:<direction>:<id>" transfer key. */
+/**
+ * Pulls the row id back out of an "xfer:<direction>:<kind>:<id>" transfer key.
+ *
+ * Only a key that names its kind is a claim about a row. The download queue
+ * keys its jobs "file:<msgId>" / "folder:<d:id>", which is exactly the id the
+ * matching row carries, so the kind prefix comes off and the badge lands.
+ *
+ * A key without one -- "xfer:up:3", "xfer:up:import" -- is not a file id at
+ * all: an upload is numbered by its position in the batch, so "3" is the
+ * fourth file of this upload and also, on a young drive, the message id of
+ * some unrelated row. Mapping those marked a stranger's row "Failed". They are
+ * dropped instead, and nothing is lost: a file being uploaded has no row to
+ * badge until it commits, by which time the transfer is over. When an upload
+ * one day knows the id it is writing to, keying it "file:<id>" is all it takes
+ * to appear here.
+ */
 function transferFileId(transfer: TransferEvent): string {
     const parts = transfer.id.split(':');
-    return parts.length >= 3 ? parts.slice(2).join(':') : '';
+    if (parts.length < 4) return '';
+    if (parts[2] !== 'file' && parts[2] !== 'folder') return '';
+    return parts.slice(3).join(':');
 }
 
 /**
