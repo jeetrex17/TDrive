@@ -504,9 +504,14 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 	ctx := a.beginDownload()
 	defer a.endDownload()
 	result := svc.Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, a.chooseDownloadPath)
-	// A phone download lands in the sandbox, so the share sheet is the only way
-	// the user can see the file; open it as soon as the bytes are on disk.
-	if application.System.IsMobile() && result.Status == "success" && result.SavedPath != "" {
+	// An iPhone download stays in the app container, so offer the share sheet
+	// as soon as the bytes are on disk: Files can list the container, but
+	// sending the file straight on is the thing worth saving a trip for.
+	//
+	// Android must not do this. There the host moves the download into public
+	// Downloads once this call returns and deletes the sandbox copy, so a
+	// chooser opened here would be holding a file that is about to vanish.
+	if application.System.IsPlatform(application.PlatformIOS) && result.Status == "success" && result.SavedPath != "" {
 		if err := shareFileNative(result.SavedPath); err != nil {
 			fmt.Printf("Warning: share sheet failed: %v\n", err)
 		}
