@@ -112,14 +112,25 @@ test('the bars carry safe-area padding', async ({ page }) => {
     const shell = page.locator('#success-screen.mobile-shell');
     await expect(shell).toHaveCSS('position', 'fixed');
 
-    // Tab bar is flush to the bottom edge (where the home indicator inset lives)
-    // and declares env-based bottom padding (0px without a notch in the harness).
+    // The tab bar floats: its slot holds it --tabbar-inset clear of every edge,
+    // and adds the home-indicator inset underneath (0px without a notch in the
+    // harness). So the gap below it is the inset, not zero -- what matters is
+    // that the slot reserves the safe area rather than letting the bar sit on
+    // it. This asserted flush-to-the-bottom for as long as the bar has floated;
+    // nothing caught it because CI only runs on a pull request, and this branch
+    // had 123 commits before it opened one.
     const box = await page.locator('.tab-bar').boundingBox();
     const size = page.viewportSize();
     expect(box).not.toBeNull();
     expect(size).not.toBeNull();
-    expect(Math.abs((box!.y + box!.height) - size!.height)).toBeLessThan(2);
-    const pad = await page.locator('.tab-bar').evaluate((el) => getComputedStyle(el).paddingBottom);
+    const gapBelow = size!.height - (box!.y + box!.height);
+    const reserved = await page.locator('.mobile-tabbar-slot').evaluate((el) => {
+        const style = getComputedStyle(el);
+        return Number.parseFloat(style.paddingBottom);
+    });
+    expect(reserved).toBeGreaterThan(0);
+    expect(Math.abs(gapBelow - reserved)).toBeLessThan(2);
+    const pad = await page.locator('.mobile-tabbar-slot').evaluate((el) => getComputedStyle(el).paddingBottom);
     expect(pad).toMatch(/px$/);
     const topPad = await page.locator('.mobile-topbar').evaluate((el) => getComputedStyle(el).paddingTop);
     expect(topPad).toMatch(/px$/);
