@@ -52,6 +52,8 @@ import androidx.biometric.BiometricManager;
 import androidx.biometric.BiometricPrompt;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.FragmentActivity;
 import androidx.security.crypto.EncryptedSharedPreferences;
 import androidx.security.crypto.MasterKey;
@@ -544,7 +546,19 @@ public class WailsBridge {
     // MARK: - Mobile features (Phase B)
 
     /**
-     * System-bar insets as JSON {"top","bottom","left","right"} in px.
+     * Reserved screen edges as JSON {"top","bottom","left","right"} in px.
+     *
+     * The cutout counts alongside the bars. The window asks for the short
+     * edges (see MainActivity.takeWholeWindow), so a turned phone lays the page
+     * out underneath the notch, and nothing in systemBars() describes it. The
+     * result is the wider of the two per edge, never their sum.
+     *
+     * Below API 30 there are no window metrics to ask, and answering zero there
+     * put the tab bar under the navigation bar: the shell is edge to edge on
+     * every release it runs on, not just the ones with a cutout. The decor
+     * view's own insets answer instead, which reaches back to API 23; the two
+     * releases below that keep the zeros, where the compat layer has nothing to
+     * report either.
      */
     public String getSafeAreaJson() {
         try {
@@ -552,8 +566,18 @@ public class WailsBridge {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 android.graphics.Insets insets = activity.getWindowManager()
                         .getCurrentWindowMetrics().getWindowInsets()
-                        .getInsetsIgnoringVisibility(WindowInsets.Type.systemBars());
+                        .getInsetsIgnoringVisibility(
+                                WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
                 top = insets.top; bottom = insets.bottom; left = insets.left; right = insets.right;
+            } else {
+                WindowInsetsCompat window = ViewCompat.getRootWindowInsets(
+                        activity.getWindow().getDecorView());
+                if (window != null) {
+                    androidx.core.graphics.Insets insets = window.getInsets(
+                            WindowInsetsCompat.Type.systemBars()
+                                    | WindowInsetsCompat.Type.displayCutout());
+                    top = insets.top; bottom = insets.bottom; left = insets.left; right = insets.right;
+                }
             }
             return new JSONObject()
                     .put("top", top).put("bottom", bottom)

@@ -16,6 +16,7 @@
     import { activateMobileBack } from './mobile-back';
     import { activateSafeArea } from './safe-area';
     import { activateKeyboardInsets } from './keyboard-insets';
+    import { scrollBehavior } from './motion';
     import { activeTab, keyboardOpen, transferAttentionCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
@@ -84,13 +85,16 @@
         scrollActiveToTop(tab);
     }
 
+    // Each tab has its own scrolling surface; Files and Photos swap theirs for
+    // one another inside the shared content region.
+    function activeScroller(tab: MobileTab): HTMLElement | null {
+        if (tab === 'files') return document.getElementById('file-list');
+        if (tab === 'photos') return document.getElementById('gallery-view');
+        return document.querySelector<HTMLElement>(`.mobile-panel[data-tab="${tab}"] .mobile-scroll`);
+    }
+
     function scrollActiveToTop(tab: MobileTab): void {
-        const el = tab === 'files'
-            ? document.getElementById('file-list')
-            : tab === 'photos'
-                ? document.getElementById('gallery-view')
-                : document.querySelector<HTMLElement>(`.mobile-panel[data-tab="${tab}"] .mobile-scroll`);
-        el?.scrollTo?.({ top: 0, behavior: 'smooth' });
+        activeScroller(tab)?.scrollTo?.({ top: 0, behavior: scrollBehavior() });
     }
 
     // The top bar carries no divider until content actually passes under it.
@@ -98,19 +102,25 @@
     // pixels apart; the bar only needs one once there is something to separate.
     let scrolled = $state(false);
 
+    // Read from whichever surface is showing. Wired to the file list alone, the
+    // rule stayed on under the Account tab because the list it was watching had
+    // been left part-scrolled, and never came on at all while the gallery moved.
+    $effect(() => {
+        const surface = activeScroller($activeTab);
+        const onScroll = (): void => {
+            scrolled = (surface?.scrollTop ?? 0) > 2;
+        };
+        onScroll();
+        surface?.addEventListener('scroll', onScroll, { passive: true });
+        return () => surface?.removeEventListener('scroll', onScroll);
+    });
+
     onMount(() => {
         const disposeBack = activateMobileBack();
         const disposeSafeArea = activateSafeArea();
         const disposeKeyboard = activateKeyboardInsets();
 
-        const list = document.getElementById('file-list');
-        const onScroll = (): void => {
-            scrolled = (list?.scrollTop ?? 0) > 2;
-        };
-        list?.addEventListener('scroll', onScroll, { passive: true });
-
         return () => {
-            list?.removeEventListener('scroll', onScroll);
             disposeBack();
             disposeSafeArea();
             disposeKeyboard();
