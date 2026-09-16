@@ -365,8 +365,13 @@
    becomes a two-line list: a 32px type icon, the name over one meta line, and
    a trailing overflow button. Rows are full-bleed with a single hairline inset
    to the text column, tinted for 80ms on press, and never hover on touch. */
+/* overflow-x is clipped, not auto: an auto x-axis turns any stray pixel of
+   overflow into a horizontal scroller with a visible bar on Android. The
+   pull indicator is positioned against this box. */
 html.mobile .file-list-box {
+    position: relative;
     padding: 0;
+    overflow-x: hidden;
     touch-action: pan-y;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
@@ -378,7 +383,9 @@ html.mobile .file-row {
     gap: 12px;
     min-height: 56px;
     margin: 0;
-    padding: 8px 4px 8px 16px;
+    /* 10px on the right: the overflow button's 44px hit area ends exactly at
+       the row edge instead of spilling into scrollable overflow. */
+    padding: 8px 10px 8px 16px;
     border-radius: 0;
     transition: background-color 80ms var(--ease-standard);
     touch-action: manipulation;
@@ -496,6 +503,18 @@ html.mobile .folder-chip {
     height: 32px;
     margin: 0;
     border-radius: var(--radius-md);
+}
+/* Opaque chip colours. The Android WebView mistiles a rounded box whose
+   translucent border sits over a fill with an SVG inside, painting a stale
+   copy of the rows above it into the list. Mixing the overlay into the canvas
+   keeps the same tint without the alpha. */
+html.mobile .file-type-icon {
+    background: var(--color-surface-1);
+    border-color: var(--color-border-soft);
+}
+html.mobile .folder-chip {
+    background: color-mix(in srgb, var(--color-accent) 12%, var(--color-canvas));
+    border-color: color-mix(in srgb, var(--color-accent) 18%, var(--color-canvas));
 }
 html.mobile .folder-chip svg,
 html.mobile .file-type-icon svg { width: 20px; height: 20px; stroke-width: 1.75; }
@@ -619,10 +638,15 @@ html.mobile .file-state-skeleton-action { display: none; }
 
 /* Pull to refresh: a small ring slides in over the first rows as the pull
    grows, snaps to its resting spot once armed and spins until the refresh
-   settles. The rows never move, so the virtualised list stays untouched. */
+   settles. The rows never move, so the virtualised list stays untouched.
+   Absolute at the scroll origin rather than sticky: a pull only happens at
+   the top, and a sticky child inside the scroller costs the Android WebView
+   a compositing layer it mistiles. */
 html.mobile .pull-refresh {
-    position: sticky;
+    position: absolute;
     top: 0;
+    right: 0;
+    left: 0;
     z-index: 3;
     display: flex;
     justify-content: center;
