@@ -569,12 +569,20 @@ html.mobile .file-type-icon {
     border-color: transparent;
     color: var(--color-text-muted);
 }
-/* Folders carry the accent so the one structural distinction in the list, a
-   container versus a leaf, is readable before any text is. */
+/* Folders still need to read as containers before any text does, but they no
+   longer spend the accent to do it.
+
+   In a folder-heavy drive that tint covered most of the screen, and once the
+   accent is on most rows it has stopped marking anything -- it was competing
+   with the active tab, the upload action and the transfer states, all of which
+   need it to mean something. The distinction survives on the two channels that
+   were already carrying it: the glyph's shape, which is a folder, and its
+   brightness. A full-strength mark on a lighter tile reads as the structural
+   row; a muted mark on a darker tile reads as a leaf. */
 html.mobile .folder-chip {
-    background: color-mix(in srgb, var(--color-accent) 16%, var(--color-surface-0));
+    background: var(--color-surface-1);
     border-color: transparent;
-    color: var(--color-accent);
+    color: var(--color-text);
 }
 html.mobile .folder-chip svg,
 html.mobile .file-type-icon svg { width: 22px; height: 22px; stroke-width: 1.75; }

@@ -14,7 +14,9 @@ html.mobile {
     --tabbar-height: 64px;
     /* How far the floating bar sits from the screen edges. */
     --tabbar-inset: 12px;
-    --fab-size: 56px;
+    /* Seated inside the bar as a peer of the tabs rather than floating over
+       it, so 44 is the touch minimum, not a size chosen to be noticed. */
+    --fab-size: 44px;
 }
 
 /* The shell root and the tab panels set display:flex, which would otherwise
@@ -283,7 +285,8 @@ html.mobile .topbar-search input:focus-visible {
 /* ============================ TAB BAR ============================ */
 /* A floating bar rather than a full-bleed one: it reads as a control resting
    on the content instead of a wall the content stops at, and the rounded ends
-   echo the file card above it. The upload button is docked into its middle. */
+   echo the file card above it. The upload action sits in the middle of the row
+   as a peer of the tabs, not on top of them. */
 html.mobile .mobile-tabbar-slot {
     position: relative;
     flex: 0 0 auto;
@@ -299,7 +302,7 @@ html.mobile .tab-bar {
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-lg);
 }
-/* Holds open the space the docked button sits in. */
+/* Holds open the slot the upload action sits in, sized like a tab. */
 html.mobile .tab-dock { flex: 0 0 var(--fab-size); }
 html.mobile .tab-item {
     flex: 1 1 0;
@@ -374,18 +377,31 @@ html.mobile .tab-badge {
 /* Docked into the middle of the tab bar. The upload menu portals into
    #upload-menu-root; the shell restyles the menu's own trigger into the
    accent circle. It rides above the bar so its shadow reads against it. */
+/* The upload action sits in the bar's middle slot, level with the tab icons.
+   It used to float half outside the bar, which cost it on every count: a
+   circle overlapping a rounded rectangle put three different corner radii in
+   one control, the cut-out needed a canvas-coloured ring to fake a hole in the
+   bar's outline, and at 56px with a drop shadow it was the brightest and
+   largest object on the screen -- louder than the files, which are the actual
+   point of the app.
+
+   Seated and shrunk, it is still unmistakably the primary action, because
+   accent on dark does that at any size. It just no longer shouts. */
 html.mobile .mobile-fab {
     position: absolute;
     left: 50%;
     /* Centred with a negative margin rather than translateX(-50%). A transform
        on this host would make it the containing block for any position:fixed
        descendant, which silently reduces the upload sheet inside it from the
-       viewport to this 56px circle. */
+       viewport to this circle. */
     margin-left: calc(var(--fab-size) / -2);
-    /* Centre of the circle sits just above the bar's top edge, so it breaks
-       the bar's outline instead of floating free of it. */
-    bottom: calc(var(--inset-bottom) + var(--tabbar-inset) + var(--tabbar-height)
-                 - var(--fab-size) / 2 - 4px);
+    /* Aligned with the tab ICONS rather than centred in the bar. The tabs are
+       icon-over-label, so the bar's true centre falls between the two rows and
+       a button parked there reads as sitting low against the labels. The icon
+       row is the line the eye actually follows across the bar, so the action
+       joins it: icon block is 24 + 3 + 11px of label, centred in the bar, which
+       puts the icon centre 41px up from the bar's bottom edge. */
+    bottom: calc(var(--inset-bottom) + var(--tabbar-inset) + 41px - var(--fab-size) / 2);
     z-index: 1;
 }
 html.mobile .mobile-fab .upload-btn,
@@ -397,15 +413,17 @@ html.mobile .mobile-fab .primary-btn.upload-btn {
     display: inline-grid;
     place-items: center;
     font-size: 0;
-    border: 3px solid var(--color-canvas);
+    /* No ring and no shadow: both existed to sell an elevation the button no
+       longer has, and a shadow per control is ornament this design does not
+       spend. */
+    border: 0;
     border-radius: var(--radius-pill);
     background: var(--color-accent);
     color: var(--color-on-accent);
-    box-shadow: var(--shadow-lg);
     transition: transform var(--motion-fast) var(--ease-standard);
 }
 html.mobile .mobile-fab .upload-btn:active { transform: scale(0.94); }
-html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
+html.mobile .mobile-fab .upload-btn .btn-icon { width: 20px; height: 20px; }
 
 /* The upload menu is a bottom sheet on a phone, not a popover. The trigger is
    docked in the middle of the tab bar against the bottom safe area, so there is
@@ -469,26 +487,6 @@ html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-item {
 html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-item:active {
     background: var(--overlay-neutral-2);
 }
-html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-cancel {
-    width: 100%;
-    min-height: 48px;
-    margin-top: var(--space-2);
-    border: 1px solid var(--color-border-soft);
-    border-radius: var(--radius-md);
-    background: var(--overlay-white-1);
-    color: var(--color-text);
-    font-size: var(--type-md);
-    font-weight: var(--weight-strong);
-    cursor: pointer;
-}
-html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-cancel:active {
-    background: var(--overlay-neutral-2);
-}
-html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-cancel:focus-visible {
-    outline: 2px solid var(--color-accent);
-    outline-offset: -2px;
-}
-
 /* ============================ SELECTION BAR ============================ */
 /* The controller flips display:flex/none inline; the shell only positions it as
    a bottom bar that replaces the tab bar. */
@@ -864,7 +862,14 @@ html.mobile .item-status.is-tappable:focus-visible {
    clips horizontally, which is what keeps it invisible until it is wanted. */
 html.mobile .row-swipe-actions {
     position: absolute;
-    left: 100%;
+    /* Starts at the LIST's right edge, not the row's. The row is inset from
+       the list by the card margin, so a strip parked at the row's edge leaves
+       that margin's worth of itself showing past the list's clip -- a coloured
+       stripe down the whole screen, on every row, at rest. Pushing it out by
+       the same margin puts its resting position exactly on the clip boundary.
+       The open distance is unchanged: moving the row by the strip's own width
+       still lands the strip flush inside the list. */
+    left: calc(100% + var(--space-3));
     top: 0;
     bottom: 0;
     display: flex;

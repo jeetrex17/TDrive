@@ -1,5 +1,5 @@
 <script lang="ts">
-    import BrandMark from '../BrandMark.svelte';
+    import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import EyeIcon from '@lucide/svelte/icons/eye';
     import EyeOffIcon from '@lucide/svelte/icons/eye-off';
     import KeyRoundIcon from '@lucide/svelte/icons/key-round';
@@ -168,11 +168,7 @@
 {#if step === 'welcome'}
     <section class="auth-box auth-welcome" aria-labelledby="auth-welcome-title">
         <div class="auth-page-body">
-            <!-- One mark, shared with the desktop sidebar, so the app has a
-                 single identity. Muted rather than full-strength: the mark
-                 identifies, the headline speaks, and accent is left to the one
-                 button the reader is meant to press. -->
-            <BrandMark size={40} class="auth-mark" />
+            <img class="auth-mark" src={tdriveLogo} alt="" width="112" height="112" />
             <h2 id="auth-welcome-title">Your Telegram, as a drive.</h2>
             <p class="auth-intro">
                 TDrive keeps your files in a private channel on your own Telegram account. There is no TDrive
@@ -576,17 +572,13 @@
         padding-bottom: 10vh;
     }
 
-    /* Fully global: the class rides on the BrandMark component, so Svelte's
-       scoped-CSS pass cannot see it in this template. */
-    :global(html.mobile .auth-mark) {
+    /* Centred and large: on the one screen with no content to compete with,
+       the logo is the thing that says whose app this is. */
+    :global(html.mobile) .auth-mark {
         display: block;
-        width: 40px;
-        height: 40px;
-        margin-bottom: 1.5rem;
-        /* Muted rather than full-strength: the mark identifies, the headline
-           speaks. Giving both maximum contrast would leave the eye with two
-           things competing to be read first. */
-        color: var(--color-text-muted);
+        width: 112px;
+        height: auto;
+        margin: 0 auto 1.75rem;
     }
 
     :global(html.mobile) .auth-welcome h2 {

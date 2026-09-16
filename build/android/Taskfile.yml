@@ -350,8 +350,12 @@ tasks:
           ARCH: '{{.ARCH | default .HOST_ARCH}}'
     cmds:
       - task: ensure-emulator
-      - '"{{.ADB}}" uninstall {{.APP_ID}} 2>/dev/null || true'
-      - '"{{.ADB}}" install "{{.BIN_DIR}}/{{.APP_NAME}}.apk"'
+      # -r reinstalls over the existing app and keeps its data directory, so a
+      # dev run no longer throws away the Telegram session, the config and the
+      # projection and land on the login screen. ANDROID_CLEAN=1 forces a
+      # genuine first-run state.
+      - '[ "${ANDROID_CLEAN:-0}" = "1" ] && "{{.ADB}}" uninstall {{.APP_ID}} 2>/dev/null || true'
+      - '"{{.ADB}}" install -r "{{.BIN_DIR}}/{{.APP_NAME}}.apk"'
       - '"{{.ADB}}" shell am start -n {{.APP_ID}}/com.wails.app.MainActivity'
 
   run:
@@ -361,8 +365,12 @@ tasks:
       - task: build
     cmds:
       - task: assemble:apk
-      - '"{{.ADB}}" uninstall {{.APP_ID}} 2>/dev/null || true'
-      - '"{{.ADB}}" install "{{.BIN_DIR}}/{{.APP_NAME}}.apk"'
+      # -r reinstalls over the existing app and keeps its data directory, so a
+      # dev run no longer throws away the Telegram session, the config and the
+      # projection and land on the login screen. ANDROID_CLEAN=1 forces a
+      # genuine first-run state.
+      - '[ "${ANDROID_CLEAN:-0}" = "1" ] && "{{.ADB}}" uninstall {{.APP_ID}} 2>/dev/null || true'
+      - '"{{.ADB}}" install -r "{{.BIN_DIR}}/{{.APP_NAME}}.apk"'
       - '"{{.ADB}}" shell am start -n {{.APP_ID}}/com.wails.app.MainActivity'
 
   device:list:
@@ -394,8 +402,11 @@ tasks:
         fi
 
         echo "Deploying {{.BIN_DIR}}/{{.APP_NAME}}.apk to device $DEVICE..."
-        "{{.ADB}}" -s "$DEVICE" uninstall {{.APP_ID}} 2>/dev/null || true
-        "{{.ADB}}" -s "$DEVICE" install "{{.BIN_DIR}}/{{.APP_NAME}}.apk"
+        # Keeps the session and database across runs; ANDROID_CLEAN=1 wipes.
+        if [ "${ANDROID_CLEAN:-0}" = "1" ]; then
+          "{{.ADB}}" -s "$DEVICE" uninstall {{.APP_ID}} 2>/dev/null || true
+        fi
+        "{{.ADB}}" -s "$DEVICE" install -r "{{.BIN_DIR}}/{{.APP_NAME}}.apk"
         "{{.ADB}}" -s "$DEVICE" shell am start -n {{.APP_ID}}/com.wails.app.MainActivity
     preconditions:
       - sh: '[ -x "{{.ADB}}" ] || command -v adb'
@@ -424,8 +435,11 @@ tasks:
         fi
 
         echo "Deploying {{.BIN_DIR}}/{{.APP_NAME}}.apk to device $DEVICE..."
-        "{{.ADB}}" -s "$DEVICE" uninstall {{.APP_ID}} 2>/dev/null || true
-        "{{.ADB}}" -s "$DEVICE" install "{{.BIN_DIR}}/{{.APP_NAME}}.apk"
+        # Keeps the session and database across runs; ANDROID_CLEAN=1 wipes.
+        if [ "${ANDROID_CLEAN:-0}" = "1" ]; then
+          "{{.ADB}}" -s "$DEVICE" uninstall {{.APP_ID}} 2>/dev/null || true
+        fi
+        "{{.ADB}}" -s "$DEVICE" install -r "{{.BIN_DIR}}/{{.APP_NAME}}.apk"
         "{{.ADB}}" -s "$DEVICE" shell am start -n {{.APP_ID}}/com.wails.app.MainActivity
     preconditions:
       - sh: '[ -x "{{.ADB}}" ] || command -v adb'

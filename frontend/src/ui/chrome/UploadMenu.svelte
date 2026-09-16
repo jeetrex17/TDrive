@@ -132,7 +132,8 @@
             {onNewFolder ? 'Upload folder' : 'Folder'}
         </button>
     {/if}
-    {#if asSheet}
-        <button class="upload-menu-cancel" type="button" onclick={() => closeMenu(true)}>Cancel</button>
-    {/if}
+    <!-- No Cancel row. The sheet already has three ways out that cost less than
+         reading a fourth option: the scrim, a downward swipe, and Android's
+         back. A Cancel button in a sheet this short mostly adds a line of text
+         that has to be read and dismissed as not-what-you-want. -->
 </div>
