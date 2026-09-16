@@ -772,6 +772,12 @@ function handleMobileTap(e: MouseEvent, row: HTMLElement) {
     if (more) {
         const rect = more.getBoundingClientRect();
         openRowMenu(row, rect.left + rect.width / 2, rect.bottom);
+        // This click is fully spent on opening the sheet. Left to bubble, it
+        // reaches the menu's own dismiss-on-outside-click handler on document,
+        // which sees a target outside a sheet that has not rendered yet and
+        // closes it again in the same tick. Long-press escaped that only
+        // because it fires on a timer with no click of its own.
+        e.stopPropagation();
         return;
     }
     if (target.closest('button')) return;

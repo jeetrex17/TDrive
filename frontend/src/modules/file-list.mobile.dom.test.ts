@@ -129,6 +129,21 @@ describe('phone file list', () => {
         expect(actions.openFile).not.toHaveBeenCalled();
     });
 
+    it('the overflow click stops before document, so the sheet survives it', () => {
+        // The menu dismisses itself on any click outside its own element. The
+        // click that opens it would otherwise reach that handler in the same
+        // tick, before the sheet has rendered, and close it again.
+        const reachedDocument = vi.fn();
+        document.addEventListener('click', reachedDocument);
+        try {
+            click(row('plan.pdf').querySelector('button.row-more')!);
+            expect(showRowContextMenu).toHaveBeenCalled();
+            expect(reachedDocument).not.toHaveBeenCalled();
+        } finally {
+            document.removeEventListener('click', reachedDocument);
+        }
+    });
+
     it('a press on the leading icon selects, then taps toggle instead of opening', () => {
         press(row('plan.pdf').querySelector('.file-type-icon')!);
         flushSync();
