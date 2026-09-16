@@ -1,6 +1,6 @@
 import type { FileListFileRow, FileListRow, FolderListRow, PendingFolderListRow } from './types';
 
-export type FileSortKey = 'name' | 'date' | 'size';
+export type FileSortKey = 'name' | 'date' | 'size' | 'type';
 export type FileSortDirection = 'asc' | 'desc';
 
 export type FileSortState = {
@@ -17,6 +17,10 @@ const DEFAULT_DIRECTIONS: Record<FileSortKey, FileSortDirection> = {
     name: 'asc',
     date: 'desc',
     size: 'desc',
+    // Type is a name, so it reads A-Z like one. Grouping is the point of this
+    // sort -- "show me the PDFs together" -- and descending would open the list
+    // on whatever happens to sort last, which is nobody's intent.
+    type: 'asc',
 };
 
 const collator = new Intl.Collator(undefined, {
@@ -66,6 +70,11 @@ function compareFolderPrimary(a: FolderListRow, b: FolderListRow, key: FileSortK
             return compareNumber(a.modifiedTime, b.modifiedTime);
         case 'size':
             return compareNumber(a.size, b.size);
+        case 'type':
+            // Every folder is the same type, so within the folder block this
+            // sort has nothing to say and name is the useful order. Folders
+            // still lead the list, which is the grouping the user asked for.
+            return compareName(a, b);
         case 'name':
         default:
             return compareName(a, b);
@@ -84,6 +93,13 @@ function compareFilePrimary(a: FileListFileRow, b: FileListFileRow, key: FileSor
             return compareNumber(a.uploadTime, b.uploadTime);
         case 'size':
             return compareNumber(a.size, b.size);
+        case 'type': {
+            // Files of one type cluster, and inside a cluster they read by
+            // name: a type sort that left twelve PDFs in arbitrary order would
+            // have done only half the grouping it promised.
+            const byType = collator.compare(a.ext || '', b.ext || '');
+            return byType !== 0 ? byType : compareName(a, b);
+        }
         case 'name':
         default:
             return compareName(a, b);

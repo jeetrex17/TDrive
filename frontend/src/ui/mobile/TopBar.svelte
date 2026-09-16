@@ -58,11 +58,20 @@
         searchInputEl?.focus();
     }
 
+    // Desktop sorts by clicking a column header and has no Type column, so
+    // Type lives only here, where the sort menu is its own control.
     const sortOptions: Array<{ key: FileSortKey; label: string }> = [
         { key: 'name', label: 'Name' },
         { key: 'date', label: 'Date added' },
         { key: 'size', label: 'Size' },
+        { key: 'type', label: 'Type' },
     ];
+
+    // The toolbar says what the list is currently sorted by, so the order the
+    // reader is looking at is never a mystery they have to open a menu to solve.
+    const currentSortLabel = $derived(
+        sortOptions.find((option) => option.key === $fileSortState.key)?.label ?? 'Name',
+    );
 
     async function toggleSort(): Promise<void> {
         sortOpen = !sortOpen;
@@ -143,7 +152,7 @@
                         class="topbar-icon-btn"
                         aria-haspopup="menu"
                         aria-expanded={sortOpen}
-                        aria-label="Sort and more"
+                        aria-label={`Sort and more. Sorted by ${currentSortLabel}, ${$fileSortState.direction === 'asc' ? 'ascending' : 'descending'}.`}
                         onclick={toggleSort}
                     >
                         <EllipsisIcon size={22} strokeWidth={2} aria-hidden="true" />
