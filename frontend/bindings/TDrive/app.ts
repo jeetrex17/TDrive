@@ -577,6 +577,26 @@ export function SetFileDropEnabled(enabled: boolean): $CancellablePromise<void> 
 }
 
 /**
+ * SetImmersive hides the system bars for a full-screen surface, or gives them
+ * back. The video player is the only caller: everywhere else the bars belong on
+ * screen, and hiding them would just make the app harder to leave.
+ * 
+ * It is not only about looking tidy. An app targeting SDK 35 is laid out edge
+ * to edge on Android 15 whether it asks or not, and the system paints a
+ * translucent scrim behind three-button navigation so the buttons stay legible
+ * over whatever is beneath them. That scrim lands on top of the picture as a
+ * grey band down one edge, and the API that used to switch it off --
+ * setNavigationBarContrastEnforced -- does nothing at this target. The bar
+ * itself can still be hidden, which removes the scrim with it.
+ * 
+ * iOS has no navigation bar to hide, so there the payload only takes the status
+ * bar, which is what a full-screen player wants anyway.
+ */
+export function SetImmersive(on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3415634150, on);
+}
+
+/**
  * SetKeyboardWatch starts or stops "common:keyboard" {visible,height} events.
  * The frontend prefers visualViewport where it exists and falls back to these,
  * which is the only source Android's WebView reports reliably.

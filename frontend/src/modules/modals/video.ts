@@ -10,6 +10,7 @@ import {
     onRuntimeEvent,
     openMedia,
     openNativeMedia,
+    setImmersive,
     updateMediaPlayback,
     type MediaStats,
     type MediaOpenResult,
@@ -1583,6 +1584,11 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     setChromeVisible(true);
     modalEl.style.display = "flex";
     modalEl.setAttribute("aria-hidden", "false");
+    // Take the phone's system bars for the duration. A player is the one
+    // surface that wants the whole screen, and on Android it is also the only
+    // way to be rid of the band the system paints behind the navigation
+    // buttons, which lands on top of the picture.
+    setImmersive(true);
     activateModalOwnership(modalEl);
     a11y?.activate();
     void geometry?.syncFullscreenState();
@@ -1647,6 +1653,7 @@ export async function closeVideoModal() {
     if (!playbackTransitions.isCurrent(generation)) return;
     modalEl.style.display = "none";
     modalEl.setAttribute("aria-hidden", "true");
+    setImmersive(false);
     deactivateModalOwnership(modalEl);
     a11y?.deactivate();
     await playbackTransitions.run(generation, async () => releaseActive());
@@ -1925,6 +1932,7 @@ export function teardownVideoModal(): void {
         modalEl.setAttribute("aria-hidden", "true");
     }
 
+    setImmersive(false);
     if (modalEl) deactivateModalOwnership(modalEl);
     a11y?.deactivate();
     a11y = null;

@@ -646,8 +646,19 @@ public class WailsBridge {
     }
 
     /**
-     * Set status-bar appearance. json: {"style":"light|dark|default","hidden":bool}.
+     * Set system-bar appearance. json: {"style":"light|dark|default",
+     * "hidden":bool,"bars":"status|system"}.
      * "light" = light (white) icons; "dark" = dark icons.
+     *
+     * "bars":"system" takes the navigation bar with the status bar, which is
+     * the only way to get a clean full-screen picture on Android 15. An app
+     * targeting SDK 35 is laid out edge to edge whether it asks or not, and the
+     * system then paints its own translucent scrim behind three-button
+     * navigation so the buttons stay legible over whatever is underneath.
+     * setNavigationBarContrastEnforced(false) used to turn that off and no
+     * longer does anything at this target, so the band over the video cannot be
+     * removed -- only the bar itself can, which is what every video player does
+     * anyway. A swipe from the edge brings the bars back for a moment.
      */
     public void setStatusBar(final String json) {
         mainHandler.post(() -> {
@@ -655,6 +666,7 @@ public class WailsBridge {
                 JSONObject opts = new JSONObject(json);
                 String style = opts.optString("style", "default");
                 boolean hidden = opts.optBoolean("hidden", false);
+                boolean systemBars = "system".equals(opts.optString("bars", "status"));
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     WindowInsetsController c = activity.getWindow().getInsetsController();
                     if (c != null) {
@@ -666,15 +678,31 @@ public class WailsBridge {
                             c.setSystemBarsAppearance(0,
                                     WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
                         }
-                        if (hidden) c.hide(WindowInsets.Type.statusBars());
-                        else c.show(WindowInsets.Type.statusBars());
+                        int types = systemBars
+                                ? WindowInsets.Type.systemBars()
+                                : WindowInsets.Type.statusBars();
+                        if (hidden) {
+                            // Transient rather than sticky: a swipe shows the
+                            // bars over the picture and they leave again, so
+                            // the layout never moves underneath the player.
+                            c.setSystemBarsBehavior(WindowInsetsController
+                                    .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                            c.hide(types);
+                        } else {
+                            c.show(types);
+                        }
                     }
                 } else {
                     int vis = activity.getWindow().getDecorView().getSystemUiVisibility();
                     if ("dark".equals(style)) vis |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
                     else if ("light".equals(style)) vis &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-                    if (hidden) vis |= View.SYSTEM_UI_FLAG_FULLSCREEN;
-                    else vis &= ~View.SYSTEM_UI_FLAG_FULLSCREEN;
+                    int flags = View.SYSTEM_UI_FLAG_FULLSCREEN;
+                    if (systemBars) {
+                        flags |= View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+                    }
+                    if (hidden) vis |= flags;
+                    else vis &= ~flags;
                     activity.getWindow().getDecorView().setSystemUiVisibility(vis);
                 }
             } catch (Exception e) {

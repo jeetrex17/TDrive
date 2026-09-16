@@ -1,6 +1,10 @@
 package main
 
-import "github.com/wailsapp/wails/v3/pkg/application"
+import (
+	"encoding/json"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
 
 // The mobile UX primitives iOS and Android both implement identically, exposed
 // as one binding each so the frontend never branches on platform to reach them.
@@ -50,4 +54,26 @@ func (a *App) SetScreenProtect(enabled bool) {
 // which is the only source Android's WebView reports reliably.
 func (a *App) SetKeyboardWatch(enabled bool) {
 	application.Mobile.SetKeyboardWatch(enabled)
+}
+
+// SetImmersive hides the system bars for a full-screen surface, or gives them
+// back. The video player is the only caller: everywhere else the bars belong on
+// screen, and hiding them would just make the app harder to leave.
+//
+// It is not only about looking tidy. An app targeting SDK 35 is laid out edge
+// to edge on Android 15 whether it asks or not, and the system paints a
+// translucent scrim behind three-button navigation so the buttons stay legible
+// over whatever is beneath them. That scrim lands on top of the picture as a
+// grey band down one edge, and the API that used to switch it off --
+// setNavigationBarContrastEnforced -- does nothing at this target. The bar
+// itself can still be hidden, which removes the scrim with it.
+//
+// iOS has no navigation bar to hide, so there the payload only takes the status
+// bar, which is what a full-screen player wants anyway.
+func (a *App) SetImmersive(on bool) {
+	payload, err := json.Marshal(map[string]any{"hidden": on, "bars": "system"})
+	if err != nil {
+		return
+	}
+	application.Mobile.SetStatusBar(string(payload))
 }
