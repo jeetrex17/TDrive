@@ -33,6 +33,11 @@
     const chunkNodes = new SvelteMap<HTMLElement, string>();
 
     function updateGeometry(root: HTMLElement): void {
+        // A hidden gallery measures zero wide, and acting on that would drop the
+        // grid to one column: every chunk key changes, so the cells unmount and
+        // re-download their thumbnails on the way back. Keep the last real
+        // geometry until the view is laid out again.
+        if (root.clientWidth === 0) return;
         const style = getComputedStyle(root);
         const horizontalPadding = Number.parseFloat(style.paddingLeft || '0') + Number.parseFloat(style.paddingRight || '0');
         const nextWidth = Math.max(1, Math.round(root.clientWidth - horizontalPadding));
