@@ -24,6 +24,7 @@ const apiMocks = vi.hoisted(() => ({
     exitFullscreen: vi.fn(),
     fullscreenAvailable: vi.fn(() => true),
     isMobilePlatform: vi.fn(() => false),
+    isIOSPlatform: vi.fn(() => false),
     isFullscreen: vi.fn(async () => false),
     onRuntimeEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
         runtimeMocks.eventsOn(name, callback);
@@ -150,6 +151,7 @@ beforeEach(async () => {
     apiMocks.showNativeSeekThumbnail.mockResolvedValue(undefined);
     apiMocks.updateMediaPlayback.mockResolvedValue(undefined);
     apiMocks.isMobilePlatform.mockReturnValue(false);
+    apiMocks.isIOSPlatform.mockReturnValue(false);
 
     const videoModule = await import('./video');
     videoModule.updatePlaybackPreferences({ ...DEFAULT_PLAYBACK_PREFERENCES });
@@ -1736,5 +1738,34 @@ describe("video on a phone", () => {
         await vi.waitFor(() => expect(document.querySelector("#video-error")?.textContent).toContain("can't be played on this device"));
         expect(apiMocks.attachNativeMedia).not.toHaveBeenCalled();
         expect(apiMocks.openNativeMedia).not.toHaveBeenCalled();
+    });
+
+    it("on iOS refuses a container it cannot demux without opening a session", async () => {
+        // Apple ships no Matroska demuxer, so this can only ever fail. Opening
+        // a media session would spend Telegram bandwidth to reach that failure
+        // and leave a Retry button that is guaranteed not to work.
+        apiMocks.isMobilePlatform.mockReturnValue(true);
+        apiMocks.isIOSPlatform.mockReturnValue(true);
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 31, name: "movie-31.mkv", size: 2048 });
+
+        expect(apiMocks.openMedia).not.toHaveBeenCalled();
+        const error = document.querySelector("#video-error");
+        expect(error?.textContent).toContain("MKV");
+        expect(document.querySelector("#video-error-retry")?.textContent).toBe("Download");
+    });
+
+    it("on iOS still plays a container it can demux", async () => {
+        apiMocks.isMobilePlatform.mockReturnValue(true);
+        apiMocks.isIOSPlatform.mockReturnValue(true);
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(32, "ios-token"));
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "movie-32.mp4", size: 2048 });
+
+        expect(apiMocks.openMedia).toHaveBeenCalledOnce();
     });
 });

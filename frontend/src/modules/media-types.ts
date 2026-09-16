@@ -105,6 +105,19 @@ export function isWebviewDirectVideo(name: string): boolean {
     return WEBVIEW_DIRECT_EXTENSIONS.has(fileExtension(name));
 }
 
+/**
+ * Containers AVFoundation can open. Apple ships no Matroska demuxer on any of
+ * its operating systems, so an MKV cannot be played on an iPhone whatever codec
+ * is inside it. WebM is left out too: Safari only gained it in 17.4 and the app
+ * supports iOS 16. Android is deliberately not covered by this — its media
+ * stack does handle Matroska, and it plays these files today.
+ */
+const IOS_PLAYABLE_EXTENSIONS = new Set(["mp4", "m4v", "mov", "qt"]);
+
+export function isIOSPlayableVideo(name: string): boolean {
+    return IOS_PLAYABLE_EXTENSIONS.has(fileExtension(name));
+}
+
 export function videoFormatLabel(name: string): string {
     const ext = fileExtension(name);
     return ext ? ext.toUpperCase() : "VIDEO";
