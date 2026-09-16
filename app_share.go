@@ -13,15 +13,23 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// Phones have no save dialog: downloads land in the app sandbox and leave
-// through the OS share sheet (Files, AirDrop, Drive, mail, ...). Desktop keeps
-// its dialogs and never calls into the share path.
+// Phones have no save dialog. A download has to land somewhere first and be
+// made reachable afterwards, and the two platforms disagree about where:
+// iOS has no shared storage at all, so the file goes in the one folder the
+// Files app is allowed to list, while Android has a real public Downloads
+// folder the host moves it into. Desktop keeps its dialogs and never comes
+// through here.
 
-// downloadsDir is the sandbox folder phone downloads are written to.
+// downloadsDir is the folder phone downloads are written to: the user-visible
+// one where the platform has it, and the app's own data directory otherwise.
 func downloadsDir() (string, error) {
-	base, err := datadir.Dir()
-	if err != nil {
-		return "", err
+	base := visibleStorageDir()
+	if base == "" {
+		dataDir, err := datadir.Dir()
+		if err != nil {
+			return "", err
+		}
+		base = dataDir
 	}
 	dir := filepath.Join(base, "Downloads")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -73,18 +81,30 @@ func (a *App) chooseDownloadDir(defaultName string) (string, error) {
 		PromptForSingleSelection()
 }
 
-// ShareFile opens the platform share sheet for a file TDrive wrote into its
-// own data directory. Anything outside it is refused so the webview cannot
-// hand arbitrary files to other apps. Desktop reports unsupported.
+// under reports whether path is a file somewhere below root. The root itself
+// does not count: a directory cannot be shared, and neither can its parent.
+func under(root, path string) bool {
+	if root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// ShareFile opens the platform share sheet for a file TDrive wrote itself.
+// Anything outside the folders it owns is refused so the webview cannot hand
+// arbitrary files to other apps. Desktop reports unsupported.
 func (a *App) ShareFile(path string) OperationResult {
 	base, err := datadir.Dir()
 	if err != nil {
 		return operationFailure(err)
 	}
 	clean := filepath.Clean(path)
-	rel, err := filepath.Rel(base, clean)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return operationFailure(fmt.Errorf("%w: only files inside TDrive's data directory can be shared", fs.ErrPermission))
+	if !under(base, clean) && !under(visibleStorageDir(), clean) {
+		return operationFailure(fmt.Errorf("%w: only files TDrive saved itself can be shared", fs.ErrPermission))
 	}
 	if _, err := os.Stat(clean); err != nil {
 		return operationFailure(err)
