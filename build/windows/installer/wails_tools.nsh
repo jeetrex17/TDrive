@@ -14,7 +14,7 @@
     !define INFO_PRODUCTNAME "TDrive"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "1.8.1"
+    !define INFO_PRODUCTVERSION "1.9.0"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "© 2026, Jeetraj"

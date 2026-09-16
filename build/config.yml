@@ -13,7 +13,7 @@ info:
   description: "Use a private Telegram channel as cloud storage"
   copyright: "© 2026, Jeetraj"
   comments: "Use a private Telegram channel as cloud storage"
-  version: "1.8.1"
+  version: "1.9.0"
 
 # iOS bundle settings, read by `wails3 ios xcode:gen` (these override `info`).
 ios:

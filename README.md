@@ -101,10 +101,10 @@ Get the newest build from [**GitHub Releases**](https://github.com/jeetrex17/TDr
 | Platform | Desktop app | CLI | Native media | Desktop mount |
 | --- | --- | --- | --- | --- |
 | macOS Apple silicon | Yes | Yes | Yes | Finder |
-| Windows amd64 | Yes | Portable beta | Yes | Explorer |
+| Windows amd64 | Installer, portable zip | Portable beta | Yes | Explorer |
 | Linux amd64 | AppImage | Yes | Yes | GIO/GVfs file managers |
 
-Release assets contain the supported packages for each version. TDrive currently does not publish macOS Intel or Linux ARM desktop builds.
+Release assets contain the supported packages for each version. The Windows `*-setup.exe` installs per user without admin rights; the zip is the same build unpacked. TDrive currently does not publish macOS Intel or Linux ARM desktop builds.
 
 ## Quick start
 

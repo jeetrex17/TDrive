@@ -19,7 +19,7 @@ Unicode true
 ## !define INFO_PROJECTNAME    "my-project" # Default "TDrive"
 ## !define INFO_COMPANYNAME    "My Company" # Default "Jeetraj"
 ## !define INFO_PRODUCTNAME    "My Product Name" # Default "TDrive"
-## !define INFO_PRODUCTVERSION "1.0.0"     # Default "1.8.1"
+## !define INFO_PRODUCTVERSION "1.0.0"     # Default "1.9.0"
 ## !define INFO_COPYRIGHT      "(c) Now, My Company" # Default "© 2026, Jeetraj"
 ###
 ## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
@@ -89,6 +89,17 @@ Section
     SetOutPath $INSTDIR
 
     !insertmacro wails.files
+
+    # mpv, the native video player. scripts/package-mpv-windows.ps1 lays it
+    # out in build/bin/media before the installer is built, and the app looks
+    # for it in the media folder next to its exe.
+    !if /FileExists "..\..\bin\media\mpv.exe"
+        SetOutPath "$INSTDIR\media"
+        File /r "..\..\bin\media\*.*"
+        SetOutPath "$INSTDIR"
+    !else
+        !warning "build/bin/media/mpv.exe is missing: this installer ships without the video player"
+    !endif
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
