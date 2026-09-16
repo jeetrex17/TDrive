@@ -32,6 +32,12 @@ declare global {
                 Debug?: boolean;
             };
         };
+        /**
+         * Published by the phone shell (ui/mobile/mobile-back) for the Android
+         * host to call on a hardware or gesture BACK press. Returns whether the
+         * page dismissed something; the host leaves the app when it did not.
+         */
+        __tdriveHandleBack?: () => boolean;
         /** Android host bridge (addJavascriptInterface), present before the page runs. */
         wails?: {
             invoke?: (message: string) => void;

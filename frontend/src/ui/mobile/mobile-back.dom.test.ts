@@ -1,0 +1,80 @@
+// The Android BACK contract: the host asks the page what to dismiss and only
+// leaves the app when the page reports the press unhandled.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const exitPhotos = vi.hoisted(() => vi.fn());
+const navigateBack = vi.hoisted(() => vi.fn());
+vi.mock('../../modules/gallery', () => ({ exitPhotos }));
+vi.mock('../../modules/navigation', () => ({ navigateBack }));
+
+import { breadcrumbPath } from '../chrome/breadcrumb-store';
+import { closeTopSheet, pushSheet } from '../modals/sheet-stack';
+import { sidebarState } from '../sidebar/sidebar-store';
+import { activateMobileBack, BACK_BRIDGE, handleBackPress } from './mobile-back';
+import { driveSwitcherOpen } from './mobile-shell-store';
+
+beforeEach(() => {
+    while (closeTopSheet());
+    driveSwitcherOpen.set(false);
+    sidebarState.update((current) => ({ ...current, photosActive: false }));
+    breadcrumbPath.set([]);
+    exitPhotos.mockClear();
+    navigateBack.mockClear();
+});
+
+afterEach(() => {
+    delete window[BACK_BRIDGE];
+});
+
+describe('android back', () => {
+    it('leaves the app at the drive root with nothing open', () => {
+        expect(handleBackPress()).toBe(false);
+        expect(exitPhotos).not.toHaveBeenCalled();
+        expect(navigateBack).not.toHaveBeenCalled();
+    });
+
+    it('closes an open sheet before anything underneath it', () => {
+        const close = vi.fn();
+        pushSheet(close);
+        sidebarState.update((current) => ({ ...current, photosActive: true }));
+        breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
+
+        expect(handleBackPress()).toBe(true);
+        expect(close).toHaveBeenCalledOnce();
+        expect(exitPhotos).not.toHaveBeenCalled();
+        expect(navigateBack).not.toHaveBeenCalled();
+    });
+
+    it('closes the drive switcher before leaving the gallery', () => {
+        driveSwitcherOpen.set(true);
+        sidebarState.update((current) => ({ ...current, photosActive: true }));
+
+        expect(handleBackPress()).toBe(true);
+        expect(exitPhotos).not.toHaveBeenCalled();
+    });
+
+    it('leaves the gallery before popping a folder', () => {
+        sidebarState.update((current) => ({ ...current, photosActive: true }));
+        breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
+
+        expect(handleBackPress()).toBe(true);
+        expect(exitPhotos).toHaveBeenCalledOnce();
+        expect(navigateBack).not.toHaveBeenCalled();
+    });
+
+    it('pops one folder level inside a drive', () => {
+        breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
+
+        expect(handleBackPress()).toBe(true);
+        expect(navigateBack).toHaveBeenCalledOnce();
+    });
+
+    it('publishes the bridge only while the shell is mounted', () => {
+        const dispose = activateMobileBack();
+        expect(typeof window[BACK_BRIDGE]).toBe('function');
+        expect(window[BACK_BRIDGE]?.()).toBe(false);
+
+        dispose();
+        expect(window[BACK_BRIDGE]).toBeUndefined();
+    });
+});

@@ -85,7 +85,7 @@ test('FAB opens the upload menu', async ({ page }) => {
     await expect(page.locator('#upload-menu-new-folder')).toHaveText(/New folder/);
 });
 
-test('entering a folder pushes history so BACK pops one level', async ({ page }) => {
+test('the back bridge pops one folder level and then leaves the app', async ({ page }) => {
     await bootMobile(page);
     await expect(page.getByRole('button', { name: /Switch drive/ })).toBeVisible();
 
@@ -96,10 +96,15 @@ test('entering a folder pushes history so BACK pops one level', async ({ page })
     }
     await expect(page.locator('.topbar-folder-title')).toHaveText('Reports');
 
-    // Android hardware BACK arrives as popstate; the shell pops the folder.
-    await page.goBack();
+    // The Android host calls this on a hardware or gesture BACK press and only
+    // leaves the app when the page reports the press unhandled.
+    const insideFolder = await page.evaluate(() => window.__tdriveHandleBack?.());
+    expect(insideFolder).toBe(true);
     await expect(page.locator('.topbar-folder-title')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /Switch drive/ })).toBeVisible();
+
+    const atRoot = await page.evaluate(() => window.__tdriveHandleBack?.());
+    expect(atRoot).toBe(false);
 });
 
 test('the bars carry safe-area padding', async ({ page }) => {

@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onDestroy, tick, type Snippet } from 'svelte';
     import { installModalA11y } from './modal-a11y';
-    import { pushSheet, type SheetHistoryHandle } from './sheet-history';
+    import { pushSheet, type SheetHandle } from './sheet-stack';
     import { isMobilePlatform } from '../../api';
 
     interface Props {
@@ -65,7 +65,7 @@
     let wasOpen = false;
     let swipeExiting = false;
     let closeTimer: ReturnType<typeof setTimeout> | null = null;
-    let sheetHistory: SheetHistoryHandle | null = null;
+    let sheetHistory: SheetHandle | null = null;
 
     let dragStartY = 0;
     let dragDelta = 0;
