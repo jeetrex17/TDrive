@@ -19,6 +19,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.provider.MediaStore;
+import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
@@ -39,6 +40,7 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
@@ -66,6 +68,9 @@ public class MainActivity extends AppCompatActivity {
 
     // The Go-side dialog ID of the in-flight file picker (-1 when idle)
     private int pendingFilePickerCallbackID = -1;
+    private String pendingFolderCallbackId = null;
+    private WailsJSBridge jsBridge;
+    private static final int FOLDER_PICKER_REQUEST = 7004;
     private static final int PHOTO_CAPTURE_REQUEST = 7002;
     private static final int VIDEO_CAPTURE_REQUEST = 7003;
     private static final int CAMERA_PERMISSION_REQUEST = 7010;
@@ -198,7 +203,8 @@ public class MainActivity extends AppCompatActivity {
         });
 
         // Add JavaScript interface for Go communication
-        webView.addJavascriptInterface(new WailsJSBridge(bridge, webView), "wails");
+        jsBridge = new WailsJSBridge(bridge, webView);
+        webView.addJavascriptInterface(jsBridge, "wails");
 
         registerBackHandler();
     }
@@ -425,6 +431,34 @@ public class MainActivity extends AppCompatActivity {
      * cache directory so Go receives real filesystem paths. Called by
      * WailsBridge on the main thread.
      */
+    /**
+     * Launch the system folder picker and mirror what it returns into the app
+     * cache, so Go is handed an ordinary directory path.
+     *
+     * The Storage Access Framework gives a document-tree URI, which nothing
+     * above this understands. Copying the tree out is the same answer already
+     * used for single files, and it keeps the whole import pipeline, desktop
+     * and phone alike, working from one directory path.
+     */
+    public void launchFolderPicker(String callbackId) {
+        synchronized (this) {
+            if (pendingFolderCallbackId != null) {
+                // One at a time: a second tree arriving for the first one's
+                // callback would copy a folder nobody asked for.
+                jsBridge.sendCallback(callbackId, null, "a folder picker is already open");
+                return;
+            }
+            pendingFolderCallbackId = callbackId;
+        }
+        try {
+            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), FOLDER_PICKER_REQUEST);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to launch folder picker", e);
+            pendingFolderCallbackId = null;
+            jsBridge.sendCallback(callbackId, null, "no folder picker on this device");
+        }
+    }
+
     public void launchFilePicker(int callbackID, boolean multiple) {
         synchronized (this) {
             if (pendingFilePickerCallbackID != -1) {
@@ -453,6 +487,10 @@ public class MainActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == PHOTO_CAPTURE_REQUEST || requestCode == VIDEO_CAPTURE_REQUEST) {
             handleCaptureResult(resultCode, data);
+            return;
+        }
+        if (requestCode == FOLDER_PICKER_REQUEST) {
+            handleFolderPickerResult(resultCode, data);
             return;
         }
         if (requestCode != FILE_PICKER_REQUEST) {
@@ -485,6 +523,117 @@ public class MainActivity extends AppCompatActivity {
             }
             bridge.filePickerDone(callbackID);
         }).start();
+    }
+
+    private void handleFolderPickerResult(int resultCode, @Nullable Intent data) {
+        final String callbackId = pendingFolderCallbackId;
+        pendingFolderCallbackId = null;
+        if (callbackId == null) {
+            return;
+        }
+        final Uri tree = (resultCode == RESULT_OK && data != null) ? data.getData() : null;
+        if (tree == null) {
+            // Dismissed. An empty path is the answer, not an error: the reader
+            // changed their mind, and nothing went wrong.
+            jsBridge.sendCallback(callbackId, "", null);
+            return;
+        }
+        // Off the main thread: a folder of any size would otherwise freeze the
+        // screen for as long as it takes to copy.
+        new Thread(() -> {
+            try {
+                File root = mirrorTree(tree);
+                jsBridge.sendCallback(callbackId, root.getAbsolutePath(), null);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to copy the chosen folder", e);
+                jsBridge.sendCallback(callbackId, null, "could not read that folder");
+            }
+        }).start();
+    }
+
+    /** Copies a chosen document tree into the cache and returns its root. */
+    private File mirrorTree(Uri tree) throws IOException {
+        String rootDocId = DocumentsContract.getTreeDocumentId(tree);
+        String name = treeDisplayName(tree, rootDocId);
+        File root = new File(getCacheDir(), "wails-folder/" + System.nanoTime() + "/" + name);
+        if (!root.mkdirs()) {
+            throw new IOException("could not create " + root);
+        }
+        copyTreeChildren(tree, rootDocId, root);
+        return root;
+    }
+
+    private String treeDisplayName(Uri tree, String docId) {
+        Uri self = DocumentsContract.buildDocumentUriUsingTree(tree, docId);
+        try (Cursor cursor = getContentResolver().query(
+                self, new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                if (name != null && !name.isEmpty()) {
+                    return safeName(name);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "folder";
+    }
+
+    /**
+     * A display name is whatever the provider chose to call the document, so it
+     * is reduced to a bare filename before it is ever joined to a path. Left
+     * alone, a name carrying separators would write outside the folder it
+     * belongs to.
+     */
+    private String safeName(String name) {
+        String bare = new File(name).getName().trim();
+        if (bare.isEmpty() || bare.equals(".") || bare.equals("..")) {
+            return "item";
+        }
+        return bare;
+    }
+
+    private void copyTreeChildren(Uri tree, String parentDocId, File dest) throws IOException {
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, parentDocId);
+        try (Cursor cursor = getContentResolver().query(children, new String[]{
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+        }, null, null, null)) {
+            if (cursor == null) {
+                return;
+            }
+            while (cursor.moveToNext()) {
+                String docId = cursor.getString(0);
+                String rawName = cursor.getString(1);
+                String mime = cursor.getString(2);
+                if (docId == null || rawName == null || rawName.isEmpty()) {
+                    continue;
+                }
+                File out = new File(dest, safeName(rawName));
+                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
+                    if (out.isDirectory() || out.mkdirs()) {
+                        copyTreeChildren(tree, docId, out);
+                    }
+                } else {
+                    copyDocument(DocumentsContract.buildDocumentUriUsingTree(tree, docId), out);
+                }
+            }
+        }
+    }
+
+    /** Streams one document out of the provider and into the cache. */
+    private void copyDocument(Uri uri, File out) throws IOException {
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             OutputStream os = new FileOutputStream(out)) {
+            if (in == null) {
+                return;
+            }
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                os.write(buf, 0, n);
+            }
+        }
     }
 
     /**

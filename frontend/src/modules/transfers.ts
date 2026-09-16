@@ -10,6 +10,7 @@ import { downloadFile, downloadFolder, importPaths, isMobilePlatform, onRuntimeE
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import type { ImportPlan, OperationError } from '../types';
 import { notify } from './notifications';
+import { canPickFolder, pickAndroidFolder } from './android-folder';
 import { humanizeBackendError } from './errors';
 import { appActions } from './app-actions';
 import { loadEncryptionStatus } from './encryption';
@@ -574,7 +575,10 @@ export async function uploadWithParentID(parentID: string) {
 export async function importFolderWithParentID(parentID: string) {
     let dir = "";
     try {
-        dir = await selectFolder();
+        // Android's picker answers through the app's own bridge, because Wails
+        // will not hand a document tree to its dialog API. Either way what
+        // comes back is a directory path, so the import below is the same.
+        dir = canPickFolder() ? await pickAndroidFolder() : await selectFolder();
     } catch (err) {
         console.error("SelectFolder failed:", err);
         notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err) });
