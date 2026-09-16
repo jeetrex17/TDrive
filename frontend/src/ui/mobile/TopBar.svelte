@@ -8,6 +8,8 @@
     import { fileSortState, setFileSortKey } from '../file-list/file-sort-store';
     import type { FileSortKey } from '../file-list/file-sort';
     import { navigateBack } from '../../modules/navigation';
+    import { clearSearch } from '../../modules/search';
+    import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
     import SyncRing from './SyncRing.svelte';
     import {
         activeDrive,
@@ -52,10 +54,21 @@
     let searchInputEl = $state<HTMLInputElement | null>(null);
 
     async function toggleSearch(): Promise<void> {
-        searchOpen = !searchOpen;
-        if (!searchOpen) return;
+        if (searchOpen) {
+            closeSearch();
+            return;
+        }
+        searchOpen = true;
         await tick();
         searchInputEl?.focus();
+    }
+
+    // Putting the field away drops the query with it. A drive still filtered by
+    // words the user can no longer see is the one outcome worse than losing
+    // them: the list looks wrong and nothing on screen says why.
+    function closeSearch(): void {
+        searchOpen = false;
+        if (String(searchInputEl?.value ?? '').trim()) clearSearch();
     }
 
     // Desktop sorts by clicking a column header and has no Type column, so
@@ -99,6 +112,28 @@
         if (sortButtonEl?.contains(target) || sortMenuEl?.contains(target)) return;
         sortOpen = false;
     }
+
+    // Android BACK unwinds the bar the way it was built up: the menu first,
+    // then the search field, before the press reaches the page underneath.
+    let sortBack: SheetHandle | null = null;
+    $effect(() => {
+        if (sortOpen) {
+            sortBack ??= pushSheet(() => { sortOpen = false; });
+            return;
+        }
+        sortBack?.release();
+        sortBack = null;
+    });
+
+    let searchBack: SheetHandle | null = null;
+    $effect(() => {
+        if (searchOpen) {
+            searchBack ??= pushSheet(() => closeSearch());
+            return;
+        }
+        searchBack?.release();
+        searchBack = null;
+    });
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
