@@ -16,6 +16,7 @@
     import TransfersTab from './TransfersTab.svelte';
     import { activateMobileBack } from './mobile-back';
     import { activeTab, activeTransferCount, type MobileTab } from './mobile-shell-store';
+    import { sidebarState } from '../sidebar/sidebar-store';
 
     interface Props {
         dashboardVisible: boolean;
@@ -29,6 +30,18 @@
     // Files and Photos share one content region (the file list vs the gallery);
     // Transfers and Account are their own panels.
     const showMain = $derived($activeTab === 'files' || $activeTab === 'photos');
+
+    // The gallery owns whether Photos is showing; the tab is only how the user
+    // asked for it. Hardware BACK and in-app navigation leave the gallery
+    // without touching the tab bar, so follow the gallery whenever the two
+    // disagree, or the Photos tab would stay lit over the file list.
+    $effect(() => {
+        const wanted: MobileTab = $sidebarState.photosActive ? 'photos' : 'files';
+        const current = get(activeTab);
+        if ((current === 'files' || current === 'photos') && current !== wanted) {
+            activeTab.set(wanted);
+        }
+    });
 
     let fabHidden = $state(false);
 
