@@ -304,6 +304,16 @@ tasks:
       # build/ios/main.m, so put it back or a build driven from Xcode quietly
       # ships without it while a build driven from here has it.
       - cp build/ios/main.m build/ios/xcode/main/main.m
+      # Same trap for Info.plist: the generated one carries none of the keys
+      # this app declares, and UIFileSharingEnabled is the difference between
+      # a download the Files app lists and one nobody can reach. Keep the
+      # bundle id the generator chose, so only the declarations are copied.
+      - |
+        for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+          value=$(/usr/libexec/PlistBuddy -c "Print :$key" build/ios/Info.plist)
+          /usr/libexec/PlistBuddy -c "Set :$key $value" build/ios/xcode/main/Info.plist 2>/dev/null ||
+            /usr/libexec/PlistBuddy -c "Add :$key bool $value" build/ios/xcode/main/Info.plist
+        done
 
   run:
     summary: Run the application in iOS Simulator

@@ -27,6 +27,55 @@ func TestUniqueDownloadPathNumbersDuplicates(t *testing.T) {
 	}
 }
 
+func TestUnderAcceptsOnlyFilesBelowARoot(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "data", "TDrive")
+	for _, tc := range []struct {
+		name string
+		path string
+		want bool
+	}{
+		{"a file in the root", filepath.Join(root, "plan.pdf"), true},
+		{"a file further down", filepath.Join(root, "Downloads", "plan.pdf"), true},
+		{"the root itself", root, false},
+		{"the parent", filepath.Dir(root), false},
+		{"a sibling with a shared prefix", root + "-other", false},
+		{"an escape", filepath.Join(root, "..", "plan.pdf"), false},
+		{"no root at all", "plan.pdf", false},
+	} {
+		if got := under(root, filepath.Clean(tc.path)); got != tc.want {
+			t.Errorf("%s: under(%q) = %v, want %v", tc.name, tc.path, got, tc.want)
+		}
+	}
+	// A platform with no user-visible folder reports "", which must never
+	// turn into a root that accepts everything.
+	if under("", filepath.Join(root, "plan.pdf")) {
+		t.Error(`under("", ...) accepted a path`)
+	}
+}
+
+func TestDownloadsDirFallsBackToTheDataDirectory(t *testing.T) {
+	root := t.TempDir()
+	datadir.Set(root)
+	t.Cleanup(func() { datadir.Set("") })
+	base, err := datadir.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// visibleStorageDir is empty everywhere but iOS, so everywhere but iOS
+	// downloads stay inside the data directory.
+	dir, err := downloadsDir()
+	if err != nil {
+		t.Fatalf("downloadsDir: %v", err)
+	}
+	if want := filepath.Join(base, "Downloads"); dir != want {
+		t.Fatalf("downloadsDir = %q, want %q", dir, want)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("downloadsDir did not create it: %v", err)
+	}
+}
+
 func TestShareFileOnlySharesSandboxFiles(t *testing.T) {
 	root := t.TempDir()
 	datadir.Set(root)
