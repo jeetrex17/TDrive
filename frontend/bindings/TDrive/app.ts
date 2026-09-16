@@ -601,9 +601,9 @@ export function SetScreenProtect(enabled: boolean): $CancellablePromise<void> {
 }
 
 /**
- * ShareFile opens the platform share sheet for a file TDrive wrote into its
- * own data directory. Anything outside it is refused so the webview cannot
- * hand arbitrary files to other apps. Desktop reports unsupported.
+ * ShareFile opens the platform share sheet for a file TDrive wrote itself.
+ * Anything outside the folders it owns is refused so the webview cannot hand
+ * arbitrary files to other apps. Desktop reports unsupported.
  */
 export function ShareFile(path: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(3239681846, path);
