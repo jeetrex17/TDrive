@@ -63,7 +63,9 @@ describe('ContextMenu action sheet (mobile)', () => {
         expect(items.map((b) => b.textContent?.trim())).toEqual(['Open', 'Download', 'Delete']);
         expect(items[2].classList.contains('danger')).toBe(true);
         expect(document.querySelectorAll('.action-sheet-sep')).toHaveLength(1);
-        expect(document.querySelector('.action-sheet-cancel')).not.toBeNull();
+        // No Cancel row: the handle, a swipe and the scrim already dismiss it,
+        // and a fourth way costs a full row at the bottom of the sheet.
+        expect(document.querySelector('.action-sheet-cancel')).toBeNull();
         // Not the desktop popover.
         expect(document.querySelector('.context-menu-panel')).toBeNull();
     });
@@ -80,12 +82,14 @@ describe('ContextMenu action sheet (mobile)', () => {
         expect(document.querySelector('.action-sheet')).toBeNull();
     });
 
-    it('closes on the Cancel row without running an action', async () => {
+    it('closes on the scrim without running an action', async () => {
+        // The dimmed screen behind is what a Cancel row used to duplicate, and
+        // it is the target a thumb reaches for first.
         const action = vi.fn();
         showContextMenu(0, 0, [{ label: 'Open', action }], { header: { title: 'a.txt', kind: 'file' } });
         await settle();
 
-        (document.querySelector('.action-sheet-cancel') as HTMLButtonElement).dispatchEvent(
+        (document.querySelector('.action-sheet-scrim') as HTMLElement).dispatchEvent(
             new MouseEvent('click', { bubbles: true }),
         );
         flushSync();
