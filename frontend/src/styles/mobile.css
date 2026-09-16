@@ -850,6 +850,16 @@ html.mobile .mobile-sheet {
 }
 html.mobile .mobile-sheet.open { transform: translateY(0); }
 
+/* The grip plus the title row. touch-action: none so the drag is ours rather
+   than the page's, and cursor: grab so a pointer says the same thing the mark
+   does. */
+html.mobile .switcher-grab {
+    flex: 0 0 auto;
+    touch-action: none;
+    cursor: grab;
+}
+html.mobile .switcher-grab:active { cursor: grabbing; }
+
 html.mobile .switcher-grip {
     flex: 0 0 auto;
     display: flex;
@@ -869,16 +879,32 @@ html.mobile .switcher-header {
     padding: 4px 0 12px;
 }
 html.mobile .switcher-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
+/* A 32px disc inside a 44px target: the margins give back what the box gained,
+   so the header keeps its height and the disc stays exactly where it was. */
 html.mobile .switcher-close {
+    position: relative;
     display: inline-grid;
     place-items: center;
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
+    margin: -6px;
     border: 0;
     border-radius: var(--radius-pill);
-    background: var(--overlay-neutral-2);
+    background: none;
     color: var(--color-text-soft);
     cursor: pointer;
+}
+html.mobile .switcher-close::before {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border-radius: inherit;
+    background: var(--overlay-neutral-2);
+}
+html.mobile .switcher-close:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -6px;
+    border-radius: var(--radius-pill);
 }
 html.mobile .switcher-list {
     flex: 1 1 auto;
@@ -963,7 +989,6 @@ html.mobile .topbar-icon-btn:focus-visible,
 html.mobile .account-row:focus-visible,
 html.mobile .account-logout:focus-visible,
 html.mobile .switcher-action:focus-visible,
-html.mobile .switcher-close:focus-visible,
 html.mobile .transfers-clear:focus-visible,
 html.mobile .topbar-menu-item:focus-visible {
     outline: 2px solid var(--color-accent);

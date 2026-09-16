@@ -2,24 +2,128 @@
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import XIcon from '@lucide/svelte/icons/x';
+    import { createSheetDrag, sheetOffset, shouldDismiss } from '../modals/sheet-gesture';
     import { driveSwitcherOpen, closeDriveSwitcher } from './mobile-shell-store';
 
     let sheetEl = $state<HTMLElement | null>(null);
+    let scrimEl = $state<HTMLElement | null>(null);
+
+    const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+    function focusables(): HTMLElement[] {
+        return Array.from(sheetEl?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
+            .filter((element) => !element.closest('[inert], [hidden]'));
+    }
+
+    // While the sheet is up it is the only thing on screen, so the shell behind
+    // it stops answering: without this a screen reader walks straight out of the
+    // sheet into the file list it is covering. Only the shell, though -- the
+    // overlay layer above it carries the drive row's own action menu, and that
+    // has to stay reachable with the sheet still open.
+    let hiddenBehind: HTMLElement[] = [];
+
+    function hideBehind(): void {
+        const shell = sheetEl?.parentElement;
+        if (!shell) return;
+        hiddenBehind = Array.from(shell.children).filter(
+            (child): child is HTMLElement =>
+                child instanceof HTMLElement && child !== sheetEl && child !== scrimEl && !child.inert,
+        );
+        for (const element of hiddenBehind) element.inert = true;
+    }
+
+    function showBehind(): void {
+        for (const element of hiddenBehind) element.inert = false;
+        hiddenBehind = [];
+    }
 
     // Focus into the sheet when it opens so keyboard and screen-reader users land
-    // inside it, not behind it.
+    // inside it, not behind it, and hand it back to whatever opened it on the way
+    // out: the sheet goes inert while closing, so focus left inside it lands on
+    // the document body and the reader starts again from the top.
+    let opener: HTMLElement | null = null;
     $effect(() => {
-        if ($driveSwitcherOpen && sheetEl) {
-            const target = sheetEl.querySelector<HTMLElement>('.drive-item, #open-join-drive');
-            (target ?? sheetEl).focus({ preventScroll: true });
-        }
+        if (!$driveSwitcherOpen || !sheetEl) return;
+        opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        hideBehind();
+        (sheetEl.querySelector<HTMLElement>('.drive-item, #open-join-drive') ?? sheetEl)
+            .focus({ preventScroll: true });
+
+        return () => {
+            showBehind();
+            const back = opener?.isConnected && opener !== document.body
+                ? opener
+                : document.querySelector<HTMLElement>('.drive-header-btn');
+            opener = null;
+            back?.focus({ preventScroll: true });
+        };
     });
 
     function onKeydown(event: KeyboardEvent): void {
-        if (event.key === 'Escape' && $driveSwitcherOpen) {
+        if (!$driveSwitcherOpen) return;
+        if (event.key === 'Escape') {
             event.preventDefault();
             closeDriveSwitcher();
+            return;
         }
+        if (event.key !== 'Tab') return;
+        const items = focusables();
+        if (items.length === 0) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (!sheetEl?.contains(document.activeElement)) {
+            event.preventDefault();
+            first.focus();
+        } else if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+
+    // Drag to dismiss, on the same physics every other sheet in the app uses.
+    // The grip is the universal "pull me down" mark, and one that does not move
+    // reads as a sheet that is stuck; the grab area covers the title row with
+    // it, because a 5px bar is not something a thumb aims at.
+    let dragging = $state(false);
+    let dragStartY = 0;
+    let dragDelta = 0;
+    const drag = createSheetDrag();
+
+    function onGrabPointerDown(event: PointerEvent): void {
+        const origin = event.target as HTMLElement;
+        // Bound on the sheet rather than the grab area so the handlers sit on an
+        // element that already carries a role; the origin is what decides.
+        if (!sheetEl || !origin.closest('.switcher-grab') || origin.closest('.switcher-close')) return;
+        dragging = true;
+        dragStartY = event.clientY;
+        dragDelta = 0;
+        drag.start(event);
+        sheetEl.style.transition = 'none';
+        (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+    }
+
+    function onGrabPointerMove(event: PointerEvent): void {
+        if (!dragging || !sheetEl) return;
+        dragDelta = sheetOffset(event.clientY - dragStartY, sheetEl.offsetHeight);
+        drag.track(event);
+        sheetEl.style.transform = `translateY(${dragDelta}px)`;
+    }
+
+    function onGrabPointerUp(): void {
+        if (!dragging || !sheetEl) return;
+        dragging = false;
+        const threshold = Math.max(88, sheetEl.offsetHeight * 0.28);
+        const dismissed = shouldDismiss(dragDelta, drag.velocity(), threshold);
+        dragDelta = 0;
+        drag.reset();
+        // Handing the sheet back to its own transition is what lets the release
+        // carry on from where the finger left it, in either direction.
+        sheetEl.style.transition = '';
+        sheetEl.style.transform = '';
+        if (dismissed) closeDriveSwitcher();
     }
 
     // Picking a drive row switches drives (handled by the portaled DriveList) and
@@ -35,6 +139,7 @@
 <!-- Decorative scrim; keyboard users dismiss via Escape, the close button, or
      hardware back, so it carries no key handler and stays out of the a11y tree. -->
 <div
+    bind:this={scrimEl}
     class="sheet-scrim"
     class:open={$driveSwitcherOpen}
     aria-hidden="true"
@@ -53,13 +158,21 @@
     aria-label="Drives"
     tabindex="-1"
     inert={!$driveSwitcherOpen}
+    onpointerdown={onGrabPointerDown}
+    onpointermove={onGrabPointerMove}
+    onpointerup={onGrabPointerUp}
+    onpointercancel={onGrabPointerUp}
 >
-    <div class="switcher-grip" aria-hidden="true"><span></span></div>
-    <div class="switcher-header">
-        <h2 class="switcher-title">Drives</h2>
-        <button type="button" class="switcher-close" aria-label="Close" onclick={closeDriveSwitcher}>
-            <XIcon size={20} strokeWidth={2} aria-hidden="true" />
-        </button>
+    <!-- The grip and the title row are one grab area: the mark says the sheet
+         moves, and the row beside it is what a thumb actually lands on. -->
+    <div class="switcher-grab">
+        <div class="switcher-grip" aria-hidden="true"><span></span></div>
+        <div class="switcher-header">
+            <h2 class="switcher-title">Drives</h2>
+            <button type="button" class="switcher-close" aria-label="Close" onclick={closeDriveSwitcher}>
+                <XIcon size={20} strokeWidth={2} aria-hidden="true" />
+            </button>
+        </div>
     </div>
 
     <!-- Delegated tap on the portaled drive rows closes the sheet after the
