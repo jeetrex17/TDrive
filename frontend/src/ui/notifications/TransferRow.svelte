@@ -38,13 +38,42 @@
         ? Math.min(transfer.total, Math.max(transfer.bytes || 0, ((transfer.progress || 0) / 100) * transfer.total))
         : transfer.bytes || 0);
 
+    /**
+     * "3.7 / 42.4 MB" rather than "3.7 MB / 42.4 MB". Naming the unit twice
+     * when it is the same unit both times is the sort of thing that reads fine
+     * in a spreadsheet and crowds a phone, and the pair is one quantity to the
+     * person reading it, not two.
+     */
+    const sizePair = $derived.by(() => {
+        const done = formatBytes(doneBytes);
+        const total = formatBytes(transfer.total);
+        const doneUnit = done.slice(done.lastIndexOf(' ') + 1);
+        if (doneUnit && doneUnit === total.slice(total.lastIndexOf(' ') + 1)) {
+            return `${done.slice(0, done.lastIndexOf(' '))} / ${total}`;
+        }
+        return `${done} / ${total}`;
+    });
+
+    /**
+     * A transfer that has started but cannot yet say how big it is: a folder
+     * being walked before the first byte moves. There is no progress to report,
+     * so it reports none rather than a confident 0%, and the bar says the work
+     * is running by moving.
+     */
+    const preparing = $derived(
+        transfer.status === 'active'
+        && transfer.total <= 0
+        && (transfer.itemsTotal || 0) <= 0
+        && (transfer.progress || 0) <= 0,
+    );
+
     function cancel(event: MouseEvent): void {
         event.stopPropagation();
         onCancel?.(transfer.direction);
     }
 </script>
 
-<div class={`notif-row notif-row-transfer ${statusClass}`}>
+<div class={`notif-row notif-row-transfer ${statusClass}${preparing ? ' is-preparing' : ''}`}>
     <span class="notif-row-icon" data-kind={direction} aria-hidden="true">
         {#if transfer.direction === 'up'}
             <ArrowUpIcon size={14} strokeWidth={2} aria-hidden="true" />
@@ -64,28 +93,34 @@
             aria-valuemax="100"
             aria-valuenow={Math.round(progressWidth)}
         >
-            <div class="notif-row-progress-fill" style={`width:${progressWidth}%`} aria-hidden="true"></div>
+            <div
+                class="notif-row-progress-fill"
+                style={preparing ? undefined : `width:${progressWidth}%`}
+                aria-hidden="true"
+            ></div>
         </div>
     </div>
-    <div class="notif-row-meta">
-        {#if terminalLabel}
-            {terminalLabel}
-        {:else if transfer.total <= 0}
-            {#if (transfer.itemsTotal || 0) > 0}
-                <div class="notif-row-size">{transfer.itemsDone || 0} / {transfer.itemsTotal} files</div>
+    {#if !preparing}
+        <div class="notif-row-meta">
+            {#if terminalLabel}
+                <div class="notif-row-size">{terminalLabel}</div>
+            {:else if transfer.total <= 0}
+                {#if (transfer.itemsTotal || 0) > 0}
+                    <div class="notif-row-size">{transfer.itemsDone || 0} of {transfer.itemsTotal} files</div>
+                {:else}
+                    <div class="notif-row-size">{Math.round(transfer.progress || 0)}%</div>
+                {/if}
             {:else}
-                {Math.round(transfer.progress || 0)}%
+                {#if (transfer.itemsTotal || 0) > 0}
+                    <div class="notif-row-size">{transfer.itemsDone || 0} of {transfer.itemsTotal} files</div>
+                {/if}
+                <div class="notif-row-size">{sizePair}</div>
+                {#if transfer.speed > 0}
+                    <div class="notif-row-speed">{formatBytes(transfer.speed)}/s</div>
+                {/if}
             {/if}
-        {:else}
-            {#if (transfer.itemsTotal || 0) > 0}
-                <div class="notif-row-size">{transfer.itemsDone || 0} / {transfer.itemsTotal} files</div>
-            {/if}
-            <div class="notif-row-size">{formatBytes(doneBytes)} / {formatBytes(transfer.total)}</div>
-            {#if transfer.speed > 0}
-                <div class="notif-row-speed">{formatBytes(transfer.speed)}/s</div>
-            {/if}
-        {/if}
-    </div>
+        </div>
+    {/if}
     {#if transfer.status === 'active'}
         <button
             class="notif-row-cancel"

@@ -117,7 +117,9 @@ describe('notif-bell', () => {
         });
         bell().dispatchEvent(new MouseEvent('click', { bubbles: true }));
         flushSync();
-        expect(document.body.textContent).toContain('3 / 5 files');
+        expect(document.body.textContent).toContain('3 of 5 files');
+        // The pair names its unit once: "600 / 1000 B", not "600 B / 1000 B".
+        expect(document.body.textContent).toContain('600 / 1000 B');
     });
 
     it('opens the full panel on hover and closes after the pointer leaves', () => {
