@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { idleTransferActivity, state } from '../state';
 
 const mocks = vi.hoisted(() => ({
+    dismissNotification: vi.fn(),
     markTransferDone: vi.fn(),
     notify: vi.fn(),
     openImportOptionsModal: vi.fn(),
@@ -30,7 +31,7 @@ const app = vi.hoisted(() => ({
 
 vi.mock('../../bindings/TDrive/app', () => app);
 vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
-vi.mock('./notifications', () => ({ notify: mocks.notify }));
+vi.mock('./notifications', () => ({ notify: mocks.notify, dismissNotification: mocks.dismissNotification }));
 vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles: mocks.refreshFiles }) }));
 vi.mock('./notif-bell', () => ({
     markTransferDone: mocks.markTransferDone,
@@ -48,7 +49,7 @@ vi.mock('./modals/encryption-password', () => ({ openEncryptionPasswordModal: vi
 vi.mock('../ui/chrome/UploadMenu.svelte', () => ({ default: {} }));
 vi.mock('../ui/mount', () => ({ mountSvelte: vi.fn() }));
 
-import { activateTransferSurfaces, importFolderWithParentID } from './transfers';
+import { activateTransferSurfaces, importFolderWithParentID, uploadWithParentID } from './transfers';
 
 interface TestNotice {
     level?: string;
@@ -199,5 +200,39 @@ describe('native file drop', () => {
 
         Reflect.deleteProperty(document, 'elementFromPoint');
         state.currentFolderId = '';
+    });
+});
+
+describe('upload retry', () => {
+    it('takes its own toast down and refuses a second tap on the same failure', async () => {
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
+        app.SelectFiles.mockResolvedValue(['/tmp/report.pdf']);
+        app.UploadToDriveFS.mockResolvedValue({
+            result: { ok: false, error: { code: 'io', message: 'connection reset' } },
+            files: [],
+        });
+
+        await uploadWithParentID('');
+        expect(app.UploadToDriveFS).toHaveBeenCalledTimes(1);
+
+        const failure = mocks.notify.mock.calls
+            .map(([notice]) => notice as TestNotice & { action?: { label: string; run: () => void } })
+            .find((notice) => notice?.title === 'Upload failed');
+        expect(failure?.action?.label).toBe('Retry');
+
+        failure?.action?.run();
+        failure?.action?.run();
+        await vi.waitFor(() => expect(app.UploadToDriveFS).toHaveBeenCalledTimes(2));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        // A second batch over the first would cancel it on the backend, which
+        // keeps one cancel handle per direction.
+        expect(app.UploadToDriveFS).toHaveBeenCalledTimes(2);
+        expect(mocks.dismissNotification).toHaveBeenCalledTimes(1);
+        // The second tap is inert, not rebuffed: a double-tap on a button that
+        // has already been taken should not answer back with a second toast.
+        expect(mocks.notify).not.toHaveBeenCalledWith(
+            expect.objectContaining({ title: 'A transfer is already in progress' }),
+        );
     });
 });
