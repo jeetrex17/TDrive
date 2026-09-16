@@ -8,6 +8,12 @@
  * insets on the shell edges (spec 2.3, 2.11). Imported last in style.css.
  */
 
+html.mobile {
+    /* Everything that floats above the tab bar measures from this, so the bar
+       height lives in one place. Its own box adds the bottom inset on top. */
+    --tabbar-height: 49px;
+}
+
 /* The shell root and the tab panels set display:flex, which would otherwise
    beat the `hidden` attribute they toggle with; the [hidden] variants are more
    specific than those rules, so the panels collapse without a broad !important. */
@@ -232,7 +238,7 @@ html.mobile .tab-bar {
     position: relative;
     display: flex;
     align-items: stretch;
-    height: calc(49px + var(--inset-bottom));
+    height: calc(var(--tabbar-height) + var(--inset-bottom));
     padding-bottom: var(--inset-bottom);
     background: var(--color-surface-0);
     border-top: 1px solid var(--color-border-soft);
@@ -302,7 +308,9 @@ html.mobile .tab-badge {
 html.mobile .mobile-fab {
     position: absolute;
     right: 16px;
-    bottom: calc(16px + var(--inset-bottom));
+    /* Clear of the tab bar: the upload button used to sit on top of the
+       Account tab, swallowing taps meant for it. */
+    bottom: calc(var(--tabbar-height) + var(--inset-bottom) + 16px);
     z-index: var(--z-selection);
     transition: transform var(--motion-med) var(--ease-standard), opacity var(--motion-med) var(--ease-standard);
 }
@@ -637,7 +645,7 @@ html.mobile .mobile-hidden-hosts { display: none; }
 html.mobile #toast-stack.toast-stack {
     left: 50%;
     right: auto;
-    bottom: calc(49px + var(--inset-bottom) + 12px);
+    bottom: calc(var(--tabbar-height) + var(--inset-bottom) + 12px);
     transform: translateX(-50%);
     width: min(92vw, 420px);
     align-items: stretch;
