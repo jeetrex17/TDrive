@@ -2,6 +2,7 @@
     import FileUpIcon from '@lucide/svelte/icons/file-up';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import FolderUpIcon from '@lucide/svelte/icons/folder-up';
+    import PlusIcon from '@lucide/svelte/icons/plus';
     import UploadIcon from '@lucide/svelte/icons/upload';
     import { tick } from 'svelte';
     import { isMobilePlatform } from '../../api';
@@ -94,7 +95,19 @@
         else void openMenu();
     }}
 >
-    <UploadIcon class="btn-icon" size={16} strokeWidth={2} aria-hidden="true" />
+    <!-- On a phone this is one cell of the tab bar, so it is built like one:
+         a glyph over a label, with the same pill the active tab wears, filled
+         rather than tinted because this one acts instead of navigating. The
+         menu behind it creates a folder as readily as it uploads a file, so a
+         plus says what the button does. Beside the word Upload on a desktop the
+         tray reads as the verb it accompanies. -->
+    {#if isMobilePlatform()}
+        <span class="upload-btn-pill" aria-hidden="true">
+            <PlusIcon class="btn-icon" size={24} strokeWidth={2.2} />
+        </span>
+    {:else}
+        <UploadIcon class="btn-icon" size={16} strokeWidth={2} aria-hidden="true" />
+    {/if}
     Upload
 </button>
 {#if asSheet && open}
