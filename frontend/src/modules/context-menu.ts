@@ -32,9 +32,12 @@ export function buildFolderContextMenuItems(
     folderName: string,
     { folderGroup = true }: RowMenuOptions = {},
 ): ContextMenuItem[] {
+    // On the phone sheet the name is already in the header, so the tiles read
+    // "Open" rather than repeating it back at the reader.
+    const tile = !folderGroup;
     const items: ContextMenuItem[] = [
-        { label: `Open "${folderName}"`, action: () => navigateToFolder(folderID, folderName) },
-        { label: `Download "${folderName}"`, action: () => enqueueFolderDownload(folderID, folderName) },
+        { label: tile ? 'Open' : `Open "${folderName}"`, icon: 'open', primary: tile, action: () => navigateToFolder(folderID, folderName) },
+        { label: tile ? 'Download' : `Download "${folderName}"`, icon: 'download', primary: tile, action: () => enqueueFolderDownload(folderID, folderName) },
     ];
     if (folderGroup) {
         items.push(
@@ -43,11 +46,11 @@ export function buildFolderContextMenuItems(
         );
     }
     items.push(
-        { label: "Rename…", action: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
-        { label: "Move to…", action: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
+        { label: "Rename…", icon: 'rename', primary: tile, action: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
+        { label: "Move to…", icon: 'move', primary: tile, action: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
     );
     if (!folderGroup) items.push({ type: "divider" });
-    items.push({ label: 'Delete "' + folderName + '"', danger: true, action: () => openDeleteModal({ type: "folder", id: folderID, name: folderName }) });
+    items.push({ label: tile ? 'Delete' : 'Delete "' + folderName + '"', icon: 'delete', danger: true, action: () => openDeleteModal({ type: "folder", id: folderID, name: folderName }) });
     if (folderGroup) {
         items.push(
             { type: "divider" },
@@ -68,22 +71,27 @@ export function buildFileContextMenuItems(row: HTMLElement, { folderGroup = true
     const canRename = row.dataset.canRename !== "false";
     const encrypted = row.dataset.encrypted === "true";
 
+    // The phone sheet promotes the everyday actions to tiles. Delete is left
+    // out of that row on purpose: a destructive action does not belong under a
+    // thumb reaching for Download.
+    const tile = !folderGroup;
+
     const items: ContextMenuItem[] = [];
     if (isVideoFile(fileName)) {
-        items.push({ label: "Play", action: () => { void appActions().playVideo({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
+        items.push({ label: "Play", icon: 'play', primary: tile, action: () => { void appActions().playVideo({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
     } else if (canOpenFileViewer(fileName)) {
-        items.push({ label: "Open", action: () => { void appActions().openFile({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
+        items.push({ label: "Open", icon: 'open', primary: tile, action: () => { void appActions().openFile({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
     }
-    items.push({ label: "Download", action: () => enqueueDownload(fileID, fileName, fileSize) });
+    items.push({ label: "Download", icon: 'download', primary: tile, action: () => enqueueDownload(fileID, fileName, fileSize) });
 
     const fileTarget: FileCommandItem = fileSource === 'tg'
         ? { type: 'file', id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: 'tg' }
         : { type: 'file', id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: 'fs' };
-    if (canRename) items.push({ label: 'Rename…', action: () => openRenameModal(fileTarget) });
-    items.push({ label: 'Move to…', action: () => openMoveModal(fileTarget) });
+    if (canRename) items.push({ label: 'Rename…', icon: 'rename', primary: tile, action: () => openRenameModal(fileTarget) });
+    items.push({ label: 'Move to…', icon: 'move', primary: tile, action: () => openMoveModal(fileTarget) });
 
     if (folderGroup) {
-        if (canDelete) items.push({ label: 'Delete', danger: true, action: () => openDeleteModal(fileTarget) });
+        if (canDelete) items.push({ label: 'Delete', icon: 'delete', danger: true, action: () => openDeleteModal(fileTarget) });
         items.push(
             { type: "divider" },
             { label: "Upload files", action: () => { void uploadWithParentID(state.currentFolderId); } },
@@ -92,7 +100,7 @@ export function buildFileContextMenuItems(row: HTMLElement, { folderGroup = true
             { label: "Refresh", action: () => { void appActions().triggerRefresh(); } },
         );
     } else if (canDelete) {
-        items.push({ type: "divider" }, { label: 'Delete', danger: true, action: () => openDeleteModal(fileTarget) });
+        items.push({ type: "divider" }, { label: 'Delete', icon: 'delete', danger: true, action: () => openDeleteModal(fileTarget) });
     }
     return items;
 }
