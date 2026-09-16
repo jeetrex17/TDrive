@@ -6,7 +6,7 @@
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import SearchIcon from '@lucide/svelte/icons/search';
     import { isMobilePlatform, listMountableDrives } from '../api';
-    import BrandMark from './BrandMark.svelte';
+    import tdriveLogo from '../assets/images/tdrive-logo.png';
     import { setFileSortKey, fileSortState } from './file-list/file-sort-store';
     import type { FileSortKey } from './file-list/file-sort';
     import MountControl from './mount/MountControl.svelte';
@@ -54,7 +54,7 @@
 >
     <aside class="sidebar">
         <div class="logo">
-            <BrandMark size={22} class="logo-mark" />
+            <img class="logo-mark" src={tdriveLogo} alt="" width="44" height="28" />
             <span>TDrive</span>
         </div>
 
