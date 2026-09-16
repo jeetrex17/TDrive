@@ -18,11 +18,13 @@ import android.os.PowerManager;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.provider.MediaStore;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.util.Log;
+import android.view.WindowManager;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -33,6 +35,7 @@ import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
+import androidx.core.view.WindowCompat;
 import androidx.webkit.WebViewAssetLoader;
 
 import org.json.JSONObject;
@@ -89,6 +92,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        takeWholeWindow();
         setContentView(R.layout.activity_main);
 
         // Initialize the native Go library
@@ -100,6 +104,35 @@ public class MainActivity extends AppCompatActivity {
 
         // Load the application
         loadApplication();
+    }
+
+    /**
+     * The page keeps itself clear of the status bar and the gesture handle from
+     * the insets WailsBridge reports, so the window has to hand it the whole
+     * screen. Fitted, the decor lays the WebView out between the system bars
+     * instead and the window background shows through above and below the page
+     * as a hard-edged band. Android 15 gives the window over on its own; older
+     * releases need asking, and need the bars left uncoloured so the decor does
+     * not paint the same band back on top of the content.
+     */
+    private void takeWholeWindow() {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // A turned phone keeps the window off the short edge it reserves for
+            // a cutout, which is the edge the status bar moves to in landscape,
+            // and that is the whole width of the video player.
+            WindowManager.LayoutParams attrs = getWindow().getAttributes();
+            attrs.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(attrs);
+        }
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Without this the system draws its own scrim behind a transparent
+            // navigation bar, which is the band again in a different colour.
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
