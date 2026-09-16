@@ -16,6 +16,7 @@
     import TransfersTab from './TransfersTab.svelte';
     import { activateMobileBack } from './mobile-back';
     import { activateSafeArea } from './safe-area';
+    import { activateKeyboardInsets } from './keyboard-insets';
     import { activeTab, activeTransferCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
@@ -101,6 +102,7 @@
     onMount(() => {
         const disposeBack = activateMobileBack();
         const disposeSafeArea = activateSafeArea();
+        const disposeKeyboard = activateKeyboardInsets();
 
         const list = document.getElementById('file-list');
         const onScroll = (): void => {
@@ -112,6 +114,7 @@
             list?.removeEventListener('scroll', onScroll);
             disposeBack();
             disposeSafeArea();
+            disposeKeyboard();
             clearTimeout(navTimer);
         };
     });
