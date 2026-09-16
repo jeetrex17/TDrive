@@ -1356,10 +1356,17 @@ html.mobile .video-overlay.is-video-loading .video-player {
     filter: blur(18px);
     transform: scale(1.06);
 }
+/* The scrim behind the chrome is what keeps white text legible over a bright
+   frame, and it has to fade rather than end. On a phone the bar is short, so a
+   gradient sized to it falls from dark to clear across a few dozen pixels and
+   reads as a band laid over the picture. The extra padding is what the fade
+   needs: it makes the bar taller without moving anything in it, because each is
+   anchored to the edge it sits on. */
 html.mobile .video-topbar {
     min-height: 0;
-    padding: calc(var(--inset-top) + 8px) calc(var(--inset-right) + 8px) 14px calc(var(--inset-left) + 16px);
+    padding: calc(var(--inset-top) + 8px) calc(var(--inset-right) + 8px) 44px calc(var(--inset-left) + 16px);
     gap: 12px;
+    background: linear-gradient(to bottom, rgba(5, 7, 12, 0.78), rgba(5, 7, 12, 0.34) 52%, rgba(5, 7, 12, 0));
 }
 html.mobile .video-filename {
     max-width: calc(100vw - var(--inset-left) - var(--inset-right) - 92px);
@@ -1369,7 +1376,8 @@ html.mobile .video-filename {
 html.mobile .video-meta { margin-top: 2px; font-size: 12px; }
 html.mobile .video-controls {
     gap: 4px;
-    padding: 8px calc(var(--inset-right) + 8px) calc(var(--inset-bottom) + 10px) calc(var(--inset-left) + 8px);
+    padding: 52px calc(var(--inset-right) + 8px) calc(var(--inset-bottom) + 10px) calc(var(--inset-left) + 8px);
+    background: linear-gradient(to top, rgba(5, 7, 12, 0.82), rgba(5, 7, 12, 0.42) 46%, rgba(5, 7, 12, 0));
 }
 html.mobile .video-timeline-row { padding: 0 10px; }
 html.mobile .video-scrubber,
@@ -1378,12 +1386,50 @@ html.mobile .video-scrubber-thumb { transform: translate(-50%, -50%) scale(1); }
 html.mobile .video-scrubber-tooltip { display: none; }
 html.mobile .video-scrubber.is-dragging .video-scrubber-tooltip { display: grid; }
 /* Pills come and go with the stream: a file with several audio tracks shows
-   more than one with none. Wrapping means the row grows a second line instead
-   of pushing something off the edge, and the clusters stay whole because each
-   is nowrap. */
-html.mobile .video-command-row { align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 2px; }
+   more than one, one with none. A second line is the honest answer when the row
+   runs out of width, so the row wraps rather than pushing a control off the
+   edge, and each cluster stays whole because both are nowrap.
+   The wrapped line still ends at the right margin: margin-left:auto survives a
+   wrap, which is what keeps the two lines reading as one block instead of a
+   layout that has come apart. */
+html.mobile .video-command-row { align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 6px; }
 html.mobile .video-primary-cluster,
 html.mobile .video-secondary-cluster { flex-wrap: nowrap; gap: 0; }
+html.mobile .video-secondary-cluster { margin-left: auto; }
+
+/* A portrait phone cannot hold transport, a timecode and six options on one
+   line, and a row that wraps by accident lands one half left and the other
+   half right with a hole between them. So below this width it stops being one
+   row that overflows and becomes two that were meant: transport and the
+   timecode at the outer edges, the options spread across the full width
+   beneath. Both lines then start and end on the same margins as the scrubber
+   above them, which is what makes the block read as one control rather than
+   three fragments. */
+@media (max-width: 560px) {
+    html.mobile .video-primary-cluster,
+    html.mobile .video-secondary-cluster {
+        flex: 1 1 100%;
+        min-width: 0;
+        margin-left: 0;
+    }
+    /* Play and mute stay together as transport; only the timecode goes to the
+       far edge, under the end of the scrubber it belongs to. An auto margin
+       does that on its own, so the cluster keeps a plain start alignment rather
+       than also spreading its first two apart. */
+    html.mobile .video-primary-cluster { justify-content: flex-start; }
+    html.mobile .video-primary-cluster .video-time-display { margin-left: auto; }
+    /* The options spread across the same span the scrubber covers, so the two
+       lines share one set of margins. */
+    html.mobile .video-secondary-cluster { justify-content: space-between; }
+}
+/* A language code is what a track pill is usually showing, and a code fits.
+   The cap is for the fallbacks, which are long enough to push the row onto a
+   second line for no gain: the full name is one tap away in the settings sheet. */
+html.mobile .video-track-value { max-width: 40px; }
+/* A track the file did not name gets no label, and an empty span must not still
+   claim the gap beside the icon. */
+.video-track-value:empty { display: none; }
+html.mobile .video-pill-button { gap: 5px; }
 html.mobile .video-command-row .video-skip-btn,
 html.mobile .video-controls .video-fullscreen-btn,
 html.mobile .video-volume-group .video-volume-slider { display: none; }
