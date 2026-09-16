@@ -441,7 +441,9 @@
    an inset ring instead of a border (design-3), a check on every cell while
    anything is selected, and skeleton cells for the first load. */
 html.mobile .gallery-view {
+    position: relative;
     padding: 0 0 24px;
+    overflow-x: hidden;
     touch-action: pan-y;
     overscroll-behavior-y: contain;
     -webkit-overflow-scrolling: touch;
@@ -567,7 +569,7 @@ html.mobile .preview-content img {
     -webkit-user-drag: none;
 }
 html.mobile .preview-chrome {
-    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    top: calc(var(--inset-top) + 10px);
     left: 12px;
     right: 12px;
     gap: 10px;
@@ -591,9 +593,9 @@ html.mobile .preview-close-btn,
 html.mobile .preview-icon-btn { width: 44px; height: 44px; }
 html.mobile .preview-chrome-actions { gap: 8px; }
 html.mobile .preview-nav { display: none; }
-html.mobile .preview-counter { bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+html.mobile .preview-counter { bottom: calc(var(--inset-bottom) + 16px); }
 html.mobile .preview-loading { width: min(200px, calc(100vw - 80px)); }
-html.mobile .preview-locked { padding: 96px 20px calc(env(safe-area-inset-bottom, 0px) + 40px); }
+html.mobile .preview-locked { padding: 96px 20px calc(var(--inset-bottom) + 40px); }
 html.mobile .preview-info {
     top: auto;
     right: 0;
@@ -608,7 +610,7 @@ html.mobile .preview-info {
     transform: translateY(24px);
 }
 html.mobile .preview-overlay.is-info-open .preview-info { transform: none; }
-html.mobile #preview-info-body { padding: 20px 20px calc(env(safe-area-inset-bottom, 0px) + 24px); }
+html.mobile #preview-info-body { padding: 20px 20px calc(var(--inset-bottom) + 24px); }
 html.mobile .preview-info-close { top: 12px; right: 12px; width: 32px; height: 32px; }
 
 @media (prefers-reduced-motion: reduce) {
