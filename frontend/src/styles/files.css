@@ -445,13 +445,26 @@ html.mobile .file-row + .file-row::before {
     height: 1px;
     background: var(--color-border-soft);
 }
-html.mobile .file-row:hover:not(.is-selected) { background: transparent; }
+/* Every row state has to keep the card's own fill. The desktop rules clear the
+   background to transparent for hover and keyboard focus, which is right when a
+   row sits on the canvas and wrong now that the row IS the card: a cleared
+   background punches a hole through the middle of it. These restate the fill at
+   a specificity that beats the desktop rules rather than weakening them. */
+html.mobile .file-row:hover:not(.is-selected) { background: var(--color-surface-0); }
 @media (hover: hover) {
-    html.mobile .file-row:hover:not(.is-selected) { background: var(--bg-panel); }
+    html.mobile .file-row:hover:not(.is-selected) { background: var(--color-surface-1); }
 }
-html.mobile .file-row:active:not(.is-selected) { background: var(--overlay-neutral-2); }
-html.mobile .drive-row.is-selected { box-shadow: none; }
-html.mobile .file-row.is-keyboard-active:not(.is-selected) { box-shadow: none; }
+html.mobile .file-row:active:not(.is-selected) { background: var(--color-surface-2); }
+/* Selected rows tint the card rather than laying a translucent overlay on it,
+   which would otherwise composite against the canvas and read as a hole too. */
+html.mobile .drive-row.is-selected {
+    background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-0));
+    box-shadow: none;
+}
+html.mobile .file-row.is-keyboard-active:not(.is-selected) {
+    background: var(--color-surface-0);
+    box-shadow: none;
+}
 
 html.mobile .row-name {
     flex: 1 1 auto;
