@@ -77,9 +77,14 @@ func (s *Server) Add(session *Session) error {
 	url := s.baseURL + mediaRoutePrefix + session.Token()
 	thumbSourceURL := s.baseURL + mediaThumbSourcePrefix + session.Token()
 	thumbURL := s.baseURL + mediaThumbRoutePrefix + session.Token()
+	hlsURL := ""
+	if needsRemux(session.Name()) {
+		hlsURL = s.baseURL + mediaHLSRoutePrefix + session.Token() + "/" + hlsPlaylistName
+	}
 	s.mu.Unlock()
 	session.setURL(url)
 	session.setThumbnailURLs(thumbSourceURL, thumbURL)
+	session.setHLSURL(hlsURL)
 	return nil
 }
 
@@ -161,6 +166,7 @@ func (s *Server) ensureStarted() error {
 	mux.HandleFunc(mediaRoutePrefix, s.handleFile)
 	mux.HandleFunc(mediaThumbSourcePrefix, s.handleThumbSource)
 	mux.HandleFunc(mediaThumbRoutePrefix, s.handleThumbnail)
+	mux.HandleFunc(mediaHLSRoutePrefix, s.handleHLS)
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,

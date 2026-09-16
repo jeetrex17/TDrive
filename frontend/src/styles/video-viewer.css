@@ -1358,18 +1358,18 @@ html.mobile .video-overlay.is-video-loading .video-player {
 }
 html.mobile .video-topbar {
     min-height: 0;
-    padding: calc(var(--inset-top) + 8px) 8px 14px 16px;
+    padding: calc(var(--inset-top) + 8px) calc(var(--inset-right) + 8px) 14px calc(var(--inset-left) + 16px);
     gap: 12px;
 }
 html.mobile .video-filename {
-    max-width: calc(100vw - 92px);
+    max-width: calc(100vw - var(--inset-left) - var(--inset-right) - 92px);
     font-size: 15px;
     font-weight: var(--weight-strong);
 }
 html.mobile .video-meta { margin-top: 2px; font-size: 12px; }
 html.mobile .video-controls {
     gap: 4px;
-    padding: 8px 8px calc(var(--inset-bottom) + 10px);
+    padding: 8px calc(var(--inset-right) + 8px) calc(var(--inset-bottom) + 10px) calc(var(--inset-left) + 8px);
 }
 html.mobile .video-timeline-row { padding: 0 10px; }
 html.mobile .video-scrubber,
@@ -1377,11 +1377,14 @@ html.mobile .video-scrubber-hit { height: 44px; }
 html.mobile .video-scrubber-thumb { transform: translate(-50%, -50%) scale(1); }
 html.mobile .video-scrubber-tooltip { display: none; }
 html.mobile .video-scrubber.is-dragging .video-scrubber-tooltip { display: grid; }
-html.mobile .video-command-row { align-items: center; gap: 4px; }
+/* Pills come and go with the stream: a file with several audio tracks shows
+   more than one with none. Wrapping means the row grows a second line instead
+   of pushing something off the edge, and the clusters stay whole because each
+   is nowrap. */
+html.mobile .video-command-row { align-items: center; gap: 4px; flex-wrap: wrap; row-gap: 2px; }
 html.mobile .video-primary-cluster,
 html.mobile .video-secondary-cluster { flex-wrap: nowrap; gap: 0; }
 html.mobile .video-command-row .video-skip-btn,
-html.mobile .video-aspect-button,
 html.mobile .video-controls .video-fullscreen-btn,
 html.mobile .video-volume-group .video-volume-slider { display: none; }
 html.mobile .video-icon-btn,

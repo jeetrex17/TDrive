@@ -86,9 +86,13 @@ func (f LogicalFile) SegmentCount() int {
 }
 
 type OpenResult struct {
-	Token         string      `json:"token"`
-	URL           string      `json:"url"`
-	ThumbnailURL  string      `json:"thumbnail_url"`
+	Token        string `json:"token"`
+	URL          string `json:"url"`
+	ThumbnailURL string `json:"thumbnail_url"`
+	// HLSURL is set only for a container Apple platforms cannot open, such as
+	// Matroska. It points at a playlist backed by an on-demand remux, and it is
+	// empty for every file a player can take directly.
+	HLSURL        string      `json:"hls_url"`
 	Name          string      `json:"name"`
 	Kind          StreamKind  `json:"kind"`
 	MimeType      string      `json:"mime_type"`

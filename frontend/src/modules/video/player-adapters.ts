@@ -1,6 +1,7 @@
 import {
     closeMedia,
     closeNativeMedia,
+    isIOSPlatform,
     nativeMediaCommand,
     onRuntimeEvent,
     type MediaOpenResult,
@@ -12,6 +13,24 @@ import {
     type PlaybackPreferences,
 } from './playback-preferences';
 import { normalizeNativeTracks, type NativeMediaTrack } from './media-tracks';
+import {
+    elementTracks,
+    selectElementAudioTrack,
+    selectElementTextTrack,
+    watchElementTracks,
+} from './element-tracks';
+
+/**
+ * Which of a session's two URLs the element should load.
+ *
+ * The remuxed playlist is offered only where it is needed. Every other platform
+ * demuxes the original container itself, and going through HLS there would add
+ * a repackaging step and lose the byte-range seeking the direct URL already has.
+ */
+export function playbackSource(opened: MediaOpenResult): string {
+    if (opened.hlsUrl && isIOSPlatform()) return opened.hlsUrl;
+    return opened.url;
+}
 
 export const MIN_PLAYBACK_RATE = 0.25;
 export const MAX_PLAYBACK_RATE = 4;
@@ -31,6 +50,14 @@ export interface PlayerState {
     rate: number;
     loading: boolean;
     tracks: NativeMediaTrack[];
+}
+
+// TrackSwitching is what the audio and subtitle pills talk to. Both players
+// implement it, so the pills work the same whether the webview demuxed the
+// stream itself or mpv did.
+export interface TrackSwitching {
+    setAudioTrack(id: number): void;
+    setSubtitleTrack(id: number | null): void;
 }
 
 export interface PlayerAdapter {
@@ -166,7 +193,7 @@ export function coalesceBufferedRanges(ranges: BufferedRange[], duration: number
     return merged;
 }
 
-export class HtmlVideoAdapter implements PlayerAdapter {
+export class HtmlVideoAdapter implements PlayerAdapter, TrackSwitching {
     private readonly subscribers = new Set<(state: PlayerState) => void>();
     private readonly listeners: Array<() => void> = [];
     private closed = false;
@@ -217,13 +244,24 @@ export class HtmlVideoAdapter implements PlayerAdapter {
         };
         video.addEventListener('ended', endedListener);
         this.listeners.push(() => video.removeEventListener('ended', endedListener));
+        this.listeners.push(watchElementTracks(video, () => this.emit()));
+    }
+
+    setAudioTrack(id: number): void {
+        selectElementAudioTrack(this.video, id);
+        this.emit();
+    }
+
+    setSubtitleTrack(id: number | null): void {
+        selectElementTextTrack(this.video, id);
+        this.emit();
     }
 
     load(): void {
         this.video.pause();
         this.video.removeAttribute('src');
         this.video.load();
-        this.video.src = this.opened.url;
+        this.video.src = playbackSource(this.opened);
         this.video.playbackRate = 1;
         this.emit();
 
@@ -332,7 +370,7 @@ export class HtmlVideoAdapter implements PlayerAdapter {
             muted: this.video.muted || this.video.volume === 0,
             rate: this.video.playbackRate || 1,
             loading: this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !this.video.paused,
-            tracks: [],
+            tracks: elementTracks(this.video),
         };
     }
 
@@ -343,7 +381,7 @@ export class HtmlVideoAdapter implements PlayerAdapter {
     }
 }
 
-export class NativeMpvAdapter implements PlayerAdapter {
+export class NativeMpvAdapter implements PlayerAdapter, TrackSwitching {
     private readonly subscribers = new Set<(state: PlayerState) => void>();
     private state: PlayerState = { ...EMPTY_PLAYER_STATE, paused: false, loading: true };
     private closed = false;

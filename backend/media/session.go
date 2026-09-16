@@ -29,6 +29,7 @@ type Session struct {
 	url            string
 	thumbURL       string
 	sourceURL      string
+	hlsURL         string
 	file           LogicalFile
 	segments       []resolvedSegment
 	reader         *RangeReader
@@ -36,6 +37,7 @@ type Session struct {
 	decryptor      *tdcrypto.RandomAccessDecryptor
 	thumbDecryptor *tdcrypto.RandomAccessDecryptor
 	thumbs         *videoThumbnailer
+	hls            hlsStream
 
 	// ctx bounds work the session starts on its own behalf, such as warming
 	// the container index; Close cancels it.
@@ -236,19 +238,19 @@ func (s *Session) Name() string {
 	return s.file.Name
 }
 
-func (s *Session) openSnapshot() (token, url, thumbnailURL string, file LogicalFile, ok bool) {
+func (s *Session) openSnapshot() (token, url, thumbnailURL, hlsURL string, file LogicalFile, ok bool) {
 	if s == nil {
-		return "", "", "", LogicalFile{}, false
+		return "", "", "", "", LogicalFile{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return "", "", "", LogicalFile{}, false
+		return "", "", "", "", LogicalFile{}, false
 	}
 	s.lastTouch = time.Now()
 	file = s.file
 	file.Segments = append([]Segment(nil), s.file.Segments...)
-	return s.token, s.url, s.thumbURL, file, true
+	return s.token, s.url, s.thumbURL, s.hlsURL, file, true
 }
 
 func (s *Session) Encrypted() bool {
