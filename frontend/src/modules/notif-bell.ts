@@ -14,6 +14,7 @@ import { state } from '../state';
 import { cancelDownload, cancelUpload } from '../api';
 import {
     historyEvents,
+    isUnfinishedTransfer,
     notifPanelOpen,
     notifUnreadErrors,
     type NoticeEvent,
@@ -112,7 +113,7 @@ export function updateTransferProgress({
     itemsTotal?: number;
 }) {
     const key = transferKey(direction, id);
-    const entry = findActiveTransfer(key);
+    const entry = findUnfinishedTransfer(key);
     if (!entry) return;
     const value = Math.max(entry.progress, Math.max(0, Math.min(100, Number(progress) || 0)));
     const suppliedTotal = Number(exactTotal);
@@ -164,7 +165,7 @@ export function updateTransferProgress({
 // reset), used to show an import's live phase: extracting, adding folders, etc.
 export function updateTransferName({ id, direction, name }: { id: string | number; direction: TransferDirection; name: string }) {
     const key = transferKey(direction, id);
-    const entry = findActiveTransfer(key);
+    const entry = findUnfinishedTransfer(key);
     if (!entry) return;
     const next = String(name || '');
     if (entry.name === next) return;
@@ -177,7 +178,7 @@ export function markTransferDone({ id, direction, status = 'done' }: { id: strin
     const key = transferKey(direction, id);
     // Idempotent: don't downgrade or rewrite an already-terminal entry
     // (e.g. a safety sweep firing 'done' on an entry that already failed).
-    const entry = findActiveTransfer(key);
+    const entry = findUnfinishedTransfer(key);
     if (!entry) return;
     speedSamples.delete(key);
     historyEvents.update((events) =>
@@ -193,9 +194,11 @@ export function markTransferDone({ id, direction, status = 'done' }: { id: strin
 }
 
 export function clearHistory() {
-    // Keep active transfers. Drop everything else.
+    // Keep everything still on its way -- running, waiting, or stopped short of
+    // finishing. Clear is for the log of what already happened, and work the
+    // app still owes the user is not a log entry. Drop everything else.
     historyEvents.update((events) =>
-        events.filter((e) => e.kind === 'transfer' && e.status === 'active'),
+        events.filter((e) => e.kind === 'transfer' && isUnfinishedTransfer(e.status)),
     );
     notifUnreadErrors.set(0);
 }
@@ -219,8 +222,11 @@ function transferKey(direction: TransferDirection, id: string | number): string 
     return `xfer:${direction}:${id}`;
 }
 
-function findActiveTransfer(key: string): TransferEvent | null {
+// The entry a progress, rename or finish update is allowed to change: one that
+// has not reached a terminal state. Matching on 'active' alone would make every
+// one of those a silent no-op the moment a transfer can also be queued.
+function findUnfinishedTransfer(key: string): TransferEvent | null {
     const entry = get(historyEvents).find((e) => e.id === key);
-    if (!entry || entry.kind !== 'transfer' || entry.status !== 'active') return null;
+    if (!entry || entry.kind !== 'transfer' || !isUnfinishedTransfer(entry.status)) return null;
     return entry;
 }
