@@ -10,12 +10,14 @@
  * stays behind the always-visible overflow button, with a confirm.
  *
  * **The swipe never claims a gesture it might not own.** A file list scrolls
- * vertically, the gallery pages horizontally, and iOS reserves the left screen
- * edge for back. So this recogniser stays asleep until the movement is clearly
- * horizontal, refuses anything born in the system's edge zone, and opens only
- * to the trailing side -- leaving the leading side, where back lives,
- * completely untouched.
+ * vertically, the gallery pages horizontally, and the phones reserve their
+ * screen edges for back -- the leading one on iOS, both on Android. So this
+ * recogniser stays asleep until the movement is clearly horizontal, refuses
+ * anything born in a system edge zone, and opens only to the trailing side --
+ * leaving the leading side, where back lives, completely untouched.
  */
+
+import { isAndroidPlatform } from '../../api';
 
 /** Movement before any direction is committed to. Matches the long-press slop. */
 export const SWIPE_SLOP_PX = 10;
@@ -29,10 +31,22 @@ export const SWIPE_SLOP_PX = 10;
 const HORIZONTAL_BIAS = 1.5;
 
 /**
- * iOS hands any gesture starting within this band to the system back swipe.
- * Anything born here is not ours to interpret, whatever it does next.
+ * A system back swipe starting within this band is not ours to interpret,
+ * whatever it does next. iOS reserves the leading edge; Android's gesture
+ * navigation reserves both, and takes the touches away mid-drag, which left the
+ * row half open and snapping back as the app went back.
  */
 export const EDGE_GUARD_PX = 24;
+
+/**
+ * The x past which a gesture belongs to the system, or 0 where nothing does.
+ * Only Android reserves its trailing edge, and on iOS the last 24px is where a
+ * row's own overflow button sits, so guarding it there would cost a real
+ * gesture to prevent nothing.
+ */
+export function trailingEdgeGuard(width: number, android: boolean): number {
+    return android && width > EDGE_GUARD_PX ? width - EDGE_GUARD_PX : 0;
+}
 
 /** Past this speed a release is a throw rather than a placement, in px/s. */
 const FLICK_SPEED = 450;
@@ -47,9 +61,10 @@ export type SwipeClaim = 'row' | 'list' | 'undecided';
  * first pixel and the loser is dropped once intent is legible, rather than one
  * of them winning by default and feeling sticky.
  */
-export function claimGesture(dx: number, dy: number, startX: number): SwipeClaim {
-    // Born in the system's edge zone: never ours, at any distance.
+export function claimGesture(dx: number, dy: number, startX: number, trailingEdge = 0): SwipeClaim {
+    // Born in a system edge zone: never ours, at any distance.
     if (startX <= EDGE_GUARD_PX) return 'list';
+    if (trailingEdge > 0 && startX >= trailingEdge) return 'list';
 
     const absX = Math.abs(dx);
     const absY = Math.abs(dy);
@@ -123,6 +138,9 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
     let startY = 0;
     let width = 0;
     let claimed = false;
+    // Read per gesture rather than once: the reserved edge moves when the phone
+    // turns, and the shell outlives the rotation.
+    let trailingEdge = 0;
     // Samples rather than the last event alone: one sample is noisy, and a
     // finger that paused before lifting would otherwise read as a flick.
     let samples: Array<{ x: number; t: number }> = [];
@@ -187,6 +205,7 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
         startX = event.clientX;
         startY = event.clientY;
         claimed = false;
+        trailingEdge = trailingEdgeGuard(window.innerWidth, isAndroidPlatform());
         samples = [{ x: event.clientX, t: event.timeStamp }];
     };
 
@@ -199,7 +218,7 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
         const dy = event.clientY - startY;
 
         if (!claimed) {
-            const claim = claimGesture(dx, dy, startX);
+            const claim = claimGesture(dx, dy, startX, trailingEdge);
             if (claim === 'undecided') return;
             // Losing the race drops the row out of the gesture entirely rather
             // than leaving it half-listening.

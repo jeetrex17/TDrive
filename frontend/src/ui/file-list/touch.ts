@@ -5,6 +5,7 @@
 import { mount, unmount } from 'svelte';
 import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
 import { hapticPress } from '../mobile/haptics';
+import { claimGesture, type SwipeClaim } from './swipe-actions';
 
 const LONG_PRESS_MS = 350;
 const LONG_PRESS_SLOP_PX = 10;
@@ -78,6 +79,12 @@ export function bindLongPress(host: HTMLElement, selector: string, onLongPress: 
     };
     const onContextMenu = (event: MouseEvent) => {
         if (!event.isTrusted) return;
+        // Only on the rows, which have a menu of their own for the press to
+        // stand in for. Swallowed across the whole host it also took the
+        // platform's own selection and lookup off the group headings and the
+        // empty space around the list, where nothing replaces them.
+        const origin = event.target instanceof Element ? event.target : null;
+        if (!origin?.closest(selector)) return;
         event.preventDefault();
         event.stopPropagation();
     };
@@ -121,8 +128,16 @@ export function bindPullToRefresh(host: HTMLElement, refresh: () => unknown): ()
     host.prepend(indicator);
 
     let startY = -1;
+    let startX = 0;
+    // The row swipe and the pull compete for the same first pixels, so they
+    // settle it with one verdict instead of each acting on its own reading.
+    let claim: SwipeClaim = 'undecided';
     let pull = 0;
     let armed = false;
+    // Armed says what the ring is showing; buzzed says the gesture has already
+    // had its one tick. A thumb resting on the threshold crosses it over and
+    // over, and a buzz per crossing is what teaches people to turn haptics off.
+    let buzzed = false;
     let busy = false;
 
     const paint = () => {
@@ -140,19 +155,33 @@ export function bindPullToRefresh(host: HTMLElement, refresh: () => unknown): ()
     const onTouchStart = (event: TouchEvent) => {
         if (busy || host.scrollTop > 0 || event.touches.length !== 1) return;
         startY = event.touches[0].clientY;
+        startX = event.touches[0].clientX;
+        claim = 'undecided';
+        buzzed = false;
     };
     const onTouchMove = (event: TouchEvent) => {
         if (startY < 0 || busy) return;
         const dy = event.touches[0].clientY - startY;
+        const dx = event.touches[0].clientX - startX;
         if (dy <= 0 || host.scrollTop > 0) {
             if (pull > 0) settle();
             return;
         }
         if (event.cancelable) event.preventDefault();
+        // Nothing is drawn until the movement is legibly vertical: a drag down
+        // and to the left used to open a row and slide the refresh ring in
+        // behind it at the same time.
+        if (claim === 'undecided') claim = claimGesture(dx, dy, startX);
+        if (claim === 'row') {
+            if (pull > 0) settle();
+            return;
+        }
         pull = Math.min(PULL_MAX_PX, dy * 0.5);
-        const nowArmed = pull >= PULL_THRESHOLD_PX;
-        if (nowArmed && !armed) lightHaptic();
-        armed = nowArmed;
+        armed = pull >= PULL_THRESHOLD_PX;
+        if (armed && !buzzed) {
+            buzzed = true;
+            lightHaptic();
+        }
         paint();
     };
     const onTouchEnd = () => {

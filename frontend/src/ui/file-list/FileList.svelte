@@ -11,8 +11,10 @@
     import PlayIcon from '@lucide/svelte/icons/play';
     import { isMobilePlatform } from '../../api';
     import FileState from './FileState.svelte';
+    import { minuteTick } from './clock';
     import { fileTypeFamily, fileTypeIcon } from './file-type';
     import { rowMetaLine, splitRowLabel } from './row-meta';
+    import { rowOffset, rowWindowFor, type RowMetrics } from './row-window';
     import ItemStatus from '../mobile/ItemStatus.svelte';
     import { itemStateFor, transfersByFile } from '../mobile/item-state-store';
     import { itemStateDescriptor } from '../mobile/item-state';
@@ -57,29 +59,55 @@
     let scrollTop = $state(0);
     let viewportHeight = $state(0);
     let rowHeight = $state(ESTIMATED_ROW_HEIGHT);
+    // A row that has to explain itself is taller. Measured on its own so one of
+    // them cannot be taken for the standard height, which would move every
+    // spacer in the list by the difference.
+    let explainRowHeight = $state(ESTIMATED_ROW_HEIGHT);
     let list: HTMLElement | null = null;
 
     const visibleRows = $derived($fileListView.kind === 'rows'
         ? sortFileListRows($fileListView.rows, $fileSortState)
         : []);
+    // The files whose row grows that second line. Read off the transfer map,
+    // which holds a handful of entries, rather than by resolving a state for
+    // every row in the folder.
+    const explainedIds = $derived.by(() => {
+        const ids = new Set<string>();
+        if (!mobile) return ids;
+        for (const fileId of $transfersByFile.keys()) {
+            if (itemStateDescriptor(itemStateFor($transfersByFile, fileId)).needsExplanation) ids.add(fileId);
+        }
+        return ids;
+    });
+    const rowMetrics = $derived.by((): RowMetrics => ({
+        rowHeight,
+        tallRowHeight: explainRowHeight,
+        tallIndices: explainedIds.size === 0
+            ? []
+            : visibleRows.reduce<number[]>((indices, row, index) => {
+                if (row.kind !== 'pending-folder' && explainedIds.has(row.id)) indices.push(index);
+                return indices;
+            }, []),
+    }));
     const rowWindow = $derived.by(() => {
         if (visibleRows.length <= 64) {
-            return { before: 0, rows: visibleRows, start: 0, after: 0 };
+            return { before: 0, rows: visibleRows, start: 0, after: 0, end: visibleRows.length };
         }
-        const firstVisible = Math.floor(scrollTop / rowHeight);
-        const visibleCount = Math.max(1, Math.ceil(viewportHeight / rowHeight));
-        const start = Math.max(0, firstVisible - WINDOW_OVERSCAN);
-        const end = Math.min(visibleRows.length, firstVisible + visibleCount + WINDOW_OVERSCAN);
-        return {
-            before: start * rowHeight,
-            rows: visibleRows.slice(start, end),
-            start,
-            after: (visibleRows.length - end) * rowHeight,
-        };
+        const window = rowWindowFor(visibleRows.length, scrollTop, viewportHeight, WINDOW_OVERSCAN, rowMetrics);
+        return { ...window, rows: visibleRows.slice(window.start, window.end) };
     });
     // Selection mode on the phone: once anything is selected every row shows
     // its check so a tap reads as toggling rather than opening.
     const selecting = $derived(mobile && $selectedFileRowKeys.size > 0);
+
+    // Which rows sit at the ends of the card. Marked by the list rather than
+    // left to a CSS sibling selector, which can only see the rendered window:
+    // between the spacers, a row in the middle of a long folder looks like a
+    // first or last child and rounded its corners while scrolling.
+    function cardEdges(rowIndex: number): string {
+        const index = rowWindow.start + rowIndex;
+        return `${index === 0 ? ' is-card-top' : ''}${index === visibleRows.length - 1 ? ' is-card-bottom' : ''}`;
+    }
 
     function updateViewport(): void {
         if (!list) return;
@@ -95,7 +123,9 @@
                 + Number.parseFloat(style.marginTop || '0')
                 + Number.parseFloat(style.marginBottom || '0'),
             );
-            if (footprint > 0) rowHeight = footprint;
+            if (footprint <= 0) return;
+            if (element.classList.contains('needs-explanation')) explainRowHeight = footprint;
+            else rowHeight = footprint;
         };
         update();
         const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
@@ -107,10 +137,10 @@
         const key = (event as CustomEvent<{ key: string }>).detail?.key;
         const index = visibleRows.findIndex((row) => row.kind !== 'pending-folder' && row.selectionKey === key);
         if (!list || index === -1) return;
-        const top = index * rowHeight;
-        const bottom = top + rowHeight;
+        const top = rowOffset(index, rowMetrics);
+        const bottom = rowOffset(index + 1, rowMetrics);
         if (top < list.scrollTop || bottom > list.scrollTop + list.clientHeight) {
-            list.scrollTop = Math.max(0, top - Math.max(0, (list.clientHeight - rowHeight) / 2));
+            list.scrollTop = Math.max(0, top - Math.max(0, (list.clientHeight - (bottom - top)) / 2));
         }
         updateViewport();
     }
@@ -159,7 +189,7 @@
     {#each rowWindow.rows as row, rowIndex (row.key)}
         {#if row.kind === 'pending-folder'}
             <div
-                class="file-row drive-row folder-row pending-folder"
+                class={`file-row drive-row folder-row pending-folder${cardEdges(rowIndex)}`}
                 use:measureRow
                 data-type="pending-folder"
                 data-temp-id={row.tempId}
@@ -180,11 +210,11 @@
             </div>
         {:else}
             {@const selected = $selectedFileRowKeys.has(row.selectionKey)}
-            {@const meta = rowMetaLine(row)}
+            {@const meta = rowMetaLine(row, $minuteTick)}
             {@const state = itemStateFor($transfersByFile, row.id)}
             {@const stateInfo = itemStateDescriptor(state)}
             <div
-                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${selected ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}${mobile && stateInfo.needsExplanation ? ' needs-explanation' : ''}`}
+                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${selected ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}${stateInfo.needsExplanation ? ' needs-explanation' : ''}${cardEdges(rowIndex)}`}
                 use:measureRow
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}

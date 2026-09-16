@@ -96,4 +96,12 @@ describe('splitRowLabel', () => {
         expect(splitRowLabel('.env')).toEqual({ head: '.env', tail: '' });
         expect(splitRowLabel('ab.md')).toEqual({ head: '', tail: 'ab.md' });
     });
+
+    it('keeps the longest real extensions but not a trailing run pretending to be one', () => {
+        expect(splitRowLabel('scene.webarchive')).toEqual({ head: 'scene.webarchive', tail: '' });
+        expect(splitRowLabel('Quarterly Report 2026.09-final-annotated'))
+            .toEqual({ head: 'Quarterly Report 2026.09-final-annotated', tail: '' });
+        // Six characters is still an extension, and still worth keeping.
+        expect(splitRowLabel('Kitchen Remodel.sketch')).toEqual({ head: 'Kitchen Rem', tail: 'odel.sketch' });
+    });
 });

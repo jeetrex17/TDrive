@@ -6,6 +6,7 @@ import {
     shouldOpen,
     swipeOffset,
     SWIPE_SLOP_PX,
+    trailingEdgeGuard,
 } from './swipe-actions';
 
 // Rows sit inset from the screen edge, so a normal press lands well clear of
@@ -45,6 +46,24 @@ describe('claimGesture', () => {
 
     it('ignores a rightward drag, because a closed row has nothing on that side', () => {
         expect(claimGesture(60, 0, MID)).toBe('list');
+    });
+
+    it('gives up the trailing band too where the system reserves it', () => {
+        // Android's gesture navigation answers back on both edges. It takes the
+        // touches away mid-drag, which left the row half open behind the app
+        // going back.
+        const edge = trailingEdgeGuard(400, true);
+
+        expect(claimGesture(-80, 0, 399, edge)).toBe('list');
+        expect(claimGesture(-80, 0, edge, edge)).toBe('list');
+        expect(claimGesture(-80, 0, edge - 1, edge)).toBe('row');
+    });
+
+    it('keeps the trailing band where nothing reserves it', () => {
+        // On iOS the last 24px is the row's own overflow button, and guarding
+        // it would cost a real gesture to prevent nothing.
+        expect(trailingEdgeGuard(400, false)).toBe(0);
+        expect(claimGesture(-80, 0, 399)).toBe('row');
     });
 });
 
