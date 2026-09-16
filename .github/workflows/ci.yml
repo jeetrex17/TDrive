@@ -453,7 +453,14 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      # The CLI is a build tool, not part of the app, and with cgo on it drags
+      # in Wails' GTK bindings -- which default to GTK4 once the gtk3 tag is
+      # gone, and no runner has gtk4 or webkitgtk-6.0. Built without cgo it is
+      # a static binary that needs no system libraries at all. The cross
+      # compiles below still run with cgo on, from the job env.
       - name: Install Wails CLI
+        env:
+          CGO_ENABLED: 0
         run: |
           go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
@@ -531,7 +538,14 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      # The CLI is a build tool, not part of the app, and with cgo on it drags
+      # in Wails' GTK bindings -- which default to GTK4 once the gtk3 tag is
+      # gone, and no runner has gtk4 or webkitgtk-6.0. Built without cgo it is
+      # a static binary that needs no system libraries at all. The cross
+      # compiles below still run with cgo on, from the job env.
       - name: Install Wails CLI
+        env:
+          CGO_ENABLED: 0
         run: |
           go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
