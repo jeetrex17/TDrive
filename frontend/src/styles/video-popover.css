@@ -216,3 +216,37 @@ html.mobile .video-popover {
 html.mobile .video-popover[hidden],
 html.mobile .video-popover[data-state='closed'] { transform: translateY(16px); }
 html.mobile .video-popover-close { width: 44px; height: 44px; }
+
+/* A phone held sideways has about 400 points of height, and a sheet rising from
+   the bottom edge can only claim a fraction of that before it covers the film.
+   What it leaves is a row of tabs and barely one option under them, which is
+   not a list anyone can work through.
+   Turned on its side the same screen has height to spare, so the panel moves to
+   the trailing edge and takes the full height instead: every option is on
+   screen at once and the picture keeps the rest of the frame. It arrives from
+   the edge it rests against, which is the edge it leaves by. */
+@media (orientation: landscape) and (max-height: 500px) {
+    html.mobile .video-popover {
+        top: 0;
+        bottom: 0;
+        left: auto;
+        right: 0;
+        width: min(360px, 56%);
+        max-height: none;
+        padding-bottom: var(--inset-bottom);
+        padding-right: var(--inset-right);
+        border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+        transform-origin: 100% 50%;
+    }
+    html.mobile .video-popover[hidden],
+    html.mobile .video-popover[data-state='closed'] { transform: translateX(16px); }
+    /* The panel stops being a fixed slab and becomes whatever is left after the
+       header, so its own list is what scrolls rather than the panel overflowing
+       the screen. */
+    html.mobile .video-settings-panel,
+    html.mobile .video-playlist-panel {
+        height: auto;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+}
