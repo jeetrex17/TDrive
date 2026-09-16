@@ -30,9 +30,11 @@ const DRAG_SLOP_PX = 8;
 const TAP_MAX_MS = 500;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_SLOP_PX = 32;
-// A single tap waits this long for a second one only when the caller cares
-// about double taps.
-const SINGLE_TAP_DELAY_MS = 260;
+// A single tap waits for a second one only when the caller cares about double
+// taps, and it waits out the whole pairing window: committing earlier dropped
+// every double tap in the tail of that window and fired two single taps
+// instead (two chrome toggles rather than a zoom).
+const SINGLE_TAP_DELAY_MS = DOUBLE_TAP_MS;
 
 type Mode = 'idle' | 'pending' | 'drag' | 'pinch' | 'dead';
 
