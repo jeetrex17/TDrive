@@ -2,6 +2,7 @@
     import { onDestroy, tick, type Snippet } from 'svelte';
     import { installModalA11y } from './modal-a11y';
     import { pushSheet, type SheetHandle } from './sheet-stack';
+    import { createSheetDrag, sheetOffset, shouldDismiss, FLICK_SPEED } from './sheet-gesture';
     import { isMobilePlatform } from '../../api';
 
     interface Props {
@@ -68,6 +69,7 @@
     let sheetHistory: SheetHandle | null = null;
 
     let dragStartY = 0;
+    const drag = createSheetDrag();
     let dragDelta = 0;
 
     function prefersReducedMotion(): boolean {
@@ -232,9 +234,12 @@
         setScrimProgress(Math.max(0, 1 - dragDelta / height));
     }
 
-    function springBack(): void {
+    function springBack(velocity = 0): void {
         if (!card) return;
-        card.style.transition = `transform ${EXIT_MS}ms var(--ease-standard)`;
+        // A finger that was still moving gets a shorter return, so the settle
+        // continues the gesture instead of restarting from a standstill.
+        const ms = velocity > FLICK_SPEED ? Math.round(EXIT_MS * 0.7) : EXIT_MS;
+        card.style.transition = `transform ${ms}ms var(--ease-enter)`;
         card.style.transform = 'translateY(0)';
         setScrimProgress(1);
         const el = card;
@@ -262,13 +267,16 @@
         dragging = true;
         dragStartY = event.clientY;
         dragDelta = 0;
+        drag.start(event);
         card.style.transition = '';
         (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
     }
 
     function onHandlePointerMove(event: PointerEvent): void {
         if (!dragging) return;
-        dragDelta = Math.max(0, event.clientY - dragStartY);
+        // Follows the finger down, resists upward where the sheet is already open.
+        dragDelta = sheetOffset(event.clientY - dragStartY, card?.offsetHeight ?? 0);
+        drag.track(event);
         applyDrag();
     }
 
@@ -277,9 +285,11 @@
         dragging = false;
         const height = card?.offsetHeight ?? 0;
         const threshold = Math.max(88, height * 0.28);
-        if (dragDelta > threshold) swipeDismiss();
-        else springBack();
+        // Judge the gesture by where it was going, not where it stopped.
+        if (shouldDismiss(dragDelta, drag.velocity(), threshold)) swipeDismiss();
+        else springBack(drag.velocity());
         dragDelta = 0;
+        drag.reset();
     }
 
     onDestroy(() => {
