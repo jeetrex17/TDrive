@@ -5,7 +5,7 @@
 import { derived, writable } from 'svelte/store';
 import { sidebarState } from '../sidebar/sidebar-store';
 import { fileListView } from '../file-list/file-list-store';
-import { activeTransfers } from '../notifications/notif-store';
+import { activeTransfers, historyEvents } from '../notifications/notif-store';
 import type { DriveChannel } from '../../types';
 
 export type MobileTab = 'files' | 'photos' | 'transfers' | 'account';
@@ -17,6 +17,15 @@ export const activeTab = writable<MobileTab>('files');
 export const driveSwitcherOpen = writable(false);
 
 export type DriveSyncState = 'idle' | 'syncing' | 'synced' | 'failed';
+
+/**
+ * What the one ambient mark in the header is saying. It answers a single
+ * question -- is the app doing network work, and did any of it go wrong -- so
+ * that the tab badge is free to answer a different one: is anything waiting for
+ * me. Collapsing both into one mark is how a single cloud ends up standing for
+ * six situations and meaning none of them.
+ */
+export type RingState = 'idle' | 'active' | 'attention' | 'failed';
 // Fed by modules/channels.ts from the live_sync_* events and manual syncs.
 export const driveSyncStatus = writable<DriveSyncState>('idle');
 
@@ -46,8 +55,39 @@ export const fileListCount = derived(fileListView, ($view) =>
     $view.kind === 'rows' ? $view.rows.length : 0,
 );
 
-// Badge on the Transfers tab: how many uploads or downloads are in flight.
+// How many uploads or downloads are still on their way. Ambient, not a badge:
+// the user started these and does not need to be told a number.
 export const activeTransferCount = derived(activeTransfers, ($transfers) => $transfers.length);
+
+/**
+ * The Transfers badge: how many transfers need a person, not how many are
+ * running. A badge is an interrupt -- it should mean "something is waiting for
+ * you", and a count that lights up merely because an upload the user just
+ * started is progressing is noise they learn to ignore, which costs the badge
+ * its meaning for the one case that matters.
+ *
+ * Completed-awaiting-share belongs here too, but honestly cannot be counted
+ * until the queue is durable: without persistence there is no way to record
+ * that a finished download was already dealt with, so it would badge forever.
+ */
+export const transferAttentionCount = derived(historyEvents, ($events) =>
+    $events.filter((event) => event.kind === 'transfer' && event.status === 'failed').length,
+);
+
+/**
+ * Folds drive sync and transfer work into the single header mark. Failure
+ * outranks progress: something that broke stays visible even while other work
+ * carries on, because the broken thing is the part the user can act on.
+ */
+export const ringState = derived(
+    [driveSyncStatus, activeTransfers, transferAttentionCount],
+    ([$sync, $active, $attention]): RingState => {
+        if ($sync === 'failed') return 'failed';
+        if ($attention > 0) return 'attention';
+        if ($sync === 'syncing' || $active.length > 0) return 'active';
+        return 'idle';
+    },
+);
 
 // Sandbox paths of finished single-file downloads, keyed by the transfer event
 // id, so the Transfers tab can re-open the share sheet later. Populated by

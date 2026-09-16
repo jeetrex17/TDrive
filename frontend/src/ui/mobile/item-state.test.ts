@@ -29,6 +29,13 @@ describe('the state table', () => {
         expect(tall).toEqual(['conflict', 'failed']);
     });
 
+    it('marks only departures from the resting state', () => {
+        // Every row is online-only until pinning ships, and a badge that is
+        // always there says nothing. The rest are all exceptions worth a mark.
+        const unmarked = ITEM_STATE_ORDER.filter((state) => !ITEM_STATES[state].marked);
+        expect(unmarked).toEqual(['online-only']);
+    });
+
     it('gives every state a distinct glyph, so no two read alike', () => {
         const glyphs = ITEM_STATE_ORDER.map((state) => ITEM_STATES[state].glyph);
         expect(new Set(glyphs).size).toBe(glyphs.length);

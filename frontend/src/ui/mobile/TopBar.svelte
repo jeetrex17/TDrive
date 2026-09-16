@@ -11,7 +11,8 @@
     import SyncRing from './SyncRing.svelte';
     import {
         activeDrive,
-        driveSyncStatus,
+        activeTab,
+        ringState,
         fileListCount,
         openDriveSwitcher,
         type MobileTab,
@@ -118,7 +119,7 @@
                 >
                     <span class="drive-header-main">
                         <span class="drive-header-name" title={driveName}>{driveName}</span>
-                        <SyncRing status={$driveSyncStatus} />
+                        <SyncRing status={$ringState} onOpenQueue={() => activeTab.set('transfers')} />
                     </span>
                     <span class="drive-header-meta">{driveKind} · {countLabel}</span>
                 </button>
