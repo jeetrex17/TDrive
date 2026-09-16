@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
     createSheetDrag,
+    handoffTarget,
     projectOffset,
     rubberband,
+    settleToDetent,
     sheetOffset,
     shouldDismiss,
 } from './sheet-gesture';
@@ -74,5 +76,58 @@ describe('sheet drag physics', () => {
 
     it('does not divide by zero when the sheet has no measured height', () => {
         expect(sheetOffset(-40, 0)).toBe(-40);
+    });
+});
+
+describe('settleToDetent', () => {
+    const detents = [280, 620];
+
+    it('settles at the nearer detent when released without speed', () => {
+        expect(settleToDetent(300, 0, detents, 140)).toBe(280);
+        expect(settleToDetent(560, 0, detents, 140)).toBe(620);
+    });
+
+    it('follows where a flick was heading, not where the finger stopped', () => {
+        // Still high up, but thrown downward hard enough to reach the small one.
+        expect(settleToDetent(600, 900, detents, 140)).toBe(280);
+        // Low down, but thrown upward: it was on its way to the tall one.
+        expect(settleToDetent(320, -900, detents, 140)).toBe(620);
+    });
+
+    it('dismisses rather than snapping back when heading below the line', () => {
+        expect(settleToDetent(200, 1200, detents, 140)).toBeNull();
+        expect(settleToDetent(100, 0, detents, 140)).toBeNull();
+    });
+
+    it('collapses on an exact tie, because that keeps the content behind visible', () => {
+        expect(settleToDetent(450, 0, detents, 140)).toBe(280);
+    });
+
+    it('handles a single-detent sheet the way it always behaved', () => {
+        expect(settleToDetent(600, 0, [620], 140)).toBe(620);
+        expect(settleToDetent(600, 3000, [620], 140)).toBeNull();
+    });
+
+    it('has nowhere to settle with no detents', () => {
+        expect(settleToDetent(400, 0, [], 140)).toBeNull();
+    });
+});
+
+describe('handoffTarget', () => {
+    const detents = [280, 620];
+
+    it('lets the inner content keep a gesture that is not at its top', () => {
+        expect(handoffTarget('up', false, 280, detents)).toBeNull();
+        expect(handoffTarget('down', false, 620, detents)).toBeNull();
+    });
+
+    it('grows upward only while there is a taller detent left', () => {
+        expect(handoffTarget('up', true, 280, detents)).toBe(620);
+        expect(handoffTarget('up', true, 620, detents)).toBeNull();
+    });
+
+    it('collapses downward only while there is a shorter detent left', () => {
+        expect(handoffTarget('down', true, 620, detents)).toBe(280);
+        expect(handoffTarget('down', true, 280, detents)).toBeNull();
     });
 });
