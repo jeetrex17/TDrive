@@ -21,6 +21,39 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	})
 }
 
+// CancelUpload stops the single running upload with this ID — the one carried
+// by its progress events — and leaves the rest of the batch to finish. Reports
+// whether an upload with that ID was still running.
+func (s *Service) CancelUpload(uploadID int) bool {
+	s.uploadCancelMu.Lock()
+	cancel := s.uploadCancels[uploadID]
+	s.uploadCancelMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
+}
+
+// trackUploadCancel derives one upload's context from the batch context and
+// registers it for CancelUpload. Cancelling the batch still stops every file;
+// the returned func unregisters this one and releases its context.
+func (s *Service) trackUploadCancel(ctx context.Context, uploadID int) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	s.uploadCancelMu.Lock()
+	if s.uploadCancels == nil {
+		s.uploadCancels = make(map[int]context.CancelFunc)
+	}
+	s.uploadCancels[uploadID] = cancel
+	s.uploadCancelMu.Unlock()
+	return ctx, func() {
+		s.uploadCancelMu.Lock()
+		delete(s.uploadCancels, uploadID)
+		s.uploadCancelMu.Unlock()
+		cancel()
+	}
+}
+
 type uploadOptions struct {
 	observer uploadObserver
 	peer     *tgclient.InputPeer
@@ -101,6 +134,8 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 		go func(uploadID int, path string, pid string, release func()) {
 			defer wg.Done()
 			defer release()
+			uploadCtx, untrack := s.trackUploadCancel(ctx, uploadID)
+			defer untrack()
 			defer func() {
 				if r := recover(); r != nil {
 					mu.Lock()
@@ -113,7 +148,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 				}
 			}()
 
-			meta, op, header, err := s.uploadSingleWithObserver(ctx, uploadID, path, pid, channelID, encrypt, *peer, observer)
+			meta, op, header, err := s.uploadSingleWithObserver(uploadCtx, uploadID, path, pid, channelID, encrypt, *peer, observer)
 			if err != nil {
 				if meta.MsgID != 0 {
 					mu.Lock()
