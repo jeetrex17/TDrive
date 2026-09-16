@@ -64,11 +64,19 @@ html.mobile .mobile-scroll {
 }
 
 /* ============================ TOP BAR ============================ */
+/* No divider at rest: the file card's own inset edge already separates content
+   from chrome, and a permanent hairline a few pixels above it draws the same
+   line twice. The rule appears only once content is actually passing under the
+   bar, which is the moment it has something to separate. */
 html.mobile .mobile-topbar {
     flex: 0 0 auto;
     background: var(--color-surface-0);
-    border-bottom: 1px solid var(--color-border-soft);
+    border-bottom: 1px solid transparent;
     padding-top: var(--inset-top);
+    transition: border-color var(--motion-med) var(--ease-standard);
+}
+html.mobile .mobile-shell.is-scrolled .mobile-topbar {
+    border-bottom-color: var(--color-border-soft);
 }
 
 html.mobile .topbar-row {
@@ -475,6 +483,10 @@ html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-cancel {
 }
 html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-cancel:active {
     background: var(--overlay-neutral-2);
+}
+html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-cancel:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
 }
 
 /* ============================ SELECTION BAR ============================ */

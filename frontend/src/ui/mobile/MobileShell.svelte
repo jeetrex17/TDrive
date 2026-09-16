@@ -93,11 +93,23 @@
         el?.scrollTo?.({ top: 0, behavior: 'smooth' });
     }
 
+    // The top bar carries no divider until content actually passes under it.
+    // A permanent hairline plus the card's own edge draws two separators a few
+    // pixels apart; the bar only needs one once there is something to separate.
+    let scrolled = $state(false);
+
     onMount(() => {
         const disposeBack = activateMobileBack();
         const disposeSafeArea = activateSafeArea();
 
+        const list = document.getElementById('file-list');
+        const onScroll = (): void => {
+            scrolled = (list?.scrollTop ?? 0) > 2;
+        };
+        list?.addEventListener('scroll', onScroll, { passive: true });
+
         return () => {
+            list?.removeEventListener('scroll', onScroll);
             disposeBack();
             disposeSafeArea();
             clearTimeout(navTimer);
@@ -108,6 +120,7 @@
 <div
     id="success-screen"
     class="mobile-shell"
+    class:is-scrolled={scrolled}
     hidden={!dashboardVisible}
     aria-hidden={dashboardVisible ? undefined : 'true'}
 >

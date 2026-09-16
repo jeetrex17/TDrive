@@ -552,6 +552,10 @@ html.mobile .action-sheet-tile {
     transition: background-color var(--motion-fast) var(--ease-standard);
 }
 html.mobile .action-sheet-tile:active { background: var(--color-surface-3); }
+html.mobile .action-sheet-tile:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--color-accent);
+}
 html.mobile .action-sheet-tile:disabled { opacity: 0.4; }
 html.mobile .action-sheet-tile-label {
     color: var(--color-text-soft);
