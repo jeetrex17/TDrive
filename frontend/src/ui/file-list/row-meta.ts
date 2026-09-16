@@ -22,14 +22,32 @@ export function relativeTimeLabel(unixSec: number, nowMs = Date.now()): string {
     return formatDate(unixSec);
 }
 
-/** "2 MB · 2 hours ago"; a folder whose stats are still unknown gets nothing. */
+/**
+ * The kind of thing this row is, in the words a reader would use: "PDF",
+ * "Folder". It leads the meta line because it is the one field that is always
+ * known -- a folder's size and a fresh file's timestamp can both be missing,
+ * and a meta line that sometimes starts with a size and sometimes with a date
+ * gives the eye no fixed column to scan down.
+ */
+export function rowTypeLabel(row: FolderListRow | FileListFileRow): string {
+    if (row.kind === 'folder') return 'Folder';
+    return row.ext ? row.ext.toUpperCase() : 'File';
+}
+
+/** "PDF · 2 MB · 2 hours ago", dropping whichever parts are not known yet. */
 export function rowMetaLine(row: FolderListRow | FileListFileRow, nowMs = Date.now()): string {
+    const type = rowTypeLabel(row);
     if (row.kind === 'folder') {
-        if (row.size <= 0 && row.modifiedTime <= 0) return '';
-        const parts = [row.size > 0 ? formatBytes(row.size) : '', relativeTimeLabel(row.modifiedTime, nowMs)];
+        const parts = [
+            type,
+            row.size > 0 ? formatBytes(row.size) : '',
+            relativeTimeLabel(row.modifiedTime, nowMs),
+        ];
         return parts.filter(Boolean).join(' · ');
     }
-    return [formatBytes(row.size), relativeTimeLabel(row.uploadTime, nowMs)].filter(Boolean).join(' · ');
+    return [type, formatBytes(row.size), relativeTimeLabel(row.uploadTime, nowMs)]
+        .filter(Boolean)
+        .join(' · ');
 }
 
 /**

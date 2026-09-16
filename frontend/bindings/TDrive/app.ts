@@ -245,6 +245,16 @@ export function GetUpdateState(): $CancellablePromise<updater$0.State> {
 }
 
 /**
+ * Haptic plays a semantic feedback pattern: a light impact for a long press or
+ * an armed pull, "selection" for a changed sort or filter, and success/warning/
+ * error only at a real outcome. The OS maps these to its own generator, so a
+ * user who has turned system haptics off feels nothing, as they asked.
+ */
+export function Haptic(kind: string): $CancellablePromise<void> {
+    return $Call.ByID(2625367938, kind);
+}
+
+/**
  * HideNativeSeekThumbnail hides the seek-preview overlay for the session.
  */
 export function HideNativeSeekThumbnail(token: string): $CancellablePromise<void> {
@@ -564,6 +574,30 @@ export function SetActiveChannel(channelID: number): $CancellablePromise<void> {
  */
 export function SetFileDropEnabled(enabled: boolean): $CancellablePromise<void> {
     return $Call.ByID(2923268397, enabled);
+}
+
+/**
+ * SetKeyboardWatch starts or stops "common:keyboard" {visible,height} events.
+ * The frontend prefers visualViewport where it exists and falls back to these,
+ * which is the only source Android's WebView reports reliably.
+ */
+export function SetKeyboardWatch(enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3980374793, enabled);
+}
+
+/**
+ * SetScreenProtect asks the OS to keep the app's contents out of screenshots
+ * and the app switcher while the vault is locked or privacy is raised.
+ * 
+ * The two platforms do NOT deliver the same thing. Android sets FLAG_SECURE,
+ * which really does blank screenshots, screen recording and the switcher
+ * thumbnail. iOS cannot block any of that: the same call only starts
+ * *detection*, reported back as a "common:screenCapture" event. Hiding the iOS
+ * switcher preview needs a native overlay on resign-active that this host does
+ * not have yet, so on iOS treat this as telemetry, not protection.
+ */
+export function SetScreenProtect(enabled: boolean): $CancellablePromise<void> {
+    return $Call.ByID(1181758966, enabled);
 }
 
 /**

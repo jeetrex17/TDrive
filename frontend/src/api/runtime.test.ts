@@ -9,12 +9,18 @@ import {
 // runtime.ts is a thin wrapper over @wailsio/runtime's Events/Browser/System/
 // Window modules; mock those instead of the removed window.runtime bridge.
 const eventsOn = vi.hoisted(() => vi.fn());
-vi.mock('@wailsio/runtime', () => {
+vi.mock('@wailsio/runtime', async (importOriginal) => {
+    // Create builds the generated bindings' model factories at module load, so
+    // the real implementation is kept rather than stubbed: a hand-written stand-in
+    // has to be extended every time the generator emits a new helper.
+    const actual = await importOriginal<typeof import('@wailsio/runtime')>();
     // The real platform helpers read the OS Go injects into window._wails.environment.
     const os = () => (typeof window === 'undefined' ? undefined : window._wails?.environment?.OS);
     return {
+        ...actual,
         Events: { On: eventsOn },
         Browser: { OpenURL: vi.fn() },
+        Call: { ByID: vi.fn(() => Promise.resolve()) },
         System: {
             Environment: vi.fn(),
             IsIOS: () => os() === 'ios',

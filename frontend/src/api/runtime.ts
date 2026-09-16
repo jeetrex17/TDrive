@@ -1,5 +1,10 @@
 import { Browser, Events, System, Window } from "@wailsio/runtime";
-import { SafeAreaInsets as rawSafeAreaInsets } from "../../bindings/TDrive/app";
+import {
+    Haptic as rawHaptic,
+    SafeAreaInsets as rawSafeAreaInsets,
+    SetKeyboardWatch as rawSetKeyboardWatch,
+    SetScreenProtect as rawSetScreenProtect,
+} from "../../bindings/TDrive/app";
 import {
     invokeBackend,
     invokeRuntimeAsync,
@@ -49,6 +54,10 @@ export interface RuntimeEventMap {
     preview_progress: [messageId: unknown, percent: unknown];
     native_media_state: [payload: unknown];
     encrypted_media_sessions_closed: [];
+    // Emitted by both phone hosts while SetKeyboardWatch is on; the payload is
+    // {visible, height}. Android reports the only soft-keyboard height its
+    // WebView knows, so this is the fallback where visualViewport is absent.
+    "common:keyboard": [payload: unknown];
     "updates:open": [];
     update_state: [payload: unknown];
 }
@@ -298,4 +307,46 @@ export async function getRuntimeEnvironment(): Promise<RuntimeEnvironment> {
         platform: info.OS,
         arch: info.Arch,
     };
+}
+
+/**
+ * The semantic feedback vocabulary both phone platforms implement. The names
+ * describe the meaning, not the waveform: the OS picks the generator, and a
+ * user who has turned system haptics off feels nothing.
+ */
+export type HapticKind =
+    | "impact-light"
+    | "impact-medium"
+    | "impact-heavy"
+    | "selection"
+    | "success"
+    | "warning"
+    | "error";
+
+/**
+ * Plays one haptic. Fire-and-forget on purpose: feedback that arrives late is
+ * worse than none, so nothing waits on it and a failure is swallowed. Silent
+ * off a phone, where the backend call is a no-op stub.
+ */
+export function playHaptic(kind: HapticKind): void {
+    if (!isGatewayReady()) return;
+    void invokeBackend(rawHaptic, kind).catch(() => undefined);
+}
+
+/**
+ * Asks the OS to keep app contents out of screenshots and the app switcher.
+ *
+ * Android honours this fully (FLAG_SECURE). iOS cannot block screenshots at
+ * all, so there the same call only enables detection -- the switcher preview
+ * still shows unless a native resign-active overlay is added to the host.
+ */
+export function setScreenProtect(enabled: boolean): void {
+    if (!isGatewayReady()) return;
+    void invokeBackend(rawSetScreenProtect, enabled).catch(() => undefined);
+}
+
+/** Starts or stops the host's "common:keyboard" {visible,height} events. */
+export function setKeyboardWatch(enabled: boolean): void {
+    if (!isGatewayReady()) return;
+    void invokeBackend(rawSetKeyboardWatch, enabled).catch(() => undefined);
 }

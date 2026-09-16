@@ -197,7 +197,7 @@ describe('FileList phone rows', () => {
             const node = row();
             expect(node.querySelector('.row-label-head')?.textContent).toBe('Holiday Photos 2024 final versio');
             expect(node.querySelector('.row-label-tail')?.textContent).toBe('n v2.zip');
-            expect(node.querySelector('.row-sub-text')?.textContent).toBe('1.3 GB · 5 hours ago');
+            expect(node.querySelector('.row-sub-text')?.textContent).toBe('MP4 · 1.3 GB · 5 hours ago');
             expect(node.querySelector('.file-lock-badge')).not.toBeNull();
             expect(node.querySelector('.uploader-initials')?.textContent).toBe('MO');
             expect(node.querySelector('.uploader-chip')?.textContent?.trim()).toMatch(/Mara$/);

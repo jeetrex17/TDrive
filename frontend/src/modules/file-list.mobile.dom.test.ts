@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
     isMobilePlatform: vi.fn(() => true),
     isIOSPlatform: () => false,
     isAndroidPlatform: () => false,
+    playHaptic: vi.fn(),
 }));
 const actions = vi.hoisted(() => ({
     playVideo: vi.fn(),
@@ -107,7 +108,8 @@ describe('phone file list', () => {
         expect([x, y]).toEqual([130, 44]);
         expect(options?.header).toEqual({
             title: 'plan.pdf',
-            meta: expect.stringMatching(/^1\.9 MB · /),
+            // Type leads the meta line so the column reads the same on every row.
+            meta: expect.stringMatching(/^PDF · 1\.9 MB · /),
             kind: 'file',
             ext: 'PDF',
             // The sheet's detail table. Location comes last so the reader ends

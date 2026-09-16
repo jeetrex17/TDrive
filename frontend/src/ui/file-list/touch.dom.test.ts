@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bindLongPress, bindPullToRefresh } from './touch';
 
+// Haptics now go through one binding rather than a per-platform runtime call,
+// so the mock only has to silence that.
 vi.mock('../../api', () => ({
-    isAndroidPlatform: () => false,
-    isIOSPlatform: () => false,
+    playHaptic: vi.fn(),
 }));
 
 let host: HTMLElement;
