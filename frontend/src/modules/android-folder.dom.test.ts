@@ -1,19 +1,45 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { canPickFolder, pickAndroidFolder } from "./android-folder";
+import {
+    canPickFolder,
+    folderPathFor,
+    folderPathsFor,
+    materializeAndroidFiles,
+    pickAndroidFolder,
+    releaseAndroidFiles,
+} from "./android-folder";
 
 interface TestWindow {
-    wails?: { pickFolder?: (id: string) => void };
+    wails?: {
+        pickFolder?: (id: string) => void;
+        materializeFiles?: (id: string, idsJson: string) => void;
+        releaseFiles?: (id: string, idsJson: string) => void;
+    };
     _wailsAndroidCallback?: ((id: string, result: string | null, error: string | null) => void) | undefined;
     _tdriveFolderCallbacks?: Record<string, unknown>;
 }
 
 const host = window as unknown as TestWindow;
 
-/** Stands in for the Android bridge, capturing the id it was handed. */
-function installBridge(): { lastId: () => string } {
-    let seen = "";
-    host.wails = { pickFolder: (id: string) => { seen = id; } };
-    return { lastId: () => seen };
+interface BridgeCall {
+    method: string;
+    id: string;
+    args: string[];
+}
+
+let calls: BridgeCall[] = [];
+
+/** Stands in for the Android bridge, recording every call it was handed. */
+function installBridge(): void {
+    calls = [];
+    host.wails = {
+        pickFolder: (id) => { calls.push({ method: "pickFolder", id, args: [] }); },
+        materializeFiles: (id, idsJson) => { calls.push({ method: "materializeFiles", id, args: [idsJson] }); },
+        releaseFiles: (id, idsJson) => { calls.push({ method: "releaseFiles", id, args: [idsJson] }); },
+    };
+}
+
+function lastCall(): BridgeCall {
+    return calls[calls.length - 1];
 }
 
 function answer(id: string, result: string | null, error: string | null = null): void {
@@ -24,6 +50,7 @@ afterEach(() => {
     delete host.wails;
     host._wailsAndroidCallback = undefined;
     delete host._tdriveFolderCallbacks;
+    calls = [];
 });
 
 describe("asking Android for a folder", () => {
@@ -33,29 +60,49 @@ describe("asking Android for a folder", () => {
         expect(canPickFolder()).toBe(true);
     });
 
-    it("resolves with the path the bridge copied the folder to", async () => {
-        const bridge = installBridge();
+    it("resolves with what the bridge found in the tree", async () => {
+        installBridge();
         const picked = pickAndroidFolder();
 
-        answer(bridge.lastId(), "/data/cache/wails-folder/1/Holiday");
-        await expect(picked).resolves.toBe("/data/cache/wails-folder/1/Holiday");
+        answer(lastCall().id, JSON.stringify({
+            root: "Holiday",
+            files: [{ id: "doc:1", rel: "sub/a.jpg", size: 12345 }],
+        }));
+        await expect(picked).resolves.toEqual({
+            root: "Holiday",
+            files: [{ id: "doc:1", rel: "sub/a.jpg", size: 12345 }],
+        });
     });
 
     it("treats a dismissed picker as no folder rather than a failure", async () => {
         // Changing your mind is not an error, and an error here would put a
         // red notice on screen for it.
-        const bridge = installBridge();
+        installBridge();
         const picked = pickAndroidFolder();
 
-        answer(bridge.lastId(), "");
-        await expect(picked).resolves.toBe("");
+        answer(lastCall().id, "");
+        await expect(picked).resolves.toBeNull();
+    });
+
+    it("drops manifest entries with nothing to upload them by", async () => {
+        installBridge();
+        const picked = pickAndroidFolder();
+
+        answer(lastCall().id, JSON.stringify({
+            root: "Holiday",
+            files: [{ id: "", rel: "a.jpg", size: 1 }, { id: "doc:2", rel: "", size: 1 }, { id: "doc:3", rel: "b.jpg" }],
+        }));
+        await expect(picked).resolves.toEqual({
+            root: "Holiday",
+            files: [{ id: "doc:3", rel: "b.jpg", size: 0 }],
+        });
     });
 
     it("rejects when the bridge could not read the folder", async () => {
-        const bridge = installBridge();
+        installBridge();
         const picked = pickAndroidFolder();
 
-        answer(bridge.lastId(), null, "could not read that folder");
+        answer(lastCall().id, null, "could not read that folder");
         await expect(picked).rejects.toThrow("could not read that folder");
     });
 
@@ -65,37 +112,37 @@ describe("asking Android for a folder", () => {
         // them, quietly, for as long as a folder picker had ever been opened.
         const runtime = vi.fn();
         host._wailsAndroidCallback = runtime;
-        const bridge = installBridge();
+        installBridge();
         const picked = pickAndroidFolder();
 
         answer("some-other-call", "result", null);
         expect(runtime).toHaveBeenCalledWith("some-other-call", "result", null);
 
-        answer(bridge.lastId(), "/tmp/folder");
-        await expect(picked).resolves.toBe("/tmp/folder");
+        answer(lastCall().id, JSON.stringify({ root: "Holiday", files: [] }));
+        await expect(picked).resolves.toEqual({ root: "Holiday", files: [] });
         // Ours was handled by us, not passed down.
         expect(runtime).toHaveBeenCalledTimes(1);
     });
 
     it("chains onto the runtime only once, however many folders are picked", async () => {
         host._wailsAndroidCallback = vi.fn();
-        const bridge = installBridge();
+        installBridge();
 
         const first = pickAndroidFolder();
         const chained = host._wailsAndroidCallback;
-        answer(bridge.lastId(), "/tmp/a");
+        answer(lastCall().id, JSON.stringify({ root: "A", files: [] }));
         await first;
 
         const second = pickAndroidFolder();
         expect(host._wailsAndroidCallback).toBe(chained);
-        answer(bridge.lastId(), "/tmp/b");
-        await expect(second).resolves.toBe("/tmp/b");
+        answer(lastCall().id, JSON.stringify({ root: "B", files: [] }));
+        await expect(second).resolves.toEqual({ root: "B", files: [] });
     });
 
     it("forgets a picker once it has answered", async () => {
-        const bridge = installBridge();
+        installBridge();
         const picked = pickAndroidFolder();
-        answer(bridge.lastId(), "/tmp/folder");
+        answer(lastCall().id, JSON.stringify({ root: "Holiday", files: [] }));
         await picked;
 
         expect(Object.keys(host._tdriveFolderCallbacks ?? {})).toHaveLength(0);
@@ -103,5 +150,78 @@ describe("asking Android for a folder", () => {
 
     it("refuses on a build with no bridge", async () => {
         await expect(pickAndroidFolder()).rejects.toThrow(/cannot open a folder picker/);
+    });
+});
+
+describe("materializing and releasing files", () => {
+    it("maps the ids it asked for to the paths the bridge copied them to", async () => {
+        installBridge();
+        const materialized = materializeAndroidFiles(["doc:1", "doc:2"]);
+
+        expect(lastCall().method).toBe("materializeFiles");
+        expect(JSON.parse(lastCall().args[0])).toEqual(["doc:1", "doc:2"]);
+        answer(lastCall().id, JSON.stringify({ paths: { "doc:1": "/cache/a.jpg", "doc:2": "/cache/b.jpg" } }));
+        await expect(materialized).resolves.toEqual(new Map([
+            ["doc:1", "/cache/a.jpg"],
+            ["doc:2", "/cache/b.jpg"],
+        ]));
+    });
+
+    it("leaves out an id the bridge could not read instead of failing the batch", async () => {
+        installBridge();
+        const materialized = materializeAndroidFiles(["doc:1", "doc:2"]);
+
+        answer(lastCall().id, JSON.stringify({ paths: { "doc:1": "/cache/a.jpg" } }));
+        const paths = await materialized;
+        expect(paths.has("doc:2")).toBe(false);
+        expect(paths.get("doc:1")).toBe("/cache/a.jpg");
+    });
+
+    it("releases by id", async () => {
+        installBridge();
+        const released = releaseAndroidFiles(["doc:1"]);
+
+        expect(lastCall().method).toBe("releaseFiles");
+        expect(JSON.parse(lastCall().args[0])).toEqual(["doc:1"]);
+        answer(lastCall().id, "");
+        await expect(released).resolves.toBeUndefined();
+    });
+});
+
+describe("the folder tree a manifest implies", () => {
+    it("lists every directory parents first", () => {
+        const paths = folderPathsFor({
+            root: "Holiday",
+            files: [
+                { id: "1", rel: "b/deep/nested/x.jpg", size: 1 },
+                { id: "2", rel: "a/y.jpg", size: 1 },
+                { id: "3", rel: "a/z.jpg", size: 1 },
+                { id: "4", rel: "top.jpg", size: 1 },
+            ],
+        });
+
+        expect(paths).toEqual([
+            "Holiday",
+            "Holiday/b",
+            "Holiday/a",
+            "Holiday/b/deep",
+            "Holiday/b/deep/nested",
+        ]);
+        // Every entry's parent is listed before it.
+        for (const path of paths) {
+            const cut = path.lastIndexOf("/");
+            if (cut < 0) continue;
+            expect(paths.indexOf(path.slice(0, cut))).toBeLessThan(paths.indexOf(path));
+        }
+    });
+
+    it("keeps the picked folder itself even when it holds nothing", () => {
+        expect(folderPathsFor({ root: "Empty", files: [] })).toEqual(["Empty"]);
+    });
+
+    it("places a file against the directory it came from", () => {
+        expect(folderPathFor("Holiday", "sub/a.jpg")).toBe("Holiday/sub");
+        expect(folderPathFor("Holiday", "a.jpg")).toBe("Holiday");
+        expect(folderPathFor("", "a.jpg")).toBe("");
     });
 });
