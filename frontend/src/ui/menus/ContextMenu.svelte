@@ -2,9 +2,58 @@
     import { tick } from 'svelte';
     import FileIcon from '@lucide/svelte/icons/file';
     import FolderIcon from '@lucide/svelte/icons/folder';
+    import EyeIcon from '@lucide/svelte/icons/eye';
+    import PlayIcon from '@lucide/svelte/icons/play';
+    import DownloadIcon from '@lucide/svelte/icons/download';
+    import PencilIcon from '@lucide/svelte/icons/pencil';
+    import FolderInputIcon from '@lucide/svelte/icons/folder-input';
+    import Trash2Icon from '@lucide/svelte/icons/trash-2';
+    import UploadIcon from '@lucide/svelte/icons/upload';
+    import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
+    import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
     import { IOS, Android } from '@wailsio/runtime';
-    import { contextMenuState, hideContextMenu, type ContextMenuItem } from './context-menu-store';
+    import { contextMenuState, hideContextMenu, type ContextMenuIcon, type ContextMenuItem } from './context-menu-store';
+    import { fileTypeFamily, fileTypeIcon } from '../file-list/file-type';
     import { isAndroidPlatform, isGatewayReady, isIOSPlatform, isMobilePlatform } from '../../api';
+
+    // The store names an icon; this module owns what that name looks like, so
+    // the action builders never import a component.
+    const ICONS: Record<ContextMenuIcon, typeof FileIcon> = {
+        open: EyeIcon,
+        play: PlayIcon,
+        download: DownloadIcon,
+        rename: PencilIcon,
+        move: FolderInputIcon,
+        delete: Trash2Icon,
+        upload: UploadIcon,
+        'folder-new': FolderPlusIcon,
+        refresh: RefreshCwIcon,
+    };
+
+    /** The header glyph: the same type icon the row showed, not a generic page. */
+    const headerIcon = $derived.by(() => {
+        const header = $contextMenuState.header;
+        if (!header) return FileIcon;
+        if (header.kind === 'folder') return FolderIcon;
+        return fileTypeIcon(fileTypeFamily(header.ext ?? ''));
+    });
+
+    // Only a sheet with a header promotes actions to tiles. A menu opened on
+    // empty space has no subject, so it stays a plain list.
+    const tiles = $derived(
+        $contextMenuState.header
+            ? $contextMenuState.items.filter((item) => item.type !== 'divider' && item.primary)
+            : [],
+    );
+    const listItems = $derived.by(() => {
+        if (!tiles.length) return $contextMenuState.items;
+        const rest = $contextMenuState.items.filter((item) => item.type === 'divider' || !item.primary);
+        // Pulling items out can strand a separator at either end, where it
+        // would draw a rule against the sheet's own edge.
+        while (rest.length && rest[0].type === 'divider') rest.shift();
+        while (rest.length && rest[rest.length - 1].type === 'divider') rest.pop();
+        return rest;
+    });
 
     const VIEWPORT_MARGIN = 8;
 
@@ -219,13 +268,14 @@
             </div>
 
             {#if $contextMenuState.header}
+                {@const HeaderIcon = headerIcon}
                 <div class="action-sheet-header">
-                    <span class="action-sheet-icon" aria-hidden="true">
-                        {#if $contextMenuState.header.kind === 'folder'}
-                            <FolderIcon size={22} strokeWidth={1.75} />
-                        {:else}
-                            <FileIcon size={22} strokeWidth={1.75} />
-                        {/if}
+                    <span
+                        class="action-sheet-icon"
+                        class:is-folder={$contextMenuState.header.kind === 'folder'}
+                        aria-hidden="true"
+                    >
+                        <HeaderIcon size={40} strokeWidth={1.5} />
                     </span>
                     <span class="action-sheet-heading">
                         <span class="action-sheet-title">{$contextMenuState.header.title}</span>
@@ -236,8 +286,42 @@
                 </div>
             {/if}
 
+            {#if tiles.length}
+                <div class="action-sheet-tiles">
+                    {#each tiles as item, index (`${item.type === 'divider' ? 'd' : item.label}-${index}`)}
+                        {#if item.type !== 'divider'}
+                            <button
+                                type="button"
+                                role="menuitem"
+                                class="action-sheet-tile"
+                                disabled={item.disabled}
+                                tabindex="-1"
+                                onclick={() => invoke(item)}
+                            >
+                                {#if item.icon}
+                                    {@const TileIcon = ICONS[item.icon]}
+                                    <TileIcon size={22} strokeWidth={1.9} aria-hidden="true" />
+                                {/if}
+                                <span class="action-sheet-tile-label">{item.label.replace(/…$/, '')}</span>
+                            </button>
+                        {/if}
+                    {/each}
+                </div>
+            {/if}
+
+            {#if $contextMenuState.header?.details?.length}
+                <dl class="action-sheet-details">
+                    {#each $contextMenuState.header.details as detail (detail.label)}
+                        <div class="action-sheet-detail">
+                            <dt>{detail.label}</dt>
+                            <dd>{detail.value}</dd>
+                        </div>
+                    {/each}
+                </dl>
+            {/if}
+
             <div class="action-sheet-items">
-                {#each $contextMenuState.items as item, index (item.type === 'divider' ? `divider-${index}` : `${item.label}-${index}`)}
+                {#each listItems as item, index (item.type === 'divider' ? `divider-${index}` : `${item.label}-${index}`)}
                     {#if item.type === 'divider'}
                         <div class="action-sheet-sep" role="separator"></div>
                     {:else}
@@ -250,7 +334,11 @@
                             tabindex="-1"
                             onclick={() => invoke(item)}
                         >
-                            {item.label}
+                            {#if item.icon}
+                                {@const RowIcon = ICONS[item.icon]}
+                                <RowIcon size={20} strokeWidth={1.9} aria-hidden="true" />
+                            {/if}
+                            <span>{item.label}</span>
                         </button>
                     {/if}
                 {/each}

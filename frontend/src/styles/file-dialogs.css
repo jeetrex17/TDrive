@@ -480,38 +480,119 @@ html.mobile .action-sheet {
     to { opacity: 1; }
 }
 
+/* The sheet opens on one item, so it leads with that item: a large type glyph
+   over the name, the way a file's own page would. Centred, because the row of
+   action tiles under it is centred and a left-aligned header would leave the
+   two halves arguing. */
 html.mobile .action-sheet-header {
     display: flex;
+    flex-direction: column;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-1) var(--space-1) var(--space-3);
-    margin-bottom: var(--space-1);
-    border-bottom: 1px solid var(--color-border-soft);
+    padding: var(--space-3) var(--space-2) var(--space-4);
+    margin-bottom: 0;
+    text-align: center;
 }
 html.mobile .action-sheet-icon {
     flex: 0 0 auto;
-    width: 40px;
-    height: 40px;
+    width: 88px;
+    height: 88px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--radius-md);
-    background: var(--overlay-white-1);
-    color: var(--accent);
+    border-radius: var(--radius-xl);
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+}
+/* Folders keep the accent tile they carry in the list. */
+html.mobile .action-sheet-icon.is-folder {
+    background: color-mix(in srgb, var(--color-accent) 16%, var(--color-surface-0));
+    color: var(--color-accent);
 }
 html.mobile .action-sheet-heading {
     display: flex;
     flex-direction: column;
     gap: 2px;
     min-width: 0;
+    max-width: 100%;
 }
 html.mobile .action-sheet-title {
     font-weight: 700;
-    font-size: var(--type-base);
+    font-size: 1.125rem;
+    line-height: 1.3;
     color: var(--color-text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* The name is the subject of the sheet, so it wraps to a second line
+       rather than ellipsising the part that tells files apart. */
+    overflow-wrap: anywhere;
+}
+
+/* Everyday actions as a row of tiles. Four is the most that stay above 64px
+   wide on a 390px screen, which is why the builders promote at most four. */
+html.mobile .action-sheet-tiles {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: var(--space-2);
+    padding: 0 0 var(--space-4);
+}
+html.mobile .action-sheet-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 68px;
+    padding: var(--space-2) 4px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-2);
+    color: var(--color-accent);
+    font: inherit;
+    cursor: pointer;
+    transition: background-color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .action-sheet-tile:active { background: var(--color-surface-3); }
+html.mobile .action-sheet-tile:disabled { opacity: 0.4; }
+html.mobile .action-sheet-tile-label {
+    color: var(--color-text-soft);
+    font-size: 0.75rem;
+    font-weight: var(--weight-semibold);
+    line-height: 1;
+}
+
+/* The facts about the item, as a quiet table under the actions. */
+html.mobile .action-sheet-details {
+    margin: 0 0 var(--space-3);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-2);
+}
+html.mobile .action-sheet-detail {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-height: 40px;
+    padding: var(--space-2) 0;
+}
+html.mobile .action-sheet-detail + .action-sheet-detail {
+    border-top: 1px solid var(--color-border-soft);
+}
+html.mobile .action-sheet-detail dt {
+    flex: 0 0 auto;
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--type-sm);
+    font-weight: var(--weight-medium);
+}
+html.mobile .action-sheet-detail dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--color-text);
+    font-size: var(--type-sm);
+    font-weight: var(--weight-semibold);
+    text-align: right;
+    overflow-wrap: anywhere;
 }
 html.mobile .action-sheet-meta {
     font-size: var(--type-sm);
@@ -533,6 +614,7 @@ html.mobile .action-sheet-items {
 html.mobile .action-sheet-row {
     display: flex;
     align-items: center;
+    gap: var(--space-3);
     width: 100%;
     min-height: 48px;
     padding: 0 var(--space-2);

@@ -105,7 +105,20 @@ describe('phone file list', () => {
         const [target, x, y, options] = vi.mocked(showRowContextMenu).mock.calls[0];
         expect(target).toBe(row('plan.pdf'));
         expect([x, y]).toEqual([130, 44]);
-        expect(options?.header).toEqual({ title: 'plan.pdf', meta: expect.stringMatching(/^1\.9 MB · /), kind: 'file' });
+        expect(options?.header).toEqual({
+            title: 'plan.pdf',
+            meta: expect.stringMatching(/^1\.9 MB · /),
+            kind: 'file',
+            ext: 'PDF',
+            // The sheet's detail table. Location comes last so the reader ends
+            // on where the file lives, which is what a move or rename changes.
+            details: [
+                { label: 'Type', value: 'PDF file' },
+                { label: 'Size', value: '1.9 MB' },
+                { label: 'Added', value: expect.any(String) },
+                { label: 'Location', value: expect.any(String) },
+            ],
+        });
         expect(state.selectedItems.size).toBe(0);
     });
 

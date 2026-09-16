@@ -4,6 +4,9 @@ import { state, resetFolderCaches } from '../state';
 import { splitNameAndExt, formatDate, formatBytes } from '../utils';
 import { isOffline } from './connectivity';
 import { tick } from 'svelte';
+import { get } from 'svelte/store';
+import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
+import type { ContextMenuDetail } from '../ui/menus/context-menu-store';
 import { clearSelection, deselectRow, handleRowSelection, isRowSelected, reconcileSelection, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
@@ -379,13 +382,43 @@ function triggerRowContextMenu(row: HTMLElement) {
     }));
 }
 
+/** The folder path an item sits in, as the sheet's Location line shows it. */
+function rowLocationLabel(): string {
+    const trail = get(breadcrumbPath);
+    if (!trail.length) return state.activeChannel?.title || 'Drive';
+    return `/${trail.map((entry) => entry.name).join('/')}`;
+}
+
+/** The Type / Size / Added / Location lines under the sheet's actions. */
+function rowDetailLines(row: FolderListRow | FileListFileRow): ContextMenuDetail[] {
+    const added = row.kind === 'folder' ? row.modifiedTime : row.uploadTime;
+    const type = row.kind === 'folder'
+        ? 'Folder'
+        : row.ext ? `${row.ext.toUpperCase()} file` : 'File';
+    const lines: ContextMenuDetail[] = [{ label: 'Type', value: type }];
+    // A folder's size is an async subtree lookup that can still be zero, and a
+    // blank line reads better than claiming the folder holds nothing.
+    if (row.size > 0) lines.push({ label: 'Size', value: formatBytes(row.size) });
+    if (added > 0) lines.push({ label: row.kind === 'folder' ? 'Updated' : 'Added', value: formatDate(added) });
+    lines.push({ label: 'Location', value: rowLocationLabel() });
+    return lines;
+}
+
 // A long press or the overflow button opens the item's own action sheet. It
 // never selects the row: on a phone the selection belongs to the reader, not
 // the menu, and the sheet header names what the actions apply to.
 function openRowMenu(row: HTMLElement, clientX: number, clientY: number): void {
     const logical = getInteractiveFileListRows().find((candidate) => candidate.selectionKey === getRowKey(row));
     showRowContextMenu(row, clientX, clientY, {
-        header: logical ? { title: logical.name, meta: rowMetaLine(logical), kind: logical.kind } : undefined,
+        header: logical
+            ? {
+                title: logical.name,
+                meta: rowMetaLine(logical),
+                kind: logical.kind,
+                ext: logical.kind === 'file' ? logical.ext : undefined,
+                details: rowDetailLines(logical),
+            }
+            : undefined,
     });
 }
 
