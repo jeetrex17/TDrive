@@ -96,15 +96,21 @@ html.mobile .modal-sheet {
     width: 100%;
     max-width: 640px;
     margin-top: auto;
-    /* visualViewport lifts the sheet above the on-screen keyboard. */
-    margin-bottom: var(--sheet-keyboard-inset, 0px);
-    max-height: calc(90dvh - var(--sheet-keyboard-inset, 0px));
+    /* Lift the whole sheet above the keyboard rather than padding it down,
+       so the primary button stays where the thumb expects it. The height cap
+       comes down by the same amount, because that space is gone. */
+    margin-bottom: var(--inset-keyboard);
+    max-height: calc(90dvh - var(--inset-keyboard));
     display: flex;
     flex-direction: column;
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-    /* A 16 sheet with 4 padding holds 12 inner groups (design-1). */
+    /* A 16 sheet with 4 padding holds 12 inner groups (design-1). Subtract
+       what the margin above already took: --inset-bottom folds the keyboard
+       in, and reserving it twice floats the sheet a keyboard clear of the
+       keys. The remainder is the gesture bar, which is nothing once the
+       keyboard covers it. */
     padding: var(--space-1) var(--space-4)
-        calc(var(--space-4) + var(--inset-bottom));
+        calc(var(--space-4) + var(--inset-bottom) - var(--inset-keyboard));
     box-shadow: var(--shadow-lg);
     animation: tdrive-sheet-enter var(--motion-slow) var(--ease-enter) both;
     touch-action: pan-y;
