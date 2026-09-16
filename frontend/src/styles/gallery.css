@@ -121,7 +121,18 @@
 .gallery-lock svg { width: 13px; height: 13px; }
 .gallery-broken { inset: 0; color: var(--text-muted); }
 .gallery-broken svg { width: 34px; height: 34px; }
-.gallery-cell.is-locked { background: repeating-linear-gradient(45deg, var(--bg-panel), var(--bg-panel) 10px, rgba(122,162,247,0.05) 10px, rgba(122,162,247,0.05) 20px); }
+/* The stripe follows the live accent. It used to be one palette's accent
+   written out by hand (#7aa2f7, Tokyo Night), which left it off-hue in every
+   other palette -- and the default is not that one. */
+.gallery-cell.is-locked {
+    background: repeating-linear-gradient(
+        45deg,
+        var(--bg-panel),
+        var(--bg-panel) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 20px
+    );
+}
 
 /* ----- Lightbox: download, list navigation, counter ----- */
 .preview-chrome-actions { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
@@ -350,13 +361,13 @@
     padding: 7px 7px 7px 17px;
     border-radius: var(--radius-xl);
     background: rgba(18, 20, 30, 0.78);
-    border: 1px solid rgba(122, 162, 247, 0.26);
+    border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
     -webkit-backdrop-filter: blur(28px) saturate(1.4);
     backdrop-filter: blur(28px) saturate(1.4);
     transition: border-color 0.18s ease;
 }
 .preview-unlock-bar:focus-within {
-    border-color: rgba(122, 162, 247, 0.6);
+    border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .preview-unlock-lock { width: 18px; height: 18px; flex-shrink: 0; color: var(--viewer-text-muted); }
 .preview-unlock-bar input {
@@ -503,16 +514,6 @@ html.mobile .gallery-locked-pill {
     letter-spacing: 0.01em;
     line-height: 1.6;
     pointer-events: none;
-}
-/* The baked-in stripe colour was one palette's accent; follow the live one. */
-html.mobile .gallery-cell.is-locked {
-    background: repeating-linear-gradient(
-        45deg,
-        var(--bg-panel),
-        var(--bg-panel) 10px,
-        color-mix(in srgb, var(--accent) 5%, transparent) 10px,
-        color-mix(in srgb, var(--accent) 5%, transparent) 20px
-    );
 }
 html.mobile .gallery-check {
     position: absolute;
