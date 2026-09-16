@@ -24,6 +24,7 @@
         type ContextMenuItem,
     } from './context-menu-store';
     import { fileTypeFamily, fileTypeIcon } from '../file-list/file-type';
+    import { createSheetDrag, sheetOffset, shouldDismiss, FLICK_SPEED } from '../modals/sheet-gesture';
     import { isAndroidPlatform, isGatewayReady, isIOSPlatform, isMobilePlatform } from '../../api';
 
     // The store names an icon; this module owns what that name looks like, so
@@ -89,40 +90,9 @@
     let dragging = false;
     let dragStartY = 0;
     let dragDelta = 0;
-    // A short history rather than the last event alone: one sample is noisy and
-    // a finger that pauses before lifting would read as a flick.
-    let dragSamples: Array<{ y: number; t: number }> = [];
-
-    /** Release speed in px/s, measured across the recent samples. */
-    function releaseVelocity(): number {
-        if (dragSamples.length < 2) return 0;
-        const first = dragSamples[0];
-        const last = dragSamples[dragSamples.length - 1];
-        const elapsed = last.t - first.t;
-        if (elapsed <= 0) return 0;
-        return ((last.y - first.y) / elapsed) * 1000;
-    }
-
-    /**
-     * Where the sheet would come to rest if released now, using the same
-     * exponential decay a scroll view uses. Deciding on the projected point
-     * rather than the point under the finger is what lets a short, fast flick
-     * dismiss while a long, slow drag that stopped does not.
-     */
-    function projectedOffset(velocity: number): number {
-        const DECELERATION = 0.998;
-        return (velocity / 1000) * DECELERATION / (1 - DECELERATION);
-    }
-
-    /**
-     * Dragging the sheet up has nowhere to go, so it resists progressively
-     * instead of stopping dead. A hard stop reads as frozen; resistance reads
-     * as "responsive, but there is nothing more here".
-     */
-    function rubberband(overshoot: number, dimension: number): number {
-        const CONSTANT = 0.55;
-        return (overshoot * dimension * CONSTANT) / (dimension + CONSTANT * Math.abs(overshoot));
-    }
+    // The drag physics are shared with every other sheet in the app, so they
+    // all behave the same way under a thumb.
+    const drag = createSheetDrag();
 
     function container(): HTMLElement | null {
         return asSheet ? sheet : panel;
@@ -273,38 +243,36 @@
         dragging = true;
         dragStartY = event.clientY;
         dragDelta = 0;
-        dragSamples = [{ y: event.clientY, t: event.timeStamp }];
+        drag.start(event);
         sheet.style.transition = '';
         (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
     }
 
     function onHandlePointerMove(event: PointerEvent): void {
         if (!dragging || !sheet) return;
-        const raw = event.clientY - dragStartY;
-        dragDelta = raw >= 0 ? raw : rubberband(raw, sheet.offsetHeight);
-        dragSamples.push({ y: event.clientY, t: event.timeStamp });
-        if (dragSamples.length > 5) dragSamples.shift();
+        dragDelta = sheetOffset(event.clientY - dragStartY, sheet.offsetHeight);
+        drag.track(event);
         sheet.style.transform = `translateY(${dragDelta}px)`;
     }
 
     function onHandlePointerUp(): void {
         if (!dragging || !sheet) return;
         dragging = false;
-        const velocity = releaseVelocity();
+        const velocity = drag.velocity();
         const threshold = Math.max(72, sheet.offsetHeight * 0.3);
         // Judge where the gesture was going, not where the finger happened to
         // stop. A flick throws the sheet; a drag that halted keeps it.
-        if (dragDelta + projectedOffset(velocity) > threshold) {
+        if (shouldDismiss(dragDelta, velocity, threshold)) {
             void dismissAndRestoreFocus();
         } else {
             // Settle faster when the finger was still moving, so the return
             // continues the gesture instead of restarting at zero speed.
-            const settle = velocity > 600 ? 'var(--motion-fast)' : 'var(--motion-med)';
+            const settle = velocity > FLICK_SPEED ? 'var(--motion-fast)' : 'var(--motion-med)';
             sheet.style.transition = `transform ${settle} var(--ease-enter)`;
             sheet.style.transform = 'translateY(0)';
         }
         dragDelta = 0;
-        dragSamples = [];
+        drag.reset();
     }
 
     $effect(() => {
