@@ -98,14 +98,28 @@ afterEach(async () => {
 });
 
 describe('phone file list', () => {
-    it('long press opens the row action sheet and names the row in its header', () => {
+    it('a long press anywhere on the row selects it', () => {
+        // Holding a row means "select this" on every phone anyone has used. It
+        // used to select only on the row's small leading icon and open the menu
+        // everywhere else, which nobody found: a target that narrow is not a
+        // gesture, it is a secret.
         vi.mocked(showRowContextMenu).mockClear();
 
         press(row('plan.pdf').querySelector('.row-text')!, 130, 44);
+        flushSync();
+        expect(state.selectedItems.has('file:41')).toBe(true);
+        expect(row('plan.pdf').classList.contains('is-selected')).toBe(true);
+        // The press no longer owes the menu anything; the row's own button has it.
+        expect(showRowContextMenu).not.toHaveBeenCalled();
+    });
+
+    it('the action sheet names the row in its header', () => {
+        vi.mocked(showRowContextMenu).mockClear();
+
+        click(row('plan.pdf').querySelector('button.row-more')!);
         expect(showRowContextMenu).toHaveBeenCalledTimes(1);
-        const [target, x, y, options] = vi.mocked(showRowContextMenu).mock.calls[0];
+        const [target, , , options] = vi.mocked(showRowContextMenu).mock.calls[0];
         expect(target).toBe(row('plan.pdf'));
-        expect([x, y]).toEqual([130, 44]);
         expect(options?.header).toEqual({
             title: 'plan.pdf',
             // Type leads the meta line so the column reads the same on every row.

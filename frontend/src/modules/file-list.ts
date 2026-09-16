@@ -1075,16 +1075,18 @@ export function activateFileList(): () => void {
     list.addEventListener('dragleave', handleListDragLeave);
     list.addEventListener('drop', onDrop);
 
-    // Phone gestures: a long press on the leading icon selects the row, a long
-    // press anywhere else opens its menu, and a pull from the top refreshes.
+    // Phone gestures: a long press selects the row, and a pull from the top
+    // refreshes.
+    //
+    // The press used to select only when it landed on the row's small leading
+    // icon and to open the menu anywhere else. Nobody found it: holding a row
+    // means "select this" on every phone anyone has used, and a target that
+    // narrow is not a gesture, it is a secret. The menu lost nothing by giving
+    // the press up, because every row already carries its own button for it.
     const touchCleanups = isMobilePlatform()
         ? [
-            bindLongPress(list, '.drive-row[data-type="folder"], .drive-row[data-type="file"]', (row, x, y, origin) => {
-                if (origin?.closest('.file-type-icon, .folder-chip, .row-check')) {
-                    toggleRowSelection(row);
-                    return;
-                }
-                openRowMenu(row, x, y);
+            bindLongPress(list, '.drive-row[data-type="folder"], .drive-row[data-type="file"]', (row) => {
+                toggleRowSelection(row);
             }),
             bindPullToRefresh(list, () => appActions().triggerRefresh()),
             bindSwipeActions(list, '.drive-row[data-type="folder"], .drive-row[data-type="file"]', {
