@@ -31,7 +31,11 @@ export type ContextMenuItem =
 export interface ContextMenuDetail {
     label: string;
     value: string;
+    /** Leading glyph, named the same way menu item icons are. */
+    icon?: ContextMenuDetailIcon;
 }
+
+export type ContextMenuDetailIcon = 'type' | 'size' | 'added' | 'location';
 
 // Optional header for the mobile action sheet: the item the actions act on.
 // Desktop ignores it (the popover has no header). kind picks the leading glyph.

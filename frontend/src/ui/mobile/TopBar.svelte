@@ -170,7 +170,12 @@
             </div>
         </div>
 
-        <div class="topbar-search" hidden={!searchOpen}>
+        <!-- Collapsed by height rather than `hidden`, so opening it is a
+             movement instead of a jump. `inert` keeps the clipped field out of
+             the tab order and the a11y tree while it is closed, without taking
+             it out of the DOM, which the search controller's binding needs. -->
+        <div class="topbar-search-shell" data-open={searchOpen} inert={!searchOpen}>
+        <div class="topbar-search">
             <SearchIcon class="topbar-search-icon" size={18} strokeWidth={2} aria-hidden="true" />
             <input
                 bind:this={searchInputEl}
@@ -182,6 +187,7 @@
                 spellcheck="false"
                 aria-label="Search files"
             />
+        </div>
         </div>
     </div>
 

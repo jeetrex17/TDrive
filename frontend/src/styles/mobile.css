@@ -9,9 +9,12 @@
  */
 
 html.mobile {
-    /* Everything that floats above the tab bar measures from this, so the bar
-       height lives in one place. Its own box adds the bottom inset on top. */
-    --tabbar-height: 49px;
+    /* Everything that floats above the tab bar measures from these, so the
+       bar's shape lives in one place. The slot adds the bottom inset on top. */
+    --tabbar-height: 64px;
+    /* How far the floating bar sits from the screen edges. */
+    --tabbar-inset: 12px;
+    --fab-size: 56px;
 }
 
 /* The shell root and the tab panels set display:flex, which would otherwise
@@ -218,6 +221,26 @@ html.mobile .topbar-menu-item {
 html.mobile .topbar-menu-item[aria-checked='true'] { color: var(--color-accent); }
 html.mobile .topbar-menu-item:active { background: var(--overlay-neutral-2); }
 
+/* The search band collapses to nothing and grows back. Height is animated to a
+   known value rather than to `auto`, which no engine interpolates, and the
+   field itself fades and settles down so the two read as one movement. */
+html.mobile .topbar-search-shell {
+    height: 0;
+    overflow: hidden;
+    transition: height var(--motion-slow) var(--ease-enter);
+}
+html.mobile .topbar-search-shell[data-open="true"] { height: 52px; }
+html.mobile .topbar-search-shell .topbar-search {
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity var(--motion-med) var(--ease-standard),
+                transform var(--motion-med) var(--ease-standard);
+}
+html.mobile .topbar-search-shell[data-open="true"] .topbar-search {
+    opacity: 1;
+    transform: none;
+}
+
 /* Search field. 16px minimum so iOS does not zoom on focus (spec 2.3). */
 html.mobile .topbar-search {
     position: relative;
@@ -250,16 +273,26 @@ html.mobile .topbar-search input:focus-visible {
 }
 
 /* ============================ TAB BAR ============================ */
-html.mobile .mobile-tabbar-slot { flex: 0 0 auto; }
+/* A floating bar rather than a full-bleed one: it reads as a control resting
+   on the content instead of a wall the content stops at, and the rounded ends
+   echo the file card above it. The upload button is docked into its middle. */
+html.mobile .mobile-tabbar-slot {
+    position: relative;
+    flex: 0 0 auto;
+    padding: 0 var(--tabbar-inset) calc(var(--tabbar-inset) + var(--inset-bottom));
+}
 html.mobile .tab-bar {
     position: relative;
     display: flex;
     align-items: stretch;
-    height: calc(var(--tabbar-height) + var(--inset-bottom));
-    padding-bottom: var(--inset-bottom);
-    background: var(--color-surface-0);
-    border-top: 1px solid var(--color-border-soft);
+    height: var(--tabbar-height);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
 }
+/* Holds open the space the docked button sits in. */
+html.mobile .tab-dock { flex: 0 0 var(--fab-size); }
 html.mobile .tab-item {
     flex: 1 1 0;
     display: flex;
@@ -273,33 +306,43 @@ html.mobile .tab-item {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: color var(--motion-fast) var(--ease-standard);
+    transition: color var(--motion-med) var(--ease-standard);
 }
 html.mobile .tab-item.active { color: var(--color-accent); }
-html.mobile .tab-icon { position: relative; display: inline-grid; place-items: center; }
-html.mobile .tab-label { font-size: 0.6875rem; font-weight: var(--weight-semibold); letter-spacing: 0.01em; }
-
-/* The active indicator slides between the four items (motion-17). */
-html.mobile .tab-indicator {
-    position: absolute;
-    top: 6px;
-    left: 0;
-    width: 25%;
-    height: 32px;
-    pointer-events: none;
-    transition: transform var(--motion-med) var(--ease-standard);
+html.mobile .tab-icon {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    /* The press settles the icon rather than the whole button, so the label
+       underneath stays put and the target never appears to move away. */
+    transition: transform var(--motion-fast) var(--ease-standard);
 }
-html.mobile .tab-indicator::before {
-    content: "";
+html.mobile .tab-item:active .tab-icon { transform: scale(0.9); }
+html.mobile .tab-label {
+    font-size: 0.6875rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.01em;
+}
+
+/* The pill grows into place behind the active icon. Starting at 0.7 rather
+   than 0 keeps it an object that arrives, not one conjured from nothing. */
+html.mobile .tab-pill {
     position: absolute;
-    inset: 0 auto;
     left: 50%;
-    top: 0;
+    top: 50%;
     width: 48px;
     height: 32px;
-    transform: translateX(-50%);
     background: var(--overlay-accent-1);
     border-radius: var(--radius-pill);
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.7);
+    transition: opacity var(--motion-med) var(--ease-enter),
+                transform var(--motion-med) var(--ease-enter);
+}
+html.mobile .tab-item.active .tab-pill {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
 }
 
 html.mobile .tab-badge {
@@ -319,47 +362,46 @@ html.mobile .tab-badge {
     border-radius: var(--radius-pill);
 }
 
-/* ============================ FAB ============================ */
-/* The upload menu portals into #upload-menu-root; the shell positions that host
-   as the FAB and restyles the menu's own trigger into the accent pill. */
+/* ============================ UPLOAD BUTTON ============================ */
+/* Docked into the middle of the tab bar. The upload menu portals into
+   #upload-menu-root; the shell restyles the menu's own trigger into the
+   accent circle. It rides above the bar so its shadow reads against it. */
 html.mobile .mobile-fab {
     position: absolute;
-    right: 16px;
-    /* Clear of the tab bar: the upload button used to sit on top of the
-       Account tab, swallowing taps meant for it. */
-    bottom: calc(var(--tabbar-height) + var(--inset-bottom) + 16px);
-    z-index: var(--z-selection);
-    transition: transform var(--motion-med) var(--ease-standard), opacity var(--motion-med) var(--ease-standard);
-}
-html.mobile .mobile-fab.is-hidden {
-    transform: translateY(140%);
-    opacity: 0;
-    pointer-events: none;
+    left: 50%;
+    /* Centre of the circle sits just above the bar's top edge, so it breaks
+       the bar's outline instead of floating free of it. */
+    bottom: calc(var(--inset-bottom) + var(--tabbar-inset) + var(--tabbar-height)
+                 - var(--fab-size) / 2 - 4px);
+    transform: translateX(-50%);
+    z-index: 1;
 }
 html.mobile .mobile-fab .upload-btn,
 html.mobile .mobile-fab .primary-btn.upload-btn {
-    width: 56px;
-    height: 56px;
+    width: var(--fab-size);
+    height: var(--fab-size);
     padding: 0;
     gap: 0;
     display: inline-grid;
     place-items: center;
     font-size: 0;
+    border: 3px solid var(--color-canvas);
     border-radius: var(--radius-pill);
     background: var(--color-accent);
     color: var(--color-on-accent);
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--shadow-lg);
     transition: transform var(--motion-fast) var(--ease-standard);
 }
-html.mobile .mobile-fab .upload-btn:active { transform: scale(0.97); }
+html.mobile .mobile-fab .upload-btn:active { transform: scale(0.94); }
 html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
 
-/* The FAB menu opens upward as a small sheet anchored to the FAB. */
+/* The menu opens upward from the button, scaled from its own bottom centre so
+   it reads as coming out of the control that was pressed (motion-9). */
 html.mobile .mobile-fab .upload-menu {
     position: absolute;
-    right: 0;
-    bottom: calc(56px + 10px);
-    left: auto;
+    left: 50%;
+    right: auto;
+    bottom: calc(var(--fab-size) + 10px);
     min-width: 220px;
     flex-direction: column;
     padding: var(--space-1);
@@ -367,6 +409,12 @@ html.mobile .mobile-fab .upload-menu {
     border: 1px solid var(--color-border-soft);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
+    transform-origin: bottom center;
+    animation: tdrive-menu-pop var(--motion-med) var(--ease-enter) both;
+}
+@keyframes tdrive-menu-pop {
+    from { opacity: 0; transform: translateX(-50%) scale(0.94); }
+    to { opacity: 1; transform: translateX(-50%) scale(1); }
 }
 html.mobile .mobile-fab .upload-menu-item {
     display: flex;
@@ -662,7 +710,7 @@ html.mobile .mobile-hidden-hosts { display: none; }
 html.mobile #toast-stack.toast-stack {
     left: 50%;
     right: auto;
-    bottom: calc(var(--tabbar-height) + var(--inset-bottom) + 12px);
+    bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
     transform: translateX(-50%);
     width: min(92vw, 420px);
     align-items: stretch;
@@ -687,8 +735,16 @@ html.mobile .topbar-menu-item:focus-visible {
 
 /* ============================ REDUCED MOTION ============================ */
 @media (prefers-reduced-motion: reduce) {
-    html.mobile .tab-indicator,
+    html.mobile .tab-pill,
+    html.mobile .tab-icon,
     html.mobile .mobile-sheet,
     html.mobile .sheet-scrim,
-    html.mobile .mobile-fab { transition: none; }
+    html.mobile .topbar-search-shell,
+    html.mobile .topbar-search-shell .topbar-search,
+    html.mobile .mobile-fab .upload-btn { transition: none; }
+    /* The pill still needs to mark the active tab, so only its movement goes;
+       opacity carries the meaning and stays (design-taste: keep comprehension). */
+    html.mobile .tab-item.active .tab-pill { transform: translate(-50%, -50%) scale(1); }
+    html.mobile .mobile-fab .upload-menu,
+    html.mobile .file-list-box[data-nav] { animation: none; }
 }

@@ -113,10 +113,10 @@ describe('phone file list', () => {
             // The sheet's detail table. Location comes last so the reader ends
             // on where the file lives, which is what a move or rename changes.
             details: [
-                { label: 'Type', value: 'PDF file' },
-                { label: 'Size', value: '1.9 MB' },
-                { label: 'Added', value: expect.any(String) },
-                { label: 'Location', value: expect.any(String) },
+                { label: 'Type', value: 'PDF file', icon: 'type' },
+                { label: 'Size', value: '1.9 MB', icon: 'size' },
+                { label: 'Added', value: expect.any(String), icon: 'added' },
+                { label: 'Location', value: expect.any(String), icon: 'location' },
             ],
         });
         expect(state.selectedItems.size).toBe(0);

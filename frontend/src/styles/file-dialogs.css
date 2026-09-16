@@ -569,7 +569,7 @@ html.mobile .action-sheet-details {
 }
 html.mobile .action-sheet-detail {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: var(--space-4);
     min-height: 40px;
@@ -580,6 +580,9 @@ html.mobile .action-sheet-detail + .action-sheet-detail {
 }
 html.mobile .action-sheet-detail dt {
     flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     margin: 0;
     color: var(--color-text-muted);
     font-size: var(--type-sm);
@@ -587,6 +590,9 @@ html.mobile .action-sheet-detail dt {
 }
 html.mobile .action-sheet-detail dd {
     min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     margin: 0;
     color: var(--color-text);
     font-size: var(--type-sm);
@@ -594,6 +600,9 @@ html.mobile .action-sheet-detail dd {
     text-align: right;
     overflow-wrap: anywhere;
 }
+/* The chevron marks the one line that leads somewhere, so it is muted against
+   the value it follows rather than competing with it. */
+html.mobile .action-sheet-detail dd svg { flex: 0 0 auto; color: var(--color-text-subtle); }
 html.mobile .action-sheet-meta {
     font-size: var(--type-sm);
     color: var(--text-muted);
