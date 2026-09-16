@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onDestroy, tick, type Snippet } from 'svelte';
     import { installModalA11y } from './modal-a11y';
-    import { pushSheet, type SheetHandle } from './sheet-stack';
     import { createSheetDrag, sheetOffset, shouldDismiss, FLICK_SPEED } from './sheet-gesture';
     import { isMobilePlatform } from '../../api';
 
@@ -66,7 +65,6 @@
     let wasOpen = false;
     let swipeExiting = false;
     let closeTimer: ReturnType<typeof setTimeout> | null = null;
-    let sheetHistory: SheetHandle | null = null;
 
     let dragStartY = 0;
     const drag = createSheetDrag();
@@ -155,10 +153,6 @@
             host.setAttribute('aria-hidden', 'false');
         }
         setScrimProgress(1);
-        if (asSheet && !sheetHistory) {
-            // One history entry per open sheet so Android BACK closes it first.
-            sheetHistory = pushSheet(() => onClose());
-        }
         active = true;
         void tick().then(() => {
             if (!open || !active) return;
@@ -178,9 +172,6 @@
     }
 
     function closeTransition(): void {
-        // Give up the history entry we pushed (pops it unless BACK already did).
-        sheetHistory?.release();
-        sheetHistory = null;
         detachViewport();
         if (active) {
             active = false;
@@ -294,8 +285,6 @@
 
     onDestroy(() => {
         clearCloseTimer();
-        sheetHistory?.release();
-        sheetHistory = null;
         detachViewport();
         a11y?.deactivate();
         host?.removeEventListener('click', handleHostClick);

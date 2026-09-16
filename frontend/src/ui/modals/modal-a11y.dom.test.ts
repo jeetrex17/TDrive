@@ -3,6 +3,7 @@ import {
     deactivateModalOwnership,
     installModalA11y,
 } from './modal-a11y';
+import { closeTopSheet, hasOpenSheet } from './sheet-stack';
 
 Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
     configurable: true,
@@ -32,6 +33,7 @@ afterEach(() => {
     cleanups = [];
     elements.forEach((element) => element.remove());
     elements = [];
+    while (closeTopSheet());
 });
 
 describe('modal overlay ownership', () => {
@@ -103,6 +105,73 @@ describe('modal overlay ownership', () => {
         parentA11y.deactivate();
         expect(document.activeElement).toBe(child.control);
         expect(background.inert).toBe(true);
+    });
+
+    // Android BACK is answered from the same place Escape is, so a dialog that
+    // can be dismissed at all can be dismissed with the hardware button.
+    it('answers android back for as long as it is open', () => {
+        const modal = dialog('confirm');
+        const close = vi.fn();
+        const a11y = installModalA11y(modal.host, { requestClose: close });
+        cleanups.push(() => a11y.deactivate());
+
+        expect(hasOpenSheet()).toBe(false);
+        a11y.activate();
+        expect(closeTopSheet()).toBe(true);
+        expect(close).toHaveBeenCalledOnce();
+
+        a11y.deactivate();
+        expect(hasOpenSheet()).toBe(false);
+    });
+
+    it('keeps answering back when a press only dismissed an inner layer', () => {
+        const modal = dialog('player');
+        let playlistOpen = true;
+        const closePlayer = vi.fn();
+        const a11y = installModalA11y(modal.host, {
+            requestClose: () => {
+                if (playlistOpen) {
+                    playlistOpen = false;
+                    return;
+                }
+                closePlayer();
+            },
+        });
+        cleanups.push(() => a11y.deactivate());
+        a11y.activate();
+
+        // First press closes the playlist; the player is still the surface the
+        // next press belongs to.
+        expect(closeTopSheet()).toBe(true);
+        expect(playlistOpen).toBe(false);
+        expect(closePlayer).not.toHaveBeenCalled();
+
+        expect(closeTopSheet()).toBe(true);
+        expect(closePlayer).toHaveBeenCalledOnce();
+    });
+
+    it('stacks nested dialogs so back unwinds them one at a time', () => {
+        const parent = dialog('parent-back');
+        const child = dialog('child-back');
+        const closeParent = vi.fn();
+        const closeChild = vi.fn();
+        const parentA11y = installModalA11y(parent.host, { requestClose: closeParent });
+        const childA11y = installModalA11y(child.host, { requestClose: closeChild });
+        cleanups.push(() => { childA11y.deactivate(); parentA11y.deactivate(); });
+        parentA11y.activate();
+        childA11y.activate();
+
+        expect(closeTopSheet()).toBe(true);
+        expect(closeChild).toHaveBeenCalledOnce();
+        expect(closeParent).not.toHaveBeenCalled();
+    });
+
+    it('stays out of the back stack when it has no close path', () => {
+        const modal = dialog('static');
+        const a11y = installModalA11y(modal.host, {});
+        cleanups.push(() => a11y.deactivate());
+        a11y.activate();
+        expect(hasOpenSheet()).toBe(false);
     });
 
     it('skips inert controls when choosing initial focus', () => {
