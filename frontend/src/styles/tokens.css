@@ -7,14 +7,19 @@
        reads (see ui/mobile/safe-area.ts). Taking the larger of the two lets
        each platform contribute what it actually knows. */
     --inset-top: max(env(safe-area-inset-top, 0px), var(--mobile-inset-top, 0px));
+    /* What the keyboard covers, named on its own for a surface that sits above
+       it by shortening itself rather than by padding. Such a surface reserves
+       the rest with --inset-bottom minus this, which is nothing while the
+       keyboard is up. Published by ui/mobile/keyboard-insets.ts, the only thing
+       that measures it. */
+    --inset-keyboard: var(--mobile-keyboard-inset, 0px);
     /* The keyboard joins the same max(): an open keyboard already covers the
        gesture area, so the larger of the two is the reserved height and adding
-       them would push content up by a bar that is not there.
-       See ui/mobile/keyboard-insets.ts. */
+       them would push content up by a bar that is not there. */
     --inset-bottom: max(
         env(safe-area-inset-bottom, 0px),
         var(--mobile-inset-bottom, 0px),
-        var(--mobile-keyboard-inset, 0px)
+        var(--inset-keyboard)
     );
     /* The side edges only go unusable in landscape, where the notch takes one
        of them and the home indicator rotates to the other. Nothing publishes

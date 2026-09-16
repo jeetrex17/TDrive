@@ -15,7 +15,6 @@
         authSubmission,
         type AuthFlow,
     } from './auth-store';
-    import { keyboardInset } from './keyboard-inset';
     import { personalDriveSetup } from './personal-drive-store';
     import PersonalDriveSetup from './PersonalDriveSetup.svelte';
     import { installUpdate, openReleasePage } from '../../modules/updates';
@@ -188,7 +187,6 @@
         aria-busy={$authSubmission.setup.busy}
         novalidate
         onsubmit={(event) => submit(event, 'setup', () => onSetup(apiId, apiHash))}
-        use:keyboardInset
     >
         <div class="auth-page-body">
             <div class="auth-icon-box">
@@ -290,7 +288,6 @@
         aria-busy={$authSubmission.phone.busy}
         novalidate
         onsubmit={(event) => submit(event, 'phone', () => onPhone(phone))}
-        use:keyboardInset
     >
         <div class="auth-page-body">
             <div class="auth-icon-box">
@@ -338,7 +335,6 @@
         aria-busy={$authSubmission.code.busy}
         novalidate
         onsubmit={(event) => submit(event, 'code', () => onCode(code))}
-        use:keyboardInset
     >
         <div class="auth-page-body">
             <div class="auth-icon-box">
@@ -394,7 +390,6 @@
         aria-busy={$authSubmission.password.busy}
         novalidate
         onsubmit={(event) => submit(event, 'password', () => onPassword(password))}
-        use:keyboardInset
     >
         <div class="auth-page-body">
             <div class="auth-icon-box">
