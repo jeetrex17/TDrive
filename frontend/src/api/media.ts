@@ -36,6 +36,11 @@ export interface MediaOpenResult {
     token: string;
     url: string;
     thumbnailUrl: string;
+    /**
+     * An HLS playlist backed by an on-demand remux, set only for a container
+     * Apple platforms cannot open. Empty for every file a player takes directly.
+     */
+    hlsUrl: string;
     name: string;
     kind: string;
     mimeType: string;
@@ -131,6 +136,7 @@ function normalizeMediaOpenResult(opened?: OpenResult): MediaOpenResult {
         token: String(opened?.token ?? ""),
         url: String(opened?.url ?? ""),
         thumbnailUrl: String(opened?.thumbnail_url ?? ""),
+        hlsUrl: String(opened?.hls_url ?? ""),
         name: String(opened?.name ?? ""),
         kind: String(opened?.kind ?? ""),
         mimeType: String(opened?.mime_type ?? ""),

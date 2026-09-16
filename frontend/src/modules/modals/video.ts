@@ -17,7 +17,7 @@ import {
 } from "../../api";
 
 import { formatBytes } from "../../utils";
-import { isIOSPlayableVideo, isWebviewDirectVideo, videoFormatLabel } from "../media-types";
+import { isIOSPlayableVideo, isRemuxableVideo, isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { appActions } from "../app-actions";
 import { prefersNativePlayer, rememberNativePlayer } from "../video/native-memory";
 import {
@@ -41,6 +41,7 @@ import {
     clampPlaybackRate,
     type PlayerAdapter,
     type PlayerState,
+    type TrackSwitching,
 } from "../video/player-adapters";
 import { MediaPrefetcher, readyToPrefetch, warmMediaEdges } from "../video/video-prefetch";
 import { VideoGeometryController } from "../video/video-geometry";
@@ -367,9 +368,13 @@ function clearStreamActivity() {
  * the failure might not recur. A failure that will repeat identically forever
  * gets an action that can actually help instead.
  */
-let errorPrimaryAction: { label: string; run: () => void } | null = null;
+// ErrorAction is the one thing an error offers the reader beyond Retry, for the
+// failures where retrying is not the answer.
+type ErrorAction = { label: string; run: () => void };
 
-function setError(message: string, primary: { label: string; run: () => void } | null = null) {
+let errorPrimaryAction: ErrorAction | null = null;
+
+function setError(message: string, primary: ErrorAction | null = null) {
     hasError = true;
     errorPrimaryAction = primary;
     if (errorRetryBtnEl) errorRetryBtnEl.textContent = primary ? primary.label : "Retry";
@@ -440,8 +445,18 @@ function syncSpeed(state: PlayerState) {
 
 // Keep available audio and subtitle tracks discoverable, even with one track. A pill appearing changes the
 // controls height, so the native viewport is re-measured.
+// trackSwitchingPlayer is the active player when it is one the pills can drive.
+// A standalone native window owns its own controls, so the pills do not apply
+// to it even though mpv is behind it.
+function trackSwitchingPlayer(): TrackSwitching | null {
+    if (activeNative && activeNative.presentation === "standalone") return null;
+    if (activeAdapter instanceof NativeMpvAdapter) return activeAdapter;
+    if (activeAdapter instanceof HtmlVideoAdapter) return activeAdapter;
+    return null;
+}
+
 function syncNativeTracks(tracks: NativeMediaTrack[]) {
-    const available = Boolean(activeNative && activeNative.presentation !== "standalone");
+    const available = trackSwitchingPlayer() !== null;
     const audio = tracks.filter((track) => track.type === "audio");
     const subtitles = tracks.filter((track) => track.type === "subtitle");
     const selectedCodec = subtitles.find((track) => track.selected)?.codec?.toLowerCase() ?? "";
@@ -469,7 +484,7 @@ class TrackPicker {
     constructor(
         private readonly title: string,
         private readonly offLabel: string | null,
-        private readonly apply: (adapter: NativeMpvAdapter, id: number | null) => void,
+        private readonly apply: (player: TrackSwitching, id: number | null) => void,
         private readonly els: TrackPickerElements,
     ) {
         els.button?.addEventListener("click", (event) => {
@@ -574,10 +589,12 @@ class TrackPicker {
     }
 
     private select(id: number | null) {
-        if (!(activeAdapter instanceof NativeMpvAdapter)) return;
+        const player = trackSwitchingPlayer();
+        if (!player) return;
         if (id !== null && !this.tracks.some((track) => track.id === id)) return;
-        this.apply(activeAdapter, id);
-        // Reflect the choice immediately; mpv confirms it on the next state event.
+        this.apply(player, id);
+        // Reflect the choice immediately; the player confirms it on the next
+        // state event.
         this.tracks = this.tracks.map((track) => ({ ...track, selected: track.id === id }));
         this.syncSelection();
         revealChrome();
@@ -1341,10 +1358,28 @@ function handleHtmlMediaError(
         : undecodable
             ? "This video can't be played on this device."
             : "The embedded player could not continue playing this video. Try again.";
+    // A repackaged container that still will not decode has nothing left to
+    // retry: the streams inside are ones this device has no decoder for. Point
+    // at the one thing that can still work rather than at a button that cannot.
+    const action = undecodable && isRemuxableVideo(attempt.target.name)
+        ? downloadInstead(attempt.target)
+        : null;
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
-        if (isCurrent()) setError(message);
+        if (isCurrent()) setError(message, action);
     });
+}
+
+// downloadInstead is the escape from a file this device cannot play: the share
+// sheet hands it to an app that can.
+function downloadInstead(target: VideoOpenTarget): ErrorAction {
+    return {
+        label: "Download",
+        run: () => {
+            appActions().downloadFile({ id: target.id, name: target.name, size: target.size || 0 });
+            void closeVideoModal();
+        },
+    };
 }
 
 async function promoteHtmlToNative(
@@ -1530,19 +1565,17 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     a11y?.activate();
     void geometry?.syncFullscreenState();
 
-    // A container iOS cannot demux will fail no matter how long it is given, so
-    // do not open a media session for it: that would spend Telegram bandwidth
-    // and API calls to reach a guaranteed failure, and leave the reader looking
-    // at a Retry button that can never work. Offer the download instead, which
-    // hands the file to the share sheet and on to a player that can open it.
-    if (isIOSPlatform() && !isIOSPlayableVideo(target.name)) {
+    // A container iOS cannot demux and the backend will not repackage fails no
+    // matter how long it is given, so do not open a media session for it: that
+    // would spend Telegram bandwidth and API calls to reach a guaranteed
+    // failure, and leave the reader looking at a Retry button that can never
+    // work. Offer the download instead, which hands the file to the share sheet
+    // and on to a player that can open it.
+    if (isIOSPlatform() && !isIOSPlayableVideo(target.name) && !isRemuxableVideo(target.name)) {
         const format = videoFormatLabel(target.name);
         setError(
             `iOS cannot open ${format} files. Download it to play in another app.`,
-            { label: 'Download', run: () => {
-                appActions().downloadFile({ id: target.id, name: target.name, size: target.size || 0 });
-                void closeVideoModal();
-            } },
+            downloadInstead(target),
         );
         return;
     }
@@ -1953,13 +1986,13 @@ export function activateVideoModal(): () => void {
         speedButton: speedBtnEl,
         speedMenu: speedMenuEl,
     } = videoDOM);
-    audioPicker = new TrackPicker("Audio", null, (adapter, id) => {
-        if (id !== null) adapter.setAudioTrack(id);
+    audioPicker = new TrackPicker("Audio", null, (player, id) => {
+        if (id !== null) player.setAudioTrack(id);
     }, videoDOM.audioPicker);
     subtitlePicker = new TrackPicker(
         "Subtitles",
         "Off",
-        (adapter, id) => adapter.setSubtitleTrack(id),
+        (player, id) => player.setSubtitleTrack(id),
         videoDOM.subtitlePicker,
     );
 

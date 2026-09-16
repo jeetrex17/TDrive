@@ -209,6 +209,7 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		Token:         session.Token(),
 		URL:           session.URL(),
 		ThumbnailURL:  session.ThumbnailURL(),
+		HLSURL:        session.HLSURL(),
 		Name:          file.Name,
 		Kind:          kind,
 		MimeType:      contentTypeFor(file.Name),
@@ -266,7 +267,7 @@ func (s *Service) OpenResultForToken(token string) (OpenResult, error) {
 	if session == nil {
 		return OpenResult{}, ErrSessionNotFound
 	}
-	token, url, thumbnailURL, file, ok := session.openSnapshot()
+	token, url, thumbnailURL, hlsURL, file, ok := session.openSnapshot()
 	if !ok {
 		return OpenResult{}, ErrSessionNotFound
 	}
@@ -275,6 +276,7 @@ func (s *Service) OpenResultForToken(token string) (OpenResult, error) {
 		Token:         token,
 		URL:           url,
 		ThumbnailURL:  thumbnailURL,
+		HLSURL:        hlsURL,
 		Name:          file.Name,
 		Kind:          kind,
 		MimeType:      contentTypeFor(file.Name),

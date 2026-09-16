@@ -118,6 +118,19 @@ export function isIOSPlayableVideo(name: string): boolean {
     return IOS_PLAYABLE_EXTENSIONS.has(fileExtension(name));
 }
 
+/**
+ * Containers the backend will repackage into HLS on the way out, which is how
+ * an MKV plays on a device with no Matroska demuxer. This mirrors needsRemux in
+ * backend/media/hls.go: a container question, not a codec one. Whether the
+ * streams inside can be copied is decided by the remuxer, which is the only
+ * thing that has actually looked at them.
+ */
+const REMUXABLE_EXTENSIONS = new Set(["mkv", "mk3d"]);
+
+export function isRemuxableVideo(name: string): boolean {
+    return REMUXABLE_EXTENSIONS.has(fileExtension(name));
+}
+
 export function videoFormatLabel(name: string): string {
     const ext = fileExtension(name);
     return ext ? ext.toUpperCase() : "VIDEO";

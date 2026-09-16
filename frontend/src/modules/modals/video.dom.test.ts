@@ -62,6 +62,7 @@ function mediaOpenResult(id: number, token: string) {
         token,
         url: `http://127.0.0.1/media/file/${token}`,
         thumbnailUrl: "",
+        hlsUrl: "",
         name: `clip-${id}.mp4`,
         kind: "video",
         mimeType: "video/mp4",
@@ -1740,21 +1741,41 @@ describe("video on a phone", () => {
         expect(apiMocks.openNativeMedia).not.toHaveBeenCalled();
     });
 
-    it("on iOS refuses a container it cannot demux without opening a session", async () => {
-        // Apple ships no Matroska demuxer, so this can only ever fail. Opening
-        // a media session would spend Telegram bandwidth to reach that failure
-        // and leave a Retry button that is guaranteed not to work.
+    it("on iOS refuses a container nothing can open without opening a session", async () => {
+        // AVI is neither something AVFoundation demuxes nor something the
+        // backend repackages, so this can only ever fail. Opening a media
+        // session would spend Telegram bandwidth to reach that failure and
+        // leave a Retry button that is guaranteed not to work.
         apiMocks.isMobilePlatform.mockReturnValue(true);
         apiMocks.isIOSPlatform.mockReturnValue(true);
 
         const videoModule = await import("./video");
         deactivateVideo = videoModule.activateVideoModal();
-        await videoModule.openVideoModal({ id: 31, name: "movie-31.mkv", size: 2048 });
+        await videoModule.openVideoModal({ id: 31, name: "movie-31.avi", size: 2048 });
 
         expect(apiMocks.openMedia).not.toHaveBeenCalled();
         const error = document.querySelector("#video-error");
-        expect(error?.textContent).toContain("MKV");
+        expect(error?.textContent).toContain("AVI");
         expect(document.querySelector("#video-error-retry")?.textContent).toBe("Download");
+    });
+
+    it("on iOS opens a session for Matroska so the backend can repackage it", async () => {
+        // The device has no Matroska demuxer, but the backend hands it HLS, so
+        // refusing here would turn a playable file into a dead end.
+        apiMocks.isMobilePlatform.mockReturnValue(true);
+        apiMocks.isIOSPlatform.mockReturnValue(true);
+        apiMocks.openMedia.mockResolvedValue({
+            ...mediaOpenResult(31, "ios-mkv-token"),
+            hlsUrl: "http://127.0.0.1/media/hls/ios-mkv-token/index.m3u8",
+        });
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 31, name: "movie-31.mkv", size: 2048 });
+
+        expect(apiMocks.openMedia).toHaveBeenCalledOnce();
+        const video = document.querySelector<HTMLVideoElement>("#video-player");
+        expect(video?.src).toBe("http://127.0.0.1/media/hls/ios-mkv-token/index.m3u8");
     });
 
     it("on iOS still plays a container it can demux", async () => {
