@@ -17,6 +17,33 @@
 
     let { onDismiss, onPauseToast, onResumeToast, onPauseAll, onResumeAll }: Props = $props();
 
+    /**
+     * Hovering holds a toast open so it can be read. A finger cannot hover, and
+     * a touch host says so badly: tapping fires mouseenter with no matching
+     * mouseleave until the next tap somewhere else, which on a phone leaves the
+     * countdown frozen and the toast on screen for good. The stack sits right
+     * above the tab bar, so that tap happens constantly.
+     *
+     * Pointer events carry the answer with them, so the pause is taken only
+     * from something that can really hover and really leave.
+     */
+    function hovering(event: PointerEvent): boolean {
+        return event.pointerType !== 'touch';
+    }
+
+    /**
+     * A finger gets the whole toast as its dismiss target rather than the 
+     * close button alone, because a notice that has been read is in the way,
+     * and aiming at a small × above the tab bar to say so is work. A pointer
+     * keeps the button: there, the toast may hold a link or a Retry, and a
+     * click that swallows the surface would take those with it.
+     */
+    function tapToDismiss(event: PointerEvent, id: string): void {
+        if (event.pointerType !== 'touch') return;
+        if ((event.target as HTMLElement | null)?.closest('button')) return;
+        onDismiss(id);
+    }
+
 
 
 </script>
@@ -25,16 +52,17 @@
 <div
     class="toast-stack-inner"
     style="display: contents;"
-    onmouseenter={onPauseAll}
-    onmouseleave={onResumeAll}
+    onpointerenter={(event) => { if (hovering(event)) onPauseAll(); }}
+    onpointerleave={(event) => { if (hovering(event)) onResumeAll(); }}
 >
     {#each $toasts as toast (toast.id)}
         <div
             class={`toast toast-${toast.level}`}
             data-id={toast.id}
             role={toast.level === 'error' ? 'alert' : 'status'}
-            onmouseenter={() => onPauseToast(toast.id)}
-            onmouseleave={() => onResumeToast(toast.id)}
+            onpointerenter={(event) => { if (hovering(event)) onPauseToast(toast.id); }}
+            onpointerleave={(event) => { if (hovering(event)) onResumeToast(toast.id); }}
+            onpointerup={(event) => tapToDismiss(event, toast.id)}
         >
             <span class="toast-icon" aria-hidden="true">
                 {#if toast.spinner}
