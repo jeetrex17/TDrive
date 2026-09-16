@@ -395,43 +395,83 @@ html.mobile .mobile-fab .primary-btn.upload-btn {
 html.mobile .mobile-fab .upload-btn:active { transform: scale(0.94); }
 html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
 
-/* The menu opens upward from the button, scaled from its own bottom centre so
-   it reads as coming out of the control that was pressed (motion-9). */
-html.mobile .mobile-fab .upload-menu {
-    position: absolute;
-    left: 50%;
-    right: auto;
-    bottom: calc(var(--fab-size) + 10px);
-    min-width: 220px;
+/* The upload menu is a bottom sheet on a phone, not a popover. The trigger is
+   docked in the middle of the tab bar against the bottom safe area, so there is
+   no room to anchor a popover to it without covering the bar. A sheet is also
+   the surface the row actions and the drive switcher already use, so the phone
+   keeps one way of asking a question. */
+html.mobile .upload-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    background: var(--scrim);
+    animation: tdrive-scrim-in var(--motion-med) var(--ease-standard) both;
+}
+html.mobile .mobile-fab .upload-menu.is-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: calc(var(--z-modal) + 1);
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto;
     flex-direction: column;
-    padding: var(--space-1);
-    background: var(--color-surface-1);
-    border: 1px solid var(--color-border-soft);
-    border-radius: var(--radius-lg);
+    gap: 2px;
+    padding: 0 var(--space-4) calc(var(--space-4) + var(--inset-bottom));
+    background: var(--color-surface-0);
+    border: 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     box-shadow: var(--shadow-lg);
-    transform-origin: bottom center;
-    animation: tdrive-menu-pop var(--motion-med) var(--ease-enter) both;
+    animation: tdrive-sheet-enter var(--motion-slow) var(--ease-enter) both;
 }
-@keyframes tdrive-menu-pop {
-    from { opacity: 0; transform: translateX(-50%) scale(0.94); }
-    to { opacity: 1; transform: translateX(-50%) scale(1); }
+html.mobile .mobile-fab .upload-menu.is-sheet .sheet-handle {
+    display: grid;
+    place-items: center;
+    padding: var(--space-2) 0 var(--space-3);
 }
-html.mobile .mobile-fab .upload-menu-item {
+html.mobile .mobile-fab .upload-menu.is-sheet .sheet-handle span {
+    display: block;
+    width: 36px;
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-border);
+}
+html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-item {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-3);
     width: 100%;
-    min-height: 48px;
-    padding: 0 14px;
+    min-height: 52px;
+    padding: 0 var(--space-2);
     border: 0;
+    border-radius: var(--radius-md);
     background: transparent;
-    color: var(--color-text-soft);
-    font-size: 0.9375rem;
+    color: var(--color-text);
+    font-size: var(--type-md);
+    font-weight: var(--weight-semibold);
     text-align: left;
-    border-radius: var(--radius-sm);
     cursor: pointer;
 }
-html.mobile .mobile-fab .upload-menu-item:active { background: var(--overlay-neutral-2); color: var(--color-text); }
+html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-item:active {
+    background: var(--overlay-neutral-2);
+}
+html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-cancel {
+    width: 100%;
+    min-height: 48px;
+    margin-top: var(--space-2);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-md);
+    background: var(--overlay-white-1);
+    color: var(--color-text);
+    font-size: var(--type-md);
+    font-weight: var(--weight-strong);
+    cursor: pointer;
+}
+html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-cancel:active {
+    background: var(--overlay-neutral-2);
+}
 
 /* ============================ SELECTION BAR ============================ */
 /* The controller flips display:flex/none inline; the shell only positions it as
@@ -746,5 +786,6 @@ html.mobile .topbar-menu-item:focus-visible {
        opacity carries the meaning and stays (design-taste: keep comprehension). */
     html.mobile .tab-item.active .tab-pill { transform: translate(-50%, -50%) scale(1); }
     html.mobile .mobile-fab .upload-menu,
+    html.mobile .upload-scrim,
     html.mobile .file-list-box[data-nav] { animation: none; }
 }
