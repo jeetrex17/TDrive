@@ -173,7 +173,18 @@ tasks:
         APP="{{.BIN_DIR}}/{{.APP_NAME}}.app"
         BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")
         xcrun simctl terminate booted "$BUNDLE_ID" 2>/dev/null || true
-        xcrun simctl uninstall booted "$BUNDLE_ID" 2>/dev/null || true
+        # Install over the existing app rather than uninstalling first.
+        # simctl uninstall deletes the whole data container, which on this app
+        # means the Telegram session, the config and the SQLite projection --
+        # so every dev run used to land on the login screen and cost a fresh
+        # sign-in. Installing over keeps the container and still replaces the
+        # binary and the web assets.
+        #
+        # Set IOS_CLEAN=1 when you actually want a first-run state.
+        if [ "${IOS_CLEAN:-0}" = "1" ]; then
+          echo "IOS_CLEAN=1: wiping the app container (session, config, database)"
+          xcrun simctl uninstall booted "$BUNDLE_ID" 2>/dev/null || true
+        fi
         xcrun simctl install booted "$APP"
         xcrun simctl launch booted "$BUNDLE_ID"
 
@@ -335,7 +346,12 @@ tasks:
         DEV_APP="{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
         BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$DEV_APP/Info.plist")
         xcrun simctl terminate booted "$BUNDLE_ID" 2>/dev/null || true
-        xcrun simctl uninstall booted "$BUNDLE_ID" 2>/dev/null || true
+        # Keep the data container across runs so a dev build does not cost a
+        # fresh Telegram sign-in every time; IOS_CLEAN=1 wipes it on purpose.
+        if [ "${IOS_CLEAN:-0}" = "1" ]; then
+          echo "IOS_CLEAN=1: wiping the app container (session, config, database)"
+          xcrun simctl uninstall booted "$BUNDLE_ID" 2>/dev/null || true
+        fi
         xcrun simctl install booted "$DEV_APP"
         xcrun simctl launch booted "$BUNDLE_ID"
 
