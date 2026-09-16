@@ -8,7 +8,7 @@
 // It is a module singleton because the caches must outlive any single render:
 // scrolling away and back, or switching drives and returning, reuses thumbs.
 
-import { getThumbnail } from '../../api';
+import { getThumbnail, isMobilePlatform } from '../../api';
 
 // Soft cap on the in-memory thumbnail-URL map (keyed channelId:msgId). The
 // backend disk cache makes a re-fetch cheap, so this only bounds bookkeeping.
@@ -130,7 +130,9 @@ export function rearmLocked(): void {
     for (const handle of handles.values()) {
         if (handle.status !== 'locked') continue;
         handle.status = 'idle';
-        handle.apply({ status: 'idle' });
+        // Clear the "locked" detail too: it outlived the lock and kept reading
+        // as locked on a photo that had since decrypted.
+        handle.apply({ status: 'idle', title: '' });
         observer?.observe(handle.node);
     }
 }
@@ -197,7 +199,7 @@ async function loadCell(handle: CellHandle): Promise<void> {
         if (channelId !== currentChannelId || handles.get(handle.node) !== handle) return;
         if (/password required/i.test(String(err))) {
             handle.status = 'locked';
-            handle.apply({ status: 'locked', title: 'locked, click to unlock' });
+            handle.apply({ status: 'locked', title: isMobilePlatform() ? 'locked, tap to unlock' : 'locked, click to unlock' });
             return;
         }
         const delay = retryDelay(err, handle.attempt);

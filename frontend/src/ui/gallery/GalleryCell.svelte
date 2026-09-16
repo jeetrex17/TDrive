@@ -52,6 +52,8 @@
     const cellClass = $derived(
         `gallery-cell${status === 'loaded' ? ' is-loaded' : ''}${status === 'loading' ? ' is-loading' : ''}${status === 'failed' ? ' is-failed' : ''}${status === 'locked' ? ' is-locked' : ''}${selected ? ' is-selected' : ''}`,
     );
+    // The label carries the detail too: a locked or broken cell has to say so
+    // out loud, and a phone has no tooltip to fall back on.
     const title = $derived(detail ? `${item.name} — ${detail}` : item.name);
 </script>
 
@@ -62,7 +64,7 @@
     data-index={index}
     data-name={item.name}
     {title}
-    aria-label={item.name}
+    aria-label={title}
     aria-pressed={selecting ? selected : undefined}
     use:register={item.msgId}
 >
@@ -71,6 +73,9 @@
         <span class="gallery-lock">
             <LockKeyholeIcon size={13} strokeWidth={2} aria-hidden="true" />
         </span>
+    {/if}
+    {#if mobile && status === 'locked'}
+        <span class="gallery-locked-pill" aria-hidden="true">Locked</span>
     {/if}
     {#if status === 'failed'}
         <span class="gallery-broken">

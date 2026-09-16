@@ -12,6 +12,7 @@ const thumbnails = vi.hoisted(() => ({
 
 vi.mock('../../api', () => ({
     getThumbnail: (msgId: number) => thumbnails.resolver(msgId),
+    isMobilePlatform: () => false,
 }));
 
 // Manual IntersectionObserver: records observed nodes and exposes a trigger to
@@ -94,6 +95,24 @@ describe('gallery-controller', () => {
 
         expect(second.last()).toEqual({ status: 'loaded', src: 'data:url:20' });
         expect(calls).not.toHaveBeenCalled();
+    });
+
+    it('drops the locked detail when the vault unlocks', async () => {
+        thumbnails.resolver = () => Promise.reject(new Error('password required'));
+        const cell = makeCell(40);
+        controller.registerCell(cell.node, { msgId: 40, apply: cell.apply });
+        fireIntersect(cell.node);
+        await flush();
+        expect(cell.last()).toEqual({ status: 'locked', title: 'locked, click to unlock' });
+
+        thumbnails.resolver = (msgId: number) => Promise.resolve(`data:url:${msgId}`);
+        controller.rearmLocked();
+        // Without this the cell still read as locked after it had decrypted.
+        expect(cell.last()).toEqual({ status: 'idle', title: '' });
+
+        fireIntersect(cell.node);
+        await flush();
+        expect(cell.last()).toEqual({ status: 'loaded', src: 'data:url:40' });
     });
 
     it('discards a load whose cell was unregistered mid-flight', async () => {
