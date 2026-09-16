@@ -369,11 +369,15 @@ html.mobile .tab-badge {
 html.mobile .mobile-fab {
     position: absolute;
     left: 50%;
+    /* Centred with a negative margin rather than translateX(-50%). A transform
+       on this host would make it the containing block for any position:fixed
+       descendant, which silently reduces the upload sheet inside it from the
+       viewport to this 56px circle. */
+    margin-left: calc(var(--fab-size) / -2);
     /* Centre of the circle sits just above the bar's top edge, so it breaks
        the bar's outline instead of floating free of it. */
     bottom: calc(var(--inset-bottom) + var(--tabbar-inset) + var(--tabbar-height)
                  - var(--fab-size) / 2 - 4px);
-    transform: translateX(-50%);
     z-index: 1;
 }
 html.mobile .mobile-fab .upload-btn,
