@@ -789,6 +789,75 @@ html.mobile .topbar-menu-item:focus-visible {
     border-radius: var(--radius-md);
 }
 
+/* ============================ ITEM STATUS ============================ */
+/* The offline/sync badge at a row's trailing edge (ui/mobile/item-state.ts).
+   It sits in its own cell between the name and the overflow button, so it can
+   never take width from the name: a long filename ellipsises against a column
+   that is always the same width, rather than jumping as a transfer starts and
+   stops. */
+html.mobile .row-status {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Matches the overflow button's box so the two trailing controls line up
+       down the list even though only one of them is always present. */
+    width: 28px;
+}
+
+html.mobile .item-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-text-muted);
+}
+
+/* Three tones, each meaning one thing. Anything not moving and not broken
+   stays muted, so the eye only stops where something is actually happening. */
+html.mobile .item-status[data-tone="accent"] { color: var(--color-accent); }
+html.mobile .item-status[data-tone="danger"] { color: var(--color-danger); }
+
+/* Only the badge that opens the queue is a button, and only it grows a touch
+   target; the inert ones must not look pressable. */
+html.mobile .item-status.is-tappable {
+    width: 44px;
+    height: 44px;
+    margin: -8px -8px -8px 0;
+    cursor: pointer;
+}
+
+html.mobile .item-status[data-spins="true"] svg {
+    animation: tdrive-item-status-spin 1.4s linear infinite;
+}
+
+@keyframes tdrive-item-status-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* The second line only the two states that need a decision get. Everything
+   else stays on the standard row height, which is what keeps an ordinary list
+   scanning evenly. */
+html.mobile .row-explain {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--type-xs);
+    line-height: 1.35;
+    color: var(--color-text-muted);
+}
+
+html.mobile .row-explain[data-tone="danger"] { color: var(--color-danger); }
+
+html.mobile .file-row.needs-explanation { min-height: 84px; }
+
+html.mobile .item-status.is-tappable:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -6px;
+    border-radius: var(--radius-md);
+}
+
 /* ============================ REDUCED MOTION ============================ */
 @media (prefers-reduced-motion: reduce) {
     html.mobile .tab-pill,
@@ -804,4 +873,7 @@ html.mobile .topbar-menu-item:focus-visible {
     html.mobile .mobile-fab .upload-menu,
     html.mobile .upload-scrim,
     html.mobile .file-list-box[data-nav] { animation: none; }
+    /* The status glyph stops turning; its shape and tone already say which
+       state it is, so nothing is lost by holding it still. */
+    html.mobile .item-status[data-spins="true"] svg { animation: none; }
 }
