@@ -59,13 +59,23 @@ export function nativeTrackLabel(track: NativeMediaTrack, index: number): string
 }
 
 // shortNativeTrackLabel fits a track into a pill button: the language code when
-// mpv knows it, otherwise a trimmed title, otherwise the track's position.
+// the file names one, otherwise a trimmed title.
+//
+// A track that carries neither gets no label at all. The fallbacks that used to
+// fill the gap, a position or a generic name, said nothing the pill's own icon
+// and place did not already say, while being long enough to push the row onto a
+// second line on a phone. The full description is one tap away in the settings
+// sheet, which is where a name belongs.
 export function shortNativeTrackLabel(track: NativeMediaTrack, index: number): string {
     const language = formatLanguage(track.language);
     if (language && language.length <= 5) return language;
-    if (track.title) return track.title.length <= 12 ? track.title : `${track.title.slice(0, 11).trimEnd()}…`;
-    return `#${index + 1}`;
+    if (!track.title || GENERIC_TITLE.test(track.title)) return "";
+    return track.title.length <= 12 ? track.title : `${track.title.slice(0, 11).trimEnd()}…`;
 }
+
+// Titles a muxer invents when the file names nothing, which carry no more than
+// the pill's position already does.
+const GENERIC_TITLE = /^(audio|subtitle|subtitles|track|stream)\s*\d*$/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return Boolean(value && typeof value === "object" && !Array.isArray(value));

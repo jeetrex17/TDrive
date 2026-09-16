@@ -25,6 +25,7 @@ const apiMocks = vi.hoisted(() => ({
     fullscreenAvailable: vi.fn(() => true),
     isMobilePlatform: vi.fn(() => false),
     isIOSPlatform: vi.fn(() => false),
+    isAndroidPlatform: vi.fn(() => false),
     isFullscreen: vi.fn(async () => false),
     onRuntimeEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
         runtimeMocks.eventsOn(name, callback);
@@ -153,6 +154,7 @@ beforeEach(async () => {
     apiMocks.updateMediaPlayback.mockResolvedValue(undefined);
     apiMocks.isMobilePlatform.mockReturnValue(false);
     apiMocks.isIOSPlatform.mockReturnValue(false);
+    apiMocks.isAndroidPlatform.mockReturnValue(false);
 
     const videoModule = await import('./video');
     videoModule.updatePlaybackPreferences({ ...DEFAULT_PLAYBACK_PREFERENCES });

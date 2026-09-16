@@ -4,6 +4,7 @@ import {
     closeMedia,
     closeNativeMedia,
     getMediaStats,
+    isAndroidPlatform,
     isIOSPlatform,
     isMobilePlatform,
     onRuntimeEvent,
@@ -43,6 +44,7 @@ import {
     type PlayerState,
     type TrackSwitching,
 } from "../video/player-adapters";
+import { attachHls, prefersJsPlayer, type HlsSource } from "../video/hls-source";
 import { MediaPrefetcher, readyToPrefetch, warmMediaEdges } from "../video/video-prefetch";
 import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
@@ -649,12 +651,18 @@ export function updatePlaybackPreferences(value: PlaybackPreferences): void {
 
 const PICTURE_MODES: PictureMode[] = ["fit", "fill", "original", "16:9", "4:3"];
 const PICTURE_LABELS: Record<PictureMode, string> = { fit: "Fit", fill: "Fill", original: "Original", "16:9": "16:9", "4:3": "4:3" };
+// A phone's control row is a few hundred pixels wide and every pill on it
+// competes for the same space. "Original" alone is wide enough to push the row
+// onto a second line, so the pill says the short form and the description the
+// button announces stays the full one.
+const PICTURE_PILL_LABELS: Record<PictureMode, string> = { ...PICTURE_LABELS, original: "Orig" };
 
 function syncAspectButton() {
     const button = byID("video-aspect-button");
     if (!button) return;
-    const label = PICTURE_LABELS[playbackPreferences.pictureMode];
-    button.textContent = label;
+    const mode = playbackPreferences.pictureMode;
+    const label = PICTURE_LABELS[mode];
+    button.textContent = isMobilePlatform() ? PICTURE_PILL_LABELS[mode] : label;
     button.title = `Video fit: ${label}. Click to cycle`;
     button.setAttribute("aria-label", button.title);
 }
@@ -1286,6 +1294,20 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             throw new Error("media session did not return a playable URL");
         }
 
+        // Android's Chromium can neither list a file's soundtracks nor switch
+        // between them, so a file that carries more than one is handed to a
+        // JavaScript player pointed at the same remuxed playlist iOS uses. A
+        // file with one soundtrack keeps the native path, which is faster and
+        // has nothing to gain from the detour.
+        let hlsSource: HlsSource | null = null;
+        if (opened.hlsUrl && isAndroidPlatform() && await prefersJsPlayer(opened.hlsUrl)) {
+            if (!isCurrent() || !isOpen()) {
+                await safelyCloseMedia(opened.token);
+                return;
+            }
+            hlsSource = await attachHls(videoEl!, opened.hlsUrl, () => adapter?.refresh());
+        }
+
         const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
         updateMediaText(displayName, displaySize);
@@ -1299,7 +1321,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             playbackError: handleHtmlPlaybackError,
             revealChrome,
             mediaEnded: () => handleNaturalMediaEnd(attempt, adapter!),
-        });
+        }, hlsSource);
         activeAdapter = adapter;
         unsubscribeState = adapter.subscribe((state) => {
             if (!isCurrent() || activeAdapter !== adapter) return;
