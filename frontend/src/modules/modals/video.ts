@@ -1060,6 +1060,18 @@ async function safelyCloseNativeMedia(token: string) {
     }
 }
 
+// The phone shows the first-frame thumbnail, blurred, until the stream paints
+// (design-5). It is fetched off the element first: a poster the element cannot
+// load fires `error` on the video, and the thumbnail endpoint has no mpv
+// behind it on the phones.
+function preloadPoster(url: string, token: string) {
+    const image = new Image();
+    image.onload = () => {
+        if (videoEl && isOpen() && activeMediaToken === token) videoEl.poster = url;
+    };
+    image.src = url;
+}
+
 function updateMediaText(name: string, size: number) {
     if (filenameEl) filenameEl.textContent = name || "Video";
     mediaMetaBaseText = `${videoFormatLabel(name)}${size ? ` · ${formatBytes(size)}` : ""}`;
@@ -1242,10 +1254,8 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
         updateMediaText(displayName, displaySize);
         transport?.beginSession(opened.thumbnailUrl);
-        // The phone shows the first-frame thumbnail, blurred, until the stream
-        // paints (design-5).
-        if (isMobilePlatform() && videoEl && opened.thumbnailUrl) videoEl.poster = `${opened.thumbnailUrl}?t=0`;
         activeMediaToken = opened.token;
+        if (isMobilePlatform() && opened.thumbnailUrl) preloadPoster(`${opened.thumbnailUrl}?t=0`, opened.token);
         activeMediaEncrypted = Boolean(opened.info.encrypted);
 
         adapter = new HtmlVideoAdapter(videoEl!, opened, {

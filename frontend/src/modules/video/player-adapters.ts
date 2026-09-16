@@ -202,6 +202,9 @@ export class HtmlVideoAdapter implements PlayerAdapter {
         }
         const errorListener = () => {
             if (this.closed || this.failureReported || this.naturalEndReported) return;
+            // Chromium also fires `error` on the element when its poster image
+            // fails to load; without a MediaError there is no playback failure.
+            if (!this.video.error) return;
             this.failureReported = true;
             this.callbacks.mediaError(this.video.error?.code, this.snapshot());
         };
