@@ -16,6 +16,16 @@ export const activeTab = writable<MobileTab>('files');
 
 export const driveSwitcherOpen = writable(false);
 
+/**
+ * True while a software keyboard is covering part of the screen.
+ *
+ * The tab bar steps aside for it rather than riding above it. Four
+ * destinations are no use to someone halfway through typing a search, and a bar
+ * parked on top of the keys is the shape every platform's own apps avoid.
+ * See ui/mobile/keyboard-insets.ts, which sets this.
+ */
+export const keyboardOpen = writable(false);
+
 export type DriveSyncState = 'idle' | 'syncing' | 'synced' | 'failed';
 
 /**

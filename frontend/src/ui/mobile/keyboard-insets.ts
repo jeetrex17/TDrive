@@ -22,6 +22,7 @@
  */
 
 import { onRuntimeEvent, setKeyboardWatch } from '../../api';
+import { keyboardOpen } from './mobile-shell-store';
 
 const KEYBOARD = '--mobile-keyboard-inset';
 
@@ -30,12 +31,32 @@ const MIN_KEYBOARD_PX = 80;
 
 let fromViewport = 0;
 let fromHost = 0;
+/**
+ * The tallest layout viewport seen, which is what the window measures with no
+ * keyboard in it. Whatever it has lost since is space the layout has already
+ * given up, and must not be reserved a second time.
+ */
+let fullHeight = 0;
 
 function publish(): void {
-    const height = Math.max(fromViewport, fromHost);
+    if (fromHost === 0 && fromViewport === 0) fullHeight = Math.max(fullHeight, window.innerHeight);
+
+    // A host that resizes its web view for the keyboard (Android's adjustResize)
+    // has already taken that space out of the layout, so reserving the height it
+    // reports would count the keyboard twice and leave the bar floating a
+    // keyboard's height above the keys. Only the part the window still covers is
+    // owed padding.
+    const shrunkBy = Math.max(0, fullHeight - window.innerHeight);
+    const stillCovered = Math.max(0, fromHost - shrunkBy);
+
+    const height = Math.max(fromViewport, stillCovered);
     const root = document.documentElement.style;
     if (height >= MIN_KEYBOARD_PX) root.setProperty(KEYBOARD, `${Math.round(height)}px`);
     else root.setProperty(KEYBOARD, '0px');
+
+    // Whether a keyboard is up is a different question from how much padding it
+    // is owed: it is up even when the layout already made room for it.
+    keyboardOpen.set(Math.max(fromViewport, fromHost) >= MIN_KEYBOARD_PX);
 }
 
 /**
@@ -112,6 +133,8 @@ export function activateKeyboardInsets(): () => void {
         window.removeEventListener('focusin', revealFocused);
         fromViewport = 0;
         fromHost = 0;
+        fullHeight = 0;
+        keyboardOpen.set(false);
         document.documentElement.style.removeProperty(KEYBOARD);
     };
 }
