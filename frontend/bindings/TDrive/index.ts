@@ -13,6 +13,7 @@ export type {
     EncryptionStatus,
     GalleryItem,
     GalleryPage,
+    GalleryStorage,
     JoinDriveResult,
     JoinRequestInfo,
     MountDriveView,

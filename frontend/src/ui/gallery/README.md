@@ -6,8 +6,11 @@ working-set limits, never fractions of the number of photos in a drive.
 
 ## Data and layout
 
-`GetMediaTimeline` returns month counts and one cursor per 128 photos. SQLite
-scans the indexed metadata once to build that sparse timeline. `ListMediaPage`
+`GetMediaTimelineSummary` returns month counts so the first page can render
+before the index scan. `GetMediaTimelineAnchors` then returns one cursor per
+128 photos. The generation LRU is capped at eight entries and approximately
+4 MiB; oversized snapshots are served without caching. SQLite still scans the
+indexed metadata once per cold generation to build navigation anchors. `ListMediaPage`
 uses keyset seeks, including near the end of a large library. Cursors bind the
 database epoch, drive and projection generation; stale reads trigger refresh.
 
@@ -17,6 +20,10 @@ while the viewer navigates elsewhere. The layout
 uses binary search over month summaries and constructs only visible rows plus
 two buffer rows on each side. A photo anchor preserves position across resize
 and metadata refresh. Unmounting a cell releases its image lease.
+
+The physical scroll canvas is capped at 16 million CSS pixels. Logical offsets
+map across that canvas, while visible cells retain their actual size. This keeps
+the end of a million-photo library reachable under Chromium/WebKit height limits.
 
 ## Images and ownership
 
@@ -39,11 +46,23 @@ local image sessions. Native memory-pressure events reduce limits and disable
 prefetch for 60 seconds. Session expiry is recoverable; Telegram retry deadlines
 survive image-session resets.
 
-The grid fetches at most 512-pixel thumbnails; the viewer uses at most 1600-pixel
-previews. Both travel as binary responses from authenticated loopback sessions.
-Neither request path downloads or decodes an original on a cache miss. Missing
-previews retain an explicit original-download action. Preview zoom is limited by
-preview resolution; full-resolution progressive zoom is not implemented.
+The grid fetches at most 512-pixel thumbnails. Opening or navigating the viewer
+explicitly opens one revision-bound original stream; neighboring originals are
+never prefetched. Images use an 8 MiB stream cache without read-ahead. While an
+original is open, the thumbnail broker reduces its budget (16/2 MiB on mobile)
+to leave room for browser decoding. Original admission remains limited to 32 MP
+and 256 MiB source bytes; browser/GPU overhead is outside these estimates.
+
+Disk LRU admission reserves space before temporary writes and refuses oversized
+entries. Failed deletions remain accounted for; undeletable startup overflow is
+represented by counters rather than an unbounded in-memory index. Local storage
+controls report the disposable cache separately from database/WAL storage and
+clear only the cache. Catalog history and user downloads are not cache entries.
+The cache's initial directory inspection is still proportional to existing files.
+
+Projection rebuilds read and apply 256-row keyset batches within the existing
+atomic transaction. They no longer retain the complete operation log in RAM,
+but rebuild duration and database/WAL disk usage still grow with history.
 
 ## Producing and repairing previews
 
@@ -73,7 +92,7 @@ has been removed.
 ## Regression checks
 
 The relevant tests live alongside the data source, layout, image broker, policy,
-viewer and API adapters. `frontend/e2e/app.spec.ts` exercises a 100,000-photo
+viewer and API adapters. `frontend/e2e/app.spec.ts` exercises a 1,000,000-photo
 fixture, bounding DOM nodes and metadata calls while scrolling forward/backward
 and jumping with the keyboard. Backend tests cover cursor isolation, revision
 changes, cancellation, byte budgets, encrypted derivatives, replay compatibility,

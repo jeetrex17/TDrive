@@ -22,6 +22,20 @@ func (s *Service) MediaTimeline(ctx context.Context, channelID int64) (projectio
 	return projection.MediaTimeline(ctx, s.DB, channelID)
 }
 
+func (s *Service) MediaTimelineSummary(ctx context.Context, channelID int64) (projection.GalleryTimeline, error) {
+	if err := s.ready(); err != nil {
+		return projection.GalleryTimeline{}, err
+	}
+	return projection.MediaTimelineSummary(ctx, s.DB, channelID)
+}
+
+func (s *Service) MediaTimelineAnchors(ctx context.Context, channelID int64, generation string) (projection.GalleryTimeline, error) {
+	if err := s.ready(); err != nil {
+		return projection.GalleryTimeline{}, err
+	}
+	return projection.MediaTimelineAnchors(ctx, s.DB, channelID, generation)
+}
+
 func (s *Service) MediaPage(ctx context.Context, channelID int64, cursor string, limit int) (GalleryPage, error) {
 	if err := s.ready(); err != nil {
 		return GalleryPage{}, err

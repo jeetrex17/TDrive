@@ -4,6 +4,8 @@
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import LogOutIcon from '@lucide/svelte/icons/log-out';
     import PaletteIcon from '@lucide/svelte/icons/palette';
+    import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+    import PhotoCachePanel from '../gallery/PhotoCachePanel.svelte';
     import { tick } from 'svelte';
     import { checkForUpdates } from '../../modules/updates';
     import { eventOccurredWithin } from '../event-path';
@@ -25,7 +27,7 @@
 
     let { onOpen, onEncryptionSettings, onLogout, updaterAvailable = true }: Props = $props();
 
-    type MenuView = 'account' | 'appearance' | 'updates';
+    type MenuView = 'account' | 'appearance' | 'updates' | 'storage';
 
     let open = $state(false);
     let view = $state<MenuView>('account');
@@ -103,6 +105,18 @@
         menuEl?.querySelector<HTMLElement>('#profile-menu-updates')?.focus();
     }
 
+    async function openStorage(): Promise<void> {
+        view = 'storage';
+        await tick();
+        menuEl?.querySelector<HTMLElement>('#photo-storage-back')?.focus();
+    }
+
+    async function closeStorage(): Promise<void> {
+        view = 'account';
+        await tick();
+        menuEl?.querySelector<HTMLElement>('#profile-menu-storage')?.focus();
+    }
+
     async function openToUpdates(): Promise<void> {
         if (!open) {
             open = true;
@@ -118,6 +132,7 @@
             // Keep the window-level Escape handler from also closing the
             // popover after this view has handled the first navigation step.
             event.stopPropagation();
+            if (view === 'storage') { void closeStorage(); return; }
             if (view === 'appearance') {
                 void closeAppearance();
                 return;
@@ -170,6 +185,7 @@
     }
 
     function labelledBy(currentView: MenuView): string {
+        if (currentView === 'storage') return 'photo-storage-back';
         if (currentView === 'appearance') return 'appearance-title';
         if (currentView === 'updates') return 'updates-title';
         return 'profile-trigger';
@@ -213,7 +229,10 @@
     hidden={!open}
     onkeydown={onMenuKeydown}
 >
-    {#if view === 'appearance'}
+    {#if view === 'storage'}
+        <button id="photo-storage-back" class="profile-menu-item" type="button" onclick={() => void closeStorage()}>Back to account</button>
+        <PhotoCachePanel />
+    {:else if view === 'appearance'}
         <AppearancePanel />
     {:else if view === 'updates'}
         <UpdatesPanel />
@@ -252,6 +271,9 @@
         >
             <PaletteIcon size={20} strokeWidth={2} aria-hidden="true" />
             <span>Appearance</span>
+        </button>
+        <button id="profile-menu-storage" class="profile-menu-item" type="button" role="menuitem" onclick={() => void openStorage()}>
+            <HardDriveIcon size={20} strokeWidth={2} aria-hidden="true" /><span>Local storage</span>
         </button>
         {#if $encryptionEntryVisible}
             <button

@@ -6,13 +6,18 @@ import (
 	"sync"
 )
 
-const galleryTimelineCacheEntries = 8
+const (
+	galleryTimelineCacheEntries = 8
+	galleryTimelineCacheBytes   = 4 << 20
+)
 
-var mediaTimelineCache = newGalleryTimelineCache(galleryTimelineCacheEntries)
+var mediaTimelineCache = newGalleryTimelineCacheWithBytes(galleryTimelineCacheEntries, galleryTimelineCacheBytes)
 
 type galleryTimelineCache struct {
 	mu       sync.Mutex
 	capacity int
+	maxBytes int
+	bytes    int
 	entries  map[string]*list.Element
 	lru      *list.List
 	loads    map[string]*galleryTimelineLoad
@@ -21,6 +26,7 @@ type galleryTimelineCache struct {
 type galleryTimelineCacheEntry struct {
 	generation string
 	timeline   GalleryTimeline
+	bytes      int
 }
 
 type galleryTimelineLoad struct {
@@ -30,8 +36,13 @@ type galleryTimelineLoad struct {
 }
 
 func newGalleryTimelineCache(capacity int) *galleryTimelineCache {
+	return newGalleryTimelineCacheWithBytes(capacity, galleryTimelineCacheBytes)
+}
+
+func newGalleryTimelineCacheWithBytes(capacity, maxBytes int) *galleryTimelineCache {
 	return &galleryTimelineCache{
 		capacity: capacity,
+		maxBytes: maxBytes,
 		entries:  make(map[string]*list.Element),
 		lru:      list.New(),
 		loads:    make(map[string]*galleryTimelineLoad),
@@ -105,22 +116,47 @@ func (c *galleryTimelineCache) putLocked(timeline GalleryTimeline) {
 		return
 	}
 	stored := cloneGalleryTimeline(timeline)
-	if elem, ok := c.entries[timeline.Generation]; ok {
-		elem.Value = galleryTimelineCacheEntry{generation: timeline.Generation, timeline: stored}
-		c.lru.MoveToFront(elem)
+	entryBytes := galleryTimelineBytes(stored)
+	if c.maxBytes > 0 && entryBytes > c.maxBytes {
+		if elem, ok := c.entries[timeline.Generation]; ok {
+			entry := elem.Value.(galleryTimelineCacheEntry)
+			c.bytes -= entry.bytes
+			delete(c.entries, entry.generation)
+			c.lru.Remove(elem)
+		}
 		return
 	}
-	elem := c.lru.PushFront(galleryTimelineCacheEntry{generation: timeline.Generation, timeline: stored})
-	c.entries[timeline.Generation] = elem
-	for len(c.entries) > c.capacity {
+	if elem, ok := c.entries[timeline.Generation]; ok {
+		c.bytes -= elem.Value.(galleryTimelineCacheEntry).bytes
+		elem.Value = galleryTimelineCacheEntry{generation: timeline.Generation, timeline: stored, bytes: entryBytes}
+		c.bytes += entryBytes
+		c.lru.MoveToFront(elem)
+	} else {
+		elem := c.lru.PushFront(galleryTimelineCacheEntry{generation: timeline.Generation, timeline: stored, bytes: entryBytes})
+		c.entries[timeline.Generation] = elem
+		c.bytes += entryBytes
+	}
+	for len(c.entries) > c.capacity || c.maxBytes > 0 && c.bytes > c.maxBytes {
 		oldest := c.lru.Back()
 		if oldest == nil {
 			break
 		}
 		entry := oldest.Value.(galleryTimelineCacheEntry)
 		delete(c.entries, entry.generation)
+		c.bytes -= entry.bytes
 		c.lru.Remove(oldest)
 	}
+}
+
+func galleryTimelineBytes(timeline GalleryTimeline) int {
+	size := 128 + len(timeline.Generation)
+	for _, bucket := range timeline.Buckets {
+		size += 40 + len(bucket.Key)
+	}
+	for _, anchor := range timeline.Anchors {
+		size += 24 + len(anchor.Cursor)
+	}
+	return size
 }
 
 func (c *galleryTimelineCache) len() int {

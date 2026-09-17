@@ -4,7 +4,7 @@ import type { MediaTimeline } from '../../api/gallery';
 
 const mocks = vi.hoisted(() => ({ timeline: vi.fn(), page: vi.fn(), locate: vi.fn(), preview: vi.fn(), mobile: false }));
 vi.mock('../../api', () => ({ isMobilePlatform: () => mocks.mobile }));
-vi.mock('../../api/gallery', () => ({ getMediaTimeline: mocks.timeline, listMediaPage: mocks.page, locateMedia: mocks.locate }));
+vi.mock('../../api/gallery', () => ({ getMediaTimelineSummary: mocks.timeline, getMediaTimelineAnchors: mocks.timeline, listMediaPage: mocks.page, locateMedia: mocks.locate }));
 vi.mock('../../modules/search', () => ({ clearSearch: vi.fn() }));
 vi.mock('../../modules/app-actions', () => ({ appActions: () => ({ refreshFiles: vi.fn(), triggerRefresh: vi.fn() }) }));
 vi.mock('../../modules/file-list', () => ({ canOwnerActOnFile: () => true }));
@@ -69,6 +69,27 @@ describe('gallery orchestration', () => {
         mocks.timeline.mockRejectedValue(new Error('offline'));
         await renderGallery({ background: true });
         expect(get(galleryView)).toBe(original);
+        log.mockRestore();
+    });
+
+    it('retries one stale summary-to-anchor race and keeps the current view if epochs keep changing', async () => {
+        await renderGallery();
+        const original = get(galleryView);
+        host.dataset.anchorIndex = '128';
+        generation = '2';
+        mocks.timeline.mockResolvedValue(timeline(1, '2'));
+        mocks.locate.mockResolvedValue({ generation: '2', index: 128, cursor: '128' });
+        const stale = new Error('gallery snapshot is stale');
+        // The first call in each retry is the summary; the second is anchors.
+        mocks.timeline
+            .mockResolvedValueOnce(timeline(1, '2'))
+            .mockRejectedValueOnce(stale)
+            .mockResolvedValueOnce(timeline(1, '3'))
+            .mockRejectedValueOnce(stale);
+        const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+        await renderGallery({ background: true });
+        expect(get(galleryView)).toBe(original);
+        expect(mocks.timeline).toHaveBeenCalledTimes(5); // initial render + two bounded attempts
         log.mockRestore();
     });
 

@@ -68,6 +68,8 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     GetFileList: resolves([]),
     GetFolderContents: resolves({ folders: [], files: [] }),
     GetStorageUsed: resolves(0),
+    GetGalleryStorage: resolves({ cache_bytes: 1024, cache_limit: 268435456, cache_entries: 1, catalog_bytes: 2048 }),
+    ClearGalleryCache: resolves({ cache_bytes: 0, cache_limit: 268435456, cache_entries: 0, catalog_bytes: 2048 }),
     GetUpdateState: resolves({ phase: 'idle', current_version: '0.0.0-test' }),
     ListChannels: resolves([
         {
@@ -142,6 +144,9 @@ export async function bootTDrive(
     methodOverrides: Record<string, MockPlan> = {},
 ): Promise<WailsMockHandle> {
     const methods = { ...DEFAULT_METHODS, ...methodOverrides };
+    // Older journeys supply a complete timeline; reuse it for both new phases.
+    methods.GetMediaTimelineSummary ??= methods.GetMediaTimeline;
+    methods.GetMediaTimelineAnchors ??= methods.GetMediaTimeline;
     const methodNameById = methodNamesById();
 
     await page.addInitScript(({ configuredMethods, methodNameById: idToName }: {

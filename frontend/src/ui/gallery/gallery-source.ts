@@ -4,6 +4,7 @@ interface SourceOptions {
     maxPages?: number;
     load?: (cursor: string, limit: number) => Promise<MediaPage>;
     onStale?: () => void;
+    loadAnchors?: (generation: string) => Promise<MediaTimeline>;
 }
 interface PageRequest {
     promise: Promise<void>;
@@ -23,6 +24,8 @@ export class GallerySource {
     private readonly load: (cursor: string, limit: number) => Promise<MediaPage>;
     private readonly maxPages: number;
     private readonly onStale?: () => void;
+    private readonly loadAnchors?: (generation: string) => Promise<MediaTimeline>;
+    private anchorLoad: Promise<void> | null = null;
     private pinned = new Set<number>();
     private disposed = false;
     private stale = false;
@@ -34,6 +37,7 @@ export class GallerySource {
         this.maxPages = Math.max(2, options.maxPages ?? 6);
         this.load = options.load ?? listMediaPage;
         this.onStale = options.onStale;
+        this.loadAnchors = options.loadAnchors;
     }
 
     get retainedCount(): number {
@@ -42,6 +46,12 @@ export class GallerySource {
         return count;
     }
     get pendingCount(): number { return this.requests.size; }
+
+    reportRefreshError(): void {
+        if (this.disposed) return;
+        this.error = 'Photos changed while loading. Retry to update this view.';
+        this.notify();
+    }
 
     subscribe(listener: () => void): () => void {
         this.listeners.add(listener);
@@ -96,6 +106,44 @@ export class GallerySource {
         this.listeners.clear();
     }
 
+    installAnchors(timeline: MediaTimeline): void {
+        if (this.disposed) return;
+        if (timeline.generation !== this.timeline.generation || timeline.channelId !== this.timeline.channelId
+            || timeline.totalCount !== this.timeline.totalCount || timeline.pageSize !== this.timeline.pageSize) {
+            this.failAnchors(new Error('gallery snapshot is stale'));
+            return;
+        }
+        this.timeline.anchors = timeline.anchors.slice();
+        this.pump();
+        this.notify();
+    }
+
+    requestAnchors(): Promise<void> {
+        if (this.disposed || this.timeline.anchors.length > 0 || !this.loadAnchors) return Promise.resolve();
+        if (this.anchorLoad) return this.anchorLoad;
+        this.anchorLoad = this.loadAnchors(this.timeline.generation)
+            .then((timeline) => this.installAnchors(timeline))
+            .catch((error: unknown) => {
+                this.failAnchors(error);
+                if (!this.disposed && !this.stale && /stale/i.test(String(error))) {
+                    this.stale = true;
+                    this.onStale?.();
+                }
+                throw error;
+            })
+            .finally(() => { this.anchorLoad = null; });
+        return this.anchorLoad;
+    }
+
+    failAnchors(error: unknown): void {
+        for (const [start, request] of this.requests) {
+            if (!request.running && start > 0) {
+                this.requests.delete(start);
+                request.reject(error);
+            }
+        }
+    }
+
     private pageStart(index: number): number { return Math.floor(index / this.timeline.pageSize) * this.timeline.pageSize; }
 
     private touch(start: number): void {
@@ -109,7 +157,14 @@ export class GallerySource {
         if (this.pages.has(start)) { this.touch(start); return Promise.resolve(); }
         const existing = this.requests.get(start);
         if (existing) { existing.direct ||= direct; return existing.promise; }
-        if (!this.timeline.anchors[start / this.timeline.pageSize]) return Promise.resolve();
+        if (start > 0 && !this.timeline.anchors[start / this.timeline.pageSize]) {
+            void this.requestAnchors().catch(() => { /* A later demand retries transient failures. */ });
+            return this.queuePage(start, direct);
+        }
+        return this.queuePage(start, direct);
+    }
+
+    private queuePage(start: number, direct: boolean): Promise<void> {
         // Rapid keyboard repeats retain only recent queued intent. Running
         // SQLite reads finish, but there are never more than two of them.
         const queued = [...this.requests].filter(([, request]) => !request.running);
@@ -132,7 +187,8 @@ export class GallerySource {
 
     private pump(): void {
         while (!this.disposed && this.active < 2) {
-            const pending = [...this.requests].filter(([, request]) => !request.running);
+            const pending = [...this.requests].filter(([start, request]) => !request.running
+                && (start === 0 || Boolean(this.timeline.anchors[start / this.timeline.pageSize])));
             const next = pending.find(([, request]) => request.direct) ?? pending[0];
             if (!next) return;
             const [start, request] = next;
@@ -145,7 +201,7 @@ export class GallerySource {
     private async run(start: number, request: PageRequest): Promise<void> {
         try {
             const anchor = this.timeline.anchors[start / this.timeline.pageSize];
-            const page = await this.load(anchor.cursor, this.timeline.pageSize);
+            const page = await this.load(start === 0 ? (anchor?.cursor ?? '') : anchor.cursor, this.timeline.pageSize);
             if (this.disposed) return;
             if (page.generation !== this.timeline.generation) throw new Error('gallery snapshot is stale');
             const expected = Math.min(this.timeline.pageSize, this.timeline.totalCount - start);

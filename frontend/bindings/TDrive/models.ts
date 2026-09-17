@@ -98,6 +98,17 @@ export interface GalleryPage {
 }
 
 /**
+ * GalleryStorage separates disposable media from the durable local catalog.
+ * Saved downloads are user files and are never included in cache cleanup.
+ */
+export interface GalleryStorage {
+    "cache_bytes": number;
+    "cache_limit": number;
+    "cache_entries": number;
+    "catalog_bytes": number;
+}
+
+/**
  * JoinDriveResult distinguishes instant joins from approval-required requests.
  */
 export interface JoinDriveResult {

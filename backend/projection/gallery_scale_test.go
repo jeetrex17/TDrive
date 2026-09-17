@@ -201,6 +201,26 @@ func TestGalleryTimelineCacheIsBoundedAndReturnsImmutableCopies(t *testing.T) {
 	}
 }
 
+func TestGalleryTimelineCacheEvictsByApproximateBytes(t *testing.T) {
+	cache := newGalleryTimelineCacheWithBytes(10, 1200)
+	makeTimeline := func(generation string) GalleryTimeline {
+		anchors := make([]GalleryAnchor, 10)
+		for i := range anchors {
+			anchors[i] = GalleryAnchor{StartIndex: i * 128, Cursor: strings.Repeat(generation, 20)}
+		}
+		return GalleryTimeline{Generation: generation, Anchors: anchors, Buckets: []GalleryBucket{}}
+	}
+	cache.put(makeTimeline("one"))
+	cache.put(makeTimeline("two"))
+	if cache.len() != 1 {
+		t.Fatalf("cache entries=%d, want byte budget to retain one", cache.len())
+	}
+	cache.put(GalleryTimeline{Generation: "oversize", Anchors: []GalleryAnchor{{Cursor: strings.Repeat("x", 2000)}}})
+	if _, ok := cache.get("oversize"); ok {
+		t.Fatal("oversized timeline exceeded byte cap")
+	}
+}
+
 func TestMediaTimelineCachesGenerationWithoutSharingMutableSlices(t *testing.T) {
 	db := newTestDB(t)
 	seedGalleryFiles(t, db, testChan, 300)

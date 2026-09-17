@@ -88,7 +88,74 @@ func MediaTimeline(ctx context.Context, db *sql.DB, channelID int64) (GalleryTim
 	return timeline, nil
 }
 
+// MediaTimelineSummary returns the small, incrementally maintained portion of
+// the timeline. It deliberately avoids the full-library anchor scan so page
+// zero can be requested immediately on a cold database.
+func MediaTimelineSummary(ctx context.Context, db *sql.DB, channelID int64) (GalleryTimeline, error) {
+	tx, generation, err := beginGalleryRead(ctx, db, channelID, "")
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+	defer tx.Rollback()
+	timeline, err := buildGalleryTimelineSummary(ctx, tx, channelID, generation)
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return GalleryTimeline{}, err
+	}
+	return timeline, nil
+}
+
+// MediaTimelineAnchors builds the sparse seek index for an already displayed
+// summary. The expected generation prevents anchors from crossing an epoch.
+func MediaTimelineAnchors(ctx context.Context, db *sql.DB, channelID int64, expected string) (GalleryTimeline, error) {
+	tx, generation, err := beginGalleryRead(ctx, db, channelID, expected)
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+	defer tx.Rollback()
+	timeline, err := mediaTimelineCache.load(ctx, generation, func() (GalleryTimeline, error) {
+		return buildGalleryTimeline(ctx, tx, channelID, generation)
+	})
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return GalleryTimeline{}, err
+	}
+	return timeline, nil
+}
+
 func buildGalleryTimeline(ctx context.Context, tx *sql.Tx, channelID int64, generation string) (GalleryTimeline, error) {
+	timeline, err := buildGalleryTimelineSummary(ctx, tx, channelID, generation)
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT upload_time,msg_id,ordinal-1 FROM (
+  SELECT upload_time,msg_id,ROW_NUMBER() OVER (ORDER BY upload_time DESC,msg_id DESC) AS ordinal
+  FROM gallery_items WHERE channel_id=?
+) WHERE (ordinal-1)%?=0 ORDER BY ordinal`, channelID, GalleryPageSize)
+	if err != nil {
+		return GalleryTimeline{}, fmt.Errorf("projection: gallery anchors: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var timestamp, msgID int64
+		var index int
+		if err := rows.Scan(&timestamp, &msgID, &index); err != nil {
+			return GalleryTimeline{}, fmt.Errorf("projection: gallery anchor: %w", err)
+		}
+		timeline.Anchors = append(timeline.Anchors, GalleryAnchor{StartIndex: index, Cursor: encodeGalleryCursor(channelID, generation, timestamp, msgID, index)})
+	}
+	if err := rows.Err(); err != nil {
+		return GalleryTimeline{}, fmt.Errorf("projection: gallery anchors: %w", err)
+	}
+	return timeline, nil
+}
+
+func buildGalleryTimelineSummary(ctx context.Context, tx *sql.Tx, channelID int64, generation string) (GalleryTimeline, error) {
 	timeline := GalleryTimeline{ChannelID: channelID, Generation: generation, PageSize: GalleryPageSize, Buckets: []GalleryBucket{}, Anchors: []GalleryAnchor{}}
 	rows, err := tx.QueryContext(ctx, `SELECT month_key,item_count,latest_upload_time
 FROM gallery_months WHERE channel_id=? ORDER BY month_key DESC`, channelID)
@@ -110,29 +177,6 @@ FROM gallery_months WHERE channel_id=? ORDER BY month_key DESC`, channelID)
 	}
 	if err := rows.Close(); err != nil {
 		return GalleryTimeline{}, err
-	}
-
-	rows, err = tx.QueryContext(ctx, `SELECT upload_time,msg_id,ordinal-1 FROM (
-  SELECT upload_time,msg_id,ROW_NUMBER() OVER (ORDER BY upload_time DESC,msg_id DESC) AS ordinal
-  FROM gallery_items WHERE channel_id=?
-) WHERE (ordinal-1)%?=0 ORDER BY ordinal`, channelID, GalleryPageSize)
-	if err != nil {
-		return GalleryTimeline{}, fmt.Errorf("projection: gallery anchors: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var timestamp, msgID int64
-		var index int
-		if err := rows.Scan(&timestamp, &msgID, &index); err != nil {
-			return GalleryTimeline{}, fmt.Errorf("projection: gallery anchor: %w", err)
-		}
-		timeline.Anchors = append(timeline.Anchors, GalleryAnchor{
-			StartIndex: index,
-			Cursor:     encodeGalleryCursor(channelID, generation, timestamp, msgID, index),
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return GalleryTimeline{}, fmt.Errorf("projection: gallery anchors: %w", err)
 	}
 	return timeline, nil
 }
