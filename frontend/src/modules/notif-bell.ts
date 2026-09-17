@@ -12,6 +12,7 @@
 import { get } from 'svelte/store';
 import { state } from '../state';
 import { cancelDownload, cancelUpload, cancelUploadById } from '../api';
+import { clearDownloadSharePaths, forgetDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import {
     historyEvents,
     isUnfinishedTransfer,
@@ -82,6 +83,7 @@ export function pushHistoryEvent({ level = 'info', title = '', body = '', ts }: 
 export function pushTransferStart({ id, direction, name, total = 0 }: { id: string | number; direction: TransferDirection; name?: string; total?: number }) {
     if (id == null || !direction) return;
     const key = transferKey(direction, id);
+    if (direction === 'down') forgetDownloadSharePath(key);
     speedSamples.delete(key);
     // Upload IDs restart at 0 with every batch, so a mark left by the last
     // batch must not make this file's first failure read as a cancellation.
@@ -101,6 +103,31 @@ export function pushTransferStart({ id, direction, name, total = 0 }: { id: stri
     };
     // De-dup: an entry with this key is replaced, not duplicated.
     historyEvents.update((events) => [entry, ...events.filter((e) => e.id !== key)].slice(0, HISTORY_CAP));
+    return key;
+}
+
+/**
+ * Makes waiting work visible before the scheduler is ready to dispatch it.
+ * Callers must promote the same id with pushTransferStart when its first byte
+ * is requested, which replaces this row in place rather than duplicating it.
+ */
+export function pushQueuedTransfer({ id, direction, name, total = 0 }: { id: string | number; direction: TransferDirection; name?: string; total?: number }) {
+    if (id == null || !direction) return;
+    const key = transferKey(direction, id);
+    const entry: TransferEvent = {
+        kind: 'transfer',
+        id: key,
+        direction,
+        name: String(name || ''),
+        progress: 0,
+        total: Math.max(0, Number(total) || 0),
+        bytes: 0,
+        speed: 0,
+        status: 'queued',
+        startedAt: Date.now(),
+        finishedAt: 0,
+    };
+    historyEvents.update((events) => [entry, ...events.filter((event) => event.id !== key)].slice(0, HISTORY_CAP));
     return key;
 }
 
@@ -209,22 +236,38 @@ export function clearHistory() {
     historyEvents.update((events) =>
         events.filter((e) => e.kind === 'transfer' && isUnfinishedTransfer(e.status)),
     );
+    clearDownloadSharePaths();
     notifUnreadErrors.set(0);
 }
 
-// cancelTransfersInDirection cancels the active upload/import or download.
+// cancelTransfersInDirection cancels every upload/import, or the one active
+// backend download. Queued downloads remain queued because the backend has no
+// per-queue cancellation API.
 // Rows are not marked here: the backend reports the real per-file outcome, so
 // a file that already finished (and committed) ends as Done while aborted
 // ones end as Canceled (see the upload_error / download handlers).
 export function cancelTransfersInDirection(direction: TransferDirection): void {
     if (direction === 'down') {
+        const activeDownloadId = state.activeDownloadId;
+        if (activeDownloadId === null) return;
+        const matchesActiveDownload = (entry: TransferEvent) => entry.id === transferKey('down', activeDownloadId);
+        markTransfersCanceling(direction, matchesActiveDownload);
         state.cancelingDownload = true;
-        void cancelDownload().catch(() => undefined);
+        void cancelDownload().catch(() => {
+            state.cancelingDownload = false;
+            restoreCanceledTransfers(direction, matchesActiveDownload);
+            pushHistoryEvent({ level: 'error', title: 'Could not cancel download', body: 'Your download is still running.' });
+        });
         return;
     }
 
+    markTransfersCanceling(direction);
     state.cancelingUpload = true;
-    void cancelUpload().catch(() => undefined);
+    void cancelUpload().catch(() => {
+        state.cancelingUpload = false;
+        restoreCanceledTransfers(direction);
+        pushHistoryEvent({ level: 'error', title: 'Could not cancel uploads', body: 'Your uploads are still running.' });
+    });
 }
 
 // cancelSingleUpload stops one file of an upload batch. Several uploads run at
@@ -234,7 +277,12 @@ export function cancelTransfersInDirection(direction: TransferDirection): void {
 export function cancelSingleUpload(uploadId: number): void {
     if (!Number.isFinite(uploadId)) return;
     canceledUploads.add(uploadId);
-    void cancelUploadById(uploadId).catch(() => undefined);
+    markTransfersCanceling('up', (entry) => entry.id === transferKey('up', uploadId));
+    void cancelUploadById(uploadId).catch(() => {
+        canceledUploads.delete(uploadId);
+        restoreCanceledTransfers('up', (entry) => entry.id === transferKey('up', uploadId));
+        pushHistoryEvent({ level: 'error', title: 'Could not cancel upload', body: 'The upload is still running.' });
+    });
 }
 
 export function wasUploadCanceled(uploadId: number): boolean {
@@ -252,4 +300,26 @@ function findUnfinishedTransfer(key: string): TransferEvent | null {
     const entry = get(historyEvents).find((e) => e.id === key);
     if (!entry || entry.kind !== 'transfer' || !isUnfinishedTransfer(entry.status)) return null;
     return entry;
+}
+
+function markTransfersCanceling(direction: TransferDirection, matches: (entry: TransferEvent) => boolean = () => true): void {
+    historyEvents.update((events) => events.map((event) => (
+        event.kind === 'transfer'
+        && event.direction === direction
+        && isUnfinishedTransfer(event.status)
+        && matches(event)
+            ? { ...event, status: 'canceling' }
+            : event
+    )));
+}
+
+function restoreCanceledTransfers(direction: TransferDirection, matches: (entry: TransferEvent) => boolean = () => true): void {
+    historyEvents.update((events) => events.map((event) => (
+        event.kind === 'transfer'
+        && event.direction === direction
+        && event.status === 'canceling'
+        && matches(event)
+            ? { ...event, status: 'active' }
+            : event
+    )));
 }

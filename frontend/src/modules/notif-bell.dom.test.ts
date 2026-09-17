@@ -5,10 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import NotifBell from '../ui/notifications/NotifBell.svelte';
 import { get } from 'svelte/store';
+
+const transferApi = vi.hoisted(() => ({
+    cancelDownload: vi.fn(async () => undefined),
+    cancelUpload: vi.fn(async () => undefined),
+    cancelUploadById: vi.fn(async () => undefined),
+}));
+
+vi.mock('../api', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../api')>()),
+    ...transferApi,
+}));
 import {
     cancelTransfersInDirection,
     clearHistory,
     markTransferDone,
+    pushQueuedTransfer,
     pushHistoryEvent,
     pushTransferStart,
     updateTransferProgress,
@@ -19,6 +31,8 @@ import {
     notifUnreadErrors,
     type TransferEvent,
 } from '../ui/notifications/notif-store';
+import { downloadSharePaths, rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
+import { state } from '../state';
 
 
 let host: HTMLElement;
@@ -34,6 +48,8 @@ function reset(): void {
     notifPanelOpen.set(false);
     notifUnreadErrors.set(0);
     historyEvents.set([]);
+    downloadSharePaths.set(new Map());
+    state.activeDownloadId = null;
     flushSync();
 }
 
@@ -105,6 +121,42 @@ describe('notif-bell', () => {
         const left = get(historyEvents);
         expect(left).toHaveLength(1);
         expect(left[0]).toMatchObject({ id: 'xfer:down:file:9', status: 'queued' });
+    });
+
+    it('clears iOS share paths along with terminal history', () => {
+        pushTransferStart({ id: 9, direction: 'down', name: 'finished.pdf', total: 10 });
+        markTransferDone({ id: 9, direction: 'down', status: 'done' });
+        rememberDownloadSharePath('xfer:down:9', '/sandbox/Downloads/finished.pdf');
+
+        clearHistory();
+
+        expect(get(downloadSharePaths)).toEqual(new Map());
+    });
+
+    it('shows queued work before dispatch and promotes it in place', () => {
+        pushQueuedTransfer({ id: 'file:12', direction: 'down', name: 'later.pdf', total: 100 });
+        expect(get(historyEvents)[0]).toMatchObject({
+            id: 'xfer:down:file:12',
+            status: 'queued',
+        });
+
+        pushTransferStart({ id: 'file:12', direction: 'down', name: 'later.pdf', total: 100 });
+        expect(get(historyEvents)).toHaveLength(1);
+        expect(get(historyEvents)[0]).toMatchObject({ status: 'active' });
+    });
+
+    it('changes only the active download to Canceling before the backend replies', () => {
+        pushTransferStart({ id: 'file:12', direction: 'down', name: 'first.pdf', total: 100 });
+        pushQueuedTransfer({ id: 'file:13', direction: 'down', name: 'next.pdf', total: 100 });
+        state.activeDownloadId = 'file:12';
+
+        cancelTransfersInDirection('down');
+
+        expect(get(historyEvents).filter((event) => event.kind === 'transfer')).toEqual([
+            expect.objectContaining({ id: 'xfer:down:file:13', status: 'queued' }),
+            expect.objectContaining({ id: 'xfer:down:file:12', status: 'canceling' }),
+        ]);
+        expect(transferApi.cancelDownload).toHaveBeenCalledOnce();
     });
 
     it('keeps terminal transfers immutable and byte math consistent', () => {

@@ -7,10 +7,10 @@ export type TransferDirection = 'up' | 'down';
  * went away. Without them the queue can only say "active", which is how a
  * stalled upload ends up looking identical to one that is moving.
  */
-export type TransferStatus = 'queued' | 'active' | 'paused' | 'done' | 'failed' | 'canceled';
+export type TransferStatus = 'queued' | 'active' | 'paused' | 'canceling' | 'done' | 'failed' | 'canceled';
 
 /** The statuses that still have somewhere to go; the rest are finished. */
-export const UNFINISHED_TRANSFER_STATUSES: readonly TransferStatus[] = ['queued', 'active', 'paused'];
+export const UNFINISHED_TRANSFER_STATUSES: readonly TransferStatus[] = ['queued', 'active', 'paused', 'canceling'];
 
 export function isUnfinishedTransfer(status: TransferStatus): boolean {
     return UNFINISHED_TRANSFER_STATUSES.includes(status);
