@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test as base, type Page } from '@playwright/test';
 
@@ -99,25 +99,35 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     SyncChannel: resolves(null),
 };
 
-// The generated bindings (frontend/bindings/TDrive/app.ts) call
-// `$Call.ByID(<numeric id>, ...args)` for every bound Go method — there is no
-// name in the wire request. Recover the id -> method name mapping straight
-// from that generated file instead of hand-copying 89 numbers, so this stays
-// correct across regenerations.
-const APP_BINDINGS_PATH = join(__dirname, '../bindings/TDrive/app.ts');
+// The generated bindings call `$Call.ByID(<numeric id>, ...args)` for every
+// bound Go method — there is no name in the wire request. Recover the
+// id -> method name mapping straight from the generated sources instead of
+// hand-copying ~100 numbers, so this stays correct across regenerations.
+//
+// Every service gets its own module (app.ts, driveservice.ts, mediaservice.ts,
+// ...), so the whole directory is scanned rather than one file. Scanning only
+// app.ts is how OpenMedia and PreparePersonalDrive silently stopped being
+// mockable when the God object was split: an unrecovered id falls through to
+// the empty-success branch below, and the app sees an undefined result.
+const BINDINGS_DIR = join(__dirname, '../bindings/TDrive');
+const GENERATED_MODEL_MODULES = new Set(['index.ts', 'models.ts']);
 
 function loadMethodIdsByName(): Record<string, number> {
-    const source = readFileSync(APP_BINDINGS_PATH, 'utf8');
     const ids: Record<string, number> = {};
-    const functionPattern = /^export function (\w+)\(/gm;
-    let match: RegExpExecArray | null;
-    while ((match = functionPattern.exec(source)) !== null) {
-        const name = match[1];
-        const bodyStart = source.indexOf('{', match.index);
-        const bodyEnd = source.indexOf('\n}', bodyStart);
-        const body = source.slice(bodyStart, bodyEnd === -1 ? source.length : bodyEnd);
-        const idMatch = /\$Call\.ByID\((\d+)/.exec(body);
-        if (idMatch) ids[name] = Number(idMatch[1]);
+    const modules = readdirSync(BINDINGS_DIR)
+        .filter((name) => name.endsWith('.ts') && !GENERATED_MODEL_MODULES.has(name));
+    for (const moduleName of modules) {
+        const source = readFileSync(join(BINDINGS_DIR, moduleName), 'utf8');
+        const functionPattern = /^export function (\w+)\(/gm;
+        let match: RegExpExecArray | null;
+        while ((match = functionPattern.exec(source)) !== null) {
+            const name = match[1];
+            const bodyStart = source.indexOf('{', match.index);
+            const bodyEnd = source.indexOf('\n}', bodyStart);
+            const body = source.slice(bodyStart, bodyEnd === -1 ? source.length : bodyEnd);
+            const idMatch = /\$Call\.ByID\((\d+)/.exec(body);
+            if (idMatch) ids[name] = Number(idMatch[1]);
+        }
     }
     return ids;
 }
@@ -134,12 +144,35 @@ export interface WailsMockHandle {
     emit(eventName: string, ...args: unknown[]): Promise<void>;
 }
 
+export interface BootOptions {
+    /**
+     * Where to land, relative to the dev server. The app reads its platform
+     * from the query string (`?mobile=ios`), which is how a desktop browser
+     * gets to drive a phone build's branches.
+     */
+    url?: string;
+}
+
 export async function bootTDrive(
     page: Page,
     methodOverrides: Record<string, MockPlan> = {},
+    options: BootOptions = {},
 ): Promise<WailsMockHandle> {
     const methods = { ...DEFAULT_METHODS, ...methodOverrides };
     const methodNameById = methodNamesById();
+
+    // A plan for a method the bindings do not export can never fire, and the
+    // symptom is remote from the cause: the app just receives an empty
+    // success. Fail here, naming the method, rather than in some assertion
+    // three screens later.
+    const boundNames = new Set(Object.values(methodNameById));
+    const unbound = Object.keys(methods).filter((name) => !boundNames.has(name));
+    if (unbound.length > 0) {
+        throw new Error(
+            `wails-mock: no generated binding for ${unbound.join(', ')}. `
+            + 'Renamed, unbound, or are the bindings stale?',
+        );
+    }
 
     await page.addInitScript(({ configuredMethods, methodNameById: idToName }: {
         configuredMethods: Record<string, MockPlan>;
@@ -263,7 +296,7 @@ export async function bootTDrive(
         };
     }, { configuredMethods: methods, methodNameById });
 
-    await page.goto('/');
+    await page.goto(options.url ?? '/');
 
     return {
         calls: (method?: string) => page.evaluate((name) => {
