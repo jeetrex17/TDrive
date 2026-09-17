@@ -1,4 +1,5 @@
 import { get } from 'svelte/store';
+import { state } from '../../state';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
 import { itemStateFor, transfersByFile } from './item-state-store';
@@ -22,6 +23,16 @@ function transfer(overrides: Partial<TransferEvent> & Pick<TransferEvent, 'id'>)
 beforeEach(() => historyEvents.set([]));
 
 describe('transfersByFile', () => {
+    it('only maps a drive-scoped download to rows in its source drive', () => {
+        state.activeChannel = { id: 7, title: 'Drive A', kind: 'personal' };
+        historyEvents.set([transfer({ id: 'xfer:down:file:7:1042' })]);
+        const transfers = get(transfersByFile);
+        expect(transfers.get('7:1042')?.id).toBe('xfer:down:file:7:1042');
+
+        state.activeChannel = { id: 8, title: 'Drive B', kind: 'shared' };
+        expect(itemStateFor(transfers, '1042')).toBe('online-only');
+    });
+
     it('keys a download by the row id its queue key names', () => {
         // The download queue keys jobs "file:<id>"; the row carries "<id>".
         // These have to meet or a download never badges the file it is for.

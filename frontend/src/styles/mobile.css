@@ -14,6 +14,12 @@ html.mobile {
     --tabbar-height: 64px;
     /* How far the floating bar sits from the screen edges. */
     --tabbar-inset: 12px;
+    --selection-bar-reserve: calc(76px + var(--inset-bottom));
+    --context-action-clearance: calc(52px + var(--space-4));
+    --mobile-type-caption: 0.75rem;
+    --mobile-type-meta: 0.8125rem;
+    --mobile-type-body: 0.9375rem;
+    --mobile-type-title: 1.375rem;
     /* Seated inside the bar as a peer of the tabs rather than floating over
        it, so 44 is the touch minimum, not a size chosen to be noticed. */
 
@@ -50,6 +56,41 @@ html.mobile .mobile-body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
+}
+
+/* The selection bar overlays the shell so it can replace the tab bar without a
+   layout jump. Reserve its final row-height while it is visible, otherwise the
+   last file or thumbnail looks reachable but lands underneath the actions. */
+html.mobile .mobile-shell.is-selecting .mobile-body {
+    padding-bottom: var(--selection-bar-reserve);
+}
+
+/* The contextual FAB overlaps only Files and Photos. Give those scrollports a
+   final thumb-sized runway, so the last row and gallery cell can scroll above
+   the action on a short phone or in landscape. Other tabs retain their dense
+   natural ending. */
+html.mobile .mobile-shell.has-context-action .file-list-box,
+html.mobile .mobile-shell.has-context-action .gallery-view {
+    padding-bottom: calc(var(--space-6) + var(--context-action-clearance));
+    scroll-padding-bottom: var(--context-action-clearance);
+}
+
+/* At accessibility text sizes a second label line would make the compact bar
+   taller than its safe-area slot. Icons remain named controls, so hide only
+   the redundant visual labels and keep all four 48px targets stable. */
+html.mobile[data-mobile-text-scale='large'] .tab-label {
+    display: none;
+}
+html.mobile[data-mobile-text-scale='large'] .tab-item {
+    min-height: 48px;
+}
+
+/* The narrowest phones and any short landscape window use the same compact
+   icon-only navigation. This is also the safe fallback while a host reports a
+   text preference before its native scale bridge has published the category. */
+@media (max-width: 360px), (max-height: 480px) {
+    html.mobile .tab-label { display: none; }
+    html.mobile .tab-item { min-height: 48px; }
 }
 
 html.mobile .mobile-panel {
@@ -115,7 +156,7 @@ html.mobile .topbar-row {
 html.mobile .topbar-plain .topbar-row { min-height: 52px; }
 
 html.mobile .topbar-title {
-    font-size: 1.375rem;
+    font-size: var(--mobile-type-title);
     font-weight: var(--weight-strong);
     color: var(--color-text);
     letter-spacing: -0.01em;
@@ -123,7 +164,7 @@ html.mobile .topbar-title {
 }
 
 html.mobile .topbar-plain-titles { display: flex; flex-direction: column; gap: 1px; }
-html.mobile .topbar-subtitle { font-size: 0.8125rem; color: var(--color-text-muted); }
+html.mobile .topbar-subtitle { font-size: var(--mobile-type-meta); color: var(--color-text-muted); }
 
 /* Selection: the count and the only way out of the mode. The tab bar is gone
    while selecting and the bottom bar keeps only Move and Delete, so Done has to
@@ -185,7 +226,13 @@ html.mobile .drive-header-name {
     letter-spacing: -0.01em;
     line-height: 1.2;
 }
-html.mobile .drive-header-meta { font-size: 0.8125rem; color: var(--color-text-muted); }
+html.mobile .drive-header-btn .drive-header-name { flex: 0 1 auto; }
+html.mobile .drive-header-chevron {
+    flex: 0 0 auto;
+    margin-left: 4px;
+    color: var(--color-text-muted);
+}
+html.mobile .drive-header-meta { font-size: var(--mobile-type-meta); color: var(--color-text-muted); }
 
 /* Folder header: the name over a count, matching the drive header's two-line
    shape so the bar does not change height when you walk into a folder. */
@@ -408,7 +455,7 @@ html.mobile .tab-icon .profile-avatar {
    behind it and the label under it carry the active state on their own. */
 
 html.mobile .tab-label {
-    font-size: 0.6875rem;
+    font-size: var(--mobile-type-caption);
     font-weight: var(--weight-semibold);
     letter-spacing: 0.01em;
 }
@@ -502,6 +549,44 @@ html.mobile .mobile-fab .upload-btn-pill {
 }
 html.mobile .mobile-fab .upload-btn:active .upload-btn-pill { transform: scale(0.9); }
 html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
+
+/* Contextual primary action. It is deliberately independent of the tab bar:
+   navigation has four equally weighted destinations, while creating content
+   only appears where it has somewhere to go. 52px gives Android's 48dp target
+   room and remains comfortably above iOS's 44pt floor. */
+html.mobile .mobile-context-action {
+    position: absolute;
+    right: calc(var(--space-4) + var(--inset-right));
+    bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
+    z-index: var(--z-selection);
+}
+html.mobile .mobile-context-action .mobile-fab {
+    display: block;
+    width: 52px;
+    height: 52px;
+}
+html.mobile .mobile-context-action .mobile-fab .upload-btn,
+html.mobile .mobile-context-action .mobile-fab .primary-btn.upload-btn {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: transparent;
+    box-shadow: var(--shadow-md);
+}
+html.mobile .mobile-context-action .mobile-fab .upload-btn-pill {
+    width: 52px;
+    height: 52px;
+    background: transparent;
+    color: var(--color-on-accent);
+}
+html.mobile .mobile-context-action .mobile-fab .upload-btn:active .upload-btn-pill {
+    transform: scale(0.94);
+}
 
 /* The upload menu is a bottom sheet on a phone, not a popover. The trigger is
    docked in the middle of the tab bar against the bottom safe area, so there is
@@ -783,7 +868,7 @@ html.mobile .account-row {
     border: 0;
     background: transparent;
     color: var(--color-text);
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     text-align: left;
     cursor: pointer;
 }
@@ -791,7 +876,29 @@ html.mobile .account-row + .account-row { border-top: 1px solid var(--color-bord
 html.mobile .account-row:active { background: var(--overlay-neutral-2); }
 html.mobile .account-row .account-row-icon { flex: 0 0 auto; color: var(--color-text-muted); }
 html.mobile .account-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-html.mobile .account-row-value { flex: 0 0 auto; color: var(--color-text-muted); font-size: 0.8125rem; }
+html.mobile .account-row-static .account-row-label {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    white-space: normal;
+}
+html.mobile .account-row-detail {
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+html.mobile .account-row-value {
+    flex: 0 1 auto;
+    max-width: 42%;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: var(--mobile-type-meta);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 html.mobile .account-row .account-row-chevron { flex: 0 0 auto; color: var(--color-text-subtle); }
 
 html.mobile .account-about { padding: 16px; gap: 4px; }
@@ -815,20 +922,38 @@ html.mobile .account-logout {
 }
 html.mobile .account-logout:active { background: var(--overlay-danger-1); }
 
-/* The embedded appearance panel drops its desktop popover frame, and its title
-   is toned down to read as a peer of the Drives and Vault section labels. */
-html.mobile .account-tab .appearance-panel {
+/* Appearance is a drill-in, leaving Account as a fast, scannable list. */
+html.mobile .account-appearance-detail { min-width: 0; }
+html.mobile .account-appearance-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 44px;
+    min-height: 44px;
+    margin: -8px 0 var(--space-3) -8px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 0.9375rem;
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+}
+html.mobile .account-appearance-back:active { background: var(--overlay-accent-1); }
+html.mobile .account-appearance-detail .appearance-panel {
     width: auto;
+    max-height: none;
     padding: 0;
     background: transparent;
     border: 0;
     box-shadow: none;
 }
-html.mobile .account-tab .appearance-header {
+html.mobile .account-appearance-detail .appearance-header {
     padding: 0 var(--space-2) var(--space-2);
     border: 0;
 }
-html.mobile .account-tab #appearance-title {
+html.mobile .account-appearance-detail #appearance-title {
     font-size: 0.8125rem;
     font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
@@ -973,9 +1098,11 @@ html.mobile .mobile-empty {
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
+    min-height: min(420px, calc(100dvh - 196px));
     text-align: center;
     gap: 6px;
-    padding: 22dvh var(--space-6) 0;
+    padding: var(--space-6);
 }
 html.mobile .mobile-empty-glyph { color: var(--color-border); margin-bottom: 4px; }
 html.mobile .mobile-empty-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }

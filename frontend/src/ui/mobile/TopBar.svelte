@@ -1,5 +1,6 @@
 <script lang="ts">
     import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+    import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
     import SearchIcon from '@lucide/svelte/icons/search';
     import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
     import CheckIcon from '@lucide/svelte/icons/check';
@@ -97,31 +98,76 @@
         sortOptions.find((option) => option.key === $fileSortState.key)?.label ?? 'Name',
     );
 
-    async function toggleSort(): Promise<void> {
-        sortOpen = !sortOpen;
+    function sortMenuItems(): HTMLButtonElement[] {
+        return Array.from(sortMenuEl?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
+    }
+
+    function restoreSortFocus(): void {
+        void tick().then(() => sortButtonEl?.focus({ preventScroll: true }));
+    }
+
+    function closeSort({ restoreFocus = false }: { restoreFocus?: boolean } = {}): void {
         if (!sortOpen) return;
+        sortOpen = false;
+        if (restoreFocus) restoreSortFocus();
+    }
+
+    async function toggleSort(): Promise<void> {
+        if (sortOpen) {
+            closeSort({ restoreFocus: true });
+            return;
+        }
+        sortOpen = !sortOpen;
         await tick();
-        sortMenuEl?.querySelector<HTMLElement>('[role="menuitemradio"]')?.focus();
+        const items = sortMenuItems();
+        const checkedIndex = sortOptions.findIndex((option) => option.key === $fileSortState.key);
+        items[Math.max(checkedIndex, 0)]?.focus({ preventScroll: true });
     }
 
     function chooseSort(key: FileSortKey): void {
         setFileSortKey(key);
-        sortOpen = false;
-        sortButtonEl?.focus();
+        closeSort({ restoreFocus: true });
     }
 
     function onWindowKeydown(event: KeyboardEvent): void {
         if (event.key === 'Escape' && sortOpen) {
-            sortOpen = false;
-            sortButtonEl?.focus();
+            event.preventDefault();
+            closeSort({ restoreFocus: true });
         }
+    }
+
+    function onSortMenuKeydown(event: KeyboardEvent): void {
+        const items = sortMenuItems();
+        if (items.length === 0) return;
+        const activeIndex = Math.max(items.indexOf(document.activeElement as HTMLButtonElement), 0);
+        let targetIndex: number | null = null;
+        switch (event.key) {
+            case 'ArrowDown': targetIndex = (activeIndex + 1) % items.length; break;
+            case 'ArrowUp': targetIndex = (activeIndex - 1 + items.length) % items.length; break;
+            case 'Home': targetIndex = 0; break;
+            case 'End': targetIndex = items.length - 1; break;
+            case 'Escape':
+                event.preventDefault();
+                closeSort({ restoreFocus: true });
+                return;
+            case 'Enter':
+            case ' ': {
+                event.preventDefault();
+                const key = (document.activeElement as HTMLElement | null)?.dataset.sortKey as FileSortKey | undefined;
+                if (key) chooseSort(key);
+                return;
+            }
+            default: return;
+        }
+        event.preventDefault();
+        items[targetIndex]?.focus({ preventScroll: true });
     }
 
     function onDocumentClick(event: MouseEvent): void {
         if (!sortOpen) return;
         const target = event.target as Node;
         if (sortButtonEl?.contains(target) || sortMenuEl?.contains(target)) return;
-        sortOpen = false;
+        closeSort();
     }
 
     // Android BACK unwinds the bar the way it was built up: the menu first,
@@ -129,7 +175,7 @@
     let sortBack: SheetHandle | null = null;
     $effect(() => {
         if (sortOpen) {
-            sortBack ??= pushSheet(() => { sortOpen = false; });
+            sortBack ??= pushSheet(() => closeSort({ restoreFocus: true }));
             return;
         }
         sortBack?.release();
@@ -190,6 +236,7 @@
                             onclick={openDriveSwitcher}
                         >
                             <span class="drive-header-name" title={driveName}>{driveName}</span>
+                            <ChevronDownIcon class="drive-header-chevron" size={16} strokeWidth={2.4} aria-hidden="true" />
                         </button>
                         <SyncRing status={$ringState} onOpenQueue={() => activeTab.set('transfers')} />
                     </div>
@@ -215,20 +262,31 @@
                         class="topbar-icon-btn"
                         aria-haspopup="menu"
                         aria-expanded={sortOpen}
+                        aria-controls="mobile-sort-menu"
                         aria-label={`Sort and more. Sorted by ${currentSortLabel}, ${$fileSortState.direction === 'asc' ? 'ascending' : 'descending'}.`}
                         onclick={toggleSort}
                     >
                         <EllipsisIcon size={22} strokeWidth={2} aria-hidden="true" />
                     </button>
                     {#if sortOpen}
-                        <div bind:this={sortMenuEl} class="topbar-menu" role="menu" aria-label="Sort by">
-                            <div class="topbar-menu-label">Sort by</div>
+                        <div
+                            id="mobile-sort-menu"
+                            bind:this={sortMenuEl}
+                            class="topbar-menu"
+                            role="menu"
+                            aria-label="Sort by"
+                            aria-orientation="vertical"
+                            tabindex="-1"
+                            onkeydown={onSortMenuKeydown}
+                        >
+                            <div class="topbar-menu-label" role="presentation" aria-hidden="true">Sort by</div>
                             {#each sortOptions as option (option.key)}
                                 <button
                                     type="button"
                                     class="topbar-menu-item"
                                     role="menuitemradio"
                                     aria-checked={$fileSortState.key === option.key}
+                                    data-sort-key={option.key}
                                     onclick={() => chooseSort(option.key)}
                                 >
                                     <span>{option.label}</span>

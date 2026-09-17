@@ -13,6 +13,7 @@
  */
 
 import { derived, type Readable } from 'svelte/store';
+import { state } from '../../state';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
 import { resolveItemState, type ItemState } from './item-state';
 
@@ -20,8 +21,9 @@ import { resolveItemState, type ItemState } from './item-state';
  * Pulls the row id back out of an "xfer:<direction>:<kind>:<id>" transfer key.
  *
  * Only a key that names its kind is a claim about a row. The download queue
- * keys its jobs "file:<msgId>" / "folder:<d:id>", which is exactly the id the
- * matching row carries, so the kind prefix comes off and the badge lands.
+ * keys its jobs "file:<driveId>:<msgId>" / "folder:<driveId>:<d:id>". The
+ * drive segment prevents a row in another drive with the same Telegram message
+ * id inheriting a stale transfer badge after a switch.
  *
  * A key without one -- "xfer:up:3", "xfer:up:import" -- is not a file id at
  * all: an upload is numbered by its position in the batch, so "3" is the
@@ -32,10 +34,17 @@ import { resolveItemState, type ItemState } from './item-state';
  * one day knows the id it is writing to, keying it "file:<id>" is all it takes
  * to appear here.
  */
-function transferFileId(transfer: TransferEvent): string {
+function transferFileKey(transfer: TransferEvent): string {
     const parts = transfer.id.split(':');
     if (parts.length < 4) return '';
     if (parts[2] !== 'file' && parts[2] !== 'folder') return '';
+    const sourceChannelId = Number(parts[3]);
+    if (parts.length >= 5 && Number.isSafeInteger(sourceChannelId) && sourceChannelId > 0) {
+        return `${sourceChannelId}:${parts.slice(4).join(':')}`;
+    }
+    // History created before drive-scoped transfer ids is intentionally still
+    // understood. It cannot be disambiguated, but it expires from the bounded
+    // history and keeps a completed upgrade from hiding an old failure.
     return parts.slice(3).join(':');
 }
 
@@ -59,7 +68,8 @@ function transferInput(transfer: TransferEvent) {
 }
 
 /**
- * file id -> the transfer touching it. Where a file has more than one (a
+ * drive id + file id -> the transfer touching it. Legacy rows use the bare
+ * file id. Where a file has more than one (a
  * download queued behind an upload), the newest wins: historyEvents is newest
  * first, so the first match is the one the user last caused.
  */
@@ -67,9 +77,9 @@ export const transfersByFile: Readable<Map<string, TransferEvent>> = derived(his
     const byFile = new Map<string, TransferEvent>();
     for (const event of events) {
         if (event.kind !== 'transfer') continue;
-        const fileId = transferFileId(event);
-        if (!fileId || byFile.has(fileId)) continue;
-        byFile.set(fileId, event);
+        const fileKey = transferFileKey(event);
+        if (!fileKey || byFile.has(fileKey)) continue;
+        byFile.set(fileKey, event);
     }
     return byFile;
 });
@@ -83,7 +93,11 @@ export function itemStateFor(
     fileId: string,
     stored: { offline?: boolean; conflicted?: boolean } = {},
 ): ItemState {
-    const transfer = transfers.get(fileId);
+    const activeChannelId = Number(state.activeChannel?.id);
+    const scopedKey = Number.isSafeInteger(activeChannelId) && activeChannelId > 0
+        ? `${activeChannelId}:${fileId}`
+        : '';
+    const transfer = (scopedKey ? transfers.get(scopedKey) : undefined) ?? transfers.get(fileId);
     return resolveItemState({
         transfer: transfer ? transferInput(transfer) : undefined,
         offline: stored.offline,

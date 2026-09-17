@@ -89,7 +89,7 @@ test('the back bridge pops one folder level and then leaves the app', async ({ p
     await bootMobile(page);
     await expect(page.getByRole('button', { name: /Switch drive/ })).toBeVisible();
 
-    const folderRow = page.getByRole('row', { name: 'Folder: Reports' });
+    const folderRow = page.getByRole('listitem', { name: 'Folder: Reports' });
     await folderRow.click();
     if (!(await page.locator('.topbar-folder-title').isVisible().catch(() => false))) {
         await folderRow.dblclick().catch(() => undefined);

@@ -76,6 +76,33 @@ describe('drive header', () => {
         expect(get(driveSwitcherOpen)).toBe(true);
         expect(get(activeTab)).toBe('files');
     });
+
+    it('uses a keyboard-complete radio menu for sorting and restores focus when it closes', async () => {
+        render();
+        const trigger = target.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]');
+        trigger?.click();
+        flushSync();
+
+        const menu = target.querySelector<HTMLElement>('[role="menu"]');
+        const options = [...target.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+        expect(menu?.id).toBe('mobile-sort-menu');
+        expect(trigger?.getAttribute('aria-controls')).toBe('mobile-sort-menu');
+        await vi.waitFor(() => expect(document.activeElement).toBe(
+            options.find((option) => option.getAttribute('aria-checked') === 'true'),
+        ));
+
+        menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+        expect(document.activeElement).toBe(options[options.length - 1]);
+        menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+        expect(document.activeElement).toBe(options[0]);
+        menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+        expect(document.activeElement).toBe(options[0]);
+        menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        flushSync();
+
+        expect(target.querySelector('[role="menu"]')).toBeNull();
+        await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+    });
 });
 
 describe('selection header', () => {

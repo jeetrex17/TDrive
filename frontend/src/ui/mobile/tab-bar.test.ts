@@ -40,19 +40,12 @@ describe('TabBar account cell', () => {
         expect(body).toContain('data:image/jpeg;base64,QUJD');
     });
 
-    it('keeps four destinations around the upload cell', () => {
-        // The avatar replaces a glyph, not a cell: five cells is what keeps the
-        // row's spacing even. Only the upload host renders here, because the
-        // trigger itself is portalled into it at runtime.
+    it('keeps exactly four navigation destinations', () => {
         const { body } = render(TabBar, { props });
 
         for (const label of ['Files', 'Photos', 'Transfers', 'Account']) {
             expect(body).toContain(label);
         }
-        expect(body).toContain('upload-menu-root');
-        // The host sits between the second and third destination, which is what
-        // puts it in the middle of the row.
-        expect(body.indexOf('Photos')).toBeLessThan(body.indexOf('upload-menu-root'));
-        expect(body.indexOf('upload-menu-root')).toBeLessThan(body.indexOf('Transfers'));
+        expect(body).not.toContain('upload-menu-root');
     });
 });

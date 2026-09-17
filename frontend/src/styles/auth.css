@@ -1,5 +1,5 @@
 /* === AUTH SCREENS === */
-#auth-wrapper { display: flex; justify-content: center; align-items: safe center; height: 100vh; padding: 24px 16px; overflow-y: auto; background: var(--bg-dark); }
+#auth-wrapper { display: flex; justify-content: center; align-items: safe center; height: 100vh; height: 100dvh; padding: 24px 16px; overflow-y: auto; background: var(--bg-dark); }
 
 .auth-box {
     background: var(--bg-sidebar); border: 1px solid var(--border);
