@@ -28,6 +28,7 @@ interface ThumbnailHandle extends ThumbnailRegistration {
     attempt: number;
     retryTimer: number;
     lease: RenditionLease | null;
+    intersecting: boolean;
 }
 
 export interface ThumbnailController {
@@ -139,6 +140,7 @@ export function createThumbnailController(options: ThumbnailControllerOptions = 
         for (const entry of entries) {
             const handle = handles.get(entry.target as HTMLElement);
             if (!handle) continue;
+            handle.intersecting = entry.isIntersecting;
             if (entry.isIntersecting) {
                 if (handle.status === 'idle') void load(handle);
             } else {
@@ -236,6 +238,7 @@ export function createThumbnailController(options: ThumbnailControllerOptions = 
             attempt: 0,
             retryTimer: 0,
             lease: null,
+            intersecting: false,
         };
         handles.set(node, handle);
         observe(handle);
@@ -243,13 +246,17 @@ export function createThumbnailController(options: ThumbnailControllerOptions = 
 
     function rearmLocked(): void {
         for (const handle of handles.values()) {
-            if (handle.status !== 'locked') continue;
+            // A request started just before unlock can report the old locked
+            // result after the event. Cancel and replace visible in-flight
+            // work too so that stale response cannot strand the cell.
+            if (handle.status !== 'locked' && handle.status !== 'loading') continue;
             handle.attempt = 0;
             release(handle);
             handle.status = 'idle';
             handle.apply({ status: 'idle', title: '' });
             observer?.unobserve(handle.node);
-            observe(handle);
+            if (handle.intersecting) void load(handle);
+            else observe(handle);
         }
     }
 

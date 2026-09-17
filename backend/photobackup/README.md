@@ -88,7 +88,27 @@ from v1/v2 databases without discarding sources, receipts, or queued work.
 ## User-visible limits
 
 Backup source selection is available in the desktop profile menu and mobile
-Account tab. The destination is the current drive. Policy controls are enabled
+Account tab. New uploads go to `Photo backup / <device> / <source>` in the
+current drive (under a configured destination parent when present). Device names
+are persisted with an installation-specific suffix. Indexed folder lookup reuses
+the hierarchy across restarts; existing completed uploads are not moved or sent
+again. The panel reports the actual destination layout.
+
+A single scoped notification/Transfers row reports the current filename, transport
+percentage, bytes, and queue counts. Byte updates are throttled to four per second;
+file completion clears the current item. State uses one snapshot, not one object
+per queued file, and stale responses cannot restore another drive's filenames.
+
+Encrypted photo backups reuse the uploader's immutable snapshot (up to 30 MiB) to
+create encrypted thumbnails and previews before releasing the local source.
+A failed optional preview does not invalidate the original upload receipt.
+Unlocking encryption immediately retries visible locked thumbnails; offscreen
+items remain lazy. Older encrypted images without derivatives can prepare them
+on demand, capped at 30 MiB per original and by thumbnail worker concurrency.
+Temporary originals stay encrypted on disk and derivatives use the encrypted
+cache. Larger or unsupported images may still lack a thumbnail.
+
+Policy controls are enabled
 only where native device status can be supplied; an unavailable or stale required
 policy prevents uploading.
 
