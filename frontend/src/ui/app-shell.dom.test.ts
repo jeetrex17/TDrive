@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import AppShell from './AppShell.svelte';
 import { resetFileSortState } from './file-list/file-sort-store';
+import { fileListColumnMode, resetFileListColumnMode } from './file-list/column-mode-store';
 
 let app: Record<string, unknown> | null = null;
 let host: HTMLElement | null = null;
@@ -22,6 +23,7 @@ function click(selector: string): void {
 
 afterEach(async () => {
     resetFileSortState();
+    resetFileListColumnMode();
     if (app) await unmount(app);
     host?.remove();
     app = null;
@@ -34,8 +36,6 @@ describe('AppShell behavior', () => {
 
         for (const id of [
             'success-screen',
-            'drives-personal',
-            'drives-shared',
             'file-list',
             'gallery-view',
         ]) {
@@ -88,12 +88,23 @@ describe('AppShell behavior', () => {
         }
     });
 
-    it('leaves selection bar contents owned by the Svelte SelectionBar island', () => {
+    it('renders the selection bar island inside the actions column, hidden until rows are picked', () => {
         setup();
 
-        const selectionBar = host?.querySelector('#selection-bar');
+        const selectionBar = host?.querySelector<HTMLElement>('#selection-bar');
         expect(selectionBar).not.toBeNull();
-        expect(selectionBar?.children).toHaveLength(0);
+        // The controller is what reveals the bar, so it must still start hidden
+        // even though its contents are now rendered up front.
+        expect(selectionBar?.style.display).toBe('none');
+        expect(selectionBar?.querySelector('#selection-count')).not.toBeNull();
+        expect(selectionBar?.querySelector('#selection-move')).not.toBeNull();
+        expect(selectionBar?.querySelector('#selection-delete')).not.toBeNull();
+    });
+
+    it('leaves the selection bar empty until the dashboard is up', () => {
+        setup(false);
+
+        expect(host?.querySelector('#selection-bar')?.children).toHaveLength(0);
     });
 
     it('exposes sortable data-grid headers', () => {
@@ -117,5 +128,30 @@ describe('AppShell behavior', () => {
         expect(nameHeader?.getAttribute('aria-sort')).toBe('descending');
         expect(name?.getAttribute('aria-label')).toContain('ascending');
         expect(name?.querySelector('.sort-direction-down')).not.toBeNull();
+    });
+});
+
+describe('the file list header during a search', () => {
+    it('relabels the second column without destroying its sort control', () => {
+        setup();
+
+        const dateColumn = () => host?.querySelector('.file-table-header .col-date');
+        const sortButton = () => dateColumn()?.querySelector('button.file-sort-button');
+
+        expect(sortButton()).not.toBeNull();
+        expect(dateColumn()?.textContent).toContain('Date');
+
+        // A search spans every folder, so the column reports where each result
+        // lives instead. Relabelling used to be a textContent write on this
+        // column, which deleted the button inside it and never brought it back.
+        fileListColumnMode.set('location');
+        flushSync();
+        expect(dateColumn()?.textContent).toContain('Location');
+        expect(sortButton()).not.toBeNull();
+
+        fileListColumnMode.set('date');
+        flushSync();
+        expect(dateColumn()?.textContent).toContain('Date');
+        expect(sortButton()).not.toBeNull();
     });
 });

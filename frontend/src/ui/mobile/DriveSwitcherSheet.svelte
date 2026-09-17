@@ -2,7 +2,14 @@
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import XIcon from '@lucide/svelte/icons/x';
+    import {
+        handleDriveClick,
+        handlePendingClick,
+        showPendingActionsMenu,
+        showSharedActionsMenu,
+    } from '../../modules/sidebar';
     import { createSheetDrag, sheetOffset, shouldDismiss } from '../modals/sheet-gesture';
+    import DriveList from '../sidebar/DriveList.svelte';
     import { driveSwitcherOpen, closeDriveSwitcher } from './mobile-shell-store';
 
     let sheetEl = $state<HTMLElement | null>(null);
@@ -126,9 +133,9 @@
         if (dismissed) closeDriveSwitcher();
     }
 
-    // Picking a drive row switches drives (handled by the portaled DriveList) and
-    // then dismisses the sheet. The shared-drive actions button is a sibling, so
-    // it never matches here and keeps the sheet open for its context menu.
+    // Picking a drive row switches drives (handled by DriveList) and then
+    // dismisses the sheet. The shared-drive actions button is a sibling, so it
+    // never matches here and keeps the sheet open for its context menu.
     function onDriveNavClick(event: MouseEvent): void {
         if ((event.target as HTMLElement).closest('.drive-item')) closeDriveSwitcher();
     }
@@ -146,9 +153,11 @@
     onclick={closeDriveSwitcher}
 ></div>
 
-<!-- The sheet stays in the DOM at all times so the drive lists that portal into
-     #drives-personal / #drives-shared are never unmounted; visibility is a
-     transform, and it is inert while closed. -->
+<!-- The sheet stays in the DOM at all times: showing it is a transform, so it
+     has to be there to move, and it is inert while closed. The drive lists are
+     plain children of it rather than anything with a lifecycle of its own --
+     they only read the sidebar store, so there is nothing to hold off until the
+     dashboard is up, and they survive every open and close for free. -->
 <div
     bind:this={sheetEl}
     class="mobile-sheet drive-switcher-sheet"
@@ -175,13 +184,25 @@
         </div>
     </div>
 
-    <!-- Delegated tap on the portaled drive rows closes the sheet after the
-         switch; the rows are real buttons, so keyboard activation flows through
-         them and this listener needs no key handler of its own. -->
+    <!-- Delegated tap on the drive rows closes the sheet after the switch; the
+         rows are real buttons, so keyboard activation flows through them and
+         this listener needs no key handler of its own. -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
     <nav id="drives-nav" class="switcher-list" tabindex="-1" aria-label="Drives" onclick={onDriveNavClick}>
-        <div id="drives-personal" class="switcher-group"></div>
-        <div id="drives-shared" class="switcher-group"></div>
+        <!-- Two groups rather than one list: the phone shows the same split the
+             desktop sidebar does, and each is its own stacking column. -->
+        <div class="switcher-group">
+            <DriveList kind="personal" onDriveClick={handleDriveClick} />
+        </div>
+        <div class="switcher-group">
+            <DriveList
+                kind="shared"
+                onDriveClick={handleDriveClick}
+                onDriveActions={showSharedActionsMenu}
+                onPendingClick={handlePendingClick}
+                onPendingActions={showPendingActionsMenu}
+            />
+        </div>
     </nav>
 
     <div class="switcher-actions">

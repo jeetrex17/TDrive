@@ -30,7 +30,7 @@ func buildAppMenu(app *App, wailsApp *application.App) *application.Menu {
 
 	help := menu.AddSubmenu("Help")
 	help.Add("Check for Updates…").OnClick(func(*application.Context) {
-		app.requestUpdatesPanel()
+		app.updates.requestPanel()
 	})
 	help.AddSeparator()
 	help.Add("TDrive on GitHub").OnClick(func(*application.Context) {

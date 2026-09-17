@@ -23,21 +23,22 @@ type PersonalDriveSetupState struct {
 	ActiveChannelID string `json:"active_channel_id"`
 }
 
-func (a *App) requirePersonalDriveService() (*personaldriveservice.Service, error) {
-	if a == nil || a.engine == nil {
+func (s *DriveService) requirePersonalDriveService() (*personaldriveservice.Service, error) {
+	engine := s.engine()
+	if engine == nil {
 		return nil, fmt.Errorf("backend not ready")
 	}
-	return a.engine.PersonalDriveService(), nil
+	return engine.PersonalDriveService(), nil
 }
 
 // PreparePersonalDrive activates the saved personal drive, or reports that
 // the user has to choose one. It never contacts Telegram.
-func (a *App) PreparePersonalDrive() (PersonalDriveSetupState, error) {
-	service, err := a.requirePersonalDriveService()
+func (s *DriveService) PreparePersonalDrive() (PersonalDriveSetupState, error) {
+	service, err := s.requirePersonalDriveService()
 	if err != nil {
 		return PersonalDriveSetupState{}, err
 	}
-	state, err := service.Prepare(a.ctx)
+	state, err := service.Prepare(s.host.appContext())
 	if err != nil {
 		return PersonalDriveSetupState{}, err
 	}
@@ -50,36 +51,36 @@ func (a *App) PreparePersonalDrive() (PersonalDriveSetupState, error) {
 
 // DiscoverPersonalDrives lists the broadcast channels the user created so an
 // existing drive can be recovered. Read-only.
-func (a *App) DiscoverPersonalDrives() ([]PersonalDriveCandidate, error) {
-	service, err := a.requirePersonalDriveService()
+func (s *DriveService) DiscoverPersonalDrives() ([]PersonalDriveCandidate, error) {
+	service, err := s.requirePersonalDriveService()
 	if err != nil {
 		return nil, err
 	}
-	candidates, err := service.Discover(a.ctx)
+	candidates, err := service.Discover(s.host.appContext())
 	if err != nil {
 		return nil, err
 	}
 	return personalDriveCandidates(candidates), nil
 }
 
-func (a *App) SelectPersonalDrive(channelID string) error {
+func (s *DriveService) SelectPersonalDrive(channelID string) error {
 	parsed, err := strconv.ParseInt(channelID, 10, 64)
 	if err != nil || parsed <= 0 || strconv.FormatInt(parsed, 10) != channelID {
 		return fmt.Errorf("invalid channel id")
 	}
-	service, err := a.requirePersonalDriveService()
+	service, err := s.requirePersonalDriveService()
 	if err != nil {
 		return err
 	}
-	return service.Select(a.ctx, parsed)
+	return service.Select(s.host.appContext(), parsed)
 }
 
-func (a *App) CreatePersonalDrive() error {
-	service, err := a.requirePersonalDriveService()
+func (s *DriveService) CreatePersonalDrive() error {
+	service, err := s.requirePersonalDriveService()
 	if err != nil {
 		return err
 	}
-	return service.Create(a.ctx)
+	return service.Create(s.host.appContext())
 }
 
 func personalDriveCandidates(candidates []personaldriveservice.Candidate) []PersonalDriveCandidate {

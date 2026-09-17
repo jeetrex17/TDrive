@@ -6,7 +6,7 @@ func (a *App) photoBackupAccessState(state PhotoBackupState) PhotoBackupState {
 	if !state.Settings.Enabled || !state.Settings.Encrypt || state.ManualPaused {
 		return state
 	}
-	status, err := a.EncryptionStatus()
+	status, err := a.encryption.EncryptionStatus()
 	if err != nil {
 		state.Status.Phase = "paused"
 		state.Status.Message = "Could not check encryption. Try again when connected."

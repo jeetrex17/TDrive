@@ -13,19 +13,10 @@ import * as backend$0 from "./backend/models.js";
 import * as galleryimage$0 from "./backend/galleryimage/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as media$0 from "./backend/media/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as nativeplayer$0 from "./backend/nativeplayer/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
 import * as projection$0 from "./backend/projection/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as file$0 from "./backend/services/file/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as updater$0 from "./backend/updater/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -40,38 +31,10 @@ export function AddPhotoBackupFolder(): $CancellablePromise<$models.PhotoBackupS
 }
 
 /**
- * AppVersion returns the build identity shown in the Updates panel.
- */
-export function AppVersion(): $CancellablePromise<$models.AppVersionInfo> {
-    return $Call.ByID(1970741496);
-}
-
-export function ApproveJoinRequest(channelID: number, userID: number): $CancellablePromise<void> {
-    return $Call.ByID(1476636867, channelID, userID);
-}
-
-/**
- * AttachNativeMedia attaches the native player to an existing loopback media
- * session. It is used when the embedded webview cannot decode a file, allowing
- * the fallback to keep the same token and range cache. Ownership of the media
- * session remains with the original opener, including on attachment failure.
- */
-export function AttachNativeMedia(token: string, rect: nativeplayer$0.Rect): $CancellablePromise<$models.NativeMediaResult> {
-    return $Call.ByID(4057985129, token, rect);
-}
-
-/**
  * CancelDownload cancels the active download.
  */
 export function CancelDownload(): $CancellablePromise<void> {
     return $Call.ByID(2532515671);
-}
-
-/**
- * CancelUpdateDownload aborts the in-flight download.
- */
-export function CancelUpdateDownload(): $CancellablePromise<void> {
-    return $Call.ByID(786380562);
 }
 
 /**
@@ -91,35 +54,8 @@ export function CancelUploadByID(uploadID: number): $CancellablePromise<void> {
     return $Call.ByID(2968075794, uploadID);
 }
 
-/**
- * ChangeEncryptionPassword verifies the current password, then re-wraps
- * the same master key with the new password. Existing encrypted files stay
- * decryptable; file contents are not re-encrypted.
- */
-export function ChangeEncryptionPassword(currentPassword: string, newPassword: string, hint: string): $CancellablePromise<$models.OperationResult> {
-    return $Call.ByID(223299277, currentPassword, newPassword, hint);
-}
-
-/**
- * CheckForUpdate contacts GitHub and returns the resulting state. Failures
- * are reported inside the state rather than as an error so the panel has a
- * single source of truth.
- */
-export function CheckForUpdate(): $CancellablePromise<updater$0.State> {
-    return $Call.ByID(2347956003);
-}
-
 export function CheckLoginStatus(): $CancellablePromise<boolean> {
     return $Call.ByID(1827168990);
-}
-
-/**
- * CheckPendingJoin checks whether a prior approval-required request has now
- * become a membership. Users call this manually from the sidebar; no realtime
- * Telegram update stream is required for v1.
- */
-export function CheckPendingJoin(inviteHash: string): $CancellablePromise<$models.JoinDriveResult> {
-    return $Call.ByID(1448742122, inviteHash);
 }
 
 export function CheckSystemStatus(): $CancellablePromise<string> {
@@ -134,39 +70,8 @@ export function CloseGalleryImages(token: string): $CancellablePromise<void> {
     return $Call.ByID(2992155069, token);
 }
 
-export function CloseMedia(token: string): $CancellablePromise<void> {
-    return $Call.ByID(3866630845, token);
-}
-
-export function CloseNativeMedia(token: string): $CancellablePromise<void> {
-    return $Call.ByID(1685105548, token);
-}
-
-/**
- * CreateEncryptionPassword creates the user's first encryption password.
- * It stores a random master key wrapped under the password and an optional
- * plaintext hint. It refuses to overwrite an existing password.
- */
-export function CreateEncryptionPassword(password: string, hint: string): $CancellablePromise<$models.OperationResult> {
-    return $Call.ByID(2665027757, password, hint);
-}
-
 export function CreateFolder(foldername: string, parentID: string): $CancellablePromise<backend$0.Folder> {
     return $Call.ByID(1403526973, foldername, parentID);
-}
-
-export function CreatePersonalDrive(): $CancellablePromise<void> {
-    return $Call.ByID(2476815071);
-}
-
-/**
- * CreateSharedDrive creates a Telegram megagroup, exports an invite link,
- * inserts the channel row, and switches the active drive to it.
- * 
- * Returns the new ChannelInfo with the invite link populated.
- */
-export function CreateSharedDrive(title: string, requireApproval: boolean): $CancellablePromise<$models.ChannelInfo> {
-    return $Call.ByID(3508040092, title, requireApproval);
 }
 
 export function DeleteFile(msgID: number): $CancellablePromise<$models.OperationResult> {
@@ -175,14 +80,6 @@ export function DeleteFile(msgID: number): $CancellablePromise<$models.Operation
 
 export function DeleteFolder(folderID: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(127207050, folderID);
-}
-
-/**
- * DiscoverPersonalDrives lists the broadcast channels the user created so an
- * existing drive can be recovered. Read-only.
- */
-export function DiscoverPersonalDrives(): $CancellablePromise<$models.PersonalDriveCandidate[] | null> {
-    return $Call.ByID(1756959499);
 }
 
 /**
@@ -204,36 +101,12 @@ export function DownloadFolder(channelID: number, folderID: string, requestID: s
     return $Call.ByID(794478145, channelID, folderID, requestID);
 }
 
-/**
- * DownloadUpdate starts fetching the available release in the background.
- */
-export function DownloadUpdate(): $CancellablePromise<void> {
-    return $Call.ByID(115027584);
-}
-
-/**
- * EncryptionStatus reports whether the user has set an encryption
- * password, and whether that password has already been accepted for the
- * current app session.
- */
-export function EncryptionStatus(): $CancellablePromise<$models.EncryptionStatus> {
-    return $Call.ByID(2870323614);
-}
-
 export function EnqueuePhotoBackupAssets(sourceID: string, values: $models.PhotoBackupAsset[] | null): $CancellablePromise<number> {
     return $Call.ByID(2612336532, sourceID, values);
 }
 
 export function GetAllFsMsgIDs(): $CancellablePromise<number[] | null> {
     return $Call.ByID(2840193812);
-}
-
-/**
- * GetApprovalInviteLink fetches an invite link where Telegram requires an
- * admin to approve each requester before they become a member.
- */
-export function GetApprovalInviteLink(channelID: number): $CancellablePromise<string> {
-    return $Call.ByID(2039819737, channelID);
 }
 
 export function GetFileList(): $CancellablePromise<$models.TDriveFile[] | null> {
@@ -256,22 +129,8 @@ export function GetGalleryStorage(): $CancellablePromise<$models.GalleryStorage>
     return $Call.ByID(940237792);
 }
 
-/**
- * GetInviteLink fetches a fresh link from Telegram and caches it. Admin-
- * only on the Telegram side; non-admin members will get an error from
- * MessagesExportChatInvite. (Step 4 doesn't gate this client-side; we
- * surface whatever Telegram returns.)
- */
-export function GetInviteLink(channelID: number): $CancellablePromise<string> {
-    return $Call.ByID(212477826, channelID);
-}
-
 export function GetMediaNeighbors(msgID: number, before: number, after: number, generation: string): $CancellablePromise<$models.GalleryPage> {
     return $Call.ByID(2332667564, msgID, before, after, generation);
-}
-
-export function GetMediaStats(token: string): $CancellablePromise<media$0.MediaStats> {
-    return $Call.ByID(3394475712, token);
 }
 
 /**
@@ -299,30 +158,6 @@ export function GetStorageUsed(): $CancellablePromise<number> {
 }
 
 /**
- * GetUpdateState returns the current updater snapshot for hydration.
- */
-export function GetUpdateState(): $CancellablePromise<updater$0.State> {
-    return $Call.ByID(2688708227);
-}
-
-/**
- * Haptic plays a semantic feedback pattern: a light impact for a long press or
- * an armed pull, "selection" for a changed sort or filter, and success/warning/
- * error only at a real outcome. The OS maps these to its own generator, so a
- * user who has turned system haptics off feels nothing, as they asked.
- */
-export function Haptic(kind: string): $CancellablePromise<void> {
-    return $Call.ByID(2625367938, kind);
-}
-
-/**
- * HideNativeSeekThumbnail hides the seek-preview overlay for the session.
- */
-export function HideNativeSeekThumbnail(token: string): $CancellablePromise<void> {
-    return $Call.ByID(3355098410, token);
-}
-
-/**
  * ImportPaths recreates the folder structure of the selected paths under
  * parentID and uploads their files. Archives are extracted when extractArchives
  * is set, otherwise uploaded as-is. Progress flows through aggregate import_*
@@ -332,67 +167,8 @@ export function ImportPaths(paths: string[] | null, parentID: string, encrypt: b
     return $Call.ByID(4265040680, paths, parentID, encrypt, extractArchives);
 }
 
-/**
- * InstallUpdateAndRestart swaps the verified payload into place, launches the
- * new version and quits. Native players are closed first so their sidecar
- * binaries are not in use while the bundle is replaced; the regular shutdown
- * path ejects any mounted drive and releases the backend lock, which the new
- * instance waits for before it starts.
- */
-export function InstallUpdateAndRestart(): $CancellablePromise<void> {
-    return $Call.ByID(1124164773);
-}
-
-/**
- * JoinSharedDrive imports an invite link. Immediate links return a joined
- * channel. Approval-required links send a Telegram join request and return a
- * durable pending record that can be checked later.
- */
-export function JoinSharedDrive(inviteLink: string): $CancellablePromise<$models.JoinDriveResult> {
-    return $Call.ByID(3217676408, inviteLink);
-}
-
-/**
- * LeaveSharedDrive leaves the Telegram channel and drops every local row
- * scoped to it. If the active drive was this one, switches active to the
- * personal drive.
- */
-export function LeaveSharedDrive(channelID: number): $CancellablePromise<void> {
-    return $Call.ByID(3171105383, channelID);
-}
-
-/**
- * ListChannels returns every drive known to this client (personal first,
- * then shared in joined-at order). Used to render the sidebar.
- */
-export function ListChannels(): $CancellablePromise<$models.ChannelInfo[] | null> {
-    return $Call.ByID(1710969609);
-}
-
-/**
- * ListJoinRequests lists Telegram users waiting for admin approval on a drive.
- */
-export function ListJoinRequests(channelID: number): $CancellablePromise<$models.JoinRequestInfo[] | null> {
-    return $Call.ByID(3857162939, channelID);
-}
-
-/**
- * ListMedia is the legacy bulk API. The gallery uses GetMediaTimeline and
- * ListMediaPage so metadata memory stays bounded as the library grows.
- */
-export function ListMedia(): $CancellablePromise<backend$0.FileMetaData[] | null> {
-    return $Call.ByID(1688718951);
-}
-
 export function ListMediaPage(cursor: string, limit: number): $CancellablePromise<$models.GalleryPage> {
     return $Call.ByID(836790156, cursor, limit);
-}
-
-/**
- * ListPendingJoins returns approval-required joins this client is waiting on.
- */
-export function ListPendingJoins(): $CancellablePromise<$models.PendingJoinInfo[] | null> {
-    return $Call.ByID(3480021689);
 }
 
 export function LocateMedia(msgID: number, generation: string): $CancellablePromise<projection$0.GalleryLocation> {
@@ -461,16 +237,6 @@ export function MoveFolder(folderID: string, newParentID: string): $CancellableP
     return $Call.ByID(3833907176, folderID, newParentID);
 }
 
-/**
- * MoveNativeSeekThumbnail moves the already-painted seek-preview overlay without
- * re-uploading or re-decoding the frame. Windows calls this on every scrub move;
- * keeping it separate from ShowNativeSeekThumbnail avoids doing JPEG decode and
- * GDI bitmap upload work just to follow the cursor.
- */
-export function MoveNativeSeekThumbnail(token: string, rect: nativeplayer$0.Rect): $CancellablePromise<void> {
-    return $Call.ByID(1226278281, token, rect);
-}
-
 export function MsgToTdriveSystem(msgID: number, name: string, size: number, parentID: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(2126330906, msgID, name, size, parentID);
 }
@@ -485,10 +251,6 @@ export function MyUserID(): $CancellablePromise<number> {
     return $Call.ByID(1596339941);
 }
 
-export function NativeMediaCommand(token: string, command: string[] | null): $CancellablePromise<void> {
-    return $Call.ByID(689469907, token, command);
-}
-
 /**
  * OpenGalleryImages creates one capability for a gallery and its viewer. The
  * expected channel prevents a late bridge response from opening a new drive's
@@ -498,53 +260,8 @@ export function OpenGalleryImages(channelID: number): $CancellablePromise<galler
     return $Call.ByID(2496003119, channelID);
 }
 
-/**
- * OpenMedia creates a short-lived, tokenized loopback URL for a plain media
- * file in the active drive. The frontend player must call CloseMedia when the
- * preview closes so the underlying range reader and cache are released.
- */
-export function OpenMedia(msgID: number): $CancellablePromise<media$0.OpenResult> {
-    return $Call.ByID(915843295, msgID);
-}
-
 export function OpenMountedDrive(): $CancellablePromise<void> {
     return $Call.ByID(4232063021);
-}
-
-/**
- * OpenNativeMedia opens the same tokenized loopback stream as OpenMedia, then
- * hands it to the native player. The returned token owns both resources.
- */
-export function OpenNativeMedia(msgID: number, rect: nativeplayer$0.Rect): $CancellablePromise<$models.NativeMediaResult> {
-    return $Call.ByID(150136774, msgID, rect);
-}
-
-/**
- * OpenOriginalImage returns one revision-bound capability for the original
- * raster bytes. It shares the existing media range and CloseMedia lifecycle;
- * lifecycle checks around the open prevent logout from publishing a new
- * capability after session revocation has become terminal.
- */
-export function OpenOriginalImage(msgID: number, revision: number): $CancellablePromise<media$0.OpenResult> {
-    return $Call.ByID(3537090707, msgID, revision);
-}
-
-/**
- * OpenStream creates a tokenized loopback byte stream for an in-app file
- * opener. Unlike OpenMedia, it is not video-only; callers choose the viewer
- * from the returned stream kind and must still call CloseMedia on close.
- */
-export function OpenStream(msgID: number): $CancellablePromise<media$0.OpenResult> {
-    return $Call.ByID(2941707977, msgID);
-}
-
-/**
- * OpenUpdatePage opens the newest release's GitHub page in the browser, or
- * the releases index when no newer release is known. The URL never comes
- * from the frontend.
- */
-export function OpenUpdatePage(): $CancellablePromise<void> {
-    return $Call.ByID(4171214331);
 }
 
 export function PausePhotoBackup(): $CancellablePromise<void> {
@@ -558,14 +275,6 @@ export function PausePhotoBackup(): $CancellablePromise<void> {
  */
 export function PlanImport(paths: string[] | null, encrypt: boolean, extractArchives: boolean): $CancellablePromise<file$0.ImportPlan> {
     return $Call.ByID(1600788103, paths, encrypt, extractArchives);
-}
-
-/**
- * PreparePersonalDrive activates the saved personal drive, or reports that
- * the user has to choose one. It never contacts Telegram.
- */
-export function PreparePersonalDrive(): $CancellablePromise<$models.PersonalDriveSetupState> {
-    return $Call.ByID(4100922412);
 }
 
 export function PreviewFile(msgID: number): $CancellablePromise<$models.PreviewResult> {
@@ -584,18 +293,6 @@ export function RebuildProjection(channelID: number): $CancellablePromise<void> 
     return $Call.ByID(1334807909, channelID);
 }
 
-export function RejectJoinRequest(channelID: number, userID: number): $CancellablePromise<void> {
-    return $Call.ByID(4201229159, channelID, userID);
-}
-
-/**
- * RemovePendingJoin forgets a local pending request. It does not revoke the
- * Telegram-side request; only a drive admin can reject it.
- */
-export function RemovePendingJoin(inviteHash: string): $CancellablePromise<void> {
-    return $Call.ByID(4199323196, inviteHash);
-}
-
 export function RemovePhotoBackupSource(id: string): $CancellablePromise<void> {
     return $Call.ByID(560528492, id);
 }
@@ -606,10 +303,6 @@ export function RenameFile(msgID: number, newName: string): $CancellablePromise<
 
 export function RenameFolder(folderID: string, newName: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(3733990943, folderID, newName);
-}
-
-export function ResizeNativeMedia(token: string, rect: nativeplayer$0.Rect): $CancellablePromise<void> {
-    return $Call.ByID(4253865390, token, rect);
 }
 
 export function ResolvePhotoBackupResource(token: string, path: string, errorMessage: string): $CancellablePromise<void> {
@@ -636,15 +329,6 @@ export function RunPhotoBackup(): $CancellablePromise<void> {
     return $Call.ByID(424636428);
 }
 
-/**
- * SafeAreaInsets reports those reserved edges. The frontend asks for them
- * because CSS cannot see all of them: Android's WebView fills
- * env(safe-area-inset-top) but leaves the bottom gesture area at zero.
- */
-export function SafeAreaInsets(): $CancellablePromise<$models.SafeAreaInsets> {
-    return $Call.ByID(1909123243);
-}
-
 export function SavePhotoBackupSettings(value: $models.PhotoBackupSettings): $CancellablePromise<$models.PhotoBackupState> {
     return $Call.ByID(1900832239, value);
 }
@@ -669,10 +353,6 @@ export function SelectFolder(): $CancellablePromise<string> {
     return $Call.ByID(237181597);
 }
 
-export function SelectPersonalDrive(channelID: string): $CancellablePromise<void> {
-    return $Call.ByID(4065436415, channelID);
-}
-
 export function SendHint(hint: string): $CancellablePromise<void> {
     return $Call.ByID(1764638182, hint);
 }
@@ -693,35 +373,6 @@ export function SetFileDropEnabled(enabled: boolean): $CancellablePromise<void> 
 }
 
 /**
- * SetImmersive hides the system bars for a full-screen surface, or gives them
- * back. The video player is the only caller: everywhere else the bars belong on
- * screen, and hiding them would just make the app harder to leave.
- * 
- * It is not only about looking tidy. An app targeting SDK 35 is laid out edge
- * to edge on Android 15 whether it asks or not, and the system paints a
- * translucent scrim behind three-button navigation so the buttons stay legible
- * over whatever is beneath them. That scrim lands on top of the picture as a
- * grey band down one edge, and the API that used to switch it off --
- * setNavigationBarContrastEnforced -- does nothing at this target. The bar
- * itself can still be hidden, which removes the scrim with it.
- * 
- * iOS has no navigation bar to hide, so there the payload only takes the status
- * bar, which is what a full-screen player wants anyway.
- */
-export function SetImmersive(on: boolean): $CancellablePromise<void> {
-    return $Call.ByID(3415634150, on);
-}
-
-/**
- * SetKeyboardWatch starts or stops "common:keyboard" {visible,height} events.
- * The frontend prefers visualViewport where it exists and falls back to these,
- * which is the only source Android's WebView reports reliably.
- */
-export function SetKeyboardWatch(enabled: boolean): $CancellablePromise<void> {
-    return $Call.ByID(3980374793, enabled);
-}
-
-/**
  * SetPhotoBackupBackgroundLease records a lease only after the native host has
  * acquired its execution grant. Repeated calls cannot extend Android's
  * cumulative dataSync budget.
@@ -735,38 +386,12 @@ export function SetPhotoBackupPolicy(policy: $models.PhotoBackupPolicy): $Cancel
 }
 
 /**
- * SetScreenProtect asks the OS to keep the app's contents out of screenshots
- * and the app switcher while the vault is locked or privacy is raised.
- * 
- * The two platforms do NOT deliver the same thing. Android sets FLAG_SECURE,
- * which really does blank screenshots, screen recording and the switcher
- * thumbnail. iOS cannot block any of that: the same call only starts
- * *detection*, reported back as a "common:screenCapture" event. Hiding the iOS
- * switcher preview needs a native overlay on resign-active that this host does
- * not have yet, so on iOS treat this as telemetry, not protection.
- */
-export function SetScreenProtect(enabled: boolean): $CancellablePromise<void> {
-    return $Call.ByID(1181758966, enabled);
-}
-
-/**
  * ShareFile opens the platform share sheet for a file TDrive wrote itself.
  * Anything outside the folders it owns is refused so the webview cannot hand
  * arbitrary files to other apps. Desktop reports unsupported.
  */
 export function ShareFile(path: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(3239681846, path);
-}
-
-/**
- * ShowNativeSeekThumbnail paints a seek-preview thumbnail over the native video.
- * imageBase64 is the raw base64 of the JPEG frame the backend's own thumbnailer
- * produced and the frontend already holds; rect is the desired preview box in
- * CSS pixels. It is only meaningful on the Windows fallback (where HTML can't
- * draw over the video) and is a no-op on platforms without an overlay.
- */
-export function ShowNativeSeekThumbnail(token: string, imageBase64: string, rect: nativeplayer$0.Rect): $CancellablePromise<void> {
-    return $Call.ByID(5199713, token, imageBase64, rect);
 }
 
 export function SubmitCode(code: string): $CancellablePromise<void> {
@@ -785,20 +410,8 @@ export function SyncChannel(channelID: number): $CancellablePromise<void> {
     return $Call.ByID(3481222021, channelID);
 }
 
-/**
- * Thumbnail is the legacy base64 wrapper around the bounded rendition path.
- * Cache misses fetch an existing small derivative, never the original photo.
- */
-export function Thumbnail(msgID: number): $CancellablePromise<$models.PreviewPayload> {
-    return $Call.ByID(1614502735, msgID);
-}
-
 export function UnmountDrive(): $CancellablePromise<$models.MountView> {
     return $Call.ByID(3796068953);
-}
-
-export function UpdateMediaPlayback(update: media$0.PlaybackUpdate): $CancellablePromise<void> {
-    return $Call.ByID(82135249, update);
 }
 
 export function UploadToDriveFS(filePaths: string[] | null, parentIDs: string[] | null, encrypt: boolean): $CancellablePromise<$models.UploadResult> {
@@ -807,12 +420,4 @@ export function UploadToDriveFS(filePaths: string[] | null, parentIDs: string[] 
 
 export function UpsertPhotoBackupSource(value: $models.PhotoBackupSource): $CancellablePromise<$models.PhotoBackupSource> {
     return $Call.ByID(713485105, value);
-}
-
-/**
- * UseEncryptionPassword verifies an existing encryption password and keeps
- * the master key in memory for the rest of the app session.
- */
-export function UseEncryptionPassword(password: string): $CancellablePromise<$models.OperationResult> {
-    return $Call.ByID(27178320, password);
 }

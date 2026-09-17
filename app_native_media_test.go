@@ -82,47 +82,47 @@ func TestValidateNativeMediaOpenResultRejectsNonVideo(t *testing.T) {
 }
 
 func TestNativeMediaReservationRetainsSequencedStateBeforeCompletion(t *testing.T) {
-	app := &App{}
-	reservation, err := app.reserveNativeMediaSession("opaque-session-token", false)
+	media := newTestMediaService()
+	reservation, err := media.reserveNativeMediaSession("opaque-session-token", false)
 	if err != nil {
 		t.Fatalf("reserveNativeMediaSession: %v", err)
 	}
 
 	failed := nativeplayer.State{Status: nativeplayer.StatusFailed, Error: nativeplayer.ErrPlayerExited.Error(), Paused: true}
-	snapshot, emit := app.recordNativeMediaState("opaque-session-token", reservation, failed)
+	snapshot, emit := media.recordNativeMediaState("opaque-session-token", reservation, failed)
 	if emit {
 		t.Fatal("state emitted while native attachment was still in progress")
 	}
 	if snapshot.Sequence != 1 || snapshot.Status != nativeplayer.StatusFailed {
 		t.Fatalf("recorded state = %#v, want sequence 1 failed", snapshot)
 	}
-	if !app.completeNativeMediaSession("opaque-session-token", reservation, new(nativeplayer.Player)) {
+	if !media.completeNativeMediaSession("opaque-session-token", reservation, new(nativeplayer.Player)) {
 		t.Fatal("reservation could not be completed")
 	}
 
-	initial, ok := app.nativeMediaStateSnapshot("opaque-session-token", reservation)
+	initial, ok := media.nativeMediaStateSnapshot("opaque-session-token", reservation)
 	if !ok || initial.Sequence != 1 || initial.Status != nativeplayer.StatusFailed {
 		t.Fatalf("initial state = %#v, %t; want retained sequence 1 failure", initial, ok)
 	}
 
 	playing := nativeplayer.State{Status: nativeplayer.StatusPlaying, Rate: 1, Volume: 1}
-	next, emit := app.recordNativeMediaState("opaque-session-token", reservation, playing)
+	next, emit := media.recordNativeMediaState("opaque-session-token", reservation, playing)
 	if emit || next.Sequence != 1 || next.Status != nativeplayer.StatusFailed {
 		t.Fatalf("state after terminal failure = %#v, emit=%t; want retained sequence 1 failure", next, emit)
 	}
 
-	active, err := app.reserveNativeMediaSession("active-session-token", false)
+	active, err := media.reserveNativeMediaSession("active-session-token", false)
 	if err != nil {
 		t.Fatalf("reserve active session: %v", err)
 	}
 	opening := nativeplayer.State{Status: nativeplayer.StatusOpening, Paused: true, Loading: true, Rate: 1, Volume: 1}
-	if snapshot, emit := app.recordNativeMediaState("active-session-token", active, opening); emit || snapshot.Sequence != 1 {
+	if snapshot, emit := media.recordNativeMediaState("active-session-token", active, opening); emit || snapshot.Sequence != 1 {
 		t.Fatalf("opening state = %#v, emit=%t; want retained sequence 1", snapshot, emit)
 	}
-	if !app.completeNativeMediaSession("active-session-token", active, new(nativeplayer.Player)) {
+	if !media.completeNativeMediaSession("active-session-token", active, new(nativeplayer.Player)) {
 		t.Fatal("active reservation could not be completed")
 	}
-	next, emit = app.recordNativeMediaState("active-session-token", active, playing)
+	next, emit = media.recordNativeMediaState("active-session-token", active, playing)
 	if !emit || next.Sequence != 2 || next.Status != nativeplayer.StatusPlaying {
 		t.Fatalf("active state = %#v, emit=%t; want emitted sequence 2 playing", next, emit)
 	}
@@ -167,9 +167,9 @@ func TestValidateNativeMediaCommandRejectsUnsupportedCommands(t *testing.T) {
 }
 
 func TestShowNativeSeekThumbnailSkipsStaleSessionBeforeDecoding(t *testing.T) {
-	app := &App{}
+	media := newTestMediaService()
 
-	err := app.ShowNativeSeekThumbnail("stale-session-token", "%%%not-base64%%%", validSeekThumbnailRect())
+	err := media.ShowNativeSeekThumbnail("stale-session-token", "%%%not-base64%%%", validSeekThumbnailRect())
 	if err != nil {
 		t.Fatalf("ShowNativeSeekThumbnail() stale-session error = %v, want nil", err)
 	}
@@ -177,7 +177,7 @@ func TestShowNativeSeekThumbnailSkipsStaleSessionBeforeDecoding(t *testing.T) {
 
 func TestShowNativeSeekThumbnailValidatesRectBeforeDecoding(t *testing.T) {
 	const activeToken = "active-session-token"
-	app := appWithNativeThumbnailPlayer(activeToken)
+	media := mediaServiceWithNativeThumbnailPlayer(activeToken)
 	validPayload := encodeSeekThumbnailPNG(t, 8, 8)
 
 	for name, rect := range map[string]nativeplayer.Rect{
@@ -185,7 +185,7 @@ func TestShowNativeSeekThumbnailValidatesRectBeforeDecoding(t *testing.T) {
 		"non-finite coordinate": {X: math.NaN(), Y: 10, Width: 144, Height: 81},
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := app.ShowNativeSeekThumbnail(activeToken, validPayload, rect)
+			err := media.ShowNativeSeekThumbnail(activeToken, validPayload, rect)
 			assertSafeSeekThumbnailError(t, err, activeToken, validPayload)
 			if !errors.Is(err, errInvalidNativeMediaViewport) {
 				t.Fatalf("ShowNativeSeekThumbnail() error = %v, want %v", err, errInvalidNativeMediaViewport)
@@ -196,46 +196,46 @@ func TestShowNativeSeekThumbnailValidatesRectBeforeDecoding(t *testing.T) {
 
 func TestNativeMediaBridgeIgnoresStaleSessions(t *testing.T) {
 	const staleToken = "stale-session-token"
-	app := &App{}
+	media := newTestMediaService()
 	validRect := validSeekThumbnailRect()
 	invalidRect := nativeplayer.Rect{X: math.Inf(1), Y: 10, Width: 144, Height: 81}
 
-	if err := app.NativeMediaCommand(staleToken, []string{"set", "pause", "yes"}); err != nil {
+	if err := media.NativeMediaCommand(staleToken, []string{"set", "pause", "yes"}); err != nil {
 		t.Fatalf("NativeMediaCommand() stale-session error = %v, want nil", err)
 	}
-	if err := app.ResizeNativeMedia(staleToken, validRect); err != nil {
+	if err := media.ResizeNativeMedia(staleToken, validRect); err != nil {
 		t.Fatalf("ResizeNativeMedia() stale-session error = %v, want nil", err)
 	}
-	if err := app.MoveNativeSeekThumbnail(staleToken, validRect); err != nil {
+	if err := media.MoveNativeSeekThumbnail(staleToken, validRect); err != nil {
 		t.Fatalf("MoveNativeSeekThumbnail() stale-session error = %v, want nil", err)
 	}
-	if err := app.HideNativeSeekThumbnail(staleToken); err != nil {
+	if err := media.HideNativeSeekThumbnail(staleToken); err != nil {
 		t.Fatalf("HideNativeSeekThumbnail() stale-session error = %v, want nil", err)
 	}
-	if err := app.CloseNativeMedia(""); err != nil {
+	if err := media.CloseNativeMedia(""); err != nil {
 		t.Fatalf("CloseNativeMedia() empty-token error = %v, want nil", err)
 	}
-	if err := app.CloseNativeMedia(staleToken); err != nil {
+	if err := media.CloseNativeMedia(staleToken); err != nil {
 		t.Fatalf("CloseNativeMedia() stale-session error = %v, want nil", err)
 	}
-	if err := app.ResizeNativeMedia(staleToken, invalidRect); !errors.Is(err, errInvalidNativeMediaViewport) {
+	if err := media.ResizeNativeMedia(staleToken, invalidRect); !errors.Is(err, errInvalidNativeMediaViewport) {
 		t.Fatalf("ResizeNativeMedia() invalid-rect error = %v", err)
 	}
-	if err := app.MoveNativeSeekThumbnail(staleToken, invalidRect); !errors.Is(err, errInvalidNativeMediaViewport) {
+	if err := media.MoveNativeSeekThumbnail(staleToken, invalidRect); !errors.Is(err, errInvalidNativeMediaViewport) {
 		t.Fatalf("MoveNativeSeekThumbnail() invalid-rect error = %v", err)
 	}
 }
 
 func TestShowNativeSeekThumbnailRejectsMalformedBase64(t *testing.T) {
 	const activeToken = "active-session-token"
-	app := appWithNativeThumbnailPlayer(activeToken)
+	media := mediaServiceWithNativeThumbnailPlayer(activeToken)
 
 	for name, payload := range map[string]string{
 		"empty":            "",
 		"malformed base64": "%%%secret-invalid-base64%%%",
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := app.ShowNativeSeekThumbnail(activeToken, payload, validSeekThumbnailRect())
+			err := media.ShowNativeSeekThumbnail(activeToken, payload, validSeekThumbnailRect())
 			assertSafeSeekThumbnailError(t, err, activeToken, payload)
 		})
 	}
@@ -243,7 +243,7 @@ func TestShowNativeSeekThumbnailRejectsMalformedBase64(t *testing.T) {
 
 func TestShowNativeSeekThumbnailAcceptsJPEGAndPNG(t *testing.T) {
 	const activeToken = "active-session-token"
-	app := appWithNativeThumbnailPlayer(activeToken)
+	media := mediaServiceWithNativeThumbnailPlayer(activeToken)
 
 	tests := []struct {
 		name    string
@@ -255,7 +255,7 @@ func TestShowNativeSeekThumbnailAcceptsJPEGAndPNG(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := app.ShowNativeSeekThumbnail(activeToken, test.payload, validSeekThumbnailRect()); err != nil {
+			if err := media.ShowNativeSeekThumbnail(activeToken, test.payload, validSeekThumbnailRect()); err != nil {
 				t.Fatalf("ShowNativeSeekThumbnail() error = %v", err)
 			}
 		})
@@ -266,10 +266,21 @@ func validSeekThumbnailRect() nativeplayer.Rect {
 	return nativeplayer.Rect{X: 10, Y: 10, Width: 144, Height: 81}
 }
 
-func appWithNativeThumbnailPlayer(token string) *App {
-	return &App{nativeMedia: map[string]*nativeMediaSession{
+func mediaServiceWithNativeThumbnailPlayer(token string) *MediaService {
+	service := newTestMediaService()
+	service.nativeMedia = map[string]*nativeMediaSession{
 		token: {player: new(nativeplayer.Player)},
-	}}
+	}
+	return service
+}
+
+// newTestMediaService hosts the service on a bare App, which is the same thing
+// the running app does, only with no engine and no webview behind it. That is
+// what these tests want: the session table has to behave identically whether
+// the backend is up or already gone.
+func newTestMediaService() *MediaService {
+	app := &App{}
+	return newMediaService(app, app)
 }
 
 func assertSafeSeekThumbnailError(t *testing.T, err error, secrets ...string) {
@@ -309,7 +320,7 @@ func encodeSeekThumbnailImage(t *testing.T, source image.Image, encode func(*byt
 }
 
 func TestNativeMediaReservationRejectsConcurrentDuplicateAttach(t *testing.T) {
-	app := &App{}
+	media := newTestMediaService()
 	const callers = 32
 	start := make(chan struct{})
 	var successes atomic.Int32
@@ -320,7 +331,7 @@ func TestNativeMediaReservationRejectsConcurrentDuplicateAttach(t *testing.T) {
 	for range callers {
 		wg.Go(func() {
 			<-start
-			reservation, err := app.reserveNativeMediaSession("opaque-session-token", false)
+			reservation, err := media.reserveNativeMediaSession("opaque-session-token", false)
 			if err != nil {
 				if strings.Contains(err.Error(), "opaque-session-token") {
 					t.Errorf("duplicate-attach error leaked the media token: %v", err)
@@ -345,46 +356,47 @@ func TestNativeMediaReservationRejectsConcurrentDuplicateAttach(t *testing.T) {
 	if reservation == nil {
 		t.Fatal("winning reservation is nil")
 	}
-	if !app.completeNativeMediaSession("opaque-session-token", reservation, new(nativeplayer.Player)) {
+	if !media.completeNativeMediaSession("opaque-session-token", reservation, new(nativeplayer.Player)) {
 		t.Fatal("winning reservation could not be completed")
 	}
-	if got := app.nativeMediaSession("opaque-session-token"); got != reservation || got.player == nil || got.attaching {
+	if got := media.nativeMediaSession("opaque-session-token"); got != reservation || got.player == nil || got.attaching {
 		t.Fatalf("completed session = %#v, want active player", got)
 	}
 }
 
 func TestNativeMediaReservationCannotCompleteAfterClose(t *testing.T) {
-	app := &App{}
-	reservation, err := app.reserveNativeMediaSession("opaque-session-token", false)
+	media := newTestMediaService()
+	reservation, err := media.reserveNativeMediaSession("opaque-session-token", false)
 	if err != nil {
 		t.Fatalf("reserveNativeMediaSession: %v", err)
 	}
-	if err := app.CloseNativeMedia("opaque-session-token"); err != nil {
+	if err := media.CloseNativeMedia("opaque-session-token"); err != nil {
 		t.Fatalf("CloseNativeMedia: %v", err)
 	}
-	if app.completeNativeMediaSession("opaque-session-token", reservation, new(nativeplayer.Player)) {
+	if media.completeNativeMediaSession("opaque-session-token", reservation, new(nativeplayer.Player)) {
 		t.Fatal("reservation completed after it was closed")
 	}
-	if got := app.nativeMediaSession("opaque-session-token"); got != nil {
+	if got := media.nativeMediaSession("opaque-session-token"); got != nil {
 		t.Fatalf("native media session survived close: %#v", got)
 	}
 }
 
 func TestCloseEncryptedNativeMediaRemovesOnlyEncryptedEntries(t *testing.T) {
-	app := &App{nativeMedia: map[string]*nativeMediaSession{
+	media := newTestMediaService()
+	media.nativeMedia = map[string]*nativeMediaSession{
 		"encrypted-active":    {player: new(nativeplayer.Player), encrypted: true},
 		"encrypted-attaching": {attaching: true, encrypted: true},
 		"clear-active":        {player: new(nativeplayer.Player)},
 		"clear-attaching":     {attaching: true},
-	}}
+	}
 
-	app.closeEncryptedNativeMedia()
-	app.closeEncryptedNativeMedia()
+	media.closeEncryptedNativeMedia()
+	media.closeEncryptedNativeMedia()
 
-	if app.nativeMediaSession("encrypted-active") != nil || app.nativeMediaSession("encrypted-attaching") != nil {
+	if media.nativeMediaSession("encrypted-active") != nil || media.nativeMediaSession("encrypted-attaching") != nil {
 		t.Fatal("encrypted native sessions survived vault-lock cleanup")
 	}
-	if app.nativeMediaSession("clear-active") == nil || app.nativeMediaSession("clear-attaching") == nil {
+	if media.nativeMediaSession("clear-active") == nil || media.nativeMediaSession("clear-attaching") == nil {
 		t.Fatal("clear native sessions were removed by encrypted-only cleanup")
 	}
 }

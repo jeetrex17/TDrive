@@ -18,24 +18,19 @@ import { canOpenFileViewer, isVideoFile } from './media-types';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { appActions } from './app-actions';
 import type { FileListAction, FileListRow } from '../ui/file-list/types';
+import { fileListColumnMode } from '../ui/file-list/column-mode-store';
 import { getFileList, isMobilePlatform, search } from '../api';
 import type { RootFile, SearchHit } from '../types';
 
 let activeToken = 0;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let disconnectSearchBar: (() => void) | null = null;
-let colDateEl: HTMLElement | null = null;
 let telegramRootRequest: Promise<RootFile[]> | null = null;
 let telegramRootRequestDriveKey: string | null = null;
 const inFlightSearches = new Map<string, Promise<SearchHit[]>>();
-let colDateText = "";
 
 function setHeaderMode(isSearch: boolean) {
-    const el = colDateEl || document.querySelector(".file-table-header .col-date") as HTMLElement | null;
-    if (!el) return;
-    colDateEl = el;
-    if (!colDateText) colDateText = el.textContent || "";
-    el.textContent = isSearch ? "Location" : colDateText;
+	fileListColumnMode.set(isSearch ? "location" : "date");
 }
 
 function getSearchInput() {

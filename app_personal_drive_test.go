@@ -28,10 +28,10 @@ func TestPersonalDriveCandidateJSONPreservesIDAndOmitsAccessHash(t *testing.T) {
 }
 
 func TestSelectPersonalDriveRejectsNonCanonicalIDsAtBoundary(t *testing.T) {
-	app := &App{}
+	drives := newDriveService(&App{})
 	for _, channelID := range []string{"", "0", "-1", "+1", "01", " 1", "1 ", "1.0", "9223372036854775808"} {
 		t.Run(channelID, func(t *testing.T) {
-			err := app.SelectPersonalDrive(channelID)
+			err := drives.SelectPersonalDrive(channelID)
 			if err == nil || err.Error() != "invalid channel id" {
 				t.Fatalf("SelectPersonalDrive(%q) error = %v, want invalid channel id", channelID, err)
 			}

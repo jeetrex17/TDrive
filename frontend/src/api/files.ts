@@ -2,14 +2,11 @@ import {
     CancelDownload as rawCancelDownload,
     CancelUpload as rawCancelUpload,
     CancelUploadByID as rawCancelUploadById,
-    ChangeEncryptionPassword as rawChangeEncryptionPassword,
-    CreateEncryptionPassword as rawCreateEncryptionPassword,
     CreateFolder as rawCreateFolder,
     DeleteFile as rawDeleteFile,
     DeleteFolder as rawDeleteFolder,
     DownloadFile as rawDownloadFile,
     DownloadFolder as rawDownloadFolder,
-    EncryptionStatus as rawEncryptionStatus,
     GetAllFsMsgIDs as rawGetAllFsMsgIds,
     GetFileList as rawGetFileList,
     GetFolderContents as rawGetFolderContents,
@@ -31,8 +28,13 @@ import {
     SetFileDropEnabled as rawSetFileDropEnabled,
     ShareFile as rawShareFile,
     UploadToDriveFS as rawUploadToDriveFs,
-    UseEncryptionPassword as rawUseEncryptionPassword,
 } from "../../bindings/TDrive/app";
+import {
+    ChangeEncryptionPassword as rawChangeEncryptionPassword,
+    CreateEncryptionPassword as rawCreateEncryptionPassword,
+    EncryptionStatus as rawEncryptionStatus,
+    UseEncryptionPassword as rawUseEncryptionPassword,
+} from "../../bindings/TDrive/encryptionservice";
 import type { FileMetaData, Folder, SearchResult } from "../../bindings/TDrive/backend/models";
 import type { TDriveFile } from "../../bindings/TDrive/models";
 import type {

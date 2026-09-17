@@ -7,8 +7,29 @@
     import SearchIcon from '@lucide/svelte/icons/search';
     import { isMobilePlatform, listMountableDrives } from '../api';
     import tdriveLogo from '../assets/images/tdrive-logo.png';
+    import { openEncryptionSettingsModal } from '../modules/modals/encryption-settings';
+    import { openLogoutModal } from '../modules/modals/logout';
+    import { breadcrumbDrag, navigateBack, navigateToIndex } from '../modules/navigation';
+    import { cancelTransfersInDirection, clearHistory } from '../modules/notif-bell';
+    import { ensureProfileLoaded } from '../modules/profile-menu';
+    import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../modules/selection';
+    import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
+    import {
+        handleDriveClick,
+        handlePendingClick,
+        showPendingActionsMenu,
+        showSharedActionsMenu,
+    } from '../modules/sidebar';
     import { setFileSortKey, fileSortState } from './file-list/file-sort-store';
+    import { fileListColumnMode } from './file-list/column-mode-store';
     import type { FileSortKey } from './file-list/file-sort';
+    import Breadcrumb from './chrome/Breadcrumb.svelte';
+    import ProfileMenu from './chrome/ProfileMenu.svelte';
+    import UploadMenu from './chrome/UploadMenu.svelte';
+    import Gallery from './gallery/Gallery.svelte';
+    import NotifBell from './notifications/NotifBell.svelte';
+    import SelectionBar from './selection/SelectionBar.svelte';
+    import DriveList from './sidebar/DriveList.svelte';
     import MountControl from './mount/MountControl.svelte';
     import FeatureLayer from './app/FeatureLayer.svelte';
 
@@ -20,6 +41,8 @@
 
     // OS mounts are desktop-only; the phone builds ship no WebDAV connector.
     const mountAvailable = !isMobilePlatform();
+    // Desktop-only chrome: phones update through their app stores.
+    const updaterAvailable = !isMobilePlatform();
 
     function sortButtonLabel(key: FileSortKey): string {
         const active = $fileSortState.key === key;
@@ -45,7 +68,17 @@
 {/snippet}
 
 <!-- Semantic dashboard chrome remains mounted after runtime startup. The typed
-     root owns visibility; FeatureLayer owns persistent interactive surfaces. -->
+     root owns visibility; FeatureLayer owns the surfaces imperative controllers
+     still fill in (the file list, the gallery, the selection bar, the upload
+     menu) plus the modal layer.
+
+     The live chrome this shell renders itself -- the drive lists, the bell, the
+     account menu, the breadcrumb -- is gated on dashboardVisible so it lives
+     exactly as long as the dashboard does, which is what it did when a portal
+     mounted it. Built earlier it would sit behind the login screen with its
+     window listeners, its registered drag root and the last session's drive rows
+     still live under a hidden container, and logging out would stop clearing any
+     of that. -->
 <div
     id="success-screen"
     class="dashboard-container"
@@ -62,7 +95,15 @@
             <div class="drives-scroll">
                 <div class="drives-section">
                     <div class="drives-section-title">My Drive</div>
-                    <div id="drives-personal" class="drives-list"></div>
+                    <!-- The .drives-list wrapper is the column the rows stack in
+                         and the sibling the Photos row takes its top margin
+                         from, so it stays put; only the id a portal aimed at is
+                         gone. -->
+                    <div class="drives-list">
+                        {#if dashboardVisible}
+                            <DriveList kind="personal" onDriveClick={handleDriveClick} />
+                        {/if}
+                    </div>
                     <div class="drives-list">
                         <button id="nav-photos" class="drive-item nav-photos-item" type="button" title="Photos">
                             <ImagesIcon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
@@ -73,7 +114,17 @@
 
                 <div class="drives-section">
                     <div class="drives-section-title">Shared with me</div>
-                    <div id="drives-shared" class="drives-list"></div>
+                    <div class="drives-list">
+                        {#if dashboardVisible}
+                            <DriveList
+                                kind="shared"
+                                onDriveClick={handleDriveClick}
+                                onDriveActions={showSharedActionsMenu}
+                                onPendingClick={handlePendingClick}
+                                onPendingActions={showPendingActionsMenu}
+                            />
+                        {/if}
+                    </div>
                 </div>
             </div>
 
@@ -105,15 +156,51 @@
             </div>
 
             <div class="header-actions">
-                <div id="notif-bell-root" style="display: contents;"></div>
+                {#if dashboardVisible}
+                    <NotifBell onCancelDirection={cancelTransfersInDirection} onClearHistory={clearHistory} />
+                {/if}
 
-                <div class="upload-menu-wrap" id="upload-menu-root"></div>
-                <div id="profile-root" style="display: contents;"></div>
+                <!-- .upload-menu-wrap is position: relative, and it is what the
+                     menu's own absolutely positioned popover anchors to, so the
+                     wrapper stays exactly where it was; only the id a portal
+                     aimed at is gone. Held back until the dashboard is up so the
+                     menu's window and document listeners live no longer than the
+                     dashboard does, which is what a portal that only ran on the
+                     dashboard view gave it. -->
+                <div class="upload-menu-wrap">
+                    {#if dashboardVisible}
+                        <UploadMenu
+                            onFiles={chooseFilesForCurrentFolder}
+                            onFolder={chooseFolderForCurrentFolder}
+                        />
+                    {/if}
+                </div>
+                <!-- The account menu is a plain child of the header: its popover
+                     is positioned against .header-actions, which is the nearest
+                     positioned ancestor either way, so nothing about where it
+                     lands changes by rendering it here. Held back until the
+                     dashboard is up because the menu opens itself when something
+                     asks for the updates panel, and that request can come from
+                     the login screen -- mounted earlier, the user would arrive at
+                     the dashboard with the account menu already hanging open. -->
+                {#if dashboardVisible}
+                    <ProfileMenu
+                        {updaterAvailable}
+                        onOpen={ensureProfileLoaded}
+                        onEncryptionSettings={openEncryptionSettingsModal}
+                        onLogout={openLogoutModal}
+                    />
+                {/if}
             </div>
         </header>
 
         <div class="drive-breadcrumb">
-            <div id="breadcrumb-root" style="display: contents;"></div>
+            <!-- The back button and the crumb trail are flex items of this row.
+                 The host they used to arrive in was display:contents, so it was
+                 never a box of its own and taking it away moves nothing. -->
+            {#if dashboardVisible}
+                <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
+            {/if}
             <div id="gallery-title" class="gallery-title">Photos</div>
         </div>
 
@@ -138,7 +225,7 @@
                     aria-label={sortButtonLabel('date')}
                     onclick={() => setFileSortKey('date')}
                 >
-                    <span>Date</span>
+                    <span>{$fileListColumnMode === 'location' ? 'Location' : 'Date'}</span>
                     <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('date')}</span>
                 </button>
             </div>
@@ -156,13 +243,38 @@
             </div>
             <div class="col-actions" role="columnheader" aria-colindex="4">
                 <span>Actions</span>
-                <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite"></div>
+                <!-- The bar covers the Actions column while rows are selected,
+                     so it keeps its id and its inline display: none: the
+                     selection controller is what reveals it, by flipping that
+                     style once a row is picked. Only the portal that filled it
+                     from elsewhere is gone. -->
+                <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite">
+                    {#if dashboardVisible}
+                        <SelectionBar
+                            onMove={openSelectedItemsMove}
+                            onDelete={openSelectedItemsDelete}
+                            onClear={clearSelection}
+                        />
+                    {/if}
+                </div>
             </div>
         </div>
 
         <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4"></div>
 
-        <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos"></div>
+        <!-- #gallery-view is the gallery's scroll container, not a seam: the
+             component measures it, the thumbnail controller uses it as its
+             IntersectionObserver root, and the click delegation, the preview
+             modal's return-to-grid and the phone's scroll-to-top all look it up
+             by this id. So the element stays exactly as it was and only the
+             portal that filled it from elsewhere is gone. Held back until the
+             dashboard is up so the grid's window listeners and resize observer
+             live no longer than the dashboard does. -->
+        <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos">
+            {#if dashboardVisible}
+                <Gallery />
+            {/if}
+        </div>
     </main>
 </div>
 
