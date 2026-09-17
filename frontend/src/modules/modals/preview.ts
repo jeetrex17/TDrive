@@ -101,10 +101,18 @@ function isSpaceKey(event: any) {
     return event.code === "Space" || event.key === " " || event.key === "Spacebar";
 }
 
+// Where an arrow key means something to the focused control, so the preview
+// must not take it: the unlock password field, and a select's own options.
+//
+// A button is not one of them. It used to be listed here, which quietly killed
+// arrow navigation outright: the modal opens with focus on its close button, so
+// the very first press after opening a photo was swallowed, and so was every
+// press after clicking Previous or Next. Arrows do nothing on a button, so
+// there was never anything to yield to.
 function isTypingContext(element: any) {
     if (!element) return false;
     const tag = String(element.tagName || "").toUpperCase();
-    return element.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON";
+    return element.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 function isBlockingOverlayOpen() {

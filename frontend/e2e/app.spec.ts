@@ -7,11 +7,14 @@ import {
     resolves,
     test,
 } from './wails-mock';
-import type { Page } from '@playwright/test';
-
-const RED_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiNlMTFkNDgiLz48L3N2Zz4=';
-const BLUE_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiMyNTYzZWIiLz48L3N2Zz4=';
-const GOLD_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiNmNTllMGIiLz48L3N2Zz4=';
+import {
+    FIRST_PHOTO,
+    RED_BASE64,
+    SECOND_PHOTO,
+    galleryPlans,
+    previewImageContents as imageContents,
+    routeRenditions,
+} from './gallery-fixtures';
 
 const PERSONAL_CHANNEL = {
     id: 1,
@@ -27,28 +30,6 @@ declare global {
         __fileListSnapshots?: string[];
     }
 }
-
-const FIRST_PHOTO = {
-    name: 'first.jpg',
-    size: 120,
-    msg_id: 101,
-    parent_id: '',
-    upload_time: 1_735_689_600,
-    uploader_id: 7,
-    encrypted: false,
-    plaintext_size: 0,
-};
-
-const SECOND_PHOTO = {
-    name: 'second.jpg',
-    size: 240,
-    msg_id: 102,
-    parent_id: '',
-    upload_time: 1_732_924_800,
-    uploader_id: 7,
-    encrypted: false,
-    plaintext_size: 0,
-};
 
 test('auth advances through the public login surface and handles runtime errors', async ({ page }) => {
     const mock = await bootTDrive(page, {
@@ -340,36 +321,6 @@ test('context menus retain vertical actions, render notifications, and restore f
     await expect(dialog).toBeHidden();
     await expect(newDrive).toBeFocused();
 });
-
-function galleryPlans(photos: typeof FIRST_PHOTO[]) {
-    const buckets: Array<{ key: string; start_index: number; count: number; upload_time: number }> = [];
-    photos.forEach((photo, index) => {
-        const key = new Date(photo.upload_time * 1000).toISOString().slice(0, 7);
-        const previous = buckets[buckets.length - 1];
-        if (previous?.key === key) previous.count += 1;
-        else buckets.push({ key, start_index: index, count: 1, upload_time: photo.upload_time });
-    });
-    return {
-        GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: photos.length, page_size: 128, buckets, anchors: [{ start_index: 0, cursor: '0' }] }),
-        ListMediaPage: resolves({ generation: 'test', start_index: 0, next_cursor: '', items: photos.map((photo) => ({ ...photo, revision: 1, content_msg_id: photo.msg_id, content_hash: '' })) }),
-    };
-}
-
-async function routeRenditions(page: Page, slowFirstPreview = false) {
-    const requested: string[] = [];
-    await page.route('**/mock-renditions/**', async (route) => {
-        const url = new URL(route.request().url());
-        requested.push(url.pathname);
-        if (slowFirstPreview && url.pathname.endsWith('/101/preview')) await new Promise((resolve) => setTimeout(resolve, 1000));
-        const color = url.pathname.includes('/102/') ? BLUE_BASE64 : url.pathname.endsWith('/preview') ? RED_BASE64 : GOLD_BASE64;
-        await route.fulfill({ body: Buffer.from(color, 'base64'), contentType: 'image/svg+xml', headers: { 'X-Rendition-Width': '2', 'X-Rendition-Height': '2' } }).catch(() => {});
-    });
-    return requested;
-}
-
-async function imageContents(page: Page): Promise<string> {
-    return page.locator('#preview-image').evaluate(async (image) => fetch((image as HTMLImageElement).src).then((response) => response.text()));
-}
 
 test('gallery loads binary thumbnails and a bounded preview without original bridge downloads', async ({ page }) => {
     const requested = await routeRenditions(page);
