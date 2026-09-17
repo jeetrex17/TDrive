@@ -16,6 +16,39 @@ const load = async (cursor: string): Promise<MediaPage> => {
 };
 
 describe('bounded gallery page source', () => {
+    it('loads page zero before anchors and releases a deep request after anchors arrive', async () => {
+        const summary = { ...timeline, anchors: [] };
+        const loader = vi.fn(load);
+        const source = new GallerySource(summary, { load: loader });
+        expect((await source.get(0))?.msgId).toBe(1);
+        let settled = false;
+        const deep = source.get(256).then((value) => { settled = true; return value; });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        source.installAnchors(timeline);
+        expect((await deep)?.msgId).toBe(257);
+    });
+
+    it('settles anchor-blocked requests on failure and disposal', async () => {
+        const source = new GallerySource({ ...timeline, anchors: [] }, { load });
+        const failed = source.get(256);
+        source.failAnchors(new Error('anchor scan failed'));
+        await expect(failed).rejects.toThrow('anchor scan failed');
+        const disposed = new GallerySource({ ...timeline, anchors: [] }, { load });
+        const pending = disposed.get(256);
+        disposed.dispose();
+        await expect(pending).resolves.toBeUndefined();
+    });
+
+    it('retries a transient anchor failure on later deep demand', async () => {
+        const anchors = vi.fn<() => Promise<MediaTimeline>>()
+            .mockRejectedValueOnce(new Error('offline'))
+            .mockResolvedValueOnce(timeline);
+        const source = new GallerySource({ ...timeline, anchors: [] }, { load, loadAnchors: anchors });
+        await expect(source.get(256)).rejects.toThrow('offline');
+        expect((await source.get(256))?.msgId).toBe(257);
+        expect(anchors).toHaveBeenCalledTimes(2);
+    });
     it('does not schedule outside bounds and unregisters notifications cleanly', async () => {
         const loader = vi.fn(load);
         const source = new GallerySource(timeline, { load: loader });

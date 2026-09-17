@@ -122,6 +122,10 @@ export function CheckSystemStatus(): $CancellablePromise<string> {
     return $Call.ByID(586870272);
 }
 
+export function ClearGalleryCache(): $CancellablePromise<$models.GalleryStorage> {
+    return $Call.ByID(2783044110);
+}
+
 export function CloseGalleryImages(token: string): $CancellablePromise<void> {
     return $Call.ByID(2992155069, token);
 }
@@ -240,6 +244,10 @@ export function GetFolderStats(parentID: string): $CancellablePromise<projection
     return $Call.ByID(654620998, parentID);
 }
 
+export function GetGalleryStorage(): $CancellablePromise<$models.GalleryStorage> {
+    return $Call.ByID(940237792);
+}
+
 /**
  * GetInviteLink fetches a fresh link from Telegram and caches it. Admin-
  * only on the Telegram side; non-admin members will get an error from
@@ -264,6 +272,14 @@ export function GetMediaStats(token: string): $CancellablePromise<media$0.MediaS
  */
 export function GetMediaTimeline(): $CancellablePromise<projection$0.GalleryTimeline> {
     return $Call.ByID(1288157298);
+}
+
+export function GetMediaTimelineAnchors(generation: string): $CancellablePromise<projection$0.GalleryTimeline> {
+    return $Call.ByID(566606144, generation);
+}
+
+export function GetMediaTimelineSummary(): $CancellablePromise<projection$0.GalleryTimeline> {
+    return $Call.ByID(3363396734);
 }
 
 export function GetStorageUsed(): $CancellablePromise<number> {

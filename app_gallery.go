@@ -44,6 +44,26 @@ func (a *App) GetMediaTimeline() (projection.GalleryTimeline, error) {
 	return svc.MediaTimeline(ctx, a.ActiveChannelID())
 }
 
+func (a *App) GetMediaTimelineSummary() (projection.GalleryTimeline, error) {
+	svc, err := a.requireReadService()
+	if err != nil {
+		return projection.GalleryTimeline{}, err
+	}
+	ctx, cancel := a.galleryReadContext()
+	defer cancel()
+	return svc.MediaTimelineSummary(ctx, a.ActiveChannelID())
+}
+
+func (a *App) GetMediaTimelineAnchors(generation string) (projection.GalleryTimeline, error) {
+	svc, err := a.requireReadService()
+	if err != nil {
+		return projection.GalleryTimeline{}, err
+	}
+	ctx, cancel := a.galleryReadContext()
+	defer cancel()
+	return svc.MediaTimelineAnchors(ctx, a.ActiveChannelID(), generation)
+}
+
 func (a *App) ListMediaPage(cursor string, limit int) (GalleryPage, error) {
 	svc, err := a.requireReadService()
 	if err != nil {

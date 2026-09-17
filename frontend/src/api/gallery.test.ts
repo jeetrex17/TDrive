@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-vi.mock('../../bindings/TDrive/app', () => ({ GetMediaTimeline: vi.fn(), ListMediaPage: vi.fn(), LocateMedia: vi.fn() }));
+vi.mock('../../bindings/TDrive/app', () => ({ GetMediaTimeline: vi.fn(), GetMediaTimelineSummary: vi.fn(), GetMediaTimelineAnchors: vi.fn(), ListMediaPage: vi.fn(), LocateMedia: vi.fn() }));
 import { normalizeMediaPage, normalizeMediaTimeline } from './gallery';
 
 const timeline = { channel_id: 1, generation: 'g', total_count: 2, page_size: 128, buckets: [{ key: '2026-09', start_index: 0, count: 2, upload_time: 1 }], anchors: [{ start_index: 0, cursor: 'opaque' }] };
@@ -21,5 +21,10 @@ describe('gallery API boundary', () => {
 
     it('accepts an empty library without creating placeholder records', () => {
         expect(normalizeMediaTimeline({ ...timeline, total_count: 0, buckets: [], anchors: [] }).totalCount).toBe(0);
+    });
+
+    it('accepts an anchor-free summary but still requires complete full timelines', () => {
+        expect(normalizeMediaTimeline({ ...timeline, anchors: [] }, true).anchors).toEqual([]);
+        expect(() => normalizeMediaTimeline({ ...timeline, total_count: 300, anchors: timeline.anchors })).toThrow();
     });
 });

@@ -1,4 +1,4 @@
-import { GetMediaTimeline, ListMediaPage, LocateMedia } from '../../bindings/TDrive/app';
+import { GetMediaTimeline, GetMediaTimelineAnchors, GetMediaTimelineSummary, ListMediaPage, LocateMedia } from '../../bindings/TDrive/app';
 import type { FileItem } from '../types';
 import { invokeBackend } from './gateway';
 import { asRecord } from './shared';
@@ -27,7 +27,7 @@ function integer(value: unknown, minimum = 0): number {
     return number;
 }
 
-export function normalizeMediaTimeline(value: unknown): MediaTimeline {
+export function normalizeMediaTimeline(value: unknown, allowMissingAnchors = false): MediaTimeline {
     const raw = asRecord(value);
     const totalCount = integer(raw.total_count);
     const pageSize = integer(raw.page_size, 1);
@@ -46,7 +46,8 @@ export function normalizeMediaTimeline(value: unknown): MediaTimeline {
         if (anchor.startIndex !== index * pageSize || !anchor.cursor) throw new Error('Invalid gallery page anchor');
         return anchor;
     });
-    if (position !== totalCount || anchors.length !== Math.ceil(totalCount / pageSize)) throw new Error('Incomplete gallery timeline');
+    if (position !== totalCount || (!allowMissingAnchors && anchors.length !== Math.ceil(totalCount / pageSize))
+        || (allowMissingAnchors && anchors.length !== 0 && anchors.length !== Math.ceil(totalCount / pageSize))) throw new Error('Incomplete gallery timeline');
     return { channelId: integer(raw.channel_id, 1), generation: String(raw.generation ?? ''), totalCount, pageSize, buckets, anchors };
 }
 
@@ -67,6 +68,12 @@ export function normalizeMediaPage(value: unknown): MediaPage {
 
 export async function getMediaTimeline(): Promise<MediaTimeline> {
     return normalizeMediaTimeline(await invokeBackend(GetMediaTimeline));
+}
+export async function getMediaTimelineSummary(): Promise<MediaTimeline> {
+    return normalizeMediaTimeline(await invokeBackend(GetMediaTimelineSummary), true);
+}
+export async function getMediaTimelineAnchors(generation: string): Promise<MediaTimeline> {
+    return normalizeMediaTimeline(await invokeBackend(GetMediaTimelineAnchors, generation));
 }
 export async function listMediaPage(cursor: string, limit = 128): Promise<MediaPage> {
     return normalizeMediaPage(await invokeBackend(ListMediaPage, cursor, limit));

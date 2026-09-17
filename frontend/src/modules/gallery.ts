@@ -4,7 +4,7 @@
 
 import { state } from '../state';
 import { isMobilePlatform } from '../api';
-import { getMediaTimeline, locateMedia, type GalleryItem } from '../api/gallery';
+import { getMediaTimelineAnchors, getMediaTimelineSummary, locateMedia, type GalleryItem } from '../api/gallery';
 import { GallerySource } from '../ui/gallery/gallery-source';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
@@ -113,9 +113,10 @@ export function setPhotosMode(on: boolean): void {
 
 interface GalleryRefreshOptions {
     background?: boolean;
+    staleRetry?: boolean;
 }
 
-export async function renderGallery({ background = false }: GalleryRefreshOptions = {}): Promise<void> {
+export async function renderGallery({ background = false, staleRetry = false }: GalleryRefreshOptions = {}): Promise<void> {
     if (!galleryEl || galleryEl !== document.getElementById('gallery-view')) return;
     const token = background ? renderToken : ++renderToken;
     const backgroundToken = background ? ++backgroundRenderToken : 0;
@@ -132,7 +133,7 @@ export async function renderGallery({ background = false }: GalleryRefreshOption
     if (!currentSource) galleryView.set({ status: 'loading' });
     let next: GallerySource | null = null;
     try {
-        const timeline = await getMediaTimeline();
+        const timeline = await getMediaTimelineSummary();
         if (timeline.channelId !== channelId) return;
         if (currentSource?.timeline.generation === timeline.generation && sameDrive) return;
         let restoredIndex = Math.min(anchorIndex, Math.max(0, timeline.totalCount - 1));
@@ -143,8 +144,15 @@ export async function renderGallery({ background = false }: GalleryRefreshOption
         next = new GallerySource(timeline, {
             maxPages: isMobilePlatform() ? 6 : 12,
             onStale: () => { void renderGallery({ background: true }); },
+            loadAnchors: getMediaTimelineAnchors,
         });
-        if (timeline.totalCount > 0) await next.get(restoredIndex);
+        if (timeline.totalCount > 0) {
+            if (restoredIndex > 0) {
+                const anchors = await getMediaTimelineAnchors(timeline.generation);
+                next.installAnchors(anchors);
+            }
+            await next.get(restoredIndex);
+        }
         if (token !== renderToken || (background && backgroundToken !== backgroundRenderToken)
             || state.virtualView !== 'photos' || Number(state.activeChannel?.id ?? 0) !== channelId) {
             next.dispose();
@@ -155,11 +163,26 @@ export async function renderGallery({ background = false }: GalleryRefreshOption
         currentChannelId = channelId;
         beginRender(channelId);
         if (timeline.totalCount === 0) galleryView.set({ status: 'empty' });
-        else galleryView.set({ status: 'ready', source: next, ...(sameDrive && anchorIndex > 0 ? { initialIndex: restoredIndex, anchorOffset } : {}) });
+        else {
+            galleryView.set({ status: 'ready', source: next, ...(sameDrive && anchorIndex > 0 ? { initialIndex: restoredIndex, anchorOffset } : {}) });
+            const source = next;
+            requestAnimationFrame(() => {
+                if (currentSource !== source || source.timeline.anchors.length > 0) return;
+                void source.requestAnchors()
+                    .catch((error: unknown) => {
+                        if (!/stale/i.test(String(error))) console.error('Gallery anchors failed:', error);
+                    });
+            });
+        }
     } catch (error) {
         next?.dispose();
+        if (/gallery snapshot is stale/i.test(String(error)) && !staleRetry) {
+            await renderGallery({ background: true, staleRetry: true });
+            return;
+        }
         console.error('Gallery metadata failed:', error);
         if (token === renderToken && !currentSource) galleryView.set({ status: 'error' });
+        else if (token === renderToken) currentSource?.reportRefreshError();
     }
 }
 

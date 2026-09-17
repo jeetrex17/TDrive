@@ -15,6 +15,7 @@
     import { encryptionEntryVisible, profileLoaded, profileUser } from '../chrome/profile-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
+    import PhotoCachePanel from '../gallery/PhotoCachePanel.svelte';
     import { getThemeDefinition } from '../theme/theme-model';
     import { themeState } from '../theme/theme-controller';
     import { switchActiveChannel } from '../../modules/channels';
@@ -163,6 +164,7 @@
                 </span>
                 <span class="account-row-value">{storageLabel}</span>
             </div>
+            {#if $activeTab === 'account'}<PhotoCachePanel />{/if}
         </div>
     </section>
 

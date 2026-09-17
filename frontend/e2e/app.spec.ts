@@ -441,14 +441,40 @@ test('prefers-reduced-motion disables entrance motion in Chromium', async ({ pag
 });
 
 for (const platform of ['desktop', 'android', 'ios'] as const) {
-    test(`100k photo gallery stays bounded while scrolling, reversing and keyboard jumping on ${platform}`, async ({ page }, testInfo) => {
+    test(`photo cache can be cleared separately from the catalog on ${platform}`, async ({ page }, testInfo) => {
+        if (platform !== 'desktop') {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
+        }
+        const mock = await bootTDrive(page);
+        if (platform === 'desktop') {
+            await page.locator('#profile-trigger').click();
+            await page.getByRole('menuitem', { name: 'Local storage' }).click();
+        } else {
+            await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
+        }
+        const panel = page.getByRole('region', { name: 'Local photo storage' });
+        await expect(panel).toContainText('2 KB');
+        await panel.getByRole('button', { name: 'Clear photo cache' }).click();
+        await expect(panel.getByRole('status')).toHaveText('Photo cache cleared.');
+        await expect(panel).toContainText('2 KB');
+        expect(await mock.calls('ClearGalleryCache')).toHaveLength(1);
+        const shot = testInfo.outputPath(`storage-${platform}.png`);
+        await page.screenshot({ path: shot });
+        await testInfo.attach(`Storage ${platform}`, { path: shot, contentType: 'image/png' });
+    });
+
+    test(`1M photo gallery stays bounded while scrolling, reversing and keyboard jumping on ${platform}`, async ({ page }, testInfo) => {
         if (platform !== 'desktop') {
             await page.setViewportSize({ width: 390, height: 844 });
             await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
         }
         await routeRenditions(page);
-        const count = 100_000;
+        const count = 1_000_000;
         const mock = await bootTDrive(page, {
+            GetMediaTimelineSummary: resolves({ channel_id: 1, generation: 'test', total_count: count, page_size: 128,
+                buckets: [{ key: '2025-01', start_index: 0, count, upload_time: FIRST_PHOTO.upload_time }], anchors: [],
+            }),
             GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: count, page_size: 128,
                 buckets: [{ key: '2025-01', start_index: 0, count, upload_time: FIRST_PHOTO.upload_time }],
                 anchors: Array.from({ length: Math.ceil(count / 128) }, (_, index) => ({ start_index: index * 128, cursor: String(index * 128) })),
@@ -471,14 +497,14 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         await expect.poll(async () => (await mock.calls('ListMediaPage')).length).toBeGreaterThan(1);
         await bounds();
         await gallery.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-        await expect(gallery.locator('[data-id="100999"]')).toBeVisible();
+        await expect(gallery.locator(`[data-id="${count + 999}"]`)).toBeVisible();
         await bounds();
         await gallery.evaluate((element) => { element.scrollTop = 0; });
         await expect(gallery.locator('[data-id="1000"]')).toBeVisible();
         const first = gallery.locator('[data-id="1000"]');
         await first.focus();
         await page.keyboard.press('End');
-        await expect(gallery.locator('[data-id="100999"]')).toBeFocused();
+        await expect(gallery.locator(`[data-id="${count + 999}"]`)).toBeFocused();
         await page.keyboard.press('Home');
         await expect(gallery.locator('[data-id="1000"]')).toBeFocused();
         await bounds();

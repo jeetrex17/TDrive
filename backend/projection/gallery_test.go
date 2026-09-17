@@ -74,6 +74,28 @@ func TestGalleryTimelineAndPagesUseStableSparseAnchors(t *testing.T) {
 	}
 }
 
+func TestGalleryTimelineSummaryDoesNotBuildAnchors(t *testing.T) {
+	db := newTestDB(t)
+	seedGalleryFiles(t, db, testChan, 300)
+	summary, err := MediaTimelineSummary(context.Background(), db, testChan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.TotalCount != 300 || summary.PageSize != GalleryPageSize || len(summary.Buckets) != 1 || len(summary.Anchors) != 0 {
+		t.Fatalf("summary=%+v", summary)
+	}
+	full, err := MediaTimelineAnchors(context.Background(), db, testChan, summary.Generation)
+	if err != nil || len(full.Anchors) != 3 {
+		t.Fatalf("anchors=%+v err=%v", full.Anchors, err)
+	}
+	if _, err := db.Exec(`UPDATE files SET revision=revision+1 WHERE channel_id=? AND msg_id=1`, testChan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MediaTimelineAnchors(context.Background(), db, testChan, summary.Generation); !errors.Is(err, ErrGalleryStale) {
+		t.Fatalf("stale anchors error=%v", err)
+	}
+}
+
 func TestGalleryFiltersAndRespectsProjectedName(t *testing.T) {
 	db := newTestDB(t)
 	seedGalleryFiles(t, db, testChan, 8)
