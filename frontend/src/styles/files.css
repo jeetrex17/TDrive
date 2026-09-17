@@ -222,6 +222,21 @@
 @media (prefers-reduced-motion: reduce) { .file-state-skeleton-icon, .file-state-skeleton-bar, .file-state-skeleton-meta, .file-state-skeleton-action { animation: none; } }
 @media (max-width: 720px) { .file-state-skeleton-row { grid-template-columns: minmax(0, 2fr) minmax(76px, 1fr); gap: var(--space-4); } .file-state-skeleton-row > :nth-child(n + 3) { display: none; } }
 
+/* A row the app is working on: a delete runs item by item and only refreshes
+   the list at the end, so without this the list sits there looking untouched
+   between the confirmation and the rows disappearing.
+
+   It goes quiet rather than growing a spinner. The rows vanishing one by one as
+   the work lands is the progress report; a second indicator on each row would
+   be decoration over a list that is already telling the story. Taps are dropped
+   because the row is on its way out and there is nothing useful left to do to
+   it. */
+.file-row.is-busy {
+    opacity: 0.45;
+    pointer-events: none;
+    transition: opacity var(--motion-med) var(--ease-standard);
+}
+
 .file-row {
     display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); padding: 12px 20px;
     align-items: center; border-radius: var(--radius-md); transition: background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
