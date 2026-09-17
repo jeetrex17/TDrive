@@ -48,6 +48,21 @@
     );
     const contextualActionVisible = $derived(showContextAction && !selecting && !$keyboardOpen);
 
+    // Publish the upload button's footprint so anything else that floats over
+    // the content can stand off it. The toast stack is the one that matters:
+    // the notice a tap on Upload raises was landing on the button that raised
+    // it. A custom property rather than a class because the surfaces that read
+    // it are not all inside this shell -- FeatureLayer hosts the toasts as a
+    // sibling -- and :root is the one ancestor they share.
+    $effect(() => {
+        const root = document.documentElement.style;
+        root.setProperty(
+            '--mobile-fab-clearance',
+            contextualActionVisible ? 'var(--context-action-clearance)' : '0px',
+        );
+        return () => root.removeProperty('--mobile-fab-clearance');
+    });
+
     // The gallery owns whether Photos is showing; the tab is only how the user
     // asked for it. Hardware BACK and in-app navigation leave the gallery
     // without touching the tab bar, so follow the gallery whenever the two

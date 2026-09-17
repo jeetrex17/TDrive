@@ -14,6 +14,13 @@ html.mobile {
     --tabbar-height: 64px;
     /* How far the floating bar sits from the screen edges. */
     --tabbar-inset: 12px;
+    /* The top of the tab bar: where anything floating over the content has to
+       stop. Every such surface measures from this one value, so the bar's shape
+       is stated once and they cannot drift apart. */
+    --mobile-overlay-bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
+    /* Raised by the shell to --context-action-clearance while the upload button
+       is showing, so nothing else settles on top of it. */
+    --mobile-fab-clearance: 0px;
     --selection-bar-reserve: calc(76px + var(--inset-bottom));
     --context-action-clearance: calc(52px + var(--space-4));
     --mobile-type-caption: 0.75rem;
@@ -557,7 +564,7 @@ html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
 html.mobile .mobile-context-action {
     position: absolute;
     right: calc(var(--space-4) + var(--inset-right));
-    bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
+    bottom: var(--mobile-overlay-bottom);
     z-index: var(--z-selection);
 }
 html.mobile .mobile-context-action .mobile-fab {
@@ -1111,14 +1118,64 @@ html.mobile .mobile-empty-body { font-size: 0.875rem; color: var(--color-text-mu
 /* Hosts kept in the DOM for the controllers but never shown on a phone. */
 html.mobile .mobile-hidden-hosts { display: none; }
 
-/* Toasts sit above the tab bar, centered, out of the thumb's way. */
+/* ============================ TOASTS ============================ */
+/* The stack clears the tab bar and, where one is showing, the upload button
+   too: the toast a tap on Upload raises used to land on the button that
+   raised it. --mobile-fab-clearance is published by the shell and is 0 on the
+   tabs that carry no action.
+
+   Gutters match the content cards rather than a viewport percentage, so a
+   toast lines up with the list underneath instead of floating at its own
+   width. */
 html.mobile #toast-stack.toast-stack {
-    left: 50%;
-    right: auto;
-    bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
-    transform: translateX(-50%);
-    width: min(92vw, 420px);
+    left: calc(var(--space-4) + var(--inset-left));
+    right: calc(var(--space-4) + var(--inset-right));
+    bottom: calc(var(--mobile-overlay-bottom) + var(--mobile-fab-clearance));
+    width: auto;
+    max-width: none;
     align-items: stretch;
+}
+
+/* A toast is the one surface that covers content it did not replace, so it has
+   to read as something on top: its own fill, a border and a real shadow. The
+   bars elsewhere in the shell are opaque and flat because they own their strip
+   of the screen; this one is borrowing it. */
+html.mobile .toast {
+    background: var(--color-surface-2);
+    border-color: var(--color-border);
+    box-shadow: var(--shadow-md);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    /* The whole surface is a drag target (see swipe-dismiss.ts); without this
+       the page underneath scrolls instead. */
+    touch-action: none;
+    /* backwards, not both: a filled-forwards animation keeps its final
+       transform applied, and a CSS animation outranks an inline style, so the
+       swipe's own translate would be silently ignored. */
+    animation: tdrive-toast-enter var(--motion-med) var(--ease-enter) backwards;
+}
+
+/* It arrives from the edge it lives on. The desktop toast scales out of the
+   bottom-right corner it is anchored to; this one is anchored to the bottom of
+   the screen, and rising from there is the same idea told honestly. */
+@keyframes tdrive-toast-enter {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .toast { animation: none; }
+}
+
+/* Two lines each. One was not enough for the two things a failure has to say
+   -- what broke and what to do -- and clamping both to one line reliably lost
+   the end of each. Three would start to be a screen. */
+html.mobile .toast-title,
+html.mobile .toast-body {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 /* Focus rings stay visible for keyboard users on tablets and hardware keyboards
