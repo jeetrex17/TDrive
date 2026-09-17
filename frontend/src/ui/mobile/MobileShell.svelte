@@ -222,17 +222,6 @@
 
     <DriveSwitcherSheet />
 
-    <!-- The last desktop-shaped target the phone still has to carry. The file
-         list writes the drive's storage figure into #storage-used after every
-         load; the Account tab shows that figure from a call of its own, so this
-         span exists only to give that write somewhere to land. It is off-screen
-         and nothing reads it back. The bell, the account menu and the breadcrumb
-         used to sit here too, mounted but hidden; the phone surfaces all three
-         itself now (Transfers tab, Account tab, top bar), so they are simply not
-         built. -->
-    <div class="mobile-hidden-hosts">
-        <span id="storage-used"></span>
-    </div>
 </div>
 
 <FeatureLayer />

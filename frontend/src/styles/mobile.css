@@ -1019,9 +1019,6 @@ html.mobile .mobile-empty-glyph { color: var(--color-border); margin-bottom: 4px
 html.mobile .mobile-empty-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
 html.mobile .mobile-empty-body { font-size: 0.875rem; color: var(--color-text-muted); max-width: 36ch; }
 
-/* Hosts kept in the DOM for the controllers but never shown on a phone. */
-html.mobile .mobile-hidden-hosts { display: none; }
-
 /* ============================ TOASTS ============================ */
 /* The stack clears the tab bar and, where one is showing, the upload button
    too: the toast a tap on Upload raises used to land on the button that
