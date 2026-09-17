@@ -21,6 +21,7 @@
         showSharedActionsMenu,
     } from '../modules/sidebar';
     import { setFileSortKey, fileSortState } from './file-list/file-sort-store';
+    import { fileListColumnMode } from './file-list/column-mode-store';
     import type { FileSortKey } from './file-list/file-sort';
     import Breadcrumb from './chrome/Breadcrumb.svelte';
     import ProfileMenu from './chrome/ProfileMenu.svelte';
@@ -224,7 +225,7 @@
                     aria-label={sortButtonLabel('date')}
                     onclick={() => setFileSortKey('date')}
                 >
-                    <span>Date</span>
+                    <span>{$fileListColumnMode === 'location' ? 'Location' : 'Date'}</span>
                     <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('date')}</span>
                 </button>
             </div>
