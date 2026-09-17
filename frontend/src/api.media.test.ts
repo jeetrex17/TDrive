@@ -79,7 +79,7 @@ describe("getMedia", () => {
             },
         ]);
         expect(await getMedia()).toEqual([
-            { msgId: 3, name: "p.jpg", size: 10, parentId: "", uploadTime: 5, uploaderId: 0, encrypted: false, plaintextSize: 0 },
+            { msgId: 3, name: "p.jpg", size: 10, parentId: "", uploadTime: 5, uploaderId: 0, encrypted: false, plaintextSize: 0, revision: 0 },
         ]);
     });
 

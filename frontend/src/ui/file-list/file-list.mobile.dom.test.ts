@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
     isMobilePlatform: vi.fn(() => true),
     isIOSPlatform: () => false,
     isAndroidPlatform: () => false,
+    onRuntimeEvent: () => () => {},
 }));
 vi.mock('../../api', () => api);
 

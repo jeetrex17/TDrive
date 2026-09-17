@@ -22,6 +22,7 @@ let app: Record<string, unknown> | null = null;
 const item: FileItem = {
     msgId: 7, name: 'IMG_7.jpg', size: 10, parentId: '',
     uploadTime: 0, uploaderId: 0, encrypted: true, plaintextSize: 0,
+    revision: 1,
 };
 
 function patch(next: CellPatch): void {

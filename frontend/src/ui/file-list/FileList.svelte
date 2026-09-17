@@ -12,6 +12,7 @@
     import PlayIcon from '@lucide/svelte/icons/play';
     import { isMobilePlatform } from '../../api';
     import FileState from './FileState.svelte';
+    import FileThumbnail from './FileThumbnail.svelte';
     import { minuteTick } from './clock';
     import { fileTypeFamily, fileTypeIcon } from './file-type';
     import { rowMetaLine, splitRowLabel } from './row-meta';
@@ -25,6 +26,13 @@
     import { fileListView } from './file-list-store';
     import { fileSortState } from './file-sort-store';
     import { activeFileRowKey, selectedFileRowKeys } from './row-state-store';
+    import {
+        beginFileThumbnailRender,
+        activateFileThumbnailAvailability,
+        rearmFileThumbnailLocked,
+        setFileThumbnailRoot,
+        teardownFileThumbnails,
+    } from './file-thumbnail-controller';
     import type { FileListAction, FileListFileRow, FileListRow, FolderListRow } from './types';
 
     type InteractiveRow = FolderListRow | FileListFileRow;
@@ -70,6 +78,11 @@
     const visibleRows = $derived($fileListView.kind === 'rows'
         ? sortFileListRows($fileListView.rows, $fileSortState)
         : []);
+    const thumbnailChannelId = $derived(
+        visibleRows.find((row): row is FileListFileRow => row.kind === 'file' && row.thumbnail !== undefined)
+            ?.thumbnail?.channelId ?? 0,
+    );
+    $effect(() => beginFileThumbnailRender(thumbnailChannelId));
     // The rows whose second line changes virtual height. Transfer-map keys are
     // drive-scoped, whereas a row owns a bare file id, so derive from rows and
     // resolve each against the active drive instead of comparing unlike keys.
@@ -164,6 +177,8 @@
     onMount(() => {
         list = document.getElementById('file-list');
         if (!list) return;
+        setFileThumbnailRoot(list);
+        const deactivateThumbnailAvailability = activateFileThumbnailAvailability();
         applyMobileListSemantics();
         const unsubscribeListSemantics = mobile
             ? fileListView.subscribe(applyMobileListSemantics)
@@ -173,12 +188,16 @@
         list.addEventListener('scroll', onScroll, { passive: true });
         resizeObserver?.observe(list);
         window.addEventListener('tdrive:reveal-file-row', revealRow);
+        window.addEventListener('tdrive:unlocked', rearmFileThumbnailLocked);
         updateViewport();
         return () => {
             list?.removeEventListener('scroll', onScroll);
             resizeObserver?.disconnect();
             window.removeEventListener('tdrive:reveal-file-row', revealRow);
+            window.removeEventListener('tdrive:unlocked', rearmFileThumbnailLocked);
             unsubscribeListSemantics();
+            deactivateThumbnailAvailability();
+            teardownFileThumbnails();
             list = null;
         };
     });
@@ -277,11 +296,15 @@
                             <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
                         </span>
                     {:else}
-                        {@const family = fileTypeFamily(row.ext)}
-                        {@const TypeIcon = fileTypeIcon(family)}
-                        <span class="file-type-icon" data-family={family} aria-hidden="true">
-                            <TypeIcon size={20} strokeWidth={1.75} aria-hidden="true" />
-                        </span>
+                        {#if row.thumbnail}
+                            <FileThumbnail ext={row.ext} identity={row.thumbnail} />
+                        {:else}
+                            {@const family = fileTypeFamily(row.ext)}
+                            {@const TypeIcon = fileTypeIcon(family)}
+                            <span class="file-type-icon" data-family={family} aria-hidden="true">
+                                <TypeIcon size={20} strokeWidth={1.75} aria-hidden="true" />
+                            </span>
+                        {/if}
                     {/if}
                     <span class="row-text">
                         {@render phoneLabel(row.name, row.kind === 'file')}
@@ -403,14 +426,18 @@
                         </span>
                         <span class="row-label">{row.name}</span>
                     {:else}
-                        {@const family = fileTypeFamily(row.ext)}
-                        {@const TypeIcon = fileTypeIcon(family)}
-                        <span class="file-type-icon" data-family={family} aria-hidden="true">
-                            <!-- Lighter than the app default: Lucide's stroke is fixed
-                                 against a 24px grid, so it reads heavier the smaller
-                                 the glyph is drawn. The folder chip matches. -->
-                            <TypeIcon size={17} strokeWidth={1.5} aria-hidden="true" />
-                        </span>
+                        {#if row.thumbnail}
+                            <FileThumbnail ext={row.ext} identity={row.thumbnail} />
+                        {:else}
+                            {@const family = fileTypeFamily(row.ext)}
+                            {@const TypeIcon = fileTypeIcon(family)}
+                            <span class="file-type-icon" data-family={family} aria-hidden="true">
+                                <!-- Lighter than the app default: Lucide's stroke is fixed
+                                     against a 24px grid, so it reads heavier the smaller
+                                     the glyph is drawn. The folder chip matches. -->
+                                <TypeIcon size={17} strokeWidth={1.5} aria-hidden="true" />
+                            </span>
+                        {/if}
                         {#if row.encrypted}
                             <span class="file-lock-badge" title="Encrypted" aria-label="Encrypted">
                                 <LockKeyholeIcon size={12} strokeWidth={2} aria-hidden="true" />

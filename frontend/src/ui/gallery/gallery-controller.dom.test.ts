@@ -60,6 +60,16 @@ describe('gallery image leases', () => {
         vi.restoreAllMocks();
     });
 
+    it('keeps one visibility listener when the scroll root changes', async () => {
+        const target = cell();
+        fire(target.node); await flush();
+        controller.setRoot(document.createElement('div'));
+        vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(target.patches.filter((patch) => patch.status === 'idle')).toHaveLength(1);
+        vi.restoreAllMocks();
+    });
+
     it('keeps permanent errors honest and refreshes missing previews after preparation', async () => {
         runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject(new Error('unsupported image')), release: runtime.release }));
         const failed = cell(); fire(failed.node); await flush();

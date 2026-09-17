@@ -35,7 +35,7 @@ import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { bindSwipeActions } from '../ui/file-list/swipe-actions';
 import { openMoveModal } from './modals/move';
 import { showRowContextMenu } from './context-menu';
-import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FileListUploaderChip, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
+import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FileListUploaderChip, FileThumbnailIdentity, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
 
 type FileRowInput = {
     id?: string | number;
@@ -75,6 +75,20 @@ type LoadedFileData = {
     filesystemMessageIds: Set<number>;
     folderStats: Map<string, FolderStat>;
 };
+
+export function fileThumbnailIdentity(
+    file: Pick<FileItem, 'msgId' | 'name' | 'revision'>,
+    channelId: number,
+): FileThumbnailIdentity | undefined {
+    if (!isImageFile(file.name)
+        || !Number.isSafeInteger(channelId)
+        || channelId <= 0
+        || !Number.isSafeInteger(file.msgId)
+        || file.msgId <= 0
+        || !Number.isSafeInteger(file.revision)
+        || file.revision <= 0) return undefined;
+    return Object.freeze({ channelId, fileId: file.msgId, revision: file.revision });
+}
 
 // dragItemsFor returns the items to move for a drag started on `row`: the whole
 // current selection when the row is part of a multi-selection, else just the
@@ -301,6 +315,7 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         encrypted,
         canDelete,
         canRename,
+        thumbnail: overrides.thumbnail,
         uploaderChip: overrides.uploaderChip !== undefined
             ? overrides.uploaderChip
             : uploaderChipFor(uploaderID, uploadTime),
@@ -640,7 +655,11 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
         date: file.uploadTime,
         uploaderID: file.uploaderId,
         encrypted: file.encrypted,
-    }, view.folderId));
+    }, view.folderId, {
+        // Only the current folder's projected images opt in. This avoids a
+        // gallery-wide lookup and keeps raw Telegram/search rows icon-only.
+        thumbnail: fileThumbnailIdentity(file, view.channelId),
+    }));
     const telegramRows = data.telegramFiles
         .filter((file) => !data.filesystemMessageIds.has(file.msgId))
         .map((file) => buildFileRow({
@@ -1124,7 +1143,6 @@ export function activateFileList(): () => void {
             }),
         ]
         : [];
-
     return () => {
         for (const cleanup of touchCleanups) cleanup();
         list.removeEventListener('click', handleListClick);

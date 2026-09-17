@@ -808,6 +808,7 @@ func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
 			UploaderID:    f.UploaderID,
 			Encrypted:     f.Encrypted,
 			PlaintextSize: f.PlaintextSize,
+			Revision:      f.Revision,
 		})
 	}
 	return result, nil

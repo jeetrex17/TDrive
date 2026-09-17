@@ -20,7 +20,7 @@ let host: HTMLElement;
 let app: Record<string, unknown> | null = null;
 
 function makeItem(msgId: number): FileItem {
-    return { msgId, name: `IMG_${msgId}.jpg`, size: 10, parentId: '', uploadTime: 0, uploaderId: 0, encrypted: false, plaintextSize: 0 };
+    return { msgId, name: `IMG_${msgId}.jpg`, size: 10, parentId: '', uploadTime: 0, uploaderId: 0, encrypted: false, plaintextSize: 0, revision: 1 };
 }
 
 beforeEach(() => {

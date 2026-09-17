@@ -307,6 +307,39 @@
     color: var(--text-main);
 }
 
+/* Image rows keep the exact type-chip footprint, so loading a photo never
+   changes row height or the virtual scroll offsets. The icon remains underneath
+   as the honest fallback for locked, missing or failed derivatives. */
+.row-thumbnail {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+}
+.row-thumbnail-image {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 100ms var(--ease-standard);
+}
+.row-thumbnail-loaded .row-thumbnail-image { opacity: 1; }
+.row-thumbnail::after {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--overlay-white-2);
+    content: "";
+    pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .row-thumbnail-image { transition: none; }
+}
+
 
 .row-name {
     min-width: 0;
