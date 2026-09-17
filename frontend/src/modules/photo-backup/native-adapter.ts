@@ -35,7 +35,7 @@ export async function requestNativePhotoBackupAccess(): Promise<void> {
     if (hasBridgeMethod('requestPhotoBackupAccess')) await callBridge('requestPhotoBackupAccess', [], 'Photo library access is unavailable.');
 }
 
-export async function nativePhotoBackupPolicy(): Promise<{ wifi: boolean; charging: boolean } | null> {
+export async function nativePhotoBackupPolicy(): Promise<boolean | null> {
     const ios = iosBridge() as (IOSPhotosBridge & { getPhotoBackupCapabilities?: () => unknown }) | null;
     const raw = ios?.getPhotoBackupCapabilities
         ? await nativeCall(ios.getPhotoBackupCapabilities())
@@ -43,9 +43,7 @@ export async function nativePhotoBackupPolicy(): Promise<{ wifi: boolean; chargi
             ? parse(await callBridge('photoBackupPolicyStatus', [], ''))
             : null;
     if (!raw) return null;
-    const wifi = raw.wifi === true || raw.wifi_status === 'wifi';
-    const charging = raw.charging === true || raw.charging_status === 'charging';
-    return { wifi, charging };
+    return raw.wifi === true || raw.wifi_status === 'wifi';
 }
 
 export async function setIOSPhotoBackupBackground(active: boolean): Promise<boolean> {

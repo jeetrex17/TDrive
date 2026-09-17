@@ -181,8 +181,16 @@ PRAGMA user_version=1`); err != nil {
 	if err = engine.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	var version int
+	if err = db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 3 {
+		t.Fatalf("version=%d err=%v", version, err)
+	}
+	var chargingColumns int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('photo_backup_settings') WHERE name='charging_only'`).Scan(&chargingColumns); err != nil || chargingColumns != 0 {
+		t.Fatalf("charging columns=%d err=%v", chargingColumns, err)
+	}
 	settings, err := engine.GetSettings(context.Background(), Scope{AccountID: "acct", DriveID: 7})
-	if err != nil || settings.ManualPaused {
+	if err != nil || !settings.Enabled || !settings.Photos || !settings.Videos || settings.ManualPaused {
 		t.Fatalf("settings=%+v err=%v", settings, err)
 	}
 	if err = engine.SetManualPaused(context.Background(), settings.Scope, true); err != nil {
@@ -194,6 +202,62 @@ PRAGMA user_version=1`); err != nil {
 	settings, err = engine.GetSettings(context.Background(), settings.Scope)
 	if err != nil || !settings.ManualPaused {
 		t.Fatalf("reopened settings=%+v err=%v", settings, err)
+	}
+}
+
+func TestMigrateVersionTwoDropsChargingWithoutBlockingOrLosingQueue(t *testing.T) {
+	now := time.Unix(18, 0)
+	engine, scope := testEngine(t, &now)
+	configure(t, engine, scope)
+	if err := engine.PutSettings(context.Background(), Settings{Scope: scope, Enabled: true, Photos: true, Videos: true, FutureOnly: true, WiFiOnly: true, DestinationParentID: "d:root", Encrypt: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SetManualPaused(context.Background(), scope, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.EnqueuePage(context.Background(), scope, "camera", []Asset{{ID: "queued", Version: "v1", Path: "/queued.jpg", Name: "queued.jpg", MediaType: "photo", ModifiedAt: now, Size: 42}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_settings ADD COLUMN charging_only INTEGER NOT NULL DEFAULT 0;
+UPDATE photo_backup_settings SET charging_only=1;
+PRAGMA user_version=2`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := engine.GetSettings(context.Background(), scope)
+	if err != nil || !settings.Enabled || !settings.Photos || !settings.Videos || !settings.FutureOnly || !settings.WiFiOnly || !settings.Encrypt || !settings.ManualPaused || settings.DestinationParentID != "d:root" {
+		t.Fatalf("settings=%+v err=%v", settings, err)
+	}
+	status, err := engine.Status(context.Background(), scope)
+	if err != nil || status.Pending != 1 {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	if err := engine.SetManualPaused(context.Background(), scope, false); err != nil {
+		t.Fatal(err)
+	}
+	called := 0
+	uploaded, err := engine.RunOnce(context.Background(), scope, func(_ context.Context, request UploadRequest) (UploadResult, error) {
+		called++
+		if request.Asset.ID != "queued" || request.Asset.Size != 42 {
+			t.Fatalf("request=%+v", request)
+		}
+		return UploadResult{RemoteMessageID: 99}, nil
+	})
+	if err != nil || uploaded != 1 || called != 1 {
+		t.Fatalf("uploaded=%d called=%d err=%v", uploaded, called, err)
+	}
+	var version, chargingColumns int
+	if err := engine.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 3 {
+		t.Fatalf("version=%d err=%v", version, err)
+	}
+	if err := engine.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('photo_backup_settings') WHERE name='charging_only'`).Scan(&chargingColumns); err != nil || chargingColumns != 0 {
+		t.Fatalf("charging columns=%d err=%v", chargingColumns, err)
+	}
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatalf("repeat migration: %v", err)
 	}
 }
 

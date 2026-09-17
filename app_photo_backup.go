@@ -27,7 +27,6 @@ type PhotoBackupSettings struct {
 	Videos              bool   `json:"videos"`
 	FutureOnly          bool   `json:"future_only"`
 	WiFiOnly            bool   `json:"wifi_only"`
-	ChargingOnly        bool   `json:"charging_only"`
 	DestinationParentID string `json:"destination_parent_id"`
 	Encrypt             bool   `json:"encrypt"`
 }
@@ -58,9 +57,8 @@ type PhotoBackupCapability struct {
 }
 
 type PhotoBackupCapabilities struct {
-	WiFiOnly     PhotoBackupCapability `json:"wifi_only"`
-	ChargingOnly PhotoBackupCapability `json:"charging_only"`
-	Access       struct {
+	WiFiOnly PhotoBackupCapability `json:"wifi_only"`
+	Access   struct {
 		Status string `json:"status"`
 		Detail string `json:"detail"`
 	} `json:"access"`
@@ -89,12 +87,12 @@ type PhotoBackupState struct {
 		Title string `json:"title"`
 		Kind  string `json:"kind"`
 	} `json:"destination"`
-	ManualPaused bool `json:"manual_paused"`
+	ManualPaused       bool `json:"manual_paused"`
+	EncryptionRequired bool `json:"encryption_required"`
 }
 
 type PhotoBackupPolicy struct {
 	WiFi       bool  `json:"wifi"`
-	Charging   bool  `json:"charging"`
 	ObservedAt int64 `json:"observed_at"`
 }
 
@@ -195,12 +193,12 @@ func (a *App) GetPhotoBackupState() (PhotoBackupState, error) {
 			state.Status.Phase, state.Status.Message = "paused", policyErr.Error()
 		}
 	}
-	return state, nil
+	return a.photoBackupAccessState(state), nil
 }
 
 func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupState, error) {
-	if runtime.GOOS != "android" && (value.WiFiOnly || value.ChargingOnly) {
-		return PhotoBackupState{}, fmt.Errorf("photo backup: Wi-Fi and charging conditions are unavailable on this platform")
+	if runtime.GOOS != "android" && value.WiFiOnly {
+		return PhotoBackupState{}, fmt.Errorf("photo backup: Wi-Fi conditions are unavailable on this platform")
 	}
 	ctx := a.appContext()
 	engine, err := a.photoBackupEngine()
@@ -222,7 +220,7 @@ func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupSta
 	if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
 		return PhotoBackupState{}, getErr
 	}
-	settings := photobackup.Settings{Scope: scope, Enabled: value.Enabled, Photos: value.Photos, Videos: value.Videos, FutureOnly: value.FutureOnly, WiFiOnly: value.WiFiOnly, ChargingOnly: value.ChargingOnly, DestinationParentID: value.DestinationParentID, Encrypt: value.Encrypt, ManualPaused: current.ManualPaused}
+	settings := photobackup.Settings{Scope: scope, Enabled: value.Enabled, Photos: value.Photos, Videos: value.Videos, FutureOnly: value.FutureOnly, WiFiOnly: value.WiFiOnly, DestinationParentID: value.DestinationParentID, Encrypt: value.Encrypt, ManualPaused: current.ManualPaused}
 	a.stopPhotoBackup()
 	if err := engine.PutSettings(ctx, settings); err != nil {
 		return PhotoBackupState{}, err
@@ -589,7 +587,7 @@ func randomPhotoBackupToken() string {
 }
 
 func (a *App) photoBackupPolicyAllows(settings photobackup.Settings) error {
-	if !settings.WiFiOnly && !settings.ChargingOnly {
+	if !settings.WiFiOnly {
 		return nil
 	}
 	a.photoBackupMu.Lock()
@@ -601,9 +599,6 @@ func (a *App) photoBackupPolicyAllows(settings photobackup.Settings) error {
 	}
 	if settings.WiFiOnly && !policy.WiFi {
 		return fmt.Errorf("photo backup: waiting for Wi-Fi")
-	}
-	if settings.ChargingOnly && !policy.Charging {
-		return fmt.Errorf("photo backup: waiting for charging")
 	}
 	return nil
 }
@@ -767,7 +762,7 @@ func photoBackupAssetDTO(asset photobackup.Asset) PhotoBackupAsset {
 }
 
 func photoBackupState(settings photobackup.Settings, sources []photobackup.Source, status photobackup.Status, running, manualPaused bool) PhotoBackupState {
-	state := PhotoBackupState{Platform: runtime.GOOS, Settings: PhotoBackupSettings{Enabled: settings.Enabled, Photos: settings.Photos, Videos: settings.Videos, FutureOnly: settings.FutureOnly, WiFiOnly: settings.WiFiOnly, ChargingOnly: settings.ChargingOnly, DestinationParentID: settings.DestinationParentID, Encrypt: settings.Encrypt}}
+	state := PhotoBackupState{Platform: runtime.GOOS, Settings: PhotoBackupSettings{Enabled: settings.Enabled, Photos: settings.Photos, Videos: settings.Videos, FutureOnly: settings.FutureOnly, WiFiOnly: settings.WiFiOnly, DestinationParentID: settings.DestinationParentID, Encrypt: settings.Encrypt}}
 	state.ManualPaused = manualPaused
 	state.Sources = make([]PhotoBackupSource, 0, len(sources))
 	for _, source := range sources {
@@ -789,8 +784,11 @@ func photoBackupState(settings photobackup.Settings, sources []photobackup.Sourc
 		state.Status.Phase = "complete"
 	}
 	policySupported := runtime.GOOS == "android"
-	state.Capabilities.WiFiOnly = PhotoBackupCapability{Supported: policySupported, Label: "Wi-Fi only", Detail: "Requires a recent device connectivity update."}
-	state.Capabilities.ChargingOnly = PhotoBackupCapability{Supported: policySupported, Label: "Only while charging", Detail: "Requires a recent device power update."}
+	detail := "Wi-Fi conditions are available on Android."
+	if policySupported {
+		detail = "Requires a recent device connectivity update."
+	}
+	state.Capabilities.WiFiOnly = PhotoBackupCapability{Supported: policySupported, Label: "Wi-Fi only", Detail: detail}
 	state.Capabilities.Access.Status, state.Capabilities.Access.Detail = "available", "Photo access is managed by the device."
 	state.Destination.ID = settings.DestinationParentID
 	state.Destination.Title = "Photo backup"

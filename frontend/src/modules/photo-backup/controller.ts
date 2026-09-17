@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import {
     addPhotoBackupFolder, defaultSettings, enqueuePhotoBackupAssets, getPhotoBackupState,
     pausePhotoBackup, removePhotoBackupSource, resolvePhotoBackupResource, resumePhotoBackup, retryPhotoBackup, setPhotoBackupPolicy,
@@ -10,6 +10,8 @@ import { asRecord, boundedText } from '../../api/shared';
 import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativePhotoBackupAvailable, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
 import { activeDrive } from '../../ui/mobile/mobile-shell-store';
 import { activatePhotoBackupBackground } from './background';
+import { openEncryptionPasswordModal } from '../modals/encryption-password';
+import { isEncryptionPasswordRequired } from '../errors';
 
 export const photoBackupState = writable<PhotoBackupState | null>(null);
 export const photoBackupError = writable('');
@@ -53,12 +55,12 @@ function cancelDiscovery(): void {
 
 const yieldToForeground = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-async function refreshNativePolicy(): Promise<void> {
-    if (policySampling || !active || !documentVisible || manuallyPaused) return;
+async function refreshNativePolicy(force = false): Promise<void> {
+    if (policySampling || !active || !documentVisible || (manuallyPaused && !force)) return;
     policySampling = true;
     try {
-        const policy = await nativePhotoBackupPolicy();
-        if (policy && active && documentVisible) await setPhotoBackupPolicy(policy.wifi, policy.charging);
+        const wifi = await nativePhotoBackupPolicy();
+        if (wifi !== null && active && documentVisible) await setPhotoBackupPolicy(wifi);
     } finally { policySampling = false; }
 }
 
@@ -73,6 +75,10 @@ async function runDiscoveryScheduler(): Promise<void> {
         const current = await getPhotoBackupState();
         manuallyPaused = current.manualPaused;
         if (!current.settings.enabled || epoch !== schedulerEpoch || manuallyPaused) return;
+        if (current.encryptionRequired) {
+            photoBackupError.set('Unlock encryption to continue photo backup.');
+            return;
+        }
         await refreshNativePolicy();
         if (epoch !== schedulerEpoch) return;
         // Drain persisted work even when discovery already reached the end.
@@ -95,7 +101,11 @@ async function runDiscoveryScheduler(): Promise<void> {
         }
         await refreshPhotoBackup();
     } catch (cause) {
-        if (active && epoch === schedulerEpoch) photoBackupError.set(cause instanceof Error ? cause.message.slice(0, 240) : 'Backup is waiting for media access or a connection.');
+        if (isEncryptionPasswordRequired(cause)) {
+            if (active && epoch === schedulerEpoch) photoBackupError.set('Unlock encryption to continue photo backup.');
+            return;
+        }
+        if (active && epoch === schedulerEpoch) photoBackupError.set('Backup is waiting for media access or a connection.');
         // Native permission and transient provider failures are retried while
         // foregrounded without presenting an endless stream of errors.
         if (active && epoch === schedulerEpoch) retryTimer = setTimeout(() => { retryTimer = null; void runDiscoveryScheduler(); }, 5_000);
@@ -105,12 +115,26 @@ async function runDiscoveryScheduler(): Promise<void> {
 export async function loadPhotoBackupCandidates(): Promise<void> { if (nativePhotoBackupAvailable()) { await requestNativePhotoBackupAccess(); photoBackupCandidates.set(await listNativePhotoBackupSources()); } }
 export async function selectPhotoBackupSource(source: import('../../api/photo-backup').PhotoBackupSource): Promise<void> { await upsertPhotoBackupSource(source); await refreshPhotoBackup(); void runDiscoveryScheduler(); }
 
+// An explicit action may open the existing password modal, then runs once. A
+// stale state can still surface the backend's stable locked-vault error; in
+// that case unlock and retry the original action exactly once.
+async function runWithEncryptionUnlock(action: () => Promise<void>): Promise<boolean> {
+    if (get(photoBackupState)?.encryptionRequired && !await openEncryptionPasswordModal()) return false;
+    try {
+        await action();
+        return true;
+    } catch (cause) {
+        if (!isEncryptionPasswordRequired(cause)) throw cause;
+        if (!await openEncryptionPasswordModal()) return false;
+        await action();
+        return true;
+    }
+}
+
 export async function startPhotoBackup(): Promise<void> {
     manuallyPaused = false; photoBackupBusy.set(true); photoBackupError.set('');
     try {
-        await refreshNativePolicy();
-        await runPhotoBackup(); await refreshPhotoBackup();
-        void runDiscoveryScheduler();
+        if (await runWithEncryptionUnlock(async () => { await refreshNativePolicy(true); await runPhotoBackup(); })) { await refreshPhotoBackup(); void runDiscoveryScheduler(); }
     } catch { photoBackupError.set('Could not start photo backup. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
@@ -136,13 +160,13 @@ export async function pausePhotoBackupNow(): Promise<void> {
 }
 export async function resumePhotoBackupNow(): Promise<void> {
     photoBackupBusy.set(true); photoBackupError.set('');
-    try { await resumePhotoBackup(); manuallyPaused = false; await refreshPhotoBackup(); void runDiscoveryScheduler(); }
+    try { if (await runWithEncryptionUnlock(async () => { await refreshNativePolicy(true); await resumePhotoBackup(); })) { manuallyPaused = false; await refreshPhotoBackup(); void runDiscoveryScheduler(); } }
     catch { await refreshPhotoBackup(); photoBackupError.set('Could not resume photo backup. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
 export async function retryPhotoBackupNow(): Promise<void> {
     photoBackupBusy.set(true); photoBackupError.set('');
-    try { await retryPhotoBackup(); await refreshPhotoBackup(); if (!manuallyPaused) void runDiscoveryScheduler(); }
+    try { if (await runWithEncryptionUnlock(async () => { await refreshNativePolicy(true); await retryPhotoBackup(); })) { await refreshPhotoBackup(); if (!manuallyPaused) void runDiscoveryScheduler(); } }
     catch { photoBackupError.set('Could not retry photo backup. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
@@ -203,12 +227,5 @@ export function activatePhotoBackup(): () => void {
     const visibility = () => { documentVisible = document.visibilityState === 'visible'; if (!documentVisible) { cancelDiscovery(); return; } void runDiscoveryScheduler(); };
     document.addEventListener('visibilitychange', visibility);
     const stopDriveWatch = activeDrive.subscribe((drive) => { const id = drive?.id ?? null; if (id !== observedDriveID) { cancelDiscovery(); observedDriveID = id; if (id !== null) void runDiscoveryScheduler(); } });
-    // Native policy expires after two minutes. Sampling also resumes due retries
-    // without repeatedly rescanning a library that has already been discovered.
-    const policyTimer = setInterval(() => {
-        // Sample even while a long discovery pass or upload is still active.
-        // A changed network/power condition cancels the Go worker promptly.
-        void refreshNativePolicy().then(runDiscoveryScheduler).catch(() => photoBackupError.set('Device backup conditions are unavailable.'));
-    }, 30_000);
-    return () => { stopBackground(); active = false; observedDriveID = null; stopDriveWatch(); cancelDiscovery(); clearInterval(policyTimer); for (const token of materializations.keys()) release({ token }); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('ios:PhotoBackupMediaChanged', iosResume); if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; } for (const stop of stops) stop(); };
+    return () => { stopBackground(); active = false; observedDriveID = null; stopDriveWatch(); cancelDiscovery(); for (const token of materializations.keys()) release({ token }); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('ios:PhotoBackupMediaChanged', iosResume); if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; } for (const stop of stops) stop(); };
 }

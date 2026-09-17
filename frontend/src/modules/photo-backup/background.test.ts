@@ -17,10 +17,10 @@ vi.mock('../../api/runtime', () => ({ runtimeEventsAvailable: () => false, onRun
 import { activatePhotoBackupBackground } from './background';
 
 const state = (uploading: boolean): PhotoBackupState => ({
-    settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, chargingOnly: false },
+    settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false },
     sources: [], status: { phase: uploading ? 'uploading' : 'idle', pending: 0, uploading: uploading ? 1 : 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, message: '' },
-    capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, chargingOnly: { supported: true, label: '', detail: '' }, access: { status: '', detail: '' } },
-    platform: 'android', destination: { id: '', title: '', kind: '' }, manualPaused: false,
+    capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: '', detail: '' } },
+    platform: 'android', destination: { id: '', title: '', kind: '' }, manualPaused: false, encryptionRequired: false,
 });
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
 
