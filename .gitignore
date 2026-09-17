@@ -52,3 +52,12 @@ node_modules/
 .idea/
 *.swp
 *.swo
+
+# The `go build` binary at the repo root. A 70MB artifact in the tree is 70MB
+# in every clone, forever.
+/TDrive
+
+# Design references. Worth keeping on disk, not worth carrying in history --
+# same rule as the planning docs.
+/simpler better app desgin.png
+/assets/app desgin mockup .png
