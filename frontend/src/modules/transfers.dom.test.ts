@@ -227,6 +227,11 @@ describe('the picker window', () => {
             expect.objectContaining({ title: 'A transfer is already in progress' }),
         );
 
+        // The folder picker sits behind the same lock, so it is refused too
+        // rather than racing the selection that is already being prepared.
+        await importFolderWithParentID('');
+        expect(app.SelectFolder).not.toHaveBeenCalled();
+
         releasePicker(['/tmp/report.pdf']);
         await first;
         expect(app.UploadToDriveFS).toHaveBeenCalledTimes(1);

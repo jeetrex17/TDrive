@@ -767,23 +767,27 @@ export async function uploadWithParentID(parentID: string) {
 // importFolderWithParentID opens the directory picker and imports the chosen
 // folder tree into parentID.
 export async function importFolderWithParentID(parentID: string) {
-    // Android's picker answers through the app's own bridge with a manifest
-    // rather than a path, because Wails will not hand a document tree to its
-    // dialog API and because nothing has been copied out of the tree yet.
-    if (canPickFolder()) {
-        await importAndroidFolder(parentID);
-        return;
-    }
-    let dir = "";
-    try {
-        dir = await selectFolder();
-    } catch (err) {
-        console.error("SelectFolder failed:", err);
-        notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err) });
-        return;
-    }
-    if (!dir) return;
-    await runImportFlow(parentID, [dir]);
+    // The lock is taken here rather than inside either branch, so it covers the
+    // picker itself -- the same window the file picker was leaving open.
+    await withTransferFlow(async () => {
+        // Android's picker answers through the app's own bridge with a manifest
+        // rather than a path, because Wails will not hand a document tree to its
+        // dialog API and because nothing has been copied out of the tree yet.
+        if (canPickFolder()) {
+            await importAndroidFolder(parentID);
+            return;
+        }
+        let dir = "";
+        try {
+            dir = await selectFolder();
+        } catch (err) {
+            console.error("SelectFolder failed:", err);
+            notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err) });
+            return;
+        }
+        if (!dir) return;
+        await importSelection(parentID, [dir]);
+    });
 }
 
 // Peak cache use is one window, which is the whole point: a handful of files
@@ -795,7 +799,6 @@ const ANDROID_UPLOAD_WINDOW = 4;
 // importAndroidFolder picks a folder and uploads it without ever copying the
 // whole tree into the cache.
 async function importAndroidFolder(parentID: string) {
-  await withTransferFlow(async () => {
     activeTransferDriveId = state.activeChannel?.id ?? null;
     // The picker covers the app while it is open, so this row is only seen once
     // it closes, which is exactly when the tree walk is still running and the
@@ -828,7 +831,6 @@ async function importAndroidFolder(parentID: string) {
     } finally {
         state.cancelingUpload = false;
     }
-  });
 }
 
 // runAndroidImport recreates the manifest's folder tree, then uploads its files
@@ -1028,18 +1030,15 @@ function finishAndroidImport(done: number, failed: number, fatalError: string) {
     importFailureReasons.length = 0;
 }
 
-// runImportFlow is the single entry point for any selection (file picker, folder
-// picker, or drag-drop). A plain-files selection keeps the original per-file
-// upload UX; a selection containing folders or archives goes through the import
-// dialog and the aggregated import flow.
-async function runImportFlow(parentID: string, paths: string[]) {
-    await withTransferFlow(() => importSelection(parentID, paths));
-}
-
 /**
- * The flow itself, for a selection that is already in hand. Callers hold the
- * transfer lock; the picker takes it earlier than a drop can, which is why this
- * is separate from runImportFlow rather than guarded here.
+ * What every selection ends up in, however it was chosen -- file picker, folder
+ * picker or drag-drop. A plain-files selection keeps the original per-file
+ * upload UX; a selection containing folders or archives goes through the import
+ * dialog and the aggregated import flow.
+ *
+ * Callers hold the transfer lock. It is theirs rather than taken here because a
+ * picker has to be covered from the moment it opens, which is well before it
+ * has a selection to hand over; see withTransferFlow.
  */
 async function importSelection(parentID: string, paths: string[]) {
     if (!paths.length) return;
@@ -1271,7 +1270,7 @@ function activateFileDropEvents(): void {
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         const target = document.elementFromPoint(x, y);
         if (!target || !(target as HTMLElement).closest('#file-list')) return;
-        void runImportFlow(state.currentFolderId, paths);
+        void withTransferFlow(() => importSelection(state.currentFolderId, paths));
     });
 }
 
