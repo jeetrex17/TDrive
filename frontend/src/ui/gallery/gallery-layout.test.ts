@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createGalleryLayout, galleryWindow, offsetForIndex, indexAtOffset } from './gallery-layout';
+import { createGalleryLayout, createGalleryScrollSpace, galleryWindow, offsetForIndex, indexAtOffset } from './gallery-layout';
 
 describe('gallery geometry', () => {
     const buckets = [
@@ -35,5 +35,22 @@ describe('gallery geometry', () => {
         expect(visible.rows.map((row) => row.indices)).toEqual([[0, 1], [2, 3, 4], [5]]);
         expect(visible.headers).toHaveLength(2);
         expect(galleryWindow(createGalleryLayout([], 0, false), 0, 800).rows).toEqual([]);
+    });
+
+    it('maps a million-photo logical layout into a browser-safe physical canvas', () => {
+        const layout = createGalleryLayout([
+            { key: '2026-09', startIndex: 0, count: 1_000_000, uploadTime: 1 },
+        ], 390, true);
+        const scrollSpace = createGalleryScrollSpace(layout.height, 800);
+
+        expect(layout.height).toBeGreaterThan(33_000_000);
+        expect(scrollSpace.physicalHeight).toBeLessThanOrEqual(16_000_000);
+        expect(scrollSpace.toLogical(scrollSpace.physicalMax)).toBeCloseTo(scrollSpace.logicalMax, 5);
+        expect(scrollSpace.toPhysical(scrollSpace.logicalMax)).toBeCloseTo(scrollSpace.physicalMax, 5);
+
+        const bottom = galleryWindow(layout, scrollSpace.toLogical(scrollSpace.physicalMax), 800);
+        const lastRow = bottom.rows[bottom.rows.length - 1];
+        expect(lastRow?.indices[lastRow.indices.length - 1]).toBe(999_999);
+        expect(lastRow.top - scrollSpace.toLogical(scrollSpace.physicalMax)).toBeLessThan(800);
     });
 });
