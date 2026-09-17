@@ -149,6 +149,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize the native Go library
         bridge = new WailsBridge(this);
+        WailsForegroundService.attachRuntimeBridge(bridge);
         GalleryImage.nativeInit();
         bridge.initialize();
 
@@ -1700,6 +1701,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         unregisterSystemEventReceivers();
+        WailsForegroundService.attachRuntimeBridge(null);
         if (bridge != null) {
             bridge.shutdown();
         }

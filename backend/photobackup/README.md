@@ -16,15 +16,26 @@ The app resolves that scope; native adapters cannot choose an account.
 - The frontend enumerates mobile sources a page at a time. The Go worker
   uploads one queued resource at a time using the shared file service. Opening
   the gallery does not start an original-library download.
-- Mobile backup currently runs while the app is active and catches up when it
-  resumes. It does not provide a headless OS-scheduled uploader. Apple's
-  resumable-HTTP photo upload extension is not wired to Telegram transport.
+- Mobile discovery runs while the app is active. With a native execution grant,
+  an in-flight transfer can continue after backgrounding. Android uses a visible
+  data-sync foreground service; iOS grants limited UIKit background time, with a
+  conservative Go cancellation deadline. New resources wait for the foreground
+  because materialization still needs the WebView. This does not provide a
+  headless OS-scheduled uploader or uploads after process termination. Apple's
+  background HTTP upload transport is not wired to Telegram.
 
 Settings and queue state survive restart. Desktop scan handles do not: an
 interrupted traversal performs a fresh linear scan, with the ledger suppressing
 already discovered versions. Mobile discovery may also reconcile the accessible
 library again after resume. This is bounded-memory reconciliation, not a promise
 of constant-time discovery for a million items.
+
+Pause cancels in-flight work and persists per account and drive. Only an explicit
+Resume clears that choice; settings changes, retries, and app restarts do not.
+Cancellation without a remote receipt holds the interrupted item for explicit
+retry because its remote outcome may be uncertain. Confirmed receipts remain
+complete even if cancellation arrives at the same time. Pausing does not spend
+the item's failure retry budget.
 
 ## Identity and completion
 
@@ -73,9 +84,11 @@ Account tab. The destination is the current drive. Policy controls are enabled
 only where native device status can be supplied; an unavailable or stale required
 policy prevents uploading.
 
-Backed-up videos and unsupported preview formats remain accessible through the
-normal file browser/download flow. Backup does not expand the existing image-only
-gallery into a mixed photo/video timeline or reproduce device albums there.
+The gallery shows supported images and videos together. Video tiles request only
+document thumbnails and open the existing streaming player on activation. Missing
+thumbnails do not trigger full-video downloads. Unsupported preview formats remain
+accessible through the normal file browser/download flow. Device albums are not
+mirrored into cloud albums.
 Original metadata embedded in the file is retained; the current cloud timeline
 still orders files by upload time.
 

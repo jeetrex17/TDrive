@@ -4,7 +4,7 @@ import { asRecord, boundedText, nonNegativeNumber } from '../../api/shared';
 
 export interface NativeAssetPage { assets: PhotoBackupAsset[]; nextCursor: string; }
 export interface NativeMaterializedResource { path: string; releaseID: string; }
-interface IOSPhotosBridge { listPhotoBackupSources?: () => unknown; listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; }
+interface IOSPhotosBridge { listPhotoBackupSources?: () => unknown; listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; setBackgroundBackup?: (active: boolean) => unknown; }
 function iosBridge(): IOSPhotosBridge | null { return typeof window !== 'undefined' ? (window as Window & { tdriveIOSPhotos?: IOSPhotosBridge }).tdriveIOSPhotos ?? null : null; }
 async function nativeCall(value: unknown): Promise<Record<string, unknown>> { const result = await Promise.resolve(value); return typeof result === 'string' ? parse(result) : asRecord(result); }
 
@@ -46,6 +46,13 @@ export async function nativePhotoBackupPolicy(): Promise<{ wifi: boolean; chargi
     const wifi = raw.wifi === true || raw.wifi_status === 'wifi';
     const charging = raw.charging === true || raw.charging_status === 'charging';
     return { wifi, charging };
+}
+
+export async function setIOSPhotoBackupBackground(active: boolean): Promise<boolean> {
+    const operation = iosBridge()?.setBackgroundBackup;
+    if (!operation) return false;
+    await nativeCall(operation(active));
+    return true;
 }
 
 export async function materializeNativePhotoBackupAsset(asset: PhotoBackupAsset, signal?: AbortSignal): Promise<NativeMaterializedResource> {

@@ -114,6 +114,12 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
 @property (nonatomic, weak) WKWebView *webView;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *materializations;
 @property (nonatomic, strong) NSMutableSet<NSString *> *stagedTokens;
+// UIKit grants only a short, system-controlled window to finish work after
+// the app leaves the foreground. The page arms this assertion while backup is
+// running; it is acquired only after backgrounding and released promptly when
+// backup drains or the app returns.
+@property (nonatomic, assign) BOOL backgroundBackupWanted;
+@property (nonatomic, assign) UIBackgroundTaskIdentifier backgroundBackupTask;
 - (void)startObserving;
 @end
 
@@ -124,6 +130,7 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
     if (self) {
         _materializations = [NSMutableDictionary dictionary];
         _stagedTokens = [NSMutableSet set];
+        _backgroundBackupTask = UIBackgroundTaskInvalid;
     }
     return self;
 }
@@ -133,10 +140,13 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
     NSURL *stagingRoot = [cache URLByAppendingPathComponent:@"TDrivePhotoBackup" isDirectory:YES];
     [[NSFileManager defaultManager] removeItemAtURL:stagingRoot error:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationDidBecomeActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationWillResignActive:) name:UIApplicationWillResignActiveNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationDidEnterBackground:) name:UIApplicationDidEnterBackgroundNotification object:nil];
     [[PHPhotoLibrary sharedPhotoLibrary] registerChangeObserver:self];
 }
 
 - (void)dealloc {
+    [self endBackgroundBackupTask];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [[PHPhotoLibrary sharedPhotoLibrary] unregisterChangeObserver:self];
 }
@@ -148,7 +158,73 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
     (void)notification;
+    [self endBackgroundBackupTask];
+    // Backup may still be running without a state transition in JavaScript.
+    // Re-arm while visible so the next background transition has a real UIKit
+    // assertion rather than a stale frontend belief that one still exists.
+    [self beginBackgroundBackupTaskIfNeeded];
     [self emitMediaChanged:@"resume"];
+}
+
+- (void)applicationDidEnterBackground:(NSNotification *)notification {
+    (void)notification;
+    [self beginBackgroundBackupTaskIfNeeded];
+}
+
+- (void)applicationWillResignActive:(NSNotification *)notification {
+    (void)notification;
+    [self beginBackgroundBackupTaskIfNeeded];
+}
+
+- (void)emitBackgroundBackupExpired {
+    NSString *script = @"window.dispatchEvent(new CustomEvent('ios:PhotoBackupBackgroundExpired'))";
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.webView evaluateJavaScript:script completionHandler:nil];
+    });
+}
+
+- (void)beginBackgroundBackupTaskIfNeeded {
+    if (!self.backgroundBackupWanted || self.backgroundBackupTask != UIBackgroundTaskInvalid) return;
+    __weak TDrivePhotoBridge *weakSelf = self;
+    self.backgroundBackupTask = [[UIApplication sharedApplication]
+        beginBackgroundTaskWithName:@"TDrive photo backup" expirationHandler:^{
+            TDrivePhotoBridge *strongSelf = weakSelf;
+            if (strongSelf == nil) return;
+            [strongSelf emitBackgroundBackupExpired];
+            [strongSelf endBackgroundBackupTask];
+        }];
+}
+
+- (void)endBackgroundBackupTask {
+    UIBackgroundTaskIdentifier task = self.backgroundBackupTask;
+    self.backgroundBackupTask = UIBackgroundTaskInvalid;
+    if (task != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:task];
+    }
+}
+
+- (void)setBackgroundBackup:(NSString *)requestID arguments:(NSDictionary *)arguments {
+    BOOL active = [arguments[@"active"] boolValue];
+    self.backgroundBackupWanted = active;
+    if (active) {
+        // Acquire while the app is still visible. UIKit explicitly warns that
+        // waiting for suspension can be too late to receive the assertion.
+        [self beginBackgroundBackupTaskIfNeeded];
+    } else if (!active) {
+        [self endBackgroundBackupTask];
+    }
+    if (active && self.backgroundBackupTask == UIBackgroundTaskInvalid) {
+        self.backgroundBackupWanted = NO;
+        [self reply:requestID result:nil error:TDrivePhotoError(
+            @"backgroundUnavailable", @"iOS did not grant background execution time")];
+        return;
+    }
+    [self reply:requestID result:@{
+        @"active": @(active),
+        // This is deliberately named "limited": iOS chooses the deadline and
+        // may suspend or terminate the app. It is never a closed-app promise.
+        @"mode": @"limited"
+    } error:nil];
 }
 
 - (void)photoLibraryDidChange:(PHChange *)changeInstance {
@@ -413,6 +489,7 @@ complete:
     else if ([operation isEqualToString:@"materialize"]) [self materialize:requestID arguments:arguments];
     else if ([operation isEqualToString:@"cancelMaterialization"]) [self cancelMaterialization:requestID arguments:arguments];
     else if ([operation isEqualToString:@"cleanup"]) [self cleanup:requestID arguments:arguments];
+    else if ([operation isEqualToString:@"setBackgroundBackup"]) [self setBackgroundBackup:requestID arguments:arguments];
     else [self reply:requestID result:nil error:TDrivePhotoError(@"unsupportedOperation", @"Unsupported photo library operation")];
 }
 @end
@@ -428,7 +505,7 @@ static void TDriveInstallPhotoBridge(WKWebView *webView, UIViewController *prese
     objc_setAssociatedObject(webView, &TDrivePhotoBridgeKey, bridge, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     WKUserContentController *controller = webView.configuration.userContentController;
     [controller addScriptMessageHandler:bridge name:TDrivePhotoHandlerName];
-    NSString *source = @"(function(){if(window.tdriveIOSPhotos)return;const pending=new Map();let seq=0;window.__tdriveIOSPhotosReplyBase64=function(b){try{const bytes=Uint8Array.from(atob(b),c=>c.charCodeAt(0));const m=JSON.parse(new TextDecoder().decode(bytes));const p=pending.get(m.id);if(!p)return;pending.delete(m.id);m.error?p.reject(Object.assign(new Error(m.error.message||'Photo operation failed'),{code:m.error.code})):p.resolve(m.result)}catch(e){console.error('TDrive photo bridge reply failed',e)}};const call=(operation,args={})=>{const id=Date.now().toString(36)+'-'+(++seq).toString(36);const promise=new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});window.webkit.messageHandlers.tdrivePhotos.postMessage({id,operation,arguments:args})});promise.requestID=id;return promise};const api={status:()=>call('status'),requestAuthorization:()=>call('requestAuthorization'),listAlbums:(args={})=>call('listAlbums',args),listAssets:(args={})=>call('listAssets',args),materialize:(args)=>call('materialize',args||{}),cancelMaterialization:(requestID)=>call('cancelMaterialization',{requestID}),cleanup:(token)=>call('cleanup',{token})};api.getPhotoBackupCapabilities=async()=>{const s=await api.status();return{available:true,authorization:s.status,canRead:s.canRead,limited:s.limited,backgroundDiscovery:false,backgroundUpload:false,resumeRefresh:true,maxPageSize:128}};api.listPhotoBackupSources=async(cursor=null,limit=50)=>{const first=cursor===null||cursor==='';const albumCursor=first?null:String(cursor).replace(/^albums:/,'');if(first&&limit<=1)return{sources:[{id:'all',root:'phassetlibrary:all',kind:'library',name:'All accessible photos and videos'}],nextCursor:'albums:0'};const p=await api.listAlbums({cursor:albumCursor,pageSize:first?limit-1:limit});const albums=p.items.map(x=>({id:x.id,root:'phassetcollection:'+x.id,kind:'album',name:x.title,estimatedAssetCount:x.estimatedAssetCount}));return{sources:first?[{id:'all',root:'phassetlibrary:all',kind:'library',name:'All accessible photos and videos'},...albums]:albums,nextCursor:p.nextCursor===null?null:'albums:'+p.nextCursor}};api.listPhotoBackupAssets=(sourceID,cursor=null,limit=50)=>call('listBackupAssets',{sourceID,cursor,pageSize:limit});api.materializePhotoBackupResource=(assetID,version,maxBytes,resourceID)=>api.materialize({assetID,version,maxBytes,resourceID});api.releasePhotoBackupResource=token=>api.cleanup(token);window.tdriveIOSPhotos=Object.freeze(api)})();";
+    NSString *source = @"(function(){if(window.tdriveIOSPhotos)return;const pending=new Map();let seq=0;window.__tdriveIOSPhotosReplyBase64=function(b){try{const bytes=Uint8Array.from(atob(b),c=>c.charCodeAt(0));const m=JSON.parse(new TextDecoder().decode(bytes));const p=pending.get(m.id);if(!p)return;pending.delete(m.id);m.error?p.reject(Object.assign(new Error(m.error.message||'Photo operation failed'),{code:m.error.code})):p.resolve(m.result)}catch(e){console.error('TDrive photo bridge reply failed',e)}};const call=(operation,args={})=>{const id=Date.now().toString(36)+'-'+(++seq).toString(36);const promise=new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});window.webkit.messageHandlers.tdrivePhotos.postMessage({id,operation,arguments:args})});promise.requestID=id;return promise};const api={status:()=>call('status'),requestAuthorization:()=>call('requestAuthorization'),listAlbums:(args={})=>call('listAlbums',args),listAssets:(args={})=>call('listAssets',args),materialize:(args)=>call('materialize',args||{}),cancelMaterialization:(requestID)=>call('cancelMaterialization',{requestID}),cleanup:(token)=>call('cleanup',{token}),setBackgroundBackup:(active)=>call('setBackgroundBackup',{active:!!active})};api.getPhotoBackupCapabilities=async()=>{const s=await api.status();return{available:true,authorization:s.status,canRead:s.canRead,limited:s.limited,backgroundDiscovery:false,backgroundUpload:'limited',resumeRefresh:true,maxPageSize:128}};api.listPhotoBackupSources=async(cursor=null,limit=50)=>{const first=cursor===null||cursor==='';const albumCursor=first?null:String(cursor).replace(/^albums:/,'');if(first&&limit<=1)return{sources:[{id:'all',root:'phassetlibrary:all',kind:'library',name:'All accessible photos and videos'}],nextCursor:'albums:0'};const p=await api.listAlbums({cursor:albumCursor,pageSize:first?limit-1:limit});const albums=p.items.map(x=>({id:x.id,root:'phassetcollection:'+x.id,kind:'album',name:x.title,estimatedAssetCount:x.estimatedAssetCount}));return{sources:first?[{id:'all',root:'phassetlibrary:all',kind:'library',name:'All accessible photos and videos'},...albums]:albums,nextCursor:p.nextCursor===null?null:'albums:'+p.nextCursor}};api.listPhotoBackupAssets=(sourceID,cursor=null,limit=50)=>call('listBackupAssets',{sourceID,cursor,pageSize:limit});api.materializePhotoBackupResource=(assetID,version,maxBytes,resourceID)=>api.materialize({assetID,version,maxBytes,resourceID});api.releasePhotoBackupResource=token=>api.cleanup(token);window.tdriveIOSPhotos=Object.freeze(api)})();";
     [controller addUserScript:[[WKUserScript alloc] initWithSource:source injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
     [webView evaluateJavaScript:source completionHandler:nil];
 }
