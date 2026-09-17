@@ -12,7 +12,6 @@ import {
     openNativeMedia,
     setImmersive,
     updateMediaPlayback,
-    type MediaStats,
     type MediaOpenResult,
     type NativeMediaOpenResult,
     type NativeMediaRect,
@@ -28,23 +27,35 @@ import {
     shouldFallbackFromHtmlMediaError,
     type PlaybackIntent,
 } from "../video/playback-lifecycle";
-import {
-    nativeTrackLabel,
-    shortNativeTrackLabel,
-    type NativeMediaTrack,
-} from "../video/media-tracks";
+import { type NativeMediaTrack } from "../video/media-tracks";
 import {
     EMPTY_PLAYER_STATE,
     HtmlVideoAdapter,
-    MAX_PLAYBACK_RATE,
-    MIN_PLAYBACK_RATE,
     NativeMediaStateRouter,
     NativeMpvAdapter,
-    clampPlaybackRate,
     type PlayerAdapter,
     type PlayerState,
     type TrackSwitching,
 } from "../video/player-adapters";
+import { errorDetail, errorMessage } from "../video/playback-errors";
+import { handleMenuKeydown } from "../video/menu-keyboard";
+import {
+    nextPresetRate,
+    parseCustomPlaybackRate,
+    speedMenuMarkup,
+    syncSpeedControls,
+} from "../video/speed-menu-view";
+import { StreamActivityMonitor } from "../video/stream-activity";
+import { TrackPicker, type TrackPickerHost } from "../video/track-picker";
+import {
+    createActivePlaylist,
+    normalizeVideoTarget,
+    playlistItemIdentity,
+    playlistViewItems,
+    type ActiveVideoPlaylist,
+    type VideoOpenTarget,
+    type VideoPlaylistLaunch,
+} from "../video/video-queue";
 import { attachHls, prefersJsPlayer, type HlsSource } from "../video/hls-source";
 import { MediaPrefetcher, readyToPrefetch, warmMediaEdges } from "../video/video-prefetch";
 import { VideoGeometryController } from "../video/video-geometry";
@@ -61,36 +72,13 @@ import {
     setVideoPlaylistCurrentIndex,
     setVideoPlaylistOpen,
     setVideoPlaylistSwitching,
-    type VideoPlaylistViewItem,
 } from "../../ui/video/video-playlist-store";
+
+export type { VideoOpenTarget, VideoPlaylistLaunch } from "../video/video-queue";
 
 const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
-const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const PLAYBACK_HINT_INTERVAL_MS = 1000;
-const MEDIA_STATS_POLL_MS = 1000;
-const STREAM_ACTIVITY_HOLD_MS = 2000;
-
-interface VideoOpenTarget {
-    id: number;
-    name: string;
-    key?: string;
-    size?: number;
-    encrypted?: boolean;
-}
-
-export interface VideoPlaylistLaunch {
-    readonly items: readonly VideoOpenTarget[];
-    readonly currentIndex: number;
-    readonly title: string;
-}
-
-interface ActiveVideoPlaylist {
-    readonly items: readonly VideoOpenTarget[];
-    readonly title: string;
-    currentIndex: number;
-    autoNext: boolean;
-}
 
 interface VideoOpenAttempt {
     generation: number;
@@ -145,11 +133,6 @@ let hasError = false;
 let lastPlaybackHintAt = 0;
 let playbackHintTimer: number | null = null;
 let playbackHintInFlight = false;
-let mediaStatsTimer: number | null = null;
-let mediaStatsInFlight = false;
-let streamActivityClearTimer: number | null = null;
-let streamActivityText = "";
-let streamActivityAt = 0;
 let mediaMetaBaseText = "";
 let mediaMetaBytes = 0;
 let a11y: ReturnType<typeof installModalA11y> | null = null;
@@ -171,25 +154,21 @@ function isOpen() {
     return Boolean(modalEl && modalEl.style.display !== "none");
 }
 
-function errorDetail(err: unknown) {
-    return err instanceof Error && err.message ? err.message : String(err || "");
-}
-
-function errorMessage(err: unknown, fallback: string) {
-    const normalized = errorDetail(err).toLowerCase();
-    if (
-        normalized.includes("resolve peer") ||
-        normalized.includes("rpcdorequest") ||
-        normalized.includes("retryuntilack") ||
-        normalized.includes("engine forcibly closed")
-    ) {
-        return "Could not reach Telegram. Check your connection and try again.";
-    }
-    if (normalized.includes("context canceled")) {
-        return "The video request was canceled. Try again.";
-    }
-    return fallback;
-}
+// The throughput line in the title bar and the buffering status both read from
+// here. It is given accessors rather than values because it outlives any one
+// media session: the token, the error state and the file's size all change
+// under it while it keeps polling.
+const streamActivity = new StreamActivityMonitor({
+    readStats: (token) => getMediaStats(token),
+    activeToken: () => activeMediaToken,
+    hasError: () => hasError,
+    mediaBytes: () => mediaMetaBytes,
+    durationSeconds: () => currentState.duration,
+    changed: () => {
+        renderMediaMeta();
+        updateLoadingStatus();
+    },
+});
 
 function isNativeFallbackActive() {
     return Boolean(activeNative && !activeNative.htmlControls && activeNative.presentation !== "standalone");
@@ -258,12 +237,13 @@ function updateLoadingStatus() {
         loadingStatusEl.textContent = "Opening video";
         return;
     }
-    if (streamActivityText === "Rate-limited") {
+    const activity = streamActivity.label;
+    if (activity === "Rate-limited") {
         loadingStatusEl.textContent = "Buffering · Rate-limited";
         return;
     }
-    if (streamActivityText.startsWith("Streaming ")) {
-        loadingStatusEl.textContent = `Buffering · ${streamActivityText.slice("Streaming ".length)}`;
+    if (activity.startsWith("Streaming ")) {
+        loadingStatusEl.textContent = `Buffering · ${activity.slice("Streaming ".length)}`;
         return;
     }
     loadingStatusEl.textContent = "Buffering";
@@ -272,97 +252,6 @@ function updateLoadingStatus() {
 function setLoadingStatusOverride(message: string) {
     loadingStatusOverride = message;
     updateLoadingStatus();
-}
-
-function syncMediaStatsPolling() {
-    if (activeMediaToken && !hasError) {
-        startMediaStatsPolling();
-    } else {
-        clearMediaStatsPolling();
-    }
-}
-
-function startMediaStatsPolling() {
-    if (mediaStatsTimer != null) return;
-    void pollMediaStats();
-    mediaStatsTimer = window.setInterval(() => {
-        void pollMediaStats();
-    }, MEDIA_STATS_POLL_MS);
-}
-
-function clearMediaStatsPolling() {
-    if (mediaStatsTimer != null) {
-        window.clearInterval(mediaStatsTimer);
-        mediaStatsTimer = null;
-    }
-    clearStreamActivity();
-    updateLoadingStatus();
-}
-
-async function pollMediaStats() {
-    if (!activeMediaToken || mediaStatsInFlight) return;
-    const token = activeMediaToken;
-    mediaStatsInFlight = true;
-    try {
-        const stats = await getMediaStats(token);
-        if (token !== activeMediaToken) return;
-        syncStreamActivity(stats);
-    } catch (err) {
-        console.warn("GetMediaStats failed:", err);
-    } finally {
-        mediaStatsInFlight = false;
-    }
-}
-
-function syncStreamActivity(stats: MediaStats | null) {
-    const text = stats ? streamActivityLabel(stats) : "";
-    const now = Date.now();
-    if (text) {
-        streamActivityText = text;
-        streamActivityAt = now;
-        scheduleStreamActivityClear();
-    } else if (streamActivityText && now - streamActivityAt >= STREAM_ACTIVITY_HOLD_MS) {
-        streamActivityText = "";
-        clearStreamActivityTimer();
-    }
-    renderMediaMeta();
-    updateLoadingStatus();
-}
-
-function streamActivityLabel(stats: MediaStats) {
-    const playback = stats.playback;
-    if (playback.recentFloodWait) {
-        return "Rate-limited";
-    }
-    const rate = playback.bytesPerSecond || 0;
-    if (rate <= 0) return "";
-    const multiplier = formatStreamMultiplier(rate);
-    return `Streaming ${formatStreamRate(rate)}${multiplier ? ` ${multiplier}` : ""}`;
-}
-
-function scheduleStreamActivityClear() {
-    clearStreamActivityTimer();
-    streamActivityClearTimer = window.setTimeout(() => {
-        if (Date.now() - streamActivityAt >= STREAM_ACTIVITY_HOLD_MS) {
-            streamActivityText = "";
-            renderMediaMeta();
-            updateLoadingStatus();
-        }
-        streamActivityClearTimer = null;
-    }, STREAM_ACTIVITY_HOLD_MS);
-}
-
-function clearStreamActivityTimer() {
-    if (streamActivityClearTimer == null) return;
-    window.clearTimeout(streamActivityClearTimer);
-    streamActivityClearTimer = null;
-}
-
-function clearStreamActivity() {
-    clearStreamActivityTimer();
-    streamActivityText = "";
-    streamActivityAt = 0;
-    renderMediaMeta();
 }
 
 
@@ -383,7 +272,7 @@ function setError(message: string, primary: ErrorAction | null = null) {
     if (errorRetryBtnEl) errorRetryBtnEl.textContent = primary ? primary.label : "Retry";
     loadingStatusOverride = "";
     setLoading(false);
-    clearMediaStatsPolling();
+    streamActivity.stop();
     if (errorMessageEl) errorMessageEl.textContent = message;
     if (errorEl) errorEl.style.display = "block";
     modalEl?.classList.add("is-video-error");
@@ -421,31 +310,6 @@ function handleHtmlPlaybackError(detail: string) {
 }
 
 
-function syncSpeed(state: PlayerState) {
-    const customInput = byID<HTMLInputElement>("video-speed-custom-input");
-    if (speedBtnEl) {
-        speedBtnEl.textContent = `${formatRate(state.rate)}x`;
-        speedBtnEl.title = `Playback speed: ${formatRate(state.rate)}x. Click to cycle`;
-        speedBtnEl.setAttribute("aria-label", speedBtnEl.title);
-    }
-    if (customInput && document.activeElement !== customInput) {
-        customInput.value = formatRate(state.rate);
-    }
-    const slider = byID<HTMLInputElement>("video-speed-slider");
-    if (slider) {
-        slider.value = String(state.rate);
-        slider.setAttribute("aria-valuetext", `${formatRate(state.rate)} times`);
-        slider.style.setProperty("--range-fill", `${(state.rate - MIN_PLAYBACK_RATE) / (MAX_PLAYBACK_RATE - MIN_PLAYBACK_RATE) * 100}%`);
-    }
-    const value = byID("video-speed-value");
-    if (value) value.textContent = `${formatRate(state.rate)}x`;
-    speedMenuEl?.querySelectorAll<HTMLButtonElement>("[data-rate]").forEach((button) => {
-        const selected = Math.abs(Number(button.dataset.rate || 1) - state.rate) < 0.001;
-        button.classList.toggle("is-selected", selected);
-        button.setAttribute("aria-checked", selected ? "true" : "false");
-    });
-}
-
 // Keep available audio and subtitle tracks discoverable, even with one track. A pill appearing changes the
 // controls height, so the native viewport is re-measured.
 // trackSwitchingPlayer is the active player when it is one the pills can drive.
@@ -471,175 +335,22 @@ function syncNativeTracks(tracks: NativeMediaTrack[]) {
     if (audioChanged || subtitleChanged) geometry?.scheduleNativeResize();
 }
 
-interface TrackPickerElements {
-    wrap: HTMLElement | null;
-    button: HTMLButtonElement | null;
-    label: HTMLElement | null;
-    menu: HTMLElement | null;
-}
-
-// TrackPicker's pill steps to the next track on each click; the full list
-// lives in the settings dock, where the picker renders it.
-class TrackPicker {
-    private tracks: NativeMediaTrack[] = [];
-    private renderedSignature = "";
-
-    constructor(
-        private readonly title: string,
-        private readonly offLabel: string | null,
-        private readonly apply: (player: TrackSwitching, id: number | null) => void,
-        private readonly els: TrackPickerElements,
-    ) {
-        els.button?.addEventListener("click", (event) => {
-            event.stopPropagation();
-            this.cycle();
-            revealChrome();
-        });
-        els.menu?.addEventListener("click", (event) => {
-            const item = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-track]");
-            if (!item) return;
-            this.select(item.dataset.track === "no" ? null : Number(item.dataset.track));
-            this.close(true);
-        });
-        els.menu?.addEventListener("keydown", (event) => {
-            if (this.isOpen()) handleMenuKeydown(event, this.items().filter((item) => !item.hidden), () => this.close(true));
-        });
-    }
-
-    get visible() {
-        return Boolean(this.els.wrap && !this.els.wrap.hidden);
-    }
-
-    // update returns whether the pill appeared or disappeared.
-    update(tracks: NativeMediaTrack[], show: boolean): boolean {
-        const wasVisible = this.visible;
-        this.tracks = tracks;
-        if (this.els.wrap) this.els.wrap.hidden = !show;
-        if (!show) {
-            // Hiding the command-row pill must not take the settings panel with
-            // it: the section may be on screen, and "no tracks" is a legitimate
-            // thing for it to show.
-            if (settingsSection === this.section) this.setMenuOpen(true);
-            else this.close();
-            if (tracks.length === 0) {
-                this.renderedSignature = "";
-                this.els.menu?.replaceChildren();
-                if (this.els.menu) this.els.menu.innerHTML = `<p class="video-settings-note">No ${this.title.toLowerCase()} tracks available.</p>`;
-                return wasVisible;
-            }
-        }
-        const signature = JSON.stringify(this.tracks.map((track) => [track.id, track.title, track.language, track.codec]));
-        if (signature !== this.renderedSignature) {
-            this.renderedSignature = signature;
-            this.render();
-        }
-        this.syncSelection();
-        return !wasVisible;
-    }
-
-    isOpen() {
-        return Boolean(this.els.menu?.classList.contains("is-open"));
-    }
-
-    get section(): SettingsSection {
-        return this.offLabel === null ? "audio" : "subtitle";
-    }
-
-    // setMenuOpen shows or hides just this picker's list. It deliberately
-    // leaves the settings panel alone so a section swap never closes it.
-    setMenuOpen(open: boolean) {
-        this.els.menu?.classList.toggle("is-open", open);
-        if (!open) return;
-        clearChromeTimer();
-        requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
-    }
-
-    close(restoreFocus = false) {
-        if (!this.isOpen()) return;
-        this.setMenuOpen(false);
-        if (settingsSection === this.section) hideSettingsPanel();
+// The pills share the player's chrome, its settings panel and its notion of
+// which player can switch tracks; the picker itself owns none of that, so it is
+// handed this view of the controller rather than reading these directly.
+const trackPickerHost: TrackPickerHost = {
+    openSettingsSection: () => settingsSection,
+    hideSettingsPanel: () => hideSettingsPanel(),
+    holdChrome: clearChromeTimer,
+    // A menu closing only restarts the fade when the player is in a state that
+    // fades at all: paused, errored or shut, the chrome stays put.
+    releaseChrome: () => {
         if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
-        if (restoreFocus) byID("video-picture-button")?.focus({ preventScroll: true });
-    }
-
-    contains(target: Node | null) {
-        return Boolean(target && (this.els.menu?.contains(target) || this.els.button?.contains(target)));
-    }
-
-    // cycle steps to the next track in order; an optional track (subtitles)
-    // has "off" as one of the stops, a required one wraps to the first.
-    cycle() {
-        if (!this.visible || this.tracks.length === 0) return;
-        const current = this.currentTrack();
-        const next = this.tracks[(current ? this.tracks.indexOf(current) : -1) + 1];
-        const target = next?.id ?? (this.offLabel === null ? this.tracks[0].id : null);
-        if (target !== (current?.id ?? null)) this.select(target);
-    }
-
-    // toggle switches an optional track (subtitles) between off and its default.
-    toggle() {
-        if (!this.visible || this.offLabel === null) return;
-        const selected = this.tracks.find((track) => track.selected);
-        this.select(selected ? null : this.defaultTrack()?.id ?? null);
-    }
-
-    private defaultTrack() {
-        return this.tracks.find((track) => track.default) ?? this.tracks[0];
-    }
-
-    private currentTrack() {
-        return this.tracks.find((track) => track.selected) ?? (this.offLabel === null ? this.defaultTrack() : undefined);
-    }
-
-    private select(id: number | null) {
-        const player = trackSwitchingPlayer();
-        if (!player) return;
-        if (id !== null && !this.tracks.some((track) => track.id === id)) return;
-        this.apply(player, id);
-        // Reflect the choice immediately; the player confirms it on the next
-        // state event.
-        this.tracks = this.tracks.map((track) => ({ ...track, selected: track.id === id }));
-        this.syncSelection();
-        revealChrome();
-    }
-
-
-    private items() {
-        return Array.from(this.els.menu?.querySelectorAll<HTMLButtonElement>("[data-track]") || []);
-    }
-
-    private selectedItem() {
-        return this.items().find((item) => item.classList.contains("is-selected")) || this.items()[0] || null;
-    }
-
-    private render() {
-        if (!this.els.menu) return;
-        const items = this.tracks.map((track, index) => menuItemMarkup(`data-track="${track.id}"`, nativeTrackLabel(track, index)));
-        if (this.offLabel !== null) items.unshift(menuItemMarkup('data-track="no"', this.offLabel));
-        this.els.menu.innerHTML = `<div class="video-menu-title">${this.title}</div><div class="video-track-list" role="radiogroup" aria-label="${this.title} tracks">${items.join("")}</div>`;
-    }
-
-    private syncSelection() {
-        const current = this.currentTrack();
-        const key = current ? String(current.id) : "no";
-        for (const item of this.items()) {
-            const on = item.dataset.track === key;
-            item.classList.toggle("is-selected", on);
-            item.setAttribute("aria-checked", on ? "true" : "false");
-            item.tabIndex = on ? 0 : -1;
-        }
-        const index = current ? this.tracks.indexOf(current) : -1;
-        const short = current ? shortNativeTrackLabel(current, index) : this.offLabel ?? "";
-        const full = current ? nativeTrackLabel(current, index) : this.offLabel ?? "";
-        if (this.els.label) this.els.label.textContent = short;
-        if (this.els.button) {
-            const choices = this.tracks.length + (this.offLabel === null ? 0 : 1);
-            this.els.button.dataset.state = current ? "on" : "off";
-            this.els.button.title = `${this.title}: ${full}${choices > 1 ? ". Click to cycle" : ""}`;
-            this.els.button.setAttribute("aria-label", this.els.button.title);
-        }
-    }
-}
+    },
+    revealChrome,
+    trackSwitchingPlayer,
+    returnFocus: () => byID("video-picture-button")?.focus({ preventScroll: true }),
+};
 
 export function updatePlaybackPreferences(value: PlaybackPreferences): void {
     playbackPreferences = normalizePlaybackPreferences(value);
@@ -871,58 +582,6 @@ function closeOpenMenu() {
     return true;
 }
 
-function menuItemMarkup(attributes: string, label: string) {
-    return `<button type="button" role="radio" ${attributes} aria-checked="false"><span class="video-menu-check" aria-hidden="true">✓</span><span>${escapeHTML(label)}</span></button>`;
-}
-
-function escapeHTML(value: string) {
-    return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
-}
-
-function handleMenuKeydown(event: KeyboardEvent, buttons: HTMLButtonElement[], close: () => void) {
-    if ((event.target as HTMLElement)?.tagName === "INPUT" && event.key === "ArrowDown") {
-        buttons[0]?.focus();
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-    }
-    const current = Math.max(0, buttons.indexOf(document.activeElement as HTMLButtonElement));
-    const focusAt = (index: number) => buttons[(index + buttons.length) % buttons.length]?.focus({ preventScroll: true });
-    switch (event.key) {
-        case "Escape":
-            close();
-            break;
-        case "ArrowDown":
-        case "ArrowRight":
-            focusAt(current + 1);
-            break;
-        case "ArrowUp":
-        case "ArrowLeft":
-            focusAt(current - 1);
-            break;
-        case "Home":
-            focusAt(0);
-            break;
-        case "End":
-            focusAt(buttons.length - 1);
-            break;
-        case "Enter":
-        case " ":
-            (document.activeElement as HTMLButtonElement | null)?.click();
-            break;
-        default:
-            return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-}
-
-function parseCustomPlaybackRate(value: string) {
-    const rate = Number(value.trim());
-    if (!Number.isFinite(rate) || rate <= 0) return null;
-    return clampPlaybackRate(rate);
-}
-
 // The next playlist item is opened and warmed once the current one is close to
 // the end and fully buffered, so auto-next starts without a cold round-trip to
 // Telegram. A single slot is enough: only the immediate next item is useful.
@@ -953,11 +612,11 @@ function applyState(state: PlayerState) {
     }
     schedulePlaybackHint(state);
     transport?.sync(state);
-    syncSpeed(state);
+    syncSpeedControls(speedBtnEl, speedMenuEl, state.rate);
     syncNativeTracks(state.tracks);
     applyHtmlPicture();
     setLoading(state.loading);
-    syncMediaStatsPolling();
+    streamActivity.sync();
     maybePrefetchNext(state);
     if (state.paused || hasError) {
         clearChromeTimer();
@@ -1019,31 +678,6 @@ function clearPlaybackHintTimer() {
     playbackHintTimer = null;
 }
 
-function formatRate(rate: number) {
-    return Number.isInteger(rate) ? String(rate) : String(rate).replace(/0+$/, "").replace(/\.$/, "");
-}
-
-function formatStreamRate(bytesPerSecond: number) {
-    const safe = Math.max(0, Number.isFinite(bytesPerSecond) ? bytesPerSecond : 0);
-    if (safe < 1024 * 1024) {
-        return `${Math.max(0.1, safe / 1024).toFixed(1)} KB/s`;
-    }
-    return `${(safe / (1024 * 1024)).toFixed(1)} MB/s`;
-}
-
-function formatStreamMultiplier(bytesPerSecond: number) {
-    const duration = currentState.duration;
-    if (!(mediaMetaBytes > 0 && duration > 0 && bytesPerSecond > 0)) return "";
-    const averageBytesPerSecond = mediaMetaBytes / duration;
-    if (!(averageBytesPerSecond > 0)) return "";
-    const multiplier = bytesPerSecond / averageBytesPerSecond;
-    if (!Number.isFinite(multiplier) || multiplier <= 0) return "";
-    if (multiplier >= 100) return "(~99x+)";
-    if (multiplier < 10) return `(~${Math.max(0.1, multiplier).toFixed(1)}x)`;
-    return `(~${Math.round(multiplier)}x)`;
-}
-
-
 async function releaseActive() {
     const adapter = detachActiveReferences();
     if (adapter) {
@@ -1066,7 +700,7 @@ function detachActiveReferences(): PlayerAdapter | null {
     unsubscribeState?.();
     unsubscribeState = null;
     clearPlaybackHintTimer();
-    clearMediaStatsPolling();
+    streamActivity.stop();
     transport?.resetSession();
     closeMenus();
     hideSettingsPanel();
@@ -1126,63 +760,8 @@ function updateMediaText(name: string, size: number) {
 
 function renderMediaMeta() {
     if (!metaEl) return;
-    metaEl.textContent = streamActivityText ? `${mediaMetaBaseText} · ${streamActivityText}` : mediaMetaBaseText;
-}
-
-function normalizeVideoTarget(target: VideoOpenTarget): VideoOpenTarget | null {
-    const id = Number(target.id || 0);
-    if (!Number.isFinite(id) || id <= 0) return null;
-    const normalized = {
-        id,
-        name: String(target.name || "Video"),
-        size: Math.max(0, Number(target.size) || 0),
-        encrypted: Boolean(target.encrypted),
-    };
-    const key = String(target.key || "").trim();
-    return key ? { ...normalized, key } : normalized;
-}
-
-function createActivePlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch): ActiveVideoPlaylist {
-    const fallback = Object.freeze([{ ...target }]);
-    if (!launch) {
-        return { items: fallback, title: "Videos", currentIndex: 0, autoNext: loadAutoNextPreference() };
-    }
-
-    const items = launch.items
-        .map(normalizeVideoTarget)
-        .filter((item): item is VideoOpenTarget => item !== null);
-    let currentIndex = Number.isInteger(launch.currentIndex) ? launch.currentIndex : -1;
-    if (currentIndex < 0 || currentIndex >= items.length || items[currentIndex].id !== target.id) {
-        const matches = items.reduce<number[]>((indices, item, index) => {
-            if (item.id === target.id) indices.push(index);
-            return indices;
-        }, []);
-        currentIndex = matches.length === 1 ? matches[0] : -1;
-    }
-    if (currentIndex < 0) {
-        return { items: fallback, title: "Videos", currentIndex: 0, autoNext: loadAutoNextPreference() };
-    }
-    items[currentIndex] = { ...items[currentIndex], ...target };
-    return {
-        items: Object.freeze(items.map((item) => Object.freeze({ ...item }))),
-        title: String(launch.title || "Videos"),
-        currentIndex,
-        autoNext: loadAutoNextPreference(),
-    };
-}
-
-function playlistItemIdentity(item: VideoOpenTarget, index: number): string {
-    return item.key || `video:${item.id}:${index}`;
-}
-
-function playlistViewItems(playlist: ActiveVideoPlaylist): readonly VideoPlaylistViewItem[] {
-    return playlist.items.map((item, index) => ({
-        id: playlistItemIdentity(item, index),
-        name: item.name,
-        size: item.size || 0,
-        format: videoFormatLabel(item.name),
-        position: index + 1,
-    }));
+    const activity = streamActivity.label;
+    metaEl.textContent = activity ? `${mediaMetaBaseText} · ${activity}` : mediaMetaBaseText;
 }
 
 function syncPlaylistButton() {
@@ -1216,7 +795,7 @@ function syncPlaylistSnapshot() {
 function installVideoPlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch) {
     hideVideoPlaylist();
     void mediaPrefetcher.discard();
-    activePlaylist = createActivePlaylist(target, launch);
+    activePlaylist = createActivePlaylist(target, loadAutoNextPreference(), launch);
     syncPlaylistSnapshot();
 }
 
@@ -1664,12 +1243,6 @@ export async function closeVideoModal() {
 }
 
 
-// nextPresetRate steps to the first preset above the current rate and wraps at
-// the top, so a custom rate from the slider still lands on a sensible next step.
-function nextPresetRate(current: number) {
-    return RATE_OPTIONS.find((rate) => rate > current + 0.001) ?? RATE_OPTIONS[0];
-}
-
 function isSpeedMenuOpen() {
     return Boolean(speedMenuEl?.classList.contains("is-open"));
 }
@@ -1905,21 +1478,6 @@ function bindEncryptedMediaLifecycle() {
     });
 }
 
-function renderSpeedOptions() {
-    if (!speedMenuEl) return;
-    const options = RATE_OPTIONS.map(speedOptionMarkup).join("");
-    speedMenuEl.innerHTML = `<div class="video-speed-adjustment"><label class="video-settings-field" for="video-speed-slider"><span>Playback speed <output id="video-speed-value">1x</output></span><input id="video-speed-slider" class="video-settings-range" type="range" min="${MIN_PLAYBACK_RATE}" max="${MAX_PLAYBACK_RATE}" step="0.05" value="1" aria-valuetext="1 times" /></label><div class="video-range-endpoints" aria-hidden="true"><span>${MIN_PLAYBACK_RATE}x</span><span>${MAX_PLAYBACK_RATE}x</span></div></div><div class="video-speed-presets" role="menu" aria-label="Speed presets">${options}</div>${customSpeedMarkup()}`;
-}
-
-function speedOptionMarkup(rate: number) {
-    return `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}"><span class="video-menu-check" aria-hidden="true">✓</span><span>${formatRate(rate)}x</span></button>`;
-}
-
-function customSpeedMarkup() {
-    return `<form class="video-speed-custom" role="none" aria-label="Custom playback speed"><label for="video-speed-custom-input">Custom</label><div class="video-speed-custom-row"><input id="video-speed-custom-input" type="number" inputmode="decimal" min="${MIN_PLAYBACK_RATE}" max="${MAX_PLAYBACK_RATE}" step="0.05" value="1" aria-label="Custom playback speed" /><span aria-hidden="true">x</span><button type="submit">Set</button></div></form>`;
-}
-
-
 export function teardownVideoModal(): void {
     playbackTransitions.begin();
     activeOpenAttempt = null;
@@ -2018,12 +1576,13 @@ export function activateVideoModal(): () => void {
     } = videoDOM);
     audioPicker = new TrackPicker("Audio", null, (player, id) => {
         if (id !== null) player.setAudioTrack(id);
-    }, videoDOM.audioPicker);
+    }, videoDOM.audioPicker, trackPickerHost);
     subtitlePicker = new TrackPicker(
         "Subtitles",
         "Off",
         (player, id) => player.setSubtitleTrack(id),
         videoDOM.subtitlePicker,
+        trackPickerHost,
     );
 
     if (!modalEl || !videoEl || !stageEl) {
@@ -2082,7 +1641,7 @@ export function activateVideoModal(): () => void {
     });
     bindEncryptedMediaLifecycle();
     nativeStateRouter.bind();
-    renderSpeedOptions();
+    if (speedMenuEl) speedMenuEl.innerHTML = speedMenuMarkup();
     transport.bind();
     unbindSpeedMenu = bindSpeedMenu();
     bindSettingsPanel();
