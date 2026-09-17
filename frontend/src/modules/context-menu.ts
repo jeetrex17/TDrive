@@ -17,7 +17,8 @@ import {
     type ContextMenuHeader,
     type ContextMenuItem,
 } from '../ui/menus/context-menu-store';
-import type { FileCommandItem } from '../ui/file-list/types';
+import { fileListRowForElement } from '../ui/file-list/row-lookup';
+import type { FileCommandItem, FileListFileRow } from '../ui/file-list/types';
 
 // folderGroup appends the current-folder actions (upload here, new folder,
 // refresh) that make sense in the desktop popover. A phone action sheet lists
@@ -62,16 +63,13 @@ export function buildFolderContextMenuItems(
     return items;
 }
 
-export function buildFileContextMenuItems(row: HTMLElement, { folderGroup = true }: RowMenuOptions = {}): ContextMenuItem[] {
-    const fileID = parseInt(row.dataset.id || "", 10);
+export function buildFileContextMenuItems(row: FileListFileRow, { folderGroup = true }: RowMenuOptions = {}): ContextMenuItem[] {
+    const fileID = Number.parseInt(row.id, 10);
     if (!Number.isFinite(fileID)) return [];
-    const fileName = row.dataset.name || "";
-    const fileSize = Number(row.dataset.size || 0);
-    const fileSource = row.dataset.source === 'tg' ? 'tg' : 'fs';
-    const canDelete = row.dataset.canDelete === "true";
-    const canRename = row.dataset.canRename !== "false";
-    const encrypted = row.dataset.encrypted === "true";
-    const sourceChannelId = row.dataset.channelId ?? state.activeChannel?.id;
+    const { name: fileName, size: fileSize, source: fileSource, canDelete, canRename, encrypted } = row;
+    // The row captured its drive when it was rendered, so a menu still open
+    // across a drive switch downloads the file it was opened on.
+    const sourceChannelId = row.channelId ?? state.activeChannel?.id;
 
     // The phone sheet promotes the everyday actions to tiles. Delete is left
     // out of that row on purpose: a destructive action does not belong under a
@@ -131,17 +129,17 @@ export function showRowContextMenu(
     const { header, select = false } = options;
     if (select) ensureRowSelectedForContextMenu(row);
 
+    const item = fileListRowForElement(row);
+    if (!item) return;
+
     const folderGroup = !isMobilePlatform();
     let items: ContextMenuItem[];
-    if (row.dataset.type === 'folder') {
-        const folderID = row.dataset.id || '';
-        if (!folderID) return;
-        items = buildFolderContextMenuItems(folderID, row.dataset.name || 'Folder', { folderGroup }, row.dataset.channelId);
-    } else if (row.dataset.type === 'file') {
-        items = buildFileContextMenuItems(row, { folderGroup });
-        if (!items.length) return;
+    if (item.kind === 'folder') {
+        if (!item.id) return;
+        items = buildFolderContextMenuItems(item.id, item.name, { folderGroup }, item.channelId);
     } else {
-        return;
+        items = buildFileContextMenuItems(item, { folderGroup });
+        if (!items.length) return;
     }
     showContextMenu(x, y, items, { header });
 }
@@ -152,12 +150,14 @@ export function activateContextMenu(): () => void {
 
     const onContextMenu = (e: MouseEvent) => {
         e.preventDefault();
-        const row = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
-        const type = row?.dataset?.type || "background";
+        const element = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
+        // A folder still being created resolves to nothing, and the background
+        // menu is the right answer for a row with no identity yet.
+        const row = fileListRowForElement(element);
 
-        if (row) {
-            ensureRowSelectedForContextMenu(row);
-            row.focus({ preventScroll: true });
+        if (element) {
+            ensureRowSelectedForContextMenu(element);
+            element.focus({ preventScroll: true });
         } else {
             list.focus({ preventScroll: true });
         }
@@ -174,14 +174,13 @@ export function activateContextMenu(): () => void {
             return;
         }
 
-        if (type === "folder" && row) {
-            const folderID = row.dataset.id || "";
-            if (!folderID) return;
-            showContextMenu(e.clientX, e.clientY, buildFolderContextMenuItems(folderID, row.dataset.name || "Folder", {}, row.dataset.channelId));
+        if (row?.kind === "folder") {
+            if (!row.id) return;
+            showContextMenu(e.clientX, e.clientY, buildFolderContextMenuItems(row.id, row.name, {}, row.channelId));
             return;
         }
 
-        if (type === "file" && row) {
+        if (row?.kind === "file") {
             const items = buildFileContextMenuItems(row);
             if (!items.length) return;
             showContextMenu(e.clientX, e.clientY, items);

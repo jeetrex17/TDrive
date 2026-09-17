@@ -28,7 +28,8 @@ import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
 import { appActions, type RefreshFilesOptions } from './app-actions';
-import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
+import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows, type InteractiveFileListRow } from '../ui/file-list/file-list-store';
+import { fileListRowForElement } from '../ui/file-list/row-lookup';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
 import { rowMetaLine } from '../ui/file-list/row-meta';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
@@ -429,7 +430,7 @@ function rowDetailLines(row: FolderListRow | FileListFileRow): ContextMenuDetail
 // never selects the row: on a phone the selection belongs to the reader, not
 // the menu, and the sheet header names what the actions apply to.
 function openRowMenu(row: HTMLElement, clientX: number, clientY: number): void {
-    const logical = getInteractiveFileListRows().find((candidate) => candidate.selectionKey === getRowKey(row));
+    const logical = fileListRowForElement(row);
     showRowContextMenu(row, clientX, clientY, {
         header: logical
             ? {
@@ -454,7 +455,7 @@ function toggleRowSelection(row: HTMLElement): void {
 
 // The phone previews an image in the context of its folder, so swiping moves
 // through the other images here in list order.
-async function openImagePreview(row: HTMLElement): Promise<void> {
+async function openImagePreview(row: FileListFileRow): Promise<void> {
     const images = getInteractiveFileListRows()
         .filter((candidate): candidate is FileListFileRow => candidate.kind === 'file' && isImageFile(candidate.name))
         .map((image) => ({
@@ -466,44 +467,51 @@ async function openImagePreview(row: HTMLElement): Promise<void> {
             uploaderId: image.uploaderID,
             uploadTime: image.uploadTime,
         }));
-    const index = Math.max(0, images.findIndex((image) => String(image.id) === row.dataset.id));
+    const index = Math.max(0, images.findIndex((image) => String(image.id) === row.id));
     const preview = await import('./modals/preview');
     preview.activatePreviewModal();
     await preview.openPreviewList(images, index);
 }
 
-function deleteRow(row: HTMLElement) {
-    if (row.dataset.type === "folder") {
-        openDeleteModal({
-            type: "folder",
-            id: row.dataset.id,
-            name: row.dataset.name,
-            parentId: row.dataset.parentId || state.currentFolderId,
-        } as Parameters<typeof openDeleteModal>[0]);
-        return;
-    }
-    if (row.dataset.canDelete === "false") return;
-    openDeleteModal({
-        type: "file",
-        id: Number(row.dataset.id),
-        name: row.dataset.name,
-        size: Number(row.dataset.size || 0),
-        parentId: row.dataset.parentId || state.currentFolderId,
-        source: row.dataset.source || "fs",
-        canDelete: row.dataset.canDelete !== "false",
-    } as Parameters<typeof openDeleteModal>[0]);
+/**
+ * The command payload for a file row. Spelled out per source because the
+ * command item is a discriminated union: a Telegram file has to carry the
+ * folder it came from, a projected one does not.
+ */
+function fileCommandFor(row: FileListFileRow, parentId: string): FileCommandItem {
+    const target = { type: 'file' as const, id: Number(row.id), name: row.name, size: row.size, parentId };
+    return row.source === 'tg' ? { ...target, source: 'tg' } : { ...target, source: 'fs' };
 }
 
-function renameRow(row: HTMLElement) {
-    if (row.dataset.canRename === "false") return;
-    openRenameModal({
-        type: row.dataset.type,
-        id: row.dataset.type === "folder" ? row.dataset.id : Number(row.dataset.id),
-        name: row.dataset.name,
-        size: Number(row.dataset.size || 0),
-        parentId: row.dataset.parentId || state.currentFolderId,
-        source: row.dataset.source || "fs",
-    } as Parameters<typeof openRenameModal>[0]);
+function deleteRow(row: InteractiveFileListRow) {
+    if (row.kind === "folder") {
+        openDeleteModal({
+            type: "folder",
+            id: row.id,
+            name: row.name,
+            parentId: row.parentId || state.currentFolderId,
+        });
+        return;
+    }
+    if (!row.canDelete) return;
+    openDeleteModal({
+        ...fileCommandFor(row, row.parentId || state.currentFolderId),
+        canDelete: row.canDelete,
+    });
+}
+
+function renameRow(row: InteractiveFileListRow) {
+    if (row.kind === "folder") {
+        openRenameModal({
+            type: "folder",
+            id: row.id,
+            name: row.name,
+            parentId: row.parentId || state.currentFolderId,
+        });
+        return;
+    }
+    if (!row.canRename) return;
+    openRenameModal(fileCommandFor(row, row.parentId || state.currentFolderId));
 }
 
 /**
@@ -511,45 +519,38 @@ function renameRow(row: HTMLElement) {
  * action, which shows a single verb and so must resolve the target itself
  * rather than leaning on the menu's branching.
  */
-function openMoveForRow(row: HTMLElement): void {
-    const id = row.dataset.id ?? '';
-    const name = row.dataset.name || 'Item';
-    if (row.dataset.type === 'folder') {
-        openMoveModal({ type: 'folder', id, name, parentId: state.currentFolderId });
+function openMoveForRow(row: InteractiveFileListRow): void {
+    if (row.kind === 'folder') {
+        openMoveModal({ type: 'folder', id: row.id, name: row.name, parentId: state.currentFolderId });
         return;
     }
-    openMoveModal({
-        type: 'file',
-        id: Number(id),
-        name,
-        parentId: row.dataset.parentId ?? state.currentFolderId,
-        size: Number(row.dataset.size || 0),
-        source: (row.dataset.source as 'fs') || 'fs',
-    });
+    // A search result sits in its own folder, not the one on screen, so the
+    // picker opens where the file actually lives -- including the root, which
+    // is an empty string and must not fall back to the current folder.
+    openMoveModal(fileCommandFor(row, row.parentId));
 }
 
-function fileTargetForRow(row: HTMLElement) {
+function fileTargetForRow(row: FileListFileRow) {
     return {
-        id: Number(row.dataset.id),
-        channelId: row.dataset.channelId === undefined
-            ? Number(state.activeChannel?.id)
-            : Number(row.dataset.channelId),
-        name: row.dataset.name || "File",
-        size: Number(row.dataset.size || 0),
-        encrypted: row.dataset.encrypted === "true",
+        id: Number(row.id),
+        // Captured when the row was rendered, so an action taken after a drive
+        // switch still reads from the drive the reader was looking at.
+        channelId: row.channelId ?? Number(state.activeChannel?.id),
+        name: row.name,
+        size: row.size,
+        encrypted: row.encrypted,
     };
 }
 
-function activateRow(row: HTMLElement) {
+function activateRow(element: HTMLElement, row: InteractiveFileListRow) {
     if (isSearchMode()) {
-        row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
         return;
     }
-    if (row.dataset.type === "folder") {
-        navigateToFolder(row.dataset.id as string, row.dataset.name as string);
+    if (row.kind === "folder") {
+        navigateToFolder(row.id, row.name);
         return;
     }
-    if (row.dataset.type !== "file") return;
     const target = fileTargetForRow(row);
     if (isVideoFile(target.name)) {
         void appActions().playVideo(target);
@@ -818,8 +819,8 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}): 
 }
 
 // Delegated row interactions. Listeners live on the #file-list container and
-// read each row's data-* attributes, so re-rendering rows costs no listener
-// churn and Svelte can freely replace keyed rows.
+// resolve each event back to its published row by key, so re-rendering rows
+// costs no listener churn and Svelte can freely replace keyed rows.
 function isSearchMode() {
     return String(state.searchQuery || "").trim() !== "";
 }
@@ -834,7 +835,7 @@ function handleMobileRowAction(e: MouseEvent, row: HTMLElement): boolean {
     const swipeAction = target.closest<HTMLButtonElement>('button[data-swipe-action]');
     if (swipeAction) {
         e.stopPropagation();
-        const swiped = swipeAction.closest<HTMLElement>('.drive-row');
+        const swiped = fileListRowForElement(swipeAction);
         if (swiped) openMoveForRow(swiped);
         return true;
     }
@@ -855,61 +856,62 @@ function handleMobileRowAction(e: MouseEvent, row: HTMLElement): boolean {
     return false;
 }
 
-function handleMobileTap(e: MouseEvent, row: HTMLElement) {
-    if (handleMobileRowAction(e, row)) return;
-    setFocusedRow(row, { preventScroll: true });
+function handleMobileTap(e: MouseEvent, element: HTMLElement, row: InteractiveFileListRow) {
+    if (handleMobileRowAction(e, element)) return;
+    setFocusedRow(element, { preventScroll: true });
     if (state.selectedItems.size > 0) {
-        toggleRowSelection(row);
+        toggleRowSelection(element);
         return;
     }
-    activateRow(row);
+    activateRow(element, row);
 }
 
 function handleListClick(e: MouseEvent) {
-    const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
-    if (!row) return;
-    if (row.dataset.type !== "folder" && row.dataset.type !== "file") return;
+    const element = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
+    // A row still being created, or one the list has already dropped, has
+    // nothing to act on.
+    const row = fileListRowForElement(element);
+    if (!element || !row) return;
 
     // Search owns row activation so it can enter a result's folder before
     // refreshing. The mobile action affordances still belong to this shared
     // delegated layer, otherwise its overflow button is a dead end.
     if (isSearchMode()) {
-        if (isMobilePlatform()) handleMobileRowAction(e, row);
+        if (isMobilePlatform()) handleMobileRowAction(e, element);
         return;
     }
 
     if (isMobilePlatform()) {
-        handleMobileTap(e, row);
+        handleMobileTap(e, element, row);
         return;
     }
 
-    if (row.dataset.type === "folder") {
+    if (row.kind === "folder") {
         if ((e.target as HTMLElement).closest("button.download-folder")) {
-            enqueueFolderDownload(row.dataset.id, row.dataset.name, 0, Number(row.dataset.channelId));
+            enqueueFolderDownload(row.id, row.name, 0, row.channelId);
             return;
         }
-        setFocusedRow(row, { preventScroll: true });
-        handleRowSelection(row, e, getInteractiveFileListRows());
+        setFocusedRow(element, { preventScroll: true });
+        handleRowSelection(element, e, getInteractiveFileListRows());
         return;
     }
-    if (row.dataset.type === "file") {
-        const target = fileTargetForRow(row);
-        if ((e.target as HTMLElement).closest("button.download")) {
-            enqueueDownload(target.id, target.name, target.size, target.channelId);
-            return;
-        }
-        if ((e.target as HTMLElement).closest("button.play-video")) {
-            void appActions().playVideo(target);
-            return;
-        }
-        if ((e.target as HTMLElement).closest("button.open-file")) {
-            void appActions().openFile(target);
-            return;
-        }
-        if ((e.target as HTMLElement).closest("button")) return;
-        setFocusedRow(row, { preventScroll: true });
-        handleRowSelection(row, e, getInteractiveFileListRows());
+
+    const target = fileTargetForRow(row);
+    if ((e.target as HTMLElement).closest("button.download")) {
+        enqueueDownload(target.id, target.name, target.size, target.channelId);
+        return;
     }
+    if ((e.target as HTMLElement).closest("button.play-video")) {
+        void appActions().playVideo(target);
+        return;
+    }
+    if ((e.target as HTMLElement).closest("button.open-file")) {
+        void appActions().openFile(target);
+        return;
+    }
+    if ((e.target as HTMLElement).closest("button")) return;
+    setFocusedRow(element, { preventScroll: true });
+    handleRowSelection(element, e, getInteractiveFileListRows());
 }
 
 function handleListKeyDown(e: KeyboardEvent) {
@@ -932,7 +934,8 @@ function handleListKeyDown(e: KeyboardEvent) {
     if (!renderedRows.length || !logicalRows.length) return;
 
     const current = activeRowFromEventTarget(e.target) || renderedRows[0];
-    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === getRowKey(current)));
+    const currentRow = fileListRowForElement(current);
+    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === currentRow?.selectionKey));
     let nextKey: string | null = null;
 
     switch (e.key) {
@@ -961,15 +964,15 @@ function handleListKeyDown(e: KeyboardEvent) {
             return;
         case 'Enter':
             e.preventDefault();
-            activateRow(current);
+            if (currentRow) activateRow(current, currentRow);
             return;
         case 'F2':
             e.preventDefault();
-            renameRow(current);
+            if (currentRow) renameRow(currentRow);
             return;
         case 'Delete':
             e.preventDefault();
-            deleteRow(current);
+            if (currentRow) deleteRow(currentRow);
             return;
         case 'ContextMenu':
             e.preventDefault();
@@ -994,48 +997,41 @@ function handleListDblClick(e: MouseEvent) {
     // a rename request.
     if (isSearchMode() || isMobilePlatform()) return;
 
-    const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
+    const row = fileListRowForElement((e.target as HTMLElement).closest(".drive-row"));
     if (!row) return;
 
-    if (row.dataset.type === "folder") {
-        navigateToFolder(row.dataset.id as string, row.dataset.name as string);
+    if (row.kind === "folder") {
+        navigateToFolder(row.id, row.name);
         return;
     }
-    if (row.dataset.type === "file") {
-        // Rename only from the name area and only when allowed.
-        if (!(e.target as HTMLElement).closest(".row-name")) return;
-        const target = fileTargetForRow(row);
-        if (isVideoFile(target.name)) {
-            e.preventDefault();
-            window.getSelection?.()?.removeAllRanges();
-            void appActions().playVideo(target);
-            return;
-        }
-        if (canOpenFileViewer(target.name)) {
-            e.preventDefault();
-            window.getSelection?.()?.removeAllRanges();
-            void appActions().openFile(target);
-            return;
-        }
-        if (row.dataset.canRename !== "true") return;
+
+    // Rename only from the name area and only when allowed.
+    if (!(e.target as HTMLElement).closest(".row-name")) return;
+    const target = fileTargetForRow(row);
+    if (isVideoFile(target.name)) {
         e.preventDefault();
-        const selection = window.getSelection?.();
-        if (selection) selection.removeAllRanges();
-        openRenameModal({
-            type: "file",
-            id: Number(row.dataset.id),
-            name: row.dataset.name,
-            size: Number(row.dataset.size || 0),
-            parentId: state.currentFolderId,
-            source: row.dataset.source || "fs",
-        } as Parameters<typeof openRenameModal>[0]);
+        window.getSelection?.()?.removeAllRanges();
+        void appActions().playVideo(target);
+        return;
     }
+    if (canOpenFileViewer(target.name)) {
+        e.preventDefault();
+        window.getSelection?.()?.removeAllRanges();
+        void appActions().openFile(target);
+        return;
+    }
+    if (!row.canRename) return;
+    e.preventDefault();
+    const selection = window.getSelection?.();
+    if (selection) selection.removeAllRanges();
+    openRenameModal(fileCommandFor(row, state.currentFolderId));
 }
 
 function handleListDragStart(e: DragEvent) {
     const handle = (e.target as HTMLElement | null)?.closest?.(".row-name[draggable='true']") as HTMLElement | null;
-    const row = handle?.closest(".drive-row[data-type='folder'], .drive-row[data-type='file']") as HTMLElement | null;
-    if (!row) return;
+    const element = handle?.closest(".drive-row") as HTMLElement | null;
+    const row = fileListRowForElement(element);
+    if (!element || !row) return;
 
     const selection = window.getSelection?.();
     if (selection) selection.removeAllRanges();
@@ -1047,61 +1043,56 @@ function handleListDragStart(e: DragEvent) {
         } catch {}
     }
 
-    if (row.dataset.type === "folder") {
-        startDrag(row, {
-            type: "folder",
-            id: String(row.dataset.id || ""),
-            name: row.dataset.name || "Folder",
-            parentId: row.dataset.parentId || state.currentFolderId,
-            row,
-        }, row.dataset.parentId || state.currentFolderId);
+    const parentId = row.parentId || state.currentFolderId;
+    if (row.kind === "folder") {
+        startDrag(element, { type: "folder", id: row.id, name: row.name, parentId, row: element }, parentId);
         return;
     }
+    startDrag(element, { ...fileCommandFor(row, parentId), row: element }, parentId);
+}
 
-    startDrag(row, {
-        type: "file",
-        id: Number(row.dataset.id || 0),
-        name: row.dataset.name || "File",
-        size: Number(row.dataset.size || 0),
-        parentId: row.dataset.parentId || state.currentFolderId,
-        source: row.dataset.source === 'tg' ? 'tg' : 'fs',
-        row,
-    }, row.dataset.parentId || state.currentFolderId);
+/**
+ * The folder a drag event is over, or null for anything else. A drop target has
+ * to be a folder the list is currently showing: a row left behind by the last
+ * render would name a folder the move could not land in.
+ */
+function dropTargetFolder(target: EventTarget | null): { element: HTMLElement; folder: FolderListRow } | null {
+    const element = (target as HTMLElement | null)?.closest?.(".drive-row") as HTMLElement | null;
+    const row = fileListRowForElement(element);
+    return element && row?.kind === 'folder' ? { element, folder: row } : null;
 }
 
 function handleListDragOver(e: DragEvent) {
     if (!state.dragState) return;
-    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
-    if (!row) return;
-    const allowed = canDropOnFolder(row.dataset.id || "");
-    setDropHighlight(row, allowed);
+    const over = dropTargetFolder(e.target);
+    if (!over) return;
+    const allowed = canDropOnFolder(over.folder.id);
+    setDropHighlight(over.element, allowed);
     if (e.dataTransfer) e.dataTransfer.dropEffect = allowed ? "move" : "none";
     if (allowed) e.preventDefault();
 }
 
 function handleListDragLeave(e: DragEvent) {
-    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
-    if (!row) return;
-    if (e.relatedTarget && row.contains(e.relatedTarget as Node)) return;
-    if (state.dragOverEl === row) {
-        row.classList.remove("drop-target");
-        row.classList.remove("drop-denied");
+    const over = dropTargetFolder(e.target);
+    if (!over) return;
+    if (e.relatedTarget && over.element.contains(e.relatedTarget as Node)) return;
+    if (state.dragOverEl === over.element) {
+        over.element.classList.remove("drop-target");
+        over.element.classList.remove("drop-denied");
         state.dragOverEl = null;
     }
 }
 
 async function handleListDrop(e: DragEvent) {
     if (!state.dragState) return;
-    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
-    if (!row) return;
-    const folderID = row.dataset.id || "";
-    if (!canDropOnFolder(folderID)) return;
+    const over = dropTargetFolder(e.target);
+    if (!over || !canDropOnFolder(over.folder.id)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (state.dragOverEl === row) state.dragOverEl = null;
-    row.classList.remove("drop-target");
-    row.classList.remove("drop-denied");
-    await performDropMove(folderID);
+    if (state.dragOverEl === over.element) state.dragOverEl = null;
+    over.element.classList.remove("drop-target");
+    over.element.classList.remove("drop-denied");
+    await performDropMove(over.folder.id);
 }
 
 export function activateFileList(): () => void {
