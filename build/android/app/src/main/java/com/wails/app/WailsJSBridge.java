@@ -128,6 +128,55 @@ public class WailsJSBridge {
         activity.releaseFiles(callbackId, idsJson);
     }
 
+    /** Read the current photo/video library grant without opening a dialog. */
+    @JavascriptInterface public void photoBackupAccess(final String callbackId) {
+        MainActivity activity = activity();
+        if (activity == null) { sendCallback(callbackId, null, "media library unavailable"); return; }
+        sendCallback(callbackId, activity.photoBackupAccess().toString(), null);
+    }
+
+    /** Ask only for the system media permissions appropriate for this Android version. */
+    @JavascriptInterface public void requestPhotoBackupAccess(final String callbackId) {
+        MainActivity activity = activity();
+        if (activity == null) { sendCallback(callbackId, null, "media library unavailable"); return; }
+        activity.requestPhotoBackupAccess(callbackId);
+    }
+
+    /** Current network, charging and battery constraints; this does not schedule work. */
+    @JavascriptInterface public void photoBackupPolicyStatus(final String callbackId) {
+        MainActivity activity = activity();
+        if (activity == null) { sendCallback(callbackId, null, "media policy unavailable"); return; }
+        sendCallback(callbackId, activity.photoBackupPolicyStatus().toString(), null);
+    }
+
+    /** List MediaStore albums as backup sources. */
+    @JavascriptInterface public void listPhotoBackupSources(final String callbackId) {
+        MainActivity activity = activity();
+        if (activity == null) { sendCallback(callbackId, null, "media library unavailable"); return; }
+        activity.listPhotoBackupSources(callbackId);
+    }
+
+    /** Return one bounded page of photo/video assets; paths are deliberately omitted. */
+    @JavascriptInterface public void listPhotoBackupAssets(final String callbackId, final String requestJson) {
+        MainActivity activity = activity();
+        if (activity == null) { sendCallback(callbackId, null, "media library unavailable"); return; }
+        activity.listPhotoBackupAssets(callbackId, requestJson);
+    }
+
+    /** Stage exactly one durable MediaStore asset for an upload. */
+    @JavascriptInterface public void materializePhotoBackupAsset(final String callbackId, final String requestJson) {
+        MainActivity activity = activity();
+        if (activity == null) { sendCallback(callbackId, null, "media library unavailable"); return; }
+        activity.materializePhotoBackupAsset(callbackId, requestJson);
+    }
+
+    /** Delete the single staged copy after its upload completes. */
+    @JavascriptInterface public void releasePhotoBackupAsset(final String callbackId, final String requestJson) {
+        MainActivity activity = activity();
+        if (activity == null) { sendCallback(callbackId, "", null); return; }
+        activity.releasePhotoBackupAsset(callbackId, requestJson);
+    }
+
     /**
      * Move a finished download into the phone's public Downloads folder and
      * answer {"location":"Download/plan.pdf"} with the name it really got,
