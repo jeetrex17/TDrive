@@ -63,6 +63,10 @@ export interface RuntimeEventMap {
     // {visible, height}. Android reports the only soft-keyboard height its
     // WebView knows, so this is the fallback where visualViewport is absent.
     "common:keyboard": [payload: unknown];
+    // Android only, while it copies a picked selection out of the document
+    // provider and into the cache; the payload is {phase, done, total}. iOS
+    // copies behind its own picker and so reports nothing.
+    "common:filepicker": [payload: unknown];
     "updates:open": [];
     update_state: [payload: unknown];
 }
