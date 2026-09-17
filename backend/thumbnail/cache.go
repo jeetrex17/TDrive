@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +13,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+var (
+	// ErrCacheDisabled means the configured budget does not permit caching.
+	ErrCacheDisabled = errors.New("thumbnail cache is disabled")
+	// ErrCacheEntryTooLarge means one value cannot fit within the cache budget.
+	ErrCacheEntryTooLarge = errors.New("thumbnail cache entry exceeds budget")
+	// ErrCacheFull means existing files could not be evicted to reserve space.
+	ErrCacheFull = errors.New("thumbnail cache is full")
 )
 
 const (
@@ -45,7 +55,18 @@ type Cache struct {
 	entries map[string]*list.Element
 	lru     *list.List
 	used    int64
-	inited  bool
+	pending int64
+	// Overflow files could not be deleted during startup trimming. Keep their
+	// footprint without retaining an unbounded path index; new writes stay
+	// disabled until Clear or a later restart can clean them up.
+	overflowBytes   int64
+	overflowEntries int
+	inited          bool
+	active          int
+	cond            *sync.Cond
+
+	// removeFile is replaceable in tests. Production always uses os.Remove.
+	removeFile func(string) error
 }
 
 type entry struct {
@@ -57,13 +78,16 @@ type entry struct {
 // NewCache returns a cache rooted at dir, holding at most maxBytes of
 // thumbnails. The directory is created lazily on first write.
 func NewCache(dir string, maxBytes int64) *Cache {
-	return &Cache{
+	c := &Cache{
 		dir:        dir,
 		maxBytes:   maxBytes,
 		maxEntries: defaultMaxCacheEntries,
 		entries:    make(map[string]*list.Element),
 		lru:        list.New(),
+		removeFile: os.Remove,
 	}
+	c.cond = sync.NewCond(&c.mu)
+	return c
 }
 
 // Get returns the cached bytes for key and refreshes its recency. The boolean
@@ -152,18 +176,42 @@ func (c *Cache) Has(key string) bool {
 
 // Put stores data under key, replacing any previous value, and evicts the
 // least-recently-used entries until the cache is within its size budget.
-// Empty data and disabled caches are no-ops. Errors are I/O failures writing
-// the file; a failed Put leaves the cache consistent.
+// Empty data is a no-op. Disabled or oversized caches return a typed error;
+// a failed Put leaves the cache consistent.
 func (c *Cache) Put(key string, data []byte) error {
 	if c == nil || c.dir == "" || len(data) == 0 {
 		return nil
 	}
+	c.mu.Lock()
+	if c.maxBytes <= 0 {
+		c.mu.Unlock()
+		return ErrCacheDisabled
+	}
+	if int64(len(data)) > c.maxBytes {
+		c.mu.Unlock()
+		return ErrCacheEntryTooLarge
+	}
 	// Build the index before publishing any temporary file. Otherwise the first
 	// concurrent Put could classify another writer's live temp file as crash
-	// residue and remove it before rename.
-	c.mu.Lock()
+	// residue and remove it before rename. Reserve the entire temporary file
+	// while writing, so concurrent writers cannot exceed the disk budget.
 	c.ensureInitLocked()
+	if !c.reserveLocked(int64(len(data))) {
+		c.mu.Unlock()
+		return ErrCacheFull
+	}
+	c.active++
 	c.mu.Unlock()
+	reserved := true
+	defer func() {
+		c.mu.Lock()
+		if reserved {
+			c.pending -= int64(len(data))
+		}
+		c.active--
+		c.cond.Broadcast()
+		c.mu.Unlock()
+	}()
 	name := cacheRelativeName(key)
 
 	path := filepath.Join(c.dir, name)
@@ -207,8 +255,11 @@ func (c *Cache) Put(key string, data []byte) error {
 	_ = os.Chtimes(path, now, now)
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.ensureInitLocked()
+	// Rename consumed the temporary reservation. Count the published file only
+	// once before deciding whether any other entries must be evicted.
+	c.pending -= int64(len(data))
+	reserved = false
 	// Another Put for this key may have published after our rename. Account the
 	// file that is actually on disk, rather than this caller's input length, so
 	// concurrent same-key writes cannot drift the byte budget.
@@ -216,8 +267,10 @@ func (c *Cache) Put(key string, data []byte) error {
 	if statErr != nil {
 		c.forgetLocked(name)
 		if os.IsNotExist(statErr) {
+			c.mu.Unlock()
 			return nil
 		}
+		c.mu.Unlock()
 		return statErr
 	}
 	c.forgetLocked(name)
@@ -229,7 +282,45 @@ func (c *Cache) Put(key string, data []byte) error {
 	c.entries[name] = elem
 	c.used += info.Size()
 	c.evictLocked()
+	c.mu.Unlock()
 	return nil
+}
+
+// Usage returns the indexed bytes, configured byte budget, and entry count.
+// It is safe while reads, writes, and clearing are in progress.
+func (c *Cache) Usage() (used, maxBytes int64, entries int) {
+	if c == nil {
+		return 0, 0, 0
+	}
+	c.mu.Lock()
+	c.ensureInitLocked()
+	used = c.used + c.overflowBytes
+	maxBytes = c.maxBytes
+	entries = len(c.entries) + c.overflowEntries
+	c.mu.Unlock()
+	return used, maxBytes, entries
+}
+
+// Clear removes every cached thumbnail. It waits for active writers so files
+// created before Clear cannot reappear after it returns.
+func (c *Cache) Clear() error {
+	if c == nil || c.dir == "" {
+		return nil
+	}
+	c.mu.Lock()
+	for c.active > 0 {
+		c.cond.Wait()
+	}
+	err := os.RemoveAll(c.dir)
+	c.entries = make(map[string]*list.Element)
+	c.lru.Init()
+	c.used = 0
+	c.pending = 0
+	c.overflowBytes = 0
+	c.overflowEntries = 0
+	c.inited = err == nil
+	c.mu.Unlock()
+	return err
 }
 
 // ensureInitLocked walks the sharded cache once to rebuild the bounded
@@ -279,8 +370,17 @@ func (c *Cache) ensureInitLocked() {
 		foundBytes += candidate.size
 		for len(found) > 1 && (len(found) > c.entryLimit() || foundBytes > c.maxBytes) {
 			oldest := heap.Pop(&found).(entry)
+			if err := c.removeFile(filepath.Join(c.dir, oldest.name)); err != nil && !os.IsNotExist(err) {
+				// An undeletable file still occupies disk. Track its aggregate
+				// footprint without retaining every path from a failed cleanup.
+				// That keeps startup metadata bounded and blocks admission until
+				// Clear (or the next startup) can retry the cleanup.
+				foundBytes -= oldest.size
+				c.overflowBytes += oldest.size
+				c.overflowEntries++
+				continue
+			}
 			foundBytes -= oldest.size
-			_ = os.Remove(filepath.Join(c.dir, oldest.name))
 		}
 		return nil
 	})
@@ -303,17 +403,34 @@ func (c *Cache) ensureInitLocked() {
 }
 
 // evictLocked removes least-recently-used entries until the cache fits its
-// budget. It never evicts the last remaining entry, so a single oversized
-// thumbnail is kept rather than deleted on the spot. Must hold c.mu.
-func (c *Cache) evictLocked() {
-	for (c.used > c.maxBytes || len(c.entries) > c.entryLimit()) && len(c.entries) > 1 {
-		elem := c.lru.Back()
-		if elem == nil {
-			return
-		}
-		e := elem.Value.(entry)
-		c.removeLocked(e.name)
+// budget. Failed removals remain accounted for and are skipped so eviction
+// makes progress where possible. Must hold c.mu.
+func (c *Cache) evictLocked() bool {
+	if c.overflowEntries > 0 {
+		return false
 	}
+	for c.used+c.pending > c.maxBytes || len(c.entries) > c.entryLimit() {
+		removed := false
+		for elem := c.lru.Back(); elem != nil; elem = elem.Prev() {
+			if c.removeLocked(elem.Value.(entry).name) {
+				removed = true
+				break
+			}
+		}
+		if !removed {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Cache) reserveLocked(size int64) bool {
+	c.pending += size
+	if c.evictLocked() {
+		return true
+	}
+	c.pending -= size
+	return false
 }
 
 func (c *Cache) entryLimit() int {
@@ -323,21 +440,24 @@ func (c *Cache) entryLimit() int {
 	return c.maxEntries
 }
 
-func (c *Cache) removeLocked(name string) {
+func (c *Cache) removeLocked(name string) bool {
 	if _, ok := c.entries[name]; !ok {
-		return
+		return true
 	}
-	_ = os.Remove(filepath.Join(c.dir, name))
+	if err := c.removeFile(filepath.Join(c.dir, name)); err != nil && !os.IsNotExist(err) {
+		return false
+	}
 	c.forgetLocked(name)
 	// Best-effort cleanup prevents empty hash directories from accumulating.
 	parent := filepath.Dir(filepath.Join(c.dir, name))
 	if parent != c.dir {
-		_ = os.Remove(parent)
+		_ = c.removeFile(parent)
 		grandparent := filepath.Dir(parent)
 		if grandparent != c.dir {
-			_ = os.Remove(grandparent)
+			_ = c.removeFile(grandparent)
 		}
 	}
+	return true
 }
 
 func (c *Cache) forgetLocked(name string) {
