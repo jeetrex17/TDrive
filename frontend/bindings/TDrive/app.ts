@@ -35,6 +35,10 @@ export function ActiveChannelID(): $CancellablePromise<number> {
     return $Call.ByID(915599723);
 }
 
+export function AddPhotoBackupFolder(): $CancellablePromise<$models.PhotoBackupSource> {
+    return $Call.ByID(700615070);
+}
+
 /**
  * AppVersion returns the build identity shown in the Updates panel.
  */
@@ -216,6 +220,10 @@ export function EncryptionStatus(): $CancellablePromise<$models.EncryptionStatus
     return $Call.ByID(2870323614);
 }
 
+export function EnqueuePhotoBackupAssets(sourceID: string, values: $models.PhotoBackupAsset[] | null): $CancellablePromise<number> {
+    return $Call.ByID(2612336532, sourceID, values);
+}
+
 export function GetAllFsMsgIDs(): $CancellablePromise<number[] | null> {
     return $Call.ByID(2840193812);
 }
@@ -280,6 +288,10 @@ export function GetMediaTimelineAnchors(generation: string): $CancellablePromise
 
 export function GetMediaTimelineSummary(): $CancellablePromise<projection$0.GalleryTimeline> {
     return $Call.ByID(3363396734);
+}
+
+export function GetPhotoBackupState(): $CancellablePromise<$models.PhotoBackupState> {
+    return $Call.ByID(2538605868);
 }
 
 export function GetStorageUsed(): $CancellablePromise<number> {
@@ -535,6 +547,10 @@ export function OpenUpdatePage(): $CancellablePromise<void> {
     return $Call.ByID(4171214331);
 }
 
+export function PausePhotoBackup(): $CancellablePromise<void> {
+    return $Call.ByID(4020238801);
+}
+
 /**
  * PlanImport scans the selected paths and returns the counts shown in the
  * import dialog (files, folders, total size, archives, oversize-skipped). It
@@ -580,6 +596,10 @@ export function RemovePendingJoin(inviteHash: string): $CancellablePromise<void>
     return $Call.ByID(4199323196, inviteHash);
 }
 
+export function RemovePhotoBackupSource(id: string): $CancellablePromise<void> {
+    return $Call.ByID(560528492, id);
+}
+
 export function RenameFile(msgID: number, newName: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(1151698069, msgID, newName);
 }
@@ -592,12 +612,24 @@ export function ResizeNativeMedia(token: string, rect: nativeplayer$0.Rect): $Ca
     return $Call.ByID(4253865390, token, rect);
 }
 
+export function ResolvePhotoBackupResource(token: string, path: string, errorMessage: string): $CancellablePromise<void> {
+    return $Call.ByID(3713811339, token, path, errorMessage);
+}
+
 /**
  * ResolveUsernames maps Telegram user IDs to display names. Used by the
  * frontend uploader-chip cache.
  */
 export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<{ [_ in string]?: string } | null> {
     return $Call.ByID(4195625464, userIDs);
+}
+
+export function RetryPhotoBackup(): $CancellablePromise<void> {
+    return $Call.ByID(2648028709);
+}
+
+export function RunPhotoBackup(): $CancellablePromise<void> {
+    return $Call.ByID(424636428);
 }
 
 /**
@@ -607,6 +639,10 @@ export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<
  */
 export function SafeAreaInsets(): $CancellablePromise<$models.SafeAreaInsets> {
     return $Call.ByID(1909123243);
+}
+
+export function SavePhotoBackupSettings(value: $models.PhotoBackupSettings): $CancellablePromise<$models.PhotoBackupState> {
+    return $Call.ByID(1900832239, value);
 }
 
 export function SaveSetup(apiId: number, apiHash: string): $CancellablePromise<string> {
@@ -681,6 +717,10 @@ export function SetKeyboardWatch(enabled: boolean): $CancellablePromise<void> {
     return $Call.ByID(3980374793, enabled);
 }
 
+export function SetPhotoBackupPolicy(policy: $models.PhotoBackupPolicy): $CancellablePromise<void> {
+    return $Call.ByID(1872922881, policy);
+}
+
 /**
  * SetScreenProtect asks the OS to keep the app's contents out of screenshots
  * and the app switcher while the vault is locked or privacy is raised.
@@ -750,6 +790,10 @@ export function UpdateMediaPlayback(update: media$0.PlaybackUpdate): $Cancellabl
 
 export function UploadToDriveFS(filePaths: string[] | null, parentIDs: string[] | null, encrypt: boolean): $CancellablePromise<$models.UploadResult> {
     return $Call.ByID(1816080344, filePaths, parentIDs, encrypt);
+}
+
+export function UpsertPhotoBackupSource(value: $models.PhotoBackupSource): $CancellablePromise<$models.PhotoBackupSource> {
+    return $Call.ByID(713485105, value);
 }
 
 /**

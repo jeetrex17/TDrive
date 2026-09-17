@@ -250,6 +250,75 @@ export interface PersonalDriveSetupState {
     "active_channel_id": string;
 }
 
+export interface PhotoBackupAsset {
+    "id": string;
+    "version": string;
+    "name": string;
+    "media_type": string;
+    "resource_id": string;
+    "modified_at": number;
+    "size": number;
+}
+
+export interface PhotoBackupCapabilities {
+    "wifi_only": PhotoBackupCapability;
+    "charging_only": PhotoBackupCapability;
+    "access": {"status": string, "detail": string};
+}
+
+export interface PhotoBackupCapability {
+    "supported": boolean;
+    "label": string;
+    "detail": string;
+}
+
+export interface PhotoBackupPolicy {
+    "wifi": boolean;
+    "charging": boolean;
+    "observed_at": number;
+}
+
+export interface PhotoBackupSettings {
+    "enabled": boolean;
+    "photos": boolean;
+    "videos": boolean;
+    "future_only": boolean;
+    "wifi_only": boolean;
+    "charging_only": boolean;
+    "destination_parent_id": string;
+    "encrypt": boolean;
+}
+
+export interface PhotoBackupSource {
+    "id": string;
+    "kind": string;
+    "name": string;
+    "root": string;
+    "enabled": boolean;
+    "added_at": number;
+}
+
+export interface PhotoBackupState {
+    "settings": PhotoBackupSettings;
+    "sources": PhotoBackupSource[] | null;
+    "status": PhotoBackupStatus;
+    "platform": string;
+    "capabilities": PhotoBackupCapabilities;
+    "destination": {"id": string, "title": string, "kind": string};
+}
+
+export interface PhotoBackupStatus {
+    "phase": string;
+    "pending": number;
+    "uploading": number;
+    "complete": number;
+    "failed": number;
+    "paused"?: number;
+    "bytes_done": number;
+    "bytes_total": number;
+    "message": string;
+}
+
 export interface PreviewPayload {
     "data_base64": string;
     "mime_type": string;

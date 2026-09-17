@@ -6,6 +6,7 @@
     import PaletteIcon from '@lucide/svelte/icons/palette';
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
     import PhotoCachePanel from '../gallery/PhotoCachePanel.svelte';
+    import PhotoBackupPanel from '../gallery/PhotoBackupPanel.svelte';
     import { tick } from 'svelte';
     import { checkForUpdates } from '../../modules/updates';
     import { eventOccurredWithin } from '../event-path';
@@ -27,7 +28,7 @@
 
     let { onOpen, onEncryptionSettings, onLogout, updaterAvailable = true }: Props = $props();
 
-    type MenuView = 'account' | 'appearance' | 'updates' | 'storage';
+    type MenuView = 'account' | 'appearance' | 'updates' | 'storage' | 'backup';
 
     let open = $state(false);
     let view = $state<MenuView>('account');
@@ -116,6 +117,8 @@
         await tick();
         menuEl?.querySelector<HTMLElement>('#profile-menu-storage')?.focus();
     }
+    async function openBackup(): Promise<void> { view = 'backup'; await tick(); menuEl?.querySelector<HTMLElement>('#photo-backup-back')?.focus(); }
+    async function closeBackup(): Promise<void> { view = 'account'; await tick(); menuEl?.querySelector<HTMLElement>('#profile-menu-photo-backup')?.focus(); }
 
     async function openToUpdates(): Promise<void> {
         if (!open) {
@@ -133,6 +136,7 @@
             // popover after this view has handled the first navigation step.
             event.stopPropagation();
             if (view === 'storage') { void closeStorage(); return; }
+            if (view === 'backup') { void closeBackup(); return; }
             if (view === 'appearance') {
                 void closeAppearance();
                 return;
@@ -186,6 +190,7 @@
 
     function labelledBy(currentView: MenuView): string {
         if (currentView === 'storage') return 'photo-storage-back';
+        if (currentView === 'backup') return 'photo-backup-back';
         if (currentView === 'appearance') return 'appearance-title';
         if (currentView === 'updates') return 'updates-title';
         return 'profile-trigger';
@@ -232,6 +237,9 @@
     {#if view === 'storage'}
         <button id="photo-storage-back" class="profile-menu-item" type="button" onclick={() => void closeStorage()}>Back to account</button>
         <PhotoCachePanel />
+    {:else if view === 'backup'}
+        <button id="photo-backup-back" class="profile-menu-item" type="button" onclick={() => void closeBackup()}>Back to account</button>
+        <PhotoBackupPanel />
     {:else if view === 'appearance'}
         <AppearancePanel />
     {:else if view === 'updates'}
@@ -274,6 +282,9 @@
         </button>
         <button id="profile-menu-storage" class="profile-menu-item" type="button" role="menuitem" onclick={() => void openStorage()}>
             <HardDriveIcon size={20} strokeWidth={2} aria-hidden="true" /><span>Local storage</span>
+        </button>
+        <button id="profile-menu-photo-backup" class="profile-menu-item" type="button" role="menuitem" onclick={() => void openBackup()}>
+            <HardDriveIcon size={20} strokeWidth={2} aria-hidden="true" /><span>Photo &amp; video backup</span>
         </button>
         {#if $encryptionEntryVisible}
             <button

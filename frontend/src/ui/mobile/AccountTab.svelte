@@ -16,6 +16,7 @@
     import { sidebarState } from '../sidebar/sidebar-store';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
     import PhotoCachePanel from '../gallery/PhotoCachePanel.svelte';
+    import PhotoBackupPanel from '../gallery/PhotoBackupPanel.svelte';
     import { getThemeDefinition } from '../theme/theme-model';
     import { themeState } from '../theme/theme-controller';
     import { switchActiveChannel } from '../../modules/channels';
@@ -165,6 +166,7 @@
                 <span class="account-row-value">{storageLabel}</span>
             </div>
             {#if $activeTab === 'account'}<PhotoCachePanel />{/if}
+            {#if $activeTab === 'account'}<PhotoBackupPanel />{/if}
         </div>
     </section>
 
