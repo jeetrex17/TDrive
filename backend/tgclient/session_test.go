@@ -40,13 +40,11 @@ func TestLiveConnStartsOnceUnderConcurrency(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := lc.acquire(context.Background()); err != nil {
 				t.Errorf("acquire: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

@@ -116,7 +116,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 	failed := 0
 	var firstErr error
 
-	for i := 0; i < len(filePaths); i++ {
+	for i := range len(filePaths) {
 		path := filePaths[i]
 		pid := parentIDs[i]
 		uploadID := options.idOffset + i
@@ -131,10 +131,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 			observer.Failed(uploadID, filepath.Base(path), slotErr)
 			continue
 		}
-		wg.Add(1)
-
-		go func(uploadID int, path string, pid string, release func()) {
-			defer wg.Done()
+		wg.Go(func() {
 			defer release()
 			uploadCtx, untrack := s.trackUploadCancel(ctx, uploadID)
 			defer untrack()
@@ -183,7 +180,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 				Op:        op,
 			})
 			mu.Unlock()
-		}(uploadID, path, pid, release)
+		})
 	}
 
 	wg.Wait()
