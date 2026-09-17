@@ -6,10 +6,22 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// The mobile UX primitives iOS and Android both implement identically, exposed
-// as one binding each so the frontend never branches on platform to reach them.
-// application.Mobile dispatches to the IOS or Android manager and to a no-op
-// stub on desktop, so every call here is safe to make from shared code.
+// DeviceService exposes the OS-level affordances the webview cannot reach on
+// its own: haptics, screenshot protection, keyboard-visibility reporting,
+// immersive mode, and the screen edges the system reserves for its own chrome.
+//
+// They belong together because of the one property no other binding shares:
+// none of them touch the engine, the vault or a drive. That is what lets them
+// answer while the backend is still starting, or after it has failed to start
+// at all. Leaving them on App would have tied the frontend's earliest calls --
+// safe-area insets are needed before the first paint -- to whether the Telegram
+// session came up, and a phone would render its chrome under the status bar
+// whenever login was slow.
+//
+// application.Mobile dispatches to the iOS or Android manager and to a no-op
+// stub on desktop, so every method here is safe to call from shared frontend
+// code and the whole type compiles unconditionally on all five platforms.
+type DeviceService struct{}
 
 // hapticKinds is the vocabulary both platform managers understand. Unknown
 // values are dropped rather than passed through: Android's switch falls back to
@@ -29,7 +41,7 @@ var hapticKinds = map[string]bool{
 // an armed pull, "selection" for a changed sort or filter, and success/warning/
 // error only at a real outcome. The OS maps these to its own generator, so a
 // user who has turned system haptics off feels nothing, as they asked.
-func (a *App) Haptic(kind string) {
+func (s *DeviceService) Haptic(kind string) {
 	if !hapticKinds[kind] {
 		return
 	}
@@ -45,14 +57,14 @@ func (a *App) Haptic(kind string) {
 // *detection*, reported back as a "common:screenCapture" event. Hiding the iOS
 // switcher preview needs a native overlay on resign-active that this host does
 // not have yet, so on iOS treat this as telemetry, not protection.
-func (a *App) SetScreenProtect(enabled bool) {
+func (s *DeviceService) SetScreenProtect(enabled bool) {
 	application.Mobile.SetScreenProtect(enabled)
 }
 
 // SetKeyboardWatch starts or stops "common:keyboard" {visible,height} events.
 // The frontend prefers visualViewport where it exists and falls back to these,
 // which is the only source Android's WebView reports reliably.
-func (a *App) SetKeyboardWatch(enabled bool) {
+func (s *DeviceService) SetKeyboardWatch(enabled bool) {
 	application.Mobile.SetKeyboardWatch(enabled)
 }
 
@@ -70,7 +82,7 @@ func (a *App) SetKeyboardWatch(enabled bool) {
 //
 // iOS has no navigation bar to hide, so there the payload only takes the status
 // bar, which is what a full-screen player wants anyway.
-func (a *App) SetImmersive(on bool) {
+func (s *DeviceService) SetImmersive(on bool) {
 	payload, err := json.Marshal(map[string]any{"hidden": on, "bars": "system"})
 	if err != nil {
 		return

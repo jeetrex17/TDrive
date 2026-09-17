@@ -3,13 +3,45 @@ package main
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"TDrive/backend/core"
 	encservice "TDrive/backend/services/encryption"
 )
 
-const encryptionMountTransitionTimeout = 55 * time.Second
+// EncryptionService owns the vault password: what the frontend may know about
+// it, how it is first created, how it is unlocked for the session, and how it
+// is changed.
+//
+// These four are grouped because each one moves the master key in or out of
+// process memory, and every one of them must therefore hold the mount lifecycle
+// gate for the whole operation. Splitting them across types would invite a
+// fifth key-touching method that forgets the gate, and a key that changes while
+// a drive is mounted leaves the filesystem serving bytes it can no longer
+// decrypt. Everything that only *reads* an already-unlocked key -- uploads,
+// previews, the mount itself -- stays out of here on purpose.
+type EncryptionService struct {
+	host  serviceHost
+	mount vaultMountGate
+	// override replaces the engine's encryption service in tests that need to
+	// park a key write mid-flight and prove a concurrent lock or logout waits
+	// for it. Production always leaves this nil.
+	override appEncryptionService
+}
+
+func newEncryptionService(host serviceHost, mount vaultMountGate) *EncryptionService {
+	return &EncryptionService{host: host, mount: mount}
+}
+
+// vaultMountGate is what this service needs from whoever owns the mount: the
+// right to hold mount transitions still for the length of a key operation, and
+// a way to close an open mount before the key underneath it changes.
+//
+// App implements it today. It is an interface so that lifting the mount out of
+// App later is a one-line rewire here instead of a rewrite of this file.
+type vaultMountGate interface {
+	acquireMountLifecycle(ctx context.Context) (func(), error)
+	closeMountForEncryptionTransitionLocked(ctx context.Context) error
+}
 
 // EncryptionStatus is the snapshot the frontend uses for per-upload prompts
 // and for unlocking an encrypted personal-drive mount. Mounted writes always
@@ -39,96 +71,29 @@ func personalChannelID() int64 {
 	return core.PersonalChannelID()
 }
 
-func (a *App) encryptionService() appEncryptionService {
-	if a == nil {
+func (s *EncryptionService) service() appEncryptionService {
+	if s == nil {
 		return nil
 	}
-	if a.encryptionServiceOverride != nil {
-		return a.encryptionServiceOverride
+	if s.override != nil {
+		return s.override
 	}
-	if a.engine == nil {
+	engine := s.host.coreEngine()
+	if engine == nil {
 		return nil
 	}
-	return a.engine.EncryptionService()
-}
-
-func (a *App) clearEncryptionSession() {
-	if a == nil {
-		return
-	}
-	a.closeEncryptedNativeMedia()
-	a.stopGalleryPreparation()
-	a.revokeGalleryImages()
-	if a.engine != nil {
-		a.engine.ClearEncryptionSession()
-	}
-	a.emit("encrypted_media_sessions_closed")
-}
-
-func (a *App) closeMountForEncryptionTransitionLocked(ctx context.Context) error {
-	if err := a.closeMountControllerLocked(ctx); err != nil {
-		return fmt.Errorf("eject TDrive before changing the encryption session: %w", err)
-	}
-	return nil
-}
-
-func (a *App) lockEncryptionSession() error {
-	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
-	defer cancel()
-	release, err := a.acquireMountLifecycle(ctx)
-	if err != nil {
-		return fmt.Errorf("eject TDrive before changing the encryption session: %w", err)
-	}
-	defer release()
-	return a.lockEncryptionSessionLocked(ctx)
-}
-
-// lockEncryptionSessionLocked requires mountLifecycle to be held. Keeping the
-// controller close and key erasure under one gate prevents a racing Start from
-// acquiring a lease between those two steps.
-func (a *App) lockEncryptionSessionLocked(ctx context.Context) error {
-	if err := a.closeMountForEncryptionTransitionLocked(ctx); err != nil {
-		return err
-	}
-	a.clearEncryptionSession()
-	return nil
-}
-
-// runWithClosedMountForLogout holds the lifecycle gate through all local
-// logout cleanup. A queued mount can only resume after logout has removed the
-// session data, at which point it cannot acquire an encryption key lease.
-func (a *App) runWithClosedMountForLogout(action func() error) error {
-	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
-	defer cancel()
-	release, err := a.acquireMountLifecycle(ctx)
-	if err != nil {
-		return fmt.Errorf("eject TDrive before changing the encryption session: %w", err)
-	}
-	defer release()
-	if err := a.lockEncryptionSessionLocked(ctx); err != nil {
-		return err
-	}
-	if action != nil {
-		if err := action(); err != nil {
-			return err
-		}
-	}
-	// Only successful local cleanup is terminal. If cleanup fails, the mount is
-	// already safely closed and the key cleared, but the user may unlock and
-	// remount instead of being trapped in a half-logged-out process.
-	a.mountLifecycleTerminal = true
-	return nil
+	return engine.EncryptionService()
 }
 
 // EncryptionStatus reports whether the user has set an encryption
 // password, and whether that password has already been accepted for the
 // current app session.
-func (a *App) EncryptionStatus() (EncryptionStatus, error) {
-	service := a.encryptionService()
+func (s *EncryptionService) EncryptionStatus() (EncryptionStatus, error) {
+	service := s.service()
 	if service == nil {
 		return EncryptionStatus{}, fmt.Errorf("backend not ready")
 	}
-	status, err := service.StatusContext(a.appContext())
+	status, err := service.StatusContext(s.host.appContext())
 	if err != nil {
 		return EncryptionStatus{}, err
 	}
@@ -143,19 +108,19 @@ func (a *App) EncryptionStatus() (EncryptionStatus, error) {
 // CreateEncryptionPassword creates the user's first encryption password.
 // It stores a random master key wrapped under the password and an optional
 // plaintext hint. It refuses to overwrite an existing password.
-func (a *App) CreateEncryptionPassword(password string, hint string) OperationResult {
-	service := a.encryptionService()
+func (s *EncryptionService) CreateEncryptionPassword(password string, hint string) OperationResult {
+	service := s.service()
 	if service == nil {
 		return operationFailure(errBackendUnavailable)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	defer cancel()
-	release, err := a.acquireMountLifecycle(ctx)
+	release, err := s.mount.acquireMountLifecycle(ctx)
 	if err != nil {
 		return operationFailure(fmt.Errorf("eject TDrive before changing the encryption session: %w", err))
 	}
 	defer release()
-	if err := a.closeMountForEncryptionTransitionLocked(ctx); err != nil {
+	if err := s.mount.closeMountForEncryptionTransitionLocked(ctx); err != nil {
 		return operationFailure(err)
 	}
 	return operationFailure(service.CreatePasswordContext(ctx, password, hint))
@@ -163,14 +128,14 @@ func (a *App) CreateEncryptionPassword(password string, hint string) OperationRe
 
 // UseEncryptionPassword verifies an existing encryption password and keeps
 // the master key in memory for the rest of the app session.
-func (a *App) UseEncryptionPassword(password string) OperationResult {
-	service := a.encryptionService()
+func (s *EncryptionService) UseEncryptionPassword(password string) OperationResult {
+	service := s.service()
 	if service == nil {
 		return operationFailure(errBackendUnavailable)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	defer cancel()
-	release, err := a.acquireMountLifecycle(ctx)
+	release, err := s.mount.acquireMountLifecycle(ctx)
 	if err != nil {
 		return operationFailure(fmt.Errorf("unlock encryption: %w", err))
 	}
@@ -181,14 +146,14 @@ func (a *App) UseEncryptionPassword(password string) OperationResult {
 // ChangeEncryptionPassword verifies the current password, then re-wraps
 // the same master key with the new password. Existing encrypted files stay
 // decryptable; file contents are not re-encrypted.
-func (a *App) ChangeEncryptionPassword(currentPassword string, newPassword string, hint string) OperationResult {
-	service := a.encryptionService()
+func (s *EncryptionService) ChangeEncryptionPassword(currentPassword string, newPassword string, hint string) OperationResult {
+	service := s.service()
 	if service == nil {
 		return operationFailure(errBackendUnavailable)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	defer cancel()
-	release, err := a.acquireMountLifecycle(ctx)
+	release, err := s.mount.acquireMountLifecycle(ctx)
 	if err != nil {
 		return operationFailure(fmt.Errorf("change encryption password: %w", err))
 	}

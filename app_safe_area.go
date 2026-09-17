@@ -20,7 +20,7 @@ type SafeAreaInsets struct {
 // SafeAreaInsets reports those reserved edges. The frontend asks for them
 // because CSS cannot see all of them: Android's WebView fills
 // env(safe-area-inset-top) but leaves the bottom gesture area at zero.
-func (a *App) SafeAreaInsets() SafeAreaInsets {
+func (s *DeviceService) SafeAreaInsets() SafeAreaInsets {
 	var insets SafeAreaInsets
 	raw := application.Mobile.SafeAreaJSON()
 	if raw == "" {

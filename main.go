@@ -35,17 +35,14 @@ func main() {
 		updater.WaitForExit(pid, relaunchWait, processlock.ProcessRunning)
 	}
 
-	app := NewApp()
-	app.version = appVersion
+	app := NewApp(appVersion)
 
 	wailsApp := application.New(application.Options{
 		Name: "TDrive",
 		// The default About panel reads Name/Description/Icon (there is no
 		// v2-style mac.AboutInfo any more), so the version lives here.
-		Description: "Version " + app.version + "\nTelegram-backed desktop drive.",
-		Services: []application.Service{
-			application.NewService(app),
-		},
+		Description: "Version " + appVersion + "\nTelegram-backed desktop drive.",
+		Services:    app.services(),
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},

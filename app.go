@@ -24,7 +24,6 @@ import (
 	readservice "TDrive/backend/services/read"
 	userservice "TDrive/backend/services/user"
 	"TDrive/backend/tgclient"
-	"TDrive/backend/updater"
 
 	"github.com/gotd/td/telegram"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -48,12 +47,6 @@ type App struct {
 	galleryPreparation      *galleryprepare.Runner
 	galleryPreparationEpoch uint64
 
-	// version is the build stamp from main.appVersion ("dev" for local builds).
-	version string
-	// updates drives the release check/download/install lifecycle. It is
-	// created in startup so its state events can reach the webview.
-	updates *updater.Service
-
 	// mountMu protects lazy controller construction. A transient construction
 	// failure stays retryable for a later mount request.
 	mountMu                sync.Mutex
@@ -72,10 +65,6 @@ type App struct {
 	mountLifecycle         mountlifecycle.Gate
 	mountLifecycleTerminal bool // guarded by mountLifecycle
 
-	// encryptionServiceOverride is a narrow test seam for deterministic
-	// key-state race tests. Production always uses Engine.EncryptionService.
-	encryptionServiceOverride appEncryptionService
-
 	// fileDropEnabled tracks whether the native OS file-drop handler is
 	// registered. The frontend toggles it off during an internal drag-to-move so
 	// macOS does not intercept the in-app HTML5 drag.
@@ -91,11 +80,14 @@ type App struct {
 	// when the transfer state actually flips. Guarded by transferMu.
 	keepAwake bool
 
-	// nativeMedia owns out-of-webview player processes tied to media loopback
-	// sessions. Each token must be closed before the backend shuts down so the
-	// range reader and native surface do not outlive the app.
-	nativeMediaMu sync.Mutex
-	nativeMedia   map[string]*nativeMediaSession
+	// The domains lifted out of App into their own bound services. They are
+	// built once in initServices; see app_services.go for the graph and for
+	// why startup orchestration stays here.
+	device     *DeviceService
+	drives     *DriveService
+	encryption *EncryptionService
+	media      *MediaService
+	updates    *UpdateService
 }
 
 type runtimeEventSink struct {
@@ -415,24 +407,11 @@ func (a *App) fileService() *fileservice.Service {
 }
 
 func (a *App) requireFileService() (*fileservice.Service, error) {
-	if svc := a.fileService(); svc != nil {
-		return svc, nil
-	}
-	return nil, errBackendUnavailable
-}
-
-func (a *App) readService() *readservice.Service {
-	if a.engine == nil {
-		return nil
-	}
-	return a.engine.ReadService()
+	return engineFileService(a.engine)
 }
 
 func (a *App) requireReadService() (*readservice.Service, error) {
-	if svc := a.readService(); svc != nil {
-		return svc, nil
-	}
-	return nil, errBackendUnavailable
+	return engineReadService(a.engine)
 }
 
 func (a *App) lifecycleService() *lifecycleservice.Service {
@@ -607,8 +586,15 @@ func (a *App) GetStorageUsed() (int64, error) {
 	return svc.StorageUsed(a.ActiveChannelID())
 }
 
-func NewApp() *App {
-	return &App{}
+// NewApp builds the root service together with the domain services that hang
+// off it, so main.go only has to register what services() returns. The version
+// is the build stamp the updater compares releases against; it arrives here
+// because only main knows it, and passing it in at construction keeps it from
+// being a mutable field anyone could rewrite later.
+func NewApp(version string) *App {
+	app := &App{}
+	app.initServices(version)
+	return app
 }
 
 func (a *App) CheckSystemStatus() string {
@@ -656,7 +642,7 @@ func (a *App) ServiceShutdown() error {
 		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
 	}
 	cancel()
-	a.closeAllNativeMedia()
+	a.media.closeAllNativeMedia()
 	a.stopGalleryPreparation()
 	a.closeGalleryImages()
 	if a.engine != nil {
@@ -720,7 +706,7 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	}
 	a.backendLock = lock
 	applog.Init()
-	a.initUpdater()
+	a.updates.initUpdater()
 
 	// Native file drop: hand the dropped absolute paths to the frontend, which
 	// resolves the target folder and runs the import flow. Drop zones opt in via
@@ -753,7 +739,7 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	}
 
 	fmt.Println("TDrive DB ready!")
-	a.finishUpdateCleanup(mountInitErr)
+	a.updates.finishCleanup(mountInitErr)
 	return nil
 }
 

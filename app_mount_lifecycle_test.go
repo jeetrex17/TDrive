@@ -74,7 +74,7 @@ func TestCreateEncryptionPasswordSerializesPolicyChangeWithMountStart(t *testing
 
 	createDone := make(chan error, 1)
 	go func() {
-		createDone <- app.CreateEncryptionPassword("correct horse battery staple", "hint").Err()
+		createDone <- app.encryption.CreateEncryptionPassword("correct horse battery staple", "hint").Err()
 	}()
 	waitLifecycleSignal(t, controller.closeEntered, "mount close before password creation")
 	if app.mountLifecycle.TryLock() {
@@ -95,7 +95,7 @@ func TestCreateEncryptionPasswordSerializesPolicyChangeWithMountStart(t *testing
 	if err := waitLifecycleResult(t, mountDone, "mount completion"); err != nil {
 		t.Fatalf("MountDrive() error = %v", err)
 	}
-	status, err := app.EncryptionStatus()
+	status, err := app.encryption.EncryptionStatus()
 	if err != nil {
 		t.Fatalf("EncryptionStatus() error = %v", err)
 	}
@@ -120,7 +120,7 @@ func TestEncryptionStatusDoesNotWaitForMountLifecycle(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := app.EncryptionStatus()
+		_, err := app.encryption.EncryptionStatus()
 		done <- err
 	}()
 
@@ -200,7 +200,7 @@ func TestPasswordKeyWritersSerializeBeforeLockAndLogout(t *testing.T) {
 				service.useEntered = make(chan struct{})
 				service.releaseUse = make(chan struct{})
 			},
-			writeKey: func(app *App) error { return app.UseEncryptionPassword("password").Err() },
+			writeKey: func(app *App) error { return app.encryption.UseEncryptionPassword("password").Err() },
 			clearKey: func(app *App) error { return app.lockEncryptionSession() },
 		},
 		{
@@ -210,7 +210,7 @@ func TestPasswordKeyWritersSerializeBeforeLockAndLogout(t *testing.T) {
 				service.releaseChange = make(chan struct{})
 			},
 			writeKey: func(app *App) error {
-				return app.ChangeEncryptionPassword("old-password", "new-password", "hint").Err()
+				return app.encryption.ChangeEncryptionPassword("old-password", "new-password", "hint").Err()
 			},
 			clearKey: func(app *App) error { return app.runWithClosedMountForLogout(nil) },
 		},
@@ -223,7 +223,7 @@ func TestPasswordKeyWritersSerializeBeforeLockAndLogout(t *testing.T) {
 			app.mountController = newBarrierAppMountController()
 			service := &barrierEncryptionService{delegate: app.engine.EncryptionService()}
 			test.configure(service)
-			app.encryptionServiceOverride = service
+			app.encryption.override = service
 
 			writeDone := make(chan error, 1)
 			go func() { writeDone <- test.writeKey(app) }()
@@ -259,6 +259,7 @@ func TestAppShutdownMakesMountLifecycleTerminal(t *testing.T) {
 			return mountcontroller.Drive{ID: 1, Title: "Personal", Kind: mountcontroller.DriveKindPersonal}, nil
 		},
 	}
+	app.initServices("dev")
 
 	app.ServiceShutdown()
 	waitLifecycleSignal(t, controller.closeEntered, "shutdown mount close")
@@ -282,6 +283,7 @@ func TestAppShutdownWithoutControllerMakesMountLifecycleTerminal(t *testing.T) {
 		},
 		mountDriveResolver: unlockedEncryptedDrive,
 	}
+	app.initServices("dev")
 
 	app.ServiceShutdown()
 	if _, err := app.mountDriveNative(); !errors.Is(err, errAppMountLifecycleTerminal) {
