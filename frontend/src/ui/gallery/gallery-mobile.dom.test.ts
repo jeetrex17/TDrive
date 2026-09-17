@@ -101,4 +101,24 @@ describe('large library virtualization', () => {
         expect(host.querySelectorAll('*').length).toBeLessThan(250);
         source.dispose();
     });
+
+    it('keeps a million-photo canvas below the browser CSS height limit', async () => {
+        const source = await makeSource(1_000_000);
+        galleryView.set({ status: 'ready', source });
+        app = mount(Gallery, { target: host });
+        flushSync();
+
+        const canvas = host.querySelector<HTMLElement>('.gallery-virtual');
+        expect(Number.parseFloat(canvas?.style.height ?? '')).toBeLessThanOrEqual(16_000_000);
+        expect(host.querySelectorAll('.gallery-cell').length).toBeLessThan(60);
+
+        host.scrollTop = 16_000_000 - 800;
+        host.dispatchEvent(new Event('scroll'));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        flushSync();
+        const rows = host.querySelectorAll<HTMLElement>('[role="row"]');
+        expect(rows[rows.length - 1]?.getAttribute('aria-rowindex')).toBe('333334');
+        expect(host.querySelectorAll('.gallery-cell').length).toBeLessThan(60);
+        source.dispose();
+    });
 });
