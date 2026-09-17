@@ -21,6 +21,7 @@ import {
 import { formatBytes } from "../../utils";
 import { isIOSPlayableVideo, isRemuxableVideo, isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { appActions } from "../app-actions";
+import { accessEncryptedResource } from "../encryption";
 import { prefersNativePlayer, rememberNativePlayer } from "../video/native-memory";
 import {
     SerialPlaybackTransitions,
@@ -1284,7 +1285,14 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
     let opened: MediaOpenResult | null = null;
     let adapter: HtmlVideoAdapter | null = null;
     try {
-        opened = mediaPrefetcher.take(attempt.target.id) ?? await openMedia(attempt.target.id);
+        opened = mediaPrefetcher.take(attempt.target.id) ?? await accessEncryptedResource(
+            Boolean(attempt.target.encrypted),
+            () => openMedia(attempt.target.id),
+        );
+        if (!opened) {
+            if (isCurrent()) await closeVideoModal();
+            return;
+        }
         if (!isCurrent() || !isOpen()) {
             await safelyCloseMedia(opened.token);
             return;
@@ -1442,7 +1450,14 @@ async function openNativePlayback(
     try {
         const result = existing
             ? await attachNativeMedia(existing.token, rect)
-            : await openNativeMedia(attempt.target.id, rect);
+            : await accessEncryptedResource(
+                Boolean(attempt.target.encrypted),
+                () => openNativeMedia(attempt.target.id, rect),
+            );
+        if (!result) {
+            if (isCurrent()) await closeVideoModal();
+            return;
+        }
         opened = result;
         owner = "native";
         if (existing && opened.token !== existing.token) {

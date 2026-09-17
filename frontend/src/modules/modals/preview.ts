@@ -1,6 +1,7 @@
-import { closeMedia, hasOperationErrorCode, isMobilePlatform, openExternalUrl, openOriginalImage, useEncryptionPassword } from '../../api';
+import { closeMedia, isMobilePlatform, openExternalUrl, openOriginalImage, requireOperationSuccess, useEncryptionPassword } from '../../api';
 import { state } from '../../state';
 import { notify } from '../notifications';
+import { humanizeBackendError, isEncryptionPasswordRequired } from '../errors';
 import { loadEncryptionStatus } from '../encryption';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
@@ -380,6 +381,10 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
     resetImageSurface({ keepThumbnail });
     updateNavChrome();
     refreshInfoPanel();
+    if (target.encrypted && !state.encryption.passwordRemembered) {
+        showLockedState();
+        return null;
+    }
     const request = renditionRequest(target);
     const thumbnailLease = acquireRendition(request, 'viewer');
     activeThumbnailLease = thumbnailLease;
@@ -390,8 +395,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
         showPreviewThumbnail(asset.url, filename);
     }).catch(error => {
         if (token !== previewRequestToken || !isPreviewOpen()) return;
-        if (hasOperationErrorCode(error, 'encryption_password_required')
-            || (error instanceof Error && 'code' in error && error.code === 'encryption_password_required')) showLockedState();
+        if (isEncryptionPasswordRequired(error)) showLockedState();
     });
 
     try {
@@ -410,8 +414,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
         return { src: opened.url };
     } catch (error) {
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
-        if (hasOperationErrorCode(error, 'encryption_password_required')
-            || (error instanceof Error && 'code' in error && error.code === 'encryption_password_required')) {
+        if (isEncryptionPasswordRequired(error)) {
             showLockedState();
             return null;
         }
@@ -739,7 +742,7 @@ async function submitInlineUnlock() {
     if (lockedUnlockEl) lockedUnlockEl.disabled = true;
     if (lockedInputEl) lockedInputEl.disabled = true;
     try {
-        await useEncryptionPassword(value);
+        requireOperationSuccess(await useEncryptionPassword(value));
         await loadEncryptionStatus();
         if (lockedInputEl) lockedInputEl.value = "";
         // Let the gallery's locked thumbnail cells reload too.
@@ -747,7 +750,7 @@ async function submitInlineUnlock() {
         hideLockedState();
         if (target) void loadPreview(target); // re-load the photo, now decryptable
     } catch (err) {
-        showLockedError(String(err) || "Incorrect password");
+        showLockedError(humanizeBackendError(err));
     } finally {
         if (lockedUnlockEl) lockedUnlockEl.disabled = false;
         if (lockedInputEl) lockedInputEl.disabled = false;

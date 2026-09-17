@@ -448,6 +448,15 @@ export function humanizeBackendError(error: unknown): string {
     return toAppError(error, { source: 'backend' }).message;
 }
 
+// Direct Wails methods reject with a wrapped Go error instead of the operation
+// envelope used by mutations and downloads. Keep that bridge-specific fallback
+// in one place so media surfaces never branch on raw error text themselves.
+export function isEncryptionPasswordRequired(error: unknown): boolean {
+    const normalized = toAppError(error, { source: 'backend' });
+    return normalized.code === 'encryption_password_required'
+        || (normalized.kind === 'authentication' && normalized.title === 'Password required');
+}
+
 /** Formats only already-redacted fields; the original cause is deliberately excluded. */
 export function formatAppErrorDiagnostic(error: AppError): string {
     const lines = [

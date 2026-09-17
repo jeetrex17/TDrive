@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
     formatAppErrorDiagnostic,
     humanizeBackendError,
+    isEncryptionPasswordRequired,
     toAppError,
 } from "./errors";
 
@@ -59,6 +60,15 @@ describe("humanizeBackendError", () => {
     });
 });
 describe("AppError", () => {
+    it("recognizes a password requirement wrapped by the Wails binding", () => {
+        const error = new Error(
+            "Binding call failed: Bound method returned an error: media: encryption key is unavailable: encryption password required",
+        );
+
+        expect(isEncryptionPasswordRequired(error)).toBe(true);
+        expect(isEncryptionPasswordRequired(new Error("media: stale file revision"))).toBe(false);
+    });
+
     it("classifies a stable operation code through an Error cause without losing it", () => {
         const operationError = {
             code: "deadline_exceeded",

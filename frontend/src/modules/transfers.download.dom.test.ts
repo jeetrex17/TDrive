@@ -287,6 +287,21 @@ describe('folder download queue', () => {
         expect(bindings.DownloadFolder).toHaveBeenNthCalledWith(2, 101, 'd:locked', expect.stringMatching(/^folder:101:d:locked@/));
     });
 
+    it('prompts once and retries the same file after encryption unlock', async () => {
+        bindings.DownloadFile
+            .mockResolvedValueOnce(downloadFailure('encryption_password_required', 'Unlock before downloading'))
+            .mockResolvedValueOnce(downloadSuccess('/tmp/locked.jpg'));
+        passwordModal.mockResolvedValueOnce(true);
+        const { mod } = await loadModule();
+
+        mod.enqueueDownload(42, 'locked.jpg', 128);
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledTimes(2));
+
+        expect(passwordModal).toHaveBeenCalledOnce();
+        expect(bindings.DownloadFile).toHaveBeenNthCalledWith(1, 101, 42, 42, expect.stringMatching(/^file:101:42@/));
+        expect(bindings.DownloadFile).toHaveBeenNthCalledWith(2, 101, 42, 42, expect.stringMatching(/^file:101:42@/));
+    });
+
     it('does not retry when encryption unlock is canceled', async () => {
         bindings.DownloadFolder.mockResolvedValueOnce(
             downloadFailure('encryption_password_required', 'Unlock before downloading'),
