@@ -441,7 +441,7 @@ test('prefers-reduced-motion disables entrance motion in Chromium', async ({ pag
 });
 
 for (const platform of ['desktop', 'android', 'ios'] as const) {
-    test(`photo cache can be cleared separately from the catalog on ${platform}`, async ({ page }, testInfo) => {
+    test(`photo cache is managed automatically on ${platform}`, async ({ page }, testInfo) => {
         if (platform !== 'desktop') {
             await page.setViewportSize({ width: 390, height: 844 });
             await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
@@ -455,10 +455,9 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         }
         const panel = page.getByRole('region', { name: 'Local photo storage' });
         await expect(panel).toContainText('2 KB');
-        await panel.getByRole('button', { name: 'Clear photo cache' }).click();
-        await expect(panel.getByRole('status')).toHaveText('Photo cache cleared.');
-        await expect(panel).toContainText('2 KB');
-        expect(await mock.calls('ClearGalleryCache')).toHaveLength(1);
+        await expect(panel).toContainText('removed automatically');
+        await expect(page.getByRole('button', { name: /clear.*cache/i })).toHaveCount(0);
+        expect(await mock.calls('ClearGalleryCache')).toHaveLength(0);
         const shot = testInfo.outputPath(`storage-${platform}.png`);
         await page.screenshot({ path: shot });
         await testInfo.attach(`Storage ${platform}`, { path: shot, contentType: 'image/png' });

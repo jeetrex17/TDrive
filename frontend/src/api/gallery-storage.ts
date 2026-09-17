@@ -1,4 +1,4 @@
-import { ClearGalleryCache, GetGalleryStorage } from '../../bindings/TDrive/app';
+import { GetGalleryStorage } from '../../bindings/TDrive/app';
 import { invokeBackend } from './gateway';
 import { asRecord } from './shared';
 
@@ -16,7 +16,4 @@ function normalize(value: unknown): GalleryStorage {
 
 export async function getGalleryStorage(): Promise<GalleryStorage> {
     return normalize(await invokeBackend(GetGalleryStorage));
-}
-export async function clearGalleryCache(): Promise<GalleryStorage> {
-    return normalize(await invokeBackend(ClearGalleryCache));
 }
