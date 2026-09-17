@@ -7,7 +7,7 @@
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import { formatBytes } from '../../utils';
     import { choosePhotoBackupFolder, deletePhotoBackupSource, loadPhotoBackupCandidates, pausePhotoBackupNow, photoBackupBusy, photoBackupCandidates, photoBackupError, photoBackupState, refreshPhotoBackup, resumePhotoBackupNow, retryPhotoBackupNow, selectPhotoBackupSource, startPhotoBackup, updatePhotoBackupSettings } from '../../modules/photo-backup/controller';
-    import type { PhotoBackupSettings } from '../../api/photo-backup';
+    import { futureOnlyDescription, type PhotoBackupSettings } from '../../api/photo-backup';
 
     onMount(() => { void refreshPhotoBackup(); });
     const backupState = photoBackupState;
@@ -30,8 +30,9 @@
             <div class="backup-options">
                 <label class="backup-choice"><input type="checkbox" checked={$backupState.settings.photos} disabled={$busy || !$backupState.settings.enabled} onchange={(event) => save({ photos: event.currentTarget.checked })} /><span>Photos</span></label>
                 <label class="backup-choice"><input type="checkbox" checked={$backupState.settings.videos} disabled={$busy || !$backupState.settings.enabled} onchange={(event) => save({ videos: event.currentTarget.checked })} /><span>Videos</span></label>
-                <label class="backup-choice"><input type="checkbox" checked={$backupState.settings.futureOnly} disabled={$busy || !$backupState.settings.enabled} onchange={(event) => save({ futureOnly: event.currentTarget.checked })} /><span>New items only</span></label>
+                <label class="backup-choice" title={futureOnlyDescription}><input type="checkbox" checked={$backupState.settings.futureOnly} disabled={$busy || !$backupState.settings.enabled} onchange={(event) => save({ futureOnly: event.currentTarget.checked })} /><span>New items only</span></label>
             </div>
+            {#if $backupState.settings.futureOnly}<small class="backup-option-note">{futureOnlyDescription}</small>{/if}
         </div>
         <div class="backup-settings" aria-label="Backup conditions">
             <span class="backup-group-label">Only back up</span>
@@ -39,10 +40,6 @@
                 <div class="backup-policy-option">
                     <label class="backup-choice" title={$backupState.capabilities.wifiOnly.detail}><input type="checkbox" checked={$backupState.settings.wifiOnly} disabled={$busy || !$backupState.settings.enabled || !$backupState.capabilities.wifiOnly.supported} onchange={(event) => save({ wifiOnly: event.currentTarget.checked })} /><span>Wi-Fi only</span></label>
                     {#if !$backupState.capabilities.wifiOnly.supported}<small class="backup-option-note">{$backupState.capabilities.wifiOnly.detail || 'Unavailable on this device.'}</small>{/if}
-                </div>
-                <div class="backup-policy-option">
-                    <label class="backup-choice" title={$backupState.capabilities.chargingOnly.detail}><input type="checkbox" checked={$backupState.settings.chargingOnly} disabled={$busy || !$backupState.settings.enabled || !$backupState.capabilities.chargingOnly.supported} onchange={(event) => save({ chargingOnly: event.currentTarget.checked })} /><span>While charging</span></label>
-                    {#if !$backupState.capabilities.chargingOnly.supported}<small class="backup-option-note">{$backupState.capabilities.chargingOnly.detail || 'Unavailable on this device.'}</small>{/if}
                 </div>
             </div>
         </div>
@@ -52,7 +49,7 @@
             {#each $candidates.filter((candidate) => !$backupState.sources.some((source) => source.id === candidate.id)) as candidate (candidate.id)}<button class="backup-candidate" type="button" disabled={$busy} onclick={() => void selectPhotoBackupSource(candidate)}>Add {candidate.name}</button>{/each}
         </div>
         <div class="backup-progress"><div><strong>{$backupState.status.pending + $backupState.status.uploading} waiting</strong><span>{$backupState.status.complete} completed{$backupState.status.failed ? ` · ${$backupState.status.failed} failed` : ''}{$backupState.status.paused ? ` · ${$backupState.status.paused} interrupted` : ''}</span></div>{#if $backupState.status.bytesTotal > 0}<progress value={$backupState.status.bytesDone} max={$backupState.status.bytesTotal}></progress><small>{formatBytes($backupState.status.bytesDone)} of {formatBytes($backupState.status.bytesTotal)}</small>{/if}{#if $backupState.status.message}<small>{$backupState.status.message}</small>{/if}</div>
-        <div class="backup-actions">{#if $backupState.status.phase === 'uploading' || $backupState.status.phase === 'scanning' || $backupState.status.phase === 'queued'}<button class="secondary-btn" type="button" disabled={$busy} onclick={() => void pausePhotoBackupNow()}><PauseIcon size={15} /> Pause</button>{:else if $backupState.manualPaused}<button class="primary-btn" type="button" disabled={$busy} onclick={() => void resumePhotoBackupNow()}><PlayIcon size={15} /> Resume</button>{:else}<button class="primary-btn" type="button" disabled={$busy || !$backupState.settings.enabled || (!$backupState.settings.photos && !$backupState.settings.videos) || !$backupState.sources.some((source) => source.enabled)} onclick={() => void startPhotoBackup()}><PlayIcon size={15} /> Back up now</button>{/if}{#if $backupState.status.failed || $backupState.status.paused > 0}<button class="secondary-btn" type="button" disabled={$busy || $backupState.manualPaused} title={$backupState.status.paused ? 'The prior upload outcome is unknown. Retrying may create a duplicate.' : ''} onclick={() => void retryPhotoBackupNow()}><RotateCwIcon size={15} /> Retry interrupted</button>{/if}</div>
+        <div class="backup-actions">{#if $backupState.status.phase === 'uploading' || $backupState.status.phase === 'scanning' || $backupState.status.phase === 'queued'}<button class="secondary-btn" type="button" disabled={$busy} onclick={() => void pausePhotoBackupNow()}><PauseIcon size={15} /> Pause</button>{:else if $backupState.manualPaused}<button class="primary-btn" type="button" disabled={$busy} onclick={() => void resumePhotoBackupNow()}><PlayIcon size={15} /> {$backupState.encryptionRequired ? 'Unlock and resume' : 'Resume'}</button>{:else}<button class="primary-btn" type="button" disabled={$busy || !$backupState.settings.enabled || (!$backupState.settings.photos && !$backupState.settings.videos) || !$backupState.sources.some((source) => source.enabled)} onclick={() => void startPhotoBackup()}><PlayIcon size={15} /> {$backupState.encryptionRequired ? 'Unlock and back up' : 'Back up now'}</button>{/if}{#if $backupState.status.failed || $backupState.status.paused > 0}<button class="secondary-btn" type="button" disabled={$busy || $backupState.manualPaused} title={$backupState.status.paused ? 'The prior upload outcome is unknown. Retrying may create a duplicate.' : ''} onclick={() => void retryPhotoBackupNow()}><RotateCwIcon size={15} /> {$backupState.encryptionRequired ? 'Unlock and retry' : 'Retry interrupted'}</button>{/if}</div>
     {:else}<p>Loading backup settings…</p>{/if}
     {#if $error}<p class="backup-error" role="alert">{$error}</p>{/if}
 </section>

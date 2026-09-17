@@ -6,12 +6,12 @@ import type { PhotoBackupState } from '../../api/photo-backup';
 const mocks = vi.hoisted(() => ({
     events: new Map<string, (payload: unknown) => void>(),
     state: null as PhotoBackupState | null,
-    enqueue: vi.fn(), run: vi.fn(), pause: vi.fn(), resume: vi.fn(), retry: vi.fn(), policy: vi.fn(),
+    enqueue: vi.fn(), run: vi.fn(), pause: vi.fn(), resume: vi.fn(), retry: vi.fn(), policy: vi.fn(), unlock: vi.fn(), prompt: vi.fn(),
     list: vi.fn(), materialize: vi.fn(), release: vi.fn(),
 }));
 
 vi.mock('../../api/photo-backup', () => ({
-    defaultSettings: { enabled: false, photos: true, videos: true, futureOnly: false, wifiOnly: false, chargingOnly: false },
+    defaultSettings: { enabled: false, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false },
     getPhotoBackupState: vi.fn(() => Promise.resolve(mocks.state)),
     enqueuePhotoBackupAssets: mocks.enqueue,
     runPhotoBackup: mocks.run,
@@ -23,19 +23,22 @@ vi.mock('../../api/photo-backup', () => ({
 vi.mock('../../api/runtime', () => ({ runtimeEventsAvailable: () => true, onRuntimeEvent: (name: string, cb: (payload: unknown) => void) => { mocks.events.set(name, cb); return () => mocks.events.delete(name); } }));
 vi.mock('./native-adapter', () => ({
     nativePhotoBackupAvailable: () => true,
-    nativePhotoBackupPolicy: () => Promise.resolve({ wifi: true, charging: true }),
+    nativePhotoBackupPolicy: () => Promise.resolve(true),
     requestNativePhotoBackupAccess: vi.fn(), listNativePhotoBackupSources: vi.fn(),
     listNativePhotoBackupAssets: mocks.list, materializeNativePhotoBackupAsset: mocks.materialize, releaseNativePhotoBackupAsset: mocks.release,
 }));
+vi.mock('../encryption', () => ({ requireEncryptionPassword: mocks.unlock }));
+vi.mock('../modals/encryption-password', () => ({ openEncryptionPasswordModal: mocks.prompt }));
+vi.mock('../errors', () => ({ isEncryptionPasswordRequired: (error: unknown) => Boolean((error as { passwordRequired?: boolean })?.passwordRequired) || String((error as Error)?.message).includes('encryption password required') }));
 
-import { activatePhotoBackup, pausePhotoBackupNow, photoBackupError, resumePhotoBackupNow, retryPhotoBackupNow, startPhotoBackup } from './controller';
+import { activatePhotoBackup, pausePhotoBackupNow, photoBackupError, refreshPhotoBackup, resumePhotoBackupNow, retryPhotoBackupNow, startPhotoBackup } from './controller';
 
 const flush = async () => { for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
-const state = (): PhotoBackupState => ({ settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, chargingOnly: false }, sources: [{ id: 'all', kind: 'library', root: 'library', name: 'All', enabled: true, addedAt: 0 }], status: { phase: 'idle', pending: 0, uploading: 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, message: '' }, capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, chargingOnly: { supported: true, label: '', detail: '' }, access: { status: 'granted', detail: '' } }, platform: 'android', destination: { id: '1', title: 'Personal', kind: 'personal' }, manualPaused: false });
+const state = (): PhotoBackupState => ({ settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: true }, sources: [{ id: 'all', kind: 'library', root: 'library', name: 'All', enabled: true, addedAt: 0 }], status: { phase: 'idle', pending: 0, uploading: 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, message: '' }, capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: 'granted', detail: '' } }, platform: 'android', destination: { id: '1', title: 'Personal', kind: 'personal' }, manualPaused: false, encryptionRequired: false });
 
 describe('photo backup controller scheduler', () => {
     let stop = () => {};
-    beforeEach(() => { stop(); mocks.events.clear(); mocks.enqueue.mockReset(); mocks.run.mockReset(); mocks.pause.mockReset(); mocks.resume.mockReset(); mocks.retry.mockReset(); mocks.policy.mockReset(); mocks.list.mockReset(); mocks.materialize.mockReset(); mocks.release.mockReset(); mocks.state = state(); Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); stop = activatePhotoBackup(); });
+    beforeEach(() => { stop(); mocks.events.clear(); mocks.enqueue.mockReset(); mocks.run.mockReset(); mocks.pause.mockReset(); mocks.resume.mockReset(); mocks.retry.mockReset(); mocks.policy.mockReset(); mocks.unlock.mockReset(); mocks.unlock.mockResolvedValue(true); mocks.prompt.mockReset(); mocks.prompt.mockResolvedValue(true); mocks.list.mockReset(); mocks.materialize.mockReset(); mocks.release.mockReset(); mocks.state = state(); Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' }); stop = activatePhotoBackup(); });
     afterEach(() => { stop(); });
 
     it('automatically drains multiple bounded pages once', async () => {
@@ -90,6 +93,34 @@ describe('photo backup controller scheduler', () => {
         mocks.pause.mockRejectedValueOnce(new Error('offline'));
         await expect(pausePhotoBackupNow()).resolves.toBeUndefined();
         expect(get(photoBackupError)).toBe('Could not pause photo backup. Try again.');
+    });
+
+    it('unlocks and retries an explicit backup once when the vault is locked', async () => {
+        stop(); mocks.run.mockClear();
+        mocks.run.mockRejectedValueOnce(new Error('encryption password required')).mockResolvedValueOnce(undefined);
+        await startPhotoBackup();
+        expect(mocks.prompt).toHaveBeenCalledOnce();
+        expect(mocks.run).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not start an explicitly locked backup when unlocking is cancelled', async () => {
+        stop(); mocks.run.mockClear();
+        mocks.state = { ...state(), encryptionRequired: true };
+        mocks.prompt.mockResolvedValueOnce(false);
+        await refreshPhotoBackup();
+        await startPhotoBackup();
+        expect(mocks.prompt).toHaveBeenCalledOnce();
+        expect(mocks.run).not.toHaveBeenCalled();
+    });
+
+    it('does not prompt from the automatic scheduler when encryption is locked', async () => {
+        await flush(); mocks.run.mockClear();
+        mocks.state = { ...state(), encryptionRequired: true };
+        mocks.events.get('android:PhotoBackupMediaChanged')?.({});
+        await flush();
+        expect(mocks.unlock).not.toHaveBeenCalled();
+        expect(mocks.run).not.toHaveBeenCalled();
+        expect(get(photoBackupError)).toBe('Unlock encryption to continue photo backup.');
     });
 
     it('does not start discovery while hidden', async () => {

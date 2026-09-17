@@ -1,5 +1,37 @@
 import { bootTDrive, expect, resolves, test } from './wails-mock';
 
+for (const platform of ['desktop', 'android'] as const) {
+    test(`locked backup opens the password prompt on ${platform} and cancel keeps it stopped`, async ({ page }) => {
+        if (platform === 'android') {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
+        }
+        const mock = await bootTDrive(page, {
+            GetPhotoBackupState: resolves({
+                platform, encryption_required: true,
+                settings: { enabled: true, photos: true, videos: true, encrypt: true },
+                sources: [{ id: 'camera', name: 'Camera', enabled: true }],
+                status: { phase: 'paused', message: 'Unlock encryption to back up your photos and videos.' },
+            }),
+            EncryptionStatus: resolves({ available: true, password_set: true, password_remembered: false, hint: '' }),
+        });
+        if (platform === 'desktop') {
+            await page.locator('#profile-trigger').click();
+            await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
+        } else {
+            await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
+        }
+        const panel = page.getByRole('region', { name: 'Photo and video backup' });
+        await panel.getByRole('button', { name: 'Unlock and back up', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Enter encryption password' });
+        await expect(dialog).toBeVisible();
+        expect(await mock.calls('RunPhotoBackup')).toHaveLength(0);
+        await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await expect(dialog).toBeHidden();
+        expect(await mock.calls('RunPhotoBackup')).toHaveLength(0);
+    });
+}
+
 test('empty backup settings fit the desktop viewport and guide source selection', async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await bootTDrive(page, {
@@ -9,7 +41,6 @@ test('empty backup settings fit the desktop viewport and guide source selection'
             status: { phase: 'idle' }, destination: { title: 'Photo backup' },
             capabilities: {
                 wifi_only: { supported: false, label: 'Wi-Fi only' },
-                charging_only: { supported: false, label: 'Only while charging' },
                 access: { status: 'available', detail: 'Photo access is managed by the device.' },
             },
         }),
@@ -35,12 +66,11 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         const state = {
             platform,
             manual_paused: false,
-            settings: { enabled: true, photos: true, videos: true, future_only: false, wifi_only: false, charging_only: false },
+            settings: { enabled: true, photos: true, videos: true, future_only: false, wifi_only: false },
             sources: [{ id: 'camera', kind: 'library', root: 'Camera', name: 'Camera', enabled: true, added_at: 1 }],
             status: { phase: 'uploading', pending: 12, uploading: 1, complete: 24, failed: 0 },
             capabilities: {
                 wifi_only: { supported: false, label: 'Unavailable on this device' },
-                charging_only: { supported: false, label: 'Unavailable on this device' },
                 access: { status: 'limited', detail: 'Only selected photos are accessible.' },
             },
         };
@@ -59,6 +89,7 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         await expect(panel.getByRole('checkbox', { name: 'Photos', exact: true })).toBeChecked();
         await expect(panel.getByRole('checkbox', { name: 'Videos', exact: true })).toBeChecked();
         await expect(panel.getByRole('checkbox', { name: 'Wi-Fi only', exact: true })).toBeDisabled();
+        await expect(panel.getByRole('checkbox', { name: 'While charging', exact: true })).toHaveCount(0);
         await expect(panel).toContainText('Only selected photos are accessible');
         await expect(panel).toContainText('24 completed');
         // Controls must stay beside their labels despite the app's global form

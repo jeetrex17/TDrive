@@ -634,8 +634,6 @@ public class MainActivity extends AppCompatActivity {
         JSONObject out = new JSONObject();
         try {
             Intent battery = registerSticky(Intent.ACTION_BATTERY_CHANGED);
-            int status = battery == null ? -1 : battery.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
-            boolean charging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL;
             int level = battery == null ? -1 : battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
             int scale = battery == null ? -1 : battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -646,7 +644,7 @@ public class MainActivity extends AppCompatActivity {
                     : caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ? "cellular"
                     : connected ? "other" : "none";
             out.put("supported", true).put("status", connected ? "ready" : "offline").put("detail", connected ? "network available" : "no active network")
-                    .put("charging", charging).put("batteryLevel", scale > 0 ? level / (double) scale : -1)
+                    .put("batteryLevel", scale > 0 ? level / (double) scale : -1)
                     .put("lowPowerMode", pm != null && pm.isPowerSaveMode())
                     .put("wifi", "wifi".equals(type))
                     .put("network", new JSONObject().put("connected", connected).put("type", type)

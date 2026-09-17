@@ -77,6 +77,14 @@ backup database, its SQLite sidecars, and native staging; soft logout retains th
 ledger. Encryption keys are not stored in backup settings, and encrypted backup
 waits for the existing encryption session.
 
+When encrypted backup is locked, the panel shows the unlock prerequisite before
+starting. Explicit start, resume, or retry actions use the existing password
+dialog; automatic discovery never opens a password prompt. Canceling the dialog
+leaves the operation stopped. Passwords and keys remain session-only.
+
+Backup has no charging condition. Schema v3 removes the old charging setting
+from v1/v2 databases without discarding sources, receipts, or queued work.
+
 ## User-visible limits
 
 Backup source selection is available in the desktop profile menu and mobile

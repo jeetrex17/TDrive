@@ -262,7 +262,6 @@ export interface PhotoBackupAsset {
 
 export interface PhotoBackupCapabilities {
     "wifi_only": PhotoBackupCapability;
-    "charging_only": PhotoBackupCapability;
     "access": {"status": string, "detail": string};
 }
 
@@ -274,7 +273,6 @@ export interface PhotoBackupCapability {
 
 export interface PhotoBackupPolicy {
     "wifi": boolean;
-    "charging": boolean;
     "observed_at": number;
 }
 
@@ -284,7 +282,6 @@ export interface PhotoBackupSettings {
     "videos": boolean;
     "future_only": boolean;
     "wifi_only": boolean;
-    "charging_only": boolean;
     "destination_parent_id": string;
     "encrypt": boolean;
 }
@@ -306,6 +303,7 @@ export interface PhotoBackupState {
     "capabilities": PhotoBackupCapabilities;
     "destination": {"id": string, "title": string, "kind": string};
     "manual_paused": boolean;
+    "encryption_required": boolean;
 }
 
 export interface PhotoBackupStatus {

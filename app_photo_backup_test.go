@@ -124,19 +124,22 @@ func TestStagePhotoBackupFileRejectsOversizedSparseResource(t *testing.T) {
 
 func TestPhotoBackupPolicyFailsClosedAndExpires(t *testing.T) {
 	app := &App{}
-	settings := photobackup.Settings{WiFiOnly: true, ChargingOnly: true}
+	if err := app.photoBackupPolicyAllows(photobackup.Settings{}); err != nil {
+		t.Fatalf("unrestricted policy: %v", err)
+	}
+	settings := photobackup.Settings{WiFiOnly: true}
 	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("missing policy error=%v", err)
 	}
-	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, Charging: false, ObservedAt: time.Now().UnixMilli()})
-	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "charging") {
-		t.Fatalf("charging error=%v", err)
-	}
-	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, Charging: true, ObservedAt: time.Now().Add(-photoBackupPolicyTTL - time.Second).UnixMilli()})
+	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, ObservedAt: time.Now().Add(-photoBackupPolicyTTL - time.Second).UnixMilli()})
 	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("expired policy error=%v", err)
 	}
-	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, Charging: true, ObservedAt: time.Now().UnixMilli()})
+	app.SetPhotoBackupPolicy(PhotoBackupPolicy{ObservedAt: time.Now().UnixMilli()})
+	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "Wi-Fi") {
+		t.Fatalf("Wi-Fi error=%v", err)
+	}
+	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, ObservedAt: time.Now().UnixMilli()})
 	if err := app.photoBackupPolicyAllows(settings); err != nil {
 		t.Fatalf("allowed policy: %v", err)
 	}
