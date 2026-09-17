@@ -1,5 +1,6 @@
 <script lang="ts">
     import CheckIcon from '@lucide/svelte/icons/check';
+    import MonitorIcon from '@lucide/svelte/icons/monitor';
     import MoonIcon from '@lucide/svelte/icons/moon';
     import SunIcon from '@lucide/svelte/icons/sun';
     import { onMount, tick } from 'svelte';
@@ -33,9 +34,10 @@
     const modeOptions: readonly ModeOption[] = [
         { id: 'light', label: 'Light', icon: SunIcon },
         { id: 'dark', label: 'Dark', icon: MoonIcon },
+        { id: 'system', label: 'System', icon: MonitorIcon },
     ];
 
-    const activeAppearance = $derived<ThemeAppearance>($themeState.preference.mode);
+    const activeAppearance = $derived<ThemeAppearance>($themeState.resolvedAppearance);
     const visibleThemes = $derived(themesForAppearance(activeAppearance));
     const selectedThemeId = $derived(
         activeAppearance === 'light'
@@ -123,6 +125,7 @@
                     type="button"
                     role="radio"
                     aria-checked={selected}
+                    aria-label={option.label}
                     tabindex={selected ? 0 : -1}
                     onclick={(event) => selectMode(event, option.id)}
                     onkeydown={(event) => void moveModeFocus(event, index)}
@@ -176,7 +179,9 @@
         </div>
     </div>
 
-    <p class="appearance-status" aria-live="polite">{resolvedThemeName} is active.</p>
+    <p class="appearance-status" aria-live="polite">
+        {resolvedThemeName} is active{ $themeState.preference.mode === 'system' ? ', following system.' : '.' }
+    </p>
 </section>
 
 <style>
@@ -228,7 +233,7 @@
 
     .mode-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 7px;
     }
 
@@ -410,23 +415,26 @@
     }
     :global(html.mobile) .appearance-section { min-width: 0; }
 
-    /* One track, one moving indicator: the mode is a choice between two, and a
-       segmented control says that in a way two separate cards do not. */
+    /* A full-width option row is resilient to Dynamic Type. Three narrow
+       segments can contain a label at the default size but clip at 2x. */
     :global(html.mobile) .mode-grid {
         position: relative;
-        gap: 0;
+        grid-template-columns: 1fr;
+        gap: 2px;
         padding: 3px;
         background: var(--overlay-white-1);
         border: 1px solid var(--color-border-soft);
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-lg);
     }
     :global(html.mobile) .mode-card {
-        justify-content: center;
-        min-height: 44px;
+        flex-direction: row;
+        justify-content: flex-start;
+        min-height: 48px;
         padding: 0 12px;
+        gap: 10px;
         background: transparent;
         border: 0;
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-md);
     }
     :global(html.mobile) .mode-card.selected {
         background: var(--color-accent);
@@ -536,4 +544,3 @@
         .theme-card:active { transform: none; }
     }
 </style>
-

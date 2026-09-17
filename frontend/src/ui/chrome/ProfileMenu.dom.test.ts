@@ -75,7 +75,7 @@ describe('ProfileMenu appearance navigation', () => {
         const menu = host?.querySelector<HTMLElement>('#profile-menu');
         expect(menu?.getAttribute('role')).toBe('dialog');
         expect(menu?.getAttribute('aria-labelledby')).toBe('appearance-title');
-        expect(host?.textContent).not.toContain('System');
+        expect(host?.textContent).toContain('System');
         expect(host?.textContent).not.toContain('Automatic pair');
         expect(host?.querySelector('.appearance-back')).toBeNull();
         const selectedMode = host?.querySelector('[data-appearance-mode="dark"]');

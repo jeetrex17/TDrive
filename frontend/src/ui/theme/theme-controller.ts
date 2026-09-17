@@ -24,9 +24,10 @@ export const THEME_FALLBACK_CLASS = 'theme-transition-fallback';
 export const LINUX_WEBKIT_CLASS = 'linux-webkit';
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
-// Keep the fallback class just beyond the 1.2s CSS animation so WebViews that
-// lack View Transitions never remove the final animation frame prematurely.
-const FALLBACK_CLEANUP_DELAY_MS = 1250;
+const SYSTEM_APPEARANCE_QUERY = '(prefers-color-scheme: dark)';
+// Palette changes are feedback, not a full-screen event. Keep the CSS fallback
+// long enough for its 200ms colour settle, then release it promptly.
+const FALLBACK_CLEANUP_DELAY_MS = 240;
 
 type ThemeStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -45,6 +46,7 @@ export interface ThemeControllerEnvironment {
     readonly document?: Document;
     readonly storage?: ThemeStorage;
     readonly reducedMotion?: MediaQueryList;
+    readonly systemAppearance?: MediaQueryList;
     readonly userAgent?: string;
 }
 
@@ -64,6 +66,7 @@ interface ResolvedEnvironment {
     readonly document?: Document;
     readonly storage?: ThemeStorage;
     readonly reducedMotion?: MediaQueryList;
+    readonly systemAppearance?: MediaQueryList;
     readonly userAgent?: string;
 }
 
@@ -79,6 +82,8 @@ export function createThemeController(
     let started = false;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let transitionGeneration = 0;
+    let systemAppearance: ThemeAppearance = 'dark';
+    let systemAppearanceListener: ((event: MediaQueryListEvent) => void) | undefined;
     const store = writable<ThemeState>(currentState);
 
     function applyState(nextState: ThemeState): void {
@@ -191,14 +196,24 @@ export function createThemeController(
 
         activeEnvironment = resolved;
         started = true;
+        systemAppearance = appearanceFromSystem(resolved.systemAppearance);
+        systemAppearanceListener = (event) => {
+            systemAppearance = event.matches ? 'dark' : 'light';
+            if (latestPreference.mode === 'system') {
+                transitionTo(createThemeState(latestPreference, systemAppearance));
+            }
+        };
+        addMediaListener(resolved.systemAppearance, systemAppearanceListener);
         resolved.document?.documentElement.classList.toggle(LINUX_WEBKIT_CLASS, isLinuxWebKit(resolved.userAgent));
         const preference = readPreference(resolved.storage);
         latestPreference = preference;
-        applyInstantly(createThemeState(preference));
+        applyInstantly(createThemeState(preference, systemAppearance));
     }
 
     function destroy(): void {
         stopTransition();
+        removeMediaListener(activeEnvironment?.systemAppearance, systemAppearanceListener);
+        systemAppearanceListener = undefined;
         activeEnvironment?.document?.documentElement.classList.remove(LINUX_WEBKIT_CLASS);
         activeEnvironment = undefined;
         started = false;
@@ -209,7 +224,7 @@ export function createThemeController(
 
         latestPreference = preference;
         writePreference(activeEnvironment?.storage, preference);
-        transitionTo(createThemeState(preference), origin);
+        transitionTo(createThemeState(preference, systemAppearance), origin);
     }
 
     function setMode(mode: ThemeMode, origin?: ThemeChangeOrigin): void {
@@ -261,11 +276,15 @@ export function createThemeController(
     }
 }
 
-function createThemeState(preference: ThemePreference): ThemeState {
+function createThemeState(
+    preference: ThemePreference,
+    systemAppearance: ThemeAppearance = 'dark',
+): ThemeState {
+    const resolvedAppearance = preference.mode === 'system' ? systemAppearance : preference.mode;
     return Object.freeze({
         preference,
-        resolvedAppearance: preference.mode,
-        resolvedThemeId: resolveThemeId(preference),
+        resolvedAppearance,
+        resolvedThemeId: resolveThemeId(preference, systemAppearance),
     });
 }
 
@@ -277,6 +296,7 @@ function resolveEnvironment(environment: ThemeControllerEnvironment): ResolvedEn
         document: targetDocument,
         storage: environment.storage ?? getBrowserStorage(targetWindow),
         reducedMotion: environment.reducedMotion ?? queryMedia(targetWindow, REDUCED_MOTION_QUERY),
+        systemAppearance: environment.systemAppearance ?? queryMedia(targetWindow, SYSTEM_APPEARANCE_QUERY),
         userAgent: environment.userAgent ?? targetWindow?.navigator?.userAgent,
     };
 }
@@ -382,6 +402,32 @@ function prefersReducedMotion(reducedMotion?: MediaQueryList): boolean {
     } catch {
         return true;
     }
+}
+
+function appearanceFromSystem(query?: MediaQueryList): ThemeAppearance {
+    try {
+        return query?.matches ? 'dark' : 'light';
+    } catch {
+        return 'dark';
+    }
+}
+
+function addMediaListener(query: MediaQueryList | undefined, listener: ((event: MediaQueryListEvent) => void) | undefined): void {
+    if (!query || !listener) return;
+    if (typeof query.addEventListener === 'function') {
+        query.addEventListener('change', listener);
+        return;
+    }
+    query.addListener?.(listener);
+}
+
+function removeMediaListener(query: MediaQueryList | undefined, listener: ((event: MediaQueryListEvent) => void) | undefined): void {
+    if (!query || !listener) return;
+    if (typeof query.removeEventListener === 'function') {
+        query.removeEventListener('change', listener);
+        return;
+    }
+    query.removeListener?.(listener);
 }
 
 function applyThemeAttributes(targetDocument: Document | undefined, state: ThemeState): void {
