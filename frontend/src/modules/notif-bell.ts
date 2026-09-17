@@ -251,6 +251,13 @@ export function markTransferDone({ id, direction, status = 'done' }: { id: strin
     }
 }
 
+/** Removes scoped work outright when its account or drive is no longer active. */
+export function removeTransfer({ id, direction }: { id: string | number; direction: TransferDirection }): void {
+    const key = transferKey(direction, id);
+    speedSamples.delete(key);
+    historyEvents.update((events) => events.filter((event) => event.id !== key));
+}
+
 export function clearHistory() {
     // Keep everything still on its way -- running, waiting, or stopped short of
     // finishing. Clear is for the log of what already happened, and work the

@@ -1,3 +1,25 @@
+// Package folder is the only writer of directory-structure ops: mkdir, rename,
+// move, rmdir, and the tombstones for files inside a deleted subtree. It
+// validates and emits; the injected emitters send to Telegram first and project
+// locally second, so Telegram is the log of record and a local failure
+// converges on the next sync.
+//
+// Deleting a subtree emits files before folders and folders deepest-first, and
+// the whole batch commits in one local transaction — atomic locally, never
+// atomic remotely. Telegram body deletion happens after the tombstones and is
+// best-effort: on failure the part rows are left behind on purpose so the
+// orphan sweep can retry. Deletion fans out past the file message to multipart
+// parts and rendition messages, chunked because a subtree easily exceeds
+// Telegram's per-call delete limit.
+//
+// A move is checked against the projection for cycles before it is emitted, so
+// a folder can never be moved inside its own descendant.
+//
+// The encryption key is requested purely as a gate and cleared immediately
+// without being used: renaming, moving or deleting a subtree containing any
+// encrypted file requires an unlocked vault, so the UI prompts rather than
+// silently succeeding. On a shared drive a delete additionally requires the
+// actor to own every file in the subtree, and an unknown uploader fails closed.
 package folder
 
 import (

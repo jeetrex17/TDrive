@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"TDrive/backend/datadir"
 	"TDrive/backend/projection"
 	"TDrive/backend/thumbnail"
 )
@@ -75,7 +76,7 @@ prepare:
 	if err != nil {
 		return 0, err
 	}
-	stored, err := os.CreateTemp("", "tdrive-rendition-source-*")
+	stored, err := datadir.CreateCacheTemp("tdrive-rendition-source-*")
 	if err != nil {
 		return 0, err
 	}

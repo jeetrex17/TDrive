@@ -13,9 +13,6 @@ import * as backend$0 from "./backend/models.js";
 import * as galleryimage$0 from "./backend/galleryimage/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as galleryprepare$0 from "./backend/galleryprepare/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
 import * as projection$0 from "./backend/projection/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -27,6 +24,10 @@ import * as $models from "./models.js";
 
 export function ActiveChannelID(): $CancellablePromise<number> {
     return $Call.ByID(915599723);
+}
+
+export function AddPhotoBackupFolder(): $CancellablePromise<$models.PhotoBackupSource> {
+    return $Call.ByID(700615070);
 }
 
 /**
@@ -59,6 +60,10 @@ export function CheckLoginStatus(): $CancellablePromise<boolean> {
 
 export function CheckSystemStatus(): $CancellablePromise<string> {
     return $Call.ByID(586870272);
+}
+
+export function ClearGalleryCache(): $CancellablePromise<$models.GalleryStorage> {
+    return $Call.ByID(2783044110);
 }
 
 export function CloseGalleryImages(token: string): $CancellablePromise<void> {
@@ -96,6 +101,10 @@ export function DownloadFolder(channelID: number, folderID: string, requestID: s
     return $Call.ByID(794478145, channelID, folderID, requestID);
 }
 
+export function EnqueuePhotoBackupAssets(sourceID: string, values: $models.PhotoBackupAsset[] | null): $CancellablePromise<number> {
+    return $Call.ByID(2612336532, sourceID, values);
+}
+
 export function GetAllFsMsgIDs(): $CancellablePromise<number[] | null> {
     return $Call.ByID(2840193812);
 }
@@ -116,13 +125,8 @@ export function GetFolderStats(parentID: string): $CancellablePromise<projection
     return $Call.ByID(654620998, parentID);
 }
 
-/**
- * GetGalleryPreparation estimates only pending compatible files. Completed
- * progress is retained for the current drive, while newly missing derivatives
- * are reflected without holding the entire candidate list in memory.
- */
-export function GetGalleryPreparation(): $CancellablePromise<galleryprepare$0.State> {
-    return $Call.ByID(2428656508);
+export function GetGalleryStorage(): $CancellablePromise<$models.GalleryStorage> {
+    return $Call.ByID(940237792);
 }
 
 export function GetMediaNeighbors(msgID: number, before: number, after: number, generation: string): $CancellablePromise<$models.GalleryPage> {
@@ -135,6 +139,18 @@ export function GetMediaNeighbors(msgID: number, before: number, after: number, 
  */
 export function GetMediaTimeline(): $CancellablePromise<projection$0.GalleryTimeline> {
     return $Call.ByID(1288157298);
+}
+
+export function GetMediaTimelineAnchors(generation: string): $CancellablePromise<projection$0.GalleryTimeline> {
+    return $Call.ByID(566606144, generation);
+}
+
+export function GetMediaTimelineSummary(): $CancellablePromise<projection$0.GalleryTimeline> {
+    return $Call.ByID(3363396734);
+}
+
+export function GetPhotoBackupState(): $CancellablePromise<$models.PhotoBackupState> {
+    return $Call.ByID(2538605868);
 }
 
 export function GetStorageUsed(): $CancellablePromise<number> {
@@ -248,6 +264,10 @@ export function OpenMountedDrive(): $CancellablePromise<void> {
     return $Call.ByID(4232063021);
 }
 
+export function PausePhotoBackup(): $CancellablePromise<void> {
+    return $Call.ByID(4020238801);
+}
+
 /**
  * PlanImport scans the selected paths and returns the counts shown in the
  * import dialog (files, folders, total size, archives, oversize-skipped). It
@@ -273,6 +293,10 @@ export function RebuildProjection(channelID: number): $CancellablePromise<void> 
     return $Call.ByID(1334807909, channelID);
 }
 
+export function RemovePhotoBackupSource(id: string): $CancellablePromise<void> {
+    return $Call.ByID(560528492, id);
+}
+
 export function RenameFile(msgID: number, newName: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(1151698069, msgID, newName);
 }
@@ -281,12 +305,32 @@ export function RenameFolder(folderID: string, newName: string): $CancellablePro
     return $Call.ByID(3733990943, folderID, newName);
 }
 
+export function ResolvePhotoBackupResource(token: string, path: string, errorMessage: string): $CancellablePromise<void> {
+    return $Call.ByID(3713811339, token, path, errorMessage);
+}
+
 /**
  * ResolveUsernames maps Telegram user IDs to display names. Used by the
  * frontend uploader-chip cache.
  */
 export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<{ [_ in string]?: string } | null> {
     return $Call.ByID(4195625464, userIDs);
+}
+
+export function ResumePhotoBackup(): $CancellablePromise<void> {
+    return $Call.ByID(1448669500);
+}
+
+export function RetryPhotoBackup(): $CancellablePromise<void> {
+    return $Call.ByID(2648028709);
+}
+
+export function RunPhotoBackup(): $CancellablePromise<void> {
+    return $Call.ByID(424636428);
+}
+
+export function SavePhotoBackupSettings(value: $models.PhotoBackupSettings): $CancellablePromise<$models.PhotoBackupState> {
+    return $Call.ByID(1900832239, value);
 }
 
 export function SaveSetup(apiId: number, apiHash: string): $CancellablePromise<string> {
@@ -329,24 +373,25 @@ export function SetFileDropEnabled(enabled: boolean): $CancellablePromise<void> 
 }
 
 /**
+ * SetPhotoBackupBackgroundLease records a lease only after the native host has
+ * acquired its execution grant. Repeated calls cannot extend Android's
+ * cumulative dataSync budget.
+ */
+export function SetPhotoBackupBackgroundLease(active: boolean): $CancellablePromise<void> {
+    return $Call.ByID(418947735, active);
+}
+
+export function SetPhotoBackupPolicy(policy: $models.PhotoBackupPolicy): $CancellablePromise<void> {
+    return $Call.ByID(1872922881, policy);
+}
+
+/**
  * ShareFile opens the platform share sheet for a file TDrive wrote itself.
  * Anything outside the folders it owns is refused so the webview cannot hand
  * arbitrary files to other apps. Desktop reports unsupported.
  */
 export function ShareFile(path: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(3239681846, path);
-}
-
-/**
- * StartGalleryPreparation is an explicit data-consuming action. The per-file
- * service rechecks ownership and encryption before downloading an original.
- */
-export function StartGalleryPreparation(channelID: number): $CancellablePromise<$models.OperationResult> {
-    return $Call.ByID(1431845540, channelID);
-}
-
-export function StopGalleryPreparation(): $CancellablePromise<$models.OperationResult> {
-    return $Call.ByID(180477034);
 }
 
 export function SubmitCode(code: string): $CancellablePromise<void> {
@@ -371,4 +416,8 @@ export function UnmountDrive(): $CancellablePromise<$models.MountView> {
 
 export function UploadToDriveFS(filePaths: string[] | null, parentIDs: string[] | null, encrypt: boolean): $CancellablePromise<$models.UploadResult> {
     return $Call.ByID(1816080344, filePaths, parentIDs, encrypt);
+}
+
+export function UpsertPhotoBackupSource(value: $models.PhotoBackupSource): $CancellablePromise<$models.PhotoBackupSource> {
+    return $Call.ByID(713485105, value);
 }

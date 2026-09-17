@@ -158,18 +158,18 @@ describe('typed gateway runtime boundary', () => {
         const stop = vi.fn();
         let listener: ((event: { name: string; data: unknown }) => void) | undefined;
         eventsOn.mockImplementation((eventName: string, callback: typeof listener) => {
-            expect(eventName).toBe('preview_progress');
+            expect(eventName).toBe('live_sync_completed');
             listener = callback;
             return stop;
         });
         const callback = vi.fn();
 
-        const unsubscribe = onRuntimeEvent('preview_progress', callback);
-        listener?.({ name: 'preview_progress', data: [42, 75] });
+        const unsubscribe = onRuntimeEvent('live_sync_completed', callback);
+        listener?.({ name: 'live_sync_completed', data: [{ channel_id: 1 }] });
         unsubscribe();
         unsubscribe();
 
-        expect(callback).toHaveBeenCalledExactlyOnceWith(42, 75);
+        expect(callback).toHaveBeenCalledExactlyOnceWith({ channel_id: 1 });
         expect(stop).toHaveBeenCalledOnce();
     });
 });

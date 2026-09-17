@@ -8,11 +8,13 @@ import {
     test,
 } from './wails-mock';
 import {
+    BLUE_BASE64,
     FIRST_PHOTO,
     RED_BASE64,
     SECOND_PHOTO,
     galleryPlans,
-    previewImageContents as imageContents,
+    openedOriginal,
+    originalImageUrl,
     routeRenditions,
 } from './gallery-fixtures';
 
@@ -140,7 +142,7 @@ test('moves row focus and previews a selected image with Space', async ({ page }
                 { name: 'newer.jpg', size: 2, msg_id: 2, parent_id: '', upload_time: 2, uploader_id: 7, encrypted: false, plaintext_size: 0 },
             ],
         }),
-        PreviewFile: resolves({ result: { ok: true }, payload: { data_base64: RED_BASE64, mime_type: 'image/svg+xml' } }),
+        OpenOriginalImage: resolves(openedOriginal({ name: 'older.jpg', msg_id: 1 }, RED_BASE64)),
     });
 
     const newest = page.getByRole('row', { name: 'File: newer.jpg' });
@@ -153,7 +155,7 @@ test('moves row focus and previews a selected image with Space', async ({ page }
     await expect(older).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Space');
     await expect(page.getByRole('dialog', { name: 'older.jpg' })).toBeVisible();
-    await expect.poll(() => imageContents(page)).toContain('#e11d48');
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(RED_BASE64));
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: 'older.jpg' })).toBeHidden();
     await expect(older).toBeFocused();
@@ -322,7 +324,7 @@ test('context menus retain vertical actions, render notifications, and restore f
     await expect(newDrive).toBeFocused();
 });
 
-test('gallery loads binary thumbnails and a bounded preview without original bridge downloads', async ({ page }) => {
+test('gallery loads binary thumbnails and one explicitly opened original stream', async ({ page }) => {
     const requested = await routeRenditions(page);
     const mock = await bootTDrive(page, galleryPlans([FIRST_PHOTO]));
     await page.getByRole('button', { name: 'Photos' }).click();
@@ -334,23 +336,45 @@ test('gallery loads binary thumbnails and a bounded preview without original bri
     expect(requested).toContain('/mock-renditions/101/thumbnail');
     await photo.click();
     await expect(page.getByRole('dialog', { name: 'first.jpg' })).toBeVisible();
-    await expect.poll(() => imageContents(page)).toContain('#e11d48');
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(RED_BASE64));
     expect(await mock.calls('PreviewFile')).toEqual([]);
-    expect(requested).toContain('/mock-renditions/101/preview');
+    expect(await mock.calls('OpenOriginalImage')).toMatchObject([{ args: [101, 1], state: 'fulfilled' }]);
+    expect(requested.some((path) => path.endsWith('/preview'))).toBe(false);
 });
 
-test('a late preview completion cannot overwrite rapid gallery navigation', async ({ page }) => {
-    await routeRenditions(page, true);
-    await bootTDrive(page, galleryPlans([FIRST_PHOTO, SECOND_PHOTO]));
+test('mixed gallery loads video thumbnails before opening the streaming player', async ({ page }) => {
+    const requested = await routeRenditions(page);
+    const clip = { ...SECOND_PHOTO, name: 'holiday.mp4', size: 80_000_000 };
+    const mock = await bootTDrive(page, {
+        ...galleryPlans([FIRST_PHOTO, clip]),
+        OpenMedia: rejects('Test stream unavailable'),
+    });
+    await page.getByRole('button', { name: 'Photos', exact: true }).click();
+    const video = page.getByRole('button', { name: 'Video: holiday.mp4', exact: true });
+    await expect(video).toBeVisible();
+    await expect(video.locator('img')).toHaveAttribute('src', /^blob:/);
+    expect(requested).toContain('/mock-renditions/102/thumbnail');
+    expect(await mock.calls('OpenMedia')).toHaveLength(0);
+    expect(await mock.calls('OpenOriginalImage')).toHaveLength(0);
+    await video.click();
+    await expect(page.locator('#video-modal')).toBeVisible();
+    await expect.poll(async () => (await mock.calls('OpenMedia')).length).toBe(1);
+    expect(await mock.calls('OpenOriginalImage')).toHaveLength(0);
+    expect(requested.every((path) => path.endsWith('/thumbnail'))).toBe(true);
+});
+
+test('a late original completion cannot overwrite rapid gallery navigation', async ({ page }) => {
+    await routeRenditions(page);
+    await bootTDrive(page, galleryPlans([FIRST_PHOTO, SECOND_PHOTO], true));
     await page.getByRole('button', { name: 'Photos' }).click();
     await expect(page.getByRole('button', { name: 'first.jpg' }).locator('img')).toHaveAttribute('src', /^blob:/);
     await page.getByRole('button', { name: 'first.jpg' }).click();
     await expect(page.getByRole('dialog', { name: 'first.jpg' })).toBeVisible();
     await page.getByRole('button', { name: 'Next image' }).click();
     await expect(page.getByRole('dialog', { name: 'second.jpg' })).toBeVisible();
-    await expect.poll(() => imageContents(page)).toContain('#2563eb');
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(BLUE_BASE64));
     await page.waitForTimeout(1100);
-    await expect.poll(() => imageContents(page)).toContain('#2563eb');
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(BLUE_BASE64));
     await expect(page.locator('#preview-filename')).toHaveText('second.jpg');
 });
 
@@ -387,14 +411,39 @@ test('prefers-reduced-motion disables entrance motion in Chromium', async ({ pag
 });
 
 for (const platform of ['desktop', 'android', 'ios'] as const) {
-    test(`100k photo gallery stays bounded while scrolling, reversing and keyboard jumping on ${platform}`, async ({ page }, testInfo) => {
+    test(`photo cache is managed automatically on ${platform}`, async ({ page }, testInfo) => {
+        if (platform !== 'desktop') {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
+        }
+        const mock = await bootTDrive(page);
+        if (platform === 'desktop') {
+            await page.locator('#profile-trigger').click();
+            await page.getByRole('menuitem', { name: 'Local storage' }).click();
+        } else {
+            await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
+        }
+        const panel = page.getByRole('region', { name: 'Local photo storage' });
+        await expect(panel).toContainText('2 KB');
+        await expect(panel).toContainText('removed automatically');
+        await expect(page.getByRole('button', { name: /clear.*cache/i })).toHaveCount(0);
+        expect(await mock.calls('ClearGalleryCache')).toHaveLength(0);
+        const shot = testInfo.outputPath(`storage-${platform}.png`);
+        await page.screenshot({ path: shot });
+        await testInfo.attach(`Storage ${platform}`, { path: shot, contentType: 'image/png' });
+    });
+
+    test(`1M photo gallery stays bounded while scrolling, reversing and keyboard jumping on ${platform}`, async ({ page }, testInfo) => {
         if (platform !== 'desktop') {
             await page.setViewportSize({ width: 390, height: 844 });
             await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
         }
         await routeRenditions(page);
-        const count = 100_000;
+        const count = 1_000_000;
         const mock = await bootTDrive(page, {
+            GetMediaTimelineSummary: resolves({ channel_id: 1, generation: 'test', total_count: count, page_size: 128,
+                buckets: [{ key: '2025-01', start_index: 0, count, upload_time: FIRST_PHOTO.upload_time }], anchors: [],
+            }),
             GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: count, page_size: 128,
                 buckets: [{ key: '2025-01', start_index: 0, count, upload_time: FIRST_PHOTO.upload_time }],
                 anchors: Array.from({ length: Math.ceil(count / 128) }, (_, index) => ({ start_index: index * 128, cursor: String(index * 128) })),
@@ -417,14 +466,14 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         await expect.poll(async () => (await mock.calls('ListMediaPage')).length).toBeGreaterThan(1);
         await bounds();
         await gallery.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-        await expect(gallery.locator('[data-id="100999"]')).toBeVisible();
+        await expect(gallery.locator(`[data-id="${count + 999}"]`)).toBeVisible();
         await bounds();
         await gallery.evaluate((element) => { element.scrollTop = 0; });
         await expect(gallery.locator('[data-id="1000"]')).toBeVisible();
         const first = gallery.locator('[data-id="1000"]');
         await first.focus();
         await page.keyboard.press('End');
-        await expect(gallery.locator('[data-id="100999"]')).toBeFocused();
+        await expect(gallery.locator(`[data-id="${count + 999}"]`)).toBeFocused();
         await page.keyboard.press('Home');
         await expect(gallery.locator('[data-id="1000"]')).toBeFocused();
         await bounds();

@@ -98,7 +98,7 @@
         </div>
     {/if}
 
-    <div class="detail">{detail}</div>
+    <div class="detail">{detail}{#if transfer.id === 'xfer:up:photo-backup' && phase === 'running' && percent !== null} · {Math.round(percent)}%{/if}</div>
 
     {#if transfer.note}
         <!-- Where a phone download landed. Its own line because it is a place,

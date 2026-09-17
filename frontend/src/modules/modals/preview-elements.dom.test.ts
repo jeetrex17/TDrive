@@ -13,6 +13,7 @@ const FULL_MARKUP = `
         <div id="preview-stage">
             <div id="preview-loading"><div id="preview-loading-fill"></div></div>
             <div id="preview-error"></div>
+            <img id="preview-thumbnail" alt="">
             <img id="preview-image" alt="Preview">
         </div>
         <aside id="preview-info"><button id="preview-info-close" type="button"></button><div id="preview-info-body"></div></aside>
@@ -52,6 +53,7 @@ describe("resolving the preview modal's elements", () => {
         expect('missing' in resolved).toBe(true);
         if (!('missing' in resolved)) return;
 
+        expect(resolved.missing).toContain('preview-thumbnail');
         expect(resolved.missing).toContain('preview-image');
         expect(resolved.missing).toContain('preview-error');
         expect(resolved.missing).not.toContain('preview-shell');
@@ -65,6 +67,7 @@ describe("resolving the preview modal's elements", () => {
                 <div id="preview-stage">
                     <div id="preview-loading"><div id="preview-loading-fill"></div></div>
                     <div id="preview-error"></div>
+                    <img id="preview-thumbnail" alt="">
                     <img id="preview-image" alt="">
                 </div>
             </div>`));

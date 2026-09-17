@@ -3,20 +3,20 @@
 // the viewer keeps this same source instead of copying the whole library.
 
 import { state } from '../state';
-import { isMobilePlatform, onRuntimeEvent } from '../api';
-import { asRecord } from '../api/shared';
-import { getMediaTimeline, locateMedia, type GalleryItem } from '../api/gallery';
+import { isMobilePlatform } from '../api';
+import { getMediaTimelineAnchors, getMediaTimelineSummary, locateMedia, type GalleryItem } from '../api/gallery';
 import { GallerySource } from '../ui/gallery/gallery-source';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
 import { canOwnerActOnFile } from './file-list';
 import { updateSelectionBar } from './selection';
-import { beginRender, cachedThumb, rearmLocked, rearmMissing, setActive, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
+import { beginRender, cachedThumb, rearmLocked, setActive, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
 import { galleryView } from '../ui/gallery/gallery-store';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
 import type { PreviewNavigationItem } from './modals/preview';
 import { setFileThumbnailsActive } from '../ui/file-list/file-thumbnail-controller';
+import { isVideoFile } from './media-types';
 
 let galleryEl: HTMLElement | null = null;
 let renderToken = 0;
@@ -24,7 +24,6 @@ let backgroundRenderToken = 0;
 let currentSource: GallerySource | null = null;
 let currentChannelId = 0;
 let touchCleanups: Array<() => void> = [];
-let renditionEventCleanups: Array<() => void> = [];
 
 export function activateGallery(): () => void {
     const host = document.getElementById('gallery-view');
@@ -57,7 +56,6 @@ export function teardownGallery(): void {
     galleryEl?.removeEventListener('click', onGalleryClick);
     window.removeEventListener('tdrive:unlocked', rearmLocked);
     for (const cleanup of touchCleanups.splice(0)) cleanup();
-    watchRenditionAvailability(false);
     teardownGalleryController();
     galleryEl = null;
     currentSource?.dispose();
@@ -98,7 +96,6 @@ export function toggleGallerySelection(index: number): void {
 export function setPhotosMode(on: boolean): void {
     setActive(on);
     setFileThumbnailsActive(!on);
-    watchRenditionAvailability(on);
     document.querySelector('.main-content')?.classList.toggle('photos-mode', on);
     const photosNav = document.getElementById('nav-photos');
     photosNav?.classList.toggle('active', on);
@@ -115,32 +112,12 @@ export function setPhotosMode(on: boolean): void {
     });
 }
 
-function watchRenditionAvailability(on: boolean): void {
-    if (!on) {
-        for (const cleanup of renditionEventCleanups.splice(0)) cleanup();
-        return;
-    }
-    if (renditionEventCleanups.length > 0) return;
-    renditionEventCleanups = [
-        onRuntimeEvent('gallery_rendition_ready', (value) => {
-            const payload = asRecord(value);
-            const msgId = Number(payload.msg_id);
-            if (Number(payload.channel_id) !== currentChannelId || payload.kind !== 'thumbnail' || !Number.isSafeInteger(msgId) || msgId <= 0) return;
-            rearmMissing(msgId);
-        }),
-        // Hidden sidecars do not change the visible metadata epoch. Sync can
-        // therefore make a missing thumbnail available without a new page.
-        onRuntimeEvent('live_sync_completed', (value) => {
-            if (Number(asRecord(value).channel_id) === currentChannelId) rearmMissing();
-        }),
-    ];
-}
-
 interface GalleryRefreshOptions {
     background?: boolean;
+    staleRetry?: boolean;
 }
 
-export async function renderGallery({ background = false }: GalleryRefreshOptions = {}): Promise<void> {
+export async function renderGallery({ background = false, staleRetry = false }: GalleryRefreshOptions = {}): Promise<void> {
     if (!galleryEl || galleryEl !== document.getElementById('gallery-view')) return;
     const token = background ? renderToken : ++renderToken;
     const backgroundToken = background ? ++backgroundRenderToken : 0;
@@ -157,7 +134,7 @@ export async function renderGallery({ background = false }: GalleryRefreshOption
     if (!currentSource) galleryView.set({ status: 'loading' });
     let next: GallerySource | null = null;
     try {
-        const timeline = await getMediaTimeline();
+        const timeline = await getMediaTimelineSummary();
         if (timeline.channelId !== channelId) return;
         if (currentSource?.timeline.generation === timeline.generation && sameDrive) return;
         let restoredIndex = Math.min(anchorIndex, Math.max(0, timeline.totalCount - 1));
@@ -168,8 +145,15 @@ export async function renderGallery({ background = false }: GalleryRefreshOption
         next = new GallerySource(timeline, {
             maxPages: isMobilePlatform() ? 6 : 12,
             onStale: () => { void renderGallery({ background: true }); },
+            loadAnchors: getMediaTimelineAnchors,
         });
-        if (timeline.totalCount > 0) await next.get(restoredIndex);
+        if (timeline.totalCount > 0) {
+            if (restoredIndex > 0) {
+                const anchors = await getMediaTimelineAnchors(timeline.generation);
+                next.installAnchors(anchors);
+            }
+            await next.get(restoredIndex);
+        }
         if (token !== renderToken || (background && backgroundToken !== backgroundRenderToken)
             || state.virtualView !== 'photos' || Number(state.activeChannel?.id ?? 0) !== channelId) {
             next.dispose();
@@ -180,11 +164,26 @@ export async function renderGallery({ background = false }: GalleryRefreshOption
         currentChannelId = channelId;
         beginRender(channelId);
         if (timeline.totalCount === 0) galleryView.set({ status: 'empty' });
-        else galleryView.set({ status: 'ready', source: next, ...(sameDrive && anchorIndex > 0 ? { initialIndex: restoredIndex, anchorOffset } : {}) });
+        else {
+            galleryView.set({ status: 'ready', source: next, ...(sameDrive && anchorIndex > 0 ? { initialIndex: restoredIndex, anchorOffset } : {}) });
+            const source = next;
+            requestAnimationFrame(() => {
+                if (currentSource !== source || source.timeline.anchors.length > 0) return;
+                void source.requestAnchors()
+                    .catch((error: unknown) => {
+                        if (!/stale/i.test(String(error))) console.error('Gallery anchors failed:', error);
+                    });
+            });
+        }
     } catch (error) {
         next?.dispose();
+        if (/gallery snapshot is stale/i.test(String(error)) && !staleRetry) {
+            await renderGallery({ background: true, staleRetry: true });
+            return;
+        }
         console.error('Gallery metadata failed:', error);
         if (token === renderToken && !currentSource) galleryView.set({ status: 'error' });
+        else if (token === renderToken) currentSource?.reportRefreshError();
     }
 }
 
@@ -198,7 +197,26 @@ function onGalleryClick(event: MouseEvent): void {
         toggleGallerySelection(index);
         return;
     }
+    if (isVideoFile(item.name)) {
+        void openGalleryVideo(item);
+        return;
+    }
     void openGalleryLightbox(item);
+}
+
+async function openGalleryVideo(item: GalleryItem): Promise<void> {
+    const source = currentSource;
+    const channelId = currentChannelId;
+    const video = await import('./modals/video');
+    // Dynamic module loading can finish after a drive switch. Identity rather
+    // than a message ID prevents opening another drive's same-numbered file.
+    if (currentSource !== source || currentChannelId !== channelId || source?.indexOf(item.msgId) === undefined) return;
+    await video.openVideoModal({
+        id: item.msgId,
+        name: item.name,
+        size: item.encrypted && item.plaintextSize > 0 ? item.plaintextSize : item.size,
+        encrypted: item.encrypted,
+    });
 }
 
 function previewItem(item: GalleryItem, channelId: number): PreviewNavigationItem {
@@ -222,8 +240,16 @@ async function openGalleryLightbox(item: GalleryItem): Promise<void> {
             if (!source || currentChannelId !== channelId) return null;
             const index = source.indexOf(Number(active.id))
                 ?? (await locateMedia(Number(active.id), source.timeline.generation)).index;
-            const neighbor = await source.get(index + direction);
-            return neighbor ? previewItem(neighbor, channelId) : null;
+            // The image viewer must never attempt an original-image request for
+            // a video. Scan only one bounded neighbor window; this keeps a run
+            // of videos from turning a next/previous tap into an unbounded
+            // metadata walk through a large gallery.
+            for (let offset = 1; offset <= 128; offset += 1) {
+                const neighbor = await source.get(index + direction * offset);
+                if (!neighbor) return null;
+                if (!isVideoFile(neighbor.name)) return previewItem(neighbor, channelId);
+            }
+            return null;
         },
         getPosition(active) {
             if (!currentSource || currentChannelId !== channelId) return null;

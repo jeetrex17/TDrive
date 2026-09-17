@@ -56,6 +56,7 @@ func linuxOpenPlan(uri string) commandPlan {
 	return newCommandPlan("/usr/bin/gio", "open", uri)
 }
 
+//lint:ignore U1000 read by connector_linux.go only, behind //go:build linux.
 func linuxListPlan() commandPlan {
 	return newCommandPlan("/usr/bin/gio", "mount", "-l")
 }

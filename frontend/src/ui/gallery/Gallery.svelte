@@ -5,9 +5,8 @@
     import { appActions } from '../../modules/app-actions';
     import { chooseFilesForCurrentFolder } from '../../modules/transfers';
     import GalleryCell from './GalleryCell.svelte';
-    import GalleryPreparation from './GalleryPreparation.svelte';
     import { galleryView } from './gallery-store';
-    import { createGalleryLayout, galleryWindow, indexAtOffset, offsetForIndex } from './gallery-layout';
+    import { createGalleryLayout, createGalleryScrollSpace, galleryWindow, indexAtOffset, offsetForIndex } from './gallery-layout';
 
     const mobile = isMobilePlatform();
     const skeletonCells = Array.from({ length: 12 }, (_, index) => index);
@@ -15,11 +14,13 @@
     let width = $state(mobile ? 390 : 900);
     let height = $state(800);
     let scrollTop = $state(0);
+    let physicalScrollTop = $state(0);
     let version = $state(0);
     let focusedIndex = $state(0);
     let keyboardRequest = 0;
     let source = $derived($galleryView.status === 'ready' ? $galleryView.source : null);
     let layout = $derived(createGalleryLayout(source?.timeline.buckets ?? [], width, mobile));
+    let scrollSpace = $derived(createGalleryScrollSpace(layout.height, height));
     let visible = $derived(galleryWindow(layout, scrollTop, height));
     let rows = $derived.by(() => {
         void version;
@@ -40,8 +41,9 @@
         const view = $galleryView;
         if (!root || view.status !== 'ready') return;
         // Restoring a file anchor absorbs inserts/deletes ahead of it.
-        const top = untrack(() => view.initialIndex === undefined ? root!.scrollTop : Math.max(0, offsetForIndex(layout, view.initialIndex) + (view.anchorOffset ?? 0)));
-        root.scrollTop = top;
+        const top = untrack(() => view.initialIndex === undefined ? scrollSpace.toLogical(root!.scrollTop) : Math.max(0, offsetForIndex(layout, view.initialIndex) + (view.anchorOffset ?? 0)));
+        root.scrollTop = scrollSpace.toPhysical(top);
+        physicalScrollTop = root.scrollTop;
         scrollTop = top;
     });
 
@@ -49,15 +51,23 @@
         if (!root || root.clientWidth === 0) return;
         const style = getComputedStyle(root);
         const nextWidth = Math.max(1, root.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'));
-        const anchor = indexAtOffset(layout, root.scrollTop);
-        const withinRow = root.scrollTop - offsetForIndex(layout, anchor);
+        const currentTop = scrollSpace.toLogical(root.scrollTop);
+        const anchor = indexAtOffset(layout, currentTop);
+        const withinRow = currentTop - offsetForIndex(layout, anchor);
+        const nextHeight = root.clientHeight || 800;
+        let nextTop = currentTop;
+        let nextLayout = layout;
         if (nextWidth !== width) {
-            const nextLayout = createGalleryLayout(source?.timeline.buckets ?? [], nextWidth, mobile);
+            nextLayout = createGalleryLayout(source?.timeline.buckets ?? [], nextWidth, mobile);
+            nextTop = Math.max(0, offsetForIndex(nextLayout, anchor) + withinRow);
             width = nextWidth;
-            root.scrollTop = Math.max(0, offsetForIndex(nextLayout, anchor) + withinRow);
         }
-        height = root.clientHeight || 800;
-        scrollTop = root.scrollTop;
+        // A viewport resize changes both scroll ranges, so remap even when the
+        // column count stays fixed to keep the same logical row anchored.
+        root.scrollTop = createGalleryScrollSpace(nextLayout.height, nextHeight).toPhysical(nextTop);
+        height = nextHeight;
+        physicalScrollTop = root.scrollTop;
+        scrollTop = nextTop;
     }
 
     async function onKeydown(event: KeyboardEvent): Promise<void> {
@@ -74,9 +84,10 @@
         const current = source;
         focusedIndex = target;
         const top = offsetForIndex(layout, target);
-        if (root && (top < root.scrollTop + layout.headerHeight || top + layout.cellSize > root.scrollTop + height)) {
-            root.scrollTop = Math.max(0, top - layout.headerHeight);
-            scrollTop = root.scrollTop;
+        if (root && (top < scrollTop + layout.headerHeight || top + layout.cellSize > scrollTop + height)) {
+            root.scrollTop = scrollSpace.toPhysical(Math.max(0, top - layout.headerHeight));
+            physicalScrollTop = root.scrollTop;
+            scrollTop = scrollSpace.toLogical(root.scrollTop);
         }
         try { await current.get(target); } catch { return; }
         if (source !== current || request !== keyboardRequest) return;
@@ -99,7 +110,8 @@
             if (frame) return;
             frame = requestAnimationFrame(() => {
                 frame = 0;
-                scrollTop = host.scrollTop;
+                physicalScrollTop = host.scrollTop;
+                scrollTop = scrollSpace.toLogical(host.scrollTop);
                 const anchor = indexAtOffset(layout, scrollTop);
                 host.dataset.anchorIndex = String(anchor);
                 host.dataset.anchorOffset = String(scrollTop - offsetForIndex(layout, anchor));
@@ -157,9 +169,9 @@
     </div>
 {:else}
     {#key $galleryView.source.timeline.channelId}
-    <div class="gallery-virtual" role="grid" aria-label="Photos" aria-rowcount={layout.rowCount} aria-colcount={layout.columns} style:height={`${layout.height}px`}>
+    <div class="gallery-virtual" role="grid" aria-label="Photos" aria-rowcount={layout.rowCount} aria-colcount={layout.columns} style:height={`${scrollSpace.physicalHeight}px`}>
         {#each rows as row (row.key)}
-            <div class="gallery-grid gallery-virtual-row" role="row" aria-rowindex={row.rowIndex} style:top={`${row.top}px`} style:height={`${layout.cellSize}px`} style:grid-template-columns={`repeat(${layout.columns}, minmax(0, 1fr))`}>
+            <div class="gallery-grid gallery-virtual-row" role="row" aria-rowindex={row.rowIndex} style:top={`${scrollSpace.project(row.top, physicalScrollTop)}px`} style:height={`${layout.cellSize}px`} style:grid-template-columns={`repeat(${layout.columns}, minmax(0, 1fr))`}>
                 {#each row.cells as cell (cell.item?.msgId ?? `pending:${cell.index}`)}
                     <div role="gridcell" class="gallery-grid-cell">
                         {#if cell.item}
@@ -172,10 +184,9 @@
             </div>
         {/each}
         {#each visible.headers as header (header.key)}
-            <div class="gallery-group-header gallery-virtual-header" style:top={`${header.top}px`} style:height={`${layout.headerHeight}px`}>{header.label}</div>
+            <div class="gallery-group-header gallery-virtual-header" style:top={`${scrollSpace.project(header.top, physicalScrollTop)}px`} style:height={`${layout.headerHeight}px`}>{header.label}</div>
         {/each}
     </div>
-    <GalleryPreparation channelId={$galleryView.source.timeline.channelId} />
     {/key}
-    {#if pageError}<div class="gallery-page-error" role="status">{pageError} <button class="secondary-btn" type="button" onclick={() => source?.ensureRange(firstIndex, lastIndex)}>Retry</button></div>{/if}
+    {#if pageError}<div class="gallery-page-error" role="status">{pageError} <button class="secondary-btn" type="button" onclick={() => appActions().refreshFiles()}>Retry</button></div>{/if}
 {/if}

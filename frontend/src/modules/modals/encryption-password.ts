@@ -37,6 +37,7 @@ export async function submitEncryptionPassword(password: string): Promise<void> 
             return;
         }
         await loadEncryptionStatus();
+        window.dispatchEvent(new Event('tdrive:unlocked'));
         finish(true);
     } catch (err) {
         encryptionPasswordModal.setError(humanizeBackendError(err));

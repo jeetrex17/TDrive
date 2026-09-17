@@ -26,6 +26,17 @@ export interface ForegroundNotice {
 }
 
 const UNAVAILABLE = 'This build cannot keep transfers running in the background.';
+let transferNotice: ForegroundNotice | null = null;
+let photoBackupNotice: ForegroundNotice | null = null;
+let hostUpdate: Promise<void> = Promise.resolve();
+
+function syncHost(): Promise<void> {
+    hostUpdate = hostUpdate.catch(() => undefined).then(async () => {
+        const notice = transferNotice ?? photoBackupNotice;
+        await callBridge('foregroundService', [JSON.stringify(notice ? { running: true, ...notice } : { running: false })], UNAVAILABLE);
+    });
+    return hostUpdate;
+}
 
 /** Whether this build can hold the process open at all. */
 export function canRunInBackground(): boolean {
@@ -38,10 +49,18 @@ export function canRunInBackground(): boolean {
  * the page from having to track state the system already owns.
  */
 export async function runInBackground(notice: ForegroundNotice): Promise<void> {
-    await callBridge('foregroundService', [JSON.stringify({ running: true, ...notice })], UNAVAILABLE);
+    transferNotice = notice;
+    await syncHost();
 }
 
 /** Lets the process be killable again, and takes the notification down with it. */
 export async function stopRunningInBackground(): Promise<void> {
-    await callBridge('foregroundService', [JSON.stringify({ running: false })], UNAVAILABLE);
+    transferNotice = null;
+    await syncHost();
+}
+
+/** Adds/removes photo backup's ownership without stopping manual transfers. */
+export async function setPhotoBackupBackgroundDemand(notice: ForegroundNotice | null): Promise<void> {
+    photoBackupNotice = notice;
+    await syncHost();
 }

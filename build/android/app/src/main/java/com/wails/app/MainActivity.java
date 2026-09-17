@@ -15,7 +15,10 @@ import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
+import android.os.StatFs;
 import android.content.pm.PackageManager;
+import android.content.ContentUris;
+import android.content.ContentResolver;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -52,7 +55,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.HashMap;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * MainActivity hosts the WebView and manages the Wails application lifecycle.
@@ -65,6 +75,15 @@ public class MainActivity extends AppCompatActivity {
     private static final String WAILS_SCHEME = "https";
     private static final String WAILS_HOST = "wails.localhost";
     private static final int FILE_PICKER_REQUEST = 7001;
+    /**
+     * How many picked documents are copied out of the picker at once. Four
+     * matches ANDROID_UPLOAD_WINDOW on the other side of this flow: enough to
+     * keep a provider busy through its per-file latency, few enough that a
+     * large selection cannot fill the cache with in-flight copies.
+     */
+    private static final int PICKER_COPY_CONCURRENCY = 4;
+    /** Floor between progress ticks. Roughly three frames: visibly live, cheap. */
+    private static final long PICKER_PROGRESS_INTERVAL_MS = 50;
     private static final float MIN_TEXT_SCALE = 0.85f;
     private static final float MAX_TEXT_SCALE = 2.50f;
 
@@ -91,10 +110,26 @@ public class MainActivity extends AppCompatActivity {
     private static final int VIDEO_CAPTURE_REQUEST = 7003;
     private static final int CAMERA_PERMISSION_REQUEST = 7010;
     private static final int SAVE_PERMISSION_REQUEST = 7011;
+    private static final int PHOTO_BACKUP_PERMISSION_REQUEST = 7012;
+    private static final int PHOTO_BACKUP_PAGE_LIMIT = 128;
+    // One resource is staged at a time, which permits normal phone videos while
+    // still putting a firm bound on a malicious or corrupt MediaStore row.
+    private static final long PHOTO_BACKUP_STAGE_MAX_BYTES = 4L * 1024L * 1024L * 1024L;
+    // Never consume the last space the app and OS need for normal operation.
+    private static final long PHOTO_BACKUP_STAGE_FREE_HEADROOM_BYTES = 512L * 1024L * 1024L;
     private String pendingSaveCallbackId;
     private String pendingSavePath;
     private File pendingCaptureFile;
     private boolean pendingCaptureIsVideo;
+    private String pendingPhotoBackupPermissionCallbackId;
+    // Staging is intentionally independent of discovery lifetime: durable
+    // queues keep MediaStore IDs, and every materialization revalidates them.
+    private final Map<String, File> stagedPhotoBackupAssets = new ConcurrentHashMap<>();
+    private final Map<String, AtomicBoolean> stagingPhotoBackupAssets = new ConcurrentHashMap<>();
+    private final Object photoBackupStageLock = new Object();
+    // A global slot is intentional: a 4 GiB resource must never be multiplied
+    // by several simultaneous native requests.
+    private String activePhotoBackupStageKey;
 
     // System-event sources (battery/power, screen lock, network). Registered in
     // onCreate, torn down in onDestroy. Each forwards a "system:*" event to JS
@@ -110,9 +145,11 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         takeWholeWindow();
         setContentView(R.layout.activity_main);
+        cleanupPhotoBackupStage();
 
         // Initialize the native Go library
         bridge = new WailsBridge(this);
+        WailsForegroundService.attachRuntimeBridge(bridge);
         GalleryImage.nativeInit();
         bridge.initialize();
 
@@ -358,6 +395,14 @@ public class MainActivity extends AppCompatActivity {
             }
             return;
         }
+        if (requestCode == PHOTO_BACKUP_PERMISSION_REQUEST) {
+            String callbackId = pendingPhotoBackupPermissionCallbackId;
+            pendingPhotoBackupPermissionCallbackId = null;
+            if (callbackId != null) {
+                jsBridge.sendCallback(callbackId, photoBackupAccess().toString(), null);
+            }
+            return;
+        }
         if (bridge != null) {
             bridge.onRequestPermissionsResult(requestCode, grantResults);
         }
@@ -536,6 +581,310 @@ public class MainActivity extends AppCompatActivity {
      * before a single byte uploaded. The uploader asks for its files a batch at
      * a time instead, through materializeFiles.
      */
+    // ---- Photo/video automatic backup -----------------------------------
+    // These APIs use MediaStore IDs, never filesystem paths.  A queue may keep
+    // an ID across restarts, but the OS grant is always checked again when the
+    // bytes are requested; no picker or prior grant is used as a bypass.
+
+    public JSONObject photoBackupAccess() {
+        JSONObject result = new JSONObject();
+        try {
+            boolean images;
+            boolean videos;
+            boolean selected = false;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                images = checkSelfPermission("android.permission.READ_MEDIA_IMAGES") == PackageManager.PERMISSION_GRANTED;
+                videos = checkSelfPermission("android.permission.READ_MEDIA_VIDEO") == PackageManager.PERMISSION_GRANTED;
+                if (Build.VERSION.SDK_INT >= 34) {
+                    selected = checkSelfPermission("android.permission.READ_MEDIA_VISUAL_USER_SELECTED") == PackageManager.PERMISSION_GRANTED;
+                }
+            } else {
+                images = videos = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                        || checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE") == PackageManager.PERMISSION_GRANTED;
+            }
+            boolean canRead = images || videos || selected;
+            String status = !canRead ? "denied" : (selected || !images || !videos ? "limited" : "granted");
+            result.put("supported", true).put("status", status).put("detail", status.equals("granted") ? "full media access" : status.equals("limited") ? "selected or partial media access" : "media access denied").put("canRead", canRead)
+                    .put("images", images).put("videos", videos).put("selectedOnly", selected);
+        } catch (Exception e) {
+            try { result.put("supported", false).put("status", "unavailable").put("canRead", false); } catch (Exception ignored) { }
+        }
+        return result;
+    }
+
+    public void requestPhotoBackupAccess(String callbackId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || photoBackupAccess().optBoolean("canRead")) {
+            jsBridge.sendCallback(callbackId, photoBackupAccess().toString(), null);
+            return;
+        }
+        synchronized (this) {
+            if (pendingPhotoBackupPermissionCallbackId != null) {
+                jsBridge.sendCallback(callbackId, null, "a media permission request is already open");
+                return;
+            }
+            pendingPhotoBackupPermissionCallbackId = callbackId;
+        }
+        String[] permissions = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                ? new String[]{"android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO"}
+                : new String[]{"android.permission.READ_EXTERNAL_STORAGE"};
+        runOnUiThread(() -> requestPermissions(permissions, PHOTO_BACKUP_PERMISSION_REQUEST));
+    }
+
+    public JSONObject photoBackupPolicyStatus() {
+        JSONObject out = new JSONObject();
+        try {
+            Intent battery = registerSticky(Intent.ACTION_BATTERY_CHANGED);
+            int level = battery == null ? -1 : battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = battery == null ? -1 : battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            Network network = connectivityManager == null ? null : connectivityManager.getActiveNetwork();
+            NetworkCapabilities caps = connectivityManager == null || network == null ? null : connectivityManager.getNetworkCapabilities(network);
+            boolean connected = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            String type = caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? "wifi"
+                    : caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ? "cellular"
+                    : connected ? "other" : "none";
+            out.put("supported", true).put("status", connected ? "ready" : "offline").put("detail", connected ? "network available" : "no active network")
+                    .put("batteryLevel", scale > 0 ? level / (double) scale : -1)
+                    .put("lowPowerMode", pm != null && pm.isPowerSaveMode())
+                    .put("wifi", "wifi".equals(type))
+                    .put("network", new JSONObject().put("connected", connected).put("type", type)
+                            .put("metered", caps != null && !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)));
+        } catch (Exception e) {
+            try { out.put("supported", false).put("status", "unavailable").put("detail", "system status unavailable"); } catch (Exception ignored) { }
+        }
+        return out;
+    }
+
+    public void listPhotoBackupSources(String callbackId) {
+        new Thread(() -> {
+            JSONObject answer = new JSONObject();
+            try {
+                JSONObject access = photoBackupAccess();
+                answer.put("access", access);
+                JSONArray sources = new JSONArray();
+                String mediaRoot = MediaStore.Files.getContentUri("external").toString();
+                sources.put(new JSONObject().put("id", "all").put("root", mediaRoot).put("name", "All photos and videos").put("kind", "library").put("enabled", access.optBoolean("canRead")));
+                if (access.optBoolean("canRead")) {
+                    // Scan off the UI thread but retain at most 256 identities.
+                    // A library with more albums says so explicitly instead of
+                    // silently pretending its newest records were all albums.
+                    Map<String, String> albums = new HashMap<>();
+                    boolean truncated = false;
+                    String[] projection = {MediaStore.Images.Media.BUCKET_ID, MediaStore.Images.Media.BUCKET_DISPLAY_NAME};
+                    try (Cursor c = queryMedia(MediaStore.Files.getContentUri("external"), projection,
+                            MediaStore.Files.FileColumns.MEDIA_TYPE + " IN (?,?)",
+                            new String[]{String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE), String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO)}, 0)) {
+                        while (c != null && c.moveToNext()) {
+                            String id = c.getString(0), name = c.getString(1);
+                            if (id != null && name != null && !name.isEmpty() && !albums.containsKey(id)) {
+                                if (albums.size() < 256) albums.put(id, name); else truncated = true;
+                            }
+                        }
+                    }
+                    for (Map.Entry<String, String> album : albums.entrySet()) {
+                        sources.put(new JSONObject().put("id", "bucket:" + album.getKey()).put("root", mediaRoot).put("name", album.getValue()).put("kind", "album").put("enabled", true));
+                    }
+                    answer.put("truncated", truncated);
+                }
+                answer.put("sources", sources);
+                jsBridge.sendCallback(callbackId, answer.toString(), null);
+            } catch (Exception e) {
+                Log.e(TAG, "Media source listing failed", e);
+                jsBridge.sendCallback(callbackId, null, "could not list media sources");
+            }
+        }).start();
+    }
+
+    public void listPhotoBackupAssets(String callbackId, String requestJson) {
+        new Thread(() -> {
+            try {
+                if (!photoBackupAccess().optBoolean("canRead")) { jsBridge.sendCallback(callbackId, null, "media permission denied"); return; }
+                JSONObject request = new JSONObject(requestJson);
+                String sourceId = request.optString("sourceId", "all");
+                if (!"all".equals(sourceId) && !sourceId.startsWith("bucket:")) throw new IOException("unknown media source");
+                int limit = Math.max(1, Math.min(PHOTO_BACKUP_PAGE_LIMIT, request.optInt("limit", PHOTO_BACKUP_PAGE_LIMIT)));
+                JSONObject cursor = request.optJSONObject("cursor");
+                long modified = cursor == null ? Long.MAX_VALUE : cursor.optLong("modified", Long.MAX_VALUE);
+                long id = cursor == null ? Long.MAX_VALUE : cursor.optLong("id", Long.MAX_VALUE);
+                String selection = MediaStore.Files.FileColumns.MEDIA_TYPE + " IN (?,?)";
+                List<String> args = new ArrayList<>();
+                args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)); args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO));
+                if (sourceId.startsWith("bucket:")) { selection += " AND " + MediaStore.Images.Media.BUCKET_ID + "=?"; args.add(sourceId.substring(7)); }
+                if (cursor != null) { selection += " AND (" + MediaStore.MediaColumns.DATE_MODIFIED + "<? OR (" + MediaStore.MediaColumns.DATE_MODIFIED + "=? AND " + MediaStore.MediaColumns._ID + "<?))"; args.add(String.valueOf(modified)); args.add(String.valueOf(modified)); args.add(String.valueOf(id)); }
+                String[] projection = {MediaStore.MediaColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DATE_ADDED};
+                JSONArray assets = new JSONArray(); JSONObject next = null; long lastModified = 0; long lastId = 0;
+                try (Cursor c = queryMedia(MediaStore.Files.getContentUri("external"), projection, selection, args.toArray(new String[0]), limit + 1)) {
+                    while (c != null && c.moveToNext()) {
+                        if (assets.length() >= limit) { next = new JSONObject().put("modified", lastModified).put("id", lastId); break; }
+                        long mediaId = c.getLong(0); boolean video = c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO; long size = c.getLong(4); long changed = c.getLong(5);
+                        assets.put(new JSONObject().put("id", "media:" + (video ? "video:" : "image:") + mediaId)
+                                .put("version", changed + ":" + size).put("name", c.isNull(2) ? "media" : c.getString(2))
+                                .put("mediaType", video ? "video" : "image").put("mimeType", c.isNull(3) ? "" : c.getString(3))
+                                .put("resourceID", "media:" + (video ? "video:" : "image:") + mediaId)
+                                .put("size", size).put("modifiedAt", changed * 1000L).put("createdAt", c.getLong(6) * 1000L).put("sourceId", sourceId));
+                        lastModified = changed; lastId = mediaId;
+                    }
+                }
+                JSONObject answer = new JSONObject().put("assets", assets).put("nextCursor", next == null ? JSONObject.NULL : next);
+                jsBridge.sendCallback(callbackId, answer.toString(), null);
+            } catch (Exception e) { Log.e(TAG, "Media asset listing failed", e); jsBridge.sendCallback(callbackId, null, "could not list media assets"); }
+        }).start();
+    }
+
+    /** Uses provider-supported query arguments on modern Android. Never embed
+     * LIMIT in a SQL sort string, which scoped-storage providers may reject. */
+    @Nullable
+    private Cursor queryMedia(Uri uri, String[] projection, String selection, String[] selectionArgs, int limit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Bundle args = new Bundle();
+            args.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection);
+            args.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs);
+            args.putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS,
+                    new String[]{MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns._ID});
+            args.putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING);
+            if (limit > 0) args.putInt(ContentResolver.QUERY_ARG_LIMIT, limit);
+            return getContentResolver().query(uri, projection, args, null);
+        }
+        return getContentResolver().query(uri, projection, selection, selectionArgs,
+                MediaStore.MediaColumns.DATE_MODIFIED + " DESC, " + MediaStore.MediaColumns._ID + " DESC");
+    }
+
+    public void materializePhotoBackupAsset(String callbackId, String requestJson) {
+        new Thread(() -> {
+            MediaRef ref = null;
+            AtomicBoolean cancelled = null;
+            File temporary = null;
+            boolean staged = false;
+            try {
+                JSONObject request = new JSONObject(requestJson); ref = MediaRef.parse(request.optString("id", ""));
+                JSONObject access = photoBackupAccess();
+                if (ref == null || !(access.optBoolean(ref.video ? "videos" : "images") || access.optBoolean("selectedOnly"))) throw new IOException("media asset is unavailable");
+                cancelled = new AtomicBoolean(false);
+                synchronized (photoBackupStageLock) {
+                    if (activePhotoBackupStageKey != null) throw new IOException("another media asset is staged or staging; release it first");
+                    activePhotoBackupStageKey = ref.key();
+                    stagingPhotoBackupAssets.put(ref.key(), cancelled);
+                }
+                String expected = request.optString("version", ""); Uri uri = ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), ref.id);
+                String[] p = {MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.Files.FileColumns.MEDIA_TYPE};
+                try (Cursor c = getContentResolver().query(uri, p, null, null, null)) {
+                    if (c == null || !c.moveToFirst() || c.getInt(3) != (ref.video ? MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO : MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)) throw new IOException("media asset no longer exists");
+                    long size = c.getLong(0); String version = c.getLong(1) + ":" + size;
+                    if (!expected.equals(version)) throw new IOException("media asset changed; rediscover it before upload");
+                    if (size < 0 || size > PHOTO_BACKUP_STAGE_MAX_BYTES) throw new IOException("media asset exceeds the 4 GB staging limit");
+                    String displayName = safeName(c.isNull(2) ? "media" : c.getString(2));
+                    File root = photoBackupStageRoot(); if (!root.isDirectory() && !root.mkdirs()) throw new IOException("could not create staging area");
+                    File dir = new File(root, ref.directoryName()); if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("could not create staging area");
+                    long existingBytes = stageBytes(root);
+                    if (existingBytes > PHOTO_BACKUP_STAGE_MAX_BYTES || size > PHOTO_BACKUP_STAGE_MAX_BYTES - existingBytes) throw new IOException("media staging would exceed the 4 GB cache limit");
+                    requireStagingSpace(root, size);
+                    File out = new File(dir, displayName); temporary = new File(dir, "." + displayName + ".partial");
+                    discard(temporary);
+                    copyCapped(uri, temporary, PHOTO_BACKUP_STAGE_MAX_BYTES - existingBytes, cancelled, root);
+                    if (cancelled.get()) throw new IOException("media staging cancelled");
+                    String after = mediaVersion(uri, ref.video);
+                    if (!expected.equals(after)) throw new IOException("media asset changed during staging; rediscover it before upload");
+                    File previous = stagedPhotoBackupAssets.remove(ref.key()); if (previous != null) discard(previous);
+                    if (!temporary.renameTo(out)) throw new IOException("could not finalize staged media asset");
+                    if (cancelled.get()) { discard(out); throw new IOException("media staging cancelled"); }
+                    stagedPhotoBackupAssets.put(ref.key(), out);
+                    staged = true;
+                    jsBridge.sendCallback(callbackId, new JSONObject().put("id", ref.key()).put("version", version).put("path", out.getAbsolutePath()).toString(), null);
+                }
+            } catch (Exception e) { Log.e(TAG, "Media staging failed", e); jsBridge.sendCallback(callbackId, null, e.getMessage() == null ? "could not stage media asset" : e.getMessage()); }
+            finally {
+                if (!staged && temporary != null) discard(temporary);
+                if (ref != null && cancelled != null) {
+                    stagingPhotoBackupAssets.remove(ref.key(), cancelled);
+                    synchronized (photoBackupStageLock) {
+                        if (ref.key().equals(activePhotoBackupStageKey) && !staged) activePhotoBackupStageKey = null;
+                    }
+                }
+            }
+        }).start();
+    }
+
+    public void releasePhotoBackupAsset(String callbackId, String requestJson) {
+        new Thread(() -> { try { MediaRef ref = MediaRef.parse(new JSONObject(requestJson).optString("id", "")); if (ref != null) { AtomicBoolean cancel = stagingPhotoBackupAssets.get(ref.key()); if (cancel != null) { cancel.set(true); discardTree(new File(photoBackupStageRoot(), ref.directoryName())); } else { File f = stagedPhotoBackupAssets.remove(ref.key()); if (f != null) discard(f); discardTree(new File(photoBackupStageRoot(), ref.directoryName())); synchronized (photoBackupStageLock) { if (ref.key().equals(activePhotoBackupStageKey)) activePhotoBackupStageKey = null; } } } } catch (Exception ignored) { } jsBridge.sendCallback(callbackId, "", null); }).start();
+    }
+
+    private void requireStagingSpace(File directory, long expectedBytes) throws IOException {
+        long available = new StatFs(directory.getAbsolutePath()).getAvailableBytes();
+        if (available < PHOTO_BACKUP_STAGE_FREE_HEADROOM_BYTES || expectedBytes > available - PHOTO_BACKUP_STAGE_FREE_HEADROOM_BYTES) {
+            throw new IOException("not enough storage to stage this media asset; keep at least 512 MB free");
+        }
+    }
+
+    // Wails Android StoragePath is Context.getFilesDir(); Go's datadir.CacheDir
+    // is StoragePath/TDrive. Keeping this under that exact root makes the
+    // resolved path verifiable by Go without exposing Context cache paths.
+    private File photoBackupStageRoot() { return new File(new File(getFilesDir(), "TDrive"), "photo-backup-stage"); }
+
+    private long stageBytes(File root) {
+        if (!root.isDirectory()) return 0;
+        long total = 0;
+        File[] entries = root.listFiles();
+        if (entries == null) return 0;
+        for (File entry : entries) {
+            File[] files = entry.isDirectory() ? entry.listFiles() : null;
+            if (files == null) { total += entry.length(); continue; }
+            for (File file : files) total += Math.max(0, file.length());
+        }
+        return total;
+    }
+
+    /** The directory contains only one level of per-asset safe names. */
+    private void discardTree(File directory) {
+        File[] files = directory.listFiles();
+        if (files != null) for (File file : files) file.delete();
+        directory.delete();
+    }
+
+    /** Recover after a killed process without recursively touching arbitrary paths. */
+    private void cleanupPhotoBackupStage() {
+        File root = photoBackupStageRoot();
+        File[] entries = root.listFiles();
+        if (entries == null) return;
+        int count = 0;
+        for (File entry : entries) {
+            if (count++ >= 256) break;
+            if (entry.isDirectory()) discardTree(entry); else entry.delete();
+        }
+        root.delete();
+    }
+
+    private String mediaVersion(Uri uri, boolean video) throws IOException {
+        String[] projection = {MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.Files.FileColumns.MEDIA_TYPE};
+        try (Cursor c = getContentResolver().query(uri, projection, null, null, null)) {
+            if (c == null || !c.moveToFirst() || c.getInt(2) != (video ? MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO : MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)) throw new IOException("media asset no longer exists");
+            return c.getLong(1) + ":" + c.getLong(0);
+        }
+    }
+
+    private void copyCapped(Uri uri, File out, long max, AtomicBoolean cancelled, File directory) throws IOException {
+        long total = 0;
+        try (InputStream in = getContentResolver().openInputStream(uri); OutputStream os = new FileOutputStream(out)) {
+            if (in == null) throw new IOException("media asset cannot be opened");
+            byte[] buffer = new byte[64 * 1024];
+            for (int read; (read = in.read(buffer)) > 0;) {
+                if (cancelled.get() || Thread.currentThread().isInterrupted()) throw new IOException("media staging cancelled");
+                total += read;
+                if (total > max) throw new IOException("media asset exceeds the 4 GB staging limit");
+                // Querying storage every 4 MiB catches other app writes without
+                // making a multi-gigabyte copy spend its time in StatFs.
+                if ((total & ((4L * 1024L * 1024L) - 1)) < read) requireStagingSpace(directory, 0);
+                os.write(buffer, 0, read);
+            }
+            requireStagingSpace(directory, 0);
+        } catch (IOException e) { discard(out); throw e; }
+    }
+
+    private static final class MediaRef {
+        final boolean video; final long id; MediaRef(boolean video, long id) { this.video = video; this.id = id; }
+        static MediaRef parse(String value) { try { String[] parts = value.split(":"); if (parts.length != 3 || !"media".equals(parts[0]) || (!"image".equals(parts[1]) && !"video".equals(parts[1]))) return null; long id = Long.parseLong(parts[2]); return id > 0 ? new MediaRef("video".equals(parts[1]), id) : null; } catch (Exception e) { return null; } }
+        String key() { return "media:" + (video ? "video:" : "image:") + id; } String directoryName() { return (video ? "video-" : "image-") + id; }
+    }
+
     public void launchFolderPicker(String callbackId) {
         synchronized (this) {
             if (pendingFolderCallbackId != null) {
@@ -615,16 +964,103 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        // Copy the documents off the main thread, then notify Go
+        copyPickedDocuments(callbackID, uris);
+    }
+
+    /**
+     * Copies the picked documents into the cache and hands the resulting paths
+     * to Go, which cannot see a selection until every one of them has landed
+     * (Wails drains the results channel until it closes).
+     *
+     * Two things matter here, and both are about the seconds this costs. The
+     * picker activity is already gone by the time this runs, so unlike iOS --
+     * where UIKit copies behind its own document picker -- every millisecond is
+     * spent on TDrive's own screen. So it reports progress, and the app turns
+     * that into a transfer row rather than leaving the screen looking frozen.
+     *
+     * And it copies several at once. Serially, a selection cost the sum of its
+     * files; the work is almost entirely waiting on a ContentProvider, which is
+     * a network fetch when the document lives in a cloud provider, so overlapping
+     * them turns that sum into roughly its longest member.
+     */
+    private void copyPickedDocuments(final int callbackID, final List<Uri> uris) {
+        final int total = uris.size();
+        if (total == 0) {
+            bridge.filePickerDone(callbackID);
+            return;
+        }
+
+        // Announce the size of the job before any of it is done, so the app can
+        // say "0 of 7" immediately rather than after the first file lands.
+        emitPickerProgress(0, total, false);
+
         new Thread(() -> {
-            for (Uri uri : uris) {
-                String path = copyUriToCache(uri);
+            // Indexed rather than appended: the copies finish out of order, but
+            // the user picked these in an order and the uploads should follow it.
+            final String[] copied = new String[total];
+            final AtomicInteger done = new AtomicInteger();
+            final AtomicLong lastReport = new AtomicLong();
+            final ExecutorService pool =
+                    Executors.newFixedThreadPool(Math.min(PICKER_COPY_CONCURRENCY, total));
+            try {
+                final List<Callable<Void>> jobs = new ArrayList<>(total);
+                for (int i = 0; i < total; i++) {
+                    final int index = i;
+                    jobs.add(() -> {
+                        try {
+                            copied[index] = copyUriToCache(uris.get(index));
+                        } finally {
+                            // Counted even when the copy failed: this reports how
+                            // much of the wait is left, not how much succeeded.
+                            reportPickerProgress(done.incrementAndGet(), total, lastReport);
+                        }
+                        return null;
+                    });
+                }
+                pool.invokeAll(jobs); // returns once every copy has finished
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                pool.shutdownNow();
+            }
+
+            emitPickerProgress(done.get(), total, true);
+            for (String path : copied) {
                 if (path != null) {
                     bridge.filePickerResult(callbackID, path);
                 }
             }
             bridge.filePickerDone(callbackID);
         }).start();
+    }
+
+    /**
+     * Rate-limits progress so a large selection cannot spend its time crossing
+     * JNI. The final tick is always delivered by the caller, so dropping ticks
+     * here can only cost intermediate frames, never the end of the row.
+     */
+    private void reportPickerProgress(int done, int total, AtomicLong lastReport) {
+        final long now = System.currentTimeMillis();
+        final long previous = lastReport.get();
+        if (now - previous < PICKER_PROGRESS_INTERVAL_MS && done < total) {
+            return;
+        }
+        if (!lastReport.compareAndSet(previous, now)) {
+            return; // another copy just reported; one tick per interval is enough
+        }
+        emitPickerProgress(done, total, false);
+    }
+
+    private void emitPickerProgress(int done, int total, boolean finished) {
+        try {
+            bridge.emitEvent("common:filepicker", new JSONObject()
+                    .put("phase", finished ? "done" : "copying")
+                    .put("done", done)
+                    .put("total", total)
+                    .toString());
+        } catch (JSONException e) {
+            Log.w(TAG, "Could not report file picker progress", e);
+        }
     }
 
     private void handleFolderPickerResult(int resultCode, @Nullable Intent data) {
@@ -1213,6 +1649,10 @@ public class MainActivity extends AppCompatActivity {
         }
         if (bridge != null) {
             bridge.onResume();
+            // MediaStore access may have changed while the app was backgrounded
+            // (notably Android 14's selected-photo grant), so the page can
+            // resume its bounded discovery without polling a stale grant.
+            bridge.emitSystemEvent("android:PhotoBackupMediaChanged", photoBackupAccess().toString());
         }
     }
 
@@ -1259,6 +1699,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         unregisterSystemEventReceivers();
+        WailsForegroundService.attachRuntimeBridge(null);
         if (bridge != null) {
             bridge.shutdown();
         }

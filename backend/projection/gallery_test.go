@@ -74,6 +74,28 @@ func TestGalleryTimelineAndPagesUseStableSparseAnchors(t *testing.T) {
 	}
 }
 
+func TestGalleryTimelineSummaryDoesNotBuildAnchors(t *testing.T) {
+	db := newTestDB(t)
+	seedGalleryFiles(t, db, testChan, 300)
+	summary, err := MediaTimelineSummary(context.Background(), db, testChan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.TotalCount != 300 || summary.PageSize != GalleryPageSize || len(summary.Buckets) != 1 || len(summary.Anchors) != 0 {
+		t.Fatalf("summary=%+v", summary)
+	}
+	full, err := MediaTimelineAnchors(context.Background(), db, testChan, summary.Generation)
+	if err != nil || len(full.Anchors) != 3 {
+		t.Fatalf("anchors=%+v err=%v", full.Anchors, err)
+	}
+	if _, err := db.Exec(`UPDATE files SET revision=revision+1 WHERE channel_id=? AND msg_id=1`, testChan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MediaTimelineAnchors(context.Background(), db, testChan, summary.Generation); !errors.Is(err, ErrGalleryStale) {
+		t.Fatalf("stale anchors error=%v", err)
+	}
+}
+
 func TestGalleryFiltersAndRespectsProjectedName(t *testing.T) {
 	db := newTestDB(t)
 	seedGalleryFiles(t, db, testChan, 8)
@@ -99,6 +121,19 @@ func TestGalleryFiltersAndRespectsProjectedName(t *testing.T) {
 	}
 	if page.Items[2].MsgID != 6 {
 		t.Fatal("legacy orphan should remain visible")
+	}
+}
+
+func TestGalleryIncludesVideosAndExcludesNonMedia(t *testing.T) {
+	db := newTestDB(t)
+	seedGalleryFiles(t, db, testChan, 1)
+	if _, err := db.Exec(`INSERT INTO files(channel_id,msg_id,name,size,parent_id,upload_time,content_msg_id,content_hash,revision)
+		VALUES(?,2,'clip.MP4',1,'',2,2,'video',1),(?,3,'notes.txt',1,'',3,3,'text',1)`, testChan, testChan); err != nil {
+		t.Fatal(err)
+	}
+	page, err := MediaPage(context.Background(), db, testChan, "", 128)
+	if err != nil || len(page.Items) != 2 || page.Items[0].Name != "image-1.JPG" || page.Items[1].Name != "clip.MP4" {
+		t.Fatalf("mixed media page=%+v error=%v", page, err)
 	}
 }
 
@@ -256,7 +291,7 @@ func TestGalleryCursorValidationRejectsTrailingDataAndInvalidIdentity(t *testing
 
 func TestGalleryPagesUseIndexedSeekWithoutSortOrOffset(t *testing.T) {
 	db := newTestDB(t)
-	rows, err := db.Query(`EXPLAIN QUERY PLAN `+gallerySelect+galleryFrom+` AND (f.upload_time,f.msg_id)<=(?,?) ORDER BY f.upload_time DESC,f.msg_id DESC LIMIT ?`, testChan, 1700000000, 1000, 129)
+	rows, err := db.Query(`EXPLAIN QUERY PLAN `+gallerySelect+galleryFrom+` AND (gi.upload_time,gi.msg_id)<=(?,?) ORDER BY gi.upload_time DESC,gi.msg_id DESC LIMIT ?`, testChan, 1700000000, 1000, 129)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,10 +303,10 @@ func TestGalleryPagesUseIndexedSeekWithoutSortOrOffset(t *testing.T) {
 		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(detail, "SEARCH f USING INDEX idx_files_channel_upload_time") && (strings.Contains(detail, "upload_time<?") || strings.Contains(detail, "(upload_time,msg_id)<(?,?)")) {
+		if strings.Contains(detail, "idx_gallery_items_channel_order") {
 			seek = true
 		}
-		if strings.Contains(detail, "SCAN f") || strings.Contains(detail, "TEMP B-TREE") {
+		if strings.Contains(detail, "SCAN gi") || strings.Contains(detail, "TEMP B-TREE") {
 			t.Fatalf("unbounded page query: %s", detail)
 		}
 	}

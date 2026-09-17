@@ -293,6 +293,7 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 	// user can replace the selected path while Telegram is uploading; native
 	// decoding that path later would otherwise publish unrelated image pixels.
 	var source io.ReadSeeker = plainFile
+	var photoSnapshot []byte
 	const maxPhotoSnapshot = 30 << 20
 	if thumbnail.IsImage(filename) && plaintextSize <= maxPhotoSnapshot {
 		snapshot, readErr := io.ReadAll(io.LimitReader(plainFile, maxPhotoSnapshot+1))
@@ -304,6 +305,7 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 			return Metadata{}, projection.Op{}, "", fmt.Errorf("photo changed while preparing upload")
 		}
 		source = bytes.NewReader(snapshot)
+		photoSnapshot = snapshot
 	}
 	// Announce the operation once the local source is known, before validating
 	// remote metadata. That keeps failed uploads visible to callers while
@@ -315,9 +317,13 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
 	} else {
 		slog.Debug("file: upload succeeded", "channel_id", channelID, "name", filename, "msg_id", meta.MsgID, "stored_size", meta.Size)
-		// The original is the durable success boundary. Derivative preparation
-		// cannot turn it into a failed upload or trigger an original resend.
-		s.prepareUploadedRenditions(ctx, channelID, meta, op, header, source)
+	}
+	// Optional derivative consumers must use the exact immutable bytes sent,
+	// never reopen a path the user/native provider may have replaced.
+	if meta.MsgID > 0 && wantEncrypted && len(photoSnapshot) > 0 {
+		if receiver, ok := observer.(interface{ CapturePhotoSnapshot([]byte) }); ok {
+			receiver.CapturePhotoSnapshot(photoSnapshot)
+		}
 	}
 	return meta, op, header, err
 }

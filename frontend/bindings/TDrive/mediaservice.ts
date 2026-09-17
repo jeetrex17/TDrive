@@ -107,6 +107,16 @@ export function OpenNativeMedia(msgID: number, rect: nativeplayer$0.Rect): $Canc
 }
 
 /**
+ * OpenOriginalImage returns one revision-bound capability for the original
+ * raster bytes. It shares the existing media range and CloseMedia lifecycle;
+ * lifecycle checks around the open prevent logout from publishing a new
+ * capability after session revocation has become terminal.
+ */
+export function OpenOriginalImage(msgID: number, revision: number): $CancellablePromise<media$0.OpenResult> {
+    return $Call.ByID(32345691, msgID, revision);
+}
+
+/**
  * OpenStream creates a tokenized loopback byte stream for an in-app file
  * opener. Unlike OpenMedia, it is not video-only; callers choose the viewer
  * from the returned stream kind and must still call CloseMedia on close.

@@ -1,8 +1,7 @@
-import { GetGalleryPreparation, GetMediaTimeline, ListMediaPage, LocateMedia, StartGalleryPreparation, StopGalleryPreparation } from '../../bindings/TDrive/app';
+import { GetMediaTimeline, GetMediaTimelineAnchors, GetMediaTimelineSummary, ListMediaPage, LocateMedia } from '../../bindings/TDrive/app';
 import type { FileItem } from '../types';
 import { invokeBackend } from './gateway';
 import { asRecord } from './shared';
-import { normalizeOperationResult } from './operation';
 
 export interface GalleryItem extends FileItem {
     revision: number;
@@ -28,7 +27,7 @@ function integer(value: unknown, minimum = 0): number {
     return number;
 }
 
-export function normalizeMediaTimeline(value: unknown): MediaTimeline {
+export function normalizeMediaTimeline(value: unknown, allowMissingAnchors = false): MediaTimeline {
     const raw = asRecord(value);
     const totalCount = integer(raw.total_count);
     const pageSize = integer(raw.page_size, 1);
@@ -47,7 +46,8 @@ export function normalizeMediaTimeline(value: unknown): MediaTimeline {
         if (anchor.startIndex !== index * pageSize || !anchor.cursor) throw new Error('Invalid gallery page anchor');
         return anchor;
     });
-    if (position !== totalCount || anchors.length !== Math.ceil(totalCount / pageSize)) throw new Error('Incomplete gallery timeline');
+    if (position !== totalCount || (!allowMissingAnchors && anchors.length !== Math.ceil(totalCount / pageSize))
+        || (allowMissingAnchors && anchors.length !== 0 && anchors.length !== Math.ceil(totalCount / pageSize))) throw new Error('Incomplete gallery timeline');
     return { channelId: integer(raw.channel_id, 1), generation: String(raw.generation ?? ''), totalCount, pageSize, buckets, anchors };
 }
 
@@ -69,38 +69,16 @@ export function normalizeMediaPage(value: unknown): MediaPage {
 export async function getMediaTimeline(): Promise<MediaTimeline> {
     return normalizeMediaTimeline(await invokeBackend(GetMediaTimeline));
 }
+export async function getMediaTimelineSummary(): Promise<MediaTimeline> {
+    return normalizeMediaTimeline(await invokeBackend(GetMediaTimelineSummary), true);
+}
+export async function getMediaTimelineAnchors(generation: string): Promise<MediaTimeline> {
+    return normalizeMediaTimeline(await invokeBackend(GetMediaTimelineAnchors, generation));
+}
 export async function listMediaPage(cursor: string, limit = 128): Promise<MediaPage> {
     return normalizeMediaPage(await invokeBackend(ListMediaPage, cursor, limit));
 }
 export async function locateMedia(msgId: number, generation: string): Promise<MediaLocation> {
     const raw = asRecord(await invokeBackend(LocateMedia, msgId, generation));
     return { generation: String(raw.generation ?? ''), index: integer(raw.index), cursor: String(raw.cursor ?? '') };
-}
-
-export interface GalleryPreparationStatus {
-    running: boolean;
-    channelId: number;
-    completed: number;
-    skipped: number;
-    total: number;
-    bytesTotal: number;
-    bytesDone: number;
-    error: string;
-}
-export function normalizeGalleryPreparation(value: unknown): GalleryPreparationStatus {
-    const raw = asRecord(value);
-    return {
-        running: Boolean(raw.running), channelId: integer(raw.channel_id ?? 0),
-        completed: integer(raw.completed ?? 0), skipped: integer(raw.skipped ?? 0), total: integer(raw.total ?? 0),
-        bytesTotal: integer(raw.bytes_total ?? 0), bytesDone: integer(raw.bytes_done ?? 0), error: String(raw.error ?? ''),
-    };
-}
-export async function getGalleryPreparation(): Promise<GalleryPreparationStatus> {
-    return normalizeGalleryPreparation(await invokeBackend(GetGalleryPreparation));
-}
-export async function startGalleryPreparation(channelId: number) {
-    return normalizeOperationResult(await invokeBackend(StartGalleryPreparation, channelId), 'Could not prepare photos');
-}
-export async function stopGalleryPreparation() {
-    return normalizeOperationResult(await invokeBackend(StopGalleryPreparation), 'Could not pause preview preparation');
 }

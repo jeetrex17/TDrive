@@ -105,7 +105,9 @@ func (a *App) initServices(version string) {
 	// change has to hold. Both become MountService's job later.
 	a.encryption = newEncryptionService(a, a)
 	a.drives = newDriveService(a)
-	a.media = newMediaService(a)
+	// Same two roles again: the media domain holds the gate only while it
+	// publishes an original-image capability.
+	a.media = newMediaService(a, a)
 	// The updater closes native players before it replaces the bundle they run
 	// from, which is the one edge between two domain services.
 	a.updates = newUpdateService(a, a, a.media, version)

@@ -26,6 +26,7 @@ type resolvedSegment struct {
 
 type Session struct {
 	token          string
+	mimeType       string
 	url            string
 	thumbURL       string
 	sourceURL      string
@@ -60,7 +61,10 @@ type MediaStats struct {
 // per-request latency, so this and the connection pool are what set the
 // ceiling: eight blocks cover a second of a high-bitrate remux on a slow link
 // while staying well inside the block cache.
-const playbackReadAhead = 8
+const (
+	playbackReadAhead    = 8
+	imageRangeCacheBytes = 8 * 1024 * 1024
+)
 
 type SessionOptions struct {
 	Context               context.Context
@@ -77,6 +81,10 @@ type SessionOptions struct {
 // background read, so live playback always gets the getFile slots first.
 func (s *Session) warmContainerIndex() {
 	if s == nil || s.reader == nil || len(s.segments) == 0 {
+		return
+	}
+	kind := streamKindForName(s.file.Name)
+	if kind != StreamKindVideo && kind != StreamKindAudio {
 		return
 	}
 	// A file that fits in one block has nothing to overlap: the head read the
@@ -100,6 +108,7 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		token:     token,
+		mimeType:  contentTypeFor(file.Name),
 		file:      file,
 		segments:  copied,
 		ctx:       ctx,
@@ -109,11 +118,18 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 	// Playback and the thumbnail extractor share one block cache: the
 	// extractor reads the same head and index blocks playback already holds,
 	// and the blocks it pulls for a preview are where the viewer may seek next.
-	blocks := newBlockCache(defaultRangeCacheBytes)
+	kind := streamKindForName(file.Name)
+	cacheBytes := int64(defaultRangeCacheBytes)
+	readAhead := playbackReadAhead
+	if kind == StreamKindImage {
+		cacheBytes = imageRangeCacheBytes
+		readAhead = 0
+	}
+	blocks := newBlockCache(cacheBytes)
 	s.reader = NewRangeReader(RangeReaderConfig{
 		Client:    ranges,
 		Cache:     blocks,
-		ReadAhead: playbackReadAhead,
+		ReadAhead: readAhead,
 	})
 	s.warmContainerIndex()
 	if opts.EnableVideoThumbnails {
@@ -236,6 +252,13 @@ func (s *Session) Name() string {
 		return ""
 	}
 	return s.file.Name
+}
+
+func (s *Session) MimeType() string {
+	if s == nil {
+		return "application/octet-stream"
+	}
+	return s.mimeType
 }
 
 func (s *Session) openSnapshot() (token, url, thumbnailURL, hlsURL string, file LogicalFile, ok bool) {

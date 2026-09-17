@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,9 +13,9 @@ import (
 	"TDrive/backend/core"
 	"TDrive/backend/datadir"
 	"TDrive/backend/galleryimage"
-	"TDrive/backend/galleryprepare"
 	"TDrive/backend/mountcontroller"
 	"TDrive/backend/mountlifecycle"
+	"TDrive/backend/photobackup"
 	"TDrive/backend/processlock"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
@@ -23,7 +24,6 @@ import (
 	lifecycleservice "TDrive/backend/services/lifecycle"
 	readservice "TDrive/backend/services/read"
 	userservice "TDrive/backend/services/user"
-	"TDrive/backend/tgclient"
 
 	"github.com/gotd/td/telegram"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -37,15 +37,12 @@ type App struct {
 	ctx context.Context
 	// wails is the running application handle, set once main() has created
 	// it. Dialogs, events, the browser opener and Quit all go through it.
-	wails                   *application.App
-	engine                  *core.Engine
-	Client                  *telegram.Client
-	backendLock             *processlock.Lock
-	galleryImagesMu         sync.Mutex
-	galleryImages           *galleryimage.Server
-	galleryPreparationMu    sync.Mutex
-	galleryPreparation      *galleryprepare.Runner
-	galleryPreparationEpoch uint64
+	wails           *application.App
+	engine          *core.Engine
+	Client          *telegram.Client
+	backendLock     *processlock.Lock
+	galleryImagesMu sync.Mutex
+	galleryImages   *galleryimage.Server
 
 	// mountMu protects lazy controller construction. A transient construction
 	// failure stays retryable for a later mount request.
@@ -88,6 +85,21 @@ type App struct {
 	encryption *EncryptionService
 	media      *MediaService
 	updates    *UpdateService
+
+	photoBackupMu          sync.Mutex
+	photoBackupDiscoveryMu sync.Mutex
+	photoBackup            *photobackup.Engine
+	photoBackupDB          *sql.DB
+	photoBackupCancel      context.CancelFunc
+	photoBackupDone        chan struct{}
+	photoBackupRunID       uint64
+	photoBackupProgress    photoBackupProgressState
+	photoBackupWaiters     map[string]chan photoBackupMaterialization
+	photoBackupPolicy      PhotoBackupPolicy
+	photoBackupStop        chan struct{}
+	photoBackupAdapters    map[string]*photobackup.LocalFolderAdapter
+	photoBackupBackground  photoBackupBackgroundState
+	photoBackupClosed      bool
 }
 
 type runtimeEventSink struct {
@@ -113,51 +125,11 @@ func (a *App) emit(name string, args ...any) {
 	a.wails.Event.Emit(name, args)
 }
 
-// resolvePeer satisfies tdsync.PeerResolver through peerResolverFn. Keeping
-// it unexported prevents Wails from exposing this internal sync helper.
-func (a *App) resolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	if a.engine == nil {
-		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.ResolvePeer(ctx, channelID)
-}
-
-// channelPeer resolves the active drive's tgclient.InputPeer through the shared
-// Telegram client. Used by every op that needs to send into Telegram; callers
-// should not hold this across long operations.
-func (a *App) channelPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	if a.engine == nil {
-		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.ChannelPeer(ctx, channelID)
-}
-
-// emitAndProject sends a control op and projects it locally. Returns the
-// Telegram msg_id used as the op's identity.
-//
-// On send failure: returns the error; nothing is projected.
-// On project failure after a successful send: logs, returns the error so
-// the caller can surface it. The op IS in Telegram and will be projected on
-// the next sync.
-func (a *App) emitAndProject(channelID int64, op projection.Op) (int64, error) {
-	if a.engine == nil {
-		return 0, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.EmitAndProject(channelID, op)
-}
-
 func (a *App) ActiveChannelID() int64 {
 	if a.engine == nil {
 		return 0
 	}
 	return a.engine.ActiveChannelID()
-}
-
-func (a *App) setActiveChannelID(channelID int64) {
-	if a.engine == nil {
-		return
-	}
-	a.engine.SetActiveChannelID(channelID)
 }
 
 // MyUserID returns the logged-in Telegram user id (cached after first
@@ -179,7 +151,7 @@ func (a *App) SetActiveChannel(channelID int64) error {
 	if a.engine == nil {
 		return fmt.Errorf("backend not ready")
 	}
-	a.stopGalleryPreparation()
+	a.stopPhotoBackup()
 	if err := a.engine.SetActiveChannel(channelID); err != nil {
 		return err
 	}
@@ -643,8 +615,8 @@ func (a *App) ServiceShutdown() error {
 	}
 	cancel()
 	a.media.closeAllNativeMedia()
-	a.stopGalleryPreparation()
 	a.closeGalleryImages()
+	a.closePhotoBackup()
 	if a.engine != nil {
 		a.engine.Close()
 	}
@@ -733,6 +705,9 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
+	if err := a.initPhotoBackup(); err != nil {
+		fmt.Printf("Warning: Failed to initialize photo backup: %v\n", err)
+	}
 	_, mountInitErr := a.ensureMountController()
 	if mountInitErr != nil {
 		fmt.Printf("Warning: Failed to initialize TDrive mount: %v\n", mountInitErr)

@@ -24,7 +24,6 @@ export const teardown = controller.teardown;
 export const setActive = controller.setActive;
 export const beginRender = controller.beginRender;
 export const rearmLocked = controller.rearmLocked;
-export const rearmMissing = controller.rearmMissing;
 export { retryDelay };
 
 export function registerCell(node: HTMLElement, registration: CellRegistration): void {

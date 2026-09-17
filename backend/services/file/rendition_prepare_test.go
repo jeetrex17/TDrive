@@ -3,6 +3,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"os"
@@ -109,7 +110,7 @@ func TestRemotePreparationRejectsLargeSourceAndAccountsInterruptedBytes(t *testi
 		t.Fatalf("partial accounting: %d %v", n, err)
 	}
 }
-func TestVisiblePhotoUploadPublishesBothRenditions(t *testing.T) {
+func TestVisiblePhotoUploadDoesNotPublishDurableRenditions(t *testing.T) {
 	s, db, _, _ := newTestService(t)
 	path := filepath.Join(t.TempDir(), "photo.jpg")
 	if err := os.WriteFile(path, tinyRenditionJPEG(t), 0600); err != nil {
@@ -120,8 +121,8 @@ func TestVisiblePhotoUploadPublishesBothRenditions(t *testing.T) {
 		t.Fatalf("upload %+v %v", files, err)
 	}
 	for _, kind := range []string{"thumbnail", "preview"} {
-		if _, err := projection.CurrentFileRendition(context.Background(), db, personalChannelID, int64(files[0].MsgID), kind); err != nil {
-			t.Fatalf("uploaded %s unavailable: %v", kind, err)
+		if _, err := projection.CurrentFileRendition(context.Background(), db, personalChannelID, int64(files[0].MsgID), kind); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("uploaded %s should not create a sidecar: %v", kind, err)
 		}
 	}
 }
@@ -153,7 +154,7 @@ func (c *replacingPhotoClient) SendFileWithRandomID(ctx context.Context, peer tg
 	}
 	return c.Fake.SendFileWithRandomID(ctx, peer, reader, name, caption, size, progress, randomID)
 }
-func TestPhotoSnapshotPreventsChangedPathFromRebindingDerivative(t *testing.T) {
+func TestPhotoSnapshotPreventsChangedPathFromRebindingUpload(t *testing.T) {
 	s, db, fake, _ := newTestService(t)
 	raw := tinyRenditionJPEG(t)
 	path := filepath.Join(t.TempDir(), "photo.jpg")
@@ -173,8 +174,8 @@ func TestPhotoSnapshotPreventsChangedPathFromRebindingDerivative(t *testing.T) {
 	if !bytes.Equal(original.Bytes(), raw) {
 		t.Fatal("original did not use frozen bytes")
 	}
-	if _, err := projection.CurrentFileRendition(context.Background(), db, personalChannelID, int64(uploaded[0].MsgID), "preview"); err != nil {
-		t.Fatalf("derivative read changed path instead of frozen source: %v", err)
+	if _, err := projection.CurrentFileRendition(context.Background(), db, personalChannelID, int64(uploaded[0].MsgID), "preview"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("upload unexpectedly created a durable preview: %v", err)
 	}
 }
 

@@ -76,6 +76,14 @@ describe('GalleryCell', () => {
         expect(body).toContain('gallery-lock');
     });
 
+    it('marks a video tile without embedding a video source', () => {
+        const { body } = render(GalleryCell, { props: { item: makeItem({ name: 'clip.mp4' }), index: 0 } });
+
+        expect(body).toContain('gallery-video-badge');
+        expect(body).toContain('Video: clip.mp4');
+        expect(body).not.toContain('<video');
+    });
+
     it('escapes untrusted names in the aria-label and title', () => {
         const { body } = render(GalleryCell, { props: { item: makeItem({ name: '<img src=x>.jpg' }), index: 0 } });
         expect(body).not.toContain('<img src=x>');

@@ -1,3 +1,41 @@
+// Package core is TDrive's headless composition root. It builds one Engine that
+// wires every backend service, the Telegram adapter, the sync engine and live
+// sync, so the Wails GUI and the CLI daemon share one assembly instead of
+// maintaining two.
+//
+// Beyond wiring it owns three things: the control-message write path, remote
+// path resolution, and a process-local broker that lets mounted filesystems
+// hear about projection changes without the projection layer knowing they
+// exist.
+//
+// Emitting a control op is send-then-project and is not atomic. If Telegram
+// accepts the op but the local write fails, the op still exists remotely, the
+// msg id is still returned, and the next sync converges. Batches commit their
+// projections in one local transaction so the UI never sees half a subtree, but
+// they are still sent one op at a time, so a batch is never atomic remotely.
+// Every send reuses one stable random id across flood-wait retries and across
+// the single stale-access-hash retry, so a lost response cannot become a
+// duplicate op.
+//
+// Construction never fails because Telegram is unreachable — a failed connect
+// is a warning and the Engine stays usable offline. Live sync, however, exists
+// only on the default connect path: supplying a pre-built client or a custom
+// connect function silently leaves the update handler uninstalled.
+//
+// The encryption generation counter is the subtlest thing here. Clearing the
+// encryption session bumps the counter, closes encrypted media sessions, clears
+// the key, then bumps it again, so the counter is odd while a transition is in
+// flight. Media session setup takes the read side of that lock and re-checks
+// the generation, which lets slow, network-backed setup happen outside the lock
+// yet still be rejected if it was built from a key that has since been
+// discarded.
+//
+// Two pairs that look like synonyms and are not. The personal channel is
+// re-read from config on demand and is what encryption is keyed to, while the
+// active drive is merely whatever the user is browsing. And setting the active
+// channel by validated lookup is a different operation from setting the id
+// outright. Path resolution treats a duplicate sibling name as an error rather
+// than silently picking one, because TDrive's namespace permits collisions.
 package core
 
 import (
@@ -14,6 +52,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
+	"TDrive/backend/datadir"
 	"TDrive/backend/livesync"
 	"TDrive/backend/media"
 	"TDrive/backend/projection"
@@ -131,6 +170,9 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		cfg.Warnf = func(format string, args ...any) {
 			fmt.Printf(format, args...)
 		}
+	}
+	if err := datadir.CleanupCacheTemps(); err != nil {
+		return nil, fmt.Errorf("core: clean interrupted cache files: %w", err)
 	}
 
 	e := &Engine{
@@ -758,6 +800,14 @@ func (e *Engine) newFileService() *fileservice.Service {
 			}
 			return key, nil
 		},
+		RequireEncryptionKeyForChannel: func(channelID int64, encrypted bool) ([]byte, error) {
+			key, err := e.EncryptionService().RequireMasterKeyForChannel(channelID, encrypted)
+			if err != nil {
+				return nil, encservice.ErrPasswordRequired
+			}
+			return key, nil
+		},
+		PersonalChannelID: PersonalChannelID,
 		MasterKeyForUpload: func(channelID int64, wantEncrypted bool) ([]byte, error) {
 			return e.EncryptionService().MasterKeyForUpload(channelID, wantEncrypted)
 		},

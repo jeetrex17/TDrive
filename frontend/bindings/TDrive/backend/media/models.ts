@@ -81,6 +81,7 @@ export enum StreamKind {
     StreamKindAudio = "audio",
     StreamKindPDF = "pdf",
     StreamKindText = "text",
+    StreamKindImage = "image",
 };
 
 export interface ThroughputStats {

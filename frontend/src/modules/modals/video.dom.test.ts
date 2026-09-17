@@ -35,6 +35,10 @@ const apiMocks = vi.hoisted(() => ({
     }),
 }));
 
+const encryptionMocks = vi.hoisted(() => ({
+    access: vi.fn(async (_encrypted: boolean, open: () => Promise<unknown>) => open()),
+}));
+
 const runtimeMocks = vi.hoisted(() => ({
     events: new Map<string, (payload: unknown) => void>(),
     eventsOn: vi.fn(),
@@ -48,6 +52,7 @@ let videoComponent: Record<string, unknown> | null = null;
 let deactivateVideo = () => {};
 
 vi.mock("../../api", () => apiMocks);
+vi.mock("../encryption", () => ({ accessEncryptedResource: encryptionMocks.access }));
 
 
 function openSettings(section: "picture" | "audio" | "subtitle" | "speed") {

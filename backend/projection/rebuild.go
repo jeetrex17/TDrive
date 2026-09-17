@@ -16,6 +16,11 @@ type rawReplayRow struct {
 	actorUserID   int64
 }
 
+// rebuildReplayBatchSize bounds the replay rows held between each read and
+// apply phase. Queries are closed before applying so SQLite can execute the
+// projection writes in the same transaction.
+const rebuildReplayBatchSize = 256
+
 // RebuildProjection is a full delete-and-replay of channelID's projection
 // tables from replay_log. It is expensive (proportional to the channel's
 // entire history) and otherwise invisible, so its start/end/outcome is
@@ -82,52 +87,62 @@ func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, er
 		}
 	}
 
-	rows, err := tx.Query(`
-		SELECT msg_id, op_type, op_payload_json, actor_user_id, raw_header
-		FROM replay_log
-		WHERE channel_id = ?
-		ORDER BY msg_id ASC
-	`, channelID)
-	if err != nil {
-		return 0, 0, fmt.Errorf("projection: rebuild scan replay_log: %w", err)
-	}
+	lastMsgID := int64(-1 << 63)
+	for {
+		rows, err := tx.Query(`
+			SELECT msg_id, op_type, op_payload_json, actor_user_id, raw_header
+			FROM replay_log
+			WHERE channel_id = ? AND msg_id > ?
+			ORDER BY msg_id ASC
+			LIMIT ?
+		`, channelID, lastMsgID, rebuildReplayBatchSize)
+		if err != nil {
+			return applied, rejected, fmt.Errorf("projection: rebuild scan replay_log: %w", err)
+		}
 
-	var queue []rawReplayRow
-	for rows.Next() {
-		var r rawReplayRow
-		if err := rows.Scan(&r.msgID, &r.opType, &r.opPayloadJSON, &r.actorUserID, &r.rawHeader); err != nil {
-			_ = rows.Close()
-			return 0, 0, fmt.Errorf("projection: rebuild row scan: %w", err)
-		}
-		queue = append(queue, r)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return 0, 0, err
-	}
-	_ = rows.Close()
-
-	for _, r := range queue {
-		var op Op
-		if err := json.Unmarshal([]byte(r.opPayloadJSON), &op); err != nil {
-			return applied, rejected, fmt.Errorf("projection: rebuild parse op msg=%d: %w", r.msgID, err)
-		}
-		if string(op.Type) == "" {
-			op.Type = OpType(r.opType)
-		}
-		op = restoreRenditionExtension(op, r.rawHeader)
-		if err := ApplyOp(tx, channelID, r.msgID, op, r.actorUserID); err != nil {
-			if isSkippableApplyError(err) {
-				slog.Warn("projection: rebuild rejected op, continuing", "channel_id", channelID, "msg_id", r.msgID, "op_type", op.Type, "error", err)
-				if recErr := recordSkippedOp(tx, channelID, r.msgID, op, err); recErr != nil {
-					return applied, rejected, recErr
-				}
-				rejected++
-				continue
+		batch := make([]rawReplayRow, 0, rebuildReplayBatchSize)
+		for rows.Next() {
+			var r rawReplayRow
+			if err := rows.Scan(&r.msgID, &r.opType, &r.opPayloadJSON, &r.actorUserID, &r.rawHeader); err != nil {
+				_ = rows.Close()
+				return applied, rejected, fmt.Errorf("projection: rebuild row scan: %w", err)
 			}
-			return applied, rejected, fmt.Errorf("projection: rebuild apply msg=%d: %w", r.msgID, err)
+			batch = append(batch, r)
 		}
-		applied++
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return applied, rejected, fmt.Errorf("projection: rebuild scan replay_log rows: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return applied, rejected, fmt.Errorf("projection: rebuild close replay_log scan: %w", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, r := range batch {
+			var op Op
+			if err := json.Unmarshal([]byte(r.opPayloadJSON), &op); err != nil {
+				return applied, rejected, fmt.Errorf("projection: rebuild parse op msg=%d: %w", r.msgID, err)
+			}
+			if string(op.Type) == "" {
+				op.Type = OpType(r.opType)
+			}
+			op = restoreRenditionExtension(op, r.rawHeader)
+			if err := ApplyOp(tx, channelID, r.msgID, op, r.actorUserID); err != nil {
+				if isSkippableApplyError(err) {
+					slog.Warn("projection: rebuild rejected op, continuing", "channel_id", channelID, "msg_id", r.msgID, "op_type", op.Type, "error", err)
+					if recErr := recordSkippedOp(tx, channelID, r.msgID, op, err); recErr != nil {
+						return applied, rejected, recErr
+					}
+					rejected++
+					continue
+				}
+				return applied, rejected, fmt.Errorf("projection: rebuild apply msg=%d: %w", r.msgID, err)
+			}
+			applied++
+		}
+		lastMsgID = batch[len(batch)-1].msgID
 	}
 	return applied, rejected, nil
 }

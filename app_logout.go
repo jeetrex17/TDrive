@@ -32,6 +32,7 @@ func (a *App) Logout(mode string) error {
 	if m != auth.LogoutSoft && m != auth.LogoutFull {
 		return fmt.Errorf("logout: unknown mode %q", mode)
 	}
+	a.closePhotoBackup()
 	if err := a.runWithClosedMountForLogout(func() error {
 		if m == auth.LogoutFull {
 			a.revokeTelegramSession()

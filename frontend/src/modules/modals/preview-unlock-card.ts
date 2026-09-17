@@ -15,7 +15,8 @@
  * typing; the reader clicks the field when they actually want to unlock.
  */
 
-import { useEncryptionPassword } from '../../api';
+import { requireOperationSuccess, useEncryptionPassword } from '../../api';
+import { humanizeBackendError } from '../errors';
 import { loadEncryptionStatus } from '../encryption';
 
 export interface UnlockCardElements {
@@ -118,7 +119,10 @@ export function createUnlockCard(elements: UnlockCardElements): UnlockCard {
             if (unlockButton) unlockButton.disabled = true;
             if (input) input.disabled = true;
             try {
-                await useEncryptionPassword(value);
+                // A wrong password comes back as an unsuccessful result rather
+                // than a rejection, so without this the card would report the
+                // unlock as done and the photo would stay locked.
+                requireOperationSuccess(await useEncryptionPassword(value));
                 await loadEncryptionStatus();
                 if (input) input.value = '';
                 // The gallery's locked thumbnail cells are someone else's
@@ -126,7 +130,7 @@ export function createUnlockCard(elements: UnlockCardElements): UnlockCard {
                 window.dispatchEvent(new Event('tdrive:unlocked'));
                 onUnlocked();
             } catch (err) {
-                showError(String(err) || 'Incorrect password');
+                showError(humanizeBackendError(err));
             } finally {
                 if (unlockButton) unlockButton.disabled = false;
                 if (input) input.disabled = false;

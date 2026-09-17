@@ -9,6 +9,7 @@ import {
     NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
     OpenNativeMedia as rawOpenNativeMedia,
+    OpenOriginalImage as rawOpenOriginalImage,
     OpenStream as rawOpenStream,
     ResizeNativeMedia as rawResizeNativeMedia,
     ShowNativeSeekThumbnail as rawShowNativeSeekThumbnail,
@@ -129,6 +130,17 @@ export async function openMedia(msgId: number): Promise<MediaOpenResult> {
 export async function openStream(msgId: number): Promise<MediaOpenResult> {
     const opened = await invokeBackend(rawOpenStream, msgId);
     return normalizeMediaOpenResult(opened);
+}
+
+/**
+ * Opens exactly one short-lived original-image stream for an immutable file
+ * revision. This deliberately bypasses the rendition broker: it must never
+ * create a Blob, enter the thumbnail cache, or be speculatively fetched.
+ */
+export async function openOriginalImage(msgId: number, revision: number): Promise<MediaOpenResult> {
+    const opened = normalizeMediaOpenResult(await invokeBackend(rawOpenOriginalImage, msgId, revision));
+    if (!opened.token || !opened.url || opened.kind !== 'image') throw new Error('Original image stream is unavailable.');
+    return opened;
 }
 
 function normalizeMediaOpenResult(opened?: OpenResult): MediaOpenResult {

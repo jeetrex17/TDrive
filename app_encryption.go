@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"TDrive/backend/core"
 	encservice "TDrive/backend/services/encryption"
 )
 
@@ -32,14 +31,22 @@ func newEncryptionService(host serviceHost, mount vaultMountGate) *EncryptionSer
 	return &EncryptionService{host: host, mount: mount}
 }
 
+// mountLifecycleGate is the right to hold mount transitions still for the
+// length of an operation. Anything that publishes a capability against the
+// active drive needs it, so a logout cannot become terminal between the
+// capability being opened and being handed to the frontend.
+type mountLifecycleGate interface {
+	acquireMountLifecycle(ctx context.Context) (func(), error)
+}
+
 // vaultMountGate is what this service needs from whoever owns the mount: the
-// right to hold mount transitions still for the length of a key operation, and
-// a way to close an open mount before the key underneath it changes.
+// gate above, and a way to close an open mount before the key underneath it
+// changes.
 //
 // App implements it today. It is an interface so that lifting the mount out of
 // App later is a one-line rewire here instead of a rewrite of this file.
 type vaultMountGate interface {
-	acquireMountLifecycle(ctx context.Context) (func(), error)
+	mountLifecycleGate
 	closeMountForEncryptionTransitionLocked(ctx context.Context) error
 }
 
@@ -62,13 +69,6 @@ type appEncryptionService interface {
 	CreatePasswordContext(context.Context, string, string) error
 	UsePassword(password string) error
 	ChangePassword(currentPassword string, newPassword string, hint string) error
-}
-
-// personalChannelID returns the saved personal channel id without
-// requiring the active drive to be the personal one. Returns 0 if no
-// personal channel is configured (fresh install before InitDrive ran).
-func personalChannelID() int64 {
-	return core.PersonalChannelID()
 }
 
 func (s *EncryptionService) service() appEncryptionService {

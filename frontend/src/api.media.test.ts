@@ -20,6 +20,7 @@ const bindings = vi.hoisted(() => ({
     NativeMediaCommand: vi.fn(),
     OpenMedia: vi.fn(),
     OpenNativeMedia: vi.fn(),
+    OpenOriginalImage: vi.fn(),
     OpenStream: vi.fn(),
     ResizeNativeMedia: vi.fn(),
     Search: vi.fn(),
@@ -43,6 +44,7 @@ import {
     nativeMediaCommand,
     openMedia,
     openNativeMedia,
+    openOriginalImage,
     openStream,
     resizeNativeMedia,
     showNativeSeekThumbnail,
@@ -59,6 +61,7 @@ import {
     NativeMediaCommand,
     OpenMedia,
     OpenNativeMedia,
+    OpenOriginalImage,
     OpenStream,
     ResizeNativeMedia,
     ShowNativeSeekThumbnail,
@@ -262,9 +265,10 @@ describe("loopback media API boundary", () => {
         },
     };
 
-    it("normalizes both preview and stream open results", async () => {
+    it("normalizes stream opens and an immutable original-image open", async () => {
         mockBackendResult(vi.mocked(OpenMedia), opened);
         mockBackendResult(vi.mocked(OpenStream), opened);
+        mockBackendResult(vi.mocked(OpenOriginalImage), { ...opened, kind: 'image' });
 
         const expected = expect.objectContaining({
             token: loopbackSessionToken,
@@ -275,6 +279,8 @@ describe("loopback media API boundary", () => {
         });
         await expect(openMedia(9)).resolves.toEqual(expected);
         await expect(openStream(9)).resolves.toEqual(expected);
+        await expect(openOriginalImage(9, 3)).resolves.toEqual(expect.objectContaining({ kind: 'image', token: loopbackSessionToken }));
+        expect(OpenOriginalImage).toHaveBeenCalledWith(9, 3);
     });
 
     it("closes and updates only active media sessions", async () => {

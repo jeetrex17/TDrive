@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"time"
 )
 
 const (
@@ -59,21 +58,14 @@ type GalleryLocation struct {
 	Cursor     string `json:"cursor"`
 }
 
-// All gallery queries share the same eligibility predicate. A missing legacy
-// dirent does not hide an orphaned file, but an explicitly tombstoned one does.
-const galleryFrom = ` FROM files f
- LEFT JOIN dirents d ON d.channel_id=f.channel_id AND d.object_id='f:' || f.msg_id
- WHERE f.channel_id=? AND f.tombstoned=0 AND f.upload_uuid=''
- AND COALESCE(d.tombstoned,0)=0 AND (
-  COALESCE(d.display_name,f.name) LIKE '%.jpg' COLLATE NOCASE
-  OR COALESCE(d.display_name,f.name) LIKE '%.jpeg' COLLATE NOCASE
-  OR COALESCE(d.display_name,f.name) LIKE '%.png' COLLATE NOCASE
-  OR COALESCE(d.display_name,f.name) LIKE '%.gif' COLLATE NOCASE
-  OR COALESCE(d.display_name,f.name) LIKE '%.webp' COLLATE NOCASE
-  OR COALESCE(d.display_name,f.name) LIKE '%.bmp' COLLATE NOCASE)`
+// gallery_items materializes the shared eligibility predicate. Joining files
+// supplies mutable metadata while the narrow order index drives every seek.
+const galleryFrom = ` FROM gallery_items gi
+ JOIN files f ON f.channel_id=gi.channel_id AND f.msg_id=gi.msg_id
+ WHERE gi.channel_id=?`
 
 const gallerySelect = `SELECT f.msg_id,f.content_msg_id,f.content_hash,f.revision,f.upload_uuid,f.part_count,
- COALESCE(d.display_name,f.name),f.size,f.parent_id,f.upload_time,f.uploader_user_id,f.encrypted,f.plaintext_size`
+ gi.display_name,f.size,f.parent_id,gi.upload_time,f.uploader_user_id,f.encrypted,f.plaintext_size`
 
 // MediaTimeline scans only sort keys, retaining one seek anchor per page and
 // one UTC month bucket. Detailed file metadata never accumulates here. This
@@ -84,39 +76,106 @@ func MediaTimeline(ctx context.Context, db *sql.DB, channelID int64) (GalleryTim
 		return GalleryTimeline{}, err
 	}
 	defer tx.Rollback()
-	timeline := GalleryTimeline{ChannelID: channelID, Generation: generation, PageSize: GalleryPageSize, Buckets: []GalleryBucket{}, Anchors: []GalleryAnchor{}}
-	rows, err := tx.QueryContext(ctx, `SELECT f.upload_time,f.msg_id`+galleryFrom+` ORDER BY f.upload_time DESC,f.msg_id DESC`, channelID)
+	timeline, err := mediaTimelineCache.load(ctx, generation, func() (GalleryTimeline, error) {
+		return buildGalleryTimeline(ctx, tx, channelID, generation)
+	})
 	if err != nil {
-		return GalleryTimeline{}, fmt.Errorf("projection: gallery timeline: %w", err)
-	}
-	defer rows.Close()
-	var monthStart int64
-	for rows.Next() {
-		var timestamp, msgID int64
-		if err := rows.Scan(&timestamp, &msgID); err != nil {
-			return GalleryTimeline{}, fmt.Errorf("projection: gallery key: %w", err)
-		}
-		index := timeline.TotalCount
-		if index%GalleryPageSize == 0 {
-			timeline.Anchors = append(timeline.Anchors, GalleryAnchor{StartIndex: index, Cursor: encodeGalleryCursor(channelID, generation, timestamp, msgID, index)})
-		}
-		last := len(timeline.Buckets) - 1
-		if last < 0 || timestamp < monthStart {
-			date := time.Unix(timestamp, 0).UTC()
-			monthStart = time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, time.UTC).Unix()
-			timeline.Buckets = append(timeline.Buckets, GalleryBucket{Key: date.Format("2006-01"), StartIndex: index, Count: 1, UploadTime: timestamp})
-		} else {
-			timeline.Buckets[last].Count++
-		}
-		timeline.TotalCount++
-	}
-	if err := rows.Err(); err != nil {
-		return GalleryTimeline{}, fmt.Errorf("projection: gallery timeline: %w", err)
-	}
-	if err := rows.Close(); err != nil {
 		return GalleryTimeline{}, err
 	}
 	if err := tx.Commit(); err != nil {
+		return GalleryTimeline{}, err
+	}
+	return timeline, nil
+}
+
+// MediaTimelineSummary returns the small, incrementally maintained portion of
+// the timeline. It deliberately avoids the full-library anchor scan so page
+// zero can be requested immediately on a cold database.
+func MediaTimelineSummary(ctx context.Context, db *sql.DB, channelID int64) (GalleryTimeline, error) {
+	tx, generation, err := beginGalleryRead(ctx, db, channelID, "")
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+	defer tx.Rollback()
+	timeline, err := buildGalleryTimelineSummary(ctx, tx, channelID, generation)
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return GalleryTimeline{}, err
+	}
+	return timeline, nil
+}
+
+// MediaTimelineAnchors builds the sparse seek index for an already displayed
+// summary. The expected generation prevents anchors from crossing an epoch.
+func MediaTimelineAnchors(ctx context.Context, db *sql.DB, channelID int64, expected string) (GalleryTimeline, error) {
+	tx, generation, err := beginGalleryRead(ctx, db, channelID, expected)
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+	defer tx.Rollback()
+	timeline, err := mediaTimelineCache.load(ctx, generation, func() (GalleryTimeline, error) {
+		return buildGalleryTimeline(ctx, tx, channelID, generation)
+	})
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return GalleryTimeline{}, err
+	}
+	return timeline, nil
+}
+
+func buildGalleryTimeline(ctx context.Context, tx *sql.Tx, channelID int64, generation string) (GalleryTimeline, error) {
+	timeline, err := buildGalleryTimelineSummary(ctx, tx, channelID, generation)
+	if err != nil {
+		return GalleryTimeline{}, err
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT upload_time,msg_id,ordinal-1 FROM (
+  SELECT upload_time,msg_id,ROW_NUMBER() OVER (ORDER BY upload_time DESC,msg_id DESC) AS ordinal
+  FROM gallery_items WHERE channel_id=?
+) WHERE (ordinal-1)%?=0 ORDER BY ordinal`, channelID, GalleryPageSize)
+	if err != nil {
+		return GalleryTimeline{}, fmt.Errorf("projection: gallery anchors: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var timestamp, msgID int64
+		var index int
+		if err := rows.Scan(&timestamp, &msgID, &index); err != nil {
+			return GalleryTimeline{}, fmt.Errorf("projection: gallery anchor: %w", err)
+		}
+		timeline.Anchors = append(timeline.Anchors, GalleryAnchor{StartIndex: index, Cursor: encodeGalleryCursor(channelID, generation, timestamp, msgID, index)})
+	}
+	if err := rows.Err(); err != nil {
+		return GalleryTimeline{}, fmt.Errorf("projection: gallery anchors: %w", err)
+	}
+	return timeline, nil
+}
+
+func buildGalleryTimelineSummary(ctx context.Context, tx *sql.Tx, channelID int64, generation string) (GalleryTimeline, error) {
+	timeline := GalleryTimeline{ChannelID: channelID, Generation: generation, PageSize: GalleryPageSize, Buckets: []GalleryBucket{}, Anchors: []GalleryAnchor{}}
+	rows, err := tx.QueryContext(ctx, `SELECT month_key,item_count,latest_upload_time
+FROM gallery_months WHERE channel_id=? ORDER BY month_key DESC`, channelID)
+	if err != nil {
+		return GalleryTimeline{}, fmt.Errorf("projection: gallery month timeline: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var bucket GalleryBucket
+		if err := rows.Scan(&bucket.Key, &bucket.Count, &bucket.UploadTime); err != nil {
+			return GalleryTimeline{}, fmt.Errorf("projection: gallery month: %w", err)
+		}
+		bucket.StartIndex = timeline.TotalCount
+		timeline.TotalCount += bucket.Count
+		timeline.Buckets = append(timeline.Buckets, bucket)
+	}
+	if err := rows.Err(); err != nil {
+		return GalleryTimeline{}, fmt.Errorf("projection: gallery month timeline: %w", err)
+	}
+	if err := rows.Close(); err != nil {
 		return GalleryTimeline{}, err
 	}
 	return timeline, nil

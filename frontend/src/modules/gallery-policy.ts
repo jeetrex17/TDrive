@@ -14,6 +14,10 @@ export interface GalleryPolicy extends RenditionLimits {
     backgrounded: boolean;
 }
 const MiB = 1024 * 1024;
+const originalDecodedReserve = 128 * MiB;
+const originalCompressedReserve = 8 * MiB;
+const minimumViewerThumbnailDecoded = 16 * MiB;
+const minimumViewerThumbnailCompressed = 2 * MiB;
 const signalKeys = ['connected', 'metered', 'constrained', 'lowPowerMode', 'backgrounded', 'memoryPressure'] as const;
 
 /** Unknown network cost deliberately disables speculation, including on desktop. */
@@ -48,16 +52,42 @@ let signals: GallerySignals = {};
 let started = false;
 let pressureUntil = 0;
 let pressureTimer: ReturnType<typeof setTimeout> | null = null;
+let originalViewerReservations = 0;
 const pressureCooldownMs = 60_000;
 const listeners = new Set<(policy: GalleryPolicy) => void>();
 const cleanups: Array<() => void> = [];
 const currentVisibility = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
-export const getGalleryPolicy = (): GalleryPolicy => deriveGalleryPolicy(isMobilePlatform(), { ...signals, backgrounded: signals.backgrounded === true || currentVisibility(), memoryPressure: signals.memoryPressure === true || Date.now() < pressureUntil });
+export const getGalleryPolicy = (): GalleryPolicy => {
+    const policy = deriveGalleryPolicy(isMobilePlatform(), { ...signals, backgrounded: signals.backgrounded === true || currentVisibility(), memoryPressure: signals.memoryPressure === true || Date.now() < pressureUntil });
+    if (originalViewerReservations === 0) return policy;
+    return {
+        ...policy,
+        decodedBytes: Math.max(minimumViewerThumbnailDecoded, policy.decodedBytes - originalDecodedReserve),
+        compressedBytes: Math.max(minimumViewerThumbnailCompressed, policy.compressedBytes - originalCompressedReserve),
+    };
+};
+
+function publishCurrentPolicy(): void {
+    const policy = getGalleryPolicy();
+    for (const listener of listeners) listener(policy);
+}
 
 function publish(payload: unknown): void {
     signals = { ...signals, ...normalizeGallerySignals(payload) };
-    const policy = getGalleryPolicy();
-    for (const listener of listeners) listener(policy);
+    publishCurrentPolicy();
+}
+
+/** Shrinks the shared thumbnail cache while an original image is being decoded. */
+export function acquireOriginalViewerBudget(): () => void {
+    originalViewerReservations += 1;
+    publishCurrentPolicy();
+    let released = false;
+    return () => {
+        if (released) return;
+        released = true;
+        originalViewerReservations = Math.max(0, originalViewerReservations - 1);
+        publishCurrentPolicy();
+    };
 }
 
 function schedulePressureRecovery(): void {

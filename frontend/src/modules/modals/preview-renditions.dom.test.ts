@@ -1,9 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ acquire: vi.fn(), release: vi.fn(), allowPrefetch: false }));
-vi.mock('../../api', () => ({ hasOperationErrorCode: () => false, isMobilePlatform: () => false, onRuntimeEvent: () => () => {}, openExternalUrl: vi.fn(), useEncryptionPassword: vi.fn() }));
-vi.mock('../renditions/runtime', () => ({ acquireRendition: mocks.acquire, subscribeRenditionReset: () => () => {} }));
-vi.mock('../gallery-policy', () => ({ getGalleryPolicy: () => ({ allowPrefetch: mocks.allowPrefetch }), subscribeGalleryPolicy: () => () => {} }));
+const mocks = vi.hoisted(() => ({
+    acquire: vi.fn(),
+    release: vi.fn(),
+    close: vi.fn(),
+    openOriginal: vi.fn(),
+    setGalleryActive: vi.fn(),
+    reserveOriginal: vi.fn(),
+    releaseOriginalBudget: vi.fn(),
+    resetListener: undefined as undefined | (() => void),
+    policyListener: undefined as undefined | ((policy: { backgrounded: boolean }) => void),
+}));
+vi.mock('../../api', () => ({ closeMedia: mocks.close, isMobilePlatform: () => false, onRuntimeEvent: () => () => {}, openExternalUrl: vi.fn(), openOriginalImage: mocks.openOriginal, requireOperationSuccess: vi.fn(), useEncryptionPassword: vi.fn() }));
+vi.mock('../renditions/runtime', () => ({ acquireRendition: mocks.acquire, subscribeRenditionReset: (listener: () => void) => { mocks.resetListener = listener; return () => {}; } }));
+vi.mock('../gallery-policy', () => ({
+    acquireOriginalViewerBudget: mocks.reserveOriginal,
+    subscribeGalleryPolicy: (listener: (policy: { backgrounded: boolean }) => void) => { mocks.policyListener = listener; return () => {}; },
+}));
+vi.mock('../../ui/gallery/gallery-controller', () => ({ setActive: mocks.setGalleryActive }));
 vi.mock('../notifications', () => ({ notify: vi.fn() }));
 vi.mock('../encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('../transfers', () => ({ enqueueDownload: vi.fn() }));
@@ -14,32 +28,71 @@ const item = { type: 'file' as const, id: 1, name: 'Photo.jpg', channel_id: 10, 
 beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    mocks.allowPrefetch = false;
+    mocks.resetListener = undefined;
+    mocks.policyListener = undefined;
+    mocks.reserveOriginal.mockImplementation(() => mocks.releaseOriginalBudget);
     mocks.acquire.mockImplementation(() => ({ promise: Promise.resolve({ url: 'blob:photo', width: 1200, height: 800 }), release: mocks.release }));
+    mocks.openOriginal.mockResolvedValue({ token: 'original-1', url: 'http://127.0.0.1/media/original-1', kind: 'image' });
     Object.defineProperty(HTMLImageElement.prototype, 'decode', { configurable: true, value: vi.fn(async () => {}) });
-    document.body.innerHTML = '<div id="preview-modal" class="modal-overlay" style="display:none"><div id="preview-shell"><div id="preview-stage"><img id="preview-image"><div id="preview-loading"><div id="preview-loading-fill"></div></div><div id="preview-error"></div></div><span id="preview-filename"></span><button id="preview-close"></button><button id="preview-prev"></button><button id="preview-next"></button><span id="preview-counter"></span></div></div>';
+    document.body.innerHTML = '<div id="preview-modal" class="modal-overlay" style="display:none"><div id="preview-shell"><div id="preview-stage"><img id="preview-thumbnail"><img id="preview-image"><div id="preview-loading"><div id="preview-loading-fill"></div></div><div id="preview-error"></div><div id="preview-locked" style="display:none"><input id="preview-locked-input" type="password"><button id="preview-locked-eye"></button><button id="preview-locked-unlock"></button><div id="preview-locked-error"></div><div id="preview-locked-hint"><span id="preview-locked-hint-text"></span></div></div></div><span id="preview-filename"></span><button id="preview-download"></button><button id="preview-close"></button><button id="preview-prev"></button><button id="preview-next"></button><span id="preview-counter"></span></div></div>';
 });
 
 describe('bounded photo viewer', () => {
-    it('loads only a screen preview and releases its lease on close', async () => {
+    it('offers direct viewing only for backend-validated raster formats', async () => {
+        const preview = await import('./preview');
+        expect(preview.isPreviewableImage('photo.JPEG')).toBe(true);
+        expect(preview.isPreviewableImage('photo.webp')).toBe(true);
+        expect(preview.isPreviewableImage('vector.svg')).toBe(false);
+        expect(preview.isPreviewableImage('photo.jpg.exe')).toBe(false);
+    });
+
+    it('pins only an immutable thumbnail and opens one original session after the explicit viewer click', async () => {
         const preview = await import('./preview');
         preview.activatePreviewModal();
         await preview.openPreviewList([item, { ...item, id: 2 }], 0);
         expect(mocks.acquire).toHaveBeenCalledTimes(1);
-        expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ fileId: 1, revision: 2, kind: 'preview' }), 'viewer');
+        expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ fileId: 1, revision: 2, kind: 'thumbnail' }), 'viewer');
+        expect(mocks.openOriginal).toHaveBeenCalledExactlyOnceWith(1, 2);
+        expect(mocks.reserveOriginal).toHaveBeenCalledTimes(1);
+        expect(mocks.setGalleryActive).toHaveBeenCalledWith(false);
         preview.closePreviewModal();
         expect(mocks.release).toHaveBeenCalledTimes(1);
+        expect(mocks.close).toHaveBeenCalledWith('original-1');
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
+        expect(mocks.setGalleryActive).toHaveBeenLastCalledWith(true);
         expect(document.querySelector('#preview-image')?.getAttribute('src')).toBeNull();
     });
 
-    it('prefetches at most one next preview when policy permits it', async () => {
-        mocks.allowPrefetch = true;
+    it('never prefetches neighbor originals', async () => {
         const preview = await import('./preview');
         preview.activatePreviewModal();
         await preview.openPreviewList(Array.from({ length: 100 }, (_, index) => ({ ...item, id: index + 1 })), 5);
-        await vi.waitFor(() => expect(mocks.acquire).toHaveBeenCalledTimes(2));
-        expect(mocks.acquire.mock.calls[1]).toEqual([expect.objectContaining({ fileId: 7, kind: 'preview' }), 'prefetch']);
+        expect(mocks.acquire).toHaveBeenCalledTimes(1);
+        expect(mocks.openOriginal).toHaveBeenCalledTimes(1);
         preview.closePreviewModal();
+    });
+
+    it('closes the original capability when rendition state resets', async () => {
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([item], 0);
+
+        mocks.resetListener?.();
+
+        expect(mocks.close).toHaveBeenCalledWith('original-1');
+        expect(document.getElementById('preview-modal')?.style.display).toBe('none');
+    });
+
+    it('closes the original capability when the app enters the background', async () => {
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([item], 0);
+
+        mocks.policyListener?.({ backgrounded: true });
+
+        expect(mocks.close).toHaveBeenCalledWith('original-1');
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
+        expect(document.getElementById('preview-modal')?.style.display).toBe('none');
     });
 
     it('navigates through an asynchronous source without retaining the library', async () => {
@@ -50,33 +103,61 @@ describe('bounded photo viewer', () => {
         document.getElementById('preview-next')!.click();
         await vi.waitFor(() => expect(mocks.acquire).toHaveBeenCalledTimes(2));
         expect(source.getNeighbor).toHaveBeenCalledWith(item, 1);
+        expect(mocks.openOriginal.mock.calls).toEqual([[1, 2], [2, 2]]);
+        expect(mocks.close).toHaveBeenCalledWith('original-1');
         expect(document.getElementById('preview-counter')!.textContent).toBe('2 / 100000');
         preview.closePreviewModal();
     });
 
-    it('keeps a leased grid thumbnail visible while its screen preview loads', async () => {
-        let finish!: (value: { url: string; width: number; height: number }) => void;
-        const full = new Promise<{ url: string; width: number; height: number }>(resolve => { finish = resolve; });
+    it('keeps a reacquired thumbnail visible while the original stream is opening', async () => {
+        let finish!: (value: { token: string; url: string; kind: string }) => void;
+        const original = new Promise<{ token: string; url: string; kind: string }>(resolve => { finish = resolve; });
         const thumbnailRelease = vi.fn();
-        mocks.acquire.mockImplementation(request => request.kind === 'thumbnail'
-            ? { promise: Promise.resolve({ url: 'blob:thumb', width: 32, height: 32 }), release: thumbnailRelease }
-            : { promise: full, release: mocks.release });
+        mocks.acquire.mockReturnValue({ promise: Promise.resolve({ url: 'blob:thumb', width: 32, height: 32 }), release: thumbnailRelease });
+        mocks.openOriginal.mockReturnValue(original);
         const preview = await import('./preview');
         preview.activatePreviewModal();
         const opening = preview.openPreviewList([{ ...item, thumbUrl: 'blob:thumb' }], 0);
-        await vi.waitFor(() => expect(document.querySelector('#preview-image')?.getAttribute('src')).toBe('blob:thumb'));
-        finish({ url: 'blob:screen', width: 1200, height: 800 });
+        await vi.waitFor(() => expect(document.querySelector('#preview-thumbnail')?.getAttribute('src')).toBe('blob:thumb'));
+        finish({ token: 'original-1', url: 'http://127.0.0.1/media/original-1', kind: 'image' });
         await opening;
-        expect(thumbnailRelease).toHaveBeenCalledOnce();
-        expect(document.querySelector('#preview-image')?.getAttribute('src')).toBe('blob:screen');
+        expect(thumbnailRelease).not.toHaveBeenCalled();
+        expect(document.querySelector('#preview-image')?.getAttribute('src')).toBe('http://127.0.0.1/media/original-1');
         preview.closePreviewModal();
     });
 
-    it('lets another navigation cancel a slow image after metadata resolves', async () => {
-        mocks.acquire.mockImplementation(request => ({
-            promise: request.fileId === 2 ? new Promise(() => {}) : Promise.resolve({ url: 'blob:photo', width: 1200, height: 800 }),
-            release: mocks.release,
-        }));
+    it('keeps Download available when direct original display is rejected', async () => {
+        mocks.openOriginal.mockRejectedValue(new Error('animated image is unavailable for direct display'));
+        mocks.acquire.mockReturnValue({ promise: Promise.resolve({ url: 'blob:thumb', width: 32, height: 32 }), release: mocks.release });
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([item], 0);
+        await vi.waitFor(() => expect(document.querySelector('#preview-thumbnail')?.getAttribute('src')).toBe('blob:thumb'));
+        expect(document.getElementById('preview-download')?.hasAttribute('hidden')).toBe(false);
+        expect(document.getElementById('preview-error')?.textContent).toContain('animated image');
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
+        preview.closePreviewModal();
+    });
+
+    it('shows the unlock form when Wails wraps an encrypted image error', async () => {
+        mocks.openOriginal.mockRejectedValue(new Error(
+            'Binding call failed: Bound method returned an error: media: encryption key is unavailable: encryption password required',
+        ));
+        mocks.acquire.mockReturnValue({ promise: new Promise(() => {}), release: mocks.release });
+        const preview = await import('./preview');
+
+        preview.activatePreviewModal();
+        await preview.openPreviewList([{ ...item, encrypted: true }], 0);
+
+        expect(document.getElementById('preview-locked')?.style.display).toBe('flex');
+        expect(document.getElementById('preview-error')?.textContent).toBe('');
+        preview.closePreviewModal();
+    });
+
+    it('lets another navigation cancel a slow original session after metadata resolves', async () => {
+        mocks.openOriginal.mockImplementation((fileId: number) => fileId === 2
+            ? new Promise(() => {})
+            : Promise.resolve({ token: `original-${fileId}`, url: `http://127.0.0.1/media/original-${fileId}`, kind: 'image' }));
         const preview = await import('./preview');
         preview.activatePreviewModal();
         await preview.openPreviewList([item, { ...item, id: 2 }, { ...item, id: 3 }], 0);
@@ -84,18 +165,21 @@ describe('bounded photo viewer', () => {
         await vi.waitFor(() => expect(mocks.acquire).toHaveBeenCalledTimes(2));
         document.getElementById('preview-next')!.click();
         await vi.waitFor(() => expect(mocks.acquire).toHaveBeenCalledTimes(3));
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(2);
+        expect(mocks.close).toHaveBeenCalledWith('original-1');
         expect(document.getElementById('preview-counter')!.textContent).toBe('3 / 3');
         preview.closePreviewModal();
     });
 
     it('ignores a photo that finishes after the viewer closes', async () => {
-        let resolve!: (value: { url: string; width: number; height: number }) => void;
-        mocks.acquire.mockReturnValue({ promise: new Promise(yes => { resolve = yes; }), release: mocks.release });
+        let resolve!: (value: { token: string; url: string; kind: string }) => void;
+        mocks.openOriginal.mockReturnValue(new Promise(yes => { resolve = yes; }));
         const preview = await import('./preview');
         preview.activatePreviewModal();
         const opening = preview.openPreviewList([item], 0);
         preview.closePreviewModal();
-        resolve({ url: 'blob:late', width: 10, height: 10 });
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
+        resolve({ token: 'late', url: 'http://127.0.0.1/media/late', kind: 'image' });
         await opening;
         expect(document.querySelector('#preview-image')?.getAttribute('src')).toBeNull();
     });

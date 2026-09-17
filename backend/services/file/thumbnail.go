@@ -3,11 +3,17 @@ package file
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 
 	tdcrypto "TDrive/backend/crypto"
 )
 
 const defaultThumbConcurrency = 3
+
+var encryptedThumbCacheMagic = []byte("tdrive-thumb-cache-v2\x00")
+
+const encryptedThumbCacheHashSize = sha256.Size
 
 // Thumbnail preserves the legacy bridge contract while using the same bounded
 // derivative pipeline as the binary gallery. Missing derivatives are explicit;
@@ -34,11 +40,20 @@ func (s *Service) readThumbCache(cacheKey string, encrypted bool, masterKey []by
 	if !encrypted {
 		return raw, true
 	}
-	plain := &renditionWriter{limit: renditionPreviewLimit}
+	plain := &renditionWriter{limit: renditionPreviewLimit + len(encryptedThumbCacheMagic) + encryptedThumbCacheHashSize}
 	if _, err := tdcrypto.DecryptStream(bytes.NewReader(raw), plain, masterKey); err != nil {
 		return nil, false
 	}
-	return plain.Bytes(), true
+	decoded := plain.Bytes()
+	headerSize := len(encryptedThumbCacheMagic) + encryptedThumbCacheHashSize
+	if len(decoded) <= headerSize || !bytes.Equal(decoded[:len(encryptedThumbCacheMagic)], encryptedThumbCacheMagic) {
+		return nil, false
+	}
+	wantHash := sha256.Sum256([]byte(cacheKey))
+	if subtle.ConstantTimeCompare(decoded[len(encryptedThumbCacheMagic):headerSize], wantHash[:]) != 1 {
+		return nil, false
+	}
+	return bytes.Clone(decoded[headerSize:]), true
 }
 
 // writeThumbCache stores a generated thumbnail, encrypting it under the
@@ -50,8 +65,15 @@ func (s *Service) writeThumbCache(cacheKey string, jpegBytes []byte, encrypted b
 	}
 	value := jpegBytes
 	if encrypted {
+		cacheHash := sha256.Sum256([]byte(cacheKey))
+		boundPlaintext := make([]byte, 0, len(encryptedThumbCacheMagic)+len(cacheHash)+len(jpegBytes))
+		boundPlaintext = append(boundPlaintext, encryptedThumbCacheMagic...)
+		boundPlaintext = append(boundPlaintext, cacheHash[:]...)
+		boundPlaintext = append(boundPlaintext, jpegBytes...)
 		var enc bytes.Buffer
-		if err := tdcrypto.EncryptStream(bytes.NewReader(jpegBytes), &enc, masterKey, int64(len(jpegBytes))); err != nil {
+		err := tdcrypto.EncryptStream(bytes.NewReader(boundPlaintext), &enc, masterKey, int64(len(boundPlaintext)))
+		clear(boundPlaintext)
+		if err != nil {
 			return
 		}
 		value = enc.Bytes()

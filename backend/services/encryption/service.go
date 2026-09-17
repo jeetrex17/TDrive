@@ -1,3 +1,38 @@
+// Package encryption owns the vault: the lifecycle of the user's password, the
+// only in-memory copy of the unlocked master key, and the gates that decide who
+// may obtain it.
+//
+// backend/crypto supplies the primitives. This package adds the state and the
+// policy, and publishes the wrapped key as a control op on the personal
+// channel, so the vault is replicated into Telegram history and survives losing
+// the local database. Only forgetting the password destroys it. The master key
+// is never persisted in plaintext anywhere; "password remembered" means held in
+// this process's memory and nothing more.
+//
+// Any path that could mint a new master key first forces an authoritative
+// refresh, because a missing local encryption row is a cache miss and not proof
+// of absence — generating a second master key would orphan every file encrypted
+// under the first. Unlocking and changing the password deliberately skip that
+// refresh: they can only use an existing config, never create one, so they work
+// offline. A config is published before it is stored, so a failed publish
+// leaves the vault locked rather than diverged, and changing the password
+// re-wraps the same master key under a fresh salt rather than re-encrypting any
+// file.
+//
+// The three key gates are not interchangeable and choosing the wrong one is a
+// real vulnerability. The upload gate refuses any channel that is not the
+// personal one. The channel-scoped read gate must be consulted before any cache
+// is touched, so an encrypted row in a shared drive cannot borrow the personal
+// vault key. The channel-unaware gate is safe only where the channel has
+// already been proven.
+//
+// Mounts and media take a lease instead, which holds its own copy of the key,
+// so locking the vault cannot retroactively poison a mount that is mid-read.
+// The mount must close its lease when it stops serving encrypted data, and the
+// caller must eject the mount before clearing the session.
+//
+// Key derivations are serialized so that concurrent unlock attempts cannot
+// multiply Argon2id's memory cost into a self-inflicted denial of service.
 package encryption
 
 import (
@@ -12,6 +47,7 @@ import (
 	"sync"
 
 	tdcrypto "TDrive/backend/crypto"
+	"TDrive/backend/datadir"
 	"TDrive/backend/mountpolicy"
 	"TDrive/backend/projection"
 )
@@ -228,8 +264,22 @@ func (s *Service) RequireMasterKeyForFile(encrypted bool) ([]byte, error) {
 	return nil, ErrPasswordRequired
 }
 
+// RequireMasterKeyForChannel returns a fresh key copy only for encrypted files
+// in My Drive. File reads must use this channel-scoped form before touching
+// any cache, which prevents an encrypted row from a shared drive borrowing the
+// personal vault key.
+func (s *Service) RequireMasterKeyForChannel(channelID int64, encrypted bool) ([]byte, error) {
+	if !encrypted {
+		return nil, nil
+	}
+	if channelID == 0 || channelID != s.personalID() {
+		return nil, fmt.Errorf("encryption is only available on My Drive")
+	}
+	return s.RequireMasterKeyForFile(true)
+}
+
 func (s *Service) WriteCiphertextTemp(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
-	tmp, err := os.CreateTemp("", "tdrive-enc-*")
+	tmp, err := datadir.CreateCacheTemp("tdrive-enc-*")
 	if err != nil {
 		return nil, err
 	}

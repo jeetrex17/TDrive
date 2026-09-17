@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"io"
+	"os"
 	"runtime"
 	"strconv"
 	"sync"
@@ -75,6 +76,30 @@ func TestRenditionPlainThumbnailIgnoresOriginalSize(t *testing.T) {
 	}
 	if c.originals.Load() != 0 || c.thumbs.Load() != 1 {
 		t.Fatal("wrong download path")
+	}
+}
+func TestVideoRenditionAllowsOnlyBoundedThumbnail(t *testing.T) {
+	s, c := renditionFixture(t)
+	if _, err := s.DB.Exec(`UPDATE files SET name='clip.mp4' WHERE channel_id=? AND msg_id=?`, personalChannelID, 91); err != nil {
+		t.Fatal(err)
+	}
+	c.doc.Name = "clip.mp4"
+	raw := makePNG(t, 32, 16)
+	c.doc.Thumbs = []tgclient.FileThumb{{Type: "m", Width: 32, Height: 16, Size: len(raw)}}
+	c.thumbnail = func(_ context.Context, w io.Writer) error { _, err := w.Write(raw); return err }
+	for _, kind := range []string{"preview", "original"} {
+		if _, err := s.Rendition(context.Background(), personalChannelID, 91, 1, kind); !errors.Is(err, errPreviewNotSupported) {
+			t.Fatalf("%s error=%v", kind, err)
+		}
+	}
+	if c.originals.Load() != 0 || c.thumbs.Load() != 0 {
+		t.Fatal("denied video rendition performed network I/O")
+	}
+	if _, err := s.Rendition(context.Background(), personalChannelID, 91, 1, "thumbnail"); err != nil {
+		t.Fatal(err)
+	}
+	if c.originals.Load() != 0 || c.thumbs.Load() != 1 {
+		t.Fatal("video thumbnail did not use bounded document thumbnail")
 	}
 }
 func TestRenditionRevisionPinRejectsBeforeNetwork(t *testing.T) {
@@ -208,7 +233,7 @@ func TestRenditionReplacementDuringTransferIsNotCached(t *testing.T) {
 	}
 }
 
-func TestRenditionEncryptedRemoteDerivativeWorksWithoutOriginal(t *testing.T) {
+func TestLegacyEncryptedPreviewSidecarRemainsReadableWithoutOriginal(t *testing.T) {
 	s, _, telegram, _ := newTestService(t)
 	s.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
 	key := bytes.Repeat([]byte{8}, 32)
@@ -219,7 +244,20 @@ func TestRenditionEncryptedRemoteDerivativeWorksWithoutOriginal(t *testing.T) {
 		t.Fatalf("upload=%+v %v", uploaded, err)
 	}
 	id := int64(uploaded[0].MsgID)
-	ref, err := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "thumbnail")
+	legacySource, found, err := projection.FileByID(s.DB, personalChannelID, id)
+	if err != nil || !found {
+		t.Fatalf("legacy source = %#v, %v", legacySource, err)
+	}
+	legacyReader, err := os.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PrepareRenditions(context.Background(), legacySource, legacyReader); err != nil {
+		_ = legacyReader.Close()
+		t.Fatalf("prepare legacy preview: %v", err)
+	}
+	_ = legacyReader.Close()
+	ref, err := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "preview")
 	if err != nil {
 		t.Fatalf("derivative reference: %v", err)
 	}
@@ -235,7 +273,7 @@ func TestRenditionEncryptedRemoteDerivativeWorksWithoutOriginal(t *testing.T) {
 		mu.Unlock()
 		return owned, nil
 	}
-	result, err := s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
+	result, err := s.Rendition(context.Background(), personalChannelID, id, 1, "preview")
 	if err != nil || result.Width != 64 || result.Height != 32 || !result.Encrypted {
 		t.Fatalf("rendition=%+v %v", result, err)
 	}
@@ -251,7 +289,7 @@ func TestRenditionEncryptedRemoteDerivativeWorksWithoutOriginal(t *testing.T) {
 	if err := telegram.DeleteMessages(context.Background(), tgclient.InputPeer{}, []int64{ref.MsgID}); err != nil {
 		t.Fatal(err)
 	}
-	cached, err := s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
+	cached, err := s.Rendition(context.Background(), personalChannelID, id, 1, "preview")
 	if err != nil || !bytes.Equal(cached.Bytes, result.Bytes) {
 		t.Fatalf("cache: %v", err)
 	}
@@ -264,6 +302,77 @@ func TestRenditionRejectsLongEdgeDespiteSmallPixelCount(t *testing.T) {
 	selected := remoteRenditionType([]tgclient.FileThumb{{Type: "large", Width: 640, Height: 100}, {Type: "small", Width: 320, Height: 100}}, "thumbnail")
 	if selected != "small" {
 		t.Fatalf("selected=%s", selected)
+	}
+}
+
+func TestEncryptedThumbnailFallsBackToStoredDerivativeAfterUnlock(t *testing.T) {
+	s, _, telegram, _ := newTestService(t)
+	key := bytes.Repeat([]byte{7}, 32)
+	wireEncryption(s, key)
+	source := writeTempNamedFile(t, "private.png", makePNG(t, 64, 32))
+	uploaded, err := s.Upload(context.Background(), personalChannelID, []string{source}, []string{""}, true)
+	if err != nil || len(uploaded) != 1 {
+		t.Fatalf("upload=%+v %v", uploaded, err)
+	}
+	id := int64(uploaded[0].MsgID)
+	file, found, err := projection.FileByID(s.DB, personalChannelID, id)
+	if err != nil || !found {
+		t.Fatalf("source = %#v, %v", file, err)
+	}
+	reader, err := os.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PrepareRenditions(context.Background(), file, reader); err != nil {
+		_ = reader.Close()
+		t.Fatalf("prepare renditions: %v", err)
+	}
+	_ = reader.Close()
+
+	// Simulate a fresh device/cache. Encrypted source documents cannot expose a
+	// Telegram document thumbnail, so the encrypted sidecar is the bounded path.
+	if err := telegram.DeleteMessages(context.Background(), tgclient.InputPeer{}, []int64{id}); err != nil {
+		t.Fatal(err)
+	}
+	s.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	result, err := s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
+	if err != nil || result.Width != 64 || result.Height != 32 || !result.Encrypted {
+		t.Fatalf("thumbnail=%+v %v", result, err)
+	}
+}
+
+func TestEncryptedThumbnailPreparesBoundedDerivativeOnDemand(t *testing.T) {
+	s, _, telegram, _ := newTestService(t)
+	key := bytes.Repeat([]byte{9}, 32)
+	wireEncryption(s, key)
+	source := writeTempNamedFile(t, "existing-private.png", makePNG(t, 64, 32))
+	uploaded, err := s.Upload(context.Background(), personalChannelID, []string{source}, []string{""}, true)
+	if err != nil || len(uploaded) != 1 {
+		t.Fatalf("upload=%+v %v", uploaded, err)
+	}
+	id := int64(uploaded[0].MsgID)
+	s.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	if _, err := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "thumbnail"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("thumbnail unexpectedly prepared before viewport request: %v", err)
+	}
+
+	result, err := s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
+	if err != nil || result.Width != 64 || result.Height != 32 || !result.Encrypted {
+		t.Fatalf("thumbnail=%+v %v", result, err)
+	}
+	if _, err := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "thumbnail"); err != nil {
+		t.Fatalf("prepared thumbnail reference: %v", err)
+	}
+
+	// A later cache miss must use the durable encrypted sidecar. Removing the
+	// original proves the viewport path does not download it a second time.
+	if err := telegram.DeleteMessages(context.Background(), tgclient.InputPeer{}, []int64{id}); err != nil {
+		t.Fatal(err)
+	}
+	s.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	second, err := s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
+	if err != nil || second.Width != 64 || second.Height != 32 || !second.Encrypted {
+		t.Fatalf("sidecar thumbnail=%+v %v", second, err)
 	}
 }
 
@@ -330,7 +439,20 @@ func TestRenditionMissingReceiptIsQuarantinedButCancellationIsNot(t *testing.T) 
 				t.Fatal(err)
 			}
 			id := int64(files[0].MsgID)
-			ref, err := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "thumbnail")
+			legacySource, found, err := projection.FileByID(s.DB, personalChannelID, id)
+			if err != nil || !found {
+				t.Fatalf("legacy source = %#v, %v", legacySource, err)
+			}
+			legacyReader, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.PrepareRenditions(context.Background(), legacySource, legacyReader); err != nil {
+				_ = legacyReader.Close()
+				t.Fatalf("prepare legacy preview: %v", err)
+			}
+			_ = legacyReader.Close()
+			ref, err := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "preview")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -341,8 +463,8 @@ func TestRenditionMissingReceiptIsQuarantinedButCancellationIsNot(t *testing.T) 
 			} else {
 				s.TG = &renditionClient{Client: telegram, download: func(context.Context, io.Writer) error { return context.Canceled }}
 			}
-			_, err = s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
-			_, lookupErr := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "thumbnail")
+			_, err = s.Rendition(context.Background(), personalChannelID, id, 1, "preview")
+			_, lookupErr := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "preview")
 			if missing {
 				if !errors.Is(err, ErrRenditionMissing) || !errors.Is(lookupErr, sql.ErrNoRows) {
 					t.Fatalf("missing: %v lookup: %v", err, lookupErr)

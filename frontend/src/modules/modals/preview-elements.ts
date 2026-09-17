@@ -28,6 +28,7 @@ const REQUIRED_SELECTORS = {
     shell: '#preview-shell',
     stage: '#preview-stage',
     filename: '#preview-filename',
+    thumbnail: '#preview-thumbnail',
     image: '#preview-image',
     loading: '#preview-loading',
     loadingFill: '#preview-loading-fill',
@@ -40,6 +41,12 @@ export interface PreviewElements {
     readonly shell: HTMLElement;
     readonly stage: HTMLElement;
     readonly filename: HTMLElement;
+    // The stage is two stacked pictures: the grid's thumbnail holds the frame
+    // while the original streams in over it. Neither is optional, because the
+    // stylesheet keeps the original transparent until the controller promotes
+    // it, so markup without a thumbnail would show an empty stage rather than
+    // a degraded one.
+    readonly thumbnail: HTMLImageElement;
     readonly image: HTMLImageElement;
     readonly loading: HTMLElement;
     readonly loadingFill: HTMLElement;
@@ -89,6 +96,7 @@ export function resolvePreviewElements(host: HTMLElement): PreviewElementsResult
             shell: within<HTMLElement>(REQUIRED_SELECTORS.shell)!,
             stage: within<HTMLElement>(REQUIRED_SELECTORS.stage)!,
             filename: within<HTMLElement>(REQUIRED_SELECTORS.filename)!,
+            thumbnail: within<HTMLImageElement>(REQUIRED_SELECTORS.thumbnail)!,
             image: within<HTMLImageElement>(REQUIRED_SELECTORS.image)!,
             loading: within<HTMLElement>(REQUIRED_SELECTORS.loading)!,
             loadingFill: within<HTMLElement>(REQUIRED_SELECTORS.loadingFill)!,
@@ -129,6 +137,7 @@ export function previewElementsLive(elements: PreviewElements): boolean {
         && elements.shell.isConnected
         && elements.stage.isConnected
         && elements.filename.isConnected
+        && elements.thumbnail.isConnected
         && elements.image.isConnected
         && elements.loading.isConnected
         && elements.loadingFill.isConnected

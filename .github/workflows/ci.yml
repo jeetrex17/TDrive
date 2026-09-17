@@ -68,6 +68,10 @@ jobs:
         working-directory: frontend
         run: npm run typecheck
 
+      # `npm run lint` pins --max-warnings to the current warning count. It is a
+      # ratchet, not a target: package.json cannot hold comments, so the rule
+      # lives here. Lower the number whenever warnings are removed (they are
+      # almost all `any`); never raise it to make a build pass.
       - name: Lint frontend
         working-directory: frontend
         run: npm run lint
@@ -182,9 +186,21 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
-      # Nil contexts are passed intentionally by boundary-validation tests.
-      - name: Run staticcheck correctness analyzers
-        run: staticcheck -checks='SA*,-SA1012' $FIRST_PARTY_GO_PACKAGES
+      # SA* is correctness, S*/QF* are simplifications, U1000 is dead code.
+      # -SA1012 because nil contexts are passed intentionally by
+      # boundary-validation tests.
+      #
+      # U1000 cannot see across build tags: a symbol whose only callers sit
+      # behind //go:build ios, darwin or windows looks unused in this Linux
+      # run. Running the whole matrix and intersecting the results would need
+      # cross-compiling cgo for three platforms and a script to merge them, for
+      # a handful of symbols that change about once a year. Instead each such
+      # symbol carries a //lint:ignore U1000 naming the file that uses it —
+      # staticcheck does not complain about an ignore directive that turns out
+      # to be unnecessary, so the same command is clean on every GOOS and a
+      # developer can run it locally on macOS and get CI's answer.
+      - name: Run staticcheck correctness, simplification, and dead-code analyzers
+        run: staticcheck -checks='SA*,-SA1012,S*,QF*,U1000' $FIRST_PARTY_GO_PACKAGES
 
       - name: Run govulncheck
         run: govulncheck $FIRST_PARTY_GO_PACKAGES

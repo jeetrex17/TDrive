@@ -287,6 +287,25 @@
     box-shadow: 0 32px 90px rgba(0,0,0,0.28);
 }
 
+/* The thumbnail reserves a stable visual surface while the current original
+   stream opens. Both layers use identical bounds, so promotion never shifts
+   the dialog or the surrounding gallery. */
+.preview-thumbnail,
+.preview-original {
+    position: absolute;
+    inset: 84px 32px 40px;
+    width: calc(100% - 64px);
+    height: calc(100% - 124px);
+    margin: auto;
+}
+.preview-thumbnail { z-index: 1; }
+.preview-original {
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.preview-overlay.is-original-ready .preview-original { opacity: 1; }
+
 .preview-loading {
     position: absolute;
     left: 50%;
@@ -377,6 +396,13 @@
         padding: 74px 16px 24px;
     }
 
+    .preview-thumbnail,
+    .preview-original {
+        inset: 74px 16px 24px;
+        width: calc(100% - 32px);
+        height: calc(100% - 98px);
+    }
+
     .preview-content img {
         max-height: calc(100vh - 116px);
     }
@@ -385,6 +411,10 @@
         max-width: calc(100vw - 32px);
         border-radius: var(--radius-xl);
     }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .preview-original { transition: none; }
 }
 
 /* CONTEXT MENU */
@@ -682,4 +712,3 @@ html.mobile .move-modal-footer .secondary-btn {
     width: 100%;
     min-height: 48px;
 }
-

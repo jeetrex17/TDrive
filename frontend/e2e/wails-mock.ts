@@ -21,6 +21,7 @@ export interface MockCall {
 interface BrowserMock {
     calls: MockCall[];
     emit: (eventName: string, ...args: unknown[]) => void;
+    setPlan: (method: string, plan: MockPlan) => void;
 }
 
 declare global {
@@ -51,6 +52,8 @@ export function galleryPage(count: number, template: Record<string, unknown>): M
     return { kind: 'galleryPage', count, template };
 }
 
+const MOCK_IMAGE_CAPABILITY = 'mock-original-image';
+
 const DEFAULT_METHODS: Record<string, MockPlan> = {
     AppVersion: resolves({ version: '0.0.0-test', os: 'test', arch: 'test' }),
     CheckForUpdate: resolves({ phase: 'up_to_date', current_version: '0.0.0-test' }),
@@ -66,6 +69,8 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     GetFileList: resolves([]),
     GetFolderContents: resolves({ folders: [], files: [] }),
     GetStorageUsed: resolves(0),
+    GetGalleryStorage: resolves({ cache_bytes: 1024, cache_limit: 268435456, cache_entries: 1, catalog_bytes: 2048 }),
+    ClearGalleryCache: resolves({ cache_bytes: 0, cache_limit: 268435456, cache_entries: 0, catalog_bytes: 2048 }),
     GetUpdateState: resolves({ phase: 'idle', current_version: '0.0.0-test' }),
     ListChannels: resolves([
         {
@@ -78,9 +83,10 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     ]),
     ListMedia: resolves([]),
     GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: 0, page_size: 128, buckets: [], anchors: [] }),
-    GetGalleryPreparation: resolves({ running: false, channel_id: 1, completed: 0, total: 0, bytes_total: 0, bytes_done: 0, error: '' }),
     OpenGalleryImages: resolves({ token: crypto.randomUUID(), base_url: '/mock-renditions', channel_id: 1 }),
     CloseGalleryImages: resolves(null),
+    OpenOriginalImage: resolves({ token: MOCK_IMAGE_CAPABILITY, url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZcsQAAAAASUVORK5CYII=', thumbnail_url: '', hls_url: '', name: 'photo.png', kind: 'image', mime_type: 'image/png', supports_range: true, info: { channel_id: 1, file_id: 1, revision: 1, name: 'photo.png', stored_size: 68, plaintext_size: 68, encrypted: false, multipart: false } }),
+    CloseMedia: resolves(null),
     ListPendingJoins: resolves([]),
     Me: resolves({ user_id: 7, display_name: 'Test User', username: 'test', photo_base64: '' }),
     MountDrive: resolves({
@@ -142,6 +148,7 @@ function methodNamesById(): Record<string, string> {
 export interface WailsMockHandle {
     calls(method?: string): Promise<MockCall[]>;
     emit(eventName: string, ...args: unknown[]): Promise<void>;
+    setPlan(method: string, plan: MockPlan): Promise<void>;
 }
 
 export interface BootOptions {
@@ -159,6 +166,9 @@ export async function bootTDrive(
     options: BootOptions = {},
 ): Promise<WailsMockHandle> {
     const methods = { ...DEFAULT_METHODS, ...methodOverrides };
+    // Older journeys supply a complete timeline; reuse it for both new phases.
+    methods.GetMediaTimelineSummary ??= methods.GetMediaTimeline;
+    methods.GetMediaTimelineAnchors ??= methods.GetMediaTimeline;
     const methodNameById = methodNamesById();
 
     // A plan for a method the bindings do not export can never fire, and the
@@ -178,7 +188,7 @@ export async function bootTDrive(
         configuredMethods: Record<string, MockPlan>;
         methodNameById: Record<string, string>;
     }) => {
-        const plans = configuredMethods;
+        let plans = configuredMethods;
         const calls: MockCall[] = [];
 
         const selectPlan = (candidate: MockPlan | undefined, args: unknown[]): MockOutcome => {
@@ -284,6 +294,7 @@ export async function bootTDrive(
 
         window.__wailsMock = {
             calls,
+            setPlan(method, plan) { plans = { ...plans, [method]: plan }; },
             emit(eventName: string, ...args: unknown[]) {
                 // @wailsio/runtime's events module always wires up this hook
                 // (window._wails.dispatchWailsEvent) once it loads — the same
@@ -299,6 +310,10 @@ export async function bootTDrive(
     await page.goto(options.url ?? '/');
 
     return {
+        setPlan: (method: string, plan: MockPlan) => page.evaluate(
+            ([name, nextPlan]) => window.__wailsMock.setPlan(name, nextPlan),
+            [method, plan] as const,
+        ),
         calls: (method?: string) => page.evaluate((name) => {
             const calls = window.__wailsMock.calls;
             return name ? calls.filter((call) => call.method === name) : calls;

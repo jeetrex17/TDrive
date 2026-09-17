@@ -13,6 +13,42 @@ export interface GalleryLayout {
 export interface GalleryRow { key: string; top: number; indices: number[]; rowIndex: number }
 export interface GalleryHeader { key: string; label: string; top: number }
 
+const MAX_PHYSICAL_GALLERY_HEIGHT = 16_000_000;
+
+export interface GalleryScrollSpace {
+    physicalHeight: number;
+    physicalMax: number;
+    logicalMax: number;
+    toLogical: (physicalOffset: number) => number;
+    toPhysical: (logicalOffset: number) => number;
+    project: (logicalPosition: number, physicalOffset: number) => number;
+}
+
+/**
+ * Browsers clamp very tall CSS boxes (around 33 million pixels in Chromium).
+ * The scrollbar uses a capped physical range, while the virtual window keeps
+ * logical coordinates so every rendered cell remains its real pixel size.
+ */
+export function createGalleryScrollSpace(logicalHeight: number, viewportHeight: number): GalleryScrollSpace {
+    const viewport = Math.max(1, viewportHeight);
+    const physicalHeight = Math.min(Math.max(0, logicalHeight), MAX_PHYSICAL_GALLERY_HEIGHT);
+    const logicalMax = Math.max(0, logicalHeight - viewport);
+    const physicalMax = Math.max(0, physicalHeight - viewport);
+    const toLogical = (physicalOffset: number): number => {
+        if (physicalMax === 0) return 0;
+        return Math.max(0, Math.min(physicalMax, physicalOffset)) * logicalMax / physicalMax;
+    };
+    const toPhysical = (logicalOffset: number): number => {
+        if (logicalMax === 0) return 0;
+        return Math.max(0, Math.min(logicalMax, logicalOffset)) * physicalMax / logicalMax;
+    };
+    // Place logical geometry relative to the mapped viewport. This avoids
+    // shrinking cells even when the scrollbar itself represents a larger span.
+    const project = (logicalPosition: number, physicalOffset: number): number =>
+        physicalOffset + logicalPosition - toLogical(physicalOffset);
+    return { physicalHeight, physicalMax, logicalMax, toLogical, toPhysical, project };
+}
+
 /** Only month summaries are measured. No row/item array is built for offscreen photos. */
 export function createGalleryLayout(buckets: readonly MediaBucket[], width: number, mobile: boolean): GalleryLayout {
     const gap = mobile ? 2 : 5;

@@ -1,6 +1,7 @@
-import { hasOperationErrorCode, isMobilePlatform, onRuntimeEvent, openExternalUrl } from '../../api';
+import { closeMedia, isMobilePlatform, openExternalUrl, openOriginalImage } from '../../api';
 import { state } from '../../state';
 import { notify } from '../notifications';
+import { isEncryptionPasswordRequired } from '../errors';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
@@ -9,7 +10,8 @@ import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/t
 import { createZoomPanController } from '../../ui/preview/zoom-pan';
 import { acquireRendition, subscribeRenditionReset, type ImageRequest } from '../renditions/runtime';
 import type { RenditionLease } from '../renditions/broker';
-import { getGalleryPolicy, subscribeGalleryPolicy } from '../gallery-policy';
+import { acquireOriginalViewerBudget, subscribeGalleryPolicy } from '../gallery-policy';
+import { setActive as setGalleryThumbnailScheduling } from '../../ui/gallery/gallery-controller';
 import type { FileCommandItem } from '../../ui/file-list/types';
 import {
     capturePreviewTransitionSource,
@@ -23,7 +25,9 @@ type PreviewSelection =
     | { reason: 'none' | 'multiple' | 'unsupported' }
     | { reason: 'ok'; item: PreviewCommandItem; key: string };
 
-const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
+// Direct viewing is limited to raster formats whose dimensions and encoded
+// bytes the backend can validate before exposing a loopback capability.
+const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp"]);
 
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
 
@@ -49,23 +53,20 @@ const zoomPan = createZoomPanController(() => els?.image ?? null);
 // synthesises for them must not zoom a second time.
 let lastPointerType = "mouse";
 
-// Grid and viewer share one byte-budgeted broker. The displayed image stays
-// pinned until navigation/close; at most one next preview has a separate lease.
-let activeImageLease: RenditionLease | null = null;
+// The broker owns thumbnails only. An original image is a short-lived loopback
+// session that exists solely for the current explicit viewer action.
 let activeThumbnailLease: RenditionLease | null = null;
-let prefetchedImageLease: RenditionLease | null = null;
-let preloadEpoch = 0;
+let activeOriginalSession: { token: string; url: string } | null = null;
+let releaseOriginalBudget: (() => void) | null = null;
 let unsubscribePreviewPolicy: (() => void) | null = null;
 let unsubscribePreviewReset: (() => void) | null = null;
 let previewRequestToken = 0;
 let activePreviewKey = "";
-let activePreviewMsgID = 0;
-let activePreviewItem: any = null;
-let chromeHideTimer: any = null;
+let activePreviewItem: PreviewNavigationItem | null = null;
+let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
 let previewHostObserver: MutationObserver | null = null;
 let previewHostEl: HTMLElement | null = null;
 let previewA11y: ReturnType<typeof installModalA11y> | null = null;
-let previewProgressUnsubscribe: (() => void) | null = null;
 const previewListenerCleanups: Array<() => void> = [];
 let activePreviewTransitionSource: PreviewTransitionSource | null = null;
 const previewTransition = createPreviewTransitionController();
@@ -97,7 +98,7 @@ function listenPreview(target: EventTarget | null, type: string, listener: Event
     previewListenerCleanups.push(() => target.removeEventListener(type, listener, options));
 }
 
-function isSpaceKey(event: any) {
+function isSpaceKey(event: KeyboardEvent) {
     return event.code === "Space" || event.key === " " || event.key === "Spacebar";
 }
 
@@ -109,27 +110,34 @@ function isSpaceKey(event: any) {
 // the very first press after opening a photo was swallowed, and so was every
 // press after clicking Previous or Next. Arrows do nothing on a button, so
 // there was never anything to yield to.
-function isTypingContext(element: any) {
+function isTypingContext(element: Element | null) {
     if (!element) return false;
     const tag = String(element.tagName || "").toUpperCase();
-    return element.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    // isContentEditable is an HTMLElement property; an SVG or MathML node that
+    // happens to hold focus simply has no editing mode to yield to.
+    const editable = element instanceof HTMLElement && element.isContentEditable;
+    return editable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 function isBlockingOverlayOpen() {
-    const overlays = Array.from(document.querySelectorAll(".modal-overlay"));
-    if (overlays.some((el: any) => el.id !== "preview-modal" && el.style.display !== "none")) {
+    const overlays = Array.from(document.querySelectorAll<HTMLElement>(".modal-overlay"));
+    if (overlays.some((el) => el.id !== "preview-modal" && el.style.display !== "none")) {
         return true;
     }
 
     return Boolean(document.querySelector("#context-menu .context-menu-panel"));
 }
 
-function flashStatus(message: any) {
+function flashStatus(message: string) {
     if (!message) return;
     notify({ level: 'info', title: message, durationMs: 2400 });
 }
 
-function getPreviewKey(item: any) {
+// Some callers still hand over backend-shaped records, where the channel id
+// arrives under its Go field name.
+type PreviewKeySource = PreviewNavigationItem & { ChannelID?: number };
+
+function getPreviewKey(item: PreviewKeySource | null) {
 	if (!item || item.type !== "file") return "";
 	const channelID = Number(item.channel_id || item.channelId || item.ChannelID || state.activeChannel?.id || 0);
 	return `file:${channelID}:${Number(item.id || 0)}`;
@@ -137,7 +145,6 @@ function getPreviewKey(item: any) {
 
 function clearActivePreview() {
     activePreviewKey = "";
-    activePreviewMsgID = 0;
     activePreviewItem = null;
     navSource = null;
     navigationPending = false;
@@ -168,7 +175,7 @@ function clearChromeHideTimer() {
     chromeHideTimer = null;
 }
 
-function setChromeVisible(visible: any) {
+function setChromeVisible(visible: boolean) {
     els?.modal.classList.toggle("is-chrome-visible", Boolean(visible));
 }
 
@@ -200,28 +207,25 @@ function revealChrome() {
     scheduleChromeHide();
 }
 
-function resetImageSurface() {
+function resetImageSurface({ keepThumbnail = false } = {}) {
     const dom = els;
     if (!dom) return;
+    if (!keepThumbnail) {
+        dom.thumbnail.hidden = true;
+        dom.thumbnail.removeAttribute("src");
+    }
     dom.image.hidden = true;
     dom.image.removeAttribute("src");
     dom.image.alt = "";
+    dom.modal.classList.remove('is-original-ready');
 }
 
-function showPreviewLoading(_label?: any) {
+function showPreviewLoading(_label?: string) {
     const dom = els;
     if (!dom) return;
     dom.modal.classList.add("is-preview-loading");
     dom.loading.style.display = "flex";
     dom.loading.setAttribute("aria-hidden", "false");
-}
-
-function setPreviewProgress(percent: any) {
-    const dom = els;
-    if (!dom) return;
-    const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
-    showPreviewLoading();
-    dom.loadingFill.style.width = `${clamped}%`;
 }
 
 function hidePreviewProgress() {
@@ -233,7 +237,7 @@ function hidePreviewProgress() {
     dom.loadingFill.style.width = "0%";
 }
 
-function preparePreviewSurface(filename: any, { keepCurrentImage = false } = {}) {
+function preparePreviewSurface(filename: string, { keepCurrentImage = false } = {}) {
     const dom = els;
     if (!dom) return;
     hideLockedState();
@@ -249,7 +253,7 @@ function preparePreviewSurface(filename: any, { keepCurrentImage = false } = {})
     if (!keepCurrentImage) dom.image.alt = "";
 }
 
-function showPreviewError(message: any, { keepCurrentImage = false } = {}) {
+function showPreviewError(message: string, { keepCurrentImage = false } = {}) {
     const dom = els;
     if (!dom) return;
 
@@ -266,7 +270,7 @@ function showPreviewError(message: any, { keepCurrentImage = false } = {}) {
     clearChromeHideTimer();
 }
 
-function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
+function showPreviewImage(src: string, alt: string, { keepLoading = false } = {}) {
     const dom = els;
     if (!dom) return;
 
@@ -281,21 +285,35 @@ function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
     dom.error.textContent = "";
     dom.modal.classList.remove("is-preview-error");
     dom.filename.textContent = alt || "Preview";
-    dom.image.alt = "";
+    dom.image.alt = alt || "Preview";
     dom.image.src = src;
     dom.image.hidden = false;
-    // Opacity-only entrance: we drive transform via zoom/pan, so the animation
-    // must not write transform (and must not hold it with fill).
-    const sharedTransition = previewTransition.finishOpen(dom.image);
-    const reduceMotion = typeof window.matchMedia === "function"
-        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!sharedTransition && !previewTransition.isRunning() && !reduceMotion && typeof dom.image.animate === "function") {
-        dom.image.animate(
-            [{ opacity: 0.6 }, { opacity: 1 }],
-            { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-        );
-    }
+    // The CSS layer transition promotes the original over its thumbnail in
+    // 160ms. It intentionally does not touch transform, which zoom and drag
+    // own, and it is disabled by the reduced-motion media query.
     revealChrome();
+}
+
+/** Pins a thumbnail by its immutable revision while the original stream opens. */
+function showPreviewThumbnail(src: string, alt: string): void {
+    const dom = els;
+    if (!dom) return;
+    dom.thumbnail.alt = '';
+    dom.thumbnail.src = src;
+    dom.thumbnail.hidden = false;
+    dom.thumbnail.setAttribute('aria-label', `Thumbnail for ${alt}`);
+    if (previewTransition.isRunning()) previewTransition.finishOpen(dom.thumbnail);
+}
+
+// The original is a capability, not a cached asset: it is handed back the
+// moment it stops being on screen, and the budget it reserved with it.
+function releaseOriginalSession(): void {
+    const session = activeOriginalSession;
+    activeOriginalSession = null;
+    activeFullSrc = '';
+    releaseOriginalBudget?.();
+    releaseOriginalBudget = null;
+    if (session?.token) void Promise.resolve(closeMedia(session.token)).catch(() => {});
 }
 
 function isPreviewOpen() {
@@ -303,14 +321,15 @@ function isPreviewOpen() {
     return Boolean(dom && dom.modal.style.display !== "none");
 }
 
-function normalizePreviewError(err: any) {
+function normalizePreviewError(err: unknown) {
     if (err instanceof Error && err.message.trim()) return err;
     if (typeof err === "string" && err.trim()) return new Error(err.trim());
-    if (err && typeof err.message === "string" && err.message.trim()) return new Error(err.message.trim());
+    const message = (err as { message?: unknown } | null | undefined)?.message;
+    if (typeof message === "string" && message.trim()) return new Error(message.trim());
     return new Error("Download failed");
 }
 
-function showSelectionPreviewError(selection: any) {
+function showSelectionPreviewError(selection: PreviewSelection) {
     if (selection.reason === "multiple") {
         flashStatus("Preview works with one image at a time");
         return;
@@ -330,7 +349,7 @@ function readyElements(): PreviewElements | null {
     return null;
 }
 
-export function isPreviewableImage(filename: any) {
+export function isPreviewableImage(filename: string) {
     const name = String(filename || "").trim();
     const dot = name.lastIndexOf(".");
     if (dot < 0 || dot === name.length - 1) return false;
@@ -342,73 +361,81 @@ function renditionRequest(target: PreviewNavigationItem): ImageRequest {
         channelId: Number(target.channel_id || target.channelId || state.activeChannel?.id || 0),
         fileId: Number(target.id),
         revision: Number(target.content_revision || target.revision || 0),
-        kind: 'preview',
+        kind: 'thumbnail',
     };
 }
 
-function releasePreviewImages(): void {
-    preloadEpoch += 1;
-    activeImageLease?.release();
-    activeImageLease = null;
+function releasePreviewResources(): void {
     activeThumbnailLease?.release();
     activeThumbnailLease = null;
-    prefetchedImageLease?.release();
-    prefetchedImageLease = null;
+    releaseOriginalSession();
 }
 
-export async function loadPreview(target: PreviewNavigationItem) {
+export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail = false } = {}) {
     const dom = readyElements();
     if (!dom) throw new Error('Preview unavailable');
     const token = ++previewRequestToken;
     const filename = target.name || 'Preview';
     activePreviewKey = getPreviewKey(target);
-    activePreviewMsgID = Number(target.id);
     activePreviewItem = target;
-    activeFullSrc = '';
+    releasePreviewResources();
     zoomPan.reset();
-    resetImageSurface();
+    resetImageSurface({ keepThumbnail });
     updateNavChrome();
     refreshInfoPanel();
-    setPreviewProgress(0);
-
-    // Acquire before releasing the previous speculative lease. If this is the
-    // prefetched neighbor, its transfer and cached bytes remain shared.
+    // Ask for the password before the request, not after it fails: a known
+    // encrypted photo must not spend a doomed round trip to learn that.
+    if (target.encrypted && !state.encryption.passwordRemembered) {
+        showLockedState();
+        return null;
+    }
     const request = renditionRequest(target);
-    const lease = acquireRendition(request, 'viewer');
-    const placeholder = target.thumbUrl ? acquireRendition({ ...request, kind: 'thumbnail' }, 'viewer') : null;
-    releasePreviewImages();
-    activeImageLease = lease;
-    activeThumbnailLease = placeholder;
-    let previewSettled = false;
-    // Pin the already-visible grid thumbnail while the screen preview arrives.
-    // Reusing its lease avoids both a flash and a borrowed/revoked object URL.
-    if (placeholder) void placeholder.promise.then(asset => {
-        if (!previewSettled && token === previewRequestToken && isPreviewOpen()) showPreviewImage(asset.url, filename, { keepLoading: true });
-    }).catch(() => {});
+    const thumbnailLease = acquireRendition(request, 'viewer');
+    activeThumbnailLease = thumbnailLease;
+    // Do not trust an old DOM URL as identity. The shared broker either reuses
+    // the same revision asset or reacquires it with the immutable request.
+    void thumbnailLease.promise.then(asset => {
+        if (token !== previewRequestToken || !isPreviewOpen() || activeThumbnailLease !== thumbnailLease) return;
+        showPreviewThumbnail(asset.url, filename);
+    }).catch(error => {
+        if (token !== previewRequestToken || !isPreviewOpen()) return;
+        if (isEncryptionPasswordRequired(error)) showLockedState();
+    });
 
     try {
-        const asset = await lease.promise;
-        previewSettled = true;
-        if (token !== previewRequestToken || !isPreviewOpen()) return null;
-        showPreviewImage(asset.url, filename);
-        activeThumbnailLease?.release();
-        activeThumbnailLease = null;
-        dom.image.title = 'Screen-sized preview. Download for original quality.';
+        // This call happens only because opening/navigating the viewer was an
+        // explicit action. No original bytes are put in Blob or rendition cache.
+        releaseOriginalBudget = acquireOriginalViewerBudget();
+        const opened = await openOriginalImage(Number(target.id), request.revision);
+        if (token !== previewRequestToken || !isPreviewOpen()) {
+            void Promise.resolve(closeMedia(opened.token)).catch(() => {});
+            return null;
+        }
+        activeOriginalSession = { token: opened.token, url: opened.url };
+        activeFullSrc = opened.url;
+        showPreviewImage(opened.url, filename, { keepLoading: true });
+        dom.image.title = 'Original image';
         refreshInfoPanel();
-        preloadNeighbors();
-        return { src: asset.url };
+        return { src: opened.url };
     } catch (error) {
-        previewSettled = true;
+        if (token === previewRequestToken) {
+            releaseOriginalBudget?.();
+            releaseOriginalBudget = null;
+        }
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
-        if (hasOperationErrorCode(error, 'encryption_password_required')
-            || (error instanceof Error && 'code' in error && error.code === 'encryption_password_required')) {
+        if (isEncryptionPasswordRequired(error)) {
             showLockedState();
             return null;
         }
         const normalized = normalizePreviewError(error);
-        if (isPreviewVisible()) {
+        // A pinned thumbnail is still a picture worth keeping on screen, and
+        // Download still works, so the failure is reported beside it rather
+        // than replacing it with the full error state.
+        if (dom.thumbnail.getAttribute('src')) {
             hidePreviewProgress();
-            dom.image.title = 'Thumbnail preview. Download for original quality.';
+            dom.image.title = 'Original image unavailable';
+            dom.error.textContent = normalized.message;
+            dom.error.style.display = 'block';
         } else showPreviewError(normalized.message);
         return null;
     }
@@ -423,7 +450,7 @@ export function closePreviewModal() {
     }
     activePreviewTransitionSource = null;
     previewRequestToken += 1;
-    releasePreviewImages();
+    releasePreviewResources();
     clearActivePreview();
     closeInfoPanel();
     hideLockedState();
@@ -445,11 +472,12 @@ export function closePreviewModal() {
     }
     hidePreviewProgress();
     resetImageSurface();
+    setGalleryThumbnailScheduling(true);
 }
 
 // openPreviewItem shows the modal and loads one item. It does not touch the
 // navigation context, so both single-item and list callers route through it.
-async function openPreviewItem(item: any, transitionSource: PreviewTransitionSource | null = null) {
+async function openPreviewItem(item: PreviewNavigationItem, transitionSource: PreviewTransitionSource | null = null) {
     const dom = els;
     if (!dom) return false;
     const wasOpen = isPreviewOpen();
@@ -461,14 +489,18 @@ async function openPreviewItem(item: any, transitionSource: PreviewTransitionSou
     dom.modal.setAttribute("aria-hidden", "false");
     previewA11y?.activate();
     activateModalOwnership(dom.modal);
+    // The modal owns a pinned thumbnail, so yielding the gallery viewport
+    // releases below-the-overlay work and keeps mobile memory predictable.
+    setGalleryThumbnailScheduling(false);
     setChromeVisible(true);
     preparePreviewSurface(item.name || "Preview", { keepCurrentImage });
-    if (!wasOpen && transitionSource && previewTransition.beginOpen(transitionSource, dom.modal)) {
-        showPreviewImage(transitionSource.imageSrc, item.name || "Preview", { keepLoading: true });
-    }
+    const sharedTransition = !wasOpen && transitionSource
+        ? previewTransition.beginOpen(transitionSource, dom.modal)
+        : false;
+    if (sharedTransition && transitionSource) showPreviewThumbnail(transitionSource.imageSrc, item.name || "Preview");
 
     try {
-        await loadPreview(item);
+        await loadPreview(item, { keepThumbnail: sharedTransition });
         return true;
     } catch {
         return false;
@@ -496,16 +528,21 @@ export async function openPreviewForSelection(target: PreviewCommandItem | null 
     return openPreviewItem(selection.item);
 }
 
-function findGalleryPreviewSource(item: any): PreviewTransitionSource | null {
+function findGalleryPreviewSource(item: PreviewNavigationItem | null): PreviewTransitionSource | null {
     const id = Number(item?.id || 0);
     if (!id) return null;
     const cell = document.querySelector<HTMLElement>('.gallery-cell[data-id="' + id + '"]');
     return capturePreviewTransitionSource(cell);
 }
 
+// The file list builds its rows inline, so their `type` arrives as a widened
+// string rather than the literal; the adapter takes them as they come and
+// narrows at the one boundary that actually needs a navigation item.
+type PreviewListItem = Omit<PreviewNavigationItem, 'type'> & { type: string };
+
 /** Compatibility adapter for existing small, already-loaded file lists. */
 export async function openPreviewList(
-    items: any[],
+    items: PreviewListItem[],
     index: number,
     transitionSource: PreviewTransitionSource | null = null,
 ) {
@@ -518,7 +555,7 @@ export async function openPreviewList(
         async getNeighbor(item, direction) {
             if (items[position]?.id !== item.id) return null;
             const next = position + direction;
-            return next >= 0 && next < items.length ? items[next] : null;
+            return next >= 0 && next < items.length ? items[next] as PreviewNavigationItem : null;
         },
         getPosition(item) {
             if (items[position]?.id !== item.id) {
@@ -528,7 +565,7 @@ export async function openPreviewList(
             return { index: position, total: items.length };
         },
     };
-    return openPreviewSource(source, items[i], transitionSource);
+    return openPreviewSource(source, items[i] as PreviewNavigationItem, transitionSource);
 }
 
 export async function openPreviewSource(
@@ -561,7 +598,9 @@ async function navigatePreview(delta: number) {
     navigationPending = true;
     updateNavChrome();
     try {
-        const item = await source.getNeighbor(activePreviewItem, direction);
+        // A photo is loaded whenever the preview is open: loadPreview records it
+        // before anything can navigate, and closing clears the two together.
+        const item = await source.getNeighbor(activePreviewItem!, direction);
         if (!item || epoch !== navigationEpoch || source !== navSource || !isPreviewOpen()) return;
         // Once the neighboring record is known, navigation can interrupt its
         // image transfer. A slow photo must not trap the user on that slide.
@@ -694,13 +733,13 @@ function zoomAt(clientX: number, clientY: number, factor: number) {
     zoomPan.zoomAt(clientX, clientY, factor);
 }
 
-function handleZoomWheel(e: any) {
+function handleZoomWheel(e: WheelEvent) {
     if (!isPreviewVisible()) return;
     e.preventDefault();
     zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.18 : 1 / 1.18);
 }
 
-function handleZoomDblClick(e: any) {
+function handleZoomDblClick(e: MouseEvent) {
     if (!isPreviewVisible()) return;
     if (lastPointerType === "touch" && isMobilePlatform()) return;
     e.preventDefault();
@@ -811,22 +850,7 @@ function previewTouchHandlers(): TouchGestureHandlers {
     };
 }
 
-// Speculation fetches compressed screen previews only. No Image/decode call
-// here: invisible neighbors must not allocate decoded WebView surfaces.
-function preloadNeighbors() {
-    if (!navSource || !activePreviewItem || !getGalleryPolicy().allowPrefetch) return;
-    const epoch = ++preloadEpoch;
-    const source = navSource;
-    const item = activePreviewItem;
-    void source.getNeighbor(item, 1).then(next => {
-        if (!next || epoch !== preloadEpoch || !isPreviewOpen() || !getGalleryPolicy().allowPrefetch) return;
-        prefetchedImageLease?.release();
-        prefetchedImageLease = acquireRendition(renditionRequest(next), 'prefetch');
-        void prefetchedImageLease.promise.catch(() => {});
-    }).catch(() => {}); // Navigation reports an unavailable neighbor on demand.
-}
-
-async function handlePreviewKeydown(event: any) {
+async function handlePreviewKeydown(event: KeyboardEvent) {
     const spacePressed = isSpaceKey(event);
     const previewOpen = isPreviewOpen();
 
@@ -895,8 +919,6 @@ export function teardownPreviewModal(): void {
     previewA11y?.deactivate();
     if (els) deactivateModalOwnership(els.modal);
     previewA11y = null;
-    previewProgressUnsubscribe?.();
-    previewProgressUnsubscribe = null;
     for (let i = previewListenerCleanups.length - 1; i >= 0; i -= 1) {
         previewListenerCleanups[i]();
     }
@@ -905,7 +927,7 @@ export function teardownPreviewModal(): void {
     previewHostObserver = null;
     previewHostEl = null;
     previewTransition.cancel();
-    releasePreviewImages();
+    releasePreviewResources();
     unsubscribePreviewPolicy?.();
     unsubscribePreviewPolicy = null;
     unsubscribePreviewReset?.();
@@ -1046,27 +1068,21 @@ export function activatePreviewModal(): () => void {
     }) as EventListener);
     listenPreview(dom.closeButton, "blur", (() => scheduleChromeHide()) as EventListener);
     listenPreview(dom.image, "error", (() => {
-        if (isPreviewOpen() && dom.image?.getAttribute("src")) showPreviewError("Not a supported image");
+        if (isPreviewOpen() && dom.image.getAttribute("src")) {
+            releaseOriginalSession();
+            showPreviewError("Not a supported image", { keepCurrentImage: true });
+        }
     }) as EventListener);
     listenPreview(dom.image, "load", (() => {
+        dom.modal.classList.add('is-original-ready');
+        hidePreviewProgress();
         if (infoOpen) refreshInfoPanel();
     }) as EventListener);
     unsubscribePreviewReset = subscribeRenditionReset(() => {
         if (isPreviewOpen()) closePreviewModal();
     });
     unsubscribePreviewPolicy = subscribeGalleryPolicy(policy => {
-        if (!policy.allowPrefetch) {
-            preloadEpoch += 1;
-            prefetchedImageLease?.release();
-            prefetchedImageLease = null;
-        }
         if (policy.backgrounded && isPreviewOpen()) closePreviewModal();
-    });
-    previewProgressUnsubscribe = onRuntimeEvent("preview_progress", (msgID, percent) => {
-        if (!isPreviewOpen()) return;
-        const targetID = Number(msgID);
-        if (!Number.isFinite(targetID) || targetID !== activePreviewMsgID) return;
-        setPreviewProgress(percent);
     });
     listenPreview(window, "keydown", ((event: KeyboardEvent) => {
         void handlePreviewKeydown(event);

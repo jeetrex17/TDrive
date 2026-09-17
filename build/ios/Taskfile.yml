@@ -114,6 +114,7 @@ tasks:
           -framework Foundation -framework UIKit -framework WebKit \
           -framework Security -framework CoreFoundation \
           -framework CoreGraphics -framework ImageIO \
+          -framework Photos \
           -framework UniformTypeIdentifiers \
           -framework LocalAuthentication -framework UserNotifications \
           -framework AVFoundation \
@@ -295,8 +296,11 @@ tasks:
     sources:
       - build/config.yml
       - build/appicon.png
+      - build/ios/main.m
+      - build/ios/TDrivePhotoBridge.inc
     generates:
       - build/ios/xcode/main/main.m
+      - build/ios/xcode/main/TDrivePhotoBridge.inc
       - build/ios/xcode/main/Assets.xcassets/**/*
       - build/ios/xcode/project.pbxproj
     cmds:
@@ -306,11 +310,12 @@ tasks:
       # build/ios/main.m, so put it back or a build driven from Xcode quietly
       # ships without it while a build driven from here has it.
       - cp build/ios/main.m build/ios/xcode/main/main.m
+      - cp build/ios/TDrivePhotoBridge.inc build/ios/xcode/main/TDrivePhotoBridge.inc
       # Go's c-archive carries ImageIO calls but Xcode links the final binary.
       # The Wails template only includes its own frameworks; add ours to both
       # generated configurations every time the project is regenerated.
       - |
-        perl -0pi -e 's/"-ObjC",/"-ObjC", "-framework", "CoreGraphics", "-framework", "ImageIO",/g' build/ios/xcode/main.xcodeproj/project.pbxproj
+        perl -0pi -e 's/"-ObjC",/"-ObjC", "-framework", "CoreGraphics", "-framework", "ImageIO", "-framework", "Photos", "-framework", "UniformTypeIdentifiers",/g' build/ios/xcode/main.xcodeproj/project.pbxproj
       # Same trap for Info.plist: the generated one carries none of the keys
       # this app declares, and UIFileSharingEnabled is the difference between
       # a download the Files app lists and one nobody can reach. Keep the
@@ -321,6 +326,9 @@ tasks:
           /usr/libexec/PlistBuddy -c "Set :$key $value" build/ios/xcode/main/Info.plist 2>/dev/null ||
             /usr/libexec/PlistBuddy -c "Add :$key bool $value" build/ios/xcode/main/Info.plist
         done
+        description=$(/usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" build/ios/Info.plist)
+        /usr/libexec/PlistBuddy -c "Set :NSPhotoLibraryUsageDescription $description" build/ios/xcode/main/Info.plist 2>/dev/null ||
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string $description" build/ios/xcode/main/Info.plist
 
   run:
     summary: Run the application in iOS Simulator

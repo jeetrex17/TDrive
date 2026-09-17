@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,6 +33,10 @@ import (
 // narrow nativeMediaCloser rather than by reaching in here.
 type MediaService struct {
 	host serviceHost
+	// mount is held around OpenOriginalImage, the one capability here that
+	// outlives the call that created it and so must not be published after a
+	// logout has become terminal.
+	mount mountLifecycleGate
 
 	// nativeMedia owns out-of-webview player processes tied to media loopback
 	// sessions. Each token must be closed before the backend shuts down so the
@@ -39,8 +45,8 @@ type MediaService struct {
 	nativeMedia   map[string]*nativeMediaSession
 }
 
-func newMediaService(host serviceHost) *MediaService {
-	return &MediaService{host: host}
+func newMediaService(host serviceHost, mount mountLifecycleGate) *MediaService {
+	return &MediaService{host: host, mount: mount}
 }
 
 // mediaSessions is the engine's loopback session table, or nil when the backend
@@ -73,6 +79,11 @@ func thumbnailCacheBudget() int64 {
 func thumbnailCacheDir() string {
 	base, err := datadir.CacheDir()
 	if err != nil || base == "" {
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
+			// A missing mobile cache root must disable the disposable cache. The
+			// process-wide temp directory may be shared or unwritable there.
+			return ""
+		}
 		base = filepath.Join(os.TempDir(), "TDrive")
 	}
 	return filepath.Join(base, "thumbnails")
@@ -144,6 +155,67 @@ func (s *MediaService) OpenStream(msgID int) (media.OpenResult, error) {
 		return media.OpenResult{}, fmt.Errorf("backend not ready")
 	}
 	return sessions.OpenStream(s.host.appContext(), s.host.activeChannelID(), int64(msgID))
+}
+
+type originalImageOpener interface {
+	OpenImage(context.Context, int64, int64, int64) (media.OpenResult, error)
+	Resolve(context.Context, int64, int64) (media.LogicalFile, error)
+}
+
+func openOriginalImage(ctx context.Context, opener originalImageOpener, channelID, msgID, revision int64) (media.OpenResult, error) {
+	if opener == nil {
+		return media.OpenResult{}, fmt.Errorf("backend not ready")
+	}
+	opened, err := opener.OpenImage(ctx, channelID, msgID, revision)
+	if !errors.Is(err, media.ErrStaleRevision) {
+		return opened, err
+	}
+	current, resolveErr := opener.Resolve(ctx, channelID, msgID)
+	if resolveErr != nil {
+		return media.OpenResult{}, resolveErr
+	}
+	return opener.OpenImage(ctx, channelID, msgID, current.Revision)
+}
+
+// OpenOriginalImage returns one revision-bound capability for the original
+// raster bytes. It shares the existing media range and CloseMedia lifecycle;
+// lifecycle checks around the open prevent logout from publishing a new
+// capability after session revocation has become terminal.
+func (s *MediaService) OpenOriginalImage(msgID int, revision int64) (media.OpenResult, error) {
+	sessions := s.mediaSessions()
+	if sessions == nil {
+		return media.OpenResult{}, fmt.Errorf("backend not ready")
+	}
+	// Reject immediately after terminal logout without holding the lifecycle
+	// gate across Telegram I/O. A second check below closes a capability if
+	// logout raced the open.
+	release, err := s.mount.acquireMountLifecycle(s.host.appContext())
+	if err != nil {
+		return media.OpenResult{}, err
+	}
+	release()
+	channelID := s.host.activeChannelID()
+	opened, err := openOriginalImage(
+		s.host.appContext(),
+		sessions,
+		channelID,
+		int64(msgID),
+		revision,
+	)
+	if err != nil {
+		return media.OpenResult{}, err
+	}
+	release, err = s.mount.acquireMountLifecycle(s.host.appContext())
+	if err != nil {
+		_ = sessions.CloseSession(opened.Token)
+		return media.OpenResult{}, err
+	}
+	defer release()
+	if channelID != s.host.activeChannelID() {
+		_ = sessions.CloseSession(opened.Token)
+		return media.OpenResult{}, fmt.Errorf("gallery drive changed")
+	}
+	return opened, nil
 }
 
 func (s *MediaService) CloseMedia(token string) error {

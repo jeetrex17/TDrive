@@ -9,11 +9,11 @@ import (
 // Clearing the vault key is a mount operation as much as an encryption one, so
 // it stays on the root service rather than moving into EncryptionService with
 // the password methods. The reason is the ordering: the mounted filesystem, the
-// open native players and the gallery's decrypted renditions all have to be
-// torn down *before* the key goes, and all three live on App today. Putting
-// these helpers behind the bound encryption API would have meant handing that
-// service the mount, the player table and the gallery -- the exact coupling the
-// service split exists to remove.
+// open native players, the gallery's decrypted renditions and the running photo
+// backup all have to be torn down *before* the key goes, and App is what reaches
+// all of them. Putting these helpers behind the bound encryption API would have
+// meant handing that service the mount, the player table, the gallery and the
+// backup engine -- the exact coupling the service split exists to remove.
 //
 // When the mount moves into its own service this file is what moves with it.
 
@@ -28,8 +28,8 @@ func (a *App) clearEncryptionSession() {
 		return
 	}
 	a.media.closeEncryptedNativeMedia()
-	a.stopGalleryPreparation()
 	a.revokeGalleryImages()
+	a.stopPhotoBackup()
 	if a.engine != nil {
 		a.engine.ClearEncryptionSession()
 	}

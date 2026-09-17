@@ -279,7 +279,8 @@ func mediaServiceWithNativeThumbnailPlayer(token string) *MediaService {
 // what these tests want: the session table has to behave identically whether
 // the backend is up or already gone.
 func newTestMediaService() *MediaService {
-	return newMediaService(&App{})
+	app := &App{}
+	return newMediaService(app, app)
 }
 
 func assertSafeSeekThumbnailError(t *testing.T, err error, secrets ...string) {

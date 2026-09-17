@@ -23,6 +23,7 @@
      * Cancel all covers those; see the section header.
      */
     function cancelFor(transfer: TransferEvent): (() => void) | undefined {
+        if (transfer.id === 'xfer:up:photo-backup') return undefined;
         const upload = /^xfer:up:(\d+)$/.exec(transfer.id);
         if (upload) {
             const id = Number(upload[1]);

@@ -60,12 +60,6 @@
 .gallery-virtual-header { position: absolute; left: 0; right: 0; box-sizing: border-box; line-height: 20px; }
 .gallery-pending { width: 100%; background: var(--bg-panel); }
 .gallery-page-error { position: sticky; bottom: 12px; padding: 12px; background: var(--bg-panel); color: var(--text-muted); border-radius: var(--radius-md); text-align: center; }
-.gallery-missing-pill { position: absolute; inset: auto 4px 6px; font-size: 11px; text-align: center; color: var(--text-muted); }
-.gallery-preparation { position: fixed; right: 24px; bottom: 24px; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; max-width: min(420px, calc(100vw - 32px)); padding: 6px; border-radius: var(--radius-lg); background: var(--bg-panel); color: var(--text-muted); box-shadow: var(--shadow-sm); font-size: 13px; }
-.gallery-preparation .secondary-btn { min-height: 36px; padding: 8px 12px; }
-.gallery-preparation-error { color: var(--text-main); font-size: 13px; }
-html.mobile .gallery-preparation { left: calc(var(--inset-left) + 12px); right: auto; bottom: var(--mobile-overlay-bottom); max-width: calc(100vw - 96px - var(--inset-left) - var(--inset-right)); }
-html.mobile .gallery-preparation .secondary-btn { min-height: 44px; }
 
 .gallery-cell {
     appearance: none;
@@ -129,6 +123,20 @@ html.mobile .gallery-preparation .secondary-btn { min-height: 44px; }
     -webkit-backdrop-filter: blur(6px);
     backdrop-filter: blur(6px);
 }
+
+.gallery-video-badge {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    color: #fff;
+    background: rgba(0, 0, 0, .66);
+    border-radius: 50%;
+    pointer-events: none;
+}
 .gallery-lock svg { width: 13px; height: 13px; }
 .gallery-broken { inset: 0; color: var(--text-muted); }
 .gallery-broken svg { width: 34px; height: 34px; }
@@ -173,7 +181,9 @@ html.mobile .gallery-preparation .secondary-btn { min-height: 44px; }
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    z-index: 2;
+    /* Sit above both thumbnail and original layers so navigation stays
+       clickable while either image is loading or being displayed. */
+    z-index: 5;
     width: 52px; height: 52px;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -604,6 +614,12 @@ html.mobile .preview-content img {
     max-height: 100dvh;
     box-shadow: none;
     -webkit-user-drag: none;
+}
+html.mobile .preview-thumbnail,
+html.mobile .preview-original {
+    inset: 0;
+    width: 100%;
+    height: 100%;
 }
 html.mobile .preview-chrome {
     top: calc(var(--inset-top) + 10px);

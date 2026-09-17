@@ -52,20 +52,27 @@ export interface RuntimeEventMap {
     import_upload_progress: [payload: unknown];
     import_complete: [payload: unknown];
     files_dropped: [payload: unknown];
-    preview_progress: [messageId: unknown, percent: unknown];
     native_media_state: [payload: unknown];
     encrypted_media_sessions_closed: [];
     "android:NetworkChanged": [payload: unknown];
     "android:BatteryChanged": [payload: unknown];
     "ios:NetworkChanged": [payload: unknown];
     "ios:BatteryChanged": [payload: unknown];
+    "android:PhotoBackupMediaChanged": [payload: unknown];
+    "android:BackgroundTransferExpired": [payload?: unknown];
+    "ios:PhotoBackupMediaChanged": [payload: unknown];
+    "photo-backup:materialize": [payload: unknown];
+    "photo-backup:release": [payload: unknown];
+    "photo-backup:state": [payload: unknown];
     gallery_memory_pressure: [];
-    gallery_preparation_progress: [unknown];
-    gallery_rendition_ready: [payload: unknown];
     // Emitted by both phone hosts while SetKeyboardWatch is on; the payload is
     // {visible, height}. Android reports the only soft-keyboard height its
     // WebView knows, so this is the fallback where visualViewport is absent.
     "common:keyboard": [payload: unknown];
+    // Android only, while it copies a picked selection out of the document
+    // provider and into the cache; the payload is {phase, done, total}. iOS
+    // copies behind its own picker and so reports nothing.
+    "common:filepicker": [payload: unknown];
     "updates:open": [];
     update_state: [payload: unknown];
 }

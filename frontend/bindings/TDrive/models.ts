@@ -98,6 +98,17 @@ export interface GalleryPage {
 }
 
 /**
+ * GalleryStorage separates disposable media from the durable local catalog.
+ * Saved downloads are user files and are never included in cache cleanup.
+ */
+export interface GalleryStorage {
+    "cache_bytes": number;
+    "cache_limit": number;
+    "cache_entries": number;
+    "catalog_bytes": number;
+}
+
+/**
  * JoinDriveResult distinguishes instant joins from approval-required requests.
  */
 export interface JoinDriveResult {
@@ -237,6 +248,82 @@ export interface PersonalDriveCandidate {
 export interface PersonalDriveSetupState {
     "status": string;
     "active_channel_id": string;
+}
+
+/**
+ * PhotoBackupAsset is the native/frontend handoff shape for one discovered
+ * photo-library or watched-folder item.
+ */
+export interface PhotoBackupAsset {
+    "id": string;
+    "version": string;
+    "name": string;
+    "media_type": string;
+    "resource_id": string;
+    "modified_at": number;
+    "size": number;
+}
+
+export interface PhotoBackupCapabilities {
+    "wifi_only": PhotoBackupCapability;
+    "access": {"status": string, "detail": string};
+}
+
+export interface PhotoBackupCapability {
+    "supported": boolean;
+    "label": string;
+    "detail": string;
+}
+
+export interface PhotoBackupPolicy {
+    "wifi": boolean;
+    "observed_at": number;
+}
+
+export interface PhotoBackupSettings {
+    "enabled": boolean;
+    "photos": boolean;
+    "videos": boolean;
+    "future_only": boolean;
+    "wifi_only": boolean;
+    "destination_parent_id": string;
+    "encrypt": boolean;
+}
+
+export interface PhotoBackupSource {
+    "id": string;
+    "kind": string;
+    "name": string;
+    "root": string;
+    "enabled": boolean;
+    "added_at": number;
+}
+
+export interface PhotoBackupState {
+    "settings": PhotoBackupSettings;
+    "sources": PhotoBackupSource[] | null;
+    "status": PhotoBackupStatus;
+    "platform": string;
+    "capabilities": PhotoBackupCapabilities;
+    "destination": {"id": string, "title": string, "kind": string};
+    "manual_paused": boolean;
+    "encryption_required": boolean;
+}
+
+export interface PhotoBackupStatus {
+    "current_file": string;
+    "current_file_bytes_done": number;
+    "current_file_bytes_total": number;
+    "current_file_percent": number;
+    "phase": string;
+    "pending": number;
+    "uploading": number;
+    "complete": number;
+    "failed": number;
+    "paused"?: number;
+    "bytes_done": number;
+    "bytes_total": number;
+    "message": string;
 }
 
 export interface PreviewPayload {

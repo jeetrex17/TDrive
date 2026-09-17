@@ -74,7 +74,6 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 		`DELETE FROM file_revisions WHERE channel_id = ?`,
 		`DELETE FROM projection_operations WHERE channel_id = ?`,
 		`DELETE FROM trash_entries WHERE channel_id = ?`,
-		`DELETE FROM gallery_preparation_skips WHERE channel_id = ?`,
 		`DELETE FROM files WHERE channel_id = ?`,
 		`DELETE FROM file_parts WHERE channel_id = ?`,
 		`DELETE FROM file_renditions WHERE channel_id = ?`,

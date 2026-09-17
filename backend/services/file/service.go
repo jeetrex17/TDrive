@@ -1,3 +1,51 @@
+// Package file moves bytes. It is the only place in the backend that turns a
+// local file into Telegram document messages and back, and the only place that
+// decides which messages constitute one logical file.
+//
+// Everything it publishes leaves as a projection.Op whose formatted TDX1 header
+// is the Telegram caption. projection owns the SQLite write, tgclient owns the
+// transport and its flood-wait retries, crypto owns the TDE1 stream format, and
+// mountwrite owns the durable journal behind mounted writes. This package
+// supplies only policy: what to split, when to encrypt, what to retry, and when
+// a write becomes visible.
+//
+// Visibility differs per upload shape and is the easiest thing here to get
+// wrong:
+//
+//  1. A file's identity is the msg_id of its header-carrying message — the
+//     document for a single-part upload, the manifest text message for a
+//     multipart one. Part messages are OpFilePart and never reach the files
+//     table, so they can never be mistaken for orphans.
+//  2. A single-part upload commits when Telegram accepts the document. Local
+//     projection happens afterwards, so an upload can return both metadata and
+//     an error; a non-zero msg id means the file exists and must not be resent.
+//  3. A multipart upload commits on the manifest send. Before it, failure
+//     aborts and deletes the part bodies; once the manifest send has been
+//     attempted, aborting is forbidden, because sync may still project a
+//     manifest Telegram accepted.
+//  4. Hidden (mount) uploads never commit here at all. UploadHidden returns a
+//     body and mountwrite publishes it with OpFileCommit.
+//  5. Delete is tomb-first. The tombstone is emitted before any Telegram
+//     delete, and a failed body delete deliberately leaves the file_parts rows
+//     behind for the orphan sweep to retry.
+//
+// Retrying is only safe because every send derives a stable Telegram random id
+// from the upload UUID plus a step label, and because every body is an
+// io.ReadSeeker that is rewound before a resend rather than resumed mid-stream.
+// Without an idempotent sender a multipart upload refuses to start and an
+// unknown single-part outcome becomes terminal: failing is better than
+// publishing a duplicate nobody can tell apart.
+//
+// The split decision uses the stored (ciphertext) size rather than the
+// plaintext size, so encrypting a file near a boundary can make it multipart.
+// Concurrency is bounded everywhere on purpose — one upload semaphore covers
+// GUI uploads, imports, backups and mount writes alike — so no caller can turn
+// a folder import into an unbounded fan-out against Telegram.
+//
+// Encryption is per-call intent, never per-drive: the caller asks, and the
+// injected key providers decide whether that is allowed. Every key this package
+// receives is a caller-owned copy that is zeroed on every return path,
+// including error paths.
 package file
 
 import (
@@ -10,11 +58,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	tdcrypto "TDrive/backend/crypto"
+	"TDrive/backend/datadir"
 	"TDrive/backend/projection"
 	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
@@ -32,6 +82,10 @@ type ActorIDFunc func(ctx context.Context) (int64, error)
 // RequireEncryptionKeyFunc returns a caller-owned key copy. Service clears a
 // non-nil key on every return path, including when err is non-nil.
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
+
+// RequireEncryptionKeyForChannelFunc binds a rendition key request to the
+// source channel. Production providers must reject encrypted shared drives.
+type RequireEncryptionKeyForChannelFunc func(channelID int64, encrypted bool) ([]byte, error)
 
 // MasterKeyForUploadFunc returns a caller-owned key copy. Service clears a
 // non-nil key on every return path, including when err is non-nil.
@@ -57,13 +111,20 @@ type Service struct {
 	EmitOpContext        EmitOpContextFunc
 	ActorID              ActorIDFunc
 	RequireEncryptionKey RequireEncryptionKeyFunc
-	MasterKeyForUpload   MasterKeyForUploadFunc
-	WriteCiphertextTemp  WriteCiphertextTempFunc
-	encryptStream        encryptStreamFunc
-	CreateFolder         CreateFolderFunc
-	Events               EventSink
-	Warnf                WarnFunc
-	Now                  func() time.Time
+	// RequireEncryptionKeyForChannel is used by rendition reads before cache or
+	// network access. RequireEncryptionKey remains for legacy non-rendition
+	// paths until they can adopt the scoped contract.
+	RequireEncryptionKeyForChannel RequireEncryptionKeyForChannelFunc
+	// PersonalChannelID lets this service fail closed for encrypted shared-drive
+	// records even if a test or legacy caller has not provided a scoped key hook.
+	PersonalChannelID   func() int64
+	MasterKeyForUpload  MasterKeyForUploadFunc
+	WriteCiphertextTemp WriteCiphertextTempFunc
+	encryptStream       encryptStreamFunc
+	CreateFolder        CreateFolderFunc
+	Events              EventSink
+	Warnf               WarnFunc
+	Now                 func() time.Time
 	// MaxUploadBytes overrides the per-file upload limit. 0 uses the standard
 	// 2 GiB cap; it is raised to the 4 GiB Premium cap once the account is known
 	// to be Premium. See maxUploadBytes.
@@ -302,7 +363,7 @@ func (s *Service) writeCiphertextTemp(plain io.Reader, plaintextSize int64, mast
 	}
 	keyCopy := append([]byte(nil), masterKey...)
 	defer clearOwnedKey(keyCopy)
-	tmp, err := os.CreateTemp("", "tdrive-upload-*")
+	tmp, err := datadir.CreateCacheTemp("tdrive-upload-*")
 	if err != nil {
 		return nil, err
 	}
@@ -350,14 +411,14 @@ func stageUploadPart(ctx context.Context, dir string, source io.Reader, size int
 func createTempWithFallback(dir string, pattern string) (*os.File, error) {
 	// Prefer the source filesystem for multi-gigabyte ciphertext so an upload
 	// from an external volume does not unexpectedly exhaust the system temp
-	// volume. Read-only or otherwise unsuitable source directories fall back to
-	// the OS temp directory.
-	if dir != "" {
+	// volume. Mobile source paths can be shared storage, so all mobile staging
+	// stays in the app-private cache regardless of its source location.
+	if runtime.GOOS != "android" && runtime.GOOS != "ios" && dir != "" {
 		if tmp, err := os.CreateTemp(dir, pattern); err == nil {
 			return tmp, nil
 		}
 	}
-	return os.CreateTemp("", pattern)
+	return datadir.CreateCacheTemp(pattern)
 }
 
 func uploadSourceTempDir(source io.ReadSeeker) string {

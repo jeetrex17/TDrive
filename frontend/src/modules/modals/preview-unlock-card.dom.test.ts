@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ useEncryptionPassword: vi.fn(async () => {}) }));
+const api = vi.hoisted(() => ({ useEncryptionPassword: vi.fn() }));
 const encryption = vi.hoisted(() => ({ loadEncryptionStatus: vi.fn(async () => {}) }));
 
-vi.mock('../../api', () => ({ useEncryptionPassword: api.useEncryptionPassword }));
+// The real success check comes along, because "a wrong password is an
+// unsuccessful result rather than a rejection" is exactly what is under test.
+vi.mock('../../api', async () => ({
+    useEncryptionPassword: api.useEncryptionPassword,
+    requireOperationSuccess: (await vi.importActual<typeof import('../../api/operation')>('../../api/operation')).requireOperationSuccess,
+}));
 vi.mock('../encryption', () => ({ loadEncryptionStatus: encryption.loadEncryptionStatus }));
 
 import { createUnlockCard, type UnlockCard } from './preview-unlock-card';
@@ -34,7 +39,7 @@ function build(): UnlockCard {
 
 beforeEach(() => {
     vi.clearAllMocks();
-    api.useEncryptionPassword.mockResolvedValue(undefined);
+    api.useEncryptionPassword.mockResolvedValue({ ok: true });
     document.body.innerHTML = MARKUP;
     card = build();
 });
@@ -133,16 +138,28 @@ describe('submitting a password', () => {
         expect(byId('error').style.display).toBe('block');
     });
 
+    it('refuses a password the backend rejected instead of reporting it unlocked', async () => {
+        const unlocked = vi.fn();
+        api.useEncryptionPassword.mockResolvedValue({ ok: false, error: { code: 'operation_failed', message: 'Incorrect password' } });
+        byId<HTMLInputElement>('input').value = 'nope';
+
+        await card.submit(unlocked);
+
+        expect(unlocked).not.toHaveBeenCalled();
+        expect(byId('error').textContent).toContain('Incorrect password');
+        expect(byId('error').style.display).toBe('block');
+    });
+
     it('takes the controls away while the password is in flight and gives them back after', async () => {
-        let release = () => {};
-        api.useEncryptionPassword.mockImplementation(() => new Promise<void>(resolve => { release = resolve; }));
+        let release: (value: { ok: true }) => void = () => {};
+        api.useEncryptionPassword.mockImplementation(() => new Promise<{ ok: true }>(resolve => { release = resolve; }));
         byId<HTMLInputElement>('input').value = 'slow';
 
         const pending = card.submit(() => {});
         expect(byId<HTMLButtonElement>('unlock').disabled).toBe(true);
         expect(byId<HTMLInputElement>('input').disabled).toBe(true);
 
-        release();
+        release({ ok: true });
         await pending;
         expect(byId<HTMLButtonElement>('unlock').disabled).toBe(false);
         expect(byId<HTMLInputElement>('input').disabled).toBe(false);
