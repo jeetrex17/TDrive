@@ -18,13 +18,8 @@ body { background-color: var(--bg-dark); color: var(--text-main); height: 100vh;
 /* Theme changes use the browser's snapshot transition when a webview supports
    it. Older WebView2/WebKitGTK builds receive the quieter app-settle fallback
    below, while reduced-motion users always get an immediate palette swap. */
-::view-transition-old(root) {
-    animation: theme-old-fade 720ms var(--ease-standard) both;
-}
-::view-transition-new(root) {
-    animation: theme-new-reveal 1200ms cubic-bezier(0.16, 1, 0.3, 1) both;
-    clip-path: circle(150vmax at var(--theme-origin-x, 50vw) var(--theme-origin-y, 50vh));
-}
+::view-transition-old(root) { animation: theme-old-fade 180ms var(--ease-standard) both; }
+::view-transition-new(root) { animation: theme-new-fade 220ms var(--ease-standard) both; }
 /* The fallback path, for webviews that cannot be trusted with a root view
    transition (Linux WebKitGTK, iOS WKWebView).
  
@@ -41,17 +36,17 @@ body { background-color: var(--bg-dark); color: var(--text-main); height: 100vh;
 html.theme-transition-fallback #app,
 html.theme-transition-fallback #app *:not(img):not(video):not(canvas) {
     transition:
-        background-color 620ms var(--ease-standard),
-        border-color 620ms var(--ease-standard),
-        color 620ms var(--ease-standard),
-        fill 620ms var(--ease-standard),
-        stroke 620ms var(--ease-standard);
+        background-color 200ms var(--ease-standard),
+        border-color 200ms var(--ease-standard),
+        color 200ms var(--ease-standard),
+        fill 200ms var(--ease-standard),
+        stroke 200ms var(--ease-standard);
 }
 @keyframes theme-old-fade {
-    to { opacity: 0.84; filter: saturate(0.92); }
+    to { opacity: 0.94; }
 }
-@keyframes theme-new-reveal {
-    from { clip-path: circle(0 at var(--theme-origin-x, 50vw) var(--theme-origin-y, 50vh)); }
+@keyframes theme-new-fade {
+    from { opacity: 0.92; }
 }
 @keyframes tdrive-surface-enter {
     from {
@@ -118,4 +113,3 @@ body.native-video-active #app > .modal-overlay:not(#video-modal) {
 }
 *::-webkit-scrollbar-corner { background: transparent; }
 .dashboard-container, .main-content, .file-list-box { -webkit-user-drag: none; }
-
