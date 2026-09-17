@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,11 @@ func thumbnailCacheBudget() int64 {
 func thumbnailCacheDir() string {
 	base, err := datadir.CacheDir()
 	if err != nil || base == "" {
+		if runtime.GOOS == "ios" || runtime.GOOS == "android" {
+			// A missing mobile cache root must disable the disposable cache. The
+			// process-wide temp directory may be shared or unwritable there.
+			return ""
+		}
 		base = filepath.Join(os.TempDir(), "TDrive")
 	}
 	return filepath.Join(base, "thumbnails")
@@ -96,6 +102,57 @@ func (a *App) OpenStream(msgID int) (media.OpenResult, error) {
 		return media.OpenResult{}, fmt.Errorf("backend not ready")
 	}
 	return a.engine.MediaService().OpenStream(a.ctx, a.ActiveChannelID(), int64(msgID))
+}
+
+type originalImageOpener interface {
+	OpenImage(context.Context, int64, int64, int64) (media.OpenResult, error)
+}
+
+func openOriginalImage(ctx context.Context, opener originalImageOpener, channelID, msgID, revision int64) (media.OpenResult, error) {
+	if opener == nil {
+		return media.OpenResult{}, fmt.Errorf("backend not ready")
+	}
+	return opener.OpenImage(ctx, channelID, msgID, revision)
+}
+
+// OpenOriginalImage returns one revision-bound capability for the original
+// raster bytes. It shares the existing media range and CloseMedia lifecycle;
+// lifecycle checks around the open prevent logout from publishing a new
+// capability after session revocation has become terminal.
+func (a *App) OpenOriginalImage(msgID int, revision int64) (media.OpenResult, error) {
+	if a == nil || a.engine == nil {
+		return media.OpenResult{}, fmt.Errorf("backend not ready")
+	}
+	// Reject immediately after terminal logout without holding the lifecycle
+	// gate across Telegram I/O. A second check below closes a capability if
+	// logout raced the open.
+	release, err := a.acquireMountLifecycle(a.appContext())
+	if err != nil {
+		return media.OpenResult{}, err
+	}
+	release()
+	channelID := a.ActiveChannelID()
+	opened, err := openOriginalImage(
+		a.appContext(),
+		a.engine.MediaService(),
+		channelID,
+		int64(msgID),
+		revision,
+	)
+	if err != nil {
+		return media.OpenResult{}, err
+	}
+	release, err = a.acquireMountLifecycle(a.appContext())
+	if err != nil {
+		_ = a.engine.MediaService().CloseSession(opened.Token)
+		return media.OpenResult{}, err
+	}
+	defer release()
+	if channelID != a.ActiveChannelID() {
+		_ = a.engine.MediaService().CloseSession(opened.Token)
+		return media.OpenResult{}, fmt.Errorf("gallery drive changed")
+	}
+	return opened, nil
 }
 
 func (a *App) CloseMedia(token string) error {

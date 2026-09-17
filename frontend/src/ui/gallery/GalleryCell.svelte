@@ -84,7 +84,6 @@
             <ImageOffIcon size={34} strokeWidth={1.6} aria-hidden="true" />
         </span>
     {/if}
-    {#if status === 'missing'}<span class="gallery-missing-pill" aria-hidden="true">Preview pending</span>{/if}
     {#if selecting}
         <span class="gallery-check" aria-hidden="true">
             <CheckIcon size={14} strokeWidth={3} aria-hidden="true" />

@@ -11,7 +11,7 @@ vi.mock('../../api', () => ({
     isMobilePlatform: () => true,
     onRuntimeEvent: () => () => {},
 }));
-vi.mock('../../api/gallery', () => ({ getGalleryPreparation: () => Promise.resolve({ channelId: 1, total: 0, completed: 0, running: false }), listMediaPage: vi.fn() }));
+vi.mock('../../api/gallery', () => ({ listMediaPage: vi.fn() }));
 vi.mock('../../modules/renditions/runtime', () => ({ acquireRendition: vi.fn(() => ({ promise: Promise.resolve({ url: 'blob:photo', width: 256, height: 256 }), release: vi.fn() })), subscribeRenditionReset: () => () => {} }));
 vi.mock('../../modules/transfers', () => ({ chooseFilesForCurrentFolder: vi.fn() }));
 vi.mock('../../modules/app-actions', () => ({ appActions: () => ({ refreshFiles: vi.fn() }) }));

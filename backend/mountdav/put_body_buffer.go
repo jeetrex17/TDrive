@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+
+	"TDrive/backend/datadir"
 )
 
 // maxBufferedPUTBodyBytes bounds how large an unknown-length PUT body may be
@@ -34,7 +36,7 @@ const maxBufferedPUTBodyBytes = 8 << 30
 // once (see closeAndRemoveTempFile), regardless of what it does with the
 // content.
 func bufferUnknownLengthPUTBody(response http.ResponseWriter, body io.ReadCloser) (*os.File, int64, error) {
-	file, err := os.CreateTemp("", "tdrive-mountdav-put-*")
+	file, err := datadir.CreateCacheTemp("tdrive-mountdav-put-*")
 	if err != nil {
 		return nil, 0, err
 	}

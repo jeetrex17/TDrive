@@ -45,6 +45,7 @@ const PREVIEW_MARKUP = `
         <div id="preview-stage">
             <div id="preview-loading"><div id="preview-loading-fill"></div></div>
             <div id="preview-error"></div>
+            <img id="preview-thumbnail" alt="">
             <img id="preview-image" alt="Preview">
         </div>
         <aside id="preview-info"><button id="preview-info-close" type="button"></button><div id="preview-info-body"></div></aside>
@@ -73,13 +74,13 @@ beforeEach(() => {
 });
 
 describe('preview modal lifecycle', () => {
-    it('binds setup listeners and the progress subscription once per host', async () => {
+    it('binds setup without legacy progress-event subscriptions', async () => {
         const preview = await import('./preview');
 
         preview.activatePreviewModal();
         preview.activatePreviewModal();
 
-        expect(runtime.onRuntimeEvent).toHaveBeenCalledTimes(1);
+        expect(runtime.onRuntimeEvent).not.toHaveBeenCalled();
     });
 
     it('tears down the old host before binding a replacement host', async () => {
@@ -95,6 +96,6 @@ describe('preview modal lifecycle', () => {
                 oldHost.replaceWith(replacement);
 
         preview.activatePreviewModal();
-        expect(runtime.onRuntimeEvent).toHaveBeenCalledTimes(2);
+        expect(runtime.onRuntimeEvent).not.toHaveBeenCalled();
     });
 });

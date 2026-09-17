@@ -51,6 +51,8 @@ export function galleryPage(count: number, template: Record<string, unknown>): M
     return { kind: 'galleryPage', count, template };
 }
 
+const MOCK_IMAGE_CAPABILITY = 'mock-original-image';
+
 const DEFAULT_METHODS: Record<string, MockPlan> = {
     AppVersion: resolves({ version: '0.0.0-test', os: 'test', arch: 'test' }),
     CheckForUpdate: resolves({ phase: 'up_to_date', current_version: '0.0.0-test' }),
@@ -78,9 +80,10 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     ]),
     ListMedia: resolves([]),
     GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: 0, page_size: 128, buckets: [], anchors: [] }),
-    GetGalleryPreparation: resolves({ running: false, channel_id: 1, completed: 0, total: 0, bytes_total: 0, bytes_done: 0, error: '' }),
     OpenGalleryImages: resolves({ token: crypto.randomUUID(), base_url: '/mock-renditions', channel_id: 1 }),
     CloseGalleryImages: resolves(null),
+    OpenOriginalImage: resolves({ token: MOCK_IMAGE_CAPABILITY, url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZcsQAAAAASUVORK5CYII=', thumbnail_url: '', hls_url: '', name: 'photo.png', kind: 'image', mime_type: 'image/png', supports_range: true, info: { channel_id: 1, file_id: 1, revision: 1, name: 'photo.png', stored_size: 68, plaintext_size: 68, encrypted: false, multipart: false } }),
+    CloseMedia: resolves(null),
     ListPendingJoins: resolves([]),
     Me: resolves({ user_id: 7, display_name: 'Test User', username: 'test', photo_base64: '' }),
     MountDrive: resolves({

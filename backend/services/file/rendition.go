@@ -27,6 +27,9 @@ var (
 	ErrRenditionMissing = errors.New("missing_rendition")
 	ErrRenditionStale   = errors.New("stale_revision")
 	ErrRenditionBusy    = errors.New("rendition_busy")
+	// ErrEncryptedRenditionScope rejects encrypted rows outside My Drive before
+	// any cache or Telegram access.
+	ErrEncryptedRenditionScope = errors.New("encrypted_rendition_outside_personal_drive")
 )
 
 // Rendition is immutable compressed image data. Width and Height are checked
@@ -69,9 +72,15 @@ func (s *Service) Rendition(ctx context.Context, channelID, msgID, revision int6
 	if err != nil {
 		return Rendition{}, err
 	}
-	ref, err := s.renditionReference(ctx, f, kind)
-	if err != nil {
-		return Rendition{}, err
+	// Thumbnail data is deliberately local-cache then Telegram's native
+	// document thumb. Old durable sidecars remain readable for the legacy
+	// preview class, but never outrank the source document's thumbnail.
+	var ref *projection.FileRendition
+	if kind != "thumbnail" {
+		ref, err = s.renditionReference(ctx, f, kind)
+		if err != nil {
+			return Rendition{}, err
+		}
 	}
 	derivativeID := int64(0)
 	if ref != nil {
@@ -80,7 +89,7 @@ func (s *Service) Rendition(ctx context.Context, channelID, msgID, revision int6
 	key := renditionCacheKey(namespace, f, kind, derivativeID)
 	// Authorize before all cache reads, including encrypted entries already on
 	// disk. Each subscriber owns and clears its own short-lived key copy.
-	masterKey, err := s.renditionKey(f.Encrypted)
+	masterKey, err := s.renditionKey(f.ChannelID, f.Encrypted)
 	if err != nil {
 		return Rendition{}, err
 	}
@@ -99,7 +108,7 @@ func (s *Service) Rendition(ctx context.Context, channelID, msgID, revision int6
 // loadRendition owns its key and transfer slot for the complete shared flight.
 // No caller-owned key can be zeroed while another subscriber still needs it.
 func (s *Service) loadRendition(ctx context.Context, f projection.File, kind string, ref *projection.FileRendition, cacheKey string) (Rendition, error) {
-	key, err := s.renditionKey(f.Encrypted)
+	key, err := s.renditionKey(f.ChannelID, f.Encrypted)
 	defer clearOwnedKey(key)
 	if err != nil {
 		return Rendition{}, err
@@ -155,11 +164,22 @@ func (s *Service) renditionNamespace(ctx context.Context) (string, error) {
 	return namespace, nil
 }
 
-func (s *Service) renditionKey(encrypted bool) ([]byte, error) {
+func (s *Service) renditionKey(channelID int64, encrypted bool) ([]byte, error) {
 	if !encrypted {
 		return nil, nil
 	}
-	key, err := s.requireEncryptionKey(true)
+	if s.PersonalChannelID != nil && (channelID == 0 || channelID != s.PersonalChannelID()) {
+		return nil, ErrEncryptedRenditionScope
+	}
+	var (
+		key []byte
+		err error
+	)
+	if s.RequireEncryptionKeyForChannel != nil {
+		key, err = s.RequireEncryptionKeyForChannel(channelID, true)
+	} else {
+		key, err = s.requireEncryptionKey(true)
+	}
 	if err != nil || len(key) == 0 {
 		clearOwnedKey(key)
 		return nil, errPreviewEncryptionPasswordRequired
@@ -237,7 +257,11 @@ func (s *Service) fetchTelegramThumbnail(ctx context.Context, peer tgclient.Inpu
 	}
 	var raw []byte
 	err = s.sendRetryPolicy().Do(ctx, func() error {
-		dst := &renditionWriter{limit: renditionPreviewLimit}
+		limit := renditionThumbLimit
+		if kind == "preview" {
+			limit = renditionPreviewLimit
+		}
+		dst := &renditionWriter{limit: limit}
 		if err := s.TG.DownloadFileThumbnail(ctx, peer, f.ContentMsgID, thumbType, dst); err != nil {
 			return err
 		}

@@ -315,9 +315,6 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
 	} else {
 		slog.Debug("file: upload succeeded", "channel_id", channelID, "name", filename, "msg_id", meta.MsgID, "stored_size", meta.Size)
-		// The original is the durable success boundary. Derivative preparation
-		// cannot turn it into a failed upload or trigger an original resend.
-		s.prepareUploadedRenditions(ctx, channelID, meta, op, header, source)
 	}
 	return meta, op, header, err
 }

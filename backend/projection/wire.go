@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const wireVersionPrefix = "TDX1"
+const (
+	wireVersionPrefix    = "TDX1"
+	maxWireUnixTimestamp = int64(253402300799) // 9999-12-31T23:59:59Z, SQLite's upper bound.
+)
 
 var (
 	ErrWireMissingHeader = errors.New("wire: header missing")
@@ -273,7 +276,7 @@ func Parse(raw string) (Op, error) {
 	}
 	if s, ok := kv["ts"]; ok {
 		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil || n < 0 {
+		if err != nil || n < 0 || n > maxWireUnixTimestamp {
 			return Op{}, ErrWireMalformed
 		}
 		op.FileUploadTime = n

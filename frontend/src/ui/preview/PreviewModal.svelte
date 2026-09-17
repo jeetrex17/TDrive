@@ -36,13 +36,14 @@
     <div id="preview-counter" class="preview-counter" hidden></div>
 
     <div id="preview-stage" class="preview-content">
-        <div id="preview-loading" class="preview-loading" aria-hidden="true" style="display: none;">
+        <img id="preview-thumbnail" class="preview-thumbnail" src="" alt="" aria-hidden="true" hidden>
+        <img id="preview-image" class="preview-original" src="" alt="" hidden>
+        <div id="preview-loading" class="preview-loading" role="status" aria-label="Loading original image" aria-hidden="true" style="display: none;">
             <div class="preview-loading-track" aria-hidden="true">
                 <div id="preview-loading-fill" class="preview-loading-fill"></div>
             </div>
         </div>
         <div id="preview-error" class="preview-error" style="display: none;" role="alert"></div>
-        <img id="preview-image" src="" alt="Preview" hidden>
     </div>
 
     <aside id="preview-info" class="preview-info" aria-label="Photo info">

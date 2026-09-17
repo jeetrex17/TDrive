@@ -225,18 +225,7 @@ func (s *Service) sendPendingRendition(ctx context.Context, channelID int64, job
 	if err := projection.CompletePendingRendition(ctx, s.DB, channelID, jobID); err != nil {
 		return err
 	}
-	if _, err := projection.CurrentFileRendition(ctx, s.DB, channelID, op.Rendition.FileMsgID, op.Rendition.Kind); err == nil {
-		s.emitEvent("gallery_rendition_ready", RenditionReadyEvent{ChannelID: channelID, MsgID: op.Rendition.FileMsgID, Kind: op.Rendition.Kind})
-	}
 	return nil
-}
-
-// RenditionReadyEvent rearms only affected visible tiles. Derivative uploads do
-// not invalidate paginated file metadata or rebuild the whole gallery layout.
-type RenditionReadyEvent struct {
-	ChannelID int64  `json:"channel_id"`
-	MsgID     int64  `json:"msg_id"`
-	Kind      string `json:"kind"`
 }
 
 func renditionMatchesFile(ref projection.FileRendition, source projection.File) bool {
@@ -304,36 +293,4 @@ func (w *renditionBoundedWriter) Write(p []byte) (int, error) {
 	n, err := w.buffer.Write(p)
 	w.remaining -= n
 	return n, err
-}
-
-func (s *Service) prepareUploadedRenditions(ctx context.Context, channelID int64, meta Metadata, op projection.Op, header string, reader io.ReadSeeker) {
-	if !thumbnail.IsImage(meta.Name) {
-		return
-	}
-	// Visible uploads are normally batch-projected by their caller. Publish this
-	// one source before derivatives so every remote descriptor refers backwards
-	// to a real file and a restarted preparation worker can resolve it locally.
-	if op.Type != "" {
-		actor, err := s.ActorID(ctx)
-		if err != nil {
-			s.warnf("photo preparation deferred: %v\n", err)
-			return
-		}
-		if _, err := projection.ProjectFromOp(s.DB, channelID, int64(meta.MsgID), op, actor, header); err != nil {
-			s.warnf("photo preparation projection deferred: %v\n", err)
-			return
-		}
-	}
-	source, found, err := projection.FileByID(s.DB, channelID, int64(meta.MsgID))
-	if err != nil || !found {
-		return
-	}
-	// A sync replacement between upload and this lookup must not label the old
-	// local bytes as the new revision's preview.
-	if source.Revision > 1 || (source.ContentMsgID != 0 && source.ContentMsgID != int64(meta.MsgID)) {
-		return
-	}
-	if err := s.PrepareRenditions(ctx, source, reader); err != nil {
-		s.warnf("photo preparation deferred: %v\n", err)
-	}
 }

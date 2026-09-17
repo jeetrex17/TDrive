@@ -13,9 +13,6 @@ import * as backend$0 from "./backend/models.js";
 import * as galleryimage$0 from "./backend/galleryimage/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as galleryprepare$0 from "./backend/galleryprepare/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
 import * as media$0 from "./backend/media/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -241,15 +238,6 @@ export function GetFolderSize(folderID: string): $CancellablePromise<number> {
 
 export function GetFolderStats(parentID: string): $CancellablePromise<projection$0.FolderStats[] | null> {
     return $Call.ByID(654620998, parentID);
-}
-
-/**
- * GetGalleryPreparation estimates only pending compatible files. Completed
- * progress is retained for the current drive, while newly missing derivatives
- * are reflected without holding the entire candidate list in memory.
- */
-export function GetGalleryPreparation(): $CancellablePromise<galleryprepare$0.State> {
-    return $Call.ByID(2428656508);
 }
 
 /**
@@ -504,6 +492,16 @@ export function OpenNativeMedia(msgID: number, rect: nativeplayer$0.Rect): $Canc
 }
 
 /**
+ * OpenOriginalImage returns one revision-bound capability for the original
+ * raster bytes. It shares the existing media range and CloseMedia lifecycle;
+ * lifecycle checks around the open prevent logout from publishing a new
+ * capability after session revocation has become terminal.
+ */
+export function OpenOriginalImage(msgID: number, revision: number): $CancellablePromise<media$0.OpenResult> {
+    return $Call.ByID(3537090707, msgID, revision);
+}
+
+/**
  * OpenStream creates a tokenized loopback byte stream for an in-app file
  * opener. Unlike OpenMedia, it is not video-only; callers choose the viewer
  * from the returned stream kind and must still call CloseMedia on close.
@@ -700,18 +698,6 @@ export function ShareFile(path: string): $CancellablePromise<$models.OperationRe
  */
 export function ShowNativeSeekThumbnail(token: string, imageBase64: string, rect: nativeplayer$0.Rect): $CancellablePromise<void> {
     return $Call.ByID(5199713, token, imageBase64, rect);
-}
-
-/**
- * StartGalleryPreparation is an explicit data-consuming action. The per-file
- * service rechecks ownership and encryption before downloading an original.
- */
-export function StartGalleryPreparation(channelID: number): $CancellablePromise<$models.OperationResult> {
-    return $Call.ByID(1431845540, channelID);
-}
-
-export function StopGalleryPreparation(): $CancellablePromise<$models.OperationResult> {
-    return $Call.ByID(180477034);
 }
 
 export function SubmitCode(code: string): $CancellablePromise<void> {

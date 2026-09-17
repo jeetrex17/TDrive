@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -20,6 +22,41 @@ func TestCachePutGetRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestCacheConcurrentSameKeyWritesKeepAccurateAccounting(t *testing.T) {
+	cache := NewCache(t.TempDir(), 1<<20)
+	const writers = 64
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	wait.Add(writers)
+	for i := 1; i <= writers; i++ {
+		data := bytes.Repeat([]byte{byte(i)}, i*17)
+		go func() {
+			defer wait.Done()
+			<-start
+			if err := cache.Put("shared", data); err != nil {
+				t.Errorf("Put: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wait.Wait()
+
+	stored, ok := cache.Get("shared")
+	if !ok {
+		t.Fatal("shared cache entry missing")
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	elem := cache.entries[cacheRelativeName("shared")]
+	if elem == nil {
+		t.Fatal("shared cache index entry missing")
+	}
+	indexed := elem.Value.(entry).size
+	if indexed != int64(len(stored)) || cache.used != indexed {
+		t.Fatalf("disk=%d indexed=%d used=%d", len(stored), indexed, cache.used)
 	}
 }
 
@@ -66,15 +103,18 @@ func TestCacheEvictsToStayWithinBudget(t *testing.T) {
 	}
 
 	// The on-disk file count must match the in-memory index.
-	files, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("readdir: %v", err)
-	}
 	bins := 0
-	for _, f := range files {
-		if filepath.Ext(f.Name()) == cacheFileSuffix {
+	err := filepath.WalkDir(dir, func(_ string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == cacheFileSuffix {
 			bins++
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk cache: %v", err)
 	}
 	if bins != 2 {
 		t.Fatalf("on-disk thumbnails = %d, want 2", bins)
@@ -157,5 +197,101 @@ func TestCacheGetLimitedRejectsOversizedEntry(t *testing.T) {
 	}
 	if raw, ok := cache.GetLimited("large", 5); !ok || string(raw) != "12345" {
 		t.Fatalf("bounded entry=%q,%v", raw, ok)
+	}
+}
+
+func TestCacheUsesCollisionResistantShardedPaths(t *testing.T) {
+	dir := t.TempDir()
+	cache := NewCache(dir, 1<<20)
+	for key, value := range map[string]string{"a/b": "slash", "a?b": "question"} {
+		if err := cache.Put(key, []byte(value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for key, want := range map[string]string{"a/b": "slash", "a?b": "question"} {
+		got, ok := cache.Get(key)
+		if !ok || string(got) != want {
+			t.Fatalf("get %q=%q,%v want %q", key, got, ok, want)
+		}
+		rel := cacheRelativeName(key)
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) != 3 || len(parts[0]) != 2 || len(parts[1]) != 2 {
+			t.Fatalf("relative cache path %q is not two-level sharded", rel)
+		}
+		if _, err := os.Stat(filepath.Join(dir, rel)); err != nil {
+			t.Fatalf("stat sharded entry: %v", err)
+		}
+	}
+}
+
+func TestCacheBoundsIndexedEntriesAndReloadsShards(t *testing.T) {
+	dir := t.TempDir()
+	cache := NewCache(dir, 1<<20)
+	cache.maxEntries = 2
+	for _, key := range []string{"one", "two", "three"} {
+		if err := cache.Put(key, []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if cache.Has("one") {
+		t.Fatal("oldest entry survived the entry-count bound")
+	}
+
+	reloaded := NewCache(dir, 1<<20)
+	reloaded.maxEntries = 2
+	for _, key := range []string{"two", "three"} {
+		got, ok := reloaded.Get(key)
+		if !ok || string(got) != key {
+			t.Fatalf("reloaded %q=%q,%v", key, got, ok)
+		}
+	}
+}
+
+func TestCacheShardsAndFilesKeepPrivatePermissions(t *testing.T) {
+	dir := t.TempDir()
+	cache := NewCache(dir, 1<<20)
+	if err := cache.Put("private", []byte("thumbnail")); err != nil {
+		t.Fatal(err)
+	}
+	rel := cacheRelativeName("private")
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for _, path := range []string{dir, filepath.Join(dir, parts[0]), filepath.Join(dir, parts[0], parts[1])} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != cacheDirMode {
+			t.Fatalf("directory %s mode=%o, want %o", path, info.Mode().Perm(), cacheDirMode)
+		}
+	}
+	info, err := os.Stat(filepath.Join(dir, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != cacheFileMode {
+		t.Fatalf("file mode=%o, want %o", info.Mode().Perm(), cacheFileMode)
+	}
+}
+
+func TestCacheReadsLegacyFlatEntryAndMigratesOnPut(t *testing.T) {
+	dir := t.TempDir()
+	key := "legacy/key"
+	legacyPath := filepath.Join(dir, legacyFileName(key))
+	if err := os.WriteFile(legacyPath, []byte("legacy"), cacheFileMode); err != nil {
+		t.Fatal(err)
+	}
+	cache := NewCache(dir, 1<<20)
+	if got, ok := cache.Get(key); !ok || string(got) != "legacy" {
+		t.Fatalf("legacy get=%q,%v", got, ok)
+	}
+	if err := cache.Put(key, []byte("sharded")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy cache file remains after migration: %v", err)
+	}
+	if got, ok := cache.Get(key); !ok || string(got) != "sharded" {
+		t.Fatalf("sharded get=%q,%v", got, ok)
 	}
 }

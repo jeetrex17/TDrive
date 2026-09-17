@@ -113,6 +113,51 @@ func TestOverrideResolvedAtCallTime(t *testing.T) {
 	}
 }
 
+func TestCreateCacheTempUsesPrivateCacheOverride(t *testing.T) {
+	clearOverride(t)
+	base := t.TempDir()
+	SetCache(base)
+	file, err := CreateCacheTemp("test-private-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if got, want := filepath.Dir(file.Name()), filepath.Join(base, "TDrive"); got != want {
+		t.Fatalf("temp parent = %q, want %q", got, want)
+	}
+}
+
+func TestCleanupCacheTempsRemovesOnlyOwnedScratchFiles(t *testing.T) {
+	clearOverride(t)
+	base := t.TempDir()
+	SetCache(base)
+	cacheDir, err := CacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"tdrive-upload-orphan", "tdrive-enc-orphan", ".tdrive-upload-part-orphan", "tdrive-mountdav-put-orphan"} {
+		if err := os.WriteFile(filepath.Join(cacheDir, name), []byte("private"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "keep.cache"), []byte("unrelated"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CleanupCacheTemps(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"tdrive-upload-orphan", "tdrive-enc-orphan", ".tdrive-upload-part-orphan", "tdrive-mountdav-put-orphan"} {
+		if _, err := os.Stat(filepath.Join(cacheDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("owned temp %q remains: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, "keep.cache")); err != nil {
+		t.Fatalf("unrelated cache removed: %v", err)
+	}
+}
+
 func assertPrivateDir(t *testing.T, dir string) {
 	t.Helper()
 	info, err := os.Stat(dir)

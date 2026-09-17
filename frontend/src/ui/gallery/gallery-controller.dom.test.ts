@@ -70,16 +70,15 @@ describe('gallery image leases', () => {
         vi.restoreAllMocks();
     });
 
-    it('keeps permanent errors honest and refreshes missing previews after preparation', async () => {
+    it('keeps permanent and missing-thumbnail errors stable', async () => {
         runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject(new Error('unsupported image')), release: runtime.release }));
         const failed = cell(); fire(failed.node); await flush();
         expect(failed.last()?.status).toBe('failed');
         runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject({ code: 'missing_rendition' }), release: runtime.release }));
         const missing = cell(11); fire(missing.node); await flush();
-        controller.rearmMissing();
-        expect(missing.last()).toEqual({ status: 'idle', title: '' });
         fire(missing.node); await flush();
-        expect(missing.last()?.status).toBe('loaded');
+        expect(missing.last()).toEqual({ status: 'missing', title: 'thumbnail unavailable' });
+        expect(runtime.acquire).toHaveBeenCalledTimes(2);
     });
 
     it('loads the bounded mounted window on hosts without IntersectionObserver', async () => {
@@ -139,7 +138,7 @@ describe('gallery image leases', () => {
         runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject({ code: 'missing_rendition' }), release: runtime.release }));
         const missing = cell(20);
         fire(missing.node); await flush();
-        expect(missing.last()).toEqual({ status: 'missing', title: 'preview not available yet' });
+        expect(missing.last()).toEqual({ status: 'missing', title: 'thumbnail unavailable' });
     });
 
     it('respects long server deadlines and cancels retries when the cell leaves', async () => {

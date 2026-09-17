@@ -1,7 +1,10 @@
 package thumbnail
 
 import (
+	"container/heap"
 	"container/list"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +19,10 @@ const (
 	cacheTempPrefix = ".tmp-"
 	cacheDirMode    = 0o700
 	cacheFileMode   = 0o600
+
+	// The byte budget normally limits the cache first. The entry cap also
+	// bounds metadata for deployments containing millions of tiny files.
+	defaultMaxCacheEntries = 64 << 10
 )
 
 // Cache is a size-capped, on-disk store of generated thumbnails. Values are
@@ -30,8 +37,9 @@ const (
 // as a disabled cache (Get always misses, Put is a no-op), which lets the
 // caller treat caching as optional.
 type Cache struct {
-	dir      string
-	maxBytes int64
+	dir        string
+	maxBytes   int64
+	maxEntries int
 
 	mu      sync.Mutex
 	entries map[string]*list.Element
@@ -50,10 +58,11 @@ type entry struct {
 // thumbnails. The directory is created lazily on first write.
 func NewCache(dir string, maxBytes int64) *Cache {
 	return &Cache{
-		dir:      dir,
-		maxBytes: maxBytes,
-		entries:  make(map[string]*list.Element),
-		lru:      list.New(),
+		dir:        dir,
+		maxBytes:   maxBytes,
+		maxEntries: defaultMaxCacheEntries,
+		entries:    make(map[string]*list.Element),
+		lru:        list.New(),
 	}
 }
 
@@ -70,11 +79,9 @@ func (c *Cache) GetLimited(key string, limit int64) ([]byte, bool) {
 	if c == nil || c.dir == "" || limit <= 0 || limit > 64<<20 {
 		return nil, false
 	}
-	name := fileName(key)
-
 	c.mu.Lock()
 	c.ensureInitLocked()
-	_, known := c.entries[name]
+	name, known := c.lookupNameLocked(key)
 	c.mu.Unlock()
 	if !known {
 		return nil, false
@@ -119,11 +126,10 @@ func (c *Cache) Has(key string) bool {
 	if c == nil || c.dir == "" {
 		return false
 	}
-	name := fileName(key)
-
 	c.mu.Lock()
 	c.ensureInitLocked()
-	if _, known := c.entries[name]; !known {
+	name, known := c.lookupNameLocked(key)
+	if !known {
 		c.mu.Unlock()
 		return false
 	}
@@ -152,20 +158,35 @@ func (c *Cache) Put(key string, data []byte) error {
 	if c == nil || c.dir == "" || len(data) == 0 {
 		return nil
 	}
-	name := fileName(key)
+	// Build the index before publishing any temporary file. Otherwise the first
+	// concurrent Put could classify another writer's live temp file as crash
+	// residue and remove it before rename.
+	c.mu.Lock()
+	c.ensureInitLocked()
+	c.mu.Unlock()
+	name := cacheRelativeName(key)
 
-	if err := os.MkdirAll(c.dir, cacheDirMode); err != nil {
+	path := filepath.Join(c.dir, name)
+	entryDir := filepath.Dir(path)
+	if err := os.MkdirAll(entryDir, cacheDirMode); err != nil {
 		return err
 	}
-	// Chmod after MkdirAll to match the app's 0700 convention and to repair an
-	// existing dir that predates these perms (MkdirAll is a no-op then).
+	// Chmod after MkdirAll repairs directories created by older versions or a
+	// process umask while retaining private cache contents.
 	_ = os.Chmod(c.dir, cacheDirMode)
+	_ = os.Chmod(filepath.Dir(entryDir), cacheDirMode)
+	_ = os.Chmod(entryDir, cacheDirMode)
 
-	tmp, err := os.CreateTemp(c.dir, cacheTempPrefix+"*")
+	tmp, err := os.CreateTemp(entryDir, cacheTempPrefix+"*")
 	if err != nil {
 		return err
 	}
 	tmpPath := tmp.Name()
+	if err := tmp.Chmod(cacheFileMode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
@@ -176,7 +197,6 @@ func (c *Cache) Put(key string, data []byte) error {
 		return err
 	}
 
-	path := filepath.Join(c.dir, name)
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
 		return err
@@ -187,50 +207,93 @@ func (c *Cache) Put(key string, data []byte) error {
 	_ = os.Chtimes(path, now, now)
 
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.ensureInitLocked()
+	// Another Put for this key may have published after our rename. Account the
+	// file that is actually on disk, rather than this caller's input length, so
+	// concurrent same-key writes cannot drift the byte budget.
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		c.forgetLocked(name)
+		if os.IsNotExist(statErr) {
+			return nil
+		}
+		return statErr
+	}
 	c.forgetLocked(name)
-	elem := c.lru.PushFront(entry{name: name, size: int64(len(data)), used: now})
+	legacy := legacyFileName(key)
+	if legacy != name {
+		c.removeLocked(legacy)
+	}
+	elem := c.lru.PushFront(entry{name: name, size: info.Size(), used: now})
 	c.entries[name] = elem
-	c.used += int64(len(data))
+	c.used += info.Size()
 	c.evictLocked()
-	c.mu.Unlock()
 	return nil
 }
 
-// ensureInitLocked scans the cache directory once to rebuild the in-memory
-// index from whatever survived the last run. Stray temp files from an
-// interrupted Put are cleaned up. Must be called with c.mu held.
+// ensureInitLocked walks the sharded cache once to rebuild the bounded
+// in-memory index. It also recognizes legacy flat entries so upgrades keep
+// their warm cache. Stray temporary and zero-byte files are removed.
 func (c *Cache) ensureInitLocked() {
 	if c.inited {
 		return
 	}
 	c.inited = true
 
-	dirEntries, err := os.ReadDir(c.dir)
-	if err != nil {
-		return // dir not created yet; nothing cached
-	}
-	var found []entry
-	for _, de := range dirEntries {
+	found := make(entryHeap, 0, min(c.entryLimit(), 1024))
+	var foundBytes int64
+	err := filepath.WalkDir(c.dir, func(path string, de os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
 		if de.IsDir() {
-			continue
+			_ = os.Chmod(path, cacheDirMode)
+			return nil
 		}
-		fname := de.Name()
-		if strings.HasPrefix(fname, cacheTempPrefix) {
-			_ = os.Remove(filepath.Join(c.dir, fname))
-			continue
+		if de.Type()&os.ModeSymlink != 0 {
+			return nil
 		}
-		if !strings.HasSuffix(fname, cacheFileSuffix) {
-			continue
+		name := de.Name()
+		if strings.HasPrefix(name, cacheTempPrefix) {
+			_ = os.Remove(path)
+			return nil
+		}
+		if !strings.HasSuffix(name, cacheFileSuffix) {
+			return nil
 		}
 		info, err := de.Info()
 		if err != nil {
-			continue
+			return nil
 		}
-		found = append(found, entry{name: fname, size: info.Size(), used: info.ModTime()})
+		if info.Size() <= 0 {
+			_ = os.Remove(path)
+			return nil
+		}
+		relative, err := filepath.Rel(c.dir, path)
+		if err != nil || relative == "." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return nil
+		}
+		candidate := entry{name: relative, size: info.Size(), used: info.ModTime()}
+		heap.Push(&found, candidate)
+		foundBytes += candidate.size
+		for len(found) > 1 && (len(found) > c.entryLimit() || foundBytes > c.maxBytes) {
+			oldest := heap.Pop(&found).(entry)
+			foundBytes -= oldest.size
+			_ = os.Remove(filepath.Join(c.dir, oldest.name))
+		}
+		return nil
+	})
+	if err != nil {
+		return // a missing directory is an empty cache
 	}
 	// Most recently used first, so the LRU list is rebuilt newest to oldest.
-	slices.SortFunc(found, func(a, b entry) int { return b.used.Compare(a.used) })
+	slices.SortFunc(found, func(a, b entry) int {
+		if order := b.used.Compare(a.used); order != 0 {
+			return order
+		}
+		return strings.Compare(a.name, b.name)
+	})
 	for _, e := range found {
 		elem := c.lru.PushBack(e)
 		c.entries[e.name] = elem
@@ -243,14 +306,37 @@ func (c *Cache) ensureInitLocked() {
 // budget. It never evicts the last remaining entry, so a single oversized
 // thumbnail is kept rather than deleted on the spot. Must hold c.mu.
 func (c *Cache) evictLocked() {
-	for c.used > c.maxBytes && len(c.entries) > 1 {
+	for (c.used > c.maxBytes || len(c.entries) > c.entryLimit()) && len(c.entries) > 1 {
 		elem := c.lru.Back()
 		if elem == nil {
 			return
 		}
 		e := elem.Value.(entry)
-		_ = os.Remove(filepath.Join(c.dir, e.name))
-		c.forgetLocked(e.name)
+		c.removeLocked(e.name)
+	}
+}
+
+func (c *Cache) entryLimit() int {
+	if c.maxEntries < 1 {
+		return 1
+	}
+	return c.maxEntries
+}
+
+func (c *Cache) removeLocked(name string) {
+	if _, ok := c.entries[name]; !ok {
+		return
+	}
+	_ = os.Remove(filepath.Join(c.dir, name))
+	c.forgetLocked(name)
+	// Best-effort cleanup prevents empty hash directories from accumulating.
+	parent := filepath.Dir(filepath.Join(c.dir, name))
+	if parent != c.dir {
+		_ = os.Remove(parent)
+		grandparent := filepath.Dir(parent)
+		if grandparent != c.dir {
+			_ = os.Remove(grandparent)
+		}
 	}
 }
 
@@ -274,9 +360,27 @@ func (c *Cache) touchLocked(name string, now time.Time) {
 	c.lru.MoveToFront(elem)
 }
 
-// fileName maps an arbitrary key to a safe cache filename. Keys are produced
-// from numeric IDs, so this is defensive rather than load-bearing.
-func fileName(key string) string {
+func (c *Cache) lookupNameLocked(key string) (string, bool) {
+	name := cacheRelativeName(key)
+	if _, ok := c.entries[name]; ok {
+		return name, true
+	}
+	legacy := legacyFileName(key)
+	_, ok := c.entries[legacy]
+	return legacy, ok
+}
+
+// cacheRelativeName maps arbitrary key bytes to a deterministic, collision-
+// resistant two-level path. No caller-controlled path component reaches disk.
+func cacheRelativeName(key string) string {
+	digest := sha256.Sum256([]byte(key))
+	encoded := hex.EncodeToString(digest[:])
+	return filepath.Join(encoded[:2], encoded[2:4], encoded+cacheFileSuffix)
+}
+
+// legacyFileName supports caches created before hash sharding. New writes never
+// use this lossy mapping, and Put removes a matching legacy entry.
+func legacyFileName(key string) string {
 	var b strings.Builder
 	b.Grow(len(key) + len(cacheFileSuffix))
 	for _, r := range key {
@@ -289,4 +393,23 @@ func fileName(key string) string {
 	}
 	b.WriteString(cacheFileSuffix)
 	return b.String()
+}
+
+type entryHeap []entry
+
+func (h entryHeap) Len() int { return len(h) }
+func (h entryHeap) Less(i, j int) bool {
+	if h[i].used.Equal(h[j].used) {
+		return h[i].name > h[j].name
+	}
+	return h[i].used.Before(h[j].used)
+}
+func (h entryHeap) Swap(i, j int)   { h[i], h[j] = h[j], h[i] }
+func (h *entryHeap) Push(value any) { *h = append(*h, value.(entry)) }
+func (h *entryHeap) Pop() any {
+	old := *h
+	last := len(old) - 1
+	value := old[last]
+	*h = old[:last]
+	return value
 }

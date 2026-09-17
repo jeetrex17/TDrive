@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	tdcrypto "TDrive/backend/crypto"
+	"TDrive/backend/datadir"
 	"TDrive/backend/projection"
 	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
@@ -32,6 +34,10 @@ type ActorIDFunc func(ctx context.Context) (int64, error)
 // RequireEncryptionKeyFunc returns a caller-owned key copy. Service clears a
 // non-nil key on every return path, including when err is non-nil.
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
+
+// RequireEncryptionKeyForChannelFunc binds a rendition key request to the
+// source channel. Production providers must reject encrypted shared drives.
+type RequireEncryptionKeyForChannelFunc func(channelID int64, encrypted bool) ([]byte, error)
 
 // MasterKeyForUploadFunc returns a caller-owned key copy. Service clears a
 // non-nil key on every return path, including when err is non-nil.
@@ -57,13 +63,20 @@ type Service struct {
 	EmitOpContext        EmitOpContextFunc
 	ActorID              ActorIDFunc
 	RequireEncryptionKey RequireEncryptionKeyFunc
-	MasterKeyForUpload   MasterKeyForUploadFunc
-	WriteCiphertextTemp  WriteCiphertextTempFunc
-	encryptStream        encryptStreamFunc
-	CreateFolder         CreateFolderFunc
-	Events               EventSink
-	Warnf                WarnFunc
-	Now                  func() time.Time
+	// RequireEncryptionKeyForChannel is used by rendition reads before cache or
+	// network access. RequireEncryptionKey remains for legacy non-rendition
+	// paths until they can adopt the scoped contract.
+	RequireEncryptionKeyForChannel RequireEncryptionKeyForChannelFunc
+	// PersonalChannelID lets this service fail closed for encrypted shared-drive
+	// records even if a test or legacy caller has not provided a scoped key hook.
+	PersonalChannelID   func() int64
+	MasterKeyForUpload  MasterKeyForUploadFunc
+	WriteCiphertextTemp WriteCiphertextTempFunc
+	encryptStream       encryptStreamFunc
+	CreateFolder        CreateFolderFunc
+	Events              EventSink
+	Warnf               WarnFunc
+	Now                 func() time.Time
 	// MaxUploadBytes overrides the per-file upload limit. 0 uses the standard
 	// 2 GiB cap; it is raised to the 4 GiB Premium cap once the account is known
 	// to be Premium. See maxUploadBytes.
@@ -302,7 +315,7 @@ func (s *Service) writeCiphertextTemp(plain io.Reader, plaintextSize int64, mast
 	}
 	keyCopy := append([]byte(nil), masterKey...)
 	defer clearOwnedKey(keyCopy)
-	tmp, err := os.CreateTemp("", "tdrive-upload-*")
+	tmp, err := datadir.CreateCacheTemp("tdrive-upload-*")
 	if err != nil {
 		return nil, err
 	}
@@ -350,14 +363,14 @@ func stageUploadPart(ctx context.Context, dir string, source io.Reader, size int
 func createTempWithFallback(dir string, pattern string) (*os.File, error) {
 	// Prefer the source filesystem for multi-gigabyte ciphertext so an upload
 	// from an external volume does not unexpectedly exhaust the system temp
-	// volume. Read-only or otherwise unsuitable source directories fall back to
-	// the OS temp directory.
-	if dir != "" {
+	// volume. Mobile source paths can be shared storage, so all mobile staging
+	// stays in the app-private cache regardless of its source location.
+	if runtime.GOOS != "android" && runtime.GOOS != "ios" && dir != "" {
 		if tmp, err := os.CreateTemp(dir, pattern); err == nil {
 			return tmp, nil
 		}
 	}
-	return os.CreateTemp("", pattern)
+	return datadir.CreateCacheTemp(pattern)
 }
 
 func uploadSourceTempDir(source io.ReadSeeker) string {

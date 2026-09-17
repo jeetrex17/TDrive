@@ -4,16 +4,11 @@ import type { RenditionAsset } from '../../modules/renditions/broker';
 
 const platform = vi.hoisted(() => ({
     mobile: false,
-    listeners: new Map<string, (value: unknown) => void>(),
 }));
 const runtime = vi.hoisted(() => ({ acquire: vi.fn(), release: vi.fn(), reset: () => {} }));
 
 vi.mock('../../api', () => ({
     isMobilePlatform: () => platform.mobile,
-    onRuntimeEvent: (event: string, callback: (value: unknown) => void) => {
-        platform.listeners.set(event, callback);
-        return () => { platform.listeners.delete(event); };
-    },
 }));
 vi.mock('../../modules/renditions/runtime', () => ({
     acquireRendition: runtime.acquire,
@@ -64,7 +59,6 @@ async function flush(): Promise<void> {
 
 beforeEach(() => {
     platform.mobile = false;
-    platform.listeners.clear();
     state.activeChannel = { id: 7, title: 'Drive', kind: 'personal' };
     vi.stubGlobal('IntersectionObserver', TestObserver);
     runtime.release.mockReset();
@@ -176,16 +170,11 @@ it('keeps the icon fallback and labels locked thumbnails without fetching origin
     expect(thumbnail.querySelector<HTMLImageElement>('.row-thumbnail-image')?.getAttribute('src')).toBeNull();
 });
 
-it('rearms a missing visible thumbnail when its derivative is published', async () => {
-    runtime.acquire
-        .mockImplementationOnce(() => ({
-            promise: Promise.reject({ code: 'missing_rendition' }),
-            release: runtime.release,
-        }))
-        .mockImplementationOnce(() => ({
-            promise: Promise.resolve({ url: 'blob:ready', width: 256, height: 256 }),
-            release: runtime.release,
-        }));
+it('keeps a missing Telegram thumbnail stable for the current revision', async () => {
+    runtime.acquire.mockImplementationOnce(() => ({
+        promise: Promise.reject({ code: 'missing_rendition' }),
+        release: runtime.release,
+    }));
     showFileListRows([row({ thumbnail: { channelId: 7, fileId: 42, revision: 9 } })]);
     app = mount(FileList, { target: host });
     flushSync();
@@ -195,10 +184,10 @@ it('rearms a missing visible thumbnail when its derivative is published', async 
     await flush();
     expect(thumbnail.dataset.status).toBe('missing');
 
-    platform.listeners.get('gallery_rendition_ready')?.({ channel_id: 7, msg_id: 42, kind: 'thumbnail' });
     fire(thumbnail);
     await flush();
 
-    expect(runtime.acquire).toHaveBeenCalledTimes(2);
-    expect(thumbnail.querySelector<HTMLImageElement>('.row-thumbnail-image')?.getAttribute('src')).toBe('blob:ready');
+    expect(runtime.acquire).toHaveBeenCalledOnce();
+    expect(thumbnail.title).toBe('thumbnail unavailable');
+    expect(thumbnail.querySelector<HTMLImageElement>('.row-thumbnail-image')?.getAttribute('src')).toBeNull();
 });

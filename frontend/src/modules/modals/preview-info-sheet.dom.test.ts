@@ -40,6 +40,7 @@ const PREVIEW_MARKUP = `
         <div id="preview-stage">
             <div id="preview-loading"><div id="preview-loading-fill"></div></div>
             <div id="preview-error"></div>
+            <img id="preview-thumbnail" alt="">
             <img id="preview-image" alt="Preview">
         </div>
         <aside id="preview-info"><button id="preview-info-close" type="button"></button><div id="preview-info-body"></div></aside>
