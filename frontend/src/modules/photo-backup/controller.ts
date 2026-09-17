@@ -12,6 +12,7 @@ import { activeDrive } from '../../ui/mobile/mobile-shell-store';
 import { activatePhotoBackupBackground } from './background';
 import { openEncryptionPasswordModal } from '../modals/encryption-password';
 import { isEncryptionPasswordRequired } from '../errors';
+import { clearPhotoBackupActivity, syncPhotoBackupActivity } from './activity';
 
 export const photoBackupState = writable<PhotoBackupState | null>(null);
 export const photoBackupError = writable('');
@@ -22,6 +23,10 @@ let active = false;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let schedulerRunning = false;
 let schedulerEpoch = 0;
+// A backend reply belongs to the account and drive that requested it. Changing
+// either scope invalidates replies already in flight so an old filename cannot
+// reappear in the bell after a switch.
+let scopeEpoch = 0;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let manuallyPaused = false;
 let documentVisible = typeof document === 'undefined' || document.visibilityState === 'visible';
@@ -33,12 +38,14 @@ const materializedResources = new Map<string, string>();
 const materializations = new Map<string, AbortController>();
 
 export async function refreshPhotoBackup(): Promise<void> {
+    const epoch = scopeEpoch;
     try {
         const state = await getPhotoBackupState();
+        if (epoch !== scopeEpoch) return;
         manuallyPaused = state.manualPaused;
-        photoBackupState.set(state); photoBackupError.set('');
+        photoBackupState.set(state); syncPhotoBackupActivity(state); photoBackupError.set('');
     }
-    catch { photoBackupError.set('Photo backup is unavailable. Try again.'); }
+    catch { if (epoch === scopeEpoch) photoBackupError.set('Photo backup is unavailable. Try again.'); }
 }
 
 function scheduleRefresh(): void {
@@ -71,8 +78,10 @@ async function runDiscoveryScheduler(): Promise<void> {
     if (schedulerRunning || !active || !documentVisible || manuallyPaused || !nativePhotoBackupAvailable()) return;
     schedulerRunning = true;
     const epoch = schedulerEpoch;
+    const currentScope = scopeEpoch;
     try {
         const current = await getPhotoBackupState();
+        if (currentScope !== scopeEpoch) return;
         manuallyPaused = current.manualPaused;
         if (!current.settings.enabled || epoch !== schedulerEpoch || manuallyPaused) return;
         if (current.encryptionRequired) {
@@ -226,6 +235,18 @@ export function activatePhotoBackup(): () => void {
     window.addEventListener('ios:PhotoBackupMediaChanged', iosResume);
     const visibility = () => { documentVisible = document.visibilityState === 'visible'; if (!documentVisible) { cancelDiscovery(); return; } void runDiscoveryScheduler(); };
     document.addEventListener('visibilitychange', visibility);
-    const stopDriveWatch = activeDrive.subscribe((drive) => { const id = drive?.id ?? null; if (id !== observedDriveID) { cancelDiscovery(); observedDriveID = id; if (id !== null) void runDiscoveryScheduler(); } });
-    return () => { stopBackground(); active = false; observedDriveID = null; stopDriveWatch(); cancelDiscovery(); for (const token of materializations.keys()) release({ token }); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('ios:PhotoBackupMediaChanged', iosResume); if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; } for (const stop of stops) stop(); };
+    const stopDriveWatch = activeDrive.subscribe((drive) => {
+        const id = drive?.id ?? null;
+        if (id === observedDriveID) return;
+        scopeEpoch += 1;
+        clearPhotoBackupActivity();
+        photoBackupState.set(null);
+        photoBackupError.set('');
+        cancelDiscovery();
+        observedDriveID = id;
+        if (id === null) return;
+        const epoch = scopeEpoch;
+        void refreshPhotoBackup().then(() => { if (epoch === scopeEpoch) void runDiscoveryScheduler(); });
+    });
+    return () => { scopeEpoch += 1; stopBackground(); active = false; observedDriveID = null; stopDriveWatch(); clearPhotoBackupActivity(); cancelDiscovery(); for (const token of materializations.keys()) release({ token }); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('ios:PhotoBackupMediaChanged', iosResume); if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; } for (const stop of stops) stop(); };
 }

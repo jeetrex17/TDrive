@@ -1,8 +1,10 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"TDrive/backend/projection"
@@ -83,5 +85,41 @@ func TestBackupUploadDoesNotFallBackToPlaintext(t *testing.T) {
 	}
 	if len(fakeTG.SentFiles()) != 0 {
 		t.Fatal("locked vault must not send plaintext")
+	}
+}
+
+func TestBackupUploadReportsCurrentFileProgress(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	var updates []BackupUploadProgress
+	meta, err := svc.UploadBackup(context.Background(), personalChannelID, writeTempNamedFile(t, "photo.jpg", []byte("original")), "", false, func(p BackupUploadProgress) { updates = append(updates, p) })
+	if err != nil || meta.MsgID <= 0 {
+		t.Fatalf("upload = %+v, %v", meta, err)
+	}
+	if len(updates) < 2 || updates[0].Name != "photo.jpg" || updates[0].BytesTotal != 8 || updates[0].Percent != 0 || updates[len(updates)-1].Percent != 100 {
+		t.Fatalf("progress = %+v", updates)
+	}
+}
+
+func TestEncryptedBackupPublishesEncryptedPreviewsFromLocalSource(t *testing.T) {
+	svc, db, _, _ := newTestService(t)
+	key := bytes.Repeat([]byte{7}, 32)
+	svc.MasterKeyForUpload = func(int64, bool) ([]byte, error) { return append([]byte(nil), key...), nil }
+	svc.RequireEncryptionKey = func(bool) ([]byte, error) { return append([]byte(nil), key...), nil }
+	path := writeTempNamedFile(t, "photo.jpg", tinyRenditionJPEG(t))
+	replaced := false
+	meta, err := svc.UploadBackup(context.Background(), personalChannelID, path, "", true, func(BackupUploadProgress) {
+		if !replaced {
+			replaced = true
+			if err := os.WriteFile(path, []byte("replacement must never become preview pixels"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if err != nil || meta.MsgID <= 0 {
+		t.Fatalf("upload = %+v, %v", meta, err)
+	}
+	ref, err := projection.CurrentFileRendition(context.Background(), db, personalChannelID, int64(meta.MsgID), "thumbnail")
+	if err != nil || !ref.Encrypted {
+		t.Fatalf("encrypted thumbnail = %+v, %v", ref, err)
 	}
 }

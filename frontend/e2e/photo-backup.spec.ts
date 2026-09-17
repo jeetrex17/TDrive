@@ -121,3 +121,39 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         expect(await mock.calls('ClearGalleryCache')).toHaveLength(0);
     });
 }
+
+for (const platform of ['desktop', 'android', 'ios'] as const) {
+    test(`backup notifications show live current-file progress on ${platform}`, async ({ page }, testInfo) => {
+        if (platform !== 'desktop') {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
+        }
+        const state = {
+            platform, settings: { enabled: true, photos: true, videos: true },
+            sources: [{ id: 'camera', name: 'Camera', enabled: true }],
+            status: { phase: 'uploading', complete: 1, pending: 30, uploading: 1,
+                current_file: 'holiday.jpg', current_file_bytes_done: 500000,
+                current_file_bytes_total: 1000000, current_file_percent: 50 },
+        };
+        const mock = await bootTDrive(page, { GetPhotoBackupState: resolves(state) });
+        if (platform === 'desktop') {
+            await page.getByRole('button', { name: 'Notifications', exact: true }).click();
+        } else {
+            await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Transfers', exact: true }).click();
+        }
+        const notifications = platform === 'desktop' ? page.getByRole('dialog', { name: 'Notifications', exact: true }) : page.locator('.transfers-tab');
+        const rows = platform === 'desktop' ? notifications.locator('.notif-row-transfer') : notifications.getByRole('listitem');
+        await expect(notifications).toContainText('holiday.jpg');
+        await expect(notifications.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+        await expect(rows).toHaveCount(1);
+        await mock.setPlan('GetPhotoBackupState', resolves({ ...state, status: { ...state.status,
+            complete: 2, pending: 29, current_file: 'birthday.mp4',
+            current_file_bytes_done: 750000, current_file_percent: 75 } }));
+        await mock.emit('photo-backup:state');
+        await expect(notifications).toContainText('birthday.mp4');
+        await expect(notifications.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '75');
+        await expect(rows).toHaveCount(1);
+        expect(await notifications.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`backup-progress-${platform}.png`) });
+    });
+}

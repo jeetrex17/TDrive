@@ -14,6 +14,15 @@ describe('normalizePhotoBackupState', () => {
         expect(state.capabilities).toEqual(expect.objectContaining({ wifiOnly: { supported: true, label: '', detail: '' } }));
     });
 
+    it('normalizes only bounded current-file progress for live backup activity', () => {
+        const state = normalizePhotoBackupState({
+            status: { current_file: 'Trips/photo.jpg', current_file_bytes_done: 80, current_file_bytes_total: 100, current_file_percent: 80 },
+        });
+        expect(state.status).toMatchObject({ currentFile: 'Trips/photo.jpg', currentFileBytesDone: 80, currentFileBytesTotal: 100, currentFilePercent: 80 });
+        expect(normalizePhotoBackupState({ status: { current_file: 'x'.repeat(600), current_file_percent: 900 } }).status)
+            .toMatchObject({ currentFile: 'x'.repeat(512), currentFilePercent: 100 });
+    });
+
     it('falls back safely for incomplete or contradictory state', () => {
         const state = normalizePhotoBackupState({ settings: {}, status: { phase: 'unknown', pending: -100 } });
         expect(state.settings).toEqual({ enabled: false, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false });

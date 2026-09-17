@@ -250,6 +250,10 @@ export interface PersonalDriveSetupState {
     "active_channel_id": string;
 }
 
+/**
+ * PhotoBackupAsset is the native/frontend handoff shape for one discovered
+ * photo-library or watched-folder item.
+ */
 export interface PhotoBackupAsset {
     "id": string;
     "version": string;
@@ -307,6 +311,10 @@ export interface PhotoBackupState {
 }
 
 export interface PhotoBackupStatus {
+    "current_file": string;
+    "current_file_bytes_done": number;
+    "current_file_bytes_total": number;
+    "current_file_percent": number;
     "phase": string;
     "pending": number;
     "uploading": number;
