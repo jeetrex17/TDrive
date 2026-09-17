@@ -51,6 +51,7 @@ const LEVEL_DURATION: Record<ToastLevel, number> = {
     warning: 6000,
     error: 8000,
 };
+/** For a toast already on screen whose own duration has been lost. */
 const DEFAULT_DURATION = LEVEL_DURATION.info;
 /** A toast with a button has to outlast the glance that finds the button. */
 const ACTIONABLE_DURATION = 8000;
@@ -112,7 +113,7 @@ const actionable = Boolean(opts.action && opts.action.label && typeof opts.actio
 const requested = typeof opts.durationMs === 'number' && Number.isFinite(opts.durationMs) ? opts.durationMs : null;
 const duration = sticky
     ? 0
-    : Math.max(requested ?? LEVEL_DURATION[level] ?? DEFAULT_DURATION, actionable ? ACTIONABLE_DURATION : 0);
+    : Math.max(requested ?? LEVEL_DURATION[level], actionable ? ACTIONABLE_DURATION : 0);
 const now = Date.now();
 const paused = allPaused || individuallyPaused.has(id);
 const entry: ToastItem = {
