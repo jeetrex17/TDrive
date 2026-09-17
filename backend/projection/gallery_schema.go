@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const galleryMaterializationVersion = 2
+const galleryMaterializationVersion = 3
 
 // EnsureGallerySchema installs the local gallery projection. gallery_items is
 // derived from files and dirents by triggers, so replay, migrations, and direct
@@ -201,7 +201,23 @@ func galleryImageNamePredicate(name string) string {
  OR ` + name + ` LIKE '%.png' COLLATE NOCASE
  OR ` + name + ` LIKE '%.gif' COLLATE NOCASE
  OR ` + name + ` LIKE '%.webp' COLLATE NOCASE
- OR ` + name + ` LIKE '%.bmp' COLLATE NOCASE)`
+ OR ` + name + ` LIKE '%.bmp' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.mp4' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.m4v' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.mov' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.qt' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.webm' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.mkv' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.mk3d' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.avi' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.ts' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.m2ts' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.mts' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.flv' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.wmv' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.ogv' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.mpeg' COLLATE NOCASE
+ OR ` + name + ` LIKE '%.mpg' COLLATE NOCASE)`
 }
 
 func galleryMaterializationTriggerNames() []string {

@@ -124,6 +124,19 @@ func TestGalleryFiltersAndRespectsProjectedName(t *testing.T) {
 	}
 }
 
+func TestGalleryIncludesVideosAndExcludesNonMedia(t *testing.T) {
+	db := newTestDB(t)
+	seedGalleryFiles(t, db, testChan, 1)
+	if _, err := db.Exec(`INSERT INTO files(channel_id,msg_id,name,size,parent_id,upload_time,content_msg_id,content_hash,revision)
+		VALUES(?,2,'clip.MP4',1,'',2,2,'video',1),(?,3,'notes.txt',1,'',3,3,'text',1)`, testChan, testChan); err != nil {
+		t.Fatal(err)
+	}
+	page, err := MediaPage(context.Background(), db, testChan, "", 128)
+	if err != nil || len(page.Items) != 2 || page.Items[0].Name != "image-1.JPG" || page.Items[1].Name != "clip.MP4" {
+		t.Fatalf("mixed media page=%+v error=%v", page, err)
+	}
+}
+
 func TestGalleryCursorRejectsStaleAndWrongScope(t *testing.T) {
 	db := newTestDB(t)
 	seedGalleryFiles(t, db, testChan, 10)

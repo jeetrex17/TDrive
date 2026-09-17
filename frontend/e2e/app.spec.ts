@@ -393,6 +393,27 @@ test('gallery loads binary thumbnails and one explicitly opened original stream'
     expect(requested.some((path) => path.endsWith('/preview'))).toBe(false);
 });
 
+test('mixed gallery loads video thumbnails before opening the streaming player', async ({ page }) => {
+    const requested = await routeRenditions(page);
+    const clip = { ...SECOND_PHOTO, name: 'holiday.mp4', size: 80_000_000 };
+    const mock = await bootTDrive(page, {
+        ...galleryPlans([FIRST_PHOTO, clip]),
+        OpenMedia: rejects('Test stream unavailable'),
+    });
+    await page.getByRole('button', { name: 'Photos', exact: true }).click();
+    const video = page.getByRole('button', { name: 'Video: holiday.mp4', exact: true });
+    await expect(video).toBeVisible();
+    await expect(video.locator('img')).toHaveAttribute('src', /^blob:/);
+    expect(requested).toContain('/mock-renditions/102/thumbnail');
+    expect(await mock.calls('OpenMedia')).toHaveLength(0);
+    expect(await mock.calls('OpenOriginalImage')).toHaveLength(0);
+    await video.click();
+    await expect(page.locator('#video-modal')).toBeVisible();
+    await expect.poll(async () => (await mock.calls('OpenMedia')).length).toBe(1);
+    expect(await mock.calls('OpenOriginalImage')).toHaveLength(0);
+    expect(requested.every((path) => path.endsWith('/thumbnail'))).toBe(true);
+});
+
 test('a late original completion cannot overwrite rapid gallery navigation', async ({ page }) => {
     await routeRenditions(page);
     await bootTDrive(page, galleryPlans([FIRST_PHOTO, SECOND_PHOTO], true));
