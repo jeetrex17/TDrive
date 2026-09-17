@@ -2,25 +2,64 @@
     import ArrowDownUpIcon from '@lucide/svelte/icons/arrow-down-up';
     import { activeTransfers, recentEvents, type TransferEvent } from '../notifications/notif-store';
     import EventRow from '../notifications/EventRow.svelte';
-    import TransferRow from '../notifications/TransferRow.svelte';
-    import { cancelTransfersInDirection, clearHistory } from '../../modules/notif-bell';
+    import MobileTransferRow from './MobileTransferRow.svelte';
+    import { cancelSingleUpload, cancelTransfersInDirection, clearHistory } from '../../modules/notif-bell';
     import { humanizeBackendError } from '../../modules/errors';
     import { notify } from '../../modules/notifications';
     import { downloadRetryFor } from '../../modules/transfers';
     import { shareFile } from '../../api';
     import { downloadSharePaths, forgetDownloadSharePath } from './mobile-shell-store';
 
+    /** How many transfers are in flight; more than one earns a way to stop the lot. */
+    const inFlight = $derived($activeTransfers.length);
+
     /**
-     * What the row's x actually does. An upload stops on its own now, so it
-     * just says Cancel. A download row can stop only the current backend job,
-     * so queued rows expose no cancellation control.
+     * Stopping one row, where the backend can do that.
+     *
+     * An upload is numbered within its batch and can be stopped on its own. A
+     * download can only be stopped while it is the job actually running -- the
+     * queue behind it has no per-item cancel -- so a waiting row offers none
+     * rather than a control that would quietly stop somebody else's transfer.
+     * Cancel all covers those; see the section header.
      */
-    function cancelLabelFor(transfer: TransferEvent): string | undefined {
-        return transfer.direction === 'up' ? 'Cancel all uploads' : 'Cancel active download';
+    function cancelFor(transfer: TransferEvent): (() => void) | undefined {
+        const upload = /^xfer:up:(\d+)$/.exec(transfer.id);
+        if (upload) {
+            const id = Number(upload[1]);
+            return () => cancelSingleUpload(id);
+        }
+        if (transfer.direction === 'up') return () => cancelTransfersInDirection('up');
+        // "active" and not "running": a download still working out what it is
+        // downloading is the job the backend has in hand, and it was the one row
+        // on screen with no way to stop it.
+        if (transfer.status === 'active') return () => cancelTransfersInDirection('down');
+        return undefined;
     }
 
-    // Finished single-file downloads keep their sandbox path so the share sheet
-    // can be reopened from here (spec 2.5: Recent items get a Share action).
+    /**
+     * Three uploads run at a time, so twenty files show three rows and stopping
+     * those three only lets the next three start. This is the way out of the
+     * batch, and of a download queue whose waiting rows cannot be stopped alone.
+     */
+    function cancelEverything(): void {
+        cancelTransfersInDirection('up');
+        cancelTransfersInDirection('down');
+    }
+
+    /** Re-queues a failed download, forgetting the sandbox file the last try left. */
+    function retryFor(transfer: TransferEvent): (() => void) | undefined {
+        const retry = downloadRetryFor(transfer);
+        if (!retry) return undefined;
+        return () => {
+            forgetDownloadSharePath(transfer.id);
+            retry();
+        };
+    }
+
+    /**
+     * Finished single-file downloads keep their sandbox path so the share sheet
+     * can be opened again from here, long after the one that opened on arrival.
+     */
     function shareFor(transferId: string): (() => void) | undefined {
         const path = $downloadSharePaths.get(transferId);
         if (!path) return undefined;
@@ -36,31 +75,10 @@
                 });
         };
     }
-
-    /**
-     * The row's x stops one file. A batch needs its own way out: with three
-     * uploads running at a time, twenty files show three rows, and stopping
-     * those three just lets the next three start. Shown only when there is
-     * more than one upload, so a single transfer keeps one obvious control.
-     */
-    const activeUploads = $derived($activeTransfers.filter((t) => t.direction === 'up').length);
-
-    function cancelAllUploads(): void {
-        cancelTransfersInDirection('up');
-    }
-
-    function retryFor(transfer: TransferEvent): (() => void) | undefined {
-        const retry = downloadRetryFor(transfer);
-        if (!retry) return undefined;
-        return () => {
-            forgetDownloadSharePath(transfer.id);
-            retry();
-        };
-    }
 </script>
 
 <div class="mobile-scroll transfers-tab">
-    {#if $activeTransfers.length === 0 && $recentEvents.length === 0}
+    {#if inFlight === 0 && $recentEvents.length === 0}
         <div class="mobile-empty">
             <span class="mobile-empty-glyph">
                 <ArrowDownUpIcon size={40} strokeWidth={1.6} aria-hidden="true" />
@@ -69,22 +87,16 @@
             <p class="mobile-empty-body">Uploads and downloads show up here.</p>
         </div>
     {:else}
-        {#if $activeTransfers.length > 0}
+        {#if inFlight > 0}
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Active</h2>
-                {#if activeUploads > 1}
-                    <button type="button" class="transfers-clear" aria-label="Cancel all uploads" onclick={cancelAllUploads}>
-                        Cancel all
-                    </button>
+                {#if inFlight > 1}
+                    <button type="button" class="transfers-clear" onclick={cancelEverything}>Cancel all</button>
                 {/if}
             </div>
             <div class="transfers-group" role="list">
                 {#each $activeTransfers as transfer (transfer.id)}
-                    <TransferRow
-                        {transfer}
-                        onCancel={cancelTransfersInDirection}
-                        cancelLabel={cancelLabelFor(transfer)}
-                    />
+                    <MobileTransferRow {transfer} onCancel={cancelFor(transfer)} />
                 {/each}
             </div>
         {/if}
@@ -96,10 +108,10 @@
             <div class="transfers-group" role="list">
                 {#each $recentEvents.slice(0, 50) as entry (entry.id)}
                     {#if entry.kind === 'transfer'}
-                        <TransferRow
+                        <MobileTransferRow
                             transfer={entry}
-                            onShare={shareFor(entry.id)}
                             onRetry={retryFor(entry)}
+                            onShare={shareFor(entry.id)}
                         />
                     {:else}
                         <EventRow event={entry} listItem />
@@ -111,11 +123,18 @@
 </div>
 
 <style>
+    /* The card separates its own rows. A row cannot see its siblings -- each one
+       is its own component -- and the separation is a property of the stack
+       rather than of anything in it. */
+    .transfers-group > :global(* + *) {
+        border-top: 1px solid var(--color-border-soft);
+    }
+
     /* Keep the quiet text treatment while giving the section actions an iOS
        and Android sized touch target. The pseudo-element extends the hit area
        without changing the heading rhythm. */
-    :global(html.mobile .transfers-clear) { position: relative; }
-    :global(html.mobile .transfers-clear::after) {
+    .transfers-clear { position: relative; }
+    .transfers-clear::after {
         content: '';
         position: absolute;
         inset: -8px;
