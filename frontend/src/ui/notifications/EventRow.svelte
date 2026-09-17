@@ -8,9 +8,10 @@
 
     interface Props {
         event: NoticeEvent;
+        listItem?: boolean;
     }
 
-    let { event }: Props = $props();
+    let { event, listItem = false }: Props = $props();
     let copied = $state(false);
     let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -51,6 +52,7 @@
 
 <div
     class={`notif-row notif-row-event level-${event.level}${copied ? ' notif-copied' : ''}`}
+    role={listItem ? 'listitem' : undefined}
 >
     <span class="notif-row-icon" data-kind={event.level} aria-hidden="true">
         {#if event.level === 'success'}

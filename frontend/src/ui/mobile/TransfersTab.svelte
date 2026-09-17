@@ -8,18 +8,15 @@
     import { notify } from '../../modules/notifications';
     import { downloadRetryFor } from '../../modules/transfers';
     import { shareFile } from '../../api';
-    import { downloadSharePaths } from './mobile-shell-store';
+    import { downloadSharePaths, forgetDownloadSharePath } from './mobile-shell-store';
 
     /**
      * What the row's x actually does. An upload stops on its own now, so it
-     * just says Cancel. Downloads still share one cancel handle, so with more
-     * than one of them here the button takes the rest too -- worth saying on
-     * the button rather than finding out afterwards.
+     * just says Cancel. A download row can stop only the current backend job,
+     * so queued rows expose no cancellation control.
      */
     function cancelLabelFor(transfer: TransferEvent): string | undefined {
-        if (transfer.direction === 'up') return undefined;
-        const together = $activeTransfers.filter((entry) => entry.direction === 'down').length;
-        return together > 1 ? `Cancel all ${together} downloads` : undefined;
+        return transfer.direction === 'up' ? 'Cancel all uploads' : 'Cancel active download';
     }
 
     // Finished single-file downloads keep their sandbox path so the share sheet
@@ -51,6 +48,15 @@
     function cancelAllUploads(): void {
         cancelTransfersInDirection('up');
     }
+
+    function retryFor(transfer: TransferEvent): (() => void) | undefined {
+        const retry = downloadRetryFor(transfer);
+        if (!retry) return undefined;
+        return () => {
+            forgetDownloadSharePath(transfer.id);
+            retry();
+        };
+    }
 </script>
 
 <div class="mobile-scroll transfers-tab">
@@ -67,7 +73,7 @@
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Active</h2>
                 {#if activeUploads > 1}
-                    <button type="button" class="transfers-clear" onclick={cancelAllUploads}>
+                    <button type="button" class="transfers-clear" aria-label="Cancel all uploads" onclick={cancelAllUploads}>
                         Cancel all
                     </button>
                 {/if}
@@ -93,13 +99,25 @@
                         <TransferRow
                             transfer={entry}
                             onShare={shareFor(entry.id)}
-                            onRetry={downloadRetryFor(entry)}
+                            onRetry={retryFor(entry)}
                         />
                     {:else}
-                        <EventRow event={entry} />
+                        <EventRow event={entry} listItem />
                     {/if}
                 {/each}
             </div>
         {/if}
     {/if}
 </div>
+
+<style>
+    /* Keep the quiet text treatment while giving the section actions an iOS
+       and Android sized touch target. The pseudo-element extends the hit area
+       without changing the heading rhythm. */
+    :global(html.mobile .transfers-clear) { position: relative; }
+    :global(html.mobile .transfers-clear::after) {
+        content: '';
+        position: absolute;
+        inset: -8px;
+    }
+</style>

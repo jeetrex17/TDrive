@@ -10,6 +10,8 @@ import {
     downloadSharePaths,
     driveSwitcherOpen,
     fileListCount,
+    forgetDownloadSharePath,
+    clearDownloadSharePaths,
     rememberDownloadSharePath,
 } from './mobile-shell-store';
 
@@ -62,5 +64,15 @@ describe('mobile-shell-store', () => {
         const paths = get(downloadSharePaths);
         expect(paths.get('xfer:down:file:9')).toBe('/sandbox/Downloads/a.pdf');
         expect(paths.has('xfer:down:file:10')).toBe(false);
+    });
+
+    it('forgets stale share paths for a replacement or cleared history', () => {
+        rememberDownloadSharePath('xfer:down:file:9', '/sandbox/Downloads/a.pdf');
+        rememberDownloadSharePath('xfer:down:file:10', '/sandbox/Downloads/b.pdf');
+        forgetDownloadSharePath('xfer:down:file:9');
+        expect(get(downloadSharePaths).has('xfer:down:file:9')).toBe(false);
+
+        clearDownloadSharePaths();
+        expect(get(downloadSharePaths)).toEqual(new Map());
     });
 });

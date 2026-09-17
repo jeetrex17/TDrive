@@ -43,6 +43,7 @@
         transfer.status === 'done' ? 'is-done'
         : transfer.status === 'failed' ? 'is-failed'
         : transfer.status === 'canceled' ? 'is-canceled'
+        : transfer.status === 'canceling' ? 'is-canceling'
         : 'is-active',
     );
     const progressWidth = $derived(Math.max(0, Math.min(100, transfer.progress || 0)));
@@ -51,6 +52,7 @@
         transfer.status === 'done' ? 'Done'
         : transfer.status === 'failed' ? 'Failed'
         : transfer.status === 'canceled' ? 'Canceled'
+        : transfer.status === 'canceling' ? 'Canceling'
         : '',
     );
     const doneBytes = $derived(transfer.total > 0
@@ -93,6 +95,14 @@
     // The phone stacks these figures into one line and needs each one to be its
     // own box; the desktop column reads them as the plain text it always did.
     const metaClass = $derived(mobile ? 'notif-row-size' : '');
+    const showProgress = $derived(isUnfinishedTransfer(transfer.status) && transfer.status !== 'canceling');
+    const canCancel = $derived(
+        isUnfinishedTransfer(transfer.status)
+        && transfer.status !== 'canceling'
+        // The download backend can stop only the job it is currently running.
+        // A queued row gets no fake individual cancel control.
+        && (transfer.direction === 'up' || transfer.status === 'active'),
+    );
 
     /**
      * A single file of an upload batch can be stopped on its own, and the row
@@ -110,6 +120,10 @@
         const match = /^xfer:up:(\d+)$/.exec(transfer.id);
         return match ? Number(match[1]) : null;
     });
+    const effectiveCancelLabel = $derived(
+        uploadId !== null ? 'Cancel upload'
+        : cancelLabel || (transfer.direction === 'down' ? 'Cancel active download' : 'Cancel all uploads'),
+    );
 
     function cancel(event: MouseEvent): void {
         event.stopPropagation();
@@ -121,7 +135,7 @@
     }
 </script>
 
-<div class={`notif-row notif-row-transfer ${statusClass}${preparing ? ' is-preparing' : ''}`}>
+<div class={`notif-row notif-row-transfer ${statusClass}${preparing ? ' is-preparing' : ''}`} role={mobile ? 'listitem' : undefined}>
     <span class="notif-row-icon" data-kind={direction} aria-hidden="true">
         {#if transfer.direction === 'up'}
             <ArrowUpIcon size={14} strokeWidth={2} aria-hidden="true" />
@@ -133,20 +147,22 @@
         <div class="notif-row-title" title={transfer.name}>{transfer.name || dirLabel}</div>
         <!-- A progressbar reports state when queried or focused, without a
              live region that would announce each transfer tick. -->
-        <div
-            class="notif-row-progress"
-            role="progressbar"
-            aria-label={progressLabel}
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow={Math.round(progressWidth)}
-        >
+        {#if showProgress}
             <div
-                class="notif-row-progress-fill"
-                style={preparing ? undefined : `width:${progressWidth}%`}
-                aria-hidden="true"
-            ></div>
-        </div>
+                class="notif-row-progress"
+                role="progressbar"
+                aria-label={preparing ? `Preparing ${progressLabel}` : progressLabel}
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow={preparing ? undefined : Math.round(progressWidth)}
+            >
+                <div
+                    class="notif-row-progress-fill"
+                    style={preparing ? undefined : `width:${progressWidth}%`}
+                    aria-hidden="true"
+                ></div>
+            </div>
+        {/if}
     </div>
     {#if !preparing}
         <div class="notif-row-meta">
@@ -168,14 +184,16 @@
                 {/if}
             {/if}
         </div>
+    {:else}
+        <div class="notif-row-meta"><div class={metaClass}>Preparing</div></div>
     {/if}
-    {#if isUnfinishedTransfer(transfer.status)}
+    {#if canCancel}
         <button
             class="notif-row-cancel"
             type="button"
             data-cancel-dir={transfer.direction}
-            aria-label={cancelLabel || 'Cancel transfer'}
-            title={cancelLabel || 'Cancel'}
+            aria-label={effectiveCancelLabel}
+            title={effectiveCancelLabel}
             onclick={cancel}
         >
             <XIcon size={12} strokeWidth={2} aria-hidden="true" />
@@ -221,6 +239,23 @@
         background: var(--overlay-neutral-2);
         color: var(--text-muted);
     }
+
+    :global(html.mobile .notif-row-transfer.is-canceling .notif-row-icon) {
+        background: var(--overlay-neutral-2);
+        color: var(--text-muted);
+    }
+
+    :global(html.mobile .notif-row-cancel),
+    :global(html.mobile .notif-row-share) {
+        position: relative;
+    }
+    :global(html.mobile .notif-row-cancel::after),
+    :global(html.mobile .notif-row-share::after) {
+        content: '';
+        position: absolute;
+        inset: -4px;
+    }
+    :global(html.mobile .notif-row-share::after) { inset: -6px; }
 
     /* A failed download is the one terminal row with somewhere to go. Same
        shape as Share, in the danger tone the row now carries, so the row reads

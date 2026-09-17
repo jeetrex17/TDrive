@@ -114,3 +114,18 @@ export function rememberDownloadSharePath(transferId: string, path: string): voi
         return next;
     });
 }
+
+/** A retry replaces the old sandbox file, so its previous share path is stale. */
+export function forgetDownloadSharePath(transferId: string): void {
+    downloadSharePaths.update((paths) => {
+        if (!paths.has(transferId)) return paths;
+        const next = new Map(paths);
+        next.delete(transferId);
+        return next;
+    });
+}
+
+/** Terminal history and sandbox share paths have the same lifetime. */
+export function clearDownloadSharePaths(): void {
+    downloadSharePaths.set(new Map());
+}

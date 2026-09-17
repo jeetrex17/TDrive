@@ -69,15 +69,33 @@ describe('transfer row on a phone', () => {
         expect(host.textContent).toContain('3 of 5 files');
     });
 
-    it('offers cancel for work that has not finished, whether or not it is moving', () => {
+    it('does not pretend a queued download can be canceled individually', () => {
         render({ transfer: transfer({ status: 'queued' }), onCancel: () => {} });
-        expect(host.querySelector('.notif-row-cancel')).not.toBeNull();
+        expect(host.querySelector('.notif-row-cancel')).toBeNull();
     });
 
-    it('says when the one cancel handle will take other transfers with it', () => {
-        render({ transfer: transfer(), onCancel: () => {}, cancelLabel: 'Cancel all 3 downloads' });
+    it('uses list semantics and labels indeterminate preparation honestly', () => {
+        render({ transfer: transfer({ total: 0, bytes: 0, progress: 0 }) });
+        const row = host.querySelector('[role="listitem"]');
+        const progress = host.querySelector('[role="progressbar"]');
+
+        expect(row).not.toBeNull();
+        expect(host.textContent).toContain('Preparing');
+        expect(progress?.getAttribute('aria-valuenow')).toBeNull();
+        expect(progress?.getAttribute('aria-label')).toContain('Preparing');
+    });
+
+    it('shows a canceling receipt immediately and does not offer a duplicate cancel', () => {
+        render({ transfer: transfer({ status: 'canceling' }) });
+        expect(host.textContent).toContain('Canceling');
+        expect(host.querySelector('.notif-row-cancel')).toBeNull();
+        expect(host.querySelector('[role="progressbar"]')).toBeNull();
+    });
+
+    it('names the one active download that the backend can actually cancel', () => {
+        render({ transfer: transfer(), onCancel: () => {}, cancelLabel: 'Cancel active download' });
         const button = host.querySelector('.notif-row-cancel');
-        expect(button?.getAttribute('aria-label')).toBe('Cancel all 3 downloads');
+        expect(button?.getAttribute('aria-label')).toBe('Cancel active download');
     });
 
     it('gives a failed download a way back, and calls it once tapped', () => {
@@ -107,7 +125,7 @@ describe('cancelling one file of a batch', () => {
     it('stops just that upload, because the phone also has a Cancel all', () => {
         const onCancel = vi.fn();
         render({ transfer: transfer({ id: 'xfer:up:1', direction: 'up', status: 'active' }), onCancel });
-        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel upload"]');
         if (!button) throw new Error('Missing cancel button');
         button.click();
         expect(cancelSingleUpload).toHaveBeenCalledExactlyOnceWith(1);
@@ -116,10 +134,10 @@ describe('cancelling one file of a batch', () => {
 
     // One row per case: render() appends to the same host, so a loop would
     // leave the first row in place and click that one instead.
-    it('falls back to the whole direction for a download', () => {
+    it('cancels the active download without claiming queued work will stop', () => {
         const onCancel = vi.fn();
         render({ transfer: transfer({ id: 'xfer:down:file:42', direction: 'down', status: 'active' }), onCancel });
-        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel active download"]');
         if (!button) throw new Error('Missing cancel button');
         button.click();
         expect(onCancel).toHaveBeenCalledExactlyOnceWith('down');
@@ -129,7 +147,7 @@ describe('cancelling one file of a batch', () => {
     it('falls back to the whole direction for an import, which has no per-file id', () => {
         const onCancel = vi.fn();
         render({ transfer: transfer({ id: 'xfer:up:import', direction: 'up', status: 'active' }), onCancel });
-        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel all uploads"]');
         if (!button) throw new Error('Missing cancel button');
         button.click();
         expect(onCancel).toHaveBeenCalledExactlyOnceWith('up');

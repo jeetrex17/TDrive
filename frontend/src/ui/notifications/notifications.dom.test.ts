@@ -98,7 +98,7 @@ describe('notification interaction controls', () => {
         // would leave a twenty-file batch with no way to stop.
         const onCancel = vi.fn();
         const host = mountComponent(TransferRow, { transfer: makeTransfer(), onCancel });
-        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel all uploads"]');
         if (!button) throw new Error('Missing cancel button');
         button.click();
         expect(onCancel).toHaveBeenCalledExactlyOnceWith('up');
@@ -109,7 +109,8 @@ describe('notification interaction controls', () => {
             const direction = id.startsWith('xfer:up:') ? 'up' as const : 'down' as const;
             const onCancel = vi.fn();
             const host = mountComponent(TransferRow, { transfer: makeTransfer({ id, direction }), onCancel });
-            const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+            const label = direction === 'down' ? 'Cancel active download' : 'Cancel all uploads';
+            const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
             if (!button) throw new Error('Missing cancel button');
             button.click();
             expect(onCancel).toHaveBeenCalledExactlyOnceWith(direction);
