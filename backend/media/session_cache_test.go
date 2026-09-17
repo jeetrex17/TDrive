@@ -45,3 +45,43 @@ func TestSessionThumbnailReaderSharesPlaybackCache(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestImageSessionUsesSmallCacheWithoutReadAhead(t *testing.T) {
+	const size int64 = 40 * 1024 * 1024
+	ranges := newRecordingRangeClient(size)
+	file := LogicalFile{ChannelID: 1, FileID: 2, Name: "photo.jpg", StoredSize: size, PlaintextSize: size}
+	segments := []resolvedSegment{{start: 0, size: size, ref: tgclient.DocumentRef{DocumentID: 9, MsgID: 1, Size: size}}}
+
+	session, err := newSession(file, segments, ranges, nil, nil, SessionOptions{})
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	t.Cleanup(session.Close)
+
+	if got := session.reader.cache.maxBytes; got != imageRangeCacheBytes {
+		t.Fatalf("image cache = %d, want %d", got, imageRangeCacheBytes)
+	}
+	if got := session.reader.readAhead; got != 0 {
+		t.Fatalf("image read-ahead = %d, want 0", got)
+	}
+}
+
+func TestVideoSessionKeepsPlaybackCacheAndReadAhead(t *testing.T) {
+	const size int64 = 40 * 1024 * 1024
+	ranges := newRecordingRangeClient(size)
+	file := LogicalFile{ChannelID: 1, FileID: 2, Name: "clip.mp4", StoredSize: size, PlaintextSize: size}
+	segments := []resolvedSegment{{start: 0, size: size, ref: tgclient.DocumentRef{DocumentID: 9, MsgID: 1, Size: size}}}
+
+	session, err := newSession(file, segments, ranges, nil, nil, SessionOptions{})
+	if err != nil {
+		t.Fatalf("newSession: %v", err)
+	}
+	t.Cleanup(session.Close)
+
+	if got := session.reader.cache.maxBytes; got != defaultRangeCacheBytes {
+		t.Fatalf("video cache = %d, want %d", got, defaultRangeCacheBytes)
+	}
+	if got := session.reader.readAhead; got != playbackReadAhead {
+		t.Fatalf("video read-ahead = %d, want %d", got, playbackReadAhead)
+	}
+}
