@@ -58,17 +58,17 @@ func validateImageMetadata(file LogicalFile, limits ImageAdmissionLimits) error 
 	return nil
 }
 
-func admitImage(ctx context.Context, session *Session, name string, limits ImageAdmissionLimits) error {
+func admitImage(ctx context.Context, session *Session, name string, limits ImageAdmissionLimits) (string, error) {
 	if session == nil {
-		return ErrSessionNotFound
+		return "", ErrSessionNotFound
 	}
 	limits = limits.normalized()
 	if err := validateImageMetadata(session.file, limits); err != nil {
-		return err
+		return "", err
 	}
 	info, ok := streamTypeForName(name)
 	if !ok || info.kind != StreamKindImage || info.imageFormat == "" {
-		return ErrUnsupportedMediaType
+		return "", ErrUnsupportedMediaType
 	}
 
 	reader := &sessionImageHeaderReader{
@@ -79,23 +79,41 @@ func admitImage(ctx context.Context, session *Session, name string, limits Image
 	config, format, err := image.DecodeConfig(reader)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return err
+			return "", err
 		}
-		return fmt.Errorf("%w: decode header", ErrInvalidImage)
+		return "", fmt.Errorf("%w: decode header", ErrInvalidImage)
 	}
-	if format != info.imageFormat {
-		return fmt.Errorf("%w: extension expects %s, content is %s", ErrInvalidImage, info.imageFormat, format)
+	mimeType, ok := imageMimeType(format)
+	if !ok {
+		return "", fmt.Errorf("%w: unsupported format %s", ErrInvalidImage, format)
 	}
 	if err := rejectUnsafeAnimation(ctx, session, format); err != nil {
-		return err
+		return "", err
 	}
 	if config.Width <= 0 || config.Height <= 0 {
-		return ErrInvalidImage
+		return "", ErrInvalidImage
 	}
 	if int64(config.Width) > limits.MaxPixels/int64(config.Height) {
-		return fmt.Errorf("%w: %dx%d pixels exceeds %d", ErrImageTooLarge, config.Width, config.Height, limits.MaxPixels)
+		return "", fmt.Errorf("%w: %dx%d pixels exceeds %d", ErrImageTooLarge, config.Width, config.Height, limits.MaxPixels)
 	}
-	return nil
+	return mimeType, nil
+}
+
+func imageMimeType(format string) (string, bool) {
+	switch format {
+	case "jpeg":
+		return "image/jpeg", true
+	case "png":
+		return "image/png", true
+	case "gif":
+		return "image/gif", true
+	case "webp":
+		return "image/webp", true
+	case "bmp":
+		return "image/bmp", true
+	default:
+		return "", false
+	}
 }
 
 // rejectUnsafeAnimation keeps the WebView from accepting inputs whose decoded

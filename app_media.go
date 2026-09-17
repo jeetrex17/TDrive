@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -106,13 +107,22 @@ func (a *App) OpenStream(msgID int) (media.OpenResult, error) {
 
 type originalImageOpener interface {
 	OpenImage(context.Context, int64, int64, int64) (media.OpenResult, error)
+	Resolve(context.Context, int64, int64) (media.LogicalFile, error)
 }
 
 func openOriginalImage(ctx context.Context, opener originalImageOpener, channelID, msgID, revision int64) (media.OpenResult, error) {
 	if opener == nil {
 		return media.OpenResult{}, fmt.Errorf("backend not ready")
 	}
-	return opener.OpenImage(ctx, channelID, msgID, revision)
+	opened, err := opener.OpenImage(ctx, channelID, msgID, revision)
+	if !errors.Is(err, media.ErrStaleRevision) {
+		return opened, err
+	}
+	current, resolveErr := opener.Resolve(ctx, channelID, msgID)
+	if resolveErr != nil {
+		return media.OpenResult{}, resolveErr
+	}
+	return opener.OpenImage(ctx, channelID, msgID, current.Revision)
 }
 
 // OpenOriginalImage returns one revision-bound capability for the original

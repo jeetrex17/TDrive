@@ -26,6 +26,7 @@ type resolvedSegment struct {
 
 type Session struct {
 	token          string
+	mimeType       string
 	url            string
 	thumbURL       string
 	sourceURL      string
@@ -104,6 +105,7 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		token:     token,
+		mimeType:  contentTypeFor(file.Name),
 		file:      file,
 		segments:  copied,
 		ctx:       ctx,
@@ -240,6 +242,13 @@ func (s *Session) Name() string {
 		return ""
 	}
 	return s.file.Name
+}
+
+func (s *Session) MimeType() string {
+	if s == nil {
+		return "application/octet-stream"
+	}
+	return s.mimeType
 }
 
 func (s *Session) openSnapshot() (token, url, thumbnailURL, hlsURL string, file LogicalFile, ok bool) {
