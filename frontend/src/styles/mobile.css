@@ -696,13 +696,14 @@ html.mobile .transfers-group {
     border-radius: var(--radius-lg);
     overflow: hidden;
 }
-/* The group is the card, so the rows inside it stop being cards.
-   These rows are shared with the desktop bell, where each one stands alone on
-   the popover's glass and earns its own border and corner. Stacked inside a
-   surface that already has both, the same treatment reads as chips rattling in
-   a box: a border beside a divider, a corner inside a corner, and no two rows
-   the same height. Here the surface separates them and the row just holds
-   content. */
+/* Notices in Recent, which are still the bell's own row: transfers have the
+   phone's row (ui/mobile/MobileTransferRow) and bring their own shape.
+
+   The group is the card, so the rows inside it stop being cards. On the
+   popover's glass each one stands alone and earns its border and corner;
+   stacked inside a surface that already has both, the same treatment reads as
+   chips rattling in a box. Here the surface separates them and the row just
+   holds content. */
 html.mobile .transfers-group .notif-row {
     grid-template-columns: 28px minmax(0, 1fr) auto;
     align-items: center;
@@ -712,88 +713,7 @@ html.mobile .transfers-group .notif-row {
     border: 0;
     border-radius: 0;
 }
-/* A running transfer is the one row that has four things to place, and three
-   columns to place them in: the cancel button was landing in the implicit
-   fourth cell, which is column one of a second row, orphaned under the icon.
-   It gets its own cell here, and the numbers move below the name instead of
-   fighting it for the trailing edge -- which also gives the bar the whole
-   width back, since it was only ever short because a three-line stack of
-   figures was holding the column open. */
-html.mobile .transfers-group .notif-row.is-active {
-    grid-template-columns: 28px minmax(0, 1fr) 40px;
-    align-items: start;
-    row-gap: 7px;
-}
-html.mobile .transfers-group .is-active .notif-row-icon { grid-area: 1 / 1; margin-top: 2px; }
-/* The body is only a wrapper for the name and the bar, and on this layout they
-   belong on different rows and at different widths. Dissolving it lets the grid
-   place each one, rather than boxing the bar into the name's column where the
-   cancel button keeps 52px of it. */
-html.mobile .transfers-group .is-active .notif-row-body { display: contents; }
-html.mobile .transfers-group .is-active .notif-row-title { grid-area: 1 / 2; }
-html.mobile .transfers-group .is-active .notif-row-progress {
-    grid-area: 2 / 2 / auto / -1;
-    margin-top: 0;
-}
-html.mobile .transfers-group .is-active .notif-row-cancel { grid-area: 1 / 3; }
-/* One line, reading left to right under the name it describes, instead of a
-   right-aligned column of figures the eye has to climb. */
-html.mobile .transfers-group .is-active .notif-row-meta {
-    grid-area: 3 / 2 / auto / -1;
-    flex-direction: row;
-    align-items: baseline;
-    gap: 0;
-    margin: 0;
-    min-width: 0;
-    text-align: left;
-    overflow: hidden;
-}
-html.mobile .transfers-group .is-active .notif-row-meta > * {
-    flex: 0 0 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-html.mobile .transfers-group .is-active .notif-row-meta > * + *::before {
-    content: '·';
-    margin: 0 6px;
-    opacity: 0.55;
-}
-/* The speed is the first thing worth losing on a narrow screen: it changes
-   every tick and says least about where the transfer has got to. */
-html.mobile .transfers-group .is-active .notif-row-speed { flex: 0 1 auto; }
-/* 22px is a pointer's target, not a thumb's. */
-html.mobile .transfers-group .is-active .notif-row-cancel {
-    width: 40px;
-    height: 40px;
-    /* The thumb gets 40px; the row does not. Without pulling the box back in,
-       a target this size sets the height of the line the name sits on and
-       leaves the bar floating a long way underneath it. */
-    margin: -11px -9px -10px 0;
-    border-radius: var(--radius-md);
-    color: var(--text-muted);
-}
-html.mobile .transfers-group .is-active .notif-row-cancel svg { width: 17px; height: 17px; }
-html.mobile .transfers-group .is-active .notif-row-cancel:active { background: var(--color-surface-2); }
-html.mobile .transfers-group .notif-row-progress { height: 5px; margin-top: 8px; }
-/* A folder being walked has nothing true to report yet, so the bar says the
-   work is running rather than claiming a figure it does not have. */
-html.mobile .transfers-group .is-preparing .notif-row-progress-fill {
-    width: 38%;
-    animation: tdrive-transfer-indeterminate 1.25s var(--ease-standard) infinite;
-}
-@keyframes tdrive-transfer-indeterminate {
-    0% { transform: translateX(-105%); }
-    100% { transform: translateX(268%); }
-}
-@media (prefers-reduced-motion: reduce) {
-    html.mobile .transfers-group .is-preparing .notif-row-progress-fill {
-        width: 100%;
-        animation: none;
-        opacity: 0.4;
-    }
-}
 html.mobile .transfers-group .notif-row:hover { background: transparent; }
-html.mobile .transfers-group .notif-row + .notif-row { border-top: 1px solid var(--color-border-soft); }
 /* One line each, so every row is the same height whatever it is reporting. */
 html.mobile .transfers-group .notif-row-title,
 html.mobile .transfers-group .notif-row-sub {
@@ -818,22 +738,6 @@ html.mobile .transfers-group .notif-row-copy {
     justify-self: start;
     margin-top: 6px;
 }
-
-/* Share action on a finished download row. */
-html.mobile .notif-row-share {
-    flex: 0 0 auto;
-    display: inline-grid;
-    place-items: center;
-    width: 32px;
-    height: 32px;
-    margin-left: 4px;
-    border: 0;
-    border-radius: var(--radius-sm);
-    background: var(--overlay-accent-1);
-    color: var(--color-accent);
-    cursor: pointer;
-}
-html.mobile .notif-row-share:active { background: var(--overlay-accent-2); }
 
 /* ============================ ACCOUNT TAB ============================ */
 html.mobile .account-identity {
