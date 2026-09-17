@@ -8,18 +8,31 @@ import (
 
 func TestClearUserData(t *testing.T) {
 	t.Run("soft keeps everything but session", func(t *testing.T) {
-		dir := setupConfigDir(t, "session.json", "config.json", "tdrive.db", "imp_config.json")
+		dir := setupConfigDir(t, "session.json", "config.json", "tdrive.db", "imp_config.json", "photo-backup.db", "photo-backup.db-wal", "photo-backup.db-shm")
 		if err := ClearUserData(LogoutSoft); err != nil {
 			t.Fatalf("ClearUserData: %v", err)
 		}
 		assertGone(t, dir, "session.json")
-		assertPresent(t, dir, "config.json", "tdrive.db", "imp_config.json")
+		assertPresent(t, dir, "config.json", "tdrive.db", "imp_config.json", "photo-backup.db", "photo-backup.db-wal", "photo-backup.db-shm")
 	})
 
 	t.Run("full removes all user-scoped files", func(t *testing.T) {
-		dir := setupConfigDir(t, "session.json", "config.json", "tdrive.db", "imp_config.json")
+		dir := setupConfigDir(t, "session.json", "config.json", "tdrive.db", "imp_config.json", "photo-backup.db", "photo-backup.db-wal", "photo-backup.db-shm")
 		cacheDir := setupThumbnailCache(t)
 		cacheRoot := filepath.Dir(cacheDir)
+		nativeCache, err := os.UserCacheDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stagingRoots := []string{filepath.Join(cacheRoot, "photo-backup-stage"), filepath.Join(cacheRoot, "photo-backup-desktop"), filepath.Join(nativeCache, "TDrivePhotoBackup")}
+		for _, root := range stagingRoots {
+			if err := os.MkdirAll(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "original.jpg"), []byte("private staged photo"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
 		for _, name := range []string{"tdrive-upload-crash", "tdrive-enc-crash", ".tdrive-upload-part-crash", "tdrive-mountdav-put-crash"} {
 			if err := os.WriteFile(filepath.Join(cacheRoot, name), []byte("plaintext"), 0o600); err != nil {
 				t.Fatal(err)
@@ -31,12 +44,17 @@ func TestClearUserData(t *testing.T) {
 		if err := ClearUserData(LogoutFull); err != nil {
 			t.Fatalf("ClearUserData: %v", err)
 		}
-		assertGone(t, dir, "session.json", "config.json", "tdrive.db", "imp_config.json")
+		assertGone(t, dir, "session.json", "config.json", "tdrive.db", "imp_config.json", "photo-backup.db", "photo-backup.db-wal", "photo-backup.db-shm")
 		if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
 			t.Fatalf("thumbnail cache still exists (err=%v)", err)
 		}
 		assertGone(t, cacheRoot, "tdrive-upload-crash", "tdrive-enc-crash", ".tdrive-upload-part-crash", "tdrive-mountdav-put-crash")
 		assertPresent(t, cacheRoot, "keep.cache")
+		for _, root := range stagingRoots {
+			if _, err := os.Stat(root); !os.IsNotExist(err) {
+				t.Errorf("native staging survives full logout: %s, %v", root, err)
+			}
+		}
 	})
 
 	t.Run("idempotent on missing files", func(t *testing.T) {

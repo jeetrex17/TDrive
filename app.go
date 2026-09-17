@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"TDrive/backend/galleryimage"
 	"TDrive/backend/mountcontroller"
 	"TDrive/backend/mountlifecycle"
+	"TDrive/backend/photobackup"
 	"TDrive/backend/processlock"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
@@ -92,6 +94,20 @@ type App struct {
 	// range reader and native surface do not outlive the app.
 	nativeMediaMu sync.Mutex
 	nativeMedia   map[string]*nativeMediaSession
+
+	photoBackupMu           sync.Mutex
+	photoBackupDiscoveryMu  sync.Mutex
+	photoBackup             *photobackup.Engine
+	photoBackupDB           *sql.DB
+	photoBackupCancel       context.CancelFunc
+	photoBackupDone         chan struct{}
+	photoBackupRunID        uint64
+	photoBackupManualPaused bool
+	photoBackupWaiters      map[string]chan photoBackupMaterialization
+	photoBackupPolicy       PhotoBackupPolicy
+	photoBackupStop         chan struct{}
+	photoBackupAdapters     map[string]*photobackup.LocalFolderAdapter
+	photoBackupClosed       bool
 }
 
 type runtimeEventSink struct {
@@ -183,6 +199,7 @@ func (a *App) SetActiveChannel(channelID int64) error {
 	if a.engine == nil {
 		return fmt.Errorf("backend not ready")
 	}
+	a.stopPhotoBackup()
 	if err := a.engine.SetActiveChannel(channelID); err != nil {
 		return err
 	}
@@ -653,6 +670,7 @@ func (a *App) ServiceShutdown() error {
 	cancel()
 	a.closeAllNativeMedia()
 	a.closeGalleryImages()
+	a.closePhotoBackup()
 	if a.engine != nil {
 		a.engine.Close()
 	}
@@ -741,6 +759,9 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
+	if err := a.initPhotoBackup(); err != nil {
+		fmt.Printf("Warning: Failed to initialize photo backup: %v\n", err)
+	}
 	_, mountInitErr := a.ensureMountController()
 	if mountInitErr != nil {
 		fmt.Printf("Warning: Failed to initialize TDrive mount: %v\n", mountInitErr)

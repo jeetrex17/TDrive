@@ -56,6 +56,7 @@ func (a *App) mobileEnterBackground() {
 	a.engine.PauseLiveSync()
 	a.engine.CloseMediaSessions()
 	a.revokeGalleryImages()
+	a.stopPhotoBackup()
 }
 
 func (a *App) mobileEnterForeground() {

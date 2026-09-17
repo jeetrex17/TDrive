@@ -35,8 +35,20 @@ func Open(db *sql.DB, options Options) (*Engine, error) {
 }
 
 func (e *Engine) Migrate(ctx context.Context) error {
+	var version int
+	if err := e.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	// Counter backfill is a one-time migration, not a million-row scan on
+	// every launch. This package owns its separate SQLite database.
+	if version == 1 {
+		return nil
+	}
+	if version != 0 {
+		return fmt.Errorf("photobackup: unsupported database version %d", version)
+	}
 	_, err := e.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS photo_backup_settings(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,enabled INTEGER NOT NULL,photos INTEGER NOT NULL,videos INTEGER NOT NULL,future_only INTEGER NOT NULL,wifi_only INTEGER NOT NULL,charging_only INTEGER NOT NULL,destination_parent_id TEXT NOT NULL,encrypt INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id));
-CREATE TABLE IF NOT EXISTS photo_backup_sources(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,kind TEXT NOT NULL,root TEXT NOT NULL,enabled INTEGER NOT NULL,added_at INTEGER NOT NULL,scan_cursor TEXT NOT NULL DEFAULT '',scan_complete INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,drive_id,source_id));
+CREATE TABLE IF NOT EXISTS photo_backup_sources(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,kind TEXT NOT NULL,root TEXT NOT NULL,name TEXT NOT NULL,enabled INTEGER NOT NULL,added_at INTEGER NOT NULL,scan_cursor TEXT NOT NULL DEFAULT '',scan_complete INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,drive_id,source_id));
 CREATE TABLE IF NOT EXISTS photo_backup_jobs(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,asset_id TEXT NOT NULL,version TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,media_type TEXT NOT NULL,resource_id TEXT NOT NULL DEFAULT '',modified_at INTEGER NOT NULL,size INTEGER NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',remote_message_id INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id,source_id,asset_id,version,resource_id));
 CREATE INDEX IF NOT EXISTS photo_backup_jobs_ready ON photo_backup_jobs(account_id,drive_id,status,next_attempt_at,created_at);
 CREATE TABLE IF NOT EXISTS photo_backup_counts(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,status TEXT NOT NULL,count INTEGER NOT NULL CHECK(count>=0),PRIMARY KEY(account_id,drive_id,status));
@@ -51,7 +63,8 @@ CREATE INDEX IF NOT EXISTS photo_backup_jobs_last_error ON photo_backup_jobs(acc
 	if err != nil {
 		return fmt.Errorf("photobackup migrate: %w", err)
 	}
-	return nil
+	_, err = e.db.ExecContext(ctx, "PRAGMA user_version=1")
+	return err
 }
 
 func (e *Engine) PutSettings(ctx context.Context, s Settings) error {
@@ -76,6 +89,9 @@ func (e *Engine) UpsertSource(ctx context.Context, s Source) error {
 	if s.AddedAt.IsZero() {
 		s.AddedAt = e.options.Now()
 	}
+	if s.Name == "" {
+		s.Name = filepath.Base(s.Root)
+	}
 	var count int
 	if err := e.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM photo_backup_sources WHERE account_id=? AND drive_id=? AND source_id<>?`, s.Scope.AccountID, s.Scope.DriveID, s.ID).Scan(&count); err != nil {
 		return err
@@ -83,7 +99,7 @@ func (e *Engine) UpsertSource(ctx context.Context, s Source) error {
 	if count >= 256 {
 		return fmt.Errorf("photobackup: source limit reached")
 	}
-	_, err := e.db.ExecContext(ctx, `INSERT INTO photo_backup_sources(account_id,drive_id,source_id,kind,root,enabled,added_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id,drive_id,source_id) DO UPDATE SET kind=excluded.kind,root=excluded.root,enabled=excluded.enabled`, s.Scope.AccountID, s.Scope.DriveID, s.ID, s.Kind, s.Root, s.Enabled, s.AddedAt.UnixNano())
+	_, err := e.db.ExecContext(ctx, `INSERT INTO photo_backup_sources(account_id,drive_id,source_id,kind,root,name,enabled,added_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id,drive_id,source_id) DO UPDATE SET kind=excluded.kind,root=excluded.root,name=excluded.name,enabled=excluded.enabled`, s.Scope.AccountID, s.Scope.DriveID, s.ID, s.Kind, s.Root, s.Name, s.Enabled, s.AddedAt.UnixNano())
 	return err
 }
 func (e *Engine) RemoveSource(ctx context.Context, scope Scope, id string) error {
@@ -114,7 +130,7 @@ func (e *Engine) ListSources(ctx context.Context, scope Scope) ([]Source, error)
 	if !scope.valid() {
 		return nil, ErrInvalid
 	}
-	rows, err := e.db.QueryContext(ctx, `SELECT source_id,kind,root,enabled,added_at FROM photo_backup_sources WHERE account_id=? AND drive_id=? ORDER BY source_id`, scope.AccountID, scope.DriveID)
+	rows, err := e.db.QueryContext(ctx, `SELECT source_id,kind,root,name,enabled,added_at FROM photo_backup_sources WHERE account_id=? AND drive_id=? ORDER BY source_id`, scope.AccountID, scope.DriveID)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +139,7 @@ func (e *Engine) ListSources(ctx context.Context, scope Scope) ([]Source, error)
 	for rows.Next() {
 		s := Source{Scope: scope}
 		var n int64
-		if err := rows.Scan(&s.ID, &s.Kind, &s.Root, &s.Enabled, &n); err != nil {
+		if err := rows.Scan(&s.ID, &s.Kind, &s.Root, &s.Name, &s.Enabled, &n); err != nil {
 			return nil, err
 		}
 		s.AddedAt = time.Unix(0, n)
@@ -169,7 +185,7 @@ func (e *Engine) EnqueuePage(ctx context.Context, scope Scope, sourceID string, 
 	}
 	var source Source
 	var addedAt int64
-	err = e.db.QueryRowContext(ctx, `SELECT kind,root,enabled,added_at FROM photo_backup_sources WHERE account_id=? AND drive_id=? AND source_id=?`, scope.AccountID, scope.DriveID, sourceID).Scan(&source.Kind, &source.Root, &source.Enabled, &addedAt)
+	err = e.db.QueryRowContext(ctx, `SELECT kind,root,name,enabled,added_at FROM photo_backup_sources WHERE account_id=? AND drive_id=? AND source_id=?`, scope.AccountID, scope.DriveID, sourceID).Scan(&source.Kind, &source.Root, &source.Name, &source.Enabled, &addedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -352,7 +368,7 @@ func (e *Engine) RunOnce(ctx context.Context, scope Scope, upload Uploader) (int
 	if !settings.Enabled {
 		return 0, nil
 	}
-	rows, err := e.db.QueryContext(ctx, `SELECT j.source_id,j.asset_id,j.version,j.path,j.name,j.media_type,j.resource_id,j.modified_at,j.size,j.attempts,s.kind,s.root,s.enabled,s.added_at FROM photo_backup_jobs j JOIN photo_backup_sources s USING(account_id,drive_id,source_id) WHERE j.account_id=? AND j.drive_id=? AND s.enabled=1 AND j.status IN (?,?) AND j.next_attempt_at<=? AND ((j.media_type='photo' AND ?) OR (j.media_type='video' AND ?)) ORDER BY j.created_at LIMIT 1`, scope.AccountID, scope.DriveID, Pending, Error, e.options.Now().UnixNano(), settings.Photos, settings.Videos)
+	rows, err := e.db.QueryContext(ctx, `SELECT j.source_id,j.asset_id,j.version,j.path,j.name,j.media_type,j.resource_id,j.modified_at,j.size,j.attempts,s.kind,s.root,s.name,s.enabled,s.added_at FROM photo_backup_jobs j JOIN photo_backup_sources s USING(account_id,drive_id,source_id) WHERE j.account_id=? AND j.drive_id=? AND s.enabled=1 AND j.status IN (?,?) AND j.next_attempt_at<=? AND ((j.media_type='photo' AND ?) OR (j.media_type='video' AND ?)) ORDER BY j.created_at LIMIT 1`, scope.AccountID, scope.DriveID, Pending, Error, e.options.Now().UnixNano(), settings.Photos, settings.Videos)
 	if err != nil {
 		return 0, err
 	}
@@ -366,7 +382,7 @@ func (e *Engine) RunOnce(ctx context.Context, scope Scope, upload Uploader) (int
 		var x item
 		var mt, added int64
 		x.source.Scope = scope
-		if err := rows.Scan(&x.source.ID, &x.asset.ID, &x.asset.Version, &x.asset.Path, &x.asset.Name, &x.asset.MediaType, &x.asset.ResourceID, &mt, &x.asset.Size, &x.attempts, &x.source.Kind, &x.source.Root, &x.source.Enabled, &added); err != nil {
+		if err := rows.Scan(&x.source.ID, &x.asset.ID, &x.asset.Version, &x.asset.Path, &x.asset.Name, &x.asset.MediaType, &x.asset.ResourceID, &mt, &x.asset.Size, &x.attempts, &x.source.Kind, &x.source.Root, &x.source.Name, &x.source.Enabled, &added); err != nil {
 			rows.Close()
 			return 0, err
 		}
