@@ -30,6 +30,7 @@ import { openImportOptionsModal } from './modals/import-options';
 import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
 import { createImportProgress, reduceImportProgress } from './import-progress';
+import { activateTransferPersistence } from './transfer-persistence';
 import {
     pushQueuedTransfer,
     pushTransferStart,
@@ -42,6 +43,7 @@ import {
 
 
 let transferUnsubscribers: RuntimeUnsubscribe[] = [];
+let stopTransferPersistence: (() => void) | null = null;
 let downloadRequestSequence = 0;
 
 function subscribeTransferEvent<K extends keyof RuntimeEventMap>(
@@ -1251,6 +1253,13 @@ export function activateTransferSurfaces(): () => void {
     activateDownloadProgressEvents();
     activateUploadProgressEvents();
     activateFileDropEvents();
+    // The log outlives the app. The queue above it is deliberately not stored
+    // alongside: every job in it already has a bell row whose key carries the
+    // drive, the kind and the message id, which is everything enqueueDownload
+    // needs, and a second copy of that would only be a second thing to
+    // disagree. A job interrupted by a kill comes back as a failed row, and the
+    // Retry that key already powers is what puts it back in this queue.
+    stopTransferPersistence = activateTransferPersistence();
     return teardownTransferSurfaces;
 }
 
@@ -1258,4 +1267,7 @@ export function teardownTransferSurfaces(): void {
     const unsubscribers = transferUnsubscribers;
     transferUnsubscribers = [];
     for (const unsubscribe of unsubscribers) unsubscribe();
+    const stopPersistence = stopTransferPersistence;
+    stopTransferPersistence = null;
+    stopPersistence?.();
 }

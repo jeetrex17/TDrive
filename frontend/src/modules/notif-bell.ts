@@ -14,17 +14,17 @@ import { state } from '../state';
 import { cancelDownload, cancelUpload, cancelUploadById } from '../api';
 import { clearDownloadSharePaths, forgetDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import {
+    HISTORY_CAP,
     historyEvents,
     isUnfinishedTransfer,
     notifPanelOpen,
     notifUnreadErrors,
+    type HistoryEvent,
     type NoticeEvent,
     type TransferDirection,
     type TransferEvent,
     type TransferStatus,
 } from '../ui/notifications/notif-store';
-
-const HISTORY_CAP = 100;
 
 
 // Per-transfer speed sampling. Progress events arrive far more often than the
@@ -184,7 +184,14 @@ export function updateTransferProgress({
     const nextItemsTotal = Number.isFinite(Number(itemsTotal))
         ? Math.max(entry.itemsTotal ?? 0, Math.max(0, Number(itemsTotal)))
         : entry.itemsTotal;
-    const unchanged = Math.round(entry.progress) === Math.round(value)
+    // Bytes moving again is the only trustworthy sign that a transfer paused by
+    // a backgrounded app survived being suspended, so the tick carrying them is
+    // what lifts the row back out of paused. Flipping every paused row the
+    // moment the app returns would instead promise that a connection dropped an
+    // hour ago is still good.
+    const status: TransferStatus = entry.status === 'paused' ? 'active' : entry.status;
+    const unchanged = status === entry.status
+        && Math.round(entry.progress) === Math.round(value)
         && entry.total === total
         && entry.bytes === bytes
         && entry.itemsDone === nextItemsDone
@@ -192,7 +199,7 @@ export function updateTransferProgress({
     if (unchanged) return; // skip render noise
     historyEvents.update((events) =>
         events.map((e) => (e.id === key && e.kind === 'transfer'
-            ? { ...e, progress: value, bytes, total, speed, itemsDone: nextItemsDone, itemsTotal: nextItemsTotal }
+            ? { ...e, status, progress: value, bytes, total, speed, itemsDone: nextItemsDone, itemsTotal: nextItemsTotal }
             : e)),
     );
 }
@@ -302,6 +309,45 @@ export function cancelSingleUpload(uploadId: number): void {
 
 export function wasUploadCanceled(uploadId: number): boolean {
     return canceledUploads.has(uploadId);
+}
+
+/**
+ * Files the history a previous run of the app left behind underneath whatever
+ * this one has raised so far.
+ *
+ * Underneath, and never over the top. The bell is not reliably empty when the
+ * restore lands -- a connectivity notice or a download queued from a deep link
+ * can beat the dashboard onto the screen -- and those are both newer and, in
+ * the download's case, actually running. A restored row carrying an id one of
+ * them already has is the dead copy of it and is dropped.
+ */
+export function loadHistorySnapshot(events: readonly HistoryEvent[]): void {
+    if (events.length === 0) return;
+    historyEvents.update((current) => {
+        const live = new Set(current.map((event) => event.id));
+        return [...current, ...events.filter((event) => !live.has(event.id))].slice(0, HISTORY_CAP);
+    });
+}
+
+/**
+ * Stops the clock on everything that is running, for the one case where that is
+ * true of all of it at once: the OS has suspended the whole process behind a
+ * backgrounded app, so not a byte moves until it comes back.
+ *
+ * What this prevents is a screen full of rows drawing live bars over a frozen
+ * process -- and, if the OS then reclaims the app rather than resuming it, a
+ * saved record that claims the same thing. Only running transfers move: queued
+ * work was not going anywhere anyway, and a cancel that was already in flight
+ * keeps its own state.
+ */
+export function pauseRunningTransfers(): void {
+    const running = get(historyEvents).some((event) => event.kind === 'transfer' && event.status === 'active');
+    if (!running) return;
+    historyEvents.update((events) => events.map((event) => (
+        event.kind === 'transfer' && event.status === 'active'
+            ? { ...event, status: 'paused' }
+            : event
+    )));
 }
 
 function transferKey(direction: TransferDirection, id: string | number): string {

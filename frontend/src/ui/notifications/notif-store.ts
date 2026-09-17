@@ -60,8 +60,19 @@ export type HistoryEvent = TransferEvent | NoticeEvent;
 
 export type BellMode = 'idle' | 'active' | 'error';
 
-// Newest first, capped by modules/notif-bell.ts. All mutations go through
-// that module so cap/dedupe/idempotency rules live in one place.
+/**
+ * How many entries the history keeps; the oldest fall off the end.
+ *
+ * It lives with the store rather than with the module that enforces it because
+ * it now also bounds what comes back off disk, and a restore that trusted a
+ * stored count could hand the panel a list no cap had ever been applied to.
+ */
+export const HISTORY_CAP = 100;
+
+// Newest first, capped by modules/notif-bell.ts. All mutations go through that
+// module -- including the restore and the suspend that modules/transfer-
+// persistence.ts asks it for -- so cap/dedupe/idempotency rules live in one
+// place.
 export const historyEvents = writable<HistoryEvent[]>([]);
 export const notifPanelOpen = writable(false);
 export const notifUnreadErrors = writable(0);
