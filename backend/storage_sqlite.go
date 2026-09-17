@@ -43,6 +43,19 @@ func InitDB() error {
 	}
 	_ = os.Chmod(path, privateFileMode)
 
+	// One pooled connection, kept for the process's lifetime. SQLite admits a
+	// single writer, and letting the pool hand concurrent writers their own
+	// connections turned overlapping upload commits into SQLITE_BUSY failures
+	// (7be2c20); serializing every statement here is what fixed that race.
+	//
+	// Raising the cap is not just a tuning knob. Every pragma below is set
+	// through this handle and all but journal_mode are per-connection, so a
+	// second connection would come up with foreign keys off and no busy
+	// backoff. Those have to move into the DSN before the cap can move.
+	//
+	// The cost of one connection is that whoever holds it blocks every other
+	// query in the app, so no code path may keep a transaction open across
+	// network I/O — see sync.applyInitialHistoryPlan.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)

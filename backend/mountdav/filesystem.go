@@ -104,9 +104,7 @@ func cleanWebDAVName(name string) (string, error) {
 	if name == "/" {
 		return name, nil
 	}
-	if strings.HasSuffix(name, "/") {
-		name = strings.TrimSuffix(name, "/")
-	}
+	name = strings.TrimSuffix(name, "/")
 	for _, component := range strings.Split(strings.TrimPrefix(name, "/"), "/") {
 		if component == "" || component == "." || component == ".." {
 			return "", os.ErrInvalid

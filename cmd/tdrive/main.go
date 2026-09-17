@@ -1,3 +1,26 @@
+// Command tdrive is the TDrive command line client.
+//
+// It is deliberately stateless: nearly every subcommand parses argv by hand,
+// makes one daemon RPC and prints the result. The remote working directory, the
+// active drive and the vault all live in the daemon, so pwd and cd are RPCs.
+// The only things this binary genuinely owns are supervising the daemon and
+// installing itself onto PATH.
+//
+// Any command that needs the backend starts it on demand: probe the socket with
+// a status call, and if that fails consult the process lock. A lock held by the
+// GUI is a hard error — one TDrive backend per user — while a lock held by a
+// daemon means one is still booting and is waited on. Only otherwise does the
+// CLI re-exec itself detached as a daemon. Readiness is a successful status
+// call, never the mere presence of the lock file.
+//
+// Help is intercepted before dispatch, so a help flag anywhere in the argument
+// list short-circuits the command rather than being parsed as one of its
+// arguments.
+//
+// Progress goes to stderr and the final result to stdout, so piping a download
+// works. Anything originating from Telegram — channel titles, mount locations,
+// mount errors — is sanitized before printing, because a terminal is a
+// rendering target for untrusted strings.
 package main
 
 import (

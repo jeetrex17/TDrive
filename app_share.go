@@ -116,6 +116,8 @@ func (a *App) ShareFile(path string) OperationResult {
 }
 
 // fileURL renders a sandbox path as the file URL both share sheets accept.
+//
+//lint:ignore U1000 called only from app_mobile.go, behind //go:build ios || android.
 func fileURL(path string) string {
 	return (&url.URL{Scheme: "file", Path: path}).String()
 }

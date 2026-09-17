@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"TDrive/backend/core"
 	encservice "TDrive/backend/services/encryption"
 )
 
@@ -30,13 +29,6 @@ type appEncryptionService interface {
 	CreatePasswordContext(context.Context, string, string) error
 	UsePassword(password string) error
 	ChangePassword(currentPassword string, newPassword string, hint string) error
-}
-
-// personalChannelID returns the saved personal channel id without
-// requiring the active drive to be the personal one. Returns 0 if no
-// personal channel is configured (fresh install before InitDrive ran).
-func personalChannelID() int64 {
-	return core.PersonalChannelID()
 }
 
 func (a *App) encryptionService() appEncryptionService {

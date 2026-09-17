@@ -5,7 +5,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // HLS is the delivery format because a progressive fragmented MP4 cannot work
@@ -219,10 +218,4 @@ func ParseSegmentName(name string) (int, bool) {
 		return 0, false
 	}
 	return index, true
-}
-
-// approxSeconds rounds a duration the way the playlist prints it, so callers
-// comparing against a playlist see the same number.
-func approxSeconds(d time.Duration) float64 {
-	return math.Round(d.Seconds()*1000) / 1000
 }

@@ -24,7 +24,6 @@ import (
 	lifecycleservice "TDrive/backend/services/lifecycle"
 	readservice "TDrive/backend/services/read"
 	userservice "TDrive/backend/services/user"
-	"TDrive/backend/tgclient"
 	"TDrive/backend/updater"
 
 	"github.com/gotd/td/telegram"
@@ -134,51 +133,11 @@ func (a *App) emit(name string, args ...any) {
 	a.wails.Event.Emit(name, args)
 }
 
-// resolvePeer satisfies tdsync.PeerResolver through peerResolverFn. Keeping
-// it unexported prevents Wails from exposing this internal sync helper.
-func (a *App) resolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	if a.engine == nil {
-		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.ResolvePeer(ctx, channelID)
-}
-
-// channelPeer resolves the active drive's tgclient.InputPeer through the shared
-// Telegram client. Used by every op that needs to send into Telegram; callers
-// should not hold this across long operations.
-func (a *App) channelPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	if a.engine == nil {
-		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.ChannelPeer(ctx, channelID)
-}
-
-// emitAndProject sends a control op and projects it locally. Returns the
-// Telegram msg_id used as the op's identity.
-//
-// On send failure: returns the error; nothing is projected.
-// On project failure after a successful send: logs, returns the error so
-// the caller can surface it. The op IS in Telegram and will be projected on
-// the next sync.
-func (a *App) emitAndProject(channelID int64, op projection.Op) (int64, error) {
-	if a.engine == nil {
-		return 0, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.EmitAndProject(channelID, op)
-}
-
 func (a *App) ActiveChannelID() int64 {
 	if a.engine == nil {
 		return 0
 	}
 	return a.engine.ActiveChannelID()
-}
-
-func (a *App) setActiveChannelID(channelID int64) {
-	if a.engine == nil {
-		return
-	}
-	a.engine.SetActiveChannelID(channelID)
 }
 
 // MyUserID returns the logged-in Telegram user id (cached after first
