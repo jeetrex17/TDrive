@@ -20,6 +20,7 @@ type Settings struct {
 	Scope                               Scope
 	Enabled, Photos, Videos, FutureOnly bool
 	WiFiOnly, ChargingOnly              bool
+	ManualPaused                        bool
 	DestinationParentID                 string
 	Encrypt                             bool
 }
