@@ -236,7 +236,7 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 
 	size := session.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Content-Type", contentTypeFor(session.Name()))
+	w.Header().Set("Content-Type", session.MimeType())
 	if session.Encrypted() || streamKindForName(session.Name()) == StreamKindImage {
 		setMediaNoStore(w.Header())
 	}
@@ -493,7 +493,7 @@ func isSupportedMediaName(name string) bool {
 
 // IsSupportedImageName reports whether name has one of the raster extensions
 // that the original-image stream validates and serves. The extension is only
-// the first admission check; OpenImage also verifies the encoded bytes match.
+// the first admission check; OpenImage detects and validates the encoded bytes.
 func IsSupportedImageName(name string) bool {
 	return streamKindForName(name) == StreamKindImage
 }

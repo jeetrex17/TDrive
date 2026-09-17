@@ -33,6 +33,24 @@ func TestOpenOriginalImagePropagatesServiceError(t *testing.T) {
 	}
 }
 
+func TestOpenOriginalImageRefreshesStaleRevisionOnce(t *testing.T) {
+	opener := &staleOriginalImageOpener{currentRevision: 12}
+
+	got, err := openOriginalImage(context.Background(), opener, 7, 42, 11)
+	if err != nil {
+		t.Fatalf("openOriginalImage: %v", err)
+	}
+	if got.Info.Revision != 12 {
+		t.Fatalf("opened revision = %d, want 12", got.Info.Revision)
+	}
+	if len(opener.revisions) != 2 || opener.revisions[0] != 11 || opener.revisions[1] != 12 {
+		t.Fatalf("OpenImage revisions = %v, want [11 12]", opener.revisions)
+	}
+	if opener.resolveCalls != 1 {
+		t.Fatalf("Resolve calls = %d, want 1", opener.resolveCalls)
+	}
+}
+
 func TestAppOpenOriginalImageRequiresBackend(t *testing.T) {
 	if _, err := (&App{}).OpenOriginalImage(2, 1); err == nil {
 		t.Fatal("OpenOriginalImage without backend succeeded")
@@ -56,4 +74,27 @@ func (opener *recordingOriginalImageOpener) OpenImage(ctx context.Context, chann
 	opener.msgID = msgID
 	opener.revision = revision
 	return opener.result, opener.err
+}
+
+func (opener *recordingOriginalImageOpener) Resolve(context.Context, int64, int64) (media.LogicalFile, error) {
+	return media.LogicalFile{}, errors.New("unexpected resolve")
+}
+
+type staleOriginalImageOpener struct {
+	currentRevision int64
+	revisions       []int64
+	resolveCalls    int
+}
+
+func (opener *staleOriginalImageOpener) OpenImage(_ context.Context, _, _ int64, revision int64) (media.OpenResult, error) {
+	opener.revisions = append(opener.revisions, revision)
+	if revision != opener.currentRevision {
+		return media.OpenResult{}, media.ErrStaleRevision
+	}
+	return media.OpenResult{Info: media.LogicalFile{Revision: revision}}, nil
+}
+
+func (opener *staleOriginalImageOpener) Resolve(_ context.Context, _, _ int64) (media.LogicalFile, error) {
+	opener.resolveCalls++
+	return media.LogicalFile{Revision: opener.currentRevision}, nil
 }

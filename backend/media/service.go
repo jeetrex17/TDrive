@@ -230,10 +230,12 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		return OpenResult{}, err
 	}
 	if kind == StreamKindImage {
-		if err := admitImage(ctx, session, file.Name, s.imageLimits); err != nil {
+		mimeType, admitErr := admitImage(ctx, session, file.Name, s.imageLimits)
+		if admitErr != nil {
 			session.Close()
-			return OpenResult{}, err
+			return OpenResult{}, admitErr
 		}
+		session.mimeType = mimeType
 	}
 	if file.Encrypted && s.encGate != nil && s.encGeneration != nil {
 		s.encGate.Lock()
@@ -259,7 +261,7 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		HLSURL:        session.HLSURL(),
 		Name:          file.Name,
 		Kind:          kind,
-		MimeType:      contentTypeFor(file.Name),
+		MimeType:      session.MimeType(),
 		SupportsRange: true,
 		Info:          file,
 	}, nil
@@ -326,7 +328,7 @@ func (s *Service) OpenResultForToken(token string) (OpenResult, error) {
 		HLSURL:        hlsURL,
 		Name:          file.Name,
 		Kind:          kind,
-		MimeType:      contentTypeFor(file.Name),
+		MimeType:      session.MimeType(),
 		SupportsRange: true,
 		Info:          file,
 	}, nil

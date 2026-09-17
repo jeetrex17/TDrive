@@ -246,8 +246,8 @@ func TestOpenImageRejectsStaleRevisionBeforeOpeningSession(t *testing.T) {
 	}
 }
 
-func TestOpenStreamRejectsImageFormatMismatchAndOversizeDimensions(t *testing.T) {
-	t.Run("format mismatch", func(t *testing.T) {
+func TestOpenStreamUsesDetectedImageFormatAndRejectsOversizeDimensions(t *testing.T) {
+	t.Run("detected format", func(t *testing.T) {
 		db := newResolverTestDB(t)
 		body := mediaPNGHeader(8, 8)
 		mustApplyOp(t, db, 10, projection.Op{
@@ -258,12 +258,23 @@ func TestOpenStreamRejectsImageFormatMismatchAndOversizeDimensions(t *testing.T)
 		svc := NewService(Config{DB: db, Peers: staticPeerResolver{peer: ranges.peer}, Ranges: ranges})
 		defer svc.Close()
 
-		_, err := svc.OpenStream(context.Background(), testChannelID, 10)
-		if !errors.Is(err, ErrInvalidImage) {
-			t.Fatalf("format mismatch error = %v, want ErrInvalidImage", err)
+		opened, err := svc.OpenStream(context.Background(), testChannelID, 10)
+		if err != nil {
+			t.Fatalf("OpenStream: %v", err)
 		}
-		if got := len(svc.server.sessions); got != 0 {
-			t.Fatalf("format mismatch published %d sessions", got)
+		defer func() { _ = svc.CloseSession(opened.Token) }()
+		if opened.MimeType != "image/png" {
+			t.Fatalf("MimeType = %q, want image/png", opened.MimeType)
+		}
+
+		resp, err := http.Get(opened.URL)
+		if err != nil {
+			t.Fatalf("GET image: %v", err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if got := resp.Header.Get("Content-Type"); got != "image/png" {
+			t.Fatalf("Content-Type = %q, want image/png", got)
 		}
 	})
 
