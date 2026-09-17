@@ -16,6 +16,7 @@ import { galleryView } from '../ui/gallery/gallery-store';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
 import type { PreviewNavigationItem } from './modals/preview';
+import { setFileThumbnailsActive } from '../ui/file-list/file-thumbnail-controller';
 
 let galleryEl: HTMLElement | null = null;
 let renderToken = 0;
@@ -96,6 +97,7 @@ export function toggleGallerySelection(index: number): void {
 // the Photos item is active in gallery view, the active drive in files view.
 export function setPhotosMode(on: boolean): void {
     setActive(on);
+    setFileThumbnailsActive(!on);
     watchRenditionAvailability(on);
     document.querySelector('.main-content')?.classList.toggle('photos-mode', on);
     const photosNav = document.getElementById('nav-photos');

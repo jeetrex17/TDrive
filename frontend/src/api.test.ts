@@ -27,10 +27,12 @@ describe("api normalizers", () => {
         const f = {
             name: "a.txt", size: 10, msg_id: 5, parent_id: "root",
             upload_time: 100, uploader_id: 7, encrypted: true, plaintext_size: 8,
+            revision: 9,
         };
         expect(toFileItem(f)).toEqual({
             msgId: 5, name: "a.txt", size: 10, parentId: "root",
             uploadTime: 100, uploaderId: 7, encrypted: true, plaintextSize: 8,
+            revision: 9,
         });
     });
 
@@ -38,6 +40,7 @@ describe("api normalizers", () => {
         const f = { name: "x" } as unknown as Parameters<typeof toFileItem>[0];
         expect(toFileItem(f)).toMatchObject({
             name: "x", msgId: 0, uploaderId: 0, encrypted: false, plaintextSize: 0,
+            revision: 0,
         });
     });
 

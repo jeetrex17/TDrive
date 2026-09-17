@@ -15,6 +15,12 @@ export type FileListUploaderChip = {
     initials?: string;
 };
 
+export type FileThumbnailIdentity = Readonly<{
+    channelId: number;
+    fileId: number;
+    revision: number;
+}>;
+
 type BaseInteractiveRow = {
     key: string;
     selectionKey: string;
@@ -53,6 +59,9 @@ export type FileListFileRow = BaseInteractiveRow & {
     encrypted: boolean;
     canDelete: boolean;
     canRename: boolean;
+    // Present only for projected images in the folder currently being viewed.
+    // Search and raw Telegram rows intentionally remain icon-only.
+    thumbnail?: FileThumbnailIdentity;
     uploaderChip?: FileListUploaderChip | null;
     actions: FileListAction[];
 };

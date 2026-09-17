@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
     isMobilePlatform: vi.fn(() => true),
     isIOSPlatform: () => false,
     isAndroidPlatform: () => false,
+    onRuntimeEvent: () => () => {},
     playHaptic: vi.fn(),
 }));
 const actions = vi.hoisted(() => ({
@@ -43,7 +44,7 @@ vi.mock('./folder-index', () => ({ refreshFolderIndex: vi.fn(), collectDescendan
 import FileList from '../ui/file-list/FileList.svelte';
 import { contextMenuState } from '../ui/menus/context-menu-store';
 import { showRowContextMenu } from './context-menu';
-import { activateFileList, buildFileRow, buildFolderRow, renderFileListRows } from './file-list';
+import { activateFileList, buildFileRow, buildFolderRow, fileThumbnailIdentity, renderFileListRows } from './file-list';
 import { state } from '../state';
 
 let list: HTMLElement;
@@ -98,6 +99,15 @@ afterEach(async () => {
 });
 
 describe('phone file list', () => {
+    it('opts in only revision-pinned projected images', () => {
+        const image = { msgId: 42, name: 'photo.jpg', revision: 9 };
+        expect(fileThumbnailIdentity(image, 7)).toEqual({ channelId: 7, fileId: 42, revision: 9 });
+        expect(Object.isFrozen(fileThumbnailIdentity(image, 7))).toBe(true);
+        expect(fileThumbnailIdentity({ ...image, name: 'clip.mp4' }, 7)).toBeUndefined();
+        expect(fileThumbnailIdentity({ ...image, revision: 0 }, 7)).toBeUndefined();
+        expect(fileThumbnailIdentity(image, 0)).toBeUndefined();
+    });
+
     it('uses the drive captured by a visible row when Download is tapped after a switch', () => {
         renderFileListRows(list, [
             buildFileRow({ id: 99, name: 'archive.bin', size: 2_000_000, date: 1_700_000_000 }, ''),

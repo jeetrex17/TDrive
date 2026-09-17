@@ -269,6 +269,7 @@ export function toFileItem(f: FileMetaData): FileItem {
         uploaderId: Number(f.uploader_id ?? 0),
         encrypted: Boolean(f.encrypted),
         plaintextSize: Number(f.plaintext_size ?? 0),
+        revision: Number(f.revision ?? 0),
     };
 }
 

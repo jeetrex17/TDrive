@@ -16,6 +16,7 @@ function makeItem(overrides: Partial<FileItem> = {}): FileItem {
         uploaderId: 0,
         encrypted: false,
         plaintextSize: 0,
+        revision: 1,
         ...overrides,
     };
 }

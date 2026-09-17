@@ -58,6 +58,7 @@ func (a *App) ListMedia() ([]backend.FileMetaData, error) {
 			UploaderID:    f.UploaderID,
 			Encrypted:     f.Encrypted,
 			PlaintextSize: f.PlaintextSize,
+			Revision:      f.Revision,
 		})
 	}
 	return out, nil
