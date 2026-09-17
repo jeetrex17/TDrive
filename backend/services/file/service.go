@@ -88,7 +88,7 @@ type Service struct {
 	// an upload slot are registered, so it stays bounded by MaxConcurrentUploads.
 	uploadCancelMu sync.Mutex
 	uploadCancels  map[int]context.CancelFunc
-	previewMu            sync.Mutex
+	previewMu      sync.Mutex
 	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
 	// package tests. It runs immediately after Telegram returns a positive
 	// message ID and before that receipt enters any local collection/projection.
@@ -407,7 +407,28 @@ func (s *Service) emitEvent(name string, args ...any) {
 	}
 }
 
-func (s *Service) downloadProgress(total int64) func(done, total int64) {
+type downloadProgressRequestIDKey struct{}
+
+// WithDownloadProgressID binds frontend scheduler identity to emitted progress
+// events. It is kept on the operation context so other service callers can
+// remain compatible while Wails downloads are precisely correlated.
+func WithDownloadProgressID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil || requestID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, downloadProgressRequestIDKey{}, requestID)
+}
+
+func downloadProgressRequestID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(downloadProgressRequestIDKey{}).(string)
+	return id
+}
+
+func (s *Service) downloadProgress(ctx context.Context, total int64) func(done, total int64) {
+	requestID := downloadProgressRequestID(ctx)
 	lastProgress := time.Now()
 	var mu sync.Mutex
 	return func(done, callbackTotal int64) {
@@ -427,7 +448,7 @@ func (s *Service) downloadProgress(total int64) func(done, total int64) {
 				percent = 100
 			}
 		}
-		s.emitEvent("download_progress", percent)
+		s.emitEvent("download_progress", percent, requestID)
 		lastProgress = time.Now()
 	}
 }

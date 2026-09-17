@@ -21,6 +21,9 @@ type BaseInteractiveRow = {
     id: string;
     name: string;
     parentId: string;
+    // Captured when the row is rendered. Actions may be invoked after a drive
+    // switch while the old row/action sheet is still on screen.
+    channelId?: number;
     metaLabel: string;
     sizeLabel: string;
     ariaLabel: string;

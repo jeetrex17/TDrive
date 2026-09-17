@@ -188,7 +188,10 @@ describe('FileList phone rows', () => {
             showFileListRows([makeFileRow({
                 name: 'Holiday Photos 2024 final version v2.zip',
                 size: 1_400_000_000,
-                uploadTime: Math.floor(Date.now() / 1000) - 5 * 3600,
+                // minuteTick is created when this module graph loads. Leave a
+                // full minute of headroom so parallel-suite startup timing
+                // cannot make an exact five-hour boundary read as 4:59.
+                uploadTime: Math.floor(Date.now() / 1000) - 5 * 3600 - 60,
                 encrypted: true,
                 uploaderChip: { label: 'Mara Okonkwo · 5h ago', firstName: 'Mara', initials: 'MO' },
             })]);

@@ -170,8 +170,13 @@ export function DiscoverPersonalDrives(): $CancellablePromise<$models.PersonalDr
     return $Call.ByID(1756959499);
 }
 
-export function DownloadFile(msgID: number, TgMsgID: number): $CancellablePromise<$models.DownloadResult> {
-    return $Call.ByID(764734343, msgID, TgMsgID);
+/**
+ * DownloadFile downloads from the explicitly selected drive. The channel is an
+ * argument rather than a late ActiveChannelID lookup because a queued frontend
+ * transfer may begin after the user has switched drives.
+ */
+export function DownloadFile(channelID: number, msgID: number, TgMsgID: number, requestID: string): $CancellablePromise<$models.DownloadResult> {
+    return $Call.ByID(764734343, channelID, msgID, TgMsgID, requestID);
 }
 
 /**
@@ -180,8 +185,8 @@ export function DownloadFile(msgID: number, TgMsgID: number): $CancellablePromis
  * slot with single-file downloads, so the existing CancelDownload action stops
  * either transfer type.
  */
-export function DownloadFolder(folderID: string): $CancellablePromise<$models.DownloadResult> {
-    return $Call.ByID(794478145, folderID);
+export function DownloadFolder(channelID: number, folderID: string, requestID: string): $CancellablePromise<$models.DownloadResult> {
+    return $Call.ByID(794478145, channelID, folderID, requestID);
 }
 
 /**

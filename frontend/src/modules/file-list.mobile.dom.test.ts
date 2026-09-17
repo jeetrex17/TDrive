@@ -98,6 +98,18 @@ afterEach(async () => {
 });
 
 describe('phone file list', () => {
+    it('uses the drive captured by a visible row when Download is tapped after a switch', () => {
+        renderFileListRows(list, [
+            buildFileRow({ id: 99, name: 'archive.bin', size: 2_000_000, date: 1_700_000_000 }, ''),
+        ]);
+        flushSync();
+        state.activeChannel = { id: 2, title: 'Another drive', kind: 'shared' };
+
+        click(row('archive.bin'));
+
+        expect(actions.enqueueDownload).toHaveBeenCalledWith(99, 'archive.bin', 2_000_000, 1);
+    });
+
     it('a long press anywhere on the row selects it', () => {
         // Holding a row means "select this" on every phone anyone has used. It
         // used to select only on the row's small leading icon and open the menu
@@ -186,5 +198,21 @@ describe('phone file list', () => {
 
         row('plan.pdf').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
         expect(actions.openFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('activates a search result from the keyboard without requiring a double click', () => {
+        state.searchQuery = 'plan';
+        const result = buildFileRow({ id: 99, name: 'result.pdf', size: 10, date: 1 }, '', {
+            key: 'search:file:fs:99',
+            selectionKey: 'file:99',
+            onDoubleClick: () => actions.openFile({ id: 99, name: 'result.pdf', size: 10, encrypted: false }),
+        });
+        renderFileListRows(list, [result]);
+        flushSync();
+
+        const target = row('result.pdf');
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+
+        expect(actions.openFile).toHaveBeenCalledWith({ id: 99, name: 'result.pdf', size: 10, encrypted: false });
     });
 });

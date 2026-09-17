@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"TDrive/backend"
@@ -505,14 +506,20 @@ func (a *App) PreviewFile(msgID int) PreviewResult {
 	return previewOperationResult(PreviewPayload(payload), err)
 }
 
-func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
+// DownloadFile downloads from the explicitly selected drive. The channel is an
+// argument rather than a late ActiveChannelID lookup because a queued frontend
+// transfer may begin after the user has switched drives.
+func (a *App) DownloadFile(channelID int64, msgID int, TgMsgID int, requestID string) DownloadResult {
+	if !validFrontendDownloadRequestID(requestID) || !validFrontendDownloadID(channelID) || !validFrontendDownloadID(int64(msgID)) || !validFrontendDownloadID(int64(TgMsgID)) {
+		return DownloadResult{Result: operationFailure(errors.New("invalid download request identifiers"))}
+	}
 	svc, err := a.requireFileService()
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx := a.beginDownload()
+	ctx := fileservice.WithDownloadProgressID(a.beginDownload(), requestID)
 	defer a.endDownload()
-	result := svc.Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, a.chooseDownloadPath)
+	result := svc.Download(ctx, channelID, msgID, TgMsgID, a.chooseDownloadPath)
 	// An iPhone download stays in the app container, so offer the share sheet
 	// as soon as the bytes are on disk: Files can list the container, but
 	// sending the file straight on is the thing worth saving a trip for.
@@ -532,15 +539,41 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 // parent chosen once by the user. It shares the serialized/cancellable download
 // slot with single-file downloads, so the existing CancelDownload action stops
 // either transfer type.
-func (a *App) DownloadFolder(folderID string) DownloadResult {
+func (a *App) DownloadFolder(channelID int64, folderID string, requestID string) DownloadResult {
+	if !validFrontendDownloadRequestID(requestID) || strings.TrimSpace(folderID) == "" || !validFrontendDownloadID(channelID) {
+		return DownloadResult{Result: operationFailure(errors.New("invalid download request identifiers"))}
+	}
 	svc, err := a.requireFileService()
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx := a.beginDownload()
+	ctx := fileservice.WithDownloadProgressID(a.beginDownload(), requestID)
 	defer a.endDownload()
-	result := svc.DownloadFolder(ctx, a.ActiveChannelID(), folderID, a.chooseDownloadDir)
+	result := svc.DownloadFolder(ctx, channelID, folderID, a.chooseDownloadDir)
 	return downloadOperationResult(result)
+}
+
+const (
+	maxFrontendSafeInteger        int64 = 9_007_199_254_740_991
+	maxFrontendDownloadRequestLen       = 256
+)
+
+// Wails transports JavaScript numbers, so IDs outside the safe-integer range
+// can silently change before reaching Go. Reject them at the native boundary.
+func validFrontendDownloadID(id int64) bool {
+	return id > 0 && id <= maxFrontendSafeInteger
+}
+
+func validFrontendDownloadRequestID(id string) bool {
+	if id == "" || len(id) > maxFrontendDownloadRequestLen {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) DeleteFile(msgID int) OperationResult {

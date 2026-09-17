@@ -57,6 +57,6 @@ describe('folder context menu download', () => {
             item.type !== 'divider' && item.label === 'Download "Screenshots"');
         if (!download) throw new Error('download menu item missing');
         download.action();
-        expect(transferMocks.enqueueFolderDownload).toHaveBeenCalledWith('d:screenshots', 'Screenshots');
+        expect(transferMocks.enqueueFolderDownload).toHaveBeenCalledWith('d:screenshots', 'Screenshots', 0, undefined);
     });
 });

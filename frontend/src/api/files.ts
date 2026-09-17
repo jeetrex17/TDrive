@@ -199,12 +199,12 @@ export async function selectFolder(): Promise<string> {
     return invokeBackend(rawSelectFolder);
 }
 
-export async function downloadFile(messageId: number, accessHash: number): Promise<DownloadResult> {
-    return normalizeDownloadResult(await invokeBackend(rawDownloadFile, messageId, accessHash));
+export async function downloadFile(channelId: number, messageId: number, accessHash: number, requestId: string): Promise<DownloadResult> {
+    return normalizeDownloadResult(await invokeBackend(rawDownloadFile, channelId, messageId, accessHash, requestId));
 }
 
-export async function downloadFolder(folderId: string): Promise<DownloadResult> {
-    return normalizeDownloadResult(await invokeBackend(rawDownloadFolder, folderId));
+export async function downloadFolder(channelId: number, folderId: string, requestId: string): Promise<DownloadResult> {
+    return normalizeDownloadResult(await invokeBackend(rawDownloadFolder, channelId, folderId, requestId));
 }
 
 // Opens the OS share sheet for a file TDrive already wrote into its sandbox.

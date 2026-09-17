@@ -74,14 +74,14 @@ func (s *Service) Download(ctx context.Context, channelID int64, msgID int, look
 		return DownloadResult{Status: "canceled", Message: "Download canceled", Err: context.Canceled}
 	}
 
-	if err := s.downloadProjectedFileToPath(ctx, peer, file, savePath, masterKey, s.downloadProgress(file.StoredSize)); err != nil {
+	if err := s.downloadProjectedFileToPath(ctx, peer, file, savePath, masterKey, s.downloadProgress(ctx, file.StoredSize)); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return DownloadResult{Status: "canceled", Message: "Download canceled", Err: err}
 		}
 		return DownloadResult{Status: "error", Message: err.Error(), Err: err}
 	}
 
-	s.emitEvent("download_progress", 100.0)
+	s.emitEvent("download_progress", 100.0, downloadProgressRequestID(ctx))
 	return DownloadResult{
 		Status:    "success",
 		Message:   "Download complete",
