@@ -31,9 +31,9 @@ function transfer(overrides: Partial<TransferEvent> = {}): TransferEvent {
 }
 
 describe('transferPhase', () => {
-    it('treats queued and paused alike: not moving, nothing wrong', () => {
+    it('keeps queued and paused apart: one will start itself, the other will not', () => {
         expect(transferPhase(transfer({ status: 'queued', total: 4_000 }))).toBe('waiting');
-        expect(transferPhase(transfer({ status: 'paused', total: 4_000 }))).toBe('waiting');
+        expect(transferPhase(transfer({ status: 'paused', total: 4_000 }))).toBe('paused');
     });
 
     it('calls a started transfer with nothing measurable yet preparing', () => {
@@ -154,6 +154,14 @@ describe('transferDetail', () => {
         expect(transferDetail(transfer({ status: 'queued', total: 3_000 }), NOW)).toBe('Waiting its turn');
         expect(transferDetail(transfer({ status: 'active' }), NOW)).toBe('Preparing…');
         expect(transferDetail(transfer({ status: 'canceling', progress: 22 }), NOW)).toBe('Stopping…');
+    });
+
+    it('does not send a paused transfer looking for a queue that is not there', () => {
+        // Suspended with the app, not waiting behind other work.
+        expect(transferDetail(transfer({ status: 'paused', progress: 40, total: 1_000 }), NOW)).toBe('Paused');
+        // The bar holds where it stopped: how far it got is still true, and it
+        // is what the reader weighs before starting again.
+        expect(transferPercent(transfer({ status: 'paused', progress: 40, total: 1_000 }))).toBe(40);
     });
 
     it('reads how far, then how long, then how fast', () => {

@@ -12,12 +12,17 @@ import { formatBytes } from '../../utils';
 import type { TransferEvent } from './notif-store';
 
 /**
- * The states a row actually draws differently, which is fewer than the states a
- * transfer can be in: `queued` and `paused` are both "not moving yet, nothing
- * wrong", and the row has nothing different to say about them.
+ * The states a row actually draws differently.
+ *
+ * `queued` and `paused` look alike -- stopped, with nothing wrong -- but they
+ * are not the same sentence. A queued transfer is behind other work and will
+ * start on its own; a paused one stopped because iOS suspended the app, and
+ * saying it is "waiting its turn" would send the reader off looking for the
+ * queue ahead of it that does not exist.
  */
 export type TransferPhase =
     | 'waiting'
+    | 'paused'
     | 'preparing'
     | 'running'
     | 'canceling'
@@ -37,9 +42,8 @@ export function transferPhase(transfer: TransferEvent): TransferPhase {
         case 'failed': return 'failed';
         case 'canceled': return 'canceled';
         case 'canceling': return 'canceling';
-        case 'queued':
-        case 'paused':
-            return 'waiting';
+        case 'queued': return 'waiting';
+        case 'paused': return 'paused';
         default:
             // Started, but with nothing measurable yet: a folder being walked
             // before its first byte moves, or a file whose size is still coming.
@@ -51,7 +55,7 @@ export function transferPhase(transfer: TransferEvent): TransferPhase {
 
 /** True while the transfer still has somewhere to go, so the row keeps a bar. */
 export function isMoving(phase: TransferPhase): boolean {
-    return phase === 'waiting' || phase === 'preparing' || phase === 'running';
+    return phase === 'waiting' || phase === 'paused' || phase === 'preparing' || phase === 'running';
 }
 
 /**
@@ -148,6 +152,7 @@ export function transferDetail(transfer: TransferEvent, now = Date.now()): strin
     const phase = transferPhase(transfer);
     switch (phase) {
         case 'waiting': return 'Waiting its turn';
+        case 'paused': return 'Paused';
         case 'preparing': return 'Preparing…';
         case 'canceling': return 'Stopping…';
         case 'canceled': return joinDetail(['Canceled', formatAge(transfer.finishedAt, now)]);
