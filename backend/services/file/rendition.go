@@ -74,11 +74,11 @@ func (s *Service) Rendition(ctx context.Context, channelID, msgID, revision int6
 	if err != nil {
 		return Rendition{}, err
 	}
-	// Thumbnail data is deliberately local-cache then Telegram's native
-	// document thumb. Old durable sidecars remain readable for the legacy
-	// preview class, but never outrank the source document's thumbnail.
+	// Plain thumbnail data is deliberately local-cache then Telegram's native
+	// document thumb. An encrypted source has no usable native thumbnail, so a
+	// bounded encrypted sidecar is its remote fallback after the vault unlocks.
 	var ref *projection.FileRendition
-	if kind != "thumbnail" {
+	if kind != "thumbnail" || f.Encrypted {
 		ref, err = s.renditionReference(ctx, f, kind)
 		if err != nil {
 			return Rendition{}, err
@@ -135,6 +135,23 @@ func (s *Service) loadRendition(ctx context.Context, f projection.File, kind str
 		return Rendition{}, err
 	}
 	defer s.releaseThumbSlot()
+	if kind == "thumbnail" && f.Encrypted && ref == nil && thumbnail.IsImage(f.Name) {
+		// Legacy encrypted photos and uploads created before sidecars were
+		// introduced have no Telegram-native thumbnail. Generate bounded
+		// encrypted derivatives only when the photo enters the viewport. The
+		// shared flight, thumbnail slot, request context, and preparation cap
+		// deduplicate, throttle, cancel, and bound the one-time source transfer.
+		if _, err := s.PrepareRemoteRenditionsWithinBudget(ctx, f.ChannelID, f.MsgID, 30<<20); err != nil {
+			return Rendition{}, err
+		}
+		ref, err = s.renditionReference(ctx, f, kind)
+		if err != nil {
+			return Rendition{}, err
+		}
+		if ref == nil {
+			return Rendition{}, ErrRenditionMissing
+		}
+	}
 	result, err := s.fetchRendition(ctx, f, kind, ref, key)
 	if err != nil {
 		return Rendition{}, err

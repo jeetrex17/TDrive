@@ -305,6 +305,77 @@ func TestRenditionRejectsLongEdgeDespiteSmallPixelCount(t *testing.T) {
 	}
 }
 
+func TestEncryptedThumbnailFallsBackToStoredDerivativeAfterUnlock(t *testing.T) {
+	s, _, telegram, _ := newTestService(t)
+	key := bytes.Repeat([]byte{7}, 32)
+	wireEncryption(s, key)
+	source := writeTempNamedFile(t, "private.png", makePNG(t, 64, 32))
+	uploaded, err := s.Upload(context.Background(), personalChannelID, []string{source}, []string{""}, true)
+	if err != nil || len(uploaded) != 1 {
+		t.Fatalf("upload=%+v %v", uploaded, err)
+	}
+	id := int64(uploaded[0].MsgID)
+	file, found, err := projection.FileByID(s.DB, personalChannelID, id)
+	if err != nil || !found {
+		t.Fatalf("source = %#v, %v", file, err)
+	}
+	reader, err := os.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PrepareRenditions(context.Background(), file, reader); err != nil {
+		_ = reader.Close()
+		t.Fatalf("prepare renditions: %v", err)
+	}
+	_ = reader.Close()
+
+	// Simulate a fresh device/cache. Encrypted source documents cannot expose a
+	// Telegram document thumbnail, so the encrypted sidecar is the bounded path.
+	if err := telegram.DeleteMessages(context.Background(), tgclient.InputPeer{}, []int64{id}); err != nil {
+		t.Fatal(err)
+	}
+	s.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	result, err := s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
+	if err != nil || result.Width != 64 || result.Height != 32 || !result.Encrypted {
+		t.Fatalf("thumbnail=%+v %v", result, err)
+	}
+}
+
+func TestEncryptedThumbnailPreparesBoundedDerivativeOnDemand(t *testing.T) {
+	s, _, telegram, _ := newTestService(t)
+	key := bytes.Repeat([]byte{9}, 32)
+	wireEncryption(s, key)
+	source := writeTempNamedFile(t, "existing-private.png", makePNG(t, 64, 32))
+	uploaded, err := s.Upload(context.Background(), personalChannelID, []string{source}, []string{""}, true)
+	if err != nil || len(uploaded) != 1 {
+		t.Fatalf("upload=%+v %v", uploaded, err)
+	}
+	id := int64(uploaded[0].MsgID)
+	s.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	if _, err := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "thumbnail"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("thumbnail unexpectedly prepared before viewport request: %v", err)
+	}
+
+	result, err := s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
+	if err != nil || result.Width != 64 || result.Height != 32 || !result.Encrypted {
+		t.Fatalf("thumbnail=%+v %v", result, err)
+	}
+	if _, err := projection.CurrentFileRendition(context.Background(), s.DB, personalChannelID, id, "thumbnail"); err != nil {
+		t.Fatalf("prepared thumbnail reference: %v", err)
+	}
+
+	// A later cache miss must use the durable encrypted sidecar. Removing the
+	// original proves the viewport path does not download it a second time.
+	if err := telegram.DeleteMessages(context.Background(), tgclient.InputPeer{}, []int64{id}); err != nil {
+		t.Fatal(err)
+	}
+	s.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	second, err := s.Rendition(context.Background(), personalChannelID, id, 1, "thumbnail")
+	if err != nil || second.Width != 64 || second.Height != 32 || !second.Encrypted {
+		t.Fatalf("sidecar thumbnail=%+v %v", second, err)
+	}
+}
+
 func TestRenditionCacheDoesNotCrossActorsSharingDatabase(t *testing.T) {
 	s, c := renditionFixture(t)
 	s.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
