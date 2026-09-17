@@ -38,7 +38,6 @@ export interface ThumbnailController {
     register: (node: HTMLElement, registration: ThumbnailRegistration) => void;
     unregister: (node: HTMLElement) => void;
     rearmLocked: () => void;
-    rearmMissing: (fileId?: number) => void;
     cached: (channelId: number, fileId: number) => string;
 }
 
@@ -119,7 +118,7 @@ export function createThumbnailController(options: ThumbnailControllerOptions = 
             }
             if (detail.code === 'missing_rendition') {
                 handle.status = 'missing';
-                handle.apply({ status: 'missing', title: 'preview not available yet' });
+                handle.apply({ status: 'missing', title: 'thumbnail unavailable' });
                 return;
             }
             const delay = retryDelay(error, handle.attempt);
@@ -254,18 +253,6 @@ export function createThumbnailController(options: ThumbnailControllerOptions = 
         }
     }
 
-    function rearmMissing(fileId?: number): void {
-        for (const handle of handles.values()) {
-            if (fileId !== undefined && handle.fileId !== fileId) continue;
-            if (handle.status !== 'missing' && !(fileId !== undefined && handle.status === 'loading')) continue;
-            release(handle);
-            handle.status = 'idle';
-            handle.apply({ status: 'idle', title: '' });
-            observer?.unobserve(handle.node);
-            observe(handle);
-        }
-    }
-
     function cached(channelId: number, fileId: number): string {
         for (const handle of handles.values()) {
             if (handle.channelId === channelId && handle.fileId === fileId && handle.status === 'loaded') return handle.src;
@@ -281,7 +268,6 @@ export function createThumbnailController(options: ThumbnailControllerOptions = 
         register,
         unregister,
         rearmLocked,
-        rearmMissing,
         cached,
     };
 }

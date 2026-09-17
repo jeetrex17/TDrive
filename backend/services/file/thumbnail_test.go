@@ -89,6 +89,32 @@ func TestThumbnailEncryptedCacheRequiresKeyAndClearsIt(t *testing.T) {
 	}
 	assertKeyZeroed(t, owned)
 }
+
+func TestEncryptedThumbnailCacheRejectsCrossObjectSwap(t *testing.T) {
+	cache := thumbnail.NewCache(t.TempDir(), 1<<20)
+	svc := &Service{Thumbs: cache}
+	masterKey := bytes.Repeat([]byte{9}, 32)
+	imageBytes := makePNG(t, 20, 10)
+	const sourceKey = "account:channel:content:revision:one"
+	const targetKey = "account:channel:content:revision:two"
+
+	svc.writeThumbCache(sourceKey, imageBytes, true, masterKey)
+	ciphertext, ok := cache.Get(sourceKey)
+	if !ok {
+		t.Fatal("encrypted source cache entry missing")
+	}
+	if err := cache.Put(targetKey, ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svc.readThumbCache(targetKey, true, masterKey); ok {
+		t.Fatal("ciphertext from another cache identity was accepted")
+	}
+	got, ok := svc.readThumbCache(sourceKey, true, masterKey)
+	if !ok || !bytes.Equal(got, imageBytes) {
+		t.Fatal("correctly bound cache entry did not round trip")
+	}
+}
+
 func TestThumbnailMissingIsExplicit(t *testing.T) {
 	svc, client := renditionFixture(t)
 	if _, err := svc.Thumbnail(context.Background(), personalChannelID, 91); !errors.Is(err, ErrRenditionMissing) {
@@ -98,24 +124,89 @@ func TestThumbnailMissingIsExplicit(t *testing.T) {
 		t.Fatal("downloaded original")
 	}
 }
+
+func TestThumbnailPrefersLocalCacheOverLegacyRenditionAndUsesTelegramDocumentThumb(t *testing.T) {
+	svc, client := renditionFixture(t)
+	svc.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	svc.CacheNamespace = "account"
+	file, found, err := projection.FileByID(svc.DB, personalChannelID, 91)
+	if err != nil || !found {
+		t.Fatalf("file = %#v, %v", file, err)
+	}
+	legacy := makePNG(t, 24, 12)
+	legacyRef := projection.FileRendition{ChannelID: personalChannelID, FileMsgID: 91, ContentMsgID: 91, MsgID: 999, Kind: projection.RenditionThumbnail, Version: 1, Size: int64(len(legacy)), PlaintextSize: int64(len(legacy)), Width: 24, Height: 12}
+	if _, err := svc.DB.Exec(`INSERT INTO file_renditions(channel_id,file_msg_id,msg_id,content_msg_id,kind,version,size,plaintext_size,width,height,encrypted) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, legacyRef.ChannelID, legacyRef.FileMsgID, legacyRef.MsgID, legacyRef.ContentMsgID, legacyRef.Kind, legacyRef.Version, legacyRef.Size, legacyRef.PlaintextSize, legacyRef.Width, legacyRef.Height, false); err != nil {
+		t.Fatal(err)
+	}
+	cached := makePNG(t, 32, 16)
+	svc.writeThumbCache(renditionCacheKey("account:actor:7", file, "thumbnail", 0), cached, false, nil)
+	client.doc.Thumbs = []tgclient.FileThumb{{Bytes: makePNG(t, 64, 32)}}
+	got, err := svc.Thumbnail(context.Background(), personalChannelID, 91)
+	if err != nil || got.DataBase64 != base64.StdEncoding.EncodeToString(cached) {
+		t.Fatalf("cache result = %#v, %v", got, err)
+	}
+	if client.thumbs.Load() != 0 {
+		t.Fatal("cache hit fetched a remote thumbnail")
+	}
+
+	// A cache miss must use Telegram's native document thumbnail, not the old
+	// sidecar rendition.
+	svc.Thumbs = thumbnail.NewCache(t.TempDir(), 1<<20)
+	remote := makePNG(t, 64, 32)
+	client.doc.Thumbs = []tgclient.FileThumb{{Bytes: remote}}
+	got, err = svc.Thumbnail(context.Background(), personalChannelID, 91)
+	if err != nil || got.DataBase64 != base64.StdEncoding.EncodeToString(remote) {
+		t.Fatalf("remote result = %#v, %v", got, err)
+	}
+	if client.originals.Load() != 0 {
+		t.Fatal("thumbnail path downloaded an original")
+	}
+}
+
+func TestThumbnailRejectsEncryptedSharedDriveBeforeCacheOrNetwork(t *testing.T) {
+	svc, db, _, _ := newTestService(t)
+	const sharedChannelID int64 = 404
+	project(t, db, sharedChannelID, 91, 7, projection.Op{Type: projection.OpFileUpload, Name: "secret.jpg", FileSize: 128, Encrypted: true, PlaintextSize: 64, EncryptionVersion: 1})
+	svc.PersonalChannelID = func() int64 { return personalChannelID }
+	called := false
+	svc.RequireEncryptionKeyForChannel = func(channelID int64, encrypted bool) ([]byte, error) {
+		called = true
+		return bytes.Repeat([]byte{1}, 32), nil
+	}
+	if _, err := svc.Thumbnail(context.Background(), sharedChannelID, 91); !errors.Is(err, ErrEncryptedRenditionScope) {
+		t.Fatalf("shared encrypted thumbnail error = %v", err)
+	}
+	if called {
+		t.Fatal("shared encrypted row requested a key")
+	}
+}
 func readSingleCacheFile(t *testing.T, dir string) []byte {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
+	var payloadPath string
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".bin" {
+			return nil
+		}
+		if payloadPath != "" {
+			return errors.New("multiple cache payloads found")
+		}
+		payloadPath = path
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("read cache dir: %v", err)
+		t.Fatalf("walk cache dir: %v", err)
 	}
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".bin" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			t.Fatalf("read cache file: %v", err)
-		}
-		return data
+	if payloadPath == "" {
+		t.Fatalf("no cache file found in %s", dir)
 	}
-	t.Fatalf("no cache file found in %s", dir)
-	return nil
+	data, err := os.ReadFile(payloadPath)
+	if err != nil {
+		t.Fatalf("read cache file: %v", err)
+	}
+	return data
 }
 
 // wireEncryption sets up the upload/preview encryption hooks against a fixed

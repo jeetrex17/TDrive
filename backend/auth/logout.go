@@ -45,6 +45,20 @@ func ClearUserData(mode LogoutMode) error {
 			return fmt.Errorf("auth: remove %s: %w", name, err)
 		}
 	}
+	if mode == LogoutFull {
+		cacheDir, err := datadir.CacheDir()
+		if err != nil {
+			return fmt.Errorf("auth: locate cache dir: %w", err)
+		}
+		// Only the disposable thumbnail subtree is account-scoped here. Keep
+		// unrelated application caches intact and make repeated logout safe.
+		if err := os.RemoveAll(filepath.Join(cacheDir, "thumbnails")); err != nil {
+			return fmt.Errorf("auth: clear thumbnail cache: %w", err)
+		}
+		if err := datadir.CleanupCacheTemps(); err != nil {
+			return fmt.Errorf("auth: clear temporary cache files: %w", err)
+		}
+	}
 	return nil
 }
 

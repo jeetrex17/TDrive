@@ -245,11 +245,6 @@ func (s *Service) SweepOrphanParts(ctx context.Context, channelID int64) error {
 	if channelID == 0 || s.TG == nil || s.Peers == nil {
 		return nil
 	}
-	// Resume only payloads previously staged by an authorized local upload or
-	// preparation job. This maintenance step never downloads an original.
-	if err := s.ResumeRenditionUploads(ctx, channelID, 16); err != nil {
-		s.warnf("pending photo uploads deferred: %v\n", err)
-	}
 	tombParts, err := projection.OrphanPartMessages(s.DB, channelID)
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	tdcrypto "TDrive/backend/crypto"
+	"TDrive/backend/datadir"
 	"TDrive/backend/mountpolicy"
 	"TDrive/backend/projection"
 )
@@ -228,8 +229,22 @@ func (s *Service) RequireMasterKeyForFile(encrypted bool) ([]byte, error) {
 	return nil, ErrPasswordRequired
 }
 
+// RequireMasterKeyForChannel returns a fresh key copy only for encrypted files
+// in My Drive. File reads must use this channel-scoped form before touching
+// any cache, which prevents an encrypted row from a shared drive borrowing the
+// personal vault key.
+func (s *Service) RequireMasterKeyForChannel(channelID int64, encrypted bool) ([]byte, error) {
+	if !encrypted {
+		return nil, nil
+	}
+	if channelID == 0 || channelID != s.personalID() {
+		return nil, fmt.Errorf("encryption is only available on My Drive")
+	}
+	return s.RequireMasterKeyForFile(true)
+}
+
 func (s *Service) WriteCiphertextTemp(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error) {
-	tmp, err := os.CreateTemp("", "tdrive-enc-*")
+	tmp, err := datadir.CreateCacheTemp("tdrive-enc-*")
 	if err != nil {
 		return nil, err
 	}

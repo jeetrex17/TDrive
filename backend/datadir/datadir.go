@@ -7,8 +7,10 @@
 package datadir
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -19,6 +21,14 @@ const appDir = "TDrive"
 // dirMode is the private mode TDrive's data directories are created with,
 // matching every caller's historical 0700.
 const dirMode os.FileMode = 0o700
+
+var cacheTempPrefixes = [...]string{
+	"tdrive-rendition-source-",
+	"tdrive-upload-",
+	".tdrive-upload-part-",
+	"tdrive-enc-",
+	"tdrive-mountdav-put-",
+}
 
 var (
 	mu            sync.RWMutex
@@ -61,6 +71,49 @@ func CacheDir() (string, error) {
 	root := cacheOverride
 	mu.RUnlock()
 	return resolve(root, os.UserCacheDir)
+}
+
+// CreateCacheTemp creates a private, app-owned temporary file. It is the
+// single temporary-file boundary for data that may contain file bytes or
+// decrypted metadata, so mobile builds never fall back to shared storage.
+func CreateCacheTemp(pattern string) (*os.File, error) {
+	dir, err := CacheDir()
+	if err != nil {
+		return nil, err
+	}
+	return os.CreateTemp(dir, pattern)
+}
+
+// CleanupCacheTemps removes app-owned scratch files left by an interrupted
+// upload, encryption, rendition, or mount write. It only examines the cache
+// root and only removes names produced by CreateCacheTemp callers.
+func CleanupCacheTemps() error {
+	dir, err := CacheDir()
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("datadir: read cache temp directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !isOwnedCacheTemp(entry.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("datadir: remove cache temp %q: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+func isOwnedCacheTemp(name string) bool {
+	for _, prefix := range cacheTempPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolve derives the default base at call time, not at init, so tests that

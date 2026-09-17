@@ -256,7 +256,7 @@ func TestGalleryCursorValidationRejectsTrailingDataAndInvalidIdentity(t *testing
 
 func TestGalleryPagesUseIndexedSeekWithoutSortOrOffset(t *testing.T) {
 	db := newTestDB(t)
-	rows, err := db.Query(`EXPLAIN QUERY PLAN `+gallerySelect+galleryFrom+` AND (f.upload_time,f.msg_id)<=(?,?) ORDER BY f.upload_time DESC,f.msg_id DESC LIMIT ?`, testChan, 1700000000, 1000, 129)
+	rows, err := db.Query(`EXPLAIN QUERY PLAN `+gallerySelect+galleryFrom+` AND (gi.upload_time,gi.msg_id)<=(?,?) ORDER BY gi.upload_time DESC,gi.msg_id DESC LIMIT ?`, testChan, 1700000000, 1000, 129)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,10 +268,10 @@ func TestGalleryPagesUseIndexedSeekWithoutSortOrOffset(t *testing.T) {
 		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(detail, "SEARCH f USING INDEX idx_files_channel_upload_time") && (strings.Contains(detail, "upload_time<?") || strings.Contains(detail, "(upload_time,msg_id)<(?,?)")) {
+		if strings.Contains(detail, "idx_gallery_items_channel_order") {
 			seek = true
 		}
-		if strings.Contains(detail, "SCAN f") || strings.Contains(detail, "TEMP B-TREE") {
+		if strings.Contains(detail, "SCAN gi") || strings.Contains(detail, "TEMP B-TREE") {
 			t.Fatalf("unbounded page query: %s", detail)
 		}
 	}

@@ -237,7 +237,7 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 	size := session.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", contentTypeFor(session.Name()))
-	if session.Encrypted() {
+	if session.Encrypted() || streamKindForName(session.Name()) == StreamKindImage {
 		setMediaNoStore(w.Header())
 	}
 	if r.Method == http.MethodOptions {
@@ -338,6 +338,7 @@ func setMediaCORS(header http.Header) {
 	header.Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
 	header.Set("Access-Control-Allow-Headers", "Range")
 	header.Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range")
+	header.Set("X-Content-Type-Options", "nosniff")
 }
 
 func (s *Server) session(token string) *Session {
@@ -415,8 +416,9 @@ func streamSessionRange(ctx context.Context, w io.Writer, session *Session, star
 }
 
 type streamTypeInfo struct {
-	kind StreamKind
-	mime string
+	kind        StreamKind
+	mime        string
+	imageFormat string
 }
 
 var streamTypesByExt = map[string]streamTypeInfo{
@@ -445,6 +447,12 @@ var streamTypesByExt = map[string]streamTypeInfo{
 	".ogg":      {kind: StreamKindAudio, mime: "audio/ogg"},
 	".opus":     {kind: StreamKindAudio, mime: "audio/ogg"},
 	".pdf":      {kind: StreamKindPDF, mime: "application/pdf"},
+	".jpg":      {kind: StreamKindImage, mime: "image/jpeg", imageFormat: "jpeg"},
+	".jpeg":     {kind: StreamKindImage, mime: "image/jpeg", imageFormat: "jpeg"},
+	".png":      {kind: StreamKindImage, mime: "image/png", imageFormat: "png"},
+	".gif":      {kind: StreamKindImage, mime: "image/gif", imageFormat: "gif"},
+	".webp":     {kind: StreamKindImage, mime: "image/webp", imageFormat: "webp"},
+	".bmp":      {kind: StreamKindImage, mime: "image/bmp", imageFormat: "bmp"},
 	".txt":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
 	".log":      {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
 	".md":       {kind: StreamKindText, mime: "text/plain; charset=utf-8"},
@@ -481,6 +489,13 @@ func contentTypeFor(name string) string {
 
 func isSupportedMediaName(name string) bool {
 	return streamKindForName(name) == StreamKindVideo
+}
+
+// IsSupportedImageName reports whether name has one of the raster extensions
+// that the original-image stream validates and serves. The extension is only
+// the first admission check; OpenImage also verifies the encoded bytes match.
+func IsSupportedImageName(name string) bool {
+	return streamKindForName(name) == StreamKindImage
 }
 
 func streamKindForName(name string) StreamKind {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,11 +13,15 @@ import (
 	"time"
 
 	tdcrypto "TDrive/backend/crypto"
+	"TDrive/backend/datadir"
 	"TDrive/backend/projection"
 )
 
 func TestWriteCiphertextTempRoundTripAndCleanupOnFailure(t *testing.T) {
 	svc, _ := newTestService(t)
+	cacheRoot := t.TempDir()
+	datadir.SetCache(cacheRoot)
+	t.Cleanup(func() { datadir.SetCache("") })
 	master, err := tdcrypto.NewMasterKey()
 	if err != nil {
 		t.Fatalf("NewMasterKey: %v", err)
@@ -26,6 +31,9 @@ func TestWriteCiphertextTempRoundTripAndCleanupOnFailure(t *testing.T) {
 	tmp, err := svc.WriteCiphertextTemp(bytes.NewReader(plaintext), int64(len(plaintext)), master)
 	if err != nil {
 		t.Fatalf("WriteCiphertextTemp: %v", err)
+	}
+	if got, want := filepath.Dir(tmp.Name()), filepath.Join(cacheRoot, "TDrive"); got != want {
+		t.Fatalf("ciphertext temp directory = %q, want %q", got, want)
 	}
 	t.Cleanup(func() {
 		_ = tmp.Close()
@@ -147,6 +155,9 @@ func TestMasterKeyGatesRejectWrongChannel(t *testing.T) {
 	}
 	if key, err := svc.RequireMasterKeyForFile(false); err != nil || key != nil {
 		t.Fatalf("plaintext file key = %x, %v; want nil, nil", key, err)
+	}
+	if _, err := svc.RequireMasterKeyForChannel(testChannelID+1, true); err == nil {
+		t.Fatal("encrypted rendition outside personal drive unexpectedly succeeded")
 	}
 }
 

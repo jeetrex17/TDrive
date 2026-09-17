@@ -5,7 +5,6 @@
     import { appActions } from '../../modules/app-actions';
     import { chooseFilesForCurrentFolder } from '../../modules/transfers';
     import GalleryCell from './GalleryCell.svelte';
-    import GalleryPreparation from './GalleryPreparation.svelte';
     import { galleryView } from './gallery-store';
     import { createGalleryLayout, galleryWindow, indexAtOffset, offsetForIndex } from './gallery-layout';
 
@@ -175,7 +174,6 @@
             <div class="gallery-group-header gallery-virtual-header" style:top={`${header.top}px`} style:height={`${layout.headerHeight}px`}>{header.label}</div>
         {/each}
     </div>
-    <GalleryPreparation channelId={$galleryView.source.timeline.channelId} />
     {/key}
     {#if pageError}<div class="gallery-page-error" role="status">{pageError} <button class="secondary-btn" type="button" onclick={() => source?.ensureRange(firstIndex, lastIndex)}>Retry</button></div>{/if}
 {/if}

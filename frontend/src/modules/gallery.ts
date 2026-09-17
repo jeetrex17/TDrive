@@ -3,15 +3,14 @@
 // the viewer keeps this same source instead of copying the whole library.
 
 import { state } from '../state';
-import { isMobilePlatform, onRuntimeEvent } from '../api';
-import { asRecord } from '../api/shared';
+import { isMobilePlatform } from '../api';
 import { getMediaTimeline, locateMedia, type GalleryItem } from '../api/gallery';
 import { GallerySource } from '../ui/gallery/gallery-source';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
 import { canOwnerActOnFile } from './file-list';
 import { updateSelectionBar } from './selection';
-import { beginRender, cachedThumb, rearmLocked, rearmMissing, setActive, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
+import { beginRender, cachedThumb, rearmLocked, setActive, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
 import { galleryView } from '../ui/gallery/gallery-store';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
@@ -24,7 +23,6 @@ let backgroundRenderToken = 0;
 let currentSource: GallerySource | null = null;
 let currentChannelId = 0;
 let touchCleanups: Array<() => void> = [];
-let renditionEventCleanups: Array<() => void> = [];
 
 export function activateGallery(): () => void {
     const host = document.getElementById('gallery-view');
@@ -57,7 +55,6 @@ export function teardownGallery(): void {
     galleryEl?.removeEventListener('click', onGalleryClick);
     window.removeEventListener('tdrive:unlocked', rearmLocked);
     for (const cleanup of touchCleanups.splice(0)) cleanup();
-    watchRenditionAvailability(false);
     teardownGalleryController();
     galleryEl = null;
     currentSource?.dispose();
@@ -98,7 +95,6 @@ export function toggleGallerySelection(index: number): void {
 export function setPhotosMode(on: boolean): void {
     setActive(on);
     setFileThumbnailsActive(!on);
-    watchRenditionAvailability(on);
     document.querySelector('.main-content')?.classList.toggle('photos-mode', on);
     const photosNav = document.getElementById('nav-photos');
     photosNav?.classList.toggle('active', on);
@@ -113,27 +109,6 @@ export function setPhotosMode(on: boolean): void {
         if (isActiveDrive && !on) el.setAttribute('aria-current', 'page');
         else el.removeAttribute('aria-current');
     });
-}
-
-function watchRenditionAvailability(on: boolean): void {
-    if (!on) {
-        for (const cleanup of renditionEventCleanups.splice(0)) cleanup();
-        return;
-    }
-    if (renditionEventCleanups.length > 0) return;
-    renditionEventCleanups = [
-        onRuntimeEvent('gallery_rendition_ready', (value) => {
-            const payload = asRecord(value);
-            const msgId = Number(payload.msg_id);
-            if (Number(payload.channel_id) !== currentChannelId || payload.kind !== 'thumbnail' || !Number.isSafeInteger(msgId) || msgId <= 0) return;
-            rearmMissing(msgId);
-        }),
-        // Hidden sidecars do not change the visible metadata epoch. Sync can
-        // therefore make a missing thumbnail available without a new page.
-        onRuntimeEvent('live_sync_completed', (value) => {
-            if (Number(asRecord(value).channel_id) === currentChannelId) rearmMissing();
-        }),
-    ];
 }
 
 interface GalleryRefreshOptions {

@@ -28,7 +28,6 @@
     import { activeFileRowKey, selectedFileRowKeys } from './row-state-store';
     import {
         beginFileThumbnailRender,
-        activateFileThumbnailAvailability,
         rearmFileThumbnailLocked,
         setFileThumbnailRoot,
         teardownFileThumbnails,
@@ -178,7 +177,6 @@
         list = document.getElementById('file-list');
         if (!list) return;
         setFileThumbnailRoot(list);
-        const deactivateThumbnailAvailability = activateFileThumbnailAvailability();
         applyMobileListSemantics();
         const unsubscribeListSemantics = mobile
             ? fileListView.subscribe(applyMobileListSemantics)
@@ -196,7 +194,6 @@
             window.removeEventListener('tdrive:reveal-file-row', revealRow);
             window.removeEventListener('tdrive:unlocked', rearmFileThumbnailLocked);
             unsubscribeListSemantics();
-            deactivateThumbnailAvailability();
             teardownFileThumbnails();
             list = null;
         };

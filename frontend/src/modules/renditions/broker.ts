@@ -1,5 +1,6 @@
 /** The broker owns binary image URLs. Callers own leases, never the URLs. */
-export type RenditionKind = 'thumbnail' | 'preview';
+/** The rendition broker is intentionally limited to bounded thumbnails. */
+export type RenditionKind = 'thumbnail';
 export type RenditionPriority = 'viewer' | 'visible' | 'prefetch';
 export interface RenditionRequest {
     scope: string;
@@ -26,8 +27,8 @@ type Entry = {
     compressedBytes: number;
 };
 const priorities: Record<RenditionPriority, number> = { viewer: 0, visible: 1, prefetch: 2 };
-const MAX_COMPRESSED = { thumbnail: 1024 * 1024, preview: 4 * 1024 * 1024 };
-const MAX_EDGE = { thumbnail: 512, preview: 1600 };
+const MAX_COMPRESSED = { thumbnail: 1024 * 1024 };
+const MAX_EDGE = { thumbnail: 512 };
 export const renditionMaxBytes = (kind: RenditionKind): number => MAX_COMPRESSED[kind];
 export const renditionMaxEdge = (kind: RenditionKind): number => MAX_EDGE[kind];
 export const renditionKey = (request: RenditionRequest): string => JSON.stringify([request.scope, request.channelId, request.fileId, request.revision, request.kind]);

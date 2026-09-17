@@ -1,4 +1,4 @@
-import { hasOperationErrorCode, isMobilePlatform, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
+import { closeMedia, hasOperationErrorCode, isMobilePlatform, openExternalUrl, openOriginalImage, useEncryptionPassword } from '../../api';
 import { state } from '../../state';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
@@ -9,7 +9,8 @@ import { pushSheet, type SheetHandle } from '../../ui/modals/sheet-stack';
 import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/touch-gestures';
 import { acquireRendition, subscribeRenditionReset, type ImageRequest } from '../renditions/runtime';
 import type { RenditionLease } from '../renditions/broker';
-import { getGalleryPolicy, subscribeGalleryPolicy } from '../gallery-policy';
+import { subscribeGalleryPolicy } from '../gallery-policy';
+import { setActive as setGalleryThumbnailScheduling } from '../../ui/gallery/gallery-controller';
 import type { FileCommandItem } from '../../ui/file-list/types';
 import {
     capturePreviewTransitionSource,
@@ -21,7 +22,9 @@ type PreviewSelection =
     | { reason: 'none' | 'multiple' | 'unsupported' }
     | { reason: 'ok'; item: PreviewCommandItem; key: string };
 
-const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
+// Direct viewing is limited to raster formats whose dimensions and encoded
+// bytes the backend can validate before exposing a loopback capability.
+const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp"]);
 
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
 const REQUIRED_ELEMENT_IDS = [
@@ -29,6 +32,7 @@ const REQUIRED_ELEMENT_IDS = [
     "preview-shell",
     "preview-stage",
     "preview-filename",
+    "preview-thumbnail",
     "preview-image",
     "preview-loading",
     "preview-loading-fill",
@@ -40,6 +44,7 @@ let modalEl: any = null;
 let shellEl: any = null;
 let stageEl: any = null;
 let filenameEl: any = null;
+let thumbnailEl: any = null;
 let imageEl: any = null;
 let loadingEl: any = null;
 let loadingFillEl: any = null;
@@ -81,24 +86,20 @@ let panStartY = 0;
 // synthesises for them must not zoom a second time.
 let lastPointerType = "mouse";
 
-// Grid and viewer share one byte-budgeted broker. The displayed image stays
-// pinned until navigation/close; at most one next preview has a separate lease.
-let activeImageLease: RenditionLease | null = null;
+// The broker owns thumbnails only. An original image is a short-lived loopback
+// session that exists solely for the current explicit viewer action.
 let activeThumbnailLease: RenditionLease | null = null;
-let prefetchedImageLease: RenditionLease | null = null;
-let preloadEpoch = 0;
+let activeOriginalSession: { token: string; url: string } | null = null;
 let unsubscribePreviewPolicy: (() => void) | null = null;
 let unsubscribePreviewReset: (() => void) | null = null;
 let previewReady = false;
 let previewRequestToken = 0;
 let activePreviewKey = "";
-let activePreviewMsgID = 0;
 let activePreviewItem: any = null;
 let chromeHideTimer: any = null;
 let previewHostObserver: MutationObserver | null = null;
 let previewHostEl: HTMLElement | null = null;
 let previewA11y: ReturnType<typeof installModalA11y> | null = null;
-let previewProgressUnsubscribe: (() => void) | null = null;
 const previewListenerCleanups: Array<() => void> = [];
 let activePreviewTransitionSource: PreviewTransitionSource | null = null;
 const previewTransition = createPreviewTransitionController();
@@ -162,7 +163,6 @@ function getPreviewKey(item: any) {
 
 function clearActivePreview() {
     activePreviewKey = "";
-    activePreviewMsgID = 0;
     activePreviewItem = null;
     navSource = null;
     navigationPending = false;
@@ -220,11 +220,17 @@ function revealChrome() {
     scheduleChromeHide();
 }
 
-function resetImageSurface() {
-    if (!imageEl) return;
-    imageEl.hidden = true;
-    imageEl.removeAttribute("src");
-    imageEl.alt = "";
+function resetImageSurface({ keepThumbnail = false } = {}) {
+    if (thumbnailEl && !keepThumbnail) {
+        thumbnailEl.hidden = true;
+        thumbnailEl.removeAttribute("src");
+    }
+    if (imageEl) {
+        imageEl.hidden = true;
+        imageEl.removeAttribute("src");
+        imageEl.alt = "";
+    }
+    modalEl?.classList.remove('is-original-ready');
 }
 
 function showPreviewLoading(_label?: any) {
@@ -232,13 +238,6 @@ function showPreviewLoading(_label?: any) {
     modalEl.classList.add("is-preview-loading");
     loadingEl.style.display = "flex";
     loadingEl.setAttribute("aria-hidden", "false");
-}
-
-function setPreviewProgress(percent: any) {
-    if (!loadingEl || !loadingFillEl) return;
-    const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
-    showPreviewLoading();
-    loadingFillEl.style.width = `${clamped}%`;
 }
 
 function hidePreviewProgress() {
@@ -294,21 +293,30 @@ function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
     errorEl.textContent = "";
     modalEl.classList.remove("is-preview-error");
     filenameEl.textContent = alt || "Preview";
-    imageEl.alt = "";
+    imageEl.alt = alt || 'Preview';
     imageEl.src = src;
     imageEl.hidden = false;
-    // Opacity-only entrance: we drive transform via zoom/pan, so the animation
-    // must not write transform (and must not hold it with fill).
-    const sharedTransition = previewTransition.finishOpen(imageEl);
-    const reduceMotion = typeof window.matchMedia === "function"
-        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!sharedTransition && !previewTransition.isRunning() && !reduceMotion && typeof imageEl.animate === "function") {
-        imageEl.animate(
-            [{ opacity: 0.6 }, { opacity: 1 }],
-            { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-        );
-    }
+    // The CSS layer transition promotes the original over its thumbnail in
+    // 160ms. It intentionally does not touch transform, which zoom and drag
+    // own, and it is disabled by the reduced-motion media query.
     revealChrome();
+}
+
+/** Pins a thumbnail by its immutable revision while the original stream opens. */
+function showPreviewThumbnail(src: string, alt: string): void {
+    if (!thumbnailEl) return;
+    thumbnailEl.alt = '';
+    thumbnailEl.src = src;
+    thumbnailEl.hidden = false;
+    thumbnailEl.setAttribute('aria-label', `Thumbnail for ${alt}`);
+    if (previewTransition.isRunning()) previewTransition.finishOpen(thumbnailEl);
+}
+
+function releaseOriginalSession(): void {
+    const session = activeOriginalSession;
+    activeOriginalSession = null;
+    activeFullSrc = '';
+    if (session?.token) void Promise.resolve(closeMedia(session.token)).catch(() => {});
 }
 
 function isPreviewOpen() {
@@ -351,62 +359,56 @@ function renditionRequest(target: PreviewNavigationItem): ImageRequest {
         channelId: Number(target.channel_id || target.channelId || state.activeChannel?.id || 0),
         fileId: Number(target.id),
         revision: Number(target.content_revision || target.revision || 0),
-        kind: 'preview',
+        kind: 'thumbnail',
     };
 }
 
-function releasePreviewImages(): void {
-    preloadEpoch += 1;
-    activeImageLease?.release();
-    activeImageLease = null;
+function releasePreviewResources(): void {
     activeThumbnailLease?.release();
     activeThumbnailLease = null;
-    prefetchedImageLease?.release();
-    prefetchedImageLease = null;
+    releaseOriginalSession();
 }
 
-export async function loadPreview(target: PreviewNavigationItem) {
+export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail = false } = {}) {
     if (!assertPreviewReady()) throw new Error('Preview unavailable');
     const token = ++previewRequestToken;
     const filename = target.name || 'Preview';
     activePreviewKey = getPreviewKey(target);
-    activePreviewMsgID = Number(target.id);
     activePreviewItem = target;
-    activeFullSrc = '';
+    releasePreviewResources();
     resetZoom();
-    resetImageSurface();
+    resetImageSurface({ keepThumbnail });
     updateNavChrome();
     refreshInfoPanel();
-    setPreviewProgress(0);
-
-    // Acquire before releasing the previous speculative lease. If this is the
-    // prefetched neighbor, its transfer and cached bytes remain shared.
     const request = renditionRequest(target);
-    const lease = acquireRendition(request, 'viewer');
-    const placeholder = target.thumbUrl ? acquireRendition({ ...request, kind: 'thumbnail' }, 'viewer') : null;
-    releasePreviewImages();
-    activeImageLease = lease;
-    activeThumbnailLease = placeholder;
-    let previewSettled = false;
-    // Pin the already-visible grid thumbnail while the screen preview arrives.
-    // Reusing its lease avoids both a flash and a borrowed/revoked object URL.
-    if (placeholder) void placeholder.promise.then(asset => {
-        if (!previewSettled && token === previewRequestToken && isPreviewOpen()) showPreviewImage(asset.url, filename, { keepLoading: true });
-    }).catch(() => {});
+    const thumbnailLease = acquireRendition(request, 'viewer');
+    activeThumbnailLease = thumbnailLease;
+    // Do not trust an old DOM URL as identity. The shared broker either reuses
+    // the same revision asset or reacquires it with the immutable request.
+    void thumbnailLease.promise.then(asset => {
+        if (token !== previewRequestToken || !isPreviewOpen() || activeThumbnailLease !== thumbnailLease) return;
+        showPreviewThumbnail(asset.url, filename);
+    }).catch(error => {
+        if (token !== previewRequestToken || !isPreviewOpen()) return;
+        if (hasOperationErrorCode(error, 'encryption_password_required')
+            || (error instanceof Error && 'code' in error && error.code === 'encryption_password_required')) showLockedState();
+    });
 
     try {
-        const asset = await lease.promise;
-        previewSettled = true;
-        if (token !== previewRequestToken || !isPreviewOpen()) return null;
-        showPreviewImage(asset.url, filename);
-        activeThumbnailLease?.release();
-        activeThumbnailLease = null;
-        imageEl.title = 'Screen-sized preview. Download for original quality.';
+        // This call happens only because opening/navigating the viewer was an
+        // explicit action. No original bytes are put in Blob or rendition cache.
+        const opened = await openOriginalImage(Number(target.id), request.revision);
+        if (token !== previewRequestToken || !isPreviewOpen()) {
+            void Promise.resolve(closeMedia(opened.token)).catch(() => {});
+            return null;
+        }
+        activeOriginalSession = { token: opened.token, url: opened.url };
+        activeFullSrc = opened.url;
+        showPreviewImage(opened.url, filename, { keepLoading: true });
+        imageEl.title = 'Original image';
         refreshInfoPanel();
-        preloadNeighbors();
-        return { src: asset.url };
+        return { src: opened.url };
     } catch (error) {
-        previewSettled = true;
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
         if (hasOperationErrorCode(error, 'encryption_password_required')
             || (error instanceof Error && 'code' in error && error.code === 'encryption_password_required')) {
@@ -414,9 +416,11 @@ export async function loadPreview(target: PreviewNavigationItem) {
             return null;
         }
         const normalized = normalizePreviewError(error);
-        if (isPreviewVisible()) {
+        if (thumbnailEl?.getAttribute('src')) {
             hidePreviewProgress();
-            imageEl.title = 'Thumbnail preview. Download for original quality.';
+            imageEl.title = 'Original image unavailable';
+            errorEl.textContent = normalized.message;
+            errorEl.style.display = 'block';
         } else showPreviewError(normalized.message);
         return null;
     }
@@ -430,7 +434,7 @@ export function closePreviewModal() {
     }
     activePreviewTransitionSource = null;
     previewRequestToken += 1;
-    releasePreviewImages();
+    releasePreviewResources();
     clearActivePreview();
     closeInfoPanel();
     hideLockedState();
@@ -454,6 +458,7 @@ export function closePreviewModal() {
     }
     hidePreviewProgress();
     resetImageSurface();
+    setGalleryThumbnailScheduling(true);
 }
 
 // openPreviewItem shows the modal and loads one item. It does not touch the
@@ -468,14 +473,18 @@ async function openPreviewItem(item: any, transitionSource: PreviewTransitionSou
     modalEl.setAttribute("aria-hidden", "false");
     previewA11y?.activate();
     activateModalOwnership(modalEl);
+    // The modal owns a pinned thumbnail, so yielding the gallery viewport
+    // releases below-the-overlay work and keeps mobile memory predictable.
+    setGalleryThumbnailScheduling(false);
     setChromeVisible(true);
     preparePreviewSurface(item.name || "Preview", { keepCurrentImage });
-    if (!wasOpen && transitionSource && previewTransition.beginOpen(transitionSource, modalEl)) {
-        showPreviewImage(transitionSource.imageSrc, item.name || "Preview", { keepLoading: true });
-    }
+    const sharedTransition = !wasOpen && transitionSource
+        ? previewTransition.beginOpen(transitionSource, modalEl)
+        : false;
+    if (sharedTransition && transitionSource) showPreviewThumbnail(transitionSource.imageSrc, item.name || "Preview");
 
     try {
-        await loadPreview(item);
+        await loadPreview(item, { keepThumbnail: sharedTransition });
         return true;
     } catch {
         return false;
@@ -967,21 +976,6 @@ function previewTouchHandlers(): TouchGestureHandlers {
     };
 }
 
-// Speculation fetches compressed screen previews only. No Image/decode call
-// here: invisible neighbors must not allocate decoded WebView surfaces.
-function preloadNeighbors() {
-    if (!navSource || !activePreviewItem || !getGalleryPolicy().allowPrefetch) return;
-    const epoch = ++preloadEpoch;
-    const source = navSource;
-    const item = activePreviewItem;
-    void source.getNeighbor(item, 1).then(next => {
-        if (!next || epoch !== preloadEpoch || !isPreviewOpen() || !getGalleryPolicy().allowPrefetch) return;
-        prefetchedImageLease?.release();
-        prefetchedImageLease = acquireRendition(renditionRequest(next), 'prefetch');
-        void prefetchedImageLease.promise.catch(() => {});
-    }).catch(() => {}); // Navigation reports an unavailable neighbor on demand.
-}
-
 async function handlePreviewKeydown(event: any) {
     const spacePressed = isSpaceKey(event);
     const previewOpen = isPreviewOpen();
@@ -1051,8 +1045,6 @@ export function teardownPreviewModal(): void {
     previewA11y?.deactivate();
     if (modalEl) deactivateModalOwnership(modalEl);
     previewA11y = null;
-    previewProgressUnsubscribe?.();
-    previewProgressUnsubscribe = null;
     for (let i = previewListenerCleanups.length - 1; i >= 0; i -= 1) {
         previewListenerCleanups[i]();
     }
@@ -1062,7 +1054,7 @@ export function teardownPreviewModal(): void {
     previewHostEl = null;
     previewReady = false;
     previewTransition.cancel();
-    releasePreviewImages();
+    releasePreviewResources();
     unsubscribePreviewPolicy?.();
     unsubscribePreviewPolicy = null;
     unsubscribePreviewReset?.();
@@ -1130,6 +1122,7 @@ export function activatePreviewModal(): () => void {
     shellEl = document.getElementById("preview-shell");
     stageEl = document.getElementById("preview-stage");
     filenameEl = document.getElementById("preview-filename");
+    thumbnailEl = document.getElementById("preview-thumbnail");
     imageEl = document.getElementById("preview-image");
     loadingEl = document.getElementById("preview-loading");
     loadingFillEl = document.getElementById("preview-loading-fill");
@@ -1235,27 +1228,21 @@ export function activatePreviewModal(): () => void {
     }) as EventListener);
     listenPreview(closeBtnEl, "blur", (() => scheduleChromeHide()) as EventListener);
     listenPreview(imageEl, "error", (() => {
-        if (isPreviewOpen() && imageEl?.getAttribute("src")) showPreviewError("Not a supported image");
+        if (isPreviewOpen() && imageEl?.getAttribute("src")) {
+            releaseOriginalSession();
+            showPreviewError("Not a supported image", { keepCurrentImage: true });
+        }
     }) as EventListener);
     listenPreview(imageEl, "load", (() => {
+        modalEl?.classList.add('is-original-ready');
+        hidePreviewProgress();
         if (infoOpen) refreshInfoPanel();
     }) as EventListener);
     unsubscribePreviewReset = subscribeRenditionReset(() => {
         if (isPreviewOpen()) closePreviewModal();
     });
     unsubscribePreviewPolicy = subscribeGalleryPolicy(policy => {
-        if (!policy.allowPrefetch) {
-            preloadEpoch += 1;
-            prefetchedImageLease?.release();
-            prefetchedImageLease = null;
-        }
         if (policy.backgrounded && isPreviewOpen()) closePreviewModal();
-    });
-    previewProgressUnsubscribe = onRuntimeEvent("preview_progress", (msgID, percent) => {
-        if (!isPreviewOpen()) return;
-        const targetID = Number(msgID);
-        if (!Number.isFinite(targetID) || targetID !== activePreviewMsgID) return;
-        setPreviewProgress(percent);
     });
     listenPreview(window, "keydown", ((event: KeyboardEvent) => {
         void handlePreviewKeydown(event);

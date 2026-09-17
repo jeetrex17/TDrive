@@ -79,6 +79,10 @@ func (s *Session) warmContainerIndex() {
 	if s == nil || s.reader == nil || len(s.segments) == 0 {
 		return
 	}
+	kind := streamKindForName(s.file.Name)
+	if kind != StreamKindVideo && kind != StreamKindAudio {
+		return
+	}
 	// A file that fits in one block has nothing to overlap: the head read the
 	// player makes first already covers the index.
 	if s.file.StoredSize <= rangeUploadBoundary {

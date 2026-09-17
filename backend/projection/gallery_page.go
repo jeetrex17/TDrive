@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -68,11 +69,11 @@ func MediaPage(ctx context.Context, db *sql.DB, channelID int64, encoded string,
 	predicate := ""
 	args := []any{channelID}
 	if encoded != "" {
-		predicate = ` AND (f.upload_time,f.msg_id)<=(?,?)`
+		predicate = ` AND (gi.upload_time,gi.msg_id)<=(?,?)`
 		args = append(args, cursor.UploadTime, cursor.MsgID)
 	}
 	args = append(args, limit+1)
-	items, err := galleryFiles(ctx, tx, limit+1, gallerySelect+galleryFrom+predicate+` ORDER BY f.upload_time DESC,f.msg_id DESC LIMIT ?`, args...)
+	items, err := galleryFiles(ctx, tx, limit+1, gallerySelect+galleryFrom+predicate+` ORDER BY gi.upload_time DESC,gi.msg_id DESC LIMIT ?`, args...)
 	if err != nil {
 		return GalleryPage{}, err
 	}
@@ -96,7 +97,17 @@ func LocateMedia(ctx context.Context, db *sql.DB, channelID, msgID int64, genera
 		return GalleryLocation{}, err
 	}
 	defer tx.Rollback()
-	item, index, err := locateGalleryItem(ctx, tx, channelID, msgID)
+	item, err := galleryItem(ctx, tx, channelID, msgID)
+	if err != nil {
+		return GalleryLocation{}, err
+	}
+	timeline, err := mediaTimelineCache.load(ctx, current, func() (GalleryTimeline, error) {
+		return buildGalleryTimeline(ctx, tx, channelID, current)
+	})
+	if err != nil {
+		return GalleryLocation{}, err
+	}
+	item, index, _, err := locateGalleryItemFromTimeline(ctx, tx, channelID, item, timeline)
 	if err != nil {
 		return GalleryLocation{}, err
 	}
@@ -121,16 +132,37 @@ func galleryItem(ctx context.Context, tx *sql.Tx, channelID, msgID int64) (FileS
 	return item, nil
 }
 
-func locateGalleryItem(ctx context.Context, tx *sql.Tx, channelID, msgID int64) (FileSlim, int, error) {
-	item, err := galleryItem(ctx, tx, channelID, msgID)
+func locateGalleryItemFromTimeline(ctx context.Context, tx *sql.Tx, channelID int64, item FileSlim, timeline GalleryTimeline) (FileSlim, int, int, error) {
+	if len(timeline.Anchors) == 0 {
+		return FileSlim{}, 0, 0, ErrGalleryNotFound
+	}
+	anchorIndex := sort.Search(len(timeline.Anchors), func(i int) bool {
+		cursor, err := decodeGalleryCursor(timeline.Anchors[i].Cursor, channelID)
+		if err != nil {
+			return false
+		}
+		return cursor.UploadTime < item.UploadTime || cursor.UploadTime == item.UploadTime && cursor.MsgID < item.MsgID
+	}) - 1
+	if anchorIndex < 0 {
+		return FileSlim{}, 0, 0, fmt.Errorf("projection: locate gallery image: no preceding anchor")
+	}
+	anchor := timeline.Anchors[anchorIndex]
+	cursor, err := decodeGalleryCursor(anchor.Cursor, channelID)
+	if err != nil || cursor.Generation != timeline.Generation {
+		return FileSlim{}, 0, 0, fmt.Errorf("projection: locate gallery image: invalid cached anchor")
+	}
+	items, err := galleryFiles(ctx, tx, GalleryPageSize, gallerySelect+galleryFrom+
+		` AND (gi.upload_time,gi.msg_id)<=(?,?) ORDER BY gi.upload_time DESC,gi.msg_id DESC LIMIT ?`,
+		channelID, cursor.UploadTime, cursor.MsgID, GalleryPageSize)
 	if err != nil {
-		return FileSlim{}, 0, err
+		return FileSlim{}, 0, 0, err
 	}
-	var index int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*)`+galleryFrom+` AND (f.upload_time,f.msg_id)>(?,?)`, channelID, item.UploadTime, item.MsgID).Scan(&index); err != nil {
-		return FileSlim{}, 0, err
+	for offset, candidate := range items {
+		if candidate.MsgID == item.MsgID {
+			return candidate, anchor.StartIndex + offset, len(items), nil
+		}
 	}
-	return item, index, nil
+	return FileSlim{}, 0, len(items), fmt.Errorf("projection: locate gallery image: item missing from anchor page")
 }
 
 // MediaNeighbors reads a bounded window around a stable file ID. Two keyset
@@ -149,11 +181,11 @@ func MediaNeighbors(ctx context.Context, db *sql.DB, channelID, msgID int64, bef
 	if err != nil {
 		return GalleryPage{}, err
 	}
-	preceding, err := galleryFiles(ctx, tx, before, gallerySelect+galleryFrom+` AND (f.upload_time,f.msg_id)>(?,?) ORDER BY f.upload_time ASC,f.msg_id ASC LIMIT ?`, channelID, item.UploadTime, item.MsgID, before)
+	preceding, err := galleryFiles(ctx, tx, before, gallerySelect+galleryFrom+` AND (gi.upload_time,gi.msg_id)>(?,?) ORDER BY gi.upload_time ASC,gi.msg_id ASC LIMIT ?`, channelID, item.UploadTime, item.MsgID, before)
 	if err != nil {
 		return GalleryPage{}, err
 	}
-	following, err := galleryFiles(ctx, tx, after, gallerySelect+galleryFrom+` AND (f.upload_time,f.msg_id)<(?,?) ORDER BY f.upload_time DESC,f.msg_id DESC LIMIT ?`, channelID, item.UploadTime, item.MsgID, after)
+	following, err := galleryFiles(ctx, tx, after, gallerySelect+galleryFrom+` AND (gi.upload_time,gi.msg_id)<(?,?) ORDER BY gi.upload_time DESC,gi.msg_id DESC LIMIT ?`, channelID, item.UploadTime, item.MsgID, after)
 	if err != nil {
 		return GalleryPage{}, err
 	}

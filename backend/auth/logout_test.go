@@ -18,10 +18,25 @@ func TestClearUserData(t *testing.T) {
 
 	t.Run("full removes all user-scoped files", func(t *testing.T) {
 		dir := setupConfigDir(t, "session.json", "config.json", "tdrive.db", "imp_config.json")
+		cacheDir := setupThumbnailCache(t)
+		cacheRoot := filepath.Dir(cacheDir)
+		for _, name := range []string{"tdrive-upload-crash", "tdrive-enc-crash", ".tdrive-upload-part-crash", "tdrive-mountdav-put-crash"} {
+			if err := os.WriteFile(filepath.Join(cacheRoot, name), []byte("plaintext"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(cacheRoot, "keep.cache"), []byte("unrelated"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		if err := ClearUserData(LogoutFull); err != nil {
 			t.Fatalf("ClearUserData: %v", err)
 		}
 		assertGone(t, dir, "session.json", "config.json", "tdrive.db", "imp_config.json")
+		if _, err := os.Stat(cacheDir); !os.IsNotExist(err) {
+			t.Fatalf("thumbnail cache still exists (err=%v)", err)
+		}
+		assertGone(t, cacheRoot, "tdrive-upload-crash", "tdrive-enc-crash", ".tdrive-upload-part-crash", "tdrive-mountdav-put-crash")
+		assertPresent(t, cacheRoot, "keep.cache")
 	})
 
 	t.Run("idempotent on missing files", func(t *testing.T) {
@@ -50,6 +65,22 @@ func TestClearUserData(t *testing.T) {
 	})
 }
 
+func setupThumbnailCache(t *testing.T) string {
+	t.Helper()
+	base, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatalf("UserCacheDir: %v", err)
+	}
+	dir := filepath.Join(base, "TDrive", "thumbnails")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cached.bin"), []byte("ciphertext"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // setupConfigDir points os.UserConfigDir at a fresh temp directory and
 // seeds the given files inside its TDrive subfolder. Returns the TDrive
 // dir itself. The override mirrors the platform conventions os.UserConfigDir
@@ -62,8 +93,10 @@ func setupConfigDir(t *testing.T, files ...string) string {
 	// $HOME/Library/Application Support; windows uses %AppData%. Setting
 	// all three lets the same test pass on every supported platform.
 	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Setenv("XDG_CACHE_HOME", root)
 	t.Setenv("HOME", root)
 	t.Setenv("AppData", root)
+	t.Setenv("LOCALAPPDATA", root)
 
 	base, err := os.UserConfigDir()
 	if err != nil {

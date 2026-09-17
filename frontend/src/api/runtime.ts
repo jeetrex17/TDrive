@@ -52,7 +52,6 @@ export interface RuntimeEventMap {
     import_upload_progress: [payload: unknown];
     import_complete: [payload: unknown];
     files_dropped: [payload: unknown];
-    preview_progress: [messageId: unknown, percent: unknown];
     native_media_state: [payload: unknown];
     encrypted_media_sessions_closed: [];
     "android:NetworkChanged": [payload: unknown];
@@ -60,8 +59,6 @@ export interface RuntimeEventMap {
     "ios:NetworkChanged": [payload: unknown];
     "ios:BatteryChanged": [payload: unknown];
     gallery_memory_pressure: [];
-    gallery_preparation_progress: [unknown];
-    gallery_rendition_ready: [payload: unknown];
     // Emitted by both phone hosts while SetKeyboardWatch is on; the payload is
     // {visible, height}. Android reports the only soft-keyboard height its
     // WebView knows, so this is the fallback where visualViewport is absent.

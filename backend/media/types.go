@@ -20,6 +20,10 @@ var (
 	ErrEncryptedUnsupported = errors.New("media: encrypted playback format is unsupported")
 	ErrKeyUnavailable       = errors.New("media: encryption key is unavailable")
 	ErrUnsupportedMediaType = errors.New("media: unsupported media type")
+	ErrStaleRevision        = errors.New("media: stale file revision")
+	ErrInvalidImage         = errors.New("media: invalid image content")
+	ErrImageTooLarge        = errors.New("media: image exceeds safe viewing limits")
+	ErrAnimatedImageUnsafe  = errors.New("media: animated image is unavailable for direct display")
 	ErrSessionNotFound      = errors.New("media: session not found")
 	ErrThumbnailPending     = errors.New("media: thumbnail pending")
 	ErrThumbnailUnavailable = errors.New("media: thumbnail unavailable")
@@ -50,6 +54,7 @@ const (
 	StreamKindAudio   StreamKind = "audio"
 	StreamKindPDF     StreamKind = "pdf"
 	StreamKindText    StreamKind = "text"
+	StreamKindImage   StreamKind = "image"
 )
 
 // Segment is one stored Telegram document body in a logical TDrive file.

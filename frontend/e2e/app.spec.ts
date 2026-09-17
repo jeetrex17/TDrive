@@ -12,6 +12,11 @@ import type { Page } from '@playwright/test';
 const RED_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiNlMTFkNDgiLz48L3N2Zz4=';
 const BLUE_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiMyNTYzZWIiLz48L3N2Zz4=';
 const GOLD_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiNmNTllMGIiLz48L3N2Zz4=';
+const RED_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGN4KOvxHwAFbwJG6bt5fAAAAABJRU5ErkJggg==';
+const BLUE_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQTX79HwAElwJzVt2vfAAAAABJRU5ErkJggg==';
+const ROW_CAPABILITY = 'original-row';
+const FIRST_CAPABILITY = 'original-101';
+const SECOND_CAPABILITY = 'original-102';
 
 const PERSONAL_CHANNEL = {
     id: 1,
@@ -159,7 +164,7 @@ test('moves row focus and previews a selected image with Space', async ({ page }
                 { name: 'newer.jpg', size: 2, msg_id: 2, parent_id: '', upload_time: 2, uploader_id: 7, encrypted: false, plaintext_size: 0 },
             ],
         }),
-        PreviewFile: resolves({ result: { ok: true }, payload: { data_base64: RED_BASE64, mime_type: 'image/svg+xml' } }),
+        OpenOriginalImage: resolves({ token: ROW_CAPABILITY, url: `data:image/png;base64,${RED_PNG_BASE64}`, thumbnail_url: '', hls_url: '', name: 'older.jpg', kind: 'image', mime_type: 'image/png', supports_range: true, info: { channel_id: 1, file_id: 1, revision: 1, name: 'older.jpg', stored_size: 70, plaintext_size: 70, encrypted: false, multipart: false } }),
     });
 
     const newest = page.getByRole('row', { name: 'File: newer.jpg' });
@@ -172,7 +177,7 @@ test('moves row focus and previews a selected image with Space', async ({ page }
     await expect(older).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Space');
     await expect(page.getByRole('dialog', { name: 'older.jpg' })).toBeVisible();
-    await expect.poll(() => imageContents(page)).toContain('#e11d48');
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', `data:image/png;base64,${RED_PNG_BASE64}`);
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: 'older.jpg' })).toBeHidden();
     await expect(older).toBeFocused();
@@ -341,7 +346,7 @@ test('context menus retain vertical actions, render notifications, and restore f
     await expect(newDrive).toBeFocused();
 });
 
-function galleryPlans(photos: typeof FIRST_PHOTO[]) {
+function galleryPlans(photos: typeof FIRST_PHOTO[], slowFirstOriginal = false) {
     const buckets: Array<{ key: string; start_index: number; count: number; upload_time: number }> = [];
     photos.forEach((photo, index) => {
         const key = new Date(photo.upload_time * 1000).toISOString().slice(0, 7);
@@ -352,26 +357,25 @@ function galleryPlans(photos: typeof FIRST_PHOTO[]) {
     return {
         GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: photos.length, page_size: 128, buckets, anchors: [{ start_index: 0, cursor: '0' }] }),
         ListMediaPage: resolves({ generation: 'test', start_index: 0, next_cursor: '', items: photos.map((photo) => ({ ...photo, revision: 1, content_msg_id: photo.msg_id, content_hash: '' })) }),
+        OpenOriginalImage: byFirstArg({
+            '101': resolves({ token: FIRST_CAPABILITY, url: `data:image/png;base64,${RED_PNG_BASE64}`, thumbnail_url: '', hls_url: '', name: 'first.jpg', kind: 'image', mime_type: 'image/png', supports_range: true, info: { channel_id: 1, file_id: 101, revision: 1, name: 'first.jpg', stored_size: 70, plaintext_size: 70, encrypted: false, multipart: false } }, slowFirstOriginal ? 1000 : 0),
+            '102': resolves({ token: SECOND_CAPABILITY, url: `data:image/png;base64,${BLUE_PNG_BASE64}`, thumbnail_url: '', hls_url: '', name: 'second.jpg', kind: 'image', mime_type: 'image/png', supports_range: true, info: { channel_id: 1, file_id: 102, revision: 1, name: 'second.jpg', stored_size: 70, plaintext_size: 70, encrypted: false, multipart: false } }),
+        }),
     };
 }
 
-async function routeRenditions(page: Page, slowFirstPreview = false) {
+async function routeRenditions(page: Page) {
     const requested: string[] = [];
     await page.route('**/mock-renditions/**', async (route) => {
         const url = new URL(route.request().url());
         requested.push(url.pathname);
-        if (slowFirstPreview && url.pathname.endsWith('/101/preview')) await new Promise((resolve) => setTimeout(resolve, 1000));
-        const color = url.pathname.includes('/102/') ? BLUE_BASE64 : url.pathname.endsWith('/preview') ? RED_BASE64 : GOLD_BASE64;
+        const color = url.pathname.includes('/102/') ? BLUE_BASE64 : GOLD_BASE64;
         await route.fulfill({ body: Buffer.from(color, 'base64'), contentType: 'image/svg+xml', headers: { 'X-Rendition-Width': '2', 'X-Rendition-Height': '2' } }).catch(() => {});
     });
     return requested;
 }
 
-async function imageContents(page: Page): Promise<string> {
-    return page.locator('#preview-image').evaluate(async (image) => fetch((image as HTMLImageElement).src).then((response) => response.text()));
-}
-
-test('gallery loads binary thumbnails and a bounded preview without original bridge downloads', async ({ page }) => {
+test('gallery loads binary thumbnails and one explicitly opened original stream', async ({ page }) => {
     const requested = await routeRenditions(page);
     const mock = await bootTDrive(page, galleryPlans([FIRST_PHOTO]));
     await page.getByRole('button', { name: 'Photos' }).click();
@@ -383,23 +387,24 @@ test('gallery loads binary thumbnails and a bounded preview without original bri
     expect(requested).toContain('/mock-renditions/101/thumbnail');
     await photo.click();
     await expect(page.getByRole('dialog', { name: 'first.jpg' })).toBeVisible();
-    await expect.poll(() => imageContents(page)).toContain('#e11d48');
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', `data:image/png;base64,${RED_PNG_BASE64}`);
     expect(await mock.calls('PreviewFile')).toEqual([]);
-    expect(requested).toContain('/mock-renditions/101/preview');
+    expect(await mock.calls('OpenOriginalImage')).toMatchObject([{ args: [101, 1], state: 'fulfilled' }]);
+    expect(requested.some((path) => path.endsWith('/preview'))).toBe(false);
 });
 
-test('a late preview completion cannot overwrite rapid gallery navigation', async ({ page }) => {
-    await routeRenditions(page, true);
-    await bootTDrive(page, galleryPlans([FIRST_PHOTO, SECOND_PHOTO]));
+test('a late original completion cannot overwrite rapid gallery navigation', async ({ page }) => {
+    await routeRenditions(page);
+    await bootTDrive(page, galleryPlans([FIRST_PHOTO, SECOND_PHOTO], true));
     await page.getByRole('button', { name: 'Photos' }).click();
     await expect(page.getByRole('button', { name: 'first.jpg' }).locator('img')).toHaveAttribute('src', /^blob:/);
     await page.getByRole('button', { name: 'first.jpg' }).click();
     await expect(page.getByRole('dialog', { name: 'first.jpg' })).toBeVisible();
     await page.getByRole('button', { name: 'Next image' }).click();
     await expect(page.getByRole('dialog', { name: 'second.jpg' })).toBeVisible();
-    await expect.poll(() => imageContents(page)).toContain('#2563eb');
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', `data:image/png;base64,${BLUE_PNG_BASE64}`);
     await page.waitForTimeout(1100);
-    await expect.poll(() => imageContents(page)).toContain('#2563eb');
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', `data:image/png;base64,${BLUE_PNG_BASE64}`);
     await expect(page.locator('#preview-filename')).toHaveText('second.jpg');
 });
 

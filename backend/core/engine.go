@@ -14,6 +14,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
+	"TDrive/backend/datadir"
 	"TDrive/backend/livesync"
 	"TDrive/backend/media"
 	"TDrive/backend/projection"
@@ -131,6 +132,9 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		cfg.Warnf = func(format string, args ...any) {
 			fmt.Printf(format, args...)
 		}
+	}
+	if err := datadir.CleanupCacheTemps(); err != nil {
+		return nil, fmt.Errorf("core: clean interrupted cache files: %w", err)
 	}
 
 	e := &Engine{
@@ -758,6 +762,14 @@ func (e *Engine) newFileService() *fileservice.Service {
 			}
 			return key, nil
 		},
+		RequireEncryptionKeyForChannel: func(channelID int64, encrypted bool) ([]byte, error) {
+			key, err := e.EncryptionService().RequireMasterKeyForChannel(channelID, encrypted)
+			if err != nil {
+				return nil, encservice.ErrPasswordRequired
+			}
+			return key, nil
+		},
+		PersonalChannelID: PersonalChannelID,
 		MasterKeyForUpload: func(channelID int64, wantEncrypted bool) ([]byte, error) {
 			return e.EncryptionService().MasterKeyForUpload(channelID, wantEncrypted)
 		},

@@ -2,15 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import type { MediaTimeline } from '../../api/gallery';
 
-const mocks = vi.hoisted(() => ({ timeline: vi.fn(), page: vi.fn(), locate: vi.fn(), preview: vi.fn(), mobile: false, listeners: new Map<string, (payload: unknown) => void>(), rearm: vi.fn() }));
-vi.mock('../../api', () => ({ isMobilePlatform: () => mocks.mobile, onRuntimeEvent: (name: string, callback: (value: unknown) => void) => { mocks.listeners.set(name, callback); return () => mocks.listeners.delete(name); } }));
+const mocks = vi.hoisted(() => ({ timeline: vi.fn(), page: vi.fn(), locate: vi.fn(), preview: vi.fn(), mobile: false }));
+vi.mock('../../api', () => ({ isMobilePlatform: () => mocks.mobile }));
 vi.mock('../../api/gallery', () => ({ getMediaTimeline: mocks.timeline, listMediaPage: mocks.page, locateMedia: mocks.locate }));
 vi.mock('../../modules/search', () => ({ clearSearch: vi.fn() }));
 vi.mock('../../modules/app-actions', () => ({ appActions: () => ({ refreshFiles: vi.fn(), triggerRefresh: vi.fn() }) }));
 vi.mock('../../modules/file-list', () => ({ canOwnerActOnFile: () => true }));
 vi.mock('../../modules/selection', () => ({ updateSelectionBar: vi.fn() }));
 vi.mock('../file-list/touch', () => ({ bindLongPress: () => () => {}, bindPullToRefresh: () => () => {} }));
-vi.mock('./gallery-controller', () => ({ beginRender: vi.fn(), cachedThumb: () => '', rearmLocked: vi.fn(), rearmMissing: mocks.rearm, setActive: vi.fn(), setRoot: vi.fn(), teardown: vi.fn() }));
+vi.mock('./gallery-controller', () => ({ beginRender: vi.fn(), cachedThumb: () => '', rearmLocked: vi.fn(), setActive: vi.fn(), setRoot: vi.fn(), teardown: vi.fn() }));
 vi.mock('../../modules/modals/preview', () => ({ activatePreviewModal: vi.fn(), openPreviewSource: mocks.preview }));
 import { state } from '../../state';
 import { activateGallery, enterPhotos, exitPhotos, renderGallery, setPhotosMode, teardownGallery, toggleGallerySelection } from '../../modules/gallery';
@@ -26,7 +26,6 @@ let host: HTMLElement;
 beforeEach(() => {
     generation = '1';
     mocks.mobile = false;
-    mocks.rearm.mockClear();
     state.activeChannel = { id: 1 } as typeof state.activeChannel;
     state.virtualView = 'photos';
     state.selectedItems = new Map();
@@ -39,20 +38,6 @@ beforeEach(() => {
 afterEach(() => { teardownGallery(); host.remove(); galleryView.set({ status: 'loading' }); });
 
 describe('gallery orchestration', () => {
-    it('rearms visible missing renditions after local publication or remote sync, only in Photos', async () => {
-        await renderGallery();
-        setPhotosMode(true);
-        mocks.listeners.get('gallery_rendition_ready')?.({ channel_id: 2, msg_id: 1, kind: 'thumbnail' });
-        mocks.listeners.get('gallery_rendition_ready')?.({ channel_id: 1, msg_id: -1, kind: 'thumbnail' });
-        mocks.listeners.get('gallery_rendition_ready')?.({ channel_id: 1, msg_id: 1, kind: 'preview' });
-        expect(mocks.rearm).not.toHaveBeenCalled();
-        mocks.listeners.get('gallery_rendition_ready')?.({ channel_id: 1, msg_id: 1, kind: 'thumbnail' });
-        expect(mocks.rearm).toHaveBeenCalledWith(1);
-        mocks.listeners.get('live_sync_completed')?.({ channel_id: 1 });
-        expect(mocks.rearm).toHaveBeenCalledTimes(2);
-        setPhotosMode(false);
-        expect(mocks.listeners.size).toBe(0);
-    });
     it('keeps an unchanged snapshot and its cached pages on refresh', async () => {
         await renderGallery();
         const original = get(galleryView);

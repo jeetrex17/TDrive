@@ -1,8 +1,7 @@
-import { GetGalleryPreparation, GetMediaTimeline, ListMediaPage, LocateMedia, StartGalleryPreparation, StopGalleryPreparation } from '../../bindings/TDrive/app';
+import { GetMediaTimeline, ListMediaPage, LocateMedia } from '../../bindings/TDrive/app';
 import type { FileItem } from '../types';
 import { invokeBackend } from './gateway';
 import { asRecord } from './shared';
-import { normalizeOperationResult } from './operation';
 
 export interface GalleryItem extends FileItem {
     revision: number;
@@ -75,32 +74,4 @@ export async function listMediaPage(cursor: string, limit = 128): Promise<MediaP
 export async function locateMedia(msgId: number, generation: string): Promise<MediaLocation> {
     const raw = asRecord(await invokeBackend(LocateMedia, msgId, generation));
     return { generation: String(raw.generation ?? ''), index: integer(raw.index), cursor: String(raw.cursor ?? '') };
-}
-
-export interface GalleryPreparationStatus {
-    running: boolean;
-    channelId: number;
-    completed: number;
-    skipped: number;
-    total: number;
-    bytesTotal: number;
-    bytesDone: number;
-    error: string;
-}
-export function normalizeGalleryPreparation(value: unknown): GalleryPreparationStatus {
-    const raw = asRecord(value);
-    return {
-        running: Boolean(raw.running), channelId: integer(raw.channel_id ?? 0),
-        completed: integer(raw.completed ?? 0), skipped: integer(raw.skipped ?? 0), total: integer(raw.total ?? 0),
-        bytesTotal: integer(raw.bytes_total ?? 0), bytesDone: integer(raw.bytes_done ?? 0), error: String(raw.error ?? ''),
-    };
-}
-export async function getGalleryPreparation(): Promise<GalleryPreparationStatus> {
-    return normalizeGalleryPreparation(await invokeBackend(GetGalleryPreparation));
-}
-export async function startGalleryPreparation(channelId: number) {
-    return normalizeOperationResult(await invokeBackend(StartGalleryPreparation, channelId), 'Could not prepare photos');
-}
-export async function stopGalleryPreparation() {
-    return normalizeOperationResult(await invokeBackend(StopGalleryPreparation), 'Could not pause preview preparation');
 }

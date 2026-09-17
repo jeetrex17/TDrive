@@ -65,12 +65,10 @@ delete derivative blobs they do not understand. Cleanup requires an updated
 client that still has the source/tombstone history; this is a compatibility
 limitation, not a promise that old clients perform complete physical deletion.
 
-Existing libraries require the explicit **Create previews** action. It shows a
-transfer estimate, processes bounded pages sequentially, supports cancellation,
-and resumes by querying missing derivatives. It filters shared-drive ownership,
-checks password access before admission, and enforces the admitted source size
-before downloading. Unsupported sources receive local, content-bound skip
-records so retries can progress. Browsing never starts this bulk operation.
+Existing libraries receive thumbnails only when cells enter the viewport. The viewer
+opens one original-image stream only after an explicit click or navigation; it never
+prepares or prefetches originals in the background. The former **Create previews** action
+has been removed.
 
 ## Regression checks
 

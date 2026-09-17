@@ -28,9 +28,9 @@ export async function fetchRendition(session: GalleryImageSession, request: Rend
     if (!response.ok) {
         await response.body?.cancel();
         const code = response.status === 423 ? 'encryption_password_required' : response.status === 404 ? 'missing_rendition' : response.status === 429 ? 'rate_limited' : response.status === 410 ? 'session_revoked' : 'rendition_unavailable';
-        const message = response.status === 404 ? 'A preview is not available yet. Download the original to view this photo.'
-            : response.status === 413 ? 'This photo exceeds the safe preview size. Download the original to view it.'
-            : response.status === 423 ? 'Unlock this drive to view the photo.' : 'Photo preview is unavailable. Try again.';
+        const message = response.status === 404 ? 'A thumbnail is not available yet.'
+            : response.status === 413 ? 'This thumbnail exceeds the safe size.'
+            : response.status === 423 ? 'Unlock this drive to view the photo.' : 'Photo thumbnail is unavailable. Try again.';
         throw new RenditionError(code, message, retryDeadline(response.headers.get('Retry-After')));
     }
     const width = Number(response.headers.get('X-Rendition-Width'));
@@ -40,9 +40,9 @@ export async function fetchRendition(session: GalleryImageSession, request: Rend
     const declaredSize = Number(response.headers.get('Content-Length'));
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > edge || height > edge || declaredSize > maxBytes) {
         await response.body?.cancel();
-        throw new RenditionError('too_large', 'This photo exceeds the safe preview size.');
+        throw new RenditionError('too_large', 'This thumbnail exceeds the safe size.');
     }
-    if (!response.body) throw new Error('Empty photo preview.');
+    if (!response.body) throw new Error('Empty photo thumbnail.');
     const reader = response.body.getReader();
     const chunks: ArrayBuffer[] = [];
     let received = 0;
@@ -51,7 +51,7 @@ export async function fetchRendition(session: GalleryImageSession, request: Rend
             const { value, done } = await reader.read();
             if (done) break;
             received += value.byteLength;
-            if (received > maxBytes) throw new RenditionError('too_large', 'This photo exceeds the safe preview size.');
+            if (received > maxBytes) throw new RenditionError('too_large', 'This thumbnail exceeds the safe size.');
             chunks.push(value.slice().buffer);
         }
     } catch (error) {
