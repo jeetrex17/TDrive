@@ -2,13 +2,14 @@ package file
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -184,9 +185,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 	}
 
 	wg.Wait()
-	sort.Slice(uploaded, func(i, j int) bool {
-		return uploaded[i].Meta.MsgID < uploaded[j].Meta.MsgID
-	})
+	slices.SortFunc(uploaded, func(a, b uploadedResult) int { return cmp.Compare(a.Meta.MsgID, b.Meta.MsgID) })
 
 	uploadedFiles := make([]Metadata, 0, len(uploaded))
 	for _, item := range uploaded {

@@ -29,9 +29,9 @@ func TestLiveConnAcquireReady(t *testing.T) {
 }
 
 func TestLiveConnStartsOnceUnderConcurrency(t *testing.T) {
-	var starts int32
+	var starts atomic.Int32
 	lc := newLiveConn(func(ctx context.Context, ready func()) error {
-		atomic.AddInt32(&starts, 1)
+		starts.Add(1)
 		ready()
 		<-ctx.Done()
 		return ctx.Err()
@@ -48,7 +48,7 @@ func TestLiveConnStartsOnceUnderConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := atomic.LoadInt32(&starts); got != 1 {
+	if got := starts.Load(); got != 1 {
 		t.Fatalf("scope started %d times, want 1", got)
 	}
 }
@@ -108,9 +108,9 @@ func TestLiveConnCloseStopsScope(t *testing.T) {
 }
 
 func TestLiveConnRestartsAfterFailure(t *testing.T) {
-	var attempt int32
+	var attempt atomic.Int32
 	lc := newLiveConn(func(ctx context.Context, ready func()) error {
-		if atomic.AddInt32(&attempt, 1) == 1 {
+		if attempt.Add(1) == 1 {
 			return errors.New("first attempt fails")
 		}
 		ready()
@@ -125,16 +125,16 @@ func TestLiveConnRestartsAfterFailure(t *testing.T) {
 	if err := lc.acquire(context.Background()); err != nil {
 		t.Fatalf("second acquire should succeed, got %v", err)
 	}
-	if got := atomic.LoadInt32(&attempt); got != 2 {
+	if got := attempt.Load(); got != 2 {
 		t.Fatalf("attempts = %d, want 2", got)
 	}
 }
 
 func TestLiveConnRestartsAfterReadyScopeDies(t *testing.T) {
-	var attempt int32
+	var attempt atomic.Int32
 	dropFirst := make(chan struct{})
 	lc := newLiveConn(func(ctx context.Context, ready func()) error {
-		n := atomic.AddInt32(&attempt, 1)
+		n := attempt.Add(1)
 		ready()
 		if n == 1 {
 			<-dropFirst
@@ -169,7 +169,7 @@ func TestLiveConnRestartsAfterReadyScopeDies(t *testing.T) {
 	if err := lc.acquire(context.Background()); err != nil {
 		t.Fatalf("second acquire should restart and succeed, got %v", err)
 	}
-	if got := atomic.LoadInt32(&attempt); got != 2 {
+	if got := attempt.Load(); got != 2 {
 		t.Fatalf("attempts = %d, want 2", got)
 	}
 }

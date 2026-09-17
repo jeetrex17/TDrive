@@ -264,7 +264,7 @@ func MarkPersonalBackfillDone(db *sql.DB, channelID int64) error {
 	return nil
 }
 
-func nullable(s string) interface{} {
+func nullable(s string) any {
 	if s == "" {
 		return nil
 	}
