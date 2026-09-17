@@ -150,8 +150,12 @@ func TestPhotoBackupStateUsesStableWirePhases(t *testing.T) {
 		t.Fatalf("state=%+v", state)
 	}
 	state = photoBackupState(settings, sources, photobackup.Status{Error: 1, LastError: "offline"}, false, true)
-	if state.Status.Phase != "paused" || state.Status.Message != "offline" {
+	if state.Status.Phase != "paused" || state.Status.Message != "Paused by you." {
 		t.Fatalf("paused state=%+v", state.Status)
+	}
+	state = photoBackupState(settings, sources, photobackup.Status{Pending: 1, Paused: 1, LastError: "upload interrupted; remote outcome unknown"}, true, false)
+	if state.Status.Phase != "uploading" || state.Status.Paused != 1 {
+		t.Fatalf("running with interrupted item state=%+v", state.Status)
 	}
 }
 

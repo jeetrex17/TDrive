@@ -305,6 +305,7 @@ export interface PhotoBackupState {
     "platform": string;
     "capabilities": PhotoBackupCapabilities;
     "destination": {"id": string, "title": string, "kind": string};
+    "manual_paused": boolean;
 }
 
 export interface PhotoBackupStatus {

@@ -59,6 +59,7 @@ export interface RuntimeEventMap {
     "ios:NetworkChanged": [payload: unknown];
     "ios:BatteryChanged": [payload: unknown];
     "android:PhotoBackupMediaChanged": [payload: unknown];
+    "android:BackgroundTransferExpired": [payload?: unknown];
     "ios:PhotoBackupMediaChanged": [payload: unknown];
     "photo-backup:materialize": [payload: unknown];
     "photo-backup:release": [payload: unknown];

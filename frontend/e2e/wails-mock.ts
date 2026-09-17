@@ -21,6 +21,7 @@ export interface MockCall {
 interface BrowserMock {
     calls: MockCall[];
     emit: (eventName: string, ...args: unknown[]) => void;
+    setPlan: (method: string, plan: MockPlan) => void;
 }
 
 declare global {
@@ -137,6 +138,7 @@ function methodNamesById(): Record<string, string> {
 export interface WailsMockHandle {
     calls(method?: string): Promise<MockCall[]>;
     emit(eventName: string, ...args: unknown[]): Promise<void>;
+    setPlan(method: string, plan: MockPlan): Promise<void>;
 }
 
 export async function bootTDrive(
@@ -153,7 +155,7 @@ export async function bootTDrive(
         configuredMethods: Record<string, MockPlan>;
         methodNameById: Record<string, string>;
     }) => {
-        const plans = configuredMethods;
+        let plans = configuredMethods;
         const calls: MockCall[] = [];
 
         const selectPlan = (candidate: MockPlan | undefined, args: unknown[]): MockOutcome => {
@@ -259,6 +261,7 @@ export async function bootTDrive(
 
         window.__wailsMock = {
             calls,
+            setPlan(method, plan) { plans = { ...plans, [method]: plan }; },
             emit(eventName: string, ...args: unknown[]) {
                 // @wailsio/runtime's events module always wires up this hook
                 // (window._wails.dispatchWailsEvent) once it loads — the same
@@ -274,6 +277,10 @@ export async function bootTDrive(
     await page.goto('/');
 
     return {
+        setPlan: (method: string, plan: MockPlan) => page.evaluate(
+            ([name, nextPlan]) => window.__wailsMock.setPlan(name, nextPlan),
+            [method, plan] as const,
+        ),
         calls: (method?: string) => page.evaluate((name) => {
             const calls = window.__wailsMock.calls;
             return name ? calls.filter((call) => call.method === name) : calls;

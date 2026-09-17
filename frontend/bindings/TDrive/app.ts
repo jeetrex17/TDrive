@@ -624,6 +624,10 @@ export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<
     return $Call.ByID(4195625464, userIDs);
 }
 
+export function ResumePhotoBackup(): $CancellablePromise<void> {
+    return $Call.ByID(1448669500);
+}
+
 export function RetryPhotoBackup(): $CancellablePromise<void> {
     return $Call.ByID(2648028709);
 }
@@ -715,6 +719,15 @@ export function SetImmersive(on: boolean): $CancellablePromise<void> {
  */
 export function SetKeyboardWatch(enabled: boolean): $CancellablePromise<void> {
     return $Call.ByID(3980374793, enabled);
+}
+
+/**
+ * SetPhotoBackupBackgroundLease records a lease only after the native host has
+ * acquired its execution grant. Repeated calls cannot extend Android's
+ * cumulative dataSync budget.
+ */
+export function SetPhotoBackupBackgroundLease(active: boolean): $CancellablePromise<void> {
+    return $Call.ByID(418947735, active);
 }
 
 export function SetPhotoBackupPolicy(policy: $models.PhotoBackupPolicy): $CancellablePromise<void> {

@@ -12,6 +12,8 @@ import android.os.IBinder;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 
+import java.lang.ref.WeakReference;
+
 /**
  * The reason Android lets this app keep working after the user leaves it.
  *
@@ -53,6 +55,20 @@ public class WailsForegroundService extends android.app.Service {
      */
     private static final int NOTIFICATION_ID = 0x57A1; // "WAI"
     private static final int PROGRESS_MAX = 100;
+    // The service and Wails runtime share a process. Keep only a weak handle so
+    // a destroyed Activity/WebView can never be retained by a long transfer.
+    private static volatile WeakReference<WailsBridge> runtimeBridge = new WeakReference<>(null);
+
+    public static void attachRuntimeBridge(@Nullable WailsBridge bridge) {
+        runtimeBridge = new WeakReference<>(bridge);
+    }
+
+    private static void emitDeadline() {
+        WailsBridge bridge = runtimeBridge.get();
+        if (bridge != null) {
+            bridge.emitEvent("android:BackgroundTransferExpired", "{}");
+        }
+    }
 
     /** Creating the channel is idempotent but not free, and this runs per update. */
     private boolean channelReady;
@@ -172,6 +188,10 @@ public class WailsForegroundService extends android.app.Service {
      */
     @Override
     public void onTimeout(int startId, int fgsType) {
+        // Android 15's dataSync budget is a hard deadline. Tell the durable
+        // backup controller before dropping foreground priority so it can
+        // cancel staging/upload promptly and leave the queued record resumable.
+        emitDeadline();
         stopSelf(startId);
     }
 
