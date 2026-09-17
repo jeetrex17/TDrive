@@ -1,6 +1,6 @@
 <script lang="ts">
     import ArrowDownUpIcon from '@lucide/svelte/icons/arrow-down-up';
-    import { activeTransfers, recentEvents, type TransferEvent } from '../notifications/notif-store';
+    import { activeTransfers, type TransferEvent } from '../notifications/notif-store';
     import EventRow from '../notifications/EventRow.svelte';
     import MobileTransferRow from './MobileTransferRow.svelte';
     import { cancelSingleUpload, cancelTransfersInDirection, clearHistory } from '../../modules/notif-bell';
@@ -8,7 +8,7 @@
     import { notify } from '../../modules/notifications';
     import { downloadRetryFor } from '../../modules/transfers';
     import { shareFile } from '../../api';
-    import { downloadSharePaths, forgetDownloadSharePath } from './mobile-shell-store';
+    import { downloadSharePaths, forgetDownloadSharePath, recentTransferEvents } from './mobile-shell-store';
 
     /** How many transfers are in flight; more than one earns a way to stop the lot. */
     const inFlight = $derived($activeTransfers.length);
@@ -78,7 +78,7 @@
 </script>
 
 <div class="mobile-scroll transfers-tab">
-    {#if inFlight === 0 && $recentEvents.length === 0}
+    {#if inFlight === 0 && $recentTransferEvents.length === 0}
         <div class="mobile-empty">
             <span class="mobile-empty-glyph">
                 <ArrowDownUpIcon size={40} strokeWidth={1.6} aria-hidden="true" />
@@ -100,13 +100,13 @@
                 {/each}
             </div>
         {/if}
-        {#if $recentEvents.length > 0}
+        {#if $recentTransferEvents.length > 0}
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Recent</h2>
                 <button type="button" class="transfers-clear" onclick={clearHistory}>Clear</button>
             </div>
             <div class="transfers-group" role="list">
-                {#each $recentEvents.slice(0, 50) as entry (entry.id)}
+                {#each $recentTransferEvents.slice(0, 50) as entry (entry.id)}
                     {#if entry.kind === 'transfer'}
                         <MobileTransferRow
                             transfer={entry}

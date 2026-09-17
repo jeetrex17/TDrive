@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { get } from 'svelte/store';
 import { sidebarState } from '../sidebar/sidebar-store';
 import { fileListView } from '../file-list/file-list-store';
-import { historyEvents } from '../notifications/notif-store';
+import { historyEvents, type TransferEvent } from '../notifications/notif-store';
 import type { DriveChannel } from '../../types';
 import {
     activeDrive,
@@ -12,8 +12,26 @@ import {
     fileListCount,
     forgetDownloadSharePath,
     clearDownloadSharePaths,
+    recentTransferEvents,
     rememberDownloadSharePath,
 } from './mobile-shell-store';
+
+function transferEvent(overrides: Partial<TransferEvent> = {}): TransferEvent {
+    return {
+        kind: 'transfer',
+        id: 'xfer:up:1',
+        direction: 'up',
+        name: 'clip.mp4',
+        progress: 0,
+        total: 0,
+        bytes: 0,
+        speed: 0,
+        status: 'active',
+        startedAt: 0,
+        finishedAt: 0,
+        ...overrides,
+    };
+}
 
 function drive(id: number, title: string, kind: 'personal' | 'shared'): DriveChannel {
     return { id, title, kind, isActive: kind === 'personal', inviteLink: '' } as DriveChannel;
@@ -74,5 +92,29 @@ describe('mobile-shell-store', () => {
 
         clearDownloadSharePaths();
         expect(get(downloadSharePaths)).toEqual(new Map());
+    });
+});
+
+describe('what the Transfers tab lists under Recent', () => {
+    it('keeps finished transfers and anything that went wrong', () => {
+        historyEvents.set([
+            { kind: 'event', id: 'e1', level: 'error', title: 'Upload failed', body: '', ts: 1 },
+            { kind: 'event', id: 'e2', level: 'warning', title: 'Saved somewhere else', body: '', ts: 2 },
+            transferEvent({ id: 'xfer:down:1', status: 'done' }),
+        ]);
+        expect(get(recentTransferEvents).map((event) => event.id)).toEqual(['e1', 'e2', 'xfer:down:1']);
+    });
+
+    it('drops the receipts for things the person just did and watched happen', () => {
+        historyEvents.set([
+            { kind: 'event', id: 'e1', level: 'success', title: 'Deleted 3 items', body: '', ts: 1 },
+            { kind: 'event', id: 'e2', level: 'info', title: 'Back online', body: '', ts: 2 },
+        ]);
+        expect(get(recentTransferEvents)).toEqual([]);
+    });
+
+    it('leaves work still in flight to the Active section', () => {
+        historyEvents.set([transferEvent({ id: 'xfer:up:1', status: 'active' })]);
+        expect(get(recentTransferEvents)).toEqual([]);
     });
 });

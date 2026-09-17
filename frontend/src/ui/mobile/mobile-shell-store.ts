@@ -5,7 +5,7 @@
 import { derived, writable } from 'svelte/store';
 import { sidebarState } from '../sidebar/sidebar-store';
 import { fileListView } from '../file-list/file-list-store';
-import { activeTransfers, historyEvents } from '../notifications/notif-store';
+import { activeTransfers, historyEvents, recentEvents, type HistoryEvent } from '../notifications/notif-store';
 import type { DriveChannel } from '../../types';
 
 export type MobileTab = 'files' | 'photos' | 'transfers' | 'account';
@@ -68,6 +68,27 @@ export const fileListCount = derived(fileListView, ($view) =>
 // How many uploads or downloads are still on their way. Ambient, not a badge:
 // the user started these and does not need to be told a number.
 export const activeTransferCount = derived(activeTransfers, ($transfers) => $transfers.length);
+
+/**
+ * What the Transfers tab lists under Recent.
+ *
+ * Every toast is mirrored into the shared history, so the unfiltered list is an
+ * archive of everything the app has ever said -- "Deleted 3 items", "Folder
+ * created", "TDrive is up to date" -- interleaved with actual transfers. On
+ * desktop that list lives behind a bell labelled with neither word and is
+ * honestly a notification log. Here the tab is called Transfers, and a screen
+ * should hold what its name says it holds.
+ *
+ * A notice earns a place when it is a problem: something failed, or finished in
+ * a way the person has to know about. A confirmation of something they just did
+ * and watched happen does not. The filter is applied at this view rather than in
+ * the store, so the desktop bell keeps the full log it is for.
+ */
+const PROBLEM_LEVELS: readonly string[] = ['error', 'warning'];
+
+export const recentTransferEvents = derived(recentEvents, ($events: HistoryEvent[]) =>
+    $events.filter((event) => event.kind === 'transfer' || PROBLEM_LEVELS.includes(event.level)),
+);
 
 /**
  * The Transfers badge: how many transfers need a person, not how many are
