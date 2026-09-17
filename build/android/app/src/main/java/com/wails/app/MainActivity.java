@@ -50,6 +50,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -64,6 +65,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String WAILS_SCHEME = "https";
     private static final String WAILS_HOST = "wails.localhost";
     private static final int FILE_PICKER_REQUEST = 7001;
+    private static final float MIN_TEXT_SCALE = 0.85f;
+    private static final float MAX_TEXT_SCALE = 2.50f;
 
     private WebView webView;
     private WailsBridge bridge;
@@ -161,6 +164,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setMediaPlaybackRequiresUserGesture(false);
+        applySystemTextScale(settings);
         // Page origin is https://wails.localhost; TDrive streams media from its own http://127.0.0.1 server (see res/xml/network_security_config.xml).
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
@@ -242,6 +246,7 @@ public class MainActivity extends AppCompatActivity {
                 super.onPageFinished(view, url);
                 if (DEBUG) Log.d(TAG, "Page loaded: " + url);
                 bridge.onPageFinished(url);
+                publishSystemTextScale();
                 // Now that JS listeners are mounted, push a snapshot of the
                 // current battery / network / theme so the UI starts populated.
                 emitSystemSnapshot();
@@ -253,6 +258,39 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(jsBridge, "wails");
 
         registerBackHandler();
+    }
+
+    /**
+     * Android's font-size accessibility preference is exposed as
+     * Configuration.fontScale, but a WebView does not reliably consume it for
+     * CSS text. Text zoom is the supported WebSettings mapping: it affects text
+     * rather than the whole page, so 48dp targets and reserved gesture edges
+     * keep their physical size. Re-read it on resume as Settings can change
+     * while TDrive is backgrounded.
+     */
+    private void applySystemTextScale(WebSettings settings) {
+        settings.setTextZoom(Math.round(systemTextScale() * 100f));
+    }
+
+    private float systemTextScale() {
+        float scale = getResources().getConfiguration().fontScale;
+        if (Float.isNaN(scale) || Float.isInfinite(scale) || scale <= 0f) {
+            scale = 1f;
+        }
+        return Math.max(MIN_TEXT_SCALE, Math.min(MAX_TEXT_SCALE, scale));
+    }
+
+    /**
+     * TextZoom does the visual scaling on Android. The page also needs the
+     * category to choose its large-text wrapping rules, matching the Dynamic
+     * Type bridge on iOS without setting the CSS root a second time.
+     */
+    private void publishSystemTextScale() {
+        if (webView == null) return;
+        String scale = String.format(Locale.US, "%.3f", systemTextScale());
+        String script = "window.__tdriveSystemTextScale=" + scale
+                + ";window.dispatchEvent(new CustomEvent('tdrive:system-text-scale',{detail:{scale:window.__tdriveSystemTextScale}}));";
+        webView.evaluateJavascript(script, null);
     }
 
     private void loadApplication() {
@@ -1168,6 +1206,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (webView != null) {
+            applySystemTextScale(webView.getSettings());
+            publishSystemTextScale();
+        }
         if (bridge != null) {
             bridge.onResume();
         }
