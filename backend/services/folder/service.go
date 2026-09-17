@@ -355,6 +355,12 @@ func (s *Service) deleteBodiesBestEffort(ctx context.Context, channelID int64, f
 		s.warnf("warn: folder tomb succeeded but reading multipart part bodies failed: %v\n", err)
 		return
 	}
+	renditionIDs, err := projection.RenditionMessageIDsForFiles(s.DB, channelID, ids)
+	if err != nil {
+		s.warnf("warn: folder preview cleanup lookup failed: %v\n", err)
+		return
+	}
+	partIDs = append(partIDs, renditionIDs...)
 	ids = append(ids, partIDs...)
 	peer, err := s.Peers.ResolvePeer(ctx, channelID)
 	if err != nil {

@@ -729,6 +729,15 @@ func (e *Engine) newFolderService() *folderservice.Service {
 }
 
 func (e *Engine) newFileService() *fileservice.Service {
+	// The database epoch persists across restarts and changes when account data
+	// is rebuilt. Never reuse an unscoped disk cache if its identity is missing.
+	var cacheNamespace string
+	thumbs := e.thumbs
+	if backend.DB == nil {
+		thumbs = nil
+	} else if err := backend.DB.QueryRow(`SELECT epoch FROM gallery_epoch WHERE id=1`).Scan(&cacheNamespace); err != nil {
+		thumbs = nil
+	}
 	return &fileservice.Service{
 		DB:    backend.DB,
 		TG:    e.tg,
@@ -763,7 +772,8 @@ func (e *Engine) newFileService() *fileservice.Service {
 		Warnf: func(format string, args ...any) {
 			e.warnf(format, args...)
 		},
-		Thumbs:               e.thumbs,
+		Thumbs:               thumbs,
+		CacheNamespace:       cacheNamespace,
 		MaxConcurrentUploads: e.maxUploads,
 	}
 }

@@ -11,6 +11,8 @@ export type {
     ChannelInfo,
     DownloadResult,
     EncryptionStatus,
+    GalleryItem,
+    GalleryPage,
     JoinDriveResult,
     JoinRequestInfo,
     MountDriveView,

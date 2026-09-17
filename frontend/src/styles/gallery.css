@@ -53,8 +53,19 @@
     grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
     gap: 5px;
 }
-.gallery-window-chunk + .gallery-window-chunk { margin-top: 5px; }
-.gallery-window-placeholder { width: 100%; pointer-events: none; }
+.gallery-virtual { position: relative; overflow-anchor: none; }
+.gallery-virtual-row { position: absolute; left: 0; right: 0; contain: layout style; }
+.gallery-grid-cell { min-width: 0; min-height: 0; }
+.gallery-grid-cell > .gallery-cell { width: 100%; height: 100%; }
+.gallery-virtual-header { position: absolute; left: 0; right: 0; box-sizing: border-box; line-height: 20px; }
+.gallery-pending { width: 100%; background: var(--bg-panel); }
+.gallery-page-error { position: sticky; bottom: 12px; padding: 12px; background: var(--bg-panel); color: var(--text-muted); border-radius: var(--radius-md); text-align: center; }
+.gallery-missing-pill { position: absolute; inset: auto 4px 6px; font-size: 11px; text-align: center; color: var(--text-muted); }
+.gallery-preparation { position: fixed; right: 24px; bottom: 24px; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; max-width: min(420px, calc(100vw - 32px)); padding: 6px; border-radius: var(--radius-lg); background: var(--bg-panel); color: var(--text-muted); box-shadow: var(--shadow-sm); font-size: 13px; }
+.gallery-preparation .secondary-btn { min-height: 36px; padding: 8px 12px; }
+.gallery-preparation-error { color: var(--text-main); font-size: 13px; }
+html.mobile .gallery-preparation { left: calc(var(--inset-left) + 12px); right: auto; bottom: var(--mobile-overlay-bottom); max-width: calc(100vw - 96px - var(--inset-left) - var(--inset-right)); }
+html.mobile .gallery-preparation .secondary-btn { min-height: 44px; }
 
 .gallery-cell {
     appearance: none;
@@ -471,7 +482,6 @@ html.mobile .gallery-grid {
     grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
     gap: 2px;
 }
-html.mobile .gallery-window-chunk + .gallery-window-chunk { margin-top: 2px; }
 html.mobile .gallery-cell {
     border-radius: 0;
     transition: none;
@@ -683,4 +693,5 @@ html.mobile .preview-unlock-bar {
 
 @media (prefers-reduced-motion: reduce) {
     html.mobile .gallery-skeleton-cell { animation: none; }
+    .gallery-cell, .gallery-thumb { transition: none; }
 }

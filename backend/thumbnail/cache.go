@@ -2,6 +2,7 @@ package thumbnail
 
 import (
 	"container/list"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -60,7 +61,13 @@ func NewCache(dir string, maxBytes int64) *Cache {
 // is false on a miss (including a disabled cache or an entry that vanished
 // from disk underneath us).
 func (c *Cache) Get(key string) ([]byte, bool) {
-	if c == nil || c.dir == "" {
+	return c.GetLimited(key, 64<<20)
+}
+
+// GetLimited bounds disk input before allocation, including files modified after
+// the LRU index was built. Corrupt or oversized entries behave as a cache miss.
+func (c *Cache) GetLimited(key string, limit int64) ([]byte, bool) {
+	if c == nil || c.dir == "" || limit <= 0 || limit > 64<<20 {
 		return nil, false
 	}
 	name := fileName(key)
@@ -74,7 +81,22 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 	}
 
 	path := filepath.Join(c.dir, name)
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
+	if err != nil {
+		c.mu.Lock()
+		c.forgetLocked(name)
+		c.mu.Unlock()
+		return nil, false
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.Size() <= 0 || info.Size() > limit {
+		return nil, false
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if int64(len(data)) > limit {
+		return nil, false
+	}
 	if err != nil {
 		c.mu.Lock()
 		c.forgetLocked(name)

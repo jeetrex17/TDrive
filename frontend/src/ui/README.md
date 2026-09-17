@@ -25,3 +25,6 @@ Current primitives:
 
 Migration rule of thumb: replace repeated DOM-string UI first, then move larger
 stateful surfaces once their data model has a typed adapter.
+
+The [gallery performance contract](gallery/README.md) documents its bounded
+metadata, virtualization, image ownership and cross-platform regression checks.

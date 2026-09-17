@@ -354,12 +354,18 @@ func createHardDeletePlanTx(tx *sql.Tx, scope hardDeleteScope, markerMsgID int64
 			  ON parts.channel_id=revisions.channel_id
 			 AND parts.upload_uuid=revisions.upload_uuid
 			WHERE revisions.channel_id=? AND revisions.upload_uuid!=''
+			UNION
+			SELECT r.msg_id FROM file_renditions r
+			JOIN affected_files ON affected_files.file_msg_id=r.file_msg_id
+			JOIN files f ON f.channel_id=r.channel_id AND f.msg_id=r.file_msg_id
+			WHERE r.channel_id=? AND (EXISTS(SELECT 1 FROM channels c WHERE c.channel_id=r.channel_id AND c.kind='personal')
+			 OR (r.actor_user_id>0 AND r.actor_user_id=f.uploader_user_id))
 		)
 		INSERT INTO hard_delete_plan_items (channel_id, op_id, msg_id)
 		SELECT ?, ?, msg_id FROM body_messages
 		WHERE msg_id>0 AND msg_id!=?
 	`)
-	args = append(args, scope.channelID, scope.channelID, scope.channelID, opID, markerMsgID)
+	args = append(args, scope.channelID, scope.channelID, scope.channelID, scope.channelID, opID, markerMsgID)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf("projection: capture hard-delete body plan: %w", err)
 	}
@@ -390,6 +396,19 @@ func clearHardDeleteRetentionTx(tx *sql.Tx, scope hardDeleteScope) error {
 }
 
 func removeHardDeletedPartPointersTx(tx *sql.Tx, scope hardDeleteScope) error {
+	// The normalized deletion plan already owns every receipt. Remove hidden
+	// rendition pointers on secondary clients too, including duplicate blobs.
+	for _, tail := range []string{
+		`DELETE FROM file_parts WHERE channel_id=? AND msg_id IN (
+		 SELECT msg_id FROM file_renditions WHERE channel_id=? AND file_msg_id IN (SELECT file_msg_id FROM affected_files))`,
+		`DELETE FROM file_renditions WHERE channel_id=? AND channel_id=? AND file_msg_id IN (SELECT file_msg_id FROM affected_files)`,
+	} {
+		query, args := scope.withAffectedFiles(tail)
+		args = append(args, scope.channelID, scope.channelID)
+		if _, err := tx.Exec(query, args...); err != nil {
+			return fmt.Errorf("projection: clear hard-delete renditions: %w", err)
+		}
+	}
 	query, args := scope.withAffectedFiles(`
 		DELETE FROM file_parts
 		WHERE channel_id=? AND upload_uuid IN (

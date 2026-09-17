@@ -10,3 +10,6 @@
 # Keep Wails bridge classes
 -keep class com.wails.app.WailsBridge { *; }
 -keep class com.wails.app.WailsJSBridge { *; }
+
+# Native Go workers resolve this sampled decoder by class and method name.
+-keep class com.wails.app.GalleryImage { *; }

@@ -87,7 +87,7 @@ jobs:
         run: go vet $FIRST_PARTY_GO_PACKAGES
 
   browser-contracts:
-    name: Chromium frontend contracts
+    name: Browser frontend contracts
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -105,13 +105,17 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Install Chromium
+      - name: Install Chromium and WebKit
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Run production-build browser contracts
         working-directory: frontend
         run: npm run test:e2e
+
+      - name: Run WebKit gallery contracts
+        working-directory: frontend
+        run: npx playwright test --config playwright.gallery-webkit.config.ts
 
       - name: Upload browser failure artifacts
         if: failure()

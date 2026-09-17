@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"TDrive/backend"
 	"TDrive/backend/datadir"
@@ -11,9 +12,14 @@ import (
 	"TDrive/backend/thumbnail"
 )
 
-// thumbnailCacheMaxBytes caps the on-disk thumbnail cache. Thumbnails are
-// regenerable, so this is a soft budget the cache evicts down to (LRU).
-const thumbnailCacheMaxBytes int64 = 512 * 1024 * 1024
+// Renditions are disposable and shared across the gallery and viewer. Keep a
+// smaller disk working set on mobile; neither budget depends on library size.
+func thumbnailCacheBudget() int64 {
+	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
+		return 256 << 20
+	}
+	return 1 << 30
+}
 
 // thumbnailCacheDir is where generated thumbnails live. It sits under the OS
 // cache directory because the contents are disposable; encrypted-drive
@@ -27,11 +33,11 @@ func thumbnailCacheDir() string {
 }
 
 func newThumbnailCache() *thumbnail.Cache {
-	return thumbnail.NewCache(thumbnailCacheDir(), thumbnailCacheMaxBytes)
+	return thumbnail.NewCache(thumbnailCacheDir(), thumbnailCacheBudget())
 }
 
-// ListMedia returns every image in the active drive, newest first, for the
-// gallery view. Non-image files are filtered out in the read service.
+// ListMedia is the legacy bulk API. The gallery uses GetMediaTimeline and
+// ListMediaPage so metadata memory stays bounded as the library grows.
 func (a *App) ListMedia() ([]backend.FileMetaData, error) {
 	svc, err := a.requireReadService()
 	if err != nil {
@@ -57,9 +63,8 @@ func (a *App) ListMedia() ([]backend.FileMetaData, error) {
 	return out, nil
 }
 
-// Thumbnail returns a small JPEG preview for one image, base64-encoded for the
-// frontend to turn into a data URL. Cheap on a cache hit; on a miss it pulls
-// and downscales the original once.
+// Thumbnail is the legacy base64 wrapper around the bounded rendition path.
+// Cache misses fetch an existing small derivative, never the original photo.
 func (a *App) Thumbnail(msgID int) (PreviewPayload, error) {
 	svc, err := a.requireFileService()
 	if err != nil {

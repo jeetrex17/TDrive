@@ -370,6 +370,7 @@ func (c *Coordinator) finalizeCommitted(ctx context.Context, record JournalRecor
 		return result, nil
 	}
 	result.ProjectionPending = false
+	c.prepareCommittedRenditions(maintenanceCtx, record, result)
 	if record.Staged != nil {
 		if err := c.staging.Remove(maintenanceCtx, *record.Staged); err != nil {
 			_, _ = c.transition(maintenanceCtx, record, StateCleanupPending, JournalPatch{

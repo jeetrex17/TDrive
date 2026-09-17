@@ -19,8 +19,6 @@ import (
 	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 	"TDrive/backend/thumbnail"
-
-	"golang.org/x/sync/singleflight"
 )
 
 type PeerResolver interface {
@@ -40,7 +38,6 @@ type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
 type MasterKeyForUploadFunc func(channelID int64, wantEncrypted bool) ([]byte, error)
 type WriteCiphertextTempFunc func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error)
 type encryptStreamFunc func(plain io.Reader, ciphertext io.Writer, masterKey []byte, plaintextSize int64) error
-type thumbnailGeneratorFunc func(ctx context.Context, channelID int64, msgID int, cacheKey string, encrypted bool, masterKey []byte) ([]byte, error)
 type WarnFunc func(format string, args ...any)
 
 // CreateFolderFunc creates a folder and returns its new ID. It is injected so
@@ -63,7 +60,6 @@ type Service struct {
 	MasterKeyForUpload   MasterKeyForUploadFunc
 	WriteCiphertextTemp  WriteCiphertextTempFunc
 	encryptStream        encryptStreamFunc
-	generateThumbnailFn  thumbnailGeneratorFunc
 	CreateFolder         CreateFolderFunc
 	Events               EventSink
 	Warnf                WarnFunc
@@ -94,16 +90,17 @@ type Service struct {
 	// message ID and before that receipt enters any local collection/projection.
 	afterHiddenPartSend func(partIndex int, msgID int64)
 
-	// Thumbs is the on-disk thumbnail cache. Nil disables caching (every
-	// Thumbnail call regenerates), which keeps the cache optional in tests.
+	// Thumbs is the on-disk rendition cache. Nil disables caching; requests
+	// then fetch bounded remote derivatives without generating from originals.
 	Thumbs *thumbnail.Cache
-	// ThumbConcurrency bounds how many thumbnails generate at once. <= 0 uses
-	// a sensible default. Thumbnail generation runs off previewMu so the grid
-	// can fill in parallel without blocking single-file previews/downloads.
+	// ThumbConcurrency bounds active rendition transfers. Values are clamped
+	// to four; the default is three. Grid work does not hold previewMu.
 	ThumbConcurrency int
 	thumbOnce        sync.Once
 	thumbSem         chan struct{}
-	thumbGroup       singleflight.Group
+	renditionFlights renditionFlightGroup
+	// CacheNamespace is the authenticated account identity. Configure before use.
+	CacheNamespace string
 }
 
 type Metadata struct {

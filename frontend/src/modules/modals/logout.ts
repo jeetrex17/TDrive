@@ -5,6 +5,7 @@
 // The modal trigger lives in the top-right profile menu, not here.
 
 import { logout } from '../../api';
+import { resetRenditions } from '../renditions/runtime';
 import { showAuthView } from '../../ui/app/app-store';
 
 import { notify, dismissNotification } from '../notifications';
@@ -25,6 +26,7 @@ export async function confirmLogout(mode: LogoutMode): Promise<void> {
         spinner: true,
     });
     logoutModal.setBusy(true);
+    resetRenditions();
     try {
         await logout(mode);
         // Backend issues runtime.Quit on success, so this fallback only

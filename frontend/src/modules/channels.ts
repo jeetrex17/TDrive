@@ -6,6 +6,7 @@
 // change.
 
 import { state, invalidateFolderIndex, resetFolderCaches, resetSelection } from '../state';
+import { resetRenditions } from './renditions/runtime';
 import {
     approveJoinRequest as approveJoinRequestApi,
     checkPendingJoin as checkPendingJoinApi,
@@ -251,6 +252,7 @@ export async function switchActiveChannel(channelId: number): Promise<void> {
     // still publish during the switch window.
     driveRefreshGeneration += 1;
     state.channelSwitchInProgress = true;
+    resetRenditions();
     // Route intent changes immediately. A later Photos click must win while the
     // native channel switch is still in flight.
     state.virtualView = null;

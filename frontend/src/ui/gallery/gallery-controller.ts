@@ -1,208 +1,202 @@
-// Imperative machinery behind the photos gallery: one IntersectionObserver
-// for lazy thumbnail loading, an LRU thumbnail-URL cache, and FIFO eviction of
-// decoded <img> bitmaps so memory stays flat on large libraries. Mounted
-// window cells register here; this controller owns every load, cache, and
-// eviction decision so behavior stays consistent as chunks enter and leave
-// the DOM.
-//
-// It is a module singleton because the caches must outlive any single render:
-// scrolling away and back, or switching drives and returning, reuses thumbs.
+// The gallery owns DOM subscriptions; the shared rendition broker owns image
+// bytes, URLs, deduplication and memory admission for both grid and viewer.
+import { isMobilePlatform } from '../../api';
+import { acquireRendition, subscribeRenditionReset } from '../../modules/renditions/runtime';
+import type { RenditionLease } from '../../modules/renditions/broker';
 
-import { getThumbnail, isMobilePlatform } from '../../api';
-
-// Soft cap on the in-memory thumbnail-URL map (keyed channelId:msgId). The
-// backend disk cache makes a re-fetch cheap, so this only bounds bookkeeping.
-const THUMB_CACHE_MAX = 1500;
-
-// Cap on cells holding a decoded image at once. Loaded <img>s retain their
-// decoded bitmaps, so we unload the least-recently-loaded ones past this bound
-// (they reload instantly from the thumb cache when scrolled back).
-const MAX_LOADED_CELLS = 240;
-
-// Telegram rate limits a burst of cold thumbnail downloads (FLOOD_WAIT), and a
-// fresh phone install has nothing cached, so loads go through a short queue
-// and a rate-limited cell keeps its shimmer and tries again after the wait
-// Telegram named instead of failing for good.
-const MAX_CONCURRENT_LOADS = 3;
-const MAX_RETRIES = 3;
-const RETRY_BASE_MS = 8_000;
-const RETRY_MAX_MS = 90_000;
-
-export type CellStatus = 'idle' | 'loading' | 'loaded' | 'failed' | 'locked';
-
-export interface CellPatch {
-    status?: CellStatus;
-    src?: string;
-    title?: string;
-}
-
-export interface CellRegistration {
-    msgId: number;
-    apply: (patch: CellPatch) => void;
-}
-
+export type CellStatus = 'idle' | 'loading' | 'loaded' | 'failed' | 'locked' | 'missing';
+export interface CellPatch { status?: CellStatus; src?: string; title?: string }
+export interface CellRegistration { msgId: number; revision?: number; apply: (patch: CellPatch) => void }
 interface CellHandle extends CellRegistration {
     node: HTMLElement;
+    channelId: number;
     status: CellStatus;
+    src: string;
     attempt: number;
     retryTimer: number;
+    lease: RenditionLease | null;
 }
 
 const handles = new Map<HTMLElement, CellHandle>();
-// Cells waiting for a load slot, oldest first.
-const queue: CellHandle[] = [];
-let activeLoads = 0;
-// Cells currently holding a decoded image, oldest first (FIFO eviction). Kept
-// consistent across renders by register/unregister alone — never bulk-cleared,
-// because Svelte reuses keyed cells whose loaded state must keep being tracked.
-const loadedHandles: CellHandle[] = [];
-// "channelId:msgId" -> loaded thumbnail data URL.
-const thumbCache = new Map<string, string>();
-
 let observer: IntersectionObserver | null = null;
 let rootEl: HTMLElement | null = null;
 let currentChannelId = 0;
+let unsubscribeReset: (() => void) | null = null;
+let active = true;
 
-// setRoot installs the scroll container used as the observer root. Called once
-// when the gallery component mounts.
 export function setRoot(el: HTMLElement): void {
-    if (rootEl === el && observer) return;
-    if (observer) observer.disconnect();
+    if (rootEl === el) return;
+    observer?.disconnect();
     rootEl = el;
-    observer = new IntersectionObserver(onIntersect, { root: el, rootMargin: '320px 0px' });
-    // Re-observe any cells that registered before the root was ready.
-    for (const handle of handles.values()) {
-        if (handle.status === 'idle') observer.observe(handle.node);
-    }
+    observer = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver(onIntersect, { root: el, rootMargin: '160px 0px' });
+    for (const handle of handles.values()) observe(handle);
+    document.addEventListener('visibilitychange', onVisibility);
+    unsubscribeReset ??= subscribeRenditionReset(() => {
+        for (const handle of handles.values()) {
+            release(handle);
+            handle.status = 'idle';
+            handle.apply({ status: 'idle', src: '', title: '' });
+            observer?.unobserve(handle.node);
+            if (!document.hidden) observe(handle);
+        }
+    });
 }
 
-// Release the observer and every live cell registration when the gallery host
-// is replaced. The thumbnail URL cache intentionally survives so a remount
-// can reuse already-fetched data without retaining detached DOM nodes.
 export function teardown(): void {
     observer?.disconnect();
     observer = null;
     rootEl = null;
-    for (const handle of handles.values()) dropPending(handle);
+    document.removeEventListener('visibilitychange', onVisibility);
+    unsubscribeReset?.();
+    unsubscribeReset = null;
+    for (const handle of handles.values()) release(handle);
     handles.clear();
-    loadedHandles.length = 0;
+    active = true;
 }
 
-// beginRender records the drive the upcoming cells belong to, so an in-flight
-// thumbnail load from a previous drive is discarded rather than painted onto a
-// reused cell. Called before the orchestrator publishes new cells.
+/** Photos and Files reuse one shell. Hidden Photos releases its image leases
+ * immediately instead of retaining decoded pixels behind the file list. */
+export function setActive(next: boolean): void {
+    if (active === next) return;
+    active = next;
+    for (const handle of handles.values()) {
+        observer?.unobserve(handle.node);
+        if (active) observe(handle);
+        else {
+            release(handle);
+            handle.status = 'idle';
+            handle.apply({ status: 'idle', src: '', title: '' });
+        }
+    }
+}
+
 export function beginRender(channelId: number): void {
+    if (channelId !== currentChannelId) {
+        for (const handle of handles.values()) {
+            release(handle);
+            handle.apply({ status: 'idle', src: '', title: '' });
+        }
+    }
     currentChannelId = channelId;
 }
+
 export function registerCell(node: HTMLElement, reg: CellRegistration): void {
-    const previous = handles.get(node);
-    if (previous) {
-        observer?.unobserve(node);
-        removeLoaded(previous);
-        dropPending(previous);
-    }
-    const handle: CellHandle = { node, msgId: reg.msgId, apply: reg.apply, status: 'idle', attempt: 0, retryTimer: 0 };
+    unregisterCell(node);
+    const handle: CellHandle = { ...reg, node, channelId: currentChannelId, status: 'idle', src: '', attempt: 0, retryTimer: 0, lease: null };
     handles.set(node, handle);
-    observer?.observe(node);
+    observe(handle);
 }
 
 export function unregisterCell(node: HTMLElement): void {
     observer?.unobserve(node);
     const handle = handles.get(node);
-    if (handle) {
-        removeLoaded(handle);
-        dropPending(handle);
-    }
+    if (handle) release(handle);
     handles.delete(node);
 }
 
-function dropPending(handle: CellHandle): void {
-    window.clearTimeout(handle.retryTimer);
-    handle.retryTimer = 0;
-    const index = queue.indexOf(handle);
-    if (index >= 0) queue.splice(index, 1);
-}
-
-
-// rearmLocked lets locked cells retry after the vault unlocks, without a full
-// gallery refresh.
 export function rearmLocked(): void {
     for (const handle of handles.values()) {
         if (handle.status !== 'locked') continue;
         handle.status = 'idle';
-        // Clear the "locked" detail too: it outlived the lock and kept reading
-        // as locked on a photo that had since decrypted.
+        handle.attempt = 0;
         handle.apply({ status: 'idle', title: '' });
-        observer?.observe(handle.node);
+        observer?.unobserve(handle.node);
+        observe(handle);
     }
 }
 
-// cachedThumb returns a loaded thumbnail URL for the lightbox placeholder.
+export function rearmMissing(msgId?: number): void {
+    for (const handle of handles.values()) {
+        if (msgId !== undefined && handle.msgId !== msgId) continue;
+        // A targeted ready event can race a pending 404. Releasing that lease
+        // fences the late response before asking for the now-available bytes.
+        if (handle.status !== 'missing' && !(msgId !== undefined && handle.status === 'loading')) continue;
+        release(handle);
+        handle.status = 'idle';
+        handle.apply({ status: 'idle', title: '' });
+        observer?.unobserve(handle.node);
+        observe(handle);
+    }
+}
+
+/** Borrow only a currently leased URL for the opening transition. The viewer
+ * acquires its own lease before retaining the image. */
 export function cachedThumb(channelId: number, msgId: number): string {
-    return thumbCache.get(`${channelId}:${msgId}`) || '';
+    for (const handle of handles.values()) {
+        if (handle.channelId === channelId && handle.msgId === msgId && handle.status === 'loaded') return handle.src;
+    }
+    return '';
+}
+
+function observe(handle: CellHandle): void {
+    if (!active) return;
+    if (observer) observer.observe(handle.node);
+    else if (rootEl) void load(handle);
 }
 
 function onIntersect(entries: IntersectionObserverEntry[]): void {
     for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        const node = entry.target as HTMLElement;
-        observer?.unobserve(node);
-        const handle = handles.get(node);
-        if (handle) enqueue(handle);
+        const handle = handles.get(entry.target as HTMLElement);
+        if (!handle) continue;
+        if (entry.isIntersecting) {
+            if (handle.status === 'idle') void load(handle);
+        } else {
+            release(handle);
+            handle.status = 'idle';
+            handle.apply({ status: 'idle', src: '', title: '' });
+        }
     }
 }
 
-// enqueue shows the shimmer at once; the load itself waits for a slot.
-function enqueue(handle: CellHandle): void {
-    if (handle.status === 'loaded' || queue.includes(handle)) return;
+function onVisibility(): void {
+    for (const handle of handles.values()) {
+        if (document.hidden) {
+            release(handle);
+            handle.status = 'idle';
+            handle.apply({ status: 'idle', src: '', title: '' });
+        } else {
+            observer?.unobserve(handle.node);
+            observe(handle);
+        }
+    }
+}
+
+function release(handle: CellHandle): void {
+    window.clearTimeout(handle.retryTimer);
+    handle.retryTimer = 0;
+    const lease = handle.lease;
+    handle.lease = null;
+    handle.src = '';
+    lease?.release();
+}
+
+async function load(handle: CellHandle): Promise<void> {
+    if (!active || document.hidden || handle.lease || handle.channelId !== currentChannelId) return;
     handle.status = 'loading';
     handle.apply({ status: 'loading' });
-    queue.push(handle);
-    pump();
-}
-
-function pump(): void {
-    while (activeLoads < MAX_CONCURRENT_LOADS && queue.length > 0) {
-        const handle = queue.shift()!;
-        if (handles.get(handle.node) !== handle) continue;
-        activeLoads += 1;
-        void loadCell(handle).finally(() => {
-            activeLoads -= 1;
-            pump();
-        });
-    }
-}
-
-async function loadCell(handle: CellHandle): Promise<void> {
-    const channelId = currentChannelId;
-    const key = `${channelId}:${handle.msgId}`;
-
-    const cached = thumbCache.get(key);
-    if (cached) {
-        handle.status = 'loaded';
-        handle.apply({ status: 'loaded', src: cached });
-        registerLoaded(handle);
-        return;
-    }
-
+    const lease = acquireRendition({ channelId: handle.channelId, fileId: handle.msgId, revision: handle.revision ?? 0, kind: 'thumbnail' }, 'visible');
+    handle.lease = lease;
     try {
-        const url = await getThumbnail(handle.msgId);
-        // Discard if the drive changed mid-flight or the cell was unregistered
-        // (destroyed), so a stale or wrong-drive image is never painted/cached.
-        // A reused same-drive cell still matches both guards and paints.
-        if (channelId !== currentChannelId || handles.get(handle.node) !== handle) return;
-        cacheThumb(key, url);
+        const asset = await lease.promise;
+        if (!isCurrent(handle, lease)) return;
         handle.status = 'loaded';
-        handle.apply({ status: 'loaded', src: url });
-        registerLoaded(handle);
-    } catch (err) {
-        if (channelId !== currentChannelId || handles.get(handle.node) !== handle) return;
-        if (/password required/i.test(String(err))) {
+        handle.src = asset.url;
+        handle.apply({ status: 'loaded', src: asset.url, title: '' });
+    } catch (error) {
+        if (!isCurrent(handle, lease)) return;
+        release(handle);
+        const detail = error as { code?: string; retryAfterMs?: number };
+        if (detail.code === 'encryption_password_required' || /password required/i.test(String(error))) {
             handle.status = 'locked';
             handle.apply({ status: 'locked', title: isMobilePlatform() ? 'locked, tap to unlock' : 'locked, click to unlock' });
             return;
         }
-        const delay = retryDelay(err, handle.attempt);
+        if (detail.code === 'missing_rendition') {
+            handle.status = 'missing';
+            handle.apply({ status: 'missing', title: 'preview not available yet' });
+            return;
+        }
+        const delay = retryDelay(error, handle.attempt);
         if (delay === null) {
             handle.status = 'failed';
             handle.apply({ status: 'failed', title: "couldn't load" });
@@ -211,50 +205,22 @@ async function loadCell(handle: CellHandle): Promise<void> {
         handle.attempt += 1;
         handle.retryTimer = window.setTimeout(() => {
             handle.retryTimer = 0;
-            if (handles.get(handle.node) !== handle || handle.status !== 'loading') return;
-            queue.push(handle);
-            pump();
+            if (handles.get(handle.node) === handle) void load(handle);
         }, delay);
     }
 }
 
-// retryDelay is the pause before another attempt at a rate-limited download,
-// preferring the wait Telegram named, or null when the failure is final.
-function retryDelay(err: unknown, attempt: number): number | null {
-    const message = String(err);
-    if (attempt >= MAX_RETRIES || !/flood|rate.?limit|timeout/i.test(message)) return null;
-    const advised = /wait:?\s*(\d+)\s*s/i.exec(message);
-    return Math.min(RETRY_MAX_MS, advised ? Number(advised[1]) * 1000 + 1000 : RETRY_BASE_MS * 2 ** attempt);
+function isCurrent(handle: CellHandle, lease: RenditionLease): boolean {
+    return handle.channelId === currentChannelId && handles.get(handle.node) === handle && handle.lease === lease;
 }
 
-// registerLoaded tracks a cell holding a decoded image and unloads the oldest
-// once we exceed the budget, keeping decoded-image memory bounded.
-function registerLoaded(handle: CellHandle): void {
-    removeLoaded(handle);
-    loadedHandles.push(handle);
-    while (loadedHandles.length > MAX_LOADED_CELLS) {
-        const old = loadedHandles.shift();
-        if (old && old !== handle) unloadCell(old);
-    }
-}
-
-function unloadCell(handle: CellHandle): void {
-    if (handles.get(handle.node) !== handle) return;
-    handle.status = 'idle';
-    handle.apply({ status: 'idle', src: '' });
-    // Re-arm so it reloads (instantly, from the thumb cache) when scrolled back.
-    observer?.observe(handle.node);
-}
-
-function removeLoaded(handle: CellHandle): void {
-    const idx = loadedHandles.indexOf(handle);
-    if (idx >= 0) loadedHandles.splice(idx, 1);
-}
-
-function cacheThumb(key: string, url: string): void {
-    thumbCache.set(key, url);
-    if (thumbCache.size > THUMB_CACHE_MAX) {
-        const oldest = thumbCache.keys().next().value;
-        if (oldest !== undefined) thumbCache.delete(oldest);
-    }
+export function retryDelay(error: unknown, attempt: number): number | null {
+    if (attempt >= 3) return null;
+    const advised = Number((error as { retryAfterMs?: number } | null)?.retryAfterMs ?? 0);
+    if (Number.isFinite(advised) && advised > 0) return advised + 1000;
+    const message = String(error);
+    if (!/flood|rate.?limit|timeout/i.test(message)) return null;
+    const wait = /wait[:_\s]*(\d+)/i.exec(message);
+    // A server deadline is a lower bound, never clamped to our backoff cap.
+    return wait ? Number(wait[1]) * 1000 + 1000 : Math.min(90_000, 8_000 * 2 ** attempt);
 }

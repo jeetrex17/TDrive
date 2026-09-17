@@ -1,4 +1,4 @@
-import { getPreviewFile, getPreviewThumbnail, hasOperationErrorCode, isMobilePlatform, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
+import { hasOperationErrorCode, isMobilePlatform, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
 import { state } from '../../state';
 import { notify } from '../notifications';
 import { loadEncryptionStatus } from '../encryption';
@@ -7,7 +7,9 @@ import { renderImageInfoHTML } from './preview-info';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
 import { pushSheet, type SheetHandle } from '../../ui/modals/sheet-stack';
 import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/touch-gestures';
-import type { PreviewPayload } from '../../types';
+import { acquireRendition, subscribeRenditionReset, type ImageRequest } from '../renditions/runtime';
+import type { RenditionLease } from '../renditions/broker';
+import { getGalleryPolicy, subscribeGalleryPolicy } from '../gallery-policy';
 import type { FileCommandItem } from '../../ui/file-list/types';
 import {
     capturePreviewTransitionSource,
@@ -79,16 +81,14 @@ let panStartY = 0;
 // synthesises for them must not zoom a second time.
 let lastPointerType = "mouse";
 
-// Full-resolution data URLs keyed by drive + msgID, with neighbor prefetch so
-// next/prev is instant. Telegram message ids are scoped to a channel, so using
-// msgID alone can show the wrong image after switching drives.
-const FULL_CACHE_MAX = 12;
-const fullCache = new Map<string, string>();
-// In-flight full-image downloads keyed by drive + msgID, so a neighbor prefetch
-// and the user's own navigation to the same image share one download instead of
-// racing two (which would serialize on the backend's preview mutex).
-const inflightFull = new Map<string, Promise<string>>();
+// Grid and viewer share one byte-budgeted broker. The displayed image stays
+// pinned until navigation/close; at most one next preview has a separate lease.
+let activeImageLease: RenditionLease | null = null;
+let activeThumbnailLease: RenditionLease | null = null;
+let prefetchedImageLease: RenditionLease | null = null;
 let preloadEpoch = 0;
+let unsubscribePreviewPolicy: (() => void) | null = null;
+let unsubscribePreviewReset: (() => void) | null = null;
 let previewReady = false;
 let previewRequestToken = 0;
 let activePreviewKey = "";
@@ -103,11 +103,26 @@ const previewListenerCleanups: Array<() => void> = [];
 let activePreviewTransitionSource: PreviewTransitionSource | null = null;
 const previewTransition = createPreviewTransitionController();
 
-// Lightbox navigation context. When opened from the gallery this holds the
-// ordered image set and the current position so ←/→ and the on-screen chevrons
-// can page through it. A single-item open (file-list preview) leaves it empty.
-let navItems: any[] = [];
-let navIndex = -1;
+export type PreviewNavigationItem = PreviewCommandItem & {
+    channel_id?: number;
+    channelId?: number;
+    content_revision?: number;
+    revision?: number;
+    thumbUrl?: string;
+    encrypted?: boolean;
+    uploaderId?: number;
+    uploadTime?: number;
+};
+export interface PreviewNavigationSource {
+    getNeighbor(item: PreviewNavigationItem, direction: -1 | 1): Promise<PreviewNavigationItem | null>;
+    getPosition?(item: PreviewNavigationItem): { index: number; total: number } | null;
+}
+
+// Gallery supplies a bounded data source. Existing small-list callers keep
+// their list adapter; opening a 100k gallery never builds a second full array.
+let navSource: PreviewNavigationSource | null = null;
+let navigationPending = false;
+let navigationEpoch = 0;
 
 function listenPreview(target: EventTarget | null, type: string, listener: EventListener, options?: boolean | AddEventListenerOptions): void {
     if (!target) return;
@@ -149,8 +164,9 @@ function clearActivePreview() {
     activePreviewKey = "";
     activePreviewMsgID = 0;
     activePreviewItem = null;
-    navItems = [];
-    navIndex = -1;
+    navSource = null;
+    navigationPending = false;
+    navigationEpoch += 1;
     updateNavChrome();
 }
 
@@ -330,185 +346,79 @@ export function isPreviewableImage(filename: any) {
     return SUPPORTED_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
 }
 
-function buildPreviewSource(mimeType: string, dataBase64: string) {
-    return 'data:' + mimeType + ';base64,' + dataBase64;
-}
-
-function payloadToPreviewAsset(payload: PreviewPayload) {
-    const dataBase64 = payload.dataBase64;
-    const mimeType = payload.mimeType;
-    if (!dataBase64 || !mimeType) {
-        throw new Error("Download failed");
-    }
-
+function renditionRequest(target: PreviewNavigationItem): ImageRequest {
     return {
-        src: buildPreviewSource(mimeType, dataBase64),
-        mimeType,
+        channelId: Number(target.channel_id || target.channelId || state.activeChannel?.id || 0),
+        fileId: Number(target.id),
+        revision: Number(target.content_revision || target.revision || 0),
+        kind: 'preview',
     };
 }
 
-async function decodePreviewSource(src: any) {
-    const preloaded = new Image();
-    preloaded.decoding = "async";
-    preloaded.src = src;
-
-    if (typeof preloaded.decode === "function") {
-        try {
-            await preloaded.decode();
-            return;
-        } catch (err) {
-            if (preloaded.complete && preloaded.naturalWidth > 0) return;
-            throw err;
-        }
-    }
-
-    if (preloaded.complete && preloaded.naturalWidth > 0) return;
-
-    await new Promise((resolve, reject) => {
-        preloaded.addEventListener("load", resolve, { once: true });
-        preloaded.addEventListener("error", () => reject(new Error("Not a supported image")), { once: true });
-    });
-}
-
-async function resolveThumbnailPreviewEntry(target: any) {
-    const msgID = Number(target?.id || 0);
-    if (!msgID) {
-        throw new Error("Download failed");
-    }
-
-    const asset = payloadToPreviewAsset(await getPreviewThumbnail(msgID));
-    await decodePreviewSource(asset.src);
-    return asset;
-}
-
-async function resolveFullPreviewEntry(target: any) {
-    const msgID = Number(target?.id || 0);
-    if (!msgID) {
-        throw new Error("Download failed");
-    }
-
-    // Shares an in-flight neighbor prefetch for the same image. A locked
-    // encrypted file returns the stable encryption_password_required code; loadPreview
-    // turns that into the inline unlock card rather than a popup modal.
-	return { src: await fetchFullRaw(target), mimeType: "" };
-}
-
-export async function loadPreview(target: any) {
-    if (!assertPreviewReady()) {
-        throw new Error("Preview unavailable");
-    }
-    const msgID = Number(target?.id || 0);
-    const previewKey = getPreviewKey(target);
-    const filename = String(target?.name || filenameEl?.textContent || "Preview");
-    const token = ++previewRequestToken;
-    // Stop the previous image's neighbor prefetch so this load doesn't queue
-    // behind its remaining downloads (the in-flight one is shared via fetchFullRaw).
+function releasePreviewImages(): void {
     preloadEpoch += 1;
-    // Navigation commits to the target: activePreview* always reflect the item
-    // the user is on, so the counter, info panel, and download stay in agreement
-    // even when the full-size load fails.
-    activePreviewKey = previewKey;
-    activePreviewMsgID = msgID;
+    activeImageLease?.release();
+    activeImageLease = null;
+    activeThumbnailLease?.release();
+    activeThumbnailLease = null;
+    prefetchedImageLease?.release();
+    prefetchedImageLease = null;
+}
+
+export async function loadPreview(target: PreviewNavigationItem) {
+    if (!assertPreviewReady()) throw new Error('Preview unavailable');
+    const token = ++previewRequestToken;
+    const filename = target.name || 'Preview';
+    activePreviewKey = getPreviewKey(target);
+    activePreviewMsgID = Number(target.id);
     activePreviewItem = target;
-    activeFullSrc = "";
+    activeFullSrc = '';
     resetZoom();
+    resetImageSurface();
+    updateNavChrome();
     refreshInfoPanel();
+    setPreviewProgress(0);
 
-    if (!msgID || !previewKey) {
-        const err = new Error("Download failed");
-        if (token === previewRequestToken && isPreviewOpen()) {
-            showPreviewError(err.message);
-        }
-        throw err;
-    }
-
-    // Whether a usable image (placeholder or full) is currently standing in for
-    // this request, and whether the full-size load has settled.
-    let placeholderShown = false;
-    let fullSettled = false;
-    // Resolves to a fallback thumbnail src ("" if none) for when the full-size
-    // load fails (e.g. over the preview budget) so we show an image, not an error.
-    let thumbPromise: Promise<string> = Promise.resolve("");
+    // Acquire before releasing the previous speculative lease. If this is the
+    // prefetched neighbor, its transfer and cached bytes remain shared.
+    const request = renditionRequest(target);
+    const lease = acquireRendition(request, 'viewer');
+    const placeholder = target.thumbUrl ? acquireRendition({ ...request, kind: 'thumbnail' }, 'viewer') : null;
+    releasePreviewImages();
+    activeImageLease = lease;
+    activeThumbnailLease = placeholder;
+    let previewSettled = false;
+    // Pin the already-visible grid thumbnail while the screen preview arrives.
+    // Reusing its lease avoids both a flash and a borrowed/revoked object URL.
+    if (placeholder) void placeholder.promise.then(asset => {
+        if (!previewSettled && token === previewRequestToken && isPreviewOpen()) showPreviewImage(asset.url, filename, { keepLoading: true });
+    }).catch(() => {});
 
     try {
-        // Already prefetched by a neighbor preload? Show it instantly with no
-        // loading indicator at all.
-		const cachedFull = fullCache.get(previewKey);
-        if (cachedFull) {
-            activeFullSrc = cachedFull;
-            showPreviewImage(cachedFull, filename);
-            refreshInfoPanel();
-            preloadNeighbors();
-            return { src: cachedFull };
-        }
-
-        setPreviewProgress(0);
-
-        // Instant low-res placeholder. The gallery hands us a thumbnail data
-        // URL it already loaded (zero extra work); elsewhere we fall back to a
-        // server-side thumbnail fetch. Either becomes the standing image until
-        // the full-size load lands.
-        const initialThumb = String(target?.thumbUrl || "");
-        if (initialThumb) {
-            if (token === previewRequestToken && isPreviewOpen()) {
-                showPreviewImage(initialThumb, filename, { keepLoading: true });
-                placeholderShown = true;
-            }
-        } else {
-            thumbPromise = resolveThumbnailPreviewEntry(target)
-                .then((asset) => String(asset?.src || ""))
-                .catch(() => "");
-            void thumbPromise.then((src) => {
-                // Show as a placeholder only while the full load is still pending;
-                // once it settles, the catch/ success path owns what's displayed.
-                if (!src || fullSettled || token !== previewRequestToken || !isPreviewOpen()) return;
-                showPreviewImage(src, filename, { keepLoading: true });
-                placeholderShown = true;
-            });
-        }
-
-        const asset = await resolveFullPreviewEntry(target);
-        fullSettled = true;
+        const asset = await lease.promise;
+        previewSettled = true;
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
-
-        if (!asset?.src) {
-            throw new Error("Download failed");
-        }
-
-        activeFullSrc = asset.src;
-        showPreviewImage(asset.src, filename);
+        showPreviewImage(asset.url, filename);
+        activeThumbnailLease?.release();
+        activeThumbnailLease = null;
+        imageEl.title = 'Screen-sized preview. Download for original quality.';
         refreshInfoPanel();
         preloadNeighbors();
-        return asset;
-    } catch (err) {
-        fullSettled = true;
+        return { src: asset.url };
+    } catch (error) {
+        previewSettled = true;
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
-
-        // Locked encrypted photo: show the inline unlock card in place of the
-        // image, never a popup modal, so navigation stays uninterrupted.
-        if (hasOperationErrorCode(err, 'encryption_password_required')) {
+        if (hasOperationErrorCode(error, 'encryption_password_required')
+            || (error instanceof Error && 'code' in error && error.code === 'encryption_password_required')) {
             showLockedState();
             return null;
         }
-
-        // If a placeholder image is standing in, keep it: an image over the
-        // full-size budget, or a cancelled unlock, should still show the
-        // thumbnail rather than a hard error. Only error when we have nothing.
-        if (placeholderShown && isPreviewVisible()) {
+        const normalized = normalizePreviewError(error);
+        if (isPreviewVisible()) {
             hidePreviewProgress();
-            return null;
-        }
-        // Nothing shown yet: if a thumbnail is still on its way, show it instead
-        // of a hard error (e.g. an image over the full-size preview budget).
-        const thumbSrc = await thumbPromise;
-        if (token !== previewRequestToken || !isPreviewOpen()) return null;
-        if (thumbSrc) {
-            showPreviewImage(thumbSrc, filename);
-            return null;
-        }
-        const normalized = normalizePreviewError(err);
-        showPreviewError(normalized.message);
-        throw normalized;
+            imageEl.title = 'Thumbnail preview. Download for original quality.';
+        } else showPreviewError(normalized.message);
+        return null;
     }
 }
 
@@ -520,10 +430,7 @@ export function closePreviewModal() {
     }
     activePreviewTransitionSource = null;
     previewRequestToken += 1;
-    preloadEpoch += 1; // abort any in-flight neighbor prefetch
-    // Drop the full-image cache between sessions: it's keyed by msg id, which is
-    // only unique within a drive, so a stale entry must not survive a drive switch.
-    fullCache.clear();
+    releasePreviewImages();
     clearActivePreview();
     closeInfoPanel();
     hideLockedState();
@@ -589,8 +496,9 @@ export async function openPreviewForSelection(target: PreviewCommandItem | null 
     }
 
     // Single-item open: no list to page through.
-    navItems = [];
-    navIndex = -1;
+    navSource = null;
+    navigationPending = false;
+    navigationEpoch += 1;
     updateNavChrome();
     return openPreviewItem(selection.item);
 }
@@ -602,45 +510,94 @@ function findGalleryPreviewSource(item: any): PreviewTransitionSource | null {
     return capturePreviewTransitionSource(cell);
 }
 
-// openPreviewList opens the lightbox on items[index] with ←/→ navigation across
-// the whole list. Items are { type:"file", id, name, size?, thumbUrl? }.
+/** Compatibility adapter for existing small, already-loaded file lists. */
 export async function openPreviewList(
     items: any[],
     index: number,
     transitionSource: PreviewTransitionSource | null = null,
 ) {
-    if (!assertPreviewReady()) return false;
     if (!Array.isArray(items) || items.length === 0) return false;
-
     const i = Math.max(0, Math.min(items.length - 1, Number(index) || 0));
-    navItems = items;
-    navIndex = i;
-    updateNavChrome();
-    return openPreviewItem(items[i], transitionSource || findGalleryPreviewSource(items[i]));
+    // Maintain the current index rather than building another index/map of all
+    // items. This path is deliberately separate from gallery cursor navigation.
+    let position = i;
+    const source: PreviewNavigationSource = {
+        async getNeighbor(item, direction) {
+            if (items[position]?.id !== item.id) return null;
+            const next = position + direction;
+            return next >= 0 && next < items.length ? items[next] : null;
+        },
+        getPosition(item) {
+            if (items[position]?.id !== item.id) {
+                if (items[position + 1]?.id === item.id) position += 1;
+                else if (items[position - 1]?.id === item.id) position -= 1;
+            }
+            return { index: position, total: items.length };
+        },
+    };
+    return openPreviewSource(source, items[i], transitionSource);
+}
+
+export async function openPreviewSource(
+    source: PreviewNavigationSource,
+    item: PreviewNavigationItem,
+    transitionSource: PreviewTransitionSource | null = null,
+): Promise<boolean> {
+    if (!assertPreviewReady()) return false;
+    navSource = source;
+    navigationEpoch += 1;
+    navigationPending = false;
+    return openPreviewItem(item, transitionSource || findGalleryPreviewSource(item));
+}
+
+function navigationPosition(): { index: number; total: number } | null {
+    return activePreviewItem ? navSource?.getPosition?.(activePreviewItem) ?? null : null;
+}
+
+function canNavigate(direction: -1 | 1): boolean {
+    if (!navSource || navigationPending) return false;
+    const position = navigationPosition();
+    return !position || (direction < 0 ? position.index > 0 : position.index < position.total - 1);
 }
 
 async function navigatePreview(delta: number) {
-    if (!isPreviewOpen() || navItems.length === 0) return;
-    const next = navIndex + delta;
-    if (next < 0 || next >= navItems.length) return;
-    navIndex = next;
+    const direction = delta < 0 ? -1 : 1;
+    if (!isPreviewOpen() || !navSource || !canNavigate(direction)) return;
+    const source = navSource;
+    const epoch = ++navigationEpoch;
+    navigationPending = true;
     updateNavChrome();
-    await openPreviewItem(navItems[next], findGalleryPreviewSource(navItems[next]));
+    try {
+        const item = await source.getNeighbor(activePreviewItem, direction);
+        if (!item || epoch !== navigationEpoch || source !== navSource || !isPreviewOpen()) return;
+        // Once the neighboring record is known, navigation can interrupt its
+        // image transfer. A slow photo must not trap the user on that slide.
+        navigationPending = false;
+        await openPreviewItem(item, findGalleryPreviewSource(item));
+    } catch {
+        if (epoch === navigationEpoch && isPreviewOpen()) flashStatus('Could not load the next photo. Try again.');
+    } finally {
+        if (epoch === navigationEpoch) {
+            navigationPending = false;
+            updateNavChrome();
+        }
+    }
 }
 
 function updateNavChrome() {
-    const hasList = navItems.length > 1;
+    const position = navigationPosition();
+    const hasList = Boolean(navSource && (!position || position.total > 1));
     if (prevBtnEl) {
         prevBtnEl.hidden = !hasList;
-        prevBtnEl.disabled = navIndex <= 0;
+        prevBtnEl.disabled = !canNavigate(-1);
     }
     if (nextBtnEl) {
         nextBtnEl.hidden = !hasList;
-        nextBtnEl.disabled = navIndex >= navItems.length - 1;
+        nextBtnEl.disabled = !canNavigate(1);
     }
     if (counterEl) {
-        counterEl.hidden = !hasList;
-        counterEl.textContent = hasList ? `${navIndex + 1} / ${navItems.length}` : "";
+        counterEl.hidden = !hasList || !position;
+        counterEl.textContent = hasList && position ? `${position.index + 1} / ${position.total}` : '';
     }
 }
 
@@ -683,9 +640,8 @@ function closeInfoPanel() {
     infoSheetBack = null;
 }
 
-// refreshInfoPanel re-renders the panel for the active item. Dimensions are
-// only sourced from the displayed <img> once the full image is in (activeFullSrc
-// set); until then we rely on EXIF, so a thumbnail's size never leaks in.
+// Derivative dimensions and stripped EXIF are not original metadata. Keep
+// those fields unknown until a metadata source explicitly supplies them.
 function refreshInfoPanel() {
     if (!infoOpen || !infoBodyEl || !activePreviewItem) return;
     const hasFull = Boolean(activeFullSrc);
@@ -993,8 +949,7 @@ function previewTouchHandlers(): TouchGestureHandlers {
         dragEnd: (dx, dy, axis, velocity) => {
             if (axis === "x") {
                 const step = dx < 0 ? 1 : -1;
-                const next = navIndex + step;
-                if ((Math.abs(dx) > 56 || velocity > 0.5) && next >= 0 && next < navItems.length) {
+                if ((Math.abs(dx) > 56 || velocity > 0.5) && canNavigate(step)) {
                     settleDrag(false);
                     void navigatePreview(step);
                     return;
@@ -1012,66 +967,19 @@ function previewTouchHandlers(): TouchGestureHandlers {
     };
 }
 
-// --- full-image cache + neighbor prefetch ---
-
-function cacheFull(key: string, src: string) {
-	fullCache.set(key, src);
-	if (fullCache.size > FULL_CACHE_MAX) {
-		const oldest = fullCache.keys().next().value;
-		if (oldest !== undefined) fullCache.delete(oldest);
-	}
-}
-
-// fetchFullRaw downloads + decodes + caches one full image, returning its data
-// URL. Concurrent callers for the same id share a single download. It never
-// opens the unlock modal; callers that need it wrap this and retry.
-function fetchFullRaw(item: any): Promise<string> {
-	const id = Number(item?.id || 0);
-	const key = getPreviewKey(item);
-	const cached = fullCache.get(key);
-	if (cached) return Promise.resolve(cached);
-	const existing = inflightFull.get(key);
-	if (existing) return existing;
-
-	const p = (async () => {
-		const asset = payloadToPreviewAsset(await getPreviewFile(id));
-		await decodePreviewSource(asset.src);
-		cacheFull(key, asset.src);
-		return asset.src;
-	})();
-	inflightFull.set(key, p);
-	void p.catch(() => {}).finally(() => {
-		if (inflightFull.get(key) === p) inflightFull.delete(key);
-	});
-	return p;
-}
-
-// preloadNeighbors prefetches the next/prev few full images so navigation is
-// instant. It runs sequentially and aborts the instant the user navigates
-// again (preloadEpoch), so it never queues many downloads ahead of an
-// on-demand load. PreviewFile is called raw here so a locked image is skipped
-// rather than popping the password modal during a background prefetch.
+// Speculation fetches compressed screen previews only. No Image/decode call
+// here: invisible neighbors must not allocate decoded WebView surfaces.
 function preloadNeighbors() {
-    if (navItems.length <= 1) return;
+    if (!navSource || !activePreviewItem || !getGalleryPolicy().allowPrefetch) return;
     const epoch = ++preloadEpoch;
-    const baseIndex = navIndex;
-    void (async () => {
-        for (const off of [1, -1, 2, -2, 3, -3]) {
-            if (epoch !== preloadEpoch) return;
-            const idx = baseIndex + off;
-            if (idx < 0 || idx >= navItems.length) continue;
-			const item = navItems[idx];
-			const id = Number(item?.id || 0);
-			const key = getPreviewKey(item);
-			if (!id || !key || fullCache.has(key)) continue;
-			try {
-				await fetchFullRaw(item);
-			} catch {
-                // Too large, locked, or failed — the on-demand view handles it.
-            }
-            if (epoch !== preloadEpoch) return;
-        }
-    })();
+    const source = navSource;
+    const item = activePreviewItem;
+    void source.getNeighbor(item, 1).then(next => {
+        if (!next || epoch !== preloadEpoch || !isPreviewOpen() || !getGalleryPolicy().allowPrefetch) return;
+        prefetchedImageLease?.release();
+        prefetchedImageLease = acquireRendition(renditionRequest(next), 'prefetch');
+        void prefetchedImageLease.promise.catch(() => {});
+    }).catch(() => {}); // Navigation reports an unavailable neighbor on demand.
 }
 
 async function handlePreviewKeydown(event: any) {
@@ -1086,7 +994,7 @@ async function handlePreviewKeydown(event: any) {
     }
 
     if (previewOpen && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-        if (navItems.length <= 1) return;
+        if (!navSource) return;
         if (event.metaKey || event.ctrlKey || event.altKey) return;
         if (isTypingContext(document.activeElement)) return; // e.g. the unlock field
         event.preventDefault();
@@ -1154,8 +1062,11 @@ export function teardownPreviewModal(): void {
     previewHostEl = null;
     previewReady = false;
     previewTransition.cancel();
-    preloadEpoch += 1;
-    fullCache.clear();
+    releasePreviewImages();
+    unsubscribePreviewPolicy?.();
+    unsubscribePreviewPolicy = null;
+    unsubscribePreviewReset?.();
+    unsubscribePreviewReset = null;
     clearActivePreview();
     infoOpen = false;
     infoSheetBack?.release();
@@ -1329,6 +1240,17 @@ export function activatePreviewModal(): () => void {
     listenPreview(imageEl, "load", (() => {
         if (infoOpen) refreshInfoPanel();
     }) as EventListener);
+    unsubscribePreviewReset = subscribeRenditionReset(() => {
+        if (isPreviewOpen()) closePreviewModal();
+    });
+    unsubscribePreviewPolicy = subscribeGalleryPolicy(policy => {
+        if (!policy.allowPrefetch) {
+            preloadEpoch += 1;
+            prefetchedImageLease?.release();
+            prefetchedImageLease = null;
+        }
+        if (policy.backgrounded && isPreviewOpen()) closePreviewModal();
+    });
     previewProgressUnsubscribe = onRuntimeEvent("preview_progress", (msgID, percent) => {
         if (!isPreviewOpen()) return;
         const targetID = Number(msgID);
