@@ -20,6 +20,7 @@ type commandRunner interface {
 	Run(context.Context, commandPlan) error
 }
 
+//lint:ignore U1000 implemented and consumed by connector_linux.go only.
 type commandOutputRunner interface {
 	Output(context.Context, commandPlan, int) ([]byte, error)
 }

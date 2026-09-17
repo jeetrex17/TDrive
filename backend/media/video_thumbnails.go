@@ -391,10 +391,7 @@ func (t *videoThumbnailer) takeLatest() (int, bool) {
 // unknown or underreported by native players, and treating that as an emergency
 // made Windows previews stay pending forever.
 func (t *videoThumbnailer) foregroundShouldWaitLocked(now time.Time) bool {
-	if now.Before(t.thumbBackoffUntil) {
-		return true
-	}
-	return false
+	return now.Before(t.thumbBackoffUntil)
 }
 
 // precomputeAllowedLocked reports whether a background precompute bucket may run
@@ -891,6 +888,7 @@ func redactMediaURLText(text string, sensitiveValues ...string) string {
 	return text
 }
 
+//lint:ignore U1000 used by mpv_thumbnail_session_unix.go only; Windows drives mpv through a different session.
 func redactMPVThumbnailCommand(command []any) []any {
 	if len(command) == 0 {
 		return nil
@@ -908,6 +906,7 @@ func redactMPVThumbnailCommand(command []any) []any {
 	return redacted
 }
 
+//lint:ignore U1000 used by mpv_thumbnail_session_unix.go only; Windows drives mpv through a different session.
 func redactMPVThumbnailError(text string, command []any) string {
 	for _, arg := range command {
 		value, ok := arg.(string)

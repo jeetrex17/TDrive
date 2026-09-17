@@ -1,3 +1,51 @@
+// Package file moves bytes. It is the only place in the backend that turns a
+// local file into Telegram document messages and back, and the only place that
+// decides which messages constitute one logical file.
+//
+// Everything it publishes leaves as a projection.Op whose formatted TDX1 header
+// is the Telegram caption. projection owns the SQLite write, tgclient owns the
+// transport and its flood-wait retries, crypto owns the TDE1 stream format, and
+// mountwrite owns the durable journal behind mounted writes. This package
+// supplies only policy: what to split, when to encrypt, what to retry, and when
+// a write becomes visible.
+//
+// Visibility differs per upload shape and is the easiest thing here to get
+// wrong:
+//
+//  1. A file's identity is the msg_id of its header-carrying message — the
+//     document for a single-part upload, the manifest text message for a
+//     multipart one. Part messages are OpFilePart and never reach the files
+//     table, so they can never be mistaken for orphans.
+//  2. A single-part upload commits when Telegram accepts the document. Local
+//     projection happens afterwards, so an upload can return both metadata and
+//     an error; a non-zero msg id means the file exists and must not be resent.
+//  3. A multipart upload commits on the manifest send. Before it, failure
+//     aborts and deletes the part bodies; once the manifest send has been
+//     attempted, aborting is forbidden, because sync may still project a
+//     manifest Telegram accepted.
+//  4. Hidden (mount) uploads never commit here at all. UploadHidden returns a
+//     body and mountwrite publishes it with OpFileCommit.
+//  5. Delete is tomb-first. The tombstone is emitted before any Telegram
+//     delete, and a failed body delete deliberately leaves the file_parts rows
+//     behind for the orphan sweep to retry.
+//
+// Retrying is only safe because every send derives a stable Telegram random id
+// from the upload UUID plus a step label, and because every body is an
+// io.ReadSeeker that is rewound before a resend rather than resumed mid-stream.
+// Without an idempotent sender a multipart upload refuses to start and an
+// unknown single-part outcome becomes terminal: failing is better than
+// publishing a duplicate nobody can tell apart.
+//
+// The split decision uses the stored (ciphertext) size rather than the
+// plaintext size, so encrypting a file near a boundary can make it multipart.
+// Concurrency is bounded everywhere on purpose — one upload semaphore covers
+// GUI uploads, imports, backups and mount writes alike — so no caller can turn
+// a folder import into an unbounded fan-out against Telegram.
+//
+// Encryption is per-call intent, never per-drive: the caller asks, and the
+// injected key providers decide whether that is allowed. Every key this package
+// receives is a caller-owned copy that is zeroed on every return path,
+// including error paths.
 package file
 
 import (
