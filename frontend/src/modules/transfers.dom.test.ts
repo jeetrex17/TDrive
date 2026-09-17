@@ -206,6 +206,64 @@ describe('native file drop', () => {
     });
 });
 
+describe('the picker window', () => {
+    it('refuses a second Upload while the host is still preparing the first', async () => {
+        // A phone copies every picked document out of its content provider
+        // before this resolves, which is seconds of an unchanged screen -- and
+        // an unchanged screen is exactly when a reader taps Upload again.
+        let releasePicker = (_paths: string[]) => {};
+        app.SelectFiles.mockReturnValue(new Promise<string[]>((resolve) => {
+            releasePicker = resolve;
+        }));
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
+        app.UploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
+
+        const first = uploadWithParentID('');
+        await Promise.resolve();
+        // Still inside the picker: the lock has to already be held.
+        await uploadWithParentID('');
+        expect(app.SelectFiles).toHaveBeenCalledTimes(1);
+        expect(mocks.notify).toHaveBeenCalledWith(
+            expect.objectContaining({ title: 'A transfer is already in progress' }),
+        );
+
+        releasePicker(['/tmp/report.pdf']);
+        await first;
+        expect(app.UploadToDriveFS).toHaveBeenCalledTimes(1);
+
+        // And the lock is released with it, so the next upload is not rejected.
+        app.SelectFiles.mockResolvedValue(['/tmp/second.pdf']);
+        await uploadWithParentID('');
+        expect(app.SelectFiles).toHaveBeenCalledTimes(2);
+    });
+
+    it('asks for the plan and the encryption snapshot together, not one after the other', async () => {
+        // The snapshot does not depend on the selection, so it has no business
+        // sitting between the picker closing and the modal opening.
+        state.activeChannel = { id: 1, title: 'Personal', kind: 'personal' };
+        let planStarted = false;
+        let encryptionSettled = false;
+        const { loadEncryptionStatus } = await import('./encryption');
+        vi.mocked(loadEncryptionStatus).mockImplementation(async () => {
+            // Resolves only after the plan has been asked for; if the two were
+            // serialized on the snapshot this would deadlock the flow.
+            await vi.waitFor(() => expect(planStarted).toBe(true));
+            encryptionSettled = true;
+        });
+        app.SelectFiles.mockResolvedValue(['/tmp/report.pdf']);
+        app.PlanImport.mockImplementation(async () => {
+            planStarted = true;
+            return { files: 1, folders: 0, archives: 0, limitExceeded: false };
+        });
+
+        await uploadWithParentID('');
+
+        expect(planStarted).toBe(true);
+        expect(encryptionSettled).toBe(true);
+        state.activeChannel = { id: 1, title: 'Test drive', kind: 'shared' };
+    });
+});
+
 describe('upload retry', () => {
     it('takes its own toast down and refuses a second tap on the same failure', async () => {
         app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });

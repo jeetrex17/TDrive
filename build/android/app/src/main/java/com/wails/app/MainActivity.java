@@ -52,7 +52,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * MainActivity hosts the WebView and manages the Wails application lifecycle.
@@ -65,6 +70,15 @@ public class MainActivity extends AppCompatActivity {
     private static final String WAILS_SCHEME = "https";
     private static final String WAILS_HOST = "wails.localhost";
     private static final int FILE_PICKER_REQUEST = 7001;
+    /**
+     * How many picked documents are copied out of the picker at once. Four
+     * matches ANDROID_UPLOAD_WINDOW on the other side of this flow: enough to
+     * keep a provider busy through its per-file latency, few enough that a
+     * large selection cannot fill the cache with in-flight copies.
+     */
+    private static final int PICKER_COPY_CONCURRENCY = 4;
+    /** Floor between progress ticks. Roughly three frames: visibly live, cheap. */
+    private static final long PICKER_PROGRESS_INTERVAL_MS = 50;
     private static final float MIN_TEXT_SCALE = 0.85f;
     private static final float MAX_TEXT_SCALE = 2.50f;
 
@@ -615,16 +629,103 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        // Copy the documents off the main thread, then notify Go
+        copyPickedDocuments(callbackID, uris);
+    }
+
+    /**
+     * Copies the picked documents into the cache and hands the resulting paths
+     * to Go, which cannot see a selection until every one of them has landed
+     * (Wails drains the results channel until it closes).
+     *
+     * Two things matter here, and both are about the seconds this costs. The
+     * picker activity is already gone by the time this runs, so unlike iOS --
+     * where UIKit copies behind its own document picker -- every millisecond is
+     * spent on TDrive's own screen. So it reports progress, and the app turns
+     * that into a transfer row rather than leaving the screen looking frozen.
+     *
+     * And it copies several at once. Serially, a selection cost the sum of its
+     * files; the work is almost entirely waiting on a ContentProvider, which is
+     * a network fetch when the document lives in a cloud provider, so overlapping
+     * them turns that sum into roughly its longest member.
+     */
+    private void copyPickedDocuments(final int callbackID, final List<Uri> uris) {
+        final int total = uris.size();
+        if (total == 0) {
+            bridge.filePickerDone(callbackID);
+            return;
+        }
+
+        // Announce the size of the job before any of it is done, so the app can
+        // say "0 of 7" immediately rather than after the first file lands.
+        emitPickerProgress(0, total, false);
+
         new Thread(() -> {
-            for (Uri uri : uris) {
-                String path = copyUriToCache(uri);
+            // Indexed rather than appended: the copies finish out of order, but
+            // the user picked these in an order and the uploads should follow it.
+            final String[] copied = new String[total];
+            final AtomicInteger done = new AtomicInteger();
+            final AtomicLong lastReport = new AtomicLong();
+            final ExecutorService pool =
+                    Executors.newFixedThreadPool(Math.min(PICKER_COPY_CONCURRENCY, total));
+            try {
+                final List<Callable<Void>> jobs = new ArrayList<>(total);
+                for (int i = 0; i < total; i++) {
+                    final int index = i;
+                    jobs.add(() -> {
+                        try {
+                            copied[index] = copyUriToCache(uris.get(index));
+                        } finally {
+                            // Counted even when the copy failed: this reports how
+                            // much of the wait is left, not how much succeeded.
+                            reportPickerProgress(done.incrementAndGet(), total, lastReport);
+                        }
+                        return null;
+                    });
+                }
+                pool.invokeAll(jobs); // returns once every copy has finished
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                pool.shutdownNow();
+            }
+
+            emitPickerProgress(done.get(), total, true);
+            for (String path : copied) {
                 if (path != null) {
                     bridge.filePickerResult(callbackID, path);
                 }
             }
             bridge.filePickerDone(callbackID);
         }).start();
+    }
+
+    /**
+     * Rate-limits progress so a large selection cannot spend its time crossing
+     * JNI. The final tick is always delivered by the caller, so dropping ticks
+     * here can only cost intermediate frames, never the end of the row.
+     */
+    private void reportPickerProgress(int done, int total, AtomicLong lastReport) {
+        final long now = System.currentTimeMillis();
+        final long previous = lastReport.get();
+        if (now - previous < PICKER_PROGRESS_INTERVAL_MS && done < total) {
+            return;
+        }
+        if (!lastReport.compareAndSet(previous, now)) {
+            return; // another copy just reported; one tick per interval is enough
+        }
+        emitPickerProgress(done, total, false);
+    }
+
+    private void emitPickerProgress(int done, int total, boolean finished) {
+        try {
+            bridge.emitEvent("common:filepicker", new JSONObject()
+                    .put("phase", finished ? "done" : "copying")
+                    .put("done", done)
+                    .put("total", total)
+                    .toString());
+        } catch (JSONException e) {
+            Log.w(TAG, "Could not report file picker progress", e);
+        }
     }
 
     private void handleFolderPickerResult(int resultCode, @Nullable Intent data) {

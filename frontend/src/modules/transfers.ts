@@ -26,6 +26,7 @@ import { humanizeBackendError } from './errors';
 import { appActions } from './app-actions';
 import { loadEncryptionStatus } from './encryption';
 import { openUploadOptionsModal } from './modals/upload-options';
+import { activateFileSelectionProgress } from './file-selection';
 import { openImportOptionsModal } from './modals/import-options';
 import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
@@ -449,6 +450,33 @@ const IMPORT_TRANSFER_ID = 'import';
 // or a drop during an active import) is rejected rather than corrupting the
 // shared batch/transfer state.
 let flowBusy = false;
+
+/**
+ * Runs a transfer flow under that lock, or declines if one is already running.
+ *
+ * Every entry point needs the same four lines, and one of them used to take the
+ * lock a beat too late: the file picker only claimed it once the selection had
+ * come back, so during the seconds a phone spends copying the picked documents
+ * nothing was held at all. Tapping Upload again -- which is exactly what a
+ * reader does when the screen has not moved -- opened a second picker on top of
+ * the first. Held from the trigger, that window is covered too.
+ */
+async function withTransferFlow(run: () => Promise<void>): Promise<void> {
+    if (flowBusy) {
+        notify({
+            level: 'info',
+            title: 'A transfer is already in progress',
+            body: 'Wait for it to finish, then start another.',
+        });
+        return;
+    }
+    flowBusy = true;
+    try {
+        await run();
+    } finally {
+        flowBusy = false;
+    }
+}
 // First few distinct per-file failure reasons, folded into the aggregate
 // import summary toast. Imports report one toast for the whole batch, so this
 // is the only place the backend's actual error text survives to the user.
@@ -727,8 +755,13 @@ function activateUploadProgressEvents(): void {
 // uploadWithParentID opens the file picker and routes the selection through the
 // shared import flow.
 export async function uploadWithParentID(parentID: string) {
-    const paths = await selectFiles();
-    await runImportFlow(parentID, paths);
+    // The lock covers the picker, not just what follows it: on a phone the
+    // host spends seconds copying the picked documents before this resolves,
+    // and that window used to be unguarded. See withTransferFlow.
+    await withTransferFlow(async () => {
+        const paths = await selectFiles();
+        await importSelection(parentID, paths);
+    });
 }
 
 // importFolderWithParentID opens the directory picker and imports the chosen
@@ -762,11 +795,7 @@ const ANDROID_UPLOAD_WINDOW = 4;
 // importAndroidFolder picks a folder and uploads it without ever copying the
 // whole tree into the cache.
 async function importAndroidFolder(parentID: string) {
-    if (flowBusy) {
-        notify({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish, then start another.' });
-        return;
-    }
-    flowBusy = true;
+  await withTransferFlow(async () => {
     activeTransferDriveId = state.activeChannel?.id ?? null;
     // The picker covers the app while it is open, so this row is only seen once
     // it closes, which is exactly when the tree walk is still running and the
@@ -797,9 +826,9 @@ async function importAndroidFolder(parentID: string) {
         markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
         notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(err) });
     } finally {
-        flowBusy = false;
         state.cancelingUpload = false;
     }
+  });
 }
 
 // runAndroidImport recreates the manifest's folder tree, then uploads its files
@@ -1004,26 +1033,34 @@ function finishAndroidImport(done: number, failed: number, fatalError: string) {
 // upload UX; a selection containing folders or archives goes through the import
 // dialog and the aggregated import flow.
 async function runImportFlow(parentID: string, paths: string[]) {
+    await withTransferFlow(() => importSelection(parentID, paths));
+}
+
+/**
+ * The flow itself, for a selection that is already in hand. Callers hold the
+ * transfer lock; the picker takes it earlier than a drop can, which is why this
+ * is separate from runImportFlow rather than guarded here.
+ */
+async function importSelection(parentID: string, paths: string[]) {
     if (!paths.length) return;
-    if (flowBusy) {
-        notify({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish, then start another.' });
-        return;
-    }
-    flowBusy = true;
     activeTransferDriveId = state.activeChannel?.id ?? null;
     try {
         const onPersonal = state.activeChannel?.kind === 'personal';
-        if (onPersonal) {
-            // Refresh the snapshot so the modal's follow-up steps see truth.
-            await loadEncryptionStatus();
-        }
 
+        // Both answers are wanted before the first modal and neither needs the
+        // other, so they go together. Awaited one after the next, the encryption
+        // snapshot -- which does not depend on the selection at all -- sat on
+        // the critical path between the picker closing and the modal opening.
         let plan: ImportPlan | null = null;
-        try {
-            plan = await planImport(paths, false, false);
-        } catch (err) {
-            console.error("PlanImport failed:", err);
-        }
+        const [, planned] = await Promise.all([
+            // Refresh the snapshot so the modal's follow-up steps see truth.
+            onPersonal ? loadEncryptionStatus() : Promise.resolve(),
+            planImport(paths, false, false).catch((err: unknown) => {
+                console.error("PlanImport failed:", err);
+                return null;
+            }),
+        ]);
+        plan = planned;
         if (!plan) {
             // Don't fall through to the plain uploader: a directory path would be
             // sent to UploadToDriveFS and fail. Surface it and stop.
@@ -1110,7 +1147,6 @@ async function runImportFlow(parentID: string, paths: string[]) {
         }
     } finally {
         if (!importCompleteReceived) invalidateTransferCaches();
-        flowBusy = false;
         state.cancelingUpload = false;
     }
 }
@@ -1122,16 +1158,7 @@ async function runImportFlow(parentID: string, paths: string[]) {
  * more entitled to do that than any other trigger.
  */
 async function retryUploadBatch(paths: string[], parentID: string, encrypt: boolean): Promise<void> {
-    if (flowBusy) {
-        notify({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish, then try again.' });
-        return;
-    }
-    flowBusy = true;
-    try {
-        await uploadPathsBatch(paths, parentID, encrypt);
-    } finally {
-        flowBusy = false;
-    }
+    await withTransferFlow(() => uploadPathsBatch(paths, parentID, encrypt));
 }
 
 // uploadPathsBatch runs the classic per-file upload (one bell row per file).
@@ -1253,6 +1280,9 @@ export function activateTransferSurfaces(): () => void {
     activateDownloadProgressEvents();
     activateUploadProgressEvents();
     activateFileDropEvents();
+    // Makes the phone's copy-out-of-the-picker wait visible; silent everywhere
+    // the host hands back paths directly. Torn down with the rest.
+    transferUnsubscribers.push(activateFileSelectionProgress());
     // The log outlives the app. The queue above it is deliberately not stored
     // alongside: every job in it already has a bell row whose key carries the
     // drive, the kind and the message id, which is everything enqueueDownload
