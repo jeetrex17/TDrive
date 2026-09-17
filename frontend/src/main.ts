@@ -9,6 +9,7 @@ import { runGlobalSearch } from './modules/search';
 import { renderSidebar } from './modules/sidebar';
 import type { AppLifecycle } from './ui/app/app-store';
 import { applyMobilePlatformClasses } from './ui/mobile/platform-classes';
+import { activateSystemTextScale } from './ui/mobile/system-text-scale';
 import { initializeNativeTheme } from './ui/theme/native-theme';
 import { initializeTheme } from './ui/theme/theme-controller';
 import { deriveVideoPlaylist } from './modules/video/video-playlist';
@@ -110,6 +111,9 @@ const lifecycle: AppLifecycle = {
         // Now that the gateway has hydrated, iOS and Android report their real
         // platform; add the phone classes here for actual devices.
         applyMobilePlatformClasses();
+        // Dynamic Type must start before authentication resolves: the auth and
+        // recovery screens are just as important to scale as the dashboard.
+        registerDisposer(activateSystemTextScale());
 
         registerDisposer(await initializeNativeTheme());
         if (stopped) return;
