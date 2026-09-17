@@ -6,6 +6,7 @@
     import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
     import XIcon from '@lucide/svelte/icons/x';
     import { toasts } from './toast-store';
+    import { swipeDismiss } from './swipe-dismiss';
 
     interface Props {
         onDismiss: (id: string) => void;
@@ -30,22 +31,6 @@
     function hovering(event: PointerEvent): boolean {
         return event.pointerType !== 'touch';
     }
-
-    /**
-     * A finger gets the whole toast as its dismiss target rather than the 
-     * close button alone, because a notice that has been read is in the way,
-     * and aiming at a small × above the tab bar to say so is work. A pointer
-     * keeps the button: there, the toast may hold a link or a Retry, and a
-     * click that swallows the surface would take those with it.
-     */
-    function tapToDismiss(event: PointerEvent, id: string): void {
-        if (event.pointerType !== 'touch') return;
-        if ((event.target as HTMLElement | null)?.closest('[data-toast-interactive]')) return;
-        onDismiss(id);
-    }
-
-
-
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -58,13 +43,12 @@
     {#each $toasts as toast (toast.id)}
         <div
             class={`toast toast-${toast.level}`}
-            class:has-mobile-detail={toast.level === 'error' && Boolean(toast.body)}
             data-id={toast.id}
             role={toast.level === 'error' ? 'alert' : 'status'}
-            aria-describedby={toast.level === 'error' && toast.body ? `toast-detail-${toast.id}` : undefined}
+            aria-describedby={toast.body ? `toast-detail-${toast.id}` : undefined}
             onpointerenter={(event) => { if (hovering(event)) onPauseToast(toast.id); }}
             onpointerleave={(event) => { if (hovering(event)) onResumeToast(toast.id); }}
-            onpointerup={(event) => tapToDismiss(event, toast.id)}
+            use:swipeDismiss={{ onDismiss: () => onDismiss(toast.id) }}
         >
             <span class="toast-icon" aria-hidden="true">
                 {#if toast.spinner}
@@ -111,62 +95,3 @@
         </div>
     {/each}
 </div>
-
-<style>
-    /* Mobile: the stack sits above the tab bar and safe area, spans the width
-       with gutters, and toasts read as a single line. The module caps the
-       queue at two on a phone. Opaque, no blur, matching the mobile bars. */
-    :global(html.mobile .toast-stack) {
-        left: var(--space-4);
-        right: var(--space-4);
-        bottom: calc(var(--tabbar-height, 49px) + var(--inset-bottom) + var(--space-3));
-        width: auto;
-        max-width: none;
-    }
-    :global(html.mobile .toast) {
-        background: var(--color-surface-2);
-        -webkit-backdrop-filter: none;
-        backdrop-filter: none;
-        align-items: center;
-    }
-    /* Informational notices stay compact. Errors retain one concise detail
-       line so the failure is understandable without opening another surface. */
-    :global(html.mobile .toast-content) {
-        flex-direction: row;
-        align-items: center;
-        gap: var(--space-2);
-    }
-    :global(html.mobile .toast-title) {
-        flex: 1;
-        min-width: 0;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    :global(html.mobile .toast-action) {
-        flex: 0 0 auto;
-        margin-top: 0;
-        align-self: center;
-    }
-    :global(html.mobile .toast-body) { display: none; }
-    :global(html.mobile .toast.toast-error.has-mobile-detail) { align-items: flex-start; }
-    :global(html.mobile .toast.toast-error.has-mobile-detail .toast-content) {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 2px;
-        padding-block: 2px;
-    }
-    :global(html.mobile .toast.toast-error.has-mobile-detail .toast-title) {
-        flex: 0 1 auto;
-        width: 100%;
-    }
-    :global(html.mobile .toast.toast-error.has-mobile-detail .toast-body) {
-        display: block;
-        overflow: hidden;
-        color: var(--color-text-subtle);
-        font-size: var(--text-xs);
-        line-height: 1.3;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-</style>

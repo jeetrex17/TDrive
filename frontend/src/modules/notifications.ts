@@ -14,7 +14,8 @@
 //   dismissNotification('creating');
 //   notify({ level: 'success', title: 'Folder created' });
 //
-//   // Errors are sticky by default; user dismisses or clicks to copy.
+//   // Errors stay longer than confirmations, but nothing is permanent unless
+//   // it asks: pass sticky only when the surface behind the notice is broken.
 //   notify({ level: 'error', title: 'Could not join drive', body: 'Try again.' });
 //
 // This module owns the queue: capping, replace-by-id, and the nearest-deadline
@@ -33,7 +34,26 @@ const MAX_VISIBLE_MOBILE = 2;
 function visibleCap(): number {
     return isMobilePlatform() ? MAX_VISIBLE_MOBILE : MAX_VISIBLE;
 }
-const DEFAULT_DURATION = 4000;
+/**
+ * How long each level stays, in ms. A failure takes longer to read than a
+ * confirmation -- it has a reason attached and a decision behind it -- so it is
+ * given the time rather than being pinned to the screen.
+ *
+ * Nothing here is permanent. An error used to be sticky, which on a phone meant
+ * two of them parked a band over the content until they were tapped away, and
+ * bought nothing for it: the cap evicts the oldest toast when every slot is
+ * sticky, and every notice is written to the history the Transfers tab reads
+ * either way. The durable record lives there; this is the passing mention.
+ */
+const LEVEL_DURATION: Record<ToastLevel, number> = {
+    info: 4000,
+    success: 4000,
+    warning: 6000,
+    error: 8000,
+};
+const DEFAULT_DURATION = LEVEL_DURATION.info;
+/** A toast with a button has to outlast the glance that finds the button. */
+const ACTIONABLE_DURATION = 8000;
 const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
 const LEVELS: readonly ToastLevel[] = ['info', 'success', 'warning', 'error'];
 
@@ -87,8 +107,12 @@ export interface NotifyOptions {
 
 export function notify(opts: NotifyOptions = {}) { const level: ToastLevel = opts.level && LEVELS.includes(opts.level) ? opts.level : 'info';
 const id = opts.id || `t${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-const sticky = opts.sticky === true || level === 'error' || opts.durationMs === 0;
-const duration = sticky ? 0 : (typeof opts.durationMs === 'number' && Number.isFinite(opts.durationMs) ? opts.durationMs : DEFAULT_DURATION);
+const sticky = opts.sticky === true || opts.durationMs === 0;
+const actionable = Boolean(opts.action && opts.action.label && typeof opts.action.run === 'function');
+const requested = typeof opts.durationMs === 'number' && Number.isFinite(opts.durationMs) ? opts.durationMs : null;
+const duration = sticky
+    ? 0
+    : Math.max(requested ?? LEVEL_DURATION[level] ?? DEFAULT_DURATION, actionable ? ACTIONABLE_DURATION : 0);
 const now = Date.now();
 const paused = allPaused || individuallyPaused.has(id);
 const entry: ToastItem = {
@@ -128,8 +152,10 @@ toasts.update((list) => {
         next[idx] = entry;
         return next;
     }
-    // Cap the visible queue; if exceeded, the oldest non-sticky entry
-    // is dismissed early so urgent ones aren't drowned.
+    // Cap the visible queue. The oldest entry that can go goes; when every
+    // visible toast is sticky the oldest of those goes instead, because a
+    // stack that refuses new arrivals is worse than one that forgets an old
+    // one -- and nothing is lost either way, since the history has it all.
     const next = [...list];
     if (next.length >= visibleCap()) {
         const stalest = next.findIndex((t) => !t.sticky);
@@ -147,7 +173,14 @@ export interface AppErrorNotificationOptions {
     source?: AppErrorSource;
 }
 
-/** Reports only normalized copy and contains notification-renderer failures. */
+/**
+ * Reports only normalized copy and contains notification-renderer failures.
+ *
+ * Its one caller is the error boundary, which fires when a region of the UI has
+ * stopped working. That is the case sticky is for and now almost the only one:
+ * the surface behind the notice is broken, so a mention that times out would
+ * leave the user looking at a dead panel with nothing on screen to say why.
+ */
 export function notifyAppError(error: unknown, options: AppErrorNotificationOptions = {}): string | null {
     const appError = toAppError(error, { source: options.source });
     try {
