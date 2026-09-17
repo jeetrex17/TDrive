@@ -7,8 +7,8 @@
     import { tick } from 'svelte';
     import { isMobilePlatform } from '../../api';
     import { prefersReducedMotion } from '../mobile/motion';
+    import { installModalA11y } from '../modals/modal-a11y';
     import { createSheetDrag, sheetOffset, shouldDismiss } from '../modals/sheet-gesture';
-    import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
 
     // Desktop anchors this menu under its toolbar button. The phone cannot: the
     // trigger is docked into the middle of the tab bar, hard against the bottom
@@ -29,24 +29,28 @@
 
     let open = $state(false);
     let buttonEl = $state<HTMLButtonElement | null>(null);
+    let overlayEl = $state<HTMLElement | null>(null);
     let menuEl = $state<HTMLElement | null>(null);
     let filesEl = $state<HTMLButtonElement | null>(null);
     let newFolderEl = $state<HTMLButtonElement | null>(null);
     let folderEl = $state<HTMLButtonElement | null>(null);
 
     async function openMenu(): Promise<void> {
+        // Touch activation does not consistently move DOM focus. Establish the
+        // trigger as the return point before the sheet claims focus.
+        buttonEl?.focus({ preventScroll: true });
         open = true;
         await tick();
-        filesEl?.focus();
+        if (!asSheet) filesEl?.focus();
     }
 
     function closeMenu(returnFocus = false): void {
         open = false;
-        if (returnFocus) buttonEl?.focus();
+        if (returnFocus && !asSheet) buttonEl?.focus();
     }
 
     function activate(action: () => void): void {
-        closeMenu();
+        closeMenu(false);
         action();
     }
 
@@ -65,19 +69,22 @@
     function onDocumentClick(event: MouseEvent): void {
         if (!open) return;
         const target = event.target as Node;
-        if (buttonEl?.contains(target) || menuEl?.contains(target)) return;
-        closeMenu();
+        if (buttonEl?.contains(target) || overlayEl?.contains(target)) return;
+        closeMenu(true);
     }
 
-    // Android BACK is the fourth way out the sheet promises.
-    let backEntry: SheetHandle | null = null;
+    // A phone sheet is a modal action surface, not a popover menu. Sharing the
+    // modal owner gives it the same inert background, Tab loop, focus return,
+    // Escape, and Android BACK contract as every other sheet in the app.
     $effect(() => {
-        if (open) {
-            backEntry ??= pushSheet(() => closeMenu());
-            return;
-        }
-        backEntry?.release();
-        backEntry = null;
+        if (!asSheet || !open || !overlayEl) return;
+        const a11y = installModalA11y(overlayEl, {
+            requestClose: () => closeMenu(true),
+            initialFocus: () => filesEl,
+            restoreFocus: () => buttonEl,
+        });
+        a11y.activate();
+        return () => a11y.deactivate();
     });
 
     // The downward swipe the sheet's grip promises, on the same physics the
@@ -119,7 +126,7 @@
         sheet.style.animation = '';
         if (dismissed) {
             sheet.style.transform = '';
-            closeMenu();
+            closeMenu(true);
             return;
         }
         // A pull that did not reach the line slides back rather than snapping,
@@ -150,12 +157,12 @@
     id="upload-btn"
     class="primary-btn upload-btn"
     type="button"
-    aria-haspopup="menu"
+    aria-haspopup={asSheet ? 'dialog' : 'menu'}
     aria-expanded={open ? 'true' : 'false'}
     aria-controls="upload-menu"
     onclick={(event) => {
         event.stopPropagation();
-        if (open) closeMenu();
+        if (open) closeMenu(true);
         else void openMenu();
     }}
 >
@@ -174,22 +181,29 @@
     {/if}
     Upload
 </button>
-{#if asSheet && open}
-    <!-- Dimming the screen is what makes the sheet read as a layer rather than
-         a box floating over the bar. It is a real element, not a pseudo, so a
-         tap on it counts as outside the menu and closes it. -->
-    <div class="upload-scrim" aria-hidden="true" onclick={() => closeMenu()}></div>
-{/if}
 <div
-    bind:this={menuEl}
-    id="upload-menu"
-    class="upload-menu"
-    class:is-sheet={asSheet}
-    role="menu"
-    tabindex="-1"
-    style={`display: ${open ? 'flex' : 'none'};`}
-    onkeydown={onMenuKeydown}
+    bind:this={overlayEl}
+    class="upload-menu-overlay"
+    class:is-sheet-overlay={asSheet}
 >
+    {#if asSheet && open}
+        <!-- Dimming the screen is what makes the sheet read as a layer rather
+             than a box floating over the bar. It lives inside the modal owner
+             so it remains tappable while the app behind is inert. -->
+        <div class="upload-scrim" aria-hidden="true" onclick={() => closeMenu(true)}></div>
+    {/if}
+    <div
+        bind:this={menuEl}
+        id="upload-menu"
+        class="upload-menu"
+        class:is-sheet={asSheet}
+        role={asSheet ? 'dialog' : 'menu'}
+        aria-modal={asSheet ? 'true' : undefined}
+        aria-label={asSheet ? 'Upload options' : undefined}
+        tabindex="-1"
+        style={`display: ${open ? 'flex' : 'none'};`}
+        onkeydown={onMenuKeydown}
+    >
     {#if asSheet}
         <div
             class="sheet-handle"
@@ -200,18 +214,18 @@
             onpointercancel={onHandlePointerUp}
         ><span></span></div>
     {/if}
-    <button bind:this={filesEl} id="upload-menu-files" class="upload-menu-item" type="button" role="menuitem" onclick={() => activate(onFiles)}>
+    <button bind:this={filesEl} id="upload-menu-files" class="upload-menu-item" type="button" role={asSheet ? undefined : 'menuitem'} onclick={() => activate(onFiles)}>
         <FileUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
         {onNewFolder ? 'Upload files' : 'Files'}
     </button>
     {#if onNewFolder}
-        <button bind:this={newFolderEl} id="upload-menu-new-folder" class="upload-menu-item" type="button" role="menuitem" onclick={chooseNewFolder}>
+        <button bind:this={newFolderEl} id="upload-menu-new-folder" class="upload-menu-item" type="button" role={asSheet ? undefined : 'menuitem'} onclick={chooseNewFolder}>
             <FolderPlusIcon size={18} strokeWidth={1.8} aria-hidden="true" />
             New folder
         </button>
     {/if}
     {#if onFolder}
-        <button bind:this={folderEl} id="upload-menu-folder" class="upload-menu-item" type="button" role="menuitem" onclick={chooseFolder}>
+        <button bind:this={folderEl} id="upload-menu-folder" class="upload-menu-item" type="button" role={asSheet ? undefined : 'menuitem'} onclick={chooseFolder}>
             <FolderUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
             {onNewFolder ? 'Upload folder' : 'Folder'}
         </button>
@@ -220,4 +234,5 @@
          reading a fourth option: the scrim, a downward swipe, and Android's
          back. A Cancel button in a sheet this short mostly adds a line of text
          that has to be read and dismissed as not-what-you-want. -->
+    </div>
 </div>

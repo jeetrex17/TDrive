@@ -13,6 +13,13 @@ vi.mock('../../api', async (importOriginal) => {
 import ContextMenu from './ContextMenu.svelte';
 import { contextMenuState, hideContextMenu, showContextMenu } from './context-menu-store';
 
+Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+    configurable: true,
+    get() {
+        return this.parentElement;
+    },
+});
+
 let app: Record<string, unknown> | null = null;
 let host: HTMLElement | null = null;
 
@@ -68,6 +75,46 @@ describe('ContextMenu action sheet (mobile)', () => {
         expect(document.querySelector('.action-sheet-cancel')).toBeNull();
         // Not the desktop popover.
         expect(document.querySelector('.context-menu-panel')).toBeNull();
+    });
+
+    it('is a named modal dialog for the file its actions affect', async () => {
+        showContextMenu(0, 0, [{ label: 'Open', action: vi.fn() }], {
+            header: { title: 'Brand Guidelines.pdf', kind: 'file' },
+        });
+        await settle();
+
+        const actionSheet = document.querySelector<HTMLElement>('.action-sheet');
+        const title = document.querySelector<HTMLElement>('.action-sheet-title');
+        expect(actionSheet?.getAttribute('role')).toBe('dialog');
+        expect(actionSheet?.getAttribute('aria-modal')).toBe('true');
+        expect(title?.id).toBe('action-sheet-title');
+        expect(actionSheet?.getAttribute('aria-labelledby')).toBe('action-sheet-title');
+    });
+
+    it('owns focus while open and returns it when dismissed', async () => {
+        const invoker = document.createElement('button');
+        invoker.type = 'button';
+        document.body.append(invoker);
+        invoker.focus();
+        showContextMenu(0, 0, [
+            { label: 'Open', action: vi.fn() },
+            { label: 'Download', action: vi.fn() },
+        ], { header: { title: 'a.txt', kind: 'file' } });
+        await settle();
+
+        expect(invoker.inert).toBe(true);
+        const actions = Array.from(document.querySelectorAll<HTMLButtonElement>('.action-sheet button:not(:disabled)'));
+        actions[actions.length - 1]?.focus();
+        const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+        document.dispatchEvent(tab);
+        expect(tab.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(actions[0]);
+
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        await settle();
+        expect(invoker.inert).toBe(false);
+        expect(document.activeElement).toBe(invoker);
+        invoker.remove();
     });
 
     it('runs an item action once and closes', async () => {

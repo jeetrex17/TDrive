@@ -24,9 +24,9 @@
     } from './context-menu-store';
     import { fileTypeFamily, fileTypeIcon } from '../file-list/file-type';
     import { createSheetDrag, sheetOffset, shouldDismiss, FLICK_SPEED } from '../modals/sheet-gesture';
-    import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
     import { isMobilePlatform } from '../../api';
     import { hapticPress } from '../mobile/haptics';
+    import { installModalA11y } from '../modals/modal-a11y';
 
     // The store names an icon; this module owns what that name looks like, so
     // the action builders never import a component.
@@ -83,6 +83,7 @@
 
     let panel = $state<HTMLElement | null>(null);
     let sheet = $state<HTMLElement | null>(null);
+    let sheetOverlay = $state<HTMLElement | null>(null);
     let left = $state(0);
     let top = $state(0);
     let lastFocusVersion = 0;
@@ -102,7 +103,8 @@
     function menuButtons(): HTMLButtonElement[] {
         const root = container();
         if (!root) return [];
-        return Array.from(root.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)'));
+        const selector = asSheet ? 'button:not(:disabled)' : 'button[role="menuitem"]:not(:disabled)';
+        return Array.from(root.querySelectorAll<HTMLButtonElement>(selector));
     }
 
     function focusMenuItem(delta: number): void {
@@ -194,9 +196,9 @@
 
     function onDocumentClick(event: MouseEvent): void {
         if (!$contextMenuState.open) return;
-        if (container()?.contains(event.target as Node)) return;
-        invoker = null;
-        hideContextMenu();
+        const host = asSheet ? sheetOverlay : container();
+        if (host?.contains(event.target as Node)) return;
+        void dismissAndRestoreFocus();
     }
 
     function onDocumentKeydown(event: KeyboardEvent): void {
@@ -275,26 +277,37 @@
         void positionHost();
     });
 
-    // Android BACK dismisses this before whatever is under it, the same way
-    // Escape does. Registered from the open state rather than from each of the
-    // four ways out, so no exit path can forget.
-    let backEntry: SheetHandle | null = null;
+    // A phone action sheet is a modal dialog. The shared ownership primitive
+    // keeps the app behind it inert, loops Tab, restores the source row, and
+    // unifies Escape with Android BACK.
     $effect(() => {
-        if ($contextMenuState.open) {
-            backEntry ??= pushSheet(() => { void dismissAndRestoreFocus(); });
-            return;
-        }
-        backEntry?.release();
-        backEntry = null;
+        if (!asSheet || !$contextMenuState.open || !sheetOverlay) return;
+        const a11y = installModalA11y(sheetOverlay, {
+            requestClose: () => { void dismissAndRestoreFocus(); },
+            initialFocus: () => sheet,
+            restoreFocus: () => invoker,
+        });
+        a11y.activate();
+        return () => a11y.deactivate();
     });
+
 </script>
 
 <svelte:document onclick={onDocumentClick} onkeydown={onDocumentKeydown} />
 
 {#if $contextMenuState.open}
     {#if asSheet}
-        <div class="action-sheet-scrim" aria-hidden="true"></div>
-        <div class="action-sheet" role="menu" tabindex="-1" bind:this={sheet}>
+        <div class="action-sheet-overlay" bind:this={sheetOverlay}>
+            <div class="action-sheet-scrim" aria-hidden="true" onclick={() => { void dismissAndRestoreFocus(); }}></div>
+            <div
+                class="action-sheet"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={$contextMenuState.header ? 'action-sheet-title' : undefined}
+                aria-label={$contextMenuState.header ? undefined : 'Actions'}
+                tabindex="-1"
+                bind:this={sheet}
+            >
             <div
                 class="sheet-handle"
                 aria-hidden="true"
@@ -317,7 +330,7 @@
                         <HeaderIcon size={40} strokeWidth={1.5} />
                     </span>
                     <span class="action-sheet-heading">
-                        <span class="action-sheet-title">{$contextMenuState.header.title}</span>
+                        <span id="action-sheet-title" class="action-sheet-title">{$contextMenuState.header.title}</span>
                         {#if $contextMenuState.header.meta}
                             <span class="action-sheet-meta">{$contextMenuState.header.meta}</span>
                         {/if}
@@ -331,10 +344,8 @@
                         {#if item.type !== 'divider'}
                             <button
                                 type="button"
-                                role="menuitem"
                                 class="action-sheet-tile"
                                 disabled={item.disabled}
-                                tabindex="-1"
                                 onclick={() => invoke(item)}
                             >
                                 {#if item.icon}
@@ -377,11 +388,9 @@
                     {:else}
                         <button
                             type="button"
-                            role="menuitem"
                             class="action-sheet-row"
                             class:danger={item.danger}
                             disabled={item.disabled}
-                            tabindex="-1"
                             onclick={() => invoke(item)}
                         >
                             {#if item.icon}
@@ -394,6 +403,7 @@
                 {/each}
             </div>
 
+            </div>
         </div>
     {:else}
         <div
