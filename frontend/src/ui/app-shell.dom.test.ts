@@ -34,8 +34,6 @@ describe('AppShell behavior', () => {
 
         for (const id of [
             'success-screen',
-            'drives-personal',
-            'drives-shared',
             'file-list',
             'gallery-view',
         ]) {

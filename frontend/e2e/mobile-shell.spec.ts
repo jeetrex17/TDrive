@@ -68,8 +68,11 @@ test('drive switcher opens from the header and closes', async ({ page }) => {
 
     await page.getByRole('button', { name: /Switch drive/ }).click();
     await expect(page.locator('.drive-switcher-sheet')).toHaveClass(/open/);
-    await expect(page.locator('#drives-personal').getByRole('button', { name: 'My Drive', exact: true })).toBeVisible();
-    await expect(page.locator('#drives-shared').getByRole('button', { name: 'Team assets', exact: true })).toBeVisible();
+    // Personal drives and shared drives are still two groups in the sheet, in
+    // that order, the way the desktop sidebar splits them.
+    const groups = page.locator('.drive-switcher-sheet .switcher-group');
+    await expect(groups.nth(0).getByRole('button', { name: 'My Drive', exact: true })).toBeVisible();
+    await expect(groups.nth(1).getByRole('button', { name: 'Team assets', exact: true })).toBeVisible();
 
     await page.locator('.switcher-close').click();
     await expect(page.locator('.drive-switcher-sheet')).not.toHaveClass(/open/);

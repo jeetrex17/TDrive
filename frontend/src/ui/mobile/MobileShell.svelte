@@ -222,13 +222,15 @@
 
     <DriveSwitcherSheet />
 
-    <!-- Hosts the imperative controllers still write to but the phone layout does
-         not surface (the bell lives in the Transfers tab, the profile in Account,
-         folder position in the top bar). Kept mounted so nothing breaks. -->
+    <!-- The last desktop-shaped target the phone still has to carry. The file
+         list writes the drive's storage figure into #storage-used after every
+         load; the Account tab shows that figure from a call of its own, so this
+         span exists only to give that write somewhere to land. It is off-screen
+         and nothing reads it back. The bell, the account menu and the breadcrumb
+         used to sit here too, mounted but hidden; the phone surfaces all three
+         itself now (Transfers tab, Account tab, top bar), so they are simply not
+         built. -->
     <div class="mobile-hidden-hosts">
-        <div id="notif-bell-root"></div>
-        <div id="profile-root"></div>
-        <div id="breadcrumb-root"></div>
         <span id="storage-used"></span>
     </div>
 </div>

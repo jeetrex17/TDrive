@@ -9,17 +9,21 @@ describe('AppShell', () => {
         for (const id of [
             'success-screen',
             'drives-nav',
-            'drives-personal',
-            'drives-shared',
-            'notif-bell-root',
+            'notif-bell',
             'upload-menu-root',
-            'profile-root',
-            'breadcrumb-root',
+            'profile-trigger',
+            'breadcrumb-path',
             'selection-bar',
             'file-list',
             'gallery-view',
         ]) {
             expect(body).toContain(`id="${id}"`);
         }
+
+        // Both drive lists render in the sidebar itself rather than waiting for
+        // something to fill an empty host, so with no drives loaded yet the
+        // shell already says what each section is doing.
+        expect(body).toContain('Loading...');
+        expect(body).toContain('No shared drives yet');
     });
 });
