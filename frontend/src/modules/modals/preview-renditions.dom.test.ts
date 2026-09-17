@@ -6,12 +6,17 @@ const mocks = vi.hoisted(() => ({
     close: vi.fn(),
     openOriginal: vi.fn(),
     setGalleryActive: vi.fn(),
+    reserveOriginal: vi.fn(),
+    releaseOriginalBudget: vi.fn(),
     resetListener: undefined as undefined | (() => void),
     policyListener: undefined as undefined | ((policy: { backgrounded: boolean }) => void),
 }));
 vi.mock('../../api', () => ({ closeMedia: mocks.close, isMobilePlatform: () => false, onRuntimeEvent: () => () => {}, openExternalUrl: vi.fn(), openOriginalImage: mocks.openOriginal, requireOperationSuccess: vi.fn(), useEncryptionPassword: vi.fn() }));
 vi.mock('../renditions/runtime', () => ({ acquireRendition: mocks.acquire, subscribeRenditionReset: (listener: () => void) => { mocks.resetListener = listener; return () => {}; } }));
-vi.mock('../gallery-policy', () => ({ subscribeGalleryPolicy: (listener: (policy: { backgrounded: boolean }) => void) => { mocks.policyListener = listener; return () => {}; } }));
+vi.mock('../gallery-policy', () => ({
+    acquireOriginalViewerBudget: mocks.reserveOriginal,
+    subscribeGalleryPolicy: (listener: (policy: { backgrounded: boolean }) => void) => { mocks.policyListener = listener; return () => {}; },
+}));
 vi.mock('../../ui/gallery/gallery-controller', () => ({ setActive: mocks.setGalleryActive }));
 vi.mock('../notifications', () => ({ notify: vi.fn() }));
 vi.mock('../encryption', () => ({ loadEncryptionStatus: vi.fn() }));
@@ -25,6 +30,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     mocks.resetListener = undefined;
     mocks.policyListener = undefined;
+    mocks.reserveOriginal.mockImplementation(() => mocks.releaseOriginalBudget);
     mocks.acquire.mockImplementation(() => ({ promise: Promise.resolve({ url: 'blob:photo', width: 1200, height: 800 }), release: mocks.release }));
     mocks.openOriginal.mockResolvedValue({ token: 'original-1', url: 'http://127.0.0.1/media/original-1', kind: 'image' });
     Object.defineProperty(HTMLImageElement.prototype, 'decode', { configurable: true, value: vi.fn(async () => {}) });
@@ -47,10 +53,12 @@ describe('bounded photo viewer', () => {
         expect(mocks.acquire).toHaveBeenCalledTimes(1);
         expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ fileId: 1, revision: 2, kind: 'thumbnail' }), 'viewer');
         expect(mocks.openOriginal).toHaveBeenCalledExactlyOnceWith(1, 2);
+        expect(mocks.reserveOriginal).toHaveBeenCalledTimes(1);
         expect(mocks.setGalleryActive).toHaveBeenCalledWith(false);
         preview.closePreviewModal();
         expect(mocks.release).toHaveBeenCalledTimes(1);
         expect(mocks.close).toHaveBeenCalledWith('original-1');
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
         expect(mocks.setGalleryActive).toHaveBeenLastCalledWith(true);
         expect(document.querySelector('#preview-image')?.getAttribute('src')).toBeNull();
     });
@@ -83,6 +91,7 @@ describe('bounded photo viewer', () => {
         mocks.policyListener?.({ backgrounded: true });
 
         expect(mocks.close).toHaveBeenCalledWith('original-1');
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
         expect(document.getElementById('preview-modal')?.style.display).toBe('none');
     });
 
@@ -126,6 +135,7 @@ describe('bounded photo viewer', () => {
         await vi.waitFor(() => expect(document.querySelector('#preview-thumbnail')?.getAttribute('src')).toBe('blob:thumb'));
         expect(document.getElementById('preview-download')?.hasAttribute('hidden')).toBe(false);
         expect(document.getElementById('preview-error')?.textContent).toContain('animated image');
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
         preview.closePreviewModal();
     });
 
@@ -155,6 +165,7 @@ describe('bounded photo viewer', () => {
         await vi.waitFor(() => expect(mocks.acquire).toHaveBeenCalledTimes(2));
         document.getElementById('preview-next')!.click();
         await vi.waitFor(() => expect(mocks.acquire).toHaveBeenCalledTimes(3));
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(2);
         expect(mocks.close).toHaveBeenCalledWith('original-1');
         expect(document.getElementById('preview-counter')!.textContent).toBe('3 / 3');
         preview.closePreviewModal();
@@ -167,6 +178,7 @@ describe('bounded photo viewer', () => {
         preview.activatePreviewModal();
         const opening = preview.openPreviewList([item], 0);
         preview.closePreviewModal();
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
         resolve({ token: 'late', url: 'http://127.0.0.1/media/late', kind: 'image' });
         await opening;
         expect(document.querySelector('#preview-image')?.getAttribute('src')).toBeNull();

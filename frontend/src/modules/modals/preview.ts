@@ -10,7 +10,7 @@ import { pushSheet, type SheetHandle } from '../../ui/modals/sheet-stack';
 import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/touch-gestures';
 import { acquireRendition, subscribeRenditionReset, type ImageRequest } from '../renditions/runtime';
 import type { RenditionLease } from '../renditions/broker';
-import { subscribeGalleryPolicy } from '../gallery-policy';
+import { acquireOriginalViewerBudget, subscribeGalleryPolicy } from '../gallery-policy';
 import { setActive as setGalleryThumbnailScheduling } from '../../ui/gallery/gallery-controller';
 import type { FileCommandItem } from '../../ui/file-list/types';
 import {
@@ -91,6 +91,7 @@ let lastPointerType = "mouse";
 // session that exists solely for the current explicit viewer action.
 let activeThumbnailLease: RenditionLease | null = null;
 let activeOriginalSession: { token: string; url: string } | null = null;
+let releaseOriginalBudget: (() => void) | null = null;
 let unsubscribePreviewPolicy: (() => void) | null = null;
 let unsubscribePreviewReset: (() => void) | null = null;
 let previewReady = false;
@@ -317,6 +318,8 @@ function releaseOriginalSession(): void {
     const session = activeOriginalSession;
     activeOriginalSession = null;
     activeFullSrc = '';
+    releaseOriginalBudget?.();
+    releaseOriginalBudget = null;
     if (session?.token) void Promise.resolve(closeMedia(session.token)).catch(() => {});
 }
 
@@ -401,6 +404,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
     try {
         // This call happens only because opening/navigating the viewer was an
         // explicit action. No original bytes are put in Blob or rendition cache.
+        releaseOriginalBudget = acquireOriginalViewerBudget();
         const opened = await openOriginalImage(Number(target.id), request.revision);
         if (token !== previewRequestToken || !isPreviewOpen()) {
             void Promise.resolve(closeMedia(opened.token)).catch(() => {});
@@ -413,6 +417,10 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
         refreshInfoPanel();
         return { src: opened.url };
     } catch (error) {
+        if (token === previewRequestToken) {
+            releaseOriginalBudget?.();
+            releaseOriginalBudget = null;
+        }
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
         if (isEncryptionPasswordRequired(error)) {
             showLockedState();

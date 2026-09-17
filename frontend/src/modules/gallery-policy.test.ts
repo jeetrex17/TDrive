@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 const events = vi.hoisted(() => ({ listeners: new Map<string, (payload: unknown) => void>(), cleanup: vi.fn() }));
 vi.mock('../api/runtime', () => ({ isMobilePlatform: () => true, onRuntimeEvent: vi.fn((name: string, callback: (payload: unknown) => void) => { events.listeners.set(name, callback); return events.cleanup; }) }));
-import { deriveGalleryPolicy, normalizeGallerySignals, getGalleryPolicy, subscribeGalleryPolicy, updateGallerySignals } from './gallery-policy';
+import { acquireOriginalViewerBudget, deriveGalleryPolicy, normalizeGallerySignals, getGalleryPolicy, subscribeGalleryPolicy, updateGallerySignals } from './gallery-policy';
 
 describe('gallery resource policy', () => {
     it('never prefetches while network cost is unknown', () => {
@@ -19,6 +19,20 @@ describe('gallery resource policy', () => {
         expect(deriveGalleryPolicy(false, {}).decodedBytes).toBe(192 * 1024 * 1024);
         expect(deriveGalleryPolicy(true, { backgrounded: true }).concurrency).toBe(0);
         expect(deriveGalleryPolicy(false, { lowPowerMode: true }).concurrency).toBe(1);
+    });
+    it('reserves thumbnail memory while an original image viewer is open', () => {
+        const listener = vi.fn();
+        const unsubscribe = subscribeGalleryPolicy(listener);
+        const release = acquireOriginalViewerBudget();
+        expect(getGalleryPolicy()).toMatchObject({ decodedBytes: 16 * 1024 * 1024, compressedBytes: 2 * 1024 * 1024 });
+        expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ decodedBytes: 16 * 1024 * 1024 }));
+        release();
+        expect(getGalleryPolicy()).toMatchObject({ decodedBytes: 80 * 1024 * 1024, compressedBytes: 8 * 1024 * 1024 });
+        const calls = listener.mock.calls.length;
+        release();
+        expect(listener).toHaveBeenCalledTimes(calls);
+        unsubscribe();
+        events.cleanup.mockClear();
     });
     it('shares native signal listeners and tears them down with the last subscriber', () => {
         const first = vi.fn();

@@ -61,7 +61,10 @@ type MediaStats struct {
 // per-request latency, so this and the connection pool are what set the
 // ceiling: eight blocks cover a second of a high-bitrate remux on a slow link
 // while staying well inside the block cache.
-const playbackReadAhead = 8
+const (
+	playbackReadAhead    = 8
+	imageRangeCacheBytes = 8 * 1024 * 1024
+)
 
 type SessionOptions struct {
 	Context               context.Context
@@ -115,11 +118,18 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 	// Playback and the thumbnail extractor share one block cache: the
 	// extractor reads the same head and index blocks playback already holds,
 	// and the blocks it pulls for a preview are where the viewer may seek next.
-	blocks := newBlockCache(defaultRangeCacheBytes)
+	kind := streamKindForName(file.Name)
+	cacheBytes := int64(defaultRangeCacheBytes)
+	readAhead := playbackReadAhead
+	if kind == StreamKindImage {
+		cacheBytes = imageRangeCacheBytes
+		readAhead = 0
+	}
+	blocks := newBlockCache(cacheBytes)
 	s.reader = NewRangeReader(RangeReaderConfig{
 		Client:    ranges,
 		Cache:     blocks,
-		ReadAhead: playbackReadAhead,
+		ReadAhead: readAhead,
 	})
 	s.warmContainerIndex()
 	if opts.EnableVideoThumbnails {
