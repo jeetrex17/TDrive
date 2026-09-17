@@ -67,6 +67,14 @@
 }
 .profile-menu[hidden] { display: none; }
 .profile-menu.appearance-view { min-width: min(390px, calc(100vw - 32px)); }
+.profile-menu.backup-view {
+    box-sizing: border-box;
+    width: min(430px, calc(100vw - 32px));
+    max-height: min(680px, calc(100vh - 88px));
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
 .profile-menu-header {
     display: flex;
     gap: 12px;
@@ -191,4 +199,3 @@
     color: var(--danger);
     line-height: 1.3;
 }
-
