@@ -108,6 +108,7 @@ tasks:
           MAIN_M=build/ios/xcode/main/main.m
         fi
         xcrun -sdk {{.IOS_SDK}} clang \
+          -fobjc-arc -fblocks \
           -target {{.IOS_TARGET}} \
           -isysroot {{.SDK_PATH}} \
           -framework Foundation -framework UIKit -framework WebKit \
