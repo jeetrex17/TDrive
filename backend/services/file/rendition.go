@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"image"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"TDrive/backend/projection"
@@ -65,7 +67,7 @@ func (s *Service) Rendition(ctx context.Context, channelID, msgID, revision int6
 	if revision > 0 && revision != f.Revision {
 		return Rendition{}, ErrRenditionStale
 	}
-	if !thumbnail.IsImage(f.Name) {
+	if !thumbnail.IsImage(f.Name) && !(kind == "thumbnail" && isVideoDocument(f.Name)) {
 		return Rendition{}, errPreviewNotSupported
 	}
 	namespace, err := s.renditionNamespace(ctx)
@@ -103,6 +105,17 @@ func (s *Service) Rendition(ctx context.Context, channelID, msgID, revision int6
 	return s.renditionFlights.do(ctx, key, func(flightCtx context.Context) (Rendition, error) {
 		return s.loadRendition(flightCtx, f, kind, ref, key)
 	})
+}
+
+// Video gallery tiles request Telegram's bounded document thumbnail only. They
+// never admit a video preview or original through the image rendition route.
+func isVideoDocument(name string) bool {
+	switch strings.TrimPrefix(strings.ToLower(filepath.Ext(strings.TrimSpace(name))), ".") {
+	case "mp4", "m4v", "mov", "qt", "webm", "mkv", "mk3d", "avi", "ts", "m2ts", "mts", "flv", "wmv", "ogv", "mpeg", "mpg":
+		return true
+	default:
+		return false
+	}
 }
 
 // loadRendition owns its key and transfer slot for the complete shared flight.

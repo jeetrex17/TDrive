@@ -113,6 +113,27 @@ func TestGallerySchemaUpgradeBackfillsExistingProjection(t *testing.T) {
 	}
 }
 
+func TestGallerySchemaV2MigrationBackfillsVideos(t *testing.T) {
+	db := newTestDB(t)
+	if _, err := db.Exec(`INSERT INTO files(channel_id,msg_id,name,size,parent_id,upload_time,content_msg_id,content_hash,revision)
+		VALUES(?,1,'clip.mp4',1,'',1700000000,1,'video',1)`, testChan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM gallery_items WHERE channel_id=? AND msg_id=1`, testChan); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE gallery_schema_meta SET version=2 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureGallerySchema(db); err != nil {
+		t.Fatal(err)
+	}
+	page, err := MediaPage(context.Background(), db, testChan, "", 128)
+	if err != nil || len(page.Items) != 1 || page.Items[0].Name != "clip.mp4" {
+		t.Fatalf("v2 migration page=%+v error=%v", page, err)
+	}
+}
+
 func TestGallerySchemaUpgradeHandlesHistoricalOutOfRangeTimestamp(t *testing.T) {
 	db := newTestDB(t)
 	for _, name := range galleryMaterializationTriggerNames() {

@@ -78,6 +78,30 @@ func TestRenditionPlainThumbnailIgnoresOriginalSize(t *testing.T) {
 		t.Fatal("wrong download path")
 	}
 }
+func TestVideoRenditionAllowsOnlyBoundedThumbnail(t *testing.T) {
+	s, c := renditionFixture(t)
+	if _, err := s.DB.Exec(`UPDATE files SET name='clip.mp4' WHERE channel_id=? AND msg_id=?`, personalChannelID, 91); err != nil {
+		t.Fatal(err)
+	}
+	c.doc.Name = "clip.mp4"
+	raw := makePNG(t, 32, 16)
+	c.doc.Thumbs = []tgclient.FileThumb{{Type: "m", Width: 32, Height: 16, Size: len(raw)}}
+	c.thumbnail = func(_ context.Context, w io.Writer) error { _, err := w.Write(raw); return err }
+	for _, kind := range []string{"preview", "original"} {
+		if _, err := s.Rendition(context.Background(), personalChannelID, 91, 1, kind); !errors.Is(err, errPreviewNotSupported) {
+			t.Fatalf("%s error=%v", kind, err)
+		}
+	}
+	if c.originals.Load() != 0 || c.thumbs.Load() != 0 {
+		t.Fatal("denied video rendition performed network I/O")
+	}
+	if _, err := s.Rendition(context.Background(), personalChannelID, 91, 1, "thumbnail"); err != nil {
+		t.Fatal(err)
+	}
+	if c.originals.Load() != 0 || c.thumbs.Load() != 1 {
+		t.Fatal("video thumbnail did not use bounded document thumbnail")
+	}
+}
 func TestRenditionRevisionPinRejectsBeforeNetwork(t *testing.T) {
 	s, c := renditionFixture(t)
 	_, err := s.Rendition(context.Background(), personalChannelID, 91, 2, "thumbnail")

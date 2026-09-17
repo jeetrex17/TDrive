@@ -123,6 +123,20 @@
     -webkit-backdrop-filter: blur(6px);
     backdrop-filter: blur(6px);
 }
+
+.gallery-video-badge {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    color: #fff;
+    background: rgba(0, 0, 0, .66);
+    border-radius: 50%;
+    pointer-events: none;
+}
 .gallery-lock svg { width: 13px; height: 13px; }
 .gallery-broken { inset: 0; color: var(--text-muted); }
 .gallery-broken svg { width: 34px; height: 34px; }
