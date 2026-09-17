@@ -18,7 +18,7 @@ import { activatePhotoBackupBackground } from './background';
 
 const state = (uploading: boolean): PhotoBackupState => ({
     settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false },
-    sources: [], status: { phase: uploading ? 'uploading' : 'idle', pending: 0, uploading: uploading ? 1 : 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, message: '' },
+    sources: [], status: { phase: uploading ? 'uploading' : 'idle', pending: 0, uploading: uploading ? 1 : 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0, message: '' },
     capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: '', detail: '' } },
     platform: 'android', destination: { id: '', title: '', kind: '' }, manualPaused: false, encryptionRequired: false,
 });

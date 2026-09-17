@@ -55,6 +55,7 @@
         && transfer.status !== 'canceling'
         // The download backend can stop only the job it is currently running.
         // A queued row gets no fake individual cancel control.
+        && transfer.id !== 'xfer:up:photo-backup'
         && (transfer.direction === 'up' || transfer.status === 'active'),
     );
     const cancelLabel = $derived(
@@ -105,6 +106,7 @@
             {#if (transfer.itemsTotal || 0) > 0}
                 <div class="notif-row-size">{transfer.itemsDone || 0} / {transfer.itemsTotal} files</div>
             {/if}
+            <div class="notif-row-size">{Math.round(transfer.progress || 0)}%</div>
             <div class="notif-row-size">{formatBytes(doneBytes)} / {formatBytes(transfer.total)}</div>
             {#if transfer.speed > 0}
                 <div class="notif-row-speed">{formatBytes(transfer.speed)}/s</div>

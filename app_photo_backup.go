@@ -40,16 +40,6 @@ type PhotoBackupSource struct {
 	AddedAt int64  `json:"added_at"`
 }
 
-type PhotoBackupAsset struct {
-	ID         string `json:"id"`
-	Version    string `json:"version"`
-	Name       string `json:"name"`
-	MediaType  string `json:"media_type"`
-	ResourceID string `json:"resource_id"`
-	ModifiedAt int64  `json:"modified_at"`
-	Size       int64  `json:"size"`
-}
-
 type PhotoBackupCapability struct {
 	Supported bool   `json:"supported"`
 	Label     string `json:"label"`
@@ -65,15 +55,19 @@ type PhotoBackupCapabilities struct {
 }
 
 type PhotoBackupStatus struct {
-	Phase      string `json:"phase"`
-	Pending    int64  `json:"pending"`
-	Uploading  int64  `json:"uploading"`
-	Complete   int64  `json:"complete"`
-	Failed     int64  `json:"failed"`
-	Paused     int64  `json:"paused,omitempty"`
-	BytesDone  int64  `json:"bytes_done"`
-	BytesTotal int64  `json:"bytes_total"`
-	Message    string `json:"message"`
+	CurrentFile           string  `json:"current_file"`
+	CurrentFileBytesDone  int64   `json:"current_file_bytes_done"`
+	CurrentFileBytesTotal int64   `json:"current_file_bytes_total"`
+	CurrentFilePercent    float64 `json:"current_file_percent"`
+	Phase                 string  `json:"phase"`
+	Pending               int64   `json:"pending"`
+	Uploading             int64   `json:"uploading"`
+	Complete              int64   `json:"complete"`
+	Failed                int64   `json:"failed"`
+	Paused                int64   `json:"paused,omitempty"`
+	BytesDone             int64   `json:"bytes_done"`
+	BytesTotal            int64   `json:"bytes_total"`
+	Message               string  `json:"message"`
 }
 
 type PhotoBackupState struct {
@@ -95,8 +89,6 @@ type PhotoBackupPolicy struct {
 	WiFi       bool  `json:"wifi"`
 	ObservedAt int64 `json:"observed_at"`
 }
-
-type photoBackupMaterialization struct{ path, err string }
 
 func (a *App) initPhotoBackup() error {
 	// No worker exists yet; remove only this feature's private crash leftovers.
@@ -188,12 +180,15 @@ func (a *App) GetPhotoBackupState() (PhotoBackupState, error) {
 		return PhotoBackupState{}, err
 	}
 	state := photoBackupState(settings, sources, status, a.photoBackupIsRunning(), settings.ManualPaused)
+	if err := populatePhotoBackupDestination(&state, sources); err != nil {
+		return PhotoBackupState{}, err
+	}
 	if settings.Enabled && !settings.ManualPaused {
 		if policyErr := a.photoBackupPolicyAllows(settings); policyErr != nil {
 			state.Status.Phase, state.Status.Message = "paused", policyErr.Error()
 		}
 	}
-	return a.photoBackupAccessState(state), nil
+	return a.photoBackupAccessState(a.withPhotoBackupProgress(state, scope)), nil
 }
 
 func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupState, error) {
@@ -220,7 +215,7 @@ func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupSta
 	if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
 		return PhotoBackupState{}, getErr
 	}
-	settings := photobackup.Settings{Scope: scope, Enabled: value.Enabled, Photos: value.Photos, Videos: value.Videos, FutureOnly: value.FutureOnly, WiFiOnly: value.WiFiOnly, DestinationParentID: value.DestinationParentID, Encrypt: value.Encrypt, ManualPaused: current.ManualPaused}
+	settings := photoBackupSettingsForSave(scope, current, value)
 	a.stopPhotoBackup()
 	if err := engine.PutSettings(ctx, settings); err != nil {
 		return PhotoBackupState{}, err
@@ -503,6 +498,8 @@ func (a *App) uploadPhotoBackup(ctx context.Context, request photobackup.UploadR
 	if err := a.photoBackupPolicyAllows(settings); err != nil {
 		return photobackup.UploadResult{}, err
 	}
+	progress, finishProgress := a.beginPhotoBackupProgress(ctx, request.Scope, request.Asset.Name, request.Asset.Size)
+	defer finishProgress()
 	path := request.Asset.Path
 	var token string
 	if path == "" {
@@ -546,7 +543,11 @@ func (a *App) uploadPhotoBackup(ctx context.Context, request photobackup.UploadR
 	if err != nil {
 		return photobackup.UploadResult{}, err
 	}
-	meta, err := svc.UploadBackup(ctx, request.ChannelID, path, request.ParentID, request.Encrypt)
+	destinationParentID, err := a.resolvePhotoBackupUploadParent(ctx, request)
+	if err != nil {
+		return photobackup.UploadResult{}, err
+	}
+	meta, err := svc.UploadBackup(ctx, request.ChannelID, path, destinationParentID, request.Encrypt, progress)
 	if meta.MsgID > 0 {
 		return photobackup.UploadResult{RemoteMessageID: int64(meta.MsgID)}, nil
 	}
