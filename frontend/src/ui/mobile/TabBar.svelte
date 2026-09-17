@@ -6,7 +6,6 @@
     import type { Component } from 'svelte';
     import Avatar from '../chrome/Avatar.svelte';
     import { profileLoaded, profileUser } from '../chrome/profile-store';
-    import Fab from './Fab.svelte';
     import type { MobileTab } from './mobile-shell-store';
 
     interface Props {
@@ -34,10 +33,6 @@
         { id: 'account', label: 'Account', icon: CircleUserIcon },
     ];
 
-    // The upload button sits in the middle of the bar, so the destinations
-    // split two and two around it.
-    const DOCK_AFTER = 2;
-
     // The account tab is the one that is about the person using the app, so it
     // shows them rather than a drawing of a person. The icon stays until the
     // profile arrives: an empty disc in the meantime would read as a fault
@@ -51,16 +46,7 @@
 </script>
 
 <nav class="tab-bar" aria-label="Primary">
-    {#each tabs as tab, index (tab.id)}
-        {#if index === DOCK_AFTER}
-            <!-- The upload action is a cell of this row, not something floated
-                 over it. Sharing the row's own sizing is what keeps all five
-                 centres evenly spaced; parked on top with a fixed width it made
-                 the two middle gaps narrower than the two outer ones.
-                 It is still not a tab stop, so the destinations stay a clean
-                 four for a screen reader. -->
-            <Fab />
-        {/if}
+    {#each tabs as tab (tab.id)}
         {@const Icon = tab.icon}
         <button
             type="button"

@@ -1,7 +1,6 @@
 <script lang="ts">
     import CheckIcon from '@lucide/svelte/icons/check';
     import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
-    import CircleIcon from '@lucide/svelte/icons/circle';
     import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
     import type { RingState } from './mobile-shell-store';
 
@@ -13,11 +12,9 @@
 
     let { status, onOpenQueue }: Props = $props();
 
-    // One 16px mark for every kind of background work: a quiet circle at rest,
-    // a spinning loader while anything is moving, an alert when something needs
-    // a person. Every state is a Lucide glyph at the same size and weight, so
-    // the mark keeps one shape language as it changes; only the spin animates,
-    // and reduced motion stops it.
+    // The header only earns a status mark while something needs attention.
+    // An idle hollow ring competes with the drive switcher yet says nothing the
+    // user can act on, so it is intentionally absent at rest.
     //
     // The label is the state in words, because a 16px glyph is not a sentence:
     // it is what a screen reader reads and what a returning user needs when the
@@ -32,7 +29,6 @@
     const Glyph = $derived(
         status === 'active' ? LoaderCircleIcon
         : status === 'attention' || status === 'failed' ? CircleAlertIcon
-        : status === 'idle' ? CircleIcon
         : CheckIcon,
     );
 
@@ -41,7 +37,7 @@
     const tappable = $derived(Boolean(onOpenQueue) && status !== 'idle');
 </script>
 
-{#if tappable}
+{#if status !== 'idle' && tappable}
     <button
         class="sync-ring is-tappable"
         data-state={status}
@@ -51,7 +47,7 @@
     >
         <Glyph size={14} strokeWidth={2.5} aria-hidden="true" />
     </button>
-{:else}
+{:else if status !== 'idle'}
     <span class="sync-ring" data-state={status} role="img" aria-label={label}>
         <Glyph size={14} strokeWidth={2.5} aria-hidden="true" />
     </span>

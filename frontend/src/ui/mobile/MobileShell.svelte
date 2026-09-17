@@ -9,6 +9,7 @@
     import { selectionBarState } from '../selection/selection-bar-store';
     import FeatureLayer from '../app/FeatureLayer.svelte';
     import AccountTab from './AccountTab.svelte';
+    import Fab from './Fab.svelte';
     import DriveSwitcherSheet from './DriveSwitcherSheet.svelte';
     import TabBar from './TabBar.svelte';
     import TopBar from './TopBar.svelte';
@@ -20,6 +21,7 @@
     import { activeTab, keyboardOpen, transferAttentionCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
+    import { fileListView } from '../file-list/file-list-store';
 
     interface Props {
         dashboardVisible: boolean;
@@ -33,6 +35,18 @@
     // Files and Photos share one content region (the file list vs the gallery);
     // Transfers and Account are their own panels.
     const showMain = $derived($activeTab === 'files' || $activeTab === 'photos');
+    // An empty Files view already places Upload and Create folder in its
+    // center. Keep that focused state in charge rather than floating a second
+    // creation control over it.
+    const emptyFilesOwnsCreation = $derived(
+        $fileListView.kind === 'state'
+        && $fileListView.stateKind === 'empty'
+        && Boolean($fileListView.actionLabel || $fileListView.secondaryActionLabel),
+    );
+    const showContextAction = $derived(
+        $activeTab === 'photos' || ($activeTab === 'files' && !emptyFilesOwnsCreation),
+    );
+    const contextualActionVisible = $derived(showContextAction && !selecting && !$keyboardOpen);
 
     // The gallery owns whether Photos is showing; the tab is only how the user
     // asked for it. Hardware BACK and in-app navigation leave the gallery
@@ -133,6 +147,8 @@
     id="success-screen"
     class="mobile-shell"
     class:is-scrolled={scrolled}
+    class:is-selecting={selecting}
+    class:has-context-action={contextualActionVisible}
     hidden={!dashboardVisible}
     aria-hidden={dashboardVisible ? undefined : 'true'}
 >
@@ -174,10 +190,14 @@
         aria-live="polite"
     ></div>
 
-    <!-- The upload button is docked into the tab bar, so it lives in the same
-         slot and never slides away on scroll: it is part of the bar's shape,
-         and a gap opening and closing in the middle of it would read as a
-         glitch rather than a hint. -->
+    <!-- Upload/Create is contextual to drive content, not a fifth destination.
+         It stays above the navigation bar on Files and Photos, where a new
+         item has a meaningful destination, and leaves Transfers and Account
+         calm. -->
+    <div class="mobile-context-action" hidden={!contextualActionVisible}>
+        <Fab />
+    </div>
+
     <div class="mobile-tabbar-slot" hidden={selecting || $keyboardOpen}>
         <TabBar active={$activeTab} transferBadge={$transferAttentionCount} onSelect={selectTab} />
     </div>

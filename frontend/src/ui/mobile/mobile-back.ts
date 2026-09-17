@@ -1,4 +1,5 @@
-// Android hardware and gesture BACK for the phone shell.
+// Android hardware/predictive back and iOS's native leading-edge back gesture
+// share one phone-shell contract.
 //
 // The host cannot answer the press on its own: WebView.canGoBack() only sees
 // document navigations, so the history entries a single-page app pushes are
@@ -16,7 +17,7 @@ import { exitPhotos } from '../../modules/gallery';
 import { clearSelection } from '../../modules/selection';
 import { activeTab, closeDriveSwitcher, driveSwitcherOpen } from './mobile-shell-store';
 
-/** The name the Android host calls. Changing it means changing MainActivity. */
+/** The name the native phone hosts call. Keep it in sync with MainActivity and main.m. */
 export const BACK_BRIDGE = '__tdriveHandleBack';
 
 /**
