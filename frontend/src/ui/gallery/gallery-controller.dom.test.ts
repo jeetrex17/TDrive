@@ -132,13 +132,51 @@ describe('gallery image leases', () => {
         fire(locked.node); await flush();
         expect(locked.last()).toEqual({ status: 'locked', title: 'locked, click to unlock' });
         controller.rearmLocked();
-        expect(locked.last()).toEqual({ status: 'idle', title: '' });
-        fire(locked.node); await flush();
+        await flush();
         expect(locked.last()?.status).toBe('loaded');
         runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject({ code: 'missing_rendition' }), release: runtime.release }));
         const missing = cell(20);
         fire(missing.node); await flush();
         expect(missing.last()).toEqual({ status: 'missing', title: 'thumbnail unavailable' });
+    });
+
+    it('retries visible locked cells immediately after unlock and leaves offscreen cells lazy', async () => {
+        runtime.acquire.mockImplementation(() => ({ promise: Promise.reject({ code: 'encryption_password_required' }), release: runtime.release }));
+        const visible = cell(10);
+        const offscreen = cell(11);
+        fire(visible.node);
+        fire(offscreen.node, false);
+        await flush();
+        expect(visible.last()?.status).toBe('locked');
+
+        runtime.acquire.mockImplementation(() => ({ promise: Promise.resolve({ url: 'blob:unlocked', width: 256, height: 256 }), release: runtime.release }));
+        controller.rearmLocked();
+        await flush();
+
+        expect(visible.last()).toEqual({ status: 'loaded', src: 'blob:unlocked', title: '' });
+        expect(runtime.acquire).toHaveBeenCalledTimes(2);
+        expect(offscreen.last()).toEqual({ status: 'idle', src: '', title: '' });
+    });
+
+    it('replaces a visible request that was still in flight when unlock completed', async () => {
+        let rejectLocked!: (error: unknown) => void;
+        runtime.acquire.mockImplementationOnce(() => ({
+            promise: new Promise((_resolve, reject) => { rejectLocked = reject; }),
+            release: runtime.release,
+        })).mockImplementationOnce(() => ({
+            promise: Promise.resolve({ url: 'blob:fresh', width: 256, height: 256 }),
+            release: runtime.release,
+        }));
+        const target = cell();
+        fire(target.node);
+        expect(target.last()?.status).toBe('loading');
+
+        controller.rearmLocked();
+        rejectLocked({ code: 'encryption_password_required' });
+        await flush();
+
+        expect(target.last()).toEqual({ status: 'loaded', src: 'blob:fresh', title: '' });
+        expect(runtime.release).toHaveBeenCalledOnce();
     });
 
     it('respects long server deadlines and cancels retries when the cell leaves', async () => {

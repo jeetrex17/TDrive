@@ -16,15 +16,26 @@ The app resolves that scope; native adapters cannot choose an account.
 - The frontend enumerates mobile sources a page at a time. The Go worker
   uploads one queued resource at a time using the shared file service. Opening
   the gallery does not start an original-library download.
-- Mobile backup currently runs while the app is active and catches up when it
-  resumes. It does not provide a headless OS-scheduled uploader. Apple's
-  resumable-HTTP photo upload extension is not wired to Telegram transport.
+- Mobile discovery runs while the app is active. With a native execution grant,
+  an in-flight transfer can continue after backgrounding. Android uses a visible
+  data-sync foreground service; iOS grants limited UIKit background time, with a
+  conservative Go cancellation deadline. New resources wait for the foreground
+  because materialization still needs the WebView. This does not provide a
+  headless OS-scheduled uploader or uploads after process termination. Apple's
+  background HTTP upload transport is not wired to Telegram.
 
 Settings and queue state survive restart. Desktop scan handles do not: an
 interrupted traversal performs a fresh linear scan, with the ledger suppressing
 already discovered versions. Mobile discovery may also reconcile the accessible
 library again after resume. This is bounded-memory reconciliation, not a promise
 of constant-time discovery for a million items.
+
+Pause cancels in-flight work and persists per account and drive. Only an explicit
+Resume clears that choice; settings changes, retries, and app restarts do not.
+Cancellation without a remote receipt holds the interrupted item for explicit
+retry because its remote outcome may be uncertain. Confirmed receipts remain
+complete even if cancellation arrives at the same time. Pausing does not spend
+the item's failure retry budget.
 
 ## Identity and completion
 
@@ -66,16 +77,46 @@ backup database, its SQLite sidecars, and native staging; soft logout retains th
 ledger. Encryption keys are not stored in backup settings, and encrypted backup
 waits for the existing encryption session.
 
+When encrypted backup is locked, the panel shows the unlock prerequisite before
+starting. Explicit start, resume, or retry actions use the existing password
+dialog; automatic discovery never opens a password prompt. Canceling the dialog
+leaves the operation stopped. Passwords and keys remain session-only.
+
+Backup has no charging condition. Schema v3 removes the old charging setting
+from v1/v2 databases without discarding sources, receipts, or queued work.
+
 ## User-visible limits
 
 Backup source selection is available in the desktop profile menu and mobile
-Account tab. The destination is the current drive. Policy controls are enabled
+Account tab. New uploads go to `Photo backup / <device> / <source>` in the
+current drive (under a configured destination parent when present). Device names
+are persisted with an installation-specific suffix. Indexed folder lookup reuses
+the hierarchy across restarts; existing completed uploads are not moved or sent
+again. The panel reports the actual destination layout.
+
+A single scoped notification/Transfers row reports the current filename, transport
+percentage, bytes, and queue counts. Byte updates are throttled to four per second;
+file completion clears the current item. State uses one snapshot, not one object
+per queued file, and stale responses cannot restore another drive's filenames.
+
+Encrypted photo backups reuse the uploader's immutable snapshot (up to 30 MiB) to
+create encrypted thumbnails and previews before releasing the local source.
+A failed optional preview does not invalidate the original upload receipt.
+Unlocking encryption immediately retries visible locked thumbnails; offscreen
+items remain lazy. Older encrypted images without derivatives can prepare them
+on demand, capped at 30 MiB per original and by thumbnail worker concurrency.
+Temporary originals stay encrypted on disk and derivatives use the encrypted
+cache. Larger or unsupported images may still lack a thumbnail.
+
+Policy controls are enabled
 only where native device status can be supplied; an unavailable or stale required
 policy prevents uploading.
 
-Backed-up videos and unsupported preview formats remain accessible through the
-normal file browser/download flow. Backup does not expand the existing image-only
-gallery into a mixed photo/video timeline or reproduce device albums there.
+The gallery shows supported images and videos together. Video tiles request only
+document thumbnails and open the existing streaming player on activation. Missing
+thumbnails do not trigger full-video downloads. Unsupported preview formats remain
+accessible through the normal file browser/download flow. Device albums are not
+mirrored into cloud albums.
 Original metadata embedded in the file is retained; the current cloud timeline
 still orders files by upload time.
 

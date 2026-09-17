@@ -2,7 +2,9 @@
     import CheckIcon from '@lucide/svelte/icons/check';
     import ImageOffIcon from '@lucide/svelte/icons/image-off';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
+    import PlayIcon from '@lucide/svelte/icons/play';
     import { isMobilePlatform } from '../../api';
+    import { isVideoFile } from '../../modules/media-types';
     import type { FileItem } from '../../types';
     import { selectedFileRowKeys } from '../file-list/row-state-store';
     import { registerCell, unregisterCell, type CellPatch, type CellStatus } from './gallery-controller';
@@ -24,6 +26,7 @@
     const mobile = isMobilePlatform();
     const selecting = $derived(mobile && $selectedFileRowKeys.size > 0);
     const selected = $derived(selecting && $selectedFileRowKeys.has(`file:${item.msgId}`));
+    const video = $derived(isVideoFile(item.name));
 
     // The controller drives loads/eviction and pushes state here (O(1) per
     // cell, matching the old direct DOM writes).
@@ -55,7 +58,7 @@
     );
     // The label carries the detail too: a locked or broken cell has to say so
     // out loud, and a phone has no tooltip to fall back on.
-    const title = $derived(detail ? `${item.name} — ${detail}` : item.name);
+    const title = $derived(detail ? `${video ? `Video: ${item.name}` : item.name} — ${detail}` : (video ? `Video: ${item.name}` : item.name));
 </script>
 
 <button
@@ -71,6 +74,9 @@
     use:register={{ msgId: item.msgId, revision: 'revision' in item ? Number(item.revision) : 0 }}
 >
     <img class="gallery-thumb" alt="" width="512" height="512" decoding="async" src={src || undefined} />
+    {#if video}
+        <span class="gallery-video-badge" aria-hidden="true"><PlayIcon size={14} fill="currentColor" strokeWidth={2.5} /></span>
+    {/if}
     {#if item.encrypted}
         <span class="gallery-lock">
             <LockKeyholeIcon size={13} strokeWidth={2} aria-hidden="true" />

@@ -124,19 +124,22 @@ func TestStagePhotoBackupFileRejectsOversizedSparseResource(t *testing.T) {
 
 func TestPhotoBackupPolicyFailsClosedAndExpires(t *testing.T) {
 	app := &App{}
-	settings := photobackup.Settings{WiFiOnly: true, ChargingOnly: true}
+	if err := app.photoBackupPolicyAllows(photobackup.Settings{}); err != nil {
+		t.Fatalf("unrestricted policy: %v", err)
+	}
+	settings := photobackup.Settings{WiFiOnly: true}
 	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("missing policy error=%v", err)
 	}
-	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, Charging: false, ObservedAt: time.Now().UnixMilli()})
-	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "charging") {
-		t.Fatalf("charging error=%v", err)
-	}
-	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, Charging: true, ObservedAt: time.Now().Add(-photoBackupPolicyTTL - time.Second).UnixMilli()})
+	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, ObservedAt: time.Now().Add(-photoBackupPolicyTTL - time.Second).UnixMilli()})
 	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("expired policy error=%v", err)
 	}
-	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, Charging: true, ObservedAt: time.Now().UnixMilli()})
+	app.SetPhotoBackupPolicy(PhotoBackupPolicy{ObservedAt: time.Now().UnixMilli()})
+	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "Wi-Fi") {
+		t.Fatalf("Wi-Fi error=%v", err)
+	}
+	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, ObservedAt: time.Now().UnixMilli()})
 	if err := app.photoBackupPolicyAllows(settings); err != nil {
 		t.Fatalf("allowed policy: %v", err)
 	}
@@ -150,8 +153,12 @@ func TestPhotoBackupStateUsesStableWirePhases(t *testing.T) {
 		t.Fatalf("state=%+v", state)
 	}
 	state = photoBackupState(settings, sources, photobackup.Status{Error: 1, LastError: "offline"}, false, true)
-	if state.Status.Phase != "paused" || state.Status.Message != "offline" {
+	if state.Status.Phase != "paused" || state.Status.Message != "Paused by you." {
 		t.Fatalf("paused state=%+v", state.Status)
+	}
+	state = photoBackupState(settings, sources, photobackup.Status{Pending: 1, Paused: 1, LastError: "upload interrupted; remote outcome unknown"}, true, false)
+	if state.Status.Phase != "uploading" || state.Status.Paused != 1 {
+		t.Fatalf("running with interrupted item state=%+v", state.Status)
 	}
 }
 

@@ -94,19 +94,20 @@ type App struct {
 	nativeMediaMu sync.Mutex
 	nativeMedia   map[string]*nativeMediaSession
 
-	photoBackupMu           sync.Mutex
-	photoBackupDiscoveryMu  sync.Mutex
-	photoBackup             *photobackup.Engine
-	photoBackupDB           *sql.DB
-	photoBackupCancel       context.CancelFunc
-	photoBackupDone         chan struct{}
-	photoBackupRunID        uint64
-	photoBackupManualPaused bool
-	photoBackupWaiters      map[string]chan photoBackupMaterialization
-	photoBackupPolicy       PhotoBackupPolicy
-	photoBackupStop         chan struct{}
-	photoBackupAdapters     map[string]*photobackup.LocalFolderAdapter
-	photoBackupClosed       bool
+	photoBackupMu          sync.Mutex
+	photoBackupDiscoveryMu sync.Mutex
+	photoBackup            *photobackup.Engine
+	photoBackupDB          *sql.DB
+	photoBackupCancel      context.CancelFunc
+	photoBackupDone        chan struct{}
+	photoBackupRunID       uint64
+	photoBackupProgress    photoBackupProgressState
+	photoBackupWaiters     map[string]chan photoBackupMaterialization
+	photoBackupPolicy      PhotoBackupPolicy
+	photoBackupStop        chan struct{}
+	photoBackupAdapters    map[string]*photobackup.LocalFolderAdapter
+	photoBackupBackground  photoBackupBackgroundState
+	photoBackupClosed      bool
 }
 
 type runtimeEventSink struct {

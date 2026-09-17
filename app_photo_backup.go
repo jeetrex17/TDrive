@@ -27,7 +27,6 @@ type PhotoBackupSettings struct {
 	Videos              bool   `json:"videos"`
 	FutureOnly          bool   `json:"future_only"`
 	WiFiOnly            bool   `json:"wifi_only"`
-	ChargingOnly        bool   `json:"charging_only"`
 	DestinationParentID string `json:"destination_parent_id"`
 	Encrypt             bool   `json:"encrypt"`
 }
@@ -41,16 +40,6 @@ type PhotoBackupSource struct {
 	AddedAt int64  `json:"added_at"`
 }
 
-type PhotoBackupAsset struct {
-	ID         string `json:"id"`
-	Version    string `json:"version"`
-	Name       string `json:"name"`
-	MediaType  string `json:"media_type"`
-	ResourceID string `json:"resource_id"`
-	ModifiedAt int64  `json:"modified_at"`
-	Size       int64  `json:"size"`
-}
-
 type PhotoBackupCapability struct {
 	Supported bool   `json:"supported"`
 	Label     string `json:"label"`
@@ -58,24 +47,27 @@ type PhotoBackupCapability struct {
 }
 
 type PhotoBackupCapabilities struct {
-	WiFiOnly     PhotoBackupCapability `json:"wifi_only"`
-	ChargingOnly PhotoBackupCapability `json:"charging_only"`
-	Access       struct {
+	WiFiOnly PhotoBackupCapability `json:"wifi_only"`
+	Access   struct {
 		Status string `json:"status"`
 		Detail string `json:"detail"`
 	} `json:"access"`
 }
 
 type PhotoBackupStatus struct {
-	Phase      string `json:"phase"`
-	Pending    int64  `json:"pending"`
-	Uploading  int64  `json:"uploading"`
-	Complete   int64  `json:"complete"`
-	Failed     int64  `json:"failed"`
-	Paused     int64  `json:"paused,omitempty"`
-	BytesDone  int64  `json:"bytes_done"`
-	BytesTotal int64  `json:"bytes_total"`
-	Message    string `json:"message"`
+	CurrentFile           string  `json:"current_file"`
+	CurrentFileBytesDone  int64   `json:"current_file_bytes_done"`
+	CurrentFileBytesTotal int64   `json:"current_file_bytes_total"`
+	CurrentFilePercent    float64 `json:"current_file_percent"`
+	Phase                 string  `json:"phase"`
+	Pending               int64   `json:"pending"`
+	Uploading             int64   `json:"uploading"`
+	Complete              int64   `json:"complete"`
+	Failed                int64   `json:"failed"`
+	Paused                int64   `json:"paused,omitempty"`
+	BytesDone             int64   `json:"bytes_done"`
+	BytesTotal            int64   `json:"bytes_total"`
+	Message               string  `json:"message"`
 }
 
 type PhotoBackupState struct {
@@ -89,15 +81,14 @@ type PhotoBackupState struct {
 		Title string `json:"title"`
 		Kind  string `json:"kind"`
 	} `json:"destination"`
+	ManualPaused       bool `json:"manual_paused"`
+	EncryptionRequired bool `json:"encryption_required"`
 }
 
 type PhotoBackupPolicy struct {
 	WiFi       bool  `json:"wifi"`
-	Charging   bool  `json:"charging"`
 	ObservedAt int64 `json:"observed_at"`
 }
-
-type photoBackupMaterialization struct{ path, err string }
 
 func (a *App) initPhotoBackup() error {
 	// No worker exists yet; remove only this feature's private crash leftovers.
@@ -188,18 +179,21 @@ func (a *App) GetPhotoBackupState() (PhotoBackupState, error) {
 	if err != nil {
 		return PhotoBackupState{}, err
 	}
-	state := photoBackupState(settings, sources, status, a.photoBackupIsRunning(), a.photoBackupIsPaused())
-	if settings.Enabled {
+	state := photoBackupState(settings, sources, status, a.photoBackupIsRunning(), settings.ManualPaused)
+	if err := populatePhotoBackupDestination(&state, sources); err != nil {
+		return PhotoBackupState{}, err
+	}
+	if settings.Enabled && !settings.ManualPaused {
 		if policyErr := a.photoBackupPolicyAllows(settings); policyErr != nil {
 			state.Status.Phase, state.Status.Message = "paused", policyErr.Error()
 		}
 	}
-	return state, nil
+	return a.photoBackupAccessState(a.withPhotoBackupProgress(state, scope)), nil
 }
 
 func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupState, error) {
-	if runtime.GOOS != "android" && (value.WiFiOnly || value.ChargingOnly) {
-		return PhotoBackupState{}, fmt.Errorf("photo backup: Wi-Fi and charging conditions are unavailable on this platform")
+	if runtime.GOOS != "android" && value.WiFiOnly {
+		return PhotoBackupState{}, fmt.Errorf("photo backup: Wi-Fi conditions are unavailable on this platform")
 	}
 	ctx := a.appContext()
 	engine, err := a.photoBackupEngine()
@@ -217,7 +211,11 @@ func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupSta
 	if enc.PasswordSet {
 		value.Encrypt = true
 	}
-	settings := photobackup.Settings{Scope: scope, Enabled: value.Enabled, Photos: value.Photos, Videos: value.Videos, FutureOnly: value.FutureOnly, WiFiOnly: value.WiFiOnly, ChargingOnly: value.ChargingOnly, DestinationParentID: value.DestinationParentID, Encrypt: value.Encrypt}
+	current, getErr := engine.GetSettings(ctx, scope)
+	if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
+		return PhotoBackupState{}, getErr
+	}
+	settings := photoBackupSettingsForSave(scope, current, value)
 	a.stopPhotoBackup()
 	if err := engine.PutSettings(ctx, settings); err != nil {
 		return PhotoBackupState{}, err
@@ -321,19 +319,56 @@ func (a *App) EnqueuePhotoBackupAssets(sourceID string, values []PhotoBackupAsse
 }
 
 func (a *App) RunPhotoBackup() error {
-	a.photoBackupMu.Lock()
-	a.photoBackupManualPaused = false
-	a.photoBackupMu.Unlock()
+	engine, err := a.photoBackupEngine()
+	if err != nil {
+		return err
+	}
+	scope, err := a.photoBackupScope(a.appContext())
+	if err != nil {
+		return err
+	}
+	settings, err := engine.GetSettings(a.appContext(), scope)
+	if err != nil {
+		return err
+	}
+	if settings.ManualPaused {
+		return fmt.Errorf("photo backup: paused")
+	}
 	if runtime.GOOS != "ios" && runtime.GOOS != "android" && !a.photoBackupIsRunning() {
 		a.resetDesktopPhotoBackupDiscovery(a.appContext())
 	}
 	return a.startPhotoBackup()
 }
-func (a *App) PausePhotoBackup() {
-	a.photoBackupMu.Lock()
-	a.photoBackupManualPaused = true
-	a.photoBackupMu.Unlock()
+func (a *App) PausePhotoBackup() error {
+	engine, err := a.photoBackupEngine()
+	if err != nil {
+		return err
+	}
+	scope, err := a.photoBackupScope(a.appContext())
+	if err != nil {
+		return err
+	}
+	if err := engine.SetManualPaused(a.appContext(), scope, true); err != nil {
+		return err
+	}
 	a.stopPhotoBackup()
+	a.emit("photo-backup:state")
+	return nil
+}
+
+func (a *App) ResumePhotoBackup() error {
+	engine, err := a.photoBackupEngine()
+	if err != nil {
+		return err
+	}
+	scope, err := a.photoBackupScope(a.appContext())
+	if err != nil {
+		return err
+	}
+	if err := engine.SetManualPaused(a.appContext(), scope, false); err != nil {
+		return err
+	}
+	return a.startPhotoBackup()
 }
 func (a *App) RetryPhotoBackup() error {
 	engine, err := a.photoBackupEngine()
@@ -392,6 +427,9 @@ func (a *App) startPhotoBackup() error {
 	if !settings.Enabled {
 		return nil
 	}
+	if settings.ManualPaused {
+		return fmt.Errorf("photo backup: paused")
+	}
 	if settings.Encrypt {
 		status, err := a.EncryptionStatus()
 		if err != nil {
@@ -405,10 +443,6 @@ func (a *App) startPhotoBackup() error {
 	if a.photoBackupClosed {
 		a.photoBackupMu.Unlock()
 		return fmt.Errorf("photo backup unavailable")
-	}
-	if a.photoBackupManualPaused {
-		a.photoBackupMu.Unlock()
-		return fmt.Errorf("photo backup: paused")
 	}
 	if a.photoBackupCancel != nil {
 		a.photoBackupMu.Unlock()
@@ -433,6 +467,12 @@ func (a *App) startPhotoBackup() error {
 		}()
 		_ = engine.RecoverInterrupted(ctx, scope)
 		for ctx.Err() == nil {
+			// A native background lease may finish the item that was already in
+			// flight, but a suspended WebView cannot safely discover or stage the
+			// next one. Foreground resume restarts this durable queue.
+			if !a.photoBackupMayStartNextJob() {
+				break
+			}
 			done, runErr := engine.RunOnce(ctx, scope, a.uploadPhotoBackup)
 			if runErr != nil {
 				break
@@ -458,6 +498,8 @@ func (a *App) uploadPhotoBackup(ctx context.Context, request photobackup.UploadR
 	if err := a.photoBackupPolicyAllows(settings); err != nil {
 		return photobackup.UploadResult{}, err
 	}
+	progress, finishProgress := a.beginPhotoBackupProgress(ctx, request.Scope, request.Asset.Name, request.Asset.Size)
+	defer finishProgress()
 	path := request.Asset.Path
 	var token string
 	if path == "" {
@@ -501,7 +543,11 @@ func (a *App) uploadPhotoBackup(ctx context.Context, request photobackup.UploadR
 	if err != nil {
 		return photobackup.UploadResult{}, err
 	}
-	meta, err := svc.UploadBackup(ctx, request.ChannelID, path, request.ParentID, request.Encrypt)
+	destinationParentID, err := a.resolvePhotoBackupUploadParent(ctx, request)
+	if err != nil {
+		return photobackup.UploadResult{}, err
+	}
+	meta, err := svc.UploadBackup(ctx, request.ChannelID, path, destinationParentID, request.Encrypt, progress)
 	if meta.MsgID > 0 {
 		return photobackup.UploadResult{RemoteMessageID: int64(meta.MsgID)}, nil
 	}
@@ -542,7 +588,7 @@ func randomPhotoBackupToken() string {
 }
 
 func (a *App) photoBackupPolicyAllows(settings photobackup.Settings) error {
-	if !settings.WiFiOnly && !settings.ChargingOnly {
+	if !settings.WiFiOnly {
 		return nil
 	}
 	a.photoBackupMu.Lock()
@@ -555,9 +601,6 @@ func (a *App) photoBackupPolicyAllows(settings photobackup.Settings) error {
 	if settings.WiFiOnly && !policy.WiFi {
 		return fmt.Errorf("photo backup: waiting for Wi-Fi")
 	}
-	if settings.ChargingOnly && !policy.Charging {
-		return fmt.Errorf("photo backup: waiting for charging")
-	}
 	return nil
 }
 
@@ -566,12 +609,6 @@ func (a *App) photoBackupIsRunning() bool {
 	defer a.photoBackupMu.Unlock()
 	return a.photoBackupCancel != nil
 }
-func (a *App) photoBackupIsPaused() bool {
-	a.photoBackupMu.Lock()
-	defer a.photoBackupMu.Unlock()
-	return a.photoBackupManualPaused
-}
-
 func (a *App) stopPhotoBackup() {
 	a.photoBackupMu.Lock()
 	cancel := a.photoBackupCancel
@@ -629,8 +666,7 @@ func (a *App) photoBackupDesktopLoop(stop <-chan struct{}) {
 			return
 		case <-ticker.C:
 			if !a.photoBackupIsRunning() {
-				a.resetDesktopPhotoBackupDiscovery(a.appContext())
-				_ = a.startPhotoBackup()
+				_ = a.RunPhotoBackup()
 			}
 		}
 	}
@@ -727,26 +763,33 @@ func photoBackupAssetDTO(asset photobackup.Asset) PhotoBackupAsset {
 }
 
 func photoBackupState(settings photobackup.Settings, sources []photobackup.Source, status photobackup.Status, running, manualPaused bool) PhotoBackupState {
-	state := PhotoBackupState{Platform: runtime.GOOS, Settings: PhotoBackupSettings{Enabled: settings.Enabled, Photos: settings.Photos, Videos: settings.Videos, FutureOnly: settings.FutureOnly, WiFiOnly: settings.WiFiOnly, ChargingOnly: settings.ChargingOnly, DestinationParentID: settings.DestinationParentID, Encrypt: settings.Encrypt}}
+	state := PhotoBackupState{Platform: runtime.GOOS, Settings: PhotoBackupSettings{Enabled: settings.Enabled, Photos: settings.Photos, Videos: settings.Videos, FutureOnly: settings.FutureOnly, WiFiOnly: settings.WiFiOnly, DestinationParentID: settings.DestinationParentID, Encrypt: settings.Encrypt}}
+	state.ManualPaused = manualPaused
 	state.Sources = make([]PhotoBackupSource, 0, len(sources))
 	for _, source := range sources {
 		state.Sources = append(state.Sources, photoBackupSourceDTO(source))
 	}
 	state.Status = PhotoBackupStatus{Phase: "idle", Pending: status.Pending, Uploading: status.Uploading, Complete: status.Complete, Failed: status.Error, Paused: status.Paused, Message: status.LastError}
-	if manualPaused || status.Paused > 0 {
+	if manualPaused {
 		state.Status.Phase = "paused"
+		state.Status.Message = "Paused by you."
 	} else if running || status.Uploading > 0 {
 		state.Status.Phase = "uploading"
 	} else if status.Error > 0 {
 		state.Status.Phase = "failed"
 	} else if status.Pending > 0 {
 		state.Status.Phase = "queued"
+	} else if status.Paused > 0 {
+		state.Status.Phase = "paused"
 	} else if status.Complete > 0 {
 		state.Status.Phase = "complete"
 	}
 	policySupported := runtime.GOOS == "android"
-	state.Capabilities.WiFiOnly = PhotoBackupCapability{Supported: policySupported, Label: "Wi-Fi only", Detail: "Requires a recent device connectivity update."}
-	state.Capabilities.ChargingOnly = PhotoBackupCapability{Supported: policySupported, Label: "Only while charging", Detail: "Requires a recent device power update."}
+	detail := "Wi-Fi conditions are available on Android."
+	if policySupported {
+		detail = "Requires a recent device connectivity update."
+	}
+	state.Capabilities.WiFiOnly = PhotoBackupCapability{Supported: policySupported, Label: "Wi-Fi only", Detail: detail}
 	state.Capabilities.Access.Status, state.Capabilities.Access.Detail = "available", "Photo access is managed by the device."
 	state.Destination.ID = settings.DestinationParentID
 	state.Destination.Title = "Photo backup"

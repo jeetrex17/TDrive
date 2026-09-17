@@ -250,6 +250,10 @@ export interface PersonalDriveSetupState {
     "active_channel_id": string;
 }
 
+/**
+ * PhotoBackupAsset is the native/frontend handoff shape for one discovered
+ * photo-library or watched-folder item.
+ */
 export interface PhotoBackupAsset {
     "id": string;
     "version": string;
@@ -262,7 +266,6 @@ export interface PhotoBackupAsset {
 
 export interface PhotoBackupCapabilities {
     "wifi_only": PhotoBackupCapability;
-    "charging_only": PhotoBackupCapability;
     "access": {"status": string, "detail": string};
 }
 
@@ -274,7 +277,6 @@ export interface PhotoBackupCapability {
 
 export interface PhotoBackupPolicy {
     "wifi": boolean;
-    "charging": boolean;
     "observed_at": number;
 }
 
@@ -284,7 +286,6 @@ export interface PhotoBackupSettings {
     "videos": boolean;
     "future_only": boolean;
     "wifi_only": boolean;
-    "charging_only": boolean;
     "destination_parent_id": string;
     "encrypt": boolean;
 }
@@ -305,9 +306,15 @@ export interface PhotoBackupState {
     "platform": string;
     "capabilities": PhotoBackupCapabilities;
     "destination": {"id": string, "title": string, "kind": string};
+    "manual_paused": boolean;
+    "encryption_required": boolean;
 }
 
 export interface PhotoBackupStatus {
+    "current_file": string;
+    "current_file_bytes_done": number;
+    "current_file_bytes_total": number;
+    "current_file_percent": number;
     "phase": string;
     "pending": number;
     "uploading": number;

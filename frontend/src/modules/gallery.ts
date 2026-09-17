@@ -16,6 +16,7 @@ import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
 import type { PreviewNavigationItem } from './modals/preview';
 import { setFileThumbnailsActive } from '../ui/file-list/file-thumbnail-controller';
+import { isVideoFile } from './media-types';
 
 let galleryEl: HTMLElement | null = null;
 let renderToken = 0;
@@ -196,7 +197,26 @@ function onGalleryClick(event: MouseEvent): void {
         toggleGallerySelection(index);
         return;
     }
+    if (isVideoFile(item.name)) {
+        void openGalleryVideo(item);
+        return;
+    }
     void openGalleryLightbox(item);
+}
+
+async function openGalleryVideo(item: GalleryItem): Promise<void> {
+    const source = currentSource;
+    const channelId = currentChannelId;
+    const video = await import('./modals/video');
+    // Dynamic module loading can finish after a drive switch. Identity rather
+    // than a message ID prevents opening another drive's same-numbered file.
+    if (currentSource !== source || currentChannelId !== channelId || source?.indexOf(item.msgId) === undefined) return;
+    await video.openVideoModal({
+        id: item.msgId,
+        name: item.name,
+        size: item.encrypted && item.plaintextSize > 0 ? item.plaintextSize : item.size,
+        encrypted: item.encrypted,
+    });
 }
 
 function previewItem(item: GalleryItem, channelId: number): PreviewNavigationItem {
@@ -220,8 +240,16 @@ async function openGalleryLightbox(item: GalleryItem): Promise<void> {
             if (!source || currentChannelId !== channelId) return null;
             const index = source.indexOf(Number(active.id))
                 ?? (await locateMedia(Number(active.id), source.timeline.generation)).index;
-            const neighbor = await source.get(index + direction);
-            return neighbor ? previewItem(neighbor, channelId) : null;
+            // The image viewer must never attempt an original-image request for
+            // a video. Scan only one bounded neighbor window; this keeps a run
+            // of videos from turning a next/previous tap into an unbounded
+            // metadata walk through a large gallery.
+            for (let offset = 1; offset <= 128; offset += 1) {
+                const neighbor = await source.get(index + direction * offset);
+                if (!neighbor) return null;
+                if (!isVideoFile(neighbor.name)) return previewItem(neighbor, channelId);
+            }
+            return null;
         },
         getPosition(active) {
             if (!currentSource || currentChannelId !== channelId) return null;

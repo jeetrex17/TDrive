@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -31,8 +32,11 @@ func shareFileNative(path string) error {
 // registerMobileLifecycle ties OS suspend/resume to the engine. Backgrounding a
 // phone drops the Telegram update loop and stops serving decrypted media over
 // the loopback server; returning to the foreground resumes both and pulls any
-// changes the active drive missed while suspended. The vault is deliberately
-// left unlocked across background (decision pending).
+// changes the active drive missed while suspended. Photo backup is different:
+// Android's data-sync foreground service can keep its process alive and iOS
+// grants a short background assertion. Native expiry signals and a conservative
+// Go deadline stop the worker; the OS may suspend it sooner. New items wait for
+// foreground resume even when the current upload can finish in the background.
 func registerMobileLifecycle(a *App, wailsApp *application.App) {
 	if a == nil || wailsApp == nil {
 		return
@@ -56,14 +60,21 @@ func (a *App) mobileEnterBackground() {
 	a.engine.PauseLiveSync()
 	a.engine.CloseMediaSessions()
 	a.revokeGalleryImages()
-	a.stopPhotoBackup()
+	if !a.enterPhotoBackupBackground(runtime.GOOS) {
+		a.stopPhotoBackup()
+	}
 }
 
 func (a *App) mobileEnterForeground() {
 	if a == nil || a.engine == nil {
 		return
 	}
+	a.leavePhotoBackupBackground()
 	a.engine.ResumeLiveSync()
+	// The durable queue may have been interrupted by process suspension or an
+	// OS background deadline. A manual pause remains sticky in startPhotoBackup,
+	// so this never overrides the user's choice.
+	go func() { _ = a.startPhotoBackup() }()
 	channelID := a.engine.ActiveChannelID()
 	if channelID <= 0 {
 		return

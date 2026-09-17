@@ -1,0 +1,63 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { PhotoBackupState } from '../../api/photo-backup';
+import { activeTransfers, historyEvents } from '../../ui/notifications/notif-store';
+import { get } from 'svelte/store';
+import { clearPhotoBackupActivity, syncPhotoBackupActivity } from './activity';
+
+function state(overrides: Partial<PhotoBackupState['status']> = {}): PhotoBackupState {
+    return {
+        settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false },
+        sources: [],
+        status: {
+            phase: 'uploading', pending: 4, uploading: 1, complete: 2, failed: 0, paused: 0,
+            bytesDone: 400, bytesTotal: 1_000, currentFile: 'Summer/photo.jpg',
+            currentFileBytesDone: 40, currentFileBytesTotal: 100, currentFilePercent: 40,
+            message: '', ...overrides,
+        },
+        capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: '', detail: '' } },
+        platform: 'darwin', destination: { id: '1', title: 'Personal', kind: 'personal' }, manualPaused: false, encryptionRequired: false,
+    };
+}
+
+describe('photo backup activity', () => {
+    beforeEach(() => { historyEvents.set([]); clearPhotoBackupActivity(); });
+
+    it('keeps one current backup row and refreshes its filename, bytes, and queue count in place', () => {
+        syncPhotoBackupActivity(state());
+        syncPhotoBackupActivity(state({ currentFile: 'Summer/photo-2.jpg', currentFileBytesDone: 75, currentFilePercent: 75, complete: 3 }));
+
+        const entries = get(activeTransfers);
+        expect(entries).toHaveLength(1);
+        expect(entries[0]).toMatchObject({
+            id: 'xfer:up:photo-backup', name: 'Backing up photo-2.jpg', progress: 75,
+            bytes: 75, total: 100, itemsDone: 3, itemsTotal: 8,
+        });
+    });
+
+    it('keeps a paused backup visible without pretending the bell can cancel all uploads', () => {
+        syncPhotoBackupActivity(state({ phase: 'paused', currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0 }));
+        expect(get(activeTransfers)[0]).toMatchObject({ status: 'queued', name: 'Photo backup paused' });
+    });
+
+    it('finalizes a completion summary instead of retaining the last filename, and removes it on a scope change', () => {
+        syncPhotoBackupActivity(state());
+        syncPhotoBackupActivity(state({ phase: 'complete', pending: 0, uploading: 0, complete: 6, currentFile: '' }));
+        expect(get(historyEvents)[0]).toMatchObject({ id: 'xfer:up:photo-backup', status: 'done', name: 'Photo backup completed · 6 items' });
+        syncPhotoBackupActivity(state());
+        clearPhotoBackupActivity();
+        expect(get(activeTransfers)).toEqual([]);
+        expect(get(historyEvents).filter((entry) => entry.id === 'xfer:up:photo-backup')).toHaveLength(0);
+    });
+
+    it('does not call an idle backup with failures or paused items complete', () => {
+        syncPhotoBackupActivity(state());
+        syncPhotoBackupActivity(state({ phase: 'idle', failed: 2, paused: 1, currentFile: '' }));
+        expect(get(historyEvents)[0]).toMatchObject({ status: 'failed', name: 'Photo backup needs attention · 2 failed' });
+    });
+
+    it('does not report success when backup is turned off while an item is active', () => {
+        syncPhotoBackupActivity(state());
+        syncPhotoBackupActivity({ ...state({ phase: 'idle', currentFile: '' }), settings: { ...state().settings, enabled: false } });
+        expect(get(historyEvents)[0]).toMatchObject({ status: 'canceled', name: 'Photo backup stopped' });
+    });
+});

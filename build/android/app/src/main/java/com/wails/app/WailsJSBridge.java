@@ -142,7 +142,7 @@ public class WailsJSBridge {
         activity.requestPhotoBackupAccess(callbackId);
     }
 
-    /** Current network, charging and battery constraints; this does not schedule work. */
+    /** Current network and battery constraints; this does not schedule work. */
     @JavascriptInterface public void photoBackupPolicyStatus(final String callbackId) {
         MainActivity activity = activity();
         if (activity == null) { sendCallback(callbackId, null, "media policy unavailable"); return; }

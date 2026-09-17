@@ -4,7 +4,7 @@ import { asRecord, boundedText, nonNegativeNumber } from '../../api/shared';
 
 export interface NativeAssetPage { assets: PhotoBackupAsset[]; nextCursor: string; }
 export interface NativeMaterializedResource { path: string; releaseID: string; }
-interface IOSPhotosBridge { listPhotoBackupSources?: () => unknown; listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; }
+interface IOSPhotosBridge { listPhotoBackupSources?: () => unknown; listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; setBackgroundBackup?: (active: boolean) => unknown; }
 function iosBridge(): IOSPhotosBridge | null { return typeof window !== 'undefined' ? (window as Window & { tdriveIOSPhotos?: IOSPhotosBridge }).tdriveIOSPhotos ?? null : null; }
 async function nativeCall(value: unknown): Promise<Record<string, unknown>> { const result = await Promise.resolve(value); return typeof result === 'string' ? parse(result) : asRecord(result); }
 
@@ -35,7 +35,7 @@ export async function requestNativePhotoBackupAccess(): Promise<void> {
     if (hasBridgeMethod('requestPhotoBackupAccess')) await callBridge('requestPhotoBackupAccess', [], 'Photo library access is unavailable.');
 }
 
-export async function nativePhotoBackupPolicy(): Promise<{ wifi: boolean; charging: boolean } | null> {
+export async function nativePhotoBackupPolicy(): Promise<boolean | null> {
     const ios = iosBridge() as (IOSPhotosBridge & { getPhotoBackupCapabilities?: () => unknown }) | null;
     const raw = ios?.getPhotoBackupCapabilities
         ? await nativeCall(ios.getPhotoBackupCapabilities())
@@ -43,9 +43,14 @@ export async function nativePhotoBackupPolicy(): Promise<{ wifi: boolean; chargi
             ? parse(await callBridge('photoBackupPolicyStatus', [], ''))
             : null;
     if (!raw) return null;
-    const wifi = raw.wifi === true || raw.wifi_status === 'wifi';
-    const charging = raw.charging === true || raw.charging_status === 'charging';
-    return { wifi, charging };
+    return raw.wifi === true || raw.wifi_status === 'wifi';
+}
+
+export async function setIOSPhotoBackupBackground(active: boolean): Promise<boolean> {
+    const operation = iosBridge()?.setBackgroundBackup;
+    if (!operation) return false;
+    await nativeCall(operation(active));
+    return true;
 }
 
 export async function materializeNativePhotoBackupAsset(asset: PhotoBackupAsset, signal?: AbortSignal): Promise<NativeMaterializedResource> {
