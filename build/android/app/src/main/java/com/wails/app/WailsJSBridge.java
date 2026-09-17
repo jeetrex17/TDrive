@@ -4,9 +4,12 @@ import android.util.Log;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import android.content.Context;
+import android.content.Intent;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
+import androidx.core.content.ContextCompat;
 import com.wails.app.BuildConfig;
+import org.json.JSONObject;
 
 /**
  * WailsJSBridge provides the JavaScript interface that allows the web frontend
@@ -142,6 +145,60 @@ public class WailsJSBridge {
             return;
         }
         activity.saveToDownloads(callbackId, json);
+    }
+
+    /**
+     * Keep the process alive while transfers run, and say what they are doing.
+     *
+     * Called from JavaScript: wails.foregroundService(callbackId, json) with
+     * json {"running":true,"title":"Uploading 3 files","text":"2 min left",
+     * "progress":42}, or {"running":false} to let the process be killable
+     * again. Progress is a percentage, or negative where nothing is known yet.
+     *
+     * Sending the same shape for the first call and every update is deliberate:
+     * whether the service is already up is Android's business, not the page's,
+     * and startForegroundService on a running service is simply how its
+     * notification is replaced. One method, one state machine, no way for the
+     * two sides to disagree about what is running.
+     *
+     * This deliberately does not ask for POST_NOTIFICATIONS. The service runs
+     * and the process survives whether or not the notification is visible --
+     * and where it is denied, Android still lists the app under the Task
+     * Manager's running apps. A permission dialog thrown up the instant someone
+     * taps Upload is the kind that gets dismissed, and on Android 13+ a second
+     * dismissal is permanent, so the one good chance to ask is not here. Once
+     * it is granted the notification simply appears, because every coalesced
+     * update re-posts it.
+     */
+    @JavascriptInterface
+    public void foregroundService(final String callbackId, final String json) {
+        final MainActivity activity = activity();
+        if (activity == null) {
+            sendCallback(callbackId, null, "background service unavailable");
+            return;
+        }
+        try {
+            JSONObject options = new JSONObject(json);
+            if (!options.optBoolean("running", false)) {
+                activity.stopService(new Intent(activity, WailsForegroundService.class));
+                sendCallback(callbackId, "", null);
+                return;
+            }
+            Intent intent = new Intent(activity, WailsForegroundService.class)
+                    .setAction(WailsForegroundService.ACTION_START)
+                    .putExtra(WailsForegroundService.EXTRA_TITLE, options.optString("title", "Transferring files"))
+                    .putExtra(WailsForegroundService.EXTRA_TEXT, options.optString("text", ""))
+                    .putExtra(WailsForegroundService.EXTRA_PROGRESS, options.optInt("progress", -1));
+            ContextCompat.startForegroundService(activity, intent);
+            sendCallback(callbackId, "", null);
+        } catch (Exception e) {
+            // Android 12+ throws ForegroundServiceStartNotAllowedException when
+            // the app is no longer in the foreground. Nothing above can recover
+            // from that, but the transfer itself is still running and must not
+            // be taken down with it, so the failure is reported and dropped.
+            Log.e(TAG, "foregroundService failed", e);
+            sendCallback(callbackId, null, "could not keep transfers running in the background");
+        }
     }
 
     private MainActivity activity() {
