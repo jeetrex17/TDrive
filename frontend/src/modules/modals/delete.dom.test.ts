@@ -20,6 +20,9 @@ vi.mock('../drive-data', () => ({
 vi.mock('../app-actions', () => ({ appActions: () => appActionMocks }));
 
 import { confirmDelete, openDeleteModal } from './delete';
+import { busyRowIds } from '../../ui/file-list/busy-rows';
+import { toasts } from '../../ui/notifications/toast-store';
+import { get } from 'svelte/store';
 
 let host: HTMLElement;
 let app: Record<string, unknown> | null = null;
@@ -47,6 +50,7 @@ afterEach(async () => {
     host.remove();
     deleteFileMock.mockReset();
     appActionMocks.refreshFiles.mockReset();
+    toasts.set([]);
 });
 
 describe('confirmDelete (single file)', () => {
@@ -62,12 +66,49 @@ describe('confirmDelete (single file)', () => {
     });
 
     it('still refreshes the file list when the delete succeeds', async () => {
-        deleteFileMock.mockResolvedValue('Success');
+        deleteFileMock.mockResolvedValue({ ok: true });
 
         openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
         flushSync();
         click('#delete-confirm');
 
         await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
+    });
+
+    it('says nothing on success: the row the user was looking at is gone', async () => {
+        deleteFileMock.mockResolvedValue({ ok: true });
+
+        openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
+        flushSync();
+        click('#delete-confirm');
+
+        await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
+        expect(get(toasts)).toEqual([]);
+    });
+
+    it('still says so when it fails, because nothing else on screen will', async () => {
+        deleteFileMock.mockResolvedValue('Error: File not found');
+
+        openDeleteModal({ type: 'file', id: 44, name: 'ghost.png' });
+        flushSync();
+        click('#delete-confirm');
+
+        await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
+        expect(get(toasts)[0].level).toBe('error');
+    });
+
+    it('quiets the row while the delete runs, and lets it go afterwards', async () => {
+        let settle: (value: unknown) => void = () => {};
+        deleteFileMock.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+
+        openDeleteModal({ type: 'file', id: 45, name: 'slow.png' });
+        flushSync();
+        click('#delete-confirm');
+
+        // The list only refreshes at the end, so without this the row would sit
+        // there looking untouched for the whole round-trip.
+        await vi.waitFor(() => expect(get(busyRowIds).has('45')).toBe(true));
+        settle({ ok: true });
+        await vi.waitFor(() => expect(get(busyRowIds).has('45')).toBe(false));
     });
 });

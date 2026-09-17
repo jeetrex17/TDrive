@@ -4,11 +4,12 @@ import { deleteFile, deleteFolder } from '../../api';
 import { invalidateFolderIndex } from '../../state';
 import { clearSelection } from '../selection';
 import { ensureNotInsideDeletedFolder } from '../navigation';
-import { notify, dismissNotification } from '../notifications';
+import { notify } from '../notifications';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
 import { callWithPasswordRetry } from './encryption-password';
 import { closeDeleteModalView, openDeleteModalView } from '../../ui/modals/delete-modal-store';
+import { markRowsBusy } from '../../ui/file-list/busy-rows';
 import type {
     FileCommandItem,
     FileCommandTarget,
@@ -16,24 +17,18 @@ import type {
 } from '../../ui/file-list/types';
 let pendingTarget: FileCommandTarget | null = null;
 
-function successTitle(item: FileCommandItem): string {
-    const name = item.name.trim();
-    if (!name) return item.type === 'folder' ? 'Folder deleted' : 'File deleted';
-    return item.type === 'folder' ? `Deleted folder "${name}"` : `Deleted "${name}"`;
-}
-
 /**
  * One line for a whole batch. A selection of twelve used to answer with twelve
  * toasts into a stack that holds two on a phone, so eleven of them evicted each
  * other on the way past and the user read whichever happened to be last.
  */
-function batchTitle(items: FileCommandItem[], verb: string): string {
-    if (items.length === 1) return verb === 'Deleted' ? successTitle(items[0]) : failureTitle(items[0]);
+function failureBatchTitle(items: FileCommandItem[]): string {
+    if (items.length === 1) return failureTitle(items[0]);
     const folders = items.filter(isFolder).length;
     const files = items.length - folders;
-    if (folders === 0) return `${verb} ${files} files`;
-    if (files === 0) return `${verb} ${folders} folders`;
-    return `${verb} ${items.length} items`;
+    if (folders === 0) return `Could not delete ${files} files`;
+    if (files === 0) return `Could not delete ${folders} folders`;
+    return `Could not delete ${items.length} items`;
 }
 
 function failureTitle(item: FileCommandItem): string {
@@ -99,20 +94,17 @@ export async function confirmDelete(): Promise<void> {
     closeDeleteModalView();
     if (!target) return;
 
-    const progressId = notify({
-        id: 'deleting',
-        level: 'info',
-        title: 'Deleting…',
-        sticky: true,
-        spinner: true,
-    });
+    // The rows being deleted go quiet for the duration and then disappear.
+    // That is the report; a notice about rows the user is already looking at,
+    // parked over the list, was telling them something the list should say.
+    // Rows carry their id as a string; a Telegram file's is a number here.
+    const releaseBusy = markRowsBusy(
+        (target.type === 'bulk' ? target.items : [target]).map((item) => String(item.id)),
+    );
 
     try {
         if (target.type === 'bulk') {
-            if (target.items.length === 0) {
-                dismissNotification(progressId);
-                return;
-            }
+            if (target.items.length === 0) return;
             const folders = target.items.filter(isFolder);
             const files = target.items.filter((item) => item.type === 'file');
             const succeeded: FileCommandItem[] = [];
@@ -148,10 +140,6 @@ export async function confirmDelete(): Promise<void> {
             }
 
             clearSelection();
-            dismissNotification(progressId);
-            if (succeeded.length > 0) {
-                notify({ level: 'success', title: batchTitle(succeeded, 'Deleted') });
-            }
             if (failures.length > 0) {
                 // The reasons are worth keeping, but only the first is worth a
                 // toast: past two or three they stop being read and start
@@ -159,7 +147,7 @@ export async function confirmDelete(): Promise<void> {
                 const [first] = failures;
                 notify({
                     level: 'error',
-                    title: batchTitle(failures.map((entry) => entry.item), 'Could not delete'),
+                    title: failureBatchTitle(failures.map((entry) => entry.item)),
                     body: failures.length === 1
                         ? first.error
                         : `${first.error} Open Transfers for the rest.`,
@@ -174,7 +162,6 @@ export async function confirmDelete(): Promise<void> {
             ? await callWithPasswordRetry(() => deleteFolder(target.id))
             : await callWithPasswordRetry(() => deleteFile(target.id));
 
-        dismissNotification(progressId);
         if (!result.ok) {
             notify({
                 level: 'error',
@@ -185,16 +172,17 @@ export async function confirmDelete(): Promise<void> {
             return;
         }
         if (target.type === 'folder') ensureNotInsideDeletedFolder(target.id);
-        notify({ level: 'success', title: successTitle(target) });
         invalidateFolderIndex();
         appActions().refreshFiles();
     } catch (error) {
         console.error('Delete failed:', error);
-        dismissNotification(progressId);
         notify({
             level: 'error',
             title: 'Delete failed',
             body: humanizeBackendError(error),
         });
+    } finally {
+        // A row left marked is a row the user can no longer touch.
+        releaseBusy();
     }
 }

@@ -31,13 +31,11 @@ export async function submitFolder(name: string): Promise<void> {
     // Telegram round-trip completes.
     appActions().refreshFiles();
 
-    let failed = false;
     try {
         await createFolder(trimmed, parentId);
         invalidateFolderIndex();
         closeFolderModalView();
     } catch (err) {
-        failed = true;
         notify({
             level: 'error',
             title: 'Could not create folder',
@@ -47,13 +45,15 @@ export async function submitFolder(name: string): Promise<void> {
         // Drop the pending overlay regardless of outcome. The follow-up
         // refreshFiles either shows the new real row (success) or shows the
         // prior state (error).
+        //
+        // Success says nothing further. The ghost row has been standing in the
+        // list saying "Creating…" since before the round-trip started, and it
+        // has just turned into the real folder in front of the person who asked
+        // for it; a notice on top of that is the app reading its own work back.
         state.pendingFolderOps.delete(tempId);
         inFlight = false;
         setFolderModalInFlight(false);
         appActions().refreshFiles();
-        if (!failed) {
-            notify({ level: 'success', title: `Folder "${trimmed}" created` });
-        }
     }
 }
 

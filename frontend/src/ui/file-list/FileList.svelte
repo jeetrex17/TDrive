@@ -18,6 +18,7 @@
     import { rowOffset, rowWindowFor, type RowMetrics } from './row-window';
     import ItemStatus from '../mobile/ItemStatus.svelte';
     import { itemStateFor, transfersByFile } from '../mobile/item-state-store';
+    import { busyRowIds } from './busy-rows';
     import { itemStateDescriptor } from '../mobile/item-state';
     import { activeTab } from '../mobile/mobile-shell-store';
     import { sortFileListRows } from './file-sort';
@@ -240,7 +241,8 @@
             <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <div
-                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${selected ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}${stateInfo.needsExplanation ? ' needs-explanation' : ''}${cardEdges(rowIndex)}`}
+                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${selected ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}${stateInfo.needsExplanation ? ' needs-explanation' : ''}${$busyRowIds.has(row.id) ? ' is-busy' : ''}${cardEdges(rowIndex)}`}
+                aria-busy={$busyRowIds.has(row.id) ? 'true' : undefined}
                 use:measureRow
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}
@@ -369,7 +371,8 @@
             </div>
         {:else}
             <div
-                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${$selectedFileRowKeys.has(row.selectionKey) ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}`}
+                class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${$selectedFileRowKeys.has(row.selectionKey) ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}${$busyRowIds.has(row.id) ? ' is-busy' : ''}`}
+                aria-busy={$busyRowIds.has(row.id) ? 'true' : undefined}
                 use:measureRow
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}
