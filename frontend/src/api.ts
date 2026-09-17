@@ -2,7 +2,9 @@
 // Domain implementations stay internal; UI modules import only from this file.
 export * from "./api/drives";
 export * from "./api/files";
+export * from "./api/gallery";
 export * from "./api/media";
+export * from "./api/renditions";
 export * from "./api/mount";
 export * from "./api/operation";
 export * from "./api/runtime";

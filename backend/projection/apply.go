@@ -88,7 +88,7 @@ func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) (er
 	case OpFileUpload, OpMeta:
 		return applyFileMeta(tx, channelID, msgID, op, actorID)
 	case OpFilePart:
-		return applyFilePart(tx, channelID, msgID, op)
+		return applyFilePart(tx, channelID, msgID, op, actorID)
 	case OpFileManifest:
 		return applyManifest(tx, channelID, msgID, op, actorID)
 	case OpRename:
@@ -192,7 +192,10 @@ func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 // enter the files table, so they never surface as files or as orphans. The
 // manifest op (applied last, with a higher msg_id) creates the single logical
 // file row that references these parts by upload_uuid.
-func applyFilePart(tx *sql.Tx, channelID int64, msgID int64, op Op) error {
+func applyFilePart(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) error {
+	if err := applyRendition(tx, channelID, msgID, op, actorID); err != nil {
+		return err
+	}
 	if strings.TrimSpace(op.UploadUUID) == "" {
 		return fmt.Errorf("%w: part requires upload uuid", ErrBadOp)
 	}

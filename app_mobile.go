@@ -46,6 +46,7 @@ func registerMobileLifecycle(a *App, wailsApp *application.App) {
 	wailsApp.Event.OnApplicationEvent(events.Android.ActivityPaused, background)
 	wailsApp.Event.OnApplicationEvent(events.IOS.ApplicationWillEnterForeground, foreground)
 	wailsApp.Event.OnApplicationEvent(events.Android.ActivityResumed, foreground)
+	registerGalleryResourceEvents(a, wailsApp)
 }
 
 func (a *App) mobileEnterBackground() {
@@ -54,6 +55,8 @@ func (a *App) mobileEnterBackground() {
 	}
 	a.engine.PauseLiveSync()
 	a.engine.CloseMediaSessions()
+	a.stopGalleryPreparation()
+	a.revokeGalleryImages()
 }
 
 func (a *App) mobileEnterForeground() {

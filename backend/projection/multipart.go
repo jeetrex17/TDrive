@@ -103,8 +103,16 @@ func OrphanPartMessages(db *sql.DB, channelID int64) ([]int64, error) {
 			  AND f.upload_uuid = fp.upload_uuid
 			  AND f.tombstoned = 1
 		  )
-		ORDER BY fp.msg_id ASC
-	`, channelID)
+		UNION
+		SELECT r.msg_id FROM file_renditions r JOIN files f
+		  ON f.channel_id=r.channel_id AND f.msg_id=r.file_msg_id
+		WHERE r.channel_id=? AND f.tombstoned=1
+		  AND (EXISTS(SELECT 1 FROM channels c WHERE c.channel_id=r.channel_id AND c.kind='personal')
+		   OR (r.actor_user_id>0 AND r.actor_user_id=f.uploader_user_id))
+		  AND NOT EXISTS (SELECT 1 FROM trash_entries t
+		    WHERE t.channel_id=f.channel_id AND t.object_id='f:'||f.msg_id)
+		ORDER BY msg_id ASC
+	`, channelID, channelID)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +147,10 @@ func DeleteFileParts(db *sql.DB, channelID int64, uuid string) error {
 // Used by the GC sweep after the corresponding messages are deleted from
 // Telegram. Chunked to stay under SQLite's bound-variable limit.
 func DeleteFilePartsByMsgIDs(db *sql.DB, channelID int64, msgIDs []int64) error {
-	return deleteByMsgIDs(db, "file_parts", channelID, msgIDs)
+	if err := deleteByMsgIDs(db, "file_parts", channelID, msgIDs); err != nil {
+		return err
+	}
+	return deleteByMsgIDs(db, "file_renditions", channelID, msgIDs)
 }
 
 // MultipartPartMsgIDsForFiles returns all part document msg_ids behind the given

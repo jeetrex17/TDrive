@@ -12,6 +12,7 @@ type rawReplayRow struct {
 	msgID         int64
 	opType        string
 	opPayloadJSON string
+	rawHeader     string
 	actorUserID   int64
 }
 
@@ -72,6 +73,7 @@ func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, er
 	for table, label := range map[string]string{
 		"dirents":               "dirents",
 		"file_revisions":        "file revisions",
+		"file_renditions":       "file renditions",
 		"projection_operations": "projection operations",
 		"trash_entries":         "trash entries",
 	} {
@@ -81,7 +83,7 @@ func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, er
 	}
 
 	rows, err := tx.Query(`
-		SELECT msg_id, op_type, op_payload_json, actor_user_id
+		SELECT msg_id, op_type, op_payload_json, actor_user_id, raw_header
 		FROM replay_log
 		WHERE channel_id = ?
 		ORDER BY msg_id ASC
@@ -93,7 +95,7 @@ func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, er
 	var queue []rawReplayRow
 	for rows.Next() {
 		var r rawReplayRow
-		if err := rows.Scan(&r.msgID, &r.opType, &r.opPayloadJSON, &r.actorUserID); err != nil {
+		if err := rows.Scan(&r.msgID, &r.opType, &r.opPayloadJSON, &r.actorUserID, &r.rawHeader); err != nil {
 			_ = rows.Close()
 			return 0, 0, fmt.Errorf("projection: rebuild row scan: %w", err)
 		}
@@ -113,6 +115,7 @@ func rebuildProjectionTx(tx *sql.Tx, channelID int64) (applied, rejected int, er
 		if string(op.Type) == "" {
 			op.Type = OpType(r.opType)
 		}
+		op = restoreRenditionExtension(op, r.rawHeader)
 		if err := ApplyOp(tx, channelID, r.msgID, op, r.actorUserID); err != nil {
 			if isSkippableApplyError(err) {
 				slog.Warn("projection: rebuild rejected op, continuing", "channel_id", channelID, "msg_id", r.msgID, "op_type", op.Type, "error", err)

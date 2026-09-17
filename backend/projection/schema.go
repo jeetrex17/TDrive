@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const currentSchemaVersion = 13
+const currentSchemaVersion = 14
 
 func EnsureSchema(db *sql.DB) error {
 	if db == nil {
@@ -194,10 +194,13 @@ func EnsureSchema(db *sql.DB) error {
 			return fmt.Errorf("projection: ensure schema: %w", err)
 		}
 	}
+	if err := EnsureRenditionSchema(db); err != nil {
+		return err
+	}
 	if err := ensureCompatibleIndexes(db); err != nil {
 		return err
 	}
-	return nil
+	return EnsureGallerySchema(db)
 }
 
 func ensureCompatibleIndexes(db *sql.DB) error {
@@ -374,6 +377,11 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 			return err
 		}
 	}
+	if v < 14 {
+		if err := migrateRenditionReferences(tx); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`DELETE FROM schema_version`); err != nil {
 		return fmt.Errorf("projection: clear schema version: %w", err)
 	}
@@ -391,7 +399,7 @@ func MigratePersonalChannel(db *sql.DB, personalChannelID int64) error {
 	if err := ensureCompatibleIndexes(db); err != nil {
 		return err
 	}
-	return nil
+	return EnsureGallerySchema(db)
 }
 
 func repairFoldersPK(tx *sql.Tx) error {

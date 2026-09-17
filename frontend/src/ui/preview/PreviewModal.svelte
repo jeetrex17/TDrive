@@ -17,7 +17,7 @@
             <button id="preview-info-btn" class="preview-icon-btn" type="button" aria-label="Photo info" aria-pressed="false" title="Info (i)">
                 <InfoIcon aria-hidden="true" />
             </button>
-            <button id="preview-download" class="preview-icon-btn" type="button" aria-label="Download" title="Download">
+            <button id="preview-download" class="preview-icon-btn" type="button" aria-label="Download original" title="Download original">
                 <DownloadIcon aria-hidden="true" />
             </button>
             <button id="preview-close" class="preview-close-btn" type="button" aria-label="Close preview" title="Close preview">

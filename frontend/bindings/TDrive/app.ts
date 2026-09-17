@@ -10,6 +10,12 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as backend$0 from "./backend/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as galleryimage$0 from "./backend/galleryimage/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as galleryprepare$0 from "./backend/galleryprepare/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as media$0 from "./backend/media/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -117,6 +123,10 @@ export function CheckPendingJoin(inviteHash: string): $CancellablePromise<$model
 
 export function CheckSystemStatus(): $CancellablePromise<string> {
     return $Call.ByID(586870272);
+}
+
+export function CloseGalleryImages(token: string): $CancellablePromise<void> {
+    return $Call.ByID(2992155069, token);
 }
 
 export function CloseMedia(token: string): $CancellablePromise<void> {
@@ -234,6 +244,15 @@ export function GetFolderStats(parentID: string): $CancellablePromise<projection
 }
 
 /**
+ * GetGalleryPreparation estimates only pending compatible files. Completed
+ * progress is retained for the current drive, while newly missing derivatives
+ * are reflected without holding the entire candidate list in memory.
+ */
+export function GetGalleryPreparation(): $CancellablePromise<galleryprepare$0.State> {
+    return $Call.ByID(2428656508);
+}
+
+/**
  * GetInviteLink fetches a fresh link from Telegram and caches it. Admin-
  * only on the Telegram side; non-admin members will get an error from
  * MessagesExportChatInvite. (Step 4 doesn't gate this client-side; we
@@ -243,8 +262,20 @@ export function GetInviteLink(channelID: number): $CancellablePromise<string> {
     return $Call.ByID(212477826, channelID);
 }
 
+export function GetMediaNeighbors(msgID: number, before: number, after: number, generation: string): $CancellablePromise<$models.GalleryPage> {
+    return $Call.ByID(2332667564, msgID, before, after, generation);
+}
+
 export function GetMediaStats(token: string): $CancellablePromise<media$0.MediaStats> {
     return $Call.ByID(3394475712, token);
+}
+
+/**
+ * GetMediaTimeline returns only compact layout metadata and sparse page keys.
+ * A cursor is tied to the account database, active drive, and projection epoch.
+ */
+export function GetMediaTimeline(): $CancellablePromise<projection$0.GalleryTimeline> {
+    return $Call.ByID(1288157298);
 }
 
 export function GetStorageUsed(): $CancellablePromise<number> {
@@ -330,11 +361,15 @@ export function ListJoinRequests(channelID: number): $CancellablePromise<$models
 }
 
 /**
- * ListMedia returns every image in the active drive, newest first, for the
- * gallery view. Non-image files are filtered out in the read service.
+ * ListMedia is the legacy bulk API. The gallery uses GetMediaTimeline and
+ * ListMediaPage so metadata memory stays bounded as the library grows.
  */
 export function ListMedia(): $CancellablePromise<backend$0.FileMetaData[] | null> {
     return $Call.ByID(1688718951);
+}
+
+export function ListMediaPage(cursor: string, limit: number): $CancellablePromise<$models.GalleryPage> {
+    return $Call.ByID(836790156, cursor, limit);
 }
 
 /**
@@ -342,6 +377,10 @@ export function ListMedia(): $CancellablePromise<backend$0.FileMetaData[] | null
  */
 export function ListPendingJoins(): $CancellablePromise<$models.PendingJoinInfo[] | null> {
     return $Call.ByID(3480021689);
+}
+
+export function LocateMedia(msgID: number, generation: string): $CancellablePromise<projection$0.GalleryLocation> {
+    return $Call.ByID(3544189497, msgID, generation);
 }
 
 export function LoginPhoneNumber(phoneNumber: string): $CancellablePromise<void> {
@@ -432,6 +471,15 @@ export function MyUserID(): $CancellablePromise<number> {
 
 export function NativeMediaCommand(token: string, command: string[] | null): $CancellablePromise<void> {
     return $Call.ByID(689469907, token, command);
+}
+
+/**
+ * OpenGalleryImages creates one capability for a gallery and its viewer. The
+ * expected channel prevents a late bridge response from opening a new drive's
+ * images under an old UI. Individual binary requests carry their own cancel.
+ */
+export function OpenGalleryImages(channelID: number): $CancellablePromise<galleryimage$0.OpenResult> {
+    return $Call.ByID(2496003119, channelID);
 }
 
 /**
@@ -654,6 +702,18 @@ export function ShowNativeSeekThumbnail(token: string, imageBase64: string, rect
     return $Call.ByID(5199713, token, imageBase64, rect);
 }
 
+/**
+ * StartGalleryPreparation is an explicit data-consuming action. The per-file
+ * service rechecks ownership and encryption before downloading an original.
+ */
+export function StartGalleryPreparation(channelID: number): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(1431845540, channelID);
+}
+
+export function StopGalleryPreparation(): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(180477034);
+}
+
 export function SubmitCode(code: string): $CancellablePromise<void> {
     return $Call.ByID(2820917964, code);
 }
@@ -671,9 +731,8 @@ export function SyncChannel(channelID: number): $CancellablePromise<void> {
 }
 
 /**
- * Thumbnail returns a small JPEG preview for one image, base64-encoded for the
- * frontend to turn into a data URL. Cheap on a cache hit; on a miss it pulls
- * and downscales the original once.
+ * Thumbnail is the legacy base64 wrapper around the bounded rendition path.
+ * Cache misses fetch an existing small derivative, never the original photo.
  */
 export function Thumbnail(msgID: number): $CancellablePromise<$models.PreviewPayload> {
     return $Call.ByID(1614502735, msgID);

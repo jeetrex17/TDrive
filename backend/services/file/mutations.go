@@ -192,6 +192,13 @@ func (s *Service) Delete(ctx context.Context, channelID int64, msgID int) (err e
 		}
 	}
 
+	renditionIDs, err := projection.RenditionMessageIDsForFiles(s.DB, channelID, []int64{int64(msgID)})
+	if err != nil {
+		return err
+	}
+	bodyMsgIDs = append(bodyMsgIDs, renditionIDs...)
+	partMsgIDs = append(partMsgIDs, renditionIDs...)
+
 	// Tomb first: visibility convergence is the contract; body delete is
 	// best-effort. If body cleanup fails, the visible state is still correct.
 	tombOp := projection.Op{
@@ -237,6 +244,11 @@ func (s *Service) SweepOrphanParts(ctx context.Context, channelID int64) error {
 	}
 	if channelID == 0 || s.TG == nil || s.Peers == nil {
 		return nil
+	}
+	// Resume only payloads previously staged by an authorized local upload or
+	// preparation job. This maintenance step never downloads an original.
+	if err := s.ResumeRenditionUploads(ctx, channelID, 16); err != nil {
+		s.warnf("pending photo uploads deferred: %v\n", err)
 	}
 	tombParts, err := projection.OrphanPartMessages(s.DB, channelID)
 	if err != nil {

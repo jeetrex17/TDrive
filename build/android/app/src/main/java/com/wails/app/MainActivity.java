@@ -113,6 +113,7 @@ public class MainActivity extends AppCompatActivity {
 
         // Initialize the native Go library
         bridge = new WailsBridge(this);
+        GalleryImage.nativeInit();
         bridge.initialize();
 
         // Set up WebView
@@ -1239,6 +1240,17 @@ public class MainActivity extends AppCompatActivity {
     public void onLowMemory() {
         super.onLowMemory();
         if (bridge != null) {
+            bridge.onLowMemory();
+        }
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        // Modern Android commonly trims without dispatching onLowMemory.
+        // UI-hidden also drops disposable decoded images before backgrounding.
+        if (bridge != null && (level == android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
+                || level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW)) {
             bridge.onLowMemory();
         }
     }

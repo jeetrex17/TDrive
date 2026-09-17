@@ -11,6 +11,8 @@ import (
 	"TDrive/backend/applog"
 	"TDrive/backend/core"
 	"TDrive/backend/datadir"
+	"TDrive/backend/galleryimage"
+	"TDrive/backend/galleryprepare"
 	"TDrive/backend/mountcontroller"
 	"TDrive/backend/mountlifecycle"
 	"TDrive/backend/processlock"
@@ -36,10 +38,15 @@ type App struct {
 	ctx context.Context
 	// wails is the running application handle, set once main() has created
 	// it. Dialogs, events, the browser opener and Quit all go through it.
-	wails       *application.App
-	engine      *core.Engine
-	Client      *telegram.Client
-	backendLock *processlock.Lock
+	wails                   *application.App
+	engine                  *core.Engine
+	Client                  *telegram.Client
+	backendLock             *processlock.Lock
+	galleryImagesMu         sync.Mutex
+	galleryImages           *galleryimage.Server
+	galleryPreparationMu    sync.Mutex
+	galleryPreparation      *galleryprepare.Runner
+	galleryPreparationEpoch uint64
 
 	// version is the build stamp from main.appVersion ("dev" for local builds).
 	version string
@@ -180,7 +187,12 @@ func (a *App) SetActiveChannel(channelID int64) error {
 	if a.engine == nil {
 		return fmt.Errorf("backend not ready")
 	}
-	return a.engine.SetActiveChannel(channelID)
+	a.stopGalleryPreparation()
+	if err := a.engine.SetActiveChannel(channelID); err != nil {
+		return err
+	}
+	a.revokeGalleryImages()
+	return nil
 }
 
 type TDriveFile struct {
@@ -645,6 +657,8 @@ func (a *App) ServiceShutdown() error {
 	}
 	cancel()
 	a.closeAllNativeMedia()
+	a.stopGalleryPreparation()
+	a.closeGalleryImages()
 	if a.engine != nil {
 		a.engine.Close()
 	}

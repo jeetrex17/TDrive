@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import Gallery from './Gallery.svelte';
 import GalleryCell from './GalleryCell.svelte';
-import { galleryView, type GalleryGroup } from './gallery-store';
+import { galleryView } from './gallery-store';
+import { GallerySource } from './gallery-source';
 import type { FileItem } from '../../types';
 
 function makeItem(overrides: Partial<FileItem> = {}): FileItem {
@@ -17,10 +18,6 @@ function makeItem(overrides: Partial<FileItem> = {}): FileItem {
         plaintextSize: 0,
         ...overrides,
     };
-}
-
-function makeGroup(label: string, items: FileItem[], startIndex = 0): GalleryGroup {
-    return { label, cells: items.map((item, i) => ({ item, index: startIndex + i })) };
 }
 
 afterEach(() => {
@@ -43,14 +40,14 @@ describe('Gallery view states', () => {
         expect(empty).toContain('No photos yet');
     });
 
-    it('renders month groups with a cell per item', () => {
-        galleryView.set({
-            status: 'ready',
-            groups: [
-                makeGroup('July 2026', [makeItem({ msgId: 10 }), makeItem({ msgId: 11 })], 0),
-                makeGroup('June 2026', [makeItem({ msgId: 12 })], 2),
-            ],
-        });
+    it('renders loaded month groups without retaining offscreen containers', async () => {
+        const source = new GallerySource({
+            channelId: 1, generation: '1', totalCount: 3, pageSize: 128,
+            buckets: [{ key: '2026-07', startIndex: 0, count: 2, uploadTime: 1 }, { key: '2026-06', startIndex: 2, count: 1, uploadTime: 1 }],
+            anchors: [{ startIndex: 0, cursor: 'first' }],
+        }, { load: async () => ({ generation: '1', startIndex: 0, nextCursor: '', items: [10, 11, 12].map((msgId) => ({ ...makeItem({ msgId }), revision: 1, contentMsgId: msgId, contentHash: '' })) }) });
+        await source.get(0);
+        galleryView.set({ status: 'ready', source });
 
         const { body } = render(Gallery);
 

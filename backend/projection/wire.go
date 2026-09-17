@@ -299,6 +299,16 @@ func Parse(raw string) (Op, error) {
 		op.PlaintextSize = n
 	}
 
+	if raw, ok := kv["rend"]; ok {
+		if op.Type != OpFilePart {
+			return Op{}, ErrWireMalformed
+		}
+		r, err := parseRendition(raw)
+		if err != nil {
+			return Op{}, err
+		}
+		op.Rendition = r
+	}
 	return op, nil
 }
 
@@ -452,6 +462,10 @@ func Format(op Op) string {
 		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
 	}
 
+	if op.Rendition != nil {
+		b.WriteString("|rend=")
+		b.WriteString(formatRendition(*op.Rendition))
+	}
 	return b.String()
 }
 

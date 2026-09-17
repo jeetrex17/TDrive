@@ -146,3 +146,16 @@ func TestCacheCleansStrayTempFiles(t *testing.T) {
 		t.Fatalf("stray temp file not cleaned: %v", err)
 	}
 }
+
+func TestCacheGetLimitedRejectsOversizedEntry(t *testing.T) {
+	cache := NewCache(t.TempDir(), 1<<20)
+	if err := cache.Put("large", []byte("12345")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache.GetLimited("large", 4); ok {
+		t.Fatal("oversized entry returned")
+	}
+	if raw, ok := cache.GetLimited("large", 5); !ok || string(raw) != "12345" {
+		t.Fatalf("bounded entry=%q,%v", raw, ok)
+	}
+}

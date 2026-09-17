@@ -48,6 +48,10 @@ const (
 type Op struct {
 	Type OpType
 
+	// Rendition is an additive extension on existing hidden part operations.
+	// Older readers ignore it while keeping the document out of the namespace.
+	Rendition *FileRendition `json:",omitempty"`
+
 	// ProtocolVersion versions the payload of atomic writable operations. It
 	// is intentionally independent of the outer TDX wire envelope.
 	ProtocolVersion int

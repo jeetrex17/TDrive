@@ -9,6 +9,7 @@ type MockOutcome =
 
 export type MockPlan =
     | MockOutcome
+    | { kind: 'galleryPage'; count: number; template: Record<string, unknown> }
     | { kind: 'byFirstArg'; values: Record<string, MockPlan>; fallback: MockPlan };
 
 export interface MockCall {
@@ -44,6 +45,12 @@ export function byFirstArg(values: Record<string, MockPlan>, fallback: MockPlan 
     return { kind: 'byFirstArg', values, fallback };
 }
 
+/** Generate one page at the wire boundary so scale tests do not inject a full
+ * 100k metadata array into the app under test. */
+export function galleryPage(count: number, template: Record<string, unknown>): MockPlan {
+    return { kind: 'galleryPage', count, template };
+}
+
 const DEFAULT_METHODS: Record<string, MockPlan> = {
     AppVersion: resolves({ version: '0.0.0-test', os: 'test', arch: 'test' }),
     CheckForUpdate: resolves({ phase: 'up_to_date', current_version: '0.0.0-test' }),
@@ -70,6 +77,10 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
         },
     ]),
     ListMedia: resolves([]),
+    GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: 0, page_size: 128, buckets: [], anchors: [] }),
+    GetGalleryPreparation: resolves({ running: false, channel_id: 1, completed: 0, total: 0, bytes_total: 0, bytes_done: 0, error: '' }),
+    OpenGalleryImages: resolves({ token: crypto.randomUUID(), base_url: '/mock-renditions', channel_id: 1 }),
+    CloseGalleryImages: resolves(null),
     ListPendingJoins: resolves([]),
     Me: resolves({ user_id: 7, display_name: 'Test User', username: 'test', photo_base64: '' }),
     MountDrive: resolves({
@@ -141,6 +152,16 @@ export async function bootTDrive(
             const plan = candidate ?? { kind: 'resolve', value: null, delayMs: 0 };
             if (plan.kind === 'byFirstArg') {
                 return selectPlan(plan.values[String(args[0])] ?? plan.fallback, args);
+            }
+            if (plan.kind === 'galleryPage') {
+                const start = Number(args[0]);
+                return { kind: 'resolve', delayMs: 0, value: {
+                    generation: 'test', start_index: start, next_cursor: '',
+                    items: Array.from({ length: Math.max(0, Math.min(128, plan.count - start)) }, (_, offset) => ({
+                        ...plan.template, name: `photo-${start + offset}.jpg`, msg_id: 1000 + start + offset,
+                        revision: 1, content_msg_id: 1000 + start + offset, content_hash: '',
+                    })),
+                } };
             }
             return plan;
         };

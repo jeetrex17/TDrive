@@ -1,286 +1,163 @@
-// Unit tests for the gallery controller: lazy load on intersect, thumb-cache
-// hits, drive-change and unregister discard guards, and FIFO eviction of
-// decoded images. getThumbnail is mocked; a manual IntersectionObserver shim
-// lets the test drive intersections deterministically.
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CellPatch } from './gallery-controller';
+import type { RenditionAsset } from '../../modules/renditions/broker';
 
-const thumbnails = vi.hoisted(() => ({
-    resolver: (msgId: number) => Promise.resolve(`data:url:${msgId}`),
-}));
+const runtime = vi.hoisted(() => ({ acquire: vi.fn(), release: vi.fn(), reset: () => {} }));
+vi.mock('../../api', () => ({ isMobilePlatform: () => false }));
+vi.mock('../../modules/renditions/runtime', () => ({ acquireRendition: runtime.acquire, subscribeRenditionReset: (callback: () => void) => { runtime.reset = callback; return () => {}; } }));
+import * as controller from './gallery-controller';
 
-vi.mock('../../api', () => ({
-    getThumbnail: (msgId: number) => thumbnails.resolver(msgId),
-    isMobilePlatform: () => false,
-}));
-
-// Manual IntersectionObserver: records observed nodes and exposes a trigger to
-// fire an intersection for a specific node.
+let fire: (node: Element, visible?: boolean) => void;
 const observed = new Set<Element>();
-let fireIntersect: (node: Element) => void = () => {};
-
 class TestObserver {
-    constructor(private cb: IntersectionObserverCallback) {
-        fireIntersect = (node: Element) => {
-            this.cb(
-                [{ target: node, isIntersecting: true } as IntersectionObserverEntry],
-                this as unknown as IntersectionObserver,
-            );
-        };
+    constructor(callback: IntersectionObserverCallback) {
+        fire = (node, visible = true) => callback([{ target: node, isIntersecting: visible } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
     }
     observe(node: Element) { observed.add(node); }
     unobserve(node: Element) { observed.delete(node); }
     disconnect() { observed.clear(); }
 }
-
-(globalThis as any).IntersectionObserver = TestObserver;
-
-let controller: typeof import('./gallery-controller');
-
-async function flush(): Promise<void> {
-    await Promise.resolve();
-    await Promise.resolve();
-}
-
-function makeCell(msgId: number) {
+function cell(msgId = 10, revision = 1) {
     const node = document.createElement('button');
     const patches: CellPatch[] = [];
-    const apply = (patch: CellPatch): void => {
-        patches.push(patch);
-    };
-    return { node, msgId, apply, patches, last: () => patches[patches.length - 1] };
+    controller.registerCell(node, { msgId, revision, apply: (patch) => patches.push(patch) });
+    return { node, patches, last: () => patches[patches.length - 1] };
 }
+async function flush() { await Promise.resolve(); await Promise.resolve(); }
 
-beforeEach(async () => {
-    vi.resetModules();
-    observed.clear();
-    thumbnails.resolver = (msgId: number) => Promise.resolve(`data:url:${msgId}`);
-    controller = await import('./gallery-controller');
+beforeEach(() => {
+    vi.stubGlobal('IntersectionObserver', TestObserver);
+    runtime.acquire.mockReset().mockImplementation(() => ({ promise: Promise.resolve({ url: 'blob:10', width: 256, height: 256 }), release: runtime.release }));
+    runtime.release.mockReset();
     controller.setRoot(document.createElement('div'));
     controller.beginRender(1);
 });
+afterEach(() => { controller.teardown(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-afterEach(() => {
-    vi.restoreAllMocks();
-});
-
-describe('gallery-controller', () => {
-    it('loads a thumbnail when a cell intersects and caches it', async () => {
-        const cell = makeCell(10);
-        controller.registerCell(cell.node, { msgId: cell.msgId, apply: cell.apply });
-        expect(observed.has(cell.node)).toBe(true);
-
-        fireIntersect(cell.node);
-        await flush();
-
-        expect(cell.last()).toEqual({ status: 'loaded', src: 'data:url:10' });
-        expect(observed.has(cell.node)).toBe(false); // unobserved once loaded
-        expect(controller.cachedThumb(1, 10)).toBe('data:url:10');
+describe('gallery image leases', () => {
+    it('releases hidden Photos and resumes only its mounted visible window', async () => {
+        const target = cell(); fire(target.node); await flush();
+        controller.setActive(false);
+        expect(target.last()).toEqual({ status: 'idle', src: '', title: '' });
+        fire(target.node); await flush();
+        expect(runtime.acquire).toHaveBeenCalledOnce();
+        controller.setActive(true);
+        fire(target.node); await flush();
+        expect(runtime.acquire).toHaveBeenCalledTimes(2);
+    });
+    it('clears decoded references while backgrounded and rearms on foreground', async () => {
+        const target = cell();
+        fire(target.node); await flush();
+        vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+        document.dispatchEvent(new Event('visibilitychange'));
+        expect(target.last()).toEqual({ status: 'idle', src: '', title: '' });
+        fire(target.node); await flush();
+        expect(runtime.acquire).toHaveBeenCalledOnce();
+        vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+        document.dispatchEvent(new Event('visibilitychange'));
+        fire(target.node); await flush();
+        expect(runtime.acquire).toHaveBeenCalledTimes(2);
+        vi.restoreAllMocks();
     });
 
-    it('serves a cache hit without calling the backend again', async () => {
-        const first = makeCell(20);
-        controller.registerCell(first.node, { msgId: 20, apply: first.apply });
-        fireIntersect(first.node);
-        await flush();
-
-        const calls = vi.fn();
-        thumbnails.resolver = (msgId: number) => { calls(); return Promise.resolve(`data:url:${msgId}`); };
-
-        const second = makeCell(20);
-        controller.registerCell(second.node, { msgId: 20, apply: second.apply });
-        fireIntersect(second.node);
-        await flush();
-
-        expect(second.last()).toEqual({ status: 'loaded', src: 'data:url:20' });
-        expect(calls).not.toHaveBeenCalled();
+    it('keeps permanent errors honest and refreshes missing previews after preparation', async () => {
+        runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject(new Error('unsupported image')), release: runtime.release }));
+        const failed = cell(); fire(failed.node); await flush();
+        expect(failed.last()?.status).toBe('failed');
+        runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject({ code: 'missing_rendition' }), release: runtime.release }));
+        const missing = cell(11); fire(missing.node); await flush();
+        controller.rearmMissing();
+        expect(missing.last()).toEqual({ status: 'idle', title: '' });
+        fire(missing.node); await flush();
+        expect(missing.last()?.status).toBe('loaded');
     });
 
-    it('drops the locked detail when the vault unlocks', async () => {
-        thumbnails.resolver = () => Promise.reject(new Error('password required'));
-        const cell = makeCell(40);
-        controller.registerCell(cell.node, { msgId: 40, apply: cell.apply });
-        fireIntersect(cell.node);
+    it('loads the bounded mounted window on hosts without IntersectionObserver', async () => {
+        controller.teardown();
+        vi.stubGlobal('IntersectionObserver', undefined);
+        controller.setRoot(document.createElement('div'));
+        const target = cell(); await flush();
+        expect(target.last()?.status).toBe('loaded');
+    });
+    it('loads visible cells with exact content identity and exposes an active placeholder', async () => {
+        const target = cell(10, 7);
+        expect(runtime.acquire).not.toHaveBeenCalled();
+        fire(target.node);
         await flush();
-        expect(cell.last()).toEqual({ status: 'locked', title: 'locked, click to unlock' });
+        expect(runtime.acquire).toHaveBeenCalledWith({ channelId: 1, fileId: 10, revision: 7, kind: 'thumbnail' }, 'visible');
+        expect(target.last()).toEqual({ status: 'loaded', src: 'blob:10', title: '' });
+        expect(controller.cachedThumb(1, 10)).toBe('blob:10');
+        expect(controller.cachedThumb(2, 10)).toBe('');
+        controller.unregisterCell(target.node);
+        expect(runtime.release).toHaveBeenCalledOnce();
+        expect(controller.cachedThumb(1, 10)).toBe('');
+    });
 
-        thumbnails.resolver = (msgId: number) => Promise.resolve(`data:url:${msgId}`);
+    it('releases an image outside the viewport buffer, then reacquires on return', async () => {
+        const target = cell();
+        fire(target.node); await flush();
+        fire(target.node, false);
+        expect(target.last()).toEqual({ status: 'idle', src: '', title: '' });
+        expect(runtime.release).toHaveBeenCalledOnce();
+        fire(target.node); await flush();
+        expect(runtime.acquire).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['unregister', 'drive', 'replacement'] as const)('discards late responses after %s', async (action) => {
+        let resolve!: (asset: RenditionAsset) => void;
+        runtime.acquire.mockImplementation(() => ({ promise: new Promise((done) => { resolve = done; }), release: runtime.release }));
+        const target = cell();
+        fire(target.node);
+        if (action === 'unregister') controller.unregisterCell(target.node);
+        if (action === 'drive') controller.beginRender(2);
+        if (action === 'replacement') controller.registerCell(target.node, { msgId: 20, apply: () => {} });
+        resolve({ url: 'blob:stale', width: 256, height: 256 });
+        await flush();
+        expect(target.patches.some((patch) => patch.status === 'loaded')).toBe(false);
+        expect(runtime.release).toHaveBeenCalledOnce();
+    });
+
+    it('renders locked and missing derivatives without original downloads', async () => {
+        runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject({ code: 'encryption_password_required' }), release: runtime.release }));
+        const locked = cell();
+        fire(locked.node); await flush();
+        expect(locked.last()).toEqual({ status: 'locked', title: 'locked, click to unlock' });
         controller.rearmLocked();
-        // Without this the cell still read as locked after it had decrypted.
-        expect(cell.last()).toEqual({ status: 'idle', title: '' });
-
-        fireIntersect(cell.node);
-        await flush();
-        expect(cell.last()).toEqual({ status: 'loaded', src: 'data:url:40' });
+        expect(locked.last()).toEqual({ status: 'idle', title: '' });
+        fire(locked.node); await flush();
+        expect(locked.last()?.status).toBe('loaded');
+        runtime.acquire.mockImplementationOnce(() => ({ promise: Promise.reject({ code: 'missing_rendition' }), release: runtime.release }));
+        const missing = cell(20);
+        fire(missing.node); await flush();
+        expect(missing.last()).toEqual({ status: 'missing', title: 'preview not available yet' });
     });
 
-    it('discards a load whose cell was unregistered mid-flight', async () => {
-        let resolve!: (v: string) => void;
-        thumbnails.resolver = () => new Promise<string>((r) => { resolve = r; });
-
-        const cell = makeCell(30);
-        controller.registerCell(cell.node, { msgId: 30, apply: cell.apply });
-        fireIntersect(cell.node);
-        await flush();
-        expect(cell.last()).toEqual({ status: 'loading' });
-
-        controller.unregisterCell(cell.node);
-        resolve('data:url:30');
-        await flush();
-
-        // No 'loaded' patch after unregister, and nothing cached.
-        expect(cell.patches.some((p) => p.status === 'loaded')).toBe(false);
-        expect(controller.cachedThumb(1, 30)).toBe('');
-    });
-
-    it('ignores a stale completion when a keyed cell is registered for another item', async () => {
-        let resolveOld!: (value: string) => void;
-        let resolveNew!: (value: string) => void;
-        let request = 0;
-        thumbnails.resolver = () => new Promise<string>((resolve) => {
-            if (request++ === 0) resolveOld = resolve;
-            else resolveNew = resolve;
-        });
-
-        const oldCell = makeCell(31);
-        controller.registerCell(oldCell.node, { msgId: 31, apply: oldCell.apply });
-        fireIntersect(oldCell.node);
-        await flush();
-        expect(oldCell.last()).toEqual({ status: 'loading' });
-
-        const replacementPatches: CellPatch[] = [];
-        controller.registerCell(oldCell.node, {
-            msgId: 32,
-            apply: (patch) => replacementPatches.push(patch),
-        });
-        fireIntersect(oldCell.node);
-        await flush();
-
-        resolveOld('data:url:31');
-        await flush();
-        expect(oldCell.patches.some((patch) => patch.status === 'loaded')).toBe(false);
-        expect(replacementPatches.some((patch) => patch.status === 'loaded')).toBe(false);
-        expect(controller.cachedThumb(1, 31)).toBe('');
-
-        resolveNew('data:url:32');
-        await flush();
-        expect(replacementPatches[replacementPatches.length - 1]).toEqual({ status: 'loaded', src: 'data:url:32' });
-    });
-
-    it('discards a load when the drive changed mid-flight', async () => {
-        let resolve!: (v: string) => void;
-        thumbnails.resolver = () => new Promise<string>((r) => { resolve = r; });
-
-        const cell = makeCell(40);
-        controller.registerCell(cell.node, { msgId: 40, apply: cell.apply });
-        fireIntersect(cell.node);
-        await flush();
-
-        controller.beginRender(2); // user switched drives
-        resolve('data:url:40');
-        await flush();
-
-        expect(cell.patches.some((p) => p.status === 'loaded')).toBe(false);
-    });
-
-    it('marks a locked cell and rearms it on unlock', async () => {
-        thumbnails.resolver = () => Promise.reject(new Error('encryption password required'));
-
-        const cell = makeCell(50);
-        controller.registerCell(cell.node, { msgId: 50, apply: cell.apply });
-        fireIntersect(cell.node);
-        await flush();
-
-        expect(cell.last()).toMatchObject({ status: 'locked' });
-        expect(observed.has(cell.node)).toBe(false);
-
-        thumbnails.resolver = (msgId: number) => Promise.resolve(`data:url:${msgId}`);
-        controller.rearmLocked();
-        expect(observed.has(cell.node)).toBe(true); // re-observed for retry
-
-        fireIntersect(cell.node);
-        await flush();
-        expect(cell.last()).toEqual({ status: 'loaded', src: 'data:url:50' });
-    });
-
-    it('keeps a rate-limited cell shimmering and retries after the wait Telegram named', async () => {
+    it('respects long server deadlines and cancels retries when the cell leaves', async () => {
         vi.useFakeTimers();
-        try {
-            let calls = 0;
-            thumbnails.resolver = (msgId: number) => {
-                calls += 1;
-                return calls === 1
-                    ? Promise.reject(new Error('tgclient: GetFileDocument failed: tgclient: flood wait: 25s'))
-                    : Promise.resolve(`data:url:${msgId}`);
-            };
-
-            const cell = makeCell(60);
-            controller.registerCell(cell.node, { msgId: 60, apply: cell.apply });
-            fireIntersect(cell.node);
-            await flush();
-            expect(cell.last()).toEqual({ status: 'loading' });
-            expect(cell.patches.some((patch) => patch.status === 'failed')).toBe(false);
-
-            await vi.advanceTimersByTimeAsync(25_000);
-            expect(calls).toBe(1);
-            await vi.advanceTimersByTimeAsync(1_100);
-            await flush();
-            expect(calls).toBe(2);
-            expect(cell.last()).toEqual({ status: 'loaded', src: 'data:url:60' });
-        } finally {
-            vi.useRealTimers();
-        }
+        runtime.acquire.mockImplementation(() => ({ promise: Promise.reject({ retryAfterMs: 300_000 }), release: runtime.release }));
+        const target = cell();
+        fire(target.node); await flush();
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(runtime.acquire).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(runtime.acquire).toHaveBeenCalledTimes(2);
+        controller.unregisterCell(target.node);
+        await vi.advanceTimersByTimeAsync(400_000);
+        expect(runtime.acquire).toHaveBeenCalledTimes(2);
     });
 
-    it('fails a cell outright for a permanent error and after the retry budget', async () => {
-        vi.useFakeTimers();
-        try {
-            thumbnails.resolver = () => Promise.reject(new Error('unsupported image'));
-            const permanent = makeCell(70);
-            controller.registerCell(permanent.node, { msgId: 70, apply: permanent.apply });
-            fireIntersect(permanent.node);
-            await flush();
-            expect(permanent.last()).toMatchObject({ status: 'failed' });
-
-            let calls = 0;
-            thumbnails.resolver = () => {
-                calls += 1;
-                return Promise.reject(new Error('flood wait: 1s'));
-            };
-            const limited = makeCell(71);
-            controller.registerCell(limited.node, { msgId: 71, apply: limited.apply });
-            fireIntersect(limited.node);
-            await flush();
-            for (let round = 0; round < 3; round += 1) {
-                await vi.advanceTimersByTimeAsync(2_100);
-                await flush();
-            }
-            expect(calls).toBe(4);
-            expect(limited.last()).toMatchObject({ status: 'failed' });
-        } finally {
-            vi.useRealTimers();
-        }
+    it('clears revoked image references when the shared scope is reset', async () => {
+        const target = cell();
+        fire(target.node); await flush();
+        runtime.reset();
+        expect(target.last()).toEqual({ status: 'idle', src: '', title: '' });
+        expect(observed.has(target.node)).toBe(true);
     });
 
-    it('loads at most three thumbnails at a time', async () => {
-        const resolvers: Array<(value: string) => void> = [];
-        thumbnails.resolver = () => new Promise<string>((resolve) => { resolvers.push(resolve); });
-
-        const cells = [80, 81, 82, 83, 84].map((msgId) => {
-            const cell = makeCell(msgId);
-            controller.registerCell(cell.node, { msgId, apply: cell.apply });
-            fireIntersect(cell.node);
-            return cell;
-        });
-        await flush();
-        expect(resolvers).toHaveLength(3);
-        expect(cells.every((cell) => cell.last()?.status === 'loading')).toBe(true);
-
-        resolvers[0]('data:url:80');
-        await flush();
-        await flush();
-        expect(resolvers).toHaveLength(4);
-        expect(cells[0].last()).toEqual({ status: 'loaded', src: 'data:url:80' });
+    it('limits retry attempts without truncating Telegram FLOOD_WAIT', () => {
+        expect(controller.retryDelay('FLOOD_WAIT_600', 0)).toBe(601_000);
+        expect(controller.retryDelay('timeout', 1)).toBe(16_000);
+        expect(controller.retryDelay('timeout', 3)).toBeNull();
+        expect(controller.retryDelay('unsupported format', 0)).toBeNull();
     });
 });

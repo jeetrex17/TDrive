@@ -12,3 +12,30 @@ export interface FolderStats {
     "bytes": number;
     "latestUpload": number;
 }
+
+export interface GalleryAnchor {
+    "start_index": number;
+    "cursor": string;
+}
+
+export interface GalleryBucket {
+    "key": string;
+    "start_index": number;
+    "count": number;
+    "upload_time": number;
+}
+
+export interface GalleryLocation {
+    "generation": string;
+    "index": number;
+    "cursor": string;
+}
+
+export interface GalleryTimeline {
+    "channel_id": number;
+    "generation": string;
+    "total_count": number;
+    "page_size": number;
+    "buckets": GalleryBucket[] | null;
+    "anchors": GalleryAnchor[] | null;
+}

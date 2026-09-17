@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
+	"TDrive/backend/thumbnail"
 )
 
 func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool) ([]Metadata, error) {
@@ -291,16 +293,35 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 		return Metadata{}, projection.Op{}, "", err
 	}
 	plaintextSize := info.Size()
+	// A photo's original and derivatives must use one immutable source. The
+	// user can replace the selected path while Telegram is uploading; native
+	// decoding that path later would otherwise publish unrelated image pixels.
+	var source io.ReadSeeker = plainFile
+	const maxPhotoSnapshot = 30 << 20
+	if thumbnail.IsImage(filename) && plaintextSize <= maxPhotoSnapshot {
+		snapshot, readErr := io.ReadAll(io.LimitReader(plainFile, maxPhotoSnapshot+1))
+		if readErr != nil {
+			return Metadata{}, projection.Op{}, "", readErr
+		}
+		defer clear(snapshot)
+		if int64(len(snapshot)) != plaintextSize {
+			return Metadata{}, projection.Op{}, "", fmt.Errorf("photo changed while preparing upload")
+		}
+		source = bytes.NewReader(snapshot)
+	}
 	// Announce the operation once the local source is known, before validating
 	// remote metadata. That keeps failed uploads visible to callers while
 	// avoiding the duplicate start event that used to be emitted at two layers.
 	observer.Started(uploadID, filename, uploadByteSize(plaintextSize, wantEncrypted), parentID)
 	slog.Debug("file: uploading", "channel_id", channelID, "name", filename, "size", plaintextSize, "encrypt", wantEncrypted, "parent_id", parentID)
-	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, plainFile, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer)
+	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, source, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer)
 	if err != nil {
 		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
 	} else {
 		slog.Debug("file: upload succeeded", "channel_id", channelID, "name", filename, "msg_id", meta.MsgID, "stored_size", meta.Size)
+		// The original is the durable success boundary. Derivative preparation
+		// cannot turn it into a failed upload or trigger an original resend.
+		s.prepareUploadedRenditions(ctx, channelID, meta, op, header, source)
 	}
 	return meta, op, header, err
 }
@@ -408,13 +429,25 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 			return Metadata{}, projection.Op{}, "", err
 		}
 	}
+	var documentThumb []byte
+	thumbSender, canAttachThumb := s.TG.(tgclient.DocumentThumbnailSender)
+	if !encrypted && idempotentSend && canAttachThumb && thumbnail.IsImage(filename) {
+		// Telegram's separate document thumbnail is bounded to 320px. Native
+		// sampled decoding shares the global generation admission policy.
+		documentThumb, _ = thumbnail.GenerateLocal(ctx, source, 320)
+		if len(documentThumb) > 200*1024 {
+			documentThumb = nil
+		}
+	}
 	err = s.retryVisibleSend(ctx, idempotentSend, func() error {
 		// A retried attempt must resend the whole body from its start.
 		if _, ok := rewindSeeker(uploadSource, 0); !ok {
 			return fmt.Errorf("staged upload source is not rewindable")
 		}
 		var serr error
-		if idempotentSend {
+		if len(documentThumb) > 0 {
+			result, serr = thumbSender.SendFileWithThumbnail(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress, sendRandomID, documentThumb)
+		} else if idempotentSend {
 			result, serr = tgclient.SendFileIdempotent(
 				ctx, s.TG, peer, uploadSource, filename, caption, uploadSize, onProgress, sendRandomID,
 			)

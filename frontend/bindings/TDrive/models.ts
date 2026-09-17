@@ -72,6 +72,32 @@ export interface EncryptionStatus {
 }
 
 /**
+ * GalleryItem keeps existing file wire fields while adding immutable content
+ * identity. Pixel caches must use content identity, never a filename alone.
+ */
+export interface GalleryItem {
+    "name": string;
+    "size": number;
+    "msg_id": number;
+    "parent_id": string;
+    "upload_time": number;
+    "uploader_id": number;
+    "encrypted"?: boolean;
+    "plaintext_size"?: number;
+    "content_msg_id": number;
+    "content_hash": string;
+    "revision": number;
+}
+
+export interface GalleryPage {
+    "generation": string;
+    "start_index": number;
+    "anchor_offset": number;
+    "items": GalleryItem[] | null;
+    "next_cursor": string;
+}
+
+/**
  * JoinDriveResult distinguishes instant joins from approval-required requests.
  */
 export interface JoinDriveResult {
