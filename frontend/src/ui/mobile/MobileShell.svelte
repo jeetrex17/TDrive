@@ -6,8 +6,11 @@
     import { state as appState } from '../../state';
     import { navigateToIndex } from '../../modules/navigation';
     import { enterPhotos, exitPhotos } from '../../modules/gallery';
+    import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../../modules/selection';
     import { selectionBarState } from '../selection/selection-bar-store';
     import FeatureLayer from '../app/FeatureLayer.svelte';
+    import Gallery from '../gallery/Gallery.svelte';
+    import SelectionBar from '../selection/SelectionBar.svelte';
     import AccountTab from './AccountTab.svelte';
     import Fab from './Fab.svelte';
     import DriveSwitcherSheet from './DriveSwitcherSheet.svelte';
@@ -187,7 +190,19 @@
                 aria-multiselectable="true"
                 aria-colcount="4"
             ></div>
-            <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos"></div>
+            <!-- #gallery-view is the gallery's scroll container, not a seam: the
+                 component measures it, the thumbnail controller uses it as its
+                 IntersectionObserver root, and the click delegation, the preview
+                 modal's return-to-grid and this shell's scroll-to-top all look
+                 it up by this id. So the element stays exactly as it was and only the
+                 portal that filled it from elsewhere is gone. Held back until the
+                 dashboard is up so the grid's window listeners and resize observer
+                 live no longer than the dashboard does. -->
+            <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos">
+                {#if dashboardVisible}
+                    <Gallery />
+                {/if}
+            </div>
         </main>
 
         <div class="mobile-panel" data-tab="transfers" hidden={$activeTab !== 'transfers'}>
@@ -198,22 +213,33 @@
         </div>
     </div>
 
-    <!-- Selection bar host; the controller flips its display and fills it via a
-         portal. It sits above the tab bar and replaces it while selecting. -->
+    <!-- The selection bar sits above the tab bar and replaces it while
+         selecting. It keeps its id and its inline display: none because the
+         selection controller is what reveals it, by flipping that style once a
+         row is picked; the bar is fixed to the bottom of the viewport from
+         its own stylesheet, so where it sits in this shell does not move it. -->
     <div
         id="selection-bar"
         class="selection-bar mobile-selection-bar"
         style="display: none;"
         role="status"
         aria-live="polite"
-    ></div>
+    >
+        {#if dashboardVisible}
+            <SelectionBar
+                onMove={openSelectedItemsMove}
+                onDelete={openSelectedItemsDelete}
+                onClear={clearSelection}
+            />
+        {/if}
+    </div>
 
     <!-- Upload/Create is contextual to drive content, not a fifth destination.
          It stays above the navigation bar on Files and Photos, where a new
          item has a meaningful destination, and leaves Transfers and Account
          calm. -->
     <div class="mobile-context-action" hidden={!contextualActionVisible}>
-        <Fab />
+        <Fab {dashboardVisible} />
     </div>
 
     <div class="mobile-tabbar-slot" hidden={selecting || $keyboardOpen}>
@@ -222,15 +248,6 @@
 
     <DriveSwitcherSheet />
 
-    <!-- Hosts the imperative controllers still write to but the phone layout does
-         not surface (the bell lives in the Transfers tab, the profile in Account,
-         folder position in the top bar). Kept mounted so nothing breaks. -->
-    <div class="mobile-hidden-hosts">
-        <div id="notif-bell-root"></div>
-        <div id="profile-root"></div>
-        <div id="breadcrumb-root"></div>
-        <span id="storage-used"></span>
-    </div>
 </div>
 
 <FeatureLayer />

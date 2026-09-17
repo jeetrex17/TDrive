@@ -456,7 +456,9 @@ func (e *Engine) RunOnce(ctx context.Context, scope Scope, upload Uploader) (int
 		if result.RemoteMessageID > 0 {
 			upErr = nil
 		} else if ctx.Err() != nil {
-			upErr = ctx.Err()
+			// upErr is deliberately left alone: this asset is parked as Paused
+			// with its reason in last_error and the loop moves on, so the
+			// cancellation is never reported as a per-asset upload failure.
 			_, dbErr := e.db.ExecContext(persistCtx, `UPDATE photo_backup_jobs SET status=?,last_error=?,updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=?`, Paused, "upload interrupted; remote outcome unknown", now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID)
 			cancelPersist()
 			if dbErr != nil {

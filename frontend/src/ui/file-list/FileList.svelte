@@ -40,6 +40,21 @@
     // desktop grid below is untouched.
     const mobile = isMobilePlatform();
 
+    // A row carries three attributes, and each one has to earn its place: a
+    // long folder is thousands of rows, and anything written here is written
+    // that many times.
+    //
+    // `data-row-key` is how a handler holding nothing but an element gets the
+    // row back (see row-lookup.ts). `data-type` is what the delegated
+    // listeners and the touch binders match on to tell a folder from a file
+    // from a folder still being created. `data-name` is there for the
+    // end-to-end tests, which assert on sort order and have no other way to
+    // read a row's name out of the two different layouts below.
+    //
+    // Everything else about a row -- its id, size, source, uploader, whether
+    // it can be renamed -- lives in the store and is looked up from there.
+    // Serialising those as well gave every row a second, untyped copy of
+    // itself that was free to disagree with the first.
     function dataType(row: FileListRow) {
         return row.kind === 'pending-folder' ? 'pending-folder' : row.kind;
     }
@@ -262,17 +277,7 @@
                 use:measureRow
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}
-                data-id={row.id}
-                data-channel-id={String(row.channelId)}
                 data-name={row.name}
-                data-parent-id={row.parentId}
-                data-source={row.kind === 'file' ? row.source : undefined}
-                data-size={row.kind === 'file' ? String(row.size) : undefined}
-                data-uploader-id={row.kind === 'file' ? String(row.uploaderID) : undefined}
-                data-upload-time={row.kind === 'file' ? String(row.uploadTime) : undefined}
-                data-encrypted={row.kind === 'file' ? String(row.encrypted) : undefined}
-                data-can-delete={row.kind === 'file' ? String(row.canDelete) : undefined}
-                data-can-rename={row.kind === 'file' ? String(row.canRename) : undefined}
                 role="listitem"
                 aria-posinset={rowWindow.start + rowIndex + 1}
                 aria-setsize={visibleRows.length}
@@ -396,17 +401,7 @@
                 use:measureRow
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}
-                data-id={row.id}
-                data-channel-id={String(row.channelId)}
                 data-name={row.name}
-                data-parent-id={row.parentId}
-                data-source={row.kind === 'file' ? row.source : undefined}
-                data-size={row.kind === 'file' ? String(row.size) : undefined}
-                data-uploader-id={row.kind === 'file' ? String(row.uploaderID) : undefined}
-                data-upload-time={row.kind === 'file' ? String(row.uploadTime) : undefined}
-                data-encrypted={row.kind === 'file' ? String(row.encrypted) : undefined}
-                data-can-delete={row.kind === 'file' ? String(row.canDelete) : undefined}
-                data-can-rename={row.kind === 'file' ? String(row.canRename) : undefined}
                 role="row"
                 aria-rowindex={rowWindow.start + rowIndex + 2}
                 aria-selected={$selectedFileRowKeys.has(row.selectionKey) ? 'true' : 'false'}

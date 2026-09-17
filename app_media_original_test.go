@@ -51,8 +51,8 @@ func TestOpenOriginalImageRefreshesStaleRevisionOnce(t *testing.T) {
 	}
 }
 
-func TestAppOpenOriginalImageRequiresBackend(t *testing.T) {
-	if _, err := (&App{}).OpenOriginalImage(2, 1); err == nil {
+func TestMediaServiceOpenOriginalImageRequiresBackend(t *testing.T) {
+	if _, err := newTestMediaService().OpenOriginalImage(2, 1); err == nil {
 		t.Fatal("OpenOriginalImage without backend succeeded")
 	}
 }

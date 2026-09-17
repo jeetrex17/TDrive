@@ -55,7 +55,6 @@ function reset(): void {
 
 beforeEach(() => {
     host = document.createElement('div');
-    host.id = 'notif-bell-root';
     document.body.appendChild(host);
     app = mount(NotifBell, {
         target: host,

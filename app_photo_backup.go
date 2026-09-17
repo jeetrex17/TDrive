@@ -204,7 +204,7 @@ func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupSta
 	if err != nil {
 		return PhotoBackupState{}, err
 	}
-	enc, err := a.EncryptionStatus()
+	enc, err := a.encryption.EncryptionStatus()
 	if err != nil {
 		return PhotoBackupState{}, err
 	}
@@ -431,7 +431,7 @@ func (a *App) startPhotoBackup() error {
 		return fmt.Errorf("photo backup: paused")
 	}
 	if settings.Encrypt {
-		status, err := a.EncryptionStatus()
+		status, err := a.encryption.EncryptionStatus()
 		if err != nil {
 			return err
 		}

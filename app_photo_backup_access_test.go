@@ -17,7 +17,8 @@ func (s backupEncryptionStatusService) StatusContext(context.Context) (encservic
 }
 
 func TestPhotoBackupShowsLockedEncryptionBeforeStarting(t *testing.T) {
-	app := &App{encryptionServiceOverride: backupEncryptionStatusService{status: encservice.Status{Available: true, PasswordSet: true}}}
+	app := NewApp("test")
+	app.encryption.override = backupEncryptionStatusService{status: encservice.Status{Available: true, PasswordSet: true}}
 	initial := PhotoBackupState{Settings: PhotoBackupSettings{Enabled: true, Encrypt: true}, Status: PhotoBackupStatus{Phase: "idle"}}
 	locked := app.photoBackupAccessState(initial)
 	if !locked.EncryptionRequired || locked.Status.Phase != "paused" || locked.Status.Message != "Unlock encryption to back up your photos and videos." {
@@ -26,7 +27,7 @@ func TestPhotoBackupShowsLockedEncryptionBeforeStarting(t *testing.T) {
 	if initial.Status.Phase != "idle" {
 		t.Fatal("changed input state")
 	}
-	app.encryptionServiceOverride = backupEncryptionStatusService{status: encservice.Status{Available: true, PasswordSet: true, PasswordRemembered: true}}
+	app.encryption.override = backupEncryptionStatusService{status: encservice.Status{Available: true, PasswordSet: true, PasswordRemembered: true}}
 	unlocked := app.photoBackupAccessState(initial)
 	if unlocked.EncryptionRequired || unlocked.Status.Phase != "idle" {
 		t.Fatalf("unlocked state: %+v", unlocked)

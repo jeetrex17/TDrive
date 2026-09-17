@@ -1,10 +1,10 @@
 import {
-    ListChannels as rawListChannels,
     MountDrive as rawMountDrive,
     MountDrives as rawMountDrives,
     MountStatus as rawMountStatus,
     UnmountDrive as rawUnmountDrive,
 } from "../../bindings/TDrive/app";
+import { ListChannels as rawListChannels } from "../../bindings/TDrive/driveservice";
 import type {
     MountedDrive,
     MountedDriveKind,

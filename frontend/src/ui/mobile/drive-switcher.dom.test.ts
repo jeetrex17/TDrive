@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { get } from 'svelte/store';
 import DriveSwitcherSheet from './DriveSwitcherSheet.svelte';
+import { sidebarState } from '../sidebar/sidebar-store';
 import { closeDriveSwitcher, driveSwitcherOpen, openDriveSwitcher } from './mobile-shell-store';
 
 let shell: HTMLElement;
@@ -33,6 +34,15 @@ function pointer(type: string, target: EventTarget, clientY: number, timeStamp =
 
 beforeEach(() => {
     driveSwitcherOpen.set(false);
+    // The sheet renders the drive list itself, so a drive in the sidebar store
+    // is what puts a row in it.
+    sidebarState.set({
+        personal: [{ id: 1, title: 'My Drive', kind: 'personal', isActive: true, inviteLink: '' }],
+        shared: [],
+        pending: [],
+        activeChannelId: 1,
+        photosActive: false,
+    });
     shell = document.createElement('div');
     shell.className = 'mobile-shell';
     behind = document.createElement('div');
@@ -43,10 +53,6 @@ beforeEach(() => {
     document.body.append(shell);
     component = mount(DriveSwitcherSheet, { target: shell });
     flushSync();
-    // The portaled drive rows the real sheet is filled with.
-    const row = document.createElement('button');
-    row.className = 'drive-item';
-    shell.querySelector('#drives-personal')?.append(row);
 });
 
 afterEach(() => {
