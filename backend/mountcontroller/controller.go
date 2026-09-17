@@ -1,10 +1,11 @@
 package mountcontroller
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -813,16 +814,18 @@ func normalizeDriveSelection(requested []Drive) ([]Drive, error) {
 		}
 		drives[index] = drive
 	}
-	sort.Slice(drives, func(left, right int) bool {
-		if drives[left].Kind != drives[right].Kind {
-			return drives[left].Kind == DriveKindPersonal
+	slices.SortFunc(drives, func(a, b Drive) int {
+		if a.Kind != b.Kind {
+			// Personal drives lead, whatever they are called.
+			if a.Kind == DriveKindPersonal {
+				return -1
+			}
+			return 1
 		}
-		leftTitle := mountfs.NameKey(drives[left].Title)
-		rightTitle := mountfs.NameKey(drives[right].Title)
-		if leftTitle != rightTitle {
-			return leftTitle < rightTitle
+		if c := cmp.Compare(mountfs.NameKey(a.Title), mountfs.NameKey(b.Title)); c != 0 {
+			return c
 		}
-		return drives[left].ID < drives[right].ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 	return drives, nil
 }

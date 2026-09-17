@@ -178,9 +178,7 @@ func TestRangeReaderCoalescesConcurrentBlockReads(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, readers)
 	for i := 0; i < readers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			buf := make([]byte, 32)
 			_, err := reader.ReadStoredAt(context.Background(), ref, buf, off)
@@ -191,7 +189,7 @@ func TestRangeReaderCoalescesConcurrentBlockReads(t *testing.T) {
 			if !bytes.Equal(buf, data[off:off+32]) {
 				errs <- fmt.Errorf("bytes mismatch")
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

@@ -1082,9 +1082,7 @@ func TestCoordinatorBoundsAdmittedAndConcurrentOperations(t *testing.T) {
 		operations.Wait()
 	})
 	startMove := func(index int) {
-		operations.Add(1)
-		go func() {
-			defer operations.Done()
+		operations.Go(func() {
 			_, moveErr := coordinator.Move(ctx, MoveRequest{
 				OperationID:         fmt.Sprintf("bounded-%d", index),
 				DriveID:             42,
@@ -1094,7 +1092,7 @@ func TestCoordinatorBoundsAdmittedAndConcurrentOperations(t *testing.T) {
 				DestinationName:     fmt.Sprintf("file-%d.txt", index),
 			})
 			results <- moveErr
-		}()
+		})
 	}
 	startMove(0)
 	startMove(1)

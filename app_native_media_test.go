@@ -328,9 +328,7 @@ func TestNativeMediaReservationRejectsConcurrentDuplicateAttach(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			reservation, err := media.reserveNativeMediaSession("opaque-session-token", false)
 			if err != nil {
@@ -343,7 +341,7 @@ func TestNativeMediaReservationRejectsConcurrentDuplicateAttach(t *testing.T) {
 			winnerMu.Lock()
 			winner = reservation
 			winnerMu.Unlock()
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

@@ -2,11 +2,12 @@ package tgclient
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 )
@@ -154,7 +155,7 @@ func (f *Fake) SeedHistory(msgs ...HistoryMessage) {
 	for _, m := range msgs {
 		f.recordMessageEvent(m)
 	}
-	sort.Slice(f.history, func(i, j int) bool { return f.history[i].MsgID < f.history[j].MsgID })
+	slices.SortFunc(f.history, func(a, b HistoryMessage) int { return cmp.Compare(a.MsgID, b.MsgID) })
 	for _, m := range f.history {
 		if m.MsgID >= f.nextMsgID {
 			f.nextMsgID = m.MsgID + 1

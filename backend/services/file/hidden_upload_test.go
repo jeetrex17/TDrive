@@ -1000,7 +1000,7 @@ func TestDiscardHiddenBodyValidationAndCleanupFailure(t *testing.T) {
 }
 
 func TestServiceDoesNotExposeRawHiddenMessageDeletion(t *testing.T) {
-	if _, exposed := reflect.TypeOf((*Service)(nil)).MethodByName("DiscardHidden"); exposed {
+	if _, exposed := reflect.TypeFor[*Service]().MethodByName("DiscardHidden"); exposed {
 		t.Fatal("Service exposes raw hidden MessageID deletion without operation ownership")
 	}
 }
