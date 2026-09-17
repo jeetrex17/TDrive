@@ -13,6 +13,45 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestFolderCloseReleasesPausedTraversal(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"one.jpg", "two.jpg"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter := NewLocalFolderAdapter(32, nil)
+	page, err := adapter.Page(context.Background(), Source{Root: root}, "", 1)
+	if err != nil || page.NextCursor == "" {
+		t.Fatalf("page=%+v err=%v", page, err)
+	}
+	handle := adapter.sessions[page.NextCursor].stack[0].dir
+	adapter.Close()
+	if len(adapter.sessions) != 0 {
+		t.Fatal("paused scan retained")
+	}
+	if _, err := handle.Stat(); err == nil {
+		t.Fatal("directory handle retained after close")
+	}
+	adapter.Close()
+}
+
+func TestNativeSourceDisplayNameSurvivesRoundTrip(t *testing.T) {
+	now := time.Now()
+	engine, scope := testEngine(t, &now)
+	source := Source{Scope: scope, ID: "phassetcollection:camera", Kind: "ios", Root: "phassetcollection:UUID", Name: "Camera", Enabled: true}
+	if err := engine.UpsertSource(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := engine.ListSources(context.Background(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].Name != "Camera" || sources[0].Root != "phassetcollection:UUID" {
+		t.Fatalf("sources=%+v", sources)
+	}
+}
+
 func testEngine(t *testing.T, now *time.Time) (*Engine, Scope) {
 	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "backup.db"))

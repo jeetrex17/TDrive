@@ -58,6 +58,7 @@ func (a *App) clearEncryptionSession() {
 	}
 	a.closeEncryptedNativeMedia()
 	a.revokeGalleryImages()
+	a.stopPhotoBackup()
 	if a.engine != nil {
 		a.engine.ClearEncryptionSession()
 	}

@@ -25,10 +25,10 @@ type Settings struct {
 }
 
 type Source struct {
-	Scope          Scope
-	ID, Kind, Root string
-	Enabled        bool
-	AddedAt        time.Time
+	Scope                Scope
+	ID, Kind, Root, Name string
+	Enabled              bool
+	AddedAt              time.Time
 }
 
 type Asset struct {

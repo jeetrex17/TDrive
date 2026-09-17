@@ -37,6 +37,19 @@ func NewLocalFolderAdapter(maxDepth int, excludedRoots []string) *LocalFolderAda
 	return &LocalFolderAdapter{MaxDepth: maxDepth, ExcludedRoots: append([]string(nil), excludedRoots...), sessions: make(map[string]*folderSession)}
 }
 
+// Close releases traversal handles when a worker stops between pages. Waiting
+// for another Page call would retain open directories for every paused source.
+func (a *LocalFolderAdapter) Close() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for token, scan := range a.sessions {
+		a.close(token, scan)
+	}
+}
+
 func (a *LocalFolderAdapter) Page(ctx context.Context, source Source, cursor string, limit int) (Page, error) {
 	if a == nil || limit <= 0 || limit > 128 || source.Root == "" {
 		return Page{}, ErrInvalid
