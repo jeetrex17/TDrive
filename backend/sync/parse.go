@@ -1,9 +1,10 @@
 package sync
 
 import (
+	"cmp"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 
 	"TDrive/backend/projection"
@@ -104,5 +105,5 @@ func captionlessMediaOp(m tgclient.HistoryMessage) (projection.Op, string, bool)
 // SortAscending sorts by msg_id in place. Telegram history is descending;
 // we always project ascending so out-of-order ops can't reach ApplyOp.
 func SortAscending(msgs []ParsedMessage) {
-	sort.Slice(msgs, func(i, j int) bool { return msgs[i].MsgID < msgs[j].MsgID })
+	slices.SortFunc(msgs, func(a, b ParsedMessage) int { return cmp.Compare(a.MsgID, b.MsgID) })
 }

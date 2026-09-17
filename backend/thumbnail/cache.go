@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -229,9 +229,8 @@ func (c *Cache) ensureInitLocked() {
 		}
 		found = append(found, entry{name: fname, size: info.Size(), used: info.ModTime()})
 	}
-	sort.Slice(found, func(i, j int) bool {
-		return found[i].used.After(found[j].used)
-	})
+	// Most recently used first, so the LRU list is rebuilt newest to oldest.
+	slices.SortFunc(found, func(a, b entry) int { return b.used.Compare(a.used) })
 	for _, e := range found {
 		elem := c.lru.PushBack(e)
 		c.entries[e.name] = elem

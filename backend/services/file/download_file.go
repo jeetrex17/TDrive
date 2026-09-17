@@ -184,10 +184,7 @@ func (s *Service) downloadMultipartPlain(
 	}
 
 	for i, part := range file.Parts {
-		i, part := i, part
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			select {
 			case sem <- struct{}{}:
 			case <-downloadCtx.Done():
@@ -208,7 +205,7 @@ func (s *Service) downloadMultipartPlain(
 			default:
 			}
 			cancel()
-		}()
+		})
 	}
 
 	wait.Wait()

@@ -9,12 +9,13 @@
 package backfill
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -362,8 +363,6 @@ func orderParentsFirst(rows []folderRow) []folderRow {
 	for _, r := range out {
 		depths[r.ID] = depth(r.ID, make(map[string]bool))
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return depths[out[i].ID] < depths[out[j].ID]
-	})
+	slices.SortStableFunc(out, func(a, b folderRow) int { return cmp.Compare(depths[a.ID], depths[b.ID]) })
 	return out
 }

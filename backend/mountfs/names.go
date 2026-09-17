@@ -1,17 +1,17 @@
 package mountfs
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"fmt"
-	"sort"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"TDrive/backend/mountpath"
-
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
 )
 
 const (
@@ -118,18 +118,14 @@ func assignUniqueNames(entries []snapshotEntry, bases []string, baseGroups map[s
 		}
 		aliasIndexes = append(aliasIndexes, indexes...)
 	}
-	sort.Slice(aliasIndexes, func(left, right int) bool {
-		leftIndex := aliasIndexes[left]
-		rightIndex := aliasIndexes[right]
-		leftKey := NameKey(bases[leftIndex])
-		rightKey := NameKey(bases[rightIndex])
-		if leftKey != rightKey {
-			return leftKey < rightKey
+	slices.SortFunc(aliasIndexes, func(a, b int) int {
+		if c := cmp.Compare(NameKey(bases[a]), NameKey(bases[b])); c != 0 {
+			return c
 		}
-		if entries[leftIndex].source.Kind != entries[rightIndex].source.Kind {
-			return entries[leftIndex].source.Kind < entries[rightIndex].source.Kind
+		if c := cmp.Compare(entries[a].source.Kind, entries[b].source.Kind); c != 0 {
+			return c
 		}
-		return entries[leftIndex].source.ID < entries[rightIndex].source.ID
+		return cmp.Compare(entries[a].source.ID, entries[b].source.ID)
 	})
 
 	maxRounds := 2*len(entries) + 1
@@ -157,19 +153,21 @@ func assignUniqueNames(entries []snapshotEntry, bases []string, baseGroups map[s
 }
 
 func sortSnapshotEntries(entries []snapshotEntry) {
-	sort.Slice(entries, func(left, right int) bool {
-		leftKey := NameKey(entries[left].entry.Name)
-		rightKey := NameKey(entries[right].entry.Name)
-		if leftKey != rightKey {
-			return leftKey < rightKey
+	slices.SortFunc(entries, func(a, b snapshotEntry) int {
+		if c := cmp.Compare(NameKey(a.entry.Name), NameKey(b.entry.Name)); c != 0 {
+			return c
 		}
-		if entries[left].entry.Name != entries[right].entry.Name {
-			return entries[left].entry.Name < entries[right].entry.Name
+		if c := cmp.Compare(a.entry.Name, b.entry.Name); c != 0 {
+			return c
 		}
-		if entries[left].entry.Kind != entries[right].entry.Kind {
-			return entries[left].entry.Kind == KindDirectory
+		if a.entry.Kind != b.entry.Kind {
+			// Directories lead their siblings.
+			if a.entry.Kind == KindDirectory {
+				return -1
+			}
+			return 1
 		}
-		return entries[left].entry.ID < entries[right].entry.ID
+		return cmp.Compare(a.entry.ID, b.entry.ID)
 	})
 }
 

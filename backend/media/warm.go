@@ -76,12 +76,10 @@ func (s *Service) WarmTransport(ctx context.Context, channelID int64) {
 	}
 	var wg sync.WaitGroup
 	for dc, ref := range perDC {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			reads := s.warmPool(ctx, ref)
 			slog.Info("media: transport warmed", "channel_id", channelID, "dc", dc, "reads", reads, "elapsed", time.Since(started))
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -99,13 +97,11 @@ func (s *Service) warmPool(ctx context.Context, ref tgclient.DocumentRef) int {
 		}
 		size := int(min(int64(warmReadBytes), ref.Size-offset))
 		reads++
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := s.ranges.ReadDocumentRange(ctx, ref, offset, make([]byte, size)); err != nil {
 				slog.Debug("media: transport warm read failed", "dc", ref.DCID, "offset", offset, "error", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	return reads

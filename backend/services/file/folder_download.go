@@ -199,9 +199,7 @@ func (s *Service) downloadFolderFiles(
 		})
 	}
 	for range workerCount {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			for index := range jobs {
 				file := files[index]
 				destination, err := joinWithinRoot(stagingRoot, file.relativePath)
@@ -219,7 +217,7 @@ func (s *Service) downloadFolderFiles(
 				}
 				progress.complete(index, file.relativePath)
 			}
-		}()
+		})
 	}
 
 sendLoop:
