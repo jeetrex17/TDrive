@@ -108,11 +108,13 @@
 </div>
 
 <style>
-    /* Three columns and three rows: the glyph holds the first cell, the name and
-       the control share the first row, and the bar and the detail run the full
-       width beneath them. The control gets a cell of its own rather than landing
-       in the implicit fourth, which is where it used to end up -- orphaned on a
-       second row underneath the glyph. */
+    /* Three columns. The glyph, the name and the control are pinned to the
+       first row; everything under them spans from the name's column to the
+       edge and takes the next row going.
+
+       Auto-placed rather than numbered, because not every row has every part:
+       numbered, a finished row with no bar left an empty row 2 behind and so
+       carried twice the gap of a running one. */
     .row {
         display: grid;
         grid-template-columns: 28px minmax(0, 1fr) auto;
@@ -123,7 +125,8 @@
     }
 
     .glyph {
-        grid-area: 1 / 1;
+        grid-row: 1;
+        grid-column: 1;
         display: grid;
         place-items: center;
         width: 28px;
@@ -146,7 +149,8 @@
     }
 
     .name {
-        grid-area: 1 / 2;
+        grid-row: 1;
+        grid-column: 2;
         min-width: 0;
         font-size: var(--mobile-type-body);
         font-weight: var(--weight-medium);
@@ -157,7 +161,7 @@
     }
 
     .track {
-        grid-area: 2 / 2 / auto / -1;
+        grid-column: 2 / -1;
         height: 5px;
         border-radius: var(--radius-pill);
         background: var(--overlay-neutral-2);
@@ -183,7 +187,7 @@
     }
 
     .detail {
-        grid-area: 3 / 2 / auto / -1;
+        grid-column: 2 / -1;
         min-width: 0;
         font-size: var(--mobile-type-meta);
         color: var(--color-text-muted);
@@ -194,7 +198,7 @@
     }
 
     .note {
-        grid-area: 4 / 2 / auto / -1;
+        grid-column: 2 / -1;
         min-width: 0;
         font-size: var(--mobile-type-caption);
         color: var(--color-text-subtle);
@@ -207,7 +211,8 @@
        not set the height of the line the name sits on and leave the bar
        floating a long way underneath it. */
     .control {
-        grid-area: 1 / 3;
+        grid-row: 1;
+        grid-column: 3;
         display: grid;
         place-items: center;
         width: 40px;
