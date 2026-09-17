@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
     resetListener: undefined as undefined | (() => void),
     policyListener: undefined as undefined | ((policy: { backgrounded: boolean }) => void),
 }));
-vi.mock('../../api', () => ({ closeMedia: mocks.close, hasOperationErrorCode: () => false, isMobilePlatform: () => false, onRuntimeEvent: () => () => {}, openExternalUrl: vi.fn(), openOriginalImage: mocks.openOriginal, useEncryptionPassword: vi.fn() }));
+vi.mock('../../api', () => ({ closeMedia: mocks.close, isMobilePlatform: () => false, onRuntimeEvent: () => () => {}, openExternalUrl: vi.fn(), openOriginalImage: mocks.openOriginal, requireOperationSuccess: vi.fn(), useEncryptionPassword: vi.fn() }));
 vi.mock('../renditions/runtime', () => ({ acquireRendition: mocks.acquire, subscribeRenditionReset: (listener: () => void) => { mocks.resetListener = listener; return () => {}; } }));
 vi.mock('../gallery-policy', () => ({ subscribeGalleryPolicy: (listener: (policy: { backgrounded: boolean }) => void) => { mocks.policyListener = listener; return () => {}; } }));
 vi.mock('../../ui/gallery/gallery-controller', () => ({ setActive: mocks.setGalleryActive }));
@@ -28,7 +28,7 @@ beforeEach(() => {
     mocks.acquire.mockImplementation(() => ({ promise: Promise.resolve({ url: 'blob:photo', width: 1200, height: 800 }), release: mocks.release }));
     mocks.openOriginal.mockResolvedValue({ token: 'original-1', url: 'http://127.0.0.1/media/original-1', kind: 'image' });
     Object.defineProperty(HTMLImageElement.prototype, 'decode', { configurable: true, value: vi.fn(async () => {}) });
-    document.body.innerHTML = '<div id="preview-modal" class="modal-overlay" style="display:none"><div id="preview-shell"><div id="preview-stage"><img id="preview-thumbnail"><img id="preview-image"><div id="preview-loading"><div id="preview-loading-fill"></div></div><div id="preview-error"></div></div><span id="preview-filename"></span><button id="preview-download"></button><button id="preview-close"></button><button id="preview-prev"></button><button id="preview-next"></button><span id="preview-counter"></span></div></div>';
+    document.body.innerHTML = '<div id="preview-modal" class="modal-overlay" style="display:none"><div id="preview-shell"><div id="preview-stage"><img id="preview-thumbnail"><img id="preview-image"><div id="preview-loading"><div id="preview-loading-fill"></div></div><div id="preview-error"></div><div id="preview-locked" style="display:none"><input id="preview-locked-input" type="password"><button id="preview-locked-eye"></button><button id="preview-locked-unlock"></button><div id="preview-locked-error"></div><div id="preview-locked-hint"><span id="preview-locked-hint-text"></span></div></div></div><span id="preview-filename"></span><button id="preview-download"></button><button id="preview-close"></button><button id="preview-prev"></button><button id="preview-next"></button><span id="preview-counter"></span></div></div>';
 });
 
 describe('bounded photo viewer', () => {
@@ -126,6 +126,21 @@ describe('bounded photo viewer', () => {
         await vi.waitFor(() => expect(document.querySelector('#preview-thumbnail')?.getAttribute('src')).toBe('blob:thumb'));
         expect(document.getElementById('preview-download')?.hasAttribute('hidden')).toBe(false);
         expect(document.getElementById('preview-error')?.textContent).toContain('animated image');
+        preview.closePreviewModal();
+    });
+
+    it('shows the unlock form when Wails wraps an encrypted image error', async () => {
+        mocks.openOriginal.mockRejectedValue(new Error(
+            'Binding call failed: Bound method returned an error: media: encryption key is unavailable: encryption password required',
+        ));
+        mocks.acquire.mockReturnValue({ promise: new Promise(() => {}), release: mocks.release });
+        const preview = await import('./preview');
+
+        preview.activatePreviewModal();
+        await preview.openPreviewList([{ ...item, encrypted: true }], 0);
+
+        expect(document.getElementById('preview-locked')?.style.display).toBe('flex');
+        expect(document.getElementById('preview-error')?.textContent).toBe('');
         preview.closePreviewModal();
     });
 
