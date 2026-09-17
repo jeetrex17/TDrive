@@ -2,13 +2,14 @@ package file
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -116,7 +117,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 	failed := 0
 	var firstErr error
 
-	for i := 0; i < len(filePaths); i++ {
+	for i := range len(filePaths) {
 		path := filePaths[i]
 		pid := parentIDs[i]
 		uploadID := options.idOffset + i
@@ -131,10 +132,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 			observer.Failed(uploadID, filepath.Base(path), slotErr)
 			continue
 		}
-		wg.Add(1)
-
-		go func(uploadID int, path string, pid string, release func()) {
-			defer wg.Done()
+		wg.Go(func() {
 			defer release()
 			uploadCtx, untrack := s.trackUploadCancel(ctx, uploadID)
 			defer untrack()
@@ -183,13 +181,11 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 				Op:        op,
 			})
 			mu.Unlock()
-		}(uploadID, path, pid, release)
+		})
 	}
 
 	wg.Wait()
-	sort.Slice(uploaded, func(i, j int) bool {
-		return uploaded[i].Meta.MsgID < uploaded[j].Meta.MsgID
-	})
+	slices.SortFunc(uploaded, func(a, b uploadedResult) int { return cmp.Compare(a.Meta.MsgID, b.Meta.MsgID) })
 
 	uploadedFiles := make([]Metadata, 0, len(uploaded))
 	for _, item := range uploaded {
