@@ -189,6 +189,96 @@ jobs:
       - name: Run govulncheck
         run: govulncheck $FIRST_PARTY_GO_PACKAGES
 
+  # frontend/bindings is generated from the Go source by
+  # `wails3 generate bindings` (build/Taskfile.yml's generate:bindings, which
+  # build:frontend depends on) and then committed, and until this job nothing
+  # compared the two. A bound method whose signature changes without a
+  # regeneration leaves the frontend calling a backend that no longer looks
+  # like that: a runtime failure every other job here stays green through.
+  bindings:
+    name: Generated bindings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # The generator type-checks the whole module through go/packages, and
+      # main embeds frontend/dist, so with no frontend built the root package
+      # carries an embed error, no service is found, and the run would compare
+      # the committed bindings against nothing at all.
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev
+
+      # Pinned to the wails version in go.mod. The generator ships inside the
+      # CLI, so a different CLI emits different files and the check below
+      # would fail on code nobody touched.
+      - name: Install Wails
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The same flags generate:bindings passes; the gtk3 build tag arrives
+      # through the workflow-level GOFLAGS, which is how every other Go job
+      # here loads the module.
+      #
+      # That is one set of build tags, and bindings are generated per platform
+      # with that platform's tags -- android,debug, ios,debug, gtk3 on Linux,
+      # production, and the desktop dev build's empty set -- while a single
+      # copy is committed for all of them. That holds only while no bound
+      # method sits behind a build tag: today none does, so every set produces
+      # the same files and the copy this job checks is the right one
+      # everywhere. Put an exported service method behind a tag and four of
+      # the five platforms start shipping bindings that disagree with their
+      # own build, and this job will not see it. Keep bound methods untagged;
+      # the android and iOS jobs below already regenerate with their own tags,
+      # so that is where a check for the other sets would go.
+      - name: Check the committed bindings are current
+        run: |
+          set -euo pipefail
+          wails3 generate bindings -clean=true -ts -i
+
+          # --intent-to-add so that files the generator adds -- a new service,
+          # a newly bound package -- show up in the diff instead of sitting
+          # untracked and invisible, which is the likeliest shape of a miss
+          # while App is being split into services.
+          git add --intent-to-add frontend/bindings
+          if ! git diff --exit-code -- frontend/bindings; then
+            echo
+            echo "frontend/bindings does not match the Go source: the diff above is what"
+            echo "regenerating produced. Shipping it would call methods the backend no"
+            echo "longer has. Regenerate from the repository root with:"
+            echo
+            echo "    wails3 generate bindings -clean=true -ts -i"
+            echo
+            echo "and commit frontend/bindings. Any 'wails3 task build' does it too, since"
+            echo "build:frontend depends on generate:bindings."
+            exit 1
+          fi
+
   wails-build:
     name: Wails build (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
