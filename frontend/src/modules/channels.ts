@@ -53,6 +53,7 @@ interface ChannelRenderers {
 
 let renderSidebar: () => void = () => undefined;
 let refreshFilesView: (options?: RefreshFilesOptions) => void | Promise<void> = () => undefined;
+let driveRefreshGeneration = 0;
 const pendingLiveSyncChannels = new Set<number>();
 let processingLiveSyncRefresh = false;
 let disconnectLiveSyncEvents: (() => void) | null = null;
@@ -245,6 +246,10 @@ export async function leaveSharedDrive(channelId: number): Promise<void> {
 
 export async function switchActiveChannel(channelId: number): Promise<void> {
     if (!channelId || state.channelSwitchInProgress) return;
+    // Invalidate an explicit refresh immediately, before the native switch
+    // resolves. Otherwise an older request for the drive we are leaving can
+    // still publish during the switch window.
+    driveRefreshGeneration += 1;
     state.channelSwitchInProgress = true;
     // Route intent changes immediately. A later Photos click must win while the
     // native channel switch is still in flight.
@@ -282,16 +287,22 @@ export async function refreshActiveDrive(): Promise<void> {
         return;
     }
     const channelId = state.activeChannel.id;
+    const generation = ++driveRefreshGeneration;
+    const stillActive = (): boolean => (
+        generation === driveRefreshGeneration
+        && Number(state.activeChannel?.id ?? 0) === channelId
+    );
     setDriveSync('syncing');
     try {
         await syncChannel(channelId);
-        setDriveSync('synced');
+        if (stillActive()) setDriveSync('synced');
     } catch (error) {
-        setDriveSync('failed');
+        if (stillActive()) setDriveSync('failed');
         console.warn('SyncChannel:', error);
     } finally {
         invalidateDriveCaches(channelId);
     }
+    if (!stillActive()) return;
     await refreshFilesView();
 }
 

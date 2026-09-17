@@ -40,6 +40,9 @@ export const idleTransferActivity: TransferActivity = Object.freeze({
 
 type DownloadQueueBase = {
     key: string;
+    // The backend must never infer this from the currently selected drive:
+    // queued work can start after the user has changed drives.
+    channelId: number;
     name: string;
     size: number;
     progress: number;
@@ -69,6 +72,8 @@ export interface State {
     transferActivity: TransferActivity;
     downloadQueue: DownloadQueueItem[];
     activeDownloadId: string | null;
+    // Fresh for every backend dispatch, even when retrying the same queue key.
+    activeDownloadRequestId: string | null;
 
     transferPillEl: HTMLElement | null;
     transferSheetEl: HTMLElement | null;
@@ -130,6 +135,7 @@ export const state: State = {
     transferActivity: idleTransferActivity,
     downloadQueue: [],
     activeDownloadId: null,
+    activeDownloadRequestId: null,
 
     transferPillEl: null,
     transferSheetEl: null,

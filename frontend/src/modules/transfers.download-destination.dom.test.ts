@@ -37,6 +37,7 @@ vi.mock('../ui/mobile/mobile-shell-store', () => ({
 }));
 vi.mock('./notif-bell', () => ({
     markTransferDone: mocks.markTransferDone,
+    pushQueuedTransfer: vi.fn(),
     pushTransferStart: vi.fn(),
     updateTransferName: vi.fn(),
     updateTransferProgress: vi.fn(),
@@ -65,6 +66,7 @@ async function loadModule() {
     state.activeDownloadId = null;
     state.transferActivity = idleTransferActivity;
     state.cancelingDownload = false;
+    state.activeChannel = { id: 101, title: 'Test drive', kind: 'personal' };
     return import('./transfers');
 }
 
@@ -139,7 +141,7 @@ describe('ios', () => {
         mod.enqueueDownload(42, 'plan.pdf', 10);
 
         await vi.waitFor(() => expect(mocks.rememberDownloadSharePath).toHaveBeenCalledWith(
-            'xfer:down:file:42', '/sandbox/Downloads/plan.pdf',
+            'xfer:down:file:101:42', '/sandbox/Downloads/plan.pdf',
         ));
     });
 

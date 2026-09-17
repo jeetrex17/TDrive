@@ -256,6 +256,7 @@ export function buildFolderRow(folder: FolderRowInput, parentId: string, overrid
         selectionKey: overrides.selectionKey || `folder:${id}`,
         id,
         name,
+        channelId: Number(overrides.channelId ?? state.activeChannel?.id ?? 0),
         parentId: String(overrides.parentId ?? folder.parentId ?? parentId ?? ''),
         metaLabel: overrides.metaLabel ?? '—',
         sizeLabel: overrides.sizeLabel ?? '…',
@@ -286,6 +287,7 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         selectionKey: overrides.selectionKey || `file:${id}`,
         id,
         name,
+        channelId: Number(overrides.channelId ?? state.activeChannel?.id ?? 0),
         baseName: overrides.baseName ?? base,
         ext: overrides.ext ?? ext,
         source,
@@ -514,6 +516,9 @@ function openMoveForRow(row: HTMLElement): void {
 function fileTargetForRow(row: HTMLElement) {
     return {
         id: Number(row.dataset.id),
+        channelId: row.dataset.channelId === undefined
+            ? Number(state.activeChannel?.id)
+            : Number(row.dataset.channelId),
         name: row.dataset.name || "File",
         size: Number(row.dataset.size || 0),
         encrypted: row.dataset.encrypted === "true",
@@ -543,7 +548,7 @@ function activateRow(row: HTMLElement) {
         void appActions().openFile(target);
         return;
     }
-    enqueueDownload(target.id, target.name, target.size);
+    enqueueDownload(target.id, target.name, target.size, target.channelId);
 }
 
 
@@ -654,17 +659,30 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
 function applyPendingFocus(list: HTMLElement): void {
     if (state.pendingFocus?.type !== 'file') return;
     const targetId = String(state.pendingFocus.id || '');
-    const target = targetId
-        ? list.querySelector<HTMLElement>(`.drive-row[data-type="file"][data-id="${CSS.escape(targetId)}"]`)
-        : null;
-    state.pendingFocus = null;
-    if (!target) return;
+    const logicalRows = getInteractiveFileListRows();
+    const targetRow = targetId
+        ? logicalRows.find((row): row is FileListFileRow => row.kind === 'file' && row.id === targetId)
+        : undefined;
+    // A virtual window does not mount every row. Do not consume navigation
+    // intent until the target exists logically and has actually mounted.
+    if (!targetRow) return;
 
-    const index = interactiveRows(list).indexOf(target);
-    clearSelection();
-    if (index >= 0) selectRow(target, index);
-    setFocusedRow(target);
-    target.scrollIntoView({ block: 'center' });
+    setActiveFileRowKey(targetRow.selectionKey);
+    window.dispatchEvent(new CustomEvent('tdrive:reveal-file-row', { detail: { key: targetRow.selectionKey } }));
+    void tick().then(() => {
+        requestAnimationFrame(() => {
+            if (state.pendingFocus?.type !== 'file' || String(state.pendingFocus.id || '') !== targetId) return;
+            const target = rowForSelectionKey(list, targetRow.selectionKey);
+            if (!target) return;
+            const index = getInteractiveFileListRows()
+                .findIndex((row) => row.selectionKey === targetRow.selectionKey);
+            if (index < 0) return;
+            clearSelection();
+            selectRow(target, index);
+            setFocusedRow(target, { preventScroll: true });
+            state.pendingFocus = null;
+        });
+    });
 }
 
 function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, data: LoadedFileData): void {
@@ -790,7 +808,7 @@ function isSearchMode() {
 // On a phone a tap opens the row (the desktop double click) unless something is
 // already selected, when it toggles the row instead, and the trailing button
 // opens the row's menu.
-function handleMobileTap(e: MouseEvent, row: HTMLElement) {
+function handleMobileRowAction(e: MouseEvent, row: HTMLElement): boolean {
     const target = e.target as HTMLElement;
     // The revealed swipe button commits and stops there: it must not also run
     // the tap that would have opened the row underneath it.
@@ -799,7 +817,7 @@ function handleMobileTap(e: MouseEvent, row: HTMLElement) {
         e.stopPropagation();
         const swiped = swipeAction.closest<HTMLElement>('.drive-row');
         if (swiped) openMoveForRow(swiped);
-        return;
+        return true;
     }
 
     const more = target.closest<HTMLButtonElement>('button.row-more');
@@ -812,9 +830,14 @@ function handleMobileTap(e: MouseEvent, row: HTMLElement) {
         // closes it again in the same tick. Long-press escaped that only
         // because it fires on a timer with no click of its own.
         e.stopPropagation();
-        return;
+        return true;
     }
-    if (target.closest('button')) return;
+    if (target.closest('button')) return true;
+    return false;
+}
+
+function handleMobileTap(e: MouseEvent, row: HTMLElement) {
+    if (handleMobileRowAction(e, row)) return;
     setFocusedRow(row, { preventScroll: true });
     if (state.selectedItems.size > 0) {
         toggleRowSelection(row);
@@ -824,13 +847,17 @@ function handleMobileTap(e: MouseEvent, row: HTMLElement) {
 }
 
 function handleListClick(e: MouseEvent) {
-    // Search results still own their row handlers. Ignore those events here
-    // so downloads/open/double-click navigation do not fire twice.
-    if (isSearchMode()) return;
-
     const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
     if (!row) return;
     if (row.dataset.type !== "folder" && row.dataset.type !== "file") return;
+
+    // Search owns row activation so it can enter a result's folder before
+    // refreshing. The mobile action affordances still belong to this shared
+    // delegated layer, otherwise its overflow button is a dead end.
+    if (isSearchMode()) {
+        if (isMobilePlatform()) handleMobileRowAction(e, row);
+        return;
+    }
 
     if (isMobilePlatform()) {
         handleMobileTap(e, row);
@@ -839,7 +866,7 @@ function handleListClick(e: MouseEvent) {
 
     if (row.dataset.type === "folder") {
         if ((e.target as HTMLElement).closest("button.download-folder")) {
-            enqueueFolderDownload(row.dataset.id, row.dataset.name);
+            enqueueFolderDownload(row.dataset.id, row.dataset.name, 0, Number(row.dataset.channelId));
             return;
         }
         setFocusedRow(row, { preventScroll: true });
@@ -849,7 +876,7 @@ function handleListClick(e: MouseEvent) {
     if (row.dataset.type === "file") {
         const target = fileTargetForRow(row);
         if ((e.target as HTMLElement).closest("button.download")) {
-            enqueueDownload(target.id, target.name, target.size);
+            enqueueDownload(target.id, target.name, target.size, target.channelId);
             return;
         }
         if ((e.target as HTMLElement).closest("button.play-video")) {
@@ -877,7 +904,7 @@ function handleListKeyDown(e: KeyboardEvent) {
         setFocusedRow(row, { preventScroll: true });
         return;
     }
-    if (isSearchMode() || target?.closest("input, textarea, select, [contenteditable='true']")) return;
+    if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
 
     const list = document.getElementById('file-list') as HTMLElement | null;
     if (!list) return;

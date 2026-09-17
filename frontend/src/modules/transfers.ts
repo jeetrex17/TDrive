@@ -31,6 +31,7 @@ import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
 import { createImportProgress, reduceImportProgress } from './import-progress';
 import {
+    pushQueuedTransfer,
     pushTransferStart,
     updateTransferProgress,
     updateTransferName,
@@ -40,6 +41,7 @@ import {
 
 
 let transferUnsubscribers: RuntimeUnsubscribe[] = [];
+let downloadRequestSequence = 0;
 
 function subscribeTransferEvent<K extends keyof RuntimeEventMap>(
     eventName: K,
@@ -64,6 +66,7 @@ function invalidateTransferCaches(): void {
     }
 }
 type FolderDownloadProgressPayload = {
+    request_id?: unknown;
     folder_id?: unknown;
     percent?: unknown;
     bytes_completed?: unknown;
@@ -78,9 +81,9 @@ function asObjectRecord(value: unknown): Record<string, unknown> {
 
 
 function activateDownloadProgressEvents(): void {
-    subscribeTransferEvent("download_progress", (percent) => {
+    subscribeTransferEvent("download_progress", (percent, requestId) => {
         const activeKey = state.activeDownloadId;
-        if (activeKey === null) return;
+        if (activeKey === null || String(requestId ?? '') !== state.activeDownloadRequestId) return;
         const value = Number(percent);
         if (!Number.isFinite(value)) return;
 
@@ -101,7 +104,12 @@ function activateDownloadProgressEvents(): void {
         if (activeKey === null) return;
         const item = state.downloadQueue.find((entry) => entry.key === activeKey);
         const payload = asObjectRecord(rawPayload) as FolderDownloadProgressPayload;
-        if (!item || item.kind !== 'folder' || String(payload?.folder_id ?? '') !== item.id) return;
+        if (
+            !item
+            || item.kind !== 'folder'
+            || String(payload?.request_id ?? '') !== state.activeDownloadRequestId
+            || String(payload?.folder_id ?? '') !== item.id
+        ) return;
 
         const progress = clampFinite(payload?.percent, item.progress, 0, 100);
         const bytesCompleted = clampFinite(payload?.bytes_completed, item.bytesCompleted, 0, Number.MAX_SAFE_INTEGER);
@@ -193,6 +201,8 @@ async function startNextDownload() {
 
     setTransferDirectionActive('download', true);
     state.activeDownloadId = next.key;
+    const requestId = `${next.key}@${++downloadRequestSequence}`;
+    state.activeDownloadRequestId = requestId;
     replaceDownloadItem(next.key, (current) => ({
         ...current,
         state: 'downloading',
@@ -201,14 +211,14 @@ async function startNextDownload() {
     pushTransferStart({ id: next.key, direction: 'down', name: next.name, total: next.size });
 
     try {
-        let result = await dispatchDownload(next);
+        let result = await dispatchDownload(next, requestId);
         if (!result.result.ok && result.result.error.code === 'encryption_password_required') {
             const unlocked = await openEncryptionPasswordModal();
             if (!unlocked) {
                 finalizeDownload(next.key, 'canceled');
                 return;
             }
-            result = await dispatchDownload(next);
+            result = await dispatchDownload(next, requestId);
         }
 
         if (result.result.ok) {
@@ -236,16 +246,20 @@ async function startNextDownload() {
     } finally {
         state.cancelingDownload = false;
         state.activeDownloadId = null;
+        state.activeDownloadRequestId = null;
         void startNextDownload();
     }
 }
 
-export function enqueueDownload(id: unknown, name: unknown, size: unknown) {
+export function enqueueDownload(id: unknown, name: unknown, size: unknown, sourceChannelId?: unknown) {
     const downloadId = Number(id);
-    if (!Number.isFinite(downloadId)) return;
+    if (!Number.isSafeInteger(downloadId) || downloadId <= 0) return;
+    const channelId = downloadChannelId(sourceChannelId);
+    if (channelId === null) return;
     const label = String(name || "Download");
     enqueueDownloadItem({
-        key: `file:${downloadId}`,
+        key: downloadQueueKey('file', channelId, String(downloadId)),
+        channelId,
         kind: 'file',
         id: downloadId,
         name: label,
@@ -259,12 +273,15 @@ export function enqueueDownload(id: unknown, name: unknown, size: unknown) {
     });
 }
 
-export function enqueueFolderDownload(id: unknown, name: unknown, size: unknown = 0) {
+export function enqueueFolderDownload(id: unknown, name: unknown, size: unknown = 0, sourceChannelId?: unknown) {
     const folderId = String(id ?? '').trim();
     if (!folderId) return;
+    const channelId = downloadChannelId(sourceChannelId);
+    if (channelId === null) return;
     const storedSize = Math.max(0, Number(size) || 0);
     enqueueDownloadItem({
-        key: `folder:${folderId}`,
+        key: downloadQueueKey('folder', channelId, folderId),
+        channelId,
         kind: 'folder',
         id: folderId,
         name: String(name || 'Folder'),
@@ -285,6 +302,12 @@ function enqueueDownloadItem(item: DownloadQueueItem) {
             ? { ...item, name: entry.name || item.name }
             : entry)
         : [...state.downloadQueue, item];
+    // The bell is the user-visible transfer queue. Use the same drive-scoped
+    // id the scheduler will later promote, so two equal message ids from
+    // separate drives cannot overwrite one another.
+    if (!existing) {
+        pushQueuedTransfer({ id: item.key, direction: 'down', name: item.name, total: item.size });
+    }
     if (state.activeDownloadId === null) void startNextDownload();
 }
 
@@ -311,7 +334,7 @@ function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | 
     // The fields are read out now rather than closed over: finalizeDownload
     // drops the item from the queue right after this, and a Retry that
     // referenced a removed entry would do nothing.
-    const { kind, id, name, size } = item;
+    const { kind, id, name, size, channelId } = item;
     const toastId = `download-retry:${item.key}`;
     notify({
         id: toastId,
@@ -326,8 +349,8 @@ function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | 
             // the queue entry's progress under it.
             run: oneShot(() => {
                 dismissNotification(toastId);
-                if (kind === 'folder') enqueueFolderDownload(id, name, size);
-                else enqueueDownload(id, name, size);
+                if (kind === 'folder') enqueueFolderDownload(id, name, size, channelId);
+                else enqueueDownload(id, name, size, channelId);
             }),
         },
     });
@@ -349,14 +372,12 @@ export function downloadRetryFor(transfer: TransferEvent): (() => void) | undefi
     if (!transfer.id.startsWith('xfer:down:')) return undefined;
     const key = transfer.id.slice('xfer:down:'.length);
     const { name, total } = transfer;
-    if (key.startsWith('file:')) {
-        const id = Number(key.slice('file:'.length));
-        return Number.isFinite(id) ? () => enqueueDownload(id, name, total) : undefined;
+    const parsed = parseDownloadQueueKey(key);
+    if (parsed?.kind === 'file') {
+        const id = Number(parsed.id);
+        return Number.isFinite(id) ? () => enqueueDownload(id, name, total, parsed.channelId) : undefined;
     }
-    if (key.startsWith('folder:')) {
-        const id = key.slice('folder:'.length);
-        return id ? () => enqueueFolderDownload(id, name, total) : undefined;
-    }
+    if (parsed?.kind === 'folder') return () => enqueueFolderDownload(parsed.id, name, total, parsed.channelId);
     return undefined;
 }
 
@@ -370,10 +391,45 @@ function oneShot(run: () => void): () => void {
     };
 }
 
-function dispatchDownload(item: DownloadQueueItem) {
+function dispatchDownload(item: DownloadQueueItem, requestId: string) {
     return item.kind === 'folder'
-        ? downloadFolder(item.id)
-        : downloadFile(item.id, item.id);
+        ? downloadFolder(item.channelId, item.id, requestId)
+        : downloadFile(item.channelId, item.id, item.id, requestId);
+}
+
+type DownloadQueueKind = DownloadQueueItem['kind'];
+
+function downloadChannelId(sourceChannelId: unknown): number | null {
+    const channelId = sourceChannelId === undefined
+        ? Number(state.activeChannel?.id)
+        : Number(sourceChannelId);
+    return Number.isSafeInteger(channelId) && channelId > 0 ? channelId : null;
+}
+
+/** A job identity must include its drive: Telegram message ids repeat per channel. */
+function downloadQueueKey(kind: DownloadQueueKind, channelId: number, id: string): string {
+    return `${kind}:${channelId}:${id}`;
+}
+
+function parseDownloadQueueKey(key: string): { kind: DownloadQueueKind; channelId: number; id: string } | null {
+    const firstColon = key.indexOf(':');
+    if (firstColon < 1) return null;
+    const kind = key.slice(0, firstColon);
+    if (kind !== 'file' && kind !== 'folder') return null;
+    const rest = key.slice(firstColon + 1);
+    const secondColon = rest.indexOf(':');
+    // Transfers created before drive-scoped keys shipped did not carry their
+    // source. Keep their Retry button useful by associating it with the drive
+    // that is selected at retry time; all newly-created work takes the branch
+    // below and remains bound to its original source.
+    if (secondColon < 1 || !/^\d+$/.test(rest.slice(0, secondColon))) {
+        const channelId = downloadChannelId(undefined);
+        return channelId === null || !rest ? null : { kind, channelId, id: rest };
+    }
+    const channelId = Number(rest.slice(0, secondColon));
+    const id = rest.slice(secondColon + 1);
+    if (!Number.isSafeInteger(channelId) || channelId <= 0 || !id) return null;
+    return { kind, channelId, id };
 }
 
 function clampFinite(raw: unknown, fallback: number, minValue: number, maxValue: number): number {
@@ -397,7 +453,7 @@ const MAX_IMPORT_FAILURE_REASONS = 3;
 const importFailureReasons: string[] = [];
 let importCompleteReceived = false;
 
-function recordImportFailureReason(name: any, message: any) {
+function recordImportFailureReason(name: unknown, message: unknown) {
     if (importFailureReasons.length >= MAX_IMPORT_FAILURE_REASONS) return;
     const reason = String(message ?? '').trim();
     if (!reason) return;

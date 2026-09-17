@@ -69,14 +69,16 @@
     const visibleRows = $derived($fileListView.kind === 'rows'
         ? sortFileListRows($fileListView.rows, $fileSortState)
         : []);
-    // The files whose row grows that second line. Read off the transfer map,
-    // which holds a handful of entries, rather than by resolving a state for
-    // every row in the folder.
+    // The rows whose second line changes virtual height. Transfer-map keys are
+    // drive-scoped, whereas a row owns a bare file id, so derive from rows and
+    // resolve each against the active drive instead of comparing unlike keys.
     const explainedIds = $derived.by(() => {
         const ids = new SvelteSet<string>();
         if (!mobile) return ids;
-        for (const fileId of $transfersByFile.keys()) {
-            if (itemStateDescriptor(itemStateFor($transfersByFile, fileId)).needsExplanation) ids.add(fileId);
+        for (const row of visibleRows) {
+            if (row.kind !== 'pending-folder' && itemStateDescriptor(itemStateFor($transfersByFile, row.id)).needsExplanation) {
+                ids.add(row.id);
+            }
         }
         return ids;
     });
@@ -146,9 +148,25 @@
         updateViewport();
     }
 
+    function applyMobileListSemantics(): void {
+        if (!mobile || !list) return;
+        // The shell starts as a desktop grid so it can render before the mobile
+        // portal mounts. A phone row is one two-line item, not four cells, and
+        // leaving these attributes in place makes a screen reader invent a
+        // header and announce a table that is not on screen.
+        list.setAttribute('role', 'list');
+        list.removeAttribute('aria-colcount');
+        list.removeAttribute('aria-rowcount');
+        list.removeAttribute('aria-multiselectable');
+    }
+
     onMount(() => {
         list = document.getElementById('file-list');
         if (!list) return;
+        applyMobileListSemantics();
+        const unsubscribeListSemantics = mobile
+            ? fileListView.subscribe(applyMobileListSemantics)
+            : () => {};
         const onScroll = () => updateViewport();
         const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateViewport);
         list.addEventListener('scroll', onScroll, { passive: true });
@@ -159,6 +177,7 @@
             list?.removeEventListener('scroll', onScroll);
             resizeObserver?.disconnect();
             window.removeEventListener('tdrive:reveal-file-row', revealRow);
+            unsubscribeListSemantics();
             list = null;
         };
     });
@@ -194,11 +213,12 @@
                 use:measureRow
                 data-type="pending-folder"
                 data-temp-id={row.tempId}
-                role="row"
-                aria-rowindex={rowWindow.start + rowIndex + 2}
+                role="listitem"
+                aria-posinset={rowWindow.start + rowIndex + 1}
+                aria-setsize={visibleRows.length}
                 title="Creating..."
             >
-                <div class="row-name" role="gridcell" aria-colindex="1" title={row.name}>
+                <div class="row-name" title={row.name}>
                     <span class="folder-chip" aria-hidden="true">
                         <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
                     </span>
@@ -207,19 +227,25 @@
                         <span class="row-sub"><span class="row-sub-text">Creating...</span><span class="pending-indicator" aria-hidden="true"><LoaderCircleIcon size={12} strokeWidth={2.25} aria-hidden="true" /></span></span>
                     </span>
                 </div>
-                <div class="row-actions" role="gridcell" aria-colindex="4"></div>
+                <div class="row-actions"></div>
             </div>
         {:else}
             {@const selected = $selectedFileRowKeys.has(row.selectionKey)}
             {@const meta = rowMetaLine(row, $minuteTick)}
             {@const state = itemStateFor($transfersByFile, row.id)}
             {@const stateInfo = itemStateDescriptor(state)}
+            <!-- The focusable item is intentional: the delegated list handler
+                 supplies its keyboard contract while the native list role
+                 keeps the phone's one-item-per-row announcement. -->
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <div
                 class={`file-row drive-row${row.kind === 'folder' ? ' folder-row' : ''}${selected ? ' is-selected' : ''}${$activeFileRowKey === row.selectionKey ? ' is-keyboard-active' : ''}${stateInfo.needsExplanation ? ' needs-explanation' : ''}${cardEdges(rowIndex)}`}
                 use:measureRow
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}
                 data-id={row.id}
+                data-channel-id={String(row.channelId)}
                 data-name={row.name}
                 data-parent-id={row.parentId}
                 data-source={row.kind === 'file' ? row.source : undefined}
@@ -229,16 +255,16 @@
                 data-encrypted={row.kind === 'file' ? String(row.encrypted) : undefined}
                 data-can-delete={row.kind === 'file' ? String(row.canDelete) : undefined}
                 data-can-rename={row.kind === 'file' ? String(row.canRename) : undefined}
-                role="row"
-                aria-rowindex={rowWindow.start + rowIndex + 2}
-                aria-selected={selected ? 'true' : 'false'}
-                aria-label={row.ariaLabel}
+                role="listitem"
+                aria-posinset={rowWindow.start + rowIndex + 1}
+                aria-setsize={visibleRows.length}
+                aria-label={selected ? `Selected. ${row.ariaLabel}` : row.ariaLabel}
                 tabindex={$activeFileRowKey === row.selectionKey ? 0 : -1}
                 onclick={(event) => onRowClick(event, row)}
                 ondblclick={(event) => onRowDoubleClick(event, row)}
                 onkeydown={onGridRowKeydown}
             >
-                <div class="row-name" role="gridcell" aria-colindex="1" title={row.name}>
+                <div class="row-name" title={row.name}>
                     {#if selecting}
                         <span class="row-check" aria-hidden="true">
                             <CheckIcon size={14} strokeWidth={3} aria-hidden="true" />
@@ -281,11 +307,11 @@
                     </span>
                 </div>
                 {#if mobile}
-                    <div class="row-status" role="gridcell" aria-colindex="3">
+                    <div class="row-status">
                         <ItemStatus state={state} onOpenQueue={() => activeTab.set('transfers')} />
                     </div>
                 {/if}
-                <div class="row-actions" role="gridcell" aria-colindex="4">
+                <div class="row-actions">
                     <button
                         class="action-icon row-more"
                         type="button"
@@ -348,6 +374,7 @@
                 data-type={dataType(row)}
                 data-row-key={row.selectionKey}
                 data-id={row.id}
+                data-channel-id={String(row.channelId)}
                 data-name={row.name}
                 data-parent-id={row.parentId}
                 data-source={row.kind === 'file' ? row.source : undefined}

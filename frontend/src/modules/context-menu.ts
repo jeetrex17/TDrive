@@ -31,13 +31,14 @@ export function buildFolderContextMenuItems(
     folderID: string,
     folderName: string,
     { folderGroup = true }: RowMenuOptions = {},
+    sourceChannelId: unknown = state.activeChannel?.id,
 ): ContextMenuItem[] {
     // On the phone sheet the name is already in the header, so the tiles read
     // "Open" rather than repeating it back at the reader.
     const tile = !folderGroup;
     const items: ContextMenuItem[] = [
         { label: tile ? 'Open' : `Open "${folderName}"`, icon: 'open', primary: tile, action: () => navigateToFolder(folderID, folderName) },
-        { label: tile ? 'Download' : `Download "${folderName}"`, icon: 'download', primary: tile, action: () => enqueueFolderDownload(folderID, folderName) },
+        { label: tile ? 'Download' : `Download "${folderName}"`, icon: 'download', primary: tile, action: () => enqueueFolderDownload(folderID, folderName, 0, sourceChannelId) },
     ];
     if (folderGroup) {
         items.push(
@@ -70,6 +71,7 @@ export function buildFileContextMenuItems(row: HTMLElement, { folderGroup = true
     const canDelete = row.dataset.canDelete === "true";
     const canRename = row.dataset.canRename !== "false";
     const encrypted = row.dataset.encrypted === "true";
+    const sourceChannelId = row.dataset.channelId ?? state.activeChannel?.id;
 
     // The phone sheet promotes the everyday actions to tiles. Delete is left
     // out of that row on purpose: a destructive action does not belong under a
@@ -82,7 +84,7 @@ export function buildFileContextMenuItems(row: HTMLElement, { folderGroup = true
     } else if (canOpenFileViewer(fileName)) {
         items.push({ label: "Open", icon: 'open', primary: tile, action: () => { void appActions().openFile({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
     }
-    items.push({ label: "Download", icon: 'download', primary: tile, action: () => enqueueDownload(fileID, fileName, fileSize) });
+    items.push({ label: "Download", icon: 'download', primary: tile, action: () => enqueueDownload(fileID, fileName, fileSize, sourceChannelId) });
 
     const fileTarget: FileCommandItem = fileSource === 'tg'
         ? { type: 'file', id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: 'tg' }
@@ -134,7 +136,7 @@ export function showRowContextMenu(
     if (row.dataset.type === 'folder') {
         const folderID = row.dataset.id || '';
         if (!folderID) return;
-        items = buildFolderContextMenuItems(folderID, row.dataset.name || 'Folder', { folderGroup });
+        items = buildFolderContextMenuItems(folderID, row.dataset.name || 'Folder', { folderGroup }, row.dataset.channelId);
     } else if (row.dataset.type === 'file') {
         items = buildFileContextMenuItems(row, { folderGroup });
         if (!items.length) return;
@@ -175,7 +177,7 @@ export function activateContextMenu(): () => void {
         if (type === "folder" && row) {
             const folderID = row.dataset.id || "";
             if (!folderID) return;
-            showContextMenu(e.clientX, e.clientY, buildFolderContextMenuItems(folderID, row.dataset.name || "Folder"));
+            showContextMenu(e.clientX, e.clientY, buildFolderContextMenuItems(folderID, row.dataset.name || "Folder", {}, row.dataset.channelId));
             return;
         }
 

@@ -16,6 +16,7 @@ import { showFileListRows, showFileListState } from './file-list-store';
 import { resetFileSortState } from './file-sort-store';
 import { setActiveFileRowKey, setSelectedFileRowKeys } from './row-state-store';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
+import { state } from '../../state';
 import type { FileListFileRow } from './types';
 
 let app: Record<string, unknown> | null = null;
@@ -72,9 +73,15 @@ function longList(count: number): FileListFileRow[] {
     }));
 }
 
-function setup(): void {
+function setup({ desktopGrid = false }: { desktopGrid?: boolean } = {}): void {
     list = document.createElement('div');
     list.id = 'file-list';
+    if (desktopGrid) {
+        list.setAttribute('role', 'grid');
+        list.setAttribute('aria-colcount', '4');
+        list.setAttribute('aria-rowcount', '99');
+        list.setAttribute('aria-multiselectable', 'true');
+    }
     document.body.appendChild(list);
     app = mount(FileList, { target: list, props: {} });
     flushSync();
@@ -84,7 +91,10 @@ function rows(): HTMLElement[] {
     return Array.from(list?.querySelectorAll<HTMLElement>('.drive-row') ?? []);
 }
 
-beforeEach(() => historyEvents.set([]));
+beforeEach(() => {
+    historyEvents.set([]);
+    state.activeChannel = { id: 1, title: 'Drive A', kind: 'personal' };
+});
 
 afterEach(async () => {
     historyEvents.set([]);
@@ -100,6 +110,28 @@ afterEach(async () => {
 });
 
 describe('phone row transfer badge', () => {
+    it('uses a list rather than leaking the desktop data-grid model to assistive technology', () => {
+        setup({ desktopGrid: true });
+        // renderFileListRows writes the desktop row count immediately before it
+        // publishes rows; the mobile subscriber must strip it again.
+        list?.setAttribute('aria-rowcount', '1');
+        showFileListRows([makeFileRow()]);
+        setSelectedFileRowKeys(['file:42']);
+        flushSync();
+
+        const item = rows()[0];
+        expect(list?.getAttribute('role')).toBe('list');
+        expect(list?.hasAttribute('aria-colcount')).toBe(false);
+        expect(list?.hasAttribute('aria-rowcount')).toBe(false);
+        expect(list?.hasAttribute('aria-multiselectable')).toBe(false);
+        expect(item.getAttribute('role')).toBe('listitem');
+        expect(item.hasAttribute('aria-rowindex')).toBe(false);
+        expect(item.hasAttribute('aria-selected')).toBe(false);
+        expect(item.getAttribute('aria-posinset')).toBe('1');
+        expect(item.getAttribute('aria-setsize')).toBe('1');
+        expect(item.querySelector('[role="gridcell"]')).toBeNull();
+    });
+
     it('badges the row a download is actually for', () => {
         // The download queue keys its jobs "file:<id>"; a row that only matched
         // a bare id meant no download ever badged anything.
@@ -121,6 +153,17 @@ describe('phone row transfer badge', () => {
         expect(rows()[0].classList.contains('needs-explanation')).toBe(true);
         expect(rows()[0].querySelector('.row-explain')?.textContent)
             .toBe('The last transfer did not finish.');
+    });
+
+    it('keeps a drive-scoped failed transfer in the explanatory virtual-row set', () => {
+        setup();
+        showFileListRows([makeFileRow()]);
+        historyEvents.set([transfer('xfer:down:file:1:42', { status: 'failed' })]);
+        flushSync();
+
+        // The visible row proves the drive-scoped key joined by its file id;
+        // the same join feeds the virtualiser's tall-row calculation.
+        expect(rows()[0].classList.contains('needs-explanation')).toBe(true);
     });
 
     it('leaves rows alone for a transfer that names no file', () => {
@@ -167,5 +210,26 @@ describe('phone card ends', () => {
         expect(rendered[0].dataset.rowKey).not.toBe('file:0');
         expect(rendered.some((row) => row.classList.contains('is-card-top'))).toBe(false);
         expect(rendered.some((row) => row.classList.contains('is-card-bottom'))).toBe(false);
+    });
+
+    it('reveals an offscreen logical row before attempting to focus it', async () => {
+        setup();
+        showFileListRows(longList(200));
+        let scrollTop = 0;
+        Object.defineProperty(list, 'scrollTop', {
+            configurable: true,
+            get: () => scrollTop,
+            set: (value: number) => { scrollTop = value; },
+        });
+        Object.defineProperty(list, 'clientHeight', { value: 680, configurable: true });
+        flushSync();
+        expect(list?.querySelector('.drive-row[data-row-key="file:199"]')).toBeNull();
+
+        window.dispatchEvent(new CustomEvent('tdrive:reveal-file-row', { detail: { key: 'file:199' } }));
+        await Promise.resolve();
+        flushSync();
+
+        expect(scrollTop).toBeGreaterThan(0);
+        expect(list?.querySelector('.drive-row[data-row-key="file:199"]')).not.toBeNull();
     });
 });
