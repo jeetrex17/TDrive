@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -98,6 +99,53 @@ func TestRebuildReplaysAscending(t *testing.T) {
 	}
 	if name != "Final" {
 		t.Fatalf("name = %q want Final (highest msg_id wins)", name)
+	}
+}
+
+func TestRebuildReplaysAscendingAcrossBatches(t *testing.T) {
+	db := newRebuildDB(t)
+	seedReplay(t, db, testChan, 1, Op{Type: OpMkdir, Obj: "d:batched", Parent: RootParent, Name: "First"})
+	for msgID := int64(2); msgID <= int64(rebuildReplayBatchSize)+2; msgID++ {
+		seedReplay(t, db, testChan, msgID, Op{Type: OpRename, Obj: "d:batched", Name: fmt.Sprintf("Name %d", msgID)})
+	}
+
+	if err := RebuildProjection(db, testChan); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+
+	var name string
+	if err := db.QueryRow(`SELECT name FROM folders WHERE id = ?`, "d:batched").Scan(&name); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	want := fmt.Sprintf("Name %d", rebuildReplayBatchSize+2)
+	if name != want {
+		t.Fatalf("name = %q, want %q after replaying more than one batch", name, want)
+	}
+}
+
+func TestRebuildRollsBackAllBatchesOnReplayFailure(t *testing.T) {
+	db := newRebuildDB(t)
+	mustOp(t, db, 1, Op{Type: OpMkdir, Obj: "d:preexisting", Parent: RootParent, Name: "Preserve me"})
+	seedReplay(t, db, testChan, 1, Op{Type: OpMkdir, Obj: "d:replayed", Parent: RootParent, Name: "Replayed"})
+	for msgID := int64(2); msgID <= int64(rebuildReplayBatchSize); msgID++ {
+		seedReplay(t, db, testChan, msgID, Op{Type: OpRename, Obj: "d:replayed", Name: fmt.Sprintf("Name %d", msgID)})
+	}
+	if _, err := db.Exec(`
+		INSERT INTO replay_log
+		  (channel_id, msg_id, op_type, op_payload_json, raw_header, first_seen_hash, actor_user_id, seen_at)
+		VALUES (?, ?, ?, ?, '', '', 0, 0)
+	`, testChan, int64(rebuildReplayBatchSize)+1, OpMkdir, "not json"); err != nil {
+		t.Fatalf("seed malformed replay: %v", err)
+	}
+
+	if err := RebuildProjection(db, testChan); err == nil {
+		t.Fatal("rebuild succeeded with malformed replay row")
+	}
+	if !FolderExists(db, testChan, "d:preexisting") {
+		t.Fatal("failed rebuild did not roll back the original projection")
+	}
+	if FolderExists(db, testChan, "d:replayed") {
+		t.Fatal("failed rebuild committed an earlier batch")
 	}
 }
 
