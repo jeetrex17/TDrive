@@ -56,8 +56,9 @@ and 256 MiB source bytes; browser/GPU overhead is outside these estimates.
 Disk LRU admission reserves space before temporary writes and refuses oversized
 entries. Failed deletions remain accounted for; undeletable startup overflow is
 represented by counters rather than an unbounded in-memory index. Local storage
-controls report the disposable cache separately from database/WAL storage and
-clear only the cache. Catalog history and user downloads are not cache entries.
+controls report the disposable cache separately from database/WAL storage.
+Cache cleanup is automatic, with no manual clear button. Catalog history and
+user downloads are not cache entries.
 The cache's initial directory inspection is still proportional to existing files.
 
 Projection rebuilds read and apply 256-row keyset batches within the existing
