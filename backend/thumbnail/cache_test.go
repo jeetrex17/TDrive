@@ -2,6 +2,7 @@ package thumbnail
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,143 @@ import (
 	"testing"
 	"time"
 )
+
+func TestCacheRejectsEntriesThatCannotFit(t *testing.T) {
+	cache := NewCache(t.TempDir(), 4)
+	if err := cache.Put("large", []byte("12345")); !errors.Is(err, ErrCacheEntryTooLarge) {
+		t.Fatalf("Put oversized error = %v, want ErrCacheEntryTooLarge", err)
+	}
+	if _, ok := cache.Get("large"); ok {
+		t.Fatal("oversized entry was stored")
+	}
+
+	disabled := NewCache(t.TempDir(), 0)
+	if err := disabled.Put("entry", []byte("1")); !errors.Is(err, ErrCacheDisabled) {
+		t.Fatalf("Put with zero budget error = %v, want ErrCacheDisabled", err)
+	}
+}
+
+func TestCacheConcurrentWritesNeverExceedBudgetIncludingTemps(t *testing.T) {
+	cache := NewCache(t.TempDir(), 64)
+	const writers = 16
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	wait.Add(writers)
+	for i := 0; i < writers; i++ {
+		go func(i int) {
+			defer wait.Done()
+			<-start
+			err := cache.Put(string(rune('a'+i)), bytes.Repeat([]byte{byte(i)}, 32))
+			if err != nil && !errors.Is(err, ErrCacheFull) {
+				t.Errorf("Put: %v", err)
+			}
+		}(i)
+	}
+	close(start)
+	wait.Wait()
+
+	var total int64
+	err := filepath.WalkDir(cache.dir, func(path string, de os.DirEntry, walkErr error) error {
+		if walkErr != nil || de.IsDir() {
+			return walkErr
+		}
+		info, err := de.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total > 64 {
+		t.Fatalf("cache files use %d bytes, want <= 64", total)
+	}
+}
+
+func TestCacheEvictsAnotherEntryWhenOldestDeleteFails(t *testing.T) {
+	cache := NewCache(t.TempDir(), 10)
+	if err := cache.Put("old", []byte("12345")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Put("new", []byte("67890")); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(cache.dir, cacheRelativeName("old"))
+	cache.removeFile = func(path string) error {
+		if path == oldPath {
+			return errors.New("in use")
+		}
+		return os.Remove(path)
+	}
+	if err := cache.Put("third", []byte("abcde")); err != nil {
+		t.Fatalf("Put should evict a removable entry: %v", err)
+	}
+	cache.mu.Lock()
+	used := cache.used
+	cache.mu.Unlock()
+	if used > 10 {
+		t.Fatalf("used = %d, want <= 10", used)
+	}
+	if _, ok := cache.Get("new"); ok {
+		t.Fatal("removable entry was not evicted")
+	}
+}
+
+func TestCacheUsageAndClear(t *testing.T) {
+	cache := NewCache(t.TempDir(), 100)
+	if err := cache.Put("entry", []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if used, budget, entries := cache.Usage(); used != 5 || budget != 100 || entries != 1 {
+		t.Fatalf("Usage = (%d, %d, %d), want (5, 100, 1)", used, budget, entries)
+	}
+	if err := cache.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if used, _, entries := cache.Usage(); used != 0 || entries != 0 {
+		t.Fatalf("Usage after Clear = (%d, %d), want (0, 0)", used, entries)
+	}
+	if _, ok := cache.Get("entry"); ok {
+		t.Fatal("cleared entry was returned")
+	}
+}
+
+func TestCacheStartupBoundsUndeletableOverflowMetadata(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.bin", "b.bin", "c.bin", "d.bin", "e.bin"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), cacheFileMode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cache := NewCache(dir, 100)
+	cache.maxEntries = 2
+	cache.removeFile = func(string) error { return errors.New("read-only") }
+	cache.mu.Lock()
+	cache.ensureInitLocked()
+	indexed := len(cache.entries)
+	overflow := cache.overflowEntries
+	cache.mu.Unlock()
+	if indexed > 2 {
+		t.Fatalf("indexed entries = %d, want <= 2", indexed)
+	}
+	if overflow != 3 {
+		t.Fatalf("overflow entries = %d, want 3", overflow)
+	}
+	if used, _, entries := cache.Usage(); used != 5 || entries != 5 {
+		t.Fatalf("Usage = (%d bytes, %d entries), want (5, 5)", used, entries)
+	}
+	if err := cache.Put("new", []byte("x")); !errors.Is(err, ErrCacheFull) {
+		t.Fatalf("Put with undeletable overflow = %v, want ErrCacheFull", err)
+	}
+	if err := cache.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if used, _, entries := cache.Usage(); used != 0 || entries != 0 {
+		t.Fatalf("Usage after Clear = (%d bytes, %d entries), want (0, 0)", used, entries)
+	}
+}
 
 func TestCachePutGetRoundTrip(t *testing.T) {
 	c := NewCache(t.TempDir(), 1<<20)

@@ -44,7 +44,7 @@ func (c *blockCache) get(key string) ([]byte, bool) {
 }
 
 func (c *blockCache) put(key string, data []byte) {
-	if c == nil || len(data) == 0 {
+	if c == nil || len(data) == 0 || int64(len(data)) > c.maxBytes {
 		return
 	}
 	// blockCache takes ownership of data. Callers must not mutate a fetched block
@@ -68,7 +68,7 @@ func (c *blockCache) put(key string, data []byte) {
 }
 
 func (c *blockCache) evictLocked() {
-	for c.used > c.maxBytes && c.lru.Len() > 1 {
+	for c.used > c.maxBytes {
 		elem := c.lru.Back()
 		if elem == nil {
 			return
