@@ -36,6 +36,7 @@ import {
     updateTransferProgress,
     updateTransferName,
     markTransferDone,
+    setTransferNote,
     wasUploadCanceled,
 } from './notif-bell';
 
@@ -142,37 +143,41 @@ function activateDownloadProgressEvents(): void {
 }
 
 /**
- * Tells the user where a phone download went, after putting it somewhere they
- * can actually get to.
+ * Records where a phone download went, after putting it somewhere they can
+ * actually get to.
  *
- * The two platforms need opposite things here. iOS has no shared storage, so
- * the download stays in the app container and the answer is that the container
- * is published to the Files app; the share sheet Go opens afterwards is for
+ * The answer is kept on the transfer rather than raised as a toast. A phone has
+ * no Finder to go and look in, so "where is it" is the whole point of the
+ * download -- and a toast says it once, to someone who may be watching the
+ * progress bar rather than the bottom of the screen, and cannot be asked again.
+ * The row keeps it for as long as the row is there.
+ *
+ * The two platforms need opposite things. iOS has no shared storage, so the
+ * download stays in the app container and the answer is that the container is
+ * published to the Files app; the share sheet Go opens afterwards is for
  * sending it on, not for finding it. Android has a real public Downloads
  * folder but hides the sandbox completely, so the file has to be moved out
  * before it exists as far as the user is concerned.
  */
 async function announceMobileDownload(item: DownloadQueueItem, savedPath: string): Promise<void> {
     const folder = item.kind === 'folder';
-    const title = folder ? 'Folder downloaded' : 'Downloaded';
+    const note = (text: string) => setTransferNote({ id: item.key, direction: 'down', note: text });
 
     if (isAndroidPlatform() && canSaveToDownloads()) {
         try {
             const location = await saveToDownloads(savedPath);
-            notify({
-                level: 'success',
-                title,
-                body: location ? `Saved to ${location}` : 'Saved to your Downloads folder.',
-            });
+            note(location ? `Saved to ${location}` : 'Saved to your Downloads folder');
             return;
         } catch (err) {
-            // The bytes are downloaded either way, so this is a warning about
-            // where they are, not a failed transfer.
+            // The bytes arrived either way, so this is a question of where they
+            // are rather than a failed transfer -- but it is the one outcome
+            // here the user has to act on, so it is still worth interrupting for.
             console.error('Could not move the download to Downloads:', err);
+            note('Saved inside TDrive, not in your Downloads folder');
             notify({
                 level: 'warning',
-                title,
-                body: 'Saved inside TDrive, but it could not be moved to your Downloads folder.',
+                title: 'Could not reach your Downloads folder',
+                body: `${item.name} is saved inside TDrive instead. Open Transfers to share it out.`,
             });
             return;
         }
@@ -182,13 +187,9 @@ async function announceMobileDownload(item: DownloadQueueItem, savedPath: string
     // Transfers tab can offer it again later. A folder has no share sheet --
     // no phone share sheet takes a directory -- so Files is the only route.
     if (!folder && savedPath) rememberDownloadSharePath(`xfer:down:${item.key}`, savedPath);
-    notify({
-        level: 'success',
-        title,
-        body: folder
-            ? 'Saved to Files › On My iPhone › TDrive › Downloads.'
-            : 'Saved to Files › TDrive › Downloads. The share sheet is open.',
-    });
+    note(folder
+        ? 'Saved to Files › On My iPhone › TDrive › Downloads'
+        : 'Saved to Files › TDrive › Downloads');
 }
 
 async function startNextDownload() {
