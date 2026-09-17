@@ -40,7 +40,7 @@
      */
     function tapToDismiss(event: PointerEvent, id: string): void {
         if (event.pointerType !== 'touch') return;
-        if ((event.target as HTMLElement | null)?.closest('button')) return;
+        if ((event.target as HTMLElement | null)?.closest('[data-toast-interactive]')) return;
         onDismiss(id);
     }
 
@@ -58,8 +58,10 @@
     {#each $toasts as toast (toast.id)}
         <div
             class={`toast toast-${toast.level}`}
+            class:has-mobile-detail={toast.level === 'error' && Boolean(toast.body)}
             data-id={toast.id}
             role={toast.level === 'error' ? 'alert' : 'status'}
+            aria-describedby={toast.level === 'error' && toast.body ? `toast-detail-${toast.id}` : undefined}
             onpointerenter={(event) => { if (hovering(event)) onPauseToast(toast.id); }}
             onpointerleave={(event) => { if (hovering(event)) onResumeToast(toast.id); }}
             onpointerup={(event) => tapToDismiss(event, toast.id)}
@@ -80,12 +82,13 @@
             <div class="toast-content">
                 <div class="toast-title">{toast.title}</div>
                 {#if toast.body}
-                    <div class="toast-body">{toast.body}</div>
+                    <div id={`toast-detail-${toast.id}`} class="toast-body">{toast.body}</div>
                 {/if}
                 {#if toast.action}
                     <button
-                        class="toast-action"
+                        class="toast-action toast-interactive-control"
                         type="button"
+                        data-toast-interactive
                         onclick={(event) => {
                             event.stopPropagation();
                             toast.action?.run();
@@ -94,9 +97,10 @@
                 {/if}
             </div>
             <button
-                class="toast-close"
+                class="toast-close toast-interactive-control"
                 type="button"
                 aria-label="Dismiss"
+                data-toast-interactive
                 onclick={(event) => {
                     event.stopPropagation();
                     onDismiss(toast.id);
@@ -125,8 +129,8 @@
         backdrop-filter: none;
         align-items: center;
     }
-    /* Single line: title and its action sit on one row, the multi-line body
-       is dropped. */
+    /* Informational notices stay compact. Errors retain one concise detail
+       line so the failure is understandable without opening another surface. */
     :global(html.mobile .toast-content) {
         flex-direction: row;
         align-items: center;
@@ -145,4 +149,24 @@
         align-self: center;
     }
     :global(html.mobile .toast-body) { display: none; }
+    :global(html.mobile .toast.toast-error.has-mobile-detail) { align-items: flex-start; }
+    :global(html.mobile .toast.toast-error.has-mobile-detail .toast-content) {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 2px;
+        padding-block: 2px;
+    }
+    :global(html.mobile .toast.toast-error.has-mobile-detail .toast-title) {
+        flex: 0 1 auto;
+        width: 100%;
+    }
+    :global(html.mobile .toast.toast-error.has-mobile-detail .toast-body) {
+        display: block;
+        overflow: hidden;
+        color: var(--color-text-subtle);
+        font-size: var(--text-xs);
+        line-height: 1.3;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 </style>
