@@ -10,7 +10,7 @@ describe('AppShell', () => {
             'success-screen',
             'drives-nav',
             'notif-bell',
-            'upload-menu-root',
+            'upload-btn',
             'profile-trigger',
             'breadcrumb-path',
             'selection-bar',

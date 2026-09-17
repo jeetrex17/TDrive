@@ -506,8 +506,8 @@ html.mobile .tab-badge {
 }
 
 /* ============================ UPLOAD BUTTON ============================ */
-/* Docked into the middle of the tab bar. The upload menu portals into
-   #upload-menu-root; the shell restyles the menu's own trigger into the
+/* Docked into the middle of the tab bar. The Fab renders the upload menu
+   inside .mobile-fab; the rules below restyle the menu's own trigger into the
    accent circle. It rides above the bar so its shadow reads against it. */
 /* The upload action sits in the bar's middle slot, level with the tab icons.
    It used to float half outside the bar, which cost it on every count: a

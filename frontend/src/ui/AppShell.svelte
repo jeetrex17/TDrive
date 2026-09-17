@@ -12,6 +12,8 @@
     import { breadcrumbDrag, navigateBack, navigateToIndex } from '../modules/navigation';
     import { cancelTransfersInDirection, clearHistory } from '../modules/notif-bell';
     import { ensureProfileLoaded } from '../modules/profile-menu';
+    import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../modules/selection';
+    import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
     import {
         handleDriveClick,
         handlePendingClick,
@@ -22,7 +24,10 @@
     import type { FileSortKey } from './file-list/file-sort';
     import Breadcrumb from './chrome/Breadcrumb.svelte';
     import ProfileMenu from './chrome/ProfileMenu.svelte';
+    import UploadMenu from './chrome/UploadMenu.svelte';
+    import Gallery from './gallery/Gallery.svelte';
     import NotifBell from './notifications/NotifBell.svelte';
+    import SelectionBar from './selection/SelectionBar.svelte';
     import DriveList from './sidebar/DriveList.svelte';
     import MountControl from './mount/MountControl.svelte';
     import FeatureLayer from './app/FeatureLayer.svelte';
@@ -154,7 +159,21 @@
                     <NotifBell onCancelDirection={cancelTransfersInDirection} onClearHistory={clearHistory} />
                 {/if}
 
-                <div class="upload-menu-wrap" id="upload-menu-root"></div>
+                <!-- .upload-menu-wrap is position: relative, and it is what the
+                     menu's own absolutely positioned popover anchors to, so the
+                     wrapper stays exactly where it was; only the id a portal
+                     aimed at is gone. Held back until the dashboard is up so the
+                     menu's window and document listeners live no longer than the
+                     dashboard does, which is what a portal that only ran on the
+                     dashboard view gave it. -->
+                <div class="upload-menu-wrap">
+                    {#if dashboardVisible}
+                        <UploadMenu
+                            onFiles={chooseFilesForCurrentFolder}
+                            onFolder={chooseFolderForCurrentFolder}
+                        />
+                    {/if}
+                </div>
                 <!-- The account menu is a plain child of the header: its popover
                      is positioned against .header-actions, which is the nearest
                      positioned ancestor either way, so nothing about where it
@@ -223,13 +242,38 @@
             </div>
             <div class="col-actions" role="columnheader" aria-colindex="4">
                 <span>Actions</span>
-                <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite"></div>
+                <!-- The bar covers the Actions column while rows are selected,
+                     so it keeps its id and its inline display: none: the
+                     selection controller is what reveals it, by flipping that
+                     style once a row is picked. Only the portal that filled it
+                     from elsewhere is gone. -->
+                <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite">
+                    {#if dashboardVisible}
+                        <SelectionBar
+                            onMove={openSelectedItemsMove}
+                            onDelete={openSelectedItemsDelete}
+                            onClear={clearSelection}
+                        />
+                    {/if}
+                </div>
             </div>
         </div>
 
         <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4"></div>
 
-        <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos"></div>
+        <!-- #gallery-view is the gallery's scroll container, not a seam: the
+             component measures it, the thumbnail controller uses it as its
+             IntersectionObserver root, and the click delegation, the preview
+             modal's return-to-grid and the phone's scroll-to-top all look it up
+             by this id. So the element stays exactly as it was and only the
+             portal that filled it from elsewhere is gone. Held back until the
+             dashboard is up so the grid's window listeners and resize observer
+             live no longer than the dashboard does. -->
+        <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos">
+            {#if dashboardVisible}
+                <Gallery />
+            {/if}
+        </div>
     </main>
 </div>
 

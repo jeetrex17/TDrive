@@ -86,12 +86,23 @@ describe('AppShell behavior', () => {
         }
     });
 
-    it('leaves selection bar contents owned by the Svelte SelectionBar island', () => {
+    it('renders the selection bar island inside the actions column, hidden until rows are picked', () => {
         setup();
 
-        const selectionBar = host?.querySelector('#selection-bar');
+        const selectionBar = host?.querySelector<HTMLElement>('#selection-bar');
         expect(selectionBar).not.toBeNull();
-        expect(selectionBar?.children).toHaveLength(0);
+        // The controller is what reveals the bar, so it must still start hidden
+        // even though its contents are now rendered up front.
+        expect(selectionBar?.style.display).toBe('none');
+        expect(selectionBar?.querySelector('#selection-count')).not.toBeNull();
+        expect(selectionBar?.querySelector('#selection-move')).not.toBeNull();
+        expect(selectionBar?.querySelector('#selection-delete')).not.toBeNull();
+    });
+
+    it('leaves the selection bar empty until the dashboard is up', () => {
+        setup(false);
+
+        expect(host?.querySelector('#selection-bar')?.children).toHaveLength(0);
     });
 
     it('exposes sortable data-grid headers', () => {

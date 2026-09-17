@@ -46,6 +46,8 @@ describe('TabBar account cell', () => {
         for (const label of ['Files', 'Photos', 'Transfers', 'Account']) {
             expect(body).toContain(label);
         }
-        expect(body).not.toContain('upload-menu-root');
+        // Upload is a contextual action the shell floats above this bar, not a
+        // fifth destination inside it.
+        expect(body).not.toContain('upload-btn');
     });
 });

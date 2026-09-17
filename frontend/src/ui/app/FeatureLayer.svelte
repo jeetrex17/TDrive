@@ -19,18 +19,9 @@
     import { activateConnectivityWatch } from '../../modules/connectivity';
     import { activateRefreshShortcut } from '../../modules/refresh-shortcut';
     import { activateSearchBar } from '../../modules/search';
-    import {
-        activateSelectionBar,
-        clearSelection,
-        openSelectedItemsDelete,
-        openSelectedItemsMove,
-    } from '../../modules/selection';
+    import { activateSelectionBar } from '../../modules/selection';
     import { activateSidebar } from '../../modules/sidebar';
-    import {
-        activateTransferSurfaces,
-        chooseFilesForCurrentFolder,
-        chooseFolderForCurrentFolder,
-    } from '../../modules/transfers';
+    import { activateTransferSurfaces } from '../../modules/transfers';
     import { activateUpdates } from '../../modules/updates';
     import { confirmDelete } from '../../modules/modals/delete';
     import {
@@ -45,7 +36,7 @@
         cancelEncryptionSetup,
         submitEncryptionSetup,
     } from '../../modules/modals/encryption-setup';
-    import { openNewFolderModal, submitFolder } from '../../modules/modals/folder';
+    import { submitFolder } from '../../modules/modals/folder';
     import {
         cancelImportOptions,
         confirmImportOptions,
@@ -67,9 +58,7 @@
         cancelUploadOptions,
         confirmUploadOptions,
     } from '../../modules/modals/upload-options';
-    import UploadMenu from '../chrome/UploadMenu.svelte';
     import FileList from '../file-list/FileList.svelte';
-    import Gallery from '../gallery/Gallery.svelte';
     import ContextMenu from '../menus/ContextMenu.svelte';
     import DeleteModal from '../modals/DeleteModal.svelte';
     import EncryptionPasswordModal from '../modals/EncryptionPasswordModal.svelte';
@@ -89,7 +78,6 @@
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
     import ToastStack from '../notifications/ToastStack.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
-    import SelectionBar from '../selection/SelectionBar.svelte';
     import DropOverlay from '../transfers/DropOverlay.svelte';
     import UpdatesPanel from '../updates/UpdatesPanel.svelte';
     import VideoModal from '../video/VideoModal.svelte';
@@ -99,13 +87,6 @@
 
     // Desktop-only chrome: phones update through their app stores.
     const updaterAvailable = !isMobilePlatform();
-    // Android can pick a folder too: the app's own bridge walks the chosen
-    // tree and the upload copies out of it a window at a time, so the item is
-    // no longer a button that could only fail. See modules/android-folder.ts.
-    const chooseFolder = chooseFolderForCurrentFolder;
-    // The phone's FAB menu adds New folder; desktop creates folders from the
-    // context menu, so it stays out of the upload button there.
-    const newFolder = isMobilePlatform() ? openNewFolderModal : undefined;
 
     $effect(() => activateNotificationEffects());
 
@@ -159,21 +140,8 @@
 </div>
 
 {#if $appView.kind === 'dashboard'}
-    <FeaturePortal hostId="upload-menu-root">
-        <UploadMenu onFiles={chooseFilesForCurrentFolder} onFolder={chooseFolder} onNewFolder={newFolder} />
-    </FeaturePortal>
-    <FeaturePortal hostId="selection-bar">
-        <SelectionBar
-            onMove={openSelectedItemsMove}
-            onDelete={openSelectedItemsDelete}
-            onClear={clearSelection}
-        />
-    </FeaturePortal>
     <FeaturePortal hostId="file-list">
         <FileList />
-    </FeaturePortal>
-    <FeaturePortal hostId="gallery-view">
-        <Gallery />
     </FeaturePortal>
 
     <div id="context-menu" class="context-menu">
