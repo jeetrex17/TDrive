@@ -227,6 +227,7 @@
     id="profile-menu"
     class:appearance-view={view === 'appearance'}
     class:updates-view={view === 'updates'}
+    class:backup-view={view === 'backup'}
     class="profile-menu"
     role={view === 'account' ? 'menu' : 'dialog'}
     aria-labelledby={labelledBy(view)}

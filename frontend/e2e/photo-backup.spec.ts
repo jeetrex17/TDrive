@@ -1,7 +1,33 @@
 import { bootTDrive, expect, resolves, test } from './wails-mock';
 
+test('empty backup settings fit the desktop viewport and guide source selection', async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await bootTDrive(page, {
+        GetPhotoBackupState: resolves({
+            platform: 'darwin', manual_paused: false,
+            settings: { enabled: false, photos: true, videos: true }, sources: [],
+            status: { phase: 'idle' }, destination: { title: 'Photo backup' },
+            capabilities: {
+                wifi_only: { supported: false, label: 'Wi-Fi only' },
+                charging_only: { supported: false, label: 'Only while charging' },
+                access: { status: 'available', detail: 'Photo access is managed by the device.' },
+            },
+        }),
+    });
+    await page.locator('#profile-trigger').click();
+    await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
+    const panel = page.getByRole('region', { name: 'Photo and video backup' });
+    await expect(panel.getByRole('button', { name: 'Add folder', exact: true })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Back up now', exact: true })).toBeDisabled();
+    const bounds = await page.locator('#profile-menu').boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(768);
+    await page.screenshot({ path: testInfo.outputPath('backup-desktop-empty.png') });
+});
+
 for (const platform of ['desktop', 'android', 'ios'] as const) {
-    test(`photo backup settings and pause are available on ${platform}`, async ({ page }) => {
+    test(`photo backup settings and pause are available on ${platform}`, async ({ page }, testInfo) => {
         if (platform !== 'desktop') {
             await page.setViewportSize({ width: 390, height: 844 });
             await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
@@ -35,6 +61,17 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         await expect(panel.getByRole('checkbox', { name: 'Wi-Fi only', exact: true })).toBeDisabled();
         await expect(panel).toContainText('Only selected photos are accessible');
         await expect(panel).toContainText('24 completed');
+        // Controls must stay beside their labels despite the app's global form
+        // styles, which previously stacked tiny checkboxes above the text.
+        const photos = panel.getByRole('checkbox', { name: 'Photos', exact: true });
+        const geometry = await photos.evaluate((input) => {
+            const control = input.getBoundingClientRect();
+            const label = input.closest('label')!.getBoundingClientRect();
+            return { controlY: control.y + control.height / 2, labelY: label.y + label.height / 2 };
+        });
+        expect(Math.abs(geometry.controlY - geometry.labelY)).toBeLessThan(5);
+        expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        await page.screenshot({ path: testInfo.outputPath(`backup-${platform}.png`), fullPage: true });
         await mock.setPlan('GetPhotoBackupState', resolves({
             ...state, manual_paused: true, status: { ...state.status, phase: 'paused', uploading: 0, pending: 13, message: 'Paused by you.' },
         }));
