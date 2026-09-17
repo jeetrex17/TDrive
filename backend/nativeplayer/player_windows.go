@@ -563,10 +563,6 @@ func (p *Player) updateObservedState(event mpvIPCEvent) {
 	p.emitState(stateFromMPVProperties(values))
 }
 
-func openMPVIPCReadWrite(path string) (*os.File, error) {
-	return openMPVIPCReadWriteWithAttempts(path, 4)
-}
-
 func openMPVIPCReadWriteWithAttempts(path string, attempts int) (*os.File, error) {
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {

@@ -3,7 +3,6 @@ package media
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -666,9 +665,4 @@ func TestMediaServiceRequiresPeerResolver(t *testing.T) {
 	if !errors.Is(err, ErrPeerResolverNotReady) {
 		t.Fatalf("err = %v, want ErrPeerResolverNotReady", err)
 	}
-}
-
-func newMediaTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	return newResolverTestDB(t)
 }

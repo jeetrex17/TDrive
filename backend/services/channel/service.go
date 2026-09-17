@@ -1,3 +1,26 @@
+// Package channel owns shared drives: creating one as a megagroup, joining by
+// invite link, moderating join requests, and leaving. The personal drive
+// belongs to backend/services/personaldrive and history sync to backend/sync —
+// the single sync call here is the one-shot initial projection of a drive that
+// was just joined.
+//
+// A shared drive is registered with the personal-backfill flag already set,
+// because it is never personal-backfilled and the backfiller must skip it.
+//
+// The package degrades rather than fails. A drive is created even when
+// exporting its invite link fails, since the UI can retry. Polling an
+// approval-gated join records a transport error on the pending row and still
+// reports "pending", so a network blip never looks like a rejection. Leaving is
+// local-wins: the local row goes even if Telegram refuses, and the active drive
+// falls back to the personal one.
+//
+// Access hashes are cached in the projection and rotate on their own: a call
+// that fails with a stale-peer error is retried exactly once against a freshly
+// resolved peer and the new hash is written back.
+//
+// Creating or joining switches the active drive as a side effect of success,
+// and unlike its neighbours this service is constructed fresh per call because
+// it holds no state.
 package channel
 
 import (

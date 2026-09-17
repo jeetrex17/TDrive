@@ -1,3 +1,20 @@
+// Package processlock enforces one TDrive backend per user data directory: the
+// GUI and the CLI daemon cannot run at the same time.
+//
+// The lock is a self-describing PID file, not an OS advisory lock. Exclusion
+// comes from creating the file exclusively; its contents record which role
+// holds it and which process, so the caller that loses can say "close the GUI
+// first" rather than merely failing. It locks nothing else — not the database,
+// not the daemon socket, not mounts, all of which have their own guards.
+//
+// A lock whose process is gone is reclaimed once and then re-created
+// exclusively, so the loser of a reclaim race still fails cleanly. A lock file
+// that exists but cannot be parsed is never reclaimed: startup fails until
+// someone removes it, which is the conservative choice when the alternative is
+// two backends writing one database. Liveness is a signal-0 probe on Unix and a
+// process handle wait on Windows, both treating access-denied as alive. Neither
+// consults the recorded start time, so PID reuse can still produce a false
+// "already running".
 package processlock
 
 import (

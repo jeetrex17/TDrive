@@ -1,3 +1,22 @@
+// Package auth drives the interactive half of Telegram login. The protocol flow
+// lives in backend/auth; this package exists to satisfy the callback interface
+// that flow needs — supply a code, supply a password, deliver a hint — and to
+// turn each step into a frontend event.
+//
+// Starting a login returns as soon as the client connects. The flow then runs
+// in a goroutine and reports its outcome only through events, so every terminal
+// path, a panic included, must produce one.
+//
+// A stage machine guards against out-of-order input from the UI: a password
+// submitted before the password prompt is rejected with an error event rather
+// than buffered. Both handoff channels hold a single value and are drained at
+// the start and the end of every attempt, so a code typed into an abandoned
+// attempt can never be consumed by the next one, and submitting is
+// last-writer-wins and never blocks.
+//
+// An invalid code is a retry inside the same attempt, not a restart: the flow
+// keeps its phone code hash and asks again, so the UI clears the field and
+// stays put instead of requesting a fresh code.
 package auth
 
 import (

@@ -1,3 +1,38 @@
+// Package nativeplayer owns one native video surface at a time: it starts an
+// mpv renderer, keeps it positioned over a rectangle of the Wails window, and
+// translates mpv properties into a normalized State.
+//
+// It resolves nothing. The caller hands it an already-resolved URL and receives
+// State callbacks; media resolution, loopback serving, session tokens and
+// frontend events belong to backend/media and the app layer. Commands are
+// forwarded to mpv verbatim — this package has no vocabulary of its own.
+//
+// The supported platforms are not ports of one design. macOS links libmpv
+// in-process, renders into an NSOpenGLView and polls for state; Windows and
+// Linux spawn mpv as a child process embedded through --wid and receive pushed
+// state over JSON IPC. Because there is no shared Player type, everything that
+// must not drift between them lives in this file, which carries no build tag:
+// the State model, the property mapping, and the IPC scanner and encoders. That
+// also keeps them testable on any host OS.
+//
+// Two invariants callers depend on. State.Status is decided by normalization,
+// never by the caller, with the precedence closed, failed, ended, opening,
+// buffering, paused, playing — and every non-failed branch clears the error. And
+// each player emits at most one terminal state for its whole life; once closed
+// or failed has been delivered, nothing further escapes.
+//
+// Whether TDrive draws its own controls is a per-OS constant, because the two
+// layouts are mutually exclusive. macOS puts mpv behind a transparent WKWebView
+// and disables mpv's own OSC; Windows cannot reveal a sibling child window
+// through WebView2, so it reserves chrome around the video rectangle instead,
+// which is why the seek-thumbnail overlay exists only there. Wayland has no
+// cross-process embedding at all, so Linux may fall back to a standalone mpv
+// window owning its own controls, which the presentation mode reports.
+//
+// mpv always runs with --no-config, so a user's mpv.conf cannot reach TDrive,
+// and Linux gates options on the detected mpv version because mpv refuses to
+// start on an option it does not recognise. The TDRIVE_EXPERIMENTAL_ variables
+// are kill switches, not opt-ins.
 package nativeplayer
 
 import (
@@ -102,6 +137,7 @@ func (r Rect) Valid() bool {
 	return r.Width > 0 && r.Height > 0
 }
 
+//lint:ignore U1000 observed by the player_linux.go and player_windows.go sidecars; macOS polls libmpv in-process instead.
 var mpvStatePropertyNames = []string{
 	"time-pos",
 	"duration",
@@ -289,6 +325,7 @@ func mpvObservePropertiesPayload(names []string) []byte {
 	return buf.Bytes()
 }
 
+//lint:ignore U1000 used by the player_linux.go and player_windows.go IPC sidecars.
 func writeMPVObserveProperties(writer io.Writer, names []string) error {
 	if writer == nil {
 		return errors.New("native player: mpv IPC writer is required")
@@ -390,6 +427,7 @@ type stoppableTimer interface {
 
 type closeTimerScheduler func(time.Duration, func()) stoppableTimer
 
+//lint:ignore U1000 used by the player_linux.go and player_windows.go IPC sidecars.
 func writeAndCloseWithTimeout(writer io.WriteCloser, payload []byte, timeout time.Duration) error {
 	return writeAndCloseWithTimer(writer, payload, timeout, func(delay time.Duration, callback func()) stoppableTimer {
 		return time.AfterFunc(delay, callback)
@@ -429,6 +467,7 @@ func writeAndCloseWithTimer(writer io.WriteCloser, payload []byte, timeout time.
 	return closeErr
 }
 
+//lint:ignore U1000 used by the player_linux.go and player_windows.go IPC sidecars.
 func mpvCommandPayload(command ...string) []byte {
 	payload, _ := json.Marshal(struct {
 		Command []string `json:"command"`

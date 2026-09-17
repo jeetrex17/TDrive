@@ -1,3 +1,6 @@
+// Type-only, so the state <-> folder-index cycle it would otherwise form is
+// erased before it reaches the bundler.
+import type { FolderIndex } from './modules/folder-index';
 import type { ImportProgress } from './modules/import-progress';
 import type { DriveChannel, DriveKind, PendingJoin, RootFile } from './types';
 import type { FileCommandItem, FileDragState } from './ui/file-list/types';
@@ -98,8 +101,12 @@ export interface State {
     telegramRootCacheDriveKey: string | null;
     pendingFocus: { type: string; id: string | number } | null;
 
-    folderIndexCache: any;
-    folderIndexBuildPromise: any;
+    // The published index for `folderIndexCacheDriveKey`, and the in-flight
+    // build for `folderIndexBuildDriveKey`. Both are identity-compared against
+    // the promise that created them, so the field must hold the exact promise
+    // rather than a widened alias of it.
+    folderIndexCache: FolderIndex | null;
+    folderIndexBuildPromise: Promise<FolderIndex> | null;
 
     folderIndexCacheDriveKey: string | null;
     folderIndexBuildDriveKey: string | null;

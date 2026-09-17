@@ -1,3 +1,23 @@
+// Package user resolves Telegram identities for display. It stores no users;
+// the only rows it reads are files, and only to find a message through which a
+// user can be resolved at all.
+//
+// That indirection is why the package exists. Telegram will not resolve a
+// non-contact by bare user id, so for each uploader this package finds the
+// single newest surviving file that user uploaded in the active channel and
+// resolves them through that message. A user with no surviving upload simply
+// does not appear in the result.
+//
+// Resolution is therefore implicitly scoped to the active drive: the same id
+// can resolve in one drive and not in another. Results are keyed by the decimal
+// string form of the id for the JavaScript binding, and partial results are
+// intentional — several failure paths return the ids resolved so far together
+// with an error, so callers must not assume an empty map.
+//
+// The signed-in user short-circuits to "You" before any network call. Their own
+// profile is cached for the life of the process and invalidated only
+// explicitly; failures are not cached. Other users' names are abbreviated to a
+// last initial, a deliberate choice for shared drives rather than an accident.
 package user
 
 import (

@@ -18,6 +18,7 @@ import {
     createPreviewTransitionController,
     type PreviewTransitionSource,
 } from './preview-transition';
+import { collectPreviewDOM, missingPreviewElements, type PreviewDOM } from './preview-dom';
 type PreviewCommandItem = Extract<FileCommandItem, { type: 'file' }>;
 type PreviewSelection =
     | { reason: 'none' | 'multiple' | 'unsupported' }
@@ -28,44 +29,32 @@ type PreviewSelection =
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp"]);
 
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
-const REQUIRED_ELEMENT_IDS = [
-    "preview-modal",
-    "preview-shell",
-    "preview-stage",
-    "preview-filename",
-    "preview-thumbnail",
-    "preview-image",
-    "preview-loading",
-    "preview-loading-fill",
-    "preview-error",
-    "preview-close",
-];
 
-let modalEl: any = null;
-let shellEl: any = null;
-let stageEl: any = null;
-let filenameEl: any = null;
-let thumbnailEl: any = null;
-let imageEl: any = null;
-let loadingEl: any = null;
-let loadingFillEl: any = null;
-let errorEl: any = null;
-let closeBtnEl: any = null;
-let prevBtnEl: any = null;
-let nextBtnEl: any = null;
-let counterEl: any = null;
-let downloadBtnEl: any = null;
-let infoBtnEl: any = null;
-let infoPanelEl: any = null;
-let infoBodyEl: any = null;
-let infoCloseBtnEl: any = null;
-let lockedEl: any = null;
-let lockedInputEl: any = null;
-let lockedUnlockEl: any = null;
-let lockedEyeEl: any = null;
-let lockedErrorEl: any = null;
-let lockedHintEl: any = null;
-let lockedHintTextEl: any = null;
+let modalEl: HTMLElement | null = null;
+let shellEl: HTMLElement | null = null;
+let stageEl: HTMLElement | null = null;
+let filenameEl: HTMLElement | null = null;
+let thumbnailEl: HTMLImageElement | null = null;
+let imageEl: HTMLImageElement | null = null;
+let loadingEl: HTMLElement | null = null;
+let loadingFillEl: HTMLElement | null = null;
+let errorEl: HTMLElement | null = null;
+let closeBtnEl: HTMLButtonElement | null = null;
+let prevBtnEl: HTMLButtonElement | null = null;
+let nextBtnEl: HTMLButtonElement | null = null;
+let counterEl: HTMLElement | null = null;
+let downloadBtnEl: HTMLButtonElement | null = null;
+let infoBtnEl: HTMLButtonElement | null = null;
+let infoPanelEl: HTMLElement | null = null;
+let infoBodyEl: HTMLElement | null = null;
+let infoCloseBtnEl: HTMLButtonElement | null = null;
+let lockedEl: HTMLElement | null = null;
+let lockedInputEl: HTMLInputElement | null = null;
+let lockedUnlockEl: HTMLButtonElement | null = null;
+let lockedEyeEl: HTMLButtonElement | null = null;
+let lockedErrorEl: HTMLElement | null = null;
+let lockedHintEl: HTMLElement | null = null;
+let lockedHintTextEl: HTMLElement | null = null;
 let activeFullSrc = "";
 let infoOpen = false;
 // On a phone the info card is a sheet, so Android's BACK has to dismiss it
@@ -94,11 +83,13 @@ let activeOriginalSession: { token: string; url: string } | null = null;
 let releaseOriginalBudget: (() => void) | null = null;
 let unsubscribePreviewPolicy: (() => void) | null = null;
 let unsubscribePreviewReset: (() => void) | null = null;
+// Setup only completes once every required element resolved, so code reached
+// through an open preview asserts those refs rather than re-guarding them.
 let previewReady = false;
 let previewRequestToken = 0;
 let activePreviewKey = "";
-let activePreviewItem: any = null;
-let chromeHideTimer: any = null;
+let activePreviewItem: PreviewNavigationItem | null = null;
+let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
 let previewHostObserver: MutationObserver | null = null;
 let previewHostEl: HTMLElement | null = null;
 let previewA11y: ReturnType<typeof installModalA11y> | null = null;
@@ -133,31 +124,39 @@ function listenPreview(target: EventTarget | null, type: string, listener: Event
     previewListenerCleanups.push(() => target.removeEventListener(type, listener, options));
 }
 
-function isSpaceKey(event: any) {
+function isSpaceKey(event: KeyboardEvent): boolean {
     return event.code === "Space" || event.key === " " || event.key === "Spacebar";
 }
 
-function isTypingContext(element: any) {
+// BUTTON counts as typing: the modal opens with #preview-close focused, and
+// Space there has to stay the button's own activation.
+function isTypingContext(element: Element | null): boolean {
     if (!element) return false;
     const tag = String(element.tagName || "").toUpperCase();
-    return element.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON";
+    return Boolean((element as HTMLElement).isContentEditable) || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON";
 }
 
-function isBlockingOverlayOpen() {
-    const overlays = Array.from(document.querySelectorAll(".modal-overlay"));
-    if (overlays.some((el: any) => el.id !== "preview-modal" && el.style.display !== "none")) {
-        return true;
+// Both queries stay live: overlays mount and unmount with their modals, and the
+// context menu panel exists only while it is open.
+function isBlockingOverlayOpen(): boolean {
+    const overlays = document.querySelectorAll<HTMLElement>(".modal-overlay");
+    for (const overlay of overlays) {
+        if (overlay.id !== "preview-modal" && overlay.style.display !== "none") return true;
     }
 
     return Boolean(document.querySelector("#context-menu .context-menu-panel"));
 }
 
-function flashStatus(message: any) {
+function flashStatus(message: string): void {
     if (!message) return;
     notify({ level: 'info', title: message, durationMs: 2400 });
 }
 
-function getPreviewKey(item: any) {
+// Some callers hand over backend-shaped records, where the channel id still
+// arrives under its Go field name.
+type PreviewKeySource = PreviewNavigationItem & { ChannelID?: number };
+
+function getPreviewKey(item: PreviewKeySource | null | undefined): string {
 	if (!item || item.type !== "file") return "";
 	const channelID = Number(item.channel_id || item.channelId || item.ChannelID || state.activeChannel?.id || 0);
 	return `file:${channelID}:${Number(item.id || 0)}`;
@@ -194,7 +193,7 @@ function clearChromeHideTimer() {
     chromeHideTimer = null;
 }
 
-function setChromeVisible(visible: any) {
+function setChromeVisible(visible: boolean) {
     if (!modalEl) return;
     modalEl.classList.toggle("is-chrome-visible", Boolean(visible));
 }
@@ -235,7 +234,7 @@ function resetImageSurface({ keepThumbnail = false } = {}) {
     modalEl?.classList.remove('is-original-ready');
 }
 
-function showPreviewLoading(_label?: any) {
+function showPreviewLoading(_label?: string) {
     if (!modalEl || !loadingEl) return;
     modalEl.classList.add("is-preview-loading");
     loadingEl.style.display = "flex";
@@ -250,7 +249,7 @@ function hidePreviewProgress() {
     loadingFillEl.style.width = "0%";
 }
 
-function preparePreviewSurface(filename: any, { keepCurrentImage = false } = {}) {
+function preparePreviewSurface(filename: string, { keepCurrentImage = false } = {}) {
     if (!modalEl || !filenameEl || !loadingEl || !errorEl) return;
     hideLockedState();
     if (!keepCurrentImage) {
@@ -265,7 +264,7 @@ function preparePreviewSurface(filename: any, { keepCurrentImage = false } = {})
     if (imageEl && !keepCurrentImage) imageEl.alt = "";
 }
 
-function showPreviewError(message: any, { keepCurrentImage = false } = {}) {
+function showPreviewError(message: string, { keepCurrentImage = false } = {}) {
     if (!modalEl || !loadingEl || !errorEl) return;
 
     previewTransition.cancel();
@@ -281,7 +280,7 @@ function showPreviewError(message: any, { keepCurrentImage = false } = {}) {
     clearChromeHideTimer();
 }
 
-function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
+function showPreviewImage(src: string, alt: string, { keepLoading = false } = {}) {
     if (!modalEl || !filenameEl || !imageEl || !loadingEl || !errorEl) return;
 
     hideLockedState();
@@ -327,14 +326,15 @@ function isPreviewOpen() {
     return Boolean(modalEl && modalEl.style.display !== "none");
 }
 
-function normalizePreviewError(err: any) {
+function normalizePreviewError(err: unknown): Error {
     if (err instanceof Error && err.message.trim()) return err;
     if (typeof err === "string" && err.trim()) return new Error(err.trim());
-    if (err && typeof err.message === "string" && err.message.trim()) return new Error(err.message.trim());
+    const message = (err as { message?: unknown } | null | undefined)?.message;
+    if (typeof message === "string" && message.trim()) return new Error(message.trim());
     return new Error("Download failed");
 }
 
-function showSelectionPreviewError(selection: any) {
+function showSelectionPreviewError(selection: PreviewSelection) {
     if (selection.reason === "multiple") {
         flashStatus("Preview works with one image at a time");
         return;
@@ -351,7 +351,7 @@ function assertPreviewReady() {
     return false;
 }
 
-export function isPreviewableImage(filename: any) {
+export function isPreviewableImage(filename: string | null | undefined) {
     const name = String(filename || "").trim();
     const dot = name.lastIndexOf(".");
     if (dot < 0 || dot === name.length - 1) return false;
@@ -413,7 +413,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
         activeOriginalSession = { token: opened.token, url: opened.url };
         activeFullSrc = opened.url;
         showPreviewImage(opened.url, filename, { keepLoading: true });
-        imageEl.title = 'Original image';
+        imageEl!.title = 'Original image';
         refreshInfoPanel();
         return { src: opened.url };
     } catch (error) {
@@ -429,9 +429,9 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
         const normalized = normalizePreviewError(error);
         if (thumbnailEl?.getAttribute('src')) {
             hidePreviewProgress();
-            imageEl.title = 'Original image unavailable';
-            errorEl.textContent = normalized.message;
-            errorEl.style.display = 'block';
+            imageEl!.title = 'Original image unavailable';
+            errorEl!.textContent = normalized.message;
+            errorEl!.style.display = 'block';
         } else showPreviewError(normalized.message);
         return null;
     }
@@ -439,7 +439,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
 
 export function closePreviewModal() {
     if (zoomScale === 1 && activePreviewTransitionSource && isPreviewVisible()) {
-        previewTransition.playClose(activePreviewTransitionSource, imageEl);
+        previewTransition.playClose(activePreviewTransitionSource, imageEl!);
     } else {
         previewTransition.cancel();
     }
@@ -474,23 +474,23 @@ export function closePreviewModal() {
 
 // openPreviewItem shows the modal and loads one item. It does not touch the
 // navigation context, so both single-item and list callers route through it.
-async function openPreviewItem(item: any, transitionSource: PreviewTransitionSource | null = null) {
+async function openPreviewItem(item: PreviewNavigationItem, transitionSource: PreviewTransitionSource | null = null) {
     const wasOpen = isPreviewOpen();
     const keepCurrentImage = wasOpen && isPreviewVisible();
 
     previewTransition.cancel();
     activePreviewTransitionSource = transitionSource;
-    modalEl.style.display = "flex";
-    modalEl.setAttribute("aria-hidden", "false");
+    modalEl!.style.display = "flex";
+    modalEl!.setAttribute("aria-hidden", "false");
     previewA11y?.activate();
-    activateModalOwnership(modalEl);
+    activateModalOwnership(modalEl!);
     // The modal owns a pinned thumbnail, so yielding the gallery viewport
     // releases below-the-overlay work and keeps mobile memory predictable.
     setGalleryThumbnailScheduling(false);
     setChromeVisible(true);
     preparePreviewSurface(item.name || "Preview", { keepCurrentImage });
     const sharedTransition = !wasOpen && transitionSource
-        ? previewTransition.beginOpen(transitionSource, modalEl)
+        ? previewTransition.beginOpen(transitionSource, modalEl!)
         : false;
     if (sharedTransition && transitionSource) showPreviewThumbnail(transitionSource.imageSrc, item.name || "Preview");
 
@@ -523,16 +523,23 @@ export async function openPreviewForSelection(target: PreviewCommandItem | null 
     return openPreviewItem(selection.item);
 }
 
-function findGalleryPreviewSource(item: any): PreviewTransitionSource | null {
+// The cell is looked up per navigation on purpose: the gallery virtualises its
+// grid, so the element backing an id is only valid for this one capture.
+function findGalleryPreviewSource(item: PreviewNavigationItem | null | undefined): PreviewTransitionSource | null {
     const id = Number(item?.id || 0);
     if (!id) return null;
     const cell = document.querySelector<HTMLElement>('.gallery-cell[data-id="' + id + '"]');
     return capturePreviewTransitionSource(cell);
 }
 
+// The file list builds its rows inline, so their `type` is a widened string
+// rather than the literal; the adapter takes them as they come and narrows at
+// the one boundary where a navigation item is actually required.
+type PreviewListItem = Omit<PreviewNavigationItem, 'type'> & { type: string };
+
 /** Compatibility adapter for existing small, already-loaded file lists. */
 export async function openPreviewList(
-    items: any[],
+    items: PreviewListItem[],
     index: number,
     transitionSource: PreviewTransitionSource | null = null,
 ) {
@@ -545,7 +552,7 @@ export async function openPreviewList(
         async getNeighbor(item, direction) {
             if (items[position]?.id !== item.id) return null;
             const next = position + direction;
-            return next >= 0 && next < items.length ? items[next] : null;
+            return next >= 0 && next < items.length ? items[next] as PreviewNavigationItem : null;
         },
         getPosition(item) {
             if (items[position]?.id !== item.id) {
@@ -555,7 +562,7 @@ export async function openPreviewList(
             return { index: position, total: items.length };
         },
     };
-    return openPreviewSource(source, items[i], transitionSource);
+    return openPreviewSource(source, items[i] as PreviewNavigationItem, transitionSource);
 }
 
 export async function openPreviewSource(
@@ -588,7 +595,7 @@ async function navigatePreview(delta: number) {
     navigationPending = true;
     updateNavChrome();
     try {
-        const item = await source.getNeighbor(activePreviewItem, direction);
+        const item = await source.getNeighbor(activePreviewItem!, direction);
         if (!item || epoch !== navigationEpoch || source !== navSource || !isPreviewOpen()) return;
         // Once the neighboring record is known, navigation can interrupt its
         // image transfer. A slow photo must not trap the user on that slide.
@@ -832,13 +839,13 @@ function zoomAt(clientX: number, clientY: number, factor: number) {
     applyZoomTransform();
 }
 
-function handleZoomWheel(e: any) {
+function handleZoomWheel(e: WheelEvent) {
     if (!isPreviewVisible()) return;
     e.preventDefault();
     zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.18 : 1 / 1.18);
 }
 
-function handleZoomDblClick(e: any) {
+function handleZoomDblClick(e: MouseEvent) {
     if (!isPreviewVisible()) return;
     if (lastPointerType === "touch" && isMobilePlatform()) return;
     e.preventDefault();
@@ -846,7 +853,7 @@ function handleZoomDblClick(e: any) {
     else zoomAt(e.clientX, e.clientY, 2.5);
 }
 
-function handlePanStart(e: any) {
+function handlePanStart(e: PointerEvent) {
     if (zoomScale <= 1 || !imageEl) return;
     panning = true;
     panMoved = false;
@@ -860,7 +867,7 @@ function handlePanStart(e: any) {
     e.preventDefault();
 }
 
-function handlePanMove(e: any) {
+function handlePanMove(e: PointerEvent) {
     if (!panning || e.pointerId !== panPointerId) return;
     panMoved = true;
     zoomTx = e.clientX - panStartX;
@@ -869,12 +876,12 @@ function handlePanMove(e: any) {
     applyZoomTransform();
 }
 
-function handlePanEnd(e: any) {
+function handlePanEnd(e: PointerEvent) {
     if (!panning || e.pointerId !== panPointerId) return;
     panning = false;
     panPointerId = -1;
     try {
-        imageEl.releasePointerCapture(e.pointerId);
+        imageEl!.releasePointerCapture(e.pointerId);
     } catch {}
     if (imageEl) imageEl.style.cursor = zoomScale > 1 ? "grab" : "zoom-in";
 }
@@ -987,7 +994,7 @@ function previewTouchHandlers(): TouchGestureHandlers {
     };
 }
 
-async function handlePreviewKeydown(event: any) {
+async function handlePreviewKeydown(event: KeyboardEvent) {
     const spacePressed = isSpaceKey(event);
     const previewOpen = isPreviewOpen();
 
@@ -1101,15 +1108,17 @@ export function teardownPreviewModal(): void {
 }
 
 export function activatePreviewModal(): () => void {
-    const host = document.getElementById("preview-modal");
+    // One traversal answers both questions activation asks: whether the host is
+    // the same live element, and which required elements are absent.
+    const dom: PreviewDOM = collectPreviewDOM();
+    const host = dom.modal;
     if (!host) {
         if (previewHostEl) teardownPreviewModal();
         return () => {};
     }
 
-    const canReuse = previewHostEl === host
-        && previewReady
-        && REQUIRED_ELEMENT_IDS.every((id) => Boolean(document.getElementById(id)));
+    const missing = missingPreviewElements(dom);
+    const canReuse = previewHostEl === host && previewReady && missing.length === 0;
     if (canReuse) {
         updateNavChrome();
         return teardownPreviewModal;
@@ -1122,40 +1131,41 @@ export function activatePreviewModal(): () => void {
     });
     previewHostObserver.observe(document.body, { childList: true, subtree: true });
 
-    const missing = REQUIRED_ELEMENT_IDS.filter((id) => !document.getElementById(id));
     if (missing.length) {
         console.error("Preview modal setup failed. Missing DOM elements: " + missing.join(", "));
         teardownPreviewModal();
         return () => {};
     }
 
-    modalEl = document.getElementById("preview-modal");
-    shellEl = document.getElementById("preview-shell");
-    stageEl = document.getElementById("preview-stage");
-    filenameEl = document.getElementById("preview-filename");
-    thumbnailEl = document.getElementById("preview-thumbnail");
-    imageEl = document.getElementById("preview-image");
-    loadingEl = document.getElementById("preview-loading");
-    loadingFillEl = document.getElementById("preview-loading-fill");
-    errorEl = document.getElementById("preview-error");
-    closeBtnEl = document.getElementById("preview-close");
-    prevBtnEl = document.getElementById("preview-prev");
-    nextBtnEl = document.getElementById("preview-next");
-    counterEl = document.getElementById("preview-counter");
-    downloadBtnEl = document.getElementById("preview-download");
-    infoBtnEl = document.getElementById("preview-info-btn");
-    infoPanelEl = document.getElementById("preview-info");
-    infoBodyEl = document.getElementById("preview-info-body");
-    infoCloseBtnEl = document.getElementById("preview-info-close");
-    lockedEl = document.getElementById("preview-locked");
-    lockedInputEl = document.getElementById("preview-locked-input");
-    lockedUnlockEl = document.getElementById("preview-locked-unlock");
-    lockedEyeEl = document.getElementById("preview-locked-eye");
-    lockedErrorEl = document.getElementById("preview-locked-error");
-    lockedHintEl = document.getElementById("preview-locked-hint");
-    lockedHintTextEl = document.getElementById("preview-locked-hint-text");
+    ({
+        modal: modalEl,
+        shell: shellEl,
+        stage: stageEl,
+        filename: filenameEl,
+        thumbnail: thumbnailEl,
+        image: imageEl,
+        loading: loadingEl,
+        loadingFill: loadingFillEl,
+        error: errorEl,
+        closeButton: closeBtnEl,
+        prevButton: prevBtnEl,
+        nextButton: nextBtnEl,
+        counter: counterEl,
+        downloadButton: downloadBtnEl,
+        infoButton: infoBtnEl,
+        infoPanel: infoPanelEl,
+        infoBody: infoBodyEl,
+        infoCloseButton: infoCloseBtnEl,
+        locked: lockedEl,
+        lockedInput: lockedInputEl,
+        lockedUnlockButton: lockedUnlockEl,
+        lockedEyeButton: lockedEyeEl,
+        lockedError: lockedErrorEl,
+        lockedHint: lockedHintEl,
+        lockedHintText: lockedHintTextEl,
+    } = dom);
     previewReady = true;
-    previewA11y = installModalA11y(modalEl, {
+    previewA11y = installModalA11y(modalEl!, {
         requestClose: closePreviewModal,
         initialFocus: () => closeBtnEl,
         restoreFocus: () => state.virtualView === "photos"
@@ -1224,8 +1234,8 @@ export function activatePreviewModal(): () => void {
         listenPreview(stageEl, "pointerdown", ((event: PointerEvent) => {
             lastPointerType = event.pointerType;
         }) as EventListener, true);
-        previewListenerCleanups.push(bindTouchGestures(stageEl, previewTouchHandlers()));
-        previewListenerCleanups.push(bindTouchGestures(infoPanelEl, infoTouchHandlers()));
+        previewListenerCleanups.push(bindTouchGestures(stageEl!, previewTouchHandlers()));
+        previewListenerCleanups.push(bindTouchGestures(infoPanelEl!, infoTouchHandlers()));
     }
     listenPreview(stageEl, "wheel", handleZoomWheel as EventListener, { passive: false });
     listenPreview(imageEl, "dblclick", handleZoomDblClick as EventListener);

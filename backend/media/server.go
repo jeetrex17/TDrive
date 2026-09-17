@@ -487,10 +487,6 @@ func contentTypeFor(name string) string {
 	return "application/octet-stream"
 }
 
-func isSupportedMediaName(name string) bool {
-	return streamKindForName(name) == StreamKindVideo
-}
-
 // IsSupportedImageName reports whether name has one of the raster extensions
 // that the original-image stream validates and serves. The extension is only
 // the first admission check; OpenImage detects and validates the encoded bytes.
