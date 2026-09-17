@@ -555,7 +555,7 @@ func (a *App) DownloadFolder(channelID int64, folderID string, requestID string)
 
 const (
 	maxFrontendSafeInteger        int64 = 9_007_199_254_740_991
-	maxFrontendDownloadRequestLen       = 256
+	maxFrontendDownloadRequestLen int   = 256
 )
 
 // Wails transports JavaScript numbers, so IDs outside the safe-integer range
