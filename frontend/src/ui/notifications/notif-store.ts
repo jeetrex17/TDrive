@@ -30,6 +30,15 @@ export interface TransferEvent {
     status: TransferStatus;
     startedAt: number;
     finishedAt: number;
+    /**
+     * One sentence the transfer wants to keep after it has finished: on a phone,
+     * where the file actually landed.
+     *
+     * A phone has no Finder to go and look in, so that answer is the whole point
+     * of the download, and it used to be carried by a toast -- which is to say
+     * it went past once and could not be asked for again.
+     */
+    note?: string;
 }
 
 export interface NoticeEvent {

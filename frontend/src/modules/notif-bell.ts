@@ -210,6 +210,21 @@ export function updateTransferName({ id, direction, name }: { id: string | numbe
     );
 }
 
+/**
+ * Attaches the sentence a finished transfer should keep -- where a phone
+ * download landed. Set after the transfer is terminal, so unlike the other
+ * updaters here it looks the entry up wherever it is rather than only among the
+ * unfinished.
+ */
+export function setTransferNote({ id, direction, note }: { id: string | number; direction: TransferDirection; note: string }) {
+    const key = transferKey(direction, id);
+    const text = String(note || '');
+    if (!text) return;
+    historyEvents.update((events) =>
+        events.map((e) => (e.id === key && e.kind === 'transfer' ? { ...e, note: text } : e)),
+    );
+}
+
 export function markTransferDone({ id, direction, status = 'done' }: { id: string | number; direction: TransferDirection; status?: TransferStatus }) {
     const key = transferKey(direction, id);
     // Idempotent: don't downgrade or rewrite an already-terminal entry

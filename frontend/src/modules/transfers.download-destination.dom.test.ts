@@ -2,15 +2,21 @@
  * Where a phone says a download went.
  *
  * The interesting part is not the wording but the promise behind it: whatever
- * the toast names has to be somewhere the user can actually open. Android only
+ * the app names has to be somewhere the user can actually open. Android only
  * earns that by moving the file out of the sandbox first, so the move and the
  * message are tested together.
+ *
+ * The answer is kept on the transfer rather than raised as a toast, so it is
+ * still there when the person thinks to ask. The one exception is the Android
+ * move failing, which leaves the file somewhere they did not choose and is
+ * worth interrupting for.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
     notify: vi.fn(),
     markTransferDone: vi.fn(),
+    setTransferNote: vi.fn(),
     canSaveToDownloads: vi.fn(() => true),
     saveToDownloads: vi.fn(async () => 'Download/plan.pdf'),
     rememberDownloadSharePath: vi.fn(),
@@ -37,6 +43,7 @@ vi.mock('../ui/mobile/mobile-shell-store', () => ({
 }));
 vi.mock('./notif-bell', () => ({
     markTransferDone: mocks.markTransferDone,
+    setTransferNote: mocks.setTransferNote,
     pushQueuedTransfer: vi.fn(),
     pushTransferStart: vi.fn(),
     updateTransferName: vi.fn(),
@@ -70,10 +77,10 @@ async function loadModule() {
     return import('./transfers');
 }
 
-/** The body of the last toast, which is the sentence the user reads. */
-function lastBody(): string {
-    const calls = mocks.notify.mock.calls;
-    return String((calls[calls.length - 1]?.[0] as { body?: unknown })?.body ?? '');
+/** The sentence the finished row keeps, which is what the user reads. */
+function lastNote(): string {
+    const calls = mocks.setTransferNote.mock.calls;
+    return String((calls[calls.length - 1]?.[0] as { note?: unknown })?.note ?? '');
 }
 
 beforeEach(() => {
@@ -93,7 +100,7 @@ describe('android', () => {
         mod.enqueueDownload(42, 'plan.pdf', 10);
 
         await vi.waitFor(() => expect(mocks.saveToDownloads).toHaveBeenCalledWith('/sandbox/Downloads/plan.pdf'));
-        await vi.waitFor(() => expect(lastBody()).toBe('Saved to Download/plan.pdf'));
+        await vi.waitFor(() => expect(lastNote()).toBe('Saved to Download/plan.pdf'));
     });
 
     it('moves a folder too, which is the case that had no way out at all', async () => {
@@ -102,7 +109,7 @@ describe('android', () => {
         mod.enqueueFolderDownload('d:holiday', 'Holiday');
 
         await vi.waitFor(() => expect(mocks.saveToDownloads).toHaveBeenCalledWith('/sandbox/Downloads/Holiday'));
-        await vi.waitFor(() => expect(lastBody()).toBe('Saved to Download/Holiday'));
+        await vi.waitFor(() => expect(lastNote()).toBe('Saved to Download/Holiday'));
     });
 
     it('says the file is stranded rather than claiming a folder it is not in', async () => {
@@ -110,10 +117,13 @@ describe('android', () => {
         const mod = await loadModule();
         mod.enqueueDownload(42, 'plan.pdf', 10);
 
-        // The bytes did arrive, so this is a warning about where they are.
+        // The bytes did arrive, so this is a warning about where they are --
+        // and the one download outcome that still interrupts, because the file
+        // is somewhere the user did not ask for.
         await vi.waitFor(() => expect(mocks.notify).toHaveBeenCalledWith(
-            expect.objectContaining({ level: 'warning', body: expect.stringContaining('could not be moved') }),
+            expect.objectContaining({ level: 'warning', title: expect.stringContaining('Downloads folder') }),
         ));
+        expect(lastNote()).toBe('Saved inside TDrive, not in your Downloads folder');
     });
 
     it('falls back to a plain confirmation when the host cannot move it', async () => {
@@ -121,7 +131,7 @@ describe('android', () => {
         const mod = await loadModule();
         mod.enqueueDownload(42, 'plan.pdf', 10);
 
-        await vi.waitFor(() => expect(mocks.notify).toHaveBeenCalled());
+        await vi.waitFor(() => expect(lastNote()).toContain('Files'));
         expect(mocks.saveToDownloads).not.toHaveBeenCalled();
     });
 });
@@ -131,8 +141,8 @@ describe('ios', () => {
         const mod = await loadModule();
         mod.enqueueDownload(42, 'plan.pdf', 10);
 
-        await vi.waitFor(() => expect(lastBody()).toContain('Files'));
-        expect(lastBody()).not.toContain('/sandbox');
+        await vi.waitFor(() => expect(lastNote()).toContain('Files'));
+        expect(lastNote()).not.toContain('/sandbox');
         expect(mocks.saveToDownloads).not.toHaveBeenCalled();
     });
 
@@ -149,8 +159,8 @@ describe('ios', () => {
         const mod = await loadModule();
         mod.enqueueFolderDownload('d:holiday', 'Holiday');
 
-        await vi.waitFor(() => expect(lastBody()).toContain('Files'));
-        expect(lastBody()).not.toContain('share sheet');
+        await vi.waitFor(() => expect(lastNote()).toContain('Files'));
+        expect(lastNote()).not.toContain('share sheet');
         expect(mocks.rememberDownloadSharePath).not.toHaveBeenCalled();
     });
 });

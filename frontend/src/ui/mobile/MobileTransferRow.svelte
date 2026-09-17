@@ -99,6 +99,12 @@
     {/if}
 
     <div class="detail">{detail}</div>
+
+    {#if transfer.note}
+        <!-- Where a phone download landed. Its own line because it is a place,
+             not a figure, and because it is the answer the person came for. -->
+        <div class="note">{transfer.note}</div>
+    {/if}
 </div>
 
 <style>
@@ -182,6 +188,16 @@
         font-size: var(--mobile-type-meta);
         color: var(--color-text-muted);
         font-variant-numeric: tabular-nums;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .note {
+        grid-area: 4 / 2 / auto / -1;
+        min-width: 0;
+        font-size: var(--mobile-type-caption);
+        color: var(--color-text-subtle);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;

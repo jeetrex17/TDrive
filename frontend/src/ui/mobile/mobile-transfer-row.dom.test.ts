@@ -116,3 +116,22 @@ describe('the one control a row offers', () => {
         expect(host.querySelector('button')?.getAttribute('aria-label')).toBe('Stop plan.pdf');
     });
 });
+
+describe('where a phone download went', () => {
+    it('keeps the answer on the row, where it can be asked for again', () => {
+        render({
+            transfer: transfer({
+                status: 'done',
+                progress: 100,
+                finishedAt: Date.now(),
+                note: 'Saved to Files › TDrive › Downloads',
+            }),
+        });
+        expect(host.textContent).toContain('Saved to Files › TDrive › Downloads');
+    });
+
+    it('says nothing extra when there is nothing to add', () => {
+        render({ transfer: transfer({ status: 'done', progress: 100 }) });
+        expect(host.querySelector('.note')).toBeNull();
+    });
+});
