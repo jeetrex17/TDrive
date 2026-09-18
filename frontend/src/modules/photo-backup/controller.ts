@@ -1,23 +1,31 @@
 import { get, writable } from 'svelte/store';
 import {
-    addPhotoBackupFolder, defaultSettings, enqueuePhotoBackupAssets, getPhotoBackupState,
+    addPhotoBackupFolder, defaultSettings, enqueuePhotoBackupAssets, getPhotoBackupState, normalizeAsset,
     pausePhotoBackup, removePhotoBackupSource, resolvePhotoBackupResource, resumePhotoBackup, retryPhotoBackup, setPhotoBackupPolicy,
-    runPhotoBackup, savePhotoBackupSettings, type PhotoBackupAsset, type PhotoBackupSettings,
+    runPhotoBackup, savePhotoBackupSettings, type PhotoBackupSettings, type PhotoBackupSource,
     type PhotoBackupState, upsertPhotoBackupSource,
 } from '../../api/photo-backup';
+import { OperationFailure, requireOperationSuccess } from '../../api/operation';
 import { onRuntimeEvent, runtimeEventsAvailable, type RuntimeUnsubscribe } from '../../api/runtime';
 import { asRecord, boundedText } from '../../api/shared';
+import type { OperationError, OperationResult } from '../../types';
 import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativePhotoBackupAvailable, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
 import { activeDrive } from '../../ui/mobile/mobile-shell-store';
 import { activatePhotoBackupBackground } from './background';
-import { openEncryptionPasswordModal } from '../modals/encryption-password';
-import { isEncryptionPasswordRequired } from '../errors';
+import { callWithPasswordRetry, openEncryptionPasswordModal } from '../modals/encryption-password';
+import { humanizeBackendError } from '../errors';
 import { clearPhotoBackupActivity, syncPhotoBackupActivity } from './activity';
 
 export const photoBackupState = writable<PhotoBackupState | null>(null);
 export const photoBackupError = writable('');
 export const photoBackupBusy = writable(false);
-export const photoBackupCandidates = writable<import('../../api/photo-backup').PhotoBackupSource[]>([]);
+export const photoBackupCandidates = writable<PhotoBackupSource[]>([]);
+
+const UNLOCK_MESSAGE = 'Unlock encryption to continue photo backup.';
+/** How long to sit on a device-side wait (Wi-Fi, policy) before asking again. */
+const POLICY_RECHECK_MS = 30_000;
+/** How long to sit on a native access or provider failure before trying again. */
+const ACCESS_RETRY_MS = 5_000;
 
 let active = false;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -37,13 +45,36 @@ const discoveryCursors = new Map<string, string>();
 const materializedResources = new Map<string, string>();
 const materializations = new Map<string, AbortController>();
 
+// The backend cannot see the page walking the library, so the scanning phase
+// is layered on here: the last backend snapshot plus one flag. Everything that
+// reads state -- the panel and the activity row alike -- sees the same view.
+let backendState: PhotoBackupState | null = null;
+let discovering = false;
+
+function publish(state: PhotoBackupState | null): void {
+    backendState = state;
+    const idle = state?.status.phase === 'idle' || state?.status.phase === 'queued' || state?.status.phase === 'complete';
+    const view = state && discovering && idle && !state.manualPaused
+        ? { ...state, status: { ...state.status, phase: 'scanning' as const } }
+        : state;
+    photoBackupState.set(view);
+    if (view) syncPhotoBackupActivity(view);
+}
+
+function setDiscovering(value: boolean): void {
+    if (discovering === value) return;
+    discovering = value;
+    publish(backendState);
+}
+
 export async function refreshPhotoBackup(): Promise<void> {
     const epoch = scopeEpoch;
     try {
         const state = await getPhotoBackupState();
         if (epoch !== scopeEpoch) return;
         manuallyPaused = state.manualPaused;
-        photoBackupState.set(state); syncPhotoBackupActivity(state); photoBackupError.set('');
+        publish(state);
+        photoBackupError.set('');
     }
     catch { if (epoch === scopeEpoch) photoBackupError.set('Photo backup is unavailable. Try again.'); }
 }
@@ -60,6 +91,11 @@ function cancelDiscovery(): void {
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
 }
 
+function retryDiscoveryAfter(delay: number, epoch: number): void {
+    if (!active || epoch !== schedulerEpoch) return;
+    retryTimer = setTimeout(() => { retryTimer = null; void runDiscoveryScheduler(); }, delay);
+}
+
 const yieldToForeground = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 async function refreshNativePolicy(force = false): Promise<void> {
@@ -69,6 +105,11 @@ async function refreshNativePolicy(force = false): Promise<void> {
         const wifi = await nativePhotoBackupPolicy();
         if (wifi !== null && active && documentVisible) await setPhotoBackupPolicy(wifi);
     } finally { policySampling = false; }
+}
+
+/** Shown when the backend declines to run: its own words, or the unlock hint for a locked vault. */
+function refusalMessage(error: OperationError): string {
+    return error.code === 'encryption_password_required' ? UNLOCK_MESSAGE : humanizeBackendError(error);
 }
 
 // A single serial worker gives native staging and the durable enqueue a bounded
@@ -85,13 +126,23 @@ async function runDiscoveryScheduler(): Promise<void> {
         manuallyPaused = current.manualPaused;
         if (!current.settings.enabled || epoch !== schedulerEpoch || manuallyPaused) return;
         if (current.encryptionRequired) {
-            photoBackupError.set('Unlock encryption to continue photo backup.');
+            photoBackupError.set(UNLOCK_MESSAGE);
             return;
         }
         await refreshNativePolicy();
         if (epoch !== schedulerEpoch) return;
-        // Drain persisted work even when discovery already reached the end.
-        await runPhotoBackup();
+        // Drain persisted work even when discovery already reached the end. A
+        // refusal is a state to show rather than an error to retry into: a
+        // locked vault waits for the user, a Wi-Fi wait for the device, and
+        // the device is asked again after a while.
+        const drained = await runPhotoBackup();
+        if (!drained.ok) {
+            if (epoch !== schedulerEpoch) return;
+            photoBackupError.set(refusalMessage(drained.error));
+            if (drained.error.code === 'operation_failed') retryDiscoveryAfter(POLICY_RECHECK_MS, epoch);
+            return;
+        }
+        setDiscovering(true);
         for (const source of current.sources.filter((item) => item.enabled)) {
             if (completedScans.has(source.id)) continue;
             while (active && epoch === schedulerEpoch) {
@@ -109,48 +160,49 @@ async function runDiscoveryScheduler(): Promise<void> {
             }
         }
         await refreshPhotoBackup();
-    } catch (cause) {
-        if (isEncryptionPasswordRequired(cause)) {
-            if (active && epoch === schedulerEpoch) photoBackupError.set('Unlock encryption to continue photo backup.');
-            return;
-        }
+    } catch {
         if (active && epoch === schedulerEpoch) photoBackupError.set('Backup is waiting for media access or a connection.');
         // Native permission and transient provider failures are retried while
         // foregrounded without presenting an endless stream of errors.
-        if (active && epoch === schedulerEpoch) retryTimer = setTimeout(() => { retryTimer = null; void runDiscoveryScheduler(); }, 5_000);
-    } finally { schedulerRunning = false; }
+        retryDiscoveryAfter(ACCESS_RETRY_MS, epoch);
+    } finally {
+        setDiscovering(false);
+        schedulerRunning = false;
+    }
 }
 
 export async function loadPhotoBackupCandidates(): Promise<void> { if (nativePhotoBackupAvailable()) { await requestNativePhotoBackupAccess(); photoBackupCandidates.set(await listNativePhotoBackupSources()); } }
-export async function selectPhotoBackupSource(source: import('../../api/photo-backup').PhotoBackupSource): Promise<void> { await upsertPhotoBackupSource(source); await refreshPhotoBackup(); void runDiscoveryScheduler(); }
+export async function selectPhotoBackupSource(source: PhotoBackupSource): Promise<void> { await upsertPhotoBackupSource(source); await refreshPhotoBackup(); void runDiscoveryScheduler(); }
 
-// An explicit action may open the existing password modal, then runs once. A
-// stale state can still surface the backend's stable locked-vault error; in
-// that case unlock and retry the original action exactly once.
-async function runWithEncryptionUnlock(action: () => Promise<void>): Promise<boolean> {
+// An explicit action may open the existing password modal, then runs once. The
+// snapshot can be stale, so the backend's stable locked-vault code is the
+// second chance: the shared retry helper unlocks and re-runs exactly once.
+// Resolves false when the user dismissed the prompt, which is not a failure.
+async function runUnlocked(action: () => Promise<OperationResult>): Promise<boolean> {
     if (get(photoBackupState)?.encryptionRequired && !await openEncryptionPasswordModal()) return false;
-    try {
-        await action();
-        return true;
-    } catch (cause) {
-        if (!isEncryptionPasswordRequired(cause)) throw cause;
-        if (!await openEncryptionPasswordModal()) return false;
-        await action();
-        return true;
-    }
+    const result = await callWithPasswordRetry(action);
+    if (result.ok) return true;
+    if (result.error.code === 'canceled') return false;
+    throw new OperationFailure(result.error);
+}
+
+// The backend's refusal is worth repeating verbatim -- "Waiting for Wi-Fi." tells
+// the user what to do. A transport failure is not, so it gets the generic copy.
+function reportFailure(cause: unknown, fallback: string): void {
+    photoBackupError.set(cause instanceof OperationFailure ? humanizeBackendError(cause) : fallback);
 }
 
 export async function startPhotoBackup(): Promise<void> {
     manuallyPaused = false; photoBackupBusy.set(true); photoBackupError.set('');
     try {
-        if (await runWithEncryptionUnlock(async () => { await refreshNativePolicy(true); await runPhotoBackup(); })) { await refreshPhotoBackup(); void runDiscoveryScheduler(); }
-    } catch { photoBackupError.set('Could not start photo backup. Try again.'); }
+        if (await runUnlocked(async () => { await refreshNativePolicy(true); return runPhotoBackup(); })) { await refreshPhotoBackup(); void runDiscoveryScheduler(); }
+    } catch (cause) { reportFailure(cause, 'Could not start photo backup. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
 
 export async function updatePhotoBackupSettings(settings: PhotoBackupSettings): Promise<void> {
     cancelDiscovery(); photoBackupBusy.set(true); photoBackupError.set('');
-    try { photoBackupState.set(await savePhotoBackupSettings({ ...defaultSettings, ...settings })); if (settings.enabled) void runDiscoveryScheduler(); }
+    try { publish(await savePhotoBackupSettings({ ...defaultSettings, ...settings })); if (settings.enabled) void runDiscoveryScheduler(); }
     catch { photoBackupError.set('Could not save backup settings. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
@@ -163,30 +215,25 @@ export async function pausePhotoBackupNow(): Promise<void> {
     manuallyPaused = true; cancelDiscovery();
     for (const controller of materializations.values()) controller.abort();
     photoBackupBusy.set(true); photoBackupError.set('');
-    try { await pausePhotoBackup(); await refreshPhotoBackup(); }
-    catch { await refreshPhotoBackup(); photoBackupError.set('Could not pause photo backup. Try again.'); }
+    try { requireOperationSuccess(await pausePhotoBackup()); await refreshPhotoBackup(); }
+    catch (cause) { await refreshPhotoBackup(); reportFailure(cause, 'Could not pause photo backup. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
 export async function resumePhotoBackupNow(): Promise<void> {
     photoBackupBusy.set(true); photoBackupError.set('');
-    try { if (await runWithEncryptionUnlock(async () => { await refreshNativePolicy(true); await resumePhotoBackup(); })) { manuallyPaused = false; await refreshPhotoBackup(); void runDiscoveryScheduler(); } }
-    catch { await refreshPhotoBackup(); photoBackupError.set('Could not resume photo backup. Try again.'); }
+    try { if (await runUnlocked(async () => { await refreshNativePolicy(true); return resumePhotoBackup(); })) { manuallyPaused = false; await refreshPhotoBackup(); void runDiscoveryScheduler(); } }
+    catch (cause) { await refreshPhotoBackup(); reportFailure(cause, 'Could not resume photo backup. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
 export async function retryPhotoBackupNow(): Promise<void> {
     photoBackupBusy.set(true); photoBackupError.set('');
-    try { if (await runWithEncryptionUnlock(async () => { await refreshNativePolicy(true); await retryPhotoBackup(); })) { await refreshPhotoBackup(); if (!manuallyPaused) void runDiscoveryScheduler(); } }
-    catch { photoBackupError.set('Could not retry photo backup. Try again.'); }
+    try { if (await runUnlocked(async () => { await refreshNativePolicy(true); return retryPhotoBackup(); })) { await refreshPhotoBackup(); if (!manuallyPaused) void runDiscoveryScheduler(); } }
+    catch (cause) { reportFailure(cause, 'Could not retry photo backup. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
 
-function parseAsset(value: unknown): PhotoBackupAsset | null {
-    const raw = asRecord(value); const id = boundedText(raw.id, 512); const version = boundedText(raw.version, 256); const mediaType = raw.media_type === 'video' ? 'video' : raw.media_type === 'photo' ? 'photo' : null;
-    return id && version && mediaType ? { id, version, name: boundedText(raw.name, 512), mediaType, modifiedAt: Number(raw.modified_at) || 0, size: Number(raw.size) || 0, resourceId: boundedText(raw.resource_id, 512) || undefined } : null;
-}
-
 async function materialize(payload: unknown): Promise<void> {
-    const raw = asRecord(payload); const token = boundedText(raw.token, 512); const asset = parseAsset(raw.asset);
+    const raw = asRecord(payload); const token = boundedText(raw.token, 512); const asset = normalizeAsset(raw.asset);
     if (!token || !asset) return;
     const controller = new AbortController();
     materializations.set(token, controller);
@@ -240,7 +287,7 @@ export function activatePhotoBackup(): () => void {
         if (id === observedDriveID) return;
         scopeEpoch += 1;
         clearPhotoBackupActivity();
-        photoBackupState.set(null);
+        publish(null);
         photoBackupError.set('');
         cancelDiscovery();
         observedDriveID = id;
