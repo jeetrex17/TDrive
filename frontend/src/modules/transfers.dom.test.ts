@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { TransferItem } from '../ui/notifications/notif-store';
 import { idleTransferActivity, state } from '../state';
 
 const mocks = vi.hoisted(() => ({
@@ -319,5 +320,79 @@ describe('stopping one upload from its own row', () => {
 
         expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 2, direction: 'up', status: 'failed' });
         expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
+    });
+});
+
+describe('a multi-file upload reports as one transfer', () => {
+    async function runBatch(paths: string[], run: () => void = () => {}): Promise<void> {
+        app.SelectFiles.mockResolvedValue(paths);
+        app.PlanImport.mockResolvedValue({ files: paths.length, folders: 0, archives: 0, limitExceeded: false });
+        app.UploadToDriveFS.mockImplementation(async () => {
+            run();
+            return { result: { ok: true } };
+        });
+        await uploadWithParentID('');
+    }
+
+    it('opens one aggregate row for the batch and lists only the files in flight', async () => {
+        await runBatch(Array.from({ length: 200 }, (_, index) => `/tmp/file-${index}.bin`), () => {
+            for (let id = 0; id < 3; id++) handlers.get('upload_start')?.(id, `file-${id}.bin`, 1_000, '');
+            handlers.get('upload_progress')?.(0, 50);
+            handlers.get('upload_complete')?.(1, 'file-1.bin');
+        });
+
+        // One row for two hundred files. Two hundred rows would say nothing
+        // about the batch and would push the rest of the bell past its cap.
+        const started = mocks.pushTransferStart.mock.calls.map(([call]) => call);
+        expect(started).toHaveLength(1);
+        expect(started[0]).toMatchObject({ id: 'upload-batch', direction: 'up', name: 'Uploading 200 files' });
+
+        const midFlight = mocks.updateTransferProgress.mock.calls
+            .map(([call]) => call)
+            .filter((call) => call.itemsActive === 2)
+            .pop();
+        expect(midFlight).toMatchObject({ id: 'upload-batch', itemsDone: 1, itemsTotal: 200 });
+        expect(midFlight?.items?.map((item: TransferItem) => item.name)).toEqual(['file-0.bin', 'file-2.bin']);
+
+        // Every file is accounted for once the call returns, whether or not its
+        // own event arrived, and the row ends saying what happened.
+        expect(mocks.updateTransferName).toHaveBeenLastCalledWith({
+            id: 'upload-batch', direction: 'up', name: 'Uploaded 200 files',
+        });
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({
+            id: 'upload-batch', direction: 'up', status: 'done',
+        });
+    });
+
+    it('folds the batch\'s failures into one summary rather than one toast per file', async () => {
+        await runBatch(Array.from({ length: 50 }, (_, index) => `/tmp/file-${index}.bin`), () => {
+            for (let id = 0; id < 50; id++) {
+                handlers.get('upload_start')?.(id, `file-${id}.bin`, 10, '');
+                handlers.get('upload_error')?.(id, `file-${id}.bin`, 'FLOOD_WAIT (420)');
+            }
+        });
+
+        const errors = mocks.notify.mock.calls
+            .map(([notice]) => notice as TestNotice)
+            .filter((notice) => notice.level === 'error');
+        expect(errors).toHaveLength(1);
+        expect(errors[0].title).toBe("Couldn't upload 50 files");
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({
+            id: 'upload-batch', direction: 'up', status: 'failed',
+        });
+    });
+
+    it('leaves a single file its own row, where the file is the transfer', async () => {
+        await runBatch(['/tmp/only.bin'], () => {
+            handlers.get('upload_start')?.(0, 'only.bin', 1_000, '');
+            handlers.get('upload_complete')?.(0, 'only.bin');
+        });
+
+        expect(mocks.pushTransferStart).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 0, direction: 'up', name: 'only.bin' }),
+        );
+        expect(mocks.pushTransferStart).not.toHaveBeenCalledWith(
+            expect.objectContaining({ id: 'upload-batch' }),
+        );
     });
 });

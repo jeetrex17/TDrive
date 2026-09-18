@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { TransferEvent } from './notif-store';
 import {
     etaSeconds,
+    transferItemDetail,
     formatAge,
     formatEta,
     formatSizePair,
@@ -91,22 +92,30 @@ describe('transferredBytes', () => {
 
 describe('etaSeconds', () => {
     it('divides what is left by the rate', () => {
-        expect(etaSeconds(transfer({ progress: 50, total: 1_000, speed: 100 }))).toBe(5);
+        expect(etaSeconds(transfer({ progress: 50, total: 1_000, speed: 100 }), NOW)).toBe(5);
     });
 
-    it('declines to guess without a total, a rate, or anything left to send', () => {
-        expect(etaSeconds(transfer({ progress: 50, total: 0, speed: 100 }))).toBeNull();
-        expect(etaSeconds(transfer({ progress: 50, total: 1_000, speed: 0 }))).toBeNull();
-        expect(etaSeconds(transfer({ progress: 100, total: 1_000, speed: 100 }))).toBeNull();
+    it('falls back to the pace so far when there is no byte total to divide', () => {
+        // Ten seconds to get halfway is ten seconds to finish. This is all an
+        // aggregate has: a batch does not know its own size until its last file
+        // has been read, and a number of files is not a number of bytes.
+        expect(etaSeconds(transfer({ progress: 50, total: 0, speed: 0 }), NOW)).toBe(10);
+        expect(etaSeconds(transfer({ progress: 50, total: 1_000, speed: 0 }), NOW)).toBe(10);
+    });
+
+    it('declines to guess before there is enough of the job to guess from', () => {
+        expect(etaSeconds(transfer({ progress: 1, total: 0, speed: 0 }), NOW)).toBeNull();
+        expect(etaSeconds(transfer({ progress: 100, total: 1_000, speed: 100 }), NOW)).toBeNull();
+        expect(etaSeconds(transfer({ progress: 50, total: 0, speed: 0, startedAt: 0 }), NOW)).toBeNull();
     });
 
     it('says nothing rather than something absurd', () => {
         // A byte a second against a terabyte: true, useless, and alarming.
-        expect(etaSeconds(transfer({ progress: 0, total: 1e12, speed: 1 }))).toBeNull();
+        expect(etaSeconds(transfer({ progress: 0, total: 1e12, speed: 1 }), NOW)).toBeNull();
     });
 
     it('is only for a transfer that is actually moving', () => {
-        expect(etaSeconds(transfer({ status: 'queued', progress: 0, total: 1_000, speed: 100 }))).toBeNull();
+        expect(etaSeconds(transfer({ status: 'queued', progress: 0, total: 1_000, speed: 100 }), NOW)).toBeNull();
     });
 });
 
@@ -171,13 +180,13 @@ describe('transferDetail', () => {
         expect(detail).toBe('500 of 1000 MB · 2 min left · 5 MB/s');
     });
 
-    it('counts files when that is what the backend knows', () => {
-        expect(transferDetail(transfer({ itemsDone: 3, itemsTotal: 12, progress: 25 }), NOW))
-            .toBe('3 of 12 files');
+    it('counts files, then says how much and how long, for a batch with no byte total', () => {
+        expect(transferDetail(transfer({ itemsDone: 3, itemsTotal: 12, progress: 25, bytes: 5 * 1024 * 1024 }), NOW))
+            .toBe('3 of 12 files · 5 MB so far · 30s left');
     });
 
     it('falls back to a bare percentage when nothing else is known', () => {
-        expect(transferDetail(transfer({ progress: 42 }), NOW)).toBe('42%');
+        expect(transferDetail(transfer({ progress: 42 }), NOW)).toBe('42% · 14s left');
     });
 
     it('dates a finished transfer, which the row never used to say', () => {
@@ -185,5 +194,16 @@ describe('transferDetail', () => {
             .toBe('Done · 2 min ago');
         expect(transferDetail(transfer({ status: 'failed', finishedAt: NOW - 120_000 }), NOW))
             .toBe('Failed · 2 min ago');
+    });
+});
+
+describe('transferItemDetail', () => {
+    it('gives a file its size pair, because the bar beside it already says the percentage', () => {
+        expect(transferItemDetail({ key: '1', name: 'clip.mov', progress: 25, total: 4 * 1024 * 1024 }))
+            .toBe('1 of 4 MB');
+    });
+
+    it('falls back to the percentage for a file whose size never arrived', () => {
+        expect(transferItemDetail({ key: '1', name: 'clip.mov', progress: 25.4, total: 0 })).toBe('25%');
     });
 });

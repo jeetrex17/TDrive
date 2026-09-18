@@ -11,7 +11,7 @@
     import { openEncryptionSettingsModal } from '../modules/modals/encryption-settings';
     import { openLogoutModal } from '../modules/modals/logout';
     import { breadcrumbDrag, navigateBack, navigateToIndex } from '../modules/navigation';
-    import { cancelTransfersInDirection, clearHistory } from '../modules/notif-bell';
+    import { cancelTransfersInDirection, cancelUploadFile, clearHistory } from '../modules/notif-bell';
     import { ensureProfileLoaded } from '../modules/profile-menu';
     import { openTrash } from '../modules/trash/controller';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../modules/selection';
@@ -173,7 +173,7 @@
 
             <div class="header-actions">
                 {#if dashboardVisible}
-                    <NotifBell onCancelDirection={cancelTransfersInDirection} onClearHistory={clearHistory} />
+                    <NotifBell onCancelDirection={cancelTransfersInDirection} onCancelFile={cancelUploadFile} onClearHistory={clearHistory} />
                 {/if}
 
                 <!-- .upload-menu-wrap is position: relative, and it is what the

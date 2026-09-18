@@ -252,6 +252,19 @@
     border-radius: var(--radius-pill);
     transition: width 200ms ease;
 }
+/* The files in flight, under the row that aggregates them. They span from the
+   title's column to the edge so a filename has the whole width to be clipped
+   at, and the row's parts stop being centred once there are two rows of them. */
+.notif-row-items {
+    grid-column: 2 / -1;
+    min-width: 0;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--color-border-soft);
+}
+.notif-row-transfer:has(.notif-row-items) { align-items: start; }
+.notif-row-transfer:has(.notif-row-items) .notif-row-icon { margin-top: 2px; }
+
 /* Once a transfer terminates, the bar is just noise — the meta label
    ("Done" / "Failed" / "Canceled") already says it. Hide it so finished
    rows match the look of completed event rows above. */

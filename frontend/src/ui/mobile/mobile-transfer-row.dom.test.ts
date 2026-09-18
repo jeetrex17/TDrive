@@ -135,3 +135,50 @@ describe('where a phone download went', () => {
         expect(host.querySelector('.note')).toBeNull();
     });
 });
+
+describe('the files under an aggregate row', () => {
+    const batch = () => transfer({
+        id: 'xfer:up:upload-batch',
+        direction: 'up',
+        name: 'Uploading 200 files',
+        progress: 18,
+        total: 0,
+        bytes: 5 * 1024 * 1024,
+        itemsDone: 36,
+        itemsTotal: 200,
+        itemsActive: 6,
+        items: [
+            { key: '36', name: 'clip.mov', progress: 40, total: 1024 * 1024 * 4 },
+            { key: '37', name: 'notes.txt', progress: 10, total: 0 },
+        ],
+    });
+
+    it('says how the batch is doing and which files are actually moving', () => {
+        render({ transfer: batch() });
+        // The row: how many files, how much has gone, how long is left.
+        expect(host.textContent).toContain('36 of 200 files');
+        expect(host.textContent).toContain('5 MB so far');
+        // The files under it, each with its own figure and bar.
+        expect(host.textContent).toContain('clip.mov');
+        expect(host.textContent).toContain('1.6 of 4 MB');
+        expect(host.textContent).toContain('10%');
+        // Four more are uploading than the list has room to name.
+        expect(host.textContent).toContain('+4 more files');
+        expect(host.querySelectorAll('[role="progressbar"]')).toHaveLength(3);
+    });
+
+    it('drops the list when the batch finishes, so a done row lists nothing', () => {
+        render({ transfer: { ...batch(), status: 'done', items: undefined, itemsActive: 0 } });
+        expect(host.textContent).not.toContain('clip.mov');
+    });
+
+    it('offers a thumb-sized stop on each file, keyed by the file it stops', async () => {
+        const stopped: string[] = [];
+        render({ transfer: batch(), onCancelFile: (key: string) => stopped.push(key) });
+        const stop = host.querySelector<HTMLButtonElement>('button[aria-label="Stop clip.mov"]');
+        expect(stop).not.toBeNull();
+        stop?.click();
+        flushSync();
+        expect(stopped).toEqual(['36']);
+    });
+});

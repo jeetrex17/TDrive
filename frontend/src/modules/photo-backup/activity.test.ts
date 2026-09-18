@@ -22,16 +22,37 @@ function state(overrides: Partial<PhotoBackupState['status']> = {}): PhotoBackup
 describe('photo backup activity', () => {
     beforeEach(() => { historyEvents.set([]); clearPhotoBackupActivity(); });
 
-    it('keeps one current backup row and refreshes its filename, bytes, and queue count in place', () => {
+    it('keeps one backup row whose bar is the queue and whose listed file is the current one', () => {
         syncPhotoBackupActivity(state());
-        syncPhotoBackupActivity(state({ currentFile: 'Summer/photo-2.jpg', currentFileBytesDone: 75, currentFilePercent: 75, complete: 3 }));
+        syncPhotoBackupActivity(state({
+            currentFile: 'Summer/photo-2.jpg', currentFileBytesDone: 75, currentFilePercent: 75,
+            complete: 3, bytesDone: 600,
+        }));
 
         const entries = get(activeTransfers);
         expect(entries).toHaveLength(1);
         expect(entries[0]).toMatchObject({
-            id: 'xfer:up:photo-backup', name: 'Backing up photo-2.jpg', progress: 75,
-            bytes: 75, total: 100, itemsDone: 3, itemsTotal: 8,
+            id: 'xfer:up:photo-backup', name: 'Photo backup',
+            // The queue's bytes, not the current file's: 600 of 1,000.
+            progress: 60, bytes: 600, total: 1_000, itemsDone: 3, itemsTotal: 8,
         });
+        expect(entries[0].items).toEqual([
+            { key: 'Summer/photo-2.jpg', name: 'photo-2.jpg', progress: 75, total: 100 },
+        ]);
+    });
+
+    it('lists one file however large the camera roll is, and drops it when the run ends', () => {
+        for (let index = 0; index < 500; index++) {
+            syncPhotoBackupActivity(state({
+                currentFile: `Roll/photo-${index}.jpg`, complete: index, bytesDone: index,
+            }));
+        }
+        const running = get(activeTransfers);
+        expect(running).toHaveLength(1);
+        expect(running[0].items).toHaveLength(1);
+
+        syncPhotoBackupActivity(state({ phase: 'complete', pending: 0, uploading: 0, currentFile: '' }));
+        expect(get(historyEvents)[0]).toMatchObject({ id: 'xfer:up:photo-backup', items: undefined });
     });
 
     it('keeps a paused backup visible without pretending the bell can cancel all uploads', () => {

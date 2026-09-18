@@ -77,6 +77,13 @@ public class WailsBridge {
     private static final String TAG = "WailsBridge";
     private static final boolean DEBUG = BuildConfig.DEBUG;
     private static final int LOCATION_PERMISSION_REQUEST = 1002;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 1001;
+    /**
+     * One id for every untagged notification, so posting again revises the row
+     * rather than adding one. The previous id was the wall clock, which made
+     * every post a new notification and every "update" a pile.
+     */
+    private static final int NOTIFICATION_ID = 0x4E4F; // "NO"
 
     static {
         // Load the native Go library
@@ -103,6 +110,9 @@ public class WailsBridge {
     private boolean proximityWanted = false;
     private boolean torchOn = false;
     private boolean pendingLocationRequest = false;
+    // The notification waiting on a POST_NOTIFICATIONS answer, if any. Only
+    // ever touched on the main thread.
+    private String pendingNotification;
 
     // Native methods - implemented in Go
     private static native void nativeInit(WailsBridge bridge);
@@ -787,41 +797,66 @@ public class WailsBridge {
     }
 
     /**
-     * Post a local notification. json: {"title","body"}. Requests the
+     * Post a local notification. json: {"title","body","tag"}. Requests the
      * POST_NOTIFICATIONS runtime permission on Android 13+.
+     *
+     * "tag" is optional and is how a caller revises what it already posted:
+     * the same tag replaces that notification in place, a new tag is a new row,
+     * and no tag at all is the single default row. Anything that wants to keep
+     * a progress line honest needs this; without it every update was a fresh
+     * notification and a long operation ended as a column of stale ones.
      */
     public void postNotification(final String json) {
-        mainHandler.post(() -> {
-            try {
-                JSONObject opts = new JSONObject(json);
-                String title = opts.optString("title", "Notification");
-                String body = opts.optString("body", "");
-                String channelId = "wails_default";
-                NotificationManager nm =
-                        (NotificationManager) activity.getSystemService(Context.NOTIFICATION_SERVICE);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    NotificationChannel ch = new NotificationChannel(
-                            channelId, "General", NotificationManager.IMPORTANCE_DEFAULT);
-                    nm.createNotificationChannel(ch);
-                }
-                if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(
-                        "android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
-                    activity.requestPermissions(
-                            new String[]{"android.permission.POST_NOTIFICATIONS"}, 1001);
-                }
-                Notification n = new NotificationCompat.Builder(activity, channelId)
-                        .setSmallIcon(android.R.drawable.ic_dialog_info)
-                        .setContentTitle(title)
-                        .setContentText(body)
-                        .setAutoCancel(true)
-                        .build();
-                nm.notify((int) (System.currentTimeMillis() & 0x0fffffff), n);
-                emitEvent("common:notification", "{\"ok\":true}");
-            } catch (Exception e) {
-                Log.e(TAG, "postNotification failed", e);
-                emitEvent("common:notification", "{\"ok\":false}");
+        mainHandler.post(() -> deliverNotification(json, true));
+    }
+
+    /**
+     * @param mayAsk false on the second pass, once the permission dialog has
+     *               already been answered, so a refusal reports itself instead
+     *               of asking again.
+     */
+    private void deliverNotification(final String json, final boolean mayAsk) {
+        try {
+            JSONObject opts = new JSONObject(json);
+            String title = opts.optString("title", "Notification");
+            String body = opts.optString("body", "");
+            String tag = opts.optString("tag", "");
+            String channelId = "wails_default";
+            NotificationManager nm =
+                    (NotificationManager) activity.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                NotificationChannel ch = new NotificationChannel(
+                        channelId, "General", NotificationManager.IMPORTANCE_DEFAULT);
+                nm.createNotificationChannel(ch);
             }
-        });
+            if (Build.VERSION.SDK_INT >= 33 && activity.checkSelfPermission(
+                    "android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                if (!mayAsk) {
+                    emitEvent("common:notification", "{\"ok\":false,\"reason\":\"permission denied\"}");
+                    return;
+                }
+                // A grant arrives on a later turn of the main loop, so posting
+                // in this one posts while the app still has no permission and
+                // the system drops it without a word -- which is why the very
+                // first notification an app ever asked for was the one the user
+                // never saw. Held until the answer comes back instead.
+                pendingNotification = json;
+                activity.requestPermissions(
+                        new String[]{"android.permission.POST_NOTIFICATIONS"}, NOTIFICATION_PERMISSION_REQUEST);
+                return;
+            }
+            Notification n = new NotificationCompat.Builder(activity, channelId)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setAutoCancel(true)
+                    .build();
+            nm.notify(tag.isEmpty() ? null : tag, NOTIFICATION_ID, n);
+            emitEvent("common:notification", "{\"ok\":true}");
+        } catch (Exception e) {
+            Log.e(TAG, "postNotification failed", e);
+            emitEvent("common:notification", "{\"ok\":false}");
+        }
     }
 
     /**
@@ -982,6 +1017,14 @@ public class WailsBridge {
     }
 
     public void onRequestPermissionsResult(int requestCode, int[] grantResults) {
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
+            String held = pendingNotification;
+            pendingNotification = null;
+            // Posted now that there is an answer, whichever way it went: a
+            // refusal comes back through the same path and reports itself.
+            if (held != null) deliverNotification(held, false);
+            return;
+        }
         if (requestCode == LOCATION_PERMISSION_REQUEST) {
             boolean shouldResume = pendingLocationRequest;
             pendingLocationRequest = false;

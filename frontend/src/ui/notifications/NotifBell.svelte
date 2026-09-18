@@ -16,10 +16,12 @@
 
     interface Props {
         onCancelDirection: (direction: TransferDirection) => void;
+        /** Stops one file listed under an aggregate row. */
+        onCancelFile: (key: string) => void;
         onClearHistory: () => void;
     }
 
-    let { onCancelDirection, onClearHistory }: Props = $props();
+    let { onCancelDirection, onCancelFile, onClearHistory }: Props = $props();
 
     const HOVER_CLOSE_MS = 140;
 
@@ -150,7 +152,7 @@
                 <div class="notif-section-label">Active</div>
                 <div class="notif-section">
                     {#each $activeTransfers as transfer (transfer.id)}
-                        <TransferRow {transfer} onCancel={onCancelDirection} />
+                        <TransferRow {transfer} onCancel={onCancelDirection} {onCancelFile} />
                     {/each}
                 </div>
             {/if}

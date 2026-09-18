@@ -31,6 +31,7 @@ import { openImportOptionsModal } from './modals/import-options';
 import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
 import { createImportProgress, reduceImportProgress } from './import-progress';
+import { TransferBatch, type UploadOutcome } from './transfer-batch';
 import { activateTransferPersistence } from './transfer-persistence';
 import {
     pushQueuedTransfer,
@@ -446,6 +447,16 @@ function clampFinite(raw: unknown, fallback: number, minValue: number, maxValue:
 // import. It is a string so it never collides with numeric per-file upload ids.
 const IMPORT_TRANSFER_ID = 'import';
 
+// UPLOAD_BATCH_TRANSFER_ID keys the same kind of row for a multi-file upload.
+// One row per batch rather than one per file: a two-hundred-file selection used
+// to push two hundred rows, which told the reader nothing about the batch and
+// pushed everything else in the bell past its hundred-entry cap.
+const UPLOAD_BATCH_TRANSFER_ID = 'upload-batch';
+
+// The aggregate for the batch currently uploading, or null when files are
+// uploading one at a time and each keeps its own row.
+let uploadBatch: TransferBatch | null = null;
+
 // flowBusy serializes import/upload flows: a second trigger (rapid menu clicks,
 // or a drop during an active import) is rejected rather than corrupting the
 // shared batch/transfer state.
@@ -482,15 +493,19 @@ async function withTransferFlow(run: () => Promise<void>): Promise<void> {
 // is the only place the backend's actual error text survives to the user.
 const MAX_IMPORT_FAILURE_REASONS = 3;
 const importFailureReasons: string[] = [];
+// The same for a multi-file upload, which reports one summary for the batch:
+// two hundred files failing the same way must not raise two hundred toasts.
+const uploadBatchFailureReasons: string[] = [];
 let importCompleteReceived = false;
 
-function recordImportFailureReason(name: unknown, message: unknown) {
-    if (importFailureReasons.length >= MAX_IMPORT_FAILURE_REASONS) return;
+/** Keeps the first few distinct reasons and drops the rest, so the log is bounded. */
+function recordFailureReason(into: string[], name: unknown, message: unknown) {
+    if (into.length >= MAX_IMPORT_FAILURE_REASONS) return;
     const reason = String(message ?? '').trim();
     if (!reason) return;
     const fname = String(name ?? '').trim();
     const entry = fname ? `${fname}: ${reason}` : reason;
-    if (!importFailureReasons.includes(entry)) importFailureReasons.push(entry);
+    if (!into.includes(entry)) into.push(entry);
 }
 
 function formatImportResultLabel(uploaded: number, failedUploads = 0) {
@@ -499,16 +514,96 @@ function formatImportResultLabel(uploaded: number, failedUploads = 0) {
 }
 
 // refreshImportRow renders one constant-size aggregate supplied by the backend.
+// A failed file counts as settled: it is not going to move again, and a bar
+// that stops short because three files failed is the less useful answer.
 function refreshImportRow() {
     const batch = state.importBatch;
     if (!batch) return;
-    const total = batch.total || 0;
-    updateTransferProgress({ id: IMPORT_TRANSFER_ID, direction: 'up', progress: batch.progress });
-    if (total > 0) {
-        updateTransferName({
-            id: IMPORT_TRANSFER_ID,
-            direction: 'up',
-            name: `Importing ${batch.done + batch.failed} / ${total}`,
+    updateTransferProgress({
+        id: IMPORT_TRANSFER_ID,
+        direction: 'up',
+        progress: batch.progress,
+        bytes: batch.bytes,
+        itemsDone: batch.done + batch.failed,
+        itemsTotal: batch.total,
+        items: batch.active,
+        itemsActive: batch.activeCount,
+    });
+}
+
+// refreshUploadBatchRow renders the frontend's own aggregate for a multi-file
+// upload. Same shape, same bound; see modules/transfer-batch.ts.
+function refreshUploadBatchRow() {
+    if (!uploadBatch) return;
+    const snapshot = uploadBatch.snapshot();
+    updateTransferProgress({
+        id: UPLOAD_BATCH_TRANSFER_ID,
+        direction: 'up',
+        progress: snapshot.progress,
+        bytes: snapshot.bytes,
+        itemsDone: snapshot.itemsDone,
+        itemsTotal: snapshot.itemsTotal,
+        items: snapshot.items,
+        itemsActive: snapshot.itemsActive,
+    });
+}
+
+/** "Uploaded 197 files · 2 failed", the sentence the finished row keeps. */
+function formatUploadBatchLabel(batch: TransferBatch): string {
+    const uploaded = batch.succeeded === 1 ? 'Uploaded 1 file' : `Uploaded ${batch.succeeded} files`;
+    const parts = [uploaded];
+    if (batch.failures > 0) parts.push(`${batch.failures} failed`);
+    if (batch.stopped > 0) parts.push(`${batch.stopped} canceled`);
+    return parts.join(' · ');
+}
+
+/**
+ * Folds one file's outcome into the batch aggregate and redraws its row.
+ * Returns false when no batch is running, so the caller keeps its own row.
+ */
+function settleUploadInBatch(uploadId: number, outcome: UploadOutcome): boolean {
+    if (!uploadBatch) return false;
+    uploadBatch.settle(uploadId, outcome);
+    refreshUploadBatchRow();
+    return true;
+}
+
+/**
+ * Closes the aggregate row once the upload call has returned, and reports the
+ * per-file failures it folded away.
+ *
+ * One summary rather than one toast per file: a batch is the case where the
+ * same failure can land two hundred times, and two hundred toasts saying it
+ * would bury the one thing the reader could do about it.
+ */
+function finalizeUploadBatch(uploadThrew: boolean): void {
+    const batch = uploadBatch;
+    if (!batch) return;
+    const canceled = state.cancelingUpload;
+    batch.settleRemaining(canceled ? 'canceled' : uploadThrew ? 'failed' : 'done');
+    refreshUploadBatchRow();
+    uploadBatch = null;
+
+    updateTransferName({
+        id: UPLOAD_BATCH_TRANSFER_ID,
+        direction: 'up',
+        name: canceled ? 'Upload canceled' : formatUploadBatchLabel(batch),
+    });
+    markTransferDone({
+        id: UPLOAD_BATCH_TRANSFER_ID,
+        direction: 'up',
+        status: canceled ? 'canceled' : (uploadThrew || batch.failures > 0) ? 'failed' : 'done',
+    });
+    appActions().refreshFiles();
+
+    // A call that threw has already raised its own toast, with the Retry that
+    // restarts the whole batch; this one is for the files that failed inside a
+    // call that otherwise succeeded, which nothing else would mention.
+    if (!canceled && !uploadThrew && batch.failures > 0) {
+        notify({
+            level: 'error',
+            title: batch.failures === 1 ? "Couldn't upload 1 file" : `Couldn't upload ${batch.failures} files`,
+            body: uploadBatchFailureReasons.map(humanizeBackendError).join('\n') || 'The rest of the batch finished.',
         });
     }
 }
@@ -524,6 +619,14 @@ function activateUploadProgressEvents(): void {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         const filename = String(name ?? "");
+
+        // In a batch the file joins the aggregate row instead of raising one of
+        // its own, and nothing per-file is retained once it finishes.
+        if (uploadBatch) {
+            uploadBatch.start(uploadId, filename, Number(size) || 0);
+            refreshUploadBatchRow();
+            return;
+        }
 
         const existing = state.uploadTransfers.get(uploadId);
         if (existing) {
@@ -556,6 +659,11 @@ function activateUploadProgressEvents(): void {
         if (state.importBatch) {
             return;
         }
+        if (uploadBatch) {
+            uploadBatch.progress(uploadId, clamped);
+            refreshUploadBatchRow();
+            return;
+        }
 
         const item = state.uploadTransfers.get(uploadId);
         if (!item) return;
@@ -569,26 +677,27 @@ function activateUploadProgressEvents(): void {
         if (state.importBatch) {
             return;
         }
-        const item = state.uploadTransfers.get(uploadId);
-        if (!item) {
-            state.uploadTransfers.set(uploadId, {
-                id: uploadId,
-                name: String(name ?? ""),
-                size: 0,
-                parentId: "",
-                progress: 100,
-                state: "done",
-            });
-        } else {
-            item.progress = 100;
-            item.state = "done";
+        if (!settleUploadInBatch(uploadId, 'done')) {
+            const item = state.uploadTransfers.get(uploadId);
+            if (!item) {
+                state.uploadTransfers.set(uploadId, {
+                    id: uploadId,
+                    name: String(name ?? ""),
+                    size: 0,
+                    parentId: "",
+                    progress: 100,
+                    state: "done",
+                });
+            } else {
+                item.progress = 100;
+                item.state = "done";
+            }
+            markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
         }
 
         if (state.uploadBatch) state.uploadBatch.done += 1;
         const batchFinished = Boolean(state.uploadBatch && state.uploadBatch.done + state.uploadBatch.failed >= state.uploadBatch.total);
         if (batchFinished) state.uploadBatch = null;
-
-        markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
 
         if (batchFinished) {
             invalidateTransferCaches();
@@ -600,10 +709,21 @@ function activateUploadProgressEvents(): void {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         if (state.importBatch) {
-            if (!state.cancelingUpload) recordImportFailureReason(name, message);
+            if (!state.cancelingUpload) recordFailureReason(importFailureReasons, name, message);
             return;
         }
         const filename = String(name ?? "");
+        // A file the user stopped from its own row is already marked canceled;
+        // the backend reports it through this same error event, and neither the
+        // row nor a toast should call it a failure.
+        const canceled = state.cancelingUpload || wasUploadCanceled(uploadId);
+
+        if (uploadBatch) {
+            settleUploadInBatch(uploadId, canceled ? 'canceled' : 'failed');
+            if (!canceled) recordFailureReason(uploadBatchFailureReasons, filename, message);
+            if (state.uploadBatch) state.uploadBatch.failed += 1;
+            return;
+        }
 
         const hadItem = state.uploadTransfers.has(uploadId);
         const item = state.uploadTransfers.get(uploadId) || {
@@ -625,10 +745,6 @@ function activateUploadProgressEvents(): void {
         if (!hadItem) {
             pushTransferStart({ id: uploadId, direction: 'up', name: filename || 'Upload failed', total: 0 });
         }
-        // A file the user stopped from its own row is already marked canceled;
-        // the backend reports it through this same error event, and neither the
-        // row nor a toast should call it a failure.
-        const canceled = state.cancelingUpload || wasUploadCanceled(uploadId);
         markTransferDone({ id: uploadId, direction: 'up', status: canceled ? 'canceled' : 'failed' });
 
         // Surface the backend's actual failure reason. The bell row only shows
@@ -669,10 +785,12 @@ function activateUploadProgressEvents(): void {
         const payload = asObjectRecord(info);
         const files = Number(payload.files) || 0;
         state.importBatch = reduceImportProgress(state.importBatch, { total: files });
+        // The counts live in the row's own detail line from here on, so the
+        // title stays put instead of being rewritten on every tick.
         updateTransferName({
             id: IMPORT_TRANSFER_ID,
             direction: 'up',
-            name: files > 0 ? `Importing 0 / ${files}` : 'Finishing import…',
+            name: files > 0 ? `Importing ${files} ${files === 1 ? 'file' : 'files'}` : 'Finishing import…',
         });
         refreshImportRow();
     });
@@ -975,7 +1093,7 @@ async function uploadAndroidWindow(
             if (!path) {
                 // One file the bridge could not read does not stop the window.
                 unreadable += 1;
-                recordImportFailureReason(file.rel, 'could not be read from the folder');
+                recordFailureReason(importFailureReasons, file.rel, 'could not be read from the folder');
                 continue;
             }
             paths.push(path);
@@ -1080,7 +1198,7 @@ async function importSelection(parentID: string, paths: string[]) {
         const complex = Number(plan.folders) > 0 || Number(plan.archives) > 0;
 
         if (!complex) {
-            // Plain files: the original flow (per-file rows, encrypt-options modal).
+            // Plain files: the flat uploader, behind the encrypt-options modal.
             let encrypt = false;
             if (onPersonal) {
                 const choice = await openUploadOptionsModal({ count: plan.files || paths.length });
@@ -1160,24 +1278,46 @@ async function retryUploadBatch(paths: string[], parentID: string, encrypt: bool
     await withTransferFlow(() => uploadPathsBatch(paths, parentID, encrypt));
 }
 
-// uploadPathsBatch runs the classic per-file upload (one bell row per file).
+/**
+ * Runs an upload selection.
+ *
+ * One file keeps a row of its own -- the file *is* the transfer, and an
+ * aggregate over one thing says nothing extra. More than one gets a single
+ * aggregate row with the files currently moving listed under it, so the reader
+ * can see both how far the batch has got and what it is working on.
+ */
 async function uploadPathsBatch(paths: string[], parentID: string, encrypt: boolean) {
     if (activeTransferDriveId === null) activeTransferDriveId = state.activeChannel?.id ?? null;
     setTransferDirectionActive('upload', true);
     state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
 
+    const aggregated = paths.length > 1;
     const nextTransfers = new Map();
-    for (let i = 0; i < paths.length; i++) {
-        const p = String(paths[i] ?? "");
-        const name = p ? p.split(/[/\\]/).pop() : "Untitled";
-        nextTransfers.set(i, {
-            id: i,
-            name,
-            size: 0,
-            parentId: String(parentID || ""),
-            progress: 0,
-            state: "queued",
+    if (aggregated) {
+        uploadBatchFailureReasons.length = 0;
+        uploadBatch = new TransferBatch(paths.length);
+        pushTransferStart({
+            id: UPLOAD_BATCH_TRANSFER_ID,
+            direction: 'up',
+            name: `Uploading ${paths.length} files`,
         });
+        refreshUploadBatchRow();
+    } else {
+        // Per-file rows need somewhere to remember what each file is, both for
+        // the row and for the safety sweep below. The aggregate keeps its own
+        // bounded state instead, so a batch of any size retains none of this.
+        for (let i = 0; i < paths.length; i++) {
+            const p = String(paths[i] ?? "");
+            const name = p ? p.split(/[/\\]/).pop() : "Untitled";
+            nextTransfers.set(i, {
+                id: i,
+                name,
+                size: 0,
+                parentId: String(parentID || ""),
+                progress: 0,
+                state: "queued",
+            });
+        }
     }
     state.uploadTransfers = nextTransfers;
 
@@ -1226,14 +1366,18 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
         // the batch has terminated on the backend. If a Wails event was dropped,
         // an entry may still be stuck 'active' at 100% in the bell.
         // markTransferDone is idempotent against terminal entries.
-        for (const [uploadId, item] of state.uploadTransfers) {
-            if (state.cancelingUpload) {
-                markTransferDone({ id: uploadId, direction: 'up', status: 'canceled' });
-            } else if (uploadThrew && item?.state !== 'done' && item?.state !== 'failed') {
-                pushTransferStart({ id: uploadId, direction: 'up', name: item?.name || 'Upload failed', total: item?.size || 0 });
-                markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
-            } else {
-                markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+        if (uploadBatch) {
+            finalizeUploadBatch(uploadThrew);
+        } else {
+            for (const [uploadId, item] of state.uploadTransfers) {
+                if (state.cancelingUpload) {
+                    markTransferDone({ id: uploadId, direction: 'up', status: 'canceled' });
+                } else if (uploadThrew && item?.state !== 'done' && item?.state !== 'failed') {
+                    pushTransferStart({ id: uploadId, direction: 'up', name: item?.name || 'Upload failed', total: item?.size || 0 });
+                    markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
+                } else {
+                    markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+                }
             }
         }
         invalidateTransferCaches();

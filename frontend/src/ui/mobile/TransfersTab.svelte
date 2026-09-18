@@ -3,7 +3,7 @@
     import { activeTransfers, type TransferEvent } from '../notifications/notif-store';
     import EventRow from '../notifications/EventRow.svelte';
     import MobileTransferRow from './MobileTransferRow.svelte';
-    import { cancelSingleUpload, cancelTransfersInDirection, clearHistory } from '../../modules/notif-bell';
+    import { cancelSingleUpload, cancelTransfersInDirection, cancelUploadFile, clearHistory } from '../../modules/notif-bell';
     import { humanizeBackendError } from '../../modules/errors';
     import { notify } from '../../modules/notifications';
     import { downloadRetryFor } from '../../modules/transfers';
@@ -97,7 +97,7 @@
             </div>
             <div class="transfers-group" role="list">
                 {#each $activeTransfers as transfer (transfer.id)}
-                    <MobileTransferRow {transfer} onCancel={cancelFor(transfer)} />
+                    <MobileTransferRow {transfer} onCancel={cancelFor(transfer)} onCancelFile={cancelUploadFile} />
                 {/each}
             </div>
         {/if}
