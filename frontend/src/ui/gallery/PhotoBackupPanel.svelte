@@ -25,14 +25,13 @@
     import IconButton from '../IconButton.svelte';
     import ProgressBar from '../ProgressBar.svelte';
     import SwitchRow from '../SwitchRow.svelte';
-    import { formatBytes } from '../../utils';
     import { futureOnlyDescription, type PhotoBackupSettings } from '../../api/photo-backup';
     import {
         choosePhotoBackupFolder, deletePhotoBackupSource, loadPhotoBackupCandidates, pausePhotoBackupNow,
         photoBackupAccessNote, photoBackupBusy, photoBackupCandidates, photoBackupError, photoBackupState, refreshPhotoBackup,
         photoBackupFolderPicking, resumePhotoBackupNow, retryPhotoBackupNow, selectPhotoBackupSource, startPhotoBackup, updatePhotoBackupSettings,
     } from '../../modules/photo-backup/controller';
-    import { actionLabel, canStart, describeBackup, destinationLabel, summaryLine, type BackupAction } from './photo-backup-view';
+    import { actionLabel, canStart, describeBackup, destinationLabel, queueProgress, summaryLine, type BackupAction } from './photo-backup-view';
 
     onMount(() => { void refreshPhotoBackup(); });
 
@@ -47,6 +46,7 @@
 
     const situation = $derived($backupState ? describeBackup($backupState) : null);
     const summary = $derived($backupState ? summaryLine($backupState.status) : '');
+    const queue = $derived($backupState ? queueProgress($backupState.status) : null);
     const startable = $derived($backupState ? canStart($backupState) : false);
     const phone = $derived($backupState?.platform === 'android' || $backupState?.platform === 'ios');
     const unselected = $derived($candidates.filter((candidate) => !$backupState?.sources.some((source) => source.id === candidate.id)));
@@ -120,8 +120,12 @@
                     {/if}
                     {#if situation.progress}
                         <div class="pb-progress">
-                            {#if state.status.currentFileBytesTotal > 0}
-                                <ProgressBar value={state.status.currentFileBytesDone} max={state.status.currentFileBytesTotal} label={`${formatBytes(state.status.currentFileBytesDone)} of ${formatBytes(state.status.currentFileBytesTotal)}`} showValue />
+                            <!-- The queue's own progress, with the file it is
+                                 on named above it. The counts are already on
+                                 the line under the title, so the bar carries
+                                 no label of its own. -->
+                            {#if queue}
+                                <ProgressBar value={queue.value} max={queue.max} />
                             {:else}
                                 <ProgressBar indeterminate />
                             {/if}
@@ -136,25 +140,31 @@
                             <p>{situation.detail}</p>
                         </details>
                     {/if}
-                    {#if situation.primary || situation.secondary}
-                        <div class="pb-actions">
-                            {#if situation.primary}
-                                {@const primary = situation.primary}
-                                <Button size="sm" disabled={disabledFor(primary)} onclick={() => void handlers[primary]()}>
-                                    {#if primary === 'retry'}<RotateCwIcon size={14} strokeWidth={2.2} aria-hidden="true" />{:else}<PlayIcon size={14} strokeWidth={2.2} aria-hidden="true" />{/if}
-                                    {actionLabel(primary, state.encryptionRequired)}
-                                </Button>
-                            {/if}
-                            {#if situation.secondary}
-                                {@const secondary = situation.secondary}
-                                <Button variant="secondary" size="sm" disabled={disabledFor(secondary)} onclick={() => void handlers[secondary]()}>
-                                    <PauseIcon size={14} strokeWidth={2.2} aria-hidden="true" />
-                                    {actionLabel(secondary, false)}
-                                </Button>
-                            {/if}
-                        </div>
-                    {/if}
                 </div>
+                <!-- The actions sit outside the copy so a phone can run them
+                     the full width of the card rather than indenting them
+                     past the glyph. -->
+                {#if situation.primary || situation.secondary}
+                    <div class="pb-actions">
+                        {#if situation.primary}
+                            {@const primary = situation.primary}
+                            <!-- Nothing is owed when the drive is up to date,
+                                 so running one now is an option rather than a
+                                 call to action, and it is drawn as one. -->
+                            <Button variant={situation.tone === 'success' ? 'secondary' : 'primary'} size="sm" disabled={disabledFor(primary)} onclick={() => void handlers[primary]()}>
+                                {#if primary === 'retry'}<RotateCwIcon size={14} strokeWidth={2.2} aria-hidden="true" />{:else}<PlayIcon size={14} strokeWidth={2.2} aria-hidden="true" />{/if}
+                                {actionLabel(primary, state.encryptionRequired)}
+                            </Button>
+                        {/if}
+                        {#if situation.secondary}
+                            {@const secondary = situation.secondary}
+                            <Button variant="secondary" size="sm" disabled={disabledFor(secondary)} onclick={() => void handlers[secondary]()}>
+                                <PauseIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+                                {actionLabel(secondary, false)}
+                            </Button>
+                        {/if}
+                    </div>
+                {/if}
             </div>
 
             <div class="pb-group" aria-label="Sources">
@@ -421,6 +431,7 @@
     }
 
     .pb-actions {
+        grid-column: 2;
         display: flex;
         flex-wrap: wrap;
         gap: var(--space-2);
@@ -574,11 +585,56 @@
         font-size: var(--mobile-type-body);
     }
 
+    /* A phone has no room for a state and a count on one line: "Ready to back
+       up" wrapped onto two while "41 backed up · 14 waiting" was cut off mid
+       word beside it. Stacked, both are read in full and the block is shorter
+       than the wrap it replaces. */
+    :global(html.mobile) .pb-situation-head {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 2px;
+    }
+
+    :global(html.mobile) .pb-situation-head .pb-summary {
+        text-align: left;
+        white-space: normal;
+        overflow: visible;
+    }
+
+    /* One action fills the width; two share it. Either way they line up with
+       the card rather than sitting in the middle of it, and every one of them
+       is a full-width tap target. */
+    :global(html.mobile) .pb-actions {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(0, 1fr);
+        gap: var(--space-2);
+        margin-top: var(--space-3);
+    }
+
     :global(html.mobile) .pb-situation-body,
     :global(html.mobile) .pb-summary,
     :global(html.mobile) .pb-note,
     :global(html.mobile) .pb-source-empty {
         font-size: var(--mobile-type-meta);
+    }
+
+    /* The label keeps its own row: beside two buttons it was wrapping to two
+       lines on a 390px screen and the buttons were staggering down the side
+       of it. */
+    :global(html.mobile) .pb-group-head {
+        display: grid;
+        gap: var(--space-2);
+        min-height: 0;
+    }
+
+    :global(html.mobile) .pb-group-actions {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(0, 1fr);
+        justify-content: stretch;
+        gap: var(--space-2);
     }
 
     :global(html.mobile) .pb-source {
@@ -598,8 +654,11 @@
         font-size: var(--mobile-type-meta);
     }
 
+    /* A full tap target, without the outline: on a phone the row is the thing
+       being read and a boxed bin beside one folder name drew the eye first. */
     :global(html.mobile) .pb-source :global(.ui-icon-button) {
         width: 44px;
         height: 44px;
+        border-color: transparent;
     }
 </style>

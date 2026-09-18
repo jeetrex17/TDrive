@@ -60,6 +60,19 @@ export function summaryLine(status: PhotoBackupStatus): string {
     return parts.join(' · ');
 }
 
+/**
+ * How far through the queue the backup is, counted in files, or null when
+ * there is nothing yet to measure.
+ *
+ * Files, not bytes: the backend does not total the queue's bytes, so a bar
+ * wired to them sits at zero for the whole run. A barber pole says only that
+ * something is happening, which the spinner beside it already said.
+ */
+export function queueProgress(status: PhotoBackupStatus): { value: number; max: number } | null {
+    const max = status.complete + status.pending + status.uploading + status.failed + status.paused;
+    return max > 0 ? { value: status.complete, max } : null;
+}
+
 /** The file name alone; sources hand over paths and the row is one line tall. */
 export function currentFileName(status: PhotoBackupStatus): string {
     const parts = status.currentFile.split(/[\\/]/).filter(Boolean);
