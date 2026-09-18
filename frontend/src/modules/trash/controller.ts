@@ -8,9 +8,12 @@ import {
 import { sortedByDeletion, trashSummary } from '../../ui/trash/trash-view';
 import { trashConfirmModal } from '../../ui/trash/trash-confirm-store';
 import type { OperationResult } from '../../types';
-import { invalidateFolderIndex } from '../../state';
+import { invalidateFolderIndex, state } from '../../state';
+import { clearSearch } from '../search';
+import { renderTrashError, renderTrashRows } from './view';
 import { appActions } from '../app-actions';
 import { humanizeBackendError } from '../errors';
+import { notify } from '../notifications';
 
 /** The busy key for an operation that spans the whole trash, not one row. */
 export const EMPTY_TRASH_KEY = '*';
@@ -33,16 +36,29 @@ export const trashBusyKey = writable('');
 // can be closed and reopened faster than a slow backend answers.
 let loadGeneration = 0;
 
+/**
+ * Enters the trash. It is a destination in the main area rather than a dialog,
+ * so it goes through the same virtual-view switch Photos uses and lets
+ * refreshFiles decide what to draw.
+ */
 export function openTrash(): void {
+    if (state.virtualView === 'trash') return;
     trashOpen.set(true);
+    state.virtualView = 'trash';
+    clearSearch();
+    appActions().refreshFiles();
     void loadTrash();
 }
 
+/** Leaves the trash for the folder the drive was last showing. */
 export function closeTrash(): void {
     loadGeneration += 1;
     trashConfirmModal.close();
     trashOpen.set(false);
     trashBusyKey.set('');
+    if (state.virtualView !== 'trash') return;
+    state.virtualView = null;
+    appActions().refreshFiles();
 }
 
 export async function loadTrash(): Promise<void> {
@@ -54,11 +70,13 @@ export async function loadTrash(): Promise<void> {
         if (generation !== loadGeneration) return;
         trashEntries.set(sortedByDeletion(entries));
         trashStatus.set('ready');
+        publishTrashRows();
     } catch (error) {
         if (generation !== loadGeneration) return;
         trashEntries.set([]);
         trashStatus.set('error');
         trashError.set(humanizeBackendError(error));
+        publishTrashRows();
     }
 }
 
@@ -92,7 +110,10 @@ export async function confirmTrashAction(): Promise<void> {
     trashConfirmModal.close();
     if (!target) return;
     if (target.kind === 'empty') {
-        if (await mutate(EMPTY_TRASH_KEY, emptyTrash)) trashEntries.set([]);
+        if (await mutate(EMPTY_TRASH_KEY, emptyTrash)) {
+            trashEntries.set([]);
+            publishTrashRows();
+        }
         return;
     }
     if (await mutate(target.objectId, () => deleteFromTrashPermanently(target.objectId))) {
@@ -112,16 +133,30 @@ async function mutate(key: string, run: () => Promise<OperationResult>): Promise
     try {
         const result = await run();
         if (!result.ok) {
-            trashError.set(result.error.message);
+            reportMutationRefusal(result.error.message);
             return false;
         }
         return true;
     } catch (error) {
-        trashError.set(humanizeBackendError(error));
+        reportMutationRefusal(humanizeBackendError(error));
         return false;
     } finally {
         trashBusyKey.set('');
     }
+}
+
+/**
+ * A refused restore or delete is reported beside the list, not in place of it.
+ *
+ * The list is still correct -- the item really is still in the trash -- so
+ * replacing it with an error state would throw away a good answer to say that a
+ * different request failed. As a dialog this was an inline alert; as a full view
+ * the equivalent is a toast.
+ */
+function reportMutationRefusal(message: string): void {
+    trashError.set(message);
+    if (state.virtualView !== 'trash') return;
+    notify({ level: 'error', title: 'Trash', body: message });
 }
 
 /**
@@ -130,6 +165,21 @@ async function mutate(key: string, run: () => Promise<OperationResult>): Promise
  */
 function dropEntry(objectId: string): void {
     trashEntries.update((entries) => entries.filter((entry) => entry.objectId !== objectId));
+    publishTrashRows();
+}
+
+/**
+ * Redraws the list, but only while the trash is the thing on screen. Every
+ * mutation calls it, so a restore that lands after the user has already left
+ * cannot publish trash rows over the folder they went back to.
+ */
+function publishTrashRows(): void {
+    if (state.virtualView !== 'trash') return;
+    if (get(trashStatus) === 'error') {
+        renderTrashError(get(trashError));
+        return;
+    }
+    renderTrashRows();
 }
 
 /**

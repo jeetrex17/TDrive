@@ -48,11 +48,11 @@ export function rowMetaLine(row: FolderListRow | FileListFileRow, nowMs = Date.n
         const parts = [
             type,
             row.size > 0 ? formatBytes(row.size) : '',
-            relativeTimeLabel(row.modifiedTime, nowMs),
+            row.timeLabel ?? relativeTimeLabel(row.modifiedTime, nowMs),
         ];
         return parts.filter(Boolean).join(' · ');
     }
-    return [type, formatBytes(row.size), relativeTimeLabel(row.uploadTime, nowMs)]
+    return [type, formatBytes(row.size), row.timeLabel ?? relativeTimeLabel(row.uploadTime, nowMs)]
         .filter(Boolean)
         .join(' · ');
 }

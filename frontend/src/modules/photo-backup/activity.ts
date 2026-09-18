@@ -40,6 +40,12 @@ function currentItem(state: PhotoBackupState): readonly TransferItem[] {
     }];
 }
 
+/** Bytes where the backend knows them, finished files where it does not. */
+function queueProgress(bytesDone: number, bytesTotal: number, done: number, total: number): number {
+    const fraction = bytesTotal > 0 ? bytesDone / bytesTotal : (total > 0 ? done / total : 0);
+    return Math.max(0, Math.min(100, fraction * 100));
+}
+
 function totals(state: PhotoBackupState): { done: number; total: number } {
     const { complete, pending, uploading, failed, paused } = state.status;
     return { done: complete, total: complete + pending + uploading + failed + paused };
@@ -80,11 +86,18 @@ export function syncPhotoBackupActivity(state: PhotoBackupState): void {
     }
     waiting = queued;
     const { done, total } = totals(state);
-    // The queue's bytes, not the current file's: the bar is answering "how far
-    // through the backup", and the file it happens to be on is one line below.
+    // The queue's progress, not the current file's: the bar is answering "how
+    // far through the backup", and the file it happens to be on is one line
+    // below.
+    //
+    // Bytes are the better measure -- a 4 GB video and a 2 MB photo are not the
+    // same third of a three-item backup -- but the backend does not total the
+    // queue's bytes today, so they arrive as zero and the honest fallback is
+    // the files it has finished. A bar wired only to bytes would sit at 0 for
+    // the whole run.
     updateTransferProgress({
         id: ACTIVITY_ID, direction: 'up',
-        progress: bytesTotal > 0 ? (bytesDone / bytesTotal) * 100 : 0,
+        progress: queueProgress(bytesDone, bytesTotal, done, total),
         bytes: bytesDone, total: bytesTotal, itemsDone: done, itemsTotal: total,
         items: currentItem(state), itemsActive: state.status.uploading,
     });

@@ -115,6 +115,11 @@ func TestTrashRecordsRestorableEntryAndHidesTheFile(t *testing.T) {
 		OriginalParentID: "d:docs", OriginalName: "report.txt",
 		OriginalRevision: 1, DeletedAt: 1000, PurgeAfter: 2000,
 		OpID: "trash-report", Size: 12,
+		// Trashing bumps the file's revision, so the live row is at 2 while the
+		// entry remembers the 1 a restore has to match. Revision is the live
+		// one on purpose: it is what addresses the thumbnail, and the rendition
+		// path rejects any other as stale.
+		Revision: 2,
 	}
 	if !reflect.DeepEqual(entry, want) {
 		t.Fatalf("trash entry\n got: %+v\nwant: %+v", entry, want)
@@ -321,5 +326,32 @@ func TestRestoreWireRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, op) {
 		t.Fatalf("round trip\n got: %#v\nwant: %#v\nwire: %s", got, op, wire)
+	}
+}
+
+// A trash row is entitled to the picture its drive row had; a file that left
+// the trash for good is not, because its bytes are gone with it.
+func TestFileByIDIncludingTrashedServesTrashedButNotPurgedFiles(t *testing.T) {
+	db := newTestDB(t)
+	seedTrashedFile(t, db)
+
+	if _, found, err := FileByID(db, testChan, 101); err != nil || found {
+		t.Fatalf("plain lookup returned a trashed file: found=%v err=%v", found, err)
+	}
+	file, found, err := FileByIDIncludingTrashed(db, testChan, 101)
+	if err != nil || !found {
+		t.Fatalf("trashed lookup: found=%v err=%v", found, err)
+	}
+	if !file.Tombstoned || file.Name != "report.txt" {
+		t.Fatalf("trashed file = %+v", file)
+	}
+
+	// Dropping the entry is what a purge does; the file must go back to being
+	// unreachable, or the widened lookup would outlive the trash itself.
+	if _, err := db.Exec(`DELETE FROM trash_entries WHERE channel_id=? AND object_id='f:101'`, testChan); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := FileByIDIncludingTrashed(db, testChan, 101); err != nil || found {
+		t.Fatalf("purged file still reachable: found=%v err=%v", found, err)
 	}
 }

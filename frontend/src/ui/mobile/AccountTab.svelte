@@ -26,6 +26,7 @@
     import { openNewDriveModal } from '../../modules/modals/new-drive';
     import { openLogoutModal } from '../../modules/modals/logout';
     import { openTrash } from '../../modules/trash/controller';
+    import { activeTab as mobileActiveTab } from './mobile-shell-store';
     import type { DriveChannel } from '../../types';
     import { activeDrive, activeTab } from './mobile-shell-store';
     import { pushSheet } from '../modals/sheet-stack';
@@ -134,6 +135,16 @@
         if ($activeTab !== 'account') return;
         void loadStorage($activeDrive?.id ?? null);
     });
+
+    /**
+     * The trash is a view of the drive, not a dialog, so opening it from here
+     * means moving to the tab that shows the drive. Entering first means the
+     * Files tab is never briefly the folder the user left.
+     */
+    function showTrash(): void {
+        openTrash();
+        mobileActiveTab.set('files');
+    }
 </script>
 
 <div class="mobile-scroll account-tab">
@@ -170,7 +181,7 @@
             <!-- Deleted items are the other half of "what this drive is
                  holding", so the way back to them sits with the figure that
                  counts them, not in a menu of its own. -->
-            <button type="button" class="account-row" aria-haspopup="dialog" onclick={openTrash}>
+            <button type="button" class="account-row" onclick={showTrash}>
                 <Trash2Icon class="account-row-icon" size={20} strokeWidth={1.9} aria-hidden="true" />
                 <span class="account-row-label">Trash</span>
                 <ChevronRightIcon class="account-row-chevron" size={18} strokeWidth={2} aria-hidden="true" />

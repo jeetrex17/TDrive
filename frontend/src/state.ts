@@ -126,7 +126,7 @@ export interface State {
 
     encryption: EncryptionState;
 
-    virtualView: "photos" | null;
+    virtualView: "photos" | "trash" | null;
 
     pendingFolderOps: Map<string, { parentId: string; name: string }>;
 

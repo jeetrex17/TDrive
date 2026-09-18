@@ -10,6 +10,8 @@
     import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import PlayIcon from '@lucide/svelte/icons/play';
+    import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+    import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import { isMobilePlatform } from '../../api';
     import FileState from './FileState.svelte';
     import FileThumbnail from './FileThumbnail.svelte';
@@ -231,6 +233,22 @@
     </span>
 {/snippet}
 
+<!-- An action's glyph, in one place: the phone draws the same set at its own
+     size, and two copies of this list would be two chances to disagree. -->
+{#snippet actionGlyph(action: FileListAction, size: number)}
+    {#if action.kind === 'open'}
+        <ExternalLinkIcon {size} strokeWidth={2} aria-hidden="true" />
+    {:else if action.kind === 'play'}
+        <PlayIcon {size} strokeWidth={2} aria-hidden="true" />
+    {:else if action.kind === 'restore'}
+        <RotateCcwIcon {size} strokeWidth={2} aria-hidden="true" />
+    {:else if action.kind === 'purge'}
+        <Trash2Icon {size} strokeWidth={2} aria-hidden="true" />
+    {:else}
+        <DownloadIcon {size} strokeWidth={2} aria-hidden="true" />
+    {/if}
+{/snippet}
+
 {#if $fileListView.kind === 'state'}
     <FileState
         kind={$fileListView.stateKind}
@@ -344,16 +362,33 @@
                     </div>
                 {/if}
                 <div class="row-actions">
-                    <button
-                        class="action-icon row-more"
-                        type="button"
-                        aria-label={`More actions for ${row.name}`}
-                        aria-haspopup="menu"
-                    >
-                        <EllipsisIcon size={20} strokeWidth={2} aria-hidden="true" />
-                    </button>
+                    {#if row.actionsInline}
+                        <!-- Few, important, and with no menu behind them, so the
+                             phone shows them the way the desktop does rather
+                             than hiding them in a sheet built for a live item. -->
+                        {#each row.actions as action (action.kind)}
+                            <button
+                                class={`action-icon ${action.className}`}
+                                type="button"
+                                title={action.title}
+                                aria-label={action.label}
+                                onclick={(event) => onActionClick(event, row, action)}
+                            >
+                                {@render actionGlyph(action, 20)}
+                            </button>
+                        {/each}
+                    {:else}
+                        <button
+                            class="action-icon row-more"
+                            type="button"
+                            aria-label={`More actions for ${row.name}`}
+                            aria-haspopup="menu"
+                        >
+                            <EllipsisIcon size={20} strokeWidth={2} aria-hidden="true" />
+                        </button>
+                    {/if}
                 </div>
-                {#if mobile}
+                {#if mobile && !row.actionsInline}
                     <!-- Revealed by a trailing swipe. One action, and a
                          reversible one: a destructive button a careless thumb
                          away from a scrolling list is the worst pattern in
@@ -458,13 +493,7 @@
                             aria-label={action.label}
                             onclick={(event) => onActionClick(event, row, action)}
                         >
-                            {#if action.kind === 'open'}
-                                <ExternalLinkIcon size={16} strokeWidth={2} aria-hidden="true" />
-                            {:else if action.kind === 'play'}
-                                <PlayIcon size={16} strokeWidth={2} aria-hidden="true" />
-                            {:else}
-                                <DownloadIcon size={16} strokeWidth={2} aria-hidden="true" />
-                            {/if}
+                            {@render actionGlyph(action, 16)}
                         </button>
                     {/each}
                 </div>

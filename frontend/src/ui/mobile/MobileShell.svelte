@@ -6,6 +6,7 @@
     import { state as appState } from '../../state';
     import { navigateToIndex } from '../../modules/navigation';
     import { enterPhotos, exitPhotos } from '../../modules/gallery';
+    import { closeTrash } from '../../modules/trash/controller';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../../modules/selection';
     import { selectionBarState } from '../selection/selection-bar-store';
     import FeatureLayer from '../app/FeatureLayer.svelte';
@@ -104,6 +105,9 @@
         // existing gallery virtual view rather than navigating away.
         if (tab === 'files') {
             if (appState.virtualView === 'photos') exitPhotos();
+            // Tapping Files while in the trash is how a phone leaves it: there
+            // is no breadcrumb up there to leave by.
+            else if (appState.virtualView === 'trash') closeTrash();
         } else if (tab === 'photos') {
             enterPhotos();
         }
