@@ -3,6 +3,7 @@
 import { state, resetFolderCaches } from '../state';
 import { splitNameAndExt, formatDate, formatBytes } from '../utils';
 import { isOffline } from './connectivity';
+import { humanizeBackendError } from './errors';
 import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
@@ -777,11 +778,6 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
     renderFileListRows(list, rows, afterPublish);
 }
 
-function refreshErrorMessage(error: unknown): string {
-    if (error instanceof Error && error.message) return error.message;
-    return String(error || 'Failed to load files');
-}
-
 function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, error: unknown): void {
     if (!isCurrentFileRequest(request)) return;
     if (request.presentation === 'same-view-refresh') {
@@ -795,7 +791,7 @@ function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, err
         list,
         'error',
         offline ? "You're offline" : 'Could not load this folder',
-        offline ? 'Reconnect to load this folder from Telegram.' : refreshErrorMessage(error),
+        offline ? 'Reconnect to load this folder from Telegram.' : humanizeBackendError(error),
         { label: 'Retry', onClick: () => appActions().refreshFiles() },
     );
 }

@@ -76,7 +76,7 @@
         width: 14px;
         height: 14px;
         border-radius: var(--radius-full);
-        border: 2px solid var(--border-strong);
+        border: 2px solid var(--border);
         border-top-color: var(--accent);
         animation: state-spin 720ms linear infinite;
     }
