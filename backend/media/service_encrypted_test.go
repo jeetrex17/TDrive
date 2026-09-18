@@ -228,6 +228,30 @@ func TestMediaOpenRejectsEncryptedFilesWithoutKeyProvider(t *testing.T) {
 	}
 }
 
+// A locked vault must reach the caller as the reason it is locked, not just as
+// "key unavailable". The app turns that sentinel into the password prompt, so
+// a wrap that loses it leaves the reader looking at a dead player with nothing
+// asking them to unlock.
+func TestMediaOpenCarriesTheLockedVaultReason(t *testing.T) {
+	db := newResolverTestDB(t)
+	key := bytes.Repeat([]byte{0x53}, 32)
+	plaintext := testBytes(100)
+	ciphertext := encryptMediaFixture(t, plaintext, key)
+	projectEncryptedMedia(t, db, 10, "secret.mp4", ciphertext, plaintext)
+	ranges := newMediaRangeFake(map[int64][]byte{10: ciphertext})
+	locked := errors.New("encryption password required")
+	svc := NewService(Config{
+		DB: db, Peers: staticPeerResolver{peer: ranges.peer}, Ranges: ranges,
+		Keys: MasterKeyProviderFunc(func(context.Context, int64) ([]byte, error) { return nil, locked }),
+	})
+	defer svc.Close()
+
+	_, err := svc.Open(context.Background(), testChannelID, 10)
+	if !errors.Is(err, ErrKeyUnavailable) || !errors.Is(err, locked) {
+		t.Fatalf("err = %v, want both ErrKeyUnavailable and the vault's own reason", err)
+	}
+}
+
 func TestEncryptedMediaPublicationRejectsStaleGenerationWithoutHoldingGateDuringSetup(t *testing.T) {
 	db := newResolverTestDB(t)
 	key := bytes.Repeat([]byte{0x54}, 32)

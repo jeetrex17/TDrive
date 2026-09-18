@@ -144,7 +144,15 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 	if err != nil {
 		return OpenResult{}, err
 	}
+	// Only a session that actually opened is logged as one. This used to be a
+	// plain defer, so a refused open -- a locked vault above all -- printed
+	// "media: opened session" on its way out, and a log read afterwards said
+	// the drive had served an encrypted file with no key.
+	opened := false
 	defer func() {
+		if !opened {
+			return
+		}
 		slog.Debug("media: opened session", "channel_id", channelID, "file_id", fileID, "elapsed", time.Since(started))
 	}()
 	if file.Encrypted {
@@ -254,6 +262,7 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		session.Close()
 		return OpenResult{}, err
 	}
+	opened = true
 	return OpenResult{
 		Token:         session.Token(),
 		URL:           session.URL(),

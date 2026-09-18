@@ -241,3 +241,27 @@ test('on iOS the element is handed the HLS source, not the progressive one', asy
     expect(await page.evaluate(() => (window as unknown as { __videoSources: string[] }).__videoSources))
         .not.toContain(FIXTURE_URL);
 });
+
+/**
+ * A locked vault has to reach the reader as a prompt. The backend refuses an
+ * encrypted open with its own "encryption password required", and the player
+ * turns that into the unlock dialog rather than an error about a video that is
+ * perfectly fine -- or, worse, a spinner that never resolves.
+ */
+test('an encrypted video with the vault locked asks for the password', async ({ page }) => {
+    const encrypted = { ...VIDEO_FILE, name: 'holiday.mkv', msg_id: 611, encrypted: true, plaintext_size: VIDEO_FILE.size };
+    const mock = await bootTDrive(page, {
+        GetFolderContents: resolves({ folders: [], files: [encrypted] }),
+        EncryptionStatus: resolves({ available: true, password_set: true, password_remembered: false, hint: '' }),
+        // What the drive answers with while the key is not in memory.
+        OpenMedia: rejects('media: encryption key unavailable: encryption password required'),
+        OpenNativeMedia: rejects('media: encryption key unavailable: encryption password required'),
+    });
+    await page.getByRole('row', { name: 'File: holiday.mkv' }).getByRole('button', { name: 'Play video' }).click();
+
+    await expect(page.getByRole('dialog', { name: 'Enter encryption password' })).toBeVisible();
+    // Nothing was played, and dismissing the prompt is a choice rather than a
+    // failure to report.
+    await page.getByRole('dialog', { name: 'Enter encryption password' }).getByRole('button', { name: 'Cancel', exact: true }).click();
+    expect(await mock.calls('AttachNativeMedia')).toHaveLength(0);
+});
