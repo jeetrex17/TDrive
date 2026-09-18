@@ -79,11 +79,17 @@ type LoadedFileData = {
     folderStats: Map<string, FolderStat>;
 };
 
+/**
+ * What addresses a file's thumbnail, or undefined when the file has none to
+ * address. Videos count: the backend draws a frame for them at upload and
+ * serves it through the same rendition, so a row or an album cover that stops
+ * at images would be refusing a picture that already exists.
+ */
 export function fileThumbnailIdentity(
     file: Pick<FileItem, 'msgId' | 'name' | 'revision'>,
     channelId: number,
 ): FileThumbnailIdentity | undefined {
-    if (!isImageFile(file.name)
+    if (!(isImageFile(file.name) || isVideoFile(file.name))
         || !Number.isSafeInteger(channelId)
         || channelId <= 0
         || !Number.isSafeInteger(file.msgId)

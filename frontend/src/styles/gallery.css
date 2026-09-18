@@ -796,11 +796,17 @@ html.mobile .preview-unlock-bar {
 .album-tile:hover { transform: translateY(-2px); }
 .album-tile:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-/* Square, because a 4:3 crop of a portrait photo loses the subject. */
+/* Square, because a 4:3 crop of a portrait photo loses the subject.
+   The height is the length the grid measured its rows with, and the ratio is
+   only the fallback for a tile rendered outside that grid: a cover that works
+   out its own height from a stretched flex item collapses to the label strip
+   on webviews that will not resolve the ratio, and an empty cover is exactly
+   the one that has no image to prop it open. */
 .album-cover {
     position: relative;
     display: block;
     aspect-ratio: 1 / 1;
+    height: var(--album-cover-size);
     overflow: hidden;
     border-radius: var(--radius-lg);
     background: var(--bg-panel);

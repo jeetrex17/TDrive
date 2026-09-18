@@ -41,8 +41,9 @@ export interface AlbumTile {
     label: string;
     /**
      * The cover's thumbnail identity, or undefined when there is nothing to
-     * render -- no cover, a stale revision, or a video, which has no still.
-     * The tile draws a folder glyph then, never a broken image.
+     * render -- no cover, or a stale revision. A video has one too: the frame
+     * drawn for it at upload. The tile draws a folder glyph when there is
+     * nothing to address, never a broken image.
      */
     cover?: FileThumbnailIdentity;
 }
