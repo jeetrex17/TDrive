@@ -7,10 +7,26 @@
  * alpha, so the blur did nothing and the panel read as a solid slab. The
  * upload menu was a plain --bg-panel surface with no blur at all.
  *
- * The fill only drops to 14% inside @supports. A browser that cannot blur
- * would otherwise be handed a near-transparent panel with the file list
- * showing through the text, so it keeps the opaque --glass-bg each surface
- * already sets for itself.
+ * The fill thins only inside @supports. A browser that cannot blur would
+ * otherwise be handed a near-transparent panel with the file list showing
+ * through the text, so it keeps the opaque --glass-bg each surface already
+ * sets for itself.
+ *
+ * The readability floor is built from --color-surface-0 and never from
+ * --glass-bg, because the glass token carries its own alpha in most palettes
+ * (0.82 to 0.88) and none in the rest. One color-mix against `transparent`
+ * multiplies the two, so a single percentage would have meant a different
+ * effective opacity per theme -- the earlier 14% landed at 12% under the dark
+ * palettes and was unreadable over the photo gallery. --color-surface-0 is an
+ * opaque hex in every palette (asserted by theme-palettes.test.ts), so 78% of
+ * it is 78% everywhere.
+ *
+ * --glass-bg still supplies the hue, as a bounded tint layered over that
+ * floor rather than as the fill. At 30% its own alpha can only move the
+ * composite between 83.4% and 84.6%, which is within a shade of itself across
+ * all 17 palettes instead of the 12-to-14 spread it replaces. Painting it at
+ * full strength would instead turn the palettes whose token is opaque into a
+ * flat slab, which is the failure this file was written to end.
  *
  * Imported after the component stylesheets on purpose: those set `background`
  * as a shorthand, which would reset background-color and background-image
@@ -25,12 +41,17 @@
     html:not(.linux-webkit) .notif-panel,
     html:not(.linux-webkit) .profile-menu,
     html:not(.linux-webkit) .upload-menu {
-        background-color: color-mix(in srgb, var(--glass-bg) 14%, transparent);
-        background-image: linear-gradient(
-            135deg,
-            color-mix(in srgb, var(--text-main) 6%, transparent),
-            transparent 44%
-        );
+        /* Layer order is paint order: the highlight sits on the tint, the tint
+           on the floor. */
+        --glass-tint: color-mix(in srgb, var(--glass-bg) 30%, transparent);
+        background-color: color-mix(in srgb, var(--color-surface-0) 78%, transparent);
+        background-image:
+            linear-gradient(
+                135deg,
+                color-mix(in srgb, var(--text-main) 6%, transparent),
+                transparent 44%
+            ),
+            linear-gradient(var(--glass-tint), var(--glass-tint));
         -webkit-backdrop-filter: blur(16px) saturate(145%);
         backdrop-filter: blur(16px) saturate(145%);
     }
@@ -40,15 +61,15 @@
  * While the palette is changing, the glass comes off.
  *
  * A theme change animates the whole root, and for the length of that animation
- * the page is a flat snapshot with the wipe drawn across it. Anything sitting
- * at 14% lets the wipe through, so the open menu reads as see-through for a
- * few hundred milliseconds -- the background behind it is briefly all you see.
- * The controller already marks the window with these two classes.
+ * the page is a flat snapshot with the wipe drawn across it. Anything still
+ * translucent lets the wipe through, so the open menu reads as see-through for
+ * a few hundred milliseconds -- the background behind it is briefly all you
+ * see. The controller already marks the window with these two classes.
  *
  * The fill is --glass-bg painted over an opaque --color-surface-0 rather than
  * used on its own: several palettes define the glass colour with alpha, and a
- * panel that is still 12% transparent would show a fainter version of the same
- * artefact.
+ * panel that is still part transparent would show a fainter version of the
+ * same artefact.
  */
 html.theme-transition-active .notif-panel,
 html.theme-transition-active .profile-menu,
