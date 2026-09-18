@@ -9,7 +9,7 @@ import (
 )
 
 func TestCreateContextStopsBeforeEmitWhenCanceled(t *testing.T) {
-	svc, _, _, _ := newTestService(t)
+	svc, _, _ := newTestService(t)
 	called := false
 	svc.EmitOpContext = func(context.Context, int64, projection.Op) error {
 		called = true
@@ -28,7 +28,7 @@ func TestCreateContextStopsBeforeEmitWhenCanceled(t *testing.T) {
 }
 
 func TestRenameContextPropagatesContextToEmitter(t *testing.T) {
-	svc, _, _, _ := newTestService(t)
+	svc, _, _ := newTestService(t)
 	folder, err := svc.Create(testChannelID, "Before", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -54,7 +54,7 @@ func TestRenameContextPropagatesContextToEmitter(t *testing.T) {
 }
 
 func TestMoveContextPropagatesContextToEmitter(t *testing.T) {
-	svc, _, _, _ := newTestService(t)
+	svc, _, _ := newTestService(t)
 	parent, err := svc.Create(testChannelID, "Parent", "")
 	if err != nil {
 		t.Fatalf("create parent: %v", err)
@@ -83,8 +83,8 @@ func TestMoveContextPropagatesContextToEmitter(t *testing.T) {
 	}
 }
 
-func TestDeletePropagatesContextToBatchEmitter(t *testing.T) {
-	svc, _, _, _ := newTestService(t)
+func TestDeletePropagatesContextToTrashPublisher(t *testing.T) {
+	svc, _, _ := newTestService(t)
 	folder, err := svc.Create(testChannelID, "Delete", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -93,24 +93,25 @@ func TestDeletePropagatesContextToBatchEmitter(t *testing.T) {
 	const key contextKey = "delete"
 	ctx := context.WithValue(context.Background(), key, "value")
 	called := false
-	svc.EmitOpsContext = func(got context.Context, channelID int64, ops []projection.Op) error {
+	publish := svc.TrashObject
+	svc.TrashObject = func(got context.Context, channelID int64, objectID string) error {
 		called = true
 		if got.Value(key) != "value" {
 			t.Fatalf("context value was not propagated")
 		}
-		return svc.EmitOps(channelID, ops)
+		return publish(got, channelID, objectID)
 	}
 
 	if err := svc.Delete(ctx, testChannelID, folder.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if !called {
-		t.Fatal("context batch emitter was not called")
+		t.Fatal("trash publisher was not called")
 	}
 }
 
 func TestContextMethodsRejectNilContext(t *testing.T) {
-	svc, _, _, _ := newTestService(t)
+	svc, _, _ := newTestService(t)
 	tests := map[string]func() error{
 		"create": func() error {
 			_, err := svc.CreateContext(nil, testChannelID, "No context", "")

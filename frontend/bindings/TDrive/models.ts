@@ -380,6 +380,48 @@ export interface TDriveFile {
 }
 
 /**
+ * TrashEntry is one deleted object as the trash view needs it: what it was
+ * called, where it came from, and the two instants that bound how long it can
+ * still be brought back.
+ */
+export interface TrashEntry {
+    /**
+     * "f:2615" or "d:uuid"
+     */
+    "object_id": string;
+
+    /**
+     * "file" | "folder"
+     */
+    "kind": string;
+
+    /**
+     * original display name
+     */
+    "name": string;
+
+    /**
+     * human path it came from, "" for the drive root
+     */
+    "parent_path": string;
+
+    /**
+     * bytes, 0 for a folder
+     */
+    "size": number;
+
+    /**
+     * unix millis
+     */
+    "deleted_at": number;
+
+    /**
+     * unix millis
+     */
+    "purge_after": number;
+}
+
+/**
  * UploadResult adds uploaded file data to the common operation envelope.
  */
 export interface UploadResult {

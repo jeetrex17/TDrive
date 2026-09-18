@@ -62,6 +62,11 @@ type App struct {
 	mountLifecycle         mountlifecycle.Gate
 	mountLifecycleTerminal bool // guarded by mountLifecycle
 
+	// trashSweepStop ends the background retention sweep. The sweep is the
+	// only thing that ever destroys trashed bytes without the user asking, so
+	// it is owned here and stopped with the rest of the process.
+	trashSweepStop chan struct{}
+
 	// fileDropEnabled tracks whether the native OS file-drop handler is
 	// registered. The frontend toggles it off during an internal drag-to-move so
 	// macOS does not intercept the in-app HTML5 drag.
@@ -614,6 +619,7 @@ func (a *App) ServiceShutdown() error {
 		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
 	}
 	cancel()
+	a.stopTrashSweep()
 	a.media.closeAllNativeMedia()
 	a.closeGalleryImages()
 	a.closePhotoBackup()
@@ -712,6 +718,7 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	if mountInitErr != nil {
 		fmt.Printf("Warning: Failed to initialize TDrive mount: %v\n", mountInitErr)
 	}
+	a.startTrashSweep()
 
 	fmt.Println("TDrive DB ready!")
 	a.updates.finishCleanup(mountInitErr)

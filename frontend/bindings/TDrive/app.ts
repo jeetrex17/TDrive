@@ -83,6 +83,15 @@ export function DeleteFolder(folderID: string): $CancellablePromise<$models.Oper
 }
 
 /**
+ * DeleteFromTrashPermanently destroys one object's Telegram bodies for good.
+ * This is the user's explicit instruction, so it does not wait for the object's
+ * retention window; that window only ever gates the automatic sweep.
+ */
+export function DeleteFromTrashPermanently(objectID: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(3002045001, objectID);
+}
+
+/**
  * DownloadFile downloads from the explicitly selected drive. The channel is an
  * argument rather than a late ActiveChannelID lookup because a queued frontend
  * transfer may begin after the user has switched drives.
@@ -99,6 +108,15 @@ export function DownloadFile(channelID: number, msgID: number, TgMsgID: number, 
  */
 export function DownloadFolder(channelID: number, folderID: string, requestID: string): $CancellablePromise<$models.DownloadResult> {
     return $Call.ByID(794478145, channelID, folderID, requestID);
+}
+
+/**
+ * EmptyTrash purges every entry. It stops at the first failure rather than
+ * carrying on, so the trash the user sees afterwards is exactly what is left to
+ * deal with instead of an arbitrary subset.
+ */
+export function EmptyTrash(): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(3764116748);
 }
 
 export function EnqueuePhotoBackupAssets(sourceID: string, values: $models.PhotoBackupAsset[] | null): $CancellablePromise<number> {
@@ -169,6 +187,18 @@ export function ImportPaths(paths: string[] | null, parentID: string, encrypt: b
 
 export function ListMediaPage(cursor: string, limit: number): $CancellablePromise<$models.GalleryPage> {
     return $Call.ByID(836790156, cursor, limit);
+}
+
+/**
+ * ListTrash returns everything still restorable, most recently deleted first.
+ * 
+ * It is a pure read: purging is the background sweep's job (app_trash_sweep.go)
+ * precisely so that opening the Trash panel can never block on Telegram. An
+ * entry whose window has closed but that the sweep has not reached yet is still
+ * listed, and is still restorable, which is the lenient side to err on.
+ */
+export function ListTrash(): $CancellablePromise<$models.TrashEntry[] | null> {
+    return $Call.ByID(1092645193);
 }
 
 export function LocateMedia(msgID: number, generation: string): $CancellablePromise<projection$0.GalleryLocation> {
@@ -315,6 +345,16 @@ export function ResolvePhotoBackupResource(token: string, path: string, errorMes
  */
 export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<{ [_ in string]?: string } | null> {
     return $Call.ByID(4195625464, userIDs);
+}
+
+/**
+ * RestoreFromTrash puts one object back. It lands under its original parent, or
+ * under the drive root if that parent is gone, and takes a numbered name if the
+ * original is occupied -- never refusing outright, because a refusal would
+ * leave the user with no way to recover the object at all.
+ */
+export function RestoreFromTrash(objectID: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(2589623153, objectID);
 }
 
 export function ResumePhotoBackup(): $CancellablePromise<$models.OperationResult> {
