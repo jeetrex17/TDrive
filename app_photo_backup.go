@@ -237,6 +237,11 @@ func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupSta
 	return a.GetPhotoBackupState()
 }
 
+// AddPhotoBackupFolder opens the desktop directory dialog. Mobile does not
+// come through here: Android picks its folder in the native layer, because the
+// Storage Access Framework answers with a document tree rather than a path and
+// only the host can turn one into something enumerable. It then arrives as an
+// ordinary UpsertPhotoBackupSource of kind photoBackupDeviceFolderKind.
 func (a *App) AddPhotoBackupFolder() (PhotoBackupSource, error) {
 	if runtime.GOOS == "ios" || runtime.GOOS == "android" {
 		return PhotoBackupSource{}, fmt.Errorf("photo backup: folder sources are unavailable on mobile")
@@ -272,6 +277,24 @@ func (a *App) UpsertPhotoBackupSource(value PhotoBackupSource) (PhotoBackupSourc
 			return PhotoBackupSource{}, rootErr
 		}
 		value.Root = root
+	} else if value.Kind == photoBackupDeviceFolderKind {
+		root, rootErr := validatePhotoBackupDeviceFolderRoot(value.Root)
+		if rootErr != nil {
+			return PhotoBackupSource{}, rootErr
+		}
+		value.Root = root
+		// The id is derived from the root so that re-picking the same folder
+		// updates the source it already has instead of opening a second one
+		// with the same contents, exactly as stableFolderSourceID does for a
+		// desktop path.
+		value.ID = photoBackupDeviceFolderSourceID(root)
+		existing, listErr := engine.ListSources(ctx, scope)
+		if listErr != nil {
+			return PhotoBackupSource{}, listErr
+		}
+		if clash := photoBackupOverlappingDeviceFolder(existing, value.ID, root); clash != "" {
+			return PhotoBackupSource{}, fmt.Errorf("photo backup: %q is already covered by %q. Remove that one first, or choose a folder outside it.", photoBackupDeviceFolderName(root), clash)
+		}
 	} else if value.Root == "" {
 		value.Root = value.Name
 		if value.Root == "" {
@@ -327,7 +350,7 @@ func (a *App) EnqueuePhotoBackupAssets(sourceID string, values []PhotoBackupAsse
 		if resourceID == "" {
 			resourceID = value.ID
 		}
-		assets = append(assets, photobackup.Asset{ID: value.ID, Version: value.Version, Name: value.Name, MediaType: value.MediaType, ResourceID: resourceID, ModifiedAt: time.UnixMilli(value.ModifiedAt), CapturedAt: timeFromMillis(value.CreatedAt), Size: value.Size})
+		assets = append(assets, photobackup.Asset{ID: value.ID, Version: value.Version, Name: value.Name, MediaType: value.MediaType, ResourceID: resourceID, ModifiedAt: time.UnixMilli(value.ModifiedAt), CapturedAt: timeFromMillis(value.CreatedAt), RelDir: value.RelDir, Size: value.Size})
 	}
 	return engine.EnqueuePage(a.appContext(), scope, sourceID, assets)
 }
@@ -800,7 +823,7 @@ func photoBackupSourceDTO(source photobackup.Source) PhotoBackupSource {
 }
 
 func photoBackupAssetDTO(asset photobackup.Asset) PhotoBackupAsset {
-	return PhotoBackupAsset{ID: asset.ID, Version: asset.Version, Name: asset.Name, MediaType: asset.MediaType, ResourceID: asset.ResourceID, ModifiedAt: asset.ModifiedAt.UnixMilli(), CreatedAt: millisFromTime(asset.CapturedAt), Size: asset.Size}
+	return PhotoBackupAsset{ID: asset.ID, Version: asset.Version, Name: asset.Name, MediaType: asset.MediaType, ResourceID: asset.ResourceID, ModifiedAt: asset.ModifiedAt.UnixMilli(), CreatedAt: millisFromTime(asset.CapturedAt), RelDir: asset.RelDir, Size: asset.Size}
 }
 
 // The wire carries an unknown capture time as 0. Both directions have to agree

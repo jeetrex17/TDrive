@@ -33,6 +33,13 @@ export interface PhotoBackupAsset {
     createdAt: number;
     size: number;
     resourceId?: string;
+    /**
+     * Where the asset sits below its source, "/" separated, empty at the top of
+     * it. Only a watched folder has one: an album is a flat set of resources,
+     * and the host that walks a phone's folder is the only thing that knows
+     * which subfolder a photo came out of.
+     */
+    relDir?: string;
 }
 
 const defaultSettings: PhotoBackupSettings = { enabled: false, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false };
@@ -43,7 +50,7 @@ function normalizeAsset(value: unknown): PhotoBackupAsset | null {
     const raw = asRecord(value); const id = boundedText(raw.id, 512); const version = boundedText(raw.version, 256);
     const mediaType = raw.media_type === 'video' ? 'video' : raw.media_type === 'photo' ? 'photo' : null;
     if (!id || !version || !mediaType) return null;
-    return { id, version, name: boundedText(raw.name, 512) || 'Untitled', mediaType, modifiedAt: nonNegativeNumber(raw.modified_at), createdAt: nonNegativeNumber(raw.created_at), size: nonNegativeNumber(raw.size), resourceId: boundedText(raw.resource_id, 512) || undefined };
+    return { id, version, name: boundedText(raw.name, 512) || 'Untitled', mediaType, modifiedAt: nonNegativeNumber(raw.modified_at), createdAt: nonNegativeNumber(raw.created_at), size: nonNegativeNumber(raw.size), resourceId: boundedText(raw.resource_id, 512) || undefined, relDir: boundedText(raw.rel_dir, 1024) || undefined };
 }
 
 export function normalizePhotoBackupState(value: unknown): PhotoBackupState {
@@ -60,7 +67,7 @@ export async function savePhotoBackupSettings(settings: PhotoBackupSettings): Pr
 export async function addPhotoBackupFolder(): Promise<PhotoBackupSource | null> { const raw = asRecord(await invokeBackend(binding('AddPhotoBackupFolder'))); const id = boundedText(raw.id, 512); return id ? { id, kind: boundedText(raw.kind, 64), name: boundedText(raw.name, 240) || 'Folder', root: boundedText(raw.root, 1024), enabled: raw.enabled !== false, addedAt: nonNegativeNumber(raw.added_at) } : null; }
 export async function upsertPhotoBackupSource(source: PhotoBackupSource): Promise<void> { await invokeBackend(binding('UpsertPhotoBackupSource'), { id: source.id, kind: source.kind, name: source.name, root: source.root, enabled: source.enabled, added_at: source.addedAt }); }
 export async function removePhotoBackupSource(id: string): Promise<void> { await invokeBackend(binding('RemovePhotoBackupSource'), id); }
-export async function enqueuePhotoBackupAssets(sourceID: string, assets: PhotoBackupAsset[]): Promise<void> { await invokeBackend(binding('EnqueuePhotoBackupAssets'), sourceID, assets.map((asset) => ({ id: asset.id, version: asset.version, name: asset.name, media_type: asset.mediaType, modified_at: asset.modifiedAt, created_at: asset.createdAt, size: asset.size, resource_id: asset.resourceId ?? '' }))); }
+export async function enqueuePhotoBackupAssets(sourceID: string, assets: PhotoBackupAsset[]): Promise<void> { await invokeBackend(binding('EnqueuePhotoBackupAssets'), sourceID, assets.map((asset) => ({ id: asset.id, version: asset.version, name: asset.name, media_type: asset.mediaType, modified_at: asset.modifiedAt, created_at: asset.createdAt, size: asset.size, resource_id: asset.resourceId ?? '', rel_dir: asset.relDir ?? '' }))); }
 
 // The controls answer with the operation envelope: a stable code the password
 // prompt keys off, and the backend's own words for everything else.

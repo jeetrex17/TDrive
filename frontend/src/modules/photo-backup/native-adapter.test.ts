@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const bridge = vi.hoisted(() => ({ callBridge: vi.fn(), hasBridgeMethod: vi.fn() }));
 vi.mock('../android-bridge', () => bridge);
 
-import { listNativePhotoBackupAssets, materializeNativePhotoBackupAsset } from './native-adapter';
+import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, pickNativePhotoBackupFolder } from './native-adapter';
 
 type IOSWindow = Window & { tdriveIOSPhotos?: unknown };
 
@@ -21,6 +21,32 @@ describe('native photo backup adapter', () => {
         expect(first.assets[0]).toMatchObject({ id: 'media:image:9', mediaType: 'photo', modifiedAt: 100, createdAt: 40, resourceId: 'media:image:9' });
         await listNativePhotoBackupAssets('library:all', first.nextCursor);
         expect(JSON.parse(bridge.callBridge.mock.calls[1][1][0]).cursor).toEqual({ modified: 100, id: 9 });
+    });
+
+    it('carries the subfolder a watched-folder asset came out of', async () => {
+        bridge.callBridge.mockResolvedValue(JSON.stringify({
+            assets: [{ id: 'media:image:9', version: '100:32', name: 'IMG_9.jpg', mediaType: 'image', relDir: 'Trips/Rome', size: 32, resourceID: 'media:image:9' }],
+            nextCursor: null,
+        }));
+        const page = await listNativePhotoBackupAssets('tree:external_primary:DCIM/');
+        expect(page.assets[0].relDir).toBe('Trips/Rome');
+    });
+
+    it('reads a picked folder as a source, and a dismissal as nothing', async () => {
+        bridge.callBridge.mockResolvedValueOnce(JSON.stringify({ id: 'tree:external_primary:DCIM/Camera/', root: 'external_primary:DCIM/Camera/', name: 'Camera', kind: 'device-folder' }));
+        expect(await pickNativePhotoBackupFolder()).toMatchObject({ id: 'tree:external_primary:DCIM/Camera/', kind: 'device-folder', name: 'Camera', enabled: true });
+        bridge.callBridge.mockResolvedValueOnce('');
+        expect(await pickNativePhotoBackupFolder()).toBeNull();
+    });
+
+    it('reports the grant alongside a list that partial access has shortened', async () => {
+        bridge.callBridge.mockResolvedValue(JSON.stringify({
+            access: { status: 'limited', detail: 'TDrive can only see the photos you picked.' },
+            sources: [{ id: 'all', root: 'content://media', name: 'All photos and videos', kind: 'library' }],
+        }));
+        const listing = await listNativePhotoBackupSources();
+        expect(listing.sources).toHaveLength(1);
+        expect(listing.access).toEqual({ status: 'limited', detail: 'TDrive can only see the photos you picked.' });
     });
 
     it('keeps iOS Live Photo resources distinct and reads their capture time', async () => {

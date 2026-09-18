@@ -6,6 +6,40 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "apple_image.h"
+
+// The one JPEG encoder on this platform, shared with the video poster bridge.
+// A rendition larger than this was not produced by anything we asked for.
+#define TDRIVE_MAX_ENCODED (8 * 1024 * 1024)
+
+int tdrive_encode_jpeg(CGImageRef image, void **bytes, size_t *length) {
+    *bytes = NULL;
+    *length = 0;
+    if (!image) return 1;
+    CFMutableDataRef encoded = CFDataCreateMutable(NULL, 0);
+    if (!encoded) return 1;
+    CGImageDestinationRef destination = CGImageDestinationCreateWithData(encoded, CFSTR("public.jpeg"), 1, NULL);
+    double quality = .82;
+    CFNumberRef qualityNumber = CFNumberCreate(NULL, kCFNumberDoubleType, &quality);
+    const void *outputKeys[] = {kCGImageDestinationLossyCompressionQuality};
+    const void *outputValues[] = {qualityNumber};
+    CFDictionaryRef outputOptions = CFDictionaryCreate(NULL, outputKeys, outputValues, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    bool ok = false;
+    if (destination) {
+        CGImageDestinationAddImage(destination, image, outputOptions);
+        ok = CGImageDestinationFinalize(destination);
+        CFRelease(destination);
+    }
+    CFRelease(outputOptions); CFRelease(qualityNumber);
+    CFIndex count = CFDataGetLength(encoded);
+    if (ok && count > 0 && count <= TDRIVE_MAX_ENCODED) {
+        *bytes = malloc(count);
+        if (*bytes) { memcpy(*bytes, CFDataGetBytePtr(encoded), count); *length = count; }
+    }
+    CFRelease(encoded);
+    return *bytes ? 0 : 1;
+}
+
 // ImageIO's thumbnail API downsamples during decoding. Drawing a full UIImage
 // into a smaller canvas would allocate the very bitmap this path avoids.
 static int sample_source(CGImageSourceRef source, int edge, void **bytes, size_t *length) {
@@ -48,27 +82,9 @@ static int sample_source(CGImageSourceRef source, int edge, void **bytes, size_t
     CGImageRef flattened = CGBitmapContextCreateImage(canvas);
     CGContextRelease(canvas);
     if (!flattened) return 1;
-    CFMutableDataRef encoded = CFDataCreateMutable(NULL, 0);
-    CGImageDestinationRef destination = CGImageDestinationCreateWithData(encoded, CFSTR("public.jpeg"), 1, NULL);
-    double quality = .82;
-    CFNumberRef qualityNumber = CFNumberCreate(NULL, kCFNumberDoubleType, &quality);
-    const void *outputKeys[] = { kCGImageDestinationLossyCompressionQuality };
-    const void *outputValues[] = { qualityNumber };
-    CFDictionaryRef outputOptions = CFDictionaryCreate(NULL, outputKeys, outputValues, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    bool ok = false;
-    if (destination) {
-        CGImageDestinationAddImage(destination, flattened, outputOptions);
-        ok = CGImageDestinationFinalize(destination);
-        CFRelease(destination);
-    }
-    CFRelease(outputOptions); CFRelease(qualityNumber); CGImageRelease(flattened);
-    CFIndex count = CFDataGetLength(encoded);
-    if (ok && count > 0 && count <= 8 * 1024 * 1024) {
-        *bytes = malloc(count);
-        if (*bytes) { memcpy(*bytes, CFDataGetBytePtr(encoded), count); *length = count; }
-    }
-    CFRelease(encoded);
-    return *bytes ? 0 : 1;
+    int encoded = tdrive_encode_jpeg(flattened, bytes, length);
+    CGImageRelease(flattened);
+    return encoded;
 }
 
 static CFDictionaryRef source_options(void) {

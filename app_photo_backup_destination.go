@@ -64,16 +64,26 @@ func newPhotoBackupDestinationResolver(store photoBackupFolderStore) *photoBacku
 }
 
 // photoBackupRelativeDir is the folder chain to recreate under a source, or ""
-// when there is none to mirror. Native library assets carry no path: an album
-// is a flat set of resources, not a tree, so only watched folders nest.
+// when there is none to mirror. An album is a flat set of resources, not a
+// tree, so only watched folders nest.
 //
-// The result is derived from the file's own location rather than its ledger id
-// so that it means the same thing however the id was formed, and it is empty
-// unless the file really sits inside the root -- validatePhotoBackupPath
-// enforces that too, and a destination must never be built from a path that
-// escaped it.
+// A desktop source is walked as files, so the chain is derived from the file's
+// own location rather than its ledger id -- it then means the same thing
+// however the id was formed, and it is empty unless the file really sits
+// inside the root. validatePhotoBackupPath enforces that too, and a
+// destination must never be built from a path that escaped it.
+//
+// A mobile watched folder has no path to derive it from: Android reads the
+// tree through MediaStore, and a staged copy lives in the app's cache, not
+// under the source. An empty Path is exactly what marks such an asset (see
+// validatePhotoBackupPath), so that is when the host's own answer is used. It
+// is still sanitized level by level in resolve, so a hostile RelDir can only
+// produce folder names, never an escape.
 func photoBackupRelativeDir(source photobackup.Source, asset photobackup.Asset) string {
-	if asset.Path == "" || source.Root == "" {
+	if asset.Path == "" {
+		return photoBackupSafeRelDir(asset.RelDir)
+	}
+	if source.Root == "" {
 		return ""
 	}
 	root, err := filepath.Abs(source.Root)
@@ -89,6 +99,34 @@ func photoBackupRelativeDir(source photobackup.Source, asset photobackup.Asset) 
 		return ""
 	}
 	return filepath.ToSlash(relative)
+}
+
+// photoBackupMaxRelDirDepth bounds how deep a host-supplied chain may nest.
+// Each level costs one indexed lookup and possibly one remote folder creation,
+// so an absurd chain is a remote cost, not just an odd-looking path. It
+// matches the desktop walker's own traversal depth.
+const photoBackupMaxRelDirDepth = 32
+
+// photoBackupSafeRelDir keeps only the plain folder names from a host-supplied
+// chain. Traversal components and empties are dropped rather than rejected: a
+// file whose reported location is partly unusable still belongs somewhere
+// sensible, and refusing it outright would leave it unbacked up over a naming
+// detail.
+func photoBackupSafeRelDir(value string) string {
+	if value == "" {
+		return ""
+	}
+	components := make([]string, 0, 8)
+	for _, component := range strings.Split(filepath.ToSlash(value), "/") {
+		if component == "" || component == "." || component == ".." {
+			continue
+		}
+		if len(components) == photoBackupMaxRelDirDepth {
+			break
+		}
+		components = append(components, component)
+	}
+	return strings.Join(components, "/")
 }
 
 // resolve returns the folder an upload belongs in, creating what is missing.

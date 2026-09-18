@@ -13,6 +13,18 @@ The app resolves that scope; native adapters cannot choose an account.
 - Android reads authorized MediaStore images/videos through native paged
   queries. iOS reads authorized PhotoKit resources, including the paired video
   of a Live Photo. Neither adapter reads other applications' private files.
+- An Android folder source is a place, not a document tree. The system picker
+  chooses the folder; the tree it returns is converted to a media volume and a
+  path on it, and the folder is then read through the same paged MediaStore
+  query every other Android source uses. Nothing holds a URI permission, so a
+  folder source cannot be lost to a revoked grant, and a photo reached through
+  both a folder and an album keeps one identity and uploads once. The cost is
+  that such a source covers the photos and videos MediaStore indexes, not every
+  file in the folder, and only folders on the device's own storage: one from a
+  cloud provider is refused where it is picked. Overlapping folders are refused
+  for the same reason -- both would dedupe to one upload whose destination
+  depended on scan order. iOS has no equivalent: the photo library is the unit
+  there, and the sandbox exposes no user-visible tree to watch.
 - The frontend enumerates mobile sources a page at a time. The Go worker
   uploads one queued resource at a time using the shared file service. Opening
   the gallery does not start an original-library download.
@@ -61,6 +73,12 @@ A file in the trash is still recoverable and is not a loss, a file that comes
 back becomes complete again, and a message id the local index has not reached
 yet is never treated as missing.
 
+A watched folder's subfolders are recreated under its destination. A desktop
+walk derives them from the file's own path; a phone has no path to derive them
+from, because the bytes are staged in the app's cache, so the host reports the
+folder chain with each discovered item and the ledger carries it. Either way
+the chain is sanitized component by component before it becomes a folder name.
+
 Live Photo components are separate uploaded files and separate resource counts.
 This version does not publish a compound-asset manifest or reconstruct Live
 Photos on restore. It preserves the original resource bytes. Cross-device
@@ -99,7 +117,11 @@ from v1/v2 databases without discarding sources, receipts, or queued work.
 ## User-visible limits
 
 Backup source selection is available in the desktop profile menu and mobile
-Account tab. New uploads go to `Photo backup / <device> / <source>` in the
+Account tab. Android offers both: albums and the whole library, and a folder
+picked from system storage. Under Android's partial photo access MediaStore
+answers only with the items the user selected, so the album list is short for a
+real reason; the panel says so and choosing sources again reopens the system
+dialog that can widen the grant. New uploads go to `Photo backup / <device> / <source>` in the
 current drive (under a configured destination parent when present). Device names
 are persisted with an installation-specific suffix. Indexed folder lookup reuses
 the hierarchy across restarts; existing completed uploads are not moved or sent

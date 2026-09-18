@@ -26,6 +26,13 @@ export function ActiveChannelID(): $CancellablePromise<number> {
     return $Call.ByID(915599723);
 }
 
+/**
+ * AddPhotoBackupFolder opens the desktop directory dialog. Mobile does not
+ * come through here: Android picks its folder in the native layer, because the
+ * Storage Access Framework answers with a document tree rather than a path and
+ * only the host can turn one into something enumerable. It then arrives as an
+ * ordinary UpsertPhotoBackupSource of kind photoBackupDeviceFolderKind.
+ */
 export function AddPhotoBackupFolder(): $CancellablePromise<$models.PhotoBackupSource> {
     return $Call.ByID(700615070);
 }

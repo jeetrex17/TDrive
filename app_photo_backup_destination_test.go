@@ -141,6 +141,71 @@ func TestPhotoBackupRelativeDirOnlyMirrorsContainedFolderSources(t *testing.T) {
 	if got := photoBackupRelativeDir(photobackup.Source{Root: "library"}, photobackup.Asset{ResourceID: "media:image:9"}); got != "" {
 		t.Fatalf("native asset = %q", got)
 	}
+	// A watched folder on a phone has no path either -- its bytes are staged in
+	// the app's cache -- so the host's own answer is what nests it.
+	folder := photobackup.Source{Kind: photoBackupDeviceFolderKind, Root: "external_primary:DCIM/Camera/"}
+	for _, tc := range []struct{ name, relDir, want string }{
+		{"nested", "Trips/Rome", "Trips/Rome"},
+		{"at the top", "", ""},
+		{"traversal is dropped, not obeyed", "../../etc/Trips", "etc/Trips"},
+		{"empty components collapse", "Trips//Rome/", "Trips/Rome"},
+	} {
+		if got := photoBackupRelativeDir(folder, photobackup.Asset{ResourceID: "media:image:9", RelDir: tc.relDir}); got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	deep := strings.Repeat("a/", photoBackupMaxRelDirDepth+4)
+	if got := photoBackupRelativeDir(folder, photobackup.Asset{ResourceID: "media:image:9", RelDir: deep}); strings.Count(got, "/")+1 != photoBackupMaxRelDirDepth {
+		t.Fatalf("deep chain = %q", got)
+	}
+}
+
+func TestPhotoBackupDeviceFolderRootIsNormalizedAndChecked(t *testing.T) {
+	for _, tc := range []struct{ name, root, want string }{
+		{"plain", "external_primary:DCIM/Camera", "external_primary:DCIM/Camera/"},
+		{"already terminated", "external_primary:DCIM/Camera/", "external_primary:DCIM/Camera/"},
+		{"traversal removed", "external_primary:DCIM/../Camera", "external_primary:DCIM/Camera/"},
+		{"card volume", "1aef-2b03:Pictures", "1aef-2b03:Pictures/"},
+	} {
+		got, err := validatePhotoBackupDeviceFolderRoot(tc.root)
+		if err != nil || got != tc.want {
+			t.Fatalf("%s = %q err=%v, want %q", tc.name, got, err, tc.want)
+		}
+	}
+	for _, tc := range []struct{ name, root string }{
+		{"no volume", "DCIM/Camera"},
+		{"whole volume", "external_primary:"},
+		{"hostile volume", "../../secrets:DCIM"},
+		{"empty", ""},
+	} {
+		if _, err := validatePhotoBackupDeviceFolderRoot(tc.root); err == nil {
+			t.Fatalf("%s was accepted", tc.name)
+		}
+	}
+}
+
+// Overlapping folders are refused: the ledger would dedupe the uploads, but
+// the file's place in the drive would then depend on which source scanned it
+// first, which is not something a user can predict or find.
+func TestPhotoBackupOverlappingDeviceFolderIsNamed(t *testing.T) {
+	existing := []photobackup.Source{
+		{ID: "tree:external_primary:DCIM/", Kind: photoBackupDeviceFolderKind, Root: "external_primary:DCIM/", Name: "DCIM"},
+		{ID: "bucket:9", Kind: "album", Root: "content://media", Name: "Camera"},
+	}
+	if got := photoBackupOverlappingDeviceFolder(existing, "tree:external_primary:DCIM/Camera/", "external_primary:DCIM/Camera/"); got != "DCIM" {
+		t.Fatalf("contained folder = %q", got)
+	}
+	if got := photoBackupOverlappingDeviceFolder(existing, "tree:external_primary:Pictures/", "external_primary:Pictures/"); got != "" {
+		t.Fatalf("unrelated folder = %q", got)
+	}
+	// Re-picking the same folder updates it rather than clashing with itself.
+	if got := photoBackupOverlappingDeviceFolder(existing, "tree:external_primary:DCIM/", "external_primary:DCIM/"); got != "" {
+		t.Fatalf("same folder = %q", got)
+	}
+	// A different volume is a different place, even with the same path.
+	if got := photoBackupOverlappingDeviceFolder(existing, "tree:1aef-2b03:DCIM/", "1aef-2b03:DCIM/"); got != "" {
+		t.Fatalf("other volume = %q", got)
+	}
 }
 
 func TestPhotoBackupSettingsSavePreservesOmittedDestination(t *testing.T) {

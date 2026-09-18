@@ -39,7 +39,15 @@ type Asset struct {
 	// otherwise. ModifiedAt is the file's own timestamp and moves whenever a
 	// photo is edited, which is why "new items only" cannot key off it alone.
 	CapturedAt time.Time
-	Size       int64
+	// RelDir is the folder chain below the source that this asset sits in, "/"
+	// separated, empty at the top of the source. A host that walks a tree
+	// without handing over filesystem paths has no other way to say where an
+	// asset lived: Android reads a watched folder through MediaStore, which
+	// answers with rows, not files, so Path stays empty there by design.
+	// Without it every subfolder's files land in one destination folder and
+	// two photos named the same in different subfolders collide.
+	RelDir string
+	Size   int64
 }
 
 type Page struct {

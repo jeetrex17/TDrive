@@ -225,7 +225,7 @@ func TestMigrateVersionFourAddsReceiptReconciliation(t *testing.T) {
 	configure(t, e, scope)
 	ctx := context.Background()
 	ids := completeReceipts(t, e, scope, "old.jpg")
-	if _, err := e.db.Exec(`DROP INDEX photo_backup_jobs_receipts; ALTER TABLE photo_backup_settings DROP COLUMN receipt_cursor; PRAGMA user_version=4`); err != nil {
+	if _, err := e.db.Exec(`DROP INDEX photo_backup_jobs_receipts; ALTER TABLE photo_backup_settings DROP COLUMN receipt_cursor; ALTER TABLE photo_backup_jobs DROP COLUMN rel_dir; PRAGMA user_version=4`); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.Migrate(ctx); err != nil {

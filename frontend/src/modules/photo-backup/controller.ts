@@ -9,7 +9,7 @@ import { OperationFailure, requireOperationSuccess } from '../../api/operation';
 import { onRuntimeEvent, runtimeEventsAvailable, type RuntimeUnsubscribe } from '../../api/runtime';
 import { asRecord, boundedText } from '../../api/shared';
 import type { OperationError, OperationResult } from '../../types';
-import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativePhotoBackupAvailable, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
+import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativePhotoBackupAvailable, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
 import { activeDrive } from '../../ui/mobile/mobile-shell-store';
 import { activatePhotoBackupBackground } from './background';
 import { callWithPasswordRetry, openEncryptionPasswordModal } from '../modals/encryption-password';
@@ -20,6 +20,11 @@ export const photoBackupState = writable<PhotoBackupState | null>(null);
 export const photoBackupError = writable('');
 export const photoBackupBusy = writable(false);
 export const photoBackupCandidates = writable<PhotoBackupSource[]>([]);
+// What the device says about the media grant. It lives here rather than in the
+// backend state because only the host can see an Android permission, and under
+// partial access it is the one thing that explains why the list of albums is
+// nearly empty.
+export const photoBackupAccessNote = writable('');
 
 const UNLOCK_MESSAGE = 'Unlock encryption to continue photo backup.';
 /** How long to sit on a device-side wait (Wi-Fi, policy) before asking again. */
@@ -171,7 +176,25 @@ async function runDiscoveryScheduler(): Promise<void> {
     }
 }
 
-export async function loadPhotoBackupCandidates(): Promise<void> { if (nativePhotoBackupAvailable()) { await requestNativePhotoBackupAccess(); photoBackupCandidates.set(await listNativePhotoBackupSources()); } }
+// Asking for access every time is deliberate. A user who chose "Select photos"
+// can only widen that from the system's own dialog, and this button is the
+// place they come to when the list is missing what they expected.
+export async function loadPhotoBackupCandidates(): Promise<void> {
+    if (!nativePhotoBackupAvailable()) return;
+    await requestNativePhotoBackupAccess();
+    const listing = await listNativePhotoBackupSources();
+    photoBackupCandidates.set(listing.sources);
+    photoBackupAccessNote.set(listing.access.status === 'limited' || listing.access.status === 'denied' ? listing.access.detail : '');
+}
+/**
+ * Whether a folder can be added on this host. Desktop always can, through the
+ * backend's own dialog; a phone only where the host offers a picker, which is
+ * Android. iOS has no folder to offer -- the photo library is the unit there,
+ * and the sandbox has no user-visible tree to watch -- so the button is absent
+ * rather than present and refusing.
+ */
+export function photoBackupFolderPicking(): boolean { return !nativePhotoBackupAvailable() || nativePhotoBackupFolderPicking(); }
+
 export async function selectPhotoBackupSource(source: PhotoBackupSource): Promise<void> { await upsertPhotoBackupSource(source); await refreshPhotoBackup(); void runDiscoveryScheduler(); }
 
 // An explicit action may open the existing password modal, then runs once. The
@@ -207,9 +230,41 @@ export async function updatePhotoBackupSettings(settings: PhotoBackupSettings): 
     finally { photoBackupBusy.set(false); }
 }
 
+/**
+ * Add a folder to back up.
+ *
+ * Desktop opens the native directory dialog inside the backend. A phone cannot:
+ * the picker is an activity, and what it returns is a document tree the backend
+ * could not read, so the host picks the folder and hands back the source it
+ * became. Both ends arrive at the same place -- one more row in the ledger.
+ *
+ * The host's refusals are written for the user ("choose one in internal storage
+ * or on the SD card"), so they are shown as they are.
+ */
 export async function choosePhotoBackupFolder(): Promise<void> {
-    photoBackupBusy.set(true); try { await addPhotoBackupFolder(); await refreshPhotoBackup(); } catch { photoBackupError.set('Could not add that folder. Try again.'); } finally { photoBackupBusy.set(false); }
+    photoBackupBusy.set(true);
+    try {
+        if (nativePhotoBackupFolderPicking()) {
+            const picked = await pickNativePhotoBackupFolder();
+            if (!picked) return;
+            await upsertPhotoBackupSource(picked);
+        } else {
+            await addPhotoBackupFolder();
+        }
+        await refreshPhotoBackup();
+        void runDiscoveryScheduler();
+    }
+    catch (cause) { photoBackupError.set(folderRefusal(cause)); }
+    finally { photoBackupBusy.set(false); }
 }
+
+// Both ends refuse a folder in words meant for the user; only the backend's
+// "photo backup:" log prefix has to come off before they are shown.
+function folderRefusal(cause: unknown): string {
+    const message = cause instanceof Error ? cause.message.replace(/^photo backup:\s*/i, '').trim() : '';
+    return message ? message.slice(0, 240) : 'Could not add that folder. Try again.';
+}
+
 export async function deletePhotoBackupSource(id: string): Promise<void> { cancelDiscovery(); photoBackupBusy.set(true); try { await removePhotoBackupSource(id); await refreshPhotoBackup(); } catch { photoBackupError.set('Could not remove that source. Try again.'); } finally { photoBackupBusy.set(false); } }
 export async function pausePhotoBackupNow(): Promise<void> {
     manuallyPaused = true; cancelDiscovery();
