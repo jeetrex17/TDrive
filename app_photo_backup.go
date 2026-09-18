@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"TDrive/backend"
 	"TDrive/backend/datadir"
 	"TDrive/backend/photobackup"
 
@@ -107,7 +108,10 @@ func (a *App) initPhotoBackup() error {
 	if err != nil {
 		return err
 	}
-	db.SetMaxOpenConns(1)
+	if err := backend.TuneSQLite(db); err != nil {
+		db.Close()
+		return err
+	}
 	engine, err := photobackup.Open(db, photobackup.Options{})
 	if err != nil {
 		db.Close()
@@ -313,7 +317,7 @@ func (a *App) EnqueuePhotoBackupAssets(sourceID string, values []PhotoBackupAsse
 		if resourceID == "" {
 			resourceID = value.ID
 		}
-		assets = append(assets, photobackup.Asset{ID: value.ID, Version: value.Version, Name: value.Name, MediaType: value.MediaType, ResourceID: resourceID, ModifiedAt: time.UnixMilli(value.ModifiedAt), Size: value.Size})
+		assets = append(assets, photobackup.Asset{ID: value.ID, Version: value.Version, Name: value.Name, MediaType: value.MediaType, ResourceID: resourceID, ModifiedAt: time.UnixMilli(value.ModifiedAt), CapturedAt: timeFromMillis(value.CreatedAt), Size: value.Size})
 	}
 	return engine.EnqueuePage(a.appContext(), scope, sourceID, assets)
 }
@@ -759,7 +763,24 @@ func photoBackupSourceDTO(source photobackup.Source) PhotoBackupSource {
 }
 
 func photoBackupAssetDTO(asset photobackup.Asset) PhotoBackupAsset {
-	return PhotoBackupAsset{ID: asset.ID, Version: asset.Version, Name: asset.Name, MediaType: asset.MediaType, ResourceID: asset.ResourceID, ModifiedAt: asset.ModifiedAt.UnixMilli(), Size: asset.Size}
+	return PhotoBackupAsset{ID: asset.ID, Version: asset.Version, Name: asset.Name, MediaType: asset.MediaType, ResourceID: asset.ResourceID, ModifiedAt: asset.ModifiedAt.UnixMilli(), CreatedAt: millisFromTime(asset.CapturedAt), Size: asset.Size}
+}
+
+// The wire carries an unknown capture time as 0. Both directions have to agree
+// on that, or a host that reports nothing would round-trip as a 1970 photo
+// and "new items only" would skip everything it ever sends.
+func timeFromMillis(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
+}
+
+func millisFromTime(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }
 
 func photoBackupState(settings photobackup.Settings, sources []photobackup.Source, status photobackup.Status, running, manualPaused bool) PhotoBackupState {
