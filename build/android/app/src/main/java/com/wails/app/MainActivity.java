@@ -797,7 +797,13 @@ public class MainActivity extends AppCompatActivity {
                     if (existingBytes > PHOTO_BACKUP_STAGE_MAX_BYTES || size > PHOTO_BACKUP_STAGE_MAX_BYTES - existingBytes) throw new IOException("media staging would exceed the 4 GB cache limit");
                     requireStagingSpace(root, size);
                     File out = new File(dir, displayName); temporary = new File(dir, "." + displayName + ".partial");
-                    discard(temporary);
+                    // Only the stale file, never discard(): this runs *before*
+                    // the copy, and discard() also removes the parent once it is
+                    // empty -- which a directory just created for this asset
+                    // always is. That deleted the staging directory out from
+                    // under the stream below, and every first attempt at an
+                    // asset failed with ENOENT on its own .partial file.
+                    temporary.delete();
                     copyCapped(uri, temporary, PHOTO_BACKUP_STAGE_MAX_BYTES - existingBytes, cancelled, root);
                     if (cancelled.get()) throw new IOException("media staging cancelled");
                     String after = mediaVersion(uri, ref.video);
@@ -1316,6 +1322,16 @@ public class MainActivity extends AppCompatActivity {
         return new File(pickedCache, id + "/" + file.rel.substring(file.rel.lastIndexOf('/') + 1));
     }
 
+    /**
+     * Removes a staged copy and the slot directory it was the last occupant of.
+     *
+     * Cleanup only, once nothing more will be written to that directory: the
+     * parent delete is what keeps the picker's one-directory-per-file cache from
+     * accumulating empty slots, and File.delete() on a directory is a no-op
+     * while anything else is still in it. Clearing a stale file that is about to
+     * be rewritten is not this -- use File.delete() for that, or the directory
+     * goes with it.
+     */
     private void discard(File copy) {
         copy.delete();
         File slot = copy.getParentFile();
