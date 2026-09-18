@@ -20,6 +20,7 @@ import {
     cancelTransfersInDirection,
     clearHistory,
     markTransferDone,
+    cancelUploadFile,
     pushQueuedTransfer,
     pushHistoryEvent,
     pushTransferStart,
@@ -60,6 +61,7 @@ beforeEach(() => {
         target: host,
         props: {
             onCancelDirection: cancelTransfersInDirection,
+            onCancelFile: cancelUploadFile,
             onClearHistory: clearHistory,
         },
     });
@@ -204,7 +206,7 @@ describe('notif-bell', () => {
         // shared, so the compact forms live in transfer-row.mobile.dom.test.ts
         // and this asserts the desktop row is untouched by them.
         expect(document.body.textContent).toContain('3 / 5 files');
-        expect(document.body.textContent).toContain('600 B / 1000 B');
+        expect(document.body.textContent).toContain('600 of 1000 B');
     });
 
     it('opens the full panel on hover and closes after the pointer leaves', () => {

@@ -111,6 +111,7 @@ public class MainActivity extends AppCompatActivity {
     private static final int CAMERA_PERMISSION_REQUEST = 7010;
     private static final int SAVE_PERMISSION_REQUEST = 7011;
     private static final int PHOTO_BACKUP_PERMISSION_REQUEST = 7012;
+    private static final int NOTIFICATION_PERMISSION_REQUEST = 7013;
     private static final int PHOTO_BACKUP_PAGE_LIMIT = 128;
     // One resource is staged at a time, which permits normal phone videos while
     // still putting a firm bound on a malicious or corrupt MediaStore row.
@@ -122,6 +123,12 @@ public class MainActivity extends AppCompatActivity {
     private File pendingCaptureFile;
     private boolean pendingCaptureIsVideo;
     private String pendingPhotoBackupPermissionCallbackId;
+    // Whether a transfer has held the process open since the last time the user
+    // was here, and whether this run of the app has already asked about it.
+    // Written from the JS thread by noteBackgroundTransferRunning, read on the
+    // main thread in onResume.
+    private volatile boolean backgroundTransferRan;
+    private boolean askedForTransferNotifications;
     // Staging is intentionally independent of discovery lifetime: durable
     // queues keep MediaStore IDs, and every materialization revalidates them.
     private final Map<String, File> stagedPhotoBackupAssets = new ConcurrentHashMap<>();
@@ -393,6 +400,12 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 jsBridge.sendCallback(callbackId, null, "TDrive needs permission to write to Downloads");
             }
+            return;
+        }
+        // Nothing to resume: this path only primes the permission ahead of a
+        // transfer. A held notification is replayed by WailsBridge's own
+        // request code; a refusal leaves transfers running with nothing to say.
+        if (requestCode == NOTIFICATION_PERMISSION_REQUEST) {
             return;
         }
         if (requestCode == PHOTO_BACKUP_PERMISSION_REQUEST) {
@@ -1645,9 +1658,46 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Records that transfers are being kept alive behind the app, so the next
+     * return to the foreground can be the moment TDrive asks to show them.
+     */
+    void noteBackgroundTransferRunning() {
+        backgroundTransferRan = true;
+    }
+
+    /**
+     * Asks for POST_NOTIFICATIONS at the only moment it explains itself.
+     *
+     * Asked when Upload is tapped, the dialog is one more thing between the
+     * user and the thing they just asked for, and it gets dismissed; on Android
+     * 13+ the second dismissal is permanent, so a badly-timed ask is not a
+     * retry, it is the end of the matter. Asked here -- the user has left, a
+     * transfer has been running without them, and they have just come back --
+     * the question is about something that has already happened to them.
+     *
+     * Once per run of the app, and only after a transfer has actually earned
+     * it. No preference is stored: a refusal is remembered by Android itself,
+     * which from then on answers the request immediately and without a dialog,
+     * so there is no way for this to become a prompt the user sees twice.
+     */
+    private void askForTransferNotificationsIfEarned() {
+        if (!backgroundTransferRan || askedForTransferNotifications) return;
+        backgroundTransferRan = false;
+        askedForTransferNotifications = true;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+        if (checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                == PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        requestPermissions(
+                new String[]{"android.permission.POST_NOTIFICATIONS"}, NOTIFICATION_PERMISSION_REQUEST);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
+        askForTransferNotificationsIfEarned();
         if (webView != null) {
             applySystemTextScale(webView.getSettings());
             publishSystemTextScale();

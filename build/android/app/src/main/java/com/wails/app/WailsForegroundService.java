@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
@@ -11,6 +12,7 @@ import android.os.IBinder;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 
 import java.lang.ref.WeakReference;
 
@@ -40,6 +42,14 @@ public class WailsForegroundService extends android.app.Service {
     public static final String EXTRA_TEXT = "text";
     /** 0..100 for a real bar, negative for one that only says "something is happening". */
     public static final String EXTRA_PROGRESS = "progress";
+    /** The item moving right now -- a file name. Absent where there is nothing to name. */
+    public static final String EXTRA_DETAIL = "detail";
+    /**
+     * Files finished, and files in the batch. Absent, or a total of zero, where
+     * the work is not a countable batch; a count is never guessed from one.
+     */
+    public static final String EXTRA_FILES_DONE = "filesDone";
+    public static final String EXTRA_FILES_TOTAL = "filesTotal";
 
     /**
      * Unchanged from the id this service has always used. A channel id is how
@@ -54,6 +64,12 @@ public class WailsForegroundService extends android.app.Service {
      * behind, because an ongoing notification cannot be swiped away.
      */
     private static final int NOTIFICATION_ID = 0x57A1; // "WAI"
+    /**
+     * The line left behind once the work is over, on an id of its own so it
+     * neither replaces a transfer that is still running nor is taken down with
+     * the service that posted it.
+     */
+    private static final int SUMMARY_NOTIFICATION_ID = 0x57A2;
     private static final int PROGRESS_MAX = 100;
     // The service and Wails runtime share a process. Keep only a weak handle so
     // a destroyed Activity/WebView can never be retained by a long transfer.
@@ -71,7 +87,7 @@ public class WailsForegroundService extends android.app.Service {
     }
 
     /** Creating the channel is idempotent but not free, and this runs per update. */
-    private boolean channelReady;
+    private static volatile boolean channelReady;
     private PendingIntent contentIntent;
 
     @Override
@@ -87,13 +103,19 @@ public class WailsForegroundService extends android.app.Service {
         // the plain notification it has always got.
         boolean hasBar = intent != null && intent.hasExtra(EXTRA_PROGRESS);
         int progress = hasBar ? intent.getIntExtra(EXTRA_PROGRESS, -1) : -1;
+        // Everything below is optional and defaults to what this notification
+        // showed before any of it existed, so a page that sends none of it --
+        // an older bundle against a newer host -- is unchanged by its arrival.
+        String detail = intent != null ? intent.getStringExtra(EXTRA_DETAIL) : null;
+        int filesDone = intent != null ? intent.getIntExtra(EXTRA_FILES_DONE, 0) : 0;
+        int filesTotal = intent != null ? intent.getIntExtra(EXTRA_FILES_TOTAL, 0) : 0;
 
-        ensureChannel();
+        ensureChannel(this);
         // Unconditional and synchronous, on every command including the one
         // that arrives with a null intent: the system allows roughly five
         // seconds from startForegroundService() to startForeground() before it
         // kills the app with an ANR, and there is nothing here worth deferring.
-        Notification notification = build(title, text, hasBar, progress);
+        Notification notification = build(title, text, hasBar, progress, detail, filesDone, filesTotal);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         } else {
@@ -107,7 +129,7 @@ public class WailsForegroundService extends android.app.Service {
         return START_NOT_STICKY;
     }
 
-    private void ensureChannel() {
+    private static void ensureChannel(Context context) {
         if (channelReady || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             channelReady = true;
             return;
@@ -119,12 +141,14 @@ public class WailsForegroundService extends android.app.Service {
         // strip: a progress line that shoved itself over whatever the user had
         // opened, once a second, would be unusable.
         channel.setShowBadge(false); // Work in progress is not an unread item.
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        NotificationManager nm =
+                (NotificationManager) context.getSystemService(NOTIFICATION_SERVICE);
         if (nm != null) nm.createNotificationChannel(channel);
         channelReady = true;
     }
 
-    private Notification build(String title, String text, boolean hasBar, int progress) {
+    private Notification build(String title, String text, boolean hasBar, int progress,
+                               String detail, int filesDone, int filesTotal) {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 // A platform status icon rather than the launcher icon, which is
                 // a full-colour bitmap and renders as a white blob up there.
@@ -152,6 +176,18 @@ public class WailsForegroundService extends android.app.Service {
                 .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED);
 
         if (hasBar) builder.setProgress(PROGRESS_MAX, clampProgress(progress), progress < 0);
+        // "3 of 12" sits beside the app name, where it costs neither of the two
+        // lines anything: a count is what a glance at a collapsed row can use,
+        // and bytes and an estimate are what a longer look wants.
+        if (filesTotal > 0) {
+            builder.setSubText(Math.max(0, Math.min(filesDone, filesTotal)) + " of " + filesTotal);
+        }
+        // A file name is routinely wider than the collapsed row, which would
+        // truncate it to nothing useful, and is exactly what the user came to
+        // the shade for. Expanding is where it belongs.
+        if (detail != null && !detail.isEmpty()) {
+            builder.setStyle(new NotificationCompat.BigTextStyle().bigText(text + "\n" + detail));
+        }
 
         // No Cancel action. Stopping the transfers means reaching the Go calls
         // that own them, which only the WebView can do, and wiring a button
@@ -162,15 +198,57 @@ public class WailsForegroundService extends android.app.Service {
         return builder.build();
     }
 
-    /** Tapping the row opens the app, which is where the transfers can be managed. */
+    /**
+     * Held rather than rebuilt: this runs on every update, and asking for a
+     * PendingIntent is a round trip to the system each time.
+     */
     private PendingIntent contentIntent() {
-        if (contentIntent != null) return contentIntent;
-        Intent launch = getPackageManager().getLaunchIntentForPackage(getPackageName());
+        if (contentIntent == null) contentIntent = launchIntent(this);
+        return contentIntent;
+    }
+
+    /**
+     * The line the user finds afterwards, in place of the ongoing one.
+     *
+     * A transfer that ran while the phone was in a pocket ends with its
+     * notification simply vanishing, which tells the user nothing about whether
+     * their photos are safe. This says so, once, and can be swiped away --
+     * unlike the ongoing notification, which cannot, and so must never be the
+     * thing left behind. Same channel as the progress it replaces: it is the
+     * same subject, and a second channel would be a second row in Settings for
+     * the user to reason about.
+     *
+     * Silent and low either way. "Done" is good news, and good news that
+     * interrupts is still an interruption.
+     */
+    static void postSummary(Context context, String title, String text, boolean interrupted) {
+        NotificationManagerCompat manager = NotificationManagerCompat.from(context);
+        // Denied POST_NOTIFICATIONS makes notify() a no-op rather than an
+        // error, but asking first keeps the intent of the code readable.
+        if (!manager.areNotificationsEnabled()) return;
+        ensureChannel(context);
+        Notification notification = new NotificationCompat.Builder(context, CHANNEL_ID)
+                // The icon carries the outcome before either line is read.
+                .setSmallIcon(interrupted
+                        ? android.R.drawable.stat_sys_warning
+                        : android.R.drawable.stat_sys_upload_done)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setAutoCancel(true)
+                .setSilent(true)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setContentIntent(launchIntent(context))
+                .build();
+        manager.notify(SUMMARY_NOTIFICATION_ID, notification);
+    }
+
+    /** Tapping any of this opens the app, which is where transfers are managed. */
+    private static PendingIntent launchIntent(Context context) {
+        Intent launch = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
         if (launch == null) return null;
         int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                 ? PendingIntent.FLAG_IMMUTABLE : 0;
-        contentIntent = PendingIntent.getActivity(this, 0, launch, flags);
-        return contentIntent;
+        return PendingIntent.getActivity(context, 0, launch, flags);
     }
 
     private static int clampProgress(int progress) {
@@ -192,6 +270,12 @@ public class WailsForegroundService extends android.app.Service {
         // backup controller before dropping foreground priority so it can
         // cancel staging/upload promptly and leave the queued record resumable.
         emitDeadline();
+        // Said here rather than left to the page: the deadline is the host's
+        // doing, the page may be frozen in a backgrounded WebView when it
+        // arrives, and a transfer that stops must never be mistaken for one
+        // that finished. The work is resumable, and the line says so.
+        postSummary(this, "Transfers stopped",
+                "Android reached its background limit. Open TDrive to finish.", true);
         stopSelf(startId);
     }
 

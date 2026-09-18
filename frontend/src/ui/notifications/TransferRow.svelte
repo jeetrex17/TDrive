@@ -3,6 +3,8 @@
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
     import XIcon from '@lucide/svelte/icons/x';
     import { formatBytes } from '../../utils';
+    import TransferItems from './TransferItems.svelte';
+    import { etaSeconds, formatEta, formatSizePair } from './transfer-view';
     import { isUnfinishedTransfer, type TransferEvent } from './notif-store';
 
     /**
@@ -23,9 +25,15 @@
          * a twenty-file batch with no way to stop.
          */
         onCancel?: (direction: TransferEvent['direction']) => void;
+        /**
+         * Stops one file of an aggregate row. The row-wide control above takes
+         * the whole batch down; this is how a reader drops the one 4 GB video
+         * holding up the other hundred and ninety-nine files.
+         */
+        onCancelFile?: (key: string) => void;
     }
 
-    let { transfer, onCancel }: Props = $props();
+    let { transfer, onCancel, onCancelFile }: Props = $props();
 
     const direction = $derived(transfer.direction === 'up' ? 'upload' : 'download');
     const dirLabel = $derived(transfer.direction === 'up' ? 'Uploading' : 'Downloading');
@@ -50,6 +58,8 @@
         : transfer.bytes || 0);
 
     const showProgress = $derived(isUnfinishedTransfer(transfer.status) && transfer.status !== 'canceling');
+    const items = $derived(showProgress ? transfer.items ?? [] : []);
+    const eta = $derived(etaSeconds(transfer));
     const canCancel = $derived(
         isUnfinishedTransfer(transfer.status)
         && transfer.status !== 'canceling'
@@ -93,21 +103,29 @@
             </div>
         {/if}
     </div>
+    <!-- Read down: how many files, how far, how much, how long, how fast. The
+         count leads because on an aggregate it is the figure the reader is
+         actually tracking; the rate trails because it says the least. -->
     <div class="notif-row-meta">
         {#if terminalLabel}
             <div>{terminalLabel}</div>
-        {:else if transfer.total <= 0}
-            {#if (transfer.itemsTotal || 0) > 0}
-                <div class="notif-row-size">{transfer.itemsDone || 0} / {transfer.itemsTotal} files</div>
-            {:else}
-                <div>{Math.round(transfer.progress || 0)}%</div>
-            {/if}
         {:else}
             {#if (transfer.itemsTotal || 0) > 0}
                 <div class="notif-row-size">{transfer.itemsDone || 0} / {transfer.itemsTotal} files</div>
+            {:else}
+                <!-- A row counting files has the bar to say how far along it is
+                     and no room to spare; one with nothing to count needs the
+                     figure, because it is the only one it has. -->
+                <div class="notif-row-size">{Math.round(transfer.progress || 0)}%</div>
             {/if}
-            <div class="notif-row-size">{Math.round(transfer.progress || 0)}%</div>
-            <div class="notif-row-size">{formatBytes(doneBytes)} / {formatBytes(transfer.total)}</div>
+            {#if transfer.total > 0}
+                <div class="notif-row-size">{formatSizePair(doneBytes, transfer.total)}</div>
+            {:else if transfer.bytes > 0}
+                <div class="notif-row-size">{formatBytes(transfer.bytes)} so far</div>
+            {/if}
+            {#if eta !== null}
+                <div class="notif-row-size">{formatEta(eta)}</div>
+            {/if}
             {#if transfer.speed > 0}
                 <div class="notif-row-speed">{formatBytes(transfer.speed)}/s</div>
             {/if}
@@ -124,5 +142,10 @@
         >
             <XIcon size={12} strokeWidth={2} aria-hidden="true" />
         </button>
+    {/if}
+    {#if items.length > 0}
+        <div class="notif-row-items">
+            <TransferItems {items} active={transfer.itemsActive ?? items.length} onCancel={onCancelFile} />
+        </div>
     {/if}
 </div>

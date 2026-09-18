@@ -16,6 +16,31 @@ export function isUnfinishedTransfer(status: TransferStatus): boolean {
     return UNFINISHED_TRANSFER_STATUSES.includes(status);
 }
 
+/**
+ * One file moving inside an aggregate transfer, listed underneath it.
+ *
+ * A batch of any size runs only a handful of files at a time, and those few are
+ * the only ones a reader can act on or learn anything from; the rest are a
+ * number. So a row carries the files in flight and never the batch, which is
+ * what keeps a ten-thousand-file import the same size on screen, in the store
+ * and on the wire as a ten-file one.
+ */
+export interface TransferItem {
+    /** Stable for this file's whole life, so its bar keeps its place in the list. */
+    key: string;
+    name: string;
+    progress: number; // 0..100
+    total: number; // bytes; 0 when unknown
+}
+
+/**
+ * How many in-flight files a row lists. Upload concurrency is capped at eight,
+ * so this is a reading limit rather than a safety one -- past four names the
+ * list stops being something the eye takes in at a glance -- and itemsActive
+ * keeps the count of what is left out honest.
+ */
+export const MAX_TRANSFER_ITEMS = 4;
+
 export interface TransferEvent {
     kind: 'transfer';
     id: string; // "xfer:<direction>:<callerId>"
@@ -27,6 +52,10 @@ export interface TransferEvent {
     speed: number; // smoothed bytes/sec; 0 when unknown
     itemsDone?: number; // completed files for aggregate folder/import transfers
     itemsTotal?: number;
+    /** The files moving right now, at most MAX_TRANSFER_ITEMS of them. */
+    items?: readonly TransferItem[];
+    /** How many are moving in all, which is items.length or more. */
+    itemsActive?: number;
     status: TransferStatus;
     startedAt: number;
     finishedAt: number;
