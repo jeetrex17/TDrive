@@ -25,6 +25,27 @@ The physical scroll canvas is capped at 16 million CSS pixels. Logical offsets
 map across that canvas, while visible cells retain their actual size. This keeps
 the end of a million-photo library reachable under Chromium/WebKit height limits.
 
+## Albums
+
+Photos opens on the folder grid whenever the drive has more than one folder
+holding media; one folder, or none, falls back to the single timeline. Tiles
+come from one `ListMediaFolders` projection read, in the order it returns them,
+recomputed on entry rather than under a live scroll. The grid windows by row
+through `ui/file-list/row-window.ts`, so a drive with hundreds of media folders
+still costs a viewport of DOM.
+
+Covers are ordinary thumbnails: the same identity the file list builds, the same
+broker leases, byte caps, eviction and cancellation. A cover that cannot be
+drawn -- absent, a video, a stale revision, a locked vault, offline -- degrades
+to a folder glyph or the locked stripes; names and counts are local, so the grid
+still navigates.
+
+Opening a tile reuses this same `GallerySource`, scoped by `folderID`. A folder
+timeline carries month buckets but no anchor index, so its pages are reached by
+following each page's next cursor; the source learns those cursors as pages land
+and walks the gap once on a jump. The drive-wide timeline keeps its anchor index
+precisely because a million photos cannot be walked.
+
 ## Images and ownership
 
 The shared rendition broker owns cancellation, priorities, object URLs and

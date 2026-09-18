@@ -26,6 +26,7 @@ export class GallerySource {
     private readonly onStale?: () => void;
     private readonly loadAnchors?: (generation: string) => Promise<MediaTimeline>;
     private anchorLoad: Promise<void> | null = null;
+    private walking = false;
     private pinned = new Set<number>();
     private disposed = false;
     private stale = false;
@@ -158,7 +159,8 @@ export class GallerySource {
         const existing = this.requests.get(start);
         if (existing) { existing.direct ||= direct; return existing.promise; }
         if (start > 0 && !this.timeline.anchors[start / this.timeline.pageSize]) {
-            void this.requestAnchors().catch(() => { /* A later demand retries transient failures. */ });
+            if (this.loadAnchors) void this.requestAnchors().catch(() => { /* A later demand retries transient failures. */ });
+            else void this.walkTo(start);
             return this.queuePage(start, direct);
         }
         return this.queuePage(start, direct);
@@ -178,6 +180,35 @@ export class GallerySource {
         this.requests.set(start, { promise, resolve, reject, direct, running: false });
         this.pump();
         return promise;
+    }
+
+    /**
+     * Reach `start` in a scope that has no anchor index -- one folder, whose
+     * pages are keyed only by the cursor the page before hands back.
+     *
+     * Scrolling never gets here: the page above has already handed over the
+     * key. This is the price of a jump, and it is paid once, because every
+     * cursor learned on the way stays in the timeline. A folder is hundreds to
+     * a few thousand photos, so the walk is bounded by design rather than by
+     * hope; the drive-wide timeline keeps its anchor index precisely because it
+     * is not.
+     */
+    private async walkTo(start: number): Promise<void> {
+        if (this.walking) return;
+        this.walking = true;
+        try {
+            while (!this.disposed && !this.timeline.anchors[start / this.timeline.pageSize]) {
+                let known = start - this.timeline.pageSize;
+                while (known > 0 && !this.timeline.anchors[known / this.timeline.pageSize]) known -= this.timeline.pageSize;
+                await this.fetchPage(known, false).catch(() => { /* Handled by the progress check below. */ });
+                // No new cursor means the folder ended there, or the queue
+                // dropped the read under pressure. Either way this walk is
+                // over; the next viewport request starts a fresh one.
+                if (!this.timeline.anchors[known / this.timeline.pageSize + 1]) return;
+            }
+        } finally {
+            this.walking = false;
+        }
     }
 
     private discard(start: number, request: PageRequest): void {
@@ -207,6 +238,14 @@ export class GallerySource {
             const expected = Math.min(this.timeline.pageSize, this.timeline.totalCount - start);
             if (page.startIndex !== start || page.items.length !== expected) throw new Error('Invalid gallery page position');
             this.pages.set(start, page.items);
+            // Learn the key to the page after this one. Only a cursor-chained
+            // scope needs it: where an anchor index exists it arrives whole,
+            // and a half-filled anchors array would make requestAnchors()
+            // believe it already had one.
+            const next = start / this.timeline.pageSize + 1;
+            if (!this.loadAnchors && page.nextCursor && !this.timeline.anchors[next]) {
+                this.timeline.anchors[next] = { startIndex: start + this.timeline.pageSize, cursor: page.nextCursor };
+            }
             for (const key of this.pages.keys()) {
                 if (this.pages.size <= this.maxPages) break;
                 if (!this.pinned.has(key)) this.pages.delete(key);

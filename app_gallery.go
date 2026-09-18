@@ -78,6 +78,45 @@ func (a *App) ListMediaPage(cursor string, limit int) (GalleryPage, error) {
 	return galleryPageToWire(page), nil
 }
 
+// ListMediaFolders returns the album grid: every folder that directly holds
+// media, newest first, with its count and the newest item as a cover.
+func (a *App) ListMediaFolders() ([]projection.GalleryFolder, error) {
+	svc, err := a.requireReadService()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := a.galleryReadContext()
+	defer cancel()
+	return svc.MediaFolders(ctx, a.ActiveChannelID())
+}
+
+// GetMediaFolderTimeline is the scoped counterpart of GetMediaTimelineSummary.
+// A folder has no anchor index: it is small enough to seek by paging, so this
+// carries only the month buckets the grid lays out against.
+func (a *App) GetMediaFolderTimeline(folderID string) (projection.GalleryTimeline, error) {
+	svc, err := a.requireReadService()
+	if err != nil {
+		return projection.GalleryTimeline{}, err
+	}
+	ctx, cancel := a.galleryReadContext()
+	defer cancel()
+	return svc.MediaFolderTimeline(ctx, a.ActiveChannelID(), folderID)
+}
+
+func (a *App) ListMediaFolderPage(folderID, cursor string, limit int) (GalleryPage, error) {
+	svc, err := a.requireReadService()
+	if err != nil {
+		return GalleryPage{}, err
+	}
+	ctx, cancel := a.galleryReadContext()
+	defer cancel()
+	page, err := svc.MediaFolderPage(ctx, a.ActiveChannelID(), folderID, cursor, limit)
+	if err != nil {
+		return GalleryPage{}, err
+	}
+	return galleryPageToWire(page), nil
+}
+
 func (a *App) LocateMedia(msgID int, generation string) (projection.GalleryLocation, error) {
 	svc, err := a.requireReadService()
 	if err != nil {

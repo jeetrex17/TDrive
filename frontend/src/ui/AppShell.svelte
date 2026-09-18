@@ -28,7 +28,8 @@
     import Breadcrumb from './chrome/Breadcrumb.svelte';
     import ProfileMenu from './chrome/ProfileMenu.svelte';
     import UploadMenu from './chrome/UploadMenu.svelte';
-    import Gallery from './gallery/Gallery.svelte';
+    import PhotosModeBar from './gallery/PhotosModeBar.svelte';
+    import PhotosSurface from './gallery/PhotosSurface.svelte';
     import NotifBell from './notifications/NotifBell.svelte';
     import SelectionBar from './selection/SelectionBar.svelte';
     import DriveList from './sidebar/DriveList.svelte';
@@ -217,6 +218,7 @@
                 <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
             {/if}
             <div id="gallery-title" class="gallery-title">Photos</div>
+            <PhotosModeBar />
             <div id="trash-title" class="trash-title">Trash</div>
             <!-- Destructive and irreversible, so it only ever opens the
                  confirmation. With nothing to empty it is absent rather than
@@ -304,7 +306,7 @@
              live no longer than the dashboard does. -->
         <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos">
             {#if dashboardVisible}
-                <Gallery />
+                <PhotosSurface />
             {/if}
         </div>
     </main>
