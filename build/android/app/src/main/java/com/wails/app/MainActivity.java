@@ -711,17 +711,22 @@ public class MainActivity extends AppCompatActivity {
                 args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)); args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO));
                 if (sourceId.startsWith("bucket:")) { selection += " AND " + MediaStore.Images.Media.BUCKET_ID + "=?"; args.add(sourceId.substring(7)); }
                 if (cursor != null) { selection += " AND (" + MediaStore.MediaColumns.DATE_MODIFIED + "<? OR (" + MediaStore.MediaColumns.DATE_MODIFIED + "=? AND " + MediaStore.MediaColumns._ID + "<?))"; args.add(String.valueOf(modified)); args.add(String.valueOf(modified)); args.add(String.valueOf(id)); }
-                String[] projection = {MediaStore.MediaColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DATE_ADDED};
+                // DATE_TAKEN is the camera's clock and the only column that survives
+                // an edit; DATE_ADDED is when MediaStore first saw the row, which is
+                // the closest thing to it for media without EXIF.
+                String[] projection = {MediaStore.MediaColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DATE_ADDED, MediaStore.Images.ImageColumns.DATE_TAKEN};
                 JSONArray assets = new JSONArray(); JSONObject next = null; long lastModified = 0; long lastId = 0;
                 try (Cursor c = queryMedia(MediaStore.Files.getContentUri("external"), projection, selection, args.toArray(new String[0]), limit + 1)) {
                     while (c != null && c.moveToNext()) {
                         if (assets.length() >= limit) { next = new JSONObject().put("modified", lastModified).put("id", lastId); break; }
                         long mediaId = c.getLong(0); boolean video = c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO; long size = c.getLong(4); long changed = c.getLong(5);
+                        long taken = c.isNull(7) ? 0L : c.getLong(7);
+                        long createdAt = taken > 0 ? taken : c.getLong(6) * 1000L;
                         assets.put(new JSONObject().put("id", "media:" + (video ? "video:" : "image:") + mediaId)
                                 .put("version", changed + ":" + size).put("name", c.isNull(2) ? "media" : c.getString(2))
                                 .put("mediaType", video ? "video" : "image").put("mimeType", c.isNull(3) ? "" : c.getString(3))
                                 .put("resourceID", "media:" + (video ? "video:" : "image:") + mediaId)
-                                .put("size", size).put("modifiedAt", changed * 1000L).put("createdAt", c.getLong(6) * 1000L).put("sourceId", sourceId));
+                                .put("size", size).put("modifiedAt", changed * 1000L).put("createdAt", createdAt).put("sourceId", sourceId));
                         lastModified = changed; lastId = mediaId;
                     }
                 }

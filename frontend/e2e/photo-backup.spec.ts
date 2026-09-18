@@ -1,27 +1,41 @@
 import { bootTDrive, expect, resolves, test } from './wails-mock';
+import type { Page } from '@playwright/test';
+
+type Platform = 'desktop' | 'android' | 'ios';
+
+/** The panel lives behind the profile menu on desktop and on the Account tab on a phone. */
+async function openPanel(page: Page, platform: Platform) {
+    if (platform === 'desktop') {
+        await page.locator('#profile-trigger').click();
+        await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
+    } else {
+        await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
+    }
+    return page.getByRole('region', { name: 'Photo and video backup' });
+}
+
+async function usePlatform(page: Page, platform: Platform): Promise<void> {
+    if (platform === 'desktop') return;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
+}
+
+const ok = { ok: true };
 
 for (const platform of ['desktop', 'android'] as const) {
     test(`locked backup opens the password prompt on ${platform} and cancel keeps it stopped`, async ({ page }) => {
-        if (platform === 'android') {
-            await page.setViewportSize({ width: 390, height: 844 });
-            await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
-        }
+        await usePlatform(page, platform);
         const mock = await bootTDrive(page, {
             GetPhotoBackupState: resolves({
                 platform, encryption_required: true,
                 settings: { enabled: true, photos: true, videos: true, encrypt: true },
                 sources: [{ id: 'camera', name: 'Camera', enabled: true }],
-                status: { phase: 'paused', message: 'Unlock encryption to back up your photos and videos.' },
+                status: { phase: 'paused', pending: 12, message: 'Unlock encryption to back up your photos and videos.' },
             }),
             EncryptionStatus: resolves({ available: true, password_set: true, password_remembered: false, hint: '' }),
         });
-        if (platform === 'desktop') {
-            await page.locator('#profile-trigger').click();
-            await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
-        } else {
-            await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
-        }
-        const panel = page.getByRole('region', { name: 'Photo and video backup' });
+        const panel = await openPanel(page, platform);
+        await expect(panel).toContainText('Unlock to continue');
         await panel.getByRole('button', { name: 'Unlock and back up', exact: true }).click();
         const dialog = page.getByRole('dialog', { name: 'Enter encryption password' });
         await expect(dialog).toBeVisible();
@@ -29,15 +43,34 @@ for (const platform of ['desktop', 'android'] as const) {
         await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
         await expect(dialog).toBeHidden();
         expect(await mock.calls('RunPhotoBackup')).toHaveLength(0);
+        // Dismissing the prompt is a choice, not a failure: nothing turns red.
+        await expect(panel.getByRole('alert')).toHaveCount(0);
     });
 }
+
+test("a refused start repeats the backend's reason instead of a generic failure", async ({ page }) => {
+    const mock = await bootTDrive(page, {
+        GetPhotoBackupState: resolves({
+            platform: 'darwin',
+            settings: { enabled: true, photos: true, videos: true, wifi_only: true },
+            sources: [{ id: 'camera', name: 'Camera', enabled: true }],
+            status: { phase: 'idle', complete: 3 },
+        }),
+        RunPhotoBackup: resolves({ ok: false, error: { code: 'operation_failed', message: 'Waiting for Wi-Fi.' } }),
+    });
+    const panel = await openPanel(page, 'desktop');
+    await panel.getByRole('button', { name: 'Back up now', exact: true }).click();
+    await expect.poll(async () => (await mock.calls('RunPhotoBackup')).length).toBe(1);
+    await expect(panel.getByRole('alert')).toHaveText('Waiting for Wi-Fi.');
+    await expect(page.getByRole('dialog', { name: 'Enter encryption password' })).toHaveCount(0);
+});
 
 test('empty backup settings fit the desktop viewport and guide source selection', async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await bootTDrive(page, {
         GetPhotoBackupState: resolves({
             platform: 'darwin', manual_paused: false,
-            settings: { enabled: false, photos: true, videos: true }, sources: [],
+            settings: { enabled: true, photos: true, videos: true }, sources: [],
             status: { phase: 'idle' }, destination: { title: 'Photo backup' },
             capabilities: {
                 wifi_only: { supported: false, label: 'Wi-Fi only' },
@@ -45,11 +78,15 @@ test('empty backup settings fit the desktop viewport and guide source selection'
             },
         }),
     });
-    await page.locator('#profile-trigger').click();
-    await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
-    const panel = page.getByRole('region', { name: 'Photo and video backup' });
+    const panel = await openPanel(page, 'desktop');
+    await expect(panel).toContainText('Choose what to back up');
     await expect(panel.getByRole('button', { name: 'Add folder', exact: true })).toBeVisible();
-    await expect(panel.getByRole('button', { name: 'Back up now', exact: true })).toBeDisabled();
+    // Nothing to start yet, so no start button to sit there disabled.
+    await expect(panel.getByRole('button', { name: 'Back up now', exact: true })).toHaveCount(0);
+    // Wi-Fi is a phone condition; a desktop never shows a switch it cannot honour.
+    await expect(panel.getByRole('switch', { name: 'Wi-Fi only' })).toHaveCount(0);
+    // Full access is the expected case and earns no line of copy.
+    await expect(panel).not.toContainText('managed by the device');
     const bounds = await page.locator('#profile-menu').boundingBox();
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -59,56 +96,43 @@ test('empty backup settings fit the desktop viewport and guide source selection'
 
 for (const platform of ['desktop', 'android', 'ios'] as const) {
     test(`photo backup settings and pause are available on ${platform}`, async ({ page }, testInfo) => {
-        if (platform !== 'desktop') {
-            await page.setViewportSize({ width: 390, height: 844 });
-            await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
-        }
+        await usePlatform(page, platform);
         const state = {
             platform,
             manual_paused: false,
             settings: { enabled: true, photos: true, videos: true, future_only: false, wifi_only: false },
             sources: [{ id: 'camera', kind: 'library', root: 'Camera', name: 'Camera', enabled: true, added_at: 1 }],
-            status: { phase: 'uploading', pending: 12, uploading: 1, complete: 24, failed: 0 },
+            status: { phase: 'uploading', pending: 12, uploading: 1, complete: 24, failed: 0, current_file: 'Trips/IMG_0042.HEIC', current_file_bytes_done: 500, current_file_bytes_total: 1000, current_file_percent: 50 },
             capabilities: {
-                wifi_only: { supported: false, label: 'Unavailable on this device' },
+                wifi_only: { supported: platform === 'android', label: 'Wi-Fi only', detail: 'Requires a recent device connectivity update.' },
                 access: { status: 'limited', detail: 'Only selected photos are accessible.' },
             },
         };
         const mock = await bootTDrive(page, {
             GetPhotoBackupState: resolves(state),
-            PausePhotoBackup: resolves(null),
-            ResumePhotoBackup: resolves(null),
+            PausePhotoBackup: resolves(ok),
+            ResumePhotoBackup: resolves(ok),
         });
-        if (platform === 'desktop') {
-            await page.locator('#profile-trigger').click();
-            await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
-        } else {
-            await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
-        }
-        const panel = page.getByRole('region', { name: 'Photo and video backup' });
-        await expect(panel.getByRole('checkbox', { name: 'Photos', exact: true })).toBeChecked();
-        await expect(panel.getByRole('checkbox', { name: 'Videos', exact: true })).toBeChecked();
-        await expect(panel.getByRole('checkbox', { name: 'Wi-Fi only', exact: true })).toBeDisabled();
-        await expect(panel.getByRole('checkbox', { name: 'While charging', exact: true })).toHaveCount(0);
+        const panel = await openPanel(page, platform);
+        await expect(panel.getByRole('switch', { name: 'Back up photos & videos' })).toHaveAttribute('aria-checked', 'true');
+        await expect(panel.getByRole('switch', { name: 'Photos', exact: true })).toHaveAttribute('aria-checked', 'true');
+        await expect(panel.getByRole('switch', { name: 'Videos', exact: true })).toHaveAttribute('aria-checked', 'true');
+        await expect(panel.getByRole('switch', { name: 'Wi-Fi only' })).toHaveCount(platform === 'android' ? 1 : 0);
         await expect(panel).toContainText('Only selected photos are accessible');
-        await expect(panel).toContainText('24 completed');
-        // Controls must stay beside their labels despite the app's global form
-        // styles, which previously stacked tiny checkboxes above the text.
-        const photos = panel.getByRole('checkbox', { name: 'Photos', exact: true });
-        const geometry = await photos.evaluate((input) => {
-            const control = input.getBoundingClientRect();
-            const label = input.closest('label')!.getBoundingClientRect();
-            return { controlY: control.y + control.height / 2, labelY: label.y + label.height / 2 };
-        });
-        expect(Math.abs(geometry.controlY - geometry.labelY)).toBeLessThan(5);
+        await expect(panel).toContainText('Backing up');
+        await expect(panel).toContainText('IMG_0042.HEIC');
+        await expect(panel).toContainText('24 backed up · 13 waiting');
+        await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '500');
         expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`backup-${platform}.png`), fullPage: true });
+
         await mock.setPlan('GetPhotoBackupState', resolves({
-            ...state, manual_paused: true, status: { ...state.status, phase: 'paused', uploading: 0, pending: 13, message: 'Paused by you.' },
+            ...state, manual_paused: true, status: { ...state.status, phase: 'paused', uploading: 0, pending: 13, current_file: '', message: 'Paused by you.' },
         }));
         await panel.getByRole('button', { name: 'Pause', exact: true }).click();
         await expect.poll(async () => (await mock.calls('PausePhotoBackup')).length).toBe(1);
-        await expect(panel).toContainText('Paused by you.');
+        await expect(panel).toContainText('Paused');
+        await expect(panel).toContainText('24 backed up · 13 waiting');
         await expect(panel.getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
         await mock.emit('photo-backup:state');
         await expect(panel.getByRole('button', { name: 'Resume', exact: true })).toBeVisible();
@@ -124,10 +148,7 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
 
 for (const platform of ['desktop', 'android', 'ios'] as const) {
     test(`backup notifications show live current-file progress on ${platform}`, async ({ page }, testInfo) => {
-        if (platform !== 'desktop') {
-            await page.setViewportSize({ width: 390, height: 844 });
-            await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
-        }
+        await usePlatform(page, platform);
         const state = {
             platform, settings: { enabled: true, photos: true, videos: true },
             sources: [{ id: 'camera', name: 'Camera', enabled: true }],

@@ -9,7 +9,10 @@ type PhotoBackupAsset struct {
 	MediaType  string `json:"media_type"`
 	ResourceID string `json:"resource_id"`
 	ModifiedAt int64  `json:"modified_at"`
-	Size       int64  `json:"size"`
+	// CreatedAt is the capture time in Unix milliseconds, or 0 when the host
+	// does not know it. Editing a photo moves ModifiedAt; this stays put.
+	CreatedAt int64 `json:"created_at"`
+	Size      int64 `json:"size"`
 }
 
 type photoBackupMaterialization struct{ path, err string }

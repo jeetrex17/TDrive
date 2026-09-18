@@ -78,13 +78,35 @@ static NSArray *TDriveResourcesForAsset(PHAsset *asset) {
     return result;
 }
 
+// The version is what the ledger keys a resource on, so it must move on any
+// edit and stay put otherwise. The resource count is part of it because an
+// edit can add or drop an adjustment resource without touching the date.
+static NSString *TDriveAssetVersion(PHAsset *asset, NSArray<PHAssetResource *> *resources) {
+    return [NSString stringWithFormat:@"%@|%@|%.3f|%lu",
+        asset.localIdentifier, TDriveISODate(asset.modificationDate), asset.duration,
+        (unsigned long)resources.count];
+}
+
+static NSNumber *TDriveMillis(NSDate *date) {
+    return date ? @((long long)(date.timeIntervalSince1970 * 1000.0)) : @0;
+}
+
+// PhotoKit exposes a resource's byte size only through KVC, and only for
+// resources that are local. Anything else reads as unknown rather than wrong.
+static long long TDriveResourceFileSize(PHAssetResource *resource) {
+    @try {
+        id value = [resource valueForKey:@"fileSize"];
+        return [value respondsToSelector:@selector(longLongValue)] ? MAX(0LL, [value longLongValue]) : 0;
+    } @catch (__unused NSException *exception) {
+        return 0;
+    }
+}
+
 static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
     NSString *mediaType = @"unknown";
     if (asset.mediaType == PHAssetMediaTypeImage) mediaType = @"image";
     if (asset.mediaType == PHAssetMediaTypeVideo) mediaType = @"video";
-    NSString *version = [NSString stringWithFormat:@"%@|%@|%.3f|%lu",
-        asset.localIdentifier, TDriveISODate(asset.modificationDate), asset.duration,
-        (unsigned long)[PHAssetResource assetResourcesForAsset:asset].count];
+    NSString *version = TDriveAssetVersion(asset, [PHAssetResource assetResourcesForAsset:asset]);
     NSArray *resources = TDriveResourcesForAsset(asset);
     NSDictionary *primaryResource = resources.firstObject;
     return @{
@@ -120,6 +142,12 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
 // backup drains or the app returns.
 @property (nonatomic, assign) BOOL backgroundBackupWanted;
 @property (nonatomic, assign) UIBackgroundTaskIdentifier backgroundBackupTask;
+// A backup scan pages over one immutable PHFetchResult per source, held here
+// so page N+1 sees the same library page N did. A cursor names the snapshot
+// it was cut from; when the snapshot is gone the page asks to start over
+// instead of silently skipping or repeating whatever shifted underneath it.
+@property (nonatomic, strong) NSMutableDictionary<NSString *, PHFetchResult<PHAsset *> *> *scanSnapshots;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *scanTokens;
 - (void)startObserving;
 @end
 
@@ -130,6 +158,8 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
     if (self) {
         _materializations = [NSMutableDictionary dictionary];
         _stagedTokens = [NSMutableSet set];
+        _scanSnapshots = [NSMutableDictionary dictionary];
+        _scanTokens = [NSMutableDictionary dictionary];
         _backgroundBackupTask = UIBackgroundTaskInvalid;
     }
     return self;
@@ -227,9 +257,42 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
     } error:nil];
 }
 
+// Only an addition is worth a rescan. Favouriting, retitling or deleting a
+// photo changes the library too, and re-walking a whole camera roll for each
+// of those is what made every tap in Photos cost a full scan. Edits are
+// picked up on the next resume, which already rescans.
 - (void)photoLibraryDidChange:(PHChange *)changeInstance {
-    (void)changeInstance;
-    [self emitMediaChanged:@"libraryChange"];
+    __block BOOL additions = NO;
+    NSMutableDictionary<NSString *, PHFetchResult<PHAsset *> *> *advanced = [NSMutableDictionary dictionary];
+    @synchronized (self.scanSnapshots) {
+        if (self.scanSnapshots.count == 0) additions = YES;
+        [self.scanSnapshots enumerateKeysAndObjectsUsingBlock:^(NSString *sourceID, PHFetchResult<PHAsset *> *snapshot, BOOL *stop) {
+            (void)stop;
+            PHFetchResultChangeDetails *details = [changeInstance changeDetailsForFetchResult:snapshot];
+            if (details == nil) return;
+            if (!details.hasIncrementalChanges || details.insertedObjects.count > 0) additions = YES;
+            advanced[sourceID] = details.fetchResultAfterChanges;
+        }];
+        // A snapshot that moved under a running scan invalidates that scan's
+        // cursor; the next page starts over on the current library.
+        [advanced enumerateKeysAndObjectsUsingBlock:^(NSString *sourceID, PHFetchResult<PHAsset *> *after, BOOL *stop) {
+            (void)stop;
+            self.scanSnapshots[sourceID] = after;
+            [self.scanTokens removeObjectForKey:sourceID];
+        }];
+    }
+    if (additions) [self emitMediaChanged:@"libraryChange"];
+}
+
+- (PHFetchResult<PHAsset *> *)fetchBackupAssetsForSource:(NSString *)sourceID {
+    PHFetchOptions *options = [[PHFetchOptions alloc] init];
+    options.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"creationDate" ascending:YES]];
+    options.predicate = [NSPredicate predicateWithFormat:@"mediaType IN %@", @[@(PHAssetMediaTypeImage), @(PHAssetMediaTypeVideo)]];
+    if (sourceID.length > 0 && ![sourceID isEqualToString:@"all"]) {
+        PHAssetCollection *collection = [PHAssetCollection fetchAssetCollectionsWithLocalIdentifiers:@[sourceID] options:nil].firstObject;
+        return collection ? [PHAsset fetchAssetsInAssetCollection:collection options:options] : nil;
+    }
+    return [PHAsset fetchAssetsWithOptions:options];
 }
 
 - (void)reply:(NSString *)requestID result:(id)result error:(NSDictionary *)error {
@@ -321,32 +384,51 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
     [self reply:requestID result:@{ @"items": items, @"nextCursor": end < fetch.count ? [NSString stringWithFormat:@"%lu", (unsigned long)end] : (id)[NSNull null] } error:nil];
 }
 
+// One page of a backup scan. The cursor is "token:asset:resource" against the
+// snapshot the token names, so a library that changes mid-scan cannot shift
+// indexes under the page: the token stops matching and the caller restarts.
 - (void)listBackupAssets:(NSString *)requestID arguments:(NSDictionary *)arguments {
     if (![self ensureReadable:requestID]) return;
     NSUInteger pageSize = TDriveBoundedPageSize(arguments[@"pageSize"]);
+    NSString *sourceID = [arguments[@"sourceID"] isKindOfClass:[NSString class]] && [arguments[@"sourceID"] length] > 0 ? arguments[@"sourceID"] : @"all";
+    NSString *cursor = [arguments[@"cursor"] isKindOfClass:[NSString class]] ? arguments[@"cursor"] : @"";
     NSUInteger assetOffset = 0, resourceOffset = 0;
-    NSString *cursor = [arguments[@"cursor"] isKindOfClass:[NSString class]] ? arguments[@"cursor"] : nil;
-    if (cursor.length > 0) {
-        NSArray<NSString *> *parts = [cursor componentsSeparatedByString:@":"];
-        if (parts.count == 2) { assetOffset = TDriveCursorOffset(parts[0]); resourceOffset = TDriveCursorOffset(parts[1]); }
-    }
-    PHFetchOptions *options = [[PHFetchOptions alloc] init];
-    options.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"creationDate" ascending:YES]];
-    options.predicate = [NSPredicate predicateWithFormat:@"mediaType IN %@", @[@(PHAssetMediaTypeImage), @(PHAssetMediaTypeVideo)]];
+    NSString *token = nil;
     PHFetchResult<PHAsset *> *fetch = nil;
-    NSString *sourceID = [arguments[@"sourceID"] isKindOfClass:[NSString class]] ? arguments[@"sourceID"] : nil;
-    if (sourceID.length > 0 && ![sourceID isEqualToString:@"all"]) {
-        PHAssetCollection *collection = [PHAssetCollection fetchAssetCollectionsWithLocalIdentifiers:@[sourceID] options:nil].firstObject;
-        if (collection == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"albumNotFound", @"The requested album no longer exists")]; return; }
-        fetch = [PHAsset fetchAssetsInAssetCollection:collection options:options];
-    } else fetch = [PHAsset fetchAssetsWithOptions:options];
+    @synchronized (self.scanSnapshots) {
+        if (cursor.length > 0) {
+            // The live token is the only thing that makes a cursor valid, so a
+            // forged or stale one is refused rather than silently read as an
+            // offset into whatever snapshot happens to be there.
+            NSString *live = self.scanTokens[sourceID];
+            NSArray<NSString *> *parts = [cursor componentsSeparatedByString:@":"];
+            fetch = live.length > 0 ? self.scanSnapshots[sourceID] : nil;
+            if (parts.count != 3 || live.length == 0 || ![parts[0] isEqualToString:live] || fetch == nil) {
+                [self reply:requestID result:nil error:TDrivePhotoError(@"cursorExpired", @"The photo library changed; scan again from the start")];
+                return;
+            }
+            token = live;
+            assetOffset = TDriveCursorOffset(parts[1]);
+            resourceOffset = TDriveCursorOffset(parts[2]);
+        } else {
+            fetch = [self fetchBackupAssetsForSource:sourceID];
+            if (fetch == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"albumNotFound", @"The requested album no longer exists")]; return; }
+            token = [NSUUID.UUID.UUIDString substringToIndex:8];
+            self.scanSnapshots[sourceID] = fetch;
+            self.scanTokens[sourceID] = token;
+        }
+    }
     NSMutableArray *items = [NSMutableArray arrayWithCapacity:pageSize];
     NSUInteger nextAsset = assetOffset, nextResource = resourceOffset;
     BOOL hasMore = NO;
     for (NSUInteger assetIndex = MIN(assetOffset, fetch.count); assetIndex < fetch.count; assetIndex++) {
         PHAsset *asset = fetch[assetIndex];
+        // One resource lookup per asset: it is the slow call in this loop.
         NSArray<PHAssetResource *> *resources = [PHAssetResource assetResourcesForAsset:asset];
         NSUInteger primaryResource = TDriveDefaultResourceIndex(asset, resources);
+        NSString *assetVersion = TDriveAssetVersion(asset, resources);
+        NSNumber *modifiedMillis = TDriveMillis(asset.modificationDate);
+        NSNumber *createdMillis = TDriveMillis(asset.creationDate);
         NSUInteger start = assetIndex == assetOffset ? resourceOffset : 0;
         for (NSUInteger resourceIndex = start; resourceIndex < resources.count; resourceIndex++) {
             PHAssetResource *resource = resources[resourceIndex];
@@ -355,15 +437,18 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
             NSString *resourceID = TDriveResourceID(resource, resourceIndex);
             NSString *mediaType = (resource.type == PHAssetResourceTypeVideo || resource.type == PHAssetResourceTypeFullSizeVideo || resource.type == PHAssetResourceTypePairedVideo) ? @"video" : @"image";
             NSString *backupMediaType = [mediaType isEqualToString:@"video"] ? @"video" : @"photo";
-            NSString *assetVersion = TDriveAssetManifest(asset)[@"version"];
-            NSNumber *modifiedMillis = asset.modificationDate ? @((long long)(asset.modificationDate.timeIntervalSince1970 * 1000.0)) : @0;
-            [items addObject:@{ @"id": asset.localIdentifier, @"assetID": asset.localIdentifier, @"groupID": asset.localIdentifier, @"resourceID": resourceID, @"resource_id": resourceID, @"version": assetVersion, @"name": resource.originalFilename ?: @"resource", @"mediaType": mediaType, @"media_type": backupMediaType, @"modifiedAt": modifiedMillis, @"modified_at": modifiedMillis, @"size": @0, @"resource": TDriveResourceManifest(resource, resourceIndex) }];
+            [items addObject:@{ @"id": asset.localIdentifier, @"assetID": asset.localIdentifier, @"groupID": asset.localIdentifier, @"resourceID": resourceID, @"resource_id": resourceID, @"version": assetVersion, @"name": resource.originalFilename ?: @"resource", @"mediaType": mediaType, @"media_type": backupMediaType, @"modifiedAt": modifiedMillis, @"modified_at": modifiedMillis, @"createdAt": createdMillis, @"created_at": createdMillis, @"size": @(TDriveResourceFileSize(resource)), @"resource": TDriveResourceManifest(resource, resourceIndex) }];
         }
         nextAsset = assetIndex + 1;
         nextResource = 0;
     }
 complete:
-    [self reply:requestID result:@{ @"assets": items, @"nextCursor": hasMore ? [NSString stringWithFormat:@"%lu:%lu", (unsigned long)nextAsset, (unsigned long)nextResource] : (id)[NSNull null] } error:nil];
+    if (!hasMore) {
+        // Keep the finished snapshot: it is what the next library change is
+        // diffed against, so a favourite or a delete does not cost a rescan.
+        @synchronized (self.scanSnapshots) { [self.scanTokens removeObjectForKey:sourceID]; }
+    }
+    [self reply:requestID result:@{ @"assets": items, @"nextCursor": hasMore ? [NSString stringWithFormat:@"%@:%lu:%lu", token, (unsigned long)nextAsset, (unsigned long)nextResource] : (id)[NSNull null] } error:nil];
 }
 
 - (void)materialize:(NSString *)requestID arguments:(NSDictionary *)arguments {
