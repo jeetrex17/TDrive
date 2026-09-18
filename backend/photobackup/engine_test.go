@@ -169,8 +169,10 @@ func TestMigrateVersionOneAddsDurablePauseState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	// A v1 ledger already had a queue; only the settings shape differed.
-	if _, err = db.Exec(`CREATE TABLE photo_backup_settings(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,enabled INTEGER NOT NULL,photos INTEGER NOT NULL,videos INTEGER NOT NULL,future_only INTEGER NOT NULL,wifi_only INTEGER NOT NULL,charging_only INTEGER NOT NULL,destination_parent_id TEXT NOT NULL,encrypt INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id));
+	// A v1 ledger already had sources and a queue; only the settings differed.
+	if _, err = db.Exec(`CREATE TABLE photo_backup_sources(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,kind TEXT NOT NULL,root TEXT NOT NULL,name TEXT NOT NULL,enabled INTEGER NOT NULL,added_at INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id,source_id));
+INSERT INTO photo_backup_sources VALUES('acct',7,'camera','folder','/camera','camera',1,1);
+CREATE TABLE photo_backup_settings(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,enabled INTEGER NOT NULL,photos INTEGER NOT NULL,videos INTEGER NOT NULL,future_only INTEGER NOT NULL,wifi_only INTEGER NOT NULL,charging_only INTEGER NOT NULL,destination_parent_id TEXT NOT NULL,encrypt INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id));
 INSERT INTO photo_backup_settings VALUES('acct',7,1,1,1,0,0,0,'',0);
 CREATE TABLE photo_backup_jobs(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,asset_id TEXT NOT NULL,version TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,media_type TEXT NOT NULL,resource_id TEXT NOT NULL DEFAULT '',modified_at INTEGER NOT NULL,size INTEGER NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',remote_message_id INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id,source_id,asset_id,version,resource_id));
 INSERT INTO photo_backup_jobs VALUES('acct',7,'camera','a','v','/a.jpg','a.jpg','photo','',1,1,'pending',0,0,'',0,1,1);
@@ -861,5 +863,57 @@ func TestRemoveSourceRefusesActiveUpload(t *testing.T) {
 	sources, err := e.ListSources(context.Background(), scope)
 	if err != nil || len(sources) != 1 {
 		t.Fatalf("sources=%v err=%v", sources, err)
+	}
+}
+
+// A source the user removed -- or one an older build wrote under a different
+// id -- leaves its unfinished jobs behind. Nothing will ever scan or upload
+// them, so they must not go on counting as work the backup is waiting to do.
+func TestMigratePrunesJobsWhoseSourceIsGone(t *testing.T) {
+	now := time.Now()
+	engine, scope := testEngine(t, &now)
+	ctx := context.Background()
+	if err := engine.UpsertSource(ctx, Source{Scope: scope, ID: "folder:/Pictures", Kind: "folder", Root: "/Pictures", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(sourceID, assetID, status string) {
+		t.Helper()
+		if _, err := engine.db.ExecContext(ctx, `INSERT INTO photo_backup_jobs(account_id,drive_id,source_id,asset_id,version,path,name,media_type,resource_id,modified_at,size,status,created_at,updated_at) VALUES(?,?,?,?,'1',?,?,'photo','',0,1,?,1,1)`,
+			scope.AccountID, scope.DriveID, sourceID, assetID, "/"+assetID, assetID, status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("folder:/Pictures", "kept.jpg", string(Pending))
+	insert("folder:/Pictures/images", "orphan.jpg", string(Pending))
+	insert("folder:/Pictures/images", "orphan-failed.jpg", string(Error))
+	// The receipt of a file that did reach the drive: the record of it stays,
+	// so the next scan of a folder that still covers it sends nothing.
+	insert("folder:/Pictures/images", "done.jpg", string(Complete))
+
+	if err := engine.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	status, err := engine.Status(ctx, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Pending != 1 || status.Error != 0 || status.Complete != 1 {
+		t.Fatalf("status=%+v", status)
+	}
+	var names []string
+	rows, err := engine.db.QueryContext(ctx, `SELECT asset_id FROM photo_backup_jobs ORDER BY asset_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	if strings.Join(names, ",") != "done.jpg,kept.jpg" {
+		t.Fatalf("jobs=%v", names)
 	}
 }

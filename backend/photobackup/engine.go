@@ -61,7 +61,36 @@ var migrationSteps = []struct {
 // of the walk is answered from the index without touching the table.
 const receiptIndexDDL = `CREATE INDEX IF NOT EXISTS photo_backup_jobs_receipts ON photo_backup_jobs(account_id,drive_id,remote_message_id,status) WHERE remote_message_id>0`
 
+// Migrate brings the ledger up to date and then clears the work in it that
+// nobody can do, which is what a launch is the right moment for.
 func (e *Engine) Migrate(ctx context.Context) error {
+	if err := e.migrateSchema(ctx); err != nil {
+		return err
+	}
+	return e.pruneOrphanedJobs(ctx)
+}
+
+// Unfinished jobs outlive their source only as garbage: a source that is gone
+// is never scanned again, so its queue is work nobody will ever pick up. Left
+// there it counts as waiting for good -- the panel stays at "Ready to back up"
+// with "14 waiting" after the last photo is safely in the drive, and the
+// activity row sits at "waiting its turn" with nothing to wait for.
+//
+// Completed receipts stay. They are the record that those files reached the
+// drive, and what stops the next scan of a folder that still covers them from
+// sending every one of them a second time.
+//
+// This is a launch-time pass, before any worker runs, so an "uploading" row it
+// finds is a crash's leftover rather than a transfer in flight.
+func (e *Engine) pruneOrphanedJobs(ctx context.Context) error {
+	_, err := e.db.ExecContext(ctx, `DELETE FROM photo_backup_jobs WHERE status<>? AND NOT EXISTS (SELECT 1 FROM photo_backup_sources s WHERE s.account_id=photo_backup_jobs.account_id AND s.drive_id=photo_backup_jobs.drive_id AND s.source_id=photo_backup_jobs.source_id)`, Complete)
+	if err != nil {
+		return fmt.Errorf("photobackup: prune orphaned jobs: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) migrateSchema(ctx context.Context) error {
 	var version int
 	if err := e.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
