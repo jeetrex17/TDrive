@@ -78,7 +78,12 @@
     // #file-list. This handler keeps that bubbling contract explicit to Svelte.
     function onGridRowKeydown(_event: KeyboardEvent): void {}
 
-    const ESTIMATED_ROW_HEIGHT = mobile ? 68 : 54;
+    // Seeds the spacers for the frames before measureRow reports a real row.
+    // A wrong seed is visible: the list scrolls to a stale offset and jumps
+    // once the measurement lands. Desktop is the 40px chip plus the row's 12px
+    // padding either side plus its 2px gap; the phone row is its own
+    // min-height, which is taller than the 44px chip it holds.
+    const ESTIMATED_ROW_HEIGHT = mobile ? 68 : 66;
     const WINDOW_OVERSCAN = 8;
     let scrollTop = $state(0);
     let viewportHeight = $state(0);
@@ -385,7 +390,7 @@
             >
                 <div class="row-name" role="gridcell" aria-colindex="1" title={row.name}>
                     <span class="folder-chip" aria-hidden="true">
-                        <FolderIcon size={17} strokeWidth={1.5} aria-hidden="true" />
+                        <FolderIcon size={20} strokeWidth={1.5} aria-hidden="true" />
                     </span>
                     <span class="row-label">{row.name}</span>
                     <span class="pending-indicator" aria-hidden="true"><LoaderCircleIcon size={12} strokeWidth={2.25} aria-hidden="true" /></span>
@@ -414,7 +419,7 @@
                 <div class="row-name" role="gridcell" aria-colindex="1" draggable="true" title={row.name}>
                     {#if row.kind === 'folder'}
                         <span class="folder-chip" aria-hidden="true">
-                            <FolderIcon size={17} strokeWidth={1.5} aria-hidden="true" />
+                            <FolderIcon size={20} strokeWidth={1.5} aria-hidden="true" />
                         </span>
                         <span class="row-label">{row.name}</span>
                     {:else}
@@ -427,7 +432,7 @@
                                 <!-- Lighter than the app default: Lucide's stroke is fixed
                                      against a 24px grid, so it reads heavier the smaller
                                      the glyph is drawn. The folder chip matches. -->
-                                <TypeIcon size={17} strokeWidth={1.5} aria-hidden="true" />
+                                <TypeIcon size={20} strokeWidth={1.5} aria-hidden="true" />
                             </span>
                         {/if}
                         {#if row.encrypted}
