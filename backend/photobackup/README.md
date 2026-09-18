@@ -50,6 +50,17 @@ repairs the index. If the process dies while an upload is marked in flight, its
 remote outcome is uncertain. Recovery holds it for explicit retry instead of
 automatically sending another copy. A retry can duplicate an uncertain upload.
 
+A receipt also stops counting as complete once the drive no longer holds the
+file it points at. A bounded sweep walks the receipts before each run, from a
+durable cursor that rewinds at the end of a cycle, and asks the drive which
+message ids it can still produce. One it cannot becomes `missing`: the ledger
+stops claiming the file is backed up and the panel counts it as waiting on the
+user. Nothing re-uploads on its own -- `missing` is never queued, so a
+deliberate delete stays deleted -- and only the explicit Retry sends it again.
+A file in the trash is still recoverable and is not a loss, a file that comes
+back becomes complete again, and a message id the local index has not reached
+yet is never treated as missing.
+
 Live Photo components are separate uploaded files and separate resource counts.
 This version does not publish a compound-asset manifest or reconstruct Live
 Photos on restore. It preserves the original resource bytes. Cross-device

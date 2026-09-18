@@ -9,6 +9,7 @@
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import LogOutIcon from '@lucide/svelte/icons/log-out';
     import PaletteIcon from '@lucide/svelte/icons/palette';
+    import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import Avatar from '../chrome/Avatar.svelte';
     import { getStorageUsed } from '../../api';
     import { formatBytes } from '../../utils';
@@ -24,6 +25,7 @@
     import { openJoinDriveModal } from '../../modules/modals/join-drive';
     import { openNewDriveModal } from '../../modules/modals/new-drive';
     import { openLogoutModal } from '../../modules/modals/logout';
+    import { openTrash } from '../../modules/trash/controller';
     import type { DriveChannel } from '../../types';
     import { activeDrive, activeTab } from './mobile-shell-store';
     import { pushSheet } from '../modals/sheet-stack';
@@ -165,6 +167,14 @@
                 </span>
                 <span class="account-row-value">{storageLabel}</span>
             </div>
+            <!-- Deleted items are the other half of "what this drive is
+                 holding", so the way back to them sits with the figure that
+                 counts them, not in a menu of its own. -->
+            <button type="button" class="account-row" aria-haspopup="dialog" onclick={openTrash}>
+                <Trash2Icon class="account-row-icon" size={20} strokeWidth={1.9} aria-hidden="true" />
+                <span class="account-row-label">Trash</span>
+                <ChevronRightIcon class="account-row-chevron" size={18} strokeWidth={2} aria-hidden="true" />
+            </button>
             {#if $activeTab === 'account'}<PhotoCachePanel />{/if}
             {#if $activeTab === 'account'}<PhotoBackupPanel />{/if}
         </div>

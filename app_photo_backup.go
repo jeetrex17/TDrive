@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -446,12 +447,15 @@ func (a *App) startPhotoBackup() error {
 		return err
 	}
 	if err := a.photoBackupPolicyAllows(settings); err != nil {
+		slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", err)
 		return err
 	}
 	if !settings.Enabled {
+		slog.Debug("photo backup: not starting", "drive_id", scope.DriveID, "reason", "backup is off for this drive")
 		return nil
 	}
 	if settings.ManualPaused {
+		slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", errPhotoBackupPaused)
 		return errPhotoBackupPaused
 	}
 	if settings.Encrypt {
@@ -460,6 +464,7 @@ func (a *App) startPhotoBackup() error {
 			return err
 		}
 		if !status.PasswordRemembered {
+			slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", ErrEncryptionPasswordRequired)
 			return ErrEncryptionPasswordRequired
 		}
 	}
@@ -489,7 +494,13 @@ func (a *App) startPhotoBackup() error {
 			a.photoBackupMu.Unlock()
 			close(done)
 		}()
-		_ = engine.RecoverInterrupted(ctx, scope)
+		if err := engine.RecoverInterrupted(ctx, scope); err != nil {
+			slog.Warn("photo backup: recover interrupted uploads failed", "drive_id", scope.DriveID, "error", err)
+		}
+		a.reconcilePhotoBackupReceipts(ctx, engine, scope)
+		before, _ := engine.Status(ctx, scope)
+		slog.Info("photo backup: run starting", "drive_id", scope.DriveID, "pending", before.Pending, "failed", before.Error, "held", before.Paused+before.Missing, "complete", before.Complete)
+		uploaded := 0
 		for ctx.Err() == nil {
 			// A native background lease may finish the item that was already in
 			// flight, but a suspended WebView cannot safely discover or stage the
@@ -499,12 +510,16 @@ func (a *App) startPhotoBackup() error {
 			}
 			done, runErr := engine.RunOnce(ctx, scope, a.uploadPhotoBackup)
 			if runErr != nil {
+				slog.Warn("photo backup: run stopped", "drive_id", scope.DriveID, "uploaded", uploaded, "error", runErr)
 				break
 			}
+			uploaded += done
 			if done == 0 && (runtime.GOOS == "ios" || runtime.GOOS == "android" || !a.discoverDesktopPhotoBackup(ctx)) {
 				break
 			}
 		}
+		after, _ := engine.Status(ctx, scope)
+		slog.Info("photo backup: run finished", "drive_id", scope.DriveID, "uploaded", uploaded, "pending", after.Pending, "failed", after.Error, "held", after.Paused+after.Missing, "canceled", ctx.Err() != nil)
 		a.emit("photo-backup:state")
 	}()
 	return nil
@@ -734,7 +749,9 @@ func (a *App) discoverDesktopSources(ctx context.Context, engine *photobackup.En
 				delete(a.photoBackupAdapters, key)
 				a.photoBackupMu.Unlock()
 			}
-			if discoverErr == nil && (added > 0 || !done) {
+			if discoverErr != nil {
+				slog.Warn("photo backup: folder scan failed", "drive_id", scope.DriveID, "source", source.ID, "error", discoverErr)
+			} else if added > 0 || !done {
 				more = true
 			}
 		}
@@ -810,7 +827,12 @@ func photoBackupState(settings photobackup.Settings, sources []photobackup.Sourc
 	for _, source := range sources {
 		state.Sources = append(state.Sources, photoBackupSourceDTO(source))
 	}
-	state.Status = PhotoBackupStatus{Phase: "idle", Pending: status.Pending, Uploading: status.Uploading, Complete: status.Complete, Failed: status.Error, Paused: status.Paused, Message: status.LastError}
+	// The panel has one bucket for work that is waiting on the user and one
+	// Retry that releases it, and a receipt whose file left the drive waits in
+	// exactly that way, so it is reported there rather than as a new state the
+	// panel would have to learn.
+	held := status.Paused + status.Missing
+	state.Status = PhotoBackupStatus{Phase: "idle", Pending: status.Pending, Uploading: status.Uploading, Complete: status.Complete, Failed: status.Error, Paused: held, Message: status.LastError}
 	if manualPaused {
 		state.Status.Phase = "paused"
 		state.Status.Message = "Paused by you."
@@ -820,7 +842,7 @@ func photoBackupState(settings photobackup.Settings, sources []photobackup.Sourc
 		state.Status.Phase = "failed"
 	} else if status.Pending > 0 {
 		state.Status.Phase = "queued"
-	} else if status.Paused > 0 {
+	} else if held > 0 {
 		state.Status.Phase = "paused"
 	} else if status.Complete > 0 {
 		state.Status.Phase = "complete"

@@ -51,5 +51,6 @@ export type {
     SafeAreaInsets,
     SelfUser,
     TDriveFile,
+    TrashEntry,
     UploadResult
 } from "./models.js";

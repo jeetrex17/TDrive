@@ -263,6 +263,22 @@ func Parse(raw string) (Op, error) {
 		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
 			return Op{}, err
 		}
+	case OpRestoreTree:
+		if err := setWritableEnvelope(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setObjAny(&op, kv["obj"]); err != nil {
+			return Op{}, err
+		}
+		if err := setParent(&op, kv["p"]); err != nil {
+			return Op{}, err
+		}
+		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
+			return Op{}, err
+		}
 	default:
 		return Op{}, ErrWireBadOpType
 	}
@@ -461,6 +477,16 @@ func Format(op Op) string {
 		appendWritableEnvelope(&b, op)
 		b.WriteString("|obj=")
 		b.WriteString(op.Obj)
+		b.WriteString("|rev=")
+		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
+	case OpRestoreTree:
+		appendWritableEnvelope(&b, op)
+		b.WriteString("|obj=")
+		b.WriteString(op.Obj)
+		b.WriteString("|p=")
+		b.WriteString(op.Parent)
+		b.WriteString("|n=")
+		b.WriteString(url.QueryEscape(op.Name))
 		b.WriteString("|rev=")
 		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
 	}

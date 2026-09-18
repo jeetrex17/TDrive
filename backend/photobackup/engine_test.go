@@ -230,6 +230,7 @@ func TestMigrateVersionTwoDropsChargingWithoutBlockingOrLosingQueue(t *testing.T
 	// Rewind a current ledger to the exact shape a v2 release wrote.
 	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_settings ADD COLUMN charging_only INTEGER NOT NULL DEFAULT 0;
 UPDATE photo_backup_settings SET charging_only=1;
+ALTER TABLE photo_backup_settings DROP COLUMN receipt_cursor;
 ALTER TABLE photo_backup_jobs DROP COLUMN captured_at;
 PRAGMA user_version=2`); err != nil {
 		t.Fatal(err)
@@ -284,7 +285,10 @@ func TestMigrateVersionThreeAddsCaptureTimeWithoutLosingQueue(t *testing.T) {
 	if _, err := engine.EnqueuePage(context.Background(), scope, "camera", []Asset{{ID: "queued", Version: "v1", Path: "/queued.jpg", Name: "queued.jpg", MediaType: "photo", ModifiedAt: now, Size: 42}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_jobs DROP COLUMN captured_at; PRAGMA user_version=3`); err != nil {
+	// Rewind a current ledger to the exact shape a v3 release wrote.
+	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_jobs DROP COLUMN captured_at;
+ALTER TABLE photo_backup_settings DROP COLUMN receipt_cursor;
+PRAGMA user_version=3`); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.Migrate(context.Background()); err != nil {

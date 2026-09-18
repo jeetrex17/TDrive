@@ -61,6 +61,16 @@ type UploadRequest struct {
 type UploadResult struct{ RemoteMessageID int64 }
 type Uploader func(context.Context, UploadRequest) (UploadResult, error)
 
+// RemoteIndex answers, for one bounded batch of remote message ids taken from
+// completed receipts, which of them the drive can no longer produce a file for.
+//
+// Returning the absent ids rather than the present ones makes the safe answer
+// the cheap one: an implementation that cannot decide returns nothing and the
+// ledger is left exactly as it was. An id must only be reported when the drive
+// is known to have lost it for good -- an unfinished index, or a delete the
+// user can still undo, is not a loss.
+type RemoteIndex func(ctx context.Context, driveID int64, messageIDs []int64) ([]int64, error)
+
 type JobStatus string
 
 const (
@@ -69,11 +79,15 @@ const (
 	Complete  JobStatus = "complete"
 	Error     JobStatus = "error"
 	Paused    JobStatus = "paused"
+	// Missing is a receipt the drive no longer honours: the upload really
+	// happened, and the file it produced is gone. It is a resting state, never
+	// a queue -- the work only resumes when the user explicitly retries.
+	Missing JobStatus = "missing"
 )
 
 type Status struct {
-	Pending, Uploading, Complete, Error, Paused int64
-	LastError                                   string
+	Pending, Uploading, Complete, Error, Paused, Missing int64
+	LastError                                            string
 }
 
 type Options struct {

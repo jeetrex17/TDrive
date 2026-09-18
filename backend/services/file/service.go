@@ -25,9 +25,10 @@
 //     manifest Telegram accepted.
 //  4. Hidden (mount) uploads never commit here at all. UploadHidden returns a
 //     body and mountwrite publishes it with OpFileCommit.
-//  5. Delete is tomb-first. The tombstone is emitted before any Telegram
-//     delete, and a failed body delete deliberately leaves the file_parts rows
-//     behind for the orphan sweep to retry.
+//  5. Delete never touches Telegram. It publishes a trash operation and stops;
+//     the bytes are destroyed only by an explicit purge or by the retention
+//     sweep, both of which delete exactly the messages the projection's
+//     immutable hard-delete plan lists.
 //
 // Retrying is only safe because every send derives a stable Telegram random id
 // from the upload UUID plus a step label, and because every body is an
