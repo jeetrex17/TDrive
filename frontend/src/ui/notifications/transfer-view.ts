@@ -1,8 +1,8 @@
 /**
  * What a transfer row says, worked out once and away from any markup.
  *
- * The phone row and its tests both read from here, so what a state is called is
- * decided in one place. The rule behind every answer below is that a row never
+ * Both rows -- the phone's and the desktop bell's -- and their tests read from
+ * here, so what a state is called is decided in one place. The rule behind every answer below is that a row never
  * reports a number it does not have: a queue position is not 0%, and a folder
  * still being walked has no total to be a fraction of. Claiming either is how a
  * transfer that is waiting its turn comes to look like one that has stalled.
@@ -29,6 +29,15 @@ export type TransferPhase =
     | 'done'
     | 'failed'
     | 'canceled';
+
+/**
+ * One piece of the line under the name, labelled by what kind of thing it is so
+ * a row can style or drop it without parsing the text back apart.
+ */
+export interface TransferDetailPart {
+    kind: 'status' | 'figure' | 'rate';
+    text: string;
+}
 
 /** Longer than this and an estimate is a guess, so the row keeps it to itself. */
 const MAX_SENSIBLE_ETA_SECONDS = 24 * 60 * 60;
@@ -178,36 +187,61 @@ export function formatAge(timestamp: number, now = Date.now()): string {
  * row clips from the right, so the least useful figure is the first to go.
  */
 export function transferDetail(transfer: TransferEvent, now = Date.now()): string {
+    return transferDetailParts(transfer, now).map((part) => part.text).join(' · ');
+}
+
+/**
+ * What a row is allowed to say right now, one piece at a time.
+ *
+ * The phone reads them as a sentence; the desktop popover stacks them in a
+ * narrow column down the right of the row. So each piece carries what it is and
+ * not only what it says -- a `status` is a state rather than a measurement and
+ * takes no figure styling, and a `rate` is the one a cramped row gives up
+ * first. Either surface can drop or restyle a piece; neither works any of them
+ * out for itself, which is how the two came to disagree about what a queued
+ * transfer looks like.
+ */
+export function transferDetailParts(transfer: TransferEvent, now = Date.now()): readonly TransferDetailPart[] {
     const phase = transferPhase(transfer);
     switch (phase) {
-        case 'waiting': return 'Waiting its turn';
-        case 'paused': return 'Paused';
-        case 'preparing': return 'Preparing…';
-        case 'canceling': return 'Stopping…';
-        case 'canceled': return joinDetail(['Canceled', formatAge(transfer.finishedAt, now)]);
-        case 'failed': return joinDetail(['Failed', formatAge(transfer.finishedAt, now)]);
-        case 'done': return joinDetail(['Done', formatAge(transfer.finishedAt, now)]);
+        case 'waiting': return [status('Waiting its turn')];
+        case 'paused': return [status('Paused')];
+        case 'preparing': return [status('Preparing…')];
+        case 'canceling': return [status('Stopping…')];
+        case 'canceled': return [status(terminal('Canceled', transfer.finishedAt, now))];
+        case 'failed': return [status(terminal('Failed', transfer.finishedAt, now))];
+        case 'done': return [status(terminal('Done', transfer.finishedAt, now))];
         default: break;
     }
 
-    const parts: string[] = [];
+    const parts: TransferDetailPart[] = [];
     const items = transfer.itemsTotal || 0;
-    if (items > 0) parts.push(`${transfer.itemsDone || 0} of ${items} files`);
-    if (transfer.total > 0) parts.push(formatSizePair(transferredBytes(transfer), transfer.total));
+    if (items > 0) parts.push(figure(`${transfer.itemsDone || 0} of ${items} files`));
+    if (transfer.total > 0) parts.push(figure(formatSizePair(transferredBytes(transfer), transfer.total)));
     // A batch learns its size one file at a time, so it can say what it has
     // moved but not what that is out of. "1.2 GB so far" is that, and it is
     // still the figure that says how much work this is.
-    else if (transfer.bytes > 0) parts.push(`${formatBytes(transfer.bytes)} so far`);
-    else if (items === 0) parts.push(`${Math.round(transfer.progress || 0)}%`);
+    else if (transfer.bytes > 0) parts.push(figure(`${formatBytes(transfer.bytes)} so far`));
+    else if (items === 0) parts.push(figure(`${Math.round(transfer.progress || 0)}%`));
 
     const eta = etaSeconds(transfer, now);
-    if (eta !== null) parts.push(formatEta(eta));
-    if (transfer.speed > 0) parts.push(`${formatBytes(transfer.speed)}/s`);
-    return joinDetail(parts);
+    if (eta !== null) parts.push(figure(formatEta(eta)));
+    if (transfer.speed > 0) parts.push({ kind: 'rate', text: `${formatBytes(transfer.speed)}/s` });
+    return parts;
 }
 
-function joinDetail(parts: readonly string[]): string {
-    return parts.filter(Boolean).join(' · ');
+/** "Done · 2 min ago", or just "Done" before the clock has anything to add. */
+function terminal(label: string, finishedAt: number, now: number): string {
+    const age = formatAge(finishedAt, now);
+    return age ? `${label} · ${age}` : label;
+}
+
+function status(text: string): TransferDetailPart {
+    return { kind: 'status', text };
+}
+
+function figure(text: string): TransferDetailPart {
+    return { kind: 'figure', text };
 }
 
 /** Spoken description of the whole row, for a screen reader reaching the bar. */

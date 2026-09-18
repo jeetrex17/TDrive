@@ -11,7 +11,17 @@ export interface SidebarState {
     shared: DriveChannel[];
     pending: PendingJoin[];
     activeChannelId: number | null;
-    photosActive: boolean;
+    /**
+     * Which of the drive's virtual views is showing, mirrored from
+     * state.virtualView rather than flattened to a boolean.
+     *
+     * It was `photosActive: boolean` until the trash became a destination of its
+     * own, at which point `false` stopped meaning "the file list" and started
+     * meaning "photos, or the trash, we cannot say". Everything that read it to
+     * decide what to draw or where BACK goes was wrong in the trash -- most
+     * visibly the phone, which exited the app instead of closing it.
+     */
+    virtualView: 'photos' | 'trash' | null;
 }
 
 const initialState: SidebarState = {
@@ -19,7 +29,7 @@ const initialState: SidebarState = {
     shared: [],
     pending: [],
     activeChannelId: null,
-    photosActive: false,
+    virtualView: null,
 };
 
 export const sidebarState = writable<SidebarState>(initialState);
@@ -28,8 +38,8 @@ export function setSidebarState(next: SidebarState): void {
     sidebarState.set(next);
 }
 
-export function setSidebarPhotosActive(photosActive: boolean): void {
+export function setSidebarVirtualView(virtualView: SidebarState['virtualView']): void {
     sidebarState.update((current) => (
-        current.photosActive === photosActive ? current : { ...current, photosActive }
+        current.virtualView === virtualView ? current : { ...current, virtualView }
     ));
 }

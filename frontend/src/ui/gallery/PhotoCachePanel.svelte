@@ -33,6 +33,10 @@
     .photo-cache-panel { padding: 16px; display: grid; gap: 12px; }
     .photo-cache-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 13px; }
     .photo-cache-row strong { font-weight: 500; font-variant-numeric: tabular-nums; }
-    p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+    p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+    /* The explainer and the failure are both paragraphs directly under the
+       rows, so the failure has to carry its own tone or it reads as more
+       small print. */
+    p[role='alert'] { color: var(--danger); font-weight: 500; }
     button { min-height: 44px; }
 </style>

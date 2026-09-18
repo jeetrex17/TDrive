@@ -15,7 +15,7 @@
 import { derived, type Readable } from 'svelte/store';
 import { state } from '../../state';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
-import { resolveItemState, type ItemState } from './item-state';
+import { itemStateDescriptor, resolveItemState, type ItemState } from './item-state';
 
 /**
  * Pulls the row id back out of an "xfer:<direction>:<kind>:<id>" transfer key.
@@ -103,4 +103,71 @@ export function itemStateFor(
         offline: stored.offline,
         conflicted: stored.conflicted,
     });
+}
+
+/**
+ * The ids of the files whose rows have to grow a second line explaining
+ * themselves, for the drive that is on screen.
+ *
+ * Derived from the transfers, never from the rows. The two are not the same
+ * size: history is capped at HISTORY_CAP entries, while a folder is however
+ * many files the drive holds, and this answer is wanted again on every
+ * progress event. Walking the rows meant a full pass over a ten-thousand-row
+ * folder several times a second to name at most a handful of files.
+ *
+ * `scope` is any value whose identity changes when the active drive does --
+ * the published file-list view is the one the caller has. Transfer keys are
+ * drive-scoped and resolved here against the live active channel, so a set
+ * built for the previous drive cannot be reused after a switch: message ids
+ * repeat across drives, and a stale id would make a stranger's row tall.
+ *
+ * Unchanged membership publishes the *previous* set, not an equal one. The
+ * same identity-as-cache-key reasoning row-lookup.ts relies on: callers hold
+ * this in a derived, and a fresh collection per tick would re-run everything
+ * downstream -- the virtualiser's metrics, and with them the rendered window.
+ */
+const DRIVE_SCOPED_KEY = /^\d+:/;
+
+let explainedFrom: Map<string, TransferEvent> | null = null;
+let explainedScope: unknown = null;
+let explainedIds: ReadonlySet<string> = new Set<string>();
+
+export function explainedFileIds(
+    transfers: Map<string, TransferEvent>,
+    scope: unknown = null,
+): ReadonlySet<string> {
+    if (transfers === explainedFrom && scope === explainedScope) return explainedIds;
+
+    const activeChannelId = Number(state.activeChannel?.id);
+    const prefix = Number.isSafeInteger(activeChannelId) && activeChannelId > 0
+        ? `${activeChannelId}:`
+        : '';
+    const next = new Set<string>();
+    for (const key of transfers.keys()) {
+        const id = rowIdForTransferKey(key, prefix);
+        if (!id || next.has(id)) continue;
+        // Asked rather than answered here: a file with both a scoped and a
+        // legacy entry has a precedence rule, and it lives in one place.
+        if (itemStateDescriptor(itemStateFor(transfers, id)).needsExplanation) next.add(id);
+    }
+
+    explainedFrom = transfers;
+    explainedScope = scope;
+    if (!sameIds(next, explainedIds)) explainedIds = next;
+    return explainedIds;
+}
+
+/** The row id a transfer key names in the active drive, or '' for none. */
+function rowIdForTransferKey(key: string, prefix: string): string {
+    if (prefix && key.startsWith(prefix)) return key.slice(prefix.length);
+    // A leading integer segment is what makes a key drive-scoped, so one that
+    // carries another drive's names no row on screen. Everything else is a
+    // legacy bare id, which is the row id as it stands.
+    return DRIVE_SCOPED_KEY.test(key) ? '' : key;
+}
+
+function sameIds(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+    if (a.size !== b.size) return false;
+    for (const id of a) if (!b.has(id)) return false;
+    return true;
 }

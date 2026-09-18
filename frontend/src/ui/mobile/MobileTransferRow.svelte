@@ -96,7 +96,7 @@
             aria-label={label}
             aria-valuemin="0"
             aria-valuemax="100"
-            aria-valuenow={percent ?? undefined}
+            aria-valuenow={percent === null ? undefined : Math.round(percent)}
         >
             <div class="fill" style={percent === null ? undefined : `width:${percent}%`} aria-hidden="true"></div>
         </div>

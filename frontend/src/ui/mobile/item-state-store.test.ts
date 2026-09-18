@@ -2,7 +2,7 @@ import { get } from 'svelte/store';
 import { state } from '../../state';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
-import { itemStateFor, transfersByFile } from './item-state-store';
+import { explainedFileIds, itemStateFor, transfersByFile } from './item-state-store';
 
 function transfer(overrides: Partial<TransferEvent> & Pick<TransferEvent, 'id'>): TransferEvent {
     return {
@@ -92,5 +92,51 @@ describe('itemStateFor', () => {
     it('lets a failure outrank a pinned local copy', () => {
         historyEvents.set([transfer({ id: 'xfer:down:file:5', status: 'failed', direction: 'down' })]);
         expect(itemStateFor(get(transfersByFile), '5', { offline: true })).toBe('failed');
+    });
+});
+
+describe('explainedFileIds', () => {
+    // Stands in for the published file-list view: one drive, one identity.
+    const scope = {};
+
+    it('names a file whose last transfer failed, by the id its row carries', () => {
+        state.activeChannel = { id: 1, title: 'Drive A', kind: 'personal' };
+        historyEvents.set([
+            transfer({ id: 'xfer:down:file:1:42', status: 'failed' }),
+            transfer({ id: 'xfer:down:file:1:7' }),
+        ]);
+        expect([...explainedFileIds(get(transfersByFile), scope)]).toEqual(['42']);
+    });
+
+    it('republishes the same set when a progress tick explains nothing new', () => {
+        state.activeChannel = { id: 1, title: 'Drive A', kind: 'personal' };
+        historyEvents.set([transfer({ id: 'xfer:down:file:1:42', status: 'failed' })]);
+        const first = explainedFileIds(get(transfersByFile), scope);
+
+        historyEvents.set([
+            transfer({ id: 'xfer:down:file:1:900', status: 'active', progress: 40 }),
+            transfer({ id: 'xfer:down:file:1:42', status: 'failed' }),
+        ]);
+        // Identity, not equality: the virtualiser's row metrics and the window
+        // it renders are derived from this, and a fresh set per progress event
+        // would re-run both for an answer that has not changed.
+        expect(explainedFileIds(get(transfersByFile), scope)).toBe(first);
+    });
+
+    it('forgets the ids of the drive it just left', () => {
+        state.activeChannel = { id: 1, title: 'Drive A', kind: 'personal' };
+        historyEvents.set([transfer({ id: 'xfer:down:file:1:42', status: 'failed' })]);
+        expect(explainedFileIds(get(transfersByFile), scope).has('42')).toBe(true);
+
+        // Message ids repeat across drives, so carrying '42' over would make an
+        // unrelated row in the next drive grow a failure it never had.
+        state.activeChannel = { id: 8, title: 'Drive B', kind: 'shared' };
+        expect(explainedFileIds(get(transfersByFile), {}).size).toBe(0);
+    });
+
+    it('understands a legacy transfer key that carries no drive', () => {
+        state.activeChannel = { id: 1, title: 'Drive A', kind: 'personal' };
+        historyEvents.set([transfer({ id: 'xfer:down:folder:d:design', status: 'failed' })]);
+        expect([...explainedFileIds(get(transfersByFile), {})]).toEqual(['d:design']);
     });
 });

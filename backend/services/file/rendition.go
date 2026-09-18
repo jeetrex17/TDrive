@@ -57,7 +57,15 @@ func (s *Service) Rendition(ctx context.Context, channelID, msgID, revision int6
 	if s.TG == nil || s.Peers == nil {
 		return Rendition{}, errPreviewDownloadFailed
 	}
-	f, found, err := projection.FileByID(s.DB, channelID, msgID)
+	// A thumbnail is widened to the trash so its rows look like the drive rows
+	// they came from. Preview and original are not: those hand over the file
+	// itself, and nothing outside the trash should reach a deleted file's bytes
+	// without restoring it first.
+	lookup := projection.FileByID
+	if kind == "thumbnail" {
+		lookup = projection.FileByIDIncludingTrashed
+	}
+	f, found, err := lookup(s.DB, channelID, msgID)
 	if err != nil {
 		return Rendition{}, err
 	}

@@ -14,6 +14,7 @@ import { closeTopSheet } from '../modals/sheet-stack';
 import { selectionBarState } from '../selection/selection-bar-store';
 import { navigateBack } from '../../modules/navigation';
 import { exitPhotos } from '../../modules/gallery';
+import { closeTrash } from '../../modules/trash/controller';
 import { clearSelection } from '../../modules/selection';
 import { activeTab, closeDriveSwitcher, driveSwitcherOpen } from './mobile-shell-store';
 
@@ -44,19 +45,28 @@ export function handleBackPress(): boolean {
     // Files is home. Every other destination steps back to it rather than out,
     // which is the one rule a phone's bottom bar is expected to keep.
     if (get(activeTab) === 'transfers' || get(activeTab) === 'account') {
-        if (get(sidebarState).photosActive) exitPhotos();
+        leaveVirtualView();
         activeTab.set('files');
         return true;
     }
-    if (get(sidebarState).photosActive) {
-        exitPhotos();
-        return true;
-    }
+    // A virtual view steps back to the file list. The trash has to be named
+    // here as well as Photos: it has no breadcrumb to unwind, so without this
+    // BACK fell through to `return false` and left the app.
+    if (leaveVirtualView()) return true;
     if (get(breadcrumbPath).length > 0) {
         navigateBack();
         return true;
     }
     return false;
+}
+
+/** Closes whichever virtual view is showing, reporting whether one was. */
+function leaveVirtualView(): boolean {
+    const view = get(sidebarState).virtualView;
+    if (view === 'photos') exitPhotos();
+    else if (view === 'trash') closeTrash();
+    else return false;
+    return true;
 }
 
 /** Publishes the bridge for as long as the phone shell is mounted. */

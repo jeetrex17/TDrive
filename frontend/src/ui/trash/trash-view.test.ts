@@ -9,7 +9,8 @@ const NOW = 1_700_000_000_000;
 function entry(overrides: Partial<TrashEntry> = {}): TrashEntry {
     return {
         objectId: 'f:1', kind: 'file', name: 'photo.jpg', parentPath: '',
-        size: 0, deletedAt: NOW, purgeAfter: NOW + 7 * DAY, ...overrides,
+        size: 0, deletedAt: NOW, purgeAfter: NOW + 7 * DAY,
+        revision: 0, encrypted: false, ...overrides,
     };
 }
 

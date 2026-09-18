@@ -21,6 +21,11 @@ type TrashEntry struct {
 	Size       int64  `json:"size"`        // bytes, 0 for a folder
 	DeletedAt  int64  `json:"deleted_at"`  // unix millis
 	PurgeAfter int64  `json:"purge_after"` // unix millis
+
+	// What the trash view needs to render a row the way the drive rendered it,
+	// rather than as a generic icon and a name. Zero for a folder.
+	Revision  int64 `json:"revision"`
+	Encrypted bool  `json:"encrypted"`
 }
 
 // ListTrash returns everything still restorable, most recently deleted first.
@@ -48,6 +53,8 @@ func (a *App) ListTrash() ([]TrashEntry, error) {
 			Size:       listing.Size,
 			DeletedAt:  listing.DeletedAt * millisPerSecond,
 			PurgeAfter: listing.PurgeAfter * millisPerSecond,
+			Revision:   listing.Revision,
+			Encrypted:  listing.Encrypted,
 		})
 	}
 	return view, nil

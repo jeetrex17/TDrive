@@ -41,7 +41,7 @@ beforeEach(() => {
         shared: [],
         pending: [],
         activeChannelId: 1,
-        photosActive: false,
+        virtualView: null,
     });
     shell = document.createElement('div');
     shell.className = 'mobile-shell';

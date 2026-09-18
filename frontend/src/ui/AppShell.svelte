@@ -13,7 +13,7 @@
     import { breadcrumbDrag, navigateBack, navigateToIndex } from '../modules/navigation';
     import { cancelTransfersInDirection, cancelUploadFile, clearHistory } from '../modules/notif-bell';
     import { ensureProfileLoaded } from '../modules/profile-menu';
-    import { openTrash } from '../modules/trash/controller';
+    import { askEmptyTrash, openTrash, trashBusyKey, trashEntries } from '../modules/trash/controller';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
     import {
@@ -23,7 +23,7 @@
         showSharedActionsMenu,
     } from '../modules/sidebar';
     import { setFileSortKey, fileSortState } from './file-list/file-sort-store';
-    import { fileListColumnMode } from './file-list/column-mode-store';
+    import { FILE_LIST_COLUMN_LABEL, fileListColumnMode } from './file-list/column-mode-store';
     import type { FileSortKey } from './file-list/file-sort';
     import Breadcrumb from './chrome/Breadcrumb.svelte';
     import ProfileMenu from './chrome/ProfileMenu.svelte';
@@ -119,7 +119,6 @@
                             class="drive-item"
                             type="button"
                             title="Trash"
-                            aria-haspopup="dialog"
                             onclick={openTrash}
                         >
                             <Trash2Icon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
@@ -218,6 +217,23 @@
                 <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
             {/if}
             <div id="gallery-title" class="gallery-title">Photos</div>
+            <div id="trash-title" class="trash-title">Trash</div>
+            <!-- Destructive and irreversible, so it only ever opens the
+                 confirmation. With nothing to empty it is absent rather than
+                 disabled: a dead control invites a click that cannot do
+                 anything. It is disabled only while a mutation is in flight. -->
+            {#if $trashEntries.length > 0}
+                <button
+                    id="trash-empty-btn"
+                    class="trash-empty-btn"
+                    type="button"
+                    disabled={$trashBusyKey !== ''}
+                    onclick={askEmptyTrash}
+                >
+                    <Trash2Icon size={15} strokeWidth={2} aria-hidden="true" />
+                    <span>Empty trash</span>
+                </button>
+            {/if}
         </div>
 
         <div class="file-table-header" role="row" aria-rowindex="1">
@@ -241,7 +257,7 @@
                     aria-label={sortButtonLabel('date')}
                     onclick={() => setFileSortKey('date')}
                 >
-                    <span>{$fileListColumnMode === 'location' ? 'Location' : 'Date'}</span>
+                    <span>{FILE_LIST_COLUMN_LABEL[$fileListColumnMode]}</span>
                     <span class="file-sort-indicator" aria-hidden="true">{@render sortIndicator('date')}</span>
                 </button>
             </div>

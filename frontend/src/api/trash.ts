@@ -32,6 +32,13 @@ export interface TrashEntry {
     deletedAt: number;
     /** Unix milliseconds after which the backend purges the item for good. */
     purgeAfter: number;
+    /**
+     * The file's *live* revision, which is one past the revision the entry
+     * remembers for a restore. This is the one that addresses a thumbnail; the
+     * rendition path rejects any other as stale. Zero for a folder.
+     */
+    revision: number;
+    encrypted: boolean;
 }
 
 // Bounds are deliberately generous for real names and paths and hard enough
@@ -58,6 +65,8 @@ export function normalizeTrashEntry(value: unknown): TrashEntry | null {
         size: kind === 'folder' ? 0 : nonNegativeNumber(raw.size),
         deletedAt: nonNegativeNumber(raw.deleted_at),
         purgeAfter: nonNegativeNumber(raw.purge_after),
+        revision: kind === 'folder' ? 0 : nonNegativeNumber(raw.revision),
+        encrypted: raw.encrypted === true,
     };
 }
 

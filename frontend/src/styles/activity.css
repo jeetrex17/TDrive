@@ -39,6 +39,10 @@
     opacity: 0;
     transform: scale(0.4);
 }
+/* Accent and danger differ only in hue, so the two states differ in silhouette
+   as well: work in progress is a round dot, an unread error a square badge.
+   That still reads in greyscale, and to anyone who cannot separate the two
+   colours -- which the tinted icon on its own never did. */
 .notif-bell-dot[data-mode="active"] {
     background: var(--accent);
     opacity: 1;
@@ -46,6 +50,7 @@
 }
 .notif-bell-dot[data-mode="error"] {
     background: var(--danger);
+    border-radius: 2px;
     opacity: 1;
     transform: scale(1);
 }
@@ -129,6 +134,9 @@
     opacity: 0.65;
     padding: 4px 0 6px;
 }
+/* Recent only needs air above it when Active is there to be separated from,
+   which the markup used to say with an inline style computed per render. */
+.notif-section + .notif-section-label { margin-top: 14px; }
 .notif-section {
     display: flex;
     flex-direction: column;
@@ -248,7 +256,7 @@
 }
 .notif-row-progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+    background: var(--accent);
     border-radius: var(--radius-pill);
     transition: width 200ms ease;
 }

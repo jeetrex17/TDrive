@@ -69,7 +69,7 @@
     }
 
     function isActiveDrive(channel: DriveChannel): boolean {
-        return !$sidebarState.photosActive && $sidebarState.activeChannelId === channel.id;
+        return $sidebarState.virtualView === null && $sidebarState.activeChannelId === channel.id;
     }
 
     function requestBelow(trigger: HTMLElement): SidebarActionMenuRequest {
