@@ -73,7 +73,7 @@
     // without touching the tab bar, so follow the gallery whenever the two
     // disagree, or the Photos tab would stay lit over the file list.
     $effect(() => {
-        const wanted: MobileTab = $sidebarState.photosActive ? 'photos' : 'files';
+        const wanted: MobileTab = $sidebarState.virtualView === 'photos' ? 'photos' : 'files';
         const current = get(activeTab);
         if ((current === 'files' || current === 'photos') && current !== wanted) {
             activeTab.set(wanted);

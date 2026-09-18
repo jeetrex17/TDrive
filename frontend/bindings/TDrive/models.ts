@@ -419,6 +419,13 @@ export interface TrashEntry {
      * unix millis
      */
     "purge_after": number;
+
+    /**
+     * What the trash view needs to render a row the way the drive rendered it,
+     * rather than as a generic icon and a name. Zero for a folder.
+     */
+    "revision": number;
+    "encrypted": boolean;
 }
 
 /**

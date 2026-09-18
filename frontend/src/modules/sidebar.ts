@@ -53,13 +53,14 @@ export function renderSidebar() {
     const shared = channels.filter((channel) => channel.kind === 'shared');
     const pending = state.pendingJoins.filter((request) => request.inviteHash);
 
-    const photosActive = state.virtualView === 'photos';
+    const virtualView = state.virtualView;
+    const photosActive = virtualView === 'photos';
     setSidebarState({
         personal,
         shared,
         pending,
         activeChannelId: state.activeChannel ? Number(state.activeChannel.id) : null,
-        photosActive,
+        virtualView,
     });
 
     // The Photos item owns the current-route semantics while the gallery is open.

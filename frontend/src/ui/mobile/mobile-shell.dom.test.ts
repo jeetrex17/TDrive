@@ -26,7 +26,7 @@ beforeEach(() => {
     activeTab.set('files');
     selectionBarState.set({ count: 0 });
     fileListView.set({ kind: 'state', stateKind: 'loading', title: 'Loading files' });
-    sidebarState.update((current) => ({ ...current, photosActive: false }));
+    sidebarState.update((current) => ({ ...current, virtualView: null }));
     target = document.createElement('div');
     document.body.append(target);
     component = mount(MobileShell, { target, props: { dashboardVisible: true } });
@@ -76,7 +76,7 @@ describe('scroll divider', () => {
     it('answers the gallery as well as the list', () => {
         // Photos scrolls its own surface inside the same region, and the bar
         // never drew a divider for it at all.
-        sidebarState.update((current) => ({ ...current, photosActive: true }));
+        sidebarState.update((current) => ({ ...current, virtualView: 'photos' }));
         flushSync();
 
         scrollTo('#gallery-view', 60);

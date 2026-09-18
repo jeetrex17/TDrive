@@ -9,6 +9,8 @@ const clearSelection = vi.hoisted(() => vi.fn());
 vi.mock('../../modules/gallery', () => ({ exitPhotos }));
 vi.mock('../../modules/navigation', () => ({ navigateBack }));
 vi.mock('../../modules/selection', () => ({ clearSelection }));
+const closeTrash = vi.hoisted(() => vi.fn());
+vi.mock('../../modules/trash/controller', () => ({ closeTrash }));
 
 import { breadcrumbPath } from '../chrome/breadcrumb-store';
 import { closeTopSheet, pushSheet } from '../modals/sheet-stack';
@@ -20,13 +22,14 @@ import { activeTab, driveSwitcherOpen } from './mobile-shell-store';
 beforeEach(() => {
     while (closeTopSheet());
     driveSwitcherOpen.set(false);
-    sidebarState.update((current) => ({ ...current, photosActive: false }));
+    sidebarState.update((current) => ({ ...current, virtualView: null }));
     selectionBarState.set({ count: 0 });
     activeTab.set('files');
     breadcrumbPath.set([]);
     exitPhotos.mockClear();
     navigateBack.mockClear();
     clearSelection.mockClear();
+    closeTrash.mockClear();
 });
 
 afterEach(() => {
@@ -40,10 +43,27 @@ describe('android back', () => {
         expect(navigateBack).not.toHaveBeenCalled();
     });
 
+    // The trash has no breadcrumb to unwind, so before it was named here BACK
+    // fell all the way through and left the app from inside it.
+    it('closes the trash instead of leaving the app', () => {
+        sidebarState.update((current) => ({ ...current, virtualView: 'trash' }));
+        expect(handleBackPress()).toBe(true);
+        expect(closeTrash).toHaveBeenCalledTimes(1);
+        expect(exitPhotos).not.toHaveBeenCalled();
+    });
+
+    it('returns to the files tab from another tab and closes the trash with it', () => {
+        sidebarState.update((current) => ({ ...current, virtualView: 'trash' }));
+        activeTab.set('account');
+        expect(handleBackPress()).toBe(true);
+        expect(get(activeTab)).toBe('files');
+        expect(closeTrash).toHaveBeenCalledTimes(1);
+    });
+
     it('closes an open sheet before anything underneath it', () => {
         const close = vi.fn();
         pushSheet(close);
-        sidebarState.update((current) => ({ ...current, photosActive: true }));
+        sidebarState.update((current) => ({ ...current, virtualView: 'photos' }));
         breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
 
         expect(handleBackPress()).toBe(true);
@@ -65,7 +85,7 @@ describe('android back', () => {
 
     it('closes the drive switcher before leaving the gallery', () => {
         driveSwitcherOpen.set(true);
-        sidebarState.update((current) => ({ ...current, photosActive: true }));
+        sidebarState.update((current) => ({ ...current, virtualView: 'photos' }));
 
         expect(handleBackPress()).toBe(true);
         expect(exitPhotos).not.toHaveBeenCalled();
@@ -98,7 +118,7 @@ describe('android back', () => {
     });
 
     it('lands on files, not the gallery, when back leaves a tab', () => {
-        sidebarState.update((current) => ({ ...current, photosActive: true }));
+        sidebarState.update((current) => ({ ...current, virtualView: 'photos' }));
         activeTab.set('transfers');
 
         expect(handleBackPress()).toBe(true);
@@ -107,7 +127,7 @@ describe('android back', () => {
     });
 
     it('leaves the gallery before popping a folder', () => {
-        sidebarState.update((current) => ({ ...current, photosActive: true }));
+        sidebarState.update((current) => ({ ...current, virtualView: 'photos' }));
         breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
 
         expect(handleBackPress()).toBe(true);

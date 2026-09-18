@@ -13,7 +13,7 @@ import { updateSelectionBar } from './selection';
 import { beginRender, cachedThumb, rearmLocked, setActive, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
 import { galleryView } from '../ui/gallery/gallery-store';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
-import { setSidebarPhotosActive } from '../ui/sidebar/sidebar-store';
+import { setSidebarVirtualView } from '../ui/sidebar/sidebar-store';
 import type { PreviewNavigationItem } from './modals/preview';
 import { setFileThumbnailsActive } from '../ui/file-list/file-thumbnail-controller';
 import { isVideoFile } from './media-types';
@@ -101,7 +101,7 @@ export function setPhotosMode(on: boolean): void {
     photosNav?.classList.toggle('active', on);
     if (on) photosNav?.setAttribute('aria-current', 'page');
     else photosNav?.removeAttribute('aria-current');
-    setSidebarPhotosActive(on);
+    setSidebarVirtualView(on ? 'photos' : null);
 
     const activeId = Number(state.activeChannel?.id || 0);
     document.querySelectorAll<HTMLElement>('.drive-item[data-channel-id]').forEach((el) => {
