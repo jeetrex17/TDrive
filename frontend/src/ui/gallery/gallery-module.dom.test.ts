@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import type { MediaTimeline } from '../../api/gallery';
 
-const mocks = vi.hoisted(() => ({ timeline: vi.fn(), page: vi.fn(), locate: vi.fn(), preview: vi.fn(), mobile: false }));
+const mocks = vi.hoisted(() => ({ timeline: vi.fn(), folderTimeline: vi.fn(), page: vi.fn(), folderPage: vi.fn(), folders: vi.fn(), locate: vi.fn(), preview: vi.fn(), mobile: false }));
 vi.mock('../../api', () => ({ isMobilePlatform: () => mocks.mobile }));
-vi.mock('../../api/gallery', () => ({ getMediaTimelineSummary: mocks.timeline, getMediaTimelineAnchors: mocks.timeline, listMediaPage: mocks.page, locateMedia: mocks.locate }));
+vi.mock('../../api/gallery', () => ({ getMediaTimelineSummary: mocks.timeline, getMediaTimelineAnchors: mocks.timeline, getMediaFolderTimeline: mocks.folderTimeline, listMediaPage: mocks.page, listMediaFolderPage: mocks.folderPage, listMediaFolders: mocks.folders, locateMedia: mocks.locate }));
 vi.mock('../../modules/search', () => ({ clearSearch: vi.fn() }));
 vi.mock('../../modules/app-actions', () => ({ appActions: () => ({ refreshFiles: vi.fn(), triggerRefresh: vi.fn() }) }));
 vi.mock('../../modules/file-list', () => ({ canOwnerActOnFile: () => true }));
@@ -14,7 +14,7 @@ vi.mock('./gallery-controller', () => ({ beginRender: vi.fn(), cachedThumb: () =
 vi.mock('../../modules/modals/preview', () => ({ activatePreviewModal: vi.fn(), openPreviewSource: mocks.preview }));
 import { state } from '../../state';
 import { activateGallery, enterPhotos, exitPhotos, renderGallery, setPhotosMode, teardownGallery, toggleGallerySelection } from '../../modules/gallery';
-import { galleryView } from './gallery-store';
+import { albumsView, galleryView, photosMode } from './gallery-store';
 
 const timeline = (channelId = 1, generation = '1'): MediaTimeline => ({
     channelId, generation, totalCount: 1000, pageSize: 128,
@@ -32,10 +32,13 @@ beforeEach(() => {
     mocks.timeline.mockReset().mockImplementation(async () => timeline());
     mocks.page.mockReset().mockImplementation(async (cursor: string) => ({ generation, startIndex: Number(cursor), nextCursor: '', items: Array.from({ length: Math.min(128, 1000 - Number(cursor)) }, (_, offset) => ({ msgId: Number(cursor) + offset + 1, name: 'photo.jpg', size: 12, parentId: '', uploadTime: 1, uploaderId: 1, encrypted: false, plaintextSize: 0, revision: 1, contentMsgId: 1, contentHash: '' })) }));
     mocks.preview.mockReset(); mocks.locate.mockReset();
+    mocks.folders.mockReset().mockResolvedValue([]);
+    mocks.folderTimeline.mockReset(); mocks.folderPage.mockReset();
+    photosMode.set({ kind: 'timeline' });
     host = document.createElement('div'); host.id = 'gallery-view'; document.body.append(host);
     activateGallery();
 });
-afterEach(() => { teardownGallery(); host.remove(); galleryView.set({ status: 'loading' }); });
+afterEach(() => { teardownGallery(); host.remove(); galleryView.set({ status: 'loading' }); albumsView.set({ status: 'loading' }); photosMode.set({ kind: 'timeline' }); });
 
 describe('gallery orchestration', () => {
     it('keeps an unchanged snapshot and its cached pages on refresh', async () => {
@@ -174,6 +177,10 @@ describe('gallery orchestration', () => {
         let resolve!: (value: MediaTimeline) => void;
         mocks.timeline.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
         const old = renderGallery();
+        // Wait until the old drive's read is actually in flight: the drive has
+        // to change under a request that has already been made, not one that
+        // has yet to be.
+        await vi.waitFor(() => expect(mocks.timeline).toHaveBeenCalled());
         state.activeChannel = { id: 2 } as typeof state.activeChannel;
         mocks.timeline.mockResolvedValue(timeline(2));
         await renderGallery();

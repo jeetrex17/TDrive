@@ -154,4 +154,31 @@ describe('bounded gallery page source', () => {
         expect(stale).toHaveBeenCalledOnce();
         expect(changed.retainedCount).toBe(0);
     });
+
+    // One folder has no anchor index: the backend hands over the key to the
+    // next page with the page before it, which is the only way through.
+    it('follows the cursor chain when a scope has no anchor index', async () => {
+        const folder: MediaTimeline = {
+            channelId: 1, generation: '1', totalCount: 500, pageSize: 128,
+            buckets: [{ key: '2026-09', startIndex: 0, count: 500, uploadTime: 1 }],
+            anchors: [],
+        };
+        const chained = vi.fn(async (cursor: string): Promise<MediaPage> => {
+            const startIndex = cursor === '' ? 0 : Number(cursor);
+            const count = Math.min(128, 500 - startIndex);
+            return {
+                generation: '1', startIndex,
+                items: Array.from({ length: count }, (_, offset) => item(startIndex + offset + 1)),
+                nextCursor: startIndex + 128 < 500 ? String(startIndex + 128) : '',
+            };
+        });
+        const source = new GallerySource(folder, { load: chained });
+        // A jump past the loaded pages walks the gap once and lands on it.
+        expect((await source.get(300))?.msgId).toBe(301);
+        expect(chained.mock.calls.map(([cursor]) => cursor)).toEqual(['', '128', '256']);
+        // Every cursor learned on the way stays put: a second visit is free.
+        chained.mockClear();
+        expect((await source.get(260))?.msgId).toBe(261);
+        expect(chained).not.toHaveBeenCalled();
+    });
 });

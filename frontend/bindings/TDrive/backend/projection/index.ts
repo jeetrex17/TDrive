@@ -5,6 +5,7 @@ export type {
     FolderStats,
     GalleryAnchor,
     GalleryBucket,
+    GalleryFolder,
     GalleryLocation,
     GalleryTimeline
 } from "./models.js";

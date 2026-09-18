@@ -12,6 +12,7 @@ import {
     FIRST_PHOTO,
     RED_BASE64,
     SECOND_PHOTO,
+    albumPlans,
     galleryPlans,
     openedOriginal,
     originalImageUrl,
@@ -340,6 +341,34 @@ test('gallery loads binary thumbnails and one explicitly opened original stream'
     expect(await mock.calls('PreviewFile')).toEqual([]);
     expect(await mock.calls('OpenOriginalImage')).toMatchObject([{ args: [101, 1], state: 'fulfilled' }]);
     expect(requested.some((path) => path.endsWith('/preview'))).toBe(false);
+});
+
+test('albums open on the folder grid and scope the one gallery to a folder', async ({ page }, testInfo) => {
+    const requested = await routeRenditions(page);
+    await bootTDrive(page, { ...galleryPlans([FIRST_PHOTO, SECOND_PHOTO]), ...albumPlans() });
+    await page.getByRole('button', { name: 'Photos' }).click();
+
+    // More than one folder, so Photos opens on the grid. Each tile names
+    // itself fully, and the drive's own root is called what the trash calls it.
+    const camera = page.getByRole('button', { name: 'Camera, 1 photo' });
+    await expect(camera).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Drive root, 1 photo' })).toBeVisible();
+    await expect(camera.locator('img')).toHaveAttribute('src', /^blob:/);
+    expect(requested).toContain('/mock-renditions/101/thumbnail');
+    await page.screenshot({ path: testInfo.outputPath('albums-grid.png'), fullPage: true });
+
+    // A tile opens the existing gallery, scoped: the other folder's photo is
+    // not in it, and leaving comes back to the grid.
+    await camera.click();
+    await expect(page.getByRole('button', { name: 'first.jpg' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'second.jpg' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Camera' }).click();
+    await expect(camera).toBeVisible();
+
+    // The whole drive is still one switch away.
+    await page.getByRole('button', { name: 'All photos' }).click();
+    await expect(page.getByRole('button', { name: 'first.jpg' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'second.jpg' })).toBeVisible();
 });
 
 test('mixed gallery loads video thumbnails before opening the streaming player', async ({ page }) => {

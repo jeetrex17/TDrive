@@ -10,7 +10,8 @@
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../../modules/selection';
     import { selectionBarState } from '../selection/selection-bar-store';
     import FeatureLayer from '../app/FeatureLayer.svelte';
-    import Gallery from '../gallery/Gallery.svelte';
+    import PhotosModeBar from '../gallery/PhotosModeBar.svelte';
+    import PhotosSurface from '../gallery/PhotosSurface.svelte';
     import SelectionBar from '../selection/SelectionBar.svelte';
     import AccountTab from './AccountTab.svelte';
     import Fab from './Fab.svelte';
@@ -184,6 +185,7 @@
              .photos-mode on it to swap the list for the grid. -->
         <main class="main-content mobile-panel" data-tab="files" hidden={!showMain}>
             <div id="gallery-title" class="gallery-title">Photos</div>
+            <PhotosModeBar />
             <div
                 id="file-list"
                 class="file-list-box"
@@ -204,7 +206,7 @@
                  live no longer than the dashboard does. -->
             <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos">
                 {#if dashboardVisible}
-                    <Gallery />
+                    <PhotosSurface />
                 {/if}
             </div>
         </main>
