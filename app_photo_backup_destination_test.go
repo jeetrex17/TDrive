@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"TDrive/backend/photobackup"
@@ -48,11 +49,11 @@ func TestResolvePhotoBackupDestinationBuildsAndReusesHierarchy(t *testing.T) {
 	store := &fakePhotoBackupFolderStore{}
 	resolver := newPhotoBackupDestinationResolver(store)
 
-	first, err := resolver.resolve(context.Background(), 41, "d:selected", "Workstation", "Camera Roll")
+	first, err := resolver.resolve(context.Background(), 41, "d:selected", "Workstation", "Camera Roll", "")
 	if err != nil {
 		t.Fatalf("first resolve: %v", err)
 	}
-	second, err := resolver.resolve(context.Background(), 41, "d:selected", "Workstation", "Camera Roll")
+	second, err := resolver.resolve(context.Background(), 41, "d:selected", "Workstation", "Camera Roll", "")
 	if err != nil {
 		t.Fatalf("second resolve: %v", err)
 	}
@@ -64,6 +65,81 @@ func TestResolvePhotoBackupDestinationBuildsAndReusesHierarchy(t *testing.T) {
 	}
 	if got := store.folders; got[0].Name != "Photo backup" || got[0].ParentID != "d:selected" || got[1].Name != "Workstation" || got[1].ParentID != got[0].ID || got[2].Name != "Camera Roll" || got[2].ParentID != got[1].ID {
 		t.Fatalf("unexpected hierarchy: %#v", got)
+	}
+}
+
+func TestResolvePhotoBackupDestinationMirrorsNestedFolders(t *testing.T) {
+	store := &fakePhotoBackupFolderStore{}
+	resolver := newPhotoBackupDestinationResolver(store)
+	ctx := context.Background()
+
+	nested, err := resolver.resolve(ctx, 41, "", "Workstation", "Pictures", "Summer/Beach")
+	if err != nil {
+		t.Fatalf("nested resolve: %v", err)
+	}
+	if store.creates != 5 {
+		t.Fatalf("created %d folders, want Photo backup/device/source/Summer/Beach", store.creates)
+	}
+	names := make([]string, 0, len(store.folders))
+	for _, folder := range store.folders {
+		names = append(names, folder.Name)
+	}
+	if got := strings.Join(names, "/"); got != "Photo backup/Workstation/Pictures/Summer/Beach" {
+		t.Fatalf("hierarchy = %q", got)
+	}
+	if store.folders[4].ParentID != store.folders[3].ID || store.folders[3].ParentID != store.folders[2].ID {
+		t.Fatalf("subfolders were not chained: %#v", store.folders)
+	}
+
+	// A sibling deeper in the same tree reuses everything it shares, and a file
+	// at the source root still belongs to the source folder itself.
+	sibling, err := resolver.resolve(ctx, 41, "", "Workstation", "Pictures", "Summer/Beach/Day 2")
+	if err != nil {
+		t.Fatalf("sibling resolve: %v", err)
+	}
+	if store.creates != 6 || sibling.ParentID != nested.ID {
+		t.Fatalf("deeper sibling creates=%d parent=%q", store.creates, sibling.ParentID)
+	}
+	root, err := resolver.resolve(ctx, 41, "", "Workstation", "Pictures", "")
+	if err != nil {
+		t.Fatalf("root resolve: %v", err)
+	}
+	if store.creates != 6 || root.ID != store.folders[2].ID {
+		t.Fatalf("root file creates=%d id=%q", store.creates, root.ID)
+	}
+}
+
+func TestResolvePhotoBackupDestinationSanitizesEveryMirroredLevel(t *testing.T) {
+	store := &fakePhotoBackupFolderStore{}
+	// Empty and dot components are skipped rather than becoming folders, and a
+	// name the namespace rejects falls back instead of failing the upload.
+	if _, err := newPhotoBackupDestinationResolver(store).resolve(context.Background(), 41, "", "PC", "Pics", "a//./b:c/ "); err != nil {
+		t.Fatal(err)
+	}
+	var mirrored []string
+	for _, folder := range store.folders[3:] {
+		mirrored = append(mirrored, folder.Name)
+	}
+	if got := strings.Join(mirrored, "|"); got != "a|b_c|Folder" {
+		t.Fatalf("mirrored levels = %q", got)
+	}
+}
+
+func TestPhotoBackupRelativeDirOnlyMirrorsContainedFolderSources(t *testing.T) {
+	root := t.TempDir()
+	source := photobackup.Source{Root: root}
+	for _, tc := range []struct{ name, path, want string }{
+		{"nested file", filepath.Join(root, "Summer", "Beach", "a.jpg"), "Summer/Beach"},
+		{"file at the root", filepath.Join(root, "a.jpg"), ""},
+		{"file outside the root", filepath.Join(filepath.Dir(root), "elsewhere", "a.jpg"), ""},
+	} {
+		if got := photoBackupRelativeDir(source, photobackup.Asset{Path: tc.path}); got != tc.want {
+			t.Fatalf("%s = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// A photo-library resource has no path and no tree to mirror.
+	if got := photoBackupRelativeDir(photobackup.Source{Root: "library"}, photobackup.Asset{ResourceID: "media:image:9"}); got != "" {
+		t.Fatalf("native asset = %q", got)
 	}
 }
 
@@ -84,11 +160,11 @@ func TestResolvePhotoBackupDestinationIsolatesDrives(t *testing.T) {
 	store := &fakePhotoBackupFolderStore{}
 	resolver := newPhotoBackupDestinationResolver(store)
 
-	one, err := resolver.resolve(context.Background(), 41, "", "Phone", "Photos")
+	one, err := resolver.resolve(context.Background(), 41, "", "Phone", "Photos", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, err := resolver.resolve(context.Background(), 42, "", "Phone", "Photos")
+	two, err := resolver.resolve(context.Background(), 42, "", "Phone", "Photos", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,12 +177,12 @@ func TestResolvePhotoBackupDestinationHonorsCancellationAndErrors(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	store := &fakePhotoBackupFolderStore{}
-	if _, err := newPhotoBackupDestinationResolver(store).resolve(ctx, 41, "", "Phone", "Photos"); !errors.Is(err, context.Canceled) {
+	if _, err := newPhotoBackupDestinationResolver(store).resolve(ctx, 41, "", "Phone", "Photos", ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled resolve error = %v", err)
 	}
 	boom := errors.New("projection unavailable")
 	store.err = boom
-	if _, err := newPhotoBackupDestinationResolver(store).resolve(context.Background(), 41, "", "Phone", "Photos"); !errors.Is(err, boom) {
+	if _, err := newPhotoBackupDestinationResolver(store).resolve(context.Background(), 41, "", "Phone", "Photos", ""); !errors.Is(err, boom) {
 		t.Fatalf("store error = %v", err)
 	}
 }
