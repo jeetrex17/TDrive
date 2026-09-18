@@ -47,6 +47,10 @@
     const unselected = $derived($candidates.filter((candidate) => !$backupState?.sources.some((source) => source.id === candidate.id)));
     // Only a restriction is worth a line; full access is the expected case.
     const accessNote = $derived(($backupState && !['', 'available', 'granted'].includes($backupState.capabilities.access.status)) ? $backupState.capabilities.access.detail : '');
+    // Watched folders are walked all the way down and arrive in the drive with
+    // their subfolders intact. An album has no tree, so this only applies where
+    // a folder source is actually in the list.
+    const nestsFolders = $derived(Boolean($backupState?.sources.some((source) => source.kind === 'folder')));
 
     const handlers: Record<BackupAction, () => Promise<void>> = {
         start: startPhotoBackup, pause: pausePhotoBackupNow, resume: resumePhotoBackupNow, retry: retryPhotoBackupNow,
@@ -155,7 +159,7 @@
                             </IconButton>
                         </li>
                     {:else}
-                        <li class="pb-source pb-source-empty">{phone ? 'Choose an album or your whole library.' : 'Add a folder to watch for new photos and videos.'}</li>
+                        <li class="pb-source pb-source-empty">{phone ? 'Choose an album or your whole library.' : 'Add a folder to watch. Everything inside it is included.'}</li>
                     {/each}
                     {#each unselected as candidate (candidate.id)}
                         <li>
@@ -166,6 +170,9 @@
                         </li>
                     {/each}
                 </ul>
+                {#if nestsFolders}
+                    <p class="pb-note">Subfolders are backed up too, and keep their structure in the drive.</p>
+                {/if}
                 {#if accessNote}
                     <p class="pb-note">{accessNote}</p>
                 {/if}

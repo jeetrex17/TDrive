@@ -63,7 +63,47 @@ func newPhotoBackupDestinationResolver(store photoBackupFolderStore) *photoBacku
 	return &photoBackupDestinationResolver{store: store}
 }
 
-func (r *photoBackupDestinationResolver) resolve(ctx context.Context, channelID int64, selectedParentID, deviceName, sourceName string) (photoBackupFolder, error) {
+// photoBackupRelativeDir is the folder chain to recreate under a source, or ""
+// when there is none to mirror. Native library assets carry no path: an album
+// is a flat set of resources, not a tree, so only watched folders nest.
+//
+// The result is derived from the file's own location rather than its ledger id
+// so that it means the same thing however the id was formed, and it is empty
+// unless the file really sits inside the root -- validatePhotoBackupPath
+// enforces that too, and a destination must never be built from a path that
+// escaped it.
+func photoBackupRelativeDir(source photobackup.Source, asset photobackup.Asset) string {
+	if asset.Path == "" || source.Root == "" {
+		return ""
+	}
+	root, err := filepath.Abs(source.Root)
+	if err != nil {
+		return ""
+	}
+	dir, err := filepath.Abs(filepath.Dir(asset.Path))
+	if err != nil {
+		return ""
+	}
+	relative, err := filepath.Rel(root, dir)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return filepath.ToSlash(relative)
+}
+
+// resolve returns the folder an upload belongs in, creating what is missing.
+//
+// The first three levels are fixed -- Photo backup / <device> / <source> -- and
+// relativeDir mirrors the file's own folders beneath them, so a watched tree
+// arrives in the drive shaped the way it sits on disk. Without it every file in
+// the tree landed in one folder, where two photos named the same in different
+// subfolders collided.
+//
+// Each level costs one indexed lookup, and a remote folder creation only the
+// first time a folder is seen. Deliberately uncached: the saving over an upload
+// that takes seconds is noise, and a cached id survives the folder being
+// deleted, which would send files to a tombstone.
+func (r *photoBackupDestinationResolver) resolve(ctx context.Context, channelID int64, selectedParentID, deviceName, sourceName, relativeDir string) (photoBackupFolder, error) {
 	if err := ctx.Err(); err != nil {
 		return photoBackupFolder{}, err
 	}
@@ -75,6 +115,15 @@ func (r *photoBackupDestinationResolver) resolve(ctx context.Context, channelID 
 		photoBackupRootFolderName,
 		photoBackupFolderName(deviceName, photoBackupDeviceFallback()),
 		photoBackupFolderName(sourceName, "Photos"),
+	}
+	for _, component := range strings.Split(relativeDir, "/") {
+		if component == "" || component == "." {
+			continue
+		}
+		// A component is sanitized the same way every other level is, so a
+		// folder the local filesystem allows but the namespace does not still
+		// lands somewhere predictable instead of failing the upload.
+		names = append(names, photoBackupFolderName(component, "Folder"))
 	}
 	var folder photoBackupFolder
 	for _, name := range names {
@@ -170,7 +219,7 @@ func (a *App) resolvePhotoBackupUploadParent(ctx context.Context, request photob
 		return "", err
 	}
 	resolver := newPhotoBackupDestinationResolver(appPhotoBackupFolderStore{service: service})
-	folder, err := resolver.resolve(ctx, request.ChannelID, request.ParentID, deviceName, sourceName)
+	folder, err := resolver.resolve(ctx, request.ChannelID, request.ParentID, deviceName, sourceName, photoBackupRelativeDir(request.Source, request.Asset))
 	if err != nil {
 		return "", err
 	}
