@@ -292,8 +292,13 @@
  * pasted into the list.
  */
 .file-type-icon {
+    /* Square, not the 40x20 letterbox it used to be. The chip doubles as the
+       photo thumbnail, and a 2:1 crop of a portrait is a strip of somebody's
+       shirt -- unrecognisable, which is the one thing a thumbnail must not be.
+       Square costs 20px of row height and is what makes the picture readable.
+       The phone shell already had its own 44px square for the same reason. */
     width: 40px;
-    height: 20px;
+    height: 40px;
     margin-right: 12px;
     flex: 0 0 auto;
     display: inline-flex;
@@ -307,9 +312,12 @@
     color: var(--text-main);
 }
 
-/* Image rows keep the exact type-chip footprint, so loading a photo never
-   changes row height or the virtual scroll offsets. The icon remains underneath
-   as the honest fallback for locked, missing or failed derivatives. */
+/* The thumbnail paints inside the type chip's box and adds nothing of its own:
+   no width, no height, no aspect-ratio. That is the invariant -- the chip is
+   the same square whether the derivative arrives, fails, or never comes -- and
+   it is what keeps a photo loading mid-scroll from moving row height or the
+   virtual offsets under the reader. The icon remains underneath as the honest
+   fallback for locked, missing or failed derivatives. */
 .row-thumbnail {
     position: relative;
     overflow: hidden;
@@ -373,8 +381,10 @@
 
 .row-actions { min-width: 0; display: flex; gap: 8px; opacity: 1; justify-content: flex-end; }
 
+/* Tracks .file-type-icon exactly. The two chips share the leading column, so
+   any difference in box reads as one of them being misaligned. */
 .folder-chip {
-    width: 40px; height: 20px; margin-right: 12px;
+    width: 40px; height: 40px; margin-right: 12px;
     flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     background: var(--overlay-accent-1);
     border: 1px solid var(--overlay-accent-2);
@@ -382,9 +392,14 @@
 }
 /* One rule for both chips. A folder and a file type share a column, so any
    difference in size or stroke between them reads as one of the two being
-   wrong rather than as two kinds of thing. */
+   wrong rather than as two kinds of thing.
+
+   Half the chip, which is the ratio the phone shell already uses. The glyph
+   sat at 17px when the chip was a 40x20 letterbox and it filled that; in the
+   square it read as a small mark adrift in an empty tile, next to thumbnails
+   that reach the chip's own edges. */
 .folder-chip svg,
-.file-type-icon svg { width: 17px; height: 17px; stroke-width: 1.5; }
+.file-type-icon svg { width: 20px; height: 20px; stroke-width: 1.5; }
 
 .action-icon {
     width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
