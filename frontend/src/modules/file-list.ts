@@ -3,6 +3,7 @@
 import { state, resetFolderCaches } from '../state';
 import { splitNameAndExt, formatDate, formatBytes } from '../utils';
 import { isOffline } from './connectivity';
+import { humanizeBackendError } from './errors';
 import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
@@ -26,6 +27,7 @@ import { refreshFolderIndex, collectDescendants } from './folder-index';
 import { chooseFilesForCurrentFolder, enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
+import { renderTrashRows, setTrashMode } from './trash/view';
 import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
 import { appActions, type RefreshFilesOptions } from './app-actions';
 import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows, type InteractiveFileListRow } from '../ui/file-list/file-list-store';
@@ -104,6 +106,9 @@ function dragItemsFor(row: HTMLElement, fallback: FileCommandItem): FileCommandI
 // startDrag begins an internal drag-to-move, resolving multi-select and the set
 // of folders that can't be a drop target (a dragged folder or its own subtree).
 function startDrag(row: HTMLElement, fallback: FileCommandItem, parentId: string): void {
+    // Nothing in the trash has a parent to be dragged out of.
+    if (isTrashMode()) return;
+
     const items = dragItemsFor(row, fallback);
     const folderIds = items
         .filter((item): item is FolderCommandItem => item.type === 'folder')
@@ -278,6 +283,8 @@ export function buildFolderRow(folder: FolderRowInput, parentId: string, overrid
         size: overrides.size ?? 0,
         modifiedTime: overrides.modifiedTime ?? 0,
         ariaLabel: overrides.ariaLabel ?? `Folder: ${name}`,
+        timeLabel: overrides.timeLabel,
+        actionsInline: overrides.actionsInline,
         actions: overrides.actions ?? [folderAction()],
         onClick: overrides.onClick,
         onDoubleClick: overrides.onDoubleClick,
@@ -311,6 +318,8 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         metaLabel: overrides.metaLabel ?? formatDate(uploadTime),
         sizeLabel: overrides.sizeLabel ?? formatBytes(size),
         ariaLabel: overrides.ariaLabel ?? `File: ${name}`,
+        timeLabel: overrides.timeLabel,
+        actionsInline: overrides.actionsInline,
         uploaderID,
         uploadTime,
         encrypted,
@@ -430,6 +439,10 @@ function rowDetailLines(row: FolderListRow | FileListFileRow): ContextMenuDetail
 // never selects the row: on a phone the selection belongs to the reader, not
 // the menu, and the sheet header names what the actions apply to.
 function openRowMenu(row: HTMLElement, clientX: number, clientY: number): void {
+    // Every item on the row menu (open, rename, move, download, delete) acts on
+    // a live file. The trash offers its two real actions on the row itself.
+    if (isTrashMode()) return;
+
     const logical = fileListRowForElement(row);
     showRowContextMenu(row, clientX, clientY, {
         header: logical
@@ -445,6 +458,10 @@ function openRowMenu(row: HTMLElement, clientX: number, clientY: number): void {
 }
 
 function toggleRowSelection(row: HTMLElement): void {
+    // The selection bar acts on live items -- move, download, delete. None of
+    // those mean anything for something already deleted, and the two that do
+    // are each row's own buttons, so the trash does not select at all.
+    if (isTrashMode()) return;
     if (isRowSelected(row)) {
         deselectRow(row);
         return;
@@ -484,6 +501,8 @@ function fileCommandFor(row: FileListFileRow, parentId: string): FileCommandItem
 }
 
 function deleteRow(row: InteractiveFileListRow) {
+    if (isTrashMode()) return;
+
     if (row.kind === "folder") {
         openDeleteModal({
             type: "folder",
@@ -501,6 +520,8 @@ function deleteRow(row: InteractiveFileListRow) {
 }
 
 function renameRow(row: InteractiveFileListRow) {
+    if (isTrashMode()) return;
+
     if (row.kind === "folder") {
         openRenameModal({
             type: "folder",
@@ -520,6 +541,8 @@ function renameRow(row: InteractiveFileListRow) {
  * rather than leaning on the menu's branching.
  */
 function openMoveForRow(row: InteractiveFileListRow): void {
+    if (isTrashMode()) return;
+
     if (row.kind === 'folder') {
         openMoveModal({ type: 'folder', id: row.id, name: row.name, parentId: state.currentFolderId });
         return;
@@ -543,6 +566,7 @@ function fileTargetForRow(row: FileListFileRow) {
 }
 
 function activateRow(element: HTMLElement, row: InteractiveFileListRow) {
+    if (isTrashMode()) return;
     if (isSearchMode()) {
         element.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
         return;
@@ -754,11 +778,6 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
     renderFileListRows(list, rows, afterPublish);
 }
 
-function refreshErrorMessage(error: unknown): string {
-    if (error instanceof Error && error.message) return error.message;
-    return String(error || 'Failed to load files');
-}
-
 function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, error: unknown): void {
     if (!isCurrentFileRequest(request)) return;
     if (request.presentation === 'same-view-refresh') {
@@ -772,7 +791,7 @@ function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, err
         list,
         'error',
         offline ? "You're offline" : 'Could not load this folder',
-        offline ? 'Reconnect to load this folder from Telegram.' : refreshErrorMessage(error),
+        offline ? 'Reconnect to load this folder from Telegram.' : humanizeBackendError(error),
         { label: 'Retry', onClick: () => appActions().refreshFiles() },
     );
 }
@@ -788,6 +807,16 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}): 
         return;
     }
     setPhotosMode(false);
+    if (state.virtualView === 'trash') {
+        // Same reasoning as Photos: invalidate any drive load already in
+        // flight so it cannot republish a folder over the trash.
+        fileRefreshToken += 1;
+        clearSelection();
+        setTrashMode(true);
+        renderTrashRows();
+        return;
+    }
+    setTrashMode(false);
 
     const list = document.getElementById('file-list');
     if (!list) return;
@@ -823,6 +852,14 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}): 
 // costs no listener churn and Svelte can freely replace keyed rows.
 function isSearchMode() {
     return String(state.searchQuery || "").trim() !== "";
+}
+
+// In the trash a row is a record of something deleted, not a live item: it
+// cannot be opened, renamed, moved, dragged or downloaded. The two things it
+// can do are its own buttons, so every drive interaction below checks this
+// first rather than each one deciding for itself.
+function isTrashMode() {
+    return state.virtualView === 'trash';
 }
 
 // On a phone a tap opens the row (the desktop double click) unless something is
@@ -872,6 +909,11 @@ function handleListClick(e: MouseEvent) {
     // nothing to act on.
     const row = fileListRowForElement(element);
     if (!element || !row) return;
+
+    // A trash row's only two operations are its own buttons, which Svelte binds
+    // directly. Everything this delegated layer would otherwise do -- select,
+    // focus, open -- has no meaning for a deleted item, so it stops here.
+    if (isTrashMode()) return;
 
     // Search owns row activation so it can enter a result's folder before
     // refreshing. The mobile action affordances still belong to this shared
@@ -995,7 +1037,7 @@ function handleListKeyDown(e: KeyboardEvent) {
 function handleListDblClick(e: MouseEvent) {
     // A phone tap already opened the row; the second tap of a quick pair is not
     // a rename request.
-    if (isSearchMode() || isMobilePlatform()) return;
+    if (isTrashMode() || isSearchMode() || isMobilePlatform()) return;
 
     const row = fileListRowForElement((e.target as HTMLElement).closest(".drive-row"));
     if (!row) return;

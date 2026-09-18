@@ -76,7 +76,6 @@
     import RenameModal from '../modals/RenameModal.svelte';
     import ShareDriveModal from '../modals/ShareDriveModal.svelte';
     import UploadOptionsModal from '../modals/UploadOptionsModal.svelte';
-    import TrashModal from '../trash/TrashModal.svelte';
     import TrashConfirmModal from '../trash/TrashConfirmModal.svelte';
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
     import ToastStack from '../notifications/ToastStack.svelte';
@@ -219,7 +218,6 @@
          host comes last so that, with every overlay on the same --z-modal, the
          later element in the document is the one drawn on top. -->
     <div id="trash-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
-        <TrashModal />
     </div>
     <div id="trash-confirm-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <TrashConfirmModal onConfirm={confirmTrashAction} />

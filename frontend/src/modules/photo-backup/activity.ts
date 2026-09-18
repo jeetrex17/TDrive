@@ -4,7 +4,8 @@
 import type { PhotoBackupState } from '../../api/photo-backup';
 import type { TransferItem } from '../../ui/notifications/notif-store';
 import {
-    markTransferDone, pushQueuedTransfer, pushTransferStart, removeTransfer, updateTransferName, updateTransferProgress,
+    markTransferDone, pushQueuedTransfer, pushTransferStart, removeTransfer, transferKey,
+    updateTransferName, updateTransferProgress,
 } from '../notif-bell';
 
 const ACTIVITY_ID = 'photo-backup';
@@ -38,6 +39,12 @@ function currentItem(state: PhotoBackupState): readonly TransferItem[] {
         progress: state.status.currentFilePercent,
         total: state.status.currentFileBytesTotal,
     }];
+}
+
+/** Bytes where the backend knows them, finished files where it does not. */
+function queueProgress(bytesDone: number, bytesTotal: number, done: number, total: number): number {
+    const fraction = bytesTotal > 0 ? bytesDone / bytesTotal : (total > 0 ? done / total : 0);
+    return Math.max(0, Math.min(100, fraction * 100));
 }
 
 function totals(state: PhotoBackupState): { done: number; total: number } {
@@ -80,11 +87,18 @@ export function syncPhotoBackupActivity(state: PhotoBackupState): void {
     }
     waiting = queued;
     const { done, total } = totals(state);
-    // The queue's bytes, not the current file's: the bar is answering "how far
-    // through the backup", and the file it happens to be on is one line below.
+    // The queue's progress, not the current file's: the bar is answering "how
+    // far through the backup", and the file it happens to be on is one line
+    // below.
+    //
+    // Bytes are the better measure -- a 4 GB video and a 2 MB photo are not the
+    // same third of a three-item backup -- but the backend does not total the
+    // queue's bytes today, so they arrive as zero and the honest fallback is
+    // the files it has finished. A bar wired only to bytes would sit at 0 for
+    // the whole run.
     updateTransferProgress({
         id: ACTIVITY_ID, direction: 'up',
-        progress: bytesTotal > 0 ? (bytesDone / bytesTotal) * 100 : 0,
+        progress: queueProgress(bytesDone, bytesTotal, done, total),
         bytes: bytesDone, total: bytesTotal, itemsDone: done, itemsTotal: total,
         items: currentItem(state), itemsActive: state.status.uploading,
     });
@@ -97,6 +111,12 @@ export function clearPhotoBackupActivity(): void {
     waiting = false;
 }
 
+/**
+ * Whether a history id is the backup's own row. The rows that offer a stop
+ * control ask here instead of matching the key themselves: the backup queue is
+ * the backend's to schedule, and a rename of the id must not quietly leave them
+ * offering a button that stops nothing.
+ */
 export function isPhotoBackupActivity(id: string): boolean {
-    return id === `xfer:up:${ACTIVITY_ID}`;
+    return id === transferKey('up', ACTIVITY_ID);
 }

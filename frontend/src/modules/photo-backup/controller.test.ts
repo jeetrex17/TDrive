@@ -68,7 +68,7 @@ describe('photo backup controller scheduler', () => {
         for (const control of [mocks.run, mocks.pause, mocks.resume, mocks.retry]) control.mockResolvedValue(ok);
         mocks.unlock.mockResolvedValue(true); mocks.prompt.mockResolvedValue(true);
         mocks.state = state(); mocks.getState.mockImplementation(() => Promise.resolve(mocks.state));
-        sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, photosActive: false });
+        sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
         stop = activatePhotoBackup();
     });
@@ -218,7 +218,7 @@ describe('photo backup controller scheduler', () => {
         mocks.getState.mockReset()
             .mockImplementationOnce(() => new Promise<PhotoBackupState>((resolve) => { resolveOld = resolve; }))
             .mockResolvedValue(current);
-        sidebarState.set({ personal: [{ id: 9, title: 'Current', kind: 'personal' } as never], shared: [], pending: [], activeChannelId: 9, photosActive: false });
+        sidebarState.set({ personal: [{ id: 9, title: 'Current', kind: 'personal' } as never], shared: [], pending: [], activeChannelId: 9, virtualView: null });
         stop = activatePhotoBackup();
         await flush();
         // The row names the run; the file it is on is the one listed under it,

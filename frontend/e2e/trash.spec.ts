@@ -11,8 +11,8 @@ const ok = { ok: true };
 function trashRows(now: number) {
     return [
         { object_id: 'd:9c1', kind: 'folder', name: 'Tax returns 2024', parent_path: 'Documents', size: 0, deleted_at: now - 3 * DAY, purge_after: now + 27 * DAY + HOUR },
-        { object_id: 'f:2615', kind: 'file', name: 'IMG_0042.HEIC', parent_path: 'Trips/Iceland', size: 4_812_000, deleted_at: now - 60_000, purge_after: now + 29 * DAY + HOUR },
-        { object_id: 'f:2601', kind: 'file', name: 'budget.xlsx', parent_path: '', size: 12_000, deleted_at: now - 29 * DAY, purge_after: now + 6 * HOUR + 60_000 },
+        { object_id: 'f:2615', kind: 'file', name: 'IMG_0042.jpg', parent_path: 'Trips/Iceland', size: 4_812_000, deleted_at: now - 60_000, purge_after: now + 29 * DAY + HOUR, revision: 4, },
+        { object_id: 'f:2601', kind: 'file', name: 'budget.xlsx', parent_path: '', size: 12_000, deleted_at: now - 29 * DAY, purge_after: now + 6 * HOUR + 60_000, revision: 2, },
     ];
 }
 
@@ -22,7 +22,11 @@ async function usePlatform(page: Page, platform: Platform): Promise<void> {
     await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
 }
 
-/** Trash is a sidebar destination on the desktop and an Account row on a phone. */
+/**
+ * Trash is a sidebar destination on the desktop and an Account row on a phone.
+ * Either way it lands in the drive's own file list rather than in a dialog, so
+ * what comes back is the list every other folder is read from.
+ */
 async function openTrash(page: Page, platform: Platform) {
     if (platform === 'desktop') {
         await page.locator('#nav-trash').click();
@@ -31,7 +35,7 @@ async function openTrash(page: Page, platform: Platform) {
             .getByRole('button', { name: 'Account', exact: true }).click();
         await page.getByRole('button', { name: 'Trash', exact: true }).click();
     }
-    return page.getByRole('dialog', { name: 'Trash', exact: true });
+    return page.locator('#file-list');
 }
 
 for (const platform of ['desktop', 'android'] as const) {
@@ -39,24 +43,27 @@ for (const platform of ['desktop', 'android'] as const) {
         await usePlatform(page, platform);
         const now = Date.now();
         await bootTDrive(page, { ListTrash: resolves(trashRows(now)), RestoreFromTrash: resolves(ok) });
-        const dialog = await openTrash(page, platform);
+        const list = await openTrash(page, platform);
 
-        const rows = dialog.getByRole('listitem');
+        const rows = list.locator('.drive-row');
         await expect(rows).toHaveCount(3);
-        // Newest deletion leads, whatever order the backend answered in.
-        await expect(rows.first()).toContainText('IMG_0042.HEIC');
-        await expect(rows.first()).toContainText('Trips/Iceland');
-        await expect(rows.first()).toContainText('29 days left');
+        // This is the drive's list, so it keeps the drive's convention of
+        // folders above files. Within each group the newest deletion leads,
+        // because it has the most time left and the list sorts on the deadline
+        // the countdown column is showing.
+        await expect(rows.nth(0)).toContainText('Tax returns 2024');
+        await expect(rows.nth(1)).toContainText('IMG_0042.jpg');
+        await expect(rows.nth(1)).toHaveAttribute('aria-label', /Trips\/Iceland/);
+        await expect(rows.nth(1)).toContainText('29 days left');
         // An item deleted from the drive's own root says so rather than nothing.
-        await expect(rows.nth(2)).toContainText('Drive root');
+        await expect(rows.nth(2)).toHaveAttribute('aria-label', /Drive root/);
         // Hours, not a timestamp, once the deadline is close.
         await expect(rows.nth(2)).toContainText('6 hours left');
-        await expect(dialog).toContainText('3 items');
-        await page.screenshot({ path: testInfo.outputPath(`trash-${platform}.png`) });
+        await page.screenshot({ path: testInfo.outputPath(`trash-${platform}.png`), fullPage: true });
 
-        await rows.first().getByRole('button', { name: 'Restore IMG_0042.HEIC' }).click();
+        await rows.nth(1).getByRole('button', { name: 'Restore IMG_0042.jpg' }).click();
         await expect(rows).toHaveCount(2);
-        await expect(dialog).not.toContainText('IMG_0042.HEIC');
+        await expect(list).not.toContainText('IMG_0042.jpg');
     });
 }
 
@@ -67,23 +74,24 @@ for (const platform of ['desktop', 'android'] as const) {
             ListTrash: resolves(trashRows(Date.now())),
             DeleteFromTrashPermanently: resolves(ok),
         });
-        const dialog = await openTrash(page, platform);
-        await dialog.getByRole('button', { name: 'Delete IMG_0042.HEIC permanently' }).click();
+        const list = await openTrash(page, platform);
+        const rows = list.locator('.drive-row');
+        await rows.nth(1).getByRole('button', { name: 'Delete IMG_0042.jpg forever' }).click();
 
         const confirm = page.getByRole('dialog', { name: 'Delete permanently?' });
         await expect(confirm).toContainText("can't be undone");
-        await expect(confirm).toContainText('IMG_0042.HEIC');
+        await expect(confirm).toContainText('IMG_0042.jpg');
         // Backing out of the question deletes nothing.
         await confirm.getByRole('button', { name: 'Cancel', exact: true }).click();
         await expect(confirm).toBeHidden();
         expect(await mock.calls('DeleteFromTrashPermanently')).toHaveLength(0);
-        await expect(dialog.getByRole('listitem')).toHaveCount(3);
+        await expect(rows).toHaveCount(3);
 
-        await dialog.getByRole('button', { name: 'Delete IMG_0042.HEIC permanently' }).click();
+        await rows.nth(1).getByRole('button', { name: 'Delete IMG_0042.jpg forever' }).click();
         await confirm.getByRole('button', { name: 'Delete permanently', exact: true }).click();
         await expect.poll(async () => (await mock.calls('DeleteFromTrashPermanently')).length).toBe(1);
         expect((await mock.calls('DeleteFromTrashPermanently'))[0].args).toEqual(['f:2615']);
-        await expect(dialog.getByRole('listitem')).toHaveCount(2);
+        await expect(rows).toHaveCount(2);
     });
 }
 
@@ -92,44 +100,92 @@ test('emptying the trash confirms first and then leaves an empty state', async (
         ListTrash: resolves(trashRows(Date.now())),
         EmptyTrash: resolves(ok),
     });
-    const dialog = await openTrash(page, 'desktop');
-    await dialog.getByRole('button', { name: 'Empty trash', exact: true }).click();
+    const list = await openTrash(page, 'desktop');
+    await page.locator('#trash-empty-btn').click();
 
     const confirm = page.getByRole('dialog', { name: 'Empty the trash?' });
     await expect(confirm).toContainText('3 items');
     await confirm.getByRole('button', { name: 'Empty trash', exact: true }).click();
     await expect.poll(async () => (await mock.calls('EmptyTrash')).length).toBe(1);
 
-    await expect(dialog).toContainText('Nothing in the trash');
+    await expect(list).toContainText('Nothing in the trash');
     // Nothing left to empty, so the control is gone rather than sitting disabled.
-    await expect(dialog.getByRole('button', { name: 'Empty trash', exact: true })).toHaveCount(0);
+    await expect(page.locator('#trash-empty-btn')).toHaveCount(0);
 });
 
 test('an empty trash explains itself instead of showing a bare list', async ({ page }) => {
     await bootTDrive(page, { ListTrash: resolves([]) });
-    const dialog = await openTrash(page, 'desktop');
-    await expect(dialog).toContainText('Nothing in the trash');
-    await expect(dialog.getByRole('listitem')).toHaveCount(0);
+    const list = await openTrash(page, 'desktop');
+    await expect(list).toContainText('Nothing in the trash');
+    await expect(list.locator('.drive-row')).toHaveCount(0);
 });
 
-test("a refused restore repeats the backend's reason", async ({ page }) => {
+test('a refused restore says so without throwing away a list that is still right', async ({ page }) => {
     await bootTDrive(page, {
         ListTrash: resolves(trashRows(Date.now())),
         RestoreFromTrash: resolves({ ok: false, error: { code: 'operation_failed', message: 'The original folder is gone.' } }),
     });
-    const dialog = await openTrash(page, 'desktop');
-    await dialog.getByRole('button', { name: 'Restore IMG_0042.HEIC' }).click();
-    await expect(dialog.getByRole('alert')).toHaveText('The original folder is gone.');
+    const list = await openTrash(page, 'desktop');
+    await list.locator('.drive-row').nth(1).getByRole('button', { name: 'Restore IMG_0042.jpg' }).click();
+    await expect(page.locator('.toast').filter({ hasText: 'The original folder is gone.' })).toBeVisible();
     // A refusal keeps the row: it is still in the trash.
-    await expect(dialog.getByRole('listitem')).toHaveCount(3);
+    await expect(list.locator('.drive-row')).toHaveCount(3);
 });
 
 test('a trash that cannot be read offers a way to try again', async ({ page }) => {
     const mock = await bootTDrive(page, { ListTrash: resolves(null) });
     await mock.setPlan('ListTrash', rejects('Telegram is unreachable.'));
-    const dialog = await openTrash(page, 'desktop');
-    await expect(dialog).toContainText('The trash could not be opened');
+    const list = await openTrash(page, 'desktop');
+    await expect(list).toContainText('The trash could not be opened');
     await mock.setPlan('ListTrash', resolves(trashRows(Date.now())));
-    await dialog.getByRole('button', { name: 'Try again', exact: true }).click();
-    await expect(dialog.getByRole('listitem')).toHaveCount(3);
+    // 'Retry' is what the drive's own failed folder load offers; the trash is
+    // that list now, so it says the same word.
+    await list.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect(list.locator('.drive-row')).toHaveCount(3);
+});
+
+test('the trash reads as the drive: same header, no folder trail, nothing to upload into', async ({ page }) => {
+    await bootTDrive(page, { ListTrash: resolves(trashRows(Date.now())) });
+    await openTrash(page, 'desktop');
+
+    await expect(page.locator('#trash-title')).toBeVisible();
+    // The drive's own column header is still there, because this is the drive's
+    // own list -- but the date column is reporting the countdown instead.
+    await expect(page.locator('.file-table-header')).toBeVisible();
+    await expect(page.locator('.file-table-header')).toContainText('Time left');
+    // No folder to be in, so no trail and no way back up.
+    await expect(page.locator('.breadcrumb-path')).toBeHidden();
+    // Nothing can be added to the trash.
+    await expect(page.locator('.upload-menu-wrap')).toBeHidden();
+});
+
+test('a trashed row offers only the two things a deleted item can do', async ({ page }) => {
+    await bootTDrive(page, { ListTrash: resolves(trashRows(Date.now())) });
+    const list = await openTrash(page, 'desktop');
+    const row = list.locator('.drive-row').nth(1);
+
+    await expect(row.getByRole('button', { name: 'Restore IMG_0042.jpg' })).toBeVisible();
+    await expect(row.getByRole('button', { name: 'Delete IMG_0042.jpg forever' })).toBeVisible();
+    // Nothing that acts on a live file.
+    await expect(row.locator('button.download')).toHaveCount(0);
+    await expect(row.locator('button.open-file')).toHaveCount(0);
+
+    // A deleted item cannot be selected into the drive's bulk actions, and a
+    // right-click offers no menu of operations it could not perform anyway.
+    await row.click();
+    await expect(page.locator('.selection-bar')).toBeHidden();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toHaveCount(0);
+});
+
+test('leaving the trash returns the drive to the folder it was showing', async ({ page }) => {
+    await bootTDrive(page, { ListTrash: resolves(trashRows(Date.now())) });
+    await openTrash(page, 'desktop');
+    await expect(page.locator('#trash-title')).toBeVisible();
+
+    // The sidebar drive is the way back, the same as it is out of Photos.
+    await page.locator('.drive-item[data-channel-id]').first().click();
+    await expect(page.locator('#trash-title')).toBeHidden();
+    await expect(page.locator('.breadcrumb-path')).toBeVisible();
+    await expect(page.locator('.file-table-header')).toContainText('Date');
 });

@@ -52,6 +52,11 @@ type TrashEntry struct {
 	// Size is the logical size of a trashed file, plaintext where the file is
 	// encrypted, and zero for a folder.
 	Size int64
+	// What the trash view needs to draw a file the way the drive drew it: the
+	// revision that addresses its thumbnail, and whether it wears a lock. Both
+	// are zero for a folder, which has neither.
+	Revision  int64
+	Encrypted bool
 }
 
 // DeterministicOpID derives a stable operation id from a purpose label and the
@@ -116,7 +121,8 @@ func queryTrashEntries(db *sql.DB, channelID int64, tail string, args ...any) ([
 		SELECT entry.object_id, entry.object_kind, entry.original_parent_id,
 		       entry.original_name, entry.original_revision, entry.deleted_at,
 		       entry.purge_after, entry.op_id,
-		       COALESCE(MAX(file.plaintext_size, file.size), 0)
+		       COALESCE(MAX(file.plaintext_size, file.size), 0),
+		       COALESCE(file.revision, 0), COALESCE(file.encrypted, 0)
 		FROM trash_entries entry
 		LEFT JOIN files file
 		  ON file.channel_id=entry.channel_id
@@ -132,13 +138,16 @@ func queryTrashEntries(db *sql.DB, channelID int64, tail string, args ...any) ([
 	var entries []TrashEntry
 	for rows.Next() {
 		var entry TrashEntry
+		var encrypted int
 		if err := rows.Scan(
 			&entry.ObjectID, &entry.ObjectKind, &entry.OriginalParentID,
 			&entry.OriginalName, &entry.OriginalRevision, &entry.DeletedAt,
 			&entry.PurgeAfter, &entry.OpID, &entry.Size,
+			&entry.Revision, &encrypted,
 		); err != nil {
 			return nil, fmt.Errorf("projection: scan trash entry: %w", err)
 		}
+		entry.Encrypted = encrypted != 0
 		entries = append(entries, entry)
 	}
 	if err := rows.Err(); err != nil {

@@ -1,4 +1,4 @@
-export type FileListActionKind = 'open' | 'play' | 'download';
+export type FileListActionKind = 'open' | 'play' | 'download' | 'restore' | 'purge';
 
 export type FileListAction = {
     kind: FileListActionKind;
@@ -33,6 +33,24 @@ type BaseInteractiveRow = {
     metaLabel: string;
     sizeLabel: string;
     ariaLabel: string;
+    /**
+     * What to say in place of the row's age on the phone's meta line, where
+     * type, size and time share one line and the whole line is composed rather
+     * than taken from metaLabel. A row that reports something other than "how
+     * long ago" -- the trash reports how long is left -- sets this so both
+     * shells say the same thing.
+     */
+    timeLabel?: string;
+    /**
+     * Renders `actions` on the row itself on the phone as well as the desktop,
+     * instead of folding them into the overflow menu and offering a swipe.
+     *
+     * For rows whose actions are few, important, and have no menu behind them:
+     * the phone's overflow sheet is built from the operations a live item
+     * supports, so a row that supports none of them would open an empty sheet
+     * and a swipe would reveal a Move that cannot happen.
+     */
+    actionsInline?: boolean;
     onClick?: (event: MouseEvent, row: FileListRow) => void;
     onDoubleClick?: (event: MouseEvent, row: FileListRow) => void;
 };

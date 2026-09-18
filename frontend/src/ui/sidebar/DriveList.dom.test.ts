@@ -4,7 +4,7 @@ import ContextMenu from '../menus/ContextMenu.svelte';
 import { hideContextMenu, showContextMenu } from '../menus/context-menu-store';
 import DriveList from './DriveList.svelte';
 import {
-    setSidebarPhotosActive,
+    setSidebarVirtualView,
     setSidebarState,
     type SidebarActionMenuRequest,
 } from './sidebar-store';
@@ -74,7 +74,7 @@ beforeEach(() => {
             lastError: '',
         }],
         activeChannelId: 42,
-        photosActive: false,
+        virtualView: null,
     });
 
     driveHost = document.createElement('div');
@@ -100,7 +100,7 @@ afterEach(async () => {
         shared: [],
         pending: [],
         activeChannelId: null,
-        photosActive: false,
+        virtualView: null,
     });
 });
 
@@ -118,7 +118,7 @@ describe('DriveList actions', () => {
         expect(actionLabels).toEqual(['Actions for Family archive', 'Actions for Project records']);
         expect(driveHost?.querySelector('button button')).toBeNull();
 
-        setSidebarPhotosActive(true);
+        setSidebarVirtualView('photos');
         flushSync();
         expect(currentDrive?.hasAttribute('aria-current')).toBe(false);
     });

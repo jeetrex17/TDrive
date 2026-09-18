@@ -1,0 +1,64 @@
+/* ====================== TRASH ====================== */
+
+/* The trash is the file list, so there is nothing here to style a row with --
+   rows are drive rows and are already styled. What this file does is swap the
+   chrome around them: the folder breadcrumb for a title, and the controls that
+   act on a live folder for the one control the trash has. */
+
+/* "Trash" heading in the breadcrumb row, matching the Photos one exactly so
+   the two destinations read as siblings rather than as two designs. */
+.trash-title {
+    display: none;
+    align-items: center;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text-main);
+    letter-spacing: 0.01em;
+}
+.main-content.trash-mode .trash-title { display: flex; }
+
+/* There is no folder to be at, so there is no trail to show and nowhere for
+   Back to go: leaving is the sidebar's job, the same as leaving Photos. */
+.main-content.trash-mode #breadcrumb-back,
+.main-content.trash-mode .breadcrumb-path { display: none; }
+
+/* Nothing can be added to the trash, so the control that adds things goes. */
+.main-content.trash-mode .upload-menu-wrap { display: none; }
+
+/* Empty trash sits at the end of the breadcrumb row, where the eye lands last.
+   It is destructive and styled as such, but it only ever opens the
+   confirmation -- it never empties anything on its own click. */
+.trash-empty-btn {
+    display: none;
+    margin-left: auto;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--overlay-danger-2);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-danger);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard),
+                border-color var(--motion-fast) var(--ease-standard);
+}
+.main-content.trash-mode .trash-empty-btn { display: inline-flex; }
+.trash-empty-btn:hover { background: var(--overlay-danger-1); border-color: var(--color-danger); }
+.trash-empty-btn:active { background: var(--overlay-danger-2); }
+.trash-empty-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.trash-empty-btn[disabled] { opacity: 0.5; cursor: default; }
+
+/* Restore reads as the safe way out and Delete forever as the irreversible
+   one, so they are not left looking like the same neutral icon pair. */
+.action-icon.row-restore:hover { color: var(--color-accent); background: var(--overlay-accent-1); }
+.action-icon.row-purge:hover { color: var(--color-danger); background: var(--overlay-danger-1); }
+
+/* A trashed row is a record, not a live item: it does not offer the hover
+   affordances of something that can be opened. */
+.main-content.trash-mode .drive-row { cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+    .trash-empty-btn { transition: none; }
+}

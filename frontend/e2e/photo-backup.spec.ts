@@ -162,21 +162,34 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         };
         const mock = await bootTDrive(page, { GetPhotoBackupState: resolves(state) });
         if (platform === 'desktop') {
-            await page.getByRole('button', { name: 'Notifications', exact: true }).click();
+            // The bell's name carries its state ("Notifications, 1 transfer in
+            // progress"), so match the stable prefix rather than a snapshot of it.
+            await page.getByRole('button', { name: /^Notifications/ }).click();
         } else {
             await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Transfers', exact: true }).click();
         }
         const notifications = platform === 'desktop' ? page.getByRole('dialog', { name: 'Notifications', exact: true }) : page.locator('.transfers-tab');
-        const rows = platform === 'desktop' ? notifications.locator('.notif-row-transfer') : notifications.getByRole('listitem');
+        // The transfer rows themselves, not the per-file lines nested inside
+        // them: the point of the count is that one backup is one row.
+        const rows = platform === 'desktop' ? notifications.locator('.notif-row-transfer') : notifications.locator('.row[role="listitem"]');
         await expect(notifications).toContainText('holiday.jpg');
-        await expect(notifications.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '50');
+        // Two bars now, and they answer different questions: the row's is how
+        // far through the backup, the file's is how far through that file. The
+        // run is 1 of 31 done, so the aggregate is not the file's 50%.
+        await expect(notifications.getByRole('progressbar', { name: 'holiday.jpg, 50%' }))
+            .toHaveAttribute('aria-valuenow', '50');
+        await expect(notifications.getByRole('progressbar', { name: /Uploading Photo backup/ }))
+            .toHaveAttribute('aria-valuenow', '3');
         await expect(rows).toHaveCount(1);
         await mock.setPlan('GetPhotoBackupState', resolves({ ...state, status: { ...state.status,
             complete: 2, pending: 29, current_file: 'birthday.mp4',
             current_file_bytes_done: 750000, current_file_percent: 75 } }));
         await mock.emit('photo-backup:state');
         await expect(notifications).toContainText('birthday.mp4');
-        await expect(notifications.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '75');
+        await expect(notifications.getByRole('progressbar', { name: 'birthday.mp4, 75%' }))
+            .toHaveAttribute('aria-valuenow', '75');
+        // One row still, and one file listed under it: a camera roll must not
+        // become an equally long notification log.
         await expect(rows).toHaveCount(1);
         expect(await notifications.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`backup-progress-${platform}.png`) });

@@ -37,7 +37,7 @@ function setDrive(id: number, title: string): void {
         shared: [],
         pending: [],
         activeChannelId: id,
-        photosActive: false,
+        virtualView: null,
     });
 }
 
@@ -60,7 +60,7 @@ afterEach(async () => {
     app = null;
     host.remove();
     activeTab.set('files');
-    sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, photosActive: false });
+    sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
 });
 
 describe('Account storage row', () => {

@@ -31,7 +31,7 @@
         photoBackupBusy, photoBackupCandidates, photoBackupError, photoBackupState, refreshPhotoBackup,
         resumePhotoBackupNow, retryPhotoBackupNow, selectPhotoBackupSource, startPhotoBackup, updatePhotoBackupSettings,
     } from '../../modules/photo-backup/controller';
-    import { actionLabel, canStart, describeBackup, summaryLine, type BackupAction } from './photo-backup-view';
+    import { actionLabel, canStart, describeBackup, destinationLabel, summaryLine, type BackupAction } from './photo-backup-view';
 
     onMount(() => { void refreshPhotoBackup(); });
 
@@ -72,7 +72,7 @@
         <div class="pb-master">
             <SwitchRow
                 title="Back up photos & videos"
-                description={state.settings.enabled ? `To ${state.destination.title || 'this drive'}` : 'Keep a copy of new photos and videos in this drive.'}
+                description={state.settings.enabled ? destinationLabel(state.destination.title) || 'In this drive' : 'Keep a copy of new photos and videos in this drive.'}
                 checked={state.settings.enabled}
                 disabled={$busy}
                 onchange={(enabled) => save({ enabled })}
@@ -97,7 +97,13 @@
                     {/if}
                 </div>
                 <div class="pb-situation-copy">
-                    <div class="pb-situation-title">{situation.title}</div>
+                    <!-- State and count share the top line: one says what is
+                         happening, the other says how much is left, and a
+                         glance wants both before it wants anything else. -->
+                    <div class="pb-situation-head">
+                        <div class="pb-situation-title">{situation.title}</div>
+                        {#if summary}<div class="pb-summary">{summary}</div>{/if}
+                    </div>
                     {#if situation.body}
                         <div class="pb-situation-body" class:is-file={situation.tone === 'busy' && Boolean(state.status.currentFile)}>{situation.body}</div>
                     {/if}
@@ -110,8 +116,14 @@
                             {/if}
                         </div>
                     {/if}
-                    {#if summary}
-                        <div class="pb-summary">{summary}</div>
+                    {#if situation.detail}
+                        <!-- Closed by default: the cause is for whoever is
+                             diagnosing, and it is the one string here whose
+                             length nothing in this app controls. -->
+                        <details class="pb-detail">
+                            <summary>Details</summary>
+                            <p>{situation.detail}</p>
+                        </details>
                     {/if}
                     {#if situation.primary || situation.secondary}
                         <div class="pb-actions">
@@ -279,10 +291,30 @@
         padding-top: 5px;
     }
 
+    /* State on the left, count on the right, baselines aligned. The count is
+       allowed to shrink to nothing before the state does: "Backing up" with no
+       figure still reads, a figure with no state does not. */
+    .pb-situation-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: var(--space-2);
+        min-width: 0;
+    }
+
     .pb-situation-title {
         font-size: var(--font-size-sm);
         font-weight: 800;
         line-height: 1.35;
+        min-width: 0;
+    }
+
+    .pb-situation-head .pb-summary {
+        flex: 0 1 auto;
+        text-align: right;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .pb-situation-body {
@@ -307,6 +339,58 @@
         color: var(--text-muted);
         font-size: var(--font-size-xs);
         font-variant-numeric: tabular-nums;
+    }
+
+    /* The cause, for whoever wants it. Closed it costs one short line; open it
+       is the only text here whose length nothing in this app controls, so it
+       scrolls rather than pushing the controls off the screen. */
+    .pb-detail {
+        margin-top: var(--space-1);
+        font-size: var(--font-size-xs);
+    }
+
+    .pb-detail > summary {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        width: fit-content;
+        padding: 2px 0;
+        color: var(--text-muted);
+        cursor: pointer;
+        list-style: none;
+        border-radius: var(--radius-sm);
+    }
+
+    .pb-detail > summary::-webkit-details-marker { display: none; }
+
+    .pb-detail > summary::before {
+        content: '';
+        width: 0;
+        height: 0;
+        border-left: 4px solid currentColor;
+        border-top: 3.5px solid transparent;
+        border-bottom: 3.5px solid transparent;
+        transition: transform var(--motion-fast) var(--ease-standard);
+    }
+
+    .pb-detail[open] > summary::before { transform: rotate(90deg); }
+    .pb-detail > summary:hover { color: var(--text-main); }
+    .pb-detail > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .pb-detail > p {
+        margin: var(--space-1) 0 0;
+        max-height: 8.5em;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        color: var(--text-muted);
+        line-height: 1.5;
+        /* A backend cause is a path and an errno; let it break anywhere rather
+           than widen the panel. */
+        overflow-wrap: anywhere;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .pb-detail > summary::before { transition: none; }
     }
 
     .pb-actions {

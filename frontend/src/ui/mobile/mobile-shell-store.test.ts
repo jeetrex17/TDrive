@@ -39,7 +39,7 @@ function drive(id: number, title: string, kind: 'personal' | 'shared'): DriveCha
 
 describe('mobile-shell-store', () => {
     beforeEach(() => {
-        sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, photosActive: false });
+        sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
         fileListView.set({ kind: 'state', stateKind: 'loading', title: 'Loading' });
         historyEvents.set([]);
         downloadSharePaths.set(new Map());
@@ -53,7 +53,7 @@ describe('mobile-shell-store', () => {
             shared: [drive(2, 'Team assets', 'shared')],
             pending: [],
             activeChannelId: 2,
-            photosActive: false,
+            virtualView: null,
         });
         expect(get(activeDrive)?.title).toBe('Team assets');
     });

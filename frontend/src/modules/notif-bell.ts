@@ -14,6 +14,7 @@ import { state } from '../state';
 import { cancelDownload, cancelUpload, cancelUploadById } from '../api';
 import { clearDownloadSharePaths, forgetDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import { boundedText } from '../api/shared';
+import { formatBytes } from '../utils';
 import {
     HISTORY_CAP,
     historyEvents,
@@ -37,9 +38,9 @@ const MAX_TRANSFER_ITEM_NAME = 120;
 
 
 // Per-transfer speed sampling. Progress events arrive far more often than the
-// rounded percent changes; samples land in this O(1) sidecar on every tick,
-// and the visible entry (which notifies every store subscriber) only updates
-// when the percent actually moves.
+// row redraws; samples land in this O(1) sidecar on every tick, and the visible
+// entry (which notifies every store subscriber and the saver behind them) only
+// updates when a figure the row actually draws has moved.
 const speedSamples = new Map<string, { at: number; bytes: number; speed: number }>();
 
 // Uploads the user stopped one at a time. The backend reports a cancelled file
@@ -210,15 +211,29 @@ export function updateTransferProgress({
     const nextItemsActive = Number.isFinite(Number(itemsActive))
         ? Math.max(0, Math.floor(Number(itemsActive)))
         : entry.itemsActive;
-    const unchanged = status === entry.status
+    // Everything above is compared at the precision the row renders it -- whole
+    // percent, and the rounded figure formatBytes prints -- because a transfer
+    // reports bytes tens of times per drawn step and an exact comparison here
+    // made every one of those a store write, waking each derived store and the
+    // saver subscribed behind them. The sampling above already ran, so the rate
+    // and the estimate built on it still see every tick.
+    const sameFigures = status === entry.status
         && Math.round(entry.progress) === Math.round(value)
         && entry.total === total
-        && entry.bytes === bytes
+        && formatBytes(entry.bytes) === formatBytes(bytes)
         && entry.itemsDone === nextItemsDone
         && entry.itemsTotal === nextItemsTotal
         && entry.itemsActive === nextItemsActive
         && sameTransferItems(entry.items, nextItems);
-    if (unchanged) return; // skip render noise
+    // The tick that completes the transfer lands in full whatever it would
+    // redraw. These figures outlive the row -- markTransferDone freezes them and
+    // the next launch restores them -- so the last one written must be the true
+    // one, not the last one that happened to be worth drawing. Both halves also
+    // require an actual change, so a backend that keeps ticking at 100% writes
+    // once and then goes quiet again.
+    const completing = (value >= 100 && value !== entry.progress)
+        || (total > 0 && bytes >= total && bytes !== entry.bytes);
+    if (sameFigures && !completing) return; // skip render noise
     historyEvents.update((events) =>
         events.map((e) => (e.id === key && e.kind === 'transfer'
             ? {
@@ -341,21 +356,21 @@ export function cancelTransfersInDirection(direction: TransferDirection): void {
         const activeDownloadId = state.activeDownloadId;
         if (activeDownloadId === null) return;
         const matchesActiveDownload = (entry: TransferEvent) => entry.id === transferKey('down', activeDownloadId);
-        markTransfersCanceling(direction, matchesActiveDownload);
+        const canceling = markTransfersCanceling(direction, matchesActiveDownload);
         state.cancelingDownload = true;
         void cancelDownload().catch(() => {
             state.cancelingDownload = false;
-            restoreCanceledTransfers(direction, matchesActiveDownload);
+            restoreCanceledTransfers(canceling);
             pushHistoryEvent({ level: 'error', title: 'Could not cancel download', body: 'Your download is still running.' });
         });
         return;
     }
 
-    markTransfersCanceling(direction);
+    const canceling = markTransfersCanceling(direction);
     state.cancelingUpload = true;
     void cancelUpload().catch(() => {
         state.cancelingUpload = false;
-        restoreCanceledTransfers(direction);
+        restoreCanceledTransfers(canceling);
         pushHistoryEvent({ level: 'error', title: 'Could not cancel uploads', body: 'Your uploads are still running.' });
     });
 }
@@ -367,10 +382,10 @@ export function cancelTransfersInDirection(direction: TransferDirection): void {
 export function cancelSingleUpload(uploadId: number): void {
     if (!Number.isFinite(uploadId)) return;
     canceledUploads.add(uploadId);
-    markTransfersCanceling('up', (entry) => entry.id === transferKey('up', uploadId));
+    const canceling = markTransfersCanceling('up', (entry) => entry.id === transferKey('up', uploadId));
     void cancelUploadById(uploadId).catch(() => {
         canceledUploads.delete(uploadId);
-        restoreCanceledTransfers('up', (entry) => entry.id === transferKey('up', uploadId));
+        restoreCanceledTransfers(canceling);
         pushHistoryEvent({ level: 'error', title: 'Could not cancel upload', body: 'The upload is still running.' });
     });
 }
@@ -432,8 +447,28 @@ export function pauseRunningTransfers(): void {
     )));
 }
 
-function transferKey(direction: TransferDirection, id: string | number): string {
+/**
+ * The one place the `xfer:<direction>:<callerId>` grammar is written. Exported
+ * because the surfaces that ask what a row is -- whether the backend can stop
+ * it on its own, whether it is the photo backup -- were re-deriving it with
+ * string literals, which a rename would have left silently wrong.
+ */
+export function transferKey(direction: TransferDirection, id: string | number): string {
     return `xfer:${direction}:${id}`;
+}
+
+/** The same grammar read back, or null for a string that is not one of our keys. */
+export function parseTransferKey(key: string): { direction: TransferDirection; id: string } | null {
+    const prefix = 'xfer:';
+    if (!key.startsWith(prefix)) return null;
+    const rest = key.slice(prefix.length);
+    // The caller id may itself contain colons ('file:42'), so only the
+    // direction is split off; the remainder is the id whole.
+    const sep = rest.indexOf(':');
+    if (sep <= 0 || sep === rest.length - 1) return null;
+    const direction = rest.slice(0, sep);
+    if (direction !== 'up' && direction !== 'down') return null;
+    return { direction, id: rest.slice(sep + 1) };
 }
 
 // The entry a progress, rename or finish update is allowed to change: one that
@@ -445,24 +480,43 @@ function findUnfinishedTransfer(key: string): TransferEvent | null {
     return entry;
 }
 
-function markTransfersCanceling(direction: TransferDirection, matches: (entry: TransferEvent) => boolean = () => true): void {
-    historyEvents.update((events) => events.map((event) => (
-        event.kind === 'transfer'
-        && event.direction === direction
-        && isUnfinishedTransfer(event.status)
-        && matches(event)
-            ? { ...event, status: 'canceling' }
-            : event
-    )));
+/**
+ * Marks the rows a cancel is about, and hands back what each of them was.
+ *
+ * The status a row leaves behind is the only way back if the cancel fails, and
+ * it is per row: a batch on a backgrounded phone is a mix of running, waiting
+ * and paused work. Returning it keeps that answer with the one call that can
+ * still see it, rather than in module state a successful cancel would leak.
+ * Rows already canceling belong to a cancel of their own and are left out.
+ */
+function markTransfersCanceling(direction: TransferDirection, matches: (entry: TransferEvent) => boolean = () => true): Map<string, TransferStatus> {
+    const previous = new Map<string, TransferStatus>();
+    historyEvents.update((events) => events.map((event) => {
+        if (event.kind !== 'transfer'
+            || event.direction !== direction
+            || event.status === 'canceling'
+            || !isUnfinishedTransfer(event.status)
+            || !matches(event)) return event;
+        previous.set(event.id, event.status);
+        return { ...event, status: 'canceling' };
+    }));
+    return previous;
 }
 
-function restoreCanceledTransfers(direction: TransferDirection, matches: (entry: TransferEvent) => boolean = () => true): void {
-    historyEvents.update((events) => events.map((event) => (
-        event.kind === 'transfer'
-        && event.direction === direction
-        && event.status === 'canceling'
-        && matches(event)
-            ? { ...event, status: 'active' }
-            : event
-    )));
+/**
+ * Puts back exactly what the failed cancel took.
+ *
+ * Every row returns to its own status, never to 'active'. A paused row promoted
+ * to active draws a live bar over a process moving no bytes -- the very thing
+ * pauseRunningTransfers exists to prevent, and the shape of the iOS bug: the app
+ * is suspended, the user comes back, taps Cancel all, and the RPC is rejected.
+ * A queued row promoted the same way claims a turn it has not been given.
+ */
+function restoreCanceledTransfers(previous: ReadonlyMap<string, TransferStatus>): void {
+    if (previous.size === 0) return;
+    historyEvents.update((events) => events.map((event) => {
+        if (event.kind !== 'transfer' || event.status !== 'canceling') return event;
+        const prior = previous.get(event.id);
+        return prior ? { ...event, status: prior } : event;
+    }));
 }

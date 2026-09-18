@@ -12,7 +12,7 @@ afterEach(() => {
         shared: [],
         pending: [],
         activeChannelId: null,
-        photosActive: false,
+        virtualView: null,
     });
 });
 
@@ -35,7 +35,7 @@ describe('Photos sidebar route semantics', () => {
             }],
             pending: [],
             activeChannelId: 42,
-            photosActive: false,
+            virtualView: null,
         });
 
         setPhotosMode(true);
@@ -44,12 +44,12 @@ describe('Photos sidebar route semantics', () => {
         const drive = document.querySelector<HTMLElement>('[data-channel-id="42"]');
         expect(photos?.getAttribute('aria-current')).toBe('page');
         expect(drive?.hasAttribute('aria-current')).toBe(false);
-        expect(get(sidebarState).photosActive).toBe(true);
+        expect(get(sidebarState).virtualView).toBe('photos');
 
         setPhotosMode(false);
 
         expect(photos?.hasAttribute('aria-current')).toBe(false);
         expect(drive?.getAttribute('aria-current')).toBe('page');
-        expect(get(sidebarState).photosActive).toBe(false);
+        expect(get(sidebarState).virtualView).toBe(null);
     });
 });
