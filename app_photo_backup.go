@@ -22,6 +22,15 @@ import (
 
 const photoBackupPolicyTTL = 2 * time.Minute
 
+// These reach the panel word for word, both as the status line and as the
+// message inside a failed operation envelope, so they are written for the
+// user rather than the log.
+var (
+	errPhotoBackupPaused            = errors.New("Backup is paused. Resume it to continue.")
+	errPhotoBackupPolicyUnavailable = errors.New("Waiting for a connectivity update from the device.")
+	errPhotoBackupWaitingForWiFi    = errors.New("Waiting for Wi-Fi.")
+)
+
 type PhotoBackupSettings struct {
 	Enabled             bool   `json:"enabled"`
 	Photos              bool   `json:"photos"`
@@ -322,7 +331,16 @@ func (a *App) EnqueuePhotoBackupAssets(sourceID string, values []PhotoBackupAsse
 	return engine.EnqueuePage(a.appContext(), scope, sourceID, assets)
 }
 
-func (a *App) RunPhotoBackup() error {
+// The backup controls answer with the common operation envelope so the
+// frontend can branch on a stable code — a locked vault opens the password
+// prompt, anything else is shown in the backend's own words — rather than
+// sniffing display text out of a wrapped Go error.
+func (a *App) RunPhotoBackup() OperationResult    { return operationFailure(a.runPhotoBackup()) }
+func (a *App) PausePhotoBackup() OperationResult  { return operationFailure(a.pausePhotoBackup()) }
+func (a *App) ResumePhotoBackup() OperationResult { return operationFailure(a.resumePhotoBackup()) }
+func (a *App) RetryPhotoBackup() OperationResult  { return operationFailure(a.retryPhotoBackup()) }
+
+func (a *App) runPhotoBackup() error {
 	engine, err := a.photoBackupEngine()
 	if err != nil {
 		return err
@@ -336,14 +354,15 @@ func (a *App) RunPhotoBackup() error {
 		return err
 	}
 	if settings.ManualPaused {
-		return fmt.Errorf("photo backup: paused")
+		return errPhotoBackupPaused
 	}
 	if runtime.GOOS != "ios" && runtime.GOOS != "android" && !a.photoBackupIsRunning() {
 		a.resetDesktopPhotoBackupDiscovery(a.appContext())
 	}
 	return a.startPhotoBackup()
 }
-func (a *App) PausePhotoBackup() error {
+
+func (a *App) pausePhotoBackup() error {
 	engine, err := a.photoBackupEngine()
 	if err != nil {
 		return err
@@ -360,7 +379,7 @@ func (a *App) PausePhotoBackup() error {
 	return nil
 }
 
-func (a *App) ResumePhotoBackup() error {
+func (a *App) resumePhotoBackup() error {
 	engine, err := a.photoBackupEngine()
 	if err != nil {
 		return err
@@ -374,7 +393,8 @@ func (a *App) ResumePhotoBackup() error {
 	}
 	return a.startPhotoBackup()
 }
-func (a *App) RetryPhotoBackup() error {
+
+func (a *App) retryPhotoBackup() error {
 	engine, err := a.photoBackupEngine()
 	if err != nil {
 		return err
@@ -386,7 +406,7 @@ func (a *App) RetryPhotoBackup() error {
 	if err := engine.RetryErrors(a.appContext(), scope); err != nil {
 		return err
 	}
-	return a.RunPhotoBackup()
+	return a.runPhotoBackup()
 }
 
 func (a *App) SetPhotoBackupPolicy(policy PhotoBackupPolicy) {
@@ -432,7 +452,7 @@ func (a *App) startPhotoBackup() error {
 		return nil
 	}
 	if settings.ManualPaused {
-		return fmt.Errorf("photo backup: paused")
+		return errPhotoBackupPaused
 	}
 	if settings.Encrypt {
 		status, err := a.encryption.EncryptionStatus()
@@ -600,10 +620,10 @@ func (a *App) photoBackupPolicyAllows(settings photobackup.Settings) error {
 	a.photoBackupMu.Unlock()
 	observed := time.UnixMilli(policy.ObservedAt)
 	if policy.ObservedAt <= 0 || time.Since(observed) > photoBackupPolicyTTL || observed.After(time.Now().Add(30*time.Second)) {
-		return fmt.Errorf("photo backup: device policy unavailable")
+		return errPhotoBackupPolicyUnavailable
 	}
 	if settings.WiFiOnly && !policy.WiFi {
-		return fmt.Errorf("photo backup: waiting for Wi-Fi")
+		return errPhotoBackupWaitingForWiFi
 	}
 	return nil
 }
@@ -670,7 +690,7 @@ func (a *App) photoBackupDesktopLoop(stop <-chan struct{}) {
 			return
 		case <-ticker.C:
 			if !a.photoBackupIsRunning() {
-				_ = a.RunPhotoBackup()
+				_ = a.runPhotoBackup()
 			}
 		}
 	}

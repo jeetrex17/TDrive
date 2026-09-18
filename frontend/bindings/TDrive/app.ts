@@ -264,7 +264,7 @@ export function OpenMountedDrive(): $CancellablePromise<void> {
     return $Call.ByID(4232063021);
 }
 
-export function PausePhotoBackup(): $CancellablePromise<void> {
+export function PausePhotoBackup(): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(4020238801);
 }
 
@@ -317,15 +317,21 @@ export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<
     return $Call.ByID(4195625464, userIDs);
 }
 
-export function ResumePhotoBackup(): $CancellablePromise<void> {
+export function ResumePhotoBackup(): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(1448669500);
 }
 
-export function RetryPhotoBackup(): $CancellablePromise<void> {
+export function RetryPhotoBackup(): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(2648028709);
 }
 
-export function RunPhotoBackup(): $CancellablePromise<void> {
+/**
+ * The backup controls answer with the common operation envelope so the
+ * frontend can branch on a stable code — a locked vault opens the password
+ * prompt, anything else is shown in the backend's own words — rather than
+ * sniffing display text out of a wrapped Go error.
+ */
+export function RunPhotoBackup(): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(424636428);
 }
 
