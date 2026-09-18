@@ -43,6 +43,13 @@ const (
 	OpRelocate       OpType = "relocate"
 	OpTrashTree      OpType = "trash"
 	OpHardDeleteTree OpType = "harddel"
+
+	// OpRestoreTree is the inverse of OpTrashTree: it returns one trashed
+	// object (and the subtree that went down with it) to a caller-chosen live
+	// parent and name. It is additive on purpose -- a client that predates it
+	// cannot parse the header at all, so it skips the message and the object
+	// simply stays deleted there instead of the projection diverging.
+	OpRestoreTree OpType = "untrash"
 )
 
 type Op struct {

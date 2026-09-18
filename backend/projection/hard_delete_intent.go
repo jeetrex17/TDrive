@@ -33,57 +33,68 @@ func RegisterHardDeleteIntent(
 	if err := validateHardDeleteChannel(tx, channelID); err != nil {
 		return err
 	}
-	storedObjectID, storedRevision, exists, err := loadHardDeleteIntentTx(tx, channelID, opID)
+	// The existing-claim check comes before the target read on purpose: receipt
+	// reconciliation re-registers after the marker has already hidden the
+	// object, and an exact retry has to stay idempotent rather than fail on a
+	// target that is no longer live.
+	claimed, err := hardDeleteIntentClaimedTx(tx, channelID, opID, objectID, expectedRevision)
 	if err != nil {
 		return err
 	}
-	if exists {
-		if storedObjectID != objectID || storedRevision != expectedRevision {
-			return fmt.Errorf("%w: hard-delete intent operation id targets another object", ErrBadOp)
+	if !claimed {
+		var currentRevision int64
+		err = tx.QueryRowContext(ctx, `
+			SELECT revision FROM dirents
+			WHERE channel_id=? AND object_id=? AND tombstoned=0
+		`, channelID, objectID).Scan(&currentRevision)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrObjectNotFound
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("projection: commit existing hard-delete intent: %w", err)
+		if err != nil {
+			return fmt.Errorf("projection: inspect hard-delete intent target: %w", err)
 		}
-		return nil
+		if currentRevision != expectedRevision {
+			return ErrRevisionConflict
+		}
+		if err := recordHardDeleteIntentTx(tx, channelID, opID, objectID, expectedRevision); err != nil {
+			return err
+		}
 	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("projection: commit hard-delete intent: %w", err)
+	}
+	return nil
+}
+
+// hardDeleteIntentClaimedTx reports whether this operation id is already this
+// installation's, refusing an id that was claimed for a different object or a
+// different revision.
+func hardDeleteIntentClaimedTx(tx *sql.Tx, channelID int64, opID, objectID string, expectedRevision int64) (bool, error) {
+	storedObjectID, storedRevision, exists, err := loadHardDeleteIntentTx(tx, channelID, opID)
+	if err != nil || !exists {
+		return false, err
+	}
+	if storedObjectID != objectID || storedRevision != expectedRevision {
+		return false, fmt.Errorf("%w: hard-delete intent operation id targets another object", ErrBadOp)
+	}
+	return true, nil
+}
+
+// recordHardDeleteIntentTx takes exclusive local ownership of the physical
+// cleanup behind one operation id. It refuses an id whose marker already
+// produced a cleanup job, because that plan is immutable once captured.
+func recordHardDeleteIntentTx(tx *sql.Tx, channelID int64, opID, objectID string, expectedRevision int64) error {
 	if _, jobExists, err := hardDeleteJobStateTx(tx, channelID, opID, objectID); err != nil {
 		return err
 	} else if jobExists {
 		return ErrHardDeleteIntentApplied
 	}
-
-	var currentRevision int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT revision FROM dirents
-		WHERE channel_id=? AND object_id=? AND tombstoned=0
-	`, channelID, objectID).Scan(&currentRevision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrObjectNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("projection: inspect hard-delete intent target: %w", err)
-	}
-	if currentRevision != expectedRevision {
-		return ErrRevisionConflict
-	}
-
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.Exec(`
 		INSERT INTO hard_delete_intents
 		  (channel_id, op_id, root_object_id, expected_revision)
 		VALUES (?, ?, ?, ?)
-		ON CONFLICT(channel_id, op_id) DO NOTHING
 	`, channelID, opID, objectID, expectedRevision); err != nil {
 		return fmt.Errorf("projection: register hard-delete intent: %w", err)
-	}
-	storedObjectID, storedRevision, exists, err = loadHardDeleteIntentTx(tx, channelID, opID)
-	if err != nil {
-		return fmt.Errorf("projection: verify hard-delete intent: %w", err)
-	}
-	if !exists || storedObjectID != objectID || storedRevision != expectedRevision {
-		return fmt.Errorf("%w: hard-delete intent operation id targets another object", ErrBadOp)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("projection: commit hard-delete intent: %w", err)
 	}
 	return nil
 }

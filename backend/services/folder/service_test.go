@@ -8,22 +8,16 @@ import (
 	"time"
 
 	"TDrive/backend/projection"
-	"TDrive/backend/tgclient"
 
 	_ "modernc.org/sqlite"
 )
 
 const testChannelID int64 = 424242
 
-type testPeerResolver struct {
-	peer tgclient.InputPeer
-}
-
-func (r testPeerResolver) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	return r.peer, nil
-}
-
-func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
+// newTestService wires the service to an in-memory projection. TrashObject
+// stands in for the file service's publisher and does exactly what it does:
+// read the live dirent and project the trash operation it anchors on.
+func newTestService(t *testing.T) (*Service, *sql.DB, *int64) {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -34,39 +28,23 @@ func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	fakeTG := tgclient.NewFake(7)
-	peer := tgclient.InputPeer{ChannelID: testChannelID, AccessHash: 99}
-	fakeTG.SeedChannel(peer, "Personal")
 	actor := int64(7)
 	var msgID int64
-	svc := &Service{
-		DB:    db,
-		TG:    fakeTG,
-		Peers: testPeerResolver{peer: peer},
-		EmitOp: func(channelID int64, op projection.Op) error {
-			msgID++
-			header := projection.Format(op)
-			_, err := projection.ProjectFromOp(db, channelID, msgID, op, actor, header)
+	project := func(channelID int64, op projection.Op) error {
+		msgID++
+		header := projection.Format(op)
+		if _, err := projection.ProjectFromOp(db, channelID, msgID, op, actor, header); err != nil {
 			return err
-		},
-		EmitOps: func(channelID int64, ops []projection.Op) (err error) {
-			tx, err := db.Begin()
-			if err != nil {
-				return err
-			}
-			defer func() {
-				if err != nil {
-					_ = tx.Rollback()
-				}
-			}()
-			for _, op := range ops {
-				msgID++
-				header := projection.Format(op)
-				if _, err = projection.ProjectFromOpTx(tx, channelID, msgID, op, actor, header); err != nil {
-					return err
-				}
-			}
-			return tx.Commit()
+		}
+		if op.OpID == "" {
+			return nil
+		}
+		return projection.ConfirmWritableOperation(db, channelID, op.OpID)
+	}
+	svc := &Service{
+		DB: db,
+		EmitOp: func(channelID int64, op projection.Op) error {
+			return project(channelID, op)
 		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return actor, nil
@@ -74,12 +52,36 @@ func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
 		RequireEncryptionKey: func(encrypted bool) ([]byte, error) {
 			return nil, nil
 		},
+		TrashObject: func(ctx context.Context, channelID int64, objectID string) error {
+			entry, found, err := projection.DirentByID(db, channelID, objectID)
+			if err != nil {
+				return err
+			}
+			if !found || entry.Tombstoned {
+				return errors.New("item not found")
+			}
+			return project(channelID, projection.TrashOp(entry, time.Unix(1000, 0), projection.DefaultTrashRetention))
+		},
 	}
-	return svc, db, fakeTG, &actor
+	return svc, db, &actor
+}
+
+func assertTrashEntry(t *testing.T, db *sql.DB, channelID int64, objectID, name string) {
+	t.Helper()
+	entry, err := projection.TrashEntryByID(db, channelID, objectID)
+	if err != nil {
+		t.Fatalf("trash entry for %s: %v", objectID, err)
+	}
+	if entry.OriginalName != name {
+		t.Fatalf("trash entry name = %q, want %q", entry.OriginalName, name)
+	}
+	if entry.PurgeAfter <= entry.DeletedAt {
+		t.Fatalf("purge_after %d must be after deleted_at %d", entry.PurgeAfter, entry.DeletedAt)
+	}
 }
 
 func TestCreateFolderProjectsMkdir(t *testing.T) {
-	svc, db, _, _ := newTestService(t)
+	svc, db, _ := newTestService(t)
 
 	got, err := svc.Create(testChannelID, "Photos", "")
 	if err != nil {
@@ -97,8 +99,8 @@ func TestCreateFolderProjectsMkdir(t *testing.T) {
 	}
 }
 
-func TestDeleteFolderBatchFailureLeavesProjectionUntouched(t *testing.T) {
-	svc, db, fakeTG, _ := newTestService(t)
+func TestDeleteFolderPublishFailureLeavesProjectionUntouched(t *testing.T) {
+	svc, db, _ := newTestService(t)
 
 	folder, err := svc.Create(testChannelID, "Parent", "")
 	if err != nil {
@@ -121,27 +123,24 @@ func TestDeleteFolderBatchFailureLeavesProjectionUntouched(t *testing.T) {
 		t.Fatalf("scan file id: %v", err)
 	}
 
-	batchErr := errors.New("injected batch failure")
-	svc.EmitOps = func(channelID int64, ops []projection.Op) error {
-		return batchErr
+	publishErr := errors.New("injected publish failure")
+	svc.TrashObject = func(ctx context.Context, channelID int64, objectID string) error {
+		return publishErr
 	}
 
-	if err := svc.Delete(context.Background(), testChannelID, folder.ID); !errors.Is(err, batchErr) {
-		t.Fatalf("delete err = %v, want %v", err, batchErr)
+	if err := svc.Delete(context.Background(), testChannelID, folder.ID); !errors.Is(err, publishErr) {
+		t.Fatalf("delete err = %v, want %v", err, publishErr)
 	}
 	if !projection.FolderExists(db, testChannelID, folder.ID) {
-		t.Fatalf("folder was locally tombstoned despite batch failure")
+		t.Fatalf("folder was locally tombstoned despite publish failure")
 	}
 	if !projection.FileExists(db, testChannelID, fileID) {
-		t.Fatalf("file was locally tombstoned despite batch failure")
-	}
-	if batches := fakeTG.DeletedBatches(); len(batches) != 0 {
-		t.Fatalf("body delete happened despite metadata failure: %+v", batches)
+		t.Fatalf("file was locally tombstoned despite publish failure")
 	}
 }
 
 func TestRenameMoveAndDeleteFolder(t *testing.T) {
-	svc, db, fakeTG, _ := newTestService(t)
+	svc, db, _ := newTestService(t)
 
 	parent, err := svc.Create(testChannelID, "Parent", "")
 	if err != nil {
@@ -211,14 +210,17 @@ func TestRenameMoveAndDeleteFolder(t *testing.T) {
 	if projection.FileExists(db, testChannelID, deepFileID) {
 		t.Fatalf("descendant file still visible")
 	}
-	batches := fakeTG.DeletedBatches()
-	if len(batches) != 1 || len(batches[0]) != 1 || batches[0][0] != deepFileID {
-		t.Fatalf("deleted batches = %+v, want [[%d]]", batches, deepFileID)
+	assertTrashEntry(t, db, testChannelID, parent.ID, "Parent")
+	// Only the deleted root is restorable on its own; the subtree comes back
+	// with it, so recording an entry per member would offer partial restores
+	// the trash model does not have.
+	if _, err := projection.TrashEntryByID(db, testChannelID, child.ID); !errors.Is(err, projection.ErrTrashEntryNotFound) {
+		t.Fatalf("descendant trash entry err = %v, want %v", err, projection.ErrTrashEntryNotFound)
 	}
 }
 
-func TestDeleteFolderCascadesToMultipartParts(t *testing.T) {
-	svc, db, fakeTG, _ := newTestService(t)
+func TestDeleteFolderKeepsMultipartBodiesRestorable(t *testing.T) {
+	svc, db, _ := newTestService(t)
 
 	folder, err := svc.Create(testChannelID, "Big", "")
 	if err != nil {
@@ -254,26 +256,22 @@ func TestDeleteFolderCascadesToMultipartParts(t *testing.T) {
 		t.Fatalf("delete folder: %v", err)
 	}
 
-	// The file_parts rows are dropped...
-	if left, _ := projection.MultipartParts(db, testChannelID, manifestID); len(left) != 0 {
-		t.Fatalf("file_parts after delete = %d, want 0", len(left))
+	// A trashed file is still restorable, so its bodies and the pointers to
+	// them must survive the delete and stay out of the orphan sweep.
+	if left, _ := projection.MultipartParts(db, testChannelID, manifestID); len(left) != 3 {
+		t.Fatalf("file_parts after delete = %d, want 3", len(left))
 	}
-	// ...and the manifest + every part body were deleted from Telegram.
-	deleted := map[int64]bool{}
-	for _, batch := range fakeTG.DeletedBatches() {
-		for _, id := range batch {
-			deleted[id] = true
-		}
+	orphans, err := projection.OrphanPartMessages(db, testChannelID)
+	if err != nil {
+		t.Fatalf("orphan parts: %v", err)
 	}
-	for _, id := range []int64{manifestID, parts[0].MsgID, parts[1].MsgID, parts[2].MsgID} {
-		if !deleted[id] {
-			t.Fatalf("msg %d was not deleted from Telegram; deleted=%v", id, deleted)
-		}
+	if len(orphans) != 0 {
+		t.Fatalf("orphan sweep would delete restorable bodies: %v", orphans)
 	}
 }
 
 func TestDeleteFolderRequiresOwnershipForSharedDescendantFiles(t *testing.T) {
-	svc, db, fakeTG, actor := newTestService(t)
+	svc, db, actor := newTestService(t)
 	const sharedChannelID int64 = 717171
 	if err := projection.InsertChannel(db, projection.Channel{
 		ChannelID:            sharedChannelID,
@@ -285,8 +283,6 @@ func TestDeleteFolderRequiresOwnershipForSharedDescendantFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert shared channel: %v", err)
 	}
-	fakeTG.SeedChannel(tgclient.InputPeer{ChannelID: sharedChannelID, AccessHash: 1}, "Shared")
-
 	*actor = 9
 	folder, err := svc.Create(sharedChannelID, "Shared folder", "")
 	if err != nil {
@@ -309,10 +305,6 @@ func TestDeleteFolderRequiresOwnershipForSharedDescendantFiles(t *testing.T) {
 	if !projection.FolderExists(db, sharedChannelID, folder.ID) {
 		t.Fatalf("folder was deleted by non-uploader")
 	}
-	if batches := fakeTG.DeletedBatches(); len(batches) != 0 {
-		t.Fatalf("body delete happened despite permission failure: %+v", batches)
-	}
-
 	*actor = 9
 	if err := svc.Delete(context.Background(), sharedChannelID, folder.ID); err != nil {
 		t.Fatalf("delete by uploader: %v", err)
@@ -323,7 +315,7 @@ func TestDeleteFolderRequiresOwnershipForSharedDescendantFiles(t *testing.T) {
 }
 
 func TestDeleteFolderRequiresPasswordForEncryptedDescendantFiles(t *testing.T) {
-	svc, db, _, _ := newTestService(t)
+	svc, db, _ := newTestService(t)
 	folder, err := svc.Create(testChannelID, "Secrets", "")
 	if err != nil {
 		t.Fatalf("create folder: %v", err)
