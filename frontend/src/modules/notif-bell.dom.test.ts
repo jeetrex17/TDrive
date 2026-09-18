@@ -21,6 +21,7 @@ import {
     clearHistory,
     markTransferDone,
     cancelUploadFile,
+    pauseRunningTransfers,
     pushQueuedTransfer,
     pushHistoryEvent,
     pushTransferStart,
@@ -38,6 +39,13 @@ import { state } from '../state';
 
 let host: HTMLElement;
 let app: Record<string, unknown> | null = null;
+/** Store notifications counted by the tests that assert on redraw noise. */
+let writes = 0;
+
+/** The transfer rows' statuses, newest first, with notices left out. */
+function transferStatuses(): string[] {
+    return get(historyEvents).filter((event) => event.kind === 'transfer').map((event) => event.status);
+}
 
 function bell(): HTMLElement {
     const el = document.getElementById('notif-bell');
@@ -51,6 +59,8 @@ function reset(): void {
     historyEvents.set([]);
     downloadSharePaths.set(new Map());
     state.activeDownloadId = null;
+    state.cancelingUpload = false;
+    writes = 0;
     flushSync();
 }
 
@@ -202,12 +212,89 @@ describe('notif-bell', () => {
         });
         bell().dispatchEvent(new MouseEvent('click', { bubbles: true }));
         flushSync();
-        // Desktop spelling, which the phone deliberately shortens. The bell is
-        // shared, so the compact forms live in transfer-row.mobile.dom.test.ts
-        // and this asserts the desktop row is untouched by them.
-        expect(document.body.textContent).toContain('3 / 5 files');
+        // The wording both rows share: the desktop popover stacks the figures
+        // in its meta column and the phone joins the same ones into a line, but
+        // ui/notifications/transfer-view decides what they say for both.
+        expect(document.body.textContent).toContain('3 of 5 files');
         expect(document.body.textContent).toContain('600 of 1000 B');
     });
+
+    it('writes the history only when a figure the row prints has moved', () => {
+        vi.useFakeTimers();
+        const stop = historyEvents.subscribe(() => { writes += 1; });
+        try {
+            pushTransferStart({ id: 'batch', direction: 'up', name: 'photos.zip', total: 100_000_000 });
+            writes = 0;
+            updateTransferProgress({ id: 'batch', direction: 'up', progress: 10, bytes: 10_000_000 });
+            expect(writes).toBe(1);
+
+            // Progress arrives tens of times a second. None of these move the
+            // whole percent or the rounded size the row draws, and each write
+            // would wake every derived store and the saver behind them.
+            for (let tick = 1; tick <= 20; tick++) {
+                vi.advanceTimersByTime(12);
+                updateTransferProgress({
+                    id: 'batch', direction: 'up',
+                    progress: 10 + tick * 0.01, bytes: 10_000_000 + tick * 100,
+                });
+            }
+            expect(writes).toBe(1);
+            expect((get(historyEvents)[0] as TransferEvent).bytes).toBe(10_000_000);
+
+            // The rate was sampled off every one of them even so: it is the
+            // working behind "2 min left", and it would lurch if it only ever
+            // saw the ticks that happened to be worth drawing.
+            vi.advanceTimersByTime(1_000);
+            updateTransferProgress({ id: 'batch', direction: 'up', progress: 12, bytes: 12_000_000 });
+            expect(writes).toBe(2);
+            expect((get(historyEvents)[0] as TransferEvent).speed).toBeGreaterThan(0);
+        } finally {
+            stop();
+            vi.useRealTimers();
+        }
+    });
+
+    it('lands on the true finished figures even where they would redraw the same', () => {
+        pushTransferStart({ id: 5, direction: 'down', name: 'clip.mp4', total: 1_000_000_000 });
+        updateTransferProgress({ id: 5, direction: 'down', progress: 99.96, bytes: 999_999_000 });
+        const stop = historyEvents.subscribe(() => { writes += 1; });
+        writes = 0;
+
+        // Same whole percent and same "953.7 MB" as the tick before it, but
+        // these are the figures markTransferDone freezes and the next launch
+        // restores, so the last word has to be the true one.
+        updateTransferProgress({ id: 5, direction: 'down', progress: 100, bytes: 1_000_000_000 });
+        expect(writes).toBe(1);
+        const entry = get(historyEvents)[0] as TransferEvent;
+        expect([entry.progress, entry.bytes]).toEqual([100, 1_000_000_000]);
+
+        // And says it once: a backend that keeps reporting 100% goes quiet again.
+        updateTransferProgress({ id: 5, direction: 'down', progress: 100, bytes: 1_000_000_000 });
+        expect(writes).toBe(1);
+        stop();
+    });
+
+    it('gives a failed cancel back the rows it took, each to the status it had', async () => {
+        // The iOS shape of it: the app is suspended, so what was running is
+        // paused; the user comes back, taps Cancel all, and the RPC is refused.
+        pushTransferStart({ id: 1, direction: 'up', name: 'running.bin', total: 10 });
+        pushQueuedTransfer({ id: 2, direction: 'up', name: 'waiting.bin', total: 10 });
+        pauseRunningTransfers();
+        expect(transferStatuses()).toEqual(['queued', 'paused']);
+
+        transferApi.cancelUpload.mockRejectedValueOnce(new Error('offline'));
+        cancelTransfersInDirection('up');
+        expect(transferStatuses()).toEqual(['canceling', 'canceling']);
+
+        await vi.waitFor(() => expect(state.cancelingUpload).toBe(false));
+        // Not 'active' for either: a paused row promoted to active draws a live
+        // bar over a process moving no bytes, and a queued one claims a turn it
+        // has not been given.
+        expect(transferStatuses()).toEqual(['queued', 'paused']);
+    });
+
+    // Hover is an intent in both directions; NotifBell keeps the two delays equal.
+    const HOVER_INTENT_MS = 140;
 
     it('opens the full panel on hover and closes after the pointer leaves', () => {
         vi.useFakeTimers();
@@ -218,6 +305,8 @@ describe('notif-bell', () => {
             expect(get(notifUnreadErrors)).toBe(1);
 
             bell().dispatchEvent(new MouseEvent('mouseenter'));
+            // Opening waits out the same hover intent delay that closing does.
+            vi.advanceTimersByTime(HOVER_INTENT_MS);
             flushSync();
 
             expect(get(notifPanelOpen)).toBe(true);
@@ -230,12 +319,12 @@ describe('notif-bell', () => {
 
             bell().dispatchEvent(new MouseEvent('mouseleave'));
             panel?.dispatchEvent(new MouseEvent('mouseenter'));
-            vi.runAllTimers();
+            vi.runOnlyPendingTimers();
             flushSync();
             expect(get(notifPanelOpen)).toBe(true);
 
             panel?.dispatchEvent(new MouseEvent('mouseleave'));
-            vi.runAllTimers();
+            vi.runOnlyPendingTimers();
             flushSync();
             expect(get(notifPanelOpen)).toBe(false);
         } finally {
