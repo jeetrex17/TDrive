@@ -147,6 +147,15 @@ export function GetGalleryStorage(): $CancellablePromise<$models.GalleryStorage>
     return $Call.ByID(940237792);
 }
 
+/**
+ * GetMediaFolderTimeline is the scoped counterpart of GetMediaTimelineSummary.
+ * A folder has no anchor index: it is small enough to seek by paging, so this
+ * carries only the month buckets the grid lays out against.
+ */
+export function GetMediaFolderTimeline(folderID: string): $CancellablePromise<projection$0.GalleryTimeline> {
+    return $Call.ByID(2988451442, folderID);
+}
+
 export function GetMediaNeighbors(msgID: number, before: number, after: number, generation: string): $CancellablePromise<$models.GalleryPage> {
     return $Call.ByID(2332667564, msgID, before, after, generation);
 }
@@ -183,6 +192,18 @@ export function GetStorageUsed(): $CancellablePromise<number> {
  */
 export function ImportPaths(paths: string[] | null, parentID: string, encrypt: boolean, extractArchives: boolean): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(4265040680, paths, parentID, encrypt, extractArchives);
+}
+
+export function ListMediaFolderPage(folderID: string, cursor: string, limit: number): $CancellablePromise<$models.GalleryPage> {
+    return $Call.ByID(1400575016, folderID, cursor, limit);
+}
+
+/**
+ * ListMediaFolders returns the album grid: every folder that directly holds
+ * media, newest first, with its count and the newest item as a cover.
+ */
+export function ListMediaFolders(): $CancellablePromise<projection$0.GalleryFolder[] | null> {
+    return $Call.ByID(2052331840);
 }
 
 export function ListMediaPage(cursor: string, limit: number): $CancellablePromise<$models.GalleryPage> {

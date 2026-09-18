@@ -25,6 +25,36 @@ export interface GalleryBucket {
     "upload_time": number;
 }
 
+/**
+ * GalleryFolder is one tile in the album grid: a folder that directly holds
+ * media, how much of it, and the newest item to show as its cover.
+ */
+export interface GalleryFolder {
+    /**
+     * FolderID is the drive folder id, or "" for the drive's own root.
+     */
+    "folder_id": string;
+    "name": string;
+
+    /**
+     * ItemCount counts media directly in this folder, never its subfolders.
+     */
+    "item_count": number;
+
+    /**
+     * LatestUploadTime is unix seconds; the grid sorts on it.
+     */
+    "latest_upload_time": number;
+
+    /**
+     * The newest item, which is what the tile shows. CoverRevision addresses
+     * the thumbnail; a mismatched revision is refused as stale.
+     */
+    "cover_msg_id": number;
+    "cover_revision": number;
+    "cover_name": string;
+}
+
 export interface GalleryLocation {
     "generation": string;
     "index": number;

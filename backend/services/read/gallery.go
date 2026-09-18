@@ -47,6 +47,32 @@ func (s *Service) MediaPage(ctx context.Context, channelID int64, cursor string,
 	return galleryPageFromProjection(page), nil
 }
 
+// MediaFolders lists the folders that hold media, for the album grid.
+func (s *Service) MediaFolders(ctx context.Context, channelID int64) ([]projection.GalleryFolder, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	return projection.MediaFolders(ctx, s.DB, channelID)
+}
+
+func (s *Service) MediaFolderTimeline(ctx context.Context, channelID int64, folderID string) (projection.GalleryTimeline, error) {
+	if err := s.ready(); err != nil {
+		return projection.GalleryTimeline{}, err
+	}
+	return projection.MediaFolderTimeline(ctx, s.DB, channelID, folderID)
+}
+
+func (s *Service) MediaFolderPage(ctx context.Context, channelID int64, folderID, cursor string, limit int) (GalleryPage, error) {
+	if err := s.ready(); err != nil {
+		return GalleryPage{}, err
+	}
+	page, err := projection.MediaFolderPage(ctx, s.DB, channelID, folderID, cursor, limit)
+	if err != nil {
+		return GalleryPage{}, err
+	}
+	return galleryPageFromProjection(page), nil
+}
+
 func (s *Service) LocateMedia(ctx context.Context, channelID, msgID int64, generation string) (projection.GalleryLocation, error) {
 	if err := s.ready(); err != nil {
 		return projection.GalleryLocation{}, err
