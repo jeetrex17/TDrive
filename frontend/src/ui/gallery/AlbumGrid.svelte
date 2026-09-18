@@ -115,7 +115,16 @@
     });
 </script>
 
-<div class="album-grid-root" style:--album-label-height={`${ALBUM_LABEL_HEIGHT}px`} style:--album-gap={`${ALBUM_TILE_GAP}px`}>
+<!-- The cover size is published as a length rather than left to
+     aspect-ratio: the row window has already decided how tall a row is,
+     and a cover that derives its own height collapses to nothing on a
+     webview that will not resolve a ratio from a stretched flex item. -->
+<div
+    class="album-grid-root"
+    style:--album-label-height={`${ALBUM_LABEL_HEIGHT}px`}
+    style:--album-gap={`${ALBUM_TILE_GAP}px`}
+    style:--album-cover-size={`${Math.round(metrics.tileWidth)}px`}
+>
     {#if $albumsView.status === 'loading'}
         <div class="album-row" role="status" aria-label="Loading albums" aria-busy="true" style:grid-template-columns={`repeat(${metrics.columns}, minmax(0, 1fr))`}>
             {#each Array.from({ length: SKELETON_TILES }, (_, index) => index) as index (index)}

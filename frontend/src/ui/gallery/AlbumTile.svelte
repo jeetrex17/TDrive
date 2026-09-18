@@ -18,11 +18,14 @@
     let src = $state('');
     let detail = $state('');
 
-    // A cover that cannot be drawn is a folder glyph: no cover at all, a video
-    // (which has no still of its own), a stale revision, or a failed fetch.
+    // Until a cover is actually on screen the tile draws a folder glyph: no
+    // cover at all, a stale revision, a failed fetch, and the whole wait in
+    // between, which on a cold drive is most of the time a person spends here.
     // Never a broken image -- the tile still navigates, and saying "broken"
     // about a folder that is perfectly fine would be a lie about the drive.
-    const glyph = $derived(!tile.cover || status === 'failed' || status === 'missing');
+    // A locked vault draws its own lock instead, so the two never stack.
+    const glyph = $derived(status !== 'loaded' && status !== 'locked');
+    const image = $derived(tile.cover !== undefined && status !== 'failed' && status !== 'missing');
     const coverClass = $derived(
         `album-cover${status === 'loaded' ? ' is-loaded' : ''}${status === 'loading' ? ' is-loading' : ''}${status === 'locked' ? ' is-locked' : ''}`,
     );
@@ -70,10 +73,11 @@
     onclick={() => onOpen(tile)}
 >
     <span class={coverClass} use:cover={tile.cover}>
+        {#if image}
+            <img class="gallery-thumb" alt="" width="512" height="512" decoding="async" src={src || undefined} />
+        {/if}
         {#if glyph}
             <span class="album-cover-glyph"><FolderIcon size={30} strokeWidth={1.5} aria-hidden="true" /></span>
-        {:else}
-            <img class="gallery-thumb" alt="" width="512" height="512" decoding="async" src={src || undefined} />
         {/if}
         {#if status === 'locked'}
             <span class="album-cover-glyph"><LockKeyholeIcon size={26} strokeWidth={1.6} aria-hidden="true" /></span>

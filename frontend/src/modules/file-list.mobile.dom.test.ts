@@ -99,11 +99,13 @@ afterEach(async () => {
 });
 
 describe('phone file list', () => {
-    it('opts in only revision-pinned projected images', () => {
+    it('opts in only revision-pinned projected media', () => {
         const image = { msgId: 42, name: 'photo.jpg', revision: 9 };
         expect(fileThumbnailIdentity(image, 7)).toEqual({ channelId: 7, fileId: 42, revision: 9 });
         expect(Object.isFrozen(fileThumbnailIdentity(image, 7))).toBe(true);
-        expect(fileThumbnailIdentity({ ...image, name: 'clip.mp4' }, 7)).toBeUndefined();
+        // A video has a frame of its own, drawn at upload.
+        expect(fileThumbnailIdentity({ ...image, name: 'clip.mp4' }, 7)).toEqual({ channelId: 7, fileId: 42, revision: 9 });
+        expect(fileThumbnailIdentity({ ...image, name: 'notes.pdf' }, 7)).toBeUndefined();
         expect(fileThumbnailIdentity({ ...image, revision: 0 }, 7)).toBeUndefined();
         expect(fileThumbnailIdentity(image, 0)).toBeUndefined();
     });

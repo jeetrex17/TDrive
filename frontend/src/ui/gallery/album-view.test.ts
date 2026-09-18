@@ -40,11 +40,16 @@ describe('album tiles', () => {
         expect(albumTile(folder(), CHANNEL).cover).toEqual({ channelId: CHANNEL, fileId: 9, revision: 3 });
     });
 
+    it('covers a folder of videos with the frame drawn for one', () => {
+        expect(albumTile(folder({ coverName: 'clip.mp4' }), CHANNEL).cover)
+            .toEqual({ channelId: CHANNEL, fileId: 9, revision: 3 });
+    });
+
     it('leaves the cover out when there is nothing renderable to show', () => {
-        // No cover at all, a video (no still of its own), a revision the
-        // rendition path would refuse, and no drive to address it in.
+        // No cover at all, a revision the rendition path would refuse, a file
+        // that is neither picture nor video, and no drive to address it in.
         expect(albumTile(folder({ coverMsgId: 0, coverName: '' }), CHANNEL).cover).toBeUndefined();
-        expect(albumTile(folder({ coverName: 'clip.mp4' }), CHANNEL).cover).toBeUndefined();
+        expect(albumTile(folder({ coverName: 'notes.pdf' }), CHANNEL).cover).toBeUndefined();
         expect(albumTile(folder({ coverRevision: 0 }), CHANNEL).cover).toBeUndefined();
         expect(albumTile(folder(), 0).cover).toBeUndefined();
     });
