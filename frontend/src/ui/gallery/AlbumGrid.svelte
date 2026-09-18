@@ -123,7 +123,7 @@
     class="album-grid-root"
     style:--album-label-height={`${ALBUM_LABEL_HEIGHT}px`}
     style:--album-gap={`${ALBUM_TILE_GAP}px`}
-    style:--album-cover-size={`${Math.round(metrics.tileWidth)}px`}
+    style:--album-cover-size={`${Math.floor(metrics.tileWidth)}px`}
 >
     {#if $albumsView.status === 'loading'}
         <div class="album-row" role="status" aria-label="Loading albums" aria-busy="true" style:grid-template-columns={`repeat(${metrics.columns}, minmax(0, 1fr))`}>

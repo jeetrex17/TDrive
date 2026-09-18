@@ -782,6 +782,14 @@ html.mobile .preview-unlock-bar {
     display: flex;
     flex-direction: column;
     width: 100%;
+    /* The tile is exactly its column. A folder name is one nowrap line, so its
+       min-content width is the whole name -- left to shrink-to-fit, a tile with
+       a long name grows past its column and prints across the tile beside it.
+       The clip is the last word on that: nothing inside a tile paints outside
+       it, whatever an engine makes of the sizes within. */
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
     padding: 0;
     border: 0;
     margin: 0;
@@ -806,6 +814,7 @@ html.mobile .preview-unlock-bar {
     position: relative;
     display: block;
     aspect-ratio: 1 / 1;
+    width: 100%;
     height: var(--album-cover-size);
     overflow: hidden;
     border-radius: var(--radius-lg);
@@ -835,8 +844,12 @@ html.mobile .preview-unlock-bar {
     height: var(--album-label-height, 58px);
     padding: 0 2px;
     min-width: 0;
+    /* A definite width, for the same reason the cover has one: the ellipsis
+       below needs a box to end at, not a box that grows to fit the name. */
+    max-width: var(--album-cover-size, 100%);
 }
 .album-name {
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
