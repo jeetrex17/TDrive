@@ -2,16 +2,21 @@
 // image leases are shared across desktop and both mobile platforms; opening
 // the viewer keeps this same source instead of copying the whole library.
 
+import { get } from 'svelte/store';
 import { state } from '../state';
 import { isMobilePlatform } from '../api';
-import { getMediaTimelineAnchors, getMediaTimelineSummary, locateMedia, type GalleryItem } from '../api/gallery';
+import {
+    getMediaFolderTimeline, getMediaTimelineAnchors, getMediaTimelineSummary,
+    listMediaFolderPage, listMediaFolders, locateMedia, type GalleryItem,
+} from '../api/gallery';
 import { GallerySource } from '../ui/gallery/gallery-source';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
 import { canOwnerActOnFile } from './file-list';
 import { updateSelectionBar } from './selection';
 import { beginRender, cachedThumb, rearmLocked, setActive, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
-import { galleryView } from '../ui/gallery/gallery-store';
+import { albumsView, galleryView, photosMode, type PhotosMode } from '../ui/gallery/gallery-store';
+import { albumsWorthShowing, buildAlbumTiles, type AlbumTile } from '../ui/gallery/album-view';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { setSidebarVirtualView } from '../ui/sidebar/sidebar-store';
 import type { PreviewNavigationItem } from './modals/preview';
@@ -23,6 +28,10 @@ let renderToken = 0;
 let backgroundRenderToken = 0;
 let currentSource: GallerySource | null = null;
 let currentChannelId = 0;
+/** Which photos `currentSource` holds: null for the drive, else a folder id. */
+let currentScope: string | null = null;
+let albumsChannelId = 0;
+let albumsToken = 0;
 let touchCleanups: Array<() => void> = [];
 
 export function activateGallery(): () => void {
@@ -61,6 +70,9 @@ export function teardownGallery(): void {
     currentSource?.dispose();
     currentSource = null;
     currentChannelId = 0;
+    currentScope = null;
+    // The next activation is an entry, and an entry recomputes the grid.
+    albumsChannelId = 0;
 }
 
 // The gallery reuses the file list's selection, keyed the way its rows are,
@@ -112,6 +124,62 @@ export function setPhotosMode(on: boolean): void {
     });
 }
 
+// --- albums: the folder grid, and what a tile opens ---
+
+/**
+ * Recompute the album grid for `channelId`. Names and counts are local, so a
+ * failure here is never a reason to refuse Photos: the drive still has one
+ * timeline, and falling back to it is better than an error where photos go.
+ */
+async function loadAlbums(channelId: number): Promise<AlbumTile[]> {
+    const token = ++albumsToken;
+    albumsChannelId = channelId;
+    albumsView.set({ status: 'loading' });
+    let tiles: AlbumTile[] = [];
+    try {
+        tiles = buildAlbumTiles(await listMediaFolders(), channelId);
+    } catch (error) {
+        console.warn('Album folders failed:', error);
+    }
+    if (token !== albumsToken) return [];
+    albumsView.set({ status: 'ready', tiles });
+    return tiles;
+}
+
+/** What Photos opens on: the grid when there is structure, else the timeline. */
+function defaultPhotosMode(tiles: readonly AlbumTile[]): PhotosMode {
+    return albumsWorthShowing(tiles) ? { kind: 'albums' } : { kind: 'timeline' };
+}
+
+/** Release the timeline's pages and leases; the grid is what is on screen. */
+function dropGallerySource(): void {
+    currentSource?.dispose();
+    currentSource = null;
+    currentChannelId = 0;
+    currentScope = null;
+    galleryView.set({ status: 'loading' });
+}
+
+function sameMode(left: PhotosMode, right: PhotosMode): boolean {
+    if (left.kind !== right.kind) return false;
+    return left.kind !== 'album' || left.tile.folderId === (right as { tile: AlbumTile }).tile.folderId;
+}
+
+/**
+ * Switch what Photos shows. The grid, the timeline and one album are three
+ * views of the same drive, so this re-renders in place rather than navigating
+ * -- Photos stays the single nav destination it already is.
+ */
+export async function showPhotos(mode: PhotosMode): Promise<void> {
+    if (sameMode(get(photosMode), mode)) return;
+    photosMode.set(mode);
+    if (galleryEl) galleryEl.scrollTop = 0;
+    // Asking for the grid is an entry: its counts are recomputed, and the
+    // explicit choice then survives the render below.
+    if (mode.kind === 'albums') await loadAlbums(Number(state.activeChannel?.id || 0));
+    await renderGallery();
+}
+
 interface GalleryRefreshOptions {
     background?: boolean;
     staleRetry?: boolean;
@@ -122,7 +190,23 @@ export async function renderGallery({ background = false, staleRetry = false }: 
     const token = background ? renderToken : ++renderToken;
     const backgroundToken = background ? ++backgroundRenderToken : 0;
     const channelId = Number(state.activeChannel?.id || 0);
-    const sameDrive = currentChannelId === channelId;
+    // Arriving in Photos, or in another drive, is what recomputes the grid and
+    // picks the view. A refresh while the grid is already open deliberately
+    // does not: photos landing mid-scroll must not resort tiles under a thumb.
+    if (albumsChannelId !== channelId) {
+        photosMode.set(defaultPhotosMode(await loadAlbums(channelId)));
+        if (token !== renderToken || !galleryEl) return;
+    }
+    const mode = get(photosMode);
+    if (mode.kind === 'albums') {
+        // The grid renders from albumsView; the timeline's pages would only sit
+        // in memory behind it, and its channel is what arms the cover loads.
+        dropGallerySource();
+        beginRender(channelId);
+        return;
+    }
+    const scope = mode.kind === 'album' ? mode.tile.folderId : null;
+    const sameDrive = currentChannelId === channelId && currentScope === scope;
     const anchorIndex = sameDrive ? Number(galleryEl.dataset.anchorIndex ?? 0) : 0;
     const anchor = sameDrive ? currentSource?.peek(anchorIndex) : undefined;
     const anchorOffset = sameDrive ? Number(galleryEl.dataset.anchorOffset ?? 0) : 0;
@@ -134,21 +218,27 @@ export async function renderGallery({ background = false, staleRetry = false }: 
     if (!currentSource) galleryView.set({ status: 'loading' });
     let next: GallerySource | null = null;
     try {
-        const timeline = await getMediaTimelineSummary();
+        const timeline = scope === null ? await getMediaTimelineSummary() : await getMediaFolderTimeline(scope);
         if (timeline.channelId !== channelId) return;
         if (currentSource?.timeline.generation === timeline.generation && sameDrive) return;
         let restoredIndex = Math.min(anchorIndex, Math.max(0, timeline.totalCount - 1));
-        if (anchor) {
+        // LocateMedia ranks the whole drive, which is not the rank inside a
+        // folder. A scoped view keeps the positional anchor instead.
+        if (anchor && scope === null) {
             try { restoredIndex = (await locateMedia(anchor.msgId, timeline.generation)).index; }
             catch { /* A deleted anchor falls back to the closest surviving rank. */ }
         }
         next = new GallerySource(timeline, {
             maxPages: isMobilePlatform() ? 6 : 12,
             onStale: () => { void renderGallery({ background: true }); },
-            loadAnchors: getMediaTimelineAnchors,
+            // A folder carries no anchor index: its pages are reached by
+            // following each page's next cursor, which the source learns.
+            ...(scope === null
+                ? { loadAnchors: getMediaTimelineAnchors }
+                : { load: (cursor: string, limit: number) => listMediaFolderPage(scope, cursor, limit) }),
         });
         if (timeline.totalCount > 0) {
-            if (restoredIndex > 0) {
+            if (restoredIndex > 0 && scope === null) {
                 const anchors = await getMediaTimelineAnchors(timeline.generation);
                 next.installAnchors(anchors);
             }
@@ -162,6 +252,7 @@ export async function renderGallery({ background = false, staleRetry = false }: 
         currentSource?.dispose();
         currentSource = next;
         currentChannelId = channelId;
+        currentScope = scope;
         beginRender(channelId);
         if (timeline.totalCount === 0) galleryView.set({ status: 'empty' });
         else {
@@ -238,8 +329,12 @@ async function openGalleryLightbox(item: GalleryItem): Promise<void> {
         async getNeighbor(active, direction) {
             const source = currentSource;
             if (!source || currentChannelId !== channelId) return null;
+            // LocateMedia ranks the whole drive. Inside an album that rank
+            // addresses a different photo, so an evicted page ends navigation
+            // there instead of jumping somewhere the viewer never was.
             const index = source.indexOf(Number(active.id))
-                ?? (await locateMedia(Number(active.id), source.timeline.generation)).index;
+                ?? (currentScope === null ? (await locateMedia(Number(active.id), source.timeline.generation)).index : undefined);
+            if (index === undefined) return null;
             // The image viewer must never attempt an original-image request for
             // a video. Scan only one bounded neighbor window; this keeps a run
             // of videos from turning a next/previous tap into an unbounded
@@ -263,6 +358,9 @@ async function openGalleryLightbox(item: GalleryItem): Promise<void> {
 
 export function enterPhotos(): void {
     if (state.virtualView === 'photos') return;
+    // Entering recomputes the album grid and picks the view again, so a folder
+    // that filled up or emptied while away is reflected on arrival.
+    albumsChannelId = 0;
     // The gallery is not a search surface: drop any active search so returning
     // to Files restores normal row interaction instead of search mode.
     clearSearch({ refresh: false });

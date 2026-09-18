@@ -711,3 +711,157 @@ html.mobile .preview-unlock-bar {
     html.mobile .gallery-skeleton-cell { animation: none; }
     .gallery-cell, .gallery-thumb { transition: none; }
 }
+
+/* ====================== ALBUMS ======================
+   The folder grid Photos opens on. Reaching a screenshot from March in a
+   50,000-photo timeline means scrolling past everything; the drive already has
+   Camera, Screenshots and WhatsApp Images in it, and this is that structure
+   given back. Tiles reuse the photo grid's shimmer, its locked stripes and its
+   thumbnail, so an album cover is the same picture the file list would draw. */
+
+/* Sits in the breadcrumb row beside the "Photos" heading, and only there:
+   outside photos mode the row belongs to the folder trail. */
+.photos-mode-bar { display: none; align-items: center; gap: 10px; margin-left: auto; }
+.main-content.photos-mode .photos-mode-bar { display: flex; }
+
+.photos-modes {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-panel);
+}
+.photos-modes button {
+    border: 0;
+    padding: 5px 14px;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+.photos-modes button:hover { color: var(--text-main); }
+.photos-modes button[aria-pressed="true"] { background: var(--surface-control); color: var(--text-main); }
+.photos-modes button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Leaving an album is a step back up, so it reads like the breadcrumb's back
+   control rather than a third kind of navigation. */
+.album-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 12px 5px 8px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: var(--bg-panel);
+    color: var(--text-main);
+    font: inherit;
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+}
+.album-back:hover { background: var(--surface-control); }
+.album-back:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.album-back-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-back-count { color: var(--text-muted); font-size: var(--type-xs); }
+
+.album-grid-root { padding-top: 16px; }
+.album-row {
+    display: grid;
+    gap: var(--album-gap, 12px);
+    margin-bottom: var(--album-gap, 12px);
+}
+/* A grid item's automatic minimum is its content, so without this a name like
+   "WhatsApp Animated Gifs" would widen its column instead of being clipped. */
+.album-row > * { min-width: 0; }
+
+.album-tile {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    margin: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: var(--radius-lg);
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+.album-tile:hover { transform: translateY(-2px); }
+.album-tile:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Square, because a 4:3 crop of a portrait photo loses the subject. */
+.album-cover {
+    position: relative;
+    display: block;
+    aspect-ratio: 1 / 1;
+    overflow: hidden;
+    border-radius: var(--radius-lg);
+    background: var(--bg-panel);
+}
+.album-cover .gallery-thumb { border-radius: inherit; }
+.album-cover.is-loaded .gallery-thumb { opacity: 1; }
+.album-cover-glyph {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-muted);
+}
+
+/* The label lives under the image on a solid strip, never over it: a cover is
+   arbitrary user content and can be any brightness, and this UI is flat -- it
+   has no scrim idiom, and inventing one for this screen alone would leave
+   "Screenshots" unreadable over a bright collage anyway. Its height is fixed
+   so the row window can measure a row before the row exists; album-view.ts
+   holds the same number and sets it here. */
+.album-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    height: var(--album-label-height, 58px);
+    padding: 0 2px;
+    min-width: 0;
+}
+.album-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-main);
+    font-size: var(--type-sm);
+    font-weight: var(--weight-semibold);
+}
+.album-count { color: var(--text-muted); font-size: var(--type-xs); }
+
+/* The photo grid's own states, reused verbatim rather than restated: the
+   shimmer while a cover loads, and the stripes a locked vault draws. */
+.album-cover.is-loading {
+    background-image: linear-gradient(100deg, var(--bg-panel) 30%, var(--overlay-accent-1) 50%, var(--bg-panel) 70%);
+    background-size: 200% 100%;
+    animation: gallery-shimmer 1.3s linear infinite;
+}
+.album-cover.is-locked {
+    background: repeating-linear-gradient(
+        45deg,
+        var(--bg-panel),
+        var(--bg-panel) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 20px
+    );
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .album-cover.is-loading { animation: none; }
+    .album-tile { transition: none; }
+    .album-tile:hover { transform: none; }
+}
+
+html.mobile .album-grid-root { padding-top: 10px; }
+html.mobile .photos-mode-bar { margin-left: 0; }

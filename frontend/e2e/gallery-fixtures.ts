@@ -122,6 +122,50 @@ export function galleryPlans(photos: Photo[], slowFirstOriginal = false): Record
 }
 
 /**
+ * The album grid: one named folder and the drive's own root, each holding one
+ * of the shared photos. Scoped reads answer with that folder's photo alone, so
+ * a spec can tell a scoped grid from the drive-wide one by what is in it.
+ */
+export function albumPlans(): Record<string, MockPlan> {
+    const folderTimeline = (photo: Photo) => resolves({
+        channel_id: 1,
+        generation: 'test',
+        total_count: 1,
+        page_size: 128,
+        buckets: [{ key: new Date(photo.upload_time * 1000).toISOString().slice(0, 7), start_index: 0, count: 1, upload_time: photo.upload_time }],
+        anchors: [],
+    });
+    const folderPage = (photo: Photo) => resolves({
+        generation: 'test',
+        start_index: 0,
+        next_cursor: '',
+        items: [{ ...photo, revision: 1, content_msg_id: photo.msg_id, content_hash: '' }],
+    });
+    return {
+        ListMediaFolders: resolves([
+            {
+                folder_id: 'd:camera', name: 'Camera', item_count: 1,
+                latest_upload_time: FIRST_PHOTO.upload_time,
+                cover_msg_id: FIRST_PHOTO.msg_id, cover_revision: 1, cover_name: FIRST_PHOTO.name,
+            },
+            {
+                folder_id: '', name: '', item_count: 1,
+                latest_upload_time: SECOND_PHOTO.upload_time,
+                cover_msg_id: SECOND_PHOTO.msg_id, cover_revision: 1, cover_name: SECOND_PHOTO.name,
+            },
+        ]),
+        GetMediaFolderTimeline: byFirstArg({
+            'd:camera': folderTimeline(FIRST_PHOTO),
+            '': folderTimeline(SECOND_PHOTO),
+        }),
+        ListMediaFolderPage: byFirstArg({
+            'd:camera': folderPage(FIRST_PHOTO),
+            '': folderPage(SECOND_PHOTO),
+        }),
+    };
+}
+
+/**
  * Serves renditions and reports which were asked for -- the returned array is
  * live, so a spec can assert that a thumbnail was reused rather than refetched,
  * and that opening a photo never reached for a rendition of the original.
