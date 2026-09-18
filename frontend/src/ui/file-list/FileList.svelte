@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { SvelteSet } from 'svelte/reactivity';
     import { onMount } from 'svelte';
     import CheckIcon from '@lucide/svelte/icons/check';
     import DownloadIcon from '@lucide/svelte/icons/download';
@@ -20,12 +19,11 @@
     import { rowMetaLine, splitRowLabel } from './row-meta';
     import { rowOffset, rowWindowFor, type RowMetrics } from './row-window';
     import ItemStatus from '../mobile/ItemStatus.svelte';
-    import { itemStateFor, transfersByFile } from '../mobile/item-state-store';
+    import { explainedFileIds, itemStateFor, transfersByFile } from '../mobile/item-state-store';
     import { busyRowIds } from './busy-rows';
     import { itemStateDescriptor } from '../mobile/item-state';
     import { activeTab } from '../mobile/mobile-shell-store';
-    import { sortFileListRows } from './file-sort';
-    import { fileListView } from './file-list-store';
+    import { fileListView, sortedFileListRows } from './file-list-store';
     import { fileSortState } from './file-sort-store';
     import { activeFileRowKey, selectedFileRowKeys } from './row-state-store';
     import {
@@ -96,32 +94,45 @@
     let explainRowHeight = $state(ESTIMATED_ROW_HEIGHT);
     let list: HTMLElement | null = null;
 
-    const visibleRows = $derived($fileListView.kind === 'rows'
-        ? sortFileListRows($fileListView.rows, $fileSortState)
-        : []);
+    const visibleRows = $derived(sortedFileListRows($fileListView, $fileSortState));
     const thumbnailChannelId = $derived(
         visibleRows.find((row): row is FileListFileRow => row.kind === 'file' && row.thumbnail !== undefined)
             ?.thumbnail?.channelId ?? 0,
     );
     $effect(() => beginFileThumbnailRender(thumbnailChannelId));
-    // The rows whose second line changes virtual height. Transfer-map keys are
-    // drive-scoped, whereas a row owns a bare file id, so derive from rows and
-    // resolve each against the active drive instead of comparing unlike keys.
+    // The rows whose second line changes virtual height.
+    //
+    // The transfer map is rewritten on every progress event, so what this
+    // reads decides what a busy upload costs. It names the files, not the
+    // rows: the explained ids are bounded by the capped notification history
+    // while a folder is not bounded at all, and an unchanged answer is
+    // republished by identity so nothing below re-runs (see explainedFileIds).
+    //
+    // A plain Set, not a SvelteSet: it is built whole and never mutated after,
+    // so per-entry reactive sources would be overhead paid once per file for a
+    // signal nothing subscribes to.
+    const NO_EXPLAINED_IDS: ReadonlySet<string> = new Set<string>();
+    const NO_TALL_INDICES: readonly number[] = [];
     const explainedIds = $derived.by(() => {
-        const ids = new SvelteSet<string>();
-        if (!mobile) return ids;
-        for (const row of visibleRows) {
-            if (row.kind !== 'pending-folder' && itemStateDescriptor(itemStateFor($transfersByFile, row.id)).needsExplanation) {
-                ids.add(row.id);
-            }
-        }
-        return ids;
+        // Read for its identity rather than its rows: the view is what changes
+        // when the drive does, and a transfer key only names a row in the
+        // drive it was scoped to.
+        const scope = $fileListView;
+        // Desktop draws no explaining line, and returning first is what keeps
+        // it from subscribing to the transfer map at all.
+        if (!mobile) return NO_EXPLAINED_IDS;
+        return explainedFileIds($transfersByFile, scope);
     });
     const rowMetrics = $derived.by((): RowMetrics => ({
         rowHeight,
         tallRowHeight: explainRowHeight,
+        // Over the whole folder, because a spacer's height depends on every
+        // tall row above it and not only on the ones on screen. It runs when
+        // the explained set changes -- a transfer failing -- not when one
+        // progresses, which is the difference between once and sixty times a
+        // second.
         tallIndices: explainedIds.size === 0
-            ? []
+            ? NO_TALL_INDICES
             : visibleRows.reduce<number[]>((indices, row, index) => {
                 if (row.kind !== 'pending-folder' && explainedIds.has(row.id)) indices.push(index);
                 return indices;

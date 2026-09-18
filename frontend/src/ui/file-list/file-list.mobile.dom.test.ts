@@ -213,6 +213,37 @@ describe('phone card ends', () => {
         expect(rendered.some((row) => row.classList.contains('is-card-bottom'))).toBe(false);
     });
 
+    it('leaves the rendered window alone while an unrelated file reports progress', () => {
+        // The cost that matters: a 200-file upload writes the transfer map many
+        // times a second, and the explaining line is what ties that map to the
+        // virtualiser. Reading it per row meant every tick re-measured the whole
+        // folder and re-rendered the window; reading it per transfer means an
+        // unrelated tick changes nothing at all.
+        setup();
+        showFileListRows(longList(200));
+        historyEvents.set([transfer('xfer:down:file:1:3', { status: 'failed' })]);
+        flushSync();
+
+        const first = rows()[0];
+        const rendered = list?.innerHTML;
+        expect(list?.querySelector<HTMLElement>('.drive-row[data-row-key="file:3"]')?.classList
+            .contains('needs-explanation')).toBe(true);
+
+        for (let progress = 1; progress <= 20; progress += 1) {
+            historyEvents.set([
+                transfer('xfer:down:file:1:900', { status: 'active', progress }),
+                transfer('xfer:down:file:1:3', { status: 'failed' }),
+            ]);
+            flushSync();
+        }
+
+        // The set of files needing an explanation is republished by identity
+        // when it has not changed (item-state-store.test.ts pins that), so the
+        // metrics and the window below it never re-run for these ticks.
+        expect(rows()[0]).toBe(first);
+        expect(list?.innerHTML).toBe(rendered);
+    });
+
     it('reveals an offscreen logical row before attempting to focus it', async () => {
         setup();
         showFileListRows(longList(200));
