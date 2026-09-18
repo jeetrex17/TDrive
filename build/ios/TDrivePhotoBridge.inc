@@ -132,7 +132,53 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
     };
 }
 
-@interface TDrivePhotoBridge : NSObject <WKScriptMessageHandler, PHPhotoLibraryChangeObserver>
+
+// A folder the user picked in Files, as a backup source.
+//
+// iOS has no MediaStore: a folder is a security-scoped URL the picker hands
+// over once, so what is kept is a bookmark, and every read opens the scope
+// around it. The root written into the ledger is "files:<path>/", normalized
+// exactly as the Go side normalizes it (no empty, "." or ".." components,
+// always a trailing slash) so the string the ledger stores is the key that
+// finds the bookmark again after a relaunch.
+static NSString *const TDriveFolderRootPrefix = @"files:";
+static NSString *const TDriveFolderSourcePrefix = @"tree:files:";
+static NSString *const TDriveFolderBookmarksKey = @"TDriveBackupFolderBookmarks";
+static NSUInteger const TDriveFolderMaxEntries = 50000;
+
+static NSString *TDriveNormalizedFolderRoot(NSString *path) {
+    NSMutableArray<NSString *> *components = [NSMutableArray array];
+    for (NSString *component in [path componentsSeparatedByString:@"/"]) {
+        if (component.length == 0 || [component isEqualToString:@"."] || [component isEqualToString:@".."]) continue;
+        [components addObject:component];
+    }
+    if (components.count == 0) return nil;
+    return [NSString stringWithFormat:@"%@%@/", TDriveFolderRootPrefix, [components componentsJoinedByString:@"/"]];
+}
+
+/** The root a source id names, or nil when the id is not a picked folder. */
+static NSString *TDriveFolderRootForSource(NSString *sourceID) {
+    if (![sourceID hasPrefix:TDriveFolderSourcePrefix]) return nil;
+    return [sourceID substringFromIndex:[@"tree:" length]];
+}
+
+// What the engine will actually take. Keeping the list here as well as in Go
+// means a folder of PDFs does not cost a page of assets that are enqueued and
+// then dropped; both ends agree on what a photo or a video is.
+static NSString *TDriveFolderMediaKind(NSString *name) {
+    static NSSet<NSString *> *photos, *videos;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        photos = [NSSet setWithArray:@[@"jpg", @"jpeg", @"png", @"heic", @"heif", @"webp", @"gif", @"tif", @"tiff", @"bmp", @"avif", @"dng", @"raw", @"arw", @"cr2", @"cr3", @"nef", @"orf", @"raf", @"rw2"]];
+        videos = [NSSet setWithArray:@[@"mp4", @"mov", @"m4v", @"avi", @"mkv", @"webm", @"3gp"]];
+    });
+    NSString *ext = name.pathExtension.lowercaseString;
+    if ([photos containsObject:ext]) return @"photo";
+    if ([videos containsObject:ext]) return @"video";
+    return nil;
+}
+
+@interface TDrivePhotoBridge : NSObject <WKScriptMessageHandler, PHPhotoLibraryChangeObserver, UIDocumentPickerDelegate>
 @property (nonatomic, weak) WKWebView *webView;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *materializations;
 @property (nonatomic, strong) NSMutableSet<NSString *> *stagedTokens;
@@ -148,6 +194,15 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
 // instead of silently skipping or repeating whatever shifted underneath it.
 @property (nonatomic, strong) NSMutableDictionary<NSString *, PHFetchResult<PHAsset *> *> *scanSnapshots;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *scanTokens;
+// A picked folder is walked once per scan and the listing held here, for the
+// same reason a library scan holds its fetch result: page N+1 has to see what
+// page N did, or a file written mid-scan shifts every index after it.
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *folderSnapshots;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *folderTokens;
+// The view controller the document picker is presented from, and the one
+// request waiting on it. Only one picker can be open at a time.
+@property (nonatomic, weak) UIViewController *presenter;
+@property (nonatomic, copy) NSString *pendingFolderPick;
 - (void)startObserving;
 @end
 
@@ -160,6 +215,8 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
         _stagedTokens = [NSMutableSet set];
         _scanSnapshots = [NSMutableDictionary dictionary];
         _scanTokens = [NSMutableDictionary dictionary];
+        _folderSnapshots = [NSMutableDictionary dictionary];
+        _folderTokens = [NSMutableDictionary dictionary];
         _backgroundBackupTask = UIBackgroundTaskInvalid;
     }
     return self;
@@ -388,6 +445,10 @@ static NSDictionary *TDriveAssetManifest(PHAsset *asset) {
 // snapshot the token names, so a library that changes mid-scan cannot shift
 // indexes under the page: the token stops matching and the caller restarts.
 - (void)listBackupAssets:(NSString *)requestID arguments:(NSDictionary *)arguments {
+    NSString *pickedRoot = TDriveFolderRootForSource([arguments[@"sourceID"] isKindOfClass:[NSString class]] ? arguments[@"sourceID"] : @"");
+    // A folder the user handed over is read on its own grant, so it is served
+    // before the photo library's permission is consulted at all.
+    if (pickedRoot != nil) { [self listFolderAssets:requestID root:pickedRoot arguments:arguments]; return; }
     if (![self ensureReadable:requestID]) return;
     NSUInteger pageSize = TDriveBoundedPageSize(arguments[@"pageSize"]);
     NSString *sourceID = [arguments[@"sourceID"] isKindOfClass:[NSString class]] && [arguments[@"sourceID"] length] > 0 ? arguments[@"sourceID"] : @"all";
@@ -451,7 +512,275 @@ complete:
     [self reply:requestID result:@{ @"assets": items, @"nextCursor": hasMore ? [NSString stringWithFormat:@"%@:%lu:%lu", token, (unsigned long)nextAsset, (unsigned long)nextResource] : (id)[NSNull null] } error:nil];
 }
 
+#pragma mark - Picked folders
+
+// The bookmarks, keyed by the root the ledger stores. NSUserDefaults is the
+// right home for them: they are small, they must survive a relaunch, and the
+// ledger they belong to is the app's own.
+- (NSDictionary<NSString *, NSData *> *)folderBookmarks {
+    NSDictionary *stored = [[NSUserDefaults standardUserDefaults] dictionaryForKey:TDriveFolderBookmarksKey];
+    return [stored isKindOfClass:[NSDictionary class]] ? stored : @{};
+}
+
+- (void)rememberFolder:(NSData *)bookmark forRoot:(NSString *)root {
+    NSMutableDictionary *all = [[self folderBookmarks] mutableCopy];
+    all[root] = bookmark;
+    [[NSUserDefaults standardUserDefaults] setObject:all forKey:TDriveFolderBookmarksKey];
+}
+
+/**
+ * The folder a root names, with its security scope open, or nil when the
+ * bookmark is gone or no longer resolves -- a folder deleted, or on a volume
+ * that is not mounted. The caller stops the scope when it is done.
+ */
+- (NSURL *)openFolderForRoot:(NSString *)root {
+    NSData *bookmark = [self folderBookmarks][root];
+    if (![bookmark isKindOfClass:[NSData class]]) return nil;
+    BOOL stale = NO;
+    NSError *error = nil;
+    NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark options:0 relativeToURL:nil bookmarkDataIsStale:&stale error:&error];
+    if (url == nil) return nil;
+    if (![url startAccessingSecurityScopedResource]) return nil;
+    // A stale bookmark still resolved, so it is rewritten while the scope is
+    // open rather than left to fail on some later launch.
+    if (stale) {
+        NSData *refreshed = [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:nil];
+        if (refreshed != nil) [self rememberFolder:refreshed forRoot:root];
+    }
+    return url;
+}
+
+// The system picker, in folder mode -- the same one the app opens to upload a
+// folder. What comes back is a place, not a copy: the bookmark is taken before
+// anything else, because the grant is only certain while this scope is open.
+- (void)pickBackupFolder:(NSString *)requestID {
+    if (self.pendingFolderPick.length > 0) { [self reply:requestID result:nil error:TDrivePhotoError(@"pickerBusy", @"A folder picker is already open")]; return; }
+    UIViewController *presenter = self.presenter;
+    if (presenter == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"unsupportedOperation", @"This build cannot open a folder picker")]; return; }
+    self.pendingFolderPick = requestID;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
+        picker.delegate = self;
+        picker.allowsMultipleSelection = NO;
+        UIViewController *top = presenter;
+        while (top.presentedViewController != nil) top = top.presentedViewController;
+        [top presentViewController:picker animated:YES completion:nil];
+    });
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    (void)controller;
+    NSString *requestID = self.pendingFolderPick;
+    self.pendingFolderPick = nil;
+    if (requestID.length == 0) return;
+    NSURL *url = urls.firstObject;
+    if (url == nil) { [self reply:requestID result:@{} error:nil]; return; }
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSNumber *isDirectory = nil;
+    [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+    NSString *root = isDirectory.boolValue ? TDriveNormalizedFolderRoot(url.path) : nil;
+    NSError *error = nil;
+    NSData *bookmark = root == nil ? nil : [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:&error];
+    if (scoped) [url stopAccessingSecurityScopedResource];
+    if (root == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"invalidFolder", @"Choose a folder, not a file")]; return; }
+    if (bookmark == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"invalidFolder", error.localizedDescription ?: @"That folder cannot be kept between launches")]; return; }
+    [self rememberFolder:bookmark forRoot:root];
+    [self reply:requestID result:@{ @"id": [@"tree:" stringByAppendingString:root], @"root": root, @"kind": @"device-folder", @"name": url.lastPathComponent ?: @"Folder" } error:nil];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    (void)controller;
+    NSString *requestID = self.pendingFolderPick;
+    self.pendingFolderPick = nil;
+    // A dismissal is an answer, not a failure: the empty reply is what the
+    // adapter reads as "nothing was picked".
+    if (requestID.length > 0) [self reply:requestID result:@{} error:nil];
+}
+
+/** Every photo and video under a picked folder, deepest paths included. */
+- (NSArray<NSDictionary *> *)walkFolder:(NSURL *)folder root:(NSURL *)root {
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    NSArray<NSURLResourceKey> *keys = @[NSURLIsDirectoryKey, NSURLNameKey, NSURLFileSizeKey, NSURLContentModificationDateKey, NSURLCreationDateKey];
+    NSDirectoryEnumerator<NSURL *> *walk = [[NSFileManager defaultManager] enumeratorAtURL:folder includingPropertiesForKeys:keys options:NSDirectoryEnumerationSkipsHiddenFiles | NSDirectoryEnumerationSkipsPackageDescendants errorHandler:nil];
+    NSString *base = root.path;
+    for (NSURL *url in walk) {
+        if (items.count >= TDriveFolderMaxEntries) break;
+        NSNumber *isDirectory = nil;
+        [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+        if (isDirectory.boolValue) continue;
+        NSString *name = url.lastPathComponent ?: @"";
+        NSString *kind = TDriveFolderMediaKind(name);
+        if (kind == nil) continue;
+        NSNumber *size = nil, *ignored = nil;
+        NSDate *modified = nil, *created = nil;
+        [url getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+        [url getResourceValue:&ignored forKey:NSURLIsDirectoryKey error:nil];
+        [url getResourceValue:&modified forKey:NSURLContentModificationDateKey error:nil];
+        [url getResourceValue:&created forKey:NSURLCreationDateKey error:nil];
+        NSString *path = url.path;
+        NSString *relative = [path hasPrefix:base] ? [path substringFromIndex:base.length] : name;
+        while ([relative hasPrefix:@"/"]) relative = [relative substringFromIndex:1];
+        NSString *relativeDirectory = relative.stringByDeletingLastPathComponent ?: @"";
+        // The version moves when the file does: an edit changes one of these
+        // two, and the ledger sends it again rather than believing the copy it
+        // already has.
+        NSString *version = [NSString stringWithFormat:@"%.0f:%llu", modified.timeIntervalSince1970, size.unsignedLongLongValue];
+        [items addObject:@{
+            @"relative": relative,
+            @"path": path,
+            @"name": name,
+            @"kind": kind,
+            @"relDir": relativeDirectory,
+            @"version": version,
+            @"size": size ?: @0,
+            @"modified": TDriveMillis(modified),
+            @"created": TDriveMillis(created ?: modified),
+        }];
+    }
+    return items;
+}
+
+// One page of a folder scan, against the listing the token names. A folder
+// needs no photo permission: the user handed this one over themselves.
+- (void)listFolderAssets:(NSString *)requestID root:(NSString *)root arguments:(NSDictionary *)arguments {
+    NSUInteger pageSize = TDriveBoundedPageSize(arguments[@"pageSize"]);
+    NSString *cursor = [arguments[@"cursor"] isKindOfClass:[NSString class]] ? arguments[@"cursor"] : @"";
+    NSArray<NSDictionary *> *listing = nil;
+    NSUInteger offset = 0;
+    NSString *token = nil;
+    @synchronized (self.folderSnapshots) {
+        if (cursor.length > 0) {
+            NSString *live = self.folderTokens[root];
+            NSArray<NSString *> *parts = [cursor componentsSeparatedByString:@":"];
+            listing = live.length > 0 ? self.folderSnapshots[root] : nil;
+            if (parts.count != 2 || live.length == 0 || ![parts[0] isEqualToString:live] || listing == nil) {
+                [self reply:requestID result:nil error:TDrivePhotoError(@"cursorExpired", @"The folder changed; scan again from the start")];
+                return;
+            }
+            token = live;
+            offset = TDriveCursorOffset(parts[1]);
+        }
+    }
+    if (listing == nil) {
+        NSURL *folder = [self openFolderForRoot:root];
+        if (folder == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"folderUnavailable", @"That folder is no longer available. Add it again to keep backing it up.")]; return; }
+        listing = [self walkFolder:folder root:folder];
+        [folder stopAccessingSecurityScopedResource];
+        token = [NSUUID.UUID.UUIDString substringToIndex:8];
+        @synchronized (self.folderSnapshots) {
+            self.folderSnapshots[root] = listing;
+            self.folderTokens[root] = token;
+        }
+    }
+    NSUInteger end = MIN(listing.count, offset + pageSize);
+    NSMutableArray *assets = [NSMutableArray arrayWithCapacity:end - MIN(offset, listing.count)];
+    for (NSUInteger i = MIN(offset, listing.count); i < end; i++) {
+        NSDictionary *item = listing[i];
+        // The id carries the root, because a staged file is asked for by id
+        // alone and the folder it came from is the only way to open it.
+        NSString *assetID = [root stringByAppendingString:item[@"relative"]];
+        [assets addObject:@{
+            @"id": assetID, @"version": item[@"version"], @"name": item[@"name"],
+            @"media_type": item[@"kind"], @"mediaType": item[@"kind"],
+            @"modified_at": item[@"modified"], @"modifiedAt": item[@"modified"],
+            @"created_at": item[@"created"], @"createdAt": item[@"created"],
+            @"rel_dir": item[@"relDir"], @"relDir": item[@"relDir"],
+            @"size": item[@"size"],
+        }];
+    }
+    BOOL hasMore = end < listing.count;
+    if (!hasMore) @synchronized (self.folderSnapshots) { [self.folderTokens removeObjectForKey:root]; [self.folderSnapshots removeObjectForKey:root]; }
+    [self reply:requestID result:@{ @"assets": assets, @"nextCursor": hasMore ? [NSString stringWithFormat:@"%@:%lu", token, (unsigned long)end] : (id)[NSNull null] } error:nil];
+}
+
+/** The picked folder an asset id belongs to, and its path inside it. */
+- (NSString *)folderRootForAsset:(NSString *)assetID relative:(NSString **)relative {
+    if (![assetID hasPrefix:TDriveFolderRootPrefix]) return nil;
+    for (NSString *root in [self folderBookmarks]) {
+        if (![assetID hasPrefix:root] || assetID.length <= root.length) continue;
+        if (relative != NULL) *relative = [assetID substringFromIndex:root.length];
+        return root;
+    }
+    return nil;
+}
+
+// Staging a file out of a picked folder. It is copied rather than handed over
+// in place: the upload reads it from Go, outside any security scope this
+// process is holding, and a folder in iCloud Drive may not be on the device
+// until something asks for it.
+- (void)materializeFolderAsset:(NSString *)requestID root:(NSString *)root relative:(NSString *)relative arguments:(NSDictionary *)arguments {
+    @synchronized (self.materializations) {
+        if (self.materializations.count > 0 || self.stagedTokens.count > 0) {
+            [self reply:requestID result:nil error:TDrivePhotoError(@"stagingBusy", @"Release the current staged photo resource before staging another")];
+            return;
+        }
+    }
+    NSURL *folder = [self openFolderForRoot:root];
+    if (folder == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"folderUnavailable", @"That folder is no longer available. Add it again to keep backing it up.")]; return; }
+    NSURL *source = folder;
+    for (NSString *component in [relative componentsSeparatedByString:@"/"]) {
+        if (component.length == 0 || [component isEqualToString:@"."] || [component isEqualToString:@".."]) continue;
+        source = [source URLByAppendingPathComponent:component isDirectory:NO];
+    }
+    NSNumber *size = nil;
+    NSDate *modified = nil;
+    [source getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+    [source getResourceValue:&modified forKey:NSURLContentModificationDateKey error:nil];
+    NSString *expectedVersion = [arguments[@"version"] isKindOfClass:[NSString class]] ? arguments[@"version"] : nil;
+    NSString *currentVersion = [NSString stringWithFormat:@"%.0f:%llu", modified.timeIntervalSince1970, size.unsignedLongLongValue];
+    if (modified == nil) { [folder stopAccessingSecurityScopedResource]; [self reply:requestID result:nil error:TDrivePhotoError(@"assetNotFound", @"That file is no longer in the folder")]; return; }
+    if (expectedVersion.length > 0 && ![expectedVersion isEqualToString:currentVersion]) { [folder stopAccessingSecurityScopedResource]; [self reply:requestID result:nil error:TDrivePhotoError(@"assetChanged", @"The file changed after discovery; refresh before backing it up")]; return; }
+
+    unsigned long long requestedMax = [arguments[@"maxBytes"] respondsToSelector:@selector(unsignedLongLongValue)] ? [arguments[@"maxBytes"] unsignedLongLongValue] : TDrivePhotoDefaultMaxBytes;
+    unsigned long long maxBytes = MAX(1, MIN(TDrivePhotoMaximumMaxBytes, requestedMax));
+    NSURL *cache = [[[NSFileManager defaultManager] URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask] firstObject];
+    NSNumber *availableCapacity = nil;
+    [cache getResourceValue:&availableCapacity forKey:NSURLVolumeAvailableCapacityForImportantUsageKey error:nil];
+    if (availableCapacity == nil || availableCapacity.unsignedLongLongValue <= TDrivePhotoMinimumFreeBytes) {
+        [folder stopAccessingSecurityScopedResource];
+        [self reply:requestID result:nil error:TDrivePhotoError(@"insufficientSpace", @"At least 512 MiB of free space is required to stage a photo or video")];
+        return;
+    }
+    unsigned long long stagingLimit = MIN(maxBytes, availableCapacity.unsignedLongLongValue - TDrivePhotoMinimumFreeBytes);
+    if (size.unsignedLongLongValue > stagingLimit) {
+        [folder stopAccessingSecurityScopedResource];
+        BOOL diskLimited = stagingLimit < maxBytes;
+        [self reply:requestID result:nil
+              error:TDrivePhotoError(diskLimited ? @"insufficientSpace" : @"resourceTooLarge",
+                                     diskLimited ? @"Staging this file would leave less than 512 MiB free" : @"That file is larger than the staging limit")];
+        return;
+    }
+    NSString *token = NSUUID.UUID.UUIDString;
+    NSURL *directory = [[cache URLByAppendingPathComponent:@"TDrivePhotoBackup" isDirectory:YES] URLByAppendingPathComponent:token isDirectory:YES];
+    NSError *error = nil;
+    if (![[NSFileManager defaultManager] createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:&error]) {
+        [folder stopAccessingSecurityScopedResource];
+        [self reply:requestID result:nil error:TDrivePhotoError(@"stagingFailed", error.localizedDescription)];
+        return;
+    }
+    NSURL *staged = [directory URLByAppendingPathComponent:source.lastPathComponent.length ? source.lastPathComponent : @"file" isDirectory:NO];
+    // A coordinated read is what pulls an iCloud Drive file down before it is
+    // copied; an uncoordinated one would copy a placeholder.
+    __block BOOL copied = NO;
+    __block NSError *copyError = nil;
+    NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+    [coordinator coordinateReadingItemAtURL:source options:NSFileCoordinatorReadingWithoutChanges error:&error byAccessor:^(NSURL *readable) {
+        copied = [[NSFileManager defaultManager] copyItemAtURL:readable toURL:staged error:&copyError];
+    }];
+    [folder stopAccessingSecurityScopedResource];
+    if (!copied) {
+        [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
+        [self reply:requestID result:nil error:TDrivePhotoError(@"materializeFailed", (copyError ?: error).localizedDescription ?: @"That file could not be read")];
+        return;
+    }
+    @synchronized (self.materializations) { [self.stagedTokens addObject:token]; }
+    [self reply:requestID result:@{ @"token": token, @"path": staged.path, @"byteSize": size ?: @0, @"assetID": [root stringByAppendingString:relative], @"assetVersion": currentVersion } error:nil];
+}
+
 - (void)materialize:(NSString *)requestID arguments:(NSDictionary *)arguments {
+    NSString *relative = nil;
+    NSString *pickedRoot = [self folderRootForAsset:[arguments[@"assetID"] isKindOfClass:[NSString class]] ? arguments[@"assetID"] : @"" relative:&relative];
+    if (pickedRoot != nil) { [self materializeFolderAsset:requestID root:pickedRoot relative:relative arguments:arguments]; return; }
     if (![self ensureReadable:requestID]) return;
     @synchronized (self.materializations) {
         if (self.materializations.count > 0 || self.stagedTokens.count > 0) {
@@ -575,6 +904,7 @@ complete:
     else if ([operation isEqualToString:@"cancelMaterialization"]) [self cancelMaterialization:requestID arguments:arguments];
     else if ([operation isEqualToString:@"cleanup"]) [self cleanup:requestID arguments:arguments];
     else if ([operation isEqualToString:@"setBackgroundBackup"]) [self setBackgroundBackup:requestID arguments:arguments];
+    else if ([operation isEqualToString:@"pickBackupFolder"]) [self pickBackupFolder:requestID];
     else [self reply:requestID result:nil error:TDrivePhotoError(@"unsupportedOperation", @"Unsupported photo library operation")];
 }
 @end
@@ -582,15 +912,17 @@ complete:
 static char TDrivePhotoBridgeKey;
 
 static void TDriveInstallPhotoBridge(WKWebView *webView, UIViewController *presenter) {
-    (void)presenter;
     if (webView == nil || objc_getAssociatedObject(webView, &TDrivePhotoBridgeKey) != nil) return;
     TDrivePhotoBridge *bridge = [[TDrivePhotoBridge alloc] init];
     bridge.webView = webView;
+    // Held weakly: the picker is presented from whatever is on screen at the
+    // time, and the bridge must not keep the app's controller alive.
+    bridge.presenter = presenter;
     [bridge startObserving];
     objc_setAssociatedObject(webView, &TDrivePhotoBridgeKey, bridge, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     WKUserContentController *controller = webView.configuration.userContentController;
     [controller addScriptMessageHandler:bridge name:TDrivePhotoHandlerName];
-    NSString *source = @"(function(){if(window.tdriveIOSPhotos)return;const pending=new Map();let seq=0;window.__tdriveIOSPhotosReplyBase64=function(b){try{const bytes=Uint8Array.from(atob(b),c=>c.charCodeAt(0));const m=JSON.parse(new TextDecoder().decode(bytes));const p=pending.get(m.id);if(!p)return;pending.delete(m.id);m.error?p.reject(Object.assign(new Error(m.error.message||'Photo operation failed'),{code:m.error.code})):p.resolve(m.result)}catch(e){console.error('TDrive photo bridge reply failed',e)}};const call=(operation,args={})=>{const id=Date.now().toString(36)+'-'+(++seq).toString(36);const promise=new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});window.webkit.messageHandlers.tdrivePhotos.postMessage({id,operation,arguments:args})});promise.requestID=id;return promise};const api={status:()=>call('status'),requestAuthorization:()=>call('requestAuthorization'),listAlbums:(args={})=>call('listAlbums',args),listAssets:(args={})=>call('listAssets',args),materialize:(args)=>call('materialize',args||{}),cancelMaterialization:(requestID)=>call('cancelMaterialization',{requestID}),cleanup:(token)=>call('cleanup',{token}),setBackgroundBackup:(active)=>call('setBackgroundBackup',{active:!!active})};api.getPhotoBackupCapabilities=async()=>{const s=await api.status();return{available:true,authorization:s.status,canRead:s.canRead,limited:s.limited,backgroundDiscovery:false,backgroundUpload:'limited',resumeRefresh:true,maxPageSize:128}};api.listPhotoBackupSources=async(cursor=null,limit=50)=>{const first=cursor===null||cursor==='';const albumCursor=first?null:String(cursor).replace(/^albums:/,'');if(first&&limit<=1)return{sources:[{id:'all',root:'phassetlibrary:all',kind:'library',name:'All accessible photos and videos'}],nextCursor:'albums:0'};const p=await api.listAlbums({cursor:albumCursor,pageSize:first?limit-1:limit});const albums=p.items.map(x=>({id:x.id,root:'phassetcollection:'+x.id,kind:'album',name:x.title,estimatedAssetCount:x.estimatedAssetCount}));return{sources:first?[{id:'all',root:'phassetlibrary:all',kind:'library',name:'All accessible photos and videos'},...albums]:albums,nextCursor:p.nextCursor===null?null:'albums:'+p.nextCursor}};api.listPhotoBackupAssets=(sourceID,cursor=null,limit=50)=>call('listBackupAssets',{sourceID,cursor,pageSize:limit});api.materializePhotoBackupResource=(assetID,version,maxBytes,resourceID)=>api.materialize({assetID,version,maxBytes,resourceID});api.releasePhotoBackupResource=token=>api.cleanup(token);window.tdriveIOSPhotos=Object.freeze(api)})();";
+    NSString *source = @"(function(){if(window.tdriveIOSPhotos)return;const pending=new Map();let seq=0;window.__tdriveIOSPhotosReplyBase64=function(b){try{const bytes=Uint8Array.from(atob(b),c=>c.charCodeAt(0));const m=JSON.parse(new TextDecoder().decode(bytes));const p=pending.get(m.id);if(!p)return;pending.delete(m.id);m.error?p.reject(Object.assign(new Error(m.error.message||'Photo operation failed'),{code:m.error.code})):p.resolve(m.result)}catch(e){console.error('TDrive photo bridge reply failed',e)}};const call=(operation,args={})=>{const id=Date.now().toString(36)+'-'+(++seq).toString(36);const promise=new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});window.webkit.messageHandlers.tdrivePhotos.postMessage({id,operation,arguments:args})});promise.requestID=id;return promise};const api={status:()=>call('status'),requestAuthorization:()=>call('requestAuthorization'),listAlbums:(args={})=>call('listAlbums',args),listAssets:(args={})=>call('listAssets',args),materialize:(args)=>call('materialize',args||{}),cancelMaterialization:(requestID)=>call('cancelMaterialization',{requestID}),cleanup:(token)=>call('cleanup',{token}),setBackgroundBackup:(active)=>call('setBackgroundBackup',{active:!!active}),pickPhotoBackupFolder:()=>call('pickBackupFolder')};api.getPhotoBackupCapabilities=async()=>{const s=await api.status();return{available:true,authorization:s.status,canRead:s.canRead,limited:s.limited,backgroundDiscovery:false,backgroundUpload:'limited',resumeRefresh:true,maxPageSize:128}};api.listPhotoBackupSources=async(cursor=null,limit=50)=>{const first=cursor===null||cursor==='';const albumCursor=first?null:String(cursor).replace(/^albums:/,'');if(first&&limit<=1)return{sources:[{id:'all',root:'phassetlibrary:all',kind:'library',name:'All accessible photos and videos'}],nextCursor:'albums:0'};const p=await api.listAlbums({cursor:albumCursor,pageSize:first?limit-1:limit});const albums=p.items.map(x=>({id:x.id,root:'phassetcollection:'+x.id,kind:'album',name:x.title,estimatedAssetCount:x.estimatedAssetCount}));return{sources:first?[{id:'all',root:'phassetlibrary:all',kind:'library',name:'All accessible photos and videos'},...albums]:albums,nextCursor:p.nextCursor===null?null:'albums:'+p.nextCursor}};api.listPhotoBackupAssets=(sourceID,cursor=null,limit=50)=>call('listBackupAssets',{sourceID,cursor,pageSize:limit});api.materializePhotoBackupResource=(assetID,version,maxBytes,resourceID)=>api.materialize({assetID,version,maxBytes,resourceID});api.releasePhotoBackupResource=token=>api.cleanup(token);window.tdriveIOSPhotos=Object.freeze(api)})();";
     [controller addUserScript:[[WKUserScript alloc] initWithSource:source injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
     [webView evaluateJavaScript:source completionHandler:nil];
 }

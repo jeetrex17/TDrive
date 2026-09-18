@@ -7,7 +7,7 @@ export interface NativeAssetPage { assets: PhotoBackupAsset[]; nextCursor: strin
 export interface NativeAccess { status: string; detail: string; }
 export interface NativeSourceListing { sources: PhotoBackupSource[]; access: NativeAccess; }
 export interface NativeMaterializedResource { path: string; releaseID: string; }
-interface IOSPhotosBridge { listPhotoBackupSources?: () => unknown; listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; setBackgroundBackup?: (active: boolean) => unknown; }
+interface IOSPhotosBridge { listPhotoBackupSources?: () => unknown; listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; pickPhotoBackupFolder?: () => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; setBackgroundBackup?: (active: boolean) => unknown; }
 function iosBridge(): IOSPhotosBridge | null { return typeof window !== 'undefined' ? (window as Window & { tdriveIOSPhotos?: IOSPhotosBridge }).tdriveIOSPhotos ?? null : null; }
 async function nativeCall(value: unknown): Promise<Record<string, unknown>> { const result = await Promise.resolve(value); return typeof result === 'string' ? parse(result) : asRecord(result); }
 
@@ -122,7 +122,9 @@ export async function listNativePhotoBackupSources(): Promise<NativeSourceListin
 }
 
 /** Whether this host can be asked for a folder to back up. */
-export function nativePhotoBackupFolderPicking(): boolean { return hasBridgeMethod('pickPhotoBackupFolder'); }
+export function nativePhotoBackupFolderPicking(): boolean {
+    return hasBridgeMethod('pickPhotoBackupFolder') || Boolean(iosBridge()?.pickPhotoBackupFolder);
+}
 
 /**
  * Opens the system folder picker and resolves with the source the chosen
@@ -131,7 +133,10 @@ export function nativePhotoBackupFolderPicking(): boolean { return hasBridgeMeth
  * and rejects with its own words, which are written for the user.
  */
 export async function pickNativePhotoBackupFolder(): Promise<PhotoBackupSource | null> {
-    const raw = parse(await callBridge('pickPhotoBackupFolder', [], 'This build cannot open a folder picker.'));
+    const ios = iosBridge();
+    const raw = ios?.pickPhotoBackupFolder
+        ? await nativeCall(ios.pickPhotoBackupFolder())
+        : parse(await callBridge('pickPhotoBackupFolder', [], 'This build cannot open a folder picker.'));
     const id = boundedText(raw.id, 512);
     const root = boundedText(raw.root, 1024);
     if (!id || !root) return null;

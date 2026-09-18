@@ -166,6 +166,9 @@ func TestPhotoBackupDeviceFolderRootIsNormalizedAndChecked(t *testing.T) {
 		{"already terminated", "external_primary:DCIM/Camera/", "external_primary:DCIM/Camera/"},
 		{"traversal removed", "external_primary:DCIM/../Camera", "external_primary:DCIM/Camera/"},
 		{"card volume", "1aef-2b03:Pictures", "1aef-2b03:Pictures/"},
+		// iOS has no media index: a picked folder is a place in Files, and
+		// the leading slash of its path is a component like any other.
+		{"ios files folder", "files:/private/var/mobile/Library/Mobile Documents/com~apple~CloudDocs/Camera", "files:private/var/mobile/Library/Mobile Documents/com~apple~CloudDocs/Camera/"},
 	} {
 		got, err := validatePhotoBackupDeviceFolderRoot(tc.root)
 		if err != nil || got != tc.want {
