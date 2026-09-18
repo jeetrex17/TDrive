@@ -20,6 +20,17 @@ export interface BackupSituation {
     title: string;
     /** The sentence under it; empty when the title says it all. */
     body: string;
+    /**
+     * The backend's own words about a failure, for the reader who wants them.
+     *
+     * Kept out of `body` on purpose. What the backend reports is a cause, not a
+     * sentence -- an upload path and an errno, which told one user their photos
+     * had stopped backing up by filling half the panel with
+     * "/data/user/0/.../image-1000219416/.england-london-bridge (2).jpg.partial:
+     * open failed: ENOENT". The panel says what happened and what to do; this
+     * sits behind a disclosure for whoever is diagnosing it.
+     */
+    detail: string;
     /** The one thing to do about it, if anything. */
     primary: BackupAction | null;
     /** A less urgent second option, shown smaller. */
@@ -61,42 +72,64 @@ export function describeBackup(state: PhotoBackupState): BackupSituation {
     const hasSources = state.sources.some((source) => source.enabled);
 
     if (!state.settings.enabled) {
-        return { tone: 'idle', title: 'Backup is off', body: 'Turn it on to keep a copy of your photos and videos in this drive.', primary: null, secondary: null, progress: false };
+        return { tone: 'idle', title: 'Backup is off', body: 'Turn it on to keep a copy of your photos and videos in this drive.', detail: '', primary: null, secondary: null, progress: false };
     }
     if (state.encryptionRequired) {
         // The queue's own phase decides what the unlock leads into.
         const next: BackupAction = state.manualPaused ? 'resume' : status.failed > 0 || status.paused > 0 ? 'retry' : 'start';
-        return { tone: 'locked', title: 'Unlock to continue', body: 'Backups are encrypted. Enter your password and they carry on from where they stopped.', primary: next, secondary: null, progress: false };
+        return { tone: 'locked', title: 'Unlock to continue', body: 'Backups are encrypted. Enter your password and they carry on from where they stopped.', detail: '', primary: next, secondary: null, progress: false };
     }
     // Bodies never carry counts: the summary line under them does, once.
     if (state.manualPaused) {
-        return { tone: 'idle', title: 'Paused', body: waiting > 0 ? 'Nothing is sent until you resume.' : 'Nothing is waiting right now.', primary: 'resume', secondary: null, progress: false };
+        return { tone: 'idle', title: 'Paused', body: waiting > 0 ? 'Nothing is sent until you resume.' : 'Nothing is waiting right now.', detail: '', primary: 'resume', secondary: null, progress: false };
     }
     switch (status.phase) {
         case 'uploading':
-            return { tone: 'busy', title: 'Backing up', body: currentFileName(status) || 'Preparing the next item…', primary: null, secondary: 'pause', progress: true };
+            return { tone: 'busy', title: 'Backing up', body: currentFileName(status) || 'Preparing the next item…', detail: '', primary: null, secondary: 'pause', progress: true };
         case 'scanning':
-            return { tone: 'busy', title: 'Looking for new photos and videos', body: '', primary: null, secondary: 'pause', progress: true };
+            return { tone: 'busy', title: 'Looking for new photos and videos', body: '', detail: '', primary: null, secondary: 'pause', progress: true };
         case 'failed':
-            return { tone: 'danger', title: status.failed === 1 ? '1 item could not be backed up' : `${status.failed} items could not be backed up`, body: status.message || 'They will be tried again automatically.', primary: 'retry', secondary: null, progress: false };
+            return {
+                tone: 'danger',
+                title: status.failed === 1 ? '1 item could not be backed up' : `${status.failed} items could not be backed up`,
+                body: 'The rest of your library is unaffected. Retry, or leave it and backup will try again on its own.',
+                detail: status.message,
+                primary: 'retry', secondary: null, progress: false,
+            };
         case 'paused':
             // Not the user's pause -- that returned above. Either a device
             // condition the backend named, or items whose last upload was
             // cut off with the remote outcome unknown.
             if (status.paused > 0) {
-                return { tone: 'warning', title: status.paused === 1 ? '1 item was interrupted' : `${status.paused} items were interrupted`, body: 'Their last upload did not finish. Retrying may create a duplicate of one that did.', primary: 'retry', secondary: null, progress: false };
+                return { tone: 'warning', title: status.paused === 1 ? '1 item was interrupted' : `${status.paused} items were interrupted`, body: 'Their last upload did not finish. Retrying may create a duplicate of one that did.', detail: '', primary: 'retry', secondary: null, progress: false };
             }
-            return { tone: 'warning', title: 'Waiting', body: status.message || 'Backup will continue when the device allows it.', primary: 'start', secondary: null, progress: false };
+            return { tone: 'warning', title: 'Waiting', body: status.message || 'Backup will continue when the device allows it.', detail: '', primary: 'start', secondary: null, progress: false };
         case 'queued':
-            return { tone: 'idle', title: 'Ready to back up', body: '', primary: 'start', secondary: null, progress: false };
+            return { tone: 'idle', title: 'Ready to back up', body: '', detail: '', primary: 'start', secondary: null, progress: false };
         case 'complete':
-            return { tone: 'success', title: 'Up to date', body: '', primary: 'start', secondary: null, progress: false };
+            return { tone: 'success', title: 'Up to date', body: '', detail: '', primary: 'start', secondary: null, progress: false };
         default:
             if (!hasSources) {
-                return { tone: 'idle', title: 'Choose what to back up', body: 'Add a folder or a photo library below to get started.', primary: null, secondary: null, progress: false };
+                return { tone: 'idle', title: 'Choose what to back up', body: 'Add a folder or a photo library below to get started.', detail: '', primary: null, secondary: null, progress: false };
             }
-            return { tone: 'idle', title: 'Ready', body: status.complete > 0 ? '' : 'Nothing has been backed up yet.', primary: 'start', secondary: null, progress: false };
+            return { tone: 'idle', title: 'Ready', body: status.complete > 0 ? '' : 'Nothing has been backed up yet.', detail: '', primary: 'start', secondary: null, progress: false };
     }
+}
+
+/**
+ * Where backups land, in the words the drive would use.
+ *
+ * The backend builds the destination as "Photo backup / <device> / <source>",
+ * and the device segment carries a hex suffix so two phones of the same make
+ * cannot collide in one drive. That suffix is for the folder, not the reader --
+ * "Android device (3c48be52)" tells a person nothing their own phone does not
+ * already tell them -- so it is dropped here and kept in the drive.
+ */
+export function destinationLabel(title: string): string {
+    return title
+        .split(' / ')
+        .map((segment) => segment.replace(/\s*\([0-9a-f]{6,}\)$/i, ''))
+        .join(' / ');
 }
 
 /** Whether the primary action can be taken right now. */
