@@ -24,6 +24,7 @@
     import { activateTransferSurfaces } from '../../modules/transfers';
     import { activateUpdates } from '../../modules/updates';
     import { confirmDelete } from '../../modules/modals/delete';
+    import { confirmTrashAction } from '../../modules/trash/controller';
     import {
         cancelEncryptionPassword,
         submitEncryptionPassword,
@@ -75,6 +76,8 @@
     import RenameModal from '../modals/RenameModal.svelte';
     import ShareDriveModal from '../modals/ShareDriveModal.svelte';
     import UploadOptionsModal from '../modals/UploadOptionsModal.svelte';
+    import TrashModal from '../trash/TrashModal.svelte';
+    import TrashConfirmModal from '../trash/TrashConfirmModal.svelte';
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
     import ToastStack from '../notifications/ToastStack.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
@@ -210,6 +213,16 @@
     </div>
     <div id="logout-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <LogoutModal onConfirm={confirmLogout} />
+    </div>
+
+    <!-- The trash and the confirm it raises share one component. The confirm's
+         host comes last so that, with every overlay on the same --z-modal, the
+         later element in the document is the one drawn on top. -->
+    <div id="trash-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <TrashModal />
+    </div>
+    <div id="trash-confirm-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <TrashConfirmModal onConfirm={confirmTrashAction} />
     </div>
 
     <!-- Viewer controllers stay lazy because they load media/runtime dependencies only when used. -->

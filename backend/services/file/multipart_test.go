@@ -194,7 +194,7 @@ func TestMultipartEncryptedUploadCopiesClearsAndJoinsProducerKey(t *testing.T) {
 	assertKeyZeroed(t, uploadKey)
 }
 
-func TestMultipartDeleteDropsParts(t *testing.T) {
+func TestMultipartDeleteKeepsPartsRestorable(t *testing.T) {
 	svc, db, _, _ := newTestService(t)
 	svc.MaxUploadBytes = 1000
 
@@ -213,16 +213,24 @@ func TestMultipartDeleteDropsParts(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 
-	// The file_parts rows are dropped...
-	if left, _ := projection.MultipartParts(db, personalChannelID, manifestMsgID); len(left) != 0 {
-		t.Fatalf("file_parts after delete = %d, want 0", len(left))
-	}
-	// ...and the file is tombstoned (no longer visible).
+	// The file is hidden...
 	var tombstoned int
 	if err := db.QueryRow(`SELECT tombstoned FROM files WHERE channel_id = ? AND msg_id = ?`, personalChannelID, manifestMsgID).Scan(&tombstoned); err != nil {
 		t.Fatalf("read file row: %v", err)
 	}
 	if tombstoned != 1 {
 		t.Fatalf("tombstoned = %d, want 1", tombstoned)
+	}
+	// ...but every part body and its pointer survive, because the file is
+	// still restorable until it is purged.
+	if left, _ := projection.MultipartParts(db, personalChannelID, manifestMsgID); len(left) != 3 {
+		t.Fatalf("file_parts after delete = %d, want 3", len(left))
+	}
+	orphans, err := projection.OrphanPartMessages(db, personalChannelID)
+	if err != nil {
+		t.Fatalf("orphan parts: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Fatalf("orphan sweep would delete restorable bodies: %v", orphans)
 	}
 }

@@ -737,9 +737,7 @@ func (e *Engine) newEncryptionService() *encservice.Service {
 
 func (e *Engine) newFolderService() *folderservice.Service {
 	return &folderservice.Service{
-		DB:    backend.DB,
-		TG:    e.tg,
-		Peers: peerResolverFn(e.ResolvePeer),
+		DB: backend.DB,
 		EmitOp: func(channelID int64, op projection.Op) error {
 			_, err := e.EmitAndProject(channelID, op)
 			return err
@@ -747,12 +745,6 @@ func (e *Engine) newFolderService() *folderservice.Service {
 		EmitOpContext: func(ctx context.Context, channelID int64, op projection.Op) error {
 			_, err := e.EmitAndProjectContext(ctx, channelID, op)
 			return err
-		},
-		EmitOps: func(channelID int64, ops []projection.Op) error {
-			return e.EmitAndProjectBatch(channelID, ops)
-		},
-		EmitOpsContext: func(ctx context.Context, channelID int64, ops []projection.Op) error {
-			return e.EmitAndProjectBatchContext(ctx, channelID, ops)
 		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return e.ActorID(ctx)
@@ -764,8 +756,10 @@ func (e *Engine) newFolderService() *folderservice.Service {
 			}
 			return key, nil
 		},
-		Warnf: func(format string, args ...any) {
-			e.warnf(format, args...)
+		// Deleting a folder is the same operation as deleting a file, so it is
+		// published by the one service that owns it rather than duplicated.
+		TrashObject: func(ctx context.Context, channelID int64, objectID string) error {
+			return e.FileService().TrashObject(ctx, channelID, objectID)
 		},
 	}
 }

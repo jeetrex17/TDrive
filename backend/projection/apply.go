@@ -13,7 +13,9 @@
 //  5. move/rename targeting a tombstoned or missing object: ignored, logged.
 //  6. A move that would create a cycle is rejected deterministically by walking
 //     ancestors before applying. Projection is not mutated on rejection.
-//  7. tomb / rmdir is idempotent. Re-applying does nothing.
+//  7. tomb / rmdir is idempotent. Re-applying does nothing. OpTomb stays fully
+//     supported forever: channel history and other clients still contain them,
+//     and rejecting one would break every projection rebuild.
 //  8. Virtual buckets are SELECT-time concepts. Never written as folder rows.
 //  9. ApplyOp is the only writer to files and folders. The rest of the app
 //     reads via read.go and mutates only by calling Local* helpers in writes.go,
@@ -76,6 +78,8 @@ func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) (er
 			applyErr = applyTrashTree(tx, channelID, op)
 		case OpHardDeleteTree:
 			applyErr = applyHardDeleteTree(tx, channelID, msgID, op)
+		case OpRestoreTree:
+			applyErr = applyRestoreTree(tx, channelID, op)
 		}
 		if applyErr != nil {
 			return applyErr

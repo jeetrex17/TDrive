@@ -5,6 +5,7 @@
     import ImagesIcon from '@lucide/svelte/icons/images';
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import SearchIcon from '@lucide/svelte/icons/search';
+    import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import { isMobilePlatform, listMountableDrives } from '../api';
     import tdriveLogo from '../assets/images/tdrive-logo.png';
     import { openEncryptionSettingsModal } from '../modules/modals/encryption-settings';
@@ -12,6 +13,7 @@
     import { breadcrumbDrag, navigateBack, navigateToIndex } from '../modules/navigation';
     import { cancelTransfersInDirection, clearHistory } from '../modules/notif-bell';
     import { ensureProfileLoaded } from '../modules/profile-menu';
+    import { openTrash } from '../modules/trash/controller';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
     import {
@@ -108,6 +110,20 @@
                         <button id="nav-photos" class="drive-item nav-photos-item" type="button" title="Photos">
                             <ImagesIcon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
                             <span class="drive-item-title">Photos</span>
+                        </button>
+                        <!-- Trash sits with the drive's other destinations,
+                             where a user who just lost a file looks for it,
+                             rather than behind the account menu. -->
+                        <button
+                            id="nav-trash"
+                            class="drive-item"
+                            type="button"
+                            title="Trash"
+                            aria-haspopup="dialog"
+                            onclick={openTrash}
+                        >
+                            <Trash2Icon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
+                            <span class="drive-item-title">Trash</span>
                         </button>
                     </div>
                 </div>

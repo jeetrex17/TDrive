@@ -20,6 +20,11 @@ type hardDeleteScope struct {
 	objectKind string
 	fileMsgID  int64
 	revision   int64
+	// trashed marks a root that was already hidden by an earlier trash
+	// operation. Its namespace rows are final, so the marker only has to
+	// destroy content; re-running the tombstone would advance the object's
+	// body revision past its own row.
+	trashed bool
 }
 
 // applyHardDeleteTree validates the complete Telegram body set and hides the
@@ -70,6 +75,9 @@ func applyHardDeleteTree(tx *sql.Tx, channelID, markerMsgID int64, op Op) error 
 	if err := removeHardDeleteTrashEntriesTx(tx, scope); err != nil {
 		return err
 	}
+	if scope.trashed {
+		return nil
+	}
 	if scope.objectKind == ObjectKindFile {
 		return trashFileTreeRoot(tx, channelID, scope.objectID, scope.revision)
 	}
@@ -92,16 +100,33 @@ func loadHardDeleteScope(tx *sql.Tx, channelID int64, op Op) (hardDeleteScope, e
 	if err != nil {
 		return hardDeleteScope{}, err
 	}
+	// A hard delete targets either a live object (the mount's "delete without
+	// trashing") or one already sitting in the trash (a purge). A tombstoned
+	// root is only addressable while it still holds a trash entry, so a second
+	// marker for an already-purged object stays rejected.
 	var revision int64
+	var tombstoned int
 	err = tx.QueryRow(`
-		SELECT revision FROM dirents
-		WHERE channel_id=? AND object_id=? AND tombstoned=0
-	`, channelID, op.Obj).Scan(&revision)
+		SELECT revision, tombstoned FROM dirents
+		WHERE channel_id=? AND object_id=?
+	`, channelID, op.Obj).Scan(&revision, &tombstoned)
 	if errors.Is(err, sql.ErrNoRows) {
 		return hardDeleteScope{}, ErrObjectNotFound
 	}
 	if err != nil {
 		return hardDeleteScope{}, fmt.Errorf("projection: read hard-delete root: %w", err)
+	}
+	if tombstoned != 0 {
+		var one int
+		err := tx.QueryRow(`
+			SELECT 1 FROM trash_entries WHERE channel_id=? AND object_id=?
+		`, channelID, op.Obj).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return hardDeleteScope{}, ErrObjectNotFound
+		}
+		if err != nil {
+			return hardDeleteScope{}, fmt.Errorf("projection: read hard-delete trash entry: %w", err)
+		}
 	}
 	if revision != op.ExpectedRevision {
 		return hardDeleteScope{}, ErrRevisionConflict
@@ -112,6 +137,7 @@ func loadHardDeleteScope(tx *sql.Tx, channelID int64, op Op) (hardDeleteScope, e
 		objectID:   op.Obj,
 		objectKind: kind,
 		revision:   revision,
+		trashed:    tombstoned != 0,
 	}
 	if kind == ObjectKindFile {
 		scope.fileMsgID, err = parseFileMsgID(op.Obj)

@@ -820,10 +820,10 @@ func TestSharedRenameMoveAndDeleteRequireUploader(t *testing.T) {
 		t.Fatalf("delete by uploader: %v", err)
 	}
 	if projection.FileExists(db, sharedChannelID, 60) {
-		t.Fatalf("file still visible after tomb")
+		t.Fatalf("file still visible after delete")
 	}
-	if batches := fakeTG.DeletedBatches(); len(batches) != 1 || len(batches[0]) != 1 || batches[0][0] != 60 {
-		t.Fatalf("deleted batches = %+v", batches)
+	if batches := fakeTG.DeletedBatches(); len(batches) != 0 {
+		t.Fatalf("delete destroyed Telegram bodies instead of trashing: %+v", batches)
 	}
 }
 
