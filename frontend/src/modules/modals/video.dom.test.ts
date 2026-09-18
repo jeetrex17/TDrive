@@ -727,6 +727,22 @@ describe("encrypted media lifecycle", () => {
         expect(document.querySelector<HTMLElement>("#video-modal")?.style.display).toBe("none");
     });
 
+    // The next item in a playlist is opened ahead of time and then taken
+    // without a password prompt, which is only safe while the vault stays
+    // open. A lock has to throw that session away with the rest.
+    it("throws away the warmed next item when the vault locks", async () => {
+        apiMocks.openMedia.mockImplementation(async (id: number) => mediaOpenResult(id, `warm-${id}`));
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 40, name: "first.mp4", size: 1024, encrypted: true });
+        runtimeMocks.events.get("encrypted_media_sessions_closed")?.({});
+
+        // Whatever the prefetcher was holding is released rather than kept for
+        // the next open, which would have skipped the prompt.
+        await vi.waitFor(() => expect(apiMocks.closeMedia).toHaveBeenCalled());
+    });
+
     it("uses authoritative opened-session metadata when the caller omits encryption", async () => {
         const opened = nativeOpenResult(31, "authoritative-encrypted-token");
         opened.info.encrypted = true;

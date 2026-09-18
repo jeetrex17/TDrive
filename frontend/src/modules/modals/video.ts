@@ -1493,6 +1493,12 @@ function videoTouchHandlers(): TouchGestureHandlers {
 function bindEncryptedMediaLifecycle() {
     if (unsubscribeEncryptedMediaSessionsClosed) return;
     unsubscribeEncryptedMediaSessionsClosed = onRuntimeEvent("encrypted_media_sessions_closed", () => {
+        // The warmed next item goes first, whatever is on screen. It was
+        // opened while the vault was open and is taken without asking for a
+        // password -- that is the point of warming one -- so a lock has to
+        // drop it, or the next item plays from a session the backend has
+        // already closed and the reader is never asked to unlock.
+        void mediaPrefetcher.discard();
         if (!activeOpenAttempt || (!activeOpenAttempt.target.encrypted && !activeMediaEncrypted)) return;
         void closeVideoModal();
     });
