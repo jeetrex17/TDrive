@@ -106,6 +106,10 @@ public class MainActivity extends AppCompatActivity {
     private final Map<String, PickedFile> pickedFiles = new ConcurrentHashMap<>();
     private WailsJSBridge jsBridge;
     private static final int FOLDER_PICKER_REQUEST = 7004;
+    // Its own request code, and its own pending callback: the import picker
+    // above holds one document tree and releases the previous grant whenever it
+    // runs, so a backup pick must never arrive on that path.
+    private static final int PHOTO_BACKUP_FOLDER_REQUEST = 7005;
     private static final int PHOTO_CAPTURE_REQUEST = 7002;
     private static final int VIDEO_CAPTURE_REQUEST = 7003;
     private static final int CAMERA_PERMISSION_REQUEST = 7010;
@@ -123,6 +127,7 @@ public class MainActivity extends AppCompatActivity {
     private File pendingCaptureFile;
     private boolean pendingCaptureIsVideo;
     private String pendingPhotoBackupPermissionCallbackId;
+    private String pendingPhotoBackupFolderCallbackId;
     // Whether a transfer has held the process open since the last time the user
     // was here, and whether this run of the app has already asked about it.
     // Written from the JS thread by noteBackgroundTransferRunning, read on the
@@ -158,6 +163,7 @@ public class MainActivity extends AppCompatActivity {
         bridge = new WailsBridge(this);
         WailsForegroundService.attachRuntimeBridge(bridge);
         GalleryImage.nativeInit();
+        GalleryVideo.nativeInit();
         bridge.initialize();
 
         // Set up WebView
@@ -616,17 +622,43 @@ public class MainActivity extends AppCompatActivity {
                         || checkSelfPermission("android.permission.READ_EXTERNAL_STORAGE") == PackageManager.PERMISSION_GRANTED;
             }
             boolean canRead = images || videos || selected;
-            String status = !canRead ? "denied" : (selected || !images || !videos ? "limited" : "granted");
-            result.put("supported", true).put("status", status).put("detail", status.equals("granted") ? "full media access" : status.equals("limited") ? "selected or partial media access" : "media access denied").put("canRead", canRead)
-                    .put("images", images).put("videos", videos).put("selectedOnly", selected);
+            // Full access decides first. Android 14 may report
+            // READ_MEDIA_VISUAL_USER_SELECTED as granted alongside a full
+            // grant, and asking about it first called such a device "limited"
+            // -- the one state where the app must not nag the user about
+            // access it already has.
+            boolean full = images && videos;
+            String status = !canRead ? "denied" : full ? "granted" : "limited";
+            // "limited" is the state the user can do something about, so its
+            // words are the user's, not the log's: under partial access
+            // MediaStore answers only with the handful of items they picked,
+            // which is why the folder list looks nearly empty.
+            result.put("supported", true).put("status", status)
+                    .put("detail", status.equals("granted") ? "full media access"
+                            : status.equals("limited") ? "TDrive can only see the photos you picked. Choose sources again to let it see more."
+                            : "media access denied")
+                    .put("canRead", canRead)
+                    .put("images", images).put("videos", videos).put("selectedOnly", selected)
+                    .put("full", full);
         } catch (Exception e) {
             try { result.put("supported", false).put("status", "unavailable").put("canRead", false); } catch (Exception ignored) { }
         }
         return result;
     }
 
+    /**
+     * Ask for media access, and ask again when only some of it was given.
+     *
+     * The test is full access, not "can read anything at all". Under Android
+     * 14's Select photos the app can read the few items the user picked, so a
+     * canRead test returned early and there was no way back: every later
+     * attempt short-circuited, the folder list stayed collapsed to whatever
+     * those items happened to be in, and nothing in the app could change it.
+     * Asking again puts the system's own "Select more photos" dialog in front
+     * of the user, which is the only thing that can widen the grant.
+     */
     public void requestPhotoBackupAccess(String callbackId) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || photoBackupAccess().optBoolean("canRead")) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || photoBackupAccess().optBoolean("full")) {
             jsBridge.sendCallback(callbackId, photoBackupAccess().toString(), null);
             return;
         }
@@ -637,7 +669,12 @@ public class MainActivity extends AppCompatActivity {
             }
             pendingPhotoBackupPermissionCallbackId = callbackId;
         }
-        String[] permissions = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        // READ_MEDIA_VISUAL_USER_SELECTED rides along from Android 14, where the
+        // manifest declares it: without it in the request the system has no
+        // reselection dialog to show a user who already chose Select photos.
+        String[] permissions = Build.VERSION.SDK_INT >= 34
+                ? new String[]{"android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO", "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"}
+                : Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 ? new String[]{"android.permission.READ_MEDIA_IMAGES", "android.permission.READ_MEDIA_VIDEO"}
                 : new String[]{"android.permission.READ_EXTERNAL_STORAGE"};
         runOnUiThread(() -> requestPermissions(permissions, PHOTO_BACKUP_PERMISSION_REQUEST));
@@ -714,7 +751,8 @@ public class MainActivity extends AppCompatActivity {
                 if (!photoBackupAccess().optBoolean("canRead")) { jsBridge.sendCallback(callbackId, null, "media permission denied"); return; }
                 JSONObject request = new JSONObject(requestJson);
                 String sourceId = request.optString("sourceId", "all");
-                if (!"all".equals(sourceId) && !sourceId.startsWith("bucket:")) throw new IOException("unknown media source");
+                TreeSource tree = TreeSource.parse(sourceId);
+                if (!"all".equals(sourceId) && !sourceId.startsWith("bucket:") && tree == null) throw new IOException("unknown media source");
                 int limit = Math.max(1, Math.min(PHOTO_BACKUP_PAGE_LIMIT, request.optInt("limit", PHOTO_BACKUP_PAGE_LIMIT)));
                 JSONObject cursor = request.optJSONObject("cursor");
                 long modified = cursor == null ? Long.MAX_VALUE : cursor.optLong("modified", Long.MAX_VALUE);
@@ -723,22 +761,52 @@ public class MainActivity extends AppCompatActivity {
                 List<String> args = new ArrayList<>();
                 args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)); args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO));
                 if (sourceId.startsWith("bucket:")) { selection += " AND " + MediaStore.Images.Media.BUCKET_ID + "=?"; args.add(sourceId.substring(7)); }
+                // A watched folder is a place, not a bucket: the folder itself
+                // and everything under it, which is what the desktop walker
+                // does with a chosen directory. The equality term is the
+                // folder's own files, and the one an index can answer; the
+                // pattern reaches its subfolders. A folder named "100%" is
+                // escaped, or it would match half the volume.
+                if (tree != null) {
+                    String column = treePathColumn();
+                    String prefix = tree.pathPrefix(this);
+                    if (prefix == null) throw new IOException("that folder is not available on this device");
+                    selection += " AND (" + column + "=? OR " + column + " LIKE ? ESCAPE '\\')";
+                    args.add(prefix); args.add(escapeLike(prefix) + "%");
+                }
                 if (cursor != null) { selection += " AND (" + MediaStore.MediaColumns.DATE_MODIFIED + "<? OR (" + MediaStore.MediaColumns.DATE_MODIFIED + "=? AND " + MediaStore.MediaColumns._ID + "<?))"; args.add(String.valueOf(modified)); args.add(String.valueOf(modified)); args.add(String.valueOf(id)); }
                 // DATE_TAKEN is the camera's clock and the only column that survives
                 // an edit; DATE_ADDED is when MediaStore first saw the row, which is
                 // the closest thing to it for media without EXIF.
-                String[] projection = {MediaStore.MediaColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DATE_ADDED, MediaStore.Images.ImageColumns.DATE_TAKEN};
+                String[] base = {MediaStore.MediaColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DATE_ADDED, MediaStore.Images.ImageColumns.DATE_TAKEN};
+                // The location column is asked for only by a folder source.
+                // RELATIVE_PATH does not exist before Android 10, and a
+                // projection naming a column the provider does not know fails
+                // the whole query rather than returning null for it.
+                String[] projection = base;
+                if (tree != null) {
+                    projection = new String[base.length + 1];
+                    System.arraycopy(base, 0, projection, 0, base.length);
+                    projection[base.length] = treePathColumn();
+                }
                 JSONArray assets = new JSONArray(); JSONObject next = null; long lastModified = 0; long lastId = 0;
-                try (Cursor c = queryMedia(MediaStore.Files.getContentUri("external"), projection, selection, args.toArray(new String[0]), limit + 1)) {
+                Uri collection = tree == null ? MediaStore.Files.getContentUri("external") : tree.collection();
+                try (Cursor c = queryMedia(collection, projection, selection, args.toArray(new String[0]), limit + 1)) {
                     while (c != null && c.moveToNext()) {
                         if (assets.length() >= limit) { next = new JSONObject().put("modified", lastModified).put("id", lastId); break; }
                         long mediaId = c.getLong(0); boolean video = c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO; long size = c.getLong(4); long changed = c.getLong(5);
                         long taken = c.isNull(7) ? 0L : c.getLong(7);
                         long createdAt = taken > 0 ? taken : c.getLong(6) * 1000L;
+                        // The id is MediaStore's, the same one an album source
+                        // reports for the same file, so a photo that is in
+                        // both a watched folder and a chosen album is one
+                        // upload rather than two. relDir is the only thing
+                        // that differs, and only a folder source has one.
                         assets.put(new JSONObject().put("id", "media:" + (video ? "video:" : "image:") + mediaId)
                                 .put("version", changed + ":" + size).put("name", c.isNull(2) ? "media" : c.getString(2))
                                 .put("mediaType", video ? "video" : "image").put("mimeType", c.isNull(3) ? "" : c.getString(3))
                                 .put("resourceID", "media:" + (video ? "video:" : "image:") + mediaId)
+                                .put("relDir", tree == null ? "" : tree.relativeDir(c.isNull(base.length) ? "" : c.getString(base.length)))
                                 .put("size", size).put("modifiedAt", changed * 1000L).put("createdAt", createdAt).put("sourceId", sourceId));
                         lastModified = changed; lastId = mediaId;
                     }
@@ -909,6 +977,190 @@ public class MainActivity extends AppCompatActivity {
         String key() { return "media:" + (video ? "video:" : "image:") + id; } String directoryName() { return (video ? "video-" : "image-") + id; }
     }
 
+    // ---- Watched folders -------------------------------------------------
+    //
+    // A folder the user picks for backup is read through MediaStore, not
+    // through the document tree the picker returns.
+    //
+    // The Storage Access Framework would work -- its grant can even be made
+    // persistable -- but it answers with documents, and a document has no
+    // MediaStore id. The same photo reached through an album and through a
+    // picked folder would then carry two different identities, and the ledger,
+    // which dedupes on identity, would upload it twice. Converting the tree to
+    // the place it denotes and reading that place the way every other source
+    // is read keeps one photo one photo. It also leaves nothing to persist and
+    // no grant to lose: the source is a string, and the media permission the
+    // app already holds is what reads it.
+    //
+    // The cost is honest and bounded: this backs up the photos and videos
+    // MediaStore knows about, not every file in the folder, and only folders
+    // that live on the device. A folder from a cloud provider is refused where
+    // it is picked rather than accepted and quietly skipped.
+
+    /** Which column names a row's location, by what the OS offers. */
+    private static String treePathColumn() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                ? MediaStore.MediaColumns.RELATIVE_PATH : "_data";
+    }
+
+    /** Escapes a LIKE prefix so a folder named "100%" is not a wildcard. */
+    private static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    /**
+     * A folder chosen for backup: the media volume it sits on and its place on
+     * that volume. Its source id, "tree:<volume>:<path>/", is derived from the
+     * folder itself, so picking the same folder twice names the same source
+     * instead of opening a second one over the same files.
+     */
+    private static final class TreeSource {
+        final String volume;   // "external_primary", or a card's lowercased UUID
+        final String relative; // "DCIM/Camera/", always with a trailing slash
+
+        private TreeSource(String volume, String relative) { this.volume = volume; this.relative = relative; }
+
+        @Nullable
+        static TreeSource parse(String sourceId) {
+            if (sourceId == null || !sourceId.startsWith("tree:")) return null;
+            int split = sourceId.indexOf(':', 5);
+            if (split < 0) return null;
+            String volume = sourceId.substring(5, split);
+            String relative = sourceId.substring(split + 1);
+            if (volume.isEmpty() || relative.isEmpty() || !relative.endsWith("/") || relative.contains("..")) return null;
+            return new TreeSource(volume, relative);
+        }
+
+        static String sourceId(String volume, String relative) { return "tree:" + volume + ":" + relative; }
+
+        Uri collection() {
+            return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    ? MediaStore.Files.getContentUri(volume) : MediaStore.Files.getContentUri("external");
+        }
+
+        /**
+         * What the location column holds for files directly in this folder, or
+         * null when this device cannot express it -- a card before Android 10,
+         * where only the primary volume has a knowable path.
+         */
+        @Nullable
+        String pathPrefix(Context context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return relative;
+            if (!MediaStore.VOLUME_EXTERNAL_PRIMARY.equals(volume)) return null;
+            File external = android.os.Environment.getExternalStorageDirectory();
+            return external == null ? null : external.getAbsolutePath() + "/" + relative;
+        }
+
+        /**
+         * The folders between this source and one of its rows, "/" separated
+         * and empty for a file sitting directly in it. Before Android 10 the
+         * column is the file's own path, so its name comes off first.
+         */
+        String relativeDir(String located) {
+            if (located == null || located.isEmpty()) return "";
+            String directory = located;
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                int slash = directory.lastIndexOf('/');
+                directory = slash < 0 ? "" : directory.substring(0, slash + 1);
+            }
+            if (!directory.endsWith("/")) directory = directory + "/";
+            String prefix = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ? relative : null;
+            if (prefix == null) {
+                // Pre-Q absolute path: everything up to and including the
+                // source's own relative part is the prefix.
+                int at = directory.indexOf("/" + relative);
+                if (at < 0) return "";
+                directory = directory.substring(at + 1);
+                prefix = relative;
+            }
+            if (!directory.startsWith(prefix)) return "";
+            String rest = directory.substring(prefix.length());
+            while (rest.endsWith("/")) rest = rest.substring(0, rest.length() - 1);
+            return rest;
+        }
+    }
+
+    /**
+     * Ask for a folder to back up, and answer with the source it becomes:
+     * {"id","name","root","kind"}, or "" when the picker was dismissed.
+     *
+     * Deliberately not launchFolderPicker: that one holds a single document
+     * tree for the import flow and releases the previous grant every time it
+     * runs, so sharing it would revoke a folder import in mid-upload. Nothing
+     * is held here at all -- the chosen tree is converted to a place and let
+     * go of before this returns.
+     */
+    public void pickPhotoBackupFolder(String callbackId) {
+        synchronized (this) {
+            if (pendingPhotoBackupFolderCallbackId != null) {
+                jsBridge.sendCallback(callbackId, null, "a folder picker is already open");
+                return;
+            }
+            pendingPhotoBackupFolderCallbackId = callbackId;
+        }
+        try {
+            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PHOTO_BACKUP_FOLDER_REQUEST);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to launch the backup folder picker", e);
+            pendingPhotoBackupFolderCallbackId = null;
+            jsBridge.sendCallback(callbackId, null, "no folder picker on this device");
+        }
+    }
+
+    private void handlePhotoBackupFolderResult(int resultCode, @Nullable Intent data) {
+        String callbackId;
+        synchronized (this) { callbackId = pendingPhotoBackupFolderCallbackId; pendingPhotoBackupFolderCallbackId = null; }
+        if (callbackId == null) return;
+        Uri tree = resultCode == RESULT_OK && data != null ? data.getData() : null;
+        if (tree == null) { jsBridge.sendCallback(callbackId, "", null); return; }
+        try {
+            jsBridge.sendCallback(callbackId, describePickedBackupFolder(tree).toString(), null);
+        } catch (IOException e) {
+            jsBridge.sendCallback(callbackId, null, e.getMessage());
+        } catch (Exception e) {
+            Log.e(TAG, "Could not use the chosen backup folder", e);
+            jsBridge.sendCallback(callbackId, null, "could not use that folder");
+        }
+    }
+
+    /**
+     * Turns a picked document tree into a backup source, or explains why it
+     * cannot be one. Only the device's own storage provider denotes a place
+     * MediaStore indexes; a tree from Drive or another app is a set of
+     * documents that exist nowhere on this device.
+     */
+    private JSONObject describePickedBackupFolder(Uri tree) throws IOException, JSONException {
+        if (!"com.android.externalstorage.documents".equals(tree.getAuthority())) {
+            throw new IOException("TDrive backs up folders stored on this device. Choose one in internal storage or on the SD card.");
+        }
+        String docId = DocumentsContract.getTreeDocumentId(tree);
+        int split = docId == null ? -1 : docId.indexOf(':');
+        if (split < 0) throw new IOException("could not read that folder");
+        String root = docId.substring(0, split);
+        String path = docId.substring(split + 1);
+        while (path.startsWith("/")) path = path.substring(1);
+        while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
+        if (path.isEmpty()) {
+            throw new IOException("Choose a folder inside your storage, or use All photos and videos.");
+        }
+        String volume = "primary".equals(root)
+                ? MediaStore.VOLUME_EXTERNAL_PRIMARY : root.toLowerCase(Locale.US);
+        TreeSource source = new TreeSource(volume, path + "/");
+        if (source.pathPrefix(this) == null) {
+            throw new IOException("This version of Android can only back up folders in internal storage.");
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                && !MediaStore.getExternalVolumeNames(this).contains(volume)) {
+            throw new IOException("That storage is not available. Reinsert the card and try again.");
+        }
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        return new JSONObject()
+                .put("id", TreeSource.sourceId(volume, source.relative))
+                .put("root", volume + ":" + source.relative)
+                .put("name", name)
+                .put("kind", "device-folder");
+    }
+
     public void launchFolderPicker(String callbackId) {
         synchronized (this) {
             if (pendingFolderCallbackId != null) {
@@ -966,6 +1218,10 @@ public class MainActivity extends AppCompatActivity {
         }
         if (requestCode == FOLDER_PICKER_REQUEST) {
             handleFolderPickerResult(resultCode, data);
+            return;
+        }
+        if (requestCode == PHOTO_BACKUP_FOLDER_REQUEST) {
+            handlePhotoBackupFolderResult(resultCode, data);
             return;
         }
         if (requestCode != FILE_PICKER_REQUEST) {

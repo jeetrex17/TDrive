@@ -3,6 +3,9 @@ import type { PhotoBackupAsset, PhotoBackupSource } from '../../api/photo-backup
 import { asRecord, boundedText, nonNegativeNumber } from '../../api/shared';
 
 export interface NativeAssetPage { assets: PhotoBackupAsset[]; nextCursor: string; }
+/** What the host knows about the media grant, for the one line the panel shows. */
+export interface NativeAccess { status: string; detail: string; }
+export interface NativeSourceListing { sources: PhotoBackupSource[]; access: NativeAccess; }
 export interface NativeMaterializedResource { path: string; releaseID: string; }
 interface IOSPhotosBridge { listPhotoBackupSources?: () => unknown; listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; setBackgroundBackup?: (active: boolean) => unknown; }
 function iosBridge(): IOSPhotosBridge | null { return typeof window !== 'undefined' ? (window as Window & { tdriveIOSPhotos?: IOSPhotosBridge }).tdriveIOSPhotos ?? null : null; }
@@ -25,7 +28,7 @@ const PAGE_LIMIT = 128;
 function toAssetPage(raw: Record<string, unknown>): NativeAssetPage {
     const assets = Array.isArray(raw.assets) ? raw.assets.map((value): PhotoBackupAsset | null => {
         const asset = asRecord(value); const id = boundedText(asset.id, 512); const version = boundedText(asset.version, 256); const rawType = asset.media_type ?? asset.mediaType; const mediaType = rawType === 'video' ? 'video' : rawType === 'photo' || rawType === 'image' ? 'photo' : null;
-        return id && version && mediaType ? { id, version, name: boundedText(asset.name, 512) || 'Untitled', mediaType, modifiedAt: nonNegativeNumber(asset.modified_at ?? asset.modifiedAt), createdAt: nonNegativeNumber(asset.created_at ?? asset.createdAt), size: nonNegativeNumber(asset.size), resourceId: boundedText(asset.resource_id ?? asset.resourceID, 512) || undefined } : null;
+        return id && version && mediaType ? { id, version, name: boundedText(asset.name, 512) || 'Untitled', mediaType, modifiedAt: nonNegativeNumber(asset.modified_at ?? asset.modifiedAt), createdAt: nonNegativeNumber(asset.created_at ?? asset.createdAt), size: nonNegativeNumber(asset.size), resourceId: boundedText(asset.resource_id ?? asset.resourceID, 512) || undefined, relDir: boundedText(asset.rel_dir ?? asset.relDir, 1024) || undefined } : null;
     }).filter((asset): asset is PhotoBackupAsset => asset !== null) : [];
     const next = raw.nextCursor ?? raw.next_cursor;
     return { assets, nextCursor: typeof next === 'string' ? boundedText(next, 1024) : next && typeof next === 'object' ? JSON.stringify(next) : '' };
@@ -105,10 +108,32 @@ export async function releaseNativePhotoBackupAsset(releaseID: string): Promise<
     await callBridge('releasePhotoBackupAsset', [JSON.stringify({ id: releaseID })], '');
 }
 
-export async function listNativePhotoBackupSources(): Promise<PhotoBackupSource[]> {
+export async function listNativePhotoBackupSources(): Promise<NativeSourceListing> {
     const ios = iosBridge();
-    if (!hasBridgeMethod('listPhotoBackupSources') && !ios?.listPhotoBackupSources) return [];
+    if (!hasBridgeMethod('listPhotoBackupSources') && !ios?.listPhotoBackupSources) return { sources: [], access: { status: '', detail: '' } };
     const raw = ios?.listPhotoBackupSources ? await nativeCall(ios.listPhotoBackupSources()) : parse(await callBridge('listPhotoBackupSources', [], 'Photo library access is unavailable.'));
     const entries = Array.isArray(raw.sources) ? raw.sources : [];
-    return entries.map((value): PhotoBackupSource | null => { const source = asRecord(value); const id = boundedText(source.id, 512); const root = boundedText(source.root, 1024); return id && root ? { id, kind: boundedText(source.kind, 64), name: boundedText(source.name, 240) || 'Photo library', root, enabled: source.enabled !== false, addedAt: nonNegativeNumber(source.added_at) } : null; }).filter((source): source is PhotoBackupSource => source !== null);
+    const sources = entries.map((value): PhotoBackupSource | null => { const source = asRecord(value); const id = boundedText(source.id, 512); const root = boundedText(source.root, 1024); return id && root ? { id, kind: boundedText(source.kind, 64), name: boundedText(source.name, 240) || 'Photo library', root, enabled: source.enabled !== false, addedAt: nonNegativeNumber(source.added_at) } : null; }).filter((source): source is PhotoBackupSource => source !== null);
+    // The grant is only knowable here. The backend cannot see an Android
+    // permission, so the panel's access line is carried from the same call that
+    // produced the (possibly very short) list it explains.
+    const access = asRecord(raw.access);
+    return { sources, access: { status: boundedText(access.status, 64), detail: boundedText(access.detail, 240) } };
+}
+
+/** Whether this host can be asked for a folder to back up. */
+export function nativePhotoBackupFolderPicking(): boolean { return hasBridgeMethod('pickPhotoBackupFolder'); }
+
+/**
+ * Opens the system folder picker and resolves with the source the chosen
+ * folder becomes, or null when it was dismissed. The host refuses a folder it
+ * cannot read later -- one from a cloud provider, or on storage that is gone --
+ * and rejects with its own words, which are written for the user.
+ */
+export async function pickNativePhotoBackupFolder(): Promise<PhotoBackupSource | null> {
+    const raw = parse(await callBridge('pickPhotoBackupFolder', [], 'This build cannot open a folder picker.'));
+    const id = boundedText(raw.id, 512);
+    const root = boundedText(raw.root, 1024);
+    if (!id || !root) return null;
+    return { id, kind: boundedText(raw.kind, 64) || 'device-folder', name: boundedText(raw.name, 240) || 'Folder', root, enabled: true, addedAt: 0 };
 }

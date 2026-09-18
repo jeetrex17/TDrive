@@ -11,5 +11,6 @@
 -keep class com.wails.app.WailsBridge { *; }
 -keep class com.wails.app.WailsJSBridge { *; }
 
-# Native Go workers resolve this sampled decoder by class and method name.
+# Native Go workers resolve these decoders by class and method name.
 -keep class com.wails.app.GalleryImage { *; }
+-keep class com.wails.app.GalleryVideo { *; }

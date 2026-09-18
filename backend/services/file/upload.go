@@ -312,7 +312,7 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 	// avoiding the duplicate start event that used to be emitted at two layers.
 	observer.Started(uploadID, filename, uploadByteSize(plaintextSize, wantEncrypted), parentID)
 	slog.Debug("file: uploading", "channel_id", channelID, "name", filename, "size", plaintextSize, "encrypt", wantEncrypted, "parent_id", parentID)
-	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, source, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer)
+	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, source, filePath, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer)
 	if err != nil {
 		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
 	} else {
@@ -331,7 +331,7 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 // uploadVisibleSource is the compatibility path used by the existing GUI/CLI
 // uploader. Keeping the source boundary seekable lets staged-file callers use
 // the same single/multipart planning without coupling the core to local paths.
-func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver) (Metadata, projection.Op, string, error) {
+func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, sourcePath, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver) (Metadata, projection.Op, string, error) {
 	if err := validateSeekableSize(source, plaintextSize); err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
@@ -433,10 +433,24 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 	}
 	var documentThumb []byte
 	thumbSender, canAttachThumb := s.TG.(tgclient.DocumentThumbnailSender)
-	if !encrypted && idempotentSend && canAttachThumb && thumbnail.IsImage(filename) {
+	if !encrypted && idempotentSend && canAttachThumb {
 		// Telegram's separate document thumbnail is bounded to 320px. Native
 		// sampled decoding shares the global generation admission policy.
-		documentThumb, _ = thumbnail.GenerateLocal(ctx, source, 320)
+		switch {
+		case thumbnail.IsImage(filename):
+			documentThumb, _ = thumbnail.GenerateLocal(ctx, source, 320)
+		case thumbnail.IsVideo(filename) && sourcePath != "":
+			// A poster comes from the path rather than the reader, because the
+			// decoder behind it is a separate process. It is drawn before any
+			// body bytes leave, so the window in which the file could be
+			// swapped underneath it is as small as it can be -- and the cost of
+			// losing that race is the wrong picture, never the wrong file.
+			//
+			// A failure here is ordinary: plenty of videos have no decodable
+			// frame, and one without a poster is published exactly as it was
+			// before posters existed.
+			documentThumb, _ = thumbnail.GenerateVideoPoster(ctx, sourcePath, 320)
+		}
 		if len(documentThumb) > 200*1024 {
 			documentThumb = nil
 		}

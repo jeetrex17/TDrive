@@ -38,7 +38,7 @@ func Open(db *sql.DB, options Options) (*Engine, error) {
 // schemaVersion is what PRAGMA user_version reads on a current ledger. Bump it
 // with a new entry in migrationSteps; never edit an existing step, because a
 // database in the wild may be sitting on any of the earlier versions.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // migrationSteps upgrades one version at a time. from is the version a step
 // starts at, so a ledger at any earlier release replays every later step in
@@ -53,6 +53,7 @@ var migrationSteps = []struct {
 	{3, "capture time", `ALTER TABLE photo_backup_jobs ADD COLUMN captured_at INTEGER NOT NULL DEFAULT 0`},
 	{4, "receipt cursor", `ALTER TABLE photo_backup_settings ADD COLUMN receipt_cursor INTEGER NOT NULL DEFAULT 0`},
 	{4, "receipt index", receiptIndexDDL},
+	{5, "source relative dir", `ALTER TABLE photo_backup_jobs ADD COLUMN rel_dir TEXT NOT NULL DEFAULT ''`},
 }
 
 // receiptIndexDDL covers the receipt walk end to end: the partial predicate
@@ -98,7 +99,7 @@ func (e *Engine) Migrate(ctx context.Context) error {
 func (e *Engine) createSchema(ctx context.Context) error {
 	_, err := e.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS photo_backup_settings(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,enabled INTEGER NOT NULL,photos INTEGER NOT NULL,videos INTEGER NOT NULL,future_only INTEGER NOT NULL,wifi_only INTEGER NOT NULL,destination_parent_id TEXT NOT NULL,encrypt INTEGER NOT NULL,manual_paused INTEGER NOT NULL DEFAULT 0,receipt_cursor INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,drive_id));
 CREATE TABLE IF NOT EXISTS photo_backup_sources(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,kind TEXT NOT NULL,root TEXT NOT NULL,name TEXT NOT NULL,enabled INTEGER NOT NULL,added_at INTEGER NOT NULL,scan_cursor TEXT NOT NULL DEFAULT '',scan_complete INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,drive_id,source_id));
-CREATE TABLE IF NOT EXISTS photo_backup_jobs(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,asset_id TEXT NOT NULL,version TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,media_type TEXT NOT NULL,resource_id TEXT NOT NULL DEFAULT '',modified_at INTEGER NOT NULL,captured_at INTEGER NOT NULL DEFAULT 0,size INTEGER NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',remote_message_id INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id,source_id,asset_id,version,resource_id));
+CREATE TABLE IF NOT EXISTS photo_backup_jobs(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,asset_id TEXT NOT NULL,version TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,media_type TEXT NOT NULL,resource_id TEXT NOT NULL DEFAULT '',modified_at INTEGER NOT NULL,captured_at INTEGER NOT NULL DEFAULT 0,rel_dir TEXT NOT NULL DEFAULT '',size INTEGER NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',remote_message_id INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id,source_id,asset_id,version,resource_id));
 CREATE INDEX IF NOT EXISTS photo_backup_jobs_ready ON photo_backup_jobs(account_id,drive_id,status,next_attempt_at,created_at);
 CREATE TABLE IF NOT EXISTS photo_backup_counts(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,status TEXT NOT NULL,count INTEGER NOT NULL CHECK(count>=0),PRIMARY KEY(account_id,drive_id,status));
 INSERT INTO photo_backup_counts(account_id,drive_id,status,count) SELECT account_id,drive_id,status,COUNT(*) FROM photo_backup_jobs GROUP BY account_id,drive_id,status ON CONFLICT(account_id,drive_id,status) DO NOTHING;
@@ -326,7 +327,7 @@ func (e *Engine) EnqueuePage(ctx context.Context, scope Scope, sourceID string, 
 		if _, err := tx.ExecContext(ctx, `DELETE FROM photo_backup_jobs WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND resource_id=? AND version<>? AND status IN (?,?)`, scope.AccountID, scope.DriveID, sourceID, a.ID, a.ResourceID, a.Version, Pending, Error); err != nil {
 			return 0, err
 		}
-		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO photo_backup_jobs(account_id,drive_id,source_id,asset_id,version,path,name,media_type,resource_id,modified_at,captured_at,size,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, scope.AccountID, scope.DriveID, sourceID, a.ID, a.Version, a.Path, a.Name, a.MediaType, a.ResourceID, a.ModifiedAt.UnixNano(), unixNanoOrZero(a.CapturedAt), a.Size, Pending, now, now)
+		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO photo_backup_jobs(account_id,drive_id,source_id,asset_id,version,path,name,media_type,resource_id,modified_at,captured_at,rel_dir,size,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, scope.AccountID, scope.DriveID, sourceID, a.ID, a.Version, a.Path, a.Name, a.MediaType, a.ResourceID, a.ModifiedAt.UnixNano(), unixNanoOrZero(a.CapturedAt), a.RelDir, a.Size, Pending, now, now)
 		if err != nil {
 			return 0, err
 		}
@@ -482,7 +483,7 @@ func (e *Engine) RunOnce(ctx context.Context, scope Scope, upload Uploader) (int
 		slog.Debug("photobackup: run refused", "drive_id", scope.DriveID, "reason", refusalReason(settings))
 		return 0, nil
 	}
-	rows, err := e.db.QueryContext(ctx, `SELECT j.source_id,j.asset_id,j.version,j.path,j.name,j.media_type,j.resource_id,j.modified_at,j.captured_at,j.size,j.attempts,s.kind,s.root,s.name,s.enabled,s.added_at FROM photo_backup_jobs j JOIN photo_backup_sources s USING(account_id,drive_id,source_id) WHERE j.account_id=? AND j.drive_id=? AND s.enabled=1 AND j.status IN (?,?) AND j.next_attempt_at<=? AND ((j.media_type='photo' AND ?) OR (j.media_type='video' AND ?)) ORDER BY j.created_at LIMIT 1`, scope.AccountID, scope.DriveID, Pending, Error, e.options.Now().UnixNano(), settings.Photos, settings.Videos)
+	rows, err := e.db.QueryContext(ctx, `SELECT j.source_id,j.asset_id,j.version,j.path,j.name,j.media_type,j.resource_id,j.modified_at,j.captured_at,j.rel_dir,j.size,j.attempts,s.kind,s.root,s.name,s.enabled,s.added_at FROM photo_backup_jobs j JOIN photo_backup_sources s USING(account_id,drive_id,source_id) WHERE j.account_id=? AND j.drive_id=? AND s.enabled=1 AND j.status IN (?,?) AND j.next_attempt_at<=? AND ((j.media_type='photo' AND ?) OR (j.media_type='video' AND ?)) ORDER BY j.created_at LIMIT 1`, scope.AccountID, scope.DriveID, Pending, Error, e.options.Now().UnixNano(), settings.Photos, settings.Videos)
 	if err != nil {
 		return 0, err
 	}
@@ -496,7 +497,7 @@ func (e *Engine) RunOnce(ctx context.Context, scope Scope, upload Uploader) (int
 		var x item
 		var mt, captured, added int64
 		x.source.Scope = scope
-		if err := rows.Scan(&x.source.ID, &x.asset.ID, &x.asset.Version, &x.asset.Path, &x.asset.Name, &x.asset.MediaType, &x.asset.ResourceID, &mt, &captured, &x.asset.Size, &x.attempts, &x.source.Kind, &x.source.Root, &x.source.Name, &x.source.Enabled, &added); err != nil {
+		if err := rows.Scan(&x.source.ID, &x.asset.ID, &x.asset.Version, &x.asset.Path, &x.asset.Name, &x.asset.MediaType, &x.asset.ResourceID, &mt, &captured, &x.asset.RelDir, &x.asset.Size, &x.attempts, &x.source.Kind, &x.source.Root, &x.source.Name, &x.source.Enabled, &added); err != nil {
 			rows.Close()
 			return 0, err
 		}

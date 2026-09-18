@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     getState: vi.fn(),
     enqueue: vi.fn(), run: vi.fn(), pause: vi.fn(), resume: vi.fn(), retry: vi.fn(), policy: vi.fn(), unlock: vi.fn(), prompt: vi.fn(),
     list: vi.fn(), materialize: vi.fn(), release: vi.fn(),
+    upsert: vi.fn(), pickFolder: vi.fn(), addFolder: vi.fn(), sources: vi.fn(), requestAccess: vi.fn(),
 }));
 
 const ok: OperationResult = { ok: true };
@@ -28,13 +29,14 @@ vi.mock('../../api/photo-backup', () => ({
     pausePhotoBackup: mocks.pause,
     resumePhotoBackup: mocks.resume,
     setPhotoBackupPolicy: mocks.policy,
-    savePhotoBackupSettings: vi.fn(), addPhotoBackupFolder: vi.fn(), removePhotoBackupSource: vi.fn(), retryPhotoBackup: mocks.retry, resolvePhotoBackupResource: vi.fn(), upsertPhotoBackupSource: vi.fn(),
+    savePhotoBackupSettings: vi.fn(), addPhotoBackupFolder: mocks.addFolder, removePhotoBackupSource: vi.fn(), retryPhotoBackup: mocks.retry, resolvePhotoBackupResource: vi.fn(), upsertPhotoBackupSource: mocks.upsert,
 }));
 vi.mock('../../api/runtime', () => ({ runtimeEventsAvailable: () => true, onRuntimeEvent: (name: string, cb: (payload: unknown) => void) => { mocks.events.set(name, cb); return () => mocks.events.delete(name); } }));
 vi.mock('./native-adapter', () => ({
     nativePhotoBackupAvailable: () => true,
     nativePhotoBackupPolicy: () => Promise.resolve(true),
-    requestNativePhotoBackupAccess: vi.fn(), listNativePhotoBackupSources: vi.fn(),
+    requestNativePhotoBackupAccess: mocks.requestAccess, listNativePhotoBackupSources: mocks.sources,
+    nativePhotoBackupFolderPicking: () => true, pickNativePhotoBackupFolder: mocks.pickFolder,
     listNativePhotoBackupAssets: mocks.list, materializeNativePhotoBackupAsset: mocks.materialize, releaseNativePhotoBackupAsset: mocks.release,
 }));
 vi.mock('../encryption', () => ({ requireEncryptionPassword: mocks.unlock }));
@@ -53,7 +55,7 @@ vi.mock('../modals/encryption-password', () => ({
 }));
 vi.mock('../errors', () => ({ humanizeBackendError: (error: unknown) => String((error as { message?: string })?.message ?? '') }));
 
-import { activatePhotoBackup, pausePhotoBackupNow, photoBackupError, photoBackupState, refreshPhotoBackup, resumePhotoBackupNow, retryPhotoBackupNow, startPhotoBackup } from './controller';
+import { activatePhotoBackup, choosePhotoBackupFolder, loadPhotoBackupCandidates, pausePhotoBackupNow, photoBackupAccessNote, photoBackupCandidates, photoBackupError, photoBackupState, refreshPhotoBackup, resumePhotoBackupNow, retryPhotoBackupNow, startPhotoBackup } from './controller';
 import { activeTransfers } from '../../ui/notifications/notif-store';
 import { sidebarState } from '../../ui/sidebar/sidebar-store';
 
@@ -226,6 +228,38 @@ describe('photo backup controller scheduler', () => {
         expect(get(activeTransfers)[0].items).toMatchObject([{ name: 'current.jpg', progress: 50 }]);
         resolveOld(old); await flush();
         expect(get(activeTransfers)[0].items).toMatchObject([{ name: 'current.jpg', progress: 50 }]);
+    });
+
+    it('adds a folder the host picked, and says nothing when the picker was dismissed', async () => {
+        mocks.pickFolder.mockReset().mockResolvedValueOnce({ id: 'tree:external_primary:DCIM/Camera/', kind: 'device-folder', name: 'Camera', root: 'external_primary:DCIM/Camera/', enabled: true, addedAt: 0 });
+        mocks.upsert.mockReset().mockResolvedValue(undefined);
+        await choosePhotoBackupFolder();
+        expect(mocks.upsert).toHaveBeenCalledWith(expect.objectContaining({ id: 'tree:external_primary:DCIM/Camera/', kind: 'device-folder' }));
+        // A phone never reaches the backend's own dialog.
+        expect(mocks.addFolder).not.toHaveBeenCalled();
+        mocks.upsert.mockClear();
+        mocks.pickFolder.mockResolvedValueOnce(null);
+        await choosePhotoBackupFolder();
+        expect(mocks.upsert).not.toHaveBeenCalled();
+        expect(get(photoBackupError)).toBe('');
+    });
+
+    it('shows the host refusal for a folder it cannot read, without its log prefix', async () => {
+        mocks.pickFolder.mockReset().mockRejectedValueOnce(new Error('photo backup: "Camera" is already covered by "DCIM".'));
+        await choosePhotoBackupFolder();
+        expect(get(photoBackupError)).toBe('"Camera" is already covered by "DCIM".');
+    });
+
+    it('explains a partial grant next to the short list it produced', async () => {
+        mocks.requestAccess.mockReset().mockResolvedValue(undefined);
+        mocks.sources.mockReset().mockResolvedValue({ sources: [{ id: 'all', kind: 'library', name: 'All photos and videos', root: 'content://media', enabled: true, addedAt: 0 }], access: { status: 'limited', detail: 'TDrive can only see the photos you picked.' } });
+        await loadPhotoBackupCandidates();
+        expect(get(photoBackupCandidates)).toHaveLength(1);
+        expect(get(photoBackupAccessNote)).toBe('TDrive can only see the photos you picked.');
+        // Full access is the expected case and says nothing.
+        mocks.sources.mockResolvedValue({ sources: [], access: { status: 'granted', detail: 'full media access' } });
+        await loadPhotoBackupCandidates();
+        expect(get(photoBackupAccessNote)).toBe('');
     });
 
     it('does not restore a backup activity when a refresh resolves after disposal', async () => {
