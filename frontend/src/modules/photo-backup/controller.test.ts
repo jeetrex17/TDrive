@@ -221,9 +221,11 @@ describe('photo backup controller scheduler', () => {
         sidebarState.set({ personal: [{ id: 9, title: 'Current', kind: 'personal' } as never], shared: [], pending: [], activeChannelId: 9, photosActive: false });
         stop = activatePhotoBackup();
         await flush();
-        expect(get(activeTransfers)[0]).toMatchObject({ name: 'Backing up current.jpg', progress: 50 });
+        // The row names the run; the file it is on is the one listed under it,
+        // so that is where a stale reply would show up.
+        expect(get(activeTransfers)[0].items).toMatchObject([{ name: 'current.jpg', progress: 50 }]);
         resolveOld(old); await flush();
-        expect(get(activeTransfers)[0]).toMatchObject({ name: 'Backing up current.jpg', progress: 50 });
+        expect(get(activeTransfers)[0].items).toMatchObject([{ name: 'current.jpg', progress: 50 }]);
     });
 
     it('does not restore a backup activity when a refresh resolves after disposal', async () => {

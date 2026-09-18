@@ -4,6 +4,7 @@
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
     import Share2Icon from '@lucide/svelte/icons/share-2';
     import XIcon from '@lucide/svelte/icons/x';
+    import TransferItems from '../notifications/TransferItems.svelte';
     import type { TransferEvent } from '../notifications/notif-store';
     import {
         isMoving,
@@ -36,15 +37,18 @@
         onRetry?: () => void;
         /** Reopens the share sheet for a finished download that kept its path. */
         onShare?: () => void;
+        /** Stops one file listed under an aggregate row. */
+        onCancelFile?: (key: string) => void;
     }
 
-    let { transfer, onCancel, onRetry, onShare }: Props = $props();
+    let { transfer, onCancel, onRetry, onShare, onCancelFile }: Props = $props();
 
     const phase = $derived(transferPhase(transfer));
     const percent = $derived(transferPercent(transfer));
     const detail = $derived(transferDetail(transfer));
     const label = $derived(transferAriaLabel(transfer));
     const showBar = $derived(isMoving(phase));
+    const items = $derived(showBar ? transfer.items ?? [] : []);
 
     // One control per row at most. Stopping outranks the rest because it is the
     // only one that acts on work still in flight; the other two are offers about
@@ -98,7 +102,13 @@
         </div>
     {/if}
 
-    <div class="detail">{detail}{#if transfer.id === 'xfer:up:photo-backup' && phase === 'running' && percent !== null} · {Math.round(percent)}%{/if}</div>
+    <div class="detail">{detail}</div>
+
+    {#if items.length > 0}
+        <div class="items">
+            <TransferItems {items} active={transfer.itemsActive ?? items.length} onCancel={onCancelFile} />
+        </div>
+    {/if}
 
     {#if transfer.note}
         <!-- Where a phone download landed. Its own line because it is a place,
@@ -195,6 +205,23 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    /* The files in flight, under the line that sums them up. The type scale and
+       the thumb-sized stop control are set here, on the phone's terms; the list
+       itself is shared with the desktop row. */
+    .items {
+        grid-column: 2 / -1;
+        min-width: 0;
+        --transfer-item-name-size: var(--mobile-type-meta);
+        --transfer-item-meta-size: var(--mobile-type-caption);
+        --transfer-item-gap: 4px;
+        /* A thumb-sized target every 33px is a target for the wrong file, so the
+           files are spaced by the control rather than by the text. */
+        --transfer-item-stop-size: 44px;
+        --transfer-item-stop-inset: -12px;
+        --transfer-item-min-height: 44px;
+        margin-top: 1px;
     }
 
     .note {

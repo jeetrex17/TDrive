@@ -201,8 +201,17 @@ public class WailsJSBridge {
      *
      * Called from JavaScript: wails.foregroundService(callbackId, json) with
      * json {"running":true,"title":"Uploading 3 files","text":"2 min left",
-     * "progress":42}, or {"running":false} to let the process be killable
-     * again. Progress is a percentage, or negative where nothing is known yet.
+     * "progress":42,"detail":"IMG_0042.HEIC","filesDone":3,"filesTotal":12},
+     * or {"running":false} to let the process be killable again. Progress is a
+     * percentage, or negative where nothing is known yet.
+     *
+     * {"running":false,"outcome":"complete","title":"...","text":"..."} also
+     * leaves a dismissible line behind saying how the work ended; "stopped" is
+     * the same thing for work that did not finish. Every key past "running" is
+     * optional and read with a default, so a page that sends a field this host
+     * has never heard of is not an error and a host that predates a field
+     * behaves exactly as it did before the field existed. That is the whole
+     * extension mechanism: the payload grows, the method never does.
      *
      * Sending the same shape for the first call and every update is deliberate:
      * whether the service is already up is Android's business, not the page's,
@@ -210,14 +219,17 @@ public class WailsJSBridge {
      * notification is replaced. One method, one state machine, no way for the
      * two sides to disagree about what is running.
      *
-     * This deliberately does not ask for POST_NOTIFICATIONS. The service runs
-     * and the process survives whether or not the notification is visible --
-     * and where it is denied, Android still lists the app under the Task
+     * This deliberately does not ask for POST_NOTIFICATIONS here. The service
+     * runs and the process survives whether or not the notification is visible
+     * -- and where it is denied, Android still lists the app under the Task
      * Manager's running apps. A permission dialog thrown up the instant someone
      * taps Upload is the kind that gets dismissed, and on Android 13+ a second
-     * dismissal is permanent, so the one good chance to ask is not here. Once
-     * it is granted the notification simply appears, because every coalesced
-     * update re-posts it.
+     * dismissal is permanent, so the one good chance to ask is not here. It is
+     * the next time the user comes back to the app, having just had a transfer
+     * run behind their back with nothing to show for it; the activity owns that
+     * moment, and all this does is tell it the moment has been earned. Once the
+     * permission is granted the notification simply appears, because every
+     * coalesced update re-posts it.
      */
     @JavascriptInterface
     public void foregroundService(final String callbackId, final String json) {
@@ -229,6 +241,16 @@ public class WailsJSBridge {
         try {
             JSONObject options = new JSONObject(json);
             if (!options.optBoolean("running", false)) {
+                String outcome = options.optString("outcome", "");
+                // Posted before the service goes, so the summary is already in
+                // the shade as the ongoing row leaves it, rather than after a
+                // gap in which the user is told nothing at all.
+                if (!outcome.isEmpty()) {
+                    WailsForegroundService.postSummary(activity,
+                            options.optString("title", "Transfers finished"),
+                            options.optString("text", ""),
+                            !"complete".equals(outcome));
+                }
                 activity.stopService(new Intent(activity, WailsForegroundService.class));
                 sendCallback(callbackId, "", null);
                 return;
@@ -237,8 +259,12 @@ public class WailsJSBridge {
                     .setAction(WailsForegroundService.ACTION_START)
                     .putExtra(WailsForegroundService.EXTRA_TITLE, options.optString("title", "Transferring files"))
                     .putExtra(WailsForegroundService.EXTRA_TEXT, options.optString("text", ""))
-                    .putExtra(WailsForegroundService.EXTRA_PROGRESS, options.optInt("progress", -1));
+                    .putExtra(WailsForegroundService.EXTRA_PROGRESS, options.optInt("progress", -1))
+                    .putExtra(WailsForegroundService.EXTRA_DETAIL, options.optString("detail", ""))
+                    .putExtra(WailsForegroundService.EXTRA_FILES_DONE, options.optInt("filesDone", 0))
+                    .putExtra(WailsForegroundService.EXTRA_FILES_TOTAL, options.optInt("filesTotal", 0));
             ContextCompat.startForegroundService(activity, intent);
+            activity.noteBackgroundTransferRunning();
             sendCallback(callbackId, "", null);
         } catch (Exception e) {
             // Android 12+ throws ForegroundServiceStartNotAllowedException when

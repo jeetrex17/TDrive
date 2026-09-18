@@ -13,18 +13,27 @@ import { get } from 'svelte/store';
 import { state } from '../state';
 import { cancelDownload, cancelUpload, cancelUploadById } from '../api';
 import { clearDownloadSharePaths, forgetDownloadSharePath } from '../ui/mobile/mobile-shell-store';
+import { boundedText } from '../api/shared';
 import {
     HISTORY_CAP,
     historyEvents,
     isUnfinishedTransfer,
+    MAX_TRANSFER_ITEMS,
     notifPanelOpen,
     notifUnreadErrors,
     type HistoryEvent,
     type NoticeEvent,
     type TransferDirection,
     type TransferEvent,
+    type TransferItem,
     type TransferStatus,
 } from '../ui/notifications/notif-store';
+
+/**
+ * Longest filename a row keeps. Names are user data on their way to the DOM,
+ * and a row that clips at its own width has nothing to gain from more.
+ */
+const MAX_TRANSFER_ITEM_NAME = 120;
 
 
 // Per-transfer speed sampling. Progress events arrive far more often than the
@@ -139,6 +148,8 @@ export function updateTransferProgress({
     total: exactTotal,
     itemsDone,
     itemsTotal,
+    items,
+    itemsActive,
 }: {
     id: string | number;
     direction: TransferDirection;
@@ -147,6 +158,8 @@ export function updateTransferProgress({
     total?: number;
     itemsDone?: number;
     itemsTotal?: number;
+    items?: readonly TransferItem[];
+    itemsActive?: number;
 }) {
     const key = transferKey(direction, id);
     const entry = findUnfinishedTransfer(key);
@@ -166,7 +179,10 @@ export function updateTransferProgress({
     } else if (total > 0) {
         bytes = Math.max(entry.bytes, (value / 100) * total);
     }
-    if (total > 0) {
+    // Sampled off the byte count, which an aggregate has even when it has no
+    // total to compare it against: "how fast" and "how far" are separate
+    // questions, and a batch can answer the first long before the second.
+    if (total > 0 || bytes > 0) {
         const now = Date.now();
         const prev = speedSamples.get(key);
         if (prev && now > prev.at) {
@@ -190,18 +206,57 @@ export function updateTransferProgress({
     // moment the app returns would instead promise that a connection dropped an
     // hour ago is still good.
     const status: TransferStatus = entry.status === 'paused' ? 'active' : entry.status;
+    const nextItems = items === undefined ? entry.items : boundTransferItems(items);
+    const nextItemsActive = Number.isFinite(Number(itemsActive))
+        ? Math.max(0, Math.floor(Number(itemsActive)))
+        : entry.itemsActive;
     const unchanged = status === entry.status
         && Math.round(entry.progress) === Math.round(value)
         && entry.total === total
         && entry.bytes === bytes
         && entry.itemsDone === nextItemsDone
-        && entry.itemsTotal === nextItemsTotal;
+        && entry.itemsTotal === nextItemsTotal
+        && entry.itemsActive === nextItemsActive
+        && sameTransferItems(entry.items, nextItems);
     if (unchanged) return; // skip render noise
     historyEvents.update((events) =>
         events.map((e) => (e.id === key && e.kind === 'transfer'
-            ? { ...e, status, progress: value, bytes, total, speed, itemsDone: nextItemsDone, itemsTotal: nextItemsTotal }
+            ? {
+                ...e, status, progress: value, bytes, total, speed,
+                itemsDone: nextItemsDone, itemsTotal: nextItemsTotal,
+                items: nextItems, itemsActive: nextItemsActive,
+            }
             : e)),
     );
+}
+
+/**
+ * The list a row is allowed to draw: at most MAX_TRANSFER_ITEMS files, each
+ * with a name short enough to render and figures that cannot be read as a
+ * transfer moving backwards. Every producer goes through here, so no caller can
+ * hand the DOM an unbounded name or the store an unbounded list.
+ */
+function boundTransferItems(items: readonly TransferItem[]): readonly TransferItem[] {
+    return items.slice(0, MAX_TRANSFER_ITEMS).map((item) => ({
+        key: boundedText(item.key, 64),
+        name: boundedText(item.name, MAX_TRANSFER_ITEM_NAME),
+        progress: Math.max(0, Math.min(100, Number(item.progress) || 0)),
+        total: Math.max(0, Number(item.total) || 0),
+    }));
+}
+
+/**
+ * Whether a redraw would show the same thing. Compared at the precision the row
+ * renders -- whole percent -- because progress events arrive many times per
+ * point and each store write wakes every subscriber.
+ */
+function sameTransferItems(a: readonly TransferItem[] | undefined, b: readonly TransferItem[] | undefined): boolean {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    return a.every((item, index) => item.key === b[index].key
+        && item.name === b[index].name
+        && item.total === b[index].total
+        && Math.round(item.progress) === Math.round(b[index].progress));
 }
 
 // updateTransferName changes an active transfer's title in place (no progress
@@ -242,7 +297,13 @@ export function markTransferDone({ id, direction, status = 'done' }: { id: strin
     historyEvents.update((events) =>
         events.map((e) =>
             e.id === key && e.kind === 'transfer'
-                ? { ...e, status, progress: status === 'done' ? 100 : e.progress, finishedAt: Date.now() }
+                // Nothing is in flight any more, so the per-file list goes with
+                // the bar: a finished row that still named three files would be
+                // reporting work that has already stopped.
+                ? {
+                    ...e, status, finishedAt: Date.now(), items: undefined, itemsActive: 0,
+                    progress: status === 'done' ? 100 : e.progress,
+                }
                 : e,
         ),
     );
@@ -312,6 +373,20 @@ export function cancelSingleUpload(uploadId: number): void {
         restoreCanceledTransfers('up', (entry) => entry.id === transferKey('up', uploadId));
         pushHistoryEvent({ level: 'error', title: 'Could not cancel upload', body: 'The upload is still running.' });
     });
+}
+
+/**
+ * Stops one file listed under an aggregate upload row.
+ *
+ * The key is the file's upload id wherever the backend can stop it on its own,
+ * which is every batch and import file. Photo backup keys its file by path
+ * instead -- its queue is the backend's to schedule, not ours to interrupt --
+ * and a non-numeric key is how that says so.
+ */
+export function cancelUploadFile(key: string): void {
+    const uploadId = Number(key);
+    if (!Number.isInteger(uploadId)) return;
+    cancelSingleUpload(uploadId);
 }
 
 export function wasUploadCanceled(uploadId: number): boolean {

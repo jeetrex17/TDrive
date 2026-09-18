@@ -9,7 +9,7 @@
  */
 
 import { formatBytes } from '../../utils';
-import type { TransferEvent } from './notif-store';
+import type { TransferEvent, TransferItem } from './notif-store';
 
 /**
  * The states a row actually draws differently.
@@ -35,6 +35,12 @@ const MAX_SENSIBLE_ETA_SECONDS = 24 * 60 * 60;
 
 /** Below this the estimate swings wildly between ticks; "moments" is truer. */
 const ETA_FLOOR_SECONDS = 5;
+
+/**
+ * Below this fraction of the job, extrapolating from the pace so far says more
+ * about the first file than about the batch.
+ */
+const MIN_PACE_ETA_PERCENT = 5;
 
 export function transferPhase(transfer: TransferEvent): TransferPhase {
     switch (transfer.status) {
@@ -87,14 +93,37 @@ export function transferredBytes(transfer: TransferEvent): number {
  * This is the figure a transfer screen exists to answer and the one the row
  * never had: bytes and speed are the workings, "2 min left" is the answer.
  */
-export function etaSeconds(transfer: TransferEvent): number | null {
+export function etaSeconds(transfer: TransferEvent, now = Date.now()): number | null {
     if (transferPhase(transfer) !== 'running') return null;
-    if (transfer.total <= 0 || transfer.speed <= 0) return null;
-    const remaining = transfer.total - transferredBytes(transfer);
-    if (remaining <= 0) return null;
-    const seconds = remaining / transfer.speed;
-    if (!Number.isFinite(seconds) || seconds > MAX_SENSIBLE_ETA_SECONDS) return null;
+    const seconds = secondsAtCurrentRate(transfer) ?? secondsAtCurrentPace(transfer, now);
+    if (seconds === null || seconds <= 0 || !Number.isFinite(seconds) || seconds > MAX_SENSIBLE_ETA_SECONDS) {
+        return null;
+    }
     return seconds;
+}
+
+/** Bytes left over bytes per second: the exact answer, when both are known. */
+function secondsAtCurrentRate(transfer: TransferEvent): number | null {
+    if (transfer.total <= 0 || transfer.speed <= 0) return null;
+    return transfer.total - transferredBytes(transfer) > 0
+        ? (transfer.total - transferredBytes(transfer)) / transfer.speed
+        : null;
+}
+
+/**
+ * How long the rest should take if it goes like the part already done.
+ *
+ * An aggregate has no byte total to divide -- a batch does not know how big it
+ * is until the last file has been read -- so the only rate it has is its own:
+ * this far in this long. Coarser than the byte figure, and the only one a
+ * two-hundred-file upload can offer at all.
+ */
+function secondsAtCurrentPace(transfer: TransferEvent, now: number): number | null {
+    const percent = transfer.progress || 0;
+    if (percent < MIN_PACE_ETA_PERCENT || percent >= 100 || transfer.startedAt <= 0) return null;
+    const elapsed = (now - transfer.startedAt) / 1000;
+    if (elapsed <= 0) return null;
+    return (elapsed * (100 - percent)) / percent;
 }
 
 /** "2 min left". Compact, because it shares a line with two other figures. */
@@ -165,9 +194,13 @@ export function transferDetail(transfer: TransferEvent, now = Date.now()): strin
     const items = transfer.itemsTotal || 0;
     if (items > 0) parts.push(`${transfer.itemsDone || 0} of ${items} files`);
     if (transfer.total > 0) parts.push(formatSizePair(transferredBytes(transfer), transfer.total));
+    // A batch learns its size one file at a time, so it can say what it has
+    // moved but not what that is out of. "1.2 GB so far" is that, and it is
+    // still the figure that says how much work this is.
+    else if (transfer.bytes > 0) parts.push(`${formatBytes(transfer.bytes)} so far`);
     else if (items === 0) parts.push(`${Math.round(transfer.progress || 0)}%`);
 
-    const eta = etaSeconds(transfer);
+    const eta = etaSeconds(transfer, now);
     if (eta !== null) parts.push(formatEta(eta));
     if (transfer.speed > 0) parts.push(`${formatBytes(transfer.speed)}/s`);
     return joinDetail(parts);
@@ -181,4 +214,22 @@ function joinDetail(parts: readonly string[]): string {
 export function transferAriaLabel(transfer: TransferEvent, now = Date.now()): string {
     const verb = transfer.direction === 'up' ? 'Uploading' : 'Downloading';
     return `${verb} ${transfer.name || 'transfer'}. ${transferDetail(transfer, now)}`;
+}
+
+/**
+ * What one file under an aggregate row says beside its name.
+ *
+ * Its size pair where there is one -- the bar already carries the percentage,
+ * and repeating it as a number says nothing the row does not show -- and the
+ * percentage only where no size arrived to say it any other way.
+ */
+export function transferItemDetail(item: TransferItem): string {
+    const percent = Math.max(0, Math.min(100, item.progress || 0));
+    if (item.total <= 0) return `${Math.round(percent)}%`;
+    return formatSizePair((percent / 100) * item.total, item.total);
+}
+
+/** Spoken description of one file's bar, which has no visible label of its own. */
+export function transferItemLabel(item: TransferItem): string {
+    return `${item.name || 'file'}, ${Math.round(Math.max(0, Math.min(100, item.progress || 0)))}%`;
 }
