@@ -1,5 +1,5 @@
 import { bootTDrive, expect, resolves, test } from './wails-mock';
-import { FIRST_PHOTO, galleryPlans } from './gallery-fixtures';
+import { FIRST_PHOTO, galleryPlans, routeRenditions } from './gallery-fixtures';
 
 /**
  * The album grid with nothing to draw in it: no rendition ever arrives, which
@@ -45,3 +45,54 @@ test('a grid with no covers yet is still a grid', async ({ page }) => {
     // Nothing renderable means a folder glyph, never a broken image.
     await expect(page.locator('.album-cover-glyph')).toHaveCount(NAMES.length);
 });
+
+/**
+ * Folder names are one nowrap line, so a long one is also the tile's
+ * min-content width. Nothing about it may reach the tile beside it -- on a
+ * phone, where two columns leave a name barely a third of its length, least
+ * of all.
+ */
+const LONG_NAMES = [
+    'Combinatorics + problem solving', 'Number Theory (advanced)',
+    'Binary Search (advanced) + Ternary Search', 'Problem Solving (greedy)',
+    'Advanced Bit Manipulation + Greedy Algorithms', 'Greedy Algorithms',
+];
+
+for (const shape of [
+    { name: 'a phone', width: 390, height: 844, phone: true },
+    { name: 'a window', width: 1280, height: 800, phone: false },
+]) {
+    test(`a long folder name stays inside its own tile on ${shape.name}`, async ({ page }) => {
+        await page.setViewportSize({ width: shape.width, height: shape.height });
+        if (shape.phone) await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
+        await routeRenditions(page);
+        await bootTDrive(page, {
+            ...galleryPlans([FIRST_PHOTO]),
+            ListMediaFolders: resolves(LONG_NAMES.map((name, index) => ({
+                folder_id: `d:${index}`, name, item_count: 6,
+                latest_upload_time: FIRST_PHOTO.upload_time - index,
+                cover_msg_id: FIRST_PHOTO.msg_id, cover_revision: 1, cover_name: FIRST_PHOTO.name,
+            }))),
+        });
+        await (shape.phone
+            ? page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Photos/ })
+            : page.getByRole('button', { name: 'Photos' })).click();
+
+        const tiles = page.locator('button.album-tile');
+        await expect(tiles.first()).toBeVisible();
+        const boxes = await tiles.evaluateAll((nodes) => nodes.map((node) => {
+            const tile = node.getBoundingClientRect();
+            const name = node.querySelector('.album-name')!.getBoundingClientRect();
+            const cover = node.querySelector('.album-cover')!.getBoundingClientRect();
+            return { tile, name, cover };
+        }));
+        for (const { tile, name, cover } of boxes) {
+            expect(name.right, 'a name printed past its tile').toBeLessThanOrEqual(tile.right + 1);
+            expect(tile.width, 'a tile grew to fit its name').toBeLessThanOrEqual(cover.width + 1);
+        }
+        // Two columns on a phone, so the second tile begins after the first ends.
+        const first = boxes[0];
+        const second = boxes[1];
+        expect(second.tile.left).toBeGreaterThanOrEqual(first.tile.right);
+    });
+}
