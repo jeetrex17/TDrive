@@ -156,6 +156,18 @@ public class WailsJSBridge {
         activity.listPhotoBackupSources(callbackId);
     }
 
+    /**
+     * Ask for a folder to back up and answer with the source it becomes, as
+     * {"id","name","root","kind"} -- or "" when the picker was dismissed. This
+     * is not pickFolder: that one is the import picker, and it holds a document
+     * tree that a backup pick must not disturb.
+     */
+    @JavascriptInterface public void pickPhotoBackupFolder(final String callbackId) {
+        MainActivity activity = activity();
+        if (activity == null) { sendCallback(callbackId, null, "folder picker unavailable"); return; }
+        activity.runOnUiThread(() -> activity.pickPhotoBackupFolder(callbackId));
+    }
+
     /** Return one bounded page of photo/video assets; paths are deliberately omitted. */
     @JavascriptInterface public void listPhotoBackupAssets(final String callbackId, final String requestJson) {
         MainActivity activity = activity();

@@ -232,6 +232,7 @@ func TestMigrateVersionTwoDropsChargingWithoutBlockingOrLosingQueue(t *testing.T
 UPDATE photo_backup_settings SET charging_only=1;
 ALTER TABLE photo_backup_settings DROP COLUMN receipt_cursor;
 ALTER TABLE photo_backup_jobs DROP COLUMN captured_at;
+ALTER TABLE photo_backup_jobs DROP COLUMN rel_dir;
 PRAGMA user_version=2`); err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +289,7 @@ func TestMigrateVersionThreeAddsCaptureTimeWithoutLosingQueue(t *testing.T) {
 	// Rewind a current ledger to the exact shape a v3 release wrote.
 	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_jobs DROP COLUMN captured_at;
 ALTER TABLE photo_backup_settings DROP COLUMN receipt_cursor;
+ALTER TABLE photo_backup_jobs DROP COLUMN rel_dir;
 PRAGMA user_version=3`); err != nil {
 		t.Fatal(err)
 	}
@@ -311,6 +313,63 @@ PRAGMA user_version=3`); err != nil {
 	}
 	if err := engine.Migrate(context.Background()); err != nil {
 		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
+// v5 is the ledger a release before watched folders on a phone wrote. Its
+// queue must survive, and a row from it must read back as belonging to the top
+// of its source rather than to some invented folder.
+func TestMigrateVersionFiveAddsRelativeDirWithoutLosingQueue(t *testing.T) {
+	now := time.Unix(40, 0)
+	engine, scope := testEngine(t, &now)
+	configure(t, engine, scope)
+	if _, err := engine.EnqueuePage(context.Background(), scope, "camera", []Asset{{ID: "queued", Version: "v1", ResourceID: "native:queued", Name: "queued.jpg", MediaType: "photo", ModifiedAt: now, Size: 42}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_jobs DROP COLUMN rel_dir;
+PRAGMA user_version=5`); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := engine.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("version=%d err=%v", version, err)
+	}
+	uploaded, err := engine.RunOnce(context.Background(), scope, func(_ context.Context, r UploadRequest) (UploadResult, error) {
+		if r.Asset.ID != "queued" || r.Asset.RelDir != "" {
+			t.Fatalf("request=%+v", r)
+		}
+		return UploadResult{RemoteMessageID: 7}, nil
+	})
+	if err != nil || uploaded != 1 {
+		t.Fatalf("uploaded=%d err=%v", uploaded, err)
+	}
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
+// A watched folder on a phone reports where each item sat, and that has to
+// survive the queue: it is the only thing that keeps two photos with the same
+// name in different subfolders apart when they land in the drive.
+func TestEnqueueKeepsHostReportedRelativeDir(t *testing.T) {
+	now := time.Unix(50, 0)
+	engine, scope := testEngine(t, &now)
+	configure(t, engine, scope)
+	if _, err := engine.EnqueuePage(context.Background(), scope, "camera", []Asset{{ID: "nested", Version: "v1", ResourceID: "native:nested", Name: "IMG_1.jpg", MediaType: "photo", RelDir: "Trips/Rome", ModifiedAt: now, Size: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	seen := ""
+	if _, err := engine.RunOnce(context.Background(), scope, func(_ context.Context, r UploadRequest) (UploadResult, error) {
+		seen = r.Asset.RelDir
+		return UploadResult{RemoteMessageID: 8}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "Trips/Rome" {
+		t.Fatalf("rel dir=%q", seen)
 	}
 }
 

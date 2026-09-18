@@ -12,6 +12,7 @@
     import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
     import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
+    import FolderIcon from '@lucide/svelte/icons/folder';
     import ImagesIcon from '@lucide/svelte/icons/images';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import PauseIcon from '@lucide/svelte/icons/pause';
@@ -28,8 +29,8 @@
     import { futureOnlyDescription, type PhotoBackupSettings } from '../../api/photo-backup';
     import {
         choosePhotoBackupFolder, deletePhotoBackupSource, loadPhotoBackupCandidates, pausePhotoBackupNow,
-        photoBackupBusy, photoBackupCandidates, photoBackupError, photoBackupState, refreshPhotoBackup,
-        resumePhotoBackupNow, retryPhotoBackupNow, selectPhotoBackupSource, startPhotoBackup, updatePhotoBackupSettings,
+        photoBackupAccessNote, photoBackupBusy, photoBackupCandidates, photoBackupError, photoBackupState, refreshPhotoBackup,
+        photoBackupFolderPicking, resumePhotoBackupNow, retryPhotoBackupNow, selectPhotoBackupSource, startPhotoBackup, updatePhotoBackupSettings,
     } from '../../modules/photo-backup/controller';
     import { actionLabel, canStart, describeBackup, destinationLabel, summaryLine, type BackupAction } from './photo-backup-view';
 
@@ -39,6 +40,10 @@
     const candidates = photoBackupCandidates;
     const busy = photoBackupBusy;
     const error = photoBackupError;
+    const deviceAccessNote = photoBackupAccessNote;
+    // Whether this host can be asked for a folder at all. The bridge is
+    // installed before the app runs, so this is settled once.
+    const folderPicking = photoBackupFolderPicking();
 
     const situation = $derived($backupState ? describeBackup($backupState) : null);
     const summary = $derived($backupState ? summaryLine($backupState.status) : '');
@@ -50,7 +55,13 @@
     // Watched folders are walked all the way down and arrive in the drive with
     // their subfolders intact. An album has no tree, so this only applies where
     // a folder source is actually in the list.
-    const nestsFolders = $derived(Boolean($backupState?.sources.some((source) => source.kind === 'folder')));
+    const nestsFolders = $derived(Boolean($backupState?.sources.some((source) => source.kind === 'folder' || source.kind === 'device-folder')));
+    // A phone reads a watched folder through the media library, so it backs up
+    // the photos and videos in it rather than every file. Said once, and only
+    // where it is true.
+    const mediaOnlyFolders = $derived(Boolean($backupState?.sources.some((source) => source.kind === 'device-folder')));
+    // The device's own word on the media grant, which the backend cannot see.
+    const accessHint = $derived(phone ? $deviceAccessNote : '');
 
     const handlers: Record<BackupAction, () => Promise<void>> = {
         start: startPhotoBackup, pause: pausePhotoBackupNow, resume: resumePhotoBackupNow, retry: retryPhotoBackupNow,
@@ -149,29 +160,39 @@
             <div class="pb-group" aria-label="Sources">
                 <div class="pb-group-head">
                     <span class="pb-group-label">Backing up</span>
-                    {#if phone}
-                        <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void loadPhotoBackupCandidates()}>
-                            <PlusIcon size={14} strokeWidth={2.2} aria-hidden="true" />
-                            Choose sources
-                        </Button>
-                    {:else}
-                        <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void choosePhotoBackupFolder()}>
-                            <FolderPlusIcon size={14} strokeWidth={2.2} aria-hidden="true" />
-                            Add folder
-                        </Button>
-                    {/if}
+                    <div class="pb-group-actions">
+                        {#if phone}
+                            <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void loadPhotoBackupCandidates()}>
+                                <PlusIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+                                Choose sources
+                            </Button>
+                        {/if}
+                        {#if folderPicking}
+                            <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void choosePhotoBackupFolder()}>
+                                <FolderPlusIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+                                Add folder
+                            </Button>
+                        {/if}
+                    </div>
                 </div>
                 <ul class="pb-sources" role="list">
                     {#each state.sources as source (source.id)}
                         <li class="pb-source">
-                            <ImagesIcon class="pb-source-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
+                            <!-- A folder and an album are different things to
+                                 the user, and the row is the only place that
+                                 difference is visible once both are added. -->
+                            {#if source.kind === 'folder' || source.kind === 'device-folder'}
+                                <FolderIcon class="pb-source-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
+                            {:else}
+                                <ImagesIcon class="pb-source-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
+                            {/if}
                             <span class="pb-source-name">{source.name}</span>
                             <IconButton label={`Remove ${source.name}`} size="sm" disabled={$busy} onclick={() => void deletePhotoBackupSource(source.id)}>
                                 <Trash2Icon size={15} strokeWidth={2} />
                             </IconButton>
                         </li>
                     {:else}
-                        <li class="pb-source pb-source-empty">{phone ? 'Choose an album or your whole library.' : 'Add a folder to watch. Everything inside it is included.'}</li>
+                        <li class="pb-source pb-source-empty">{phone ? 'Choose an album, a folder, or your whole library.' : 'Add a folder to watch. Everything inside it is included.'}</li>
                     {/each}
                     {#each unselected as candidate (candidate.id)}
                         <li>
@@ -184,6 +205,12 @@
                 </ul>
                 {#if nestsFolders}
                     <p class="pb-note">Subfolders are backed up too, and keep their structure in the drive.</p>
+                {/if}
+                {#if mediaOnlyFolders}
+                    <p class="pb-note">A folder on this device backs up the photos and videos in it, not other kinds of file.</p>
+                {/if}
+                {#if accessHint}
+                    <p class="pb-note">{accessHint}</p>
                 {/if}
                 {#if accessNote}
                     <p class="pb-note">{accessNote}</p>
@@ -413,6 +440,15 @@
         justify-content: space-between;
         gap: var(--space-3);
         min-height: 32px;
+    }
+
+    /* Two ways in on a phone -- albums and a folder -- so they wrap rather than
+       squeeze the label off the row on a narrow screen. */
+    .pb-group-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: var(--space-2);
     }
 
     .pb-group-label {

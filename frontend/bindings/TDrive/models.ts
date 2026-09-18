@@ -267,6 +267,14 @@ export interface PhotoBackupAsset {
      * does not know it. Editing a photo moves ModifiedAt; this stays put.
      */
     "created_at": number;
+
+    /**
+     * RelDir is where the asset sits below its source, "/" separated, empty at
+     * the top of it. A library or an album has no tree and never sets it; a
+     * watched folder on a phone is enumerated by the host, so this is the only
+     * thing that can say which subfolder a photo came out of.
+     */
+    "rel_dir": string;
     "size": number;
 }
 

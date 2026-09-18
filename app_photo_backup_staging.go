@@ -16,6 +16,98 @@ import (
 
 const maxPhotoBackupResourceBytes int64 = 4 << 30
 
+// photoBackupDeviceFolderKind is a folder the user picked on a phone. It is a
+// separate kind from "folder" on purpose: a desktop folder is a filesystem
+// path this process can open and walk, while this one is a location the host
+// enumerates on our behalf. Keeping them apart means neither the desktop
+// walker nor validatePhotoBackupFolderRoot has to learn about a root it could
+// never os.Stat.
+const photoBackupDeviceFolderKind = "device-folder"
+
+// A device folder root is "<volume>:<relative/path>/" -- the media volume the
+// host named, then the folder's position on it, always with a trailing slash
+// so that one root is a prefix of another exactly when one folder contains the
+// other. It is a location, not a path this process can open.
+const maxPhotoBackupDeviceFolderRoot = 1024
+
+func validatePhotoBackupDeviceFolderRoot(root string) (string, error) {
+	volume, relative, found := strings.Cut(strings.TrimSpace(root), ":")
+	if !found || len(root) > maxPhotoBackupDeviceFolderRoot || volume == "" || !isPhotoBackupVolumeName(volume) {
+		return "", fmt.Errorf("photo backup: that folder cannot be read on this device")
+	}
+	// Rebuilt from its own components rather than trimmed: a root that reaches
+	// the ledger with "." or ".." still in it would make the prefix test below
+	// answer about a folder that does not exist.
+	components := make([]string, 0, 8)
+	for _, component := range strings.Split(relative, "/") {
+		if component == "" || component == "." || component == ".." {
+			continue
+		}
+		components = append(components, component)
+	}
+	if len(components) == 0 {
+		// The whole volume is the library, which is what the "All photos and
+		// videos" source already is. Two sources for one set of files would
+		// only make the destination depend on which ran first.
+		return "", fmt.Errorf("photo backup: choose a folder inside your storage, or use All photos and videos")
+	}
+	return volume + ":" + strings.Join(components, "/") + "/", nil
+}
+
+// Media volume names are MediaStore's own ("external_primary", or a card's
+// lowercased UUID such as "1aef-2b03"). Anything else did not come from the
+// host, and a root is a database key, so it is checked rather than trusted.
+func isPhotoBackupVolumeName(volume string) bool {
+	if len(volume) > 64 {
+		return false
+	}
+	for _, r := range volume {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func photoBackupDeviceFolderSourceID(root string) string { return "tree:" + root }
+
+// photoBackupDeviceFolderName is the folder's own name, for the places that
+// speak to the user about a root rather than a stored source.
+func photoBackupDeviceFolderName(root string) string {
+	trimmed := strings.TrimSuffix(root, "/")
+	if index := strings.LastIndexAny(trimmed, "/:"); index >= 0 {
+		trimmed = trimmed[index+1:]
+	}
+	return trimmed
+}
+
+// photoBackupOverlappingDeviceFolder names the already-selected folder that
+// contains the candidate, or that the candidate contains, and "" when they are
+// unrelated.
+//
+// Overlapping folders are refused rather than merged. The ledger would dedupe
+// the uploads themselves -- both sources report the same MediaStore identity --
+// but the file would land under whichever source happened to reach it first,
+// so the same photo's place in the drive would depend on scan order. A folder
+// the user cannot predict the location of is worse than one they were asked to
+// pick again.
+func photoBackupOverlappingDeviceFolder(existing []photobackup.Source, candidateID, candidateRoot string) string {
+	for _, source := range existing {
+		if source.Kind != photoBackupDeviceFolderKind || source.ID == candidateID {
+			continue
+		}
+		if strings.HasPrefix(candidateRoot, source.Root) || strings.HasPrefix(source.Root, candidateRoot) {
+			name := source.Name
+			if name == "" {
+				name = photoBackupDeviceFolderName(source.Root)
+			}
+			return name
+		}
+	}
+	return ""
+}
+
 func validatePhotoBackupFolderRoot(root string) (string, error) {
 	absolute, err := filepath.Abs(root)
 	if err != nil {
