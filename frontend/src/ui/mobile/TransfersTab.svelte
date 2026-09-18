@@ -3,7 +3,8 @@
     import { activeTransfers, type TransferEvent } from '../notifications/notif-store';
     import EventRow from '../notifications/EventRow.svelte';
     import MobileTransferRow from './MobileTransferRow.svelte';
-    import { cancelSingleUpload, cancelTransfersInDirection, cancelUploadFile, clearHistory } from '../../modules/notif-bell';
+    import { cancelSingleUpload, cancelTransfersInDirection, cancelUploadFile, clearHistory, parseTransferKey } from '../../modules/notif-bell';
+    import { isPhotoBackupActivity } from '../../modules/photo-backup/activity';
     import { humanizeBackendError } from '../../modules/errors';
     import { notify } from '../../modules/notifications';
     import { downloadRetryFor } from '../../modules/transfers';
@@ -23,12 +24,14 @@
      * Cancel all covers those; see the section header.
      */
     function cancelFor(transfer: TransferEvent): (() => void) | undefined {
-        if (transfer.id === 'xfer:up:photo-backup') return undefined;
-        const upload = /^xfer:up:(\d+)$/.exec(transfer.id);
-        if (upload) {
-            const id = Number(upload[1]);
-            return () => cancelSingleUpload(id);
-        }
+        // The backup queue is the backend's to schedule, not ours to interrupt.
+        if (isPhotoBackupActivity(transfer.id)) return undefined;
+        const key = parseTransferKey(transfer.id);
+        // A numeric id is an upload's number within its batch, which is exactly
+        // what the backend can stop on its own. Anything else -- an import, a
+        // folder walk -- is one job under one row.
+        const uploadId = key?.direction === 'up' ? Number(key.id) : Number.NaN;
+        if (Number.isInteger(uploadId)) return () => cancelSingleUpload(uploadId);
         if (transfer.direction === 'up') return () => cancelTransfersInDirection('up');
         // "active" and not "running": a download still working out what it is
         // downloading is the job the backend has in hand, and it was the one row

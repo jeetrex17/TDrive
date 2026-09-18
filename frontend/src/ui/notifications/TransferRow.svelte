@@ -2,10 +2,10 @@
     import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
     import XIcon from '@lucide/svelte/icons/x';
-    import { formatBytes } from '../../utils';
     import TransferItems from './TransferItems.svelte';
-    import { etaSeconds, formatEta, formatSizePair } from './transfer-view';
+    import { isMoving, transferDetailParts, transferPercent, transferPhase, type TransferDetailPart } from './transfer-view';
     import { isUnfinishedTransfer, type TransferEvent } from './notif-store';
+    import { isPhotoBackupActivity } from '../../modules/photo-backup/activity';
 
     /**
      * One transfer in the desktop bell's popover, where each row stands alone on
@@ -15,6 +15,12 @@
      * serve both, gated on the platform in eight places and undone again by most
      * of a screenful of stylesheet overrides; the two surfaces want different
      * shapes and now each states its own.
+     *
+     * The shapes are all either of them states. What a row *says* -- which state
+     * it is in, how full the bar is, which figures are true enough to print --
+     * is ui/notifications/transfer-view, shared with the phone, because the two
+     * had drifted into disagreeing: this row drew a queued download as a 0% bar
+     * reading "0%" while the phone said "Waiting its turn".
      */
     interface Props {
         transfer: TransferEvent;
@@ -37,40 +43,45 @@
 
     const direction = $derived(transfer.direction === 'up' ? 'upload' : 'download');
     const dirLabel = $derived(transfer.direction === 'up' ? 'Uploading' : 'Downloading');
+
+    const phase = $derived(transferPhase(transfer));
+    const percent = $derived(transferPercent(transfer));
+    const detail = $derived(transferDetailParts(transfer));
+    const showProgress = $derived(isMoving(phase));
+    const items = $derived(showProgress ? transfer.items ?? [] : []);
+
+    // The stylesheet's four terminal looks, plus the phase itself for anything
+    // that wants to tell a paused row from a running one without a class of its
+    // own for each.
     const statusClass = $derived(
-        transfer.status === 'done' ? 'is-done'
-        : transfer.status === 'failed' ? 'is-failed'
-        : transfer.status === 'canceled' ? 'is-canceled'
-        : transfer.status === 'canceling' ? 'is-canceling'
+        phase === 'done' ? 'is-done'
+        : phase === 'failed' ? 'is-failed'
+        : phase === 'canceled' ? 'is-canceled'
+        : phase === 'canceling' ? 'is-canceling'
         : 'is-active',
     );
-    const progressWidth = $derived(Math.max(0, Math.min(100, transfer.progress || 0)));
     const progressLabel = $derived(`${dirLabel} ${transfer.name || 'transfer'}`);
-    const terminalLabel = $derived(
-        transfer.status === 'done' ? 'Done'
-        : transfer.status === 'failed' ? 'Failed'
-        : transfer.status === 'canceled' ? 'Canceled'
-        : transfer.status === 'canceling' ? 'Canceling'
-        : '',
-    );
-    const doneBytes = $derived(transfer.total > 0
-        ? Math.min(transfer.total, Math.max(transfer.bytes || 0, ((transfer.progress || 0) / 100) * transfer.total))
-        : transfer.bytes || 0);
 
-    const showProgress = $derived(isUnfinishedTransfer(transfer.status) && transfer.status !== 'canceling');
-    const items = $derived(showProgress ? transfer.items ?? [] : []);
-    const eta = $derived(etaSeconds(transfer));
     const canCancel = $derived(
         isUnfinishedTransfer(transfer.status)
         && transfer.status !== 'canceling'
-        // The download backend can stop only the job it is currently running.
-        // A queued row gets no fake individual cancel control.
-        && transfer.id !== 'xfer:up:photo-backup'
+        // The backup queue is the backend's to schedule, so a stop control here
+        // would stop nothing.
+        && !isPhotoBackupActivity(transfer.id)
+        // The download backend can stop only the job it is currently running,
+        // and 'active' rather than the running phase because a download still
+        // working out what it is downloading is that job. A queued row gets no
+        // fake individual cancel control.
         && (transfer.direction === 'up' || transfer.status === 'active'),
     );
     const cancelLabel = $derived(
         transfer.direction === 'down' ? 'Cancel active download' : 'Cancel all uploads',
     );
+
+    /** Figures are set apart from the muted state line; the rate is set smaller. */
+    function metaClass(kind: TransferDetailPart['kind']): string {
+        return kind === 'rate' ? 'notif-row-speed' : kind === 'figure' ? 'notif-row-size' : 'notif-row-state';
+    }
 
     function cancel(event: MouseEvent): void {
         event.stopPropagation();
@@ -78,7 +89,7 @@
     }
 </script>
 
-<div class={`notif-row notif-row-transfer ${statusClass}`}>
+<div class={`notif-row notif-row-transfer ${statusClass}`} data-phase={phase}>
     <span class="notif-row-icon" data-kind={direction} aria-hidden="true">
         {#if transfer.direction === 'up'}
             <ArrowUpIcon size={14} strokeWidth={2} aria-hidden="true" />
@@ -93,43 +104,35 @@
         {#if showProgress}
             <div
                 class="notif-row-progress"
+                class:is-indeterminate={percent === null}
                 role="progressbar"
                 aria-label={progressLabel}
                 aria-valuemin="0"
                 aria-valuemax="100"
-                aria-valuenow={Math.round(progressWidth)}
+                aria-valuenow={percent === null ? undefined : Math.round(percent)}
             >
-                <div class="notif-row-progress-fill" style={`width:${progressWidth}%`} aria-hidden="true"></div>
+                <!-- No width where there is no figure: a folder still being
+                     walked has no fraction to be, and a bar parked at 0% reads
+                     as a transfer that has stalled. -->
+                <div
+                    class="notif-row-progress-fill"
+                    style={percent === null ? undefined : `width:${percent}%`}
+                    aria-hidden="true"
+                ></div>
             </div>
         {/if}
     </div>
-    <!-- Read down: how many files, how far, how much, how long, how fast. The
-         count leads because on an aggregate it is the figure the reader is
-         actually tracking; the rate trails because it says the least. -->
+    <!-- Read down: how many files, how far, how much, how long, how fast, in the
+         order transfer-view puts them -- the count leads because on an aggregate
+         it is the figure the reader is actually tracking, the rate trails
+         because it says the least. The column stacks what the phone joins into
+         one line; both leave out what is not true rather than spelling it zero. -->
     <div class="notif-row-meta">
-        {#if terminalLabel}
-            <div>{terminalLabel}</div>
-        {:else}
-            {#if (transfer.itemsTotal || 0) > 0}
-                <div class="notif-row-size">{transfer.itemsDone || 0} / {transfer.itemsTotal} files</div>
-            {:else}
-                <!-- A row counting files has the bar to say how far along it is
-                     and no room to spare; one with nothing to count needs the
-                     figure, because it is the only one it has. -->
-                <div class="notif-row-size">{Math.round(transfer.progress || 0)}%</div>
-            {/if}
-            {#if transfer.total > 0}
-                <div class="notif-row-size">{formatSizePair(doneBytes, transfer.total)}</div>
-            {:else if transfer.bytes > 0}
-                <div class="notif-row-size">{formatBytes(transfer.bytes)} so far</div>
-            {/if}
-            {#if eta !== null}
-                <div class="notif-row-size">{formatEta(eta)}</div>
-            {/if}
-            {#if transfer.speed > 0}
-                <div class="notif-row-speed">{formatBytes(transfer.speed)}/s</div>
-            {/if}
-        {/if}
+        <!-- Keyed by position: the parts are a fixed reading order, not a list
+             of things with identities, and two of them can read alike. -->
+        {#each detail as part, index (index)}
+            <div class={metaClass(part.kind)}>{part.text}</div>
+        {/each}
     </div>
     {#if canCancel}
         <button
@@ -149,3 +152,25 @@
         </div>
     {/if}
 </div>
+
+<style>
+    /* The one state the shared stylesheet has no word for: a transfer that has
+       started with nothing measurable yet -- a folder still being walked. The
+       bar says the work is running rather than standing at a figure it does not
+       have, which is what a full-width fill with no percentage would claim.
+
+       Local to the row because it belongs to markup only this row has; the rest
+       of it is styles/activity.css, which the popover shares. */
+    .is-indeterminate .notif-row-progress-fill {
+        width: 38%;
+        transition: none;
+        animation: notif-row-indeterminate 1.25s var(--ease-standard) infinite;
+    }
+    @keyframes notif-row-indeterminate {
+        from { transform: translateX(-105%); }
+        to { transform: translateX(268%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .is-indeterminate .notif-row-progress-fill { width: 100%; animation: none; opacity: 0.4; }
+    }
+</style>

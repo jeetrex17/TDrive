@@ -4,7 +4,8 @@
 import type { PhotoBackupState } from '../../api/photo-backup';
 import type { TransferItem } from '../../ui/notifications/notif-store';
 import {
-    markTransferDone, pushQueuedTransfer, pushTransferStart, removeTransfer, updateTransferName, updateTransferProgress,
+    markTransferDone, pushQueuedTransfer, pushTransferStart, removeTransfer, transferKey,
+    updateTransferName, updateTransferProgress,
 } from '../notif-bell';
 
 const ACTIVITY_ID = 'photo-backup';
@@ -110,6 +111,12 @@ export function clearPhotoBackupActivity(): void {
     waiting = false;
 }
 
+/**
+ * Whether a history id is the backup's own row. The rows that offer a stop
+ * control ask here instead of matching the key themselves: the backup queue is
+ * the backend's to schedule, and a rename of the id must not quietly leave them
+ * offering a button that stops nothing.
+ */
 export function isPhotoBackupActivity(id: string): boolean {
-    return id === `xfer:up:${ACTIVITY_ID}`;
+    return id === transferKey('up', ACTIVITY_ID);
 }

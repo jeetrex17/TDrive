@@ -177,6 +177,24 @@ describe('notification interaction controls', () => {
         expect(progress.hasAttribute('aria-live')).toBe(false);
     });
 
+    it('says what a stopped desktop transfer is instead of drawing it as zero percent', () => {
+        // The rules are transfer-view's and the phone row already followed them.
+        // This one open-coded its own arithmetic and so drew a queued download
+        // as a 0% bar with a meta line reading "0%", and a paused one exactly
+        // like a running one.
+        const queued = mountComponent(TransferRow, { transfer: makeTransfer({ status: 'queued', progress: 0, bytes: 0 }) });
+        expect(queued.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Waiting its turn');
+
+        const paused = mountComponent(TransferRow, { transfer: makeTransfer({ status: 'paused' }) });
+        expect(paused.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Paused');
+
+        // A folder still being walked has no fraction to be, so its bar reports
+        // no value at all rather than a zero it would be read as stalled at.
+        const preparing = mountComponent(TransferRow, { transfer: makeTransfer({ total: 0, bytes: 0, progress: 0 }) });
+        expect(preparing.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Preparing…');
+        expect(preparing.querySelector('[role="progressbar"]')?.hasAttribute('aria-valuenow')).toBe(false);
+    });
+
     it('opens from the keyboard and restores the bell after Escape', () => {
         const host = mountComponent(NotifBell, { onCancelDirection: vi.fn(), onClearHistory: vi.fn() });
         const bell = host.querySelector<HTMLButtonElement>('#notif-bell');
