@@ -22,16 +22,72 @@ func TestIsVideoMatchesTheGalleryPredicate(t *testing.T) {
 }
 
 func TestGenerateVideoPosterRefusesWhatItCannotDraw(t *testing.T) {
-	// A still is not a poster request; the image path already owns those.
-	if _, err := GenerateVideoPoster(context.Background(), "photo.jpg", 512); !errors.Is(err, ErrPosterUnsupported) {
-		t.Fatalf("image = %v, want ErrPosterUnsupported", err)
+	// The two refusals mean different things to a caller, and the difference is
+	// the whole contract: "no picture" is published, a bad request is a bug.
+	for _, testCase := range []struct {
+		name        string
+		path        string
+		maxEdge     int
+		unsupported bool
+	}{
+		// A still is not a poster request; the image path already owns those.
+		{name: "image", path: "photo.jpg", maxEdge: 512, unsupported: true},
+		{name: "no extension", path: "clip", maxEdge: 512, unsupported: true},
+		{name: "extension only looks like one", path: "clip.mp4.txt", maxEdge: 512, unsupported: true},
+		{name: "empty path", path: "", maxEdge: 512},
+		{name: "blank path", path: "   ", maxEdge: 512},
+		{name: "no edge", path: "clip.mp4", maxEdge: 0},
+		{name: "negative edge", path: "clip.mp4", maxEdge: -1},
+		{name: "edge past the cache's limit", path: "clip.mp4", maxEdge: 4000},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := GenerateVideoPoster(context.Background(), testCase.path, testCase.maxEdge)
+			if err == nil {
+				t.Fatalf("%q at %d succeeded", testCase.path, testCase.maxEdge)
+			}
+			if errors.Is(err, ErrPosterUnsupported) != testCase.unsupported {
+				t.Fatalf("%q at %d = %v, unsupported = %t, want %t",
+					testCase.path, testCase.maxEdge, err, !testCase.unsupported, testCase.unsupported)
+			}
+		})
 	}
-	// Invalid requests are caller errors, not "no picture": they must not be
-	// mistaken for a video that merely could not be decoded.
-	for _, edge := range []int{0, -1, 4000} {
-		if _, err := GenerateVideoPoster(context.Background(), "clip.mp4", edge); err == nil || errors.Is(err, ErrPosterUnsupported) {
-			t.Fatalf("maxEdge %d = %v, want a plain error", edge, err)
-		}
+	if _, err := GenerateVideoPoster(nil, "clip.mp4", 512); err == nil { //nolint:staticcheck // the nil context is the case under test
+		t.Fatal("nil context succeeded")
+	}
+}
+
+// The seek policy is stated once and read by three implementations -- mpv's
+// --start=N%, and the percentage each mobile bridge applies to a declared
+// duration. Nothing else keeps them from drifting apart.
+func TestPosterSeekPolicyIsOneStatement(t *testing.T) {
+	if want := int(posterSeekFraction * 100); posterSeekPercent != want {
+		t.Fatalf("posterSeekPercent = %d, want %d", posterSeekPercent, want)
+	}
+	if posterSeekPercent < 1 || posterSeekPercent > 50 {
+		t.Fatalf("posterSeekPercent = %d, want a frame past the opening but not past the point", posterSeekPercent)
+	}
+	// The fallback is a seek within a video, so it has to be reachable well
+	// inside the window an extraction is allowed to take.
+	if posterFallbackOffset <= 0 || posterFallbackOffset >= posterTimeout {
+		t.Fatalf("posterFallbackOffset = %v, want inside the %v extraction budget", posterFallbackOffset, posterTimeout)
+	}
+}
+
+// A poster that cannot be drawn must not wedge the decode slot it took: the
+// next upload's thumbnail, poster or not, waits on that same slot.
+func TestGenerateVideoPosterReleasesTheDecodeSlot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "broken.mp4")
+	if err := os.WriteFile(path, []byte("not a video"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GenerateVideoPoster(context.Background(), path, 512); err == nil {
+		t.Fatal("a file that is not a video produced a poster")
+	}
+	select {
+	case localDecodeSlot <- struct{}{}:
+		<-localDecodeSlot
+	default:
+		t.Fatal("the decode slot is still held after a failed poster")
 	}
 }
 

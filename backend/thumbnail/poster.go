@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ErrPosterUnsupported reports that this build cannot decode a frame from this
@@ -76,3 +77,22 @@ func GenerateVideoPoster(ctx context.Context, path string, maxEdge int) ([]byte,
 // rather than empty. A tenth of the way in is past the opening of almost
 // anything while still being early enough that a decoder reaches it quickly.
 const posterSeekFraction = 0.1
+
+// posterSeekPercent is the same number in the units every decoder behind this
+// actually takes: mpv's --start=N%, and the whole-percent arithmetic the mobile
+// bridges do against a container's declared duration. Derived rather than
+// written twice so the three implementations cannot drift apart.
+const posterSeekPercent = int(posterSeekFraction * 100)
+
+// posterFallbackOffset is where the frame comes from when a container declares
+// no usable duration -- a common enough state for a fragmented MP4 still being
+// written, or a stream remuxed without a header. One second in is past a fade
+// from black without being past the end of the shortest clip anyone keeps, and
+// a decoder that overruns the file simply reports no frame.
+const posterFallbackOffset = time.Second
+
+// posterTimeout bounds one extraction. A frame comes from a seek and a single
+// decode, so a video that has not produced one by now is not going to: a
+// damaged file can otherwise hold a decoder open for as long as it likes, and
+// this runs while someone is waiting for an upload.
+const posterTimeout = 20 * time.Second

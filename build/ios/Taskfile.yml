@@ -117,7 +117,7 @@ tasks:
           -framework Photos \
           -framework UniformTypeIdentifiers \
           -framework LocalAuthentication -framework UserNotifications \
-          -framework AVFoundation \
+          -framework AVFoundation -framework CoreMedia \
           -framework CoreLocation -framework CoreMotion -framework SystemConfiguration \
           -lresolv \
           -o "{{.BIN_DIR}}/{{.APP_NAME | lower}}" \

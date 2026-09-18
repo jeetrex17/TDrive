@@ -1,10 +1,12 @@
-//go:build !darwin && !linux && !windows
+//go:build !windows && !(darwin && !ios) && !(linux && !android) && !(android && cgo) && !(ios && cgo)
 
 package thumbnail
 
 import "context"
 
-// generateVideoPoster is the answer on a platform with no decoder wired up yet.
+// generateVideoPoster is the answer where no decoder is reachable: a host with
+// no platform framework at all, or a mobile build compiled without cgo, which
+// is how the tooling cross-compiles for a tag check.
 //
 // It is a real answer, not a gap: the caller's contract is that a poster is
 // optional, so a video here is published exactly as it was before posters

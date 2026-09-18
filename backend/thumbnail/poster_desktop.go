@@ -1,4 +1,4 @@
-//go:build darwin || linux || windows
+//go:build (darwin && !ios) || (linux && !android) || windows
 
 package thumbnail
 
@@ -11,14 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"time"
 )
-
-// posterTimeout bounds one extraction. A frame comes from a seek and a single
-// decode, so a video that has not produced one by now is not going to: a
-// damaged file can otherwise hold a decoder open for as long as it likes, and
-// this runs while someone is waiting for an upload.
-const posterTimeout = 20 * time.Second
 
 // generateVideoPoster draws one frame with the mpv that already ships for
 // playback.
@@ -56,7 +49,7 @@ func generateVideoPoster(ctx context.Context, path string, maxEdge int) ([]byte,
 		"--no-audio",
 		"--no-sub",
 		"--frames=1",
-		"--start="+strconv.FormatFloat(posterSeekFraction*100, 'f', 0, 64)+"%",
+		"--start="+strconv.Itoa(posterSeekPercent)+"%",
 		"--vo=image",
 		"--vo-image-format=jpg",
 		"--vo-image-jpeg-quality=85",
