@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { normalizePhotoBackupState } from './photo-backup';
+import { normalizeAsset, normalizePhotoBackupState } from './photo-backup';
+
+describe('normalizeAsset', () => {
+    it('carries the capture time and reads a host that omits it as unknown', () => {
+        expect(normalizeAsset({ id: 'a', version: '1', media_type: 'photo', modified_at: 9, created_at: 4 })).toMatchObject({ modifiedAt: 9, createdAt: 4 });
+        expect(normalizeAsset({ id: 'a', version: '1', media_type: 'photo', modified_at: 9 })?.createdAt).toBe(0);
+        expect(normalizeAsset({ id: 'a', version: '1', media_type: 'document' })).toBeNull();
+    });
+});
 
 describe('normalizePhotoBackupState', () => {
     it('keeps only a safe, actionable backup state from backend data', () => {
