@@ -53,12 +53,14 @@ test("a refused start repeats the backend's reason instead of a generic failure"
         GetPhotoBackupState: resolves({
             platform: 'darwin',
             settings: { enabled: true, photos: true, videos: true, wifi_only: true },
-            sources: [{ id: 'camera', name: 'Camera', enabled: true }],
+            sources: [{ id: 'pictures', kind: 'folder', name: 'Pictures', enabled: true }],
             status: { phase: 'idle', complete: 3 },
         }),
         RunPhotoBackup: resolves({ ok: false, error: { code: 'operation_failed', message: 'Waiting for Wi-Fi.' } }),
     });
     const panel = await openPanel(page, 'desktop');
+    // A watched folder is walked all the way down, so the panel says so.
+    await expect(panel).toContainText('Subfolders are backed up too');
     await panel.getByRole('button', { name: 'Back up now', exact: true }).click();
     await expect.poll(async () => (await mock.calls('RunPhotoBackup')).length).toBe(1);
     await expect(panel.getByRole('alert')).toHaveText('Waiting for Wi-Fi.');
@@ -119,6 +121,8 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         await expect(panel.getByRole('switch', { name: 'Videos', exact: true })).toHaveAttribute('aria-checked', 'true');
         await expect(panel.getByRole('switch', { name: 'Wi-Fi only' })).toHaveCount(platform === 'android' ? 1 : 0);
         await expect(panel).toContainText('Only selected photos are accessible');
+        // A photo library is a flat set of resources; nothing to mirror.
+        await expect(panel).not.toContainText('Subfolders are backed up too');
         await expect(panel).toContainText('Backing up');
         await expect(panel).toContainText('IMG_0042.HEIC');
         await expect(panel).toContainText('24 backed up · 13 waiting');
