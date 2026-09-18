@@ -803,26 +803,29 @@ function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, err
 }
 
 export function refreshFiles({ background = false }: RefreshFilesOptions = {}): void {
-    if (state.virtualView === 'photos') {
+    // Both modes are set from the one value, before anything branches. They
+    // used to be cleared on the way past each other, so entering Photos from
+    // the trash returned before the line that turned the trash off: the drive
+    // chrome kept the trash's title and left both sidebar entries lit.
+    const destination = state.virtualView;
+    setPhotosMode(destination === 'photos');
+    setTrashMode(destination === 'trash');
+    if (destination === 'photos') {
         // A request that began before Photos is never permitted to republish
         // over the gallery or the preserved drive list on return.
         fileRefreshToken += 1;
         clearSelection();
-        setPhotosMode(true);
         void renderGallery({ background });
         return;
     }
-    setPhotosMode(false);
-    if (state.virtualView === 'trash') {
+    if (destination === 'trash') {
         // Same reasoning as Photos: invalidate any drive load already in
         // flight so it cannot republish a folder over the trash.
         fileRefreshToken += 1;
         clearSelection();
-        setTrashMode(true);
         renderTrashRows();
         return;
     }
-    setTrashMode(false);
 
     const list = document.getElementById('file-list');
     if (!list) return;
