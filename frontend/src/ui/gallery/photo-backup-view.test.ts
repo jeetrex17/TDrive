@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PhotoBackupState } from '../../api/photo-backup';
-import { actionLabel, canStart, currentFileName, describeBackup, destinationLabel, summaryLine } from './photo-backup-view';
+import { actionLabel, canStart, currentFileName, describeBackup, destinationLabel, queueProgress, summaryLine } from './photo-backup-view';
 
 function state(overrides: Partial<PhotoBackupState> = {}, status: Partial<PhotoBackupState['status']> = {}): PhotoBackupState {
     return {
@@ -112,5 +112,19 @@ describe('destinationLabel', () => {
     it('passes through an empty or plain destination unchanged', () => {
         expect(destinationLabel('')).toBe('');
         expect(destinationLabel('Photo backup')).toBe('Photo backup');
+    });
+});
+
+describe('queueProgress', () => {
+    it('measures the whole queue in files, finished against everything it holds', () => {
+        expect(queueProgress(state({}, { complete: 41, pending: 13, uploading: 1 }).status))
+            .toEqual({ value: 41, max: 55 });
+        // Held and failed work is still work the queue is carrying.
+        expect(queueProgress(state({}, { complete: 2, failed: 1, paused: 1 }).status))
+            .toEqual({ value: 2, max: 4 });
+    });
+
+    it('has nothing to measure on an empty queue, so the bar can say so itself', () => {
+        expect(queueProgress(state().status)).toBeNull();
     });
 });

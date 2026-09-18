@@ -126,7 +126,11 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         await expect(panel).toContainText('Backing up');
         await expect(panel).toContainText('IMG_0042.HEIC');
         await expect(panel).toContainText('24 backed up · 13 waiting');
-        await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '500');
+        // The bar answers "how far through the backup", not "how far through
+        // this file": 24 of the 37 items the queue is holding are done. The
+        // file it is on is named above it.
+        await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '24');
+        await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '37');
         expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`backup-${platform}.png`), fullPage: true });
 
@@ -195,3 +199,43 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         await page.screenshot({ path: testInfo.outputPath(`backup-progress-${platform}.png`) });
     });
 }
+
+/**
+ * The panel on a 390px screen. Every line here used to fight for the same row:
+ * "Ready to back up" wrapped onto two while its counts were cut off beside it,
+ * and "Backing up" wrapped under two buttons staggering down the side of it.
+ */
+test('the phone panel gives each line its own row and the action the full card', async ({ page }) => {
+    await usePlatform(page, 'android');
+    await bootTDrive(page, {
+        GetPhotoBackupState: resolves({
+            platform: 'android',
+            settings: { enabled: true, photos: true, videos: true, encrypt: true },
+            sources: [{ id: 'camera', kind: 'android', name: 'Camera', root: '/DCIM/Camera', enabled: true }],
+            status: { phase: 'queued', complete: 41, pending: 14 },
+            destination: { title: 'Photo backup / Pixel 8 / Camera' },
+        }),
+    });
+    const panel = await openPanel(page, 'android');
+    await expect(panel).toBeVisible();
+
+    // The count is under the state, in full, not cut off beside it.
+    const title = panel.getByText('Ready to back up', { exact: true });
+    const summary = panel.getByText('41 backed up · 14 waiting', { exact: true });
+    const titleBox = (await title.boundingBox())!;
+    const summaryBox = (await summary.boundingBox())!;
+    expect(summaryBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1);
+    expect(await summary.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
+
+    // The action runs the width of the card it sits in.
+    const card = (await panel.locator('.pb-situation').boundingBox())!;
+    const action = (await panel.getByRole('button', { name: 'Back up now', exact: true }).boundingBox())!;
+    expect(card.width - action.width).toBeLessThan(40);
+
+    // The section label keeps its own row above the two ways to add a source.
+    const label = (await panel.getByText('Backing up', { exact: true }).boundingBox())!;
+    const add = (await panel.getByRole('button', { name: 'Add folder', exact: true }).boundingBox())!;
+    expect(add.y).toBeGreaterThanOrEqual(label.y + label.height - 1);
+    // Nothing anywhere in the panel reaches past its own width.
+    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+});
