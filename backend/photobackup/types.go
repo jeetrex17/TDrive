@@ -35,7 +35,11 @@ type Source struct {
 type Asset struct {
 	ID, Version, Path, Name, MediaType, ResourceID string
 	ModifiedAt                                     time.Time
-	Size                                           int64
+	// CapturedAt is when the camera took the picture, if the host knows; zero
+	// otherwise. ModifiedAt is the file's own timestamp and moves whenever a
+	// photo is edited, which is why "new items only" cannot key off it alone.
+	CapturedAt time.Time
+	Size       int64
 }
 
 type Page struct {
