@@ -2,7 +2,9 @@
 // intentional: generated Wails bindings arrive with the backend change, while
 // this module remains the single typed frontend boundary.
 import * as appBindings from '../../bindings/TDrive/app';
+import type { OperationResult } from '../types';
 import { invokeBackend } from './gateway';
+import { normalizeOperationResult } from './operation';
 import { asRecord, boundedText, nonNegativeNumber } from './shared';
 
 type AppBinding = (...args: unknown[]) => unknown;
@@ -21,17 +23,27 @@ export interface PhotoBackupStatus { phase: 'idle' | 'scanning' | 'queued' | 'up
 export interface BackupPolicyCapability { supported: boolean; label: string; detail: string; }
 export interface PhotoBackupCapabilities { wifiOnly: BackupPolicyCapability; access: { status: string; detail: string }; }
 export interface PhotoBackupState { settings: PhotoBackupSettings; sources: PhotoBackupSource[]; status: PhotoBackupStatus; capabilities: PhotoBackupCapabilities; platform: string; destination: { id: string; title: string; kind: string }; manualPaused: boolean; encryptionRequired: boolean; }
-export interface PhotoBackupAsset { id: string; version: string; name: string; mediaType: BackupMediaType; modifiedAt: number; size: number; resourceId?: string; }
+export interface PhotoBackupAsset {
+    id: string;
+    version: string;
+    name: string;
+    mediaType: BackupMediaType;
+    modifiedAt: number;
+    /** When the picture was taken, in Unix milliseconds; 0 when the host does not know. */
+    createdAt: number;
+    size: number;
+    resourceId?: string;
+}
 
 const defaultSettings: PhotoBackupSettings = { enabled: false, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false };
 
-export const futureOnlyDescription = 'Only photos and videos added after you turn this on will be backed up. Existing items are not included.';
+export const futureOnlyDescription = 'Only photos and videos taken after you turn this on will be backed up. Existing items are not included.';
 
 function normalizeAsset(value: unknown): PhotoBackupAsset | null {
     const raw = asRecord(value); const id = boundedText(raw.id, 512); const version = boundedText(raw.version, 256);
     const mediaType = raw.media_type === 'video' ? 'video' : raw.media_type === 'photo' ? 'photo' : null;
     if (!id || !version || !mediaType) return null;
-    return { id, version, name: boundedText(raw.name, 512) || 'Untitled', mediaType, modifiedAt: nonNegativeNumber(raw.modified_at), size: nonNegativeNumber(raw.size), resourceId: boundedText(raw.resource_id, 512) || undefined };
+    return { id, version, name: boundedText(raw.name, 512) || 'Untitled', mediaType, modifiedAt: nonNegativeNumber(raw.modified_at), createdAt: nonNegativeNumber(raw.created_at), size: nonNegativeNumber(raw.size), resourceId: boundedText(raw.resource_id, 512) || undefined };
 }
 
 export function normalizePhotoBackupState(value: unknown): PhotoBackupState {
@@ -48,11 +60,14 @@ export async function savePhotoBackupSettings(settings: PhotoBackupSettings): Pr
 export async function addPhotoBackupFolder(): Promise<PhotoBackupSource | null> { const raw = asRecord(await invokeBackend(binding('AddPhotoBackupFolder'))); const id = boundedText(raw.id, 512); return id ? { id, kind: boundedText(raw.kind, 64), name: boundedText(raw.name, 240) || 'Folder', root: boundedText(raw.root, 1024), enabled: raw.enabled !== false, addedAt: nonNegativeNumber(raw.added_at) } : null; }
 export async function upsertPhotoBackupSource(source: PhotoBackupSource): Promise<void> { await invokeBackend(binding('UpsertPhotoBackupSource'), { id: source.id, kind: source.kind, name: source.name, root: source.root, enabled: source.enabled, added_at: source.addedAt }); }
 export async function removePhotoBackupSource(id: string): Promise<void> { await invokeBackend(binding('RemovePhotoBackupSource'), id); }
-export async function enqueuePhotoBackupAssets(sourceID: string, assets: PhotoBackupAsset[]): Promise<void> { await invokeBackend(binding('EnqueuePhotoBackupAssets'), sourceID, assets.map((asset) => ({ id: asset.id, version: asset.version, name: asset.name, media_type: asset.mediaType, modified_at: asset.modifiedAt, size: asset.size, resource_id: asset.resourceId ?? '' }))); }
-export async function runPhotoBackup(): Promise<void> { await invokeBackend(binding('RunPhotoBackup')); }
-export async function pausePhotoBackup(): Promise<void> { await invokeBackend(binding('PausePhotoBackup')); }
-export async function resumePhotoBackup(): Promise<void> { await invokeBackend(binding('ResumePhotoBackup')); }
-export async function retryPhotoBackup(): Promise<void> { await invokeBackend(binding('RetryPhotoBackup')); }
+export async function enqueuePhotoBackupAssets(sourceID: string, assets: PhotoBackupAsset[]): Promise<void> { await invokeBackend(binding('EnqueuePhotoBackupAssets'), sourceID, assets.map((asset) => ({ id: asset.id, version: asset.version, name: asset.name, media_type: asset.mediaType, modified_at: asset.modifiedAt, created_at: asset.createdAt, size: asset.size, resource_id: asset.resourceId ?? '' }))); }
+
+// The controls answer with the operation envelope: a stable code the password
+// prompt keys off, and the backend's own words for everything else.
+export async function runPhotoBackup(): Promise<OperationResult> { return normalizeOperationResult(await invokeBackend(binding('RunPhotoBackup')), 'Could not start photo backup'); }
+export async function pausePhotoBackup(): Promise<OperationResult> { return normalizeOperationResult(await invokeBackend(binding('PausePhotoBackup')), 'Could not pause photo backup'); }
+export async function resumePhotoBackup(): Promise<OperationResult> { return normalizeOperationResult(await invokeBackend(binding('ResumePhotoBackup')), 'Could not resume photo backup'); }
+export async function retryPhotoBackup(): Promise<OperationResult> { return normalizeOperationResult(await invokeBackend(binding('RetryPhotoBackup')), 'Could not retry photo backup'); }
 export async function setPhotoBackupPolicy(wifi: boolean): Promise<void> { await invokeBackend(binding('SetPhotoBackupPolicy'), { wifi, observed_at: Date.now() }); }
 export async function setPhotoBackupBackgroundLease(active: boolean): Promise<void> { await invokeBackend(binding('SetPhotoBackupBackgroundLease'), active); }
 export async function resolvePhotoBackupResource(token: string, path: string, error: string): Promise<void> { await invokeBackend(binding('ResolvePhotoBackupResource'), token, path, error); }

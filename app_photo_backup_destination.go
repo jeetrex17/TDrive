@@ -24,6 +24,9 @@ import (
 
 const photoBackupRootFolderName = "Photo backup"
 
+// photoBackupDestinationMu admits one destination resolution at a time across
+// the process. Folder creation is remotely projected, so two uploads racing to
+// create the same level would each publish it before either could see the other.
 var photoBackupDestinationMu sync.Mutex
 
 func photoBackupSettingsForSave(scope photobackup.Scope, current photobackup.Settings, value PhotoBackupSettings) photobackup.Settings {
@@ -50,9 +53,10 @@ type photoBackupFolderStore interface {
 	create(context.Context, int64, string, string) (photoBackupFolder, error)
 }
 
+// photoBackupDestinationResolver is built per upload and serialized by the
+// package-level photoBackupDestinationMu, so it carries no lock of its own.
 type photoBackupDestinationResolver struct {
 	store photoBackupFolderStore
-	mu    sync.Mutex
 }
 
 func newPhotoBackupDestinationResolver(store photoBackupFolderStore) *photoBackupDestinationResolver {
@@ -66,9 +70,6 @@ func (r *photoBackupDestinationResolver) resolve(ctx context.Context, channelID 
 	if r == nil || r.store == nil || channelID <= 0 {
 		return photoBackupFolder{}, fmt.Errorf("photo backup: invalid destination")
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	parentID := strings.TrimSpace(selectedParentID)
 	names := []string{
 		photoBackupRootFolderName,

@@ -10,23 +10,43 @@ async function nativeCall(value: unknown): Promise<Record<string, unknown>> { co
 
 function parse(raw: string): Record<string, unknown> { try { return asRecord(JSON.parse(raw || '{}')); } catch { return {}; } }
 
+/** The iOS bridge rejects with an Error carrying a stable `code`; anything else reads as ''. */
+function nativeErrorCode(cause: unknown): string {
+    const code = (cause as { code?: unknown } | null)?.code;
+    return typeof code === 'string' ? code : '';
+}
+
 // The Android host currently owns these names. iOS uses the same semantic
 // contract through its bridge, keeping enumeration and staging out of UI code.
 export function nativePhotoBackupAvailable(): boolean { return hasBridgeMethod('listPhotoBackupAssets') || Boolean(iosBridge()?.listPhotoBackupAssets); }
 
-export async function listNativePhotoBackupAssets(sourceID: string, cursor = ''): Promise<NativeAssetPage> {
-    const ios = iosBridge();
-    let nativeCursor: unknown = cursor;
-    try { nativeCursor = cursor ? JSON.parse(cursor) : ''; } catch { /* opaque cursors remain strings */ }
-    const raw = ios?.listPhotoBackupAssets
-        ? await nativeCall(ios.listPhotoBackupAssets(sourceID, cursor, 128))
-        : parse(await callBridge('listPhotoBackupAssets', [JSON.stringify({ sourceId: sourceID, cursor: nativeCursor, limit: 128 })], 'Photo library access is unavailable.'));
+const PAGE_LIMIT = 128;
+
+function toAssetPage(raw: Record<string, unknown>): NativeAssetPage {
     const assets = Array.isArray(raw.assets) ? raw.assets.map((value): PhotoBackupAsset | null => {
         const asset = asRecord(value); const id = boundedText(asset.id, 512); const version = boundedText(asset.version, 256); const rawType = asset.media_type ?? asset.mediaType; const mediaType = rawType === 'video' ? 'video' : rawType === 'photo' || rawType === 'image' ? 'photo' : null;
-        return id && version && mediaType ? { id, version, name: boundedText(asset.name, 512) || 'Untitled', mediaType, modifiedAt: nonNegativeNumber(asset.modified_at ?? asset.modifiedAt), size: nonNegativeNumber(asset.size), resourceId: boundedText(asset.resource_id ?? asset.resourceID, 512) || undefined } : null;
+        return id && version && mediaType ? { id, version, name: boundedText(asset.name, 512) || 'Untitled', mediaType, modifiedAt: nonNegativeNumber(asset.modified_at ?? asset.modifiedAt), createdAt: nonNegativeNumber(asset.created_at ?? asset.createdAt), size: nonNegativeNumber(asset.size), resourceId: boundedText(asset.resource_id ?? asset.resourceID, 512) || undefined } : null;
     }).filter((asset): asset is PhotoBackupAsset => asset !== null) : [];
     const next = raw.nextCursor ?? raw.next_cursor;
     return { assets, nextCursor: typeof next === 'string' ? boundedText(next, 1024) : next && typeof next === 'object' ? JSON.stringify(next) : '' };
+}
+
+export async function listNativePhotoBackupAssets(sourceID: string, cursor = ''): Promise<NativeAssetPage> {
+    const ios = iosBridge();
+    if (ios?.listPhotoBackupAssets) {
+        try {
+            return toAssetPage(await nativeCall(ios.listPhotoBackupAssets(sourceID, cursor, PAGE_LIMIT)));
+        } catch (cause) {
+            // The bridge pages over a library snapshot it keeps per cursor and
+            // lets go of when the app is suspended or memory runs short. Starting
+            // over is cheap: the ledger ignores everything it already holds.
+            if (!cursor || nativeErrorCode(cause) !== 'cursorExpired') throw cause;
+            return toAssetPage(await nativeCall(ios.listPhotoBackupAssets(sourceID, '', PAGE_LIMIT)));
+        }
+    }
+    let nativeCursor: unknown = cursor;
+    try { nativeCursor = cursor ? JSON.parse(cursor) : ''; } catch { /* opaque cursors remain strings */ }
+    return toAssetPage(parse(await callBridge('listPhotoBackupAssets', [JSON.stringify({ sourceId: sourceID, cursor: nativeCursor, limit: PAGE_LIMIT })], 'Photo library access is unavailable.')));
 }
 
 export async function requestNativePhotoBackupAccess(): Promise<void> {

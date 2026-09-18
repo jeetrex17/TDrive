@@ -169,8 +169,11 @@ func TestMigrateVersionOneAddsDurablePauseState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
+	// A v1 ledger already had a queue; only the settings shape differed.
 	if _, err = db.Exec(`CREATE TABLE photo_backup_settings(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,enabled INTEGER NOT NULL,photos INTEGER NOT NULL,videos INTEGER NOT NULL,future_only INTEGER NOT NULL,wifi_only INTEGER NOT NULL,charging_only INTEGER NOT NULL,destination_parent_id TEXT NOT NULL,encrypt INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id));
 INSERT INTO photo_backup_settings VALUES('acct',7,1,1,1,0,0,0,'',0);
+CREATE TABLE photo_backup_jobs(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,asset_id TEXT NOT NULL,version TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,media_type TEXT NOT NULL,resource_id TEXT NOT NULL DEFAULT '',modified_at INTEGER NOT NULL,size INTEGER NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',remote_message_id INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id,source_id,asset_id,version,resource_id));
+INSERT INTO photo_backup_jobs VALUES('acct',7,'camera','a','v','/a.jpg','a.jpg','photo','',1,1,'pending',0,0,'',0,1,1);
 PRAGMA user_version=1`); err != nil {
 		t.Fatal(err)
 	}
@@ -182,12 +185,18 @@ PRAGMA user_version=1`); err != nil {
 		t.Fatal(err)
 	}
 	var version int
-	if err = db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 3 {
+	if err = db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
-	var chargingColumns int
+	var chargingColumns, captureColumns, queued int
 	if err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('photo_backup_settings') WHERE name='charging_only'`).Scan(&chargingColumns); err != nil || chargingColumns != 0 {
 		t.Fatalf("charging columns=%d err=%v", chargingColumns, err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('photo_backup_jobs') WHERE name='captured_at'`).Scan(&captureColumns); err != nil || captureColumns != 1 {
+		t.Fatalf("capture columns=%d err=%v", captureColumns, err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM photo_backup_jobs WHERE captured_at=0`).Scan(&queued); err != nil || queued != 1 {
+		t.Fatalf("queued rows after migration=%d err=%v", queued, err)
 	}
 	settings, err := engine.GetSettings(context.Background(), Scope{AccountID: "acct", DriveID: 7})
 	if err != nil || !settings.Enabled || !settings.Photos || !settings.Videos || settings.ManualPaused {
@@ -218,8 +227,10 @@ func TestMigrateVersionTwoDropsChargingWithoutBlockingOrLosingQueue(t *testing.T
 	if _, err := engine.EnqueuePage(context.Background(), scope, "camera", []Asset{{ID: "queued", Version: "v1", Path: "/queued.jpg", Name: "queued.jpg", MediaType: "photo", ModifiedAt: now, Size: 42}}); err != nil {
 		t.Fatal(err)
 	}
+	// Rewind a current ledger to the exact shape a v2 release wrote.
 	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_settings ADD COLUMN charging_only INTEGER NOT NULL DEFAULT 0;
 UPDATE photo_backup_settings SET charging_only=1;
+ALTER TABLE photo_backup_jobs DROP COLUMN captured_at;
 PRAGMA user_version=2`); err != nil {
 		t.Fatal(err)
 	}
@@ -249,12 +260,50 @@ PRAGMA user_version=2`); err != nil {
 	if err != nil || uploaded != 1 || called != 1 {
 		t.Fatalf("uploaded=%d called=%d err=%v", uploaded, called, err)
 	}
-	var version, chargingColumns int
-	if err := engine.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 3 {
+	var version, chargingColumns, captureColumns int
+	if err := engine.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	if err := engine.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('photo_backup_settings') WHERE name='charging_only'`).Scan(&chargingColumns); err != nil || chargingColumns != 0 {
 		t.Fatalf("charging columns=%d err=%v", chargingColumns, err)
+	}
+	if err := engine.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('photo_backup_jobs') WHERE name='captured_at'`).Scan(&captureColumns); err != nil || captureColumns != 1 {
+		t.Fatalf("capture columns=%d err=%v", captureColumns, err)
+	}
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
+// v3 is what every current install is on, so this is the upgrade that will
+// actually run in the field.
+func TestMigrateVersionThreeAddsCaptureTimeWithoutLosingQueue(t *testing.T) {
+	now := time.Unix(30, 0)
+	engine, scope := testEngine(t, &now)
+	configure(t, engine, scope)
+	if _, err := engine.EnqueuePage(context.Background(), scope, "camera", []Asset{{ID: "queued", Version: "v1", Path: "/queued.jpg", Name: "queued.jpg", MediaType: "photo", ModifiedAt: now, Size: 42}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_jobs DROP COLUMN captured_at; PRAGMA user_version=3`); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := engine.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("version=%d err=%v", version, err)
+	}
+	uploaded, err := engine.RunOnce(context.Background(), scope, func(_ context.Context, r UploadRequest) (UploadResult, error) {
+		// A row written before the column existed must read back as an
+		// unknown capture time, never as 1970.
+		if r.Asset.ID != "queued" || !r.Asset.CapturedAt.IsZero() {
+			t.Fatalf("request=%+v", r)
+		}
+		return UploadResult{RemoteMessageID: 5}, nil
+	})
+	if err != nil || uploaded != 1 {
+		t.Fatalf("uploaded=%d err=%v", uploaded, err)
 	}
 	if err := engine.Migrate(context.Background()); err != nil {
 		t.Fatalf("repeat migration: %v", err)
@@ -340,6 +389,28 @@ func TestFutureOnlyAndNativePageBound(t *testing.T) {
 	n, err := e.EnqueuePage(context.Background(), scope, "native", []Asset{{ID: "old", Version: "1", ResourceID: "r", Name: "o.jpg", ModifiedAt: now.Add(-time.Second)}, {ID: "new", Version: "1", ResourceID: "r2", Name: "n.jpg", ModifiedAt: now.Add(time.Second)}})
 	if err != nil || n != 1 {
 		t.Fatal(n, err)
+	}
+	// The capture time decides when the host reports one. An old photo that
+	// was edited after backup was switched on is not a new item, and a fresh
+	// shot whose file timestamp lies still is.
+	n, err = e.EnqueuePage(context.Background(), scope, "native", []Asset{
+		{ID: "edited", Version: "1", ResourceID: "r3", Name: "e.jpg", CapturedAt: now.Add(-time.Hour), ModifiedAt: now.Add(time.Second)},
+		{ID: "shot", Version: "1", ResourceID: "r4", Name: "s.jpg", CapturedAt: now.Add(time.Second), ModifiedAt: now.Add(-time.Hour)},
+	})
+	if err != nil || n != 1 {
+		t.Fatalf("edited old photo must not count as new: added=%d err=%v", n, err)
+	}
+	seen := map[string]time.Time{}
+	for i := 0; i < 2; i++ {
+		if _, err := e.RunOnce(context.Background(), scope, func(_ context.Context, r UploadRequest) (UploadResult, error) {
+			seen[r.Asset.ID] = r.Asset.CapturedAt
+			return UploadResult{RemoteMessageID: int64(i + 1)}, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !seen["new"].IsZero() || !seen["shot"].Equal(now.Add(time.Second)) {
+		t.Fatalf("capture time must round-trip through the ledger: %v", seen)
 	}
 	if _, err = e.EnqueuePage(context.Background(), scope, "native", make([]Asset, 129)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err=%v", err)
