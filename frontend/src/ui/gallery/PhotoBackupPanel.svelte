@@ -170,17 +170,21 @@
             <div class="pb-group" aria-label="Sources">
                 <div class="pb-group-head">
                     <span class="pb-group-label">Backing up</span>
+                    <!-- The folder picker comes first and is the system's
+                         own, the same one the app opens to upload a folder.
+                         The album list is the other kind of source, and says
+                         so rather than reading as a second way to do this. -->
                     <div class="pb-group-actions">
-                        {#if phone}
-                            <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void loadPhotoBackupCandidates()}>
-                                <PlusIcon size={14} strokeWidth={2.2} aria-hidden="true" />
-                                Choose sources
-                            </Button>
-                        {/if}
                         {#if folderPicking}
                             <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void choosePhotoBackupFolder()}>
                                 <FolderPlusIcon size={14} strokeWidth={2.2} aria-hidden="true" />
                                 Add folder
+                            </Button>
+                        {/if}
+                        {#if phone}
+                            <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void loadPhotoBackupCandidates()}>
+                                <ImagesIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+                                Photo albums
                             </Button>
                         {/if}
                     </div>

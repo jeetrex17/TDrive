@@ -54,9 +54,12 @@ func validatePhotoBackupDeviceFolderRoot(root string) (string, error) {
 	return volume + ":" + strings.Join(components, "/") + "/", nil
 }
 
-// Media volume names are MediaStore's own ("external_primary", or a card's
-// lowercased UUID such as "1aef-2b03"). Anything else did not come from the
-// host, and a root is a database key, so it is checked rather than trusted.
+// Volume names are the host's own: MediaStore's on Android ("external_primary",
+// or a card's lowercased UUID such as "1aef-2b03"), and "files" on iOS, where
+// there is no media index and a picked folder is a place in the Files app that
+// the host holds a security-scoped bookmark to. Anything else did not come
+// from a host, and a root is a database key, so it is checked rather than
+// trusted.
 func isPhotoBackupVolumeName(volume string) bool {
 	if len(volume) > 64 {
 		return false

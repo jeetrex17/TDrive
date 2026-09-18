@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const bridge = vi.hoisted(() => ({ callBridge: vi.fn(), hasBridgeMethod: vi.fn() }));
 vi.mock('../android-bridge', () => bridge);
 
-import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, pickNativePhotoBackupFolder } from './native-adapter';
+import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder } from './native-adapter';
 
 type IOSWindow = Window & { tdriveIOSPhotos?: unknown };
 
@@ -36,6 +36,24 @@ describe('native photo backup adapter', () => {
         bridge.callBridge.mockResolvedValueOnce(JSON.stringify({ id: 'tree:external_primary:DCIM/Camera/', root: 'external_primary:DCIM/Camera/', name: 'Camera', kind: 'device-folder' }));
         expect(await pickNativePhotoBackupFolder()).toMatchObject({ id: 'tree:external_primary:DCIM/Camera/', kind: 'device-folder', name: 'Camera', enabled: true });
         bridge.callBridge.mockResolvedValueOnce('');
+        expect(await pickNativePhotoBackupFolder()).toBeNull();
+    });
+
+    // iOS folders come from the Files picker rather than a media index, so the
+    // bridge that offers them is the phone's own and not the Android one.
+    it('picks a folder through the iOS bridge when that is the host', async () => {
+        const pickPhotoBackupFolder = vi.fn().mockResolvedValue({
+            id: 'tree:files:private/var/mobile/Camera/', root: 'files:private/var/mobile/Camera/',
+            kind: 'device-folder', name: 'Camera',
+        });
+        (window as IOSWindow).tdriveIOSPhotos = { pickPhotoBackupFolder };
+        expect(nativePhotoBackupFolderPicking()).toBe(true);
+        expect(await pickNativePhotoBackupFolder()).toMatchObject({
+            id: 'tree:files:private/var/mobile/Camera/', root: 'files:private/var/mobile/Camera/', name: 'Camera', enabled: true,
+        });
+        expect(bridge.callBridge).not.toHaveBeenCalled();
+        // A dismissal answers with nothing at all, which is not a folder.
+        pickPhotoBackupFolder.mockResolvedValue({});
         expect(await pickNativePhotoBackupFolder()).toBeNull();
     });
 
