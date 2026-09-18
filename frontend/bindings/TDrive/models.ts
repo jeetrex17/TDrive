@@ -261,6 +261,12 @@ export interface PhotoBackupAsset {
     "media_type": string;
     "resource_id": string;
     "modified_at": number;
+
+    /**
+     * CreatedAt is the capture time in Unix milliseconds, or 0 when the host
+     * does not know it. Editing a photo moves ModifiedAt; this stays put.
+     */
+    "created_at": number;
     "size": number;
 }
 

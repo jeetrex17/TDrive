@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -128,15 +129,15 @@ func TestPhotoBackupPolicyFailsClosedAndExpires(t *testing.T) {
 		t.Fatalf("unrestricted policy: %v", err)
 	}
 	settings := photobackup.Settings{WiFiOnly: true}
-	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "unavailable") {
+	if err := app.photoBackupPolicyAllows(settings); err == nil || !errors.Is(err, errPhotoBackupPolicyUnavailable) {
 		t.Fatalf("missing policy error=%v", err)
 	}
 	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, ObservedAt: time.Now().Add(-photoBackupPolicyTTL - time.Second).UnixMilli()})
-	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "unavailable") {
+	if err := app.photoBackupPolicyAllows(settings); err == nil || !errors.Is(err, errPhotoBackupPolicyUnavailable) {
 		t.Fatalf("expired policy error=%v", err)
 	}
 	app.SetPhotoBackupPolicy(PhotoBackupPolicy{ObservedAt: time.Now().UnixMilli()})
-	if err := app.photoBackupPolicyAllows(settings); err == nil || !strings.Contains(err.Error(), "Wi-Fi") {
+	if err := app.photoBackupPolicyAllows(settings); err == nil || !errors.Is(err, errPhotoBackupWaitingForWiFi) {
 		t.Fatalf("Wi-Fi error=%v", err)
 	}
 	app.SetPhotoBackupPolicy(PhotoBackupPolicy{WiFi: true, ObservedAt: time.Now().UnixMilli()})
