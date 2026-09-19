@@ -30,6 +30,8 @@ import { activateFileSelectionProgress } from './file-selection';
 import { openImportOptionsModal } from './modals/import-options';
 import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
+import { postSystemNotification } from './android-foreground';
+import { retryTransferAction } from './notification-actions';
 import { createImportProgress, reduceImportProgress } from './import-progress';
 import { TransferBatch, type UploadOutcome } from './transfer-batch';
 import { activateTransferPersistence } from './transfer-persistence';
@@ -40,6 +42,7 @@ import {
     updateTransferName,
     markTransferDone,
     setTransferNote,
+    transferKey,
     wasUploadCanceled,
 } from './notif-bell';
 
@@ -338,6 +341,17 @@ function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | 
         notify({ level: 'warning', title: noun + ' already exists', body: reason, history: false });
         return;
     }
+    // In the shade too, where a failure that happened while the user was
+    // elsewhere is otherwise silent until they next open the app. The module
+    // drops it when TDrive is on screen, so this is never a second copy of a
+    // row they are already looking at.
+    void postSystemNotification({
+        kind: 'problem',
+        title: `Couldn't download ${item.name}`,
+        text: reason || 'The download could not be completed.',
+        action: retryTransferAction(transferKey('down', item.key)),
+    }).catch(() => undefined);
+
     // The fields are read out now rather than closed over: finalizeDownload
     // drops the item from the queue right after this, and a Retry that
     // referenced a removed entry would do nothing.
@@ -767,6 +781,13 @@ function activateUploadProgressEvents(): void {
                 body: errorBody,
                 history: false,
             });
+            // No button: an upload's source path is long gone by the time this
+            // row exists, so the only honest offer is none.
+            void postSystemNotification({
+                kind: 'problem',
+                title: filename ? `Couldn't upload ${filename}` : 'Upload failed',
+                text: errorBody,
+            }).catch(() => undefined);
         }
 
         if (batchFinished) {

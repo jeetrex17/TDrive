@@ -28,6 +28,7 @@ vi.mock('../../bindings/TDrive/app', () => bindings);
 vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notif-bell', () => ({
     setTransferNote: vi.fn(),
+    transferKey: (direction: string, id: string | number) => `xfer:${direction}:${id}`,
     pushQueuedTransfer: transferEvents.queued,
     pushTransferStart: transferEvents.push,
     updateTransferProgress: transferEvents.progress,

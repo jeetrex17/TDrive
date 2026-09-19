@@ -24,6 +24,18 @@
 
 import { callBridge, hasBridgeMethod } from './android-bridge';
 
+/**
+ * One button on a notification.
+ *
+ * The id is opaque to the host and meaningful only here: it comes back
+ * verbatim when the button is pressed, which is what lets a button be added
+ * without the host learning anything about what it does.
+ */
+export interface NotificationAction {
+    id: string;
+    label: string;
+}
+
 /** The one line the user sees for as long as the work runs. */
 export interface ForegroundNotice {
     /** What is happening: "Uploading 3 files". */
@@ -37,6 +49,13 @@ export interface ForegroundNotice {
     /** Files finished, and files in the batch. Omit both where there is no count. */
     filesDone?: number;
     filesTotal?: number;
+    /**
+     * The one thing the user can do to this work from the shade: pause a
+     * backup, stop a transfer they started. Omitted where there is nothing
+     * honest to offer, because a button that opens the app to do the job is
+     * just a slower way of tapping the row.
+     */
+    action?: NotificationAction;
 }
 
 /**
@@ -52,6 +71,23 @@ export interface ForegroundSummary {
     outcome: 'complete' | 'stopped';
     title: string;
     text: string;
+}
+
+/**
+ * A notification about something that already happened.
+ *
+ * 'problem' and 'done' are two different rows on two different channels: a
+ * failure has to be able to reach someone who silenced the progress bar, and
+ * the result of the work has to survive the failure being dismissed.
+ */
+export interface SystemNotification {
+    kind: 'problem' | 'done';
+    title: string;
+    text: string;
+    /** Offered only where there is a real second chance -- a retryable download. */
+    action?: NotificationAction;
+    /** Which screen a tap should open. Defaults to the transfers list. */
+    route?: 'transfers';
 }
 
 const UNAVAILABLE = 'This build cannot keep transfers running in the background.';
@@ -139,6 +175,24 @@ function syncHost(summary?: ForegroundSummary): Promise<void> {
 /** Whether this build can hold the process open at all. */
 export function canRunInBackground(): boolean {
     return hasBridgeMethod('foregroundService');
+}
+
+/** Whether this build can put a line in the system shade of its own accord. */
+export function canPostSystemNotification(): boolean {
+    return hasBridgeMethod('postNotification');
+}
+
+/**
+ * Leaves one line in the system shade about work that has already happened.
+ *
+ * Silently does nothing while TDrive is the thing on screen: the app is
+ * already showing this, and a notification for it would be a second copy of a
+ * row the user is looking at. That rule lives here, in the one place every
+ * caller passes through, rather than in each of them.
+ */
+export async function postSystemNotification(notification: SystemNotification): Promise<void> {
+    if (!canPostSystemNotification() || appIsVisible()) return;
+    await callBridge('postNotification', [JSON.stringify(notification)], UNAVAILABLE);
 }
 
 /**

@@ -118,6 +118,9 @@ public class MainActivity extends AppCompatActivity {
      * coalesced onto the trailing edge rather than sent per change. The page
      * decides what to do with it: the same event a resume sends.
      */
+    /** Set by a notification tap; read once and cleared. See routeIntent. */
+    private static final String EXTRA_ROUTE = "com.wails.app.extra.ROUTE";
+
     private ContentObserver mediaObserver;
     private Handler mediaSignalHandler;
     private Runnable mediaSignal;
@@ -1984,6 +1987,48 @@ public class MainActivity extends AppCompatActivity {
                 new String[]{"android.permission.POST_NOTIFICATIONS"}, NOTIFICATION_PERMISSION_REQUEST);
     }
 
+    /**
+     * The intent that opens TDrive on a given screen.
+     *
+     * Built from the launcher intent rather than by naming this class, so the
+     * task is resumed the way tapping the icon resumes it -- the same task,
+     * the same back stack -- with one extra saying where to land. A null or
+     * empty route is simply the app, opened.
+     */
+    static Intent routeIntent(Context context, String route) {
+        Intent launch = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+        if (launch == null) return null;
+        // SINGLE_TOP with the activity's singleTop launch mode is what makes a
+        // running app receive this through onNewIntent instead of being torn
+        // down and rebuilt under the user, losing whatever they were doing.
+        launch.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (route != null && !route.isEmpty()) launch.putExtra(EXTRA_ROUTE, route);
+        return launch;
+    }
+
+    /**
+     * Where a notification asked the app to open. The page owns what a route
+     * means; this only carries the word across, and only once -- the extra is
+     * cleared so a later resume does not navigate the user somewhere they did
+     * not ask to go a second time.
+     */
+    private void deliverRoute(Intent intent) {
+        if (intent == null || bridge == null) return;
+        String route = intent.getStringExtra(EXTRA_ROUTE);
+        if (route == null || route.isEmpty()) return;
+        intent.removeExtra(EXTRA_ROUTE);
+        bridge.emitEvent("android:OpenRoute", "{\"route\":" + JSONObject.quote(route) + "}");
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        // Keep it as the activity's intent so a route arriving before the page
+        // is ready is still delivered by the next resume rather than dropped.
+        setIntent(intent);
+        deliverRoute(intent);
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -1994,6 +2039,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (bridge != null) {
             bridge.onResume();
+            deliverRoute(getIntent());
             // MediaStore access may have changed while the app was backgrounded
             // (notably Android 14's selected-photo grant), so the page can
             // resume its bounded discovery without polling a stale grant.

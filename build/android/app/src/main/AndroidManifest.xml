@@ -51,7 +51,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -72,6 +73,12 @@
             android:name=".WailsForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- The buttons on TDrive's own notifications. Never exported: the only
+             thing allowed to press them is the system, on the user's behalf. -->
+        <receiver
+            android:name=".WailsNotificationReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

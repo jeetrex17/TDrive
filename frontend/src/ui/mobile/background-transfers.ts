@@ -28,6 +28,7 @@ import {
     stopRunningInBackground,
     type ForegroundNotice,
 } from '../../modules/android-foreground';
+import { stopTransfersAction } from '../../modules/notification-actions';
 import { activeTransfers, type TransferEvent } from '../notifications/notif-store';
 import {
     formatEta,
@@ -94,6 +95,7 @@ export function describeTransfers(
             title: `${verb(transfers)} ${only.name || 'file'}`,
             text: transferDetail(only, now),
             progress: transferPercent(only) ?? -1,
+            action: stopTransfersAction(only.direction),
         };
     }
 
@@ -126,7 +128,17 @@ export function describeTransfers(
         title: `${verb(transfers)} ${files} files`,
         text: parts.join(' · ') || 'Preparing…',
         progress: total > 0 ? Math.round((done / total) * 100) : -1,
+        // A queue going both ways has no single thing to stop, so the button
+        // names the direction it can honestly stop: whichever the majority of
+        // the queue is. The Transfers tab stops either, individually.
+        action: stopTransfersAction(majorityDirection(transfers)),
     };
+}
+
+/** Which way most of the queue is going, for a button that can only pick one. */
+function majorityDirection(transfers: readonly TransferEvent[]): 'up' | 'down' {
+    const uploads = transfers.filter((transfer) => transfer.direction === 'up').length;
+    return uploads * 2 >= transfers.length ? 'up' : 'down';
 }
 
 /** "Transferring" only when the queue really is going both ways at once. */
@@ -185,7 +197,8 @@ export function planForegroundService(
 }
 
 function same(a: ForegroundNotice, b: ForegroundNotice): boolean {
-    return a.title === b.title && a.text === b.text && a.progress === b.progress;
+    return a.title === b.title && a.text === b.text && a.progress === b.progress
+        && a.action?.id === b.action?.id;
 }
 
 /**

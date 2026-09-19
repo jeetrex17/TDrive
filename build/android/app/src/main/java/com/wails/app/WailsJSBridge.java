@@ -236,6 +236,56 @@ public class WailsJSBridge {
      * permission is granted the notification simply appears, because every
      * coalesced update re-posts it.
      */
+    /**
+     * Posts one notification that is not about work in flight.
+     *
+     * Called from JavaScript: wails.postNotification(callbackId, json) with
+     * {"kind":"problem","title":"Couldn't back up 3 items","text":"...",
+     *  "action":{"id":"backup:retry","label":"Retry"},"route":"transfers"}.
+     * "kind" is "problem" or "done"; everything past it is optional and read
+     * with a default, the same extension mechanism foregroundService uses.
+     *
+     * Separate from foregroundService because it is a separate thing: that one
+     * describes a running service and its single ongoing row, this one leaves
+     * a row behind for something that already happened. Folding them together
+     * would mean a page that wants to report a failure mid-transfer having to
+     * describe the service it is not trying to change.
+     */
+    @JavascriptInterface
+    public void postNotification(final String callbackId, final String json) {
+        final MainActivity activity = activity();
+        if (activity == null) {
+            sendCallback(callbackId, null, "notifications unavailable");
+            return;
+        }
+        try {
+            JSONObject options = new JSONObject(json);
+            String title = options.optString("title", "");
+            if (title.isEmpty()) {
+                sendCallback(callbackId, null, "a notification needs a title");
+                return;
+            }
+            String text = options.optString("text", "");
+            String route = options.optString("route", WailsForegroundService.ROUTE_TRANSFERS);
+            if ("problem".equals(options.optString("kind", "problem"))) {
+                WailsForegroundService.postProblem(activity, title, text,
+                        action(options, "id"), action(options, "label"), route);
+            } else {
+                WailsForegroundService.postSummary(activity, title, text, false, route);
+            }
+            sendCallback(callbackId, "", null);
+        } catch (Exception e) {
+            Log.e(TAG, "postNotification failed", e);
+            sendCallback(callbackId, null, "could not post that notification");
+        }
+    }
+
+    /** One field of the optional "action" object, or "" where there is none. */
+    private static String action(JSONObject options, String field) {
+        JSONObject spec = options.optJSONObject("action");
+        return spec == null ? "" : spec.optString(field, "");
+    }
+
     @JavascriptInterface
     public void foregroundService(final String callbackId, final String json) {
         final MainActivity activity = activity();
@@ -267,7 +317,12 @@ public class WailsJSBridge {
                     .putExtra(WailsForegroundService.EXTRA_PROGRESS, options.optInt("progress", -1))
                     .putExtra(WailsForegroundService.EXTRA_DETAIL, options.optString("detail", ""))
                     .putExtra(WailsForegroundService.EXTRA_FILES_DONE, options.optInt("filesDone", 0))
-                    .putExtra(WailsForegroundService.EXTRA_FILES_TOTAL, options.optInt("filesTotal", 0));
+                    .putExtra(WailsForegroundService.EXTRA_FILES_TOTAL, options.optInt("filesTotal", 0))
+                    // One optional button, described by the page: {"action":
+                    // {"id":"backup:pause","label":"Pause"}}. Absent is a
+                    // notification without one, exactly as before.
+                    .putExtra(WailsForegroundService.EXTRA_ACTION_ID, action(options, "id"))
+                    .putExtra(WailsForegroundService.EXTRA_ACTION_LABEL, action(options, "label"));
             ContextCompat.startForegroundService(activity, intent);
             activity.noteBackgroundTransferRunning();
             sendCallback(callbackId, "", null);

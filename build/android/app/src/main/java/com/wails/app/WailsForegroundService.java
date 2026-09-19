@@ -14,6 +14,8 @@ import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
 
+import org.json.JSONObject;
+
 import java.lang.ref.WeakReference;
 
 /**
@@ -50,6 +52,18 @@ public class WailsForegroundService extends android.app.Service {
      */
     public static final String EXTRA_FILES_DONE = "filesDone";
     public static final String EXTRA_FILES_TOTAL = "filesTotal";
+    /**
+     * The one button the ongoing notification carries, if the work has
+     * something the user can do to it: "Pause" for a backup, "Stop" for a
+     * transfer they started. Absent means no button, which is what every
+     * caller got before this existed.
+     *
+     * One, not several: the collapsed row shows what it has room for, and a
+     * second button is a second decision to read past at the exact moment the
+     * user is scanning the shade for something else.
+     */
+    public static final String EXTRA_ACTION_ID = "actionId";
+    public static final String EXTRA_ACTION_LABEL = "actionLabel";
 
     /**
      * Unchanged from the id this service has always used. A channel id is how
@@ -70,6 +84,24 @@ public class WailsForegroundService extends android.app.Service {
      * the service that posted it.
      */
     private static final int SUMMARY_NOTIFICATION_ID = 0x57A2;
+    /**
+     * Problems get their own id as well as their own channel: a failure that
+     * replaced the summary would erase the only record that the rest of the
+     * work succeeded, and one that shared an id with the next failure would
+     * hide it.
+     */
+    private static final int PROBLEM_NOTIFICATION_ID = 0x57A3;
+    /**
+     * The second channel, and the reason there is one.
+     *
+     * Progress and results belong together -- they are the same subject, one
+     * after the other -- but a failure is not. Sharing a channel meant a user
+     * who silenced the progress bar (reasonable: it redraws for minutes) also
+     * silenced every "could not back this up", which is the one line here
+     * worth interrupting for. Two channels is two rows in Settings; it is also
+     * the only way either choice can be made.
+     */
+    private static final String PROBLEM_CHANNEL_ID = "tdrive_problems";
     private static final int PROGRESS_MAX = 100;
     // The service and Wails runtime share a process. Keep only a weak handle so
     // a destroyed Activity/WebView can never be retained by a long transfer.
@@ -86,9 +118,34 @@ public class WailsForegroundService extends android.app.Service {
         }
     }
 
+    /**
+     * Hands a tapped notification button to the page, and reports whether
+     * anyone was there to take it.
+     *
+     * False means the process outlived its WebView -- or never had one this
+     * launch -- and the caller falls back to opening the app. The id is opaque
+     * here on purpose: what "retry:down:1421" means is the page's business,
+     * and a host that had to understand it would need updating every time the
+     * page grew a new button.
+     */
+    static boolean dispatchNotificationAction(String actionId) {
+        WailsBridge bridge = runtimeBridge.get();
+        if (bridge == null) return false;
+        bridge.emitEvent("android:NotificationAction", "{\"id\":" + JSONObject.quote(actionId) + "}");
+        return true;
+    }
+
+    /** Takes one posted row down, by the id it was posted with. */
+    static void cancelNotification(Context context, int notificationId) {
+        NotificationManagerCompat.from(context).cancel(notificationId);
+    }
+
     /** Creating the channel is idempotent but not free, and this runs per update. */
     private static volatile boolean channelReady;
     private PendingIntent contentIntent;
+
+    /** The screen a transfer row belongs to, for taps and for action fallbacks. */
+    static final String ROUTE_TRANSFERS = "transfers";
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -109,13 +166,15 @@ public class WailsForegroundService extends android.app.Service {
         String detail = intent != null ? intent.getStringExtra(EXTRA_DETAIL) : null;
         int filesDone = intent != null ? intent.getIntExtra(EXTRA_FILES_DONE, 0) : 0;
         int filesTotal = intent != null ? intent.getIntExtra(EXTRA_FILES_TOTAL, 0) : 0;
+        String actionId = intent != null ? intent.getStringExtra(EXTRA_ACTION_ID) : null;
+        String actionLabel = intent != null ? intent.getStringExtra(EXTRA_ACTION_LABEL) : null;
 
         ensureChannel(this);
         // Unconditional and synchronous, on every command including the one
         // that arrives with a null intent: the system allows roughly five
         // seconds from startForegroundService() to startForeground() before it
         // kills the app with an ANR, and there is nothing here worth deferring.
-        Notification notification = build(title, text, hasBar, progress, detail, filesDone, filesTotal);
+        Notification notification = build(title, text, hasBar, progress, detail, filesDone, filesTotal, actionId, actionLabel);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         } else {
@@ -148,7 +207,8 @@ public class WailsForegroundService extends android.app.Service {
     }
 
     private Notification build(String title, String text, boolean hasBar, int progress,
-                               String detail, int filesDone, int filesTotal) {
+                               String detail, int filesDone, int filesTotal,
+                               String actionId, String actionLabel) {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 // A platform status icon rather than the launcher icon, which is
                 // a full-colour bitmap and renders as a white blob up there.
@@ -189,12 +249,14 @@ public class WailsForegroundService extends android.app.Service {
             builder.setStyle(new NotificationCompat.BigTextStyle().bigText(text + "\n" + detail));
         }
 
-        // No Cancel action. Stopping the transfers means reaching the Go calls
-        // that own them, which only the WebView can do, and wiring a button
-        // back through the activity to JavaScript buys a static reference to a
-        // WebView that outlives it. Tapping the notification opens the app,
-        // where the Transfers tab cancels any row individually -- honest, and
-        // already built.
+        // The one thing the user can do to this work without opening the app.
+        // It reaches the Go calls that own the transfers the only way it can:
+        // a broadcast to this app, then the page, through the same weak bridge
+        // the deadline already uses. No static handle on a WebView is created
+        // or kept, which was the objection that left this button out before.
+        if (actionId != null && !actionId.isEmpty() && actionLabel != null && !actionLabel.isEmpty()) {
+            builder.addAction(0, actionLabel, actionIntent(this, actionId, 0, ROUTE_TRANSFERS));
+        }
         return builder.build();
     }
 
@@ -203,7 +265,7 @@ public class WailsForegroundService extends android.app.Service {
      * PendingIntent is a round trip to the system each time.
      */
     private PendingIntent contentIntent() {
-        if (contentIntent == null) contentIntent = launchIntent(this);
+        if (contentIntent == null) contentIntent = launchIntent(this, ROUTE_TRANSFERS);
         return contentIntent;
     }
 
@@ -222,6 +284,11 @@ public class WailsForegroundService extends android.app.Service {
      * interrupts is still an interruption.
      */
     static void postSummary(Context context, String title, String text, boolean interrupted) {
+        postSummary(context, title, text, interrupted, ROUTE_TRANSFERS);
+    }
+
+    /** As above, opening the screen the work belongs to when it is tapped. */
+    static void postSummary(Context context, String title, String text, boolean interrupted, String route) {
         NotificationManagerCompat manager = NotificationManagerCompat.from(context);
         // Denied POST_NOTIFICATIONS makes notify() a no-op rather than an
         // error, but asking first keeps the intent of the code readable.
@@ -237,18 +304,94 @@ public class WailsForegroundService extends android.app.Service {
                 .setAutoCancel(true)
                 .setSilent(true)
                 .setCategory(NotificationCompat.CATEGORY_STATUS)
-                .setContentIntent(launchIntent(context))
+                .setContentIntent(launchIntent(context, route))
                 .build();
         manager.notify(SUMMARY_NOTIFICATION_ID, notification);
     }
 
-    /** Tapping any of this opens the app, which is where transfers are managed. */
-    private static PendingIntent launchIntent(Context context) {
-        Intent launch = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+    /**
+     * Something went wrong while the user was elsewhere.
+     *
+     * Its own channel, so it can still be heard by someone who silenced the
+     * progress bar, and its own id, so it neither erases the summary of the
+     * work that did succeed nor is erased by it. The button is optional
+     * because only some failures have a second chance worth offering: a
+     * download can be re-queued from what the row already knows, an upload's
+     * source path is long gone.
+     */
+    static void postProblem(Context context, String title, String text,
+                            String actionId, String actionLabel, String route) {
+        NotificationManagerCompat manager = NotificationManagerCompat.from(context);
+        if (!manager.areNotificationsEnabled()) return;
+        ensureProblemChannel(context);
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(context, PROBLEM_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setContentTitle(title)
+                .setContentText(text)
+                // The reason is a sentence, not a label, and the collapsed row
+                // has one line: the whole of it belongs in the expanded view.
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_ERROR)
+                .setContentIntent(launchIntent(context, route));
+        if (actionId != null && !actionId.isEmpty() && actionLabel != null && !actionLabel.isEmpty()) {
+            builder.addAction(0, actionLabel,
+                    actionIntent(context, actionId, PROBLEM_NOTIFICATION_ID, route));
+        }
+        manager.notify(PROBLEM_NOTIFICATION_ID, builder.build());
+    }
+
+    /**
+     * A failure is worth a sound the first time and noise by the tenth, so the
+     * channel is DEFAULT rather than HIGH: it posts to the shade and can be
+     * heard, but it does not shove itself over what the user is doing.
+     */
+    private static volatile boolean problemChannelReady;
+
+    private static void ensureProblemChannel(Context context) {
+        if (problemChannelReady || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            problemChannelReady = true;
+            return;
+        }
+        NotificationChannel channel = new NotificationChannel(
+                PROBLEM_CHANNEL_ID, "Transfer problems", NotificationManager.IMPORTANCE_DEFAULT);
+        channel.setDescription("Shown when an upload, download, or backup could not finish.");
+        NotificationManager nm =
+                (NotificationManager) context.getSystemService(NOTIFICATION_SERVICE);
+        if (nm != null) nm.createNotificationChannel(channel);
+        problemChannelReady = true;
+    }
+
+    /**
+     * The intent behind a notification button.
+     *
+     * Keyed by the action id so two buttons never share a PendingIntent: the
+     * system matches them by requestCode plus intent equality, and extras are
+     * not part of that comparison, so a shared code would silently deliver the
+     * first button's extras from the second button.
+     */
+    private static PendingIntent actionIntent(Context context, String actionId,
+                                              int dismissId, String route) {
+        Intent intent = new Intent(context, WailsNotificationReceiver.class)
+                .setAction(WailsNotificationReceiver.ACTION_NOTIFICATION_ACTION)
+                .putExtra(WailsNotificationReceiver.EXTRA_ACTION_ID, actionId)
+                .putExtra(WailsNotificationReceiver.EXTRA_DISMISS_ID, dismissId)
+                .putExtra(WailsNotificationReceiver.EXTRA_FALLBACK_ROUTE, route);
+        return PendingIntent.getBroadcast(context, actionId.hashCode(), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /**
+     * Tapping any of this opens the app on the screen the row is about, rather
+     * than wherever the user happened to leave it. The activity is singleTop,
+     * so a running app receives this through onNewIntent instead of being
+     * rebuilt underneath the user.
+     */
+    private static PendingIntent launchIntent(Context context, String route) {
+        Intent launch = MainActivity.routeIntent(context, route);
         if (launch == null) return null;
-        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-                ? PendingIntent.FLAG_IMMUTABLE : 0;
-        return PendingIntent.getActivity(context, 0, launch, flags);
+        return PendingIntent.getActivity(context, route == null ? 0 : route.hashCode(), launch,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
     private static int clampProgress(int progress) {

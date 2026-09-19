@@ -23,6 +23,7 @@
     import { activateSafeArea } from './safe-area';
     import { activateKeyboardInsets } from './keyboard-insets';
     import { activateBackgroundTransfers } from './background-transfers';
+    import { activateNotificationActions } from '../../modules/notification-actions';
     import { scrollBehavior } from './motion';
     import { activeTab, keyboardOpen, markTransfersSeen, transferAttentionCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
@@ -161,8 +162,10 @@
         const disposeSafeArea = activateSafeArea();
         const disposeKeyboard = activateKeyboardInsets();
         const disposeBackground = activateBackgroundTransfers();
+        const disposeNotificationActions = activateNotificationActions();
 
         return () => {
+            disposeNotificationActions();
             disposeBack();
             disposeSafeArea();
             disposeKeyboard();

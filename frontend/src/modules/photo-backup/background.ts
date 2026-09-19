@@ -5,7 +5,16 @@ import { canRunInBackground, setPhotoBackupBackgroundDemand, type ForegroundSumm
 import { onRuntimeEvent, runtimeEventsAvailable, type RuntimeUnsubscribe } from '../../api/runtime';
 import { setIOSPhotoBackupBackground } from './native-adapter';
 
-const NOTICE = { title: 'Backing up photos', text: 'Finishing the current item', progress: -1 };
+import { PAUSE_BACKUP_ACTION } from '../notification-actions';
+
+const NOTICE = {
+    title: 'Backing up photos',
+    text: 'Finishing the current item',
+    progress: -1,
+    // The queue is the backend's to schedule, so the only thing worth offering
+    // from the shade is the one the panel offers: stop sending for now.
+    action: PAUSE_BACKUP_ACTION,
+};
 
 export function activatePhotoBackupBackground(
     state: Readable<PhotoBackupState | null>,

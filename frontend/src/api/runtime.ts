@@ -60,6 +60,10 @@ export interface RuntimeEventMap {
     "ios:BatteryChanged": [payload: unknown];
     "android:PhotoBackupMediaChanged": [payload: unknown];
     "android:BackgroundTransferExpired": [payload?: unknown];
+    /** A button on one of TDrive's own notifications was pressed: {id}. */
+    "android:NotificationAction": [payload: unknown];
+    /** A notification was tapped and asked for a particular screen: {route}. */
+    "android:OpenRoute": [payload: unknown];
     "ios:PhotoBackupMediaChanged": [payload: unknown];
     "photo-backup:materialize": [payload: unknown];
     "photo-backup:release": [payload: unknown];

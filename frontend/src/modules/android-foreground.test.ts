@@ -117,3 +117,42 @@ describe('android foreground notice', () => {
         expect(foreground.canRunInBackground()).toBe(false);
     });
 });
+
+describe('system notification', () => {
+    /** Only the postNotification payloads, in order. */
+    function notifications(): Payload[] {
+        return bridge.callBridge.mock.calls
+            .filter((call) => call[0] === 'postNotification')
+            .map((call) => JSON.parse((call[1] as string[])[0]) as Payload);
+    }
+
+    it('hands the host the whole notification, buttons and all', async () => {
+        await foreground.postSystemNotification({
+            kind: 'problem',
+            title: 'Download failed',
+            text: 'holiday.mov',
+            action: { id: 'transfers:retry:xfer:down:42', label: 'Retry' },
+            route: 'transfers',
+        });
+        expect(notifications()).toEqual([{
+            kind: 'problem',
+            title: 'Download failed',
+            text: 'holiday.mov',
+            action: { id: 'transfers:retry:xfer:down:42', label: 'Retry' },
+            route: 'transfers',
+        }]);
+    });
+
+    it('says nothing about what the user is already looking at', async () => {
+        setVisibility('visible');
+        await foreground.postSystemNotification({ kind: 'done', title: 'Upload complete', text: '3 files' });
+        expect(notifications()).toEqual([]);
+    });
+
+    it('is inert where the host cannot post one', async () => {
+        bridge.hasBridgeMethod.mockReturnValue(false);
+        expect(foreground.canPostSystemNotification()).toBe(false);
+        await foreground.postSystemNotification({ kind: 'done', title: 'Upload complete', text: '3 files' });
+        expect(notifications()).toEqual([]);
+    });
+});
