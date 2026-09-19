@@ -636,7 +636,7 @@ public class MainActivity extends AppCompatActivity {
             result.put("supported", true).put("status", status)
                     .put("detail", status.equals("granted") ? "full media access"
                             : status.equals("limited") ? "TDrive can only see the photos you picked. Choose sources again to let it see more."
-                            : "media access denied")
+                            : "Allow TDrive to access your photos and videos in Settings.")
                     .put("canRead", canRead)
                     .put("images", images).put("videos", videos).put("selectedOnly", selected)
                     .put("full", full);

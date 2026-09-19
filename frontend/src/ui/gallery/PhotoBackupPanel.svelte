@@ -241,6 +241,16 @@
                 {/if}
             </div>
         {/if}
+    {:else if $error}
+        <!-- The settings never arrived. The error line below says so; this
+             is the one thing to do about it, rather than a loading line that
+             will never resolve. -->
+        <div class="pb-actions">
+            <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void refreshPhotoBackup()}>
+                <RotateCwIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+                Try again
+            </Button>
+        </div>
     {:else}
         <p class="pb-loading" role="status">Loading backup settings…</p>
     {/if}

@@ -9,7 +9,7 @@ import { OperationFailure, requireOperationSuccess } from '../../api/operation';
 import { onRuntimeEvent, runtimeEventsAvailable, type RuntimeUnsubscribe } from '../../api/runtime';
 import { asRecord, boundedText } from '../../api/shared';
 import type { OperationError, OperationResult } from '../../types';
-import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativePhotoBackupAvailable, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
+import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativeErrorCode, nativePhotoBackupAvailable, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
 import { activeDrive } from '../../ui/mobile/mobile-shell-store';
 import { activatePhotoBackupBackground } from './background';
 import { callWithPasswordRetry, openEncryptionPasswordModal } from '../modals/encryption-password';
@@ -181,10 +181,19 @@ async function runDiscoveryScheduler(): Promise<void> {
 // place they come to when the list is missing what they expected.
 export async function loadPhotoBackupCandidates(): Promise<void> {
     if (!nativePhotoBackupAvailable()) return;
-    await requestNativePhotoBackupAccess();
-    const listing = await listNativePhotoBackupSources();
-    photoBackupCandidates.set(listing.sources);
-    photoBackupAccessNote.set(listing.access.status === 'limited' || listing.access.status === 'denied' ? listing.access.detail : '');
+    photoBackupBusy.set(true); photoBackupError.set('');
+    try {
+        await requestNativePhotoBackupAccess();
+        const listing = await listNativePhotoBackupSources();
+        photoBackupCandidates.set(listing.sources);
+        photoBackupAccessNote.set(listing.access.status === 'limited' || listing.access.status === 'denied' ? listing.access.detail : '');
+    } catch (cause) {
+        // iOS answers a refused library with its own code rather than an empty
+        // list; unhandled, that was a tap that did nothing.
+        photoBackupError.set(nativeErrorCode(cause) === 'photoAccessRequired'
+            ? 'Allow TDrive to access your photos in Settings, then try again.'
+            : 'Could not read your photo library. Try again.');
+    } finally { photoBackupBusy.set(false); }
 }
 /**
  * Whether a folder can be added on this host. Desktop always can, through the

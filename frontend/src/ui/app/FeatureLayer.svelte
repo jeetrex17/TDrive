@@ -81,14 +81,10 @@
     import ToastStack from '../notifications/ToastStack.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
     import DropOverlay from '../transfers/DropOverlay.svelte';
-    import UpdatesPanel from '../updates/UpdatesPanel.svelte';
     import VideoModal from '../video/VideoModal.svelte';
     import FileViewerModal from '../viewers/FileViewerModal.svelte';
     import { appView } from './app-store';
     import FeaturePortal from './FeaturePortal.svelte';
-
-    // Desktop-only chrome: phones update through their app stores.
-    const updaterAvailable = !isMobilePlatform();
 
     $effect(() => activateNotificationEffects());
 
@@ -150,11 +146,6 @@
         <ContextMenu />
     </div>
     <DropOverlay />
-    <!-- The in-app updater is off on phones (store updates), and this top-level
-         panel is an always-in-flow node that would bleed onto the phone shell. -->
-    {#if updaterAvailable}
-        <UpdatesPanel />
-    {/if}
     <div id="mount-selection-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <MountSelectionModal />
     </div>

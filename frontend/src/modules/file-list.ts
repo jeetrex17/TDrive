@@ -753,6 +753,12 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
         syncDriveRowTabStops(list);
         if (preserveScroll) list.scrollTop = scrollTop;
         applyPendingFocus(list);
+        // Opening a folder unmounts the row that had the keyboard, and with
+        // it the keyboard: focus fell to <body> and the arrows went dead.
+        // Only a view change, and only when nothing else has taken focus.
+        if (!preserveScroll && state.pendingFocus === null && document.activeElement === document.body && !isMobilePlatform()) {
+            list.focus({ preventScroll: true });
+        }
         resolveUploaderChipsForRows(rows, () => isCurrentFileRequest(request));
     };
 
@@ -1022,6 +1028,8 @@ function handleListKeyDown(e: KeyboardEvent) {
             if (currentRow) renameRow(currentRow);
             return;
         case 'Delete':
+        case 'Backspace':
+            // A Mac keyboard's Delete key is Backspace.
             e.preventDefault();
             if (currentRow) deleteRow(currentRow);
             return;

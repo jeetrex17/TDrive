@@ -621,6 +621,12 @@ html.mobile .preview-original {
     width: 100%;
     height: 100%;
 }
+/* Sized to the screen above, so hidden has to mean hidden here too: with no
+   src yet, a full-screen <img> is a broken-image glyph over the unlock card. */
+html.mobile .preview-thumbnail[hidden],
+html.mobile .preview-original[hidden] {
+    display: none;
+}
 html.mobile .preview-chrome {
     top: calc(var(--inset-top) + 10px);
     /* Held sideways the sensor housing eats one edge, so the close button has
