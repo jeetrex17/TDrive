@@ -88,7 +88,7 @@
 <section class="photo-backup" class:is-page={page} aria-label="Photo and video backup" aria-busy={$busy}>
     {#if $backupState}
         {@const state = $backupState}
-        <div class="pb-master">
+        <div class="pb-master pb-card">
             <SwitchRow
                 title="Back up photos & videos"
                 description={state.settings.enabled ? destinationLabel(state.destination.title) || 'In this drive' : 'Keep a copy of new photos and videos in this drive.'}
@@ -189,7 +189,7 @@
                         {/if}
                     </div>
                 </div>
-                <ul class="pb-sources" role="list">
+                <ul class="pb-sources pb-card" role="list">
                     {#each state.sources as source (source.id)}
                         <li class="pb-source">
                             <FolderIcon class="pb-source-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
@@ -218,12 +218,14 @@
 
             <div class="pb-group" aria-label="Backup options">
                 <span class="pb-group-label">Include</span>
-                <SwitchRow title="Photos" checked={state.settings.photos} disabled={$busy} onchange={(photos) => save({ photos })} />
-                <SwitchRow title="Videos" checked={state.settings.videos} disabled={$busy} onchange={(videos) => save({ videos })} />
-                <SwitchRow title="New items only" description={futureOnlyDescription} checked={state.settings.futureOnly} disabled={$busy} onchange={(futureOnly) => save({ futureOnly })} />
-                {#if state.capabilities.wifiOnly.supported}
-                    <SwitchRow title="Wi-Fi only" description="Never uses mobile data." checked={state.settings.wifiOnly} disabled={$busy} onchange={(wifiOnly) => save({ wifiOnly })} />
-                {/if}
+                <div class="pb-card">
+                    <SwitchRow title="Photos" checked={state.settings.photos} disabled={$busy} onchange={(photos) => save({ photos })} />
+                    <SwitchRow title="Videos" checked={state.settings.videos} disabled={$busy} onchange={(videos) => save({ videos })} />
+                    <SwitchRow title="New items only" description={futureOnlyDescription} checked={state.settings.futureOnly} disabled={$busy} onchange={(futureOnly) => save({ futureOnly })} />
+                    {#if state.capabilities.wifiOnly.supported}
+                        <SwitchRow title="Wi-Fi only" description="Never uses mobile data." checked={state.settings.wifiOnly} disabled={$busy} onchange={(wifiOnly) => save({ wifiOnly })} />
+                    {/if}
+                </div>
             </div>
         {/if}
     {:else if $error}
@@ -553,10 +555,15 @@
         border-bottom: 0;
     }
 
+    /* The same card the account list is made of: a solid surface with a
+       hairline, not a pale wash over the page. A translucent overlay read as a
+       different app, and the quiet action inside it looked disabled against
+       the lighter ground. */
     :global(html.mobile) .pb-situation {
         padding: var(--space-3);
+        border: 1px solid var(--border);
         border-radius: var(--radius-lg);
-        background: var(--overlay-neutral-2);
+        background: var(--surface-control);
     }
 
     :global(html.mobile) .pb-situation-title {
@@ -613,6 +620,25 @@
         grid-auto-columns: minmax(0, 1fr);
         justify-content: stretch;
         gap: var(--space-2);
+    }
+
+    /* Each group is a card with its label above it: the shape every other list
+       on this tab is built from. On a desktop the panel is a section of a menu
+       and keeps its rules and gutters. */
+    :global(html.mobile) .pb-card {
+        padding: 0 var(--space-3);
+        border-radius: var(--radius-lg);
+        background: var(--surface-control);
+    }
+
+    :global(html.mobile) .pb-group {
+        gap: var(--space-2);
+        padding-top: 0;
+        border-top: 0;
+    }
+
+    :global(html.mobile) .pb-source-empty {
+        padding: var(--space-3) 0;
     }
 
     :global(html.mobile) .pb-source {

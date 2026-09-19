@@ -56,7 +56,7 @@
             aria-label={`${tab.label}${badgeLabel(tab.id)}`}
             onclick={() => onSelect(tab.id)}
         >
-            <span class="tab-icon">
+            <span class="tab-icon" class:is-avatar={tab.id === 'account' && showAvatar}>
                 <!-- The pill grows behind the icon rather than cutting in, so a
                      tab change reads as one object settling (motion-17). -->
                 <span class="tab-pill" aria-hidden="true"></span>
