@@ -130,6 +130,12 @@ export function EnqueuePhotoBackupAssets(sourceID: string, values: $models.Photo
     return $Call.ByID(2612336532, sourceID, values);
 }
 
+/**
+ * GetAllFsMsgIDs lists the Telegram messages this drive already accounts for.
+ * The root listing subtracts them from the channel's history to show what was
+ * posted outside TDrive; a deleted file stays on the list, because its message
+ * is still ours until the trash purges it.
+ */
 export function GetAllFsMsgIDs(): $CancellablePromise<number[] | null> {
     return $Call.ByID(2840193812);
 }
