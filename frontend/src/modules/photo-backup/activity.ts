@@ -20,7 +20,6 @@ let waiting = false;
  * nowhere to be said.
  */
 function currentName(state: PhotoBackupState): string {
-    if (state.status.phase === 'paused') return 'Photo backup paused';
     if (state.status.phase === 'scanning') return 'Scanning photos and videos';
     if (state.status.currentFile) return 'Photo backup';
     return 'Preparing photo backup';
@@ -53,27 +52,35 @@ function totals(state: PhotoBackupState): { done: number; total: number } {
 }
 
 function resultName(state: PhotoBackupState): string {
-    const { complete, failed, paused } = state.status;
+    const { complete, failed, paused, phase } = state.status;
     if (!state.settings.enabled) return 'Photo backup stopped';
     if (failed > 0) return `Photo backup needs attention · ${failed} failed`;
-    if (paused > 0 || state.manualPaused) return 'Photo backup paused';
+    if (paused > 0 || state.manualPaused || phase === 'paused') return 'Photo backup paused';
     return `Photo backup completed · ${complete} ${complete === 1 ? 'item' : 'items'}`;
 }
 
 export function syncPhotoBackupActivity(state: PhotoBackupState): void {
     const { phase, bytesDone, bytesTotal } = state.status;
-    const terminal = phase === 'complete' || phase === 'failed' || phase === 'idle';
+    // A paused backup ends its row rather than holding one open. Nothing is on
+    // its way, so an active row with a progress bar was saying otherwise --
+    // and Clear keeps what is still moving, which left "Photo backup paused"
+    // sitting in the panel with no way to dismiss it.
+    const terminal = phase === 'complete' || phase === 'failed' || phase === 'idle' || phase === 'paused';
     if (terminal) {
         if (visible) {
+            // Each word stays close to its cause: switched off is over, paused
+            // is put down until someone picks it up, and both are finished as
+            // far as the panel and its Clear are concerned.
             const failed = phase === 'failed' || state.status.failed > 0;
-            const paused = !state.settings.enabled || state.status.paused > 0 || state.manualPaused;
+            const off = !state.settings.enabled;
+            const paused = state.status.paused > 0 || state.manualPaused || phase === 'paused';
             updateTransferName({ id: ACTIVITY_ID, direction: 'up', name: resultName(state) });
-            markTransferDone({ id: ACTIVITY_ID, direction: 'up', status: failed ? 'failed' : paused ? 'canceled' : 'done' });
+            markTransferDone({ id: ACTIVITY_ID, direction: 'up', status: failed ? 'failed' : off ? 'canceled' : paused ? 'stopped' : 'done' });
         }
         visible = false;
         return;
     }
-    const queued = phase === 'paused' || phase === 'queued' || phase === 'scanning';
+    const queued = phase === 'queued' || phase === 'scanning';
     // Pushing the row again would replace it, and with it the clock it started
     // and the rate sampled off it -- which is the working behind "4 min left".
     // So it is pushed once, and again only when it changes between waiting and

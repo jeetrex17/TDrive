@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { isMobilePlatform } from '../../api';
     import { activateLiveSyncEvents } from '../../modules/channels';
     import { activateContextMenu } from '../../modules/context-menu';
     import { activateDropOverlay } from '../../modules/drop-overlay';

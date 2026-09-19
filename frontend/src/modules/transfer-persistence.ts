@@ -60,7 +60,7 @@ const SAVE_INTERVAL_MS = 2_000;
 const MAX_TEXT_LENGTH = 300;
 
 const TRANSFER_STATUSES: readonly TransferStatus[] = [
-    'queued', 'active', 'paused', 'canceling', 'done', 'failed', 'canceled',
+    'queued', 'active', 'paused', 'canceling', 'done', 'failed', 'canceled', 'stopped',
 ];
 
 type HistoryStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;

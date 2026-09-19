@@ -168,6 +168,9 @@ describe('transferDetail', () => {
     it('does not send a paused transfer looking for a queue that is not there', () => {
         // Suspended with the app, not waiting behind other work.
         expect(transferDetail(transfer({ status: 'paused', progress: 40, total: 1_000 }), NOW)).toBe('Paused');
+        // Stopped is the terminal cousin: put down rather than suspended, so it
+        // says when, and Clear may take it.
+        expect(transferDetail(transfer({ status: 'stopped', progress: 40, total: 1_000, finishedAt: NOW - 60_000 }), NOW)).toBe('Paused · 1 min ago');
         // The bar holds where it stopped: how far it got is still true, and it
         // is what the reader weighs before starting again.
         expect(transferPercent(transfer({ status: 'paused', progress: 40, total: 1_000 }))).toBe(40);
