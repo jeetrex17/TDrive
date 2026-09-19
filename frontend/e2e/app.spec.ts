@@ -515,3 +515,20 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         await testInfo.attach(`Gallery ${platform}`, { path: shot, contentType: 'image/png' });
     });
 }
+
+/**
+ * One failed upload is one failure. It used to be counted twice: once for the
+ * row that turned red and once for the toast that narrated it, so the bell
+ * said "2 errors" for a single file. The reason now rides on the row.
+ */
+test('a failed upload counts once and keeps its reason on the row', async ({ page }) => {
+    const mock = await bootTDrive(page);
+    await mock.emit('upload_start', 41, 'broken.bin', 1024, '');
+    await mock.emit('upload_error', 41, 'broken.bin', 'upload part: rpc error code 400: FILE_REFERENCE_EXPIRED');
+    await expect(page.getByRole('button', { name: /^Notifications/ })).toHaveAttribute('aria-label', /1 error/);
+    await page.getByRole('button', { name: /^Notifications/ }).click();
+    const panel = page.getByRole('dialog', { name: 'Notifications', exact: true });
+    await expect(panel.locator('.notif-row-transfer')).toHaveCount(1);
+    await expect(panel.locator('.notif-row-transfer .notif-row-note')).toContainText(/fresh reference/);
+    await expect(panel.locator('.notif-row-event')).toHaveCount(0);
+});

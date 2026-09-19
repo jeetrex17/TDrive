@@ -4,7 +4,7 @@
 import { get } from 'svelte/store';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
-import { driveSyncStatus, ringState, transferAttentionCount } from './mobile-shell-store';
+import { driveSyncStatus, markTransfersSeen, ringState, transferAttentionCount, transfersSeenAt } from './mobile-shell-store';
 
 function transfer(status: TransferEvent['status'], id = `xfer:up:${status}`): TransferEvent {
     return {
@@ -25,6 +25,7 @@ function transfer(status: TransferEvent['status'], id = `xfer:up:${status}`): Tr
 beforeEach(() => {
     historyEvents.set([]);
     driveSyncStatus.set('idle');
+    transfersSeenAt.set(0);
 });
 
 describe('transferAttentionCount', () => {
@@ -43,6 +44,21 @@ describe('transferAttentionCount', () => {
     it('counts failures', () => {
         historyEvents.set([transfer('failed', 'xfer:up:1'), transfer('failed', 'xfer:down:2'), transfer('active', 'xfer:up:3')]);
         expect(get(transferAttentionCount)).toBe(2);
+    });
+
+    // A badge is an interrupt, and looking is what answers it. Counting every
+    // failure in a history that persists kept the badge lit across launches
+    // until the whole list was cleared.
+    it('is answered by looking at the tab, and lit again only by a newer failure', () => {
+        historyEvents.set([{ ...transfer('failed', 'xfer:up:1'), finishedAt: 1_000 }]);
+        expect(get(transferAttentionCount)).toBe(1);
+        markTransfersSeen();
+        expect(get(transferAttentionCount)).toBe(0);
+        historyEvents.set([
+            { ...transfer('failed', 'xfer:up:1'), finishedAt: 1_000 },
+            { ...transfer('failed', 'xfer:up:2'), finishedAt: Date.now() + 1 },
+        ]);
+        expect(get(transferAttentionCount)).toBe(1);
     });
 });
 

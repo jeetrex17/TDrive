@@ -13,6 +13,8 @@ import {
 } from './file-list';
 import { getInteractiveFileListRows } from '../ui/file-list/file-list-store';
 import { setPhotosMode } from './gallery';
+import { setTrashMode } from './trash/view';
+import { trashOpen } from './trash/controller';
 import { getFolderIndexDriveKey, refreshFolderIndex } from './folder-index';
 import { canOpenFileViewer, isVideoFile } from './media-types';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
@@ -325,6 +327,13 @@ export async function runGlobalSearch() {
     if (state.virtualView === 'photos') {
         state.virtualView = null;
         setPhotosMode(false);
+    }
+    // The same for the trash: results are live files, and drawing them under
+    // a "Trash" title with Empty trash beside them invited the wrong click.
+    if (state.virtualView === 'trash') {
+        state.virtualView = null;
+        setTrashMode(false);
+        trashOpen.set(false);
     }
 
     const token = ++activeToken;

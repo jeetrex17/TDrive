@@ -24,7 +24,7 @@
     import { activateKeyboardInsets } from './keyboard-insets';
     import { activateBackgroundTransfers } from './background-transfers';
     import { scrollBehavior } from './motion';
-    import { activeTab, keyboardOpen, transferAttentionCount, type MobileTab } from './mobile-shell-store';
+    import { activeTab, keyboardOpen, markTransfersSeen, transferAttentionCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
     import { fileListView } from '../file-list/file-list-store';
@@ -49,8 +49,10 @@
         && $fileListView.stateKind === 'empty'
         && Boolean($fileListView.actionLabel || $fileListView.secondaryActionLabel),
     );
+    // Nothing is uploaded into the trash, so the button does not float over it.
     const showContextAction = $derived(
-        $activeTab === 'photos' || ($activeTab === 'files' && !emptyFilesOwnsCreation),
+        $activeTab === 'photos'
+        || ($activeTab === 'files' && !emptyFilesOwnsCreation && $sidebarState.virtualView !== 'trash'),
     );
     const contextualActionVisible = $derived(showContextAction && !selecting && !$keyboardOpen);
 
@@ -113,6 +115,7 @@
             enterPhotos();
         }
         activeTab.set(tab);
+        if (tab === 'transfers') markTransfersSeen();
         if (reselect) resetTab(tab);
     }
 

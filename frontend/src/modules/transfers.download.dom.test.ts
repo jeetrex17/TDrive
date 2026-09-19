@@ -27,6 +27,7 @@ const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { 
 vi.mock('../../bindings/TDrive/app', () => bindings);
 vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notif-bell', () => ({
+    setTransferNote: vi.fn(),
     pushQueuedTransfer: transferEvents.queued,
     pushTransferStart: transferEvents.push,
     updateTransferProgress: transferEvents.progress,

@@ -13,6 +13,8 @@
     import { clearSelection } from '../../modules/selection';
     import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
     import { selectionBarState } from '../selection/selection-bar-store';
+    import { sidebarState } from '../sidebar/sidebar-store';
+    import { askEmptyTrash, closeTrash, trashEntries } from '../../modules/trash/controller';
     import SyncRing from './SyncRing.svelte';
     import {
         activeDrive,
@@ -29,7 +31,21 @@
 
     let { active }: Props = $props();
 
+    // The search field costs a permanent 52px band on every screen, so it stays
+    // collapsed behind its icon. It is hidden rather than unmounted: the
+    // imperative search controller binds to #search-input once at startup and
+    // that binding has to survive navigation.
+    let searchOpen = $state(false);
     const inFolder = $derived($breadcrumbPath.length > 0);
+    // The trash is a place the Files tab shows, and it needs its own bar: under
+    // the drive header it had no name on screen, kept Search and Sort that do
+    // not apply to it, and counted deleted items as the drive's files.
+    const inTrash = $derived($sidebarState.virtualView === 'trash');
+    const trashCountLabel = $derived(
+        $trashEntries.length === 0 ? 'Empty'
+        : $trashEntries.length === 1 ? '1 item'
+        : `${$trashEntries.length} items`,
+    );
     const folderName = $derived($breadcrumbPath[$breadcrumbPath.length - 1]?.name ?? '');
     const driveName = $derived($activeDrive?.title || 'Drive');
     const driveKind = $derived($activeDrive?.kind === 'shared' ? 'Shared' : 'Personal');
@@ -38,6 +54,9 @@
         : $fileListCount === 1 ? '1 file'
         : `${$fileListCount} files`,
     );
+    // While the search field is open the rows are results, not the drive, so
+    // the header says only what kind of drive this is rather than "No files".
+    const driveMeta = $derived(searchOpen ? driveKind : `${driveKind} · ${countLabel}`);
     // Inside a folder the row set mixes folders and files, so "items" is the
     // honest noun where the drive header can say "files".
     const itemsLabel = $derived(
@@ -58,11 +77,6 @@
     let sortOpen = $state(false);
     let sortMenuEl = $state<HTMLElement | null>(null);
     let sortButtonEl = $state<HTMLButtonElement | null>(null);
-    // The search field costs a permanent 52px band on every screen, so it stays
-    // collapsed behind its icon. It is hidden rather than unmounted: the
-    // imperative search controller binds to #search-input once at startup and
-    // that binding has to survive navigation.
-    let searchOpen = $state(false);
     let searchInputEl = $state<HTMLInputElement | null>(null);
 
     async function toggleSearch(): Promise<void> {
@@ -212,7 +226,24 @@
     <!-- Files: drive header at the root, a back chevron and folder name inside a
          folder. The search field stays mounted across tabs so its controller
          binding survives navigation. -->
-    <div class="topbar-context topbar-files" hidden={selecting || active !== 'files'}>
+    <div class="topbar-context topbar-plain topbar-trash" hidden={selecting || active !== 'files' || !inTrash}>
+        <div class="topbar-row">
+            <button type="button" class="topbar-back" aria-label="Back" onclick={() => closeTrash()}>
+                <ChevronLeftIcon size={24} strokeWidth={2} aria-hidden="true" />
+            </button>
+            <div class="topbar-plain-titles">
+                <h1 class="topbar-title">Trash</h1>
+                <span class="topbar-subtitle">{trashCountLabel}</span>
+            </div>
+            {#if $trashEntries.length > 0}
+                <div class="topbar-actions">
+                    <button type="button" class="topbar-done topbar-danger" onclick={() => askEmptyTrash()}>Empty</button>
+                </div>
+            {/if}
+        </div>
+    </div>
+
+    <div class="topbar-context topbar-files" hidden={selecting || active !== 'files' || inTrash}>
         <div class="topbar-row">
             {#if inFolder}
                 <button type="button" class="topbar-back" aria-label="Back" onclick={() => navigateBack()}>
@@ -240,7 +271,7 @@
                         </button>
                         <SyncRing status={$ringState} onOpenQueue={() => activeTab.set('transfers')} />
                     </div>
-                    <span class="drive-header-meta">{driveKind} · {countLabel}</span>
+                    <span class="drive-header-meta">{driveMeta}</span>
                 </div>
             {/if}
 

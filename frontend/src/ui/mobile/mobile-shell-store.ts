@@ -101,8 +101,28 @@ export const recentTransferEvents = derived(recentEvents, ($events: HistoryEvent
  * until the queue is durable: without persistence there is no way to record
  * that a finished download was already dealt with, so it would badge forever.
  */
-export const transferAttentionCount = derived(historyEvents, ($events) =>
-    $events.filter((event) => event.kind === 'transfer' && event.status === 'failed').length,
+const TRANSFERS_SEEN_KEY = 'tdrive.transfersSeenAt';
+
+function readTransfersSeenAt(): number {
+    try { return Number(localStorage.getItem(TRANSFERS_SEEN_KEY)) || 0; } catch { return 0; }
+}
+
+/** When the Transfers tab was last on screen: a failure older than this has been seen. */
+export const transfersSeenAt = writable(readTransfersSeenAt());
+
+/**
+ * Looking at the tab is what answers the badge. Counting every failure in
+ * history, which persists, meant a badge that outlived its reason and stayed
+ * lit across launches until the whole list was cleared.
+ */
+export function markTransfersSeen(): void {
+    const now = Date.now();
+    transfersSeenAt.set(now);
+    try { localStorage.setItem(TRANSFERS_SEEN_KEY, String(now)); } catch { /* a badge is a convenience */ }
+}
+
+export const transferAttentionCount = derived([historyEvents, transfersSeenAt], ([$events, $seenAt]) =>
+    $events.filter((event) => event.kind === 'transfer' && event.status === 'failed' && event.finishedAt >= $seenAt).length,
 );
 
 /**

@@ -36,7 +36,6 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="toast-stack-inner"
-    style="display: contents;"
     onpointerenter={(event) => { if (hovering(event)) onPauseAll(); }}
     onpointerleave={(event) => { if (hovering(event)) onResumeAll(); }}
 >
