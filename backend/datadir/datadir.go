@@ -8,6 +8,7 @@ package datadir
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,6 +88,13 @@ func CreateCacheTemp(pattern string) (*os.File, error) {
 // CleanupCacheTemps removes app-owned scratch files left by an interrupted
 // upload, encryption, rendition, or mount write. It only examines the cache
 // root and only removes names produced by CreateCacheTemp callers.
+//
+// A file it cannot delete is left where it is. Windows refuses to unlink a
+// file another process still has open, and on that platform a second copy of
+// the app -- or a test running beside this one -- is enough to make one of
+// these undeletable. Tidying up is not a reason to refuse to start: the file
+// is scratch, the next launch will try again, and the caller that owns it is
+// the one that will finish with it.
 func CleanupCacheTemps() error {
 	dir, err := CacheDir()
 	if err != nil {
@@ -101,7 +109,7 @@ func CleanupCacheTemps() error {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("datadir: remove cache temp %q: %w", entry.Name(), err)
+			slog.Debug("datadir: cache temp left in place", "name", entry.Name(), "error", err)
 		}
 	}
 	return nil
