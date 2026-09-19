@@ -138,3 +138,23 @@ test('the bars carry safe-area padding', async ({ page }) => {
     const topPad = await page.locator('.mobile-topbar').evaluate((el) => getComputedStyle(el).paddingTop);
     expect(topPad).toMatch(/px$/);
 });
+
+/**
+ * Photos and Trash are each turned off from the refresh that turns the other
+ * on. A setter that cleared the shared view unconditionally wiped out what its
+ * sibling had just published: the Photos tab read as Files, the top bar kept
+ * the drive header, and BACK at the gallery root left the app.
+ */
+test('the Photos tab lights, wears its own top bar, and BACK stays in the app', async ({ page }) => {
+    await bootMobile(page);
+    await tab(page, /^Photos/).click();
+    await expect(page.locator('.main-content.photos-mode')).toBeVisible();
+    await expect(tab(page, /^Photos/)).toHaveClass(/active/);
+    await expect(page.locator('.topbar-files')).toBeHidden();
+    await expect(page.locator('.topbar-plain').getByRole('heading', { name: 'Photos' })).toBeVisible();
+
+    // Leaving Photos is one BACK, handled here, not by the host.
+    const atPhotos = await page.evaluate(() => window.__tdriveHandleBack?.());
+    expect(atPhotos).toBe(true);
+    await expect(tab(page, /^Files/)).toHaveClass(/active/);
+});

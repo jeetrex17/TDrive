@@ -2,6 +2,7 @@
 // image leases are shared across desktop and both mobile platforms; opening
 // the viewer keeps this same source instead of copying the whole library.
 
+import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { state } from '../state';
 import { isMobilePlatform } from '../api';
@@ -18,7 +19,7 @@ import { beginRender, cachedThumb, rearmLocked, setActive, setRoot, teardown as 
 import { albumsView, galleryView, photosMode, type PhotosMode } from '../ui/gallery/gallery-store';
 import { albumsWorthShowing, buildAlbumTiles, type AlbumTile } from '../ui/gallery/album-view';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
-import { setSidebarVirtualView } from '../ui/sidebar/sidebar-store';
+import { clearSidebarVirtualView, setSidebarVirtualView } from '../ui/sidebar/sidebar-store';
 import type { PreviewNavigationItem } from './modals/preview';
 import { setFileThumbnailsActive } from '../ui/file-list/file-thumbnail-controller';
 import { isVideoFile } from './media-types';
@@ -113,7 +114,7 @@ export function setPhotosMode(on: boolean): void {
     photosNav?.classList.toggle('active', on);
     if (on) photosNav?.setAttribute('aria-current', 'page');
     else photosNav?.removeAttribute('aria-current');
-    setSidebarVirtualView(on ? 'photos' : null);
+    if (on) setSidebarVirtualView('photos'); else clearSidebarVirtualView('photos');
 
     const activeId = Number(state.activeChannel?.id || 0);
     document.querySelectorAll<HTMLElement>('.drive-item[data-channel-id]').forEach((el) => {
@@ -170,14 +171,28 @@ function sameMode(left: PhotosMode, right: PhotosMode): boolean {
  * views of the same drive, so this re-renders in place rather than navigating
  * -- Photos stays the single nav destination it already is.
  */
+/** Where the album grid was scrolled to when an album was opened from it. */
+let albumsScrollTop = 0;
+
 export async function showPhotos(mode: PhotosMode): Promise<void> {
-    if (sameMode(get(photosMode), mode)) return;
+    const previous = get(photosMode);
+    if (sameMode(previous, mode)) return;
+    if (previous.kind === 'albums' && galleryEl) albumsScrollTop = galleryEl.scrollTop;
     photosMode.set(mode);
     if (galleryEl) galleryEl.scrollTop = 0;
     // Asking for the grid is an entry: its counts are recomputed, and the
     // explicit choice then survives the render below.
     if (mode.kind === 'albums') await loadAlbums(Number(state.activeChannel?.id || 0));
     await renderGallery();
+    if (!galleryEl || get(photosMode) !== mode) return;
+    await tick();
+    // Back lands where the grid was left, not at the top of it.
+    if (mode.kind === 'albums' && previous.kind === 'album') galleryEl.scrollTop = albumsScrollTop;
+    // The tile or cell that had the keyboard is gone with the old view; the
+    // first of the new one takes it, unless something else already has focus.
+    if (document.activeElement === document.body || galleryEl.contains(document.activeElement)) {
+        galleryEl.querySelector<HTMLElement>(mode.kind === 'albums' ? '.album-tile' : '.gallery-cell')?.focus({ preventScroll: true });
+    }
 }
 
 interface GalleryRefreshOptions {
@@ -194,6 +209,9 @@ export async function renderGallery({ background = false, staleRetry = false }: 
     // picks the view. A refresh while the grid is already open deliberately
     // does not: photos landing mid-scroll must not resort tiles under a thumb.
     if (albumsChannelId !== channelId) {
+        // Another drive: its grid is dropped before this one's folders are
+        // asked for, or the old timeline sits on screen until they arrive.
+        if (currentChannelId !== channelId) dropGallerySource();
         photosMode.set(defaultPhotosMode(await loadAlbums(channelId)));
         if (token !== renderToken || !galleryEl) return;
     }
@@ -230,7 +248,16 @@ export async function renderGallery({ background = false, staleRetry = false }: 
         }
         next = new GallerySource(timeline, {
             maxPages: isMobilePlatform() ? 6 : 12,
-            onStale: () => { void renderGallery({ background: true }); },
+            // Only a source that is live re-renders itself, and once. While it
+            // is still being built the same stale page rejects the get() below
+            // and the catch owns the retry; letting both run made every failed
+            // render spawn two more, each with a fresh source, until a drive
+            // whose two calls disagreed was asking for its timeline tens of
+            // thousands of times a second.
+            onStale: () => {
+                if (currentSource !== next) return;
+                void renderGallery({ background: true, staleRetry: true });
+            },
             // A folder carries no anchor index: its pages are reached by
             // following each page's next cursor, which the source learns.
             ...(scope === null

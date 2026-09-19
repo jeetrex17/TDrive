@@ -43,3 +43,16 @@ export function setSidebarVirtualView(virtualView: SidebarState['virtualView']):
         current.virtualView === virtualView ? current : { ...current, virtualView }
     ));
 }
+
+/**
+ * Leaves a virtual view, and only that one. Photos and Trash are each turned
+ * off from the same refresh that turns the other on, so a setter that cleared
+ * the value unconditionally would wipe out what its sibling had just
+ * published -- which is how the phone's Photos tab came to read as Files and
+ * Android BACK came to quit the app from the gallery.
+ */
+export function clearSidebarVirtualView(virtualView: NonNullable<SidebarState['virtualView']>): void {
+    sidebarState.update((current) => (
+        current.virtualView === virtualView ? { ...current, virtualView: null } : current
+    ));
+}
