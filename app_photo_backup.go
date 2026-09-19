@@ -295,11 +295,11 @@ func (a *App) UpsertPhotoBackupSource(value PhotoBackupSource) (PhotoBackupSourc
 		if clash := photoBackupOverlappingDeviceFolder(existing, value.ID, root); clash != "" {
 			return PhotoBackupSource{}, fmt.Errorf("photo backup: %q is already covered by %q. Remove that one first, or choose a folder outside it.", photoBackupDeviceFolderName(root), clash)
 		}
-	} else if value.Root == "" {
-		value.Root = value.Name
-		if value.Root == "" {
-			value.Root = value.ID
-		}
+	} else {
+		// A folder is the only thing a source can be. Albums and whole-library
+		// sources went with the picker that used to offer them, and a host that
+		// still asks for one is asking for a feature that no longer exists.
+		return PhotoBackupSource{}, fmt.Errorf("photo backup: %q is not a folder", value.Kind)
 	}
 	addedAt := time.Time{}
 	if value.AddedAt > 0 {

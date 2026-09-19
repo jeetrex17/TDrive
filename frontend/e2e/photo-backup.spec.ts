@@ -3,13 +3,18 @@ import type { Page } from '@playwright/test';
 
 type Platform = 'desktop' | 'android' | 'ios';
 
-/** The panel lives behind the profile menu on desktop and on the Account tab on a phone. */
+/**
+ * The panel is a page of its own on both: behind the profile menu on a desktop
+ * and behind an Account row on a phone, where it used to unfold at the bottom
+ * of the account list.
+ */
 async function openPanel(page: Page, platform: Platform) {
     if (platform === 'desktop') {
         await page.locator('#profile-trigger').click();
         await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
     } else {
         await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
+        await page.getByRole('button', { name: /Photo & video backup/ }).click();
     }
     return page.getByRole('region', { name: 'Photo and video backup' });
 }
@@ -21,6 +26,25 @@ async function usePlatform(page: Page, platform: Platform): Promise<void> {
 }
 
 const ok = { ok: true };
+
+/**
+ * Nothing in the panel paints past its own edge.
+ *
+ * Measured by what is drawn rather than by scrollWidth: a 44px tap target with
+ * a 16px glyph centred in it reports a scroll box a few pixels wider than its
+ * client box, which is not something anyone can see and not what this is
+ * asking about.
+ */
+async function overflowsSideways(panel: ReturnType<Page['getByRole']>): Promise<boolean> {
+    return panel.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return [...element.querySelectorAll('*')].some((node) => {
+            const child = node.getBoundingClientRect();
+            return child.width > 0 && (child.right > box.right + 1 || child.left < box.left - 1);
+        });
+    });
+}
+
 
 for (const platform of ['desktop', 'android'] as const) {
     test(`locked backup opens the password prompt on ${platform} and cancel keeps it stopped`, async ({ page }) => {
@@ -131,7 +155,7 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         // file it is on is named above it.
         await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '24');
         await expect(panel.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '37');
-        expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        expect(await overflowsSideways(panel)).toBe(false);
         await page.screenshot({ path: testInfo.outputPath(`backup-${platform}.png`), fullPage: true });
 
         await mock.setPlan('GetPhotoBackupState', resolves({
@@ -237,5 +261,5 @@ test('the phone panel gives each line its own row and the action the full card',
     const add = (await panel.getByRole('button', { name: 'Add folder', exact: true }).boundingBox())!;
     expect(add.y).toBeGreaterThanOrEqual(label.y + label.height - 1);
     // Nothing anywhere in the panel reaches past its own width.
-    expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    expect(await overflowsSideways(panel)).toBe(false);
 });

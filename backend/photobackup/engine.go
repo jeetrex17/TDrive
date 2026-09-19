@@ -67,7 +67,29 @@ func (e *Engine) Migrate(ctx context.Context) error {
 	if err := e.migrateSchema(ctx); err != nil {
 		return err
 	}
+	if err := e.dropRetiredSources(ctx); err != nil {
+		return err
+	}
 	return e.pruneOrphanedJobs(ctx)
+}
+
+// FolderSourceKinds are the only kinds a source can be: a folder on a desktop
+// and a folder a phone handed over. Albums and whole-library sources were a
+// picker that no longer exists, and a ledger row for one names a place nothing
+// can scan.
+var FolderSourceKinds = []string{"folder", "device-folder"}
+
+// dropRetiredSources removes the sources the album picker used to create. The
+// jobs they own go with them through the orphan prune that follows, except the
+// completed ones: those are the record that the files reached the drive, and
+// what stops the same photos being sent again when the folder holding them is
+// added back through the picker that remains.
+func (e *Engine) dropRetiredSources(ctx context.Context) error {
+	_, err := e.db.ExecContext(ctx, `DELETE FROM photo_backup_sources WHERE kind NOT IN (?,?)`, FolderSourceKinds[0], FolderSourceKinds[1])
+	if err != nil {
+		return fmt.Errorf("photobackup: drop retired sources: %w", err)
+	}
+	return nil
 }
 
 // Unfinished jobs outlive their source only as garbage: a source that is gone

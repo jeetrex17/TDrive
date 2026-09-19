@@ -5,9 +5,8 @@ import { asRecord, boundedText, nonNegativeNumber } from '../../api/shared';
 export interface NativeAssetPage { assets: PhotoBackupAsset[]; nextCursor: string; }
 /** What the host knows about the media grant, for the one line the panel shows. */
 export interface NativeAccess { status: string; detail: string; }
-export interface NativeSourceListing { sources: PhotoBackupSource[]; access: NativeAccess; }
 export interface NativeMaterializedResource { path: string; releaseID: string; }
-interface IOSPhotosBridge { listPhotoBackupSources?: (cursor?: string, limit?: number) => unknown; listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; pickPhotoBackupFolder?: () => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; setBackgroundBackup?: (active: boolean) => unknown; }
+interface IOSPhotosBridge { listPhotoBackupAssets?: (sourceID: string, cursor: string, limit: number) => unknown; pickPhotoBackupFolder?: () => unknown; materializePhotoBackupResource?: (assetID: string, version: string, maxBytes?: number, resourceID?: string) => unknown; releasePhotoBackupResource?: (token: string) => unknown; cancelMaterialization?: (requestID: string) => unknown; setBackgroundBackup?: (active: boolean) => unknown; }
 function iosBridge(): IOSPhotosBridge | null { return typeof window !== 'undefined' ? (window as Window & { tdriveIOSPhotos?: IOSPhotosBridge }).tdriveIOSPhotos ?? null : null; }
 async function nativeCall(value: unknown): Promise<Record<string, unknown>> { const result = await Promise.resolve(value); return typeof result === 'string' ? parse(result) : asRecord(result); }
 
@@ -52,10 +51,28 @@ export async function listNativePhotoBackupAssets(sourceID: string, cursor = '')
     return toAssetPage(parse(await callBridge('listPhotoBackupAssets', [JSON.stringify({ sourceId: sourceID, cursor: nativeCursor, limit: PAGE_LIMIT })], 'Photo library access is unavailable.')));
 }
 
-export async function requestNativePhotoBackupAccess(): Promise<void> {
+/**
+ * Asks the device for media access and answers with what it granted.
+ *
+ * Android reads a watched folder through MediaStore, so a folder picked from
+ * the system picker is still unreadable without this: the grant and the folder
+ * are two separate permissions and the app needs both.
+ */
+export async function requestNativePhotoBackupAccess(): Promise<NativeAccess> {
     const ios = iosBridge() as (IOSPhotosBridge & { requestAuthorization?: () => unknown }) | null;
-    if (ios?.requestAuthorization) { await nativeCall(ios.requestAuthorization()); return; }
-    if (hasBridgeMethod('requestPhotoBackupAccess')) await callBridge('requestPhotoBackupAccess', [], 'Photo library access is unavailable.');
+    if (ios?.requestAuthorization) {
+        const raw = await nativeCall(ios.requestAuthorization());
+        const status = boundedText(raw.status, 64);
+        return {
+            status: status === 'authorized' ? 'granted' : status,
+            detail: status === 'limited' ? 'TDrive can only see the photos you picked.'
+                : status === 'authorized' || status === '' ? ''
+                : 'Allow TDrive to access your photos in Settings.',
+        };
+    }
+    if (!hasBridgeMethod('requestPhotoBackupAccess')) return { status: '', detail: '' };
+    const raw = parse(await callBridge('requestPhotoBackupAccess', [], 'Photo library access is unavailable.'));
+    return { status: boundedText(raw.status, 64), detail: boundedText(raw.detail, 240) };
 }
 
 export async function nativePhotoBackupPolicy(): Promise<boolean | null> {
@@ -106,35 +123,6 @@ export async function releaseNativePhotoBackupAsset(releaseID: string): Promise<
     if (ios?.releasePhotoBackupResource) { await nativeCall(ios.releasePhotoBackupResource(releaseID)); return; }
     if (!hasBridgeMethod('releasePhotoBackupAsset')) return;
     await callBridge('releasePhotoBackupAsset', [JSON.stringify({ id: releaseID })], '');
-}
-
-export async function listNativePhotoBackupSources(): Promise<NativeSourceListing> {
-    const ios = iosBridge();
-    if (!hasBridgeMethod('listPhotoBackupSources') && !ios?.listPhotoBackupSources) return { sources: [], access: { status: '', detail: '' } };
-    let raw: Record<string, unknown>;
-    let entries: unknown[];
-    if (ios?.listPhotoBackupSources) {
-        // The iOS shim pages the album list; the first page alone stopped at
-        // the 49th album and quietly left the rest of a big library out.
-        raw = await nativeCall(ios.listPhotoBackupSources('', 50));
-        entries = Array.isArray(raw.sources) ? [...raw.sources] : [];
-        let cursor = boundedText(raw.nextCursor, 64);
-        for (let page = 0; cursor && page < 40; page += 1) {
-            const more = await nativeCall(ios.listPhotoBackupSources(cursor, 50));
-            if (Array.isArray(more.sources)) entries.push(...more.sources);
-            const next = boundedText(more.nextCursor, 64);
-            cursor = next === cursor ? '' : next;
-        }
-    } else {
-        raw = parse(await callBridge('listPhotoBackupSources', [], 'Photo library access is unavailable.'));
-        entries = Array.isArray(raw.sources) ? raw.sources : [];
-    }
-    const sources = entries.map((value): PhotoBackupSource | null => { const source = asRecord(value); const id = boundedText(source.id, 512); const root = boundedText(source.root, 1024); return id && root ? { id, kind: boundedText(source.kind, 64), name: boundedText(source.name, 240) || 'Photo library', root, enabled: source.enabled !== false, addedAt: nonNegativeNumber(source.added_at) } : null; }).filter((source): source is PhotoBackupSource => source !== null);
-    // The grant is only knowable here. The backend cannot see an Android
-    // permission, so the panel's access line is carried from the same call that
-    // produced the (possibly very short) list it explains.
-    const access = asRecord(raw.access);
-    return { sources, access: { status: boundedText(access.status, 64), detail: boundedText(access.detail, 240) } };
 }
 
 /** Whether this host can be asked for a folder to back up. */

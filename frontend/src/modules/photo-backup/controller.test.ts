@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
     getState: vi.fn(),
     enqueue: vi.fn(), run: vi.fn(), pause: vi.fn(), resume: vi.fn(), retry: vi.fn(), policy: vi.fn(), unlock: vi.fn(), prompt: vi.fn(),
     list: vi.fn(), materialize: vi.fn(), release: vi.fn(),
-    upsert: vi.fn(), pickFolder: vi.fn(), addFolder: vi.fn(), sources: vi.fn(), requestAccess: vi.fn(),
+    upsert: vi.fn(), pickFolder: vi.fn(), addFolder: vi.fn(), requestAccess: vi.fn(),
 }));
 
 const ok: OperationResult = { ok: true };
@@ -35,7 +35,7 @@ vi.mock('../../api/runtime', () => ({ runtimeEventsAvailable: () => true, onRunt
 vi.mock('./native-adapter', () => ({
     nativePhotoBackupAvailable: () => true,
     nativePhotoBackupPolicy: () => Promise.resolve(true),
-    requestNativePhotoBackupAccess: mocks.requestAccess, listNativePhotoBackupSources: mocks.sources,
+    requestNativePhotoBackupAccess: mocks.requestAccess,
     nativePhotoBackupFolderPicking: () => true, pickNativePhotoBackupFolder: mocks.pickFolder,
     listNativePhotoBackupAssets: mocks.list, materializeNativePhotoBackupAsset: mocks.materialize, releaseNativePhotoBackupAsset: mocks.release,
 }));
@@ -55,12 +55,12 @@ vi.mock('../modals/encryption-password', () => ({
 }));
 vi.mock('../errors', () => ({ humanizeBackendError: (error: unknown) => String((error as { message?: string })?.message ?? '') }));
 
-import { activatePhotoBackup, choosePhotoBackupFolder, loadPhotoBackupCandidates, pausePhotoBackupNow, photoBackupAccessNote, photoBackupCandidates, photoBackupError, photoBackupState, refreshPhotoBackup, resumePhotoBackupNow, retryPhotoBackupNow, startPhotoBackup } from './controller';
+import { activatePhotoBackup, choosePhotoBackupFolder, pausePhotoBackupNow, photoBackupAccessNote, photoBackupError, photoBackupState, refreshPhotoBackup, resumePhotoBackupNow, retryPhotoBackupNow, startPhotoBackup } from './controller';
 import { activeTransfers } from '../../ui/notifications/notif-store';
 import { sidebarState } from '../../ui/sidebar/sidebar-store';
 
 const flush = async () => { for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
-const state = (): PhotoBackupState => ({ settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: true }, sources: [{ id: 'all', kind: 'library', root: 'library', name: 'All', enabled: true, addedAt: 0 }], status: { phase: 'idle', pending: 0, uploading: 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0, message: '' }, capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: 'granted', detail: '' }, }, platform: 'android', destination: { id: '1', title: 'Personal', kind: 'personal' }, manualPaused: false, encryptionRequired: false });
+const state = (): PhotoBackupState => ({ settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: true }, sources: [{ id: 'tree:external_primary:DCIM/', kind: 'device-folder', root: 'external_primary:DCIM/', name: 'DCIM', enabled: true, addedAt: 0 }], status: { phase: 'idle', pending: 0, uploading: 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0, message: '' }, capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: 'granted', detail: '' }, }, platform: 'android', destination: { id: '1', title: 'Personal', kind: 'personal' }, manualPaused: false, encryptionRequired: false });
 
 describe('photo backup controller scheduler', () => {
     let stop = () => {};
@@ -68,6 +68,8 @@ describe('photo backup controller scheduler', () => {
         stop(); mocks.events.clear();
         for (const mock of [mocks.enqueue, mocks.run, mocks.pause, mocks.resume, mocks.retry, mocks.policy, mocks.unlock, mocks.prompt, mocks.list, mocks.materialize, mocks.release, mocks.getState]) mock.mockReset();
         for (const control of [mocks.run, mocks.pause, mocks.resume, mocks.retry]) control.mockResolvedValue(ok);
+        // The host answers every access request with the grant it gave.
+        mocks.requestAccess.mockReset().mockResolvedValue({ status: 'granted', detail: '' });
         mocks.unlock.mockResolvedValue(true); mocks.prompt.mockResolvedValue(true);
         mocks.state = state(); mocks.getState.mockImplementation(() => Promise.resolve(mocks.state));
         sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
@@ -250,15 +252,17 @@ describe('photo backup controller scheduler', () => {
         expect(get(photoBackupError)).toBe('"Camera" is already covered by "DCIM".');
     });
 
-    it('explains a partial grant next to the short list it produced', async () => {
-        mocks.requestAccess.mockReset().mockResolvedValue(undefined);
-        mocks.sources.mockReset().mockResolvedValue({ sources: [{ id: 'all', kind: 'library', name: 'All photos and videos', root: 'content://media', enabled: true, addedAt: 0 }], access: { status: 'limited', detail: 'TDrive can only see the photos you picked.' } });
-        await loadPhotoBackupCandidates();
-        expect(get(photoBackupCandidates)).toHaveLength(1);
+    // Adding a folder is the moment the media grant matters: on a phone the
+    // folder is read through the library, so both permissions are needed and
+    // a partial grant is worth saying out loud next to the folder it limits.
+    it('asks for the media grant when a folder is added, and explains a partial one', async () => {
+        mocks.requestAccess.mockReset().mockResolvedValue({ status: 'limited', detail: 'TDrive can only see the photos you picked.' });
+        await choosePhotoBackupFolder();
+        expect(mocks.requestAccess).toHaveBeenCalled();
         expect(get(photoBackupAccessNote)).toBe('TDrive can only see the photos you picked.');
         // Full access is the expected case and says nothing.
-        mocks.sources.mockResolvedValue({ sources: [], access: { status: 'granted', detail: 'full media access' } });
-        await loadPhotoBackupCandidates();
+        mocks.requestAccess.mockResolvedValue({ status: 'granted', detail: 'full media access' });
+        await choosePhotoBackupFolder();
         expect(get(photoBackupAccessNote)).toBe('');
     });
 

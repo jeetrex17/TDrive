@@ -917,3 +917,55 @@ func TestMigratePrunesJobsWhoseSourceIsGone(t *testing.T) {
 		t.Fatalf("jobs=%v", names)
 	}
 }
+
+// The album picker is gone, and so are the sources it made: a ledger row for
+// an album names a place nothing can scan any more. What it already put in the
+// drive stays recorded, so adding the folder that holds those photos does not
+// send every one of them a second time.
+func TestMigrateDropsSourcesTheAlbumPickerMade(t *testing.T) {
+	now := time.Now()
+	engine, scope := testEngine(t, &now)
+	ctx := context.Background()
+	for _, source := range []Source{
+		{Scope: scope, ID: "folder:/Pictures", Kind: "folder", Root: "/Pictures", Enabled: true},
+		{Scope: scope, ID: "tree:external_primary:DCIM/", Kind: "device-folder", Root: "external_primary:DCIM/", Enabled: true},
+		{Scope: scope, ID: "all", Kind: "library", Root: "content://media", Enabled: true},
+		{Scope: scope, ID: "bucket:9", Kind: "album", Root: "content://media", Enabled: true},
+	} {
+		if err := engine.UpsertSource(ctx, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert := func(sourceID, assetID, status string) {
+		t.Helper()
+		if _, err := engine.db.ExecContext(ctx, `INSERT INTO photo_backup_jobs(account_id,drive_id,source_id,asset_id,version,path,name,media_type,resource_id,modified_at,size,status,created_at,updated_at) VALUES(?,?,?,?,'1','',?,'photo','',0,1,?,1,1)`,
+			scope.AccountID, scope.DriveID, sourceID, assetID, assetID, status); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("bucket:9", "waiting.jpg", string(Pending))
+	insert("bucket:9", "sent.jpg", string(Complete))
+
+	if err := engine.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := engine.ListSources(ctx, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, source := range sources {
+		kinds = append(kinds, source.Kind)
+	}
+	// Ordered by source id: "folder:/Pictures" then "tree:external_primary:…".
+	if strings.Join(kinds, ",") != "folder,device-folder" {
+		t.Fatalf("sources = %v, want only the two folder kinds", kinds)
+	}
+	status, err := engine.Status(ctx, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Pending != 0 || status.Complete != 1 {
+		t.Fatalf("status = %+v, want the queue gone and the receipt kept", status)
+	}
+}

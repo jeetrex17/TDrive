@@ -9,6 +9,7 @@
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import LogOutIcon from '@lucide/svelte/icons/log-out';
     import PaletteIcon from '@lucide/svelte/icons/palette';
+    import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import Avatar from '../chrome/Avatar.svelte';
     import { getStorageUsed } from '../../api';
@@ -30,50 +31,74 @@
     import type { DriveChannel } from '../../types';
     import { activeDrive, activeTab } from './mobile-shell-store';
     import { pushSheet } from '../modals/sheet-stack';
+    import { photoBackupState } from '../../modules/photo-backup/controller';
+    import { describeBackup } from '../gallery/photo-backup-view';
 
     const displayName = $derived(
         !$profileLoaded ? 'Loading account' : $profileUser?.displayName || 'Telegram account',
     );
     const handle = $derived(($profileUser?.username || '').trim());
     const drives = $derived([...$sidebarState.personal, ...$sidebarState.shared]);
-    let appearanceOpen = $state(false);
+    /**
+     * The settings that are a screen rather than a row: each opens in place,
+     * over the account list, with its own title and a way back. Backup earned
+     * one the way Appearance did -- it is a switch with a page behind it, and
+     * unfolding that page at the bottom of a list of unrelated rows left the
+     * thing being configured off screen.
+     */
+    type AccountDetail = 'appearance' | 'backup';
+    const DETAIL_TITLES: Record<AccountDetail, string> = {
+        appearance: 'Appearance',
+        backup: 'Photo & video backup',
+    };
+
+    let detail = $state<AccountDetail | null>(null);
     let appearanceOpener = $state<HTMLButtonElement | null>(null);
+    let backupOpener = $state<HTMLButtonElement | null>(null);
     const currentThemeName = $derived(getThemeDefinition($themeState.resolvedThemeId).name);
     const appearanceSummary = $derived(
         $themeState.preference.mode === 'system' ? `System · ${currentThemeName}` : currentThemeName,
     );
+    // What the row says without opening it: off, or whatever the backup is
+    // doing right now, in the same words the page itself uses.
+    const backupSummary = $derived(
+        !$photoBackupState ? ''
+        : !$photoBackupState.settings.enabled ? 'Off'
+        : describeBackup($photoBackupState).title,
+    );
 
-    function openAppearance(): void {
-        appearanceOpen = true;
+    function openDetail(next: AccountDetail): void {
+        detail = next;
     }
 
     /**
-     * Appearance is an in-tab drill-in rather than a modal, but it is still
-     * the page's current topmost destination. Claiming the shared sheet stack
-     * makes hardware BACK and iOS edge-back leave this detail before changing
-     * tabs, and puts focus back on the row that opened it.
+     * A detail is an in-tab drill-in rather than a modal, but it is still the
+     * page's current topmost destination. Claiming the shared sheet stack makes
+     * hardware BACK and iOS edge-back leave it before changing tabs, and puts
+     * focus back on the row that opened it.
      */
-    function closeAppearance({ restoreFocus = true }: { restoreFocus?: boolean } = {}): void {
-        if (!appearanceOpen) return;
-        appearanceOpen = false;
+    function closeDetail({ restoreFocus = true }: { restoreFocus?: boolean } = {}): void {
+        const previous = detail;
+        if (!previous) return;
+        detail = null;
         if (!restoreFocus) return;
         // The opener is unmounted with the account list and recreated on the
         // next render, so resolve the bound element after that render instead
         // of trying to focus the now-disconnected old button.
-        void tick().then(() => appearanceOpener?.focus({ preventScroll: true }));
+        void tick().then(() => (previous === 'appearance' ? appearanceOpener : backupOpener)?.focus({ preventScroll: true }));
     }
 
     $effect(() => {
-        if (!appearanceOpen) return;
-        const backEntry = pushSheet(() => closeAppearance());
+        if (!detail) return;
+        const backEntry = pushSheet(() => closeDetail());
         return () => backEntry.release();
     });
 
     // Account stays mounted behind the tab switcher. A detail screen must not
     // keep a hidden BACK-stack entry after the user chooses another tab.
     $effect(() => {
-        if ($activeTab !== 'account' && appearanceOpen) {
-            closeAppearance({ restoreFocus: false });
+        if ($activeTab !== 'account' && detail) {
+            closeDetail({ restoreFocus: false });
         }
     });
 
@@ -148,13 +173,17 @@
 </script>
 
 <div class="mobile-scroll account-tab">
-    {#if appearanceOpen}
-        <section class="account-appearance-detail" aria-label="Appearance settings">
-            <button type="button" class="account-appearance-back" onclick={() => closeAppearance()}>
+    {#if detail}
+        <section class="account-detail" aria-label={DETAIL_TITLES[detail]}>
+            <button type="button" class="account-detail-back" onclick={() => closeDetail()}>
                 <ChevronLeftIcon size={20} strokeWidth={2.2} aria-hidden="true" />
-                Appearance
+                {DETAIL_TITLES[detail]}
             </button>
-            <AppearancePanel autofocus />
+            {#if detail === 'appearance'}
+                <AppearancePanel autofocus />
+            {:else}
+                <PhotoBackupPanel page />
+            {/if}
         </section>
     {:else}
     <div class="account-identity">
@@ -187,7 +216,17 @@
                 <ChevronRightIcon class="account-row-chevron" size={18} strokeWidth={2} aria-hidden="true" />
             </button>
             {#if $activeTab === 'account'}<PhotoCachePanel />{/if}
-            {#if $activeTab === 'account'}<PhotoBackupPanel />{/if}
+            <button
+                bind:this={backupOpener}
+                type="button"
+                class="account-row"
+                onclick={() => openDetail('backup')}
+            >
+                <CloudUploadIcon class="account-row-icon" size={20} strokeWidth={1.9} aria-hidden="true" />
+                <span class="account-row-label">Photo &amp; video backup</span>
+                <span class="account-row-value">{backupSummary}</span>
+                <ChevronRightIcon class="account-row-chevron" size={18} strokeWidth={2} aria-hidden="true" />
+            </button>
         </div>
     </section>
 
@@ -235,7 +274,7 @@
                 bind:this={appearanceOpener}
                 type="button"
                 class="account-row"
-                onclick={openAppearance}
+                onclick={() => openDetail('appearance')}
             >
                 <PaletteIcon class="account-row-icon" size={20} strokeWidth={1.9} aria-hidden="true" />
                 <span class="account-row-label">Appearance</span>

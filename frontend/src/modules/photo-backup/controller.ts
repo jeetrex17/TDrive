@@ -2,14 +2,14 @@ import { get, writable } from 'svelte/store';
 import {
     addPhotoBackupFolder, defaultSettings, enqueuePhotoBackupAssets, getPhotoBackupState, normalizeAsset,
     pausePhotoBackup, removePhotoBackupSource, resolvePhotoBackupResource, resumePhotoBackup, retryPhotoBackup, setPhotoBackupPolicy,
-    runPhotoBackup, savePhotoBackupSettings, type PhotoBackupSettings, type PhotoBackupSource,
+    runPhotoBackup, savePhotoBackupSettings, type PhotoBackupSettings,
     type PhotoBackupState, upsertPhotoBackupSource,
 } from '../../api/photo-backup';
 import { OperationFailure, requireOperationSuccess } from '../../api/operation';
 import { onRuntimeEvent, runtimeEventsAvailable, type RuntimeUnsubscribe } from '../../api/runtime';
 import { asRecord, boundedText } from '../../api/shared';
 import type { OperationError, OperationResult } from '../../types';
-import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativeErrorCode, nativePhotoBackupAvailable, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
+import { listNativePhotoBackupAssets, materializeNativePhotoBackupAsset, nativePhotoBackupAvailable, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
 import { activeDrive } from '../../ui/mobile/mobile-shell-store';
 import { activatePhotoBackupBackground } from './background';
 import { callWithPasswordRetry, openEncryptionPasswordModal } from '../modals/encryption-password';
@@ -19,11 +19,10 @@ import { clearPhotoBackupActivity, syncPhotoBackupActivity } from './activity';
 export const photoBackupState = writable<PhotoBackupState | null>(null);
 export const photoBackupError = writable('');
 export const photoBackupBusy = writable(false);
-export const photoBackupCandidates = writable<PhotoBackupSource[]>([]);
 // What the device says about the media grant. It lives here rather than in the
-// backend state because only the host can see an Android permission, and under
-// partial access it is the one thing that explains why the list of albums is
-// nearly empty.
+// backend state because only the host can see an Android permission, and a
+// partial grant is the one thing that explains a folder backing up less than
+// the person can see in it.
 export const photoBackupAccessNote = writable('');
 
 const UNLOCK_MESSAGE = 'Unlock encryption to continue photo backup.';
@@ -176,25 +175,6 @@ async function runDiscoveryScheduler(): Promise<void> {
     }
 }
 
-// Asking for access every time is deliberate. A user who chose "Select photos"
-// can only widen that from the system's own dialog, and this button is the
-// place they come to when the list is missing what they expected.
-export async function loadPhotoBackupCandidates(): Promise<void> {
-    if (!nativePhotoBackupAvailable()) return;
-    photoBackupBusy.set(true); photoBackupError.set('');
-    try {
-        await requestNativePhotoBackupAccess();
-        const listing = await listNativePhotoBackupSources();
-        photoBackupCandidates.set(listing.sources);
-        photoBackupAccessNote.set(listing.access.status === 'limited' || listing.access.status === 'denied' ? listing.access.detail : '');
-    } catch (cause) {
-        // iOS answers a refused library with its own code rather than an empty
-        // list; unhandled, that was a tap that did nothing.
-        photoBackupError.set(nativeErrorCode(cause) === 'photoAccessRequired'
-            ? 'Allow TDrive to access your photos in Settings, then try again.'
-            : 'Could not read your photo library. Try again.');
-    } finally { photoBackupBusy.set(false); }
-}
 /**
  * Whether a folder can be added on this host. Desktop always can, through the
  * backend's own dialog; a phone only where the host offers a picker, which is
@@ -203,8 +183,6 @@ export async function loadPhotoBackupCandidates(): Promise<void> {
  * rather than present and refusing.
  */
 export function photoBackupFolderPicking(): boolean { return !nativePhotoBackupAvailable() || nativePhotoBackupFolderPicking(); }
-
-export async function selectPhotoBackupSource(source: PhotoBackupSource): Promise<void> { await upsertPhotoBackupSource(source); await refreshPhotoBackup(); void runDiscoveryScheduler(); }
 
 // An explicit action may open the existing password modal, then runs once. The
 // snapshot can be stale, so the backend's stable locked-vault code is the
@@ -254,6 +232,11 @@ export async function choosePhotoBackupFolder(): Promise<void> {
     photoBackupBusy.set(true);
     try {
         if (nativePhotoBackupFolderPicking()) {
+            // A phone reads a watched folder through its media library, so the
+            // folder and the grant are two permissions and both are needed.
+            // Asked for here because adding a folder is the moment it matters.
+            const access = await requestNativePhotoBackupAccess();
+            photoBackupAccessNote.set(access.status === 'limited' || access.status === 'denied' ? access.detail : '');
             const picked = await pickNativePhotoBackupFolder();
             if (!picked) return;
             await upsertPhotoBackupSource(picked);

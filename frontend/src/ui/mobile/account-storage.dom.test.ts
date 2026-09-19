@@ -17,6 +17,8 @@ vi.mock('../../modules/modals/join-drive', () => ({ openJoinDriveModal: vi.fn() 
 vi.mock('../../modules/modals/new-drive', () => ({ openNewDriveModal: vi.fn() }));
 vi.mock('../../modules/modals/logout', () => ({ openLogoutModal: vi.fn() }));
 vi.mock('../theme/AppearancePanel.svelte', () => ({ default: function noop() {} }));
+vi.mock('../gallery/PhotoBackupPanel.svelte', () => ({ default: function noop() {} }));
+vi.mock('../gallery/PhotoCachePanel.svelte', () => ({ default: function noop() {} }));
 vi.mock('../chrome/Avatar.svelte', () => ({ default: function noop() {} }));
 
 import AccountTab from './AccountTab.svelte';
@@ -73,7 +75,7 @@ describe('Account storage row', () => {
             .find((button) => button.textContent?.includes('Appearance'));
         opener?.click();
         flushSync();
-        (host.querySelector<HTMLButtonElement>('.account-appearance-back'))?.click();
+        (host.querySelector<HTMLButtonElement>('.account-detail-back'))?.click();
         flushSync();
 
         await vi.waitFor(() => {
@@ -94,13 +96,13 @@ describe('Account storage row', () => {
         opener?.focus();
         opener?.click();
         flushSync();
-        expect(host.querySelector('.account-appearance-detail')).not.toBeNull();
+        expect(host.querySelector('.account-detail')).not.toBeNull();
 
         expect(handleBackPress()).toBe(true);
         await Promise.resolve();
         flushSync();
 
-        expect(host.querySelector('.account-appearance-detail')).toBeNull();
+        expect(host.querySelector('.account-detail')).toBeNull();
         await vi.waitFor(() => {
             const restoredOpener = [...host.querySelectorAll<HTMLButtonElement>('.account-row')]
                 .find((button) => button.textContent?.includes('Appearance'));
@@ -117,12 +119,12 @@ describe('Account storage row', () => {
             .find((button) => button.textContent?.includes('Appearance'));
         opener?.click();
         flushSync();
-        expect(host.querySelector('.account-appearance-detail')).not.toBeNull();
+        expect(host.querySelector('.account-detail')).not.toBeNull();
 
         activeTab.set('files');
         flushSync();
 
-        expect(host.querySelector('.account-appearance-detail')).toBeNull();
+        expect(host.querySelector('.account-detail')).toBeNull();
     });
 
     it('reports what the drive is using', async () => {
@@ -174,5 +176,29 @@ describe('Account storage row', () => {
 
         second.resolve(2000);
         await vi.waitFor(() => expect(storageRow()).toContain('2 KB'));
+    });
+
+    // Backup is a screen, not a section that unfolds under the account list:
+    // the switch it starts with was landing below rows about drives and
+    // storage, and everything it configures below the fold.
+    it('opens photo backup as its own page and BACK returns to the list', async () => {
+        mocks.getStorageUsed.mockResolvedValue(10);
+        app = mount(AccountTab, { target: host });
+        flushSync();
+
+        const opener = [...host.querySelectorAll<HTMLButtonElement>('.account-row')]
+            .find((button) => button.textContent?.includes('Photo & video backup'));
+        expect(opener).toBeDefined();
+        opener?.click();
+        flushSync();
+        const detail = host.querySelector('.account-detail');
+        expect(detail).not.toBeNull();
+        expect(detail?.getAttribute('aria-label')).toBe('Photo & video backup');
+
+        expect(handleBackPress()).toBe(true);
+        await Promise.resolve();
+        flushSync();
+        expect(host.querySelector('.account-detail')).toBeNull();
+        expect([...host.querySelectorAll('.account-row')].some((row) => row.textContent?.includes('Photo & video backup'))).toBe(true);
     });
 });

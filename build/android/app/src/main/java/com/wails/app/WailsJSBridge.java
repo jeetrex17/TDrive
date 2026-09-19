@@ -149,13 +149,6 @@ public class WailsJSBridge {
         sendCallback(callbackId, activity.photoBackupPolicyStatus().toString(), null);
     }
 
-    /** List MediaStore albums as backup sources. */
-    @JavascriptInterface public void listPhotoBackupSources(final String callbackId) {
-        MainActivity activity = activity();
-        if (activity == null) { sendCallback(callbackId, null, "media library unavailable"); return; }
-        activity.listPhotoBackupSources(callbackId);
-    }
-
     /**
      * Ask for a folder to back up and answer with the source it becomes, as
      * {"id","name","root","kind"} -- or "" when the picker was dismissed. This

@@ -705,54 +705,17 @@ public class MainActivity extends AppCompatActivity {
         return out;
     }
 
-    public void listPhotoBackupSources(String callbackId) {
-        new Thread(() -> {
-            JSONObject answer = new JSONObject();
-            try {
-                JSONObject access = photoBackupAccess();
-                answer.put("access", access);
-                JSONArray sources = new JSONArray();
-                String mediaRoot = MediaStore.Files.getContentUri("external").toString();
-                sources.put(new JSONObject().put("id", "all").put("root", mediaRoot).put("name", "All photos and videos").put("kind", "library").put("enabled", access.optBoolean("canRead")));
-                if (access.optBoolean("canRead")) {
-                    // Scan off the UI thread but retain at most 256 identities.
-                    // A library with more albums says so explicitly instead of
-                    // silently pretending its newest records were all albums.
-                    Map<String, String> albums = new HashMap<>();
-                    boolean truncated = false;
-                    String[] projection = {MediaStore.Images.Media.BUCKET_ID, MediaStore.Images.Media.BUCKET_DISPLAY_NAME};
-                    try (Cursor c = queryMedia(MediaStore.Files.getContentUri("external"), projection,
-                            MediaStore.Files.FileColumns.MEDIA_TYPE + " IN (?,?)",
-                            new String[]{String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE), String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO)}, 0)) {
-                        while (c != null && c.moveToNext()) {
-                            String id = c.getString(0), name = c.getString(1);
-                            if (id != null && name != null && !name.isEmpty() && !albums.containsKey(id)) {
-                                if (albums.size() < 256) albums.put(id, name); else truncated = true;
-                            }
-                        }
-                    }
-                    for (Map.Entry<String, String> album : albums.entrySet()) {
-                        sources.put(new JSONObject().put("id", "bucket:" + album.getKey()).put("root", mediaRoot).put("name", album.getValue()).put("kind", "album").put("enabled", true));
-                    }
-                    answer.put("truncated", truncated);
-                }
-                answer.put("sources", sources);
-                jsBridge.sendCallback(callbackId, answer.toString(), null);
-            } catch (Exception e) {
-                Log.e(TAG, "Media source listing failed", e);
-                jsBridge.sendCallback(callbackId, null, "could not list media sources");
-            }
-        }).start();
-    }
-
     public void listPhotoBackupAssets(String callbackId, String requestJson) {
         new Thread(() -> {
             try {
                 if (!photoBackupAccess().optBoolean("canRead")) { jsBridge.sendCallback(callbackId, null, "media permission denied"); return; }
                 JSONObject request = new JSONObject(requestJson);
-                String sourceId = request.optString("sourceId", "all");
+                // A watched folder is the only kind of source there is: albums
+                // and the whole-library source went with the picker that used
+                // to offer them.
+                String sourceId = request.optString("sourceId", "");
                 TreeSource tree = TreeSource.parse(sourceId);
-                if (!"all".equals(sourceId) && !sourceId.startsWith("bucket:") && tree == null) throw new IOException("unknown media source");
+                if (tree == null) throw new IOException("unknown media source");
                 int limit = Math.max(1, Math.min(PHOTO_BACKUP_PAGE_LIMIT, request.optInt("limit", PHOTO_BACKUP_PAGE_LIMIT)));
                 JSONObject cursor = request.optJSONObject("cursor");
                 long modified = cursor == null ? Long.MAX_VALUE : cursor.optLong("modified", Long.MAX_VALUE);
@@ -760,37 +723,31 @@ public class MainActivity extends AppCompatActivity {
                 String selection = MediaStore.Files.FileColumns.MEDIA_TYPE + " IN (?,?)";
                 List<String> args = new ArrayList<>();
                 args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)); args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO));
-                if (sourceId.startsWith("bucket:")) { selection += " AND " + MediaStore.Images.Media.BUCKET_ID + "=?"; args.add(sourceId.substring(7)); }
                 // A watched folder is a place, not a bucket: the folder itself
                 // and everything under it, which is what the desktop walker
                 // does with a chosen directory. The equality term is the
                 // folder's own files, and the one an index can answer; the
                 // pattern reaches its subfolders. A folder named "100%" is
                 // escaped, or it would match half the volume.
-                if (tree != null) {
-                    String column = treePathColumn();
-                    String prefix = tree.pathPrefix(this);
-                    if (prefix == null) throw new IOException("that folder is not available on this device");
-                    selection += " AND (" + column + "=? OR " + column + " LIKE ? ESCAPE '\\')";
-                    args.add(prefix); args.add(escapeLike(prefix) + "%");
-                }
+                String column = treePathColumn();
+                String prefix = tree.pathPrefix(this);
+                if (prefix == null) throw new IOException("that folder is not available on this device");
+                selection += " AND (" + column + "=? OR " + column + " LIKE ? ESCAPE '\\')";
+                args.add(prefix); args.add(escapeLike(prefix) + "%");
                 if (cursor != null) { selection += " AND (" + MediaStore.MediaColumns.DATE_MODIFIED + "<? OR (" + MediaStore.MediaColumns.DATE_MODIFIED + "=? AND " + MediaStore.MediaColumns._ID + "<?))"; args.add(String.valueOf(modified)); args.add(String.valueOf(modified)); args.add(String.valueOf(id)); }
                 // DATE_TAKEN is the camera's clock and the only column that survives
                 // an edit; DATE_ADDED is when MediaStore first saw the row, which is
                 // the closest thing to it for media without EXIF.
                 String[] base = {MediaStore.MediaColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DATE_ADDED, MediaStore.Images.ImageColumns.DATE_TAKEN};
-                // The location column is asked for only by a folder source.
                 // RELATIVE_PATH does not exist before Android 10, and a
                 // projection naming a column the provider does not know fails
-                // the whole query rather than returning null for it.
-                String[] projection = base;
-                if (tree != null) {
-                    projection = new String[base.length + 1];
-                    System.arraycopy(base, 0, projection, 0, base.length);
-                    projection[base.length] = treePathColumn();
-                }
+                // the whole query rather than returning null for it, so the
+                // location column is added rather than assumed.
+                String[] projection = new String[base.length + 1];
+                System.arraycopy(base, 0, projection, 0, base.length);
+                projection[base.length] = treePathColumn();
                 JSONArray assets = new JSONArray(); JSONObject next = null; long lastModified = 0; long lastId = 0;
-                Uri collection = tree == null ? MediaStore.Files.getContentUri("external") : tree.collection();
+                Uri collection = tree.collection();
                 try (Cursor c = queryMedia(collection, projection, selection, args.toArray(new String[0]), limit + 1)) {
                     while (c != null && c.moveToNext()) {
                         if (assets.length() >= limit) { next = new JSONObject().put("modified", lastModified).put("id", lastId); break; }
@@ -806,7 +763,7 @@ public class MainActivity extends AppCompatActivity {
                                 .put("version", changed + ":" + size).put("name", c.isNull(2) ? "media" : c.getString(2))
                                 .put("mediaType", video ? "video" : "image").put("mimeType", c.isNull(3) ? "" : c.getString(3))
                                 .put("resourceID", "media:" + (video ? "video:" : "image:") + mediaId)
-                                .put("relDir", tree == null ? "" : tree.relativeDir(c.isNull(base.length) ? "" : c.getString(base.length)))
+                                .put("relDir", tree.relativeDir(c.isNull(base.length) ? "" : c.getString(base.length)))
                                 .put("size", size).put("modifiedAt", changed * 1000L).put("createdAt", createdAt).put("sourceId", sourceId));
                         lastModified = changed; lastId = mediaId;
                     }
