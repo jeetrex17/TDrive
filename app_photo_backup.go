@@ -36,7 +36,6 @@ type PhotoBackupSettings struct {
 	Enabled             bool   `json:"enabled"`
 	Photos              bool   `json:"photos"`
 	Videos              bool   `json:"videos"`
-	FutureOnly          bool   `json:"future_only"`
 	WiFiOnly            bool   `json:"wifi_only"`
 	DestinationParentID string `json:"destination_parent_id"`
 	Encrypt             bool   `json:"encrypt"`
@@ -844,7 +843,7 @@ func millisFromTime(t time.Time) int64 {
 }
 
 func photoBackupState(settings photobackup.Settings, sources []photobackup.Source, status photobackup.Status, running, manualPaused bool) PhotoBackupState {
-	state := PhotoBackupState{Platform: runtime.GOOS, Settings: PhotoBackupSettings{Enabled: settings.Enabled, Photos: settings.Photos, Videos: settings.Videos, FutureOnly: settings.FutureOnly, WiFiOnly: settings.WiFiOnly, DestinationParentID: settings.DestinationParentID, Encrypt: settings.Encrypt}}
+	state := PhotoBackupState{Platform: runtime.GOOS, Settings: PhotoBackupSettings{Enabled: settings.Enabled, Photos: settings.Photos, Videos: settings.Videos, WiFiOnly: settings.WiFiOnly, DestinationParentID: settings.DestinationParentID, Encrypt: settings.Encrypt}}
 	state.ManualPaused = manualPaused
 	state.Sources = make([]PhotoBackupSource, 0, len(sources))
 	for _, source := range sources {

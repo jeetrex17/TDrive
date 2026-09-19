@@ -23,7 +23,7 @@
     import IconButton from '../IconButton.svelte';
     import ProgressBar from '../ProgressBar.svelte';
     import SwitchRow from '../SwitchRow.svelte';
-    import { futureOnlyDescription, type PhotoBackupSettings } from '../../api/photo-backup';
+    import type { PhotoBackupSettings } from '../../api/photo-backup';
     import {
         choosePhotoBackupFolder, deletePhotoBackupSource, pausePhotoBackupNow,
         photoBackupAccessNote, photoBackupBusy, photoBackupError, photoBackupState, refreshPhotoBackup,
@@ -221,7 +221,6 @@
                 <div class="pb-card">
                     <SwitchRow title="Photos" checked={state.settings.photos} disabled={$busy} onchange={(photos) => save({ photos })} />
                     <SwitchRow title="Videos" checked={state.settings.videos} disabled={$busy} onchange={(videos) => save({ videos })} />
-                    <SwitchRow title="New items only" description={futureOnlyDescription} checked={state.settings.futureOnly} disabled={$busy} onchange={(futureOnly) => save({ futureOnly })} />
                     {#if state.capabilities.wifiOnly.supported}
                         <SwitchRow title="Wi-Fi only" description="Never uses mobile data." checked={state.settings.wifiOnly} disabled={$busy} onchange={(wifiOnly) => save({ wifiOnly })} />
                     {/if}

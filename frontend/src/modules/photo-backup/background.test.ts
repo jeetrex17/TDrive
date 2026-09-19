@@ -17,7 +17,7 @@ vi.mock('../../api/runtime', () => ({ runtimeEventsAvailable: () => false, onRun
 import { activatePhotoBackupBackground } from './background';
 
 const state = (uploading: boolean): PhotoBackupState => ({
-    settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false },
+    settings: { enabled: true, photos: true, videos: true, wifiOnly: false, encrypt: false },
     sources: [], status: { phase: uploading ? 'uploading' : 'idle', pending: 0, uploading: uploading ? 1 : 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0, message: '' },
     capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: '', detail: '' } },
     platform: 'android', destination: { id: '', title: '', kind: '' }, manualPaused: false, encryptionRequired: false,
@@ -50,7 +50,45 @@ describe('photo backup background lease', () => {
         const stop = activatePhotoBackupBackground(store, vi.fn());
         await flush(); store.set(state(false)); grant(); await flush(); await flush();
         expect(mocks.lease).not.toHaveBeenCalledWith(true);
-        expect(mocks.demand).toHaveBeenLastCalledWith(null);
+        // No summary for a lease that never really started: nothing ran.
+        expect(mocks.demand).toHaveBeenLastCalledWith(null, undefined);
+        stop();
+    });
+
+    // A backup that ran while the phone was in a pocket leaves one line saying
+    // so: the ongoing notification disappears with the service, and its absence
+    // tells the user nothing about whether their photos are safe. It counts
+    // this run, not every backup the drive has ever done.
+    it('leaves a summary behind counting what this run added', async () => {
+        const store = writable<PhotoBackupState | null>(state(true));
+        const stop = activatePhotoBackupBackground(store, vi.fn());
+        await flush();
+
+        const done = state(false);
+        done.status.complete = 3;
+        store.set(done);
+        await flush(); await flush();
+
+        expect(mocks.demand).toHaveBeenLastCalledWith(null, {
+            outcome: 'complete', title: 'Photos backed up', text: '3 items added to your drive',
+        });
+        stop();
+    });
+
+    it('says so when a run left something behind', async () => {
+        const store = writable<PhotoBackupState | null>(state(true));
+        const stop = activatePhotoBackupBackground(store, vi.fn());
+        await flush();
+
+        const done = state(false);
+        done.status.complete = 2;
+        done.status.failed = 1;
+        store.set(done);
+        await flush(); await flush();
+
+        expect(mocks.demand).toHaveBeenLastCalledWith(null, {
+            outcome: 'stopped', title: 'Photo backup needs attention', text: '1 item could not be backed up',
+        });
         stop();
     });
 

@@ -148,7 +148,7 @@ func (e *Engine) migrateSchema(ctx context.Context) error {
 // it is a one-time cost on an empty database, not a million-row scan on every
 // launch. This package owns its separate SQLite file.
 func (e *Engine) createSchema(ctx context.Context) error {
-	_, err := e.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS photo_backup_settings(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,enabled INTEGER NOT NULL,photos INTEGER NOT NULL,videos INTEGER NOT NULL,future_only INTEGER NOT NULL,wifi_only INTEGER NOT NULL,destination_parent_id TEXT NOT NULL,encrypt INTEGER NOT NULL,manual_paused INTEGER NOT NULL DEFAULT 0,receipt_cursor INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,drive_id));
+	_, err := e.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS photo_backup_settings(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,enabled INTEGER NOT NULL,photos INTEGER NOT NULL,videos INTEGER NOT NULL,wifi_only INTEGER NOT NULL,destination_parent_id TEXT NOT NULL,encrypt INTEGER NOT NULL,manual_paused INTEGER NOT NULL DEFAULT 0,receipt_cursor INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,drive_id));
 CREATE TABLE IF NOT EXISTS photo_backup_sources(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,kind TEXT NOT NULL,root TEXT NOT NULL,name TEXT NOT NULL,enabled INTEGER NOT NULL,added_at INTEGER NOT NULL,scan_cursor TEXT NOT NULL DEFAULT '',scan_complete INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(account_id,drive_id,source_id));
 CREATE TABLE IF NOT EXISTS photo_backup_jobs(account_id TEXT NOT NULL,drive_id INTEGER NOT NULL,source_id TEXT NOT NULL,asset_id TEXT NOT NULL,version TEXT NOT NULL,path TEXT NOT NULL,name TEXT NOT NULL,media_type TEXT NOT NULL,resource_id TEXT NOT NULL DEFAULT '',modified_at INTEGER NOT NULL,captured_at INTEGER NOT NULL DEFAULT 0,rel_dir TEXT NOT NULL DEFAULT '',size INTEGER NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at INTEGER NOT NULL DEFAULT 0,last_error TEXT NOT NULL DEFAULT '',remote_message_id INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(account_id,drive_id,source_id,asset_id,version,resource_id));
 CREATE INDEX IF NOT EXISTS photo_backup_jobs_ready ON photo_backup_jobs(account_id,drive_id,status,next_attempt_at,created_at);
@@ -174,7 +174,7 @@ func (e *Engine) PutSettings(ctx context.Context, s Settings) error {
 	}
 	// Manual pause has its own API so a concurrent settings save cannot
 	// accidentally resume a user-paused scope.
-	_, err := e.db.ExecContext(ctx, `INSERT INTO photo_backup_settings(account_id,drive_id,enabled,photos,videos,future_only,wifi_only,destination_parent_id,encrypt,manual_paused) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,drive_id) DO UPDATE SET enabled=excluded.enabled,photos=excluded.photos,videos=excluded.videos,future_only=excluded.future_only,wifi_only=excluded.wifi_only,destination_parent_id=excluded.destination_parent_id,encrypt=excluded.encrypt`, s.Scope.AccountID, s.Scope.DriveID, s.Enabled, s.Photos, s.Videos, s.FutureOnly, s.WiFiOnly, s.DestinationParentID, s.Encrypt, s.ManualPaused)
+	_, err := e.db.ExecContext(ctx, `INSERT INTO photo_backup_settings(account_id,drive_id,enabled,photos,videos,wifi_only,destination_parent_id,encrypt,manual_paused) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id,drive_id) DO UPDATE SET enabled=excluded.enabled,photos=excluded.photos,videos=excluded.videos,wifi_only=excluded.wifi_only,destination_parent_id=excluded.destination_parent_id,encrypt=excluded.encrypt`, s.Scope.AccountID, s.Scope.DriveID, s.Enabled, s.Photos, s.Videos, s.WiFiOnly, s.DestinationParentID, s.Encrypt, s.ManualPaused)
 	return err
 }
 func (e *Engine) GetSettings(ctx context.Context, scope Scope) (Settings, error) {
@@ -182,7 +182,7 @@ func (e *Engine) GetSettings(ctx context.Context, scope Scope) (Settings, error)
 		return Settings{}, ErrInvalid
 	}
 	s := Settings{Scope: scope}
-	err := e.db.QueryRowContext(ctx, `SELECT enabled,photos,videos,future_only,wifi_only,destination_parent_id,encrypt,manual_paused FROM photo_backup_settings WHERE account_id=? AND drive_id=?`, scope.AccountID, scope.DriveID).Scan(&s.Enabled, &s.Photos, &s.Videos, &s.FutureOnly, &s.WiFiOnly, &s.DestinationParentID, &s.Encrypt, &s.ManualPaused)
+	err := e.db.QueryRowContext(ctx, `SELECT enabled,photos,videos,wifi_only,destination_parent_id,encrypt,manual_paused FROM photo_backup_settings WHERE account_id=? AND drive_id=?`, scope.AccountID, scope.DriveID).Scan(&s.Enabled, &s.Photos, &s.Videos, &s.WiFiOnly, &s.DestinationParentID, &s.Encrypt, &s.ManualPaused)
 	return s, err
 }
 
@@ -269,17 +269,6 @@ func (e *Engine) ListSources(ctx context.Context, scope Scope) ([]Source, error)
 	return out, rows.Err()
 }
 
-// assetTakenAt is what "new items only" compares against: the capture time
-// when the host reports one, otherwise the last modification. The fallback
-// keeps desktop folders working, where no filesystem exposes a portable
-// creation time, at the cost of an edit there counting as new.
-func assetTakenAt(a Asset) time.Time {
-	if !a.CapturedAt.IsZero() {
-		return a.CapturedAt
-	}
-	return a.ModifiedAt
-}
-
 // The ledger stores an unknown capture time as 0 rather than the zero time's
 // negative nanoseconds, so a row written by an older host reads back as
 // unknown as well.
@@ -353,9 +342,6 @@ func (e *Engine) EnqueuePage(ctx context.Context, scope Scope, sourceID string, 
 			continue
 		}
 		if a.Path == "" && a.ResourceID == "" {
-			continue
-		}
-		if settings.FutureOnly && assetTakenAt(a).Before(source.AddedAt) {
 			continue
 		}
 		a.MediaType = normalizedMediaKind(a)

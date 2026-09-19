@@ -298,7 +298,6 @@ export interface PhotoBackupSettings {
     "enabled": boolean;
     "photos": boolean;
     "videos": boolean;
-    "future_only": boolean;
     "wifi_only": boolean;
     "destination_parent_id": string;
     "encrypt": boolean;

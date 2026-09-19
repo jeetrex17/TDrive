@@ -4,7 +4,7 @@ import { actionLabel, canStart, currentFileName, describeBackup, destinationLabe
 
 function state(overrides: Partial<PhotoBackupState> = {}, status: Partial<PhotoBackupState['status']> = {}): PhotoBackupState {
     return {
-        settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false },
+        settings: { enabled: true, photos: true, videos: true, wifiOnly: false, encrypt: false },
         sources: [{ id: 'camera', kind: 'library', root: 'Camera', name: 'Camera', enabled: true, addedAt: 1 }],
         status: { phase: 'idle', pending: 0, uploading: 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0, message: '', ...status },
         capabilities: { wifiOnly: { supported: false, label: '', detail: '' }, access: { status: 'available', detail: '' } },
