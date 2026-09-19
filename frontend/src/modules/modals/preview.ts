@@ -12,6 +12,9 @@ import { acquireRendition, subscribeRenditionReset, type ImageRequest } from '..
 import type { RenditionLease } from '../renditions/broker';
 import { acquireOriginalViewerBudget, subscribeGalleryPolicy } from '../gallery-policy';
 import { setActive as setGalleryThumbnailScheduling } from '../../ui/gallery/gallery-controller';
+import { getInteractiveFileListRows } from '../../ui/file-list/file-list-store';
+import { canOpenFileViewer, isVideoFile } from '../media-types';
+import { appActions } from '../app-actions';
 import type { FileCommandItem } from '../../ui/file-list/types';
 import {
     capturePreviewTransitionSource,
@@ -22,7 +25,10 @@ import { previewElementsLive, resolvePreviewElements, type PreviewElements } fro
 import { createUnlockCard, type UnlockCard } from './preview-unlock-card';
 type PreviewCommandItem = Extract<FileCommandItem, { type: 'file' }>;
 type PreviewSelection =
-    | { reason: 'none' | 'multiple' | 'unsupported' }
+    | { reason: 'none' | 'multiple' }
+    // The file is not a raster image, so it has no preview -- but it may still
+    // have a viewer, which is the caller's next question.
+    | { reason: 'unsupported'; item: PreviewCommandItem | null }
     | { reason: 'ok'; item: PreviewCommandItem; key: string };
 
 // Direct viewing is limited to raster formats whose dimensions and encoded
@@ -163,10 +169,43 @@ function getSelectedPreviewTarget(): PreviewSelection {
     if (items.length > 1) return { reason: 'multiple' };
 
     const item = items[0];
-    if (!item || item.type !== 'file') return { reason: 'unsupported' };
-    if (!isPreviewableImage(item.name)) return { reason: 'unsupported' };
+    if (!item || item.type !== 'file') return { reason: 'unsupported', item: null };
+    if (!isPreviewableImage(item.name)) return { reason: 'unsupported', item };
 
     return { reason: 'ok', item, key: getPreviewKey(item) };
+}
+
+/**
+ * Opens a selected file that has no preview the way a double click would, and
+ * reports whether anything could.
+ *
+ * Space means "show me this", and only a raster image has something to show in
+ * place. A video or a PDF answered the same press with a complaint about not
+ * being an image, which is true and useless: the app can open both, just not
+ * here. They now open where they belong, and the complaint is kept for the
+ * files nothing can open at all.
+ */
+function openSelectionOutsidePreview(item: PreviewCommandItem | null): boolean {
+    if (!item) return false;
+    // A trash row is a record of something deleted, not a live file.
+    if (state.virtualView === 'trash') return false;
+    const playable = isVideoFile(item.name);
+    if (!playable && !canOpenFileViewer(item.name)) return false;
+
+    // The selection carries no encryption flag; the row it came from does. It
+    // is only a hint either way -- the backend reports the truth when the file
+    // opens -- so a row that has since scrolled out of the list costs nothing
+    // but the early password prompt.
+    const row = getInteractiveFileListRows()
+        .find((candidate) => candidate.kind === 'file' && candidate.id === String(item.id));
+    const target = {
+        id: Number(item.id),
+        name: item.name,
+        size: Number(item.size ?? 0),
+        encrypted: row?.kind === 'file' ? row.encrypted : undefined,
+    };
+    void (playable ? appActions().playVideo(target) : appActions().openFile(target));
+    return true;
 }
 
 function clearChromeHideTimer() {
@@ -335,7 +374,7 @@ function showSelectionPreviewError(selection: PreviewSelection) {
         return;
     }
     if (selection.reason === "unsupported") {
-        flashStatus("Preview is available for image files only");
+        flashStatus("TDrive cannot open this kind of file");
     }
 }
 
@@ -889,6 +928,11 @@ async function handlePreviewKeydown(event: KeyboardEvent) {
 
     if (!previewOpen) {
         if (selection.reason !== 'ok') {
+            if (selection.reason === 'unsupported' && openSelectionOutsidePreview(selection.item)) {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
             if (selection.reason !== 'none') showSelectionPreviewError(selection);
             return;
         }
@@ -902,6 +946,12 @@ async function handlePreviewKeydown(event: KeyboardEvent) {
     event.stopPropagation();
 
     if (selection.reason !== "ok") {
+        // Selecting a video while a photo is open and pressing space asks for
+        // the video: the photo gets out of the way rather than arguing.
+        if (selection.reason === 'unsupported' && openSelectionOutsidePreview(selection.item)) {
+            closePreviewModal();
+            return;
+        }
         showSelectionPreviewError(selection);
         return;
     }

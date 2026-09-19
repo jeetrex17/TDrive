@@ -21,7 +21,7 @@ import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { appActions } from './app-actions';
 import type { FileListAction, FileListRow } from '../ui/file-list/types';
 import { fileListColumnMode } from '../ui/file-list/column-mode-store';
-import { getFileList, isMobilePlatform, search } from '../api';
+import { getAllFsMsgIds, getFileList, isMobilePlatform, search } from '../api';
 import type { RootFile, SearchHit } from '../types';
 
 let activeToken = 0;
@@ -343,22 +343,30 @@ export async function runGlobalSearch() {
     renderFileState(list, 'loading', 'Searching files');
 
     try {
-        const [fsResults, tgFiles] = await Promise.all([
+        // The managed set, not the hits, is what says whether a Telegram
+        // message is one of ours: a deleted file matches no hit and is still
+        // TDrive's until the trash purges it, so matching against the hits
+        // alone offered the file the user had just deleted back as a raw
+        // message nothing could open. Where the list cannot be read the hits
+        // are the honest fallback -- a duplicate row beats a missing one.
+        const [fsResults, tgFiles, managedIds] = await Promise.all([
             searchDrive(query, 200).catch(() => []),
             getTelegramRootFiles(driveKey),
+            getAllFsMsgIds().catch(() => [] as number[]),
         ]);
         if (token !== activeToken || (getFolderIndexDriveKey() ?? 'none') !== driveKey) return;
 
         const normalized = query.toLowerCase();
         const fs = fsResults;
 
-        const fsFileIDs = new Set(
-            fs.filter((result) => result.type === 'file').map((result) => result.id),
-        );
+        const managed = new Set<string>(managedIds.map(String));
+        for (const result of fs) {
+            if (result.type === 'file') managed.add(result.id);
+        }
 
         const tgMatches: SearchHit[] = tgFiles
             .filter((file) => file.name.toLowerCase().includes(normalized))
-            .filter((file) => !fsFileIDs.has(String(file.msgId)))
+            .filter((file) => !managed.has(String(file.msgId)))
             .slice(0, 50)
             .map((file) => ({
                 type: 'file',

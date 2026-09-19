@@ -3,6 +3,7 @@ package projection
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -383,5 +384,42 @@ func TestNextFreeFolderNameSkipsTakenSiblings(t *testing.T) {
 	}
 	if name != "Unused" {
 		t.Fatalf("NextFreeFolderName Unused = %q, want %q", name, "Unused")
+	}
+}
+
+// A deleted file's Telegram message is still TDrive's until the trash purges
+// it. Reporting otherwise put the file back at the root of the drive as an
+// unmanaged row -- deleted and visibly undeletable at the same time.
+func TestManagedMsgIDsCoversDeletedFilesAndEveryContentMessage(t *testing.T) {
+	db := newTestDB(t)
+	seed := func(msgID, contentMsgID int64, tombstoned int) {
+		t.Helper()
+		if _, err := db.Exec(`
+			INSERT INTO files (
+				channel_id, msg_id, name, size, parent_id, upload_time,
+				uploader_user_id, tombstoned, content_msg_id, revision
+			) VALUES (?, ?, 'file.bin', 1, ?, 100, 0, ?, ?, 1)
+		`, testChan, msgID, RootParent, tombstoned, contentMsgID); err != nil {
+			t.Fatalf("seed file %d: %v", msgID, err)
+		}
+	}
+	seed(10, 11, 0)
+	seed(20, 21, 1) // trashed, and still ours
+	if _, err := db.Exec(`
+		INSERT INTO file_revisions (
+			channel_id, file_msg_id, revision, content_msg_id, committed_msg_id
+		) VALUES (?, 10, 1, 12, 10)
+	`, testChan); err != nil {
+		t.Fatalf("seed superseded revision: %v", err)
+	}
+
+	ids, err := ManagedMsgIDs(db, testChan)
+	if err != nil {
+		t.Fatalf("ManagedMsgIDs: %v", err)
+	}
+	slices.Sort(ids)
+	want := []int64{10, 11, 12, 20, 21}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("managed ids = %v, want %v", ids, want)
 	}
 }

@@ -810,12 +810,16 @@ func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
 	return results, nil
 }
 
+// GetAllFsMsgIDs lists the Telegram messages this drive already accounts for.
+// The root listing subtracts them from the channel's history to show what was
+// posted outside TDrive; a deleted file stays on the list, because its message
+// is still ours until the trash purges it.
 func (a *App) GetAllFsMsgIDs() ([]int, error) {
 	svc, err := a.requireReadService()
 	if err != nil {
 		return nil, err
 	}
-	return svc.AllFileMsgIDs(a.ActiveChannelID())
+	return svc.ManagedMsgIDs(a.ActiveChannelID())
 }
 
 func (a *App) GetFolderSize(folderID string) (int64, error) {

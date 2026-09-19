@@ -238,14 +238,16 @@ func (s *Service) MediaFiles(channelID int64) ([]File, error) {
 	return out, nil
 }
 
-func (s *Service) AllFileMsgIDs(channelID int64) ([]int, error) {
+// ManagedMsgIDs reports which Telegram messages in a channel belong to TDrive,
+// deleted files included. See projection.ManagedMsgIDs for why.
+func (s *Service) ManagedMsgIDs(channelID int64) ([]int, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
 	if channelID == 0 {
 		return []int{}, nil
 	}
-	ids64, err := projection.AllFileMsgIDs(s.DB, channelID)
+	ids64, err := projection.ManagedMsgIDs(s.DB, channelID)
 	if err != nil {
 		return nil, err
 	}

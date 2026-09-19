@@ -104,7 +104,7 @@ func TestFolderContentsStorageIDsAndSize(t *testing.T) {
 		t.Fatalf("storage used = %d, want 20", used)
 	}
 
-	ids, err := svc.AllFileMsgIDs(testChannelID)
+	ids, err := svc.ManagedMsgIDs(testChannelID)
 	if err != nil {
 		t.Fatalf("all ids: %v", err)
 	}

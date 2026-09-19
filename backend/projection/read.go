@@ -534,10 +534,30 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 	return results, nil
 }
 
-func AllFileMsgIDs(db *sql.DB, channelID int64) ([]int64, error) {
+// ManagedMsgIDs returns every Telegram message in this channel that TDrive
+// owns, so the root listing can tell its own storage apart from whatever else
+// was posted to the channel.
+//
+// Deleted files are deliberately included. A trashed file is tombstoned in the
+// projection while its Telegram message stays in the channel until the purge
+// deadline -- that is what makes a restore possible. Reading only live rows
+// therefore made every deletion look like someone else's upload, and the file
+// the user had just deleted reappeared at the root of My Drive as an unmanaged
+// row that nothing could open. The question this answers is "is this message
+// ours", not "is this file alive", and a tombstone does not hand ownership
+// back.
+//
+// Content messages count as much as the file message does: an overwritten file
+// keeps one message per revision, and every one of those is TDrive's.
+func ManagedMsgIDs(db *sql.DB, channelID int64) ([]int64, error) {
 	rows, err := db.Query(`
-		SELECT msg_id FROM files
-		WHERE channel_id = ? AND tombstoned = 0
+		SELECT msg_id FROM files WHERE channel_id = ?1
+		UNION
+		SELECT content_msg_id FROM files
+		WHERE channel_id = ?1 AND content_msg_id > 0
+		UNION
+		SELECT content_msg_id FROM file_revisions
+		WHERE channel_id = ?1 AND content_msg_id > 0
 	`, channelID)
 	if err != nil {
 		return nil, err
