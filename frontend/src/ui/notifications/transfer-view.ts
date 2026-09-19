@@ -28,7 +28,8 @@ export type TransferPhase =
     | 'canceling'
     | 'done'
     | 'failed'
-    | 'canceled';
+    | 'canceled'
+    | 'stopped';
 
 /**
  * One piece of the line under the name, labelled by what kind of thing it is so
@@ -56,6 +57,7 @@ export function transferPhase(transfer: TransferEvent): TransferPhase {
         case 'done': return 'done';
         case 'failed': return 'failed';
         case 'canceled': return 'canceled';
+        case 'stopped': return 'stopped';
         case 'canceling': return 'canceling';
         case 'queued': return 'waiting';
         case 'paused': return 'paused';
@@ -209,6 +211,7 @@ export function transferDetailParts(transfer: TransferEvent, now = Date.now()): 
         case 'preparing': return [status('Preparing…')];
         case 'canceling': return [status('Stopping…')];
         case 'canceled': return [status(terminal('Canceled', transfer.finishedAt, now))];
+        case 'stopped': return [status(terminal('Paused', transfer.finishedAt, now))];
         case 'failed': return [status(terminal('Failed', transfer.finishedAt, now))];
         case 'done': return [status(terminal('Done', transfer.finishedAt, now))];
         default: break;

@@ -58,6 +58,7 @@
         : phase === 'failed' ? 'is-failed'
         : phase === 'canceled' ? 'is-canceled'
         : phase === 'canceling' ? 'is-canceling'
+        : phase === 'stopped' ? 'is-canceled'
         : 'is-active',
     );
     const progressLabel = $derived(`${dirLabel} ${transfer.name || 'transfer'}`);

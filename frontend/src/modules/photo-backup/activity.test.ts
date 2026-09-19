@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { PhotoBackupState } from '../../api/photo-backup';
 import { activeTransfers, historyEvents } from '../../ui/notifications/notif-store';
 import { get } from 'svelte/store';
+import { clearHistory } from '../notif-bell';
 import { clearPhotoBackupActivity, syncPhotoBackupActivity } from './activity';
 
 function state(overrides: Partial<PhotoBackupState['status']> = {}): PhotoBackupState {
@@ -55,9 +56,19 @@ describe('photo backup activity', () => {
         expect(get(historyEvents)[0]).toMatchObject({ id: 'xfer:up:photo-backup', items: undefined });
     });
 
-    it('keeps a paused backup visible without pretending the bell can cancel all uploads', () => {
+    // A paused backup is not on its way, and a row that claims to be cannot be
+    // cleared: "Photo backup paused" sat in the panel with a progress bar and
+    // no way to dismiss it, because Clear keeps whatever is still moving.
+    it('puts a paused backup down, where Clear can take it', () => {
+        syncPhotoBackupActivity(state());
+        expect(get(activeTransfers)).toHaveLength(1);
+
         syncPhotoBackupActivity(state({ phase: 'paused', currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0 }));
-        expect(get(activeTransfers)[0]).toMatchObject({ status: 'queued', name: 'Photo backup paused' });
+        expect(get(activeTransfers)).toEqual([]);
+        expect(get(historyEvents)[0]).toMatchObject({ status: 'stopped', name: 'Photo backup paused' });
+
+        clearHistory();
+        expect(get(historyEvents).filter((entry) => entry.id === 'xfer:up:photo-backup')).toHaveLength(0);
     });
 
     it('finalizes a completion summary instead of retaining the last filename, and removes it on a scope change', () => {

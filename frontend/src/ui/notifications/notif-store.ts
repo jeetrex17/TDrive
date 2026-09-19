@@ -7,7 +7,13 @@ export type TransferDirection = 'up' | 'down';
  * went away. Without them the queue can only say "active", which is how a
  * stalled upload ends up looking identical to one that is moving.
  */
-export type TransferStatus = 'queued' | 'active' | 'paused' | 'canceling' | 'done' | 'failed' | 'canceled';
+/**
+ * `paused` and `stopped` are not the same thing. A paused transfer is one iOS
+ * suspended and bytes will move again on their own, so it is still on its way;
+ * a stopped one has been put down until someone picks it up, which is what a
+ * paused photo backup is, and is finished as far as the panel is concerned.
+ */
+export type TransferStatus = 'queued' | 'active' | 'paused' | 'canceling' | 'done' | 'failed' | 'canceled' | 'stopped';
 
 /** The statuses that still have somewhere to go; the rest are finished. */
 export const UNFINISHED_TRANSFER_STATUSES: readonly TransferStatus[] = ['queued', 'active', 'paused', 'canceling'];

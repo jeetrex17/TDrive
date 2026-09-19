@@ -36,8 +36,11 @@
     margin: -8px 0 16px;
     opacity: 0.78;
 }
-.modal-actions { display: flex; gap: 12px; justify-content: flex-end; }
-.modal-actions .primary-btn { width: auto; padding: 12px 16px; }
+.modal-actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
+/* One size for both: the filled button is the heavier of the two by colour,
+   and it should not be the taller one as well. */
+.modal-actions .primary-btn,
+.modal-actions .secondary-btn { width: auto; min-height: 44px; padding: 12px 16px; }
 .modal-empty {
     padding: 14px;
     color: var(--text-muted);

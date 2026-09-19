@@ -4,6 +4,8 @@
      * over the trash dialog; modal-a11y treats nested dialogs as one stack, so
      * this owns the keyboard, Escape and Android BACK while it is up.
      */
+    import FileIcon from '@lucide/svelte/icons/file';
+    import FolderIcon from '@lucide/svelte/icons/folder';
     import ModalShell from '../modals/ModalShell.svelte';
     import { trashConfirmModal, type TrashConfirmation } from './trash-confirm-store';
 
@@ -52,7 +54,19 @@
     onClose={close}
 >
     {#if target?.kind === 'purge'}
-        <div class="trash-confirm-name" title={target.name}>{target.name}</div>
+        <!-- What is about to go, as the row it is: a bare name in a frame read
+             as a text field waiting to be typed into. -->
+        <div class="trash-confirm-target">
+            <span class="trash-confirm-icon" aria-hidden="true">
+                {#if target.isFolder}
+                    <FolderIcon size={16} strokeWidth={1.9} />
+                {:else}
+                    <FileIcon size={16} strokeWidth={1.9} />
+                {/if}
+            </span>
+            <span class="trash-confirm-name" title={target.name}>{target.name}</span>
+            <span class="trash-confirm-kind">{target.isFolder ? 'Folder' : 'File'}</span>
+        </div>
     {/if}
 
     {#snippet actions()}
@@ -66,17 +80,40 @@
 </ModalShell>
 
 <style>
-    /* Matches the delete dialog's target line: the name, quoted by its frame. */
-    .trash-confirm-name {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        padding: var(--space-2) var(--space-3);
+    /* The target reads as one row of the list it came from, and stands clear of
+       the buttons: it used to sit right on top of them. */
+    .trash-confirm-target {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        min-width: 0;
+        margin: 2px 0 var(--space-4);
+        padding: var(--space-3);
         border: 1px solid var(--border);
         border-radius: var(--radius-md);
         background: var(--surface-control);
+    }
+
+    .trash-confirm-icon {
+        flex: 0 0 auto;
+        display: inline-flex;
+        color: var(--text-muted);
+    }
+
+    .trash-confirm-name {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
         font-size: var(--font-size-sm);
         font-weight: var(--weight-semibold);
+    }
+
+    .trash-confirm-kind {
+        flex: 0 0 auto;
+        color: var(--text-muted);
+        font-size: var(--font-size-xs);
     }
 
     :global(html.mobile) .trash-confirm-name {
