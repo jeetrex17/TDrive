@@ -96,6 +96,25 @@ describe('gallery orchestration', () => {
         log.mockRestore();
     });
 
+    // A drive whose timeline and pages never agree on a generation used to
+    // spawn two renders per failed one -- the source's own stale callback and
+    // the catch -- each with a fresh source, so the retries multiplied without
+    // limit: tens of thousands of timeline calls in seconds, and a page that
+    // stopped answering. A persistent disagreement is now one bounded retry
+    // and then the error state.
+    it('gives up on a persistent generation mismatch after one retry', async () => {
+        mocks.timeline.mockImplementation(async () => timeline(1, 'summary'));
+        mocks.page.mockImplementation(async (cursor: string) => ({ generation: 'pages', startIndex: Number(cursor), nextCursor: '', items: Array.from({ length: 128 }, (_, offset) => ({ msgId: Number(cursor) + offset + 1, name: 'photo.jpg', size: 12, parentId: '', uploadTime: 1, uploaderId: 1, encrypted: false, plaintextSize: 0, revision: 1, contentMsgId: 1, contentHash: '' })) }));
+        const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+        await renderGallery();
+        // Let any stray re-render that the old code would have queued run out.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(get(galleryView)).toEqual({ status: 'error' });
+        expect(mocks.timeline.mock.calls.length).toBeLessThanOrEqual(2);
+        expect(mocks.page.mock.calls.length).toBeLessThanOrEqual(2);
+        log.mockRestore();
+    });
+
     it('falls back to the nearest rank when the anchored photo was deleted', async () => {
         await renderGallery();
         host.dataset.anchorIndex = '1';

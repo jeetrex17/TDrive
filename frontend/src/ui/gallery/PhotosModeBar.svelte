@@ -13,6 +13,14 @@
     // already on screen. A dead control invites a click that does nothing.
     const switchable = $derived(albumsWorthShowing(tiles));
     const mode = $derived($photosMode);
+    // The count is the grid's live figure for this folder, not the one the
+    // tile carried when it was tapped: a refresh that lands photos in the
+    // folder while it is open should move it.
+    const albumCount = $derived(
+        mode.kind === 'album'
+            ? (tiles.find((tile) => tile.folderId === mode.tile.folderId)?.countLabel ?? mode.tile.countLabel)
+            : '',
+    );
 </script>
 
 <div class="photos-mode-bar">
@@ -21,7 +29,7 @@
             <ChevronLeftIcon size={16} strokeWidth={2.2} aria-hidden="true" />
             <span class="album-back-name">{mode.tile.name}</span>
         </button>
-        <span class="album-back-count">{mode.tile.countLabel}</span>
+        <span class="album-back-count">{albumCount}</span>
     {:else if switchable}
         <div class="photos-modes" role="group" aria-label="Photos view">
             <button

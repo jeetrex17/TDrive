@@ -18,7 +18,7 @@ import { entryOrigin, purgeCountdown } from '../../ui/trash/trash-view';
 import type { FileListAction, FileListFileRow, FolderListRow } from '../../ui/file-list/types';
 import { setFileThumbnailsActive } from '../../ui/file-list/file-thumbnail-controller';
 import { fileListColumnMode } from '../../ui/file-list/column-mode-store';
-import { setSidebarVirtualView } from '../../ui/sidebar/sidebar-store';
+import { clearSidebarVirtualView, setSidebarVirtualView } from '../../ui/sidebar/sidebar-store';
 import { get } from 'svelte/store';
 
 /** "f:2615" -> 2615. Anything else is a folder id and has no message. */
@@ -174,7 +174,7 @@ export function setTrashMode(on: boolean): void {
     // The second column stops being the date a file arrived and becomes how
     // long it has left, which is the fact the trash exists to report.
     fileListColumnMode.set(on ? 'purge' : 'date');
-    setSidebarVirtualView(on ? 'trash' : null);
+    if (on) setSidebarVirtualView('trash'); else clearSidebarVirtualView('trash');
     document.querySelector('.main-content')?.classList.toggle('trash-mode', on);
     const nav = document.getElementById('nav-trash');
     nav?.classList.toggle('active', on);
