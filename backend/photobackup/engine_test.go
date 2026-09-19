@@ -220,7 +220,7 @@ func TestMigrateVersionTwoDropsChargingWithoutBlockingOrLosingQueue(t *testing.T
 	now := time.Unix(18, 0)
 	engine, scope := testEngine(t, &now)
 	configure(t, engine, scope)
-	if err := engine.PutSettings(context.Background(), Settings{Scope: scope, Enabled: true, Photos: true, Videos: true, FutureOnly: true, WiFiOnly: true, DestinationParentID: "d:root", Encrypt: true}); err != nil {
+	if err := engine.PutSettings(context.Background(), Settings{Scope: scope, Enabled: true, Photos: true, Videos: true, WiFiOnly: true, DestinationParentID: "d:root", Encrypt: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := engine.SetManualPaused(context.Background(), scope, true); err != nil {
@@ -243,7 +243,7 @@ PRAGMA user_version=2`); err != nil {
 		t.Fatal(err)
 	}
 	settings, err := engine.GetSettings(context.Background(), scope)
-	if err != nil || !settings.Enabled || !settings.Photos || !settings.Videos || !settings.FutureOnly || !settings.WiFiOnly || !settings.Encrypt || !settings.ManualPaused || settings.DestinationParentID != "d:root" {
+	if err != nil || !settings.Enabled || !settings.Photos || !settings.Videos || !settings.WiFiOnly || !settings.Encrypt || !settings.ManualPaused || settings.DestinationParentID != "d:root" {
 		t.Fatalf("settings=%+v err=%v", settings, err)
 	}
 	status, err := engine.Status(context.Background(), scope)
@@ -442,28 +442,25 @@ func TestRetryBackoffAndInterruptedNeedsExplicitRetry(t *testing.T) {
 	}
 }
 
-func TestFutureOnlyAndNativePageBound(t *testing.T) {
+// Backup takes everything in a watched folder. What a host reports about when
+// a photo was taken still has to survive the ledger, because the drive files
+// it by that date; it just no longer decides whether it is backed up at all.
+func TestNativePageCarriesCaptureTimeAndIsBounded(t *testing.T) {
 	now := time.Unix(100, 0)
 	e, scope := testEngine(t, &now)
-	if err := e.PutSettings(context.Background(), Settings{Scope: scope, Enabled: true, Photos: true, FutureOnly: true}); err != nil {
+	if err := e.PutSettings(context.Background(), Settings{Scope: scope, Enabled: true, Photos: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.UpsertSource(context.Background(), Source{Scope: scope, ID: "native", Kind: "ios", Root: "library", Enabled: true, AddedAt: now}); err != nil {
+	if err := e.UpsertSource(context.Background(), Source{Scope: scope, ID: "native", Kind: "device-folder", Root: "external_primary:DCIM/", Enabled: true, AddedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := e.EnqueuePage(context.Background(), scope, "native", []Asset{{ID: "old", Version: "1", ResourceID: "r", Name: "o.jpg", ModifiedAt: now.Add(-time.Second)}, {ID: "new", Version: "1", ResourceID: "r2", Name: "n.jpg", ModifiedAt: now.Add(time.Second)}})
-	if err != nil || n != 1 {
-		t.Fatal(n, err)
-	}
-	// The capture time decides when the host reports one. An old photo that
-	// was edited after backup was switched on is not a new item, and a fresh
-	// shot whose file timestamp lies still is.
-	n, err = e.EnqueuePage(context.Background(), scope, "native", []Asset{
-		{ID: "edited", Version: "1", ResourceID: "r3", Name: "e.jpg", CapturedAt: now.Add(-time.Hour), ModifiedAt: now.Add(time.Second)},
-		{ID: "shot", Version: "1", ResourceID: "r4", Name: "s.jpg", CapturedAt: now.Add(time.Second), ModifiedAt: now.Add(-time.Hour)},
+	// Both, including the one taken long before the folder was added.
+	n, err := e.EnqueuePage(context.Background(), scope, "native", []Asset{
+		{ID: "old", Version: "1", ResourceID: "r", Name: "o.jpg", CapturedAt: now.Add(-time.Hour), ModifiedAt: now.Add(-time.Second)},
+		{ID: "shot", Version: "1", ResourceID: "r2", Name: "s.jpg", CapturedAt: now.Add(time.Second), ModifiedAt: now.Add(time.Second)},
 	})
-	if err != nil || n != 1 {
-		t.Fatalf("edited old photo must not count as new: added=%d err=%v", n, err)
+	if err != nil || n != 2 {
+		t.Fatalf("every item in a watched folder is backed up: added=%d err=%v", n, err)
 	}
 	seen := map[string]time.Time{}
 	for i := 0; i < 2; i++ {
@@ -474,7 +471,7 @@ func TestFutureOnlyAndNativePageBound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if !seen["new"].IsZero() || !seen["shot"].Equal(now.Add(time.Second)) {
+	if !seen["shot"].Equal(now.Add(time.Second)) || !seen["old"].Equal(now.Add(-time.Hour)) {
 		t.Fatalf("capture time must round-trip through the ledger: %v", seen)
 	}
 	if _, err = e.EnqueuePage(context.Background(), scope, "native", make([]Asset, 129)); !errors.Is(err, ErrInvalid) {

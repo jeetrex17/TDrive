@@ -18,7 +18,7 @@ const locked: OperationResult = { ok: false, error: { code: 'encryption_password
 const waitingForWiFi: OperationResult = { ok: false, error: { code: 'operation_failed', message: 'Waiting for Wi-Fi.' } };
 
 vi.mock('../../api/photo-backup', () => ({
-    defaultSettings: { enabled: false, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false },
+    defaultSettings: { enabled: false, photos: true, videos: true, wifiOnly: false, encrypt: false },
     normalizeAsset: (value: unknown): PhotoBackupAsset | null => {
         const raw = value as Record<string, unknown>;
         return raw?.id ? { id: String(raw.id), version: String(raw.version), name: String(raw.name ?? ''), mediaType: raw.media_type === 'video' ? 'video' : 'photo', modifiedAt: 0, createdAt: Number(raw.created_at) || 0, size: 0 } : null;
@@ -60,7 +60,7 @@ import { activeTransfers } from '../../ui/notifications/notif-store';
 import { sidebarState } from '../../ui/sidebar/sidebar-store';
 
 const flush = async () => { for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
-const state = (): PhotoBackupState => ({ settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: true }, sources: [{ id: 'tree:external_primary:DCIM/', kind: 'device-folder', root: 'external_primary:DCIM/', name: 'DCIM', enabled: true, addedAt: 0 }], status: { phase: 'idle', pending: 0, uploading: 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0, message: '' }, capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: 'granted', detail: '' }, }, platform: 'android', destination: { id: '1', title: 'Personal', kind: 'personal' }, manualPaused: false, encryptionRequired: false });
+const state = (): PhotoBackupState => ({ settings: { enabled: true, photos: true, videos: true, wifiOnly: false, encrypt: true }, sources: [{ id: 'tree:external_primary:DCIM/', kind: 'device-folder', root: 'external_primary:DCIM/', name: 'DCIM', enabled: true, addedAt: 0 }], status: { phase: 'idle', pending: 0, uploading: 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0, message: '' }, capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: 'granted', detail: '' }, }, platform: 'android', destination: { id: '1', title: 'Personal', kind: 'personal' }, manualPaused: false, encryptionRequired: false });
 
 describe('photo backup controller scheduler', () => {
     let stop = () => {};

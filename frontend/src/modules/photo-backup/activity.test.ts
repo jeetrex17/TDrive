@@ -7,7 +7,7 @@ import { clearPhotoBackupActivity, syncPhotoBackupActivity } from './activity';
 
 function state(overrides: Partial<PhotoBackupState['status']> = {}): PhotoBackupState {
     return {
-        settings: { enabled: true, photos: true, videos: true, futureOnly: false, wifiOnly: false, encrypt: false },
+        settings: { enabled: true, photos: true, videos: true, wifiOnly: false, encrypt: false },
         sources: [],
         status: {
             phase: 'uploading', pending: 4, uploading: 1, complete: 2, failed: 0, paused: 0,

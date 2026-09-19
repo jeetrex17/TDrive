@@ -126,7 +126,7 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         const state = {
             platform,
             manual_paused: false,
-            settings: { enabled: true, photos: true, videos: true, future_only: false, wifi_only: false },
+            settings: { enabled: true, photos: true, videos: true, wifi_only: false },
             sources: [{ id: 'camera', kind: 'library', root: 'Camera', name: 'Camera', enabled: true, added_at: 1 }],
             status: { phase: 'uploading', pending: 12, uploading: 1, complete: 24, failed: 0, current_file: 'Trips/IMG_0042.HEIC', current_file_bytes_done: 500, current_file_bytes_total: 1000, current_file_percent: 50 },
             capabilities: {

@@ -6,11 +6,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
 import android.database.Cursor;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -105,6 +108,20 @@ public class MainActivity extends AppCompatActivity {
     private volatile File pickedCache;
     private final Map<String, PickedFile> pickedFiles = new ConcurrentHashMap<>();
     private WailsJSBridge jsBridge;
+
+    /**
+     * Watches MediaStore so a photo taken while TDrive is open is backed up
+     * without waiting for the app to be opened again.
+     *
+     * One save fires this several times -- the row, then its metadata, then a
+     * thumbnail -- and a burst of photos fires it per file, so the signal is
+     * coalesced onto the trailing edge rather than sent per change. The page
+     * decides what to do with it: the same event a resume sends.
+     */
+    private ContentObserver mediaObserver;
+    private Handler mediaSignalHandler;
+    private Runnable mediaSignal;
+    private static final long MEDIA_SIGNAL_SETTLE_MS = 2_500L;
     private static final int FOLDER_PICKER_REQUEST = 7004;
     // Its own request code, and its own pending callback: the import picker
     // above holds one document tree and releases the previous grant whenever it
@@ -1666,6 +1683,7 @@ public class MainActivity extends AppCompatActivity {
     // broadcasts, so dynamic registration needs no RECEIVER_* export flag.
 
     private void registerSystemEventReceivers() {
+        registerMediaObserver();
         // Battery + charging state (sticky broadcast: the current value is
         // delivered to the receiver immediately on registration).
         batteryReceiver = new BroadcastReceiver() {
@@ -1718,7 +1736,50 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * A new photo is a reason to back one up, not a reason to wake the whole
+     * app: the observer only lives as long as this process does, and the page
+     * runs the scan when it is the thing on screen. What it buys is the common
+     * case -- the shot taken with TDrive open, in the drive seconds later,
+     * instead of whenever the app is next opened.
+     */
+    private void registerMediaObserver() {
+        if (mediaObserver != null) return;
+        mediaSignalHandler = new Handler(Looper.getMainLooper());
+        mediaSignal = () -> {
+            if (bridge != null) {
+                bridge.emitSystemEvent("android:PhotoBackupMediaChanged", photoBackupAccess().toString());
+            }
+        };
+        mediaObserver = new ContentObserver(mediaSignalHandler) {
+            @Override
+            public void onChange(boolean selfChange, @Nullable Uri uri) {
+                if (mediaSignalHandler == null || mediaSignal == null) return;
+                mediaSignalHandler.removeCallbacks(mediaSignal);
+                mediaSignalHandler.postDelayed(mediaSignal, MEDIA_SIGNAL_SETTLE_MS);
+            }
+        };
+        try {
+            getContentResolver().registerContentObserver(
+                    MediaStore.Files.getContentUri("external"), true, mediaObserver);
+        } catch (Exception e) {
+            Log.w(TAG, "Media observer unavailable; new photos are picked up on resume", e);
+            mediaObserver = null;
+        }
+    }
+
+    private void unregisterMediaObserver() {
+        if (mediaSignalHandler != null && mediaSignal != null) mediaSignalHandler.removeCallbacks(mediaSignal);
+        if (mediaObserver != null) {
+            try { getContentResolver().unregisterContentObserver(mediaObserver); } catch (Exception ignored) { }
+            mediaObserver = null;
+        }
+        mediaSignalHandler = null;
+        mediaSignal = null;
+    }
+
     private void unregisterSystemEventReceivers() {
+        unregisterMediaObserver();
         safeUnregister(batteryReceiver);
         batteryReceiver = null;
         safeUnregister(powerSaveReceiver);

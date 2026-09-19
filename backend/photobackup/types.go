@@ -17,12 +17,12 @@ type Scope struct {
 func (s Scope) valid() bool { return s.AccountID != "" && s.DriveID > 0 }
 
 type Settings struct {
-	Scope                               Scope
-	Enabled, Photos, Videos, FutureOnly bool
-	WiFiOnly                            bool
-	ManualPaused                        bool
-	DestinationParentID                 string
-	Encrypt                             bool
+	Scope                   Scope
+	Enabled, Photos, Videos bool
+	WiFiOnly                bool
+	ManualPaused            bool
+	DestinationParentID     string
+	Encrypt                 bool
 }
 
 type Source struct {
