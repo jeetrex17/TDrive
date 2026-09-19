@@ -158,6 +158,37 @@ func TestCleanupCacheTempsRemovesOnlyOwnedScratchFiles(t *testing.T) {
 	}
 }
 
+// A scratch file that cannot be deleted is not a reason to refuse to start.
+// Windows will not unlink a file another process has open, so a second copy
+// of the app -- or, in CI, a test running beside this one -- was enough to
+// stop the engine being created at all.
+func TestCleanupCacheTempsKeepsGoingWhenOneCannotBeRemoved(t *testing.T) {
+	clearOverride(t)
+	base := t.TempDir()
+	SetCache(base)
+	cacheDir, err := CacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A directory under an owned name stands in for the undeletable file:
+	// os.Remove refuses a non-empty one on every platform, which is the same
+	// shape of failure as Windows refusing an open file.
+	stuck := filepath.Join(cacheDir, "tdrive-mountdav-put-stuck")
+	if err := os.MkdirAll(filepath.Join(stuck, "child"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "tdrive-upload-orphan"), []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CleanupCacheTemps(); err != nil {
+		t.Fatalf("a scratch file nobody can delete stopped the cleanup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, "tdrive-upload-orphan")); !os.IsNotExist(err) {
+		t.Fatalf("the deletable orphan remains: %v", err)
+	}
+}
+
 func assertPrivateDir(t *testing.T, dir string) {
 	t.Helper()
 	info, err := os.Stat(dir)
