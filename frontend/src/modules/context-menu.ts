@@ -150,6 +150,11 @@ export function activateContextMenu(): () => void {
 
     const onContextMenu = (e: MouseEvent) => {
         e.preventDefault();
+        // A trashed row is a real folder row with a real id, and every item on
+        // the folder menu -- open, upload into, rename, delete -- would act on
+        // it as if it were still in the drive. The row's own Restore and
+        // Delete forever are the only things a deleted item can do.
+        if (state.virtualView === 'trash') return;
         const element = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
         // A folder still being created resolves to nothing, and the background
         // menu is the right answer for a row with no identity yet.

@@ -189,3 +189,45 @@ test('leaving the trash returns the drive to the folder it was showing', async (
     await expect(page.locator('.breadcrumb-path')).toBeVisible();
     await expect(page.locator('.file-table-header')).toContainText('Date');
 });
+
+/**
+ * Three ways the drive used to leak into the trash. A deleted folder is a real
+ * folder row with a real id, so the folder menu -- open, upload into, rename,
+ * delete -- would have acted on it as if it were still in the drive; an OS
+ * file drop started an upload into the folder behind the trash's chrome; and
+ * a search drew live results under the "Trash" title with Empty trash beside
+ * them.
+ */
+test('the trash offers no folder menu, takes no drop, and a search leaves it', async ({ page }) => {
+    await bootTDrive(page, {
+        ListTrash: resolves(trashRows(Date.now())),
+        GetFolderContents: resolves({ folders: [], files: [] }),
+        Search: resolves([{ msg_id: 77, name: 'a.txt', size: 12, parent_id: '', upload_time: 1, uploader_id: 7, encrypted: false, plaintext_size: 0, path: 'a.txt' }]),
+    });
+    const list = await openTrash(page, 'desktop');
+    await expect(list.getByRole('row', { name: /Tax returns 2024/ })).toBeVisible();
+
+    await list.getByRole('row', { name: /Tax returns 2024/ }).click({ button: 'right' });
+    await expect(page.locator('#context-menu')).not.toHaveClass(/open|visible/);
+    await expect(page.getByRole('menuitem', { name: /Upload files to this folder/ })).toHaveCount(0);
+
+    await page.fill('#search-input', 'a');
+    await expect(page.locator('.main-content')).not.toHaveClass(/trash-mode/);
+    await expect(page.locator('#trash-empty-btn')).toBeHidden();
+});
+
+test('on a phone the trash has its own bar and no upload button', async ({ page }) => {
+    await usePlatform(page, 'android');
+    await bootTDrive(page, { ListTrash: resolves(trashRows(Date.now())) });
+    await openTrash(page, 'android');
+    const bar = page.locator('.topbar-trash');
+    await expect(bar.getByRole('heading', { name: 'Trash' })).toBeVisible();
+    await expect(bar).toContainText('3 items');
+    await expect(bar.getByRole('button', { name: 'Empty' })).toBeVisible();
+    await expect(page.locator('.topbar-files')).toBeHidden();
+    await expect(page.locator('.mobile-fab')).toBeHidden();
+    // The chevron is the way out, and it goes back to the drive.
+    await bar.getByRole('button', { name: 'Back' }).click();
+    await expect(page.locator('.main-content')).not.toHaveClass(/trash-mode/);
+    await expect(page.locator('.topbar-files')).toBeVisible();
+});

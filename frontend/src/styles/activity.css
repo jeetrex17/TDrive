@@ -281,6 +281,14 @@
 .notif-row-transfer.is-canceled .notif-row-progress { display: none; }
 
 .notif-row.level-error .notif-row-title { color: var(--danger); }
+.notif-row-note {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
+    line-height: 1.4;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+}
 
 /* Empty state */
 .notif-empty {
@@ -321,6 +329,16 @@
     pointer-events: none;
     max-width: min(420px, calc(100vw - 40px));
     width: 100%;
+}
+/* The hover-to-pause handlers sit on this, so it has to be a box: as
+   display:contents it never received a pointer event, and crossing the gap
+   between two toasts resumed the one just left. It is only as tall as the
+   toasts in it, so an empty stack blocks nothing underneath. */
+.toast-stack-inner {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 10px;
+    pointer-events: auto;
 }
 .toast {
     pointer-events: auto;

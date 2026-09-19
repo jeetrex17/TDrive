@@ -164,7 +164,7 @@ export function activateDropOverlay(): () => void {
     if (!listEl) return () => {};
 
     const onDragOver = (event: DragEvent) => {
-        if (!isFileDrag(event) || state.dragState || !state.activeChannel) return;
+        if (!isFileDrag(event) || state.dragState || !state.activeChannel || state.virtualView !== null) return;
         show();
         if (hideTimer !== null) clearTimeout(hideTimer);
         hideTimer = setTimeout(hide, HIDE_AFTER_IDLE_MS);

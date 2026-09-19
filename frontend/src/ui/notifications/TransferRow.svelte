@@ -99,6 +99,11 @@
     </span>
     <div class="notif-row-body">
         <div class="notif-row-title" title={transfer.name}>{transfer.name || dirLabel}</div>
+        {#if transfer.note}
+            <!-- Why it failed, or on a phone where it landed: the one sentence
+                 the row keeps after the toast that said it has gone. -->
+            <div class="notif-row-note">{transfer.note}</div>
+        {/if}
         <!-- A progressbar reports state when queried or focused, without a
              live region that would announce each transfer tick. -->
         {#if showProgress}

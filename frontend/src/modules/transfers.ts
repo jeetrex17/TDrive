@@ -332,8 +332,10 @@ function finalizeDownload(key: string, status: 'done' | 'failed' | 'canceled'): 
 function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | string): void {
     const reason = humanizeBackendError(error);
     const noun = item.kind === 'folder' ? 'Folder' : 'File';
+    // The row keeps the reason; the toast is the transient copy of it.
+    if (reason) setTransferNote({ id: item.key, direction: 'down', note: reason });
     if (typeof error !== 'string' && error.code === 'already_exists') {
-        notify({ level: 'warning', title: noun + ' already exists', body: reason });
+        notify({ level: 'warning', title: noun + ' already exists', body: reason, history: false });
         return;
     }
     // The fields are read out now rather than closed over: finalizeDownload
@@ -346,6 +348,7 @@ function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | 
         level: 'error',
         title: `Couldn't download ${item.name}`,
         body: reason || 'The download could not be completed.',
+        history: false,
         action: {
             label: 'Retry',
             // One shot. The toast is sticky, so without this it sits there
@@ -589,6 +592,14 @@ function finalizeUploadBatch(uploadThrew: boolean): void {
         direction: 'up',
         name: canceled ? 'Upload canceled' : formatUploadBatchLabel(batch),
     });
+    // A call that threw has already raised its own toast, with the Retry that
+    // restarts the whole batch; this is for the files that failed inside a
+    // call that otherwise succeeded, which nothing else would mention. The
+    // reasons stay on the row.
+    const batchReasons = !canceled && !uploadThrew && batch.failures > 0
+        ? uploadBatchFailureReasons.map(humanizeBackendError).join('\n') || 'The rest of the batch finished.'
+        : '';
+    if (batchReasons) setTransferNote({ id: UPLOAD_BATCH_TRANSFER_ID, direction: 'up', note: batchReasons });
     markTransferDone({
         id: UPLOAD_BATCH_TRANSFER_ID,
         direction: 'up',
@@ -596,14 +607,12 @@ function finalizeUploadBatch(uploadThrew: boolean): void {
     });
     appActions().refreshFiles();
 
-    // A call that threw has already raised its own toast, with the Retry that
-    // restarts the whole batch; this one is for the files that failed inside a
-    // call that otherwise succeeded, which nothing else would mention.
-    if (!canceled && !uploadThrew && batch.failures > 0) {
+    if (batchReasons) {
         notify({
             level: 'error',
             title: batch.failures === 1 ? "Couldn't upload 1 file" : `Couldn't upload ${batch.failures} files`,
-            body: uploadBatchFailureReasons.map(humanizeBackendError).join('\n') || 'The rest of the batch finished.',
+            body: batchReasons,
+            history: false,
         });
     }
 }
@@ -745,16 +754,18 @@ function activateUploadProgressEvents(): void {
         if (!hadItem) {
             pushTransferStart({ id: uploadId, direction: 'up', name: filename || 'Upload failed', total: 0 });
         }
-        markTransferDone({ id: uploadId, direction: 'up', status: canceled ? 'canceled' : 'failed' });
-
-        // Surface the backend's actual failure reason. The bell row only shows
-        // a generic "failed" state, which leaves the user with nothing to act on.
+        // The reason stays on the row, where it can be read again after the
+        // toast has gone. The toast itself is not mirrored into the bell: that
+        // listed one failure twice and counted it twice.
         const errorBody = humanizeBackendError(message);
+        if (errorBody && !canceled) setTransferNote({ id: uploadId, direction: 'up', note: errorBody });
+        markTransferDone({ id: uploadId, direction: 'up', status: canceled ? 'canceled' : 'failed' });
         if (errorBody && !canceled) {
             notify({
                 level: 'error',
                 title: filename ? `Couldn't upload "${filename}"` : 'Upload failed',
                 body: errorBody,
+                history: false,
             });
         }
 
@@ -929,8 +940,9 @@ async function importAndroidFolder(parentID: string) {
             manifest = await pickAndroidFolder();
         } catch (err) {
             console.error("PickFolder failed:", err);
+            setTransferNote({ id: IMPORT_TRANSFER_ID, direction: 'up', note: humanizeBackendError(err) });
             markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
-            notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err) });
+            notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err), history: false });
             return;
         }
         if (!manifest) {
@@ -944,8 +956,9 @@ async function importAndroidFolder(parentID: string) {
         // the confirmation steps threw. markTransferDone leaves an entry that
         // already ended alone, so this never rewrites a real outcome.
         console.error('Android folder import failed:', err);
+        setTransferNote({ id: IMPORT_TRANSFER_ID, direction: 'up', note: humanizeBackendError(err) });
         markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
-        notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(err) });
+        notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(err), history: false });
     } finally {
         state.cancelingUpload = false;
     }
@@ -1408,7 +1421,10 @@ function activateFileDropEvents(): void {
         const rawPaths = Array.isArray(payload) ? payload : event.paths;
         if (!Array.isArray(rawPaths) || !rawPaths.length) return;
         const paths = rawPaths.filter((path): path is string => typeof path === 'string');
-        if (!paths.length || !state.activeChannel) return;
+        // Photos and the trash are not folders: a drop there used to start an
+        // upload into whatever folder the drive had last shown, behind the
+        // trash's chrome.
+        if (!paths.length || !state.activeChannel || state.virtualView !== null) return;
         const x = Number(event.x);
         const y = Number(event.y);
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;

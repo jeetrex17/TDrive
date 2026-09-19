@@ -104,6 +104,12 @@ export interface NotifyOptions {
     durationMs?: number;
     spinner?: boolean;
     action?: ToastAction;
+    /**
+     * False for a toast that only repeats what a transfer row already says.
+     * The row carries the reason as its note, so mirroring the toast into the
+     * bell would list one failure twice and count it twice.
+     */
+    history?: boolean;
 }
 
 export function notify(opts: NotifyOptions = {}) { const level: ToastLevel = opts.level && LEVELS.includes(opts.level) ? opts.level : 'info';
@@ -135,7 +141,7 @@ const entry: ToastItem = {
 // Mirror non-spinner toasts into the bell history. In-progress sticky
 // toasts (spinners) are skipped because their final success/failure
 // version replaces them; the panel doesn't need both.
-if (!entry.spinner && entry.title) {
+if (!entry.spinner && entry.title && opts.history !== false) {
     pushHistoryEvent({
         level: entry.level,
         title: entry.title,
