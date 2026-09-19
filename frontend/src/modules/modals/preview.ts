@@ -1,105 +1,96 @@
-import { getPreviewFile, getPreviewThumbnail, hasOperationErrorCode, onRuntimeEvent, openExternalUrl, useEncryptionPassword } from '../../api';
+import { closeMedia, isMobilePlatform, openExternalUrl, openOriginalImage } from '../../api';
 import { state } from '../../state';
 import { notify } from '../notifications';
-import { loadEncryptionStatus } from '../encryption';
+import { isEncryptionPasswordRequired } from '../errors';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
-import type { PreviewPayload } from '../../types';
+import { pushSheet, type SheetHandle } from '../../ui/modals/sheet-stack';
+import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/touch-gestures';
+import { createZoomPanController } from '../../ui/preview/zoom-pan';
+import { acquireRendition, subscribeRenditionReset, type ImageRequest } from '../renditions/runtime';
+import type { RenditionLease } from '../renditions/broker';
+import { acquireOriginalViewerBudget, subscribeGalleryPolicy } from '../gallery-policy';
+import { setActive as setGalleryThumbnailScheduling } from '../../ui/gallery/gallery-controller';
 import type { FileCommandItem } from '../../ui/file-list/types';
 import {
     capturePreviewTransitionSource,
     createPreviewTransitionController,
     type PreviewTransitionSource,
 } from './preview-transition';
+import { previewElementsLive, resolvePreviewElements, type PreviewElements } from './preview-elements';
+import { createUnlockCard, type UnlockCard } from './preview-unlock-card';
 type PreviewCommandItem = Extract<FileCommandItem, { type: 'file' }>;
 type PreviewSelection =
     | { reason: 'none' | 'multiple' | 'unsupported' }
     | { reason: 'ok'; item: PreviewCommandItem; key: string };
 
-const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"]);
+// Direct viewing is limited to raster formats whose dimensions and encoded
+// bytes the backend can validate before exposing a loopback capability.
+const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp"]);
 
 const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
-const REQUIRED_ELEMENT_IDS = [
-    "preview-modal",
-    "preview-shell",
-    "preview-stage",
-    "preview-filename",
-    "preview-image",
-    "preview-loading",
-    "preview-loading-fill",
-    "preview-error",
-    "preview-close",
-];
 
-let modalEl: any = null;
-let shellEl: any = null;
-let stageEl: any = null;
-let filenameEl: any = null;
-let imageEl: any = null;
-let loadingEl: any = null;
-let loadingFillEl: any = null;
-let errorEl: any = null;
-let closeBtnEl: any = null;
-let prevBtnEl: any = null;
-let nextBtnEl: any = null;
-let counterEl: any = null;
-let downloadBtnEl: any = null;
-let infoBtnEl: any = null;
-let infoPanelEl: any = null;
-let infoBodyEl: any = null;
-let infoCloseBtnEl: any = null;
-let lockedEl: any = null;
-let lockedInputEl: any = null;
-let lockedUnlockEl: any = null;
-let lockedEyeEl: any = null;
-let lockedErrorEl: any = null;
-let lockedHintEl: any = null;
-let lockedHintTextEl: any = null;
+// The whole element set, or nothing. Before this the controller held one
+// variable per element and every function opened by re-checking whichever three
+// or four it happened to write to, which said nothing about the rest: a
+// half-built set was representable, so the guards had to keep pretending it was
+// possible. Setup now either resolves every required element or refuses to run,
+// so one check answers for all of them, and teardown is one assignment rather
+// than twenty-five that had to be remembered.
+let els: PreviewElements | null = null;
+let unlockCard: UnlockCard | null = null;
 let activeFullSrc = "";
 let infoOpen = false;
+// On a phone the info card is a sheet, so Android's BACK has to dismiss it
+// before the preview under it.
+let infoSheetBack: SheetHandle | null = null;
 
-// Zoom/pan state for the displayed image. scale 1 = fit; tx/ty are screen-px
-// offsets from center. Reset on navigation and close.
-const MAX_ZOOM = 5;
-let zoomScale = 1;
-let zoomTx = 0;
-let zoomTy = 0;
-let panning = false;
-let panMoved = false;
-let panPointerId = -1;
-let panStartX = 0;
-let panStartY = 0;
+// Zoom and pan live in their own controller; the preview only decides when to
+// reset them and whether a gesture belongs to them or to the swipe.
+const zoomPan = createZoomPanController(() => els?.image ?? null);
+// Touch double taps go through the phone recogniser; the dblclick the browser
+// synthesises for them must not zoom a second time.
+let lastPointerType = "mouse";
 
-// Full-resolution data URLs keyed by drive + msgID, with neighbor prefetch so
-// next/prev is instant. Telegram message ids are scoped to a channel, so using
-// msgID alone can show the wrong image after switching drives.
-const FULL_CACHE_MAX = 12;
-const fullCache = new Map<string, string>();
-// In-flight full-image downloads keyed by drive + msgID, so a neighbor prefetch
-// and the user's own navigation to the same image share one download instead of
-// racing two (which would serialize on the backend's preview mutex).
-const inflightFull = new Map<string, Promise<string>>();
-let preloadEpoch = 0;
-let previewReady = false;
+// The broker owns thumbnails only. An original image is a short-lived loopback
+// session that exists solely for the current explicit viewer action.
+let activeThumbnailLease: RenditionLease | null = null;
+let activeOriginalSession: { token: string; url: string } | null = null;
+let releaseOriginalBudget: (() => void) | null = null;
+let unsubscribePreviewPolicy: (() => void) | null = null;
+let unsubscribePreviewReset: (() => void) | null = null;
 let previewRequestToken = 0;
 let activePreviewKey = "";
-let activePreviewMsgID = 0;
-let activePreviewItem: any = null;
-let chromeHideTimer: any = null;
+let activePreviewItem: PreviewNavigationItem | null = null;
+let chromeHideTimer: ReturnType<typeof setTimeout> | null = null;
 let previewHostObserver: MutationObserver | null = null;
 let previewHostEl: HTMLElement | null = null;
 let previewA11y: ReturnType<typeof installModalA11y> | null = null;
-let previewProgressUnsubscribe: (() => void) | null = null;
 const previewListenerCleanups: Array<() => void> = [];
 let activePreviewTransitionSource: PreviewTransitionSource | null = null;
 const previewTransition = createPreviewTransitionController();
 
-// Lightbox navigation context. When opened from the gallery this holds the
-// ordered image set and the current position so ←/→ and the on-screen chevrons
-// can page through it. A single-item open (file-list preview) leaves it empty.
-let navItems: any[] = [];
-let navIndex = -1;
+export type PreviewNavigationItem = PreviewCommandItem & {
+    channel_id?: number;
+    channelId?: number;
+    content_revision?: number;
+    revision?: number;
+    thumbUrl?: string;
+    encrypted?: boolean;
+    uploaderId?: number;
+    uploadTime?: number;
+};
+export interface PreviewNavigationSource {
+    getNeighbor(item: PreviewNavigationItem, direction: -1 | 1): Promise<PreviewNavigationItem | null>;
+    getPosition?(item: PreviewNavigationItem): { index: number; total: number } | null;
+}
+
+// Gallery supplies a bounded data source. Existing small-list callers keep
+// their list adapter; opening a 100k gallery never builds a second full array.
+let navSource: PreviewNavigationSource | null = null;
+let navigationPending = false;
+let navigationEpoch = 0;
 
 function listenPreview(target: EventTarget | null, type: string, listener: EventListener, options?: boolean | AddEventListenerOptions): void {
     if (!target) return;
@@ -107,31 +98,46 @@ function listenPreview(target: EventTarget | null, type: string, listener: Event
     previewListenerCleanups.push(() => target.removeEventListener(type, listener, options));
 }
 
-function isSpaceKey(event: any) {
+function isSpaceKey(event: KeyboardEvent) {
     return event.code === "Space" || event.key === " " || event.key === "Spacebar";
 }
 
-function isTypingContext(element: any) {
+// Where an arrow key means something to the focused control, so the preview
+// must not take it: the unlock password field, and a select's own options.
+//
+// A button is not one of them. It used to be listed here, which quietly killed
+// arrow navigation outright: the modal opens with focus on its close button, so
+// the very first press after opening a photo was swallowed, and so was every
+// press after clicking Previous or Next. Arrows do nothing on a button, so
+// there was never anything to yield to.
+function isTypingContext(element: Element | null) {
     if (!element) return false;
     const tag = String(element.tagName || "").toUpperCase();
-    return element.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON";
+    // isContentEditable is an HTMLElement property; an SVG or MathML node that
+    // happens to hold focus simply has no editing mode to yield to.
+    const editable = element instanceof HTMLElement && element.isContentEditable;
+    return editable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 function isBlockingOverlayOpen() {
-    const overlays = Array.from(document.querySelectorAll(".modal-overlay"));
-    if (overlays.some((el: any) => el.id !== "preview-modal" && el.style.display !== "none")) {
+    const overlays = Array.from(document.querySelectorAll<HTMLElement>(".modal-overlay"));
+    if (overlays.some((el) => el.id !== "preview-modal" && el.style.display !== "none")) {
         return true;
     }
 
     return Boolean(document.querySelector("#context-menu .context-menu-panel"));
 }
 
-function flashStatus(message: any) {
+function flashStatus(message: string) {
     if (!message) return;
     notify({ level: 'info', title: message, durationMs: 2400 });
 }
 
-function getPreviewKey(item: any) {
+// Some callers still hand over backend-shaped records, where the channel id
+// arrives under its Go field name.
+type PreviewKeySource = PreviewNavigationItem & { ChannelID?: number };
+
+function getPreviewKey(item: PreviewKeySource | null) {
 	if (!item || item.type !== "file") return "";
 	const channelID = Number(item.channel_id || item.channelId || item.ChannelID || state.activeChannel?.id || 0);
 	return `file:${channelID}:${Number(item.id || 0)}`;
@@ -139,15 +145,16 @@ function getPreviewKey(item: any) {
 
 function clearActivePreview() {
     activePreviewKey = "";
-    activePreviewMsgID = 0;
     activePreviewItem = null;
-    navItems = [];
-    navIndex = -1;
+    navSource = null;
+    navigationPending = false;
+    navigationEpoch += 1;
     updateNavChrome();
 }
 
 function isPreviewVisible() {
-    return Boolean(imageEl && !imageEl.hidden && imageEl.getAttribute("src"));
+    const dom = els;
+    return Boolean(dom && !dom.image.hidden && dom.image.getAttribute("src"));
 }
 
 function getSelectedPreviewTarget(): PreviewSelection {
@@ -168,24 +175,28 @@ function clearChromeHideTimer() {
     chromeHideTimer = null;
 }
 
-function setChromeVisible(visible: any) {
-    if (!modalEl) return;
-    modalEl.classList.toggle("is-chrome-visible", Boolean(visible));
+function setChromeVisible(visible: boolean) {
+    els?.modal.classList.toggle("is-chrome-visible", Boolean(visible));
 }
 
 function isErrorVisible() {
-    return Boolean(errorEl && errorEl.style.display !== "none");
+    const dom = els;
+    return Boolean(dom && dom.error.style.display !== "none");
+}
+
+function isCloseButtonFocused() {
+    return Boolean(els && els.closeButton === document.activeElement);
 }
 
 function scheduleChromeHide() {
     clearChromeHideTimer();
 
     if (!isPreviewOpen() || isErrorVisible()) return;
-    if (closeBtnEl && closeBtnEl === document.activeElement) return;
+    if (isCloseButtonFocused()) return;
 
     chromeHideTimer = setTimeout(() => {
         if (!isPreviewOpen() || isErrorVisible()) return;
-        if (closeBtnEl && closeBtnEl === document.activeElement) return;
+        if (isCloseButtonFocused()) return;
         setChromeVisible(false);
     }, PREVIEW_CHROME_HIDE_DELAY_MS);
 }
@@ -196,109 +207,129 @@ function revealChrome() {
     scheduleChromeHide();
 }
 
-function resetImageSurface() {
-    if (!imageEl) return;
-    imageEl.hidden = true;
-    imageEl.removeAttribute("src");
-    imageEl.alt = "";
+function resetImageSurface({ keepThumbnail = false } = {}) {
+    const dom = els;
+    if (!dom) return;
+    if (!keepThumbnail) {
+        dom.thumbnail.hidden = true;
+        dom.thumbnail.removeAttribute("src");
+    }
+    dom.image.hidden = true;
+    dom.image.removeAttribute("src");
+    dom.image.alt = "";
+    dom.modal.classList.remove('is-original-ready');
 }
 
-function showPreviewLoading(_label?: any) {
-    if (!modalEl || !loadingEl) return;
-    modalEl.classList.add("is-preview-loading");
-    loadingEl.style.display = "flex";
-    loadingEl.setAttribute("aria-hidden", "false");
-}
-
-function setPreviewProgress(percent: any) {
-    if (!loadingEl || !loadingFillEl) return;
-    const clamped = Math.max(0, Math.min(100, Number(percent) || 0));
-    showPreviewLoading();
-    loadingFillEl.style.width = `${clamped}%`;
+function showPreviewLoading(_label?: string) {
+    const dom = els;
+    if (!dom) return;
+    dom.modal.classList.add("is-preview-loading");
+    dom.loading.style.display = "flex";
+    dom.loading.setAttribute("aria-hidden", "false");
 }
 
 function hidePreviewProgress() {
-    if (!modalEl || !loadingEl || !loadingFillEl) return;
-    modalEl.classList.remove("is-preview-loading");
-    loadingEl.style.display = "none";
-    loadingEl.setAttribute("aria-hidden", "true");
-    loadingFillEl.style.width = "0%";
+    const dom = els;
+    if (!dom) return;
+    dom.modal.classList.remove("is-preview-loading");
+    dom.loading.style.display = "none";
+    dom.loading.setAttribute("aria-hidden", "true");
+    dom.loadingFill.style.width = "0%";
 }
 
-function preparePreviewSurface(filename: any, { keepCurrentImage = false } = {}) {
-    if (!modalEl || !filenameEl || !loadingEl || !errorEl) return;
+function preparePreviewSurface(filename: string, { keepCurrentImage = false } = {}) {
+    const dom = els;
+    if (!dom) return;
     hideLockedState();
     if (!keepCurrentImage) {
-        filenameEl.textContent = filename || "Preview";
+        dom.filename.textContent = filename || "Preview";
     }
     showPreviewLoading();
-    errorEl.style.display = "none";
-    errorEl.textContent = "";
-    modalEl.classList.remove("is-preview-error");
+    dom.error.style.display = "none";
+    dom.error.textContent = "";
+    dom.modal.classList.remove("is-preview-error");
 
     if (!keepCurrentImage) resetImageSurface();
-    if (imageEl && !keepCurrentImage) imageEl.alt = "";
+    if (!keepCurrentImage) dom.image.alt = "";
 }
 
-function showPreviewError(message: any, { keepCurrentImage = false } = {}) {
-    if (!modalEl || !loadingEl || !errorEl) return;
+function showPreviewError(message: string, { keepCurrentImage = false } = {}) {
+    const dom = els;
+    if (!dom) return;
 
     previewTransition.cancel();
     hideLockedState();
 
-    modalEl.classList.remove("is-preview-locked");
+    dom.modal.classList.remove("is-preview-locked");
     hidePreviewProgress();
     if (!keepCurrentImage) resetImageSurface();
-    errorEl.textContent = message || "Download failed";
-    errorEl.style.display = "block";
-    modalEl.classList.add("is-preview-error");
+    dom.error.textContent = message || "Download failed";
+    dom.error.style.display = "block";
+    dom.modal.classList.add("is-preview-error");
     setChromeVisible(true);
     clearChromeHideTimer();
 }
 
-function showPreviewImage(src: any, alt: any, { keepLoading = false } = {}) {
-    if (!modalEl || !filenameEl || !imageEl || !loadingEl || !errorEl) return;
+function showPreviewImage(src: string, alt: string, { keepLoading = false } = {}) {
+    const dom = els;
+    if (!dom) return;
 
     hideLockedState();
-    modalEl.classList.remove("is-preview-locked");
+    dom.modal.classList.remove("is-preview-locked");
     if (!keepLoading) {
         hidePreviewProgress();
     } else {
         showPreviewLoading(alt || "Preview");
     }
-    errorEl.style.display = "none";
-    errorEl.textContent = "";
-    modalEl.classList.remove("is-preview-error");
-    filenameEl.textContent = alt || "Preview";
-    imageEl.alt = "";
-    imageEl.src = src;
-    imageEl.hidden = false;
-    // Opacity-only entrance: we drive transform via zoom/pan, so the animation
-    // must not write transform (and must not hold it with fill).
-    const sharedTransition = previewTransition.finishOpen(imageEl);
-    const reduceMotion = typeof window.matchMedia === "function"
-        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!sharedTransition && !previewTransition.isRunning() && !reduceMotion && typeof imageEl.animate === "function") {
-        imageEl.animate(
-            [{ opacity: 0.6 }, { opacity: 1 }],
-            { duration: 180, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-        );
-    }
+    dom.error.style.display = "none";
+    dom.error.textContent = "";
+    dom.modal.classList.remove("is-preview-error");
+    dom.filename.textContent = alt || "Preview";
+    dom.image.alt = alt || "Preview";
+    dom.image.src = src;
+    dom.image.hidden = false;
+    // The CSS layer transition promotes the original over its thumbnail in
+    // 160ms. It intentionally does not touch transform, which zoom and drag
+    // own, and it is disabled by the reduced-motion media query.
     revealChrome();
 }
 
-function isPreviewOpen() {
-    return Boolean(modalEl && modalEl.style.display !== "none");
+/** Pins a thumbnail by its immutable revision while the original stream opens. */
+function showPreviewThumbnail(src: string, alt: string): void {
+    const dom = els;
+    if (!dom) return;
+    dom.thumbnail.alt = '';
+    dom.thumbnail.src = src;
+    dom.thumbnail.hidden = false;
+    dom.thumbnail.setAttribute('aria-label', `Thumbnail for ${alt}`);
+    if (previewTransition.isRunning()) previewTransition.finishOpen(dom.thumbnail);
 }
 
-function normalizePreviewError(err: any) {
+// The original is a capability, not a cached asset: it is handed back the
+// moment it stops being on screen, and the budget it reserved with it.
+function releaseOriginalSession(): void {
+    const session = activeOriginalSession;
+    activeOriginalSession = null;
+    activeFullSrc = '';
+    releaseOriginalBudget?.();
+    releaseOriginalBudget = null;
+    if (session?.token) void Promise.resolve(closeMedia(session.token)).catch(() => {});
+}
+
+function isPreviewOpen() {
+    const dom = els;
+    return Boolean(dom && dom.modal.style.display !== "none");
+}
+
+function normalizePreviewError(err: unknown) {
     if (err instanceof Error && err.message.trim()) return err;
     if (typeof err === "string" && err.trim()) return new Error(err.trim());
-    if (err && typeof err.message === "string" && err.message.trim()) return new Error(err.message.trim());
+    const message = (err as { message?: unknown } | null | undefined)?.message;
+    if (typeof message === "string" && message.trim()) return new Error(message.trim());
     return new Error("Download failed");
 }
 
-function showSelectionPreviewError(selection: any) {
+function showSelectionPreviewError(selection: PreviewSelection) {
     if (selection.reason === "multiple") {
         flashStatus("Preview works with one image at a time");
         return;
@@ -308,259 +339,168 @@ function showSelectionPreviewError(selection: any) {
     }
 }
 
-function assertPreviewReady() {
-    if (previewReady) return true;
+// The elements, or a complaint. "Setup completed" and "the elements are here"
+// used to be two facts -- a `previewReady` flag and twenty-five variables -- and
+// only the flag was ever consulted before writing to the elements.
+function readyElements(): PreviewElements | null {
+    if (els) return els;
     console.error("Preview modal is unavailable because setup did not complete.");
     flashStatus("Preview unavailable");
-    return false;
+    return null;
 }
 
-export function isPreviewableImage(filename: any) {
+export function isPreviewableImage(filename: string) {
     const name = String(filename || "").trim();
     const dot = name.lastIndexOf(".");
     if (dot < 0 || dot === name.length - 1) return false;
     return SUPPORTED_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
 }
 
-function buildPreviewSource(mimeType: string, dataBase64: string) {
-    return 'data:' + mimeType + ';base64,' + dataBase64;
-}
-
-function payloadToPreviewAsset(payload: PreviewPayload) {
-    const dataBase64 = payload.dataBase64;
-    const mimeType = payload.mimeType;
-    if (!dataBase64 || !mimeType) {
-        throw new Error("Download failed");
-    }
-
+function renditionRequest(target: PreviewNavigationItem): ImageRequest {
     return {
-        src: buildPreviewSource(mimeType, dataBase64),
-        mimeType,
+        channelId: Number(target.channel_id || target.channelId || state.activeChannel?.id || 0),
+        fileId: Number(target.id),
+        revision: Number(target.content_revision || target.revision || 0),
+        kind: 'thumbnail',
     };
 }
 
-async function decodePreviewSource(src: any) {
-    const preloaded = new Image();
-    preloaded.decoding = "async";
-    preloaded.src = src;
-
-    if (typeof preloaded.decode === "function") {
-        try {
-            await preloaded.decode();
-            return;
-        } catch (err) {
-            if (preloaded.complete && preloaded.naturalWidth > 0) return;
-            throw err;
-        }
-    }
-
-    if (preloaded.complete && preloaded.naturalWidth > 0) return;
-
-    await new Promise((resolve, reject) => {
-        preloaded.addEventListener("load", resolve, { once: true });
-        preloaded.addEventListener("error", () => reject(new Error("Not a supported image")), { once: true });
-    });
+function releasePreviewResources(): void {
+    activeThumbnailLease?.release();
+    activeThumbnailLease = null;
+    releaseOriginalSession();
 }
 
-async function resolveThumbnailPreviewEntry(target: any) {
-    const msgID = Number(target?.id || 0);
-    if (!msgID) {
-        throw new Error("Download failed");
-    }
-
-    const asset = payloadToPreviewAsset(await getPreviewThumbnail(msgID));
-    await decodePreviewSource(asset.src);
-    return asset;
-}
-
-async function resolveFullPreviewEntry(target: any) {
-    const msgID = Number(target?.id || 0);
-    if (!msgID) {
-        throw new Error("Download failed");
-    }
-
-    // Shares an in-flight neighbor prefetch for the same image. A locked
-    // encrypted file returns the stable encryption_password_required code; loadPreview
-    // turns that into the inline unlock card rather than a popup modal.
-	return { src: await fetchFullRaw(target), mimeType: "" };
-}
-
-export async function loadPreview(target: any) {
-    if (!assertPreviewReady()) {
-        throw new Error("Preview unavailable");
-    }
-    const msgID = Number(target?.id || 0);
-    const previewKey = getPreviewKey(target);
-    const filename = String(target?.name || filenameEl?.textContent || "Preview");
+export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail = false } = {}) {
+    const dom = readyElements();
+    if (!dom) throw new Error('Preview unavailable');
     const token = ++previewRequestToken;
-    // Stop the previous image's neighbor prefetch so this load doesn't queue
-    // behind its remaining downloads (the in-flight one is shared via fetchFullRaw).
-    preloadEpoch += 1;
-    // Navigation commits to the target: activePreview* always reflect the item
-    // the user is on, so the counter, info panel, and download stay in agreement
-    // even when the full-size load fails.
-    activePreviewKey = previewKey;
-    activePreviewMsgID = msgID;
+    const filename = target.name || 'Preview';
+    activePreviewKey = getPreviewKey(target);
     activePreviewItem = target;
-    activeFullSrc = "";
-    resetZoom();
+    releasePreviewResources();
+    zoomPan.reset();
+    resetImageSurface({ keepThumbnail });
+    updateNavChrome();
     refreshInfoPanel();
-
-    if (!msgID || !previewKey) {
-        const err = new Error("Download failed");
-        if (token === previewRequestToken && isPreviewOpen()) {
-            showPreviewError(err.message);
-        }
-        throw err;
+    // Ask for the password before the request, not after it fails: a known
+    // encrypted photo must not spend a doomed round trip to learn that.
+    if (target.encrypted && !state.encryption.passwordRemembered) {
+        showLockedState();
+        return null;
     }
-
-    // Whether a usable image (placeholder or full) is currently standing in for
-    // this request, and whether the full-size load has settled.
-    let placeholderShown = false;
-    let fullSettled = false;
-    // Resolves to a fallback thumbnail src ("" if none) for when the full-size
-    // load fails (e.g. over the preview budget) so we show an image, not an error.
-    let thumbPromise: Promise<string> = Promise.resolve("");
+    const request = renditionRequest(target);
+    const thumbnailLease = acquireRendition(request, 'viewer');
+    activeThumbnailLease = thumbnailLease;
+    // Do not trust an old DOM URL as identity. The shared broker either reuses
+    // the same revision asset or reacquires it with the immutable request.
+    void thumbnailLease.promise.then(asset => {
+        if (token !== previewRequestToken || !isPreviewOpen() || activeThumbnailLease !== thumbnailLease) return;
+        showPreviewThumbnail(asset.url, filename);
+    }).catch(error => {
+        if (token !== previewRequestToken || !isPreviewOpen()) return;
+        if (isEncryptionPasswordRequired(error)) showLockedState();
+    });
 
     try {
-        // Already prefetched by a neighbor preload? Show it instantly with no
-        // loading indicator at all.
-		const cachedFull = fullCache.get(previewKey);
-        if (cachedFull) {
-            activeFullSrc = cachedFull;
-            showPreviewImage(cachedFull, filename);
-            refreshInfoPanel();
-            preloadNeighbors();
-            return { src: cachedFull };
+        // This call happens only because opening/navigating the viewer was an
+        // explicit action. No original bytes are put in Blob or rendition cache.
+        releaseOriginalBudget = acquireOriginalViewerBudget();
+        const opened = await openOriginalImage(Number(target.id), request.revision);
+        if (token !== previewRequestToken || !isPreviewOpen()) {
+            void Promise.resolve(closeMedia(opened.token)).catch(() => {});
+            return null;
         }
-
-        setPreviewProgress(0);
-
-        // Instant low-res placeholder. The gallery hands us a thumbnail data
-        // URL it already loaded (zero extra work); elsewhere we fall back to a
-        // server-side thumbnail fetch. Either becomes the standing image until
-        // the full-size load lands.
-        const initialThumb = String(target?.thumbUrl || "");
-        if (initialThumb) {
-            if (token === previewRequestToken && isPreviewOpen()) {
-                showPreviewImage(initialThumb, filename, { keepLoading: true });
-                placeholderShown = true;
-            }
-        } else {
-            thumbPromise = resolveThumbnailPreviewEntry(target)
-                .then((asset) => String(asset?.src || ""))
-                .catch(() => "");
-            void thumbPromise.then((src) => {
-                // Show as a placeholder only while the full load is still pending;
-                // once it settles, the catch/ success path owns what's displayed.
-                if (!src || fullSettled || token !== previewRequestToken || !isPreviewOpen()) return;
-                showPreviewImage(src, filename, { keepLoading: true });
-                placeholderShown = true;
-            });
-        }
-
-        const asset = await resolveFullPreviewEntry(target);
-        fullSettled = true;
-        if (token !== previewRequestToken || !isPreviewOpen()) return null;
-
-        if (!asset?.src) {
-            throw new Error("Download failed");
-        }
-
-        activeFullSrc = asset.src;
-        showPreviewImage(asset.src, filename);
+        activeOriginalSession = { token: opened.token, url: opened.url };
+        activeFullSrc = opened.url;
+        showPreviewImage(opened.url, filename, { keepLoading: true });
+        dom.image.title = 'Original image';
         refreshInfoPanel();
-        preloadNeighbors();
-        return asset;
-    } catch (err) {
-        fullSettled = true;
+        return { src: opened.url };
+    } catch (error) {
+        if (token === previewRequestToken) {
+            releaseOriginalBudget?.();
+            releaseOriginalBudget = null;
+        }
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
-
-        // Locked encrypted photo: show the inline unlock card in place of the
-        // image, never a popup modal, so navigation stays uninterrupted.
-        if (hasOperationErrorCode(err, 'encryption_password_required')) {
+        if (isEncryptionPasswordRequired(error)) {
             showLockedState();
             return null;
         }
-
-        // If a placeholder image is standing in, keep it: an image over the
-        // full-size budget, or a cancelled unlock, should still show the
-        // thumbnail rather than a hard error. Only error when we have nothing.
-        if (placeholderShown && isPreviewVisible()) {
+        const normalized = normalizePreviewError(error);
+        // A pinned thumbnail is still a picture worth keeping on screen, and
+        // Download still works, so the failure is reported beside it rather
+        // than replacing it with the full error state.
+        if (dom.thumbnail.getAttribute('src')) {
             hidePreviewProgress();
-            return null;
-        }
-        // Nothing shown yet: if a thumbnail is still on its way, show it instead
-        // of a hard error (e.g. an image over the full-size preview budget).
-        const thumbSrc = await thumbPromise;
-        if (token !== previewRequestToken || !isPreviewOpen()) return null;
-        if (thumbSrc) {
-            showPreviewImage(thumbSrc, filename);
-            return null;
-        }
-        const normalized = normalizePreviewError(err);
-        showPreviewError(normalized.message);
-        throw normalized;
+            dom.image.title = 'Original image unavailable';
+            dom.error.textContent = normalized.message;
+            dom.error.style.display = 'block';
+        } else showPreviewError(normalized.message);
+        return null;
     }
 }
 
 export function closePreviewModal() {
-    if (zoomScale === 1 && activePreviewTransitionSource && isPreviewVisible()) {
-        previewTransition.playClose(activePreviewTransitionSource, imageEl);
+    const dom = els;
+    if (dom && zoomPan.scale === 1 && activePreviewTransitionSource && isPreviewVisible()) {
+        previewTransition.playClose(activePreviewTransitionSource, dom.image);
     } else {
         previewTransition.cancel();
     }
     activePreviewTransitionSource = null;
     previewRequestToken += 1;
-    preloadEpoch += 1; // abort any in-flight neighbor prefetch
-    // Drop the full-image cache between sessions: it's keyed by msg id, which is
-    // only unique within a drive, so a stale entry must not survive a drive switch.
-    fullCache.clear();
+    releasePreviewResources();
     clearActivePreview();
     closeInfoPanel();
     hideLockedState();
-    if (lockedInputEl) lockedInputEl.value = "";
-    resetZoom();
+    zoomPan.reset();
     activeFullSrc = "";
     clearChromeHideTimer();
 
-    if (modalEl) {
-        modalEl.style.display = "none";
-        modalEl.setAttribute("aria-hidden", "true");
+    if (dom) {
+        unlockCard?.clearInput();
+        dom.modal.style.display = "none";
+        dom.modal.setAttribute("aria-hidden", "true");
         previewA11y?.deactivate();
-        deactivateModalOwnership(modalEl);
-        modalEl.classList.remove("is-chrome-visible", "is-preview-error", "is-preview-locked", "is-shared-entering");
-    }
-    if (filenameEl) filenameEl.textContent = "";
-    if (loadingEl) loadingEl.style.display = "none";
-    if (errorEl) {
-        errorEl.style.display = "none";
-        errorEl.textContent = "";
+        deactivateModalOwnership(dom.modal);
+        dom.modal.classList.remove("is-chrome-visible", "is-preview-error", "is-preview-locked", "is-shared-entering");
+        dom.filename.textContent = "";
+        dom.loading.style.display = "none";
+        dom.error.style.display = "none";
+        dom.error.textContent = "";
     }
     hidePreviewProgress();
     resetImageSurface();
+    setGalleryThumbnailScheduling(true);
 }
 
 // openPreviewItem shows the modal and loads one item. It does not touch the
 // navigation context, so both single-item and list callers route through it.
-async function openPreviewItem(item: any, transitionSource: PreviewTransitionSource | null = null) {
+async function openPreviewItem(item: PreviewNavigationItem, transitionSource: PreviewTransitionSource | null = null) {
+    const dom = els;
+    if (!dom) return false;
     const wasOpen = isPreviewOpen();
     const keepCurrentImage = wasOpen && isPreviewVisible();
 
     previewTransition.cancel();
     activePreviewTransitionSource = transitionSource;
-    modalEl.style.display = "flex";
-    modalEl.setAttribute("aria-hidden", "false");
+    dom.modal.style.display = "flex";
+    dom.modal.setAttribute("aria-hidden", "false");
     previewA11y?.activate();
-    activateModalOwnership(modalEl);
+    activateModalOwnership(dom.modal);
+    // The modal owns a pinned thumbnail, so yielding the gallery viewport
+    // releases below-the-overlay work and keeps mobile memory predictable.
+    setGalleryThumbnailScheduling(false);
     setChromeVisible(true);
     preparePreviewSurface(item.name || "Preview", { keepCurrentImage });
-    if (!wasOpen && transitionSource && previewTransition.beginOpen(transitionSource, modalEl)) {
-        showPreviewImage(transitionSource.imageSrc, item.name || "Preview", { keepLoading: true });
-    }
+    const sharedTransition = !wasOpen && transitionSource
+        ? previewTransition.beginOpen(transitionSource, dom.modal)
+        : false;
+    if (sharedTransition && transitionSource) showPreviewThumbnail(transitionSource.imageSrc, item.name || "Preview");
 
     try {
-        await loadPreview(item);
+        await loadPreview(item, { keepThumbnail: sharedTransition });
         return true;
     } catch {
         return false;
@@ -568,7 +508,7 @@ async function openPreviewItem(item: any, transitionSource: PreviewTransitionSou
 }
 
 export async function openPreviewForSelection(target: PreviewCommandItem | null = null) {
-    if (!assertPreviewReady()) return false;
+    if (!readyElements()) return false;
 
     const selection: PreviewSelection = target
         ? { reason: 'ok', item: target, key: getPreviewKey(target) }
@@ -581,58 +521,117 @@ export async function openPreviewForSelection(target: PreviewCommandItem | null 
     }
 
     // Single-item open: no list to page through.
-    navItems = [];
-    navIndex = -1;
+    navSource = null;
+    navigationPending = false;
+    navigationEpoch += 1;
     updateNavChrome();
     return openPreviewItem(selection.item);
 }
 
-function findGalleryPreviewSource(item: any): PreviewTransitionSource | null {
+function findGalleryPreviewSource(item: PreviewNavigationItem | null): PreviewTransitionSource | null {
     const id = Number(item?.id || 0);
     if (!id) return null;
     const cell = document.querySelector<HTMLElement>('.gallery-cell[data-id="' + id + '"]');
     return capturePreviewTransitionSource(cell);
 }
 
-// openPreviewList opens the lightbox on items[index] with ←/→ navigation across
-// the whole list. Items are { type:"file", id, name, size?, thumbUrl? }.
+// The file list builds its rows inline, so their `type` arrives as a widened
+// string rather than the literal; the adapter takes them as they come and
+// narrows at the one boundary that actually needs a navigation item.
+type PreviewListItem = Omit<PreviewNavigationItem, 'type'> & { type: string };
+
+/** Compatibility adapter for existing small, already-loaded file lists. */
 export async function openPreviewList(
-    items: any[],
+    items: PreviewListItem[],
     index: number,
     transitionSource: PreviewTransitionSource | null = null,
 ) {
-    if (!assertPreviewReady()) return false;
     if (!Array.isArray(items) || items.length === 0) return false;
-
     const i = Math.max(0, Math.min(items.length - 1, Number(index) || 0));
-    navItems = items;
-    navIndex = i;
-    updateNavChrome();
-    return openPreviewItem(items[i], transitionSource || findGalleryPreviewSource(items[i]));
+    // Maintain the current index rather than building another index/map of all
+    // items. This path is deliberately separate from gallery cursor navigation.
+    let position = i;
+    const source: PreviewNavigationSource = {
+        async getNeighbor(item, direction) {
+            if (items[position]?.id !== item.id) return null;
+            const next = position + direction;
+            return next >= 0 && next < items.length ? items[next] as PreviewNavigationItem : null;
+        },
+        getPosition(item) {
+            if (items[position]?.id !== item.id) {
+                if (items[position + 1]?.id === item.id) position += 1;
+                else if (items[position - 1]?.id === item.id) position -= 1;
+            }
+            return { index: position, total: items.length };
+        },
+    };
+    return openPreviewSource(source, items[i] as PreviewNavigationItem, transitionSource);
+}
+
+export async function openPreviewSource(
+    source: PreviewNavigationSource,
+    item: PreviewNavigationItem,
+    transitionSource: PreviewTransitionSource | null = null,
+): Promise<boolean> {
+    if (!readyElements()) return false;
+    navSource = source;
+    navigationEpoch += 1;
+    navigationPending = false;
+    return openPreviewItem(item, transitionSource || findGalleryPreviewSource(item));
+}
+
+function navigationPosition(): { index: number; total: number } | null {
+    return activePreviewItem ? navSource?.getPosition?.(activePreviewItem) ?? null : null;
+}
+
+function canNavigate(direction: -1 | 1): boolean {
+    if (!navSource || navigationPending) return false;
+    const position = navigationPosition();
+    return !position || (direction < 0 ? position.index > 0 : position.index < position.total - 1);
 }
 
 async function navigatePreview(delta: number) {
-    if (!isPreviewOpen() || navItems.length === 0) return;
-    const next = navIndex + delta;
-    if (next < 0 || next >= navItems.length) return;
-    navIndex = next;
+    const direction = delta < 0 ? -1 : 1;
+    if (!isPreviewOpen() || !navSource || !canNavigate(direction)) return;
+    const source = navSource;
+    const epoch = ++navigationEpoch;
+    navigationPending = true;
     updateNavChrome();
-    await openPreviewItem(navItems[next], findGalleryPreviewSource(navItems[next]));
+    try {
+        // A photo is loaded whenever the preview is open: loadPreview records it
+        // before anything can navigate, and closing clears the two together.
+        const item = await source.getNeighbor(activePreviewItem!, direction);
+        if (!item || epoch !== navigationEpoch || source !== navSource || !isPreviewOpen()) return;
+        // Once the neighboring record is known, navigation can interrupt its
+        // image transfer. A slow photo must not trap the user on that slide.
+        navigationPending = false;
+        await openPreviewItem(item, findGalleryPreviewSource(item));
+    } catch {
+        if (epoch === navigationEpoch && isPreviewOpen()) flashStatus('Could not load the next photo. Try again.');
+    } finally {
+        if (epoch === navigationEpoch) {
+            navigationPending = false;
+            updateNavChrome();
+        }
+    }
 }
 
 function updateNavChrome() {
-    const hasList = navItems.length > 1;
-    if (prevBtnEl) {
-        prevBtnEl.hidden = !hasList;
-        prevBtnEl.disabled = navIndex <= 0;
+    const dom = els;
+    if (!dom) return;
+    const position = navigationPosition();
+    const hasList = Boolean(navSource && (!position || position.total > 1));
+    if (dom.prevButton) {
+        dom.prevButton.hidden = !hasList;
+        dom.prevButton.disabled = !canNavigate(-1);
     }
-    if (nextBtnEl) {
-        nextBtnEl.hidden = !hasList;
-        nextBtnEl.disabled = navIndex >= navItems.length - 1;
+    if (dom.nextButton) {
+        dom.nextButton.hidden = !hasList;
+        dom.nextButton.disabled = !canNavigate(1);
     }
-    if (counterEl) {
-        counterEl.hidden = !hasList;
-        counterEl.textContent = hasList ? `${navIndex + 1} / ${navItems.length}` : "";
+    if (dom.counter) {
+        dom.counter.hidden = !hasList || !position;
+        dom.counter.textContent = hasList && position ? `${position.index + 1} / ${position.total}` : '';
     }
 }
 
@@ -650,30 +649,43 @@ function toggleInfoPanel() {
 }
 
 function openInfoPanel() {
-    if (!infoPanelEl || !modalEl) return;
+    const dom = els;
+    if (!dom?.infoPanel) return;
     infoOpen = true;
-    modalEl.classList.add("is-info-open");
-    infoBtnEl?.setAttribute("aria-pressed", "true");
+    // Clear whatever a drag left behind, so the sheet rises from the edge it
+    // was thrown to rather than jumping there first.
+    dom.infoPanel.style.transition = "";
+    dom.infoPanel.style.transform = "";
+    dom.modal.classList.add("is-info-open");
+    dom.infoButton?.setAttribute("aria-pressed", "true");
+    if (isMobilePlatform() && !infoSheetBack) {
+        infoSheetBack = pushSheet(() => {
+            infoSheetBack = null;
+            closeInfoPanel();
+        });
+    }
     refreshInfoPanel();
 }
 
 function closeInfoPanel() {
     infoOpen = false;
-    modalEl?.classList.remove("is-info-open");
-    infoBtnEl?.setAttribute("aria-pressed", "false");
+    els?.modal.classList.remove("is-info-open");
+    els?.infoButton?.setAttribute("aria-pressed", "false");
+    infoSheetBack?.release();
+    infoSheetBack = null;
 }
 
-// refreshInfoPanel re-renders the panel for the active item. Dimensions are
-// only sourced from the displayed <img> once the full image is in (activeFullSrc
-// set); until then we rely on EXIF, so a thumbnail's size never leaks in.
+// Derivative dimensions and stripped EXIF are not original metadata. Keep
+// those fields unknown until a metadata source explicitly supplies them.
 function refreshInfoPanel() {
-    if (!infoOpen || !infoBodyEl || !activePreviewItem) return;
+    const dom = els;
+    if (!infoOpen || !dom?.infoBody || !activePreviewItem) return;
     const hasFull = Boolean(activeFullSrc);
-    infoBodyEl.innerHTML = renderImageInfoHTML({
+    dom.infoBody.innerHTML = renderImageInfoHTML({
         item: activePreviewItem,
         fullSrc: activeFullSrc,
-        naturalWidth: hasFull ? imageEl?.naturalWidth || 0 : 0,
-        naturalHeight: hasFull ? imageEl?.naturalHeight || 0 : 0,
+        naturalWidth: hasFull ? dom.image.naturalWidth || 0 : 0,
+        naturalHeight: hasFull ? dom.image.naturalHeight || 0 : 0,
     });
 }
 
@@ -681,270 +693,164 @@ function refreshInfoPanel() {
 // image, so navigating onto a locked photo never throws up a modal. ---
 
 function showLockedState() {
-    if (!lockedEl) return;
+    const dom = els;
+    if (!dom?.locked || !unlockCard) return;
     previewTransition.cancel();
     hidePreviewProgress();
     resetImageSurface();
-    if (errorEl) {
-        errorEl.style.display = "none";
-        errorEl.textContent = "";
-    }
-    modalEl?.classList.remove("is-preview-error");
-    if (lockedErrorEl) {
-        lockedErrorEl.style.display = "none";
-        lockedErrorEl.textContent = "";
-    }
-    if (lockedInputEl) lockedInputEl.value = "";
-    resetLockedReveal();
-
-    const hint = String(state.encryption?.hint || "").trim();
-    if (lockedHintEl && lockedHintTextEl) {
-        lockedHintTextEl.textContent = hint;
-        lockedHintEl.style.display = hint ? "block" : "none";
-    }
-    lockedEl.style.display = "flex";
+    dom.error.style.display = "none";
+    dom.error.textContent = "";
+    dom.modal.classList.remove("is-preview-error");
+    unlockCard.show(String(state.encryption?.hint || "").trim());
     // Make the backdrop opaque so the gallery behind isn't visible through it.
-    modalEl?.classList.add("is-preview-locked");
+    dom.modal.classList.add("is-preview-locked");
     setChromeVisible(true);
     clearChromeHideTimer();
-    // Intentionally not auto-focusing the field: while browsing, arrow keys
-    // should skip past a locked photo, not get captured as typing. The user
-    // clicks the field when they actually want to unlock.
 }
 
 function hideLockedState() {
-    // Only hides the unlock pill; the frosted backdrop class is cleared when an
-    // image or error actually takes over, so navigating between two locked
-    // photos doesn't flash the gallery during the load in between.
-    if (lockedEl) lockedEl.style.display = "none";
+    unlockCard?.hide();
 }
 
-// Show/hide the typed password. A ghost toggle inside the pill (a polish
-// hallmark for password fields); resets to hidden whenever the state reopens.
-function toggleLockedReveal() {
-    if (!lockedInputEl || !lockedEyeEl) return;
-    const reveal = lockedInputEl.type === "password";
-    lockedInputEl.type = reveal ? "text" : "password";
-    lockedEyeEl.setAttribute("aria-pressed", reveal ? "true" : "false");
-    lockedEyeEl.setAttribute("aria-label", reveal ? "Hide password" : "Show password");
-    try { lockedInputEl.focus(); } catch { /* focus is best-effort */ }
-}
-
-function resetLockedReveal() {
-    if (lockedInputEl) lockedInputEl.type = "password";
-    if (lockedEyeEl) {
-        lockedEyeEl.setAttribute("aria-pressed", "false");
-        lockedEyeEl.setAttribute("aria-label", "Show password");
-    }
-}
-
-function showLockedError(msg: string) {
-    if (!lockedErrorEl) return;
-    lockedErrorEl.textContent = msg;
-    lockedErrorEl.style.display = "block";
-}
-
-async function submitInlineUnlock() {
-    const value = String(lockedInputEl?.value || "");
-    if (!value) {
-        showLockedError("Enter your encryption password.");
-        return;
-    }
+// The reload has to name its photo now, not after the password round trip: by
+// then the reader may have paged on, and reloading whatever is showing would
+// drop them back where they were.
+function submitInlineUnlock(): Promise<void> {
     const target = activePreviewItem;
-    if (lockedUnlockEl) lockedUnlockEl.disabled = true;
-    if (lockedInputEl) lockedInputEl.disabled = true;
-    try {
-        await useEncryptionPassword(value);
-        await loadEncryptionStatus();
-        if (lockedInputEl) lockedInputEl.value = "";
-        // Let the gallery's locked thumbnail cells reload too.
-        window.dispatchEvent(new Event("tdrive:unlocked"));
+    return unlockCard?.submit(() => {
         hideLockedState();
-        if (target) void loadPreview(target); // re-load the photo, now decryptable
-    } catch (err) {
-        showLockedError(String(err) || "Incorrect password");
-    } finally {
-        if (lockedUnlockEl) lockedUnlockEl.disabled = false;
-        if (lockedInputEl) lockedInputEl.disabled = false;
-    }
+        if (target) void loadPreview(target);
+    }) ?? Promise.resolve();
 }
 
 // --- zoom / pan ---
 
-function applyZoomTransform() {
-    if (!imageEl) return;
-    imageEl.style.transform = `translate(${zoomTx}px, ${zoomTy}px) scale(${zoomScale})`;
-    imageEl.style.cursor = zoomScale > 1 ? (panning ? "grabbing" : "grab") : "zoom-in";
-}
-
-function resetZoom() {
-    zoomScale = 1;
-    zoomTx = 0;
-    zoomTy = 0;
-    panning = false;
-    panPointerId = -1;
-    if (imageEl) {
-        imageEl.style.transform = "";
-        imageEl.style.cursor = "zoom-in";
-    }
-}
-
-// displayedImageSize is the painted size of the image inside its element box.
-// With object-fit:contain the box can be larger than the picture on one axis,
-// so we fit naturalWidth/Height into the box to get the real edges.
-function displayedImageSize(): { w: number; h: number } {
-    const cw = imageEl?.clientWidth || 0;
-    const ch = imageEl?.clientHeight || 0;
-    const nw = imageEl?.naturalWidth || 0;
-    const nh = imageEl?.naturalHeight || 0;
-    if (nw <= 0 || nh <= 0 || cw <= 0 || ch <= 0) return { w: cw, h: ch };
-    const fit = Math.min(cw / nw, ch / nh);
-    return { w: nw * fit, h: nh * fit };
-}
-
-// clampPan keeps the panned image from drifting past its own painted edges.
-function clampPan() {
-    if (!imageEl) return;
-    const { w, h } = displayedImageSize();
-    const maxX = Math.max(0, ((zoomScale - 1) * w) / 2);
-    const maxY = Math.max(0, ((zoomScale - 1) * h) / 2);
-    zoomTx = Math.max(-maxX, Math.min(maxX, zoomTx));
-    zoomTy = Math.max(-maxY, Math.min(maxY, zoomTy));
-}
-
-// zoomAt scales toward a screen point so the pixel under the cursor stays put.
-// The anchor is the cursor's offset from the image's *current* on-screen center
-// (getBoundingClientRect already reflects the live transform), which is correct
-// regardless of the stage's padding, centering, or the info panel.
+// Only ever zoom a picture the reader can actually see. The wheel and
+// double-click paths check for themselves; a pinch arrives straight from the
+// gesture recogniser, which knows nothing about whether an image loaded.
 function zoomAt(clientX: number, clientY: number, factor: number) {
-    if (!imageEl || !isPreviewVisible()) return;
-    const next = Math.max(1, Math.min(MAX_ZOOM, zoomScale * factor));
-    if (next === zoomScale) return;
-    const rect = imageEl.getBoundingClientRect();
-    const ax = clientX - (rect.left + rect.width / 2);
-    const ay = clientY - (rect.top + rect.height / 2);
-    const ratio = next / zoomScale;
-    zoomTx += ax * (1 - ratio);
-    zoomTy += ay * (1 - ratio);
-    zoomScale = next;
-    if (zoomScale <= 1.001) {
-        zoomScale = 1;
-        zoomTx = 0;
-        zoomTy = 0;
-    }
-    clampPan();
-    applyZoomTransform();
+    if (!isPreviewVisible()) return;
+    zoomPan.zoomAt(clientX, clientY, factor);
 }
 
-function handleZoomWheel(e: any) {
+function handleZoomWheel(e: WheelEvent) {
     if (!isPreviewVisible()) return;
     e.preventDefault();
     zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.18 : 1 / 1.18);
 }
 
-function handleZoomDblClick(e: any) {
+function handleZoomDblClick(e: MouseEvent) {
     if (!isPreviewVisible()) return;
+    if (lastPointerType === "touch" && isMobilePlatform()) return;
     e.preventDefault();
-    if (zoomScale > 1) resetZoom();
+    if (zoomPan.scale > 1) zoomPan.reset();
     else zoomAt(e.clientX, e.clientY, 2.5);
 }
 
-function handlePanStart(e: any) {
-    if (zoomScale <= 1 || !imageEl) return;
-    panning = true;
-    panMoved = false;
-    panPointerId = e.pointerId;
-    panStartX = e.clientX - zoomTx;
-    panStartY = e.clientY - zoomTy;
-    try {
-        imageEl.setPointerCapture(e.pointerId);
-    } catch {}
-    imageEl.style.cursor = "grabbing";
-    e.preventDefault();
+// --- phone gestures: a tap toggles the chrome, a double tap and a pinch zoom,
+// a sideways swipe moves through the set and a swipe down closes. ---
+
+function settleDrag(animated: boolean) {
+    const dom = els;
+    if (!dom) return;
+    const from = dom.image.style.transform;
+    dom.image.style.transform = "";
+    dom.modal.style.removeProperty("--preview-dismiss");
+    if (!animated || !from || typeof dom.image.animate !== "function") return;
+    const reduceMotion = typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) return;
+    dom.image.animate([{ transform: from }, { transform: "none" }], { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" });
 }
 
-function handlePanMove(e: any) {
-    if (!panning || e.pointerId !== panPointerId) return;
-    panMoved = true;
-    zoomTx = e.clientX - panStartX;
-    zoomTy = e.clientY - panStartY;
-    clampPan();
-    applyZoomTransform();
+// The info card is a sheet on a phone, so it goes the way a sheet goes: a tap
+// on the picture behind it, a drag down, or BACK. It is a sibling of the stage,
+// so none of this touches the stage's own swipe.
+const INFO_DISMISS_PX = 96;
+const INFO_DISMISS_VELOCITY = 0.6;
+
+function settleInfoSheet(to: string) {
+    const panel = els?.infoPanel;
+    if (!panel) return;
+    panel.style.transition = "";
+    panel.style.transform = to;
 }
 
-function handlePanEnd(e: any) {
-    if (!panning || e.pointerId !== panPointerId) return;
-    panning = false;
-    panPointerId = -1;
-    try {
-        imageEl.releasePointerCapture(e.pointerId);
-    } catch {}
-    if (imageEl) imageEl.style.cursor = zoomScale > 1 ? "grab" : "zoom-in";
-}
-
-// --- full-image cache + neighbor prefetch ---
-
-function cacheFull(key: string, src: string) {
-	fullCache.set(key, src);
-	if (fullCache.size > FULL_CACHE_MAX) {
-		const oldest = fullCache.keys().next().value;
-		if (oldest !== undefined) fullCache.delete(oldest);
-	}
-}
-
-// fetchFullRaw downloads + decodes + caches one full image, returning its data
-// URL. Concurrent callers for the same id share a single download. It never
-// opens the unlock modal; callers that need it wrap this and retry.
-function fetchFullRaw(item: any): Promise<string> {
-	const id = Number(item?.id || 0);
-	const key = getPreviewKey(item);
-	const cached = fullCache.get(key);
-	if (cached) return Promise.resolve(cached);
-	const existing = inflightFull.get(key);
-	if (existing) return existing;
-
-	const p = (async () => {
-		const asset = payloadToPreviewAsset(await getPreviewFile(id));
-		await decodePreviewSource(asset.src);
-		cacheFull(key, asset.src);
-		return asset.src;
-	})();
-	inflightFull.set(key, p);
-	void p.catch(() => {}).finally(() => {
-		if (inflightFull.get(key) === p) inflightFull.delete(key);
-	});
-	return p;
-}
-
-// preloadNeighbors prefetches the next/prev few full images so navigation is
-// instant. It runs sequentially and aborts the instant the user navigates
-// again (preloadEpoch), so it never queues many downloads ahead of an
-// on-demand load. PreviewFile is called raw here so a locked image is skipped
-// rather than popping the password modal during a background prefetch.
-function preloadNeighbors() {
-    if (navItems.length <= 1) return;
-    const epoch = ++preloadEpoch;
-    const baseIndex = navIndex;
-    void (async () => {
-        for (const off of [1, -1, 2, -2, 3, -3]) {
-            if (epoch !== preloadEpoch) return;
-            const idx = baseIndex + off;
-            if (idx < 0 || idx >= navItems.length) continue;
-			const item = navItems[idx];
-			const id = Number(item?.id || 0);
-			const key = getPreviewKey(item);
-			if (!id || !key || fullCache.has(key)) continue;
-			try {
-				await fetchFullRaw(item);
-			} catch {
-                // Too large, locked, or failed — the on-demand view handles it.
+function infoTouchHandlers(): TouchGestureHandlers {
+    return {
+        dragStart: (axis) => axis === "y" && infoOpen && (els?.infoBody?.scrollTop || 0) <= 0,
+        drag: (_dx, dy) => {
+            const panel = els?.infoPanel;
+            if (!panel || (els?.infoBody?.scrollTop || 0) > 0) return;
+            panel.style.transition = "none";
+            panel.style.transform = `translate3d(0, ${Math.max(0, dy)}px, 0)`;
+        },
+        dragEnd: (_dx, dy, _axis, velocity) => {
+            if (dy > INFO_DISMISS_PX || (dy > 24 && velocity > INFO_DISMISS_VELOCITY)) {
+                // Let the throw finish downwards while the card fades out.
+                settleInfoSheet("translateY(100%)");
+                closeInfoPanel();
+                return;
             }
-            if (epoch !== preloadEpoch) return;
-        }
-    })();
+            settleInfoSheet("");
+        },
+    };
 }
 
-async function handlePreviewKeydown(event: any) {
+function previewTouchHandlers(): TouchGestureHandlers {
+    return {
+        tap: () => {
+            const dom = els;
+            if (!isPreviewOpen() || !dom) return;
+            if (infoOpen) {
+                closeInfoPanel();
+                return;
+            }
+            clearChromeHideTimer();
+            setChromeVisible(!dom.modal.classList.contains("is-chrome-visible"));
+        },
+        doubleTap: (x, y) => {
+            if (!isPreviewVisible()) return;
+            if (zoomPan.scale > 1) zoomPan.reset();
+            else zoomAt(x, y, 2.5);
+        },
+        pinchStart: () => zoomPan.endPan(),
+        pinch: (factor, x, y) => zoomAt(x, y, factor),
+        // A zoomed picture pans instead; the pan handlers above own that pointer.
+        dragStart: () => zoomPan.scale === 1 && isPreviewVisible() && !els?.modal.classList.contains("is-preview-locked"),
+        drag: (dx, dy, axis) => {
+            const dom = els;
+            if (!dom) return;
+            if (axis === "x") {
+                dom.image.style.transform = `translate3d(${dx}px, 0, 0)`;
+                return;
+            }
+            const drop = Math.max(0, dy);
+            dom.image.style.transform = `translate3d(0, ${drop}px, 0) scale(${Math.max(0.82, 1 - drop / 1400)})`;
+            dom.modal.style.setProperty("--preview-dismiss", String(Math.min(1, drop / 240)));
+        },
+        dragEnd: (dx, dy, axis, velocity) => {
+            if (axis === "x") {
+                const step = dx < 0 ? 1 : -1;
+                if ((Math.abs(dx) > 56 || velocity > 0.5) && canNavigate(step)) {
+                    settleDrag(false);
+                    void navigatePreview(step);
+                    return;
+                }
+                settleDrag(true);
+                return;
+            }
+            if (dy > 96 || (dy > 24 && velocity > 0.6)) {
+                settleDrag(false);
+                closePreviewModal();
+                return;
+            }
+            settleDrag(true);
+        },
+    };
+}
+
+async function handlePreviewKeydown(event: KeyboardEvent) {
     const spacePressed = isSpaceKey(event);
     const previewOpen = isPreviewOpen();
 
@@ -956,7 +862,7 @@ async function handlePreviewKeydown(event: any) {
     }
 
     if (previewOpen && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
-        if (navItems.length <= 1) return;
+        if (!navSource) return;
         if (event.metaKey || event.ctrlKey || event.altKey) return;
         if (isTypingContext(document.activeElement)) return; // e.g. the unlock field
         event.preventDefault();
@@ -1011,10 +917,8 @@ async function handlePreviewKeydown(event: any) {
 export function teardownPreviewModal(): void {
     if (isPreviewOpen()) closePreviewModal();
     previewA11y?.deactivate();
-    if (modalEl) deactivateModalOwnership(modalEl);
+    if (els) deactivateModalOwnership(els.modal);
     previewA11y = null;
-    previewProgressUnsubscribe?.();
-    previewProgressUnsubscribe = null;
     for (let i = previewListenerCleanups.length - 1; i >= 0; i -= 1) {
         previewListenerCleanups[i]();
     }
@@ -1022,36 +926,18 @@ export function teardownPreviewModal(): void {
     previewHostObserver?.disconnect();
     previewHostObserver = null;
     previewHostEl = null;
-    previewReady = false;
     previewTransition.cancel();
-    preloadEpoch += 1;
-    fullCache.clear();
+    releasePreviewResources();
+    unsubscribePreviewPolicy?.();
+    unsubscribePreviewPolicy = null;
+    unsubscribePreviewReset?.();
+    unsubscribePreviewReset = null;
     clearActivePreview();
     infoOpen = false;
-    modalEl = null;
-    shellEl = null;
-    stageEl = null;
-    filenameEl = null;
-    imageEl = null;
-    loadingEl = null;
-    loadingFillEl = null;
-    errorEl = null;
-    closeBtnEl = null;
-    prevBtnEl = null;
-    nextBtnEl = null;
-    counterEl = null;
-    downloadBtnEl = null;
-    infoBtnEl = null;
-    infoPanelEl = null;
-    infoBodyEl = null;
-    infoCloseBtnEl = null;
-    lockedEl = null;
-    lockedInputEl = null;
-    lockedUnlockEl = null;
-    lockedEyeEl = null;
-    lockedErrorEl = null;
-    lockedHintEl = null;
-    lockedHintTextEl = null;
+    infoSheetBack?.release();
+    infoSheetBack = null;
+    els = null;
+    unlockCard = null;
 }
 
 export function activatePreviewModal(): () => void {
@@ -1061,14 +947,15 @@ export function activatePreviewModal(): () => void {
         return () => {};
     }
 
-    const canReuse = previewHostEl === host
-        && previewReady
-        && REQUIRED_ELEMENT_IDS.every((id) => Boolean(document.getElementById(id)));
-    if (canReuse) {
+    // Reuse only if the elements we already hold are the ones on screen. Asking
+    // them, rather than asking the document whether something with each id
+    // exists, is what stops a re-rendered shell from leaving every write landing
+    // on detached nodes while the modal merely looks frozen.
+    if (previewHostEl === host && els && previewElementsLive(els)) {
         updateNavChrome();
         return teardownPreviewModal;
     }
-    if (previewHostEl || previewReady) teardownPreviewModal();
+    if (previewHostEl || els) teardownPreviewModal();
 
     previewHostEl = host;
     previewHostObserver = new MutationObserver(() => {
@@ -1076,121 +963,126 @@ export function activatePreviewModal(): () => void {
     });
     previewHostObserver.observe(document.body, { childList: true, subtree: true });
 
-    const missing = REQUIRED_ELEMENT_IDS.filter((id) => !document.getElementById(id));
-    if (missing.length) {
-        console.error("Preview modal setup failed. Missing DOM elements: " + missing.join(", "));
+    const resolved = resolvePreviewElements(host);
+    if ('missing' in resolved) {
+        console.error("Preview modal setup failed. Missing DOM elements: " + resolved.missing.join(", "));
         teardownPreviewModal();
         return () => {};
     }
 
-    modalEl = document.getElementById("preview-modal");
-    shellEl = document.getElementById("preview-shell");
-    stageEl = document.getElementById("preview-stage");
-    filenameEl = document.getElementById("preview-filename");
-    imageEl = document.getElementById("preview-image");
-    loadingEl = document.getElementById("preview-loading");
-    loadingFillEl = document.getElementById("preview-loading-fill");
-    errorEl = document.getElementById("preview-error");
-    closeBtnEl = document.getElementById("preview-close");
-    prevBtnEl = document.getElementById("preview-prev");
-    nextBtnEl = document.getElementById("preview-next");
-    counterEl = document.getElementById("preview-counter");
-    downloadBtnEl = document.getElementById("preview-download");
-    infoBtnEl = document.getElementById("preview-info-btn");
-    infoPanelEl = document.getElementById("preview-info");
-    infoBodyEl = document.getElementById("preview-info-body");
-    infoCloseBtnEl = document.getElementById("preview-info-close");
-    lockedEl = document.getElementById("preview-locked");
-    lockedInputEl = document.getElementById("preview-locked-input");
-    lockedUnlockEl = document.getElementById("preview-locked-unlock");
-    lockedEyeEl = document.getElementById("preview-locked-eye");
-    lockedErrorEl = document.getElementById("preview-locked-error");
-    lockedHintEl = document.getElementById("preview-locked-hint");
-    lockedHintTextEl = document.getElementById("preview-locked-hint-text");
-    previewReady = true;
-    previewA11y = installModalA11y(modalEl, {
+    const dom = resolved.elements;
+    els = dom;
+    unlockCard = createUnlockCard({
+        card: dom.locked,
+        input: dom.lockedInput,
+        unlockButton: dom.lockedUnlockButton,
+        eyeButton: dom.lockedEyeButton,
+        error: dom.lockedError,
+        hint: dom.lockedHint,
+        hintText: dom.lockedHintText,
+    });
+    previewA11y = installModalA11y(dom.modal, {
         requestClose: closePreviewModal,
-        initialFocus: () => closeBtnEl,
+        initialFocus: () => dom.closeButton,
         restoreFocus: () => state.virtualView === "photos"
             ? document.getElementById("gallery-view")
             : document.getElementById("file-list"),
     });
 
-    listenPreview(prevBtnEl, "click", ((event: MouseEvent) => {
+    listenPreview(dom.prevButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
         void navigatePreview(-1);
     }) as EventListener);
-    listenPreview(nextBtnEl, "click", ((event: MouseEvent) => {
+    listenPreview(dom.nextButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
         void navigatePreview(1);
     }) as EventListener);
-    listenPreview(downloadBtnEl, "click", ((event: MouseEvent) => {
+    listenPreview(dom.downloadButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
         handleDownloadFromPreview();
     }) as EventListener);
-    listenPreview(infoBtnEl, "click", ((event: MouseEvent) => {
+    listenPreview(dom.infoButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
         toggleInfoPanel();
     }) as EventListener);
-    listenPreview(infoCloseBtnEl, "click", ((event: MouseEvent) => {
+    listenPreview(dom.infoCloseButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
         closeInfoPanel();
     }) as EventListener);
-    listenPreview(lockedUnlockEl, "click", ((event: MouseEvent) => {
+    listenPreview(dom.lockedUnlockButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
         void submitInlineUnlock();
     }) as EventListener);
-    listenPreview(lockedEyeEl, "click", ((event: MouseEvent) => {
+    listenPreview(dom.lockedEyeButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
-        toggleLockedReveal();
+        unlockCard?.toggleReveal();
     }) as EventListener);
-    listenPreview(lockedInputEl, "keydown", ((event: KeyboardEvent) => {
+    listenPreview(dom.lockedInput, "keydown", ((event: KeyboardEvent) => {
         if (event.key === "Enter") {
             event.preventDefault();
             void submitInlineUnlock();
         }
         event.stopPropagation();
     }) as EventListener);
-    listenPreview(infoPanelEl, "click", ((event: MouseEvent) => {
+    listenPreview(dom.infoPanel, "click", ((event: MouseEvent) => {
         const link = (event.target as HTMLElement).closest("[data-map-url]") as HTMLElement | null;
         if (!link) return;
         event.stopPropagation();
         const url = link.getAttribute("data-map-url") || "";
         if (url) openExternalUrl(url);
     }) as EventListener);
-    listenPreview(closeBtnEl, "click", closePreviewModal as EventListener);
-    listenPreview(modalEl, "click", ((event: MouseEvent) => {
-        if (panMoved) {
-            panMoved = false;
-            return;
-        }
-        if (event.target === modalEl || event.target === shellEl || event.target === stageEl) closePreviewModal();
+    listenPreview(dom.closeButton, "click", closePreviewModal as EventListener);
+    listenPreview(dom.modal, "click", ((event: MouseEvent) => {
+        // A pan ends in a click on the picture, and that click must not be
+        // read as a click on the backdrop and close the photo being panned.
+        if (zoomPan.consumePanMoved()) return;
+        // On a phone a tap on the picture toggles the chrome; the X and a swipe
+        // down close.
+        if (isMobilePlatform()) return;
+        if (event.target === dom.modal || event.target === dom.shell || event.target === dom.stage) closePreviewModal();
     }) as EventListener);
-    listenPreview(modalEl, "pointermove", (() => {
+    listenPreview(dom.modal, "pointermove", ((event: PointerEvent) => {
+        if (event.pointerType === "touch" && isMobilePlatform()) return;
         if (isPreviewOpen()) revealChrome();
     }) as EventListener);
-    listenPreview(stageEl, "wheel", handleZoomWheel as EventListener, { passive: false });
-    listenPreview(imageEl, "dblclick", handleZoomDblClick as EventListener);
-    listenPreview(imageEl, "pointerdown", handlePanStart as EventListener);
-    listenPreview(imageEl, "pointermove", handlePanMove as EventListener);
-    listenPreview(imageEl, "pointerup", handlePanEnd as EventListener);
-    listenPreview(imageEl, "pointercancel", handlePanEnd as EventListener);
-    listenPreview(closeBtnEl, "focus", (() => {
+    if (isMobilePlatform()) {
+        listenPreview(dom.stage, "pointerdown", ((event: PointerEvent) => {
+            lastPointerType = event.pointerType;
+        }) as EventListener, true);
+        previewListenerCleanups.push(bindTouchGestures(dom.stage, previewTouchHandlers()));
+        // The info sheet is optional markup, and binding gestures to nothing
+        // threw here rather than simply leaving the sheet undraggable.
+        if (dom.infoPanel) {
+            previewListenerCleanups.push(bindTouchGestures(dom.infoPanel, infoTouchHandlers()));
+        }
+    }
+    listenPreview(dom.stage, "wheel", handleZoomWheel as EventListener, { passive: false });
+    listenPreview(dom.image, "dblclick", handleZoomDblClick as EventListener);
+    listenPreview(dom.image, "pointerdown", ((event: PointerEvent) => zoomPan.pointerDown(event)) as EventListener);
+    listenPreview(dom.image, "pointermove", ((event: PointerEvent) => zoomPan.pointerMove(event)) as EventListener);
+    listenPreview(dom.image, "pointerup", ((event: PointerEvent) => zoomPan.pointerUp(event)) as EventListener);
+    listenPreview(dom.image, "pointercancel", ((event: PointerEvent) => zoomPan.pointerUp(event)) as EventListener);
+    listenPreview(dom.closeButton, "focus", (() => {
         setChromeVisible(true);
         clearChromeHideTimer();
     }) as EventListener);
-    listenPreview(closeBtnEl, "blur", (() => scheduleChromeHide()) as EventListener);
-    listenPreview(imageEl, "error", (() => {
-        if (isPreviewOpen() && imageEl?.getAttribute("src")) showPreviewError("Not a supported image");
+    listenPreview(dom.closeButton, "blur", (() => scheduleChromeHide()) as EventListener);
+    listenPreview(dom.image, "error", (() => {
+        if (isPreviewOpen() && dom.image.getAttribute("src")) {
+            releaseOriginalSession();
+            showPreviewError("Not a supported image", { keepCurrentImage: true });
+        }
     }) as EventListener);
-    listenPreview(imageEl, "load", (() => {
+    listenPreview(dom.image, "load", (() => {
+        dom.modal.classList.add('is-original-ready');
+        hidePreviewProgress();
         if (infoOpen) refreshInfoPanel();
     }) as EventListener);
-    previewProgressUnsubscribe = onRuntimeEvent("preview_progress", (msgID, percent) => {
-        if (!isPreviewOpen()) return;
-        const targetID = Number(msgID);
-        if (!Number.isFinite(targetID) || targetID !== activePreviewMsgID) return;
-        setPreviewProgress(percent);
+    unsubscribePreviewReset = subscribeRenditionReset(() => {
+        if (isPreviewOpen()) closePreviewModal();
+    });
+    unsubscribePreviewPolicy = subscribeGalleryPolicy(policy => {
+        if (policy.backgrounded && isPreviewOpen()) closePreviewModal();
     });
     listenPreview(window, "keydown", ((event: KeyboardEvent) => {
         void handlePreviewKeydown(event);

@@ -1,19 +1,23 @@
 import {
     bootTDrive,
+    galleryPage,
     byFirstArg,
     expect,
     rejects,
     resolves,
-    returnsSynchronously,
     test,
 } from './wails-mock';
-
-const RED_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiNlMTFkNDgiLz48L3N2Zz4=';
-const BLUE_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiMyNTYzZWIiLz48L3N2Zz4=';
-const GOLD_BASE64 = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyIiBoZWlnaHQ9IjIiPjxyZWN0IHdpZHRoPSIyIiBoZWlnaHQ9IjIiIGZpbGw9IiNmNTllMGIiLz48L3N2Zz4=';
-const RED_URL = `data:image/svg+xml;base64,${RED_BASE64}`;
-const BLUE_URL = `data:image/svg+xml;base64,${BLUE_BASE64}`;
-const GOLD_URL = `data:image/svg+xml;base64,${GOLD_BASE64}`;
+import {
+    BLUE_BASE64,
+    FIRST_PHOTO,
+    RED_BASE64,
+    SECOND_PHOTO,
+    albumPlans,
+    galleryPlans,
+    openedOriginal,
+    originalImageUrl,
+    routeRenditions,
+} from './gallery-fixtures';
 
 const PERSONAL_CHANNEL = {
     id: 1,
@@ -29,28 +33,6 @@ declare global {
         __fileListSnapshots?: string[];
     }
 }
-
-const FIRST_PHOTO = {
-    name: 'first.jpg',
-    size: 120,
-    msg_id: 101,
-    parent_id: '',
-    upload_time: 1_735_689_600,
-    uploader_id: 7,
-    encrypted: false,
-    plaintext_size: 0,
-};
-
-const SECOND_PHOTO = {
-    name: 'second.jpg',
-    size: 240,
-    msg_id: 102,
-    parent_id: '',
-    upload_time: 1_732_924_800,
-    uploader_id: 7,
-    encrypted: false,
-    plaintext_size: 0,
-};
 
 test('auth advances through the public login surface and handles runtime errors', async ({ page }) => {
     const mock = await bootTDrive(page, {
@@ -152,6 +134,7 @@ test('keeps foreground navigation failures visible', async ({ page }) => {
 });
 
 test('moves row focus and previews a selected image with Space', async ({ page }) => {
+    await routeRenditions(page);
     await bootTDrive(page, {
         GetFolderContents: resolves({
             folders: [],
@@ -160,7 +143,7 @@ test('moves row focus and previews a selected image with Space', async ({ page }
                 { name: 'newer.jpg', size: 2, msg_id: 2, parent_id: '', upload_time: 2, uploader_id: 7, encrypted: false, plaintext_size: 0 },
             ],
         }),
-        PreviewFile: resolves({ result: { ok: true }, payload: { data_base64: RED_BASE64, mime_type: 'image/svg+xml' } }),
+        OpenOriginalImage: resolves(openedOriginal({ name: 'older.jpg', msg_id: 1 }, RED_BASE64)),
     });
 
     const newest = page.getByRole('row', { name: 'File: newer.jpg' });
@@ -173,7 +156,7 @@ test('moves row focus and previews a selected image with Space', async ({ page }
     await expect(older).toHaveAttribute('aria-selected', 'true');
     await page.keyboard.press('Space');
     await expect(page.getByRole('dialog', { name: 'older.jpg' })).toBeVisible();
-    await expect(page.locator('#preview-image')).toHaveAttribute('src', RED_URL);
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(RED_BASE64));
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: 'older.jpg' })).toBeHidden();
     await expect(older).toBeFocused();
@@ -342,57 +325,85 @@ test('context menus retain vertical actions, render notifications, and restore f
     await expect(newDrive).toBeFocused();
 });
 
-test('gallery accepts a synchronous data-image thumbnail and previews the normalized payload', async ({ page }) => {
-    const mock = await bootTDrive(page, {
-        ListMedia: resolves([FIRST_PHOTO]),
-        Thumbnail: returnsSynchronously({ data_base64: GOLD_BASE64, mime_type: 'image/svg+xml' }),
-        PreviewFile: resolves({ result: { ok: true }, payload: { data_base64: RED_BASE64, mime_type: 'image/svg+xml' } }),
-    });
-
-    await expect(page.locator('#success-screen')).toBeVisible();
+test('gallery loads binary thumbnails and one explicitly opened original stream', async ({ page }) => {
+    const requested = await routeRenditions(page);
+    const mock = await bootTDrive(page, galleryPlans([FIRST_PHOTO]));
     await page.getByRole('button', { name: 'Photos' }).click();
-
     const photo = page.getByRole('button', { name: 'first.jpg' });
     await expect(photo).toBeVisible();
-    await expect(photo.locator('img')).toHaveAttribute('src', GOLD_URL);
-    expect(await mock.calls('Thumbnail')).toMatchObject([{ args: [101], state: 'returned' }]);
-
+    await expect(photo.locator('img')).toHaveAttribute('src', /^blob:/);
+    expect(await mock.calls('Thumbnail')).toEqual([]);
+    expect(await mock.calls('ListMedia')).toEqual([]);
+    expect(requested).toContain('/mock-renditions/101/thumbnail');
     await photo.click();
     await expect(page.getByRole('dialog', { name: 'first.jpg' })).toBeVisible();
-    await expect(page.locator('#preview-image')).toHaveAttribute('src', RED_URL);
-    await expect(page.locator('#preview-image')).toBeVisible();
-    expect(await mock.calls('PreviewFile')).toMatchObject([{ args: [101], state: 'fulfilled' }]);
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(RED_BASE64));
+    expect(await mock.calls('PreviewFile')).toEqual([]);
+    expect(await mock.calls('OpenOriginalImage')).toMatchObject([{ args: [101, 1], state: 'fulfilled' }]);
+    expect(requested.some((path) => path.endsWith('/preview'))).toBe(false);
 });
 
-test('a late preview completion cannot overwrite rapid gallery navigation', async ({ page }) => {
-    const mock = await bootTDrive(page, {
-        ListMedia: resolves([FIRST_PHOTO, SECOND_PHOTO]),
-        Thumbnail: byFirstArg({
-            '101': returnsSynchronously({ data_base64: RED_BASE64, mime_type: 'image/svg+xml' }),
-            '102': returnsSynchronously({ data_base64: BLUE_BASE64, mime_type: 'image/svg+xml' }),
-        }),
-        PreviewFile: byFirstArg({
-            '101': resolves({ result: { ok: true }, payload: { data_base64: RED_BASE64, mime_type: 'image/svg+xml' } }, 1_000),
-            '102': resolves({ result: { ok: true }, payload: { data_base64: BLUE_BASE64, mime_type: 'image/svg+xml' } }),
-        }),
-    });
-
-    await expect(page.locator('#success-screen')).toBeVisible();
+test('albums open on the folder grid and scope the one gallery to a folder', async ({ page }, testInfo) => {
+    const requested = await routeRenditions(page);
+    await bootTDrive(page, { ...galleryPlans([FIRST_PHOTO, SECOND_PHOTO]), ...albumPlans() });
     await page.getByRole('button', { name: 'Photos' }).click();
-    await expect(page.getByRole('button', { name: 'first.jpg' }).locator('img')).toHaveAttribute('src', RED_URL);
-    await expect(page.getByRole('button', { name: 'second.jpg' }).locator('img')).toHaveAttribute('src', BLUE_URL);
 
+    // More than one folder, so Photos opens on the grid. Each tile names
+    // itself fully, and the drive's own root is called what the trash calls it.
+    const camera = page.getByRole('button', { name: 'Camera, 1 photo' });
+    await expect(camera).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Drive root, 1 photo' })).toBeVisible();
+    await expect(camera.locator('img')).toHaveAttribute('src', /^blob:/);
+    expect(requested).toContain('/mock-renditions/101/thumbnail');
+    await page.screenshot({ path: testInfo.outputPath('albums-grid.png'), fullPage: true });
+
+    // A tile opens the existing gallery, scoped: the other folder's photo is
+    // not in it, and leaving comes back to the grid.
+    await camera.click();
+    await expect(page.getByRole('button', { name: 'first.jpg' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'second.jpg' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Camera' }).click();
+    await expect(camera).toBeVisible();
+
+    // The whole drive is still one switch away.
+    await page.getByRole('button', { name: 'All photos' }).click();
+    await expect(page.getByRole('button', { name: 'first.jpg' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'second.jpg' })).toBeVisible();
+});
+
+test('mixed gallery loads video thumbnails before opening the streaming player', async ({ page }) => {
+    const requested = await routeRenditions(page);
+    const clip = { ...SECOND_PHOTO, name: 'holiday.mp4', size: 80_000_000 };
+    const mock = await bootTDrive(page, {
+        ...galleryPlans([FIRST_PHOTO, clip]),
+        OpenMedia: rejects('Test stream unavailable'),
+    });
+    await page.getByRole('button', { name: 'Photos', exact: true }).click();
+    const video = page.getByRole('button', { name: 'Video: holiday.mp4', exact: true });
+    await expect(video).toBeVisible();
+    await expect(video.locator('img')).toHaveAttribute('src', /^blob:/);
+    expect(requested).toContain('/mock-renditions/102/thumbnail');
+    expect(await mock.calls('OpenMedia')).toHaveLength(0);
+    expect(await mock.calls('OpenOriginalImage')).toHaveLength(0);
+    await video.click();
+    await expect(page.locator('#video-modal')).toBeVisible();
+    await expect.poll(async () => (await mock.calls('OpenMedia')).length).toBe(1);
+    expect(await mock.calls('OpenOriginalImage')).toHaveLength(0);
+    expect(requested.every((path) => path.endsWith('/thumbnail'))).toBe(true);
+});
+
+test('a late original completion cannot overwrite rapid gallery navigation', async ({ page }) => {
+    await routeRenditions(page);
+    await bootTDrive(page, galleryPlans([FIRST_PHOTO, SECOND_PHOTO], true));
+    await page.getByRole('button', { name: 'Photos' }).click();
+    await expect(page.getByRole('button', { name: 'first.jpg' }).locator('img')).toHaveAttribute('src', /^blob:/);
     await page.getByRole('button', { name: 'first.jpg' }).click();
     await expect(page.getByRole('dialog', { name: 'first.jpg' })).toBeVisible();
     await page.getByRole('button', { name: 'Next image' }).click();
     await expect(page.getByRole('dialog', { name: 'second.jpg' })).toBeVisible();
-    await expect(page.locator('#preview-image')).toHaveAttribute('src', BLUE_URL);
-
-    await expect.poll(async () => {
-        const firstCall = (await mock.calls('PreviewFile')).find((call) => call.args[0] === 101);
-        return firstCall?.state;
-    }).toBe('fulfilled');
-    await expect(page.locator('#preview-image')).toHaveAttribute('src', BLUE_URL);
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(BLUE_BASE64));
+    await page.waitForTimeout(1100);
+    await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(BLUE_BASE64));
     await expect(page.locator('#preview-filename')).toHaveText('second.jpg');
 });
 
@@ -428,32 +439,96 @@ test('prefers-reduced-motion disables entrance motion in Chromium', async ({ pag
     expect(Number.parseFloat(motion.transitionDuration) * 1_000).toBeLessThanOrEqual(0.01);
 });
 
-test('large galleries keep DOM and thumbnail observers windowed while scrolling', async ({ page }) => {
-    const photoCount = 2_000;
-    const media = Array.from({ length: photoCount }, (_, index) => ({
-        ...FIRST_PHOTO,
-        name: `photo-${index}.jpg`,
-        msg_id: 1_000 + index,
-    }));
-    await bootTDrive(page, {
-        ListMedia: resolves(media),
-        Thumbnail: returnsSynchronously({ data_base64: GOLD_BASE64, mime_type: 'image/svg+xml' }),
+for (const platform of ['desktop', 'android', 'ios'] as const) {
+    test(`photo cache is managed automatically on ${platform}`, async ({ page }, testInfo) => {
+        if (platform !== 'desktop') {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
+        }
+        const mock = await bootTDrive(page);
+        if (platform === 'desktop') {
+            await page.locator('#profile-trigger').click();
+            await page.getByRole('menuitem', { name: 'Local storage' }).click();
+        } else {
+            await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
+        }
+        const panel = page.getByRole('region', { name: 'Local photo storage' });
+        await expect(panel).toContainText('2 KB');
+        await expect(panel).toContainText('removed automatically');
+        await expect(page.getByRole('button', { name: /clear.*cache/i })).toHaveCount(0);
+        expect(await mock.calls('ClearGalleryCache')).toHaveLength(0);
+        const shot = testInfo.outputPath(`storage-${platform}.png`);
+        await page.screenshot({ path: shot });
+        await testInfo.attach(`Storage ${platform}`, { path: shot, contentType: 'image/png' });
     });
 
-    await expect(page.locator('#success-screen')).toBeVisible();
-    await page.getByRole('button', { name: 'Photos' }).click();
-    const gallery = page.locator('#gallery-view');
-    await expect.poll(() => gallery.locator('.gallery-cell').count()).toBeGreaterThan(0);
-    expect(await gallery.locator('.gallery-cell').count()).toBeLessThan(300);
+    test(`1M photo gallery stays bounded while scrolling, reversing and keyboard jumping on ${platform}`, async ({ page }, testInfo) => {
+        if (platform !== 'desktop') {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
+        }
+        await routeRenditions(page);
+        const count = 1_000_000;
+        const mock = await bootTDrive(page, {
+            GetMediaTimelineSummary: resolves({ channel_id: 1, generation: 'test', total_count: count, page_size: 128,
+                buckets: [{ key: '2025-01', start_index: 0, count, upload_time: FIRST_PHOTO.upload_time }], anchors: [],
+            }),
+            GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: count, page_size: 128,
+                buckets: [{ key: '2025-01', start_index: 0, count, upload_time: FIRST_PHOTO.upload_time }],
+                anchors: Array.from({ length: Math.ceil(count / 128) }, (_, index) => ({ start_index: index * 128, cursor: String(index * 128) })),
+            }),
+            ListMediaPage: galleryPage(count, FIRST_PHOTO),
+        });
+        const photos = platform === 'desktop' ? page.getByRole('button', { name: 'Photos', exact: true })
+            : page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Photos', exact: true });
+        await photos.click();
+        const gallery = page.locator('#gallery-view');
+        await expect(gallery.locator('[data-id="1000"]')).toBeVisible();
+        await expect(gallery.locator('[data-id="1000"] img')).toHaveAttribute('src', /^blob:/);
+        const bounds = async () => {
+            expect(await gallery.locator('.gallery-cell').count()).toBeLessThan(120);
+            expect(await gallery.locator('*').count()).toBeLessThan(450);
+        };
+        await bounds();
+        await gallery.evaluate((element) => { element.scrollTop = element.scrollHeight / 2; });
+        await expect(gallery.locator('[data-id="1000"]')).toHaveCount(0);
+        await expect.poll(async () => (await mock.calls('ListMediaPage')).length).toBeGreaterThan(1);
+        await bounds();
+        await gallery.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+        await expect(gallery.locator(`[data-id="${count + 999}"]`)).toBeVisible();
+        await bounds();
+        await gallery.evaluate((element) => { element.scrollTop = 0; });
+        await expect(gallery.locator('[data-id="1000"]')).toBeVisible();
+        const first = gallery.locator('[data-id="1000"]');
+        await first.focus();
+        await page.keyboard.press('End');
+        await expect(gallery.locator(`[data-id="${count + 999}"]`)).toBeFocused();
+        await page.keyboard.press('Home');
+        await expect(gallery.locator('[data-id="1000"]')).toBeFocused();
+        await bounds();
+        expect(await mock.calls('ListMedia')).toEqual([]);
+        expect(await mock.calls('Thumbnail')).toEqual([]);
+        expect(await mock.calls('PreviewFile')).toEqual([]);
+        expect((await mock.calls('ListMediaPage')).every((call) => call.args[1] === 128)).toBe(true);
+        const shot = testInfo.outputPath(`gallery-${platform}.png`);
+        await page.screenshot({ path: shot });
+        await testInfo.attach(`Gallery ${platform}`, { path: shot, contentType: 'image/png' });
+    });
+}
 
-    const extent = await gallery.evaluate((element) => ({
-        clientHeight: element.clientHeight,
-        scrollHeight: element.scrollHeight,
-    }));
-    expect(extent.scrollHeight).toBeGreaterThan(extent.clientHeight * 20);
-    await gallery.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-
-    const lastPhoto = page.getByRole('button', { name: `photo-${photoCount - 1}.jpg` });
-    await expect(lastPhoto).toBeVisible();
-    expect(await gallery.locator('.gallery-cell').count()).toBeLessThan(300);
+/**
+ * One failed upload is one failure. It used to be counted twice: once for the
+ * row that turned red and once for the toast that narrated it, so the bell
+ * said "2 errors" for a single file. The reason now rides on the row.
+ */
+test('a failed upload counts once and keeps its reason on the row', async ({ page }) => {
+    const mock = await bootTDrive(page);
+    await mock.emit('upload_start', 41, 'broken.bin', 1024, '');
+    await mock.emit('upload_error', 41, 'broken.bin', 'upload part: rpc error code 400: FILE_REFERENCE_EXPIRED');
+    await expect(page.getByRole('button', { name: /^Notifications/ })).toHaveAttribute('aria-label', /1 error/);
+    await page.getByRole('button', { name: /^Notifications/ }).click();
+    const panel = page.getByRole('dialog', { name: 'Notifications', exact: true });
+    await expect(panel.locator('.notif-row-transfer')).toHaveCount(1);
+    await expect(panel.locator('.notif-row-transfer .notif-row-note')).toContainText(/fresh reference/);
+    await expect(panel.locator('.notif-row-event')).toHaveCount(0);
 });

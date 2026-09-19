@@ -1,3 +1,41 @@
+// Package core is TDrive's headless composition root. It builds one Engine that
+// wires every backend service, the Telegram adapter, the sync engine and live
+// sync, so the Wails GUI and the CLI daemon share one assembly instead of
+// maintaining two.
+//
+// Beyond wiring it owns three things: the control-message write path, remote
+// path resolution, and a process-local broker that lets mounted filesystems
+// hear about projection changes without the projection layer knowing they
+// exist.
+//
+// Emitting a control op is send-then-project and is not atomic. If Telegram
+// accepts the op but the local write fails, the op still exists remotely, the
+// msg id is still returned, and the next sync converges. Batches commit their
+// projections in one local transaction so the UI never sees half a subtree, but
+// they are still sent one op at a time, so a batch is never atomic remotely.
+// Every send reuses one stable random id across flood-wait retries and across
+// the single stale-access-hash retry, so a lost response cannot become a
+// duplicate op.
+//
+// Construction never fails because Telegram is unreachable — a failed connect
+// is a warning and the Engine stays usable offline. Live sync, however, exists
+// only on the default connect path: supplying a pre-built client or a custom
+// connect function silently leaves the update handler uninstalled.
+//
+// The encryption generation counter is the subtlest thing here. Clearing the
+// encryption session bumps the counter, closes encrypted media sessions, clears
+// the key, then bumps it again, so the counter is odd while a transition is in
+// flight. Media session setup takes the read side of that lock and re-checks
+// the generation, which lets slow, network-backed setup happen outside the lock
+// yet still be rejected if it was built from a key that has since been
+// discarded.
+//
+// Two pairs that look like synonyms and are not. The personal channel is
+// re-read from config on demand and is what encryption is keyed to, while the
+// active drive is merely whatever the user is browsing. And setting the active
+// channel by validated lookup is a different operation from setting the id
+// outright. Path resolution treats a duplicate sibling name as an error rather
+// than silently picking one, because TDrive's namespace permits collisions.
 package core
 
 import (
@@ -14,6 +52,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
+	"TDrive/backend/datadir"
 	"TDrive/backend/livesync"
 	"TDrive/backend/media"
 	"TDrive/backend/projection"
@@ -131,6 +170,9 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 		cfg.Warnf = func(format string, args ...any) {
 			fmt.Printf(format, args...)
 		}
+	}
+	if err := datadir.CleanupCacheTemps(); err != nil {
+		return nil, fmt.Errorf("core: clean interrupted cache files: %w", err)
 	}
 
 	e := &Engine{
@@ -265,6 +307,25 @@ func (e *Engine) startLiveSync(activity *livesync.TelegramActivity) {
 			return ids, nil
 		},
 	})
+	e.liveSync.Start(e.ctx)
+}
+
+// PauseLiveSync stops the live-sync coordinator so a backgrounded mobile app
+// holds no Telegram update loop. It is a no-op when live sync never started.
+func (e *Engine) PauseLiveSync() {
+	if e == nil || e.liveSync == nil {
+		return
+	}
+	e.liveSync.Stop()
+}
+
+// ResumeLiveSync restarts the coordinator after PauseLiveSync. The coordinator's
+// Start is idempotent and reuses the engine context, so resuming an already
+// running coordinator does nothing.
+func (e *Engine) ResumeLiveSync() {
+	if e == nil || e.liveSync == nil {
+		return
+	}
 	e.liveSync.Start(e.ctx)
 }
 
@@ -644,6 +705,18 @@ func (e *Engine) ClearEncryptionSession() {
 	}
 }
 
+// CloseMediaSessions closes active encrypted media sessions without locking the
+// vault. A backgrounded mobile app uses it to stop serving decrypted plaintext
+// over the loopback server while keeping the drive key, so playback resumes on
+// foreground. media.Service has no resumable close-all (Close tears the loopback
+// server down), so only the encrypted subset is closed here.
+func (e *Engine) CloseMediaSessions() {
+	if e == nil || e.media == nil {
+		return
+	}
+	e.media.CloseEncryptedSessions()
+}
+
 func (e *Engine) ClearUserCache() {
 	if e != nil && e.users != nil {
 		e.users.ClearCache()
@@ -664,9 +737,7 @@ func (e *Engine) newEncryptionService() *encservice.Service {
 
 func (e *Engine) newFolderService() *folderservice.Service {
 	return &folderservice.Service{
-		DB:    backend.DB,
-		TG:    e.tg,
-		Peers: peerResolverFn(e.ResolvePeer),
+		DB: backend.DB,
 		EmitOp: func(channelID int64, op projection.Op) error {
 			_, err := e.EmitAndProject(channelID, op)
 			return err
@@ -674,12 +745,6 @@ func (e *Engine) newFolderService() *folderservice.Service {
 		EmitOpContext: func(ctx context.Context, channelID int64, op projection.Op) error {
 			_, err := e.EmitAndProjectContext(ctx, channelID, op)
 			return err
-		},
-		EmitOps: func(channelID int64, ops []projection.Op) error {
-			return e.EmitAndProjectBatch(channelID, ops)
-		},
-		EmitOpsContext: func(ctx context.Context, channelID int64, ops []projection.Op) error {
-			return e.EmitAndProjectBatchContext(ctx, channelID, ops)
 		},
 		ActorID: func(ctx context.Context) (int64, error) {
 			return e.ActorID(ctx)
@@ -691,13 +756,24 @@ func (e *Engine) newFolderService() *folderservice.Service {
 			}
 			return key, nil
 		},
-		Warnf: func(format string, args ...any) {
-			e.warnf(format, args...)
+		// Deleting a folder is the same operation as deleting a file, so it is
+		// published by the one service that owns it rather than duplicated.
+		TrashObject: func(ctx context.Context, channelID int64, objectID string) error {
+			return e.FileService().TrashObject(ctx, channelID, objectID)
 		},
 	}
 }
 
 func (e *Engine) newFileService() *fileservice.Service {
+	// The database epoch persists across restarts and changes when account data
+	// is rebuilt. Never reuse an unscoped disk cache if its identity is missing.
+	var cacheNamespace string
+	thumbs := e.thumbs
+	if backend.DB == nil {
+		thumbs = nil
+	} else if err := backend.DB.QueryRow(`SELECT epoch FROM gallery_epoch WHERE id=1`).Scan(&cacheNamespace); err != nil {
+		thumbs = nil
+	}
 	return &fileservice.Service{
 		DB:    backend.DB,
 		TG:    e.tg,
@@ -718,6 +794,14 @@ func (e *Engine) newFileService() *fileservice.Service {
 			}
 			return key, nil
 		},
+		RequireEncryptionKeyForChannel: func(channelID int64, encrypted bool) ([]byte, error) {
+			key, err := e.EncryptionService().RequireMasterKeyForChannel(channelID, encrypted)
+			if err != nil {
+				return nil, encservice.ErrPasswordRequired
+			}
+			return key, nil
+		},
+		PersonalChannelID: PersonalChannelID,
 		MasterKeyForUpload: func(channelID int64, wantEncrypted bool) ([]byte, error) {
 			return e.EncryptionService().MasterKeyForUpload(channelID, wantEncrypted)
 		},
@@ -732,7 +816,8 @@ func (e *Engine) newFileService() *fileservice.Service {
 		Warnf: func(format string, args ...any) {
 			e.warnf(format, args...)
 		},
-		Thumbs:               e.thumbs,
+		Thumbs:               thumbs,
+		CacheNamespace:       cacheNamespace,
 		MaxConcurrentUploads: e.maxUploads,
 	}
 }

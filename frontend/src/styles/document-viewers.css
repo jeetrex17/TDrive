@@ -691,3 +691,86 @@
     }
 }
 
+
+/* ====================== PHONE VIEWERS ====================== */
+/* Scoped to html.mobile. PDF and text fill the screen under a 44px bar
+   (close, name, download); the content scrolls under the safe areas and the
+   text loses its card so it reads edge to edge. */
+html.mobile #viewer-modal.modal-overlay {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
+}
+html.mobile #viewer-modal .file-viewer-shell {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+html.mobile .file-viewer-topbar.is-phone {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    align-items: center;
+    gap: 4px;
+    min-height: 44px;
+    padding: var(--inset-top) 8px 0;
+}
+html.mobile .file-viewer-topbar.is-phone .file-viewer-title {
+    max-width: none;
+    font-size: 16px;
+    font-weight: var(--weight-strong);
+    text-align: center;
+}
+html.mobile .file-viewer-topbar.is-phone .file-viewer-close,
+html.mobile .file-viewer-topbar.is-phone .file-viewer-action {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--viewer-text);
+    -webkit-tap-highlight-color: transparent;
+}
+html.mobile .file-viewer-topbar.is-phone .file-viewer-action svg { width: 20px; height: 20px; }
+html.mobile .file-viewer-topbar.is-phone .file-viewer-close:hover,
+html.mobile .file-viewer-topbar.is-phone .file-viewer-action:hover { background: transparent; }
+html.mobile .file-viewer-topbar.is-phone .file-viewer-close:active,
+html.mobile .file-viewer-topbar.is-phone .file-viewer-action:active { background: var(--viewer-overlay-2); transform: none; }
+html.mobile .file-viewer-subbar {
+    display: flex;
+    justify-content: center;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--viewer-border-soft);
+    background: var(--viewer-surface-2);
+}
+html.mobile .file-viewer-subbar .text-viewer-toggle { width: min(100%, 240px); padding: 3px; }
+html.mobile .file-viewer-subbar .text-viewer-toggle button { flex: 1; min-height: 32px; padding: 0 12px; font-size: 14px; }
+html.mobile .file-viewer-stage { overscroll-behavior: contain; }
+html.mobile .pdf-frame-shell { padding-bottom: var(--inset-bottom); }
+html.mobile .text-viewer-scroll {
+    padding: 16px 16px calc(var(--inset-bottom) + 24px);
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+html.mobile .text-viewer-body {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    font-size: 13px;
+    line-height: 1.6;
+}
+html.mobile .text-viewer-body.is-structured { font-size: 15px; line-height: 1.6; }
+html.mobile .text-viewer-body.is-markdown h1 { font-size: 1.4rem; }
+html.mobile .text-viewer-footer { padding: 10px 16px calc(var(--inset-bottom) + 10px); }
+html.mobile .text-viewer-footer .file-viewer-action { min-height: 44px; }
+html.mobile .file-viewer-state { min-height: 40vh; font-size: 15px; }
+html.mobile .audio-viewer {
+    width: calc(100% - 32px);
+    padding: 32px 0 calc(var(--inset-bottom) + 32px);
+}

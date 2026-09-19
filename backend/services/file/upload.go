@@ -1,24 +1,60 @@
 package file
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
+	"TDrive/backend/thumbnail"
 )
 
 func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool) ([]Metadata, error) {
 	return s.upload(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{
 		observer: detailedUploadObserver{service: s},
 	})
+}
+
+// CancelUpload stops the single running upload with this ID — the one carried
+// by its progress events — and leaves the rest of the batch to finish. Reports
+// whether an upload with that ID was still running.
+func (s *Service) CancelUpload(uploadID int) bool {
+	s.uploadCancelMu.Lock()
+	cancel := s.uploadCancels[uploadID]
+	s.uploadCancelMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
+}
+
+// trackUploadCancel derives one upload's context from the batch context and
+// registers it for CancelUpload. Cancelling the batch still stops every file;
+// the returned func unregisters this one and releases its context.
+func (s *Service) trackUploadCancel(ctx context.Context, uploadID int) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	s.uploadCancelMu.Lock()
+	if s.uploadCancels == nil {
+		s.uploadCancels = make(map[int]context.CancelFunc)
+	}
+	s.uploadCancels[uploadID] = cancel
+	s.uploadCancelMu.Unlock()
+	return ctx, func() {
+		s.uploadCancelMu.Lock()
+		delete(s.uploadCancels, uploadID)
+		s.uploadCancelMu.Unlock()
+		cancel()
+	}
 }
 
 type uploadOptions struct {
@@ -81,7 +117,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 	failed := 0
 	var firstErr error
 
-	for i := 0; i < len(filePaths); i++ {
+	for i := range len(filePaths) {
 		path := filePaths[i]
 		pid := parentIDs[i]
 		uploadID := options.idOffset + i
@@ -96,11 +132,10 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 			observer.Failed(uploadID, filepath.Base(path), slotErr)
 			continue
 		}
-		wg.Add(1)
-
-		go func(uploadID int, path string, pid string, release func()) {
-			defer wg.Done()
+		wg.Go(func() {
 			defer release()
+			uploadCtx, untrack := s.trackUploadCancel(ctx, uploadID)
+			defer untrack()
 			defer func() {
 				if r := recover(); r != nil {
 					mu.Lock()
@@ -113,7 +148,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 				}
 			}()
 
-			meta, op, header, err := s.uploadSingleWithObserver(ctx, uploadID, path, pid, channelID, encrypt, *peer, observer)
+			meta, op, header, err := s.uploadSingleWithObserver(uploadCtx, uploadID, path, pid, channelID, encrypt, *peer, observer)
 			if err != nil {
 				if meta.MsgID != 0 {
 					mu.Lock()
@@ -146,13 +181,11 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 				Op:        op,
 			})
 			mu.Unlock()
-		}(uploadID, path, pid, release)
+		})
 	}
 
 	wg.Wait()
-	sort.Slice(uploaded, func(i, j int) bool {
-		return uploaded[i].Meta.MsgID < uploaded[j].Meta.MsgID
-	})
+	slices.SortFunc(uploaded, func(a, b uploadedResult) int { return cmp.Compare(a.Meta.MsgID, b.Meta.MsgID) })
 
 	uploadedFiles := make([]Metadata, 0, len(uploaded))
 	for _, item := range uploaded {
@@ -256,16 +289,41 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 		return Metadata{}, projection.Op{}, "", err
 	}
 	plaintextSize := info.Size()
+	// A photo's original and derivatives must use one immutable source. The
+	// user can replace the selected path while Telegram is uploading; native
+	// decoding that path later would otherwise publish unrelated image pixels.
+	var source io.ReadSeeker = plainFile
+	var photoSnapshot []byte
+	const maxPhotoSnapshot = 30 << 20
+	if thumbnail.IsImage(filename) && plaintextSize <= maxPhotoSnapshot {
+		snapshot, readErr := io.ReadAll(io.LimitReader(plainFile, maxPhotoSnapshot+1))
+		if readErr != nil {
+			return Metadata{}, projection.Op{}, "", readErr
+		}
+		defer clear(snapshot)
+		if int64(len(snapshot)) != plaintextSize {
+			return Metadata{}, projection.Op{}, "", fmt.Errorf("photo changed while preparing upload")
+		}
+		source = bytes.NewReader(snapshot)
+		photoSnapshot = snapshot
+	}
 	// Announce the operation once the local source is known, before validating
 	// remote metadata. That keeps failed uploads visible to callers while
 	// avoiding the duplicate start event that used to be emitted at two layers.
 	observer.Started(uploadID, filename, uploadByteSize(plaintextSize, wantEncrypted), parentID)
 	slog.Debug("file: uploading", "channel_id", channelID, "name", filename, "size", plaintextSize, "encrypt", wantEncrypted, "parent_id", parentID)
-	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, plainFile, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer)
+	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, source, filePath, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer)
 	if err != nil {
 		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
 	} else {
 		slog.Debug("file: upload succeeded", "channel_id", channelID, "name", filename, "msg_id", meta.MsgID, "stored_size", meta.Size)
+	}
+	// Optional derivative consumers must use the exact immutable bytes sent,
+	// never reopen a path the user/native provider may have replaced.
+	if meta.MsgID > 0 && wantEncrypted && len(photoSnapshot) > 0 {
+		if receiver, ok := observer.(interface{ CapturePhotoSnapshot([]byte) }); ok {
+			receiver.CapturePhotoSnapshot(photoSnapshot)
+		}
 	}
 	return meta, op, header, err
 }
@@ -273,7 +331,7 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 // uploadVisibleSource is the compatibility path used by the existing GUI/CLI
 // uploader. Keeping the source boundary seekable lets staged-file callers use
 // the same single/multipart planning without coupling the core to local paths.
-func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver) (Metadata, projection.Op, string, error) {
+func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, sourcePath, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver) (Metadata, projection.Op, string, error) {
 	if err := validateSeekableSize(source, plaintextSize); err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
@@ -373,13 +431,39 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 			return Metadata{}, projection.Op{}, "", err
 		}
 	}
+	var documentThumb []byte
+	thumbSender, canAttachThumb := s.TG.(tgclient.DocumentThumbnailSender)
+	if !encrypted && idempotentSend && canAttachThumb {
+		// Telegram's separate document thumbnail is bounded to 320px. Native
+		// sampled decoding shares the global generation admission policy.
+		switch {
+		case thumbnail.IsImage(filename):
+			documentThumb, _ = thumbnail.GenerateLocal(ctx, source, 320)
+		case thumbnail.IsVideo(filename) && sourcePath != "":
+			// A poster comes from the path rather than the reader, because the
+			// decoder behind it is a separate process. It is drawn before any
+			// body bytes leave, so the window in which the file could be
+			// swapped underneath it is as small as it can be -- and the cost of
+			// losing that race is the wrong picture, never the wrong file.
+			//
+			// A failure here is ordinary: plenty of videos have no decodable
+			// frame, and one without a poster is published exactly as it was
+			// before posters existed.
+			documentThumb, _ = thumbnail.GenerateVideoPoster(ctx, sourcePath, 320)
+		}
+		if len(documentThumb) > 200*1024 {
+			documentThumb = nil
+		}
+	}
 	err = s.retryVisibleSend(ctx, idempotentSend, func() error {
 		// A retried attempt must resend the whole body from its start.
 		if _, ok := rewindSeeker(uploadSource, 0); !ok {
 			return fmt.Errorf("staged upload source is not rewindable")
 		}
 		var serr error
-		if idempotentSend {
+		if len(documentThumb) > 0 {
+			result, serr = thumbSender.SendFileWithThumbnail(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress, sendRandomID, documentThumb)
+		} else if idempotentSend {
 			result, serr = tgclient.SendFileIdempotent(
 				ctx, s.TG, peer, uploadSource, filename, caption, uploadSize, onProgress, sendRandomID,
 			)

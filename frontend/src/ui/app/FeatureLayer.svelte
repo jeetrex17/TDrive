@@ -5,12 +5,7 @@
     import { renderEncryptionSettingsEntry } from '../../modules/encryption';
     import { activateFileList } from '../../modules/file-list';
     import { activateGallery } from '../../modules/gallery';
-    import {
-        breadcrumbDrag,
-        navigateBack,
-        navigateToIndex,
-        renderBreadcrumb,
-    } from '../../modules/navigation';
+    import { renderBreadcrumb } from '../../modules/navigation';
     import {
         activateNotificationEffects,
         dismissNotification,
@@ -19,38 +14,22 @@
         resumeAllNotifications,
         resumeToast,
     } from '../../modules/notifications';
-    import { cancelTransfersInDirection, clearHistory } from '../../modules/notif-bell';
     import { ensureProfileLoaded } from '../../modules/profile-menu';
     import { activateConnectivityWatch } from '../../modules/connectivity';
     import { activateRefreshShortcut } from '../../modules/refresh-shortcut';
     import { activateSearchBar } from '../../modules/search';
-    import {
-        activateSelectionBar,
-        clearSelection,
-        openSelectedItemsDelete,
-        openSelectedItemsMove,
-    } from '../../modules/selection';
-    import {
-        activateSidebar,
-        handleDriveClick,
-        handlePendingClick,
-        showPendingActionsMenu,
-        showSharedActionsMenu,
-    } from '../../modules/sidebar';
-    import {
-        activateTransferSurfaces,
-        chooseFilesForCurrentFolder,
-        chooseFolderForCurrentFolder,
-    } from '../../modules/transfers';
+    import { activateSelectionBar } from '../../modules/selection';
+    import { activateSidebar } from '../../modules/sidebar';
+    import { activateTransferSurfaces } from '../../modules/transfers';
     import { activateUpdates } from '../../modules/updates';
     import { confirmDelete } from '../../modules/modals/delete';
+    import { confirmTrashAction } from '../../modules/trash/controller';
     import {
         cancelEncryptionPassword,
         submitEncryptionPassword,
     } from '../../modules/modals/encryption-password';
     import {
         cancelEncryptionSettings,
-        openEncryptionSettingsModal,
         submitEncryptionSettings,
     } from '../../modules/modals/encryption-settings';
     import {
@@ -66,7 +45,7 @@
     import { submitJoinDrive } from '../../modules/modals/join-drive';
     import { resolveRequest } from '../../modules/modals/join-requests';
     import { confirmLeaveDrive } from '../../modules/modals/leave-drive';
-    import { confirmLogout, openLogoutModal } from '../../modules/modals/logout';
+    import { confirmLogout } from '../../modules/modals/logout';
     import {
         confirmMove,
         navigateMoveBack,
@@ -79,11 +58,7 @@
         cancelUploadOptions,
         confirmUploadOptions,
     } from '../../modules/modals/upload-options';
-    import Breadcrumb from '../chrome/Breadcrumb.svelte';
-    import ProfileMenu from '../chrome/ProfileMenu.svelte';
-    import UploadMenu from '../chrome/UploadMenu.svelte';
     import FileList from '../file-list/FileList.svelte';
-    import Gallery from '../gallery/Gallery.svelte';
     import ContextMenu from '../menus/ContextMenu.svelte';
     import DeleteModal from '../modals/DeleteModal.svelte';
     import EncryptionPasswordModal from '../modals/EncryptionPasswordModal.svelte';
@@ -100,14 +75,11 @@
     import RenameModal from '../modals/RenameModal.svelte';
     import ShareDriveModal from '../modals/ShareDriveModal.svelte';
     import UploadOptionsModal from '../modals/UploadOptionsModal.svelte';
+    import TrashConfirmModal from '../trash/TrashConfirmModal.svelte';
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
-    import NotifBell from '../notifications/NotifBell.svelte';
     import ToastStack from '../notifications/ToastStack.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
-    import SelectionBar from '../selection/SelectionBar.svelte';
-    import DriveList from '../sidebar/DriveList.svelte';
     import DropOverlay from '../transfers/DropOverlay.svelte';
-    import UpdatesPanel from '../updates/UpdatesPanel.svelte';
     import VideoModal from '../video/VideoModal.svelte';
     import FileViewerModal from '../viewers/FileViewerModal.svelte';
     import { appView } from './app-store';
@@ -165,53 +137,14 @@
 </div>
 
 {#if $appView.kind === 'dashboard'}
-    <FeaturePortal hostId="drives-personal">
-        <DriveList kind="personal" onDriveClick={handleDriveClick} />
-    </FeaturePortal>
-    <FeaturePortal hostId="drives-shared">
-        <DriveList
-            kind="shared"
-            onDriveClick={handleDriveClick}
-            onDriveActions={showSharedActionsMenu}
-            onPendingClick={handlePendingClick}
-            onPendingActions={showPendingActionsMenu}
-        />
-    </FeaturePortal>
-    <FeaturePortal hostId="notif-bell-root">
-        <NotifBell onCancelDirection={cancelTransfersInDirection} onClearHistory={clearHistory} />
-    </FeaturePortal>
-    <FeaturePortal hostId="upload-menu-root">
-        <UploadMenu onFiles={chooseFilesForCurrentFolder} onFolder={chooseFolderForCurrentFolder} />
-    </FeaturePortal>
-    <FeaturePortal hostId="profile-root">
-        <ProfileMenu
-            onOpen={ensureProfileLoaded}
-            onEncryptionSettings={openEncryptionSettingsModal}
-            onLogout={openLogoutModal}
-        />
-    </FeaturePortal>
-    <FeaturePortal hostId="breadcrumb-root">
-        <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
-    </FeaturePortal>
-    <FeaturePortal hostId="selection-bar">
-        <SelectionBar
-            onMove={openSelectedItemsMove}
-            onDelete={openSelectedItemsDelete}
-            onClear={clearSelection}
-        />
-    </FeaturePortal>
     <FeaturePortal hostId="file-list">
         <FileList />
-    </FeaturePortal>
-    <FeaturePortal hostId="gallery-view">
-        <Gallery />
     </FeaturePortal>
 
     <div id="context-menu" class="context-menu">
         <ContextMenu />
     </div>
     <DropOverlay />
-    <UpdatesPanel />
     <div id="mount-selection-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <MountSelectionModal />
     </div>
@@ -269,6 +202,15 @@
     </div>
     <div id="logout-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <LogoutModal onConfirm={confirmLogout} />
+    </div>
+
+    <!-- The trash and the confirm it raises share one component. The confirm's
+         host comes last so that, with every overlay on the same --z-modal, the
+         later element in the document is the one drawn on top. -->
+    <div id="trash-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+    </div>
+    <div id="trash-confirm-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <TrashConfirmModal onConfirm={confirmTrashAction} />
     </div>
 
     <!-- Viewer controllers stay lazy because they load media/runtime dependencies only when used. -->

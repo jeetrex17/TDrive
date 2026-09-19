@@ -2,15 +2,20 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"TDrive/backend"
 	"TDrive/backend/applog"
 	"TDrive/backend/core"
+	"TDrive/backend/datadir"
+	"TDrive/backend/galleryimage"
 	"TDrive/backend/mountcontroller"
 	"TDrive/backend/mountlifecycle"
+	"TDrive/backend/photobackup"
 	"TDrive/backend/processlock"
 	"TDrive/backend/projection"
 	authsvc "TDrive/backend/services/auth"
@@ -19,8 +24,6 @@ import (
 	lifecycleservice "TDrive/backend/services/lifecycle"
 	readservice "TDrive/backend/services/read"
 	userservice "TDrive/backend/services/user"
-	"TDrive/backend/tgclient"
-	"TDrive/backend/updater"
 
 	"github.com/gotd/td/telegram"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -34,16 +37,12 @@ type App struct {
 	ctx context.Context
 	// wails is the running application handle, set once main() has created
 	// it. Dialogs, events, the browser opener and Quit all go through it.
-	wails       *application.App
-	engine      *core.Engine
-	Client      *telegram.Client
-	backendLock *processlock.Lock
-
-	// version is the build stamp from main.appVersion ("dev" for local builds).
-	version string
-	// updates drives the release check/download/install lifecycle. It is
-	// created in startup so its state events can reach the webview.
-	updates *updater.Service
+	wails           *application.App
+	engine          *core.Engine
+	Client          *telegram.Client
+	backendLock     *processlock.Lock
+	galleryImagesMu sync.Mutex
+	galleryImages   *galleryimage.Server
 
 	// mountMu protects lazy controller construction. A transient construction
 	// failure stays retryable for a later mount request.
@@ -63,9 +62,10 @@ type App struct {
 	mountLifecycle         mountlifecycle.Gate
 	mountLifecycleTerminal bool // guarded by mountLifecycle
 
-	// encryptionServiceOverride is a narrow test seam for deterministic
-	// key-state race tests. Production always uses Engine.EncryptionService.
-	encryptionServiceOverride appEncryptionService
+	// trashSweepStop ends the background retention sweep. The sweep is the
+	// only thing that ever destroys trashed bytes without the user asking, so
+	// it is owned here and stopped with the rest of the process.
+	trashSweepStop chan struct{}
 
 	// fileDropEnabled tracks whether the native OS file-drop handler is
 	// registered. The frontend toggles it off during an internal drag-to-move so
@@ -78,12 +78,33 @@ type App struct {
 	transferMu     sync.Mutex
 	uploadCancel   context.CancelFunc
 	downloadCancel context.CancelFunc
+	// keepAwake mirrors the phone's idle-timer override so it is only toggled
+	// when the transfer state actually flips. Guarded by transferMu.
+	keepAwake bool
 
-	// nativeMedia owns out-of-webview player processes tied to media loopback
-	// sessions. Each token must be closed before the backend shuts down so the
-	// range reader and native surface do not outlive the app.
-	nativeMediaMu sync.Mutex
-	nativeMedia   map[string]*nativeMediaSession
+	// The domains lifted out of App into their own bound services. They are
+	// built once in initServices; see app_services.go for the graph and for
+	// why startup orchestration stays here.
+	device     *DeviceService
+	drives     *DriveService
+	encryption *EncryptionService
+	media      *MediaService
+	updates    *UpdateService
+
+	photoBackupMu          sync.Mutex
+	photoBackupDiscoveryMu sync.Mutex
+	photoBackup            *photobackup.Engine
+	photoBackupDB          *sql.DB
+	photoBackupCancel      context.CancelFunc
+	photoBackupDone        chan struct{}
+	photoBackupRunID       uint64
+	photoBackupProgress    photoBackupProgressState
+	photoBackupWaiters     map[string]chan photoBackupMaterialization
+	photoBackupPolicy      PhotoBackupPolicy
+	photoBackupStop        chan struct{}
+	photoBackupAdapters    map[string]*photobackup.LocalFolderAdapter
+	photoBackupBackground  photoBackupBackgroundState
+	photoBackupClosed      bool
 }
 
 type runtimeEventSink struct {
@@ -109,51 +130,11 @@ func (a *App) emit(name string, args ...any) {
 	a.wails.Event.Emit(name, args)
 }
 
-// resolvePeer satisfies tdsync.PeerResolver through peerResolverFn. Keeping
-// it unexported prevents Wails from exposing this internal sync helper.
-func (a *App) resolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	if a.engine == nil {
-		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.ResolvePeer(ctx, channelID)
-}
-
-// channelPeer resolves the active drive's tgclient.InputPeer through the shared
-// Telegram client. Used by every op that needs to send into Telegram; callers
-// should not hold this across long operations.
-func (a *App) channelPeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
-	if a.engine == nil {
-		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.ChannelPeer(ctx, channelID)
-}
-
-// emitAndProject sends a control op and projects it locally. Returns the
-// Telegram msg_id used as the op's identity.
-//
-// On send failure: returns the error; nothing is projected.
-// On project failure after a successful send: logs, returns the error so
-// the caller can surface it. The op IS in Telegram and will be projected on
-// the next sync.
-func (a *App) emitAndProject(channelID int64, op projection.Op) (int64, error) {
-	if a.engine == nil {
-		return 0, fmt.Errorf("tg client not ready")
-	}
-	return a.engine.EmitAndProject(channelID, op)
-}
-
 func (a *App) ActiveChannelID() int64 {
 	if a.engine == nil {
 		return 0
 	}
 	return a.engine.ActiveChannelID()
-}
-
-func (a *App) setActiveChannelID(channelID int64) {
-	if a.engine == nil {
-		return
-	}
-	a.engine.SetActiveChannelID(channelID)
 }
 
 // MyUserID returns the logged-in Telegram user id (cached after first
@@ -175,7 +156,12 @@ func (a *App) SetActiveChannel(channelID int64) error {
 	if a.engine == nil {
 		return fmt.Errorf("backend not ready")
 	}
-	return a.engine.SetActiveChannel(channelID)
+	a.stopPhotoBackup()
+	if err := a.engine.SetActiveChannel(channelID); err != nil {
+		return err
+	}
+	a.revokeGalleryImages()
+	return nil
 }
 
 type TDriveFile struct {
@@ -230,6 +216,7 @@ func (a *App) beginUpload() context.Context {
 		a.uploadCancel()
 	}
 	a.uploadCancel = cancel
+	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
 	return ctx
 }
@@ -237,7 +224,20 @@ func (a *App) beginUpload() context.Context {
 func (a *App) endUpload() {
 	a.transferMu.Lock()
 	a.uploadCancel = nil
+	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
+}
+
+// syncTransferKeepAwakeLocked keeps a phone's screen on while an upload or a
+// download is running: the OS would otherwise suspend the app and drop the
+// transfer mid-way. Desktop is a no-op. Caller holds transferMu.
+func (a *App) syncTransferKeepAwakeLocked() {
+	active := a.uploadCancel != nil || a.downloadCancel != nil
+	if active == a.keepAwake {
+		return
+	}
+	a.keepAwake = active
+	mobileKeepAwake(active)
 }
 
 // sweepOrphanParts retries deleting the part bodies of already-deleted multipart
@@ -265,6 +265,15 @@ func (a *App) CancelUpload() {
 	}
 }
 
+// CancelUploadByID cancels one file of the running batch. Both cancels exist
+// because uploads run several at a time: a transfer row's × stops that one
+// file, while CancelUpload above is the deliberate "stop everything".
+func (a *App) CancelUploadByID(uploadID int) {
+	if svc := a.fileService(); svc != nil {
+		svc.CancelUpload(uploadID)
+	}
+}
+
 // beginDownload / endDownload / CancelDownload do the same for the active
 // download.
 func (a *App) beginDownload() context.Context {
@@ -274,6 +283,7 @@ func (a *App) beginDownload() context.Context {
 		a.downloadCancel()
 	}
 	a.downloadCancel = cancel
+	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
 	return ctx
 }
@@ -281,6 +291,7 @@ func (a *App) beginDownload() context.Context {
 func (a *App) endDownload() {
 	a.transferMu.Lock()
 	a.downloadCancel = nil
+	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
 }
 
@@ -373,24 +384,11 @@ func (a *App) fileService() *fileservice.Service {
 }
 
 func (a *App) requireFileService() (*fileservice.Service, error) {
-	if svc := a.fileService(); svc != nil {
-		return svc, nil
-	}
-	return nil, errBackendUnavailable
-}
-
-func (a *App) readService() *readservice.Service {
-	if a.engine == nil {
-		return nil
-	}
-	return a.engine.ReadService()
+	return engineFileService(a.engine)
 }
 
 func (a *App) requireReadService() (*readservice.Service, error) {
-	if svc := a.readService(); svc != nil {
-		return svc, nil
-	}
-	return nil, errBackendUnavailable
+	return engineReadService(a.engine)
 }
 
 func (a *App) lifecycleService() *lifecycleservice.Service {
@@ -476,19 +474,32 @@ func (a *App) PreviewFile(msgID int) PreviewResult {
 	return previewOperationResult(PreviewPayload(payload), err)
 }
 
-func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
+// DownloadFile downloads from the explicitly selected drive. The channel is an
+// argument rather than a late ActiveChannelID lookup because a queued frontend
+// transfer may begin after the user has switched drives.
+func (a *App) DownloadFile(channelID int64, msgID int, TgMsgID int, requestID string) DownloadResult {
+	if !validFrontendDownloadRequestID(requestID) || !validFrontendDownloadID(channelID) || !validFrontendDownloadID(int64(msgID)) || !validFrontendDownloadID(int64(TgMsgID)) {
+		return DownloadResult{Result: operationFailure(errors.New("invalid download request identifiers"))}
+	}
 	svc, err := a.requireFileService()
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx := a.beginDownload()
+	ctx := fileservice.WithDownloadProgressID(a.beginDownload(), requestID)
 	defer a.endDownload()
-	result := svc.Download(ctx, a.ActiveChannelID(), msgID, TgMsgID, func(defaultName string) (string, error) {
-		return a.wails.Dialog.SaveFileWithOptions(&application.SaveFileDialogOptions{
-			Filename: defaultName,
-			Title:    "Save File As...",
-		}).PromptForSingleSelection()
-	})
+	result := svc.Download(ctx, channelID, msgID, TgMsgID, a.chooseDownloadPath)
+	// An iPhone download stays in the app container, so offer the share sheet
+	// as soon as the bytes are on disk: Files can list the container, but
+	// sending the file straight on is the thing worth saving a trip for.
+	//
+	// Android must not do this. There the host moves the download into public
+	// Downloads once this call returns and deletes the sandbox copy, so a
+	// chooser opened here would be holding a file that is about to vanish.
+	if application.System.IsPlatform(application.PlatformIOS) && result.Status == "success" && result.SavedPath != "" {
+		if err := shareFileNative(result.SavedPath); err != nil {
+			fmt.Printf("Warning: share sheet failed: %v\n", err)
+		}
+	}
 	return downloadOperationResult(result)
 }
 
@@ -496,21 +507,41 @@ func (a *App) DownloadFile(msgID int, TgMsgID int) DownloadResult {
 // parent chosen once by the user. It shares the serialized/cancellable download
 // slot with single-file downloads, so the existing CancelDownload action stops
 // either transfer type.
-func (a *App) DownloadFolder(folderID string) DownloadResult {
+func (a *App) DownloadFolder(channelID int64, folderID string, requestID string) DownloadResult {
+	if !validFrontendDownloadRequestID(requestID) || strings.TrimSpace(folderID) == "" || !validFrontendDownloadID(channelID) {
+		return DownloadResult{Result: operationFailure(errors.New("invalid download request identifiers"))}
+	}
 	svc, err := a.requireFileService()
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx := a.beginDownload()
+	ctx := fileservice.WithDownloadProgressID(a.beginDownload(), requestID)
 	defer a.endDownload()
-	result := svc.DownloadFolder(ctx, a.ActiveChannelID(), folderID, func(defaultName string) (string, error) {
-		return a.wails.Dialog.OpenFile().
-			CanChooseFiles(false).
-			CanChooseDirectories(true).
-			SetTitle(fmt.Sprintf("Choose where to save %q", defaultName)).
-			PromptForSingleSelection()
-	})
+	result := svc.DownloadFolder(ctx, channelID, folderID, a.chooseDownloadDir)
 	return downloadOperationResult(result)
+}
+
+const (
+	maxFrontendSafeInteger        int64 = 9_007_199_254_740_991
+	maxFrontendDownloadRequestLen int   = 256
+)
+
+// Wails transports JavaScript numbers, so IDs outside the safe-integer range
+// can silently change before reaching Go. Reject them at the native boundary.
+func validFrontendDownloadID(id int64) bool {
+	return id > 0 && id <= maxFrontendSafeInteger
+}
+
+func validFrontendDownloadRequestID(id string) bool {
+	if id == "" || len(id) > maxFrontendDownloadRequestLen {
+		return false
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) DeleteFile(msgID int) OperationResult {
@@ -532,8 +563,15 @@ func (a *App) GetStorageUsed() (int64, error) {
 	return svc.StorageUsed(a.ActiveChannelID())
 }
 
-func NewApp() *App {
-	return &App{}
+// NewApp builds the root service together with the domain services that hang
+// off it, so main.go only has to register what services() returns. The version
+// is the build stamp the updater compares releases against; it arrives here
+// because only main knows it, and passing it in at construction keeps it from
+// being a mutable field anyone could rewrite later.
+func NewApp(version string) *App {
+	app := &App{}
+	app.initServices(version)
+	return app
 }
 
 func (a *App) CheckSystemStatus() string {
@@ -581,7 +619,10 @@ func (a *App) ServiceShutdown() error {
 		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
 	}
 	cancel()
-	a.closeAllNativeMedia()
+	a.stopTrashSweep()
+	a.media.closeAllNativeMedia()
+	a.closeGalleryImages()
+	a.closePhotoBackup()
 	if a.engine != nil {
 		a.engine.Close()
 	}
@@ -617,6 +658,20 @@ func (a *App) fileDropAllowed() bool {
 func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
 	a.ctx = ctx
 
+	// Android's home dir is /sdcard when HOME is unset, so os.UserConfigDir /
+	// os.UserCacheDir land on shared external storage; point both at the
+	// app-private sandbox instead. iOS resolves inside the app container
+	// already and keeps its cache default (Library/Caches, excluded from
+	// backups), but its data dir is pinned to the same place Wails reports.
+	if application.System.IsMobile() {
+		if p := application.Mobile.StoragePath(); p != "" {
+			datadir.Set(p)
+			if application.System.IsPlatform(application.PlatformAndroid) {
+				datadir.SetCache(p)
+			}
+		}
+	}
+
 	lock, err := processlock.Acquire("gui")
 	if err != nil {
 		if errors.Is(err, processlock.ErrAlreadyRunning) {
@@ -629,7 +684,7 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	}
 	a.backendLock = lock
 	applog.Init()
-	a.initUpdater()
+	a.updates.initUpdater()
 
 	// Native file drop: hand the dropped absolute paths to the frontend, which
 	// resolves the target folder and runs the import flow. Drop zones opt in via
@@ -656,13 +711,17 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
+	if err := a.initPhotoBackup(); err != nil {
+		fmt.Printf("Warning: Failed to initialize photo backup: %v\n", err)
+	}
 	_, mountInitErr := a.ensureMountController()
 	if mountInitErr != nil {
 		fmt.Printf("Warning: Failed to initialize TDrive mount: %v\n", mountInitErr)
 	}
+	a.startTrashSweep()
 
 	fmt.Println("TDrive DB ready!")
-	a.finishUpdateCleanup(mountInitErr)
+	a.updates.finishCleanup(mountInitErr)
 	return nil
 }
 
@@ -717,6 +776,7 @@ func (a *App) GetFolderContents(parentID string) (backend.FileSystem, error) {
 			UploaderID:    f.UploaderID,
 			Encrypted:     f.Encrypted,
 			PlaintextSize: f.PlaintextSize,
+			Revision:      f.Revision,
 		})
 	}
 	return result, nil

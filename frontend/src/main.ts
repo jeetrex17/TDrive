@@ -8,11 +8,19 @@ import { refreshFiles } from './modules/file-list';
 import { runGlobalSearch } from './modules/search';
 import { renderSidebar } from './modules/sidebar';
 import type { AppLifecycle } from './ui/app/app-store';
+import { applyMobilePlatformClasses } from './ui/mobile/platform-classes';
+import { activateSystemTextScale } from './ui/mobile/system-text-scale';
 import { initializeNativeTheme } from './ui/theme/native-theme';
 import { initializeTheme } from './ui/theme/theme-controller';
 import { deriveVideoPlaylist } from './modules/video/video-playlist';
+import { activatePhotoBackup } from './modules/photo-backup/controller';
 import { getInteractiveFileListRows } from './ui/file-list/file-list-store';
 import type { FileListFileRow } from './ui/file-list/types';
+
+// Stamp the phone classes at module load so the `?mobile=` browser/harness
+// override paints the mobile shell before mount; a no-op on a real device this
+// early, where the platform is only known once the gateway hydrates below.
+applyMobilePlatformClasses();
 
 const disposers: Array<() => void> = [initializeTheme()];
 let started = false;
@@ -39,6 +47,12 @@ const lifecycle: AppLifecycle = {
                     return;
                 }
                 await refreshActiveDrive();
+            },
+            downloadFile: (target) => {
+                // The transfer queue stays out of startup like the viewers do.
+                void import('./modules/transfers').then((transfers) => {
+                    transfers.enqueueDownload(target.id, target.name, target.size ?? 0);
+                });
             },
             openFile: async (target) => {
                 // Keep the media controller out of startup; it pulls in viewer-only dependencies.
@@ -95,10 +109,18 @@ const lifecycle: AppLifecycle = {
         }
         if (stopped) return;
 
+        // Now that the gateway has hydrated, iOS and Android report their real
+        // platform; add the phone classes here for actual devices.
+        applyMobilePlatformClasses();
+        // Dynamic Type must start before authentication resolves: the auth and
+        // recovery screens are just as important to scale as the dashboard.
+        registerDisposer(activateSystemTextScale());
+
         registerDisposer(await initializeNativeTheme());
         if (stopped) return;
 
         registerDisposer(connectAuthEvents());
+        registerDisposer(activatePhotoBackup());
         await initializeSession();
     },
 

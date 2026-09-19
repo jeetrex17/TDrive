@@ -7,12 +7,13 @@ const bindings = vi.hoisted(() => ({
 }));
 const passwordModal = vi.hoisted(() => vi.fn(async () => false));
 const transferEvents = vi.hoisted(() => ({
+    queued: vi.fn(),
     push: vi.fn(),
     progress: vi.fn(),
     rename: vi.fn(),
     done: vi.fn(),
 }));
-const notifications = vi.hoisted(() => ({ notify: vi.fn() }));
+const notifications = vi.hoisted(() => ({ notify: vi.fn(), dismissNotification: vi.fn() }));
 
 // Go always emits an event's payload as a JSON array of its original args
 // (see RuntimeEventMap in api/runtime.ts); mimic that instead of the removed
@@ -26,12 +27,18 @@ const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { 
 vi.mock('../../bindings/TDrive/app', () => bindings);
 vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notif-bell', () => ({
+    setTransferNote: vi.fn(),
+    pushQueuedTransfer: transferEvents.queued,
     pushTransferStart: transferEvents.push,
     updateTransferProgress: transferEvents.progress,
     updateTransferName: transferEvents.rename,
     markTransferDone: transferEvents.done,
+    wasUploadCanceled: () => false,
 }));
-vi.mock('./notifications', () => ({ notify: notifications.notify }));
+vi.mock('./notifications', () => ({
+    notify: notifications.notify,
+    dismissNotification: notifications.dismissNotification,
+}));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn(async () => undefined) }));
 vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn() }));
 vi.mock('./modals/import-options', () => ({ openImportOptionsModal: vi.fn() }));
@@ -76,8 +83,10 @@ async function loadModule() {
     const { idleTransferActivity, state } = await import('../state');
     state.downloadQueue = [];
     state.activeDownloadId = null;
+    state.activeDownloadRequestId = null;
     state.transferActivity = idleTransferActivity;
     state.cancelingDownload = false;
+    state.activeChannel = { id: 101, title: 'Drive A', kind: 'personal' };
     const mod = await import('./transfers');
     mod.activateTransferSurfaces();
     return { mod, state, listeners: eventListeners };
@@ -91,6 +100,67 @@ beforeEach(() => {
 });
 
 describe('folder download queue', () => {
+    it('dispatches every queued download to the drive that was active when it was enqueued', async () => {
+        const first = deferred<DownloadBindingResult>();
+        const second = deferred<DownloadBindingResult>();
+        bindings.DownloadFile
+            .mockReturnValueOnce(first.promise)
+            .mockReturnValueOnce(second.promise);
+        const { mod, state } = await loadModule();
+
+        state.activeChannel = { id: 11, title: 'Drive A', kind: 'personal' };
+        mod.enqueueDownload(1, 'first.txt', 1);
+        mod.enqueueDownload(2, 'queued-on-a.txt', 1);
+        expect(transferEvents.queued).toHaveBeenLastCalledWith({
+            id: 'file:11:2', direction: 'down', name: 'queued-on-a.txt', total: 1,
+        });
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(11, 1, 1, expect.stringMatching(/^file:11:1@/)));
+
+        // The second row must not silently resolve its channel from this later
+        // selection when the scheduler reaches it.
+        state.activeChannel = { id: 22, title: 'Drive B', kind: 'shared' };
+        first.resolve(downloadSuccess('/tmp/first.txt'));
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(11, 2, 2, expect.stringMatching(/^file:11:2@/)));
+
+        second.resolve(downloadSuccess('/tmp/queued-on-a.txt'));
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+    });
+
+    it('rejects invalid source and file identifiers before queuing backend work', async () => {
+        const { mod, state } = await loadModule();
+
+        mod.enqueueDownload(0, 'zero.txt', 1);
+        mod.enqueueDownload(Number.MAX_SAFE_INTEGER + 1, 'unsafe.txt', 1);
+        state.activeChannel = { id: 0, title: 'Invalid', kind: 'personal' };
+        mod.enqueueDownload(3, 'no-drive.txt', 1);
+
+        expect(bindings.DownloadFile).not.toHaveBeenCalled();
+        expect(state.downloadQueue).toEqual([]);
+    });
+
+    it('ignores late progress from a completed request after starting the next file', async () => {
+        const first = deferred<DownloadBindingResult>();
+        const second = deferred<DownloadBindingResult>();
+        bindings.DownloadFile.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+        const { mod, state, listeners } = await loadModule();
+
+        mod.enqueueDownload(1, 'first.txt', 1);
+        mod.enqueueDownload(2, 'second.txt', 1);
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledTimes(1));
+        const firstRequestId = state.activeDownloadRequestId;
+        first.resolve(downloadSuccess('/tmp/first.txt'));
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledTimes(2));
+        const secondRequestId = state.activeDownloadRequestId;
+
+        const progress = listeners.get('download_progress');
+        progress?.(97, firstRequestId);
+        expect(state.downloadQueue[0]).toMatchObject({ key: 'file:101:2', progress: 0 });
+
+        progress?.(12, secondRequestId);
+        expect(state.downloadQueue[0]).toMatchObject({ key: 'file:101:2', progress: 12 });
+        second.resolve(downloadSuccess('/tmp/second.txt'));
+    });
+
     it('finalizes the notification before removing a completed folder job', async () => {
         const { mod, state } = await loadModule();
         const queueLengthAtNotificationFinalization: number[] = [];
@@ -99,11 +169,11 @@ describe('folder download queue', () => {
         });
 
         mod.enqueueFolderDownload('d:screenshots', 'Screenshots');
-        await vi.waitFor(() => expect(bindings.DownloadFolder).toHaveBeenCalledWith('d:screenshots'));
+        await vi.waitFor(() => expect(bindings.DownloadFolder).toHaveBeenCalledWith(101, 'd:screenshots', expect.stringMatching(/^folder:101:d:screenshots@/)));
 
         expect(bindings.DownloadFile).not.toHaveBeenCalled();
         await vi.waitFor(() => expect(transferEvents.done).toHaveBeenCalledWith({
-            id: 'folder:d:screenshots',
+            id: 'folder:101:d:screenshots',
             direction: 'down',
             status: 'done',
         }));
@@ -124,13 +194,13 @@ describe('folder download queue', () => {
         mod.enqueueFolderDownload('d:next', 'Next');
         await settle();
 
-        expect(bindings.DownloadFile).toHaveBeenCalledWith(42, 42);
+        expect(bindings.DownloadFile).toHaveBeenCalledWith(101, 42, 42, expect.stringMatching(/^file:101:42@/));
         expect(bindings.DownloadFolder).not.toHaveBeenCalled();
 
         first.resolve(downloadSuccess('/tmp/first.txt'));
-        await vi.waitFor(() => expect(bindings.DownloadFolder).toHaveBeenCalledWith('d:next'));
+        await vi.waitFor(() => expect(bindings.DownloadFolder).toHaveBeenCalledWith(101, 'd:next', expect.stringMatching(/^folder:101:d:next@/)));
         expect(state.downloadQueue).toEqual([
-            expect.objectContaining({ key: 'folder:d:next', state: 'downloading' }),
+            expect.objectContaining({ key: 'folder:101:d:next', state: 'downloading' }),
         ]);
 
         second.resolve(downloadSuccess('/tmp/next'));
@@ -157,10 +227,12 @@ describe('folder download queue', () => {
 
         mod.enqueueFolderDownload('d:project', 'Project');
         await settle();
+        const requestId = state.activeDownloadRequestId;
         const progress = listeners.get('folder_download_progress');
         expect(progress).toBeTypeOf('function');
 
         progress?.({
+            request_id: requestId,
             folder_id: 'd:project',
             current_file: 'Data/a.bin',
             files_completed: 2,
@@ -170,6 +242,7 @@ describe('folder download queue', () => {
             percent: 60,
         });
         progress?.({
+            request_id: requestId,
             folder_id: 'd:project',
             current_file: 'Data/a.bin',
             files_completed: 1,
@@ -187,7 +260,7 @@ describe('folder download queue', () => {
             filesTotal: 5,
         });
         expect(transferEvents.progress).toHaveBeenLastCalledWith({
-            id: 'folder:d:project',
+            id: 'folder:101:d:project',
             direction: 'down',
             progress: 60,
             bytes: 60,
@@ -211,8 +284,23 @@ describe('folder download queue', () => {
         await vi.waitFor(() => expect(bindings.DownloadFolder).toHaveBeenCalledTimes(2));
 
         expect(passwordModal).toHaveBeenCalledOnce();
-        expect(bindings.DownloadFolder).toHaveBeenNthCalledWith(1, 'd:locked');
-        expect(bindings.DownloadFolder).toHaveBeenNthCalledWith(2, 'd:locked');
+        expect(bindings.DownloadFolder).toHaveBeenNthCalledWith(1, 101, 'd:locked', expect.stringMatching(/^folder:101:d:locked@/));
+        expect(bindings.DownloadFolder).toHaveBeenNthCalledWith(2, 101, 'd:locked', expect.stringMatching(/^folder:101:d:locked@/));
+    });
+
+    it('prompts once and retries the same file after encryption unlock', async () => {
+        bindings.DownloadFile
+            .mockResolvedValueOnce(downloadFailure('encryption_password_required', 'Unlock before downloading'))
+            .mockResolvedValueOnce(downloadSuccess('/tmp/locked.jpg'));
+        passwordModal.mockResolvedValueOnce(true);
+        const { mod } = await loadModule();
+
+        mod.enqueueDownload(42, 'locked.jpg', 128);
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledTimes(2));
+
+        expect(passwordModal).toHaveBeenCalledOnce();
+        expect(bindings.DownloadFile).toHaveBeenNthCalledWith(1, 101, 42, 42, expect.stringMatching(/^file:101:42@/));
+        expect(bindings.DownloadFile).toHaveBeenNthCalledWith(2, 101, 42, 42, expect.stringMatching(/^file:101:42@/));
     });
 
     it('does not retry when encryption unlock is canceled', async () => {
@@ -223,7 +311,7 @@ describe('folder download queue', () => {
         passwordModal.mockResolvedValueOnce(false);
         mod.enqueueFolderDownload('d:locked', 'Locked');
         await vi.waitFor(() => expect(transferEvents.done).toHaveBeenCalledWith({
-            id: 'folder:d:locked',
+            id: 'folder:101:d:locked',
             direction: 'down',
             status: 'canceled',
         }));
@@ -281,7 +369,7 @@ describe('folder download queue', () => {
 
         mod.enqueueFolderDownload('d:locked', 'Locked');
         await vi.waitFor(() => expect(transferEvents.done).toHaveBeenCalledWith({
-            id: 'folder:d:locked',
+            id: 'folder:101:d:locked',
             direction: 'down',
             status: 'canceled',
         }));
@@ -311,12 +399,108 @@ describe('folder download queue', () => {
         state.cancelingDownload = true;
         first.resolve(downloadFailure('canceled', 'context canceled'));
 
-        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(77, 77));
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(101, 77, 77, expect.stringMatching(/^file:101:77@/)));
         await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
         expect(transferEvents.done).toHaveBeenCalledWith({
-            id: 'folder:d:project',
+            id: 'folder:101:d:project',
             direction: 'down',
             status: 'canceled',
         });
+    });
+});
+describe('download retry', () => {
+    function retryAction(): { label: string; run: () => void } {
+        const failure = notifications.notify.mock.calls
+            .map(([options]) => options as { level?: string; action?: { label: string; run: () => void } })
+            .find((options) => options.level === 'error' && options.action);
+        if (!failure?.action) throw new Error('no retry action was offered');
+        return failure.action;
+    }
+
+    it('takes the retry down with it, so a sticky toast cannot start a second one', async () => {
+        const second = deferred<DownloadBindingResult>();
+        bindings.DownloadFile
+            .mockResolvedValueOnce(downloadFailure('io', 'disk full'))
+            .mockReturnValueOnce(second.promise);
+        const { mod, state } = await loadModule();
+
+        mod.enqueueDownload(42, 'plan.pdf', 10);
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+
+        const action = retryAction();
+        action.run();
+        await settle();
+        // The same sticky toast is still on screen until the dismiss lands, so
+        // the second tap is the one a thumb actually makes.
+        action.run();
+        await settle();
+
+        expect(notifications.dismissNotification).toHaveBeenCalledTimes(1);
+        expect(state.downloadQueue.filter((item) => item.key === 'file:101:42')).toHaveLength(1);
+        expect(bindings.DownloadFile).toHaveBeenCalledTimes(2);
+
+        second.resolve(downloadSuccess('/tmp/plan.pdf'));
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
+    });
+
+    it('retries against the failed download\'s source drive after a drive switch', async () => {
+        bindings.DownloadFile
+            .mockResolvedValueOnce(downloadFailure('io', 'disk full'))
+            .mockResolvedValueOnce(downloadSuccess('/tmp/plan.pdf'));
+        const { mod, state } = await loadModule();
+        state.activeChannel = { id: 11, title: 'Drive A', kind: 'personal' };
+
+        mod.enqueueDownload(42, 'plan.pdf', 10);
+        await vi.waitFor(() => expect(notifications.notify).toHaveBeenCalled());
+        state.activeChannel = { id: 22, title: 'Drive B', kind: 'shared' };
+
+        retryAction().run();
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenLastCalledWith(11, 42, 42, expect.stringMatching(/^file:11:42@/)));
+    });
+
+    it('re-queues the download behind a failed row, and only a download', async () => {
+        const { mod, state } = await loadModule();
+
+        const failedFile = {
+            kind: 'transfer' as const,
+            id: 'xfer:down:file:42',
+            direction: 'down' as const,
+            name: 'plan.pdf',
+            progress: 0,
+            total: 10,
+            bytes: 0,
+            speed: 0,
+            status: 'failed' as const,
+            startedAt: 0,
+            finishedAt: 0,
+        };
+        const retry = mod.downloadRetryFor(failedFile);
+        expect(retry).toBeTypeOf('function');
+        retry?.();
+        expect(state.downloadQueue[0]).toMatchObject({ key: 'file:101:42', name: 'plan.pdf', size: 10 });
+
+        expect(mod.downloadRetryFor({ ...failedFile, status: 'done' })).toBeUndefined();
+        expect(mod.downloadRetryFor({ ...failedFile, direction: 'up', id: 'xfer:up:2' })).toBeUndefined();
+        expect(mod.downloadRetryFor({ ...failedFile, id: 'xfer:down:mystery' })).toBeUndefined();
+    });
+
+    it('re-queues a failed folder under the same key the row carries', async () => {
+        const { mod, state } = await loadModule();
+
+        const retry = mod.downloadRetryFor({
+            kind: 'transfer',
+            id: 'xfer:down:folder:d:project',
+            direction: 'down',
+            name: 'Project',
+            progress: 0,
+            total: 90,
+            bytes: 0,
+            speed: 0,
+            status: 'failed',
+            startedAt: 0,
+            finishedAt: 0,
+        });
+        retry?.();
+        expect(state.downloadQueue[0]).toMatchObject({ key: 'folder:101:d:project', kind: 'folder', name: 'Project' });
     });
 });

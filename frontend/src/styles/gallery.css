@@ -53,8 +53,13 @@
     grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
     gap: 5px;
 }
-.gallery-window-chunk + .gallery-window-chunk { margin-top: 5px; }
-.gallery-window-placeholder { width: 100%; pointer-events: none; }
+.gallery-virtual { position: relative; overflow-anchor: none; }
+.gallery-virtual-row { position: absolute; left: 0; right: 0; contain: layout style; }
+.gallery-grid-cell { min-width: 0; min-height: 0; }
+.gallery-grid-cell > .gallery-cell { width: 100%; height: 100%; }
+.gallery-virtual-header { position: absolute; left: 0; right: 0; box-sizing: border-box; line-height: 20px; }
+.gallery-pending { width: 100%; background: var(--bg-panel); }
+.gallery-page-error { position: sticky; bottom: 12px; padding: 12px; background: var(--bg-panel); color: var(--text-muted); border-radius: var(--radius-md); text-align: center; }
 
 .gallery-cell {
     appearance: none;
@@ -118,10 +123,35 @@
     -webkit-backdrop-filter: blur(6px);
     backdrop-filter: blur(6px);
 }
+
+.gallery-video-badge {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    color: #fff;
+    background: rgba(0, 0, 0, .66);
+    border-radius: 50%;
+    pointer-events: none;
+}
 .gallery-lock svg { width: 13px; height: 13px; }
 .gallery-broken { inset: 0; color: var(--text-muted); }
 .gallery-broken svg { width: 34px; height: 34px; }
-.gallery-cell.is-locked { background: repeating-linear-gradient(45deg, var(--bg-panel), var(--bg-panel) 10px, rgba(122,162,247,0.05) 10px, rgba(122,162,247,0.05) 20px); }
+/* The stripe follows the live accent. It used to be one palette's accent
+   written out by hand (#7aa2f7, Tokyo Night), which left it off-hue in every
+   other palette -- and the default is not that one. */
+.gallery-cell.is-locked {
+    background: repeating-linear-gradient(
+        45deg,
+        var(--bg-panel),
+        var(--bg-panel) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 20px
+    );
+}
 
 /* ----- Lightbox: download, list navigation, counter ----- */
 .preview-chrome-actions { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
@@ -151,7 +181,9 @@
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    z-index: 2;
+    /* Sit above both thumbnail and original layers so navigation stays
+       clickable while either image is loading or being displayed. */
+    z-index: 5;
     width: 52px; height: 52px;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -350,13 +382,13 @@
     padding: 7px 7px 7px 17px;
     border-radius: var(--radius-xl);
     background: rgba(18, 20, 30, 0.78);
-    border: 1px solid rgba(122, 162, 247, 0.26);
+    border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
     -webkit-backdrop-filter: blur(28px) saturate(1.4);
     backdrop-filter: blur(28px) saturate(1.4);
     transition: border-color 0.18s ease;
 }
 .preview-unlock-bar:focus-within {
-    border-color: rgba(122, 162, 247, 0.6);
+    border-color: color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .preview-unlock-lock { width: 18px; height: 18px; flex-shrink: 0; color: var(--viewer-text-muted); }
 .preview-unlock-bar input {
@@ -435,3 +467,426 @@
     .preview-overlay.is-info-open .preview-nav-next { right: 12px; }
 }
 
+
+/* ====================== PHONE GALLERY ====================== */
+/* Scoped to html.mobile. Three square cells across at 390pt with 2px gaps,
+   an inset ring instead of a border (design-3), a check on every cell while
+   anything is selected, and skeleton cells for the first load. */
+html.mobile .gallery-view {
+    position: relative;
+    padding: 0 0 24px;
+    overflow-x: hidden;
+    touch-action: pan-y;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+}
+/* The phone top bar already names the view. */
+html.mobile .main-content.photos-mode .gallery-title { display: none; }
+html.mobile .gallery-group { margin-bottom: 8px; }
+html.mobile .gallery-group-header {
+    padding: 14px 16px 8px;
+    font-size: 15px;
+    font-weight: var(--weight-semibold);
+}
+html.mobile .gallery-grid {
+    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+    gap: 2px;
+}
+html.mobile .gallery-cell {
+    border-radius: 0;
+    transition: none;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+}
+html.mobile .gallery-cell:hover { transform: none; box-shadow: none; }
+html.mobile .gallery-cell:focus-visible { box-shadow: inset var(--focus-ring); }
+html.mobile .gallery-cell::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 0 1px var(--overlay-neutral-2);
+    pointer-events: none;
+}
+html.mobile .gallery-cell:active .gallery-thumb { opacity: 0.82; }
+html.mobile .gallery-thumb { -webkit-user-drag: none; }
+html.mobile .gallery-lock {
+    top: 6px;
+    right: 6px;
+    width: 20px;
+    height: 20px;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(12, 14, 22, 0.62);
+}
+/* A locked cell says so in words on a phone: the corner badge only means
+   "encrypted" (it shows on unlocked photos too) and there is no tooltip. */
+html.mobile .gallery-locked-pill {
+    position: absolute;
+    left: 6px;
+    bottom: 6px;
+    padding: 2px 7px;
+    border-radius: var(--radius-pill);
+    background: rgba(12, 14, 22, 0.74);
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 10px;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.01em;
+    line-height: 1.6;
+    pointer-events: none;
+}
+html.mobile .gallery-check {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 1.5px solid rgba(255, 255, 255, 0.92);
+    border-radius: var(--radius-pill);
+    background: rgba(12, 14, 22, 0.38);
+    color: var(--color-on-accent);
+    transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .gallery-check svg { opacity: 0; }
+html.mobile .gallery-cell.is-selected .gallery-check {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+html.mobile .gallery-cell.is-selected .gallery-check svg { opacity: 1; }
+html.mobile .gallery-cell.is-selected::after { box-shadow: inset 0 0 0 3px var(--accent); }
+html.mobile .gallery-cell.is-selected .gallery-thumb { opacity: 0.78; }
+
+html.mobile .gallery-skeleton { padding-top: 2px; }
+html.mobile .gallery-skeleton-cell {
+    aspect-ratio: 1 / 1;
+    background-color: var(--bg-panel);
+    background-image: linear-gradient(100deg, transparent 25%, var(--overlay-neutral-2) 48%, transparent 70%);
+    background-size: 240% 100%;
+    animation: file-skeleton-shimmer 1.65s linear var(--skeleton-delay, 0ms) infinite;
+}
+
+html.mobile .gallery-empty {
+    min-height: 60vh;
+    justify-content: center;
+    padding: 32px 24px;
+    gap: 6px;
+}
+html.mobile .gallery-empty-icon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 6px;
+    color: var(--color-text-subtle);
+}
+html.mobile .gallery-empty-title { font-size: 17px; text-wrap: balance; }
+html.mobile .gallery-empty-sub { font-size: 15px; line-height: 1.5; }
+html.mobile .gallery-empty-actions { margin-top: 14px; }
+html.mobile .gallery-empty-actions .primary-btn,
+html.mobile .gallery-empty-actions .secondary-btn {
+    width: auto;
+    min-height: 44px;
+    padding: 0 18px;
+    font-size: 15px;
+}
+html.mobile .gallery-empty-actions .primary-btn:active { transform: scale(0.97); }
+
+/* ----- Phone lightbox ----- */
+/* Fullscreen on the viewer palette, chrome that a tap toggles, no chevrons
+   (a swipe moves through the set) and the info card as a sheet. A swipe down
+   fades the backdrop through --preview-dismiss while the picture follows the
+   finger. Glass is dropped: nothing here needs a blur on a low-end phone. */
+html.mobile .preview-overlay::before {
+    background: var(--viewer-surface-0);
+    opacity: calc(1 - var(--preview-dismiss, 0) * 0.85);
+    transition: opacity var(--motion-med) var(--ease-standard);
+}
+html.mobile .preview-content {
+    min-height: 100%;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+}
+html.mobile .preview-content img {
+    max-width: 100vw;
+    max-height: 100vh;
+    max-height: 100dvh;
+    box-shadow: none;
+    -webkit-user-drag: none;
+}
+html.mobile .preview-thumbnail,
+html.mobile .preview-original {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+/* Sized to the screen above, so hidden has to mean hidden here too: with no
+   src yet, a full-screen <img> is a broken-image glyph over the unlock card. */
+html.mobile .preview-thumbnail[hidden],
+html.mobile .preview-original[hidden] {
+    display: none;
+}
+html.mobile .preview-chrome {
+    top: calc(var(--inset-top) + 10px);
+    /* Held sideways the sensor housing eats one edge, so the close button has
+       to start after it rather than under it. */
+    left: calc(var(--inset-left) + 12px);
+    right: calc(var(--inset-right) + 12px);
+    gap: 10px;
+}
+html.mobile .preview-filename,
+html.mobile .preview-close-btn,
+html.mobile .preview-icon-btn,
+html.mobile .preview-counter {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(12, 14, 22, 0.74);
+    box-shadow: none;
+}
+html.mobile .preview-filename {
+    flex: 1 1 auto;
+    max-width: none;
+    padding: 10px 14px;
+    font-size: 14px;
+}
+html.mobile .preview-close-btn,
+html.mobile .preview-icon-btn { width: 44px; height: 44px; }
+html.mobile .preview-chrome-actions { gap: 8px; }
+html.mobile .preview-nav { display: none; }
+html.mobile .preview-counter { bottom: calc(var(--inset-bottom) + 16px); }
+html.mobile .preview-loading { width: min(200px, calc(100vw - 80px)); }
+html.mobile .preview-locked { padding: 96px 20px calc(var(--inset-bottom) + 40px); }
+html.mobile .preview-info {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    max-width: none;
+    max-height: 60vh;
+    border-width: 1px 0 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    transform: translateY(24px);
+}
+html.mobile .preview-overlay.is-info-open .preview-info { transform: none; }
+/* 36 x 5 grabber, as on the app's other sheets: the affordance for the drag
+   that dismisses this one. */
+html.mobile .preview-info::after {
+    content: "";
+    position: absolute;
+    top: 9px;
+    left: 50%;
+    width: 36px;
+    height: 5px;
+    margin-left: -18px;
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.26);
+    pointer-events: none;
+}
+html.mobile #preview-info-body {
+    /* The sheet's own drag starts at the top of this scroller, so it must not
+       hand the overscroll to the page behind. */
+    overscroll-behavior: contain;
+    padding: 26px calc(var(--inset-right) + 20px) calc(var(--inset-bottom) + 24px) calc(var(--inset-left) + 20px);
+}
+html.mobile .preview-info-close {
+    top: 8px;
+    right: calc(var(--inset-right) + 8px);
+    width: 44px;
+    height: 44px;
+}
+html.mobile .preview-info-close svg { width: 18px; height: 18px; }
+/* Clear the bigger close button. */
+html.mobile .info-date { padding-right: 46px; }
+
+/* ----- Phone locked lightbox ----- */
+/* The rest of the phone lightbox drops its glass; the locked state has to drop
+   it too. Both blurs here are invisible on a phone anyway -- the overlay's own
+   background is opaque, so a 60px backdrop blur is sampled and then painted
+   over, and the pill sits on that same flat colour -- but they still cost a
+   full-screen blur plus a second stacked one every frame. */
+html.mobile .preview-overlay.is-preview-locked::before,
+html.mobile .preview-unlock-bar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .gallery-skeleton-cell { animation: none; }
+    .gallery-cell, .gallery-thumb { transition: none; }
+}
+
+/* ====================== ALBUMS ======================
+   The folder grid Photos opens on. Reaching a screenshot from March in a
+   50,000-photo timeline means scrolling past everything; the drive already has
+   Camera, Screenshots and WhatsApp Images in it, and this is that structure
+   given back. Tiles reuse the photo grid's shimmer, its locked stripes and its
+   thumbnail, so an album cover is the same picture the file list would draw. */
+
+/* Sits in the breadcrumb row beside the "Photos" heading, and only there:
+   outside photos mode the row belongs to the folder trail. */
+.photos-mode-bar { display: none; align-items: center; gap: 10px; margin-left: auto; }
+.main-content.photos-mode .photos-mode-bar { display: flex; }
+
+.photos-modes {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-panel);
+}
+.photos-modes button {
+    border: 0;
+    padding: 5px 14px;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+.photos-modes button:hover { color: var(--text-main); }
+.photos-modes button[aria-pressed="true"] { background: var(--surface-control); color: var(--text-main); }
+.photos-modes button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Leaving an album is a step back up, so it reads like the breadcrumb's back
+   control rather than a third kind of navigation. */
+.album-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 12px 5px 8px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: var(--bg-panel);
+    color: var(--text-main);
+    font: inherit;
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+}
+.album-back:hover { background: var(--surface-control); }
+.album-back:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.album-back-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-back-count { color: var(--text-muted); font-size: var(--type-xs); }
+
+.album-grid-root { padding-top: 16px; }
+.album-row {
+    display: grid;
+    gap: var(--album-gap, 12px);
+    margin-bottom: var(--album-gap, 12px);
+}
+/* A grid item's automatic minimum is its content, so without this a name like
+   "WhatsApp Animated Gifs" would widen its column instead of being clipped. */
+.album-row > * { min-width: 0; }
+
+.album-tile {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    /* The tile is exactly its column. A folder name is one nowrap line, so its
+       min-content width is the whole name -- left to shrink-to-fit, a tile with
+       a long name grows past its column and prints across the tile beside it.
+       The clip is the last word on that: nothing inside a tile paints outside
+       it, whatever an engine makes of the sizes within. */
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    margin: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: var(--radius-lg);
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+.album-tile:hover { transform: translateY(-2px); }
+.album-tile:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Square, because a 4:3 crop of a portrait photo loses the subject.
+   The height is the length the grid measured its rows with, and the ratio is
+   only the fallback for a tile rendered outside that grid: a cover that works
+   out its own height from a stretched flex item collapses to the label strip
+   on webviews that will not resolve the ratio, and an empty cover is exactly
+   the one that has no image to prop it open. */
+.album-cover {
+    position: relative;
+    display: block;
+    aspect-ratio: 1 / 1;
+    width: 100%;
+    height: var(--album-cover-size);
+    overflow: hidden;
+    border-radius: var(--radius-lg);
+    background: var(--bg-panel);
+}
+.album-cover .gallery-thumb { border-radius: inherit; }
+.album-cover.is-loaded .gallery-thumb { opacity: 1; }
+.album-cover-glyph {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-muted);
+}
+
+/* The label lives under the image on a solid strip, never over it: a cover is
+   arbitrary user content and can be any brightness, and this UI is flat -- it
+   has no scrim idiom, and inventing one for this screen alone would leave
+   "Screenshots" unreadable over a bright collage anyway. Its height is fixed
+   so the row window can measure a row before the row exists; album-view.ts
+   holds the same number and sets it here. */
+.album-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    height: var(--album-label-height, 58px);
+    padding: 0 2px;
+    min-width: 0;
+    /* A definite width, for the same reason the cover has one: the ellipsis
+       below needs a box to end at, not a box that grows to fit the name. */
+    max-width: var(--album-cover-size, 100%);
+}
+.album-name {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-main);
+    font-size: var(--type-sm);
+    font-weight: var(--weight-semibold);
+}
+.album-count { color: var(--text-muted); font-size: var(--type-xs); }
+
+/* The photo grid's own states, reused verbatim rather than restated: the
+   shimmer while a cover loads, and the stripes a locked vault draws. */
+.album-cover.is-loading {
+    background-image: linear-gradient(100deg, var(--bg-panel) 30%, var(--overlay-accent-1) 50%, var(--bg-panel) 70%);
+    background-size: 200% 100%;
+    animation: gallery-shimmer 1.3s linear infinite;
+}
+.album-cover.is-locked {
+    background: repeating-linear-gradient(
+        45deg,
+        var(--bg-panel),
+        var(--bg-panel) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 10px,
+        color-mix(in srgb, var(--accent) 5%, transparent) 20px
+    );
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .album-cover.is-loading { animation: none; }
+    .album-tile { transition: none; }
+    .album-tile:hover { transform: none; }
+}
+
+html.mobile .album-grid-root { padding-top: 10px; }
+html.mobile .photos-mode-bar { margin-left: 0; }

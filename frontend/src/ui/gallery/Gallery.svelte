@@ -1,148 +1,192 @@
 <script lang="ts">
-    // Renders the gallery view state. The scroll host (#gallery-view) stays in
-    // index.html; this component windows complete grid-row chunks so large
-    // libraries do not create one component and observer target per image.
-    import { onMount } from 'svelte';
-    import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+    import { onMount, tick, untrack } from 'svelte';
     import ImageIcon from '@lucide/svelte/icons/image';
+    import { isMobilePlatform } from '../../api';
+    import { appActions } from '../../modules/app-actions';
+    import { chooseFilesForCurrentFolder } from '../../modules/transfers';
     import GalleryCell from './GalleryCell.svelte';
-    import { galleryView, type GalleryCellModel, type GalleryGroup } from './gallery-store';
+    import { galleryView } from './gallery-store';
+    import { createGalleryLayout, createGalleryScrollSpace, galleryWindow, indexAtOffset, offsetForIndex } from './gallery-layout';
 
-    interface GalleryChunk {
-        key: string;
-        cells: GalleryCellModel[];
-        height: number;
-    }
+    const mobile = isMobilePlatform();
+    const skeletonCells = Array.from({ length: 12 }, (_, index) => index);
+    let root = $state<HTMLElement | null>(null);
+    let width = $state(mobile ? 390 : 900);
+    let height = $state(800);
+    let scrollTop = $state(0);
+    let physicalScrollTop = $state(0);
+    let version = $state(0);
+    let focusedIndex = $state(0);
+    let keyboardRequest = 0;
+    let source = $derived($galleryView.status === 'ready' ? $galleryView.source : null);
+    let layout = $derived(createGalleryLayout(source?.timeline.buckets ?? [], width, mobile));
+    let scrollSpace = $derived(createGalleryScrollSpace(layout.height, height));
+    let visible = $derived(galleryWindow(layout, scrollTop, height));
+    let rows = $derived.by(() => {
+        void version;
+        return visible.rows.map((row) => ({ ...row, cells: row.indices.map((index) => ({ index, item: source?.peek(index) })) }));
+    });
+    let firstIndex = $derived(visible.rows[0]?.indices[0] ?? 0);
+    let lastIndex = $derived.by(() => { const indices = visible.rows[visible.rows.length - 1]?.indices; return indices?.[indices.length - 1] ?? 0; });
+    let tabIndex = $derived(focusedIndex >= firstIndex && focusedIndex <= lastIndex ? focusedIndex : firstIndex);
+    let pageError = $derived.by(() => { void version; return source?.error ?? ''; });
 
-    const MIN_CELL_WIDTH = 172;
-    const GRID_GAP = 5;
-    const ROWS_PER_CHUNK = 8;
+    $effect(() => {
+        const current = source;
+        if (!current) return;
+        return current.subscribe(() => { version += 1; });
+    });
+    $effect(() => { source?.ensureRange(firstIndex, lastIndex); });
+    $effect(() => {
+        const view = $galleryView;
+        if (!root || view.status !== 'ready') return;
+        // Restoring a file anchor absorbs inserts/deletes ahead of it.
+        const top = untrack(() => view.initialIndex === undefined ? scrollSpace.toLogical(root!.scrollTop) : Math.max(0, offsetForIndex(layout, view.initialIndex) + (view.anchorOffset ?? 0)));
+        root.scrollTop = scrollSpace.toPhysical(top);
+        physicalScrollTop = root.scrollTop;
+        scrollTop = top;
+    });
 
-    let columnCount = $state(1);
-    let gridWidth = $state(MIN_CELL_WIDTH);
-    let windowingEnabled = $state(typeof window !== 'undefined' && typeof IntersectionObserver !== 'undefined');
-    const visibleChunkKeys = new SvelteSet<string>();
-    let chunkObserver: IntersectionObserver | null = null;
-    const chunkNodes = new SvelteMap<HTMLElement, string>();
-
-    function updateGeometry(root: HTMLElement): void {
+    function measure(): void {
+        if (!root || root.clientWidth === 0) return;
         const style = getComputedStyle(root);
-        const horizontalPadding = Number.parseFloat(style.paddingLeft || '0') + Number.parseFloat(style.paddingRight || '0');
-        const nextWidth = Math.max(1, Math.round(root.clientWidth - horizontalPadding));
-        const nextColumns = Math.max(1, Math.floor((nextWidth + GRID_GAP) / (MIN_CELL_WIDTH + GRID_GAP)));
-        if (nextWidth === gridWidth && nextColumns === columnCount) return;
-        gridWidth = nextWidth;
-        if (nextColumns !== columnCount) {
-            columnCount = nextColumns;
-            visibleChunkKeys.clear();
+        const nextWidth = Math.max(1, root.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'));
+        const currentTop = scrollSpace.toLogical(root.scrollTop);
+        const anchor = indexAtOffset(layout, currentTop);
+        const withinRow = currentTop - offsetForIndex(layout, anchor);
+        const nextHeight = root.clientHeight || 800;
+        let nextTop = currentTop;
+        let nextLayout = layout;
+        if (nextWidth !== width) {
+            nextLayout = createGalleryLayout(source?.timeline.buckets ?? [], nextWidth, mobile);
+            nextTop = Math.max(0, offsetForIndex(nextLayout, anchor) + withinRow);
+            width = nextWidth;
         }
+        // A viewport resize changes both scroll ranges, so remap even when the
+        // column count stays fixed to keep the same logical row anchored.
+        root.scrollTop = createGalleryScrollSpace(nextLayout.height, nextHeight).toPhysical(nextTop);
+        height = nextHeight;
+        physicalScrollTop = root.scrollTop;
+        scrollTop = nextTop;
     }
 
-    function chunksFor(group: GalleryGroup, groupIndex: number): GalleryChunk[] {
-        const chunkSize = columnCount * ROWS_PER_CHUNK;
-        const cellWidth = (gridWidth - GRID_GAP * (columnCount - 1)) / columnCount;
-        const chunks: GalleryChunk[] = [];
-        for (let start = 0; start < group.cells.length; start += chunkSize) {
-            const cells = group.cells.slice(start, start + chunkSize);
-            const rows = Math.ceil(cells.length / columnCount);
-            chunks.push({
-                key: `${groupIndex}:${start}:${columnCount}`,
-                cells,
-                height: Math.max(0, rows * cellWidth + Math.max(0, rows - 1) * GRID_GAP),
-            });
+    async function onKeydown(event: KeyboardEvent): Promise<void> {
+        if (!source || event.isComposing || event.altKey || event.metaKey || event.ctrlKey) return;
+        const cell = (event.target as HTMLElement).closest<HTMLElement>('button.gallery-cell');
+        if (!cell && event.target !== root) return;
+        const index = Number(cell?.dataset.index ?? focusedIndex);
+        const offsets: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -layout.columns, ArrowDown: layout.columns, PageUp: -layout.columns * Math.max(1, Math.floor(height / layout.rowPitch)), PageDown: layout.columns * Math.max(1, Math.floor(height / layout.rowPitch)) };
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? source.timeline.totalCount - 1 : index + (offsets[event.key] ?? 0);
+        if (!(event.key in offsets) && event.key !== 'Home' && event.key !== 'End') return;
+        event.preventDefault();
+        const request = ++keyboardRequest;
+        const target = Math.max(0, Math.min(source.timeline.totalCount - 1, next));
+        const current = source;
+        focusedIndex = target;
+        const top = offsetForIndex(layout, target);
+        if (root && (top < scrollTop + layout.headerHeight || top + layout.cellSize > scrollTop + height)) {
+            root.scrollTop = scrollSpace.toPhysical(Math.max(0, top - layout.headerHeight));
+            physicalScrollTop = root.scrollTop;
+            scrollTop = scrollSpace.toLogical(root.scrollTop);
         }
-        return chunks;
+        try { await current.get(target); } catch { return; }
+        if (source !== current || request !== keyboardRequest) return;
+        version += 1;
+        await tick();
+        root?.querySelector<HTMLElement>(`.gallery-cell[data-index="${target}"]`)?.focus({ preventScroll: true });
     }
 
-    function chunkIsVisible(key: string, groupIndex: number, chunkIndex: number): boolean {
-        return !windowingEnabled || visibleChunkKeys.has(key) || (groupIndex === 0 && chunkIndex < 2);
-    }
-
-    function observeChunk(node: HTMLElement, key: string) {
-        chunkNodes.set(node, key);
-        chunkObserver?.observe(node);
-        return {
-            update(nextKey: string) {
-                if (nextKey === key) return;
-                key = nextKey;
-                chunkNodes.set(node, key);
-            },
-            destroy() {
-                chunkObserver?.unobserve(node);
-                chunkNodes.delete(node);
-            },
-        };
+    function onFocus(event: FocusEvent): void {
+        const cell = (event.target as HTMLElement).closest<HTMLElement>('.gallery-cell');
+        if (cell) focusedIndex = Number(cell.dataset.index);
     }
 
     onMount(() => {
-        const root = document.getElementById('gallery-view');
+        root = document.getElementById('gallery-view');
         if (!root) return;
-        updateGeometry(root);
-
-        if (typeof IntersectionObserver === 'undefined') {
-            windowingEnabled = false;
-        } else {
-            chunkObserver = new IntersectionObserver((entries) => {
-                for (const entry of entries) {
-                    const node = entry.target as HTMLElement;
-                    const key = chunkNodes.get(node);
-                    if (!key) continue;
-                    if (entry.isIntersecting) {
-                        visibleChunkKeys.add(key);
-                    } else if (!node.contains(document.activeElement)) {
-                        visibleChunkKeys.delete(key);
-                    }
+        const host = root;
+        let frame = 0;
+        const onScroll = () => {
+            if (frame) return;
+            frame = requestAnimationFrame(() => {
+                frame = 0;
+                physicalScrollTop = host.scrollTop;
+                scrollTop = scrollSpace.toLogical(host.scrollTop);
+                const anchor = indexAtOffset(layout, scrollTop);
+                host.dataset.anchorIndex = String(anchor);
+                host.dataset.anchorOffset = String(scrollTop - offsetForIndex(layout, anchor));
+                // Retain keyboard ownership when its focused row scrolls away.
+                const cell = document.activeElement?.closest<HTMLElement>('.gallery-cell');
+                if (cell && host.contains(cell)) {
+                    const top = offsetForIndex(layout, Number(cell.dataset.index));
+                    if (top + layout.cellSize < scrollTop - layout.rowPitch * 2 || top > scrollTop + height + layout.rowPitch * 2) host.focus({ preventScroll: true });
                 }
-            }, { root, rootMargin: '900px 0px' });
-            for (const node of chunkNodes.keys()) chunkObserver.observe(node);
-        }
-
-        const resizeObserver = typeof ResizeObserver === 'undefined'
-            ? null
-            : new ResizeObserver(() => updateGeometry(root));
-        resizeObserver?.observe(root);
-        const onResize = () => updateGeometry(root);
-        window.addEventListener('resize', onResize);
-
+            });
+        };
+        measure();
+        const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+        observer?.observe(host);
+        host.addEventListener('scroll', onScroll, { passive: true });
+        host.addEventListener('keydown', onKeydown);
+        host.addEventListener('focusin', onFocus);
+        window.addEventListener('resize', measure);
         return () => {
-            window.removeEventListener('resize', onResize);
-            resizeObserver?.disconnect();
-            chunkObserver?.disconnect();
-            chunkObserver = null;
-            chunkNodes.clear();
+            cancelAnimationFrame(frame);
+            observer?.disconnect();
+            host.removeEventListener('scroll', onScroll);
+            host.removeEventListener('keydown', onKeydown);
+            host.removeEventListener('focusin', onFocus);
+            window.removeEventListener('resize', measure);
         };
     });
 </script>
 
 {#if $galleryView.status === 'loading'}
-    <div class="gallery-status">Loading photos…</div>
+    {#if mobile}
+        <div class="gallery-grid gallery-skeleton" role="status" aria-label="Loading photos" aria-busy="true">
+            {#each skeletonCells as index (index)}
+                <div class="gallery-skeleton-cell" style={`--skeleton-delay: ${index * 45}ms`} aria-hidden="true"></div>
+            {/each}
+        </div>
+    {:else}
+        <div class="gallery-status" role="status">Loading photos…</div>
+    {/if}
 {:else if $galleryView.status === 'error'}
-    <div class="gallery-status">Could not load photos.</div>
+    <div class="gallery-empty" role="alert">
+        <div class="gallery-empty-title">Could not load photos.</div>
+        <div class="gallery-empty-sub">Check your connection and try again.</div>
+        <div class="gallery-empty-actions"><button class="primary-btn" type="button" onclick={() => appActions().refreshFiles()}>Retry</button></div>
+    </div>
 {:else if $galleryView.status === 'empty'}
     <div class="gallery-empty">
-        <div class="gallery-empty-icon">
-            <ImageIcon size={48} strokeWidth={1.5} aria-hidden="true" />
-        </div>
-        <div class="gallery-empty-title">No photos yet</div>
-        <div class="gallery-empty-sub">Images you upload to this drive show up here.</div>
+        <div class="gallery-empty-icon"><ImageIcon size={48} strokeWidth={1.5} aria-hidden="true" /></div>
+        <div class="gallery-empty-title">{mobile ? 'No photos in this drive.' : 'No photos yet'}</div>
+        {#if mobile}
+            <div class="gallery-empty-actions"><button class="primary-btn" type="button" onclick={() => chooseFilesForCurrentFolder()}>Upload photos</button></div>
+        {:else}
+            <div class="gallery-empty-sub">Images you upload to this drive show up here.</div>
+        {/if}
     </div>
 {:else}
-    {#each $galleryView.groups as group, groupIndex (group.cells[0].index)}
-        <section class="gallery-group">
-            <div class="gallery-group-header">{group.label}</div>
-            {#each chunksFor(group, groupIndex) as chunk, chunkIndex (chunk.key)}
-                <div class="gallery-window-chunk" use:observeChunk={chunk.key}>
-                    {#if chunkIsVisible(chunk.key, groupIndex, chunkIndex)}
-                        <div class="gallery-grid">
-                            {#each chunk.cells as cell (cell.item.msgId)}
-                                <GalleryCell item={cell.item} index={cell.index} />
-                            {/each}
-                        </div>
-                    {:else}
-                        <div class="gallery-window-placeholder" style:height={`${chunk.height}px`} aria-hidden="true"></div>
-                    {/if}
-                </div>
-            {/each}
-        </section>
-    {/each}
+    {#key $galleryView.source.timeline.channelId}
+    <div class="gallery-virtual" role="grid" aria-label="Photos" aria-rowcount={layout.rowCount} aria-colcount={layout.columns} style:height={`${scrollSpace.physicalHeight}px`}>
+        {#each rows as row (row.key)}
+            <div class="gallery-grid gallery-virtual-row" role="row" aria-rowindex={row.rowIndex} style:top={`${scrollSpace.project(row.top, physicalScrollTop)}px`} style:height={`${layout.cellSize}px`} style:grid-template-columns={`repeat(${layout.columns}, minmax(0, 1fr))`}>
+                {#each row.cells as cell (cell.item?.msgId ?? `pending:${cell.index}`)}
+                    <div role="gridcell" class="gallery-grid-cell">
+                        {#if cell.item}
+                            <GalleryCell item={cell.item} index={cell.index} tabindex={cell.index === tabIndex ? 0 : -1} />
+                        {:else}
+                            <div class="gallery-cell gallery-pending" aria-label="Loading photo" aria-busy="true"></div>
+                        {/if}
+                    </div>
+                {/each}
+            </div>
+        {/each}
+        {#each visible.headers as header (header.key)}
+            <div class="gallery-group-header gallery-virtual-header" style:top={`${scrollSpace.project(header.top, physicalScrollTop)}px`} style:height={`${layout.headerHeight}px`}>{header.label}</div>
+        {/each}
+    </div>
+    {/key}
+    {#if pageError}<div class="gallery-page-error" role="status">{pageError} <button class="secondary-btn" type="button" onclick={() => appActions().refreshFiles()}>Retry</button></div>{/if}
 {/if}

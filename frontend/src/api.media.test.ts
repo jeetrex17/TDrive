@@ -1,8 +1,10 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
 
 // Mock the generated Wails bindings so the gallery API functions can be tested
-// without a live backend. Only the names api.ts imports need to exist.
-vi.mock("../bindings/TDrive/app", () => ({
+// without a live backend. Only the names api.ts imports need to exist. The same
+// factory answers for every service module the API layer reaches into, so a
+// method moving between services does not need its stub moved with it.
+const bindings = vi.hoisted(() => ({
     AttachNativeMedia: vi.fn(),
     CloseMedia: vi.fn(),
     CloseNativeMedia: vi.fn(),
@@ -18,6 +20,7 @@ vi.mock("../bindings/TDrive/app", () => ({
     NativeMediaCommand: vi.fn(),
     OpenMedia: vi.fn(),
     OpenNativeMedia: vi.fn(),
+    OpenOriginalImage: vi.fn(),
     OpenStream: vi.fn(),
     ResizeNativeMedia: vi.fn(),
     Search: vi.fn(),
@@ -26,6 +29,8 @@ vi.mock("../bindings/TDrive/app", () => ({
     UnmountDrive: vi.fn(),
     UpdateMediaPlayback: vi.fn(),
 }));
+vi.mock("../bindings/TDrive/app", () => bindings);
+vi.mock("../bindings/TDrive/mediaservice", () => bindings);
 
 import {
     attachNativeMedia,
@@ -39,6 +44,7 @@ import {
     nativeMediaCommand,
     openMedia,
     openNativeMedia,
+    openOriginalImage,
     openStream,
     resizeNativeMedia,
     showNativeSeekThumbnail,
@@ -55,12 +61,13 @@ import {
     NativeMediaCommand,
     OpenMedia,
     OpenNativeMedia,
+    OpenOriginalImage,
     OpenStream,
     ResizeNativeMedia,
     ShowNativeSeekThumbnail,
     Thumbnail,
     UpdateMediaPlayback,
-} from "../bindings/TDrive/app";
+} from "../bindings/TDrive/mediaservice";
 
 beforeEach(() => {
     vi.clearAllMocks();
@@ -79,7 +86,7 @@ describe("getMedia", () => {
             },
         ]);
         expect(await getMedia()).toEqual([
-            { msgId: 3, name: "p.jpg", size: 10, parentId: "", uploadTime: 5, uploaderId: 0, encrypted: false, plaintextSize: 0 },
+            { msgId: 3, name: "p.jpg", size: 10, parentId: "", uploadTime: 5, uploaderId: 0, encrypted: false, plaintextSize: 0, revision: 0 },
         ]);
     });
 
@@ -258,9 +265,10 @@ describe("loopback media API boundary", () => {
         },
     };
 
-    it("normalizes both preview and stream open results", async () => {
+    it("normalizes stream opens and an immutable original-image open", async () => {
         mockBackendResult(vi.mocked(OpenMedia), opened);
         mockBackendResult(vi.mocked(OpenStream), opened);
+        mockBackendResult(vi.mocked(OpenOriginalImage), { ...opened, kind: 'image' });
 
         const expected = expect.objectContaining({
             token: loopbackSessionToken,
@@ -271,6 +279,8 @@ describe("loopback media API boundary", () => {
         });
         await expect(openMedia(9)).resolves.toEqual(expected);
         await expect(openStream(9)).resolves.toEqual(expected);
+        await expect(openOriginalImage(9, 3)).resolves.toEqual(expect.objectContaining({ kind: 'image', token: loopbackSessionToken }));
+        expect(OpenOriginalImage).toHaveBeenCalledWith(9, 3);
     });
 
     it("closes and updates only active media sessions", async () => {

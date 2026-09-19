@@ -68,6 +68,10 @@ jobs:
         working-directory: frontend
         run: npm run typecheck
 
+      # `npm run lint` pins --max-warnings to the current warning count. It is a
+      # ratchet, not a target: package.json cannot hold comments, so the rule
+      # lives here. Lower the number whenever warnings are removed (they are
+      # almost all `any`); never raise it to make a build pass.
       - name: Lint frontend
         working-directory: frontend
         run: npm run lint
@@ -87,7 +91,7 @@ jobs:
         run: go vet $FIRST_PARTY_GO_PACKAGES
 
   browser-contracts:
-    name: Chromium frontend contracts
+    name: Browser frontend contracts
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
@@ -105,13 +109,17 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: Install Chromium
+      - name: Install Chromium and WebKit
         working-directory: frontend
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Run production-build browser contracts
         working-directory: frontend
         run: npm run test:e2e
+
+      - name: Run WebKit gallery contracts
+        working-directory: frontend
+        run: npx playwright test --config playwright.gallery-webkit.config.ts
 
       - name: Upload browser failure artifacts
         if: failure()
@@ -178,12 +186,114 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
-      # Nil contexts are passed intentionally by boundary-validation tests.
-      - name: Run staticcheck correctness analyzers
-        run: staticcheck -checks='SA*,-SA1012' $FIRST_PARTY_GO_PACKAGES
+      # SA* is correctness, S*/QF* are simplifications, U1000 is dead code.
+      # -SA1012 because nil contexts are passed intentionally by
+      # boundary-validation tests.
+      #
+      # U1000 cannot see across build tags: a symbol whose only callers sit
+      # behind //go:build ios, darwin or windows looks unused in this Linux
+      # run. Running the whole matrix and intersecting the results would need
+      # cross-compiling cgo for three platforms and a script to merge them, for
+      # a handful of symbols that change about once a year. Instead each such
+      # symbol carries a //lint:ignore U1000 naming the file that uses it —
+      # staticcheck does not complain about an ignore directive that turns out
+      # to be unnecessary, so the same command is clean on every GOOS and a
+      # developer can run it locally on macOS and get CI's answer.
+      - name: Run staticcheck correctness, simplification, and dead-code analyzers
+        run: staticcheck -checks='SA*,-SA1012,S*,QF*,U1000' $FIRST_PARTY_GO_PACKAGES
 
       - name: Run govulncheck
         run: govulncheck $FIRST_PARTY_GO_PACKAGES
+
+  # frontend/bindings is generated from the Go source by
+  # `wails3 generate bindings` (build/Taskfile.yml's generate:bindings, which
+  # build:frontend depends on) and then committed, and until this job nothing
+  # compared the two. A bound method whose signature changes without a
+  # regeneration leaves the frontend calling a backend that no longer looks
+  # like that: a runtime failure every other job here stays green through.
+  bindings:
+    name: Generated bindings
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # The generator type-checks the whole module through go/packages, and
+      # main embeds frontend/dist, so with no frontend built the root package
+      # carries an embed error, no service is found, and the run would compare
+      # the committed bindings against nothing at all.
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev
+
+      # Pinned to the wails version in go.mod. The generator ships inside the
+      # CLI, so a different CLI emits different files and the check below
+      # would fail on code nobody touched.
+      - name: Install Wails
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The same flags generate:bindings passes; the gtk3 build tag arrives
+      # through the workflow-level GOFLAGS, which is how every other Go job
+      # here loads the module.
+      #
+      # That is one set of build tags, and bindings are generated per platform
+      # with that platform's tags -- android,debug, ios,debug, gtk3 on Linux,
+      # production, and the desktop dev build's empty set -- while a single
+      # copy is committed for all of them. That holds only while no bound
+      # method sits behind a build tag: today none does, so every set produces
+      # the same files and the copy this job checks is the right one
+      # everywhere. Put an exported service method behind a tag and four of
+      # the five platforms start shipping bindings that disagree with their
+      # own build, and this job will not see it. Keep bound methods untagged;
+      # the android and iOS jobs below already regenerate with their own tags,
+      # so that is where a check for the other sets would go.
+      - name: Check the committed bindings are current
+        run: |
+          set -euo pipefail
+          wails3 generate bindings -clean=true -ts -i
+
+          # --intent-to-add so that files the generator adds -- a new service,
+          # a newly bound package -- show up in the diff instead of sitting
+          # untracked and invisible, which is the likeliest shape of a miss
+          # while App is being split into services.
+          git add --intent-to-add frontend/bindings
+          if ! git diff --exit-code -- frontend/bindings; then
+            echo
+            echo "frontend/bindings does not match the Go source: the diff above is what"
+            echo "regenerating produced. Shipping it would call methods the backend no"
+            echo "longer has. Regenerate from the repository root with:"
+            echo
+            echo "    wails3 generate bindings -clean=true -ts -i"
+            echo
+            echo "and commit frontend/bindings. Any 'wails3 task build' does it too, since"
+            echo "build:frontend depends on generate:bindings."
+            exit 1
+          fi
 
   wails-build:
     name: Wails build (${{ matrix.platform }})
@@ -406,5 +516,166 @@ jobs:
           path: |
             dist/TDrive-windows-amd64-ci.zip
             dist/TDrive-windows-amd64-ci-setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # The phone builds. Nothing above compiles them: the Android host is Java the
+  # Go toolchain never sees, the iOS host is Objective-C linked in at the very
+  # last step, and every Go file behind an `ios` or `android` build tag is
+  # invisible to a desktop build. A change to any of them can pass every other
+  # job here and still ship a phone app that does not compile.
+  android-build:
+    name: Android build (arm64-v8a)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      # gtk3 is the Linux desktop's tag and has no meaning when the target is
+      # Android; carrying it into a cross compile breaks the build.
+      GOFLAGS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: npm run build
+
+      # The CLI is a build tool, not part of the app, and with cgo on it drags
+      # in Wails' GTK bindings -- which default to GTK4 once the gtk3 tag is
+      # gone, and no runner has gtk4 or webkitgtk-6.0. Built without cgo it is
+      # a static binary that needs no system libraries at all. The cross
+      # compiles below still run with cgo on, from the job env.
+      - name: Install Wails CLI
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The Taskfile finds the newest NDK under $ANDROID_HOME/ndk when this is
+      # unset, but the runner keeps its NDK elsewhere, so point at it directly.
+      - name: Point the build at the runner's NDK
+        run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      # ARCH is explicit: the Taskfile defaults it to the host, and the runner
+      # is x86_64, so leaving it out quietly builds the emulator's library and
+      # never produces the arm64-v8a one a real phone loads.
+      - name: Build the Go shared library
+        run: wails3 task android:build ARCH=arm64
+
+      - name: Assemble the APK
+        run: wails3 task android:assemble:apk
+
+      # Gradle reports success while packaging a .so it built earlier, so a
+      # frontend-only change can produce an APK that still serves the previous
+      # bundle. That has shipped twice by hand. The APK has to carry the
+      # stylesheet this run just built, or the build is a lie.
+      - name: Check the APK carries the frontend from this run
+        run: |
+          set -euo pipefail
+          built=$(basename frontend/dist/assets/main-*.css)
+          unzip -p build/bin/TDrive.apk lib/arm64-v8a/libwails.so > /tmp/libwails.so
+          # Dumped to a file rather than piped into grep: `grep -q` exits the
+          # moment it matches, strings takes a SIGPIPE for it, and pipefail
+          # then reports the whole pipeline as failed -- on success.
+          strings -a /tmp/libwails.so > /tmp/libwails.strings
+          if ! grep -qF "$built" /tmp/libwails.strings; then
+            echo "APK does not embed $built"
+            echo "it embeds: $(grep -oE 'main-[A-Za-z0-9_-]+\.css' /tmp/libwails.strings | sort -u)"
+            exit 1
+          fi
+          echo "APK embeds $built"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: TDrive-android-arm64-ci
+          path: build/bin/TDrive.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  ios-build:
+    name: iOS build (simulator bundle + device archive)
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GOFLAGS: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build embedded frontend
+        working-directory: frontend
+        run: npm run build
+
+      # The CLI is a build tool, not part of the app, and with cgo on it drags
+      # in Wails' GTK bindings -- which default to GTK4 once the gtk3 tag is
+      # gone, and no runner has gtk4 or webkitgtk-6.0. Built without cgo it is
+      # a static binary that needs no system libraries at all. The cross
+      # compiles below still run with cgo on, from the job env.
+      - name: Install Wails CLI
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The simulator bundle is ad-hoc signed, so it needs no Apple account and
+      # still exercises the whole chain: the cgo behind the ios build tag, the
+      # Wails Objective-C, and the link against build/ios/main.m.
+      - name: Build the simulator app bundle
+        run: wails3 task ios:package
+
+      # A device build uses a different SDK and a different minimum-version
+      # flag, and is the one a phone would actually run. Signing is left
+      # ad-hoc: a real identity is only needed to install, not to compile.
+      - name: Compile the device archive
+        run: wails3 task ios:build IOS_PLATFORM=device
+
+      - name: Upload the simulator bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: TDrive-ios-simulator-ci
+          path: build/bin/TDrive.app
           if-no-files-found: error
           retention-days: 7

@@ -70,7 +70,7 @@ describe('theme model', () => {
         expect(normalizeThemePreference(persisted)).toEqual(persisted);
     });
 
-    it('migrates the removed System mode to explicit dark without losing valid palettes', () => {
+    it('keeps System mode so the selected pair can follow the device', () => {
         expect(
             normalizeThemePreference({
                 mode: 'system',
@@ -78,11 +78,11 @@ describe('theme model', () => {
                 darkThemeId: 'nord',
             }),
         ).toEqual({
-            mode: 'dark',
+            mode: 'system',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'nord',
         });
-        expect(isThemeMode('system')).toBe(false);
+        expect(isThemeMode('system')).toBe(true);
     });
 
     it('preserves valid preferences without mutating the source value', () => {
@@ -107,5 +107,7 @@ describe('theme model', () => {
 
         expect(resolveThemeId(preference)).toBe('solarized-light');
         expect(resolveThemeId({ ...preference, mode: 'dark' })).toBe('nord');
+        expect(resolveThemeId({ ...preference, mode: 'system' }, 'light')).toBe('solarized-light');
+        expect(resolveThemeId({ ...preference, mode: 'system' }, 'dark')).toBe('nord');
     });
 });

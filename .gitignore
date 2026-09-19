@@ -24,6 +24,17 @@ build/bin/
 frontend/dist/
 # Transient Windows resource file generated (and removed) by windows:generate:syso
 *.syso
+# Mobile: generated per build/machine (overlays hold absolute paths). The host
+# sources under build/ios and build/android are committed.
+build/ios/xcode/
+build/android/overlay.json
+build/android/gen/
+build/android/app/src/main/jniLibs/
+build/android/app/build/
+build/android/build/
+build/android/.gradle/
+build/android/local.properties
+
 # Downloaded by windows:installer; release packaging output.
 build/windows/installer/MicrosoftEdgeWebview2Setup.exe
 dist/
@@ -41,3 +52,12 @@ node_modules/
 .idea/
 *.swp
 *.swo
+
+# The `go build` binary at the repo root. A 70MB artifact in the tree is 70MB
+# in every clone, forever.
+/TDrive
+
+# Design references. Worth keeping on disk, not worth carrying in history --
+# same rule as the planning docs.
+/simpler better app desgin.png
+/assets/app desgin mockup .png

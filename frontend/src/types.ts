@@ -16,6 +16,7 @@ export interface FileItem {
     uploaderId: number;
     encrypted: boolean;
     plaintextSize: number;
+    revision: number;
 }
 
 export interface FolderItem {

@@ -144,6 +144,26 @@
         transform: none;
     }
 
+    /* Phones: the glyph and its box stay as they are; the hit area grows to
+       44px through a pseudo-element (interactivity-3). */
+    :global(html.mobile) .ui-icon-button {
+        position: relative;
+    }
+
+    :global(html.mobile) .ui-icon-button::after {
+        position: absolute;
+        inset: -4px;
+        content: '';
+    }
+
+    :global(html.mobile) .is-small::after {
+        inset: -6px;
+    }
+
+    :global(html.mobile) .is-large::after {
+        inset: 0;
+    }
+
     @media (prefers-reduced-motion: reduce) {
         .ui-icon-button {
             transition: none;

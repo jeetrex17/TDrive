@@ -1,6 +1,7 @@
 import {
     closeMedia,
     closeNativeMedia,
+    isIOSPlatform,
     nativeMediaCommand,
     onRuntimeEvent,
     type MediaOpenResult,
@@ -12,6 +13,29 @@ import {
     type PlaybackPreferences,
 } from './playback-preferences';
 import { normalizeNativeTracks, type NativeMediaTrack } from './media-tracks';
+import {
+    elementTracks,
+    selectElementAudioTrack,
+    selectElementTextTrack,
+    watchElementTracks,
+} from './element-tracks';
+import type { HlsSource } from './hls-source';
+
+/**
+ * Which of a session's two URLs the element should load.
+ *
+ * The remuxed playlist is offered only where it is needed. Every other platform
+ * demuxes the original container itself, and going through HLS there would add
+ * a repackaging step and lose the byte-range seeking the direct URL already has.
+ *
+ * Android is the exception to the exception, and it is handled elsewhere: when a
+ * file carries more than one soundtrack the caller hands this adapter an
+ * HlsSource instead, because Chromium exposes no way to pick between them.
+ */
+export function playbackSource(opened: MediaOpenResult): string {
+    if (opened.hlsUrl && isIOSPlatform()) return opened.hlsUrl;
+    return opened.url;
+}
 
 export const MIN_PLAYBACK_RATE = 0.25;
 export const MAX_PLAYBACK_RATE = 4;
@@ -31,6 +55,14 @@ export interface PlayerState {
     rate: number;
     loading: boolean;
     tracks: NativeMediaTrack[];
+}
+
+// TrackSwitching is what the audio and subtitle pills talk to. Both players
+// implement it, so the pills work the same whether the webview demuxed the
+// stream itself or mpv did.
+export interface TrackSwitching {
+    setAudioTrack(id: number): void;
+    setSubtitleTrack(id: number | null): void;
 }
 
 export interface PlayerAdapter {
@@ -166,7 +198,7 @@ export function coalesceBufferedRanges(ranges: BufferedRange[], duration: number
     return merged;
 }
 
-export class HtmlVideoAdapter implements PlayerAdapter {
+export class HtmlVideoAdapter implements PlayerAdapter, TrackSwitching {
     private readonly subscribers = new Set<(state: PlayerState) => void>();
     private readonly listeners: Array<() => void> = [];
     private closed = false;
@@ -178,6 +210,12 @@ export class HtmlVideoAdapter implements PlayerAdapter {
         private readonly video: HTMLVideoElement,
         private readonly opened: MediaOpenResult,
         private readonly callbacks: HtmlVideoAdapterCallbacks,
+        /**
+         * Set when a JavaScript player is driving the stream instead of the
+         * element. It then owns both the source and the track lists, because
+         * the element knows nothing about renditions it never parsed.
+         */
+        private readonly hls: HlsSource | null = null,
     ) {
         this.lastAudibleVolume = video.volume > 0 ? video.volume : 1;
         const events = [
@@ -202,6 +240,9 @@ export class HtmlVideoAdapter implements PlayerAdapter {
         }
         const errorListener = () => {
             if (this.closed || this.failureReported || this.naturalEndReported) return;
+            // Chromium also fires `error` on the element when its poster image
+            // fails to load; without a MediaError there is no playback failure.
+            if (!this.video.error) return;
             this.failureReported = true;
             this.callbacks.mediaError(this.video.error?.code, this.snapshot());
         };
@@ -214,13 +255,35 @@ export class HtmlVideoAdapter implements PlayerAdapter {
         };
         video.addEventListener('ended', endedListener);
         this.listeners.push(() => video.removeEventListener('ended', endedListener));
+        this.listeners.push(watchElementTracks(video, () => this.emit()));
+    }
+
+    /** Republishes state after something outside the element changed it. */
+    refresh(): void {
+        this.emit();
+    }
+
+    setAudioTrack(id: number): void {
+        if (this.hls) this.hls.setAudioTrack(id);
+        else selectElementAudioTrack(this.video, id);
+        this.emit();
+    }
+
+    setSubtitleTrack(id: number | null): void {
+        if (this.hls) this.hls.setSubtitleTrack(id);
+        else selectElementTextTrack(this.video, id);
+        this.emit();
     }
 
     load(): void {
         this.video.pause();
-        this.video.removeAttribute('src');
-        this.video.load();
-        this.video.src = this.opened.url;
+        // A JavaScript player has already attached itself to the element and is
+        // feeding it; setting a src here would tear that out from under it.
+        if (!this.hls) {
+            this.video.removeAttribute('src');
+            this.video.load();
+            this.video.src = playbackSource(this.opened);
+        }
         this.video.playbackRate = 1;
         this.emit();
 
@@ -300,6 +363,7 @@ export class HtmlVideoAdapter implements PlayerAdapter {
     private detach(): boolean {
         if (this.closed) return false;
         this.closed = true;
+        this.hls?.destroy();
         for (const remove of this.listeners.splice(0)) remove();
         this.subscribers.clear();
         try {
@@ -329,7 +393,7 @@ export class HtmlVideoAdapter implements PlayerAdapter {
             muted: this.video.muted || this.video.volume === 0,
             rate: this.video.playbackRate || 1,
             loading: this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && !this.video.paused,
-            tracks: [],
+            tracks: this.hls ? this.hls.tracks() : elementTracks(this.video),
         };
     }
 
@@ -340,7 +404,7 @@ export class HtmlVideoAdapter implements PlayerAdapter {
     }
 }
 
-export class NativeMpvAdapter implements PlayerAdapter {
+export class NativeMpvAdapter implements PlayerAdapter, TrackSwitching {
     private readonly subscribers = new Set<(state: PlayerState) => void>();
     private state: PlayerState = { ...EMPTY_PLAYER_STATE, paused: false, loading: true };
     private closed = false;

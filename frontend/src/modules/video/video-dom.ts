@@ -58,7 +58,7 @@ export interface VideoDOMHandlers {
     close(): void;
     retry(): void;
     toggleFullscreen(): void;
-    pointerMove(): void;
+    pointerMove(event: PointerEvent): void;
     stageClick(event: MouseEvent): void;
     stageDoubleClick(event: MouseEvent): void;
     keydown(event: KeyboardEvent): void;

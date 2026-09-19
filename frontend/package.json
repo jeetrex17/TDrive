@@ -7,17 +7,16 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && svelte-check --tsconfig ./tsconfig.json",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 5",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
-    "@lucide/svelte": "^1.34.0",
     "@playwright/test": "^1.63.0",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^9.13.0",
     "eslint-plugin-svelte": "^3.19.0",
     "globals": "^15.11.0",
@@ -27,12 +26,14 @@
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.11.0",
     "vite": "^8.1.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
+    "@lucide/svelte": "^1.34.0",
     "@wailsio/runtime": "3.0.0-beta.22",
     "dompurify": "^3.4.11",
     "highlight.js": "^11.11.1",
+    "hls.js": "^1.6.14",
     "markdown-it": "^14.3.0",
     "pdfjs-dist": "^6.1.200"
   }

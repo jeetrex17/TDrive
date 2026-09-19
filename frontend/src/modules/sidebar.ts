@@ -17,6 +17,7 @@ import { openJoinRequestsModal } from './modals/join-requests';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
 import { enterPhotos, exitPhotos } from './gallery';
+import { closeTrash } from './trash/controller';
 import { showContextMenu, type ContextMenuItem } from './context-menu';
 import {
     setSidebarState,
@@ -52,13 +53,14 @@ export function renderSidebar() {
     const shared = channels.filter((channel) => channel.kind === 'shared');
     const pending = state.pendingJoins.filter((request) => request.inviteHash);
 
-    const photosActive = state.virtualView === 'photos';
+    const virtualView = state.virtualView;
+    const photosActive = virtualView === 'photos';
     setSidebarState({
         personal,
         shared,
         pending,
         activeChannelId: state.activeChannel ? Number(state.activeChannel.id) : null,
-        photosActive,
+        virtualView,
     });
 
     // The Photos item owns the current-route semantics while the gallery is open.
@@ -71,8 +73,11 @@ export function renderSidebar() {
 
 export function handleDriveClick(channelId: number): void {
     if (Number(channelId) === Number(state.activeChannel?.id)) {
-        // Clicking the already-active drive while in Photos returns to its files.
+        // Clicking the already-active drive is how you leave one of its virtual
+        // views. Without this the trash is a dead end: it has no breadcrumb to
+        // climb out by, and the drive you would click is the one you are in.
         if (state.virtualView === 'photos') exitPhotos();
+        else if (state.virtualView === 'trash') closeTrash();
         return;
     }
     void switchActiveChannel(Number(channelId));

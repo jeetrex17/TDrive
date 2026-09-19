@@ -1,7 +1,51 @@
 import { derived, writable } from 'svelte/store';
 
 export type TransferDirection = 'up' | 'down';
-export type TransferStatus = 'active' | 'done' | 'failed' | 'canceled';
+/**
+ * A transfer's whole life, including the two states it spends most of its time
+ * in on a phone: waiting behind other work, and stopped because the connection
+ * went away. Without them the queue can only say "active", which is how a
+ * stalled upload ends up looking identical to one that is moving.
+ */
+/**
+ * `paused` and `stopped` are not the same thing. A paused transfer is one iOS
+ * suspended and bytes will move again on their own, so it is still on its way;
+ * a stopped one has been put down until someone picks it up, which is what a
+ * paused photo backup is, and is finished as far as the panel is concerned.
+ */
+export type TransferStatus = 'queued' | 'active' | 'paused' | 'canceling' | 'done' | 'failed' | 'canceled' | 'stopped';
+
+/** The statuses that still have somewhere to go; the rest are finished. */
+export const UNFINISHED_TRANSFER_STATUSES: readonly TransferStatus[] = ['queued', 'active', 'paused', 'canceling'];
+
+export function isUnfinishedTransfer(status: TransferStatus): boolean {
+    return UNFINISHED_TRANSFER_STATUSES.includes(status);
+}
+
+/**
+ * One file moving inside an aggregate transfer, listed underneath it.
+ *
+ * A batch of any size runs only a handful of files at a time, and those few are
+ * the only ones a reader can act on or learn anything from; the rest are a
+ * number. So a row carries the files in flight and never the batch, which is
+ * what keeps a ten-thousand-file import the same size on screen, in the store
+ * and on the wire as a ten-file one.
+ */
+export interface TransferItem {
+    /** Stable for this file's whole life, so its bar keeps its place in the list. */
+    key: string;
+    name: string;
+    progress: number; // 0..100
+    total: number; // bytes; 0 when unknown
+}
+
+/**
+ * How many in-flight files a row lists. Upload concurrency is capped at eight,
+ * so this is a reading limit rather than a safety one -- past four names the
+ * list stops being something the eye takes in at a glance -- and itemsActive
+ * keeps the count of what is left out honest.
+ */
+export const MAX_TRANSFER_ITEMS = 4;
 
 export interface TransferEvent {
     kind: 'transfer';
@@ -14,9 +58,22 @@ export interface TransferEvent {
     speed: number; // smoothed bytes/sec; 0 when unknown
     itemsDone?: number; // completed files for aggregate folder/import transfers
     itemsTotal?: number;
+    /** The files moving right now, at most MAX_TRANSFER_ITEMS of them. */
+    items?: readonly TransferItem[];
+    /** How many are moving in all, which is items.length or more. */
+    itemsActive?: number;
     status: TransferStatus;
     startedAt: number;
     finishedAt: number;
+    /**
+     * One sentence the transfer wants to keep after it has finished: on a phone,
+     * where the file actually landed.
+     *
+     * A phone has no Finder to go and look in, so that answer is the whole point
+     * of the download, and it used to be carried by a toast -- which is to say
+     * it went past once and could not be asked for again.
+     */
+    note?: string;
 }
 
 export interface NoticeEvent {
@@ -26,26 +83,46 @@ export interface NoticeEvent {
     title: string;
     body: string;
     ts: number;
+    /**
+     * How many times this same notice has arrived in a row. One means once, and
+     * the row says nothing about it; more and it carries a count instead of
+     * stacking identical rows down the list.
+     */
+    repeats?: number;
 }
 
 export type HistoryEvent = TransferEvent | NoticeEvent;
 
 export type BellMode = 'idle' | 'active' | 'error';
 
-// Newest first, capped by modules/notif-bell.ts. All mutations go through
-// that module so cap/dedupe/idempotency rules live in one place.
+/**
+ * How many entries the history keeps; the oldest fall off the end.
+ *
+ * It lives with the store rather than with the module that enforces it because
+ * it now also bounds what comes back off disk, and a restore that trusted a
+ * stored count could hand the panel a list no cap had ever been applied to.
+ */
+export const HISTORY_CAP = 100;
+
+// Newest first, capped by modules/notif-bell.ts. All mutations go through that
+// module -- including the restore and the suspend that modules/transfer-
+// persistence.ts asks it for -- so cap/dedupe/idempotency rules live in one
+// place.
 export const historyEvents = writable<HistoryEvent[]>([]);
 export const notifPanelOpen = writable(false);
 export const notifUnreadErrors = writable(0);
 
+// Everything still on its way, whether or not bytes are moving this second.
+// Queued and paused belong here, not in Recent: the work has not happened yet,
+// and filing it under "recent" is how a queue forgets what it still owes.
 export const activeTransfers = derived(historyEvents, (events) =>
-    events.filter((e): e is TransferEvent => e.kind === 'transfer' && e.status === 'active'),
+    events.filter((e): e is TransferEvent => e.kind === 'transfer' && isUnfinishedTransfer(e.status)),
 );
 
-// Everything that is not an in-flight transfer: notices plus finished
-// transfers, in arrival order (newest first).
+// Everything that is not still on its way: notices plus finished transfers,
+// in arrival order (newest first).
 export const recentEvents = derived(historyEvents, (events) =>
-    events.filter((e) => !(e.kind === 'transfer' && e.status === 'active')),
+    events.filter((e) => !(e.kind === 'transfer' && isUnfinishedTransfer(e.status))),
 );
 
 export const bellMode = derived(

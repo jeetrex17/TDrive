@@ -135,7 +135,12 @@ func copyFile(src, dst string, mode os.FileMode) (err error) {
 }
 
 // errNoBundle and friends are internal sentinels for payload validation.
+// They live here rather than in the per-OS install files because both macOS
+// and Windows raise errNoAppInPayload; only the darwin installer unwraps a
+// bundle, so neither is referenced from a Linux build.
 var (
-	errNoAppInPayload       = errors.New("payload does not contain exactly one app")
+	//lint:ignore U1000 returned by install_darwin.go and install_windows.go only.
+	errNoAppInPayload = errors.New("payload does not contain exactly one app")
+	//lint:ignore U1000 returned by install_darwin.go only.
 	errNoExecutableInBundle = errors.New("payload app has no executable")
 )

@@ -9,12 +9,13 @@ import {
     NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
     OpenNativeMedia as rawOpenNativeMedia,
+    OpenOriginalImage as rawOpenOriginalImage,
     OpenStream as rawOpenStream,
     ResizeNativeMedia as rawResizeNativeMedia,
     ShowNativeSeekThumbnail as rawShowNativeSeekThumbnail,
     Thumbnail as rawThumbnail,
     UpdateMediaPlayback as rawUpdateMediaPlayback,
-} from "../../bindings/TDrive/app";
+} from "../../bindings/TDrive/mediaservice";
 import type { LogicalFile, OpenResult, ThroughputStats as MediaThroughputStats } from "../../bindings/TDrive/backend/media/models";
 import type { NativeMediaResult } from "../../bindings/TDrive/models";
 import type { FileItem } from "../types";
@@ -36,6 +37,11 @@ export interface MediaOpenResult {
     token: string;
     url: string;
     thumbnailUrl: string;
+    /**
+     * An HLS playlist backed by an on-demand remux, set only for a container
+     * Apple platforms cannot open. Empty for every file a player takes directly.
+     */
+    hlsUrl: string;
     name: string;
     kind: string;
     mimeType: string;
@@ -126,11 +132,23 @@ export async function openStream(msgId: number): Promise<MediaOpenResult> {
     return normalizeMediaOpenResult(opened);
 }
 
+/**
+ * Opens exactly one short-lived original-image stream for an immutable file
+ * revision. This deliberately bypasses the rendition broker: it must never
+ * create a Blob, enter the thumbnail cache, or be speculatively fetched.
+ */
+export async function openOriginalImage(msgId: number, revision: number): Promise<MediaOpenResult> {
+    const opened = normalizeMediaOpenResult(await invokeBackend(rawOpenOriginalImage, msgId, revision));
+    if (!opened.token || !opened.url || opened.kind !== 'image') throw new Error('Original image stream is unavailable.');
+    return opened;
+}
+
 function normalizeMediaOpenResult(opened?: OpenResult): MediaOpenResult {
     return {
         token: String(opened?.token ?? ""),
         url: String(opened?.url ?? ""),
         thumbnailUrl: String(opened?.thumbnail_url ?? ""),
+        hlsUrl: String(opened?.hls_url ?? ""),
         name: String(opened?.name ?? ""),
         kind: String(opened?.kind ?? ""),
         mimeType: String(opened?.mime_type ?? ""),

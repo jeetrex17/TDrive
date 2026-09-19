@@ -76,7 +76,7 @@
         width: 14px;
         height: 14px;
         border-radius: var(--radius-full);
-        border: 2px solid var(--border-strong);
+        border: 2px solid var(--border);
         border-top-color: var(--accent);
         animation: state-spin 720ms linear infinite;
     }
@@ -110,6 +110,17 @@
         color: var(--danger);
         border-color: color-mix(in srgb, var(--danger) 42%, transparent);
         background: color-mix(in srgb, var(--danger) 12%, transparent);
+    }
+
+    /* Phones read this at arm's length: section and body sizes from the
+       mobile type scale, nothing else changes. */
+    :global(html.mobile) .state-title {
+        font-size: 1.0625rem;
+    }
+
+    :global(html.mobile) .state-body {
+        font-size: 0.9375rem;
+        line-height: 1.5;
     }
 
     @keyframes state-spin {

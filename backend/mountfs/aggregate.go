@@ -1,10 +1,10 @@
 package mountfs
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -201,19 +201,21 @@ func validateAggregateRoot(candidate AggregateRoot, seenDrives map[int64]struct{
 }
 
 func sortAggregateRoots(roots []aggregateRoot) {
-	sort.Slice(roots, func(left, right int) bool {
-		if roots[left].personal != roots[right].personal {
-			return roots[left].personal
+	slices.SortFunc(roots, func(a, b aggregateRoot) int {
+		if a.personal != b.personal {
+			// Personal roots lead.
+			if a.personal {
+				return -1
+			}
+			return 1
 		}
-		leftKey := NameKey(roots[left].entry.Name)
-		rightKey := NameKey(roots[right].entry.Name)
-		if leftKey != rightKey {
-			return leftKey < rightKey
+		if c := cmp.Compare(NameKey(a.entry.Name), NameKey(b.entry.Name)); c != 0 {
+			return c
 		}
-		if roots[left].entry.Name != roots[right].entry.Name {
-			return roots[left].entry.Name < roots[right].entry.Name
+		if c := cmp.Compare(a.entry.Name, b.entry.Name); c != 0 {
+			return c
 		}
-		return roots[left].driveID < roots[right].driveID
+		return cmp.Compare(a.driveID, b.driveID)
 	})
 }
 

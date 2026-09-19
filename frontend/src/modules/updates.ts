@@ -12,6 +12,7 @@ import {
     getMountStatus,
     getUpdateState,
     installUpdateAndRestart,
+    isMobilePlatform,
     onRuntimeEvent,
     onUpdateState,
     openUpdatePage,
@@ -45,7 +46,8 @@ const announced = new Set<string>();
 const autoDownloaded = new Set<string>();
 
 export function activateUpdates(): () => void {
-    if (started) return teardownUpdates;
+    // Phones update through their app stores: no checks, panel, or toasts.
+    if (started || isMobilePlatform()) return teardownUpdates;
     started = true;
 
     stopUpdateState = onUpdateState(applyState);
@@ -155,7 +157,7 @@ export async function checkForUpdates(options: { explicit?: boolean } = {}): Pro
         applyState(result);
         if (options.explicit) {
             if (result.error && result.errorStage === 'check') {
-                notify({ level: 'error', title: 'Update check failed', body: result.error });
+                notify({ level: 'error', title: 'Update check failed', body: humanizeBackendError(result.error) });
             } else if (result.phase === 'up_to_date') {
                 notify({ level: 'success', title: 'TDrive is up to date' });
             } else if (result.phase === 'disabled') {
@@ -163,6 +165,11 @@ export async function checkForUpdates(options: { explicit?: boolean } = {}): Pro
             }
         }
     } catch (err) {
+        // A check the backend never answered must not leave the panel with its
+        // spinner on and its button off: nothing else would ever reset it.
+        updateState.update((current) => (
+            current.phase === 'checking' ? { ...current, phase: 'idle', error: humanizeBackendError(err), errorStage: 'check' } : current
+        ));
         if (options.explicit) {
             notify({ level: 'error', title: 'Update check failed', body: humanizeBackendError(err) });
         } else {
@@ -228,6 +235,7 @@ export async function getRestartRisks(): Promise<string[]> {
 // gestures: reveal the panel where possible and always run a check so the
 // action answers even from the login screen, where the panel isn't mounted.
 export async function openUpdatesUI(): Promise<void> {
+    if (isMobilePlatform()) return;
     requestUpdatesPanel();
     await checkForUpdates({ explicit: true });
 }

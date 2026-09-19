@@ -176,3 +176,52 @@ describe('FileList DOM behavior', () => {
         expect(host?.querySelector('.drive-row[data-row-key="file:0"]')).toBeNull();
     });
 });
+
+describe('FileList phone rows', () => {
+    const originalUrl = () => `${window.location.pathname}${window.location.search}`;
+
+    it('renders the two-line row with meta, chip, lock and overflow, then checks in selection mode', () => {
+        const previous = originalUrl();
+        history.replaceState(null, '', '/?mobile=android');
+        try {
+            setup();
+            showFileListRows([makeFileRow({
+                name: 'Holiday Photos 2024 final version v2.zip',
+                size: 1_400_000_000,
+                // minuteTick is created when this module graph loads. Leave a
+                // full minute of headroom so parallel-suite startup timing
+                // cannot make an exact five-hour boundary read as 4:59.
+                uploadTime: Math.floor(Date.now() / 1000) - 5 * 3600 - 60,
+                encrypted: true,
+                uploaderChip: { label: 'Mara Okonkwo · 5h ago', firstName: 'Mara', initials: 'MO' },
+            })]);
+            flushSync();
+
+            const node = row();
+            expect(node.querySelector('.row-label-head')?.textContent).toBe('Holiday Photos 2024 final versio');
+            expect(node.querySelector('.row-label-tail')?.textContent).toBe('n v2.zip');
+            expect(node.querySelector('.row-sub-text')?.textContent).toBe('MP4 · 1.3 GB · 5 hours ago');
+            expect(node.querySelector('.file-lock-badge')).not.toBeNull();
+            expect(node.querySelector('.uploader-initials')?.textContent).toBe('MO');
+            expect(node.querySelector('.uploader-chip')?.textContent?.trim()).toMatch(/Mara$/);
+            expect(node.querySelector('button.row-more')?.getAttribute('aria-haspopup')).toBe('menu');
+            expect(node.querySelector('.row-meta')).toBeNull();
+            expect(node.querySelector('.row-check')).toBeNull();
+
+            setSelectedFileRowKeys(['file:42']);
+            flushSync();
+            expect(row().querySelector('.row-check')).not.toBeNull();
+            expect(row().classList.contains('is-selected')).toBe(true);
+        } finally {
+            history.replaceState(null, '', previous);
+        }
+    });
+
+    it('keeps the desktop grid when not on a phone', () => {
+        setup();
+        showFileListRows([makeFileRow()]);
+        flushSync();
+        expect(row().querySelector('button.row-more')).toBeNull();
+        expect(row().querySelectorAll('.row-meta')).toHaveLength(2);
+    });
+});

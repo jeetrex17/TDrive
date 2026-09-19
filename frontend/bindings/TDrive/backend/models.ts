@@ -10,6 +10,7 @@ export interface FileMetaData {
     "uploader_id": number;
     "encrypted"?: boolean;
     "plaintext_size"?: number;
+    "revision"?: number;
 }
 
 export interface FileSystem {

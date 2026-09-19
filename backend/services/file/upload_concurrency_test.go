@@ -336,3 +336,62 @@ func TestUploadConcurrencyClamp(t *testing.T) {
 		}
 	}
 }
+
+// Cancelling one transfer row must stop that file only. Before per-upload
+// cancels the backend held a single handle for the whole direction, so the ×
+// on any row took every concurrent upload down with it.
+func TestCancelUploadStopsOneFileAndLeavesTheBatchRunning(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxConcurrentUploads = 3
+	svc.FloodWaitRetry = instantRetryPolicy()
+
+	names := []string{"alpha.txt", "bravo.txt", "charlie.txt"}
+	var paths, parents []string
+	for _, name := range names {
+		paths = append(paths, writeTempNamedFile(t, name, []byte(name)))
+		parents = append(parents, "")
+	}
+
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{}, len(names))
+		release := make(chan struct{})
+		client := &countingClient{Fake: fakeTG, entered: entered, release: release}
+		svc.TG = client
+
+		resultCh := make(chan []Metadata, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			files, err := svc.Upload(context.Background(), personalChannelID, paths, parents, false)
+			resultCh <- files
+			errCh <- err
+		}()
+		for range names {
+			<-entered
+		}
+		synctest.Wait()
+
+		// Upload IDs are the batch offsets the progress events carry, so 1 is
+		// the row the user tapped: bravo.txt.
+		if !svc.CancelUpload(1) {
+			t.Fatal("CancelUpload(1) did not find the running upload")
+		}
+		close(release)
+		synctest.Wait()
+
+		err := <-errCh
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("upload error = %v, want context canceled", err)
+		}
+		got := map[string]bool{}
+		for _, file := range <-resultCh {
+			got[file.Name] = true
+		}
+		if len(got) != 2 || !got["alpha.txt"] || !got["charlie.txt"] {
+			t.Fatalf("uploaded = %v, want alpha.txt and charlie.txt to finish without bravo.txt", got)
+		}
+	})
+
+	if svc.CancelUpload(1) {
+		t.Fatal("CancelUpload(1) still found an upload after the batch finished")
+	}
+}

@@ -13,7 +13,9 @@
 //  5. move/rename targeting a tombstoned or missing object: ignored, logged.
 //  6. A move that would create a cycle is rejected deterministically by walking
 //     ancestors before applying. Projection is not mutated on rejection.
-//  7. tomb / rmdir is idempotent. Re-applying does nothing.
+//  7. tomb / rmdir is idempotent. Re-applying does nothing. OpTomb stays fully
+//     supported forever: channel history and other clients still contain them,
+//     and rejecting one would break every projection rebuild.
 //  8. Virtual buckets are SELECT-time concepts. Never written as folder rows.
 //  9. ApplyOp is the only writer to files and folders. The rest of the app
 //     reads via read.go and mutates only by calling Local* helpers in writes.go,
@@ -76,6 +78,8 @@ func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) (er
 			applyErr = applyTrashTree(tx, channelID, op)
 		case OpHardDeleteTree:
 			applyErr = applyHardDeleteTree(tx, channelID, msgID, op)
+		case OpRestoreTree:
+			applyErr = applyRestoreTree(tx, channelID, op)
 		}
 		if applyErr != nil {
 			return applyErr
@@ -88,7 +92,7 @@ func ApplyOp(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) (er
 	case OpFileUpload, OpMeta:
 		return applyFileMeta(tx, channelID, msgID, op, actorID)
 	case OpFilePart:
-		return applyFilePart(tx, channelID, msgID, op)
+		return applyFilePart(tx, channelID, msgID, op, actorID)
 	case OpFileManifest:
 		return applyManifest(tx, channelID, msgID, op, actorID)
 	case OpRename:
@@ -192,7 +196,10 @@ func applyFileMeta(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int6
 // enter the files table, so they never surface as files or as orphans. The
 // manifest op (applied last, with a higher msg_id) creates the single logical
 // file row that references these parts by upload_uuid.
-func applyFilePart(tx *sql.Tx, channelID int64, msgID int64, op Op) error {
+func applyFilePart(tx *sql.Tx, channelID int64, msgID int64, op Op, actorID int64) error {
+	if err := applyRendition(tx, channelID, msgID, op, actorID); err != nil {
+		return err
+	}
 	if strings.TrimSpace(op.UploadUUID) == "" {
 		return fmt.Errorf("%w: part requires upload uuid", ErrBadOp)
 	}

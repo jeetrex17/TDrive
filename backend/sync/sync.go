@@ -562,17 +562,7 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 		if err != nil {
 			return false, fmt.Errorf("sync: get history: %w", err)
 		}
-		pageWatermark := minID
-		filtered := page[:0]
-		for _, m := range page {
-			if m.MsgID <= minID || m.MsgID > plan.highestSeen {
-				continue
-			}
-			filtered = append(filtered, m)
-			if m.MsgID > pageWatermark {
-				pageWatermark = m.MsgID
-			}
-		}
+		filtered, pageWatermark := filterHistoryPage(page, minID, plan.highestSeen)
 		parsed := ParseHistoryPageWithOptions(filtered, parseOpts)
 		SortAscending(parsed)
 		slog.Debug("sync: applying history page", "channel_id", channelID, "ops", len(parsed))
@@ -614,13 +604,80 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 	return replayOverlap, nil
 }
 
-func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions, rebuild bool) error {
-	tx, err := e.db.Begin()
-	if err != nil {
-		return fmt.Errorf("sync: begin initial projection: %w", err)
+// filterHistoryPage drops the messages a scan must ignore — ids the watermark
+// already covers, and ids that arrived after the counting pass fixed the
+// scan's upper bound — and reports the highest id it kept. Filtering is done
+// in place, so the result aliases page's backing array.
+func filterHistoryPage(page []tgclient.HistoryMessage, minID, highestSeen int64) ([]tgclient.HistoryMessage, int64) {
+	kept := page[:0]
+	watermark := minID
+	for _, m := range page {
+		if m.MsgID <= minID || m.MsgID > highestSeen {
+			continue
+		}
+		kept = append(kept, m)
+		if m.MsgID > watermark {
+			watermark = m.MsgID
+		}
 	}
-	defer func() { _ = tx.Rollback() }()
+	return kept, watermark
+}
 
+// applyInitialHistoryPlan lands a full-history scan as one atomic unit: either
+// the whole history, the optional repair rebuild and the initial-sync marker
+// commit together, or nothing does. Three guarantees rest on that. An
+// authoritative "this drive has no encryption policy" answer is only sound
+// while the marker cannot outlive a partial scan; InitialSyncEmptyChannel's
+// refusal to run on a non-empty channel, and the caption-less adoption that
+// authoritativeLocked enables only on an empty projection, are only meaningful
+// while an abandoned scan leaves no trace behind.
+//
+// The scan is therefore run as two passes over a spool (see
+// initial_scan_spool.go): the network pass parks each fetched page with no
+// transaction open, then one transaction replays the spool. backend.InitDB
+// caps the pool at one connection, so an open transaction is the whole
+// application's database access; e.getHistory sleeps through FLOOD_WAITs for
+// minutes, and holding the transaction across those sleeps stalled every
+// unrelated read for the length of the scan.
+//
+// The spool rather than a slice because a million-message drive is a target of
+// this codebase and its parsed ops measure ~570 bytes each — over half a
+// gigabyte held at once, which the mobile builds do not survive.
+func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan, parseOpts ParseOptions, rebuild bool) error {
+	if err := ensureInitialScanSpool(e.db); err != nil {
+		return err
+	}
+	// Anything already spooled belongs to a scan that was killed before it
+	// could commit. This one re-reads the same range from message zero, so
+	// those rows are stale scratch, not progress to resume from.
+	if err := clearInitialScanSpool(e.db, channelID); err != nil {
+		return err
+	}
+	if err := e.spoolHistoryPlan(ctx, channelID, peer, minID, plan); err != nil {
+		return err
+	}
+	// Past this point the scan is local work only, and a cancelled context
+	// should abandon it rather than leave a half-applied commit's worth of
+	// work to roll back.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := e.commitInitialHistoryPlan(channelID, plan, parseOpts, rebuild); err != nil {
+		return err
+	}
+	// Best effort: the spool is scratch that the next scan clears anyway, and
+	// failing here would report a scan that actually landed as failed.
+	if err := clearInitialScanSpool(e.db, channelID); err != nil {
+		slog.Warn("sync: could not clear the initial-scan spool", "channel_id", channelID, "error", err)
+	}
+	return nil
+}
+
+// spoolHistoryPlan reads every page of plan with no transaction open and parks
+// it. Pages are walked oldest-first and each lands in its own short
+// transaction, so the connection is free between round trips and a FLOOD_WAIT
+// blocks nothing but this scan.
+func (e *Engine) spoolHistoryPlan(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID int64, plan historyPlan) error {
 	messagesDone := 0
 	for i := len(plan.upperBounds) - 1; i >= 0; i-- {
 		if err := ctx.Err(); err != nil {
@@ -630,25 +687,48 @@ func (e *Engine) applyInitialHistoryPlan(ctx context.Context, channelID int64, p
 		if err != nil {
 			return fmt.Errorf("sync: get history: %w", err)
 		}
-		filtered := page[:0]
-		for _, m := range page {
-			if m.MsgID <= minID || m.MsgID > plan.highestSeen {
-				continue
-			}
-			filtered = append(filtered, m)
+		filtered, _ := filterHistoryPage(page, minID, plan.highestSeen)
+		if err := spoolHistoryPage(e.db, channelID, filtered); err != nil {
+			return err
 		}
-		parsed := ParseHistoryPageWithOptions(filtered, parseOpts)
+		messagesDone += len(page)
+		// The network dominates a scan, so page reads are what progress means
+		// to a user watching it; the local commit that follows is not worth
+		// reporting separately.
+		e.applyProgress(channelID, plan, i, messagesDone)
+	}
+	return nil
+}
+
+// commitInitialHistoryPlan projects the spooled scan and marks the channel
+// authoritative. Everything it does is local, so the pool's single connection
+// is held only for as long as the writes themselves take. Parsing happens here
+// rather than at spool time so the projection is fed by the same function over
+// the same data as before, with no encode/decode step able to alter an op.
+func (e *Engine) commitInitialHistoryPlan(channelID int64, plan historyPlan, parseOpts ParseOptions, rebuild bool) error {
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("sync: begin initial projection: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	projected := 0
+	err = eachSpooledBatch(tx, channelID, func(batch []tgclient.HistoryMessage) error {
+		parsed := ParseHistoryPageWithOptions(batch, parseOpts)
 		SortAscending(parsed)
-		slog.Debug("sync: applying initial-scan page", "channel_id", channelID, "ops", len(parsed))
 		for _, p := range parsed {
 			if _, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader); err != nil {
 				slog.Error("sync: applying op failed during initial scan", "channel_id", channelID, "msg_id", p.MsgID, "op_type", p.Op.Type, "error", err)
 				return fmt.Errorf("sync: project msg=%d: %w", p.MsgID, err)
 			}
+			projected++
 		}
-		messagesDone += len(page)
-		e.applyProgress(channelID, plan, i, messagesDone)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
+	slog.Debug("sync: applied initial-scan ops", "channel_id", channelID, "ops", projected)
 
 	// The scan has now read everything the log was missing, but the ops that
 	// depended on those objects were banked as applied the first time round and
@@ -744,11 +824,6 @@ func markProjectionRebuildRequiredTx(tx *sql.Tx, channelID int64) error {
 		return fmt.Errorf("sync: channel %d not registered", channelID)
 	}
 	return nil
-}
-
-func writeWatermark(db *sql.DB, channelID int64, msgID int64) error {
-	_, err := db.Exec(`UPDATE channels SET last_synced_msg = ? WHERE channel_id = ?`, msgID, channelID)
-	return err
 }
 
 func writeWatermarkTx(tx *sql.Tx, channelID int64, msgID int64) error {

@@ -17,12 +17,13 @@ declare global {
     interface Window {
         /**
          * Populated by Go (see wails/v3 internal/runtime/runtime_{dev,prod}.go)
-         * with an inline script that runs before the app bundle, in every real
-         * Wails webview. Absent in the plain Vite dev/preview browser, which is
-         * how the gateway readiness check tells a native webview from a browser
-         * preview. The `@wailsio/runtime` package declares a looser ambient
-         * `Window._wails` type of its own, but it is not reachable from this
-         * project's tsconfig (nothing imports it), so it is redeclared here.
+         * with an inline script that runs before the app bundle in the desktop
+         * webviews. The iOS and Android hosts (beta.22) do not inject it, so
+         * runtime.ts fills it from System.Environment() once the bridge is up.
+         * Absent in the plain Vite dev/preview browser. The `@wailsio/runtime`
+         * package declares a looser ambient `Window._wails` type of its own,
+         * but it is not reachable from this project's tsconfig (nothing imports
+         * it), so it is redeclared here.
          */
         _wails?: {
             environment?: {
@@ -30,6 +31,27 @@ declare global {
                 Arch?: string;
                 Debug?: boolean;
             };
+        };
+        /**
+         * Published by the phone shell (ui/mobile/mobile-back) for the Android
+         * host to call on a hardware or gesture BACK press. Returns whether the
+         * page dismissed something; the host leaves the app when it did not.
+         */
+        __tdriveHandleBack?: () => boolean;
+        /** Android host bridge (addJavascriptInterface), present before the page runs. */
+        wails?: {
+            invoke?: (message: string) => void;
+            platform?: () => string;
+        };
+        /** WKWebView message handler on macOS and iOS. */
+        webkit?: {
+            messageHandlers?: {
+                external?: { postMessage?: (message: unknown) => void };
+            };
+        };
+        /** WebView2 bridge on Windows. */
+        chrome?: {
+            webview?: { postMessage?: (message: unknown) => void };
         };
     }
 }

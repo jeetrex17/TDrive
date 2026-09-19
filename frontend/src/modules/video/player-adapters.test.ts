@@ -8,6 +8,7 @@ import {
     HtmlVideoAdapter,
     NativeMediaStateRouter,
     NativeMpvAdapter,
+    playbackSource,
 } from "./player-adapters";
 
 const mocks = vi.hoisted(() => {
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => {
     return {
         runtime,
         closeMedia: vi.fn(async () => undefined),
+        isIOSPlatform: vi.fn(() => false),
         closeNativeMedia: vi.fn(async () => undefined),
         nativeMediaCommand: vi.fn(async () => undefined),
         onRuntimeEvent: vi.fn((_name: string, callback: (value: unknown) => void) => {
@@ -68,6 +70,7 @@ function htmlOpened(sessionID = "html-session"): MediaOpenResult {
         token: sessionID,
         url: `http://127.0.0.1/media/${sessionID}`,
         thumbnailUrl: "",
+        hlsUrl: "",
         name: "clip.mp4",
         kind: "video",
         mimeType: "video/mp4",
@@ -143,11 +146,27 @@ describe("HTML video natural completion", () => {
         const video = new FakeVideo();
         const adapter = new HtmlVideoAdapter(video as unknown as HTMLVideoElement, htmlOpened(), callbacks);
 
+        video.error = { code: 3 } as MediaError;
         video.dispatchEvent(new Event("error"));
         video.dispatchEvent(new Event("ended"));
 
-        expect(callbacks.mediaError).toHaveBeenCalledTimes(1);
+        expect(callbacks.mediaError).toHaveBeenCalledWith(3, expect.anything());
         expect(callbacks.mediaEnded).not.toHaveBeenCalled();
+        await adapter.close();
+    });
+
+    it("ignores an error event that carries no MediaError, such as a failed poster", async () => {
+        vi.stubGlobal("HTMLMediaElement", { HAVE_FUTURE_DATA: 3 });
+        const callbacks = htmlCallbacks();
+        const video = new FakeVideo();
+        const adapter = new HtmlVideoAdapter(video as unknown as HTMLVideoElement, htmlOpened(), callbacks);
+
+        video.dispatchEvent(new Event("error"));
+        expect(callbacks.mediaError).not.toHaveBeenCalled();
+
+        video.error = { code: 2 } as MediaError;
+        video.dispatchEvent(new Event("error"));
+        expect(callbacks.mediaError).toHaveBeenCalledTimes(1);
         await adapter.close();
     });
 });
@@ -213,5 +232,30 @@ describe("native video natural completion", () => {
 
         await adapter.close();
         router.unbind();
+    });
+});
+
+describe("playbackSource", () => {
+    afterEach(() => {
+        mocks.isIOSPlatform.mockReturnValue(false);
+    });
+
+    it("loads the file directly when there is no remuxed playlist", () => {
+        mocks.isIOSPlatform.mockReturnValue(true);
+        const opened = htmlOpened();
+        expect(playbackSource(opened)).toBe(opened.url);
+    });
+
+    it("loads the remuxed playlist on ios", () => {
+        mocks.isIOSPlatform.mockReturnValue(true);
+        const opened = { ...htmlOpened(), hlsUrl: "http://127.0.0.1/media/hls/tok/index.m3u8" };
+        expect(playbackSource(opened)).toBe(opened.hlsUrl);
+    });
+
+    it("leaves every other platform on the original container", () => {
+        // Elsewhere the player demuxes Matroska itself, and going through HLS
+        // would repackage for nothing and lose byte-range seeking.
+        const opened = { ...htmlOpened(), hlsUrl: "http://127.0.0.1/media/hls/tok/index.m3u8" };
+        expect(playbackSource(opened)).toBe(opened.url);
     });
 });

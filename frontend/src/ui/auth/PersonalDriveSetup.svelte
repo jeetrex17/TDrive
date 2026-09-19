@@ -3,6 +3,7 @@
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
+    import { isMobilePlatform } from '../../api';
     import type { PersonalDriveCandidate } from '../../types';
     import type { DriveScanProgress, PersonalDrivePhase } from './personal-drive-store';
 
@@ -16,7 +17,7 @@
         waitSeconds?: number;
         onSelect: (channelID: string) => void;
         onCreate: () => void;
-        onRetry: () => void;
+        onRetry: () => void | Promise<void>;
     }
 
     let {
@@ -32,8 +33,16 @@
         onRetry,
     }: Props = $props();
 
+    // Phones move the primary and create actions into the bottom bar; the
+    // desktop card keeps them in reading order under the list. With no
+    // channel to pick, creating is the only way forward and takes the
+    // primary look there.
+    const mobile = isMobilePlatform();
+    const createIsPrimary = $derived(mobile && candidates.length === 0);
+
     let selectedID = $state('');
     let confirmingCreate = $state(false);
+    let retrying = $state(false);
 
     const busy = $derived(phase === 'loading' || phase === 'recovering');
     const recovering = $derived(phase === 'recovering');
@@ -66,7 +75,7 @@
     });
 
     const scanLabel = $derived.by(() => {
-        if (waitRemaining > 0) return `Telegram asked us to slow down — resuming in ${waitRemaining}s`;
+        if (waitRemaining > 0) return `Telegram asked us to slow down, resuming in ${waitRemaining}s`;
         if (!scan) return 'Reading your Telegram channel…';
         if (scan.phase === 'counting') {
             return `Counting messages… ${formatCount(scan.messages_done)} so far`;
@@ -106,148 +115,209 @@
         event.preventDefault();
         submitSelection();
     }
+
+    // Discovery only changes phase once the backend answers, so the button
+    // guards itself against a second tap until then.
+    async function retry(): Promise<void> {
+        if (retrying) return;
+        retrying = true;
+        try {
+            await onRetry();
+        } finally {
+            retrying = false;
+        }
+    }
 </script>
 
-<section class="auth-box drive-setup" aria-labelledby="drive-setup-title">
-    <div class="auth-icon-box">
-        <HardDriveIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-    </div>
-    <h2 id="drive-setup-title">Choose your TDrive</h2>
-    <p>No saved drive was found on this device. Pick the Telegram channel that holds your files, or start a new empty drive.</p>
+{#snippet continueButton()}
+    <button
+        class="primary-btn drive-primary"
+        class:is-busy={recovering}
+        data-drive-continue
+        type="button"
+        disabled={!selectedID || busy}
+        onclick={submitSelection}
+    >
+        {recovering ? 'Recovering…' : mobile ? 'Use this drive' : 'Continue'}
+    </button>
+{/snippet}
 
-    {#if phase === 'loading'}
-        <div class="drive-panel" role="status" aria-live="polite">
-            <span class="drive-spinner" aria-hidden="true"></span>
-            <strong>Looking for your drives…</strong>
-            <span>Checking the channels you created on Telegram</span>
+{#snippet retryButton()}
+    <button
+        class="primary-btn drive-primary"
+        class:is-busy={retrying}
+        data-drive-retry
+        type="button"
+        disabled={retrying}
+        onclick={() => void retry()}
+    >
+        <RotateCwIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+        {retrying ? 'Retrying…' : 'Retry'}
+    </button>
+{/snippet}
+
+{#snippet createActions()}
+    {#if createRetry}
+        <div class="drive-secondary drive-secondary-stack">
+            <button
+                class="drive-ghost"
+                class:is-primary={createIsPrimary}
+                data-drive-create-retry
+                type="button"
+                disabled={busy}
+                onclick={onCreate}
+            >
+                <RotateCwIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+                Retry TDrive Setup
+            </button>
+            <span class="drive-hint">Continues the previous attempt without creating a duplicate channel.</span>
         </div>
-    {:else if phase === 'discovery-error'}
-        <div class="drive-alert" role="alert">
-            <strong>{error}</strong>
-            {#if detail}<span>{detail}</span>{/if}
+    {:else if confirmingCreate}
+        <div class="drive-confirm" role="group" aria-label="Confirm new TDrive">
+            <div>
+                <strong>Create a new empty TDrive?</strong>
+                <span>This creates one new Telegram channel.</span>
+            </div>
+            <div class="drive-confirm-actions">
+                <button class="drive-ghost" type="button" disabled={busy} onclick={() => { confirmingCreate = false; }}>
+                    Cancel
+                </button>
+                <button class="drive-confirm-create" data-drive-create-confirm type="button" disabled={busy} onclick={onCreate}>
+                    Create
+                </button>
+            </div>
         </div>
-        <button class="primary-btn drive-primary" data-drive-retry type="button" onclick={onRetry}>
-            <RotateCwIcon size={16} strokeWidth={2.2} aria-hidden="true" />
-            Retry
-        </button>
     {:else}
-        {#if error}
+        <button
+            class="drive-ghost drive-secondary"
+            class:is-primary={createIsPrimary}
+            data-drive-create-request
+            type="button"
+            disabled={busy}
+            onclick={() => { confirmingCreate = true; }}
+        >
+            <PlusIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+            Create New TDrive
+        </button>
+    {/if}
+{/snippet}
+
+<section class="auth-box drive-setup" aria-labelledby="drive-setup-title">
+    <div class="auth-page-body">
+        <div class="auth-icon-box">
+            <HardDriveIcon size={32} strokeWidth={1.5} aria-hidden="true" />
+        </div>
+        <h2 id="drive-setup-title">Choose your TDrive</h2>
+        <p>No saved drive was found on this device. Pick the Telegram channel that holds your files, or start a new empty drive.</p>
+
+        {#if phase === 'loading'}
+            <div class="drive-panel" role="status" aria-live="polite">
+                <span class="drive-spinner" aria-hidden="true"></span>
+                <strong>Looking for your drives…</strong>
+                <span>Checking the channels you created on Telegram</span>
+            </div>
+        {:else if phase === 'discovery-error'}
             <div class="drive-alert" role="alert">
                 <strong>{error}</strong>
                 {#if detail}<span>{detail}</span>{/if}
             </div>
-        {/if}
-
-        {#if candidates.length > 0}
-            <fieldset class="drive-list" disabled={busy}>
-                <legend class="sr-only">Your Telegram channels</legend>
-                {#each candidates as candidate (candidate.id)}
-                    <label class="drive-choice" class:selected={selectedID === candidate.id}>
-                        <input
-                            type="radio"
-                            name="personal-drive"
-                            value={candidate.id}
-                            bind:group={selectedID}
-                            disabled={busy}
-                            onkeydown={onChoiceKeydown}
-                        />
-                        <span class="drive-choice-copy">
-                            <span class="drive-choice-title">
-                                <span class="drive-title-text" title={candidateTitle(candidate)}>
-                                    {candidateTitle(candidate)}
-                                </span>
-                                {#if candidate.recommended}
-                                    <span class="drive-badge">Recommended</span>
-                                {/if}
-                            </span>
-                            <span class="drive-choice-meta">
-                                <span class:in-use={candidate.hasActivity}>
-                                    {candidate.hasActivity ? 'In use' : 'Empty'}
-                                </span>
-                                {#if formatCreated(candidate.createdAt)}
-                                    <span>{formatCreated(candidate.createdAt)}</span>
-                                {/if}
-                                <span>ID {candidate.id}</span>
-                            </span>
-                        </span>
-                        <span class="drive-check" aria-hidden="true">
-                            <CheckIcon size={13} strokeWidth={3} />
-                        </span>
-                    </label>
-                {/each}
-            </fieldset>
-
-            <button
-                class="primary-btn drive-primary"
-                data-drive-continue
-                type="button"
-                disabled={!selectedID || busy}
-                onclick={submitSelection}
-            >
-                {recovering ? 'Recovering…' : 'Continue'}
-            </button>
+            {#if !mobile}
+                {@render retryButton()}
+            {/if}
         {:else}
-            <div class="drive-panel">
-                <strong>No channels found</strong>
-                <span>You haven't created any Telegram channels, so there is nothing to recover yet.</span>
-            </div>
-        {/if}
+            {#if error}
+                <div class="drive-alert" role="alert">
+                    <strong>{error}</strong>
+                    {#if detail}<span>{detail}</span>{/if}
+                </div>
+            {/if}
 
-        {#if recovering}
-            <div class="drive-scan" data-drive-scan>
-                <div
-                    class="drive-scan-track"
-                    role="progressbar"
-                    aria-label="Recovery progress"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={percent ?? undefined}
-                >
-                    <span
-                        class="drive-scan-fill"
-                        class:indeterminate={percent === null}
-                        style={percent === null ? undefined : `width: ${percent}%`}
-                    ></span>
-                </div>
-                <span class="drive-hint" role="status" aria-live="polite">{scanLabel}</span>
-            </div>
-        {/if}
+            {#if candidates.length > 0}
+                <fieldset class="drive-list" disabled={busy}>
+                    <legend class="sr-only">Your Telegram channels</legend>
+                    {#each candidates as candidate (candidate.id)}
+                        <label class="drive-choice" class:selected={selectedID === candidate.id}>
+                            <input
+                                type="radio"
+                                name="personal-drive"
+                                value={candidate.id}
+                                bind:group={selectedID}
+                                disabled={busy}
+                                onkeydown={onChoiceKeydown}
+                            />
+                            <span class="drive-choice-copy">
+                                <span class="drive-choice-title">
+                                    <span class="drive-title-text" title={candidateTitle(candidate)}>
+                                        {candidateTitle(candidate)}
+                                    </span>
+                                    {#if candidate.recommended}
+                                        <span class="drive-badge">Recommended</span>
+                                    {/if}
+                                </span>
+                                <span class="drive-choice-meta">
+                                    <span class:in-use={candidate.hasActivity}>
+                                        {candidate.hasActivity ? 'In use' : 'Empty'}
+                                    </span>
+                                    {#if formatCreated(candidate.createdAt)}
+                                        <span>{formatCreated(candidate.createdAt)}</span>
+                                    {/if}
+                                    <span>ID {candidate.id}</span>
+                                </span>
+                            </span>
+                            <span class="drive-check" aria-hidden="true">
+                                <CheckIcon size={13} strokeWidth={3} />
+                            </span>
+                        </label>
+                    {/each}
+                </fieldset>
 
-        {#if createRetry}
-            <div class="drive-secondary drive-secondary-stack">
-                <button class="drive-ghost" data-drive-create-retry type="button" disabled={busy} onclick={onCreate}>
-                    <RotateCwIcon size={16} strokeWidth={2.2} aria-hidden="true" />
-                    Retry TDrive Setup
-                </button>
-                <span class="drive-hint">Continues the previous attempt without creating a duplicate channel.</span>
-            </div>
-        {:else if confirmingCreate}
-            <div class="drive-confirm" role="group" aria-label="Confirm new TDrive">
-                <div>
-                    <strong>Create a new empty TDrive?</strong>
-                    <span>This creates one new Telegram channel.</span>
+                {#if !mobile}
+                    {@render continueButton()}
+                {/if}
+            {:else}
+                <div class="drive-panel">
+                    <strong>No channels found</strong>
+                    <span>You haven't created any Telegram channels, so there is nothing to recover yet.</span>
                 </div>
-                <div class="drive-confirm-actions">
-                    <button class="drive-ghost" type="button" disabled={busy} onclick={() => { confirmingCreate = false; }}>
-                        Cancel
-                    </button>
-                    <button class="drive-confirm-create" data-drive-create-confirm type="button" disabled={busy} onclick={onCreate}>
-                        Create
-                    </button>
+            {/if}
+
+            {#if recovering}
+                <div class="drive-scan" data-drive-scan>
+                    <div
+                        class="drive-scan-track"
+                        role="progressbar"
+                        aria-label="Recovery progress"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={percent ?? undefined}
+                    >
+                        <span
+                            class="drive-scan-fill"
+                            class:indeterminate={percent === null}
+                            style={percent === null ? undefined : `width: ${percent}%`}
+                        ></span>
+                    </div>
+                    <span class="drive-hint" role="status" aria-live="polite">{scanLabel}</span>
                 </div>
-            </div>
-        {:else}
-            <button
-                class="drive-ghost drive-secondary"
-                data-drive-create-request
-                type="button"
-                disabled={busy}
-                onclick={() => { confirmingCreate = true; }}
-            >
-                <PlusIcon size={16} strokeWidth={2.2} aria-hidden="true" />
-                Create New TDrive
-            </button>
+            {/if}
+
+            {#if !mobile}
+                {@render createActions()}
+            {/if}
         {/if}
+    </div>
+
+    {#if mobile && phase !== 'loading'}
+        <div class="auth-actions">
+            {#if phase === 'discovery-error'}
+                {@render retryButton()}
+            {:else}
+                {#if candidates.length > 0}
+                    {@render continueButton()}
+                {/if}
+                {@render createActions()}
+            {/if}
+        </div>
     {/if}
 </section>
 
@@ -260,7 +330,7 @@
         padding: 2.25rem 2rem;
         overflow: auto;
     }
-    .drive-setup > p {
+    .auth-page-body > p {
         max-width: 380px;
         margin-right: auto;
         margin-left: auto;
@@ -501,5 +571,100 @@
         .drive-scan-fill { transition: none; }
         .drive-scan-fill.indeterminate { width: 100%; animation: none; }
         .drive-choice, .drive-check, .drive-ghost { transition: none; }
+    }
+    /* Phone page: the list scrolls with the body and the actions sit in the
+       bottom bar (auth.css owns the page frame; this tunes the picker). */
+    :global(html.mobile) .drive-setup {
+        width: 100%;
+        max-height: none;
+        padding: 0;
+        overflow: hidden;
+    }
+    :global(html.mobile) .auth-page-body > p {
+        max-width: none;
+        margin: 0 0 1.5rem;
+    }
+    :global(html.mobile) .drive-list {
+        max-height: none;
+        margin: 0;
+        overflow: hidden;
+        border-radius: var(--radius-lg);
+    }
+    :global(html.mobile) .drive-choice {
+        min-height: 56px;
+        padding: 12px 16px;
+    }
+    :global(html.mobile) .drive-choice-title { font-size: 0.9375rem; }
+    :global(html.mobile) .drive-choice-meta { font-size: 0.8125rem; }
+    :global(html.mobile) .drive-badge { font-size: 0.75rem; }
+    :global(html.mobile) .drive-check { width: 22px; height: 22px; }
+    :global(html.mobile) .drive-panel {
+        padding: 32px 20px;
+        margin: 0;
+        font-size: 0.875rem;
+        border-radius: var(--radius-lg);
+    }
+    :global(html.mobile) .drive-panel strong { font-size: 1rem; }
+    :global(html.mobile) .drive-alert {
+        font-size: 0.9375rem;
+        border-radius: var(--radius-lg);
+    }
+    :global(html.mobile) .drive-alert span { font-size: 0.8125rem; }
+    :global(html.mobile) .drive-scan { margin-top: 16px; }
+    :global(html.mobile) .drive-hint { font-size: 0.8125rem; line-height: 1.5; }
+    :global(html.mobile) .drive-primary {
+        min-height: 50px;
+        font-size: 1rem;
+        border-radius: var(--radius-lg);
+    }
+    :global(html.mobile) .drive-primary:hover { transform: none; }
+    :global(html.mobile) .drive-primary.is-busy::before {
+        width: 16px;
+        height: 16px;
+        content: '';
+        border: 2px solid currentColor;
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: drive-spin 720ms linear infinite;
+    }
+    :global(html.mobile) .drive-primary.is-busy > :global(svg) { display: none; }
+    :global(html.mobile) .drive-ghost {
+        min-height: 44px;
+        font-size: 0.9375rem;
+    }
+    :global(html.mobile) .drive-secondary {
+        width: 100%;
+        margin-top: 4px;
+    }
+    :global(html.mobile) .drive-ghost.is-primary {
+        width: 100%;
+        min-height: 50px;
+        margin-top: 0;
+        color: var(--color-on-accent);
+        font-size: 1rem;
+        font-weight: var(--weight-strong);
+        background: var(--accent);
+        border-radius: var(--radius-lg);
+    }
+    :global(html.mobile) .drive-ghost.is-primary:not(:disabled):hover {
+        color: var(--color-on-accent);
+        background: var(--accent);
+    }
+    :global(html.mobile) .drive-secondary-stack { gap: 0; }
+    :global(html.mobile) .drive-confirm {
+        flex-direction: column;
+        align-items: stretch;
+        margin-top: 4px;
+        border-radius: var(--radius-lg);
+    }
+    :global(html.mobile) .drive-confirm strong { font-size: 0.9375rem; }
+    :global(html.mobile) .drive-confirm span { font-size: 0.8125rem; }
+    :global(html.mobile) .drive-confirm-actions button {
+        flex: 1;
+        min-height: 44px;
+    }
+    :global(html.mobile) .drive-confirm-create {
+        font-size: 0.9375rem;
+        border-radius: var(--radius-md);
     }
 </style>

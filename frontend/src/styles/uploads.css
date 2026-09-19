@@ -107,14 +107,9 @@
     color: var(--accent);
 }
 
-.drop-overlay-card strong {
+.drop-overlay-title {
     font-size: var(--type-lg);
     font-weight: 700;
-}
-
-.drop-overlay-card span {
-    font-size: var(--type-sm);
-    color: var(--text-muted);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -41,9 +41,14 @@ export function resetFileSortState(): void {
     fileSortState.set(DEFAULT_FILE_SORT);
 }
 
+const SORT_KEYS: readonly FileSortKey[] = ['name', 'date', 'size', 'type'];
+
 function isSortState(value: Partial<FileSortState>): value is FileSortState {
+    // Guards against a stored preference from an older or newer build: an
+    // unrecognised key falls back to the default rather than sorting by
+    // nothing, which would look like the list quietly ignoring the choice.
     return (
-        (value.key === 'name' || value.key === 'date' || value.key === 'size') &&
+        SORT_KEYS.includes(value.key as FileSortKey) &&
         (value.direction === 'asc' || value.direction === 'desc')
     );
 }

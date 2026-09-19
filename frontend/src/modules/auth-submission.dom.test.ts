@@ -138,7 +138,7 @@ describe('auth submission lifecycle', () => {
         expect(get(authScreen)).toBe('code');
         expect(get(authSubmission).code).toEqual({
             busy: false,
-            error: 'That code was incorrect. Check it and try again.',
+            error: 'That code was incorrect. Check the Telegram message and try again.',
         });
         expect(collaborators.notify).not.toHaveBeenCalled();
     });

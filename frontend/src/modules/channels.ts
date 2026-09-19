@@ -6,12 +6,14 @@
 // change.
 
 import { state, invalidateFolderIndex, resetFolderCaches, resetSelection } from '../state';
+import { resetRenditions } from './renditions/runtime';
 import {
     approveJoinRequest as approveJoinRequestApi,
     checkPendingJoin as checkPendingJoinApi,
     createSharedDrive as createSharedDriveApi,
     getApprovalInviteLink as getApprovalInviteLinkApi,
     getInviteLink as getInviteLinkApi,
+    isMobilePlatform,
     joinSharedDrive as joinSharedDriveApi,
     leaveSharedDrive as leaveSharedDriveApi,
     listChannels,
@@ -27,6 +29,21 @@ import {
 import type { DriveChannel, JoinDriveResult, JoinRequest, PendingJoin } from '../types';
 import { runGlobalSearch } from './search';
 import type { RefreshFilesOptions } from './app-actions';
+import { driveSyncStatus, type DriveSyncState } from '../ui/mobile/mobile-shell-store';
+
+// The phone's drive header shows a live sync ring; desktop never reads this
+// store, so the updates are gated to keep desktop free of stray timers.
+let syncedResetTimer: ReturnType<typeof setTimeout> | null = null;
+function setDriveSync(next: DriveSyncState): void {
+    if (!isMobilePlatform()) return;
+    if (syncedResetTimer) {
+        clearTimeout(syncedResetTimer);
+        syncedResetTimer = null;
+    }
+    driveSyncStatus.set(next);
+    // The success check shows briefly, then the ring settles back to idle (2.8).
+    if (next === 'synced') syncedResetTimer = setTimeout(() => driveSyncStatus.set('idle'), 900);
+}
 
 interface ChannelRenderers {
     onSidebarUpdate: () => void;
@@ -37,6 +54,7 @@ interface ChannelRenderers {
 
 let renderSidebar: () => void = () => undefined;
 let refreshFilesView: (options?: RefreshFilesOptions) => void | Promise<void> = () => undefined;
+let driveRefreshGeneration = 0;
 const pendingLiveSyncChannels = new Set<number>();
 let processingLiveSyncRefresh = false;
 let disconnectLiveSyncEvents: (() => void) | null = null;
@@ -92,18 +110,24 @@ export function activateLiveSyncEvents(): () => void {
     disconnectLiveSyncEvents?.();
     if (!runtimeEventsAvailable()) return () => {};
 
+    const stopStarted = onRuntimeEvent('live_sync_started', (payload) => {
+        if (isActiveDriveEvent(payload)) setDriveSync('syncing');
+    });
     const stopCompleted = onRuntimeEvent('live_sync_completed', (payload) => {
+        if (isActiveDriveEvent(payload)) setDriveSync('synced');
         queueLiveSyncRefresh(payload);
     });
     const stopFailed = onRuntimeEvent('live_sync_failed', (payload) => {
         const channelId = liveSyncChannelId(payload);
         const activeId = Number(state.activeChannel?.id ?? 0);
         if (channelId && channelId !== activeId) return;
+        setDriveSync('failed');
         console.warn('live sync failed:', liveSyncFailure(payload));
     });
     const disconnect = () => {
         if (disconnectLiveSyncEvents !== disconnect) return;
         disconnectLiveSyncEvents = null;
+        stopStarted();
         stopCompleted();
         stopFailed();
         pendingLiveSyncChannels.clear();
@@ -115,6 +139,13 @@ export function activateLiveSyncEvents(): () => void {
 function liveSyncChannelId(payload: unknown): number {
     if (payload === null || typeof payload !== "object" || !("channel_id" in payload)) return 0;
     return Number(payload.channel_id ?? 0);
+}
+
+// A sync event with no channel id, or one that names the active drive, drives the
+// header ring; other drives sync quietly in the background.
+function isActiveDriveEvent(payload: unknown): boolean {
+    const channelId = liveSyncChannelId(payload);
+    return !channelId || channelId === Number(state.activeChannel?.id ?? 0);
 }
 
 function liveSyncFailure(payload: unknown): unknown {
@@ -216,7 +247,12 @@ export async function leaveSharedDrive(channelId: number): Promise<void> {
 
 export async function switchActiveChannel(channelId: number): Promise<void> {
     if (!channelId || state.channelSwitchInProgress) return;
+    // Invalidate an explicit refresh immediately, before the native switch
+    // resolves. Otherwise an older request for the drive we are leaving can
+    // still publish during the switch window.
+    driveRefreshGeneration += 1;
     state.channelSwitchInProgress = true;
+    resetRenditions();
     // Route intent changes immediately. A later Photos click must win while the
     // native channel switch is still in flight.
     state.virtualView = null;
@@ -253,25 +289,37 @@ export async function refreshActiveDrive(): Promise<void> {
         return;
     }
     const channelId = state.activeChannel.id;
+    const generation = ++driveRefreshGeneration;
+    const stillActive = (): boolean => (
+        generation === driveRefreshGeneration
+        && Number(state.activeChannel?.id ?? 0) === channelId
+    );
+    setDriveSync('syncing');
     try {
         await syncChannel(channelId);
+        if (stillActive()) setDriveSync('synced');
     } catch (error) {
+        if (stillActive()) setDriveSync('failed');
         console.warn('SyncChannel:', error);
     } finally {
         invalidateDriveCaches(channelId);
     }
+    if (!stillActive()) return;
     await refreshFilesView();
 }
 
 function syncInBackground(channelId: number): void {
+    setDriveSync('syncing');
     void syncChannel(channelId)
         .then(() => {
             invalidateDriveCaches(channelId);
             if (Number(state.activeChannel?.id ?? 0) !== channelId) return;
+            setDriveSync('synced');
             return refreshFilesView({ background: true });
         })
         .catch((error: unknown) => {
             invalidateDriveCaches(channelId);
+            if (Number(state.activeChannel?.id ?? 0) === channelId) setDriveSync('failed');
             console.warn('SyncChannel:', error);
         });
 }

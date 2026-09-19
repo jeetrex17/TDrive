@@ -67,6 +67,14 @@
 }
 .profile-menu[hidden] { display: none; }
 .profile-menu.appearance-view { min-width: min(390px, calc(100vw - 32px)); }
+.profile-menu.backup-view {
+    box-sizing: border-box;
+    width: min(430px, calc(100vw - 32px));
+    max-height: min(680px, calc(100vh - 88px));
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
 .profile-menu-header {
     display: flex;
     gap: 12px;
@@ -142,11 +150,18 @@
     color: var(--text-muted);
     line-height: 1.35;
 }
+/* A drive can collect more pending requests than the dialog is tall, and the
+   centred .modal-card grows past both edges of the window with nothing to
+   scroll it. Cap the only part that grows, the same way .mount-drive-list
+   does, so the title and Close stay on screen at any count. */
 .join-requests-list {
     display: flex;
     flex-direction: column;
     gap: 8px;
     margin-bottom: 18px;
+    max-height: min(360px, 48vh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 .join-request-row {
     display: flex;
@@ -191,4 +206,3 @@
     color: var(--danger);
     line-height: 1.3;
 }
-

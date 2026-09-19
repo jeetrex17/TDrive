@@ -63,21 +63,22 @@ var (
 
 // OpenNativeMedia opens the same tokenized loopback stream as OpenMedia, then
 // hands it to the native player. The returned token owns both resources.
-func (a *App) OpenNativeMedia(msgID int, rect nativeplayer.Rect) (NativeMediaResult, error) {
-	if a.engine == nil {
+func (s *MediaService) OpenNativeMedia(msgID int, rect nativeplayer.Rect) (NativeMediaResult, error) {
+	sessions := s.mediaSessions()
+	if sessions == nil {
 		return NativeMediaResult{}, fmt.Errorf("backend not ready")
 	}
 	if !rect.Valid() {
 		return NativeMediaResult{}, fmt.Errorf("invalid video viewport")
 	}
 
-	opened, err := a.engine.MediaService().Open(a.ctx, a.ActiveChannelID(), int64(msgID))
+	opened, err := sessions.Open(s.host.appContext(), s.host.activeChannelID(), int64(msgID))
 	if err != nil {
 		return NativeMediaResult{}, err
 	}
-	result, err := a.attachNativeMedia(opened, rect)
+	result, err := s.attachNativeMedia(opened, rect)
 	if err != nil {
-		_ = a.engine.MediaService().CloseSession(opened.Token)
+		_ = sessions.CloseSession(opened.Token)
 		return NativeMediaResult{}, err
 	}
 	return result, nil
@@ -87,38 +88,39 @@ func (a *App) OpenNativeMedia(msgID int, rect nativeplayer.Rect) (NativeMediaRes
 // session. It is used when the embedded webview cannot decode a file, allowing
 // the fallback to keep the same token and range cache. Ownership of the media
 // session remains with the original opener, including on attachment failure.
-func (a *App) AttachNativeMedia(token string, rect nativeplayer.Rect) (NativeMediaResult, error) {
+func (s *MediaService) AttachNativeMedia(token string, rect nativeplayer.Rect) (NativeMediaResult, error) {
 	if token == "" {
 		return NativeMediaResult{}, fmt.Errorf("media session is required")
 	}
 	if !rect.Valid() {
 		return NativeMediaResult{}, fmt.Errorf("invalid video viewport")
 	}
-	if a.engine == nil {
+	sessions := s.mediaSessions()
+	if sessions == nil {
 		return NativeMediaResult{}, fmt.Errorf("backend not ready")
 	}
-	opened, err := a.engine.MediaService().OpenResultForToken(token)
+	opened, err := sessions.OpenResultForToken(token)
 	if err != nil {
 		return NativeMediaResult{}, err
 	}
-	return a.attachNativeMedia(opened, rect)
+	return s.attachNativeMedia(opened, rect)
 }
 
-func (a *App) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect) (NativeMediaResult, error) {
+func (s *MediaService) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect) (NativeMediaResult, error) {
 	if !rect.Valid() {
 		return NativeMediaResult{}, fmt.Errorf("invalid video viewport")
 	}
 	if err := validateNativeMediaOpenResult(opened); err != nil {
 		return NativeMediaResult{}, err
 	}
-	reservation, err := a.reserveNativeMediaSession(opened.Token, opened.Info.Encrypted)
+	reservation, err := s.reserveNativeMediaSession(opened.Token, opened.Info.Encrypted)
 	if err != nil {
 		return NativeMediaResult{}, err
 	}
 	completed := false
 	defer func() {
 		if !completed {
-			a.releaseNativeMediaReservation(opened.Token, reservation)
+			s.releaseNativeMediaReservation(opened.Token, reservation)
 		}
 	}()
 
@@ -127,16 +129,16 @@ func (a *App) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect)
 	opts := nativeplayer.Options{
 		UseHTMLControls: htmlControls,
 		OnState: func(state nativeplayer.State) {
-			snapshot, emit := a.recordNativeMediaState(token, reservation, state)
+			snapshot, emit := s.recordNativeMediaState(token, reservation, state)
 			if emit {
-				a.emitNativeMediaState(snapshot)
+				s.emitNativeMediaState(snapshot)
 			}
 		},
 	}
 	// Player startup is the other half of what a viewer waits on when a video
 	// opens, so it is measured next to the media session.
 	playerStarted := time.Now()
-	player, err := nativeplayer.Start(a.ctx, opened.URL, rect, opts)
+	player, err := nativeplayer.Start(s.host.appContext(), opened.URL, rect, opts)
 	slog.Debug("native media: player start finished", "token", token, "html_controls", htmlControls, "elapsed", time.Since(playerStarted), "err", err)
 	if err != nil {
 		if errors.Is(err, nativeplayer.ErrUnsupported) {
@@ -144,8 +146,8 @@ func (a *App) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect)
 		}
 		return NativeMediaResult{}, err
 	}
-	if _, ok := a.nativeMediaStateSnapshot(opened.Token, reservation); !ok {
-		_, _ = a.recordNativeMediaState(token, reservation, nativeplayer.State{
+	if _, ok := s.nativeMediaStateSnapshot(opened.Token, reservation); !ok {
+		_, _ = s.recordNativeMediaState(token, reservation, nativeplayer.State{
 			Status:  nativeplayer.StatusOpening,
 			Paused:  true,
 			Loading: true,
@@ -154,12 +156,12 @@ func (a *App) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect)
 		})
 	}
 
-	if !a.completeNativeMediaSession(opened.Token, reservation, player) {
+	if !s.completeNativeMediaSession(opened.Token, reservation, player) {
 		_ = player.Close()
 		return NativeMediaResult{}, fmt.Errorf("native playback attachment was canceled")
 	}
 	completed = true
-	initialState, _ := a.nativeMediaStateSnapshot(opened.Token, reservation)
+	initialState, _ := s.nativeMediaStateSnapshot(opened.Token, reservation)
 
 	return NativeMediaResult{
 		Token:        opened.Token,
@@ -172,38 +174,38 @@ func (a *App) attachNativeMedia(opened media.OpenResult, rect nativeplayer.Rect)
 	}, nil
 }
 
-func (a *App) ResizeNativeMedia(token string, rect nativeplayer.Rect) error {
+func (s *MediaService) ResizeNativeMedia(token string, rect nativeplayer.Rect) error {
 	if !rect.Valid() {
 		return errInvalidNativeMediaViewport
 	}
-	player := a.nativeMediaPlayer(token)
+	player := s.nativeMediaPlayer(token)
 	if player == nil {
 		return nil
 	}
 	return player.Resize(rect)
 }
 
-func (a *App) NativeMediaCommand(token string, command []string) error {
+func (s *MediaService) NativeMediaCommand(token string, command []string) error {
 	if err := validateNativeMediaCommand(command); err != nil {
 		return err
 	}
-	player := a.nativeMediaPlayer(token)
+	player := s.nativeMediaPlayer(token)
 	if player == nil {
 		return nil
 	}
 	return player.Command(command...)
 }
 
-func (a *App) CloseNativeMedia(token string) error {
+func (s *MediaService) CloseNativeMedia(token string) error {
 	if token == "" {
 		return nil
 	}
-	session := a.takeNativeMediaSession(token)
+	session := s.takeNativeMediaSession(token)
 	if session != nil && session.player != nil {
 		_ = session.player.Close()
 	}
-	if a.engine != nil {
-		err := a.engine.MediaService().CloseSession(token)
+	if sessions := s.mediaSessions(); sessions != nil {
+		err := sessions.CloseSession(token)
 		if errors.Is(err, media.ErrSessionNotFound) {
 			return nil
 		}
@@ -212,18 +214,18 @@ func (a *App) CloseNativeMedia(token string) error {
 	return nil
 }
 
-func (a *App) closeAllNativeMedia() {
-	a.nativeMediaMu.Lock()
-	sessions := a.nativeMedia
-	a.nativeMedia = nil
-	a.nativeMediaMu.Unlock()
+func (s *MediaService) closeAllNativeMedia() {
+	s.nativeMediaMu.Lock()
+	sessions := s.nativeMedia
+	s.nativeMedia = nil
+	s.nativeMediaMu.Unlock()
 
 	for token, session := range sessions {
 		if session != nil && session.player != nil {
 			_ = session.player.Close()
 		}
-		if a.engine != nil {
-			_ = a.engine.MediaService().CloseSession(token)
+		if sessions := s.mediaSessions(); sessions != nil {
+			_ = sessions.CloseSession(token)
 		}
 	}
 }
@@ -231,86 +233,86 @@ func (a *App) closeAllNativeMedia() {
 // closeEncryptedNativeMedia detaches only sessions backed by encrypted media.
 // Removing entries under the lock also cancels in-flight attachments: their
 // completion step will fail and close any player they managed to start.
-func (a *App) closeEncryptedNativeMedia() {
+func (s *MediaService) closeEncryptedNativeMedia() {
 	type encryptedSession struct {
 		token   string
 		session *nativeMediaSession
 	}
 
-	a.nativeMediaMu.Lock()
+	s.nativeMediaMu.Lock()
 	sessions := make([]encryptedSession, 0)
-	for token, session := range a.nativeMedia {
+	for token, session := range s.nativeMedia {
 		if session == nil || !session.encrypted {
 			continue
 		}
-		delete(a.nativeMedia, token)
+		delete(s.nativeMedia, token)
 		sessions = append(sessions, encryptedSession{token: token, session: session})
 	}
-	a.nativeMediaMu.Unlock()
+	s.nativeMediaMu.Unlock()
 
 	for _, item := range sessions {
 		if item.session.player != nil {
 			_ = item.session.player.Close()
 		}
-		if a.engine != nil {
-			_ = a.engine.MediaService().CloseSession(item.token)
+		if sessions := s.mediaSessions(); sessions != nil {
+			_ = sessions.CloseSession(item.token)
 		}
 	}
 }
 
-func (a *App) emitNativeMediaState(state *NativeMediaState) {
+func (s *MediaService) emitNativeMediaState(state *NativeMediaState) {
 	if state == nil || state.Token == "" {
 		return
 	}
-	a.emit("native_media_state", state)
+	s.host.emit("native_media_state", state)
 }
 
-func (a *App) nativeMediaSession(token string) *nativeMediaSession {
+func (s *MediaService) nativeMediaSession(token string) *nativeMediaSession {
 	if token == "" {
 		return nil
 	}
-	a.nativeMediaMu.Lock()
-	defer a.nativeMediaMu.Unlock()
-	return a.nativeMedia[token]
+	s.nativeMediaMu.Lock()
+	defer s.nativeMediaMu.Unlock()
+	return s.nativeMedia[token]
 }
 
-func (a *App) nativeMediaPlayer(token string) *nativeplayer.Player {
+func (s *MediaService) nativeMediaPlayer(token string) *nativeplayer.Player {
 	if token == "" {
 		return nil
 	}
-	a.nativeMediaMu.Lock()
-	defer a.nativeMediaMu.Unlock()
-	session := a.nativeMedia[token]
+	s.nativeMediaMu.Lock()
+	defer s.nativeMediaMu.Unlock()
+	session := s.nativeMedia[token]
 	if session == nil {
 		return nil
 	}
 	return session.player
 }
 
-func (a *App) reserveNativeMediaSession(token string, encrypted bool) (*nativeMediaSession, error) {
+func (s *MediaService) reserveNativeMediaSession(token string, encrypted bool) (*nativeMediaSession, error) {
 	if token == "" {
 		return nil, fmt.Errorf("media session is required")
 	}
-	a.nativeMediaMu.Lock()
-	defer a.nativeMediaMu.Unlock()
-	if a.nativeMedia == nil {
-		a.nativeMedia = make(map[string]*nativeMediaSession)
+	s.nativeMediaMu.Lock()
+	defer s.nativeMediaMu.Unlock()
+	if s.nativeMedia == nil {
+		s.nativeMedia = make(map[string]*nativeMediaSession)
 	}
-	if _, exists := a.nativeMedia[token]; exists {
+	if _, exists := s.nativeMedia[token]; exists {
 		return nil, fmt.Errorf("native playback is already attached or attaching")
 	}
 	reservation := &nativeMediaSession{attaching: true, encrypted: encrypted}
-	a.nativeMedia[token] = reservation
+	s.nativeMedia[token] = reservation
 	return reservation, nil
 }
 
-func (a *App) completeNativeMediaSession(token string, reservation *nativeMediaSession, player *nativeplayer.Player) bool {
+func (s *MediaService) completeNativeMediaSession(token string, reservation *nativeMediaSession, player *nativeplayer.Player) bool {
 	if token == "" || reservation == nil || player == nil {
 		return false
 	}
-	a.nativeMediaMu.Lock()
-	defer a.nativeMediaMu.Unlock()
-	current, exists := a.nativeMedia[token]
+	s.nativeMediaMu.Lock()
+	defer s.nativeMediaMu.Unlock()
+	current, exists := s.nativeMedia[token]
 	if !exists || current != reservation || !reservation.attaching {
 		return false
 	}
@@ -319,13 +321,13 @@ func (a *App) completeNativeMediaSession(token string, reservation *nativeMediaS
 	return true
 }
 
-func (a *App) recordNativeMediaState(token string, reservation *nativeMediaSession, state nativeplayer.State) (*NativeMediaState, bool) {
+func (s *MediaService) recordNativeMediaState(token string, reservation *nativeMediaSession, state nativeplayer.State) (*NativeMediaState, bool) {
 	if token == "" || reservation == nil {
 		return nil, false
 	}
-	a.nativeMediaMu.Lock()
-	defer a.nativeMediaMu.Unlock()
-	current := a.nativeMedia[token]
+	s.nativeMediaMu.Lock()
+	defer s.nativeMediaMu.Unlock()
+	current := s.nativeMedia[token]
 	if current == nil || current != reservation {
 		return nil, false
 	}
@@ -339,13 +341,13 @@ func (a *App) recordNativeMediaState(token string, reservation *nativeMediaSessi
 	return snapshot, !current.attaching
 }
 
-func (a *App) nativeMediaStateSnapshot(token string, reservation *nativeMediaSession) (*NativeMediaState, bool) {
+func (s *MediaService) nativeMediaStateSnapshot(token string, reservation *nativeMediaSession) (*NativeMediaState, bool) {
 	if token == "" || reservation == nil {
 		return nil, false
 	}
-	a.nativeMediaMu.Lock()
-	defer a.nativeMediaMu.Unlock()
-	current := a.nativeMedia[token]
+	s.nativeMediaMu.Lock()
+	defer s.nativeMediaMu.Unlock()
+	current := s.nativeMedia[token]
 	if current == nil || current != reservation || current.lastState == nil {
 		return nil, false
 	}
@@ -391,29 +393,29 @@ func cloneNativeMediaState(state *NativeMediaState) *NativeMediaState {
 	return &clone
 }
 
-func (a *App) releaseNativeMediaReservation(token string, reservation *nativeMediaSession) {
+func (s *MediaService) releaseNativeMediaReservation(token string, reservation *nativeMediaSession) {
 	if token == "" || reservation == nil {
 		return
 	}
-	a.nativeMediaMu.Lock()
-	if a.nativeMedia[token] == reservation && reservation.attaching {
-		delete(a.nativeMedia, token)
+	s.nativeMediaMu.Lock()
+	if s.nativeMedia[token] == reservation && reservation.attaching {
+		delete(s.nativeMedia, token)
 	}
-	a.nativeMediaMu.Unlock()
+	s.nativeMediaMu.Unlock()
 }
 
 func nativeHTMLControlsEnabled() bool {
 	return os.Getenv("TDRIVE_NATIVE_VIDEO_FALLBACK") != "1"
 }
 
-func (a *App) takeNativeMediaSession(token string) *nativeMediaSession {
+func (s *MediaService) takeNativeMediaSession(token string) *nativeMediaSession {
 	if token == "" {
 		return nil
 	}
-	a.nativeMediaMu.Lock()
-	defer a.nativeMediaMu.Unlock()
-	session := a.nativeMedia[token]
-	delete(a.nativeMedia, token)
+	s.nativeMediaMu.Lock()
+	defer s.nativeMediaMu.Unlock()
+	session := s.nativeMedia[token]
+	delete(s.nativeMedia, token)
 	return session
 }
 
@@ -508,11 +510,11 @@ func validateNativeMediaOpenResult(opened media.OpenResult) error {
 // produced and the frontend already holds; rect is the desired preview box in
 // CSS pixels. It is only meaningful on the Windows fallback (where HTML can't
 // draw over the video) and is a no-op on platforms without an overlay.
-func (a *App) ShowNativeSeekThumbnail(token string, imageBase64 string, rect nativeplayer.Rect) error {
+func (s *MediaService) ShowNativeSeekThumbnail(token string, imageBase64 string, rect nativeplayer.Rect) error {
 	if !rect.Valid() {
 		return errInvalidNativeMediaViewport
 	}
-	player := a.nativeMediaPlayer(token)
+	player := s.nativeMediaPlayer(token)
 	if player == nil {
 		return nil
 	}
@@ -530,11 +532,11 @@ func (a *App) ShowNativeSeekThumbnail(token string, imageBase64 string, rect nat
 // re-uploading or re-decoding the frame. Windows calls this on every scrub move;
 // keeping it separate from ShowNativeSeekThumbnail avoids doing JPEG decode and
 // GDI bitmap upload work just to follow the cursor.
-func (a *App) MoveNativeSeekThumbnail(token string, rect nativeplayer.Rect) error {
+func (s *MediaService) MoveNativeSeekThumbnail(token string, rect nativeplayer.Rect) error {
 	if !rect.Valid() {
 		return errInvalidNativeMediaViewport
 	}
-	player := a.nativeMediaPlayer(token)
+	player := s.nativeMediaPlayer(token)
 	if player == nil {
 		return nil
 	}
@@ -542,8 +544,8 @@ func (a *App) MoveNativeSeekThumbnail(token string, rect nativeplayer.Rect) erro
 }
 
 // HideNativeSeekThumbnail hides the seek-preview overlay for the session.
-func (a *App) HideNativeSeekThumbnail(token string) error {
-	player := a.nativeMediaPlayer(token)
+func (s *MediaService) HideNativeSeekThumbnail(token string) error {
+	player := s.nativeMediaPlayer(token)
 	if player == nil {
 		return nil
 	}

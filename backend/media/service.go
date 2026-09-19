@@ -30,6 +30,7 @@ type Config struct {
 	EncryptionOpenGeneration func() uint64
 	Thumbs                   *thumbnail.Cache
 	ThumbGenerator           VideoThumbnailGenerator
+	ImageAdmission           ImageAdmissionLimits
 }
 
 // Service is the app-facing media entry point. It owns logical file resolution
@@ -43,6 +44,7 @@ type Service struct {
 	encGeneration func() uint64
 	thumbs        *thumbnail.Cache
 	thumbGen      VideoThumbnailGenerator
+	imageLimits   ImageAdmissionLimits
 	resolver      *Resolver
 	server        *Server
 }
@@ -59,6 +61,7 @@ func NewService(cfg Config) *Service {
 		encGeneration: cfg.EncryptionOpenGeneration,
 		thumbs:        cfg.Thumbs,
 		thumbGen:      cfg.ThumbGenerator,
+		imageLimits:   cfg.ImageAdmission.normalized(),
 		resolver:      NewResolver(cfg.DB),
 	}
 	if s.thumbGen == nil {
@@ -84,6 +87,44 @@ func (s *Service) OpenStream(ctx context.Context, channelID, fileID int64) (Open
 	return s.open(ctx, channelID, fileID, StreamKindUnknown)
 }
 
+// OpenImage opens the current original image only when the caller's projected
+// revision still matches. It deliberately reuses OpenStream so multipart,
+// encryption, capability URLs, range reads, and CloseSession share one
+// lifecycle. The second revision check closes the sole session if a content
+// replacement raced the preflight.
+func (s *Service) OpenImage(ctx context.Context, channelID, fileID, revision int64) (OpenResult, error) {
+	if revision <= 0 {
+		return OpenResult{}, ErrStaleRevision
+	}
+	file, err := s.Resolve(ctx, channelID, fileID)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	if file.Revision != revision {
+		return OpenResult{}, ErrStaleRevision
+	}
+	if !IsSupportedImageName(file.Name) {
+		return OpenResult{}, ErrUnsupportedMediaType
+	}
+	if err := validateImageMetadata(file, s.imageLimits); err != nil {
+		return OpenResult{}, err
+	}
+
+	opened, err := s.OpenStream(ctx, channelID, fileID)
+	if err != nil {
+		return OpenResult{}, err
+	}
+	if opened.Kind != StreamKindImage {
+		_ = s.CloseSession(opened.Token)
+		return OpenResult{}, ErrUnsupportedMediaType
+	}
+	if opened.Info.Revision != revision {
+		_ = s.CloseSession(opened.Token)
+		return OpenResult{}, ErrStaleRevision
+	}
+	return opened, nil
+}
+
 func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKind StreamKind) (OpenResult, error) {
 	if s == nil {
 		return OpenResult{}, ErrDBNotReady
@@ -103,7 +144,15 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 	if err != nil {
 		return OpenResult{}, err
 	}
+	// Only a session that actually opened is logged as one. This used to be a
+	// plain defer, so a refused open -- a locked vault above all -- printed
+	// "media: opened session" on its way out, and a log read afterwards said
+	// the drive had served an encrypted file with no key.
+	opened := false
 	defer func() {
+		if !opened {
+			return
+		}
 		slog.Debug("media: opened session", "channel_id", channelID, "file_id", fileID, "elapsed", time.Since(started))
 	}()
 	if file.Encrypted {
@@ -188,6 +237,14 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 	if err != nil {
 		return OpenResult{}, err
 	}
+	if kind == StreamKindImage {
+		mimeType, admitErr := admitImage(ctx, session, file.Name, s.imageLimits)
+		if admitErr != nil {
+			session.Close()
+			return OpenResult{}, admitErr
+		}
+		session.mimeType = mimeType
+	}
 	if file.Encrypted && s.encGate != nil && s.encGeneration != nil {
 		s.encGate.Lock()
 		currentGeneration := s.encGeneration()
@@ -205,13 +262,15 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		session.Close()
 		return OpenResult{}, err
 	}
+	opened = true
 	return OpenResult{
 		Token:         session.Token(),
 		URL:           session.URL(),
 		ThumbnailURL:  session.ThumbnailURL(),
+		HLSURL:        session.HLSURL(),
 		Name:          file.Name,
 		Kind:          kind,
-		MimeType:      contentTypeFor(file.Name),
+		MimeType:      session.MimeType(),
 		SupportsRange: true,
 		Info:          file,
 	}, nil
@@ -266,7 +325,7 @@ func (s *Service) OpenResultForToken(token string) (OpenResult, error) {
 	if session == nil {
 		return OpenResult{}, ErrSessionNotFound
 	}
-	token, url, thumbnailURL, file, ok := session.openSnapshot()
+	token, url, thumbnailURL, hlsURL, file, ok := session.openSnapshot()
 	if !ok {
 		return OpenResult{}, ErrSessionNotFound
 	}
@@ -275,9 +334,10 @@ func (s *Service) OpenResultForToken(token string) (OpenResult, error) {
 		Token:         token,
 		URL:           url,
 		ThumbnailURL:  thumbnailURL,
+		HLSURL:        hlsURL,
 		Name:          file.Name,
 		Kind:          kind,
-		MimeType:      contentTypeFor(file.Name),
+		MimeType:      session.MimeType(),
 		SupportsRange: true,
 		Info:          file,
 	}, nil

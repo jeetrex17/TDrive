@@ -18,17 +18,25 @@ const apiMocks = vi.hoisted(() => ({
     openMedia: vi.fn(),
     openNativeMedia: vi.fn(),
     resizeNativeMedia: vi.fn(),
+    setImmersive: vi.fn(),
     showNativeSeekThumbnail: vi.fn(),
     updateMediaPlayback: vi.fn(),
     enterFullscreen: vi.fn(),
     exitFullscreen: vi.fn(),
     fullscreenAvailable: vi.fn(() => true),
+    isMobilePlatform: vi.fn(() => false),
+    isIOSPlatform: vi.fn(() => false),
+    isAndroidPlatform: vi.fn(() => false),
     isFullscreen: vi.fn(async () => false),
     onRuntimeEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
         runtimeMocks.eventsOn(name, callback);
         runtimeMocks.events.set(name, callback);
         return () => runtimeMocks.events.delete(name);
     }),
+}));
+
+const encryptionMocks = vi.hoisted(() => ({
+    access: vi.fn(async (_encrypted: boolean, open: () => Promise<unknown>) => open()),
 }));
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -44,6 +52,7 @@ let videoComponent: Record<string, unknown> | null = null;
 let deactivateVideo = () => {};
 
 vi.mock("../../api", () => apiMocks);
+vi.mock("../encryption", () => ({ accessEncryptedResource: encryptionMocks.access }));
 
 
 function openSettings(section: "picture" | "audio" | "subtitle" | "speed") {
@@ -60,6 +69,7 @@ function mediaOpenResult(id: number, token: string) {
         token,
         url: `http://127.0.0.1/media/file/${token}`,
         thumbnailUrl: "",
+        hlsUrl: "",
         name: `clip-${id}.mp4`,
         kind: "video",
         mimeType: "video/mp4",
@@ -148,6 +158,9 @@ beforeEach(async () => {
     apiMocks.resizeNativeMedia.mockResolvedValue(undefined);
     apiMocks.showNativeSeekThumbnail.mockResolvedValue(undefined);
     apiMocks.updateMediaPlayback.mockResolvedValue(undefined);
+    apiMocks.isMobilePlatform.mockReturnValue(false);
+    apiMocks.isIOSPlatform.mockReturnValue(false);
+    apiMocks.isAndroidPlatform.mockReturnValue(false);
 
     const videoModule = await import('./video');
     videoModule.updatePlaybackPreferences({ ...DEFAULT_PLAYBACK_PREFERENCES });
@@ -329,6 +342,36 @@ describe("macOS native video layering", () => {
 
         expect(document.documentElement.classList.contains("native-video-active")).toBe(false);
         expect(document.body.classList.contains("native-video-active")).toBe(false);
+    });
+});
+
+describe("the phone's system bars", () => {
+    it("are taken for the player and given straight back", async () => {
+        // On Android 15 this is not decoration. An app targeting SDK 35 is laid
+        // out edge to edge whether it asks or not, and the system paints a
+        // scrim behind three-button navigation that lands on top of the
+        // picture; hiding the bar is the only thing that removes it. Giving
+        // them back matters just as much -- a phone with no way out of the app
+        // is a worse bug than the band ever was.
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+
+        await videoModule.openVideoModal({ id: 31, name: "movie-31.mkv", size: 1024 });
+        expect(apiMocks.setImmersive).toHaveBeenCalledWith(true);
+
+        apiMocks.setImmersive.mockClear();
+        await videoModule.closeVideoModal();
+        expect(apiMocks.setImmersive).toHaveBeenCalledWith(false);
+    });
+
+    it("come back even when the player is torn down without being closed", async () => {
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "movie-32.mkv", size: 1024 });
+
+        apiMocks.setImmersive.mockClear();
+        videoModule.teardownVideoModal();
+        expect(apiMocks.setImmersive).toHaveBeenCalledWith(false);
     });
 });
 
@@ -682,6 +725,22 @@ describe("encrypted media lifecycle", () => {
 
         await vi.waitFor(() => expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith("encrypted-token"));
         expect(document.querySelector<HTMLElement>("#video-modal")?.style.display).toBe("none");
+    });
+
+    // The next item in a playlist is opened ahead of time and then taken
+    // without a password prompt, which is only safe while the vault stays
+    // open. A lock has to throw that session away with the rest.
+    it("throws away the warmed next item when the vault locks", async () => {
+        apiMocks.openMedia.mockImplementation(async (id: number) => mediaOpenResult(id, `warm-${id}`));
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 40, name: "first.mp4", size: 1024, encrypted: true });
+        runtimeMocks.events.get("encrypted_media_sessions_closed")?.({});
+
+        // Whatever the prefetcher was holding is released rather than kept for
+        // the next open, which would have skipped the prompt.
+        await vi.waitFor(() => expect(apiMocks.closeMedia).toHaveBeenCalled());
     });
 
     it("uses authoritative opened-session metadata when the caller omits encryption", async () => {
@@ -1708,5 +1767,80 @@ describe("folder video playlist", () => {
         document.querySelector<HTMLVideoElement>("#video-player")?.dispatchEvent(new Event("ended"));
         await nextTasks();
         expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("video on a phone", () => {
+    it("plays every container in <video> and never promotes to the native player", async () => {
+        apiMocks.isMobilePlatform.mockReturnValue(true);
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(12, "phone-token"));
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 12, name: "movie-12.mkv", size: 1024 });
+
+        expect(apiMocks.openMedia).toHaveBeenCalledOnce();
+        expect(apiMocks.openNativeMedia).not.toHaveBeenCalled();
+
+        const video = document.querySelector<HTMLVideoElement>("#video-player");
+        if (!video) throw new Error("missing video element");
+        Object.defineProperty(video, "error", {
+            configurable: true,
+            value: { code: 4, message: "source not supported" },
+        });
+        video.dispatchEvent(new Event("error"));
+
+        await vi.waitFor(() => expect(document.querySelector("#video-error")?.textContent).toContain("can't be played on this device"));
+        expect(apiMocks.attachNativeMedia).not.toHaveBeenCalled();
+        expect(apiMocks.openNativeMedia).not.toHaveBeenCalled();
+    });
+
+    it("on iOS refuses a container nothing can open without opening a session", async () => {
+        // AVI is neither something AVFoundation demuxes nor something the
+        // backend repackages, so this can only ever fail. Opening a media
+        // session would spend Telegram bandwidth to reach that failure and
+        // leave a Retry button that is guaranteed not to work.
+        apiMocks.isMobilePlatform.mockReturnValue(true);
+        apiMocks.isIOSPlatform.mockReturnValue(true);
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 31, name: "movie-31.avi", size: 2048 });
+
+        expect(apiMocks.openMedia).not.toHaveBeenCalled();
+        const error = document.querySelector("#video-error");
+        expect(error?.textContent).toContain("AVI");
+        expect(document.querySelector("#video-error-retry")?.textContent).toBe("Download");
+    });
+
+    it("on iOS opens a session for Matroska so the backend can repackage it", async () => {
+        // The device has no Matroska demuxer, but the backend hands it HLS, so
+        // refusing here would turn a playable file into a dead end.
+        apiMocks.isMobilePlatform.mockReturnValue(true);
+        apiMocks.isIOSPlatform.mockReturnValue(true);
+        apiMocks.openMedia.mockResolvedValue({
+            ...mediaOpenResult(31, "ios-mkv-token"),
+            hlsUrl: "http://127.0.0.1/media/hls/ios-mkv-token/index.m3u8",
+        });
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 31, name: "movie-31.mkv", size: 2048 });
+
+        expect(apiMocks.openMedia).toHaveBeenCalledOnce();
+        const video = document.querySelector<HTMLVideoElement>("#video-player");
+        expect(video?.src).toBe("http://127.0.0.1/media/hls/ios-mkv-token/index.m3u8");
+    });
+
+    it("on iOS still plays a container it can demux", async () => {
+        apiMocks.isMobilePlatform.mockReturnValue(true);
+        apiMocks.isIOSPlatform.mockReturnValue(true);
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(32, "ios-token"));
+
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        await videoModule.openVideoModal({ id: 32, name: "movie-32.mp4", size: 2048 });
+
+        expect(apiMocks.openMedia).toHaveBeenCalledOnce();
     });
 });

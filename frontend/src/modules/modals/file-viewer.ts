@@ -2,6 +2,7 @@ import { closeMedia, onRuntimeEvent, openStream } from '../../api';
 import { formatBytes } from '../../utils';
 import { enqueueDownload } from '../transfers';
 import { notify } from '../notifications';
+import { accessEncryptedResource } from '../encryption';
 import { canOpenFileViewer, fileKindLabel, fileOpenKind } from '../media-types';
 import {
     closeFileViewerView,
@@ -94,7 +95,14 @@ export async function openFileViewer(target: FileViewerTarget): Promise<void> {
     });
 
     try {
-        const opened = await openStream(nextTarget.id);
+        const opened = await accessEncryptedResource(
+            nextTarget.encrypted,
+            () => openStream(nextTarget.id),
+        );
+        if (!opened) {
+            if (seq === openSeq) closeFileViewer();
+            return;
+        }
         if (seq !== openSeq) {
             await closeMedia(opened.token);
             return;

@@ -76,6 +76,9 @@ func DeleteChannel(db *sql.DB, channelID int64) error {
 		`DELETE FROM trash_entries WHERE channel_id = ?`,
 		`DELETE FROM files WHERE channel_id = ?`,
 		`DELETE FROM file_parts WHERE channel_id = ?`,
+		`DELETE FROM file_renditions WHERE channel_id = ?`,
+		`DELETE FROM unavailable_renditions WHERE channel_id = ?`,
+		`DELETE FROM pending_rendition_uploads WHERE channel_id = ?`,
 		`DELETE FROM pending_part_cleanup WHERE channel_id = ?`,
 		`DELETE FROM folders WHERE channel_id = ?`,
 		`DELETE FROM replay_log_rejects WHERE channel_id = ?`,
@@ -260,7 +263,7 @@ func MarkPersonalBackfillDone(db *sql.DB, channelID int64) error {
 	return nil
 }
 
-func nullable(s string) interface{} {
+func nullable(s string) any {
 	if s == "" {
 		return nil
 	}

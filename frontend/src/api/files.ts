@@ -1,14 +1,12 @@
 import {
     CancelDownload as rawCancelDownload,
     CancelUpload as rawCancelUpload,
-    ChangeEncryptionPassword as rawChangeEncryptionPassword,
-    CreateEncryptionPassword as rawCreateEncryptionPassword,
+    CancelUploadByID as rawCancelUploadById,
     CreateFolder as rawCreateFolder,
     DeleteFile as rawDeleteFile,
     DeleteFolder as rawDeleteFolder,
     DownloadFile as rawDownloadFile,
     DownloadFolder as rawDownloadFolder,
-    EncryptionStatus as rawEncryptionStatus,
     GetAllFsMsgIDs as rawGetAllFsMsgIds,
     GetFileList as rawGetFileList,
     GetFolderContents as rawGetFolderContents,
@@ -28,9 +26,15 @@ import {
     SelectFiles as rawSelectFiles,
     SelectFolder as rawSelectFolder,
     SetFileDropEnabled as rawSetFileDropEnabled,
+    ShareFile as rawShareFile,
     UploadToDriveFS as rawUploadToDriveFs,
-    UseEncryptionPassword as rawUseEncryptionPassword,
 } from "../../bindings/TDrive/app";
+import {
+    ChangeEncryptionPassword as rawChangeEncryptionPassword,
+    CreateEncryptionPassword as rawCreateEncryptionPassword,
+    EncryptionStatus as rawEncryptionStatus,
+    UseEncryptionPassword as rawUseEncryptionPassword,
+} from "../../bindings/TDrive/encryptionservice";
 import type { FileMetaData, Folder, SearchResult } from "../../bindings/TDrive/backend/models";
 import type { TDriveFile } from "../../bindings/TDrive/models";
 import type {
@@ -197,12 +201,18 @@ export async function selectFolder(): Promise<string> {
     return invokeBackend(rawSelectFolder);
 }
 
-export async function downloadFile(messageId: number, accessHash: number): Promise<DownloadResult> {
-    return normalizeDownloadResult(await invokeBackend(rawDownloadFile, messageId, accessHash));
+export async function downloadFile(channelId: number, messageId: number, accessHash: number, requestId: string): Promise<DownloadResult> {
+    return normalizeDownloadResult(await invokeBackend(rawDownloadFile, channelId, messageId, accessHash, requestId));
 }
 
-export async function downloadFolder(folderId: string): Promise<DownloadResult> {
-    return normalizeDownloadResult(await invokeBackend(rawDownloadFolder, folderId));
+export async function downloadFolder(channelId: number, folderId: string, requestId: string): Promise<DownloadResult> {
+    return normalizeDownloadResult(await invokeBackend(rawDownloadFolder, channelId, folderId, requestId));
+}
+
+// Opens the OS share sheet for a file TDrive already wrote into its sandbox.
+// Mobile only in practice; desktop downloads land wherever the user chose.
+export async function shareFile(path: string): Promise<OperationResult> {
+    return normalizeOperationResult(await invokeBackend(rawShareFile, path), "Could not open the share sheet");
 }
 
 export async function planImport(paths: string[], encrypt: boolean, extract: boolean): Promise<ImportPlan> {
@@ -233,6 +243,12 @@ export async function cancelUpload(): Promise<void> {
     await invokeBackend(rawCancelUpload);
 }
 
+// Uploads run several at a time, so stopping one file means naming it. The id
+// is the one the backend puts on that upload's progress events.
+export async function cancelUploadById(uploadId: number): Promise<void> {
+    await invokeBackend(rawCancelUploadById, uploadId);
+}
+
 export async function getPreviewFile(messageId: number): Promise<PreviewPayload> {
     const preview = normalizePreviewResult(await invokeBackend(rawPreviewFile, messageId), "Could not preview file");
     requireOperationSuccess(preview.result);
@@ -255,6 +271,7 @@ export function toFileItem(f: FileMetaData): FileItem {
         uploaderId: Number(f.uploader_id ?? 0),
         encrypted: Boolean(f.encrypted),
         plaintextSize: Number(f.plaintext_size ?? 0),
+        revision: Number(f.revision ?? 0),
     };
 }
 

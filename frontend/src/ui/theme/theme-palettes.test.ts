@@ -127,6 +127,19 @@ describe('theme palettes', () => {
         }
     });
 
+    // glass.css builds the popover's readability floor out of this token
+    // precisely because it has no alpha of its own to multiply against: one
+    // percentage of it means the same opacity in all 17 palettes. Giving it an
+    // rgba() value would silently thin every frosted panel by that alpha.
+    it('keeps --color-surface-0 fully opaque, which the glass fill depends on', () => {
+        for (const theme of THEME_DEFINITIONS) {
+            expect(
+                tokenValue(paletteBlock(theme.id), '--color-surface-0'),
+                `${theme.id} --color-surface-0 must be an opaque six-digit hex color`,
+            ).toMatch(/^#[\da-f]{6}$/i);
+        }
+    });
+
     it('keeps primary text WCAG AA readable against the app canvas', () => {
         for (const theme of THEME_DEFINITIONS) {
             const block = paletteBlock(theme.id);

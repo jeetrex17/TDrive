@@ -1,5 +1,10 @@
 import { writable, type Writable } from 'svelte/store';
 
+// Android BACK dismisses the topmost sheet before anything underneath it; the
+// stack that decides which one lives next door, re-exported here so callers
+// reach it through the modal store they already import.
+export { closeTopSheet, hasOpenSheet } from './sheet-stack';
+
 // Shared view-state shape for ModalShell-based dialogs: open/close, a busy
 // flag that in-flight submits use to lock the controls, an inline error line,
 // and an arbitrary payload set at open time. Business logic stays in

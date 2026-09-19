@@ -100,6 +100,10 @@ tasks:
   create:app:bundle:
     summary: Creates an `.app` bundle
     cmds:
+      # From scratch: an iOS build writes its own bundle to this same path, and
+      # what it leaves in the root makes codesign refuse the Mac one it is
+      # copied over ("unsealed contents present in the bundle root").
+      - rm -rf "{{.BIN_DIR}}/{{.APP_NAME}}.app"
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
       - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
