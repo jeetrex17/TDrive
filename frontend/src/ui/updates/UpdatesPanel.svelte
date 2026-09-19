@@ -1,5 +1,6 @@
 <script lang="ts">
     import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+    import { humanizeBackendError } from '../../modules/errors';
     import DownloadIcon from '@lucide/svelte/icons/download';
     import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
     import LoaderIcon from '@lucide/svelte/icons/loader-circle';
@@ -199,7 +200,7 @@
         {#if $updateState.error && phase !== 'checking'}
             <div class="updates-error" role="alert">
                 <CircleAlertIcon size={14} strokeWidth={2} aria-hidden="true" />
-                <span>{$updateState.error}</span>
+                <span>{humanizeBackendError($updateState.error)}</span>
             </div>
         {/if}
     </div>

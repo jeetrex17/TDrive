@@ -192,6 +192,10 @@ html.mobile .topbar-done {
     cursor: pointer;
 }
 html.mobile .topbar-done:active { background: var(--overlay-accent-1); }
+/* Empty trash is the bar's one destructive action, and reads as one. */
+html.mobile .topbar-done.topbar-danger { color: var(--color-danger); }
+html.mobile .topbar-done.topbar-danger:active { background: var(--overlay-danger-1); }
+html.mobile .topbar-trash .topbar-plain-titles { flex: 1 1 auto; min-width: 0; }
 
 /* Drive header: the one bold element (spec 2.2). Name, live sync ring, then the
    kind and item count on a quiet second line. The name opens the switcher; the
@@ -736,7 +740,17 @@ html.mobile .transfers-group .notif-row-meta {
 html.mobile .transfers-group .notif-row-copy {
     grid-column: 2 / -1;
     justify-self: start;
-    margin-top: 6px;
+    margin-top: 2px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+}
+/* The notice's time stamp too: the shared rule parks it in the body column
+   under the text, which on a phone put it on a line of its own. */
+html.mobile .transfers-group .notif-row-event .notif-row-meta {
+    grid-column: 3;
+    grid-row: 1;
+    margin-left: 0;
 }
 
 /* ============================ ACCOUNT TAB ============================ */
@@ -801,8 +815,10 @@ html.mobile .account-row-detail {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* The value keeps its width: shrinking both sides let a long drive title
+   crush the kind beside it to "S…". */
 html.mobile .account-row-value {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     max-width: 42%;
     overflow: hidden;
     color: var(--color-text-muted);

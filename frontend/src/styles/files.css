@@ -47,7 +47,12 @@
     background: transparent; border: none; padding: 6px 8px; border-radius: var(--radius-md);
     color: var(--text-main); font-weight: 600; cursor: pointer; transition: background 0.15s ease;
     max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    /* Middle crumbs give way first, and each may go to a few characters; the
+       root and the folder being looked at are the two a reader needs whole. */
+    flex: 0 1 auto; min-width: 3ch;
 }
+.breadcrumb-path > .breadcrumb-link:first-child,
+.breadcrumb-path > .breadcrumb-link:last-child { flex-shrink: 0; min-width: 0; }
 .breadcrumb-link:hover { background: var(--bg-panel); }
 .breadcrumb-link:active { transform: translateY(0.5px); }
 .breadcrumb-sep { color: var(--text-muted); }
@@ -106,7 +111,10 @@
 /* FILE TABLE */
 .file-table-header {
     position: relative;
-    display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); padding: 15px 30px;
+    /* The rows sit inside a box padded 10px, then pad 20px themselves, with a
+       12px gap between cells: the header mirrors that exactly, or its labels
+       start a dozen pixels off the figures under them. */
+    display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); padding: 15px 30px; column-gap: 12px;
     font-size: var(--type-xs); font-weight: var(--weight-semibold); color: var(--text-muted); letter-spacing: 0;
 }
 .col-name { padding-left: 10px; }

@@ -157,7 +157,7 @@ export async function checkForUpdates(options: { explicit?: boolean } = {}): Pro
         applyState(result);
         if (options.explicit) {
             if (result.error && result.errorStage === 'check') {
-                notify({ level: 'error', title: 'Update check failed', body: result.error });
+                notify({ level: 'error', title: 'Update check failed', body: humanizeBackendError(result.error) });
             } else if (result.phase === 'up_to_date') {
                 notify({ level: 'success', title: 'TDrive is up to date' });
             } else if (result.phase === 'disabled') {
@@ -165,6 +165,11 @@ export async function checkForUpdates(options: { explicit?: boolean } = {}): Pro
             }
         }
     } catch (err) {
+        // A check the backend never answered must not leave the panel with its
+        // spinner on and its button off: nothing else would ever reset it.
+        updateState.update((current) => (
+            current.phase === 'checking' ? { ...current, phase: 'idle', error: humanizeBackendError(err), errorStage: 'check' } : current
+        ));
         if (options.explicit) {
             notify({ level: 'error', title: 'Update check failed', body: humanizeBackendError(err) });
         } else {
