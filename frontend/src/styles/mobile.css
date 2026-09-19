@@ -849,9 +849,9 @@ html.mobile .account-logout {
 }
 html.mobile .account-logout:active { background: var(--overlay-danger-1); }
 
-/* Appearance is a drill-in, leaving Account as a fast, scannable list. */
-html.mobile .account-appearance-detail { min-width: 0; }
-html.mobile .account-appearance-back {
+/* Appearance and backup are drill-ins, leaving Account a fast, scannable list. */
+html.mobile .account-detail { min-width: 0; }
+html.mobile .account-detail-back {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -867,8 +867,8 @@ html.mobile .account-appearance-back {
     font-weight: var(--weight-semibold);
     cursor: pointer;
 }
-html.mobile .account-appearance-back:active { background: var(--overlay-accent-1); }
-html.mobile .account-appearance-detail .appearance-panel {
+html.mobile .account-detail-back:active { background: var(--overlay-accent-1); }
+html.mobile .account-detail .appearance-panel {
     width: auto;
     max-height: none;
     padding: 0;
@@ -876,16 +876,17 @@ html.mobile .account-appearance-detail .appearance-panel {
     border: 0;
     box-shadow: none;
 }
-html.mobile .account-appearance-detail .appearance-header {
+html.mobile .account-detail .appearance-header {
     padding: 0 var(--space-2) var(--space-2);
     border: 0;
 }
-html.mobile .account-appearance-detail #appearance-title {
+html.mobile .account-detail #appearance-title {
     font-size: 0.8125rem;
     font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
     letter-spacing: 0;
 }
+
 
 /* ============================ DRIVE SWITCHER SHEET ============================ */
 html.mobile .sheet-scrim {

@@ -13,11 +13,9 @@
     import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import FolderIcon from '@lucide/svelte/icons/folder';
-    import ImagesIcon from '@lucide/svelte/icons/images';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import PauseIcon from '@lucide/svelte/icons/pause';
     import PlayIcon from '@lucide/svelte/icons/play';
-    import PlusIcon from '@lucide/svelte/icons/plus';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
@@ -27,16 +25,27 @@
     import SwitchRow from '../SwitchRow.svelte';
     import { futureOnlyDescription, type PhotoBackupSettings } from '../../api/photo-backup';
     import {
-        choosePhotoBackupFolder, deletePhotoBackupSource, loadPhotoBackupCandidates, pausePhotoBackupNow,
-        photoBackupAccessNote, photoBackupBusy, photoBackupCandidates, photoBackupError, photoBackupState, refreshPhotoBackup,
-        photoBackupFolderPicking, resumePhotoBackupNow, retryPhotoBackupNow, selectPhotoBackupSource, startPhotoBackup, updatePhotoBackupSettings,
+        choosePhotoBackupFolder, deletePhotoBackupSource, pausePhotoBackupNow,
+        photoBackupAccessNote, photoBackupBusy, photoBackupError, photoBackupState, refreshPhotoBackup,
+        photoBackupFolderPicking, resumePhotoBackupNow, retryPhotoBackupNow, startPhotoBackup, updatePhotoBackupSettings,
     } from '../../modules/photo-backup/controller';
     import { actionLabel, canStart, describeBackup, destinationLabel, queueProgress, summaryLine, type BackupAction } from './photo-backup-view';
+
+    interface Props {
+        /**
+         * True where the panel is the whole screen rather than a section of
+         * one: on a phone it is opened from Account like Appearance is, and
+         * there it owns the gutters and needs no rule separating it from rows
+         * that are no longer above it.
+         */
+        page?: boolean;
+    }
+
+    let { page = false }: Props = $props();
 
     onMount(() => { void refreshPhotoBackup(); });
 
     const backupState = photoBackupState;
-    const candidates = photoBackupCandidates;
     const busy = photoBackupBusy;
     const error = photoBackupError;
     const deviceAccessNote = photoBackupAccessNote;
@@ -49,7 +58,6 @@
     const queue = $derived($backupState ? queueProgress($backupState.status) : null);
     const startable = $derived($backupState ? canStart($backupState) : false);
     const phone = $derived($backupState?.platform === 'android' || $backupState?.platform === 'ios');
-    const unselected = $derived($candidates.filter((candidate) => !$backupState?.sources.some((source) => source.id === candidate.id)));
     // Only a restriction is worth a line; full access is the expected case.
     const accessNote = $derived(($backupState && !['', 'available', 'granted'].includes($backupState.capabilities.access.status)) ? $backupState.capabilities.access.detail : '');
     // Watched folders are walked all the way down and arrive in the drive with
@@ -77,7 +85,7 @@
     }
 </script>
 
-<section class="photo-backup" aria-label="Photo and video backup" aria-busy={$busy}>
+<section class="photo-backup" class:is-page={page} aria-label="Photo and video backup" aria-busy={$busy}>
     {#if $backupState}
         {@const state = $backupState}
         <div class="pb-master">
@@ -170,10 +178,8 @@
             <div class="pb-group" aria-label="Sources">
                 <div class="pb-group-head">
                     <span class="pb-group-label">Backing up</span>
-                    <!-- The folder picker comes first and is the system's
-                         own, the same one the app opens to upload a folder.
-                         The album list is the other kind of source, and says
-                         so rather than reading as a second way to do this. -->
+                    <!-- One way in, and it is the system's own picker: the same
+                         one the app opens to upload a folder. -->
                     <div class="pb-group-actions">
                         {#if folderPicking}
                             <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void choosePhotoBackupFolder()}>
@@ -181,40 +187,19 @@
                                 Add folder
                             </Button>
                         {/if}
-                        {#if phone}
-                            <Button variant="secondary" size="sm" disabled={$busy} onclick={() => void loadPhotoBackupCandidates()}>
-                                <ImagesIcon size={14} strokeWidth={2.2} aria-hidden="true" />
-                                Photo albums
-                            </Button>
-                        {/if}
                     </div>
                 </div>
                 <ul class="pb-sources" role="list">
                     {#each state.sources as source (source.id)}
                         <li class="pb-source">
-                            <!-- A folder and an album are different things to
-                                 the user, and the row is the only place that
-                                 difference is visible once both are added. -->
-                            {#if source.kind === 'folder' || source.kind === 'device-folder'}
-                                <FolderIcon class="pb-source-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
-                            {:else}
-                                <ImagesIcon class="pb-source-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
-                            {/if}
+                            <FolderIcon class="pb-source-icon" size={16} strokeWidth={1.9} aria-hidden="true" />
                             <span class="pb-source-name">{source.name}</span>
                             <IconButton label={`Remove ${source.name}`} size="sm" disabled={$busy} onclick={() => void deletePhotoBackupSource(source.id)}>
                                 <Trash2Icon size={15} strokeWidth={2} />
                             </IconButton>
                         </li>
                     {:else}
-                        <li class="pb-source pb-source-empty">{phone ? 'Choose an album, a folder, or your whole library.' : 'Add a folder to watch. Everything inside it is included.'}</li>
-                    {/each}
-                    {#each unselected as candidate (candidate.id)}
-                        <li>
-                            <button class="pb-candidate" type="button" disabled={$busy} onclick={() => void selectPhotoBackupSource(candidate)}>
-                                <PlusIcon size={15} strokeWidth={2.2} aria-hidden="true" />
-                                <span>Add {candidate.name}</span>
-                            </button>
-                        </li>
+                        <li class="pb-source pb-source-empty">Add a folder to watch. Everything inside it is included.</li>
                     {/each}
                 </ul>
                 {#if nestsFolders}
@@ -521,32 +506,6 @@
         font-size: var(--font-size-xs);
     }
 
-    .pb-candidate {
-        display: inline-flex;
-        align-items: center;
-        gap: var(--space-2);
-        min-height: 36px;
-        padding: 0;
-        border: 0;
-        background: transparent;
-        color: var(--accent);
-        font: inherit;
-        font-size: var(--font-size-sm);
-        font-weight: var(--weight-semibold);
-        cursor: pointer;
-    }
-
-    .pb-candidate:disabled {
-        cursor: not-allowed;
-        opacity: 0.55;
-    }
-
-    .pb-candidate:focus-visible {
-        outline: none;
-        border-radius: var(--radius-sm);
-        box-shadow: var(--focus-ring);
-    }
-
     .pb-note,
     .pb-loading {
         margin: 0;
@@ -582,6 +541,11 @@
         gap: var(--space-3);
         padding: 0 14px 14px;
         border-top: 1px solid var(--color-border-soft);
+    }
+
+    :global(html.mobile) .photo-backup.is-page {
+        padding: 0;
+        border-top: 0;
     }
 
     :global(html.mobile) .pb-master {
@@ -652,11 +616,6 @@
     }
 
     :global(html.mobile) .pb-source {
-        min-height: 48px;
-        font-size: var(--mobile-type-body);
-    }
-
-    :global(html.mobile) .pb-candidate {
         min-height: 48px;
         font-size: var(--mobile-type-body);
     }

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const bridge = vi.hoisted(() => ({ callBridge: vi.fn(), hasBridgeMethod: vi.fn() }));
 vi.mock('../android-bridge', () => bridge);
 
-import { listNativePhotoBackupAssets, listNativePhotoBackupSources, materializeNativePhotoBackupAsset, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder } from './native-adapter';
+import { listNativePhotoBackupAssets, materializeNativePhotoBackupAsset, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder, requestNativePhotoBackupAccess } from './native-adapter';
 
 type IOSWindow = Window & { tdriveIOSPhotos?: unknown };
 
@@ -57,14 +57,15 @@ describe('native photo backup adapter', () => {
         expect(await pickNativePhotoBackupFolder()).toBeNull();
     });
 
-    it('reports the grant alongside a list that partial access has shortened', async () => {
+    // Asking for the grant is also how the app learns what it got: a folder on
+    // a phone is read through the media library, so a partial grant is the one
+    // thing that explains a folder backing up less than the person can see.
+    it('answers the access request with the grant the device gave', async () => {
         bridge.callBridge.mockResolvedValue(JSON.stringify({
-            access: { status: 'limited', detail: 'TDrive can only see the photos you picked.' },
-            sources: [{ id: 'all', root: 'content://media', name: 'All photos and videos', kind: 'library' }],
+            status: 'limited', detail: 'TDrive can only see the photos you picked.',
         }));
-        const listing = await listNativePhotoBackupSources();
-        expect(listing.sources).toHaveLength(1);
-        expect(listing.access).toEqual({ status: 'limited', detail: 'TDrive can only see the photos you picked.' });
+        expect(await requestNativePhotoBackupAccess())
+            .toEqual({ status: 'limited', detail: 'TDrive can only see the photos you picked.' });
     });
 
     it('keeps iOS Live Photo resources distinct and reads their capture time', async () => {
