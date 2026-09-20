@@ -2,7 +2,7 @@ import { get, writable } from 'svelte/store';
 import {
     addPhotoBackupFolder, defaultSettings, enqueuePhotoBackupAssets, getPhotoBackupState, normalizeAsset,
     pausePhotoBackup, removePhotoBackupSource, resolvePhotoBackupResource, resumePhotoBackup, retryPhotoBackup, setPhotoBackupPolicy,
-    runPhotoBackup, savePhotoBackupSettings, type PhotoBackupSettings,
+    runPhotoBackup, savePhotoBackupSettings, type PhotoBackupAsset, type PhotoBackupSettings,
     type PhotoBackupState, upsertPhotoBackupSource,
 } from '../../api/photo-backup';
 import { OperationFailure, requireOperationSuccess } from '../../api/operation';
@@ -12,7 +12,7 @@ import type { OperationError, OperationResult } from '../../types';
 import { listNativePhotoBackupAssets, materializeNativePhotoBackupAsset, nativePhotoBackupAvailable, nativePhotoBackupFolderPicking, pickNativePhotoBackupFolder, releaseNativePhotoBackupAsset, requestNativePhotoBackupAccess, nativePhotoBackupPolicy } from './native-adapter';
 import { activeDrive } from '../../ui/mobile/mobile-shell-store';
 import { activatePhotoBackupBackground } from './background';
-import { callWithPasswordRetry, openEncryptionPasswordModal } from '../modals/encryption-password';
+import { requireEncryptionPassword } from '../encryption';
 import { humanizeBackendError } from '../errors';
 import { clearPhotoBackupActivity, syncPhotoBackupActivity } from './activity';
 
@@ -46,8 +46,14 @@ let observedDriveID: number | null = null;
 let policySampling = false;
 const completedScans = new Set<string>();
 const discoveryCursors = new Map<string, string>();
-const materializedResources = new Map<string, string>();
-const materializations = new Map<string, AbortController>();
+interface NativeStage {
+    controller: AbortController;
+    released: Promise<void>;
+    requestRelease: () => void;
+}
+
+const materializations = new Map<string, NativeStage>();
+let nativeStageTail: Promise<void> = Promise.resolve();
 
 // The backend cannot see the page walking the library, so the scanning phase
 // is layered on here: the last backend snapshot plus one flag. Everything that
@@ -184,15 +190,18 @@ async function runDiscoveryScheduler(): Promise<void> {
  */
 export function photoBackupFolderPicking(): boolean { return !nativePhotoBackupAvailable() || nativePhotoBackupFolderPicking(); }
 
-// An explicit action may open the existing password modal, then runs once. The
-// snapshot can be stale, so the backend's stable locked-vault code is the
-// second chance: the shared retry helper unlocks and re-runs exactly once.
+// An explicit action may open first-time encryption setup or the existing
+// password modal, then runs once. The snapshot can be stale, so the backend's
+// stable locked-vault code is the second chance and is retried exactly once.
 // Resolves false when the user dismissed the prompt, which is not a failure.
 async function runUnlocked(action: () => Promise<OperationResult>): Promise<boolean> {
-    if (get(photoBackupState)?.encryptionRequired && !await openEncryptionPasswordModal()) return false;
-    const result = await callWithPasswordRetry(action);
+    if (get(photoBackupState)?.encryptionRequired && !await requireEncryptionPassword()) return false;
+    let result = await action();
+    if (!result.ok && result.error.code === 'encryption_password_required') {
+        if (!await requireEncryptionPassword()) return false;
+        result = await action();
+    }
     if (result.ok) return true;
-    if (result.error.code === 'canceled') return false;
     throw new OperationFailure(result.error);
 }
 
@@ -212,7 +221,16 @@ export async function startPhotoBackup(): Promise<void> {
 
 export async function updatePhotoBackupSettings(settings: PhotoBackupSettings): Promise<void> {
     cancelDiscovery(); photoBackupBusy.set(true); photoBackupError.set('');
-    try { publish(await savePhotoBackupSettings({ ...defaultSettings, ...settings })); if (settings.enabled) void runDiscoveryScheduler(); }
+    try {
+        const enabling = settings.enabled && get(photoBackupState)?.settings.enabled !== true;
+        if (enabling && get(activeDrive)?.kind === 'shared') {
+            photoBackupError.set('Encrypted photo backup is available only in My Drive.');
+            return;
+        }
+        if (enabling && !await requireEncryptionPassword()) return;
+        publish(await savePhotoBackupSettings({ ...defaultSettings, ...settings, encrypt: true }));
+        if (settings.enabled) void runDiscoveryScheduler();
+    }
     catch { photoBackupError.set('Could not save backup settings. Try again.'); }
     finally { photoBackupBusy.set(false); }
 }
@@ -260,7 +278,6 @@ function folderRefusal(cause: unknown): string {
 export async function deletePhotoBackupSource(id: string): Promise<void> { cancelDiscovery(); photoBackupBusy.set(true); try { await removePhotoBackupSource(id); await refreshPhotoBackup(); } catch { photoBackupError.set('Could not remove that source. Try again.'); } finally { photoBackupBusy.set(false); } }
 export async function pausePhotoBackupNow(): Promise<void> {
     manuallyPaused = true; cancelDiscovery();
-    for (const controller of materializations.values()) controller.abort();
     photoBackupBusy.set(true); photoBackupError.set('');
     try { requireOperationSuccess(await pausePhotoBackup()); await refreshPhotoBackup(); }
     catch (cause) { await refreshPhotoBackup(); reportFailure(cause, 'Could not pause photo backup. Try again.'); }
@@ -279,32 +296,49 @@ export async function retryPhotoBackupNow(): Promise<void> {
     finally { photoBackupBusy.set(false); }
 }
 
-async function materialize(payload: unknown): Promise<void> {
-    const raw = asRecord(payload); const token = boundedText(raw.token, 512); const asset = normalizeAsset(raw.asset);
-    if (!token || !asset) return;
-    const controller = new AbortController();
-    materializations.set(token, controller);
+async function runMaterialization(token: string, asset: PhotoBackupAsset, stage: NativeStage): Promise<void> {
+    let releaseID = '';
     try {
-        const resource = await materializeNativePhotoBackupAsset(asset, controller.signal);
-        if (controller.signal.aborted) { await releaseNativePhotoBackupAsset(resource.releaseID); return; }
-        if (resource.path) materializedResources.set(token, resource.releaseID);
+        if (stage.controller.signal.aborted) return;
+        const resource = await materializeNativePhotoBackupAsset(asset, stage.controller.signal);
+        releaseID = resource.releaseID;
+        if (stage.controller.signal.aborted) return;
         await resolvePhotoBackupResource(token, resource.path, resource.path ? '' : 'The photo could not be read.');
     }
     catch (cause) {
-        if (controller.signal.aborted) return;
-        const message = cause instanceof Error && cause.message.trim() ? cause.message.trim().slice(0, 240) : 'The media could not be read.';
-        try { await resolvePhotoBackupResource(token, '', message); }
-        catch { release({ token }); }
+        if (!stage.controller.signal.aborted) {
+            const message = cause instanceof Error && cause.message.trim() ? cause.message.trim().slice(0, 240) : 'The media could not be read.';
+            try { await resolvePhotoBackupResource(token, '', message); }
+            catch { stage.requestRelease(); }
+        }
     }
+    finally {
+        await stage.released;
+        if (releaseID) {
+            try { await releaseNativePhotoBackupAsset(releaseID); }
+            catch { photoBackupError.set('Temporary media cleanup failed. Reopen TDrive to retry cleanup.'); }
+        }
+        materializations.delete(token);
+    }
+}
+
+function materialize(payload: unknown): void {
+    const raw = asRecord(payload); const token = boundedText(raw.token, 512); const asset = normalizeAsset(raw.asset);
+    if (!token || !asset) return;
+    const controller = new AbortController();
+    let requestRelease = () => {};
+    const released = new Promise<void>((resolve) => { requestRelease = resolve; });
+    const stage = { controller, released, requestRelease };
+    materializations.set(token, stage);
+    const work = nativeStageTail.then(() => runMaterialization(token, asset, stage));
+    nativeStageTail = work.catch(() => undefined);
 }
 
 function release(payload: unknown): void {
     const token = boundedText(asRecord(payload).token, 512);
-    materializations.get(token)?.abort();
-    materializations.delete(token);
-    const releaseID = materializedResources.get(token);
-    materializedResources.delete(token);
-    if (releaseID) void releaseNativePhotoBackupAsset(releaseID).catch(() => photoBackupError.set('Temporary media cleanup failed. Reopen TDrive to retry cleanup.'));
+    const stage = materializations.get(token);
+    stage?.controller.abort();
+    stage?.requestRelease();
 }
 
 async function continueForegroundDiscovery(): Promise<void> {

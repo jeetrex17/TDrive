@@ -1,11 +1,15 @@
 // The drive switcher is a modal surface: while it is up it owns focus and the
 // shell behind it stops answering, and it can be pushed back down by hand.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { get } from 'svelte/store';
 import DriveSwitcherSheet from './DriveSwitcherSheet.svelte';
 import { sidebarState } from '../sidebar/sidebar-store';
 import { closeDriveSwitcher, driveSwitcherOpen, openDriveSwitcher } from './mobile-shell-store';
+
+const actions = vi.hoisted(() => ({ join: vi.fn(), create: vi.fn() }));
+vi.mock('../../modules/modals/join-drive', () => ({ openJoinDriveModal: actions.join }));
+vi.mock('../../modules/modals/new-drive', () => ({ openNewDriveModal: actions.create }));
 
 let shell: HTMLElement;
 let opener: HTMLButtonElement;
@@ -33,6 +37,8 @@ function pointer(type: string, target: EventTarget, clientY: number, timeStamp =
 }
 
 beforeEach(() => {
+    actions.join.mockReset();
+    actions.create.mockReset();
     driveSwitcherOpen.set(false);
     // The sheet renders the drive list itself, so a drive in the sidebar store
     // is what puts a row in it.
@@ -53,6 +59,19 @@ beforeEach(() => {
     document.body.append(shell);
     component = mount(DriveSwitcherSheet, { target: shell });
     flushSync();
+});
+
+describe('actions', () => {
+    it('closes the switcher before opening the join sheet', () => {
+        openDriveSwitcher();
+        flushSync();
+
+        (sheet().querySelector('[data-drive-action="join"]') as HTMLButtonElement).click();
+        flushSync();
+
+        expect(get(driveSwitcherOpen)).toBe(false);
+        expect(actions.join).toHaveBeenCalledOnce();
+    });
 });
 
 afterEach(() => {

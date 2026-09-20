@@ -855,9 +855,11 @@ public class MainActivity extends AppCompatActivity {
                     if (!expected.equals(after)) throw new IOException("media asset changed during staging; rediscover it before upload");
                     File previous = stagedPhotoBackupAssets.remove(ref.key()); if (previous != null) discard(previous);
                     if (!temporary.renameTo(out)) throw new IOException("could not finalize staged media asset");
-                    if (cancelled.get()) { discard(out); throw new IOException("media staging cancelled"); }
-                    stagedPhotoBackupAssets.put(ref.key(), out);
-                    staged = true;
+                    synchronized (photoBackupStageLock) {
+                        if (cancelled.get()) { discard(out); throw new IOException("media staging cancelled"); }
+                        stagedPhotoBackupAssets.put(ref.key(), out);
+                        staged = true;
+                    }
                     jsBridge.sendCallback(callbackId, new JSONObject().put("id", ref.key()).put("version", version).put("path", out.getAbsolutePath()).toString(), null);
                 }
             } catch (Exception e) { Log.e(TAG, "Media staging failed", e); jsBridge.sendCallback(callbackId, null, e.getMessage() == null ? "could not stage media asset" : e.getMessage()); }
@@ -874,7 +876,53 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void releasePhotoBackupAsset(String callbackId, String requestJson) {
-        new Thread(() -> { try { MediaRef ref = MediaRef.parse(new JSONObject(requestJson).optString("id", "")); if (ref != null) { AtomicBoolean cancel = stagingPhotoBackupAssets.get(ref.key()); if (cancel != null) { cancel.set(true); discardTree(new File(photoBackupStageRoot(), ref.directoryName())); } else { File f = stagedPhotoBackupAssets.remove(ref.key()); if (f != null) discard(f); discardTree(new File(photoBackupStageRoot(), ref.directoryName())); synchronized (photoBackupStageLock) { if (ref.key().equals(activePhotoBackupStageKey)) activePhotoBackupStageKey = null; } } } } catch (Exception ignored) { } jsBridge.sendCallback(callbackId, "", null); }).start();
+        new Thread(() -> {
+            String releaseError = null;
+            try {
+                MediaRef ref = MediaRef.parse(new JSONObject(requestJson).optString("id", ""));
+                if (ref != null) {
+                    AtomicBoolean cancel;
+                    File stagedFile;
+                    synchronized (photoBackupStageLock) {
+                        cancel = stagingPhotoBackupAssets.get(ref.key());
+                        if (cancel != null) cancel.set(true);
+                        stagedFile = stagedPhotoBackupAssets.remove(ref.key());
+                        // A completed file owns the slot even during the tiny
+                        // interval before the staging thread removes its cancel
+                        // marker. If there is no work at all, release is simply
+                        // idempotent. An active copy clears the slot in its own
+                        // finally block after it observes cancellation.
+                        if ((stagedFile != null || cancel == null)
+                                && ref.key().equals(activePhotoBackupStageKey)) {
+                            activePhotoBackupStageKey = null;
+                        }
+                    }
+                    boolean removed = stagedFile == null || discardPhotoBackupFile(stagedFile);
+                    if (cancel == null || stagedFile != null) {
+                        removed = discardPhotoBackupTree(new File(photoBackupStageRoot(), ref.directoryName())) && removed;
+                    }
+                    if (!removed) throw new IOException("could not remove staged media asset");
+                }
+            } catch (Exception e) {
+                releaseError = e.getMessage() == null ? "could not remove staged media asset" : e.getMessage();
+            }
+            jsBridge.sendCallback(callbackId, releaseError == null ? "" : null, releaseError);
+        }).start();
+    }
+
+    private boolean discardPhotoBackupFile(File copy) {
+        boolean removed = !copy.exists() || copy.delete();
+        File slot = copy.getParentFile();
+        return (slot == null || !slot.exists() || slot.delete()) && removed;
+    }
+
+    private boolean discardPhotoBackupTree(File directory) {
+        boolean removed = true;
+        File[] files = directory.listFiles();
+        if (files != null) {
+            for (File file : files) removed = (!file.exists() || file.delete()) && removed;
+        }
+        return (!directory.exists() || directory.delete()) && removed;
     }
 
     private void requireStagingSpace(File directory, long expectedBytes) throws IOException {

@@ -73,6 +73,14 @@ test('drive switcher opens from the header and closes', async ({ page }) => {
     const groups = page.locator('.drive-switcher-sheet .switcher-group');
     await expect(groups.nth(0).getByRole('button', { name: 'My Drive', exact: true })).toBeVisible();
     await expect(groups.nth(1).getByRole('button', { name: 'Team assets', exact: true })).toBeVisible();
+    const list = page.locator('.drive-switcher-sheet .switcher-list');
+    expect(await list.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const sharedRow = groups.nth(1).locator('.sidebar-drive-row');
+    const action = sharedRow.getByRole('button', { name: 'Actions for Team assets' });
+    const [rowBox, actionBox] = await Promise.all([sharedRow.boundingBox(), action.boundingBox()]);
+    expect(rowBox).not.toBeNull();
+    expect(actionBox).not.toBeNull();
+    expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width + 1);
 
     await page.locator('.switcher-close').click();
     await expect(page.locator('.drive-switcher-sheet')).not.toHaveClass(/open/);

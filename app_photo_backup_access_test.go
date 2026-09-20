@@ -41,3 +41,27 @@ func TestPhotoBackupPreservesExplicitPauseWhenEncryptionIsLocked(t *testing.T) {
 		t.Fatalf("manual pause replaced: %+v", got)
 	}
 }
+
+func TestPhotoBackupRequiresPasswordForLegacyUnencryptedSettings(t *testing.T) {
+	app := NewApp("test")
+	app.encryption.override = backupEncryptionStatusService{status: encservice.Status{Available: true}}
+	initial := PhotoBackupState{Settings: PhotoBackupSettings{Enabled: true, Encrypt: false}, Status: PhotoBackupStatus{Phase: "idle"}}
+
+	got := app.photoBackupAccessState(initial)
+
+	if !got.EncryptionRequired || got.Status.Phase != "paused" {
+		t.Fatalf("legacy plaintext settings were allowed: %+v", got)
+	}
+}
+
+func TestPhotoBackupEncryptionDriveRequiresMyDrive(t *testing.T) {
+	if err := validatePhotoBackupEncryptionDrive(41, 41); err != nil {
+		t.Fatalf("personal drive rejected: %v", err)
+	}
+	if err := validatePhotoBackupEncryptionDrive(42, 41); err == nil {
+		t.Fatal("shared drive accepted")
+	}
+	if err := validatePhotoBackupEncryptionDrive(41, 0); err == nil {
+		t.Fatal("missing personal drive accepted")
+	}
+}

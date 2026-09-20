@@ -215,7 +215,7 @@ func TestPhotoBackupSettingsSavePreservesOmittedDestination(t *testing.T) {
 	scope := photobackup.Scope{AccountID: "7", DriveID: 41}
 	current := photobackup.Settings{Scope: scope, DestinationParentID: "d:selected", ManualPaused: true}
 	got := photoBackupSettingsForSave(scope, current, PhotoBackupSettings{Enabled: true, Photos: true})
-	if got.DestinationParentID != "d:selected" || !got.ManualPaused || !got.Enabled || !got.Photos {
+	if got.DestinationParentID != "d:selected" || !got.ManualPaused || !got.Enabled || !got.Photos || !got.Encrypt {
 		t.Fatalf("saved settings = %+v", got)
 	}
 	overridden := photoBackupSettingsForSave(scope, current, PhotoBackupSettings{DestinationParentID: "d:new"})

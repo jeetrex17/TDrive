@@ -986,6 +986,8 @@ html.mobile .switcher-close:focus-visible {
 html.mobile .switcher-list {
     flex: 1 1 auto;
     min-height: 0;
+    min-width: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
     outline: none;
@@ -1001,7 +1003,16 @@ html.mobile .switcher-list .drive-item {
     color: var(--color-text);
 }
 html.mobile .switcher-list .drive-item.active { background: var(--overlay-accent-1); color: var(--color-accent); }
-html.mobile .switcher-list .drive-actions-trigger { width: 44px; height: 44px; }
+html.mobile .switcher-list .sidebar-drive-row {
+    grid-template-columns: minmax(0, 1fr) 44px;
+    width: 100%;
+    min-width: 0;
+}
+html.mobile .switcher-list .drive-actions-trigger {
+    width: 44px;
+    height: 44px;
+    margin-right: 0;
+}
 
 html.mobile .switcher-actions {
     flex: 0 0 auto;

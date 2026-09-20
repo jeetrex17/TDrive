@@ -5,6 +5,7 @@
 import { state } from '../state';
 import { getEncryptionStatus } from '../api';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
+import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { encryptionEntryVisible } from '../ui/chrome/profile-store';
 import { isEncryptionPasswordRequired } from './errors';
 
@@ -35,8 +36,11 @@ export function renderEncryptionSettingsEntry() {
 // requireEncryptionPassword gates encrypted file access and encrypted mounts.
 // It resolves to true on success and false when the user cancels.
 export async function requireEncryptionPassword(): Promise<boolean> {
+    if (!state.encryption?.loaded) await loadEncryptionStatus();
     if (state.encryption?.passwordRemembered) return true;
-    return openEncryptionPasswordModal() as Promise<boolean>;
+    return state.encryption?.passwordSet
+        ? openEncryptionPasswordModal() as Promise<boolean>
+        : openEncryptionSetupModal();
 }
 
 // Opens a protected resource after one password prompt. The metadata hint

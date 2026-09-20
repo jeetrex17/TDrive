@@ -15,13 +15,17 @@ import (
 	"time"
 
 	"TDrive/backend"
+	"TDrive/backend/core"
 	"TDrive/backend/datadir"
 	"TDrive/backend/photobackup"
 
 	_ "modernc.org/sqlite"
 )
 
-const photoBackupPolicyTTL = 2 * time.Minute
+const (
+	photoBackupPolicyTTL = 2 * time.Minute
+	photoBackupEncrypted = true
+)
 
 // These reach the panel word for word, both as the status line and as the
 // message inside a failed operation envelope, so they are written for the
@@ -196,12 +200,19 @@ func (a *App) GetPhotoBackupState() (PhotoBackupState, error) {
 	if err := populatePhotoBackupDestination(&state, sources); err != nil {
 		return PhotoBackupState{}, err
 	}
+	destinationErr := validatePhotoBackupEncryptionDrive(scope.DriveID, core.PersonalChannelID())
 	if settings.Enabled && !settings.ManualPaused {
-		if policyErr := a.photoBackupPolicyAllows(settings); policyErr != nil {
+		if destinationErr != nil {
+			state.Status.Phase, state.Status.Message = "paused", destinationErr.Error()
+		} else if policyErr := a.photoBackupPolicyAllows(settings); policyErr != nil {
 			state.Status.Phase, state.Status.Message = "paused", policyErr.Error()
 		}
 	}
-	return a.photoBackupAccessState(a.withPhotoBackupProgress(state, scope)), nil
+	state = a.withPhotoBackupProgress(state, scope)
+	if settings.Enabled && destinationErr != nil {
+		return state, nil
+	}
+	return a.photoBackupAccessState(state), nil
 }
 
 func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupState, error) {
@@ -217,12 +228,10 @@ func (a *App) SavePhotoBackupSettings(value PhotoBackupSettings) (PhotoBackupSta
 	if err != nil {
 		return PhotoBackupState{}, err
 	}
-	enc, err := a.encryption.EncryptionStatus()
-	if err != nil {
-		return PhotoBackupState{}, err
-	}
-	if enc.PasswordSet {
-		value.Encrypt = true
+	if value.Enabled {
+		if err := validatePhotoBackupEncryptionDrive(scope.DriveID, core.PersonalChannelID()); err != nil {
+			return PhotoBackupState{}, err
+		}
 	}
 	current, getErr := engine.GetSettings(ctx, scope)
 	if getErr != nil && !errors.Is(getErr, sql.ErrNoRows) {
@@ -468,10 +477,6 @@ func (a *App) startPhotoBackup() error {
 	if err != nil {
 		return err
 	}
-	if err := a.photoBackupPolicyAllows(settings); err != nil {
-		slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", err)
-		return err
-	}
 	if !settings.Enabled {
 		slog.Debug("photo backup: not starting", "drive_id", scope.DriveID, "reason", "backup is off for this drive")
 		return nil
@@ -480,15 +485,21 @@ func (a *App) startPhotoBackup() error {
 		slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", errPhotoBackupPaused)
 		return errPhotoBackupPaused
 	}
-	if settings.Encrypt {
-		status, err := a.encryption.EncryptionStatus()
-		if err != nil {
-			return err
-		}
-		if !status.PasswordRemembered {
-			slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", ErrEncryptionPasswordRequired)
-			return ErrEncryptionPasswordRequired
-		}
+	if err := validatePhotoBackupEncryptionDrive(scope.DriveID, core.PersonalChannelID()); err != nil {
+		slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", err)
+		return err
+	}
+	if err := a.photoBackupPolicyAllows(settings); err != nil {
+		slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", err)
+		return err
+	}
+	status, err := a.encryption.EncryptionStatus()
+	if err != nil {
+		return err
+	}
+	if !status.PasswordRemembered {
+		slog.Info("photo backup: not starting", "drive_id", scope.DriveID, "reason", ErrEncryptionPasswordRequired)
+		return ErrEncryptionPasswordRequired
 	}
 	a.photoBackupMu.Lock()
 	if a.photoBackupClosed {
@@ -608,7 +619,9 @@ func (a *App) uploadPhotoBackup(ctx context.Context, request photobackup.UploadR
 	if err != nil {
 		return photobackup.UploadResult{}, err
 	}
-	meta, err := svc.UploadBackup(ctx, request.ChannelID, path, destinationParentID, request.Encrypt, progress)
+	// Photo backup is never allowed to inherit a legacy plaintext setting. The
+	// upload boundary forces encryption even for work queued by an older build.
+	meta, err := svc.UploadBackup(ctx, request.ChannelID, path, destinationParentID, photoBackupEncrypted, progress)
 	if meta.MsgID > 0 {
 		return photobackup.UploadResult{RemoteMessageID: int64(meta.MsgID)}, nil
 	}
@@ -843,7 +856,7 @@ func millisFromTime(t time.Time) int64 {
 }
 
 func photoBackupState(settings photobackup.Settings, sources []photobackup.Source, status photobackup.Status, running, manualPaused bool) PhotoBackupState {
-	state := PhotoBackupState{Platform: runtime.GOOS, Settings: PhotoBackupSettings{Enabled: settings.Enabled, Photos: settings.Photos, Videos: settings.Videos, WiFiOnly: settings.WiFiOnly, DestinationParentID: settings.DestinationParentID, Encrypt: settings.Encrypt}}
+	state := PhotoBackupState{Platform: runtime.GOOS, Settings: PhotoBackupSettings{Enabled: settings.Enabled, Photos: settings.Photos, Videos: settings.Videos, WiFiOnly: settings.WiFiOnly, DestinationParentID: settings.DestinationParentID, Encrypt: photoBackupEncrypted}}
 	state.ManualPaused = manualPaused
 	state.Sources = make([]PhotoBackupSource, 0, len(sources))
 	for _, source := range sources {

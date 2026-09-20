@@ -33,7 +33,7 @@ describe('normalizePhotoBackupState', () => {
 
     it('falls back safely for incomplete or contradictory state', () => {
         const state = normalizePhotoBackupState({ settings: {}, status: { phase: 'unknown', pending: -100 } });
-        expect(state.settings).toEqual({ enabled: false, photos: true, videos: true, wifiOnly: false, encrypt: false });
+        expect(state.settings).toEqual({ enabled: false, photos: true, videos: true, wifiOnly: false, encrypt: true });
         expect(state.status).toMatchObject({ phase: 'idle', pending: 0 });
         expect(state.sources).toEqual([]);
     });

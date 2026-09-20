@@ -150,7 +150,7 @@ func TestPhotoBackupStateUsesStableWirePhases(t *testing.T) {
 	settings := photobackup.Settings{Enabled: true, Photos: true, DestinationParentID: "d:photos"}
 	sources := []photobackup.Source{{ID: "camera", Kind: "library", Root: "Camera", Enabled: true}}
 	state := photoBackupState(settings, sources, photobackup.Status{Pending: 2}, false, false)
-	if state.Status.Phase != "queued" || state.Status.Pending != 2 || state.Destination.ID != "d:photos" || len(state.Sources) != 1 {
+	if state.Status.Phase != "queued" || state.Status.Pending != 2 || state.Destination.ID != "d:photos" || len(state.Sources) != 1 || !state.Settings.Encrypt {
 		t.Fatalf("state=%+v", state)
 	}
 	state = photoBackupState(settings, sources, photobackup.Status{Error: 1, LastError: "offline"}, false, true)

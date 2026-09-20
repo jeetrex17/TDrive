@@ -37,7 +37,7 @@ func photoBackupSettingsForSave(scope photobackup.Scope, current photobackup.Set
 	return photobackup.Settings{
 		Scope: scope, Enabled: value.Enabled, Photos: value.Photos, Videos: value.Videos,
 		WiFiOnly: value.WiFiOnly, DestinationParentID: destinationParentID,
-		Encrypt: value.Encrypt, ManualPaused: current.ManualPaused,
+		Encrypt: photoBackupEncrypted, ManualPaused: current.ManualPaused,
 	}
 }
 

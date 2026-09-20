@@ -9,6 +9,8 @@
         showSharedActionsMenu,
     } from '../../modules/sidebar';
     import { createSheetDrag, sheetOffset, shouldDismiss } from '../modals/sheet-gesture';
+    import { openJoinDriveModal } from '../../modules/modals/join-drive';
+    import { openNewDriveModal } from '../../modules/modals/new-drive';
     import DriveList from '../sidebar/DriveList.svelte';
     import { driveSwitcherOpen, closeDriveSwitcher } from './mobile-shell-store';
 
@@ -53,7 +55,7 @@
         if (!$driveSwitcherOpen || !sheetEl) return;
         opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         hideBehind();
-        (sheetEl.querySelector<HTMLElement>('.drive-item, #open-join-drive') ?? sheetEl)
+        (sheetEl.querySelector<HTMLElement>('.drive-item, [data-drive-action="join"]') ?? sheetEl)
             .focus({ preventScroll: true });
 
         return () => {
@@ -139,6 +141,16 @@
     function onDriveNavClick(event: MouseEvent): void {
         if ((event.target as HTMLElement).closest('.drive-item')) closeDriveSwitcher();
     }
+
+    function openJoin(): void {
+        closeDriveSwitcher();
+        openJoinDriveModal();
+    }
+
+    function openCreate(): void {
+        closeDriveSwitcher();
+        openNewDriveModal();
+    }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -206,11 +218,11 @@
     </nav>
 
     <div class="switcher-actions">
-        <button id="open-join-drive" class="switcher-action" type="button">
+        <button class="switcher-action" data-drive-action="join" type="button" onclick={openJoin}>
             <Link2Icon size={20} strokeWidth={1.9} aria-hidden="true" />
             Join with a link
         </button>
-        <button id="open-new-drive" class="switcher-action" type="button">
+        <button class="switcher-action" data-drive-action="create" type="button" onclick={openCreate}>
             <FolderPlusIcon size={20} strokeWidth={1.9} aria-hidden="true" />
             Create a shared drive
         </button>
