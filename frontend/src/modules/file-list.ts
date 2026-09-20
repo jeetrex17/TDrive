@@ -24,13 +24,14 @@ import {
 import { calculateVisibleFolderStats } from './drive-data';
 import type { FileItem, FolderItem, FolderStat, RootFile } from '../types';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
-import { chooseFilesForCurrentFolder, enqueueDownload, enqueueFolderDownload } from './transfers';
+import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder, enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { renderTrashRows, setTrashMode } from './trash/view';
 import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
 import { appActions, type RefreshFilesOptions } from './app-actions';
 import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows, type InteractiveFileListRow } from '../ui/file-list/file-list-store';
+import type { FileListStateAction } from '../ui/file-list/types';
 import { fileListRowForElement } from '../ui/file-list/row-lookup';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
 import { rowMetaLine } from '../ui/file-list/row-meta';
@@ -169,18 +170,14 @@ export function renderFileState(
     kind: FileStateKind,
     title: string,
     body = "",
-    action?: { label: string; onClick: () => void },
-    secondaryAction?: { label: string; onClick: () => void },
+    ...actions: FileListStateAction[]
 ) {
     list.removeAttribute('aria-rowcount');
     showFileListState({
         stateKind: kind,
         title,
         body,
-        actionLabel: action?.label ?? '',
-        onAction: action?.onClick,
-        secondaryActionLabel: secondaryAction?.label ?? '',
-        onSecondaryAction: secondaryAction?.onClick,
+        actions: Object.freeze(actions.map((action) => Object.freeze({ ...action }))),
     });
 }
 
@@ -772,6 +769,7 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
                 'No files yet.',
                 '',
                 { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
+                { label: 'Upload folder', onClick: () => chooseFolderForCurrentFolder() },
                 { label: 'Create folder', onClick: openNewFolderModal },
             );
         } else {

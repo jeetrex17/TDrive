@@ -15,6 +15,20 @@
 }
 .modal-title { color: var(--color-text); font-size: 1.05rem; font-weight: 700; margin-bottom: 6px; }
 .modal-subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 18px; }
+.share-drive-link {
+    width: 100%;
+    min-height: 44px;
+    margin-bottom: 15px;
+    padding: 12px 15px;
+    overflow-wrap: anywhere;
+    user-select: text;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    font-size: 0.95rem;
+    line-height: 1.35;
+}
 .delete-target-name {
     max-height: 5.5rem;
     margin: 10px 0 14px;
@@ -192,4 +206,3 @@ html.mobile .modal-sheet .modal-actions .secondary-btn {
     html.mobile .modal-sheet.is-closing { transition: none; }
     html.mobile .modal-overlay-sheet { transition: none; }
 }
-

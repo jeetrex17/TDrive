@@ -93,15 +93,17 @@ export type PendingFolderListRow = {
 
 export type FileListRow = FolderListRow | FileListFileRow | PendingFolderListRow;
 
+export type FileListStateAction = Readonly<{
+    label: string;
+    onClick: () => void;
+}>;
+
 export type FileListStateView = {
     kind: 'state';
     stateKind: 'loading' | 'empty' | 'error';
     title: string;
     body?: string;
-    actionLabel?: string;
-    onAction?: () => void;
-    secondaryActionLabel?: string;
-    onSecondaryAction?: () => void;
+    actions?: readonly FileListStateAction[];
 };
 
 export type FileListRowsView = {

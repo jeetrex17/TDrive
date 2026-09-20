@@ -10,6 +10,10 @@ const api = vi.hoisted(() => ({
     isAndroidPlatform: () => false,
     onRuntimeEvent: () => () => {},
     playHaptic: vi.fn(),
+    getFolderContents: vi.fn(() => Promise.resolve({ folders: [], files: [] })),
+    getFileList: vi.fn(() => Promise.resolve([])),
+    getAllFsMsgIds: vi.fn(() => Promise.resolve([])),
+    getStorageUsed: vi.fn(() => Promise.resolve(0)),
 }));
 const actions = vi.hoisted(() => ({
     playVideo: vi.fn(),
@@ -18,13 +22,16 @@ const actions = vi.hoisted(() => ({
     refreshFiles: vi.fn(),
     navigateToFolder: vi.fn(),
     enqueueDownload: vi.fn(),
+    chooseFiles: vi.fn(),
+    chooseFolder: vi.fn(),
 }));
 
 vi.mock('../api', () => api);
 vi.mock('./app-actions', () => ({ appActions: () => actions }));
 vi.mock('./navigation', () => ({ navigateToFolder: actions.navigateToFolder }));
 vi.mock('./transfers', () => ({
-    chooseFilesForCurrentFolder: vi.fn(),
+    chooseFilesForCurrentFolder: actions.chooseFiles,
+    chooseFolderForCurrentFolder: actions.chooseFolder,
     enqueueDownload: actions.enqueueDownload,
     enqueueFolderDownload: vi.fn(),
 }));
@@ -44,7 +51,7 @@ vi.mock('./folder-index', () => ({ refreshFolderIndex: vi.fn(), collectDescendan
 import FileList from '../ui/file-list/FileList.svelte';
 import { contextMenuState } from '../ui/menus/context-menu-store';
 import { showRowContextMenu } from './context-menu';
-import { activateFileList, buildFileRow, buildFolderRow, fileThumbnailIdentity, renderFileListRows } from './file-list';
+import { activateFileList, buildFileRow, buildFolderRow, fileThumbnailIdentity, refreshFiles, renderFileListRows } from './file-list';
 import { state } from '../state';
 
 let list: HTMLElement;
@@ -99,6 +106,27 @@ afterEach(async () => {
 });
 
 describe('phone file list', () => {
+    it('offers files, folders, and folder creation when the current folder is empty', async () => {
+        state.currentFolderId = '';
+        state.virtualView = null;
+        refreshFiles();
+
+        await vi.waitFor(() => {
+            flushSync();
+            expect(list.querySelectorAll('.file-state-actions button')).toHaveLength(3);
+        });
+
+        const buttons = Array.from(list.querySelectorAll<HTMLButtonElement>('.file-state-actions button'));
+        expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+            'Upload files',
+            'Upload folder',
+            'Create folder',
+        ]);
+
+        click(buttons[1]);
+        expect(actions.chooseFolder).toHaveBeenCalledTimes(1);
+    });
+
     it('opts in only revision-pinned projected media', () => {
         const image = { msgId: 42, name: 'photo.jpg', revision: 9 };
         expect(fileThumbnailIdentity(image, 7)).toEqual({ channelId: 7, fileId: 42, revision: 9 });

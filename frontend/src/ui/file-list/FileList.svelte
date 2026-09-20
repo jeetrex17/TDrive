@@ -265,10 +265,7 @@
         kind={$fileListView.stateKind}
         title={$fileListView.title}
         body={$fileListView.body ?? ''}
-        actionLabel={$fileListView.actionLabel ?? ''}
-        onAction={$fileListView.onAction}
-        secondaryActionLabel={$fileListView.secondaryActionLabel ?? ''}
-        onSecondaryAction={$fileListView.onSecondaryAction}
+        actions={$fileListView.actions ?? []}
     />
 {:else if mobile}
     <div aria-hidden="true" style:height={`${rowWindow.before}px`}></div>

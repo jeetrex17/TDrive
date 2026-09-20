@@ -96,6 +96,47 @@ test('FAB opens the upload menu', async ({ page }) => {
     await expect(page.locator('#upload-menu-new-folder')).toHaveText(/New folder/);
 });
 
+test('an empty folder offers file upload, folder upload, and folder creation', async ({ page }) => {
+    await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
+    await bootTDrive(page, {
+        ...overrides,
+        GetFolderContents: resolves({ folders: [], files: [] }),
+        GetFileList: resolves([]),
+    });
+    await expect(page.locator('#success-screen.mobile-shell')).toBeVisible();
+
+    const actions = page.locator('#file-list .file-state-actions');
+    await expect(actions.getByRole('button')).toHaveText([
+        'Upload files',
+        'Upload folder',
+        'Create folder',
+    ]);
+    await expect(page.locator('.mobile-context-action')).toBeHidden();
+    expect(await actions.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
+test('Android keyboard events keep the app shell fixed while the join sheet makes room', async ({ page }) => {
+    const mock = await bootMobile(page);
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+    await page.getByRole('button', { name: 'Join with a link' }).click();
+    await expect(page.locator('#join-drive-link')).toBeFocused();
+
+    const shell = page.locator('#success-screen.mobile-shell');
+    const before = await shell.boundingBox();
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    const devicePixelRatio = await page.evaluate(() => window.devicePixelRatio);
+
+    await mock.emit('common:keyboard', { visible: true, height: 300 * devicePixelRatio });
+    await expect.poll(() => page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--mobile-keyboard-inset').trim(),
+    )).toBe('300px');
+
+    expect(await shell.boundingBox()).toEqual(before);
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    await expect(page.locator('#join-drive-link')).toBeVisible();
+    await expect(page.locator('#join-drive-go')).toBeVisible();
+});
+
 test('the back bridge pops one folder level and then leaves the app', async ({ page }) => {
     await bootMobile(page);
     await expect(page.getByRole('button', { name: /Switch drive/ })).toBeVisible();

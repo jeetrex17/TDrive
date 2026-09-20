@@ -92,6 +92,37 @@ describe('activateKeyboardInsets', () => {
         expect(inset()).toBe('292px');
     });
 
+    it('lets Android native insets own keyboard geometry and never pans the document', () => {
+        isAndroidPlatform.mockReturnValue(true);
+        window.devicePixelRatio = 2;
+        const viewport = fakeViewport(800);
+        Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
+        const scrollIntoView = vi.fn();
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+            configurable: true,
+            value: scrollIntoView,
+        });
+        const input = document.createElement('input');
+        document.body.append(input);
+
+        try {
+            dispose = activateKeyboardInsets();
+            input.focus();
+            viewport.set(500);
+            viewport.emit();
+
+            // Android's adjustNothing window does not owe visualViewport a
+            // second keyboard reservation or a document-level reveal.
+            expect(inset()).toBe('0px');
+            emitHostKeyboard({ visible: true, height: 600 });
+            expect(inset()).toBe('300px');
+            expect(scrollIntoView).not.toHaveBeenCalled();
+        } finally {
+            input.remove();
+            Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+        }
+    });
+
     it('takes the larger source rather than their sum, so nothing double-counts', () => {
         const viewport = fakeViewport(500);
         Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });

@@ -110,10 +110,11 @@ describe('mobile hierarchy', () => {
             kind: 'state',
             stateKind: 'empty',
             title: 'This folder is empty',
-            actionLabel: 'Upload files',
-            onAction: () => {},
-            secondaryActionLabel: 'Create folder',
-            onSecondaryAction: () => {},
+            actions: [
+                { label: 'Upload files', onClick: () => {} },
+                { label: 'Upload folder', onClick: () => {} },
+                { label: 'Create folder', onClick: () => {} },
+            ],
         });
         flushSync();
 

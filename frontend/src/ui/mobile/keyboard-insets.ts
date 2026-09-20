@@ -137,6 +137,10 @@ export function isPlausibleKeyboard(height: number): boolean {
  * view as well as by this one, which is why they live in CSS.
  */
 function revealFocused(): void {
+    // Android's native IME inset is the authority and the sheet already moves
+    // itself clear of it. Asking WebView to reveal the field as well can pan
+    // the fixed app root, which looks like the entire screen jumped upward.
+    if (isAndroidPlatform()) return;
     const active = document.activeElement;
     if (!(active instanceof HTMLElement)) return;
     if (!active.matches('input, textarea, [contenteditable="true"]')) return;
@@ -151,7 +155,11 @@ function revealFocused(): void {
 export function activateKeyboardInsets(): () => void {
     if (typeof window === 'undefined') return () => {};
 
-    const viewport = window.visualViewport ?? null;
+    // Android's edge-to-edge activity uses adjustNothing and reports the IME
+    // through common:keyboard. Some WebViews still animate visualViewport as
+    // keyboard chrome moves; consuming that second signal reintroduces the
+    // whole-window movement the native policy deliberately prevents.
+    const viewport = isAndroidPlatform() ? null : (window.visualViewport ?? null);
 
     const onViewport = (): void => {
         if (viewport) fromViewport = measureViewport(viewport);

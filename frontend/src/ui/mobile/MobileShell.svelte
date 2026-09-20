@@ -48,7 +48,7 @@
     const emptyFilesOwnsCreation = $derived(
         $fileListView.kind === 'state'
         && $fileListView.stateKind === 'empty'
-        && Boolean($fileListView.actionLabel || $fileListView.secondaryActionLabel),
+        && Boolean($fileListView.actions?.length),
     );
     // Nothing is uploaded into the trash, so the button does not float over it.
     const showContextAction = $derived(
