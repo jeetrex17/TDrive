@@ -7,6 +7,7 @@
     import { isVideoFile } from '../../modules/media-types';
     import type { FileItem } from '../../types';
     import { selectedFileRowKeys } from '../file-list/row-state-store';
+    import { selectionBarState } from '../selection/selection-bar-store';
     import { registerCell, unregisterCell, type CellPatch, type CellStatus } from './gallery-controller';
 
     interface Props {
@@ -24,7 +25,7 @@
     // The phone gallery shares the file list's selection store, so a
     // long-pressed cell shows the same check the rows do.
     const mobile = isMobilePlatform();
-    const selecting = $derived(mobile && $selectedFileRowKeys.size > 0);
+    const selecting = $derived(mobile && Boolean($selectionBarState.active || $selectedFileRowKeys.size > 0));
     const selected = $derived(selecting && $selectedFileRowKeys.has(`file:${item.msgId}`));
     const video = $derived(isVideoFile(item.name));
 

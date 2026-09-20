@@ -7,7 +7,7 @@
     import { navigateToIndex } from '../../modules/navigation';
     import { enterPhotos, exitPhotos } from '../../modules/gallery';
     import { closeTrash } from '../../modules/trash/controller';
-    import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../../modules/selection';
+    import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../../modules/selection';
     import { selectionBarState } from '../selection/selection-bar-store';
     import FeatureLayer from '../app/FeatureLayer.svelte';
     import PhotosModeBar from '../gallery/PhotosModeBar.svelte';
@@ -38,7 +38,7 @@
 
     // Selecting rows swaps the tab bar for the selection bar (spec 2.5); the
     // count comes from the shared selection store the controller feeds.
-    const selecting = $derived($selectionBarState.count > 0);
+    const selecting = $derived(Boolean($selectionBarState.active || $selectionBarState.count > 0));
     // Files and Photos share one content region (the file list vs the gallery);
     // Transfers and Account are their own panels.
     const showMain = $derived($activeTab === 'files' || $activeTab === 'photos');
@@ -227,8 +227,8 @@
 
     <!-- The selection bar sits above the tab bar and replaces it while
          selecting. It keeps its id and its inline display: none because the
-         selection controller is what reveals it, by flipping that style once a
-         row is picked; the bar is fixed to the bottom of the viewport from
+         selection controller is what reveals it, by flipping that style when
+         selection mode begins or a row is picked; the bar is fixed to the bottom of the viewport from
          its own stylesheet, so where it sits in this shell does not move it. -->
     <div
         id="selection-bar"
@@ -239,6 +239,7 @@
     >
         {#if dashboardVisible}
             <SelectionBar
+                onDownload={openSelectedItemsDownload}
                 onMove={openSelectedItemsMove}
                 onDelete={openSelectedItemsDelete}
                 onClear={clearSelection}

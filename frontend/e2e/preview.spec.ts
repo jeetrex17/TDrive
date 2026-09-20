@@ -92,3 +92,33 @@ test('the arrow keys move between photos and the bytes follow', async ({ page })
     await expect(page.locator('#preview-filename')).toHaveText(FIRST_PHOTO.name);
     await expect.poll(() => previewImageContents(page)).toContain('#e11d48');
 });
+
+test.describe('Android photo details', () => {
+    test.use({ viewport: { width: 390, height: 844 } });
+
+    test('the info control opens details and an upward swipe opens them again', async ({ page }) => {
+        await routeRenditions(page);
+        await bootTDrive(page, galleryPlans([FIRST_PHOTO]), { url: '/?mobile=android' });
+        await openGallery(page);
+        await page.getByRole('button', { name: FIRST_PHOTO.name }).click();
+        await expect(page.getByRole('dialog', { name: FIRST_PHOTO.name })).toBeVisible();
+
+        const infoButton = page.getByRole('button', { name: 'Photo info' });
+        await infoButton.click();
+        await expect(page.locator('#preview-modal')).toHaveClass(/is-info-open/);
+        await expect(infoButton).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('#preview-info')).toHaveAttribute('aria-hidden', 'false');
+
+        await infoButton.click();
+        await expect(page.locator('#preview-modal')).not.toHaveClass(/is-info-open/);
+
+        const stage = page.locator('#preview-stage');
+        const pointer = { pointerId: 1, pointerType: 'touch', isPrimary: true, clientX: 195, bubbles: true, cancelable: true };
+        await stage.dispatchEvent('pointerdown', { ...pointer, clientY: 650 });
+        await stage.dispatchEvent('pointermove', { ...pointer, clientY: 490 });
+        await stage.dispatchEvent('pointerup', { ...pointer, clientY: 490 });
+
+        await expect(page.locator('#preview-modal')).toHaveClass(/is-info-open/);
+        await expect(infoButton).toHaveAttribute('aria-pressed', 'true');
+    });
+});

@@ -695,6 +695,8 @@ function openInfoPanel() {
     // was thrown to rather than jumping there first.
     dom.infoPanel.style.transition = "";
     dom.infoPanel.style.transform = "";
+    dom.infoPanel.removeAttribute("inert");
+    dom.infoPanel.setAttribute("aria-hidden", "false");
     dom.modal.classList.add("is-info-open");
     dom.infoButton?.setAttribute("aria-pressed", "true");
     if (isMobilePlatform() && !infoSheetBack) {
@@ -707,9 +709,15 @@ function openInfoPanel() {
 }
 
 function closeInfoPanel() {
+    const dom = els;
     infoOpen = false;
-    els?.modal.classList.remove("is-info-open");
-    els?.infoButton?.setAttribute("aria-pressed", "false");
+    dom?.modal.classList.remove("is-info-open");
+    dom?.infoButton?.setAttribute("aria-pressed", "false");
+    dom?.infoPanel?.setAttribute("inert", "");
+    dom?.infoPanel?.setAttribute("aria-hidden", "true");
+    if (dom?.infoPanel?.contains(document.activeElement)) {
+        dom.infoButton?.focus({ preventScroll: true });
+    }
     infoSheetBack?.release();
     infoSheetBack = null;
 }
@@ -807,6 +815,8 @@ function settleDrag(animated: boolean) {
 // so none of this touches the stage's own swipe.
 const INFO_DISMISS_PX = 96;
 const INFO_DISMISS_VELOCITY = 0.6;
+const INFO_REVEAL_PX = 96;
+const INFO_REVEAL_VELOCITY = 0.6;
 
 function settleInfoSheet(to: string) {
     const panel = els?.infoPanel;
@@ -877,6 +887,11 @@ function previewTouchHandlers(): TouchGestureHandlers {
                     return;
                 }
                 settleDrag(true);
+                return;
+            }
+            if (dy < -INFO_REVEAL_PX || (dy < -24 && velocity > INFO_REVEAL_VELOCITY)) {
+                settleDrag(false);
+                openInfoPanel();
                 return;
             }
             if (dy > 96 || (dy > 24 && velocity > 0.6)) {

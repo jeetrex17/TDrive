@@ -14,7 +14,7 @@
     import { cancelTransfersInDirection, cancelUploadFile, clearHistory } from '../modules/notif-bell';
     import { ensureProfileLoaded } from '../modules/profile-menu';
     import { askEmptyTrash, openTrash, trashBusyKey, trashEntries } from '../modules/trash/controller';
-    import { clearSelection, openSelectedItemsDelete, openSelectedItemsMove } from '../modules/selection';
+    import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
     import {
         handleDriveClick,
@@ -285,6 +285,7 @@
                 <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite">
                     {#if dashboardVisible}
                         <SelectionBar
+                            onDownload={openSelectedItemsDownload}
                             onMove={openSelectedItemsMove}
                             onDelete={openSelectedItemsDelete}
                             onClear={clearSelection}

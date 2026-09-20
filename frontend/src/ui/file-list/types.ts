@@ -117,6 +117,7 @@ export type FileSource = 'fs' | 'tg';
 
 type CommandItemBase = {
     name: string;
+    channelId?: number;
     parentId?: string;
     row?: HTMLElement;
     canDelete?: boolean;

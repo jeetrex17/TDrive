@@ -3,7 +3,8 @@
 import { state } from '../state';
 import { openDeleteModal } from './modals/delete';
 import { openMoveModal } from './modals/move';
-import { setSelectionCount } from '../ui/selection/selection-bar-store';
+import { enqueueDownload, enqueueFolderDownload } from './transfers';
+import { setSelectionCount, setSelectionModeActive } from '../ui/selection/selection-bar-store';
 import { setSelectedFileRowKeys } from '../ui/file-list/row-state-store';
 import { fileListRowForElement } from '../ui/file-list/row-lookup';
 import type { FileCommandItem, FileListFileRow, FolderListRow } from '../ui/file-list/types';
@@ -54,6 +55,7 @@ function logicalRowToSelectionItem(row: LogicalFileListRow, element?: HTMLElemen
             type: 'folder',
             id: row.id,
             name: row.name,
+            channelId: row.channelId,
             parentId: row.parentId,
             canDelete: true,
             canRename: true,
@@ -65,6 +67,7 @@ function logicalRowToSelectionItem(row: LogicalFileListRow, element?: HTMLElemen
             type: 'file',
             id: Number(row.id),
             name: row.name,
+            channelId: row.channelId,
             size: row.size,
             source: 'tg',
             parentId: row.parentId,
@@ -78,6 +81,7 @@ function logicalRowToSelectionItem(row: LogicalFileListRow, element?: HTMLElemen
         type: 'file',
         id: Number(row.id),
         name: row.name,
+        channelId: row.channelId,
         size: row.size,
         source: 'fs',
         parentId: row.parentId,
@@ -113,11 +117,16 @@ export function updateSelectionBar(): void {
 
 export function clearSelection({ keepAnchor = false }: { keepAnchor?: boolean } = {}): void {
     state.selectedItems.clear();
+    setSelectionModeActive(false);
     if (!keepAnchor) {
         selectionAnchorKey = '';
         state.selectionAnchorIndex = -1;
     }
     updateSelectionBar();
+}
+
+export function startSelectionMode(): void {
+    setSelectionModeActive(true);
 }
 
 export function selectRow(row: HTMLElement, rowIndex: number): void {
@@ -253,6 +262,7 @@ export function getSelectionPayload(): FileCommandItem[] {
                 type: 'folder',
                 id: item.id,
                 name: item.name,
+                channelId: item.channelId,
                 parentId: item.parentId,
                 canDelete: item.canDelete,
                 canRename: item.canRename,
@@ -263,6 +273,7 @@ export function getSelectionPayload(): FileCommandItem[] {
                 type: 'file',
                 id: item.id,
                 name: item.name,
+                channelId: item.channelId,
                 size: item.size,
                 source: 'tg',
                 parentId: item.parentId,
@@ -275,6 +286,7 @@ export function getSelectionPayload(): FileCommandItem[] {
             type: 'file',
             id: item.id,
             name: item.name,
+            channelId: item.channelId,
             size: item.size,
             source: 'fs',
             parentId: item.parentId,
@@ -293,6 +305,19 @@ export function openSelectedItemsDelete(): void {
 export function openSelectedItemsMove(): void {
     if (state.selectedItems.size === 0) return;
     openMoveModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
+}
+
+export function openSelectedItemsDownload(): void {
+    const items = getSelectionPayload();
+    if (items.length === 0) return;
+    for (const item of items) {
+        if (item.type === 'folder') {
+            enqueueFolderDownload(item.id, item.name, 0, item.channelId);
+        } else {
+            enqueueDownload(item.id, item.name, item.size ?? 0, item.channelId);
+        }
+    }
+    clearSelection();
 }
 
 export function activateSelectionBar(): () => void {

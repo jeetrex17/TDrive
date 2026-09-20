@@ -46,7 +46,7 @@
         <div id="preview-error" class="preview-error" style="display: none;" role="alert"></div>
     </div>
 
-    <aside id="preview-info" class="preview-info" aria-label="Photo info">
+    <aside id="preview-info" class="preview-info" aria-label="Photo info" aria-hidden="true" inert>
         <button id="preview-info-close" class="preview-info-close" type="button" aria-label="Close info" title="Close info">
             <XIcon size={14} aria-hidden="true" />
         </button>

@@ -10,7 +10,7 @@
     import type { FileSortKey } from '../file-list/file-sort';
     import { navigateBack } from '../../modules/navigation';
     import { clearSearch } from '../../modules/search';
-    import { clearSelection } from '../../modules/selection';
+    import { clearSelection, startSelectionMode } from '../../modules/selection';
     import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
     import { selectionBarState } from '../selection/selection-bar-store';
     import { sidebarState } from '../sidebar/sidebar-store';
@@ -65,11 +65,11 @@
         : `${$fileListCount} items`,
     );
 
-    // Selecting takes the tab bar away and the selection bar keeps only Move and
-    // Delete, so the count and the way out belong here. An iPhone has no
+    // Selecting takes the tab bar away and the selection bar keeps the bulk
+    // actions, so the count and the way out belong here. An iPhone has no
     // hardware BACK: without a Done on screen there is no exit from the mode at
     // all short of deselecting every row one at a time.
-    const selecting = $derived($selectionBarState.count > 0);
+    const selecting = $derived(Boolean($selectionBarState.active || $selectionBarState.count > 0));
     const selectionLabel = $derived(
         $selectionBarState.count === 1 ? '1 selected' : `${$selectionBarState.count} selected`,
     );
@@ -359,6 +359,14 @@
             <div class="topbar-plain-titles">
                 <h1 class="topbar-title">Photos</h1>
                 <span class="topbar-subtitle">{driveName}</span>
+            </div>
+            <div class="topbar-actions">
+                <button
+                    type="button"
+                    class="topbar-done"
+                    aria-label="Select photos"
+                    onclick={startSelectionMode}
+                >Select</button>
             </div>
         </div>
     </div>

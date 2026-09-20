@@ -14,7 +14,7 @@ import { GallerySource } from '../ui/gallery/gallery-source';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
 import { canOwnerActOnFile } from './file-list';
-import { updateSelectionBar } from './selection';
+import { startSelectionMode, updateSelectionBar } from './selection';
 import { beginRender, cachedThumb, rearmLocked, setActive, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
 import { albumsView, galleryView, photosMode, type PhotosMode } from '../ui/gallery/gallery-store';
 import { albumsWorthShowing, buildAlbumTiles, type AlbumTile } from '../ui/gallery/album-view';
@@ -23,6 +23,7 @@ import { clearSidebarVirtualView, setSidebarVirtualView } from '../ui/sidebar/si
 import type { PreviewNavigationItem } from './modals/preview';
 import { setFileThumbnailsActive } from '../ui/file-list/file-thumbnail-controller';
 import { isVideoFile } from './media-types';
+import { selectionBarState } from '../ui/selection/selection-bar-store';
 
 let galleryEl: HTMLElement | null = null;
 let renderToken = 0;
@@ -82,6 +83,7 @@ export function toggleGallerySelection(index: number): void {
     const item = currentSource?.peek(index);
     if (!item) return;
     const key = `file:${item.msgId}`;
+    startSelectionMode();
     const selected = new Map(state.selectedItems);
     if (selected.has(key)) {
         selected.delete(key);
@@ -91,6 +93,7 @@ export function toggleGallerySelection(index: number): void {
             type: 'file',
             id: item.msgId,
             name: item.name,
+            channelId: currentChannelId,
             size: item.encrypted && item.plaintextSize > 0 ? item.plaintextSize : item.size,
             source: 'fs',
             parentId: item.parentId,
@@ -311,7 +314,7 @@ function onGalleryClick(event: MouseEvent): void {
     const index = Number(cell.dataset.index ?? -1);
     const item = currentSource?.peek(index);
     if (!item || item.msgId !== Number(cell.dataset.id)) return;
-    if (isMobilePlatform() && state.selectedItems.size > 0) {
+    if (isMobilePlatform() && (get(selectionBarState).active || state.selectedItems.size > 0)) {
         toggleGallerySelection(index);
         return;
     }

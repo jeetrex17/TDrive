@@ -93,6 +93,44 @@ afterEach(() => {
 });
 
 describe('the phone info sheet', () => {
+    it('uses the info button as a real toggle', async () => {
+        const backStack = await openInfo();
+        const button = document.getElementById('preview-info-btn')!;
+        expect(button.getAttribute('aria-pressed')).toBe('true');
+        expect(backStack.hasOpenSheet()).toBe(true);
+
+        button.click();
+
+        expect(infoOpen()).toBe(false);
+        expect(button.getAttribute('aria-pressed')).toBe('false');
+        expect(backStack.hasOpenSheet()).toBe(false);
+        expect(document.getElementById('preview-modal')!.style.display).toBe('flex');
+    });
+
+    it('opens on a deliberate upward swipe but ignores a short upward move', async () => {
+        const preview = await import('./preview');
+        const backStack = await import('../../ui/modals/sheet-stack');
+        preview.activatePreviewModal();
+        const image = document.getElementById('preview-image') as HTMLImageElement;
+        image.hidden = false;
+        image.src = 'blob:photo';
+        const stage = document.getElementById('preview-stage')!;
+
+        pointer(stage, 'pointerdown', 120, 620);
+        pointer(stage, 'pointermove', 120, 600);
+        pointer(stage, 'pointerup', 120, 600);
+        expect(infoOpen()).toBe(false);
+
+        pointer(stage, 'pointerdown', 120, 620);
+        pointer(stage, 'pointermove', 120, 470);
+        pointer(stage, 'pointerup', 120, 470);
+
+        expect(infoOpen()).toBe(true);
+        expect(document.getElementById('preview-info-btn')?.getAttribute('aria-pressed')).toBe('true');
+        expect(image.style.transform).toBe('');
+        expect(backStack.hasOpenSheet()).toBe(true);
+    });
+
     it('closes on a tap on the picture instead of toggling the chrome', async () => {
         await openInfo();
         const modal = document.getElementById('preview-modal')!;

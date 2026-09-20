@@ -8,7 +8,10 @@ vi.mock('../../api/gallery', () => ({ getMediaTimelineSummary: mocks.timeline, g
 vi.mock('../../modules/search', () => ({ clearSearch: vi.fn() }));
 vi.mock('../../modules/app-actions', () => ({ appActions: () => ({ refreshFiles: vi.fn(), triggerRefresh: vi.fn() }) }));
 vi.mock('../../modules/file-list', () => ({ canOwnerActOnFile: () => true }));
-vi.mock('../../modules/selection', () => ({ updateSelectionBar: vi.fn() }));
+vi.mock('../../modules/selection', () => ({
+  startSelectionMode: vi.fn(),
+  updateSelectionBar: vi.fn(),
+}));
 vi.mock('../file-list/touch', () => ({ bindLongPress: () => () => {}, bindPullToRefresh: () => () => {} }));
 vi.mock('./gallery-controller', () => ({ beginRender: vi.fn(), cachedThumb: () => '', rearmLocked: vi.fn(), setActive: vi.fn(), setRoot: vi.fn(), teardown: vi.fn() }));
 vi.mock('../../modules/modals/preview', () => ({ activatePreviewModal: vi.fn(), openPreviewSource: mocks.preview }));

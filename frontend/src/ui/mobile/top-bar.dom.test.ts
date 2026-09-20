@@ -5,7 +5,8 @@ import { flushSync, mount, unmount } from 'svelte';
 import { get } from 'svelte/store';
 
 const clearSelection = vi.hoisted(() => vi.fn());
-vi.mock('../../modules/selection', () => ({ clearSelection }));
+const startSelectionMode = vi.hoisted(() => vi.fn());
+vi.mock('../../modules/selection', () => ({ clearSelection, startSelectionMode }));
 vi.mock('../../modules/navigation', () => ({ navigateBack: vi.fn(), navigateToIndex: vi.fn() }));
 vi.mock('../../modules/search', () => ({ clearSearch: vi.fn() }));
 
@@ -17,10 +18,10 @@ import { activeTab, driveSwitcherOpen, driveSyncStatus } from './mobile-shell-st
 let target: HTMLElement;
 let component: Record<string, unknown> | null = null;
 
-function render(): void {
+function render(active: 'files' | 'photos' = 'files'): void {
     target = document.createElement('div');
     document.body.append(target);
-    component = mount(TopBar, { target, props: { active: 'files' as const } });
+    component = mount(TopBar, { target, props: { active } });
     flushSync();
 }
 
@@ -35,6 +36,7 @@ beforeEach(() => {
     activeTab.set('files');
     driveSwitcherOpen.set(false);
     clearSelection.mockClear();
+    startSelectionMode.mockClear();
 });
 
 afterEach(() => {
@@ -106,6 +108,25 @@ describe('drive header', () => {
 });
 
 describe('selection header', () => {
+    it('offers an explicit way to start selecting photos', () => {
+        render('photos');
+
+        const button = target.querySelector<HTMLButtonElement>('[aria-label="Select photos"]');
+        button?.click();
+
+        expect(button).not.toBeNull();
+        expect(startSelectionMode).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows selection mode before the first photo is chosen', () => {
+        render('photos');
+        selectionBarState.set({ count: 0, active: true });
+        flushSync();
+
+        expect((target.querySelector('.topbar-selection') as HTMLElement).hidden).toBe(false);
+        expect((target.querySelector('.topbar-selection') as HTMLElement).textContent).toContain('0 selected');
+    });
+
     it('stays out of the way until something is selected', () => {
         render();
 

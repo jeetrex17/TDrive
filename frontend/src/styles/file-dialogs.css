@@ -200,7 +200,9 @@
     top: 22px;
     left: 24px;
     right: 24px;
-    z-index: 2;
+    /* The original photo is also positioned. Keep the visible controls above
+       it so Android hit-testing reaches the buttons instead of the image. */
+    z-index: 6;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;

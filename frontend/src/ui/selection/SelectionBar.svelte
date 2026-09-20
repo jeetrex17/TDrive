@@ -1,15 +1,17 @@
 <script lang="ts">
     import FolderInputIcon from '@lucide/svelte/icons/folder-input';
+    import DownloadIcon from '@lucide/svelte/icons/download';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import { selectionBarState } from './selection-bar-store';
 
     interface SelectionBarProps {
+        onDownload: () => void;
         onMove: () => void;
         onDelete: () => void;
         onClear: () => void;
     }
 
-    let { onMove, onDelete, onClear }: SelectionBarProps = $props();
+    let { onDownload, onMove, onDelete, onClear }: SelectionBarProps = $props();
 
     const label = $derived($selectionBarState.count === 1
         ? '1 selected'
@@ -19,10 +21,16 @@
 <!-- Desktop: count on the left, pill actions on the right (unchanged).
      Mobile: the host becomes a bottom action bar; the count and Done move to
      the top region owned by the shell (which reads selectionBarState.count and
-     calls clearSelection), so the count and Clear are hidden here and Move and
-     Delete show as labelled icon actions. -->
+     calls clearSelection), so the count and Clear are hidden here and the bulk
+     actions show as labelled icons. -->
 <div id="selection-count" class="selection-count" aria-atomic="true">{label}</div>
 <div class="selection-actions">
+    <button id="selection-download" class="selection-btn" type="button" onclick={onDownload}>
+        <span class="selection-btn-icon" aria-hidden="true">
+            <DownloadIcon size={22} strokeWidth={1.75} />
+        </span>
+        <span class="selection-btn-label">Download</span>
+    </button>
     <button id="selection-move" class="selection-btn" type="button" onclick={onMove}>
         <span class="selection-btn-icon" aria-hidden="true">
             <FolderInputIcon size={22} strokeWidth={1.75} />

@@ -4,6 +4,7 @@
 // carry safe-area padding. Runs under the default config (its own viewport) and
 // the throwaway s1 config alike.
 import { test, expect, bootTDrive, resolves, byFirstArg } from './wails-mock';
+import { FIRST_PHOTO, SECOND_PHOTO, galleryPlans, routeRenditions } from './gallery-fixtures';
 
 test.use({ viewport: { width: 390, height: 844 } });
 
@@ -206,4 +207,35 @@ test('the Photos tab lights, wears its own top bar, and BACK stays in the app', 
     const atPhotos = await page.evaluate(() => window.__tdriveHandleBack?.());
     expect(atPhotos).toBe(true);
     await expect(tab(page, /^Files/)).toHaveClass(/active/);
+});
+
+test('photos expose Select and queue every chosen photo for download', async ({ page }) => {
+    await routeRenditions(page);
+    const mock = await bootTDrive(page, {
+        ...overrides,
+        ...galleryPlans([FIRST_PHOTO, SECOND_PHOTO]),
+        DownloadFile: resolves({ result: { ok: true }, saved_path: '/tmp/photo.jpg' }),
+    }, { url: '/?mobile=android' });
+    await expect(page.locator('#success-screen.mobile-shell')).toBeVisible();
+
+    await tab(page, /^Photos/).click();
+    await expect(page.getByRole('button', { name: FIRST_PHOTO.name }).locator('img'))
+        .toHaveAttribute('src', /^blob:/);
+    await page.getByRole('button', { name: 'Select photos' }).click();
+    await expect(page.locator('.topbar-selection-count')).toHaveText('0 selected');
+
+    await page.getByRole('button', { name: FIRST_PHOTO.name }).click();
+    await page.getByRole('button', { name: SECOND_PHOTO.name }).click();
+    await expect(page.locator('.topbar-selection-count')).toHaveText('2 selected');
+    await expect(page.getByRole('button', { name: FIRST_PHOTO.name })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: SECOND_PHOTO.name })).toHaveAttribute('aria-pressed', 'true');
+
+    await page.getByRole('button', { name: 'Download' }).click();
+    await expect.poll(async () => (await mock.calls('DownloadFile')).length).toBe(2);
+    const calls = await mock.calls('DownloadFile');
+    expect(calls.map((call) => call.args.slice(0, 2))).toEqual([
+        [1, FIRST_PHOTO.msg_id],
+        [1, SECOND_PHOTO.msg_id],
+    ]);
+    await expect(page.locator('.topbar-selection')).toBeHidden();
 });

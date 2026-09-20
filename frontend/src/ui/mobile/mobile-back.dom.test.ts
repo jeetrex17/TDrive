@@ -100,6 +100,13 @@ describe('android back', () => {
         expect(navigateBack).not.toHaveBeenCalled();
     });
 
+    it('cancels empty selection mode before leaving the app', () => {
+        selectionBarState.set({ count: 0, active: true });
+
+        expect(handleBackPress()).toBe(true);
+        expect(clearSelection).toHaveBeenCalledOnce();
+    });
+
     it('returns to the files tab from transfers', () => {
         activeTab.set('transfers');
 

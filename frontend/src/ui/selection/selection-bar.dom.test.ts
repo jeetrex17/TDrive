@@ -7,6 +7,7 @@ let app: Record<string, unknown> | null = null;
 let host: HTMLElement | null = null;
 
 function setup(callbacks = {
+    onDownload: vi.fn(),
     onMove: vi.fn(),
     onDelete: vi.fn(),
     onClear: vi.fn(),
@@ -66,18 +67,20 @@ describe('SelectionBar', () => {
         const callbacks = setup();
 
         click('#selection-move');
+        click('#selection-download');
         click('#selection-delete');
         click('#selection-clear');
 
         expect(callbacks.onMove).toHaveBeenCalledTimes(1);
+        expect(callbacks.onDownload).toHaveBeenCalledTimes(1);
         expect(callbacks.onDelete).toHaveBeenCalledTimes(1);
         expect(callbacks.onClear).toHaveBeenCalledTimes(1);
     });
 
-    it('carries a labelled glyph on Move and Delete for the mobile action bar', () => {
+    it('carries a labelled glyph on Download, Move, and Delete for the mobile action bar', () => {
         setup();
 
-        for (const id of ['#selection-move', '#selection-delete']) {
+        for (const id of ['#selection-download', '#selection-move', '#selection-delete']) {
             const button = host?.querySelector<HTMLButtonElement>(id);
             expect(button?.querySelector('.selection-btn-icon')).not.toBeNull();
             expect(button?.querySelector('.selection-btn-label')?.textContent).toBeTruthy();
