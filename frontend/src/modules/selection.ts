@@ -4,12 +4,14 @@ import { state } from '../state';
 import { openDeleteModal } from './modals/delete';
 import { openMoveModal } from './modals/move';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
+import { notify } from './notifications';
 import { setSelectionCount, setSelectionModeActive } from '../ui/selection/selection-bar-store';
 import { setSelectedFileRowKeys } from '../ui/file-list/row-state-store';
 import { fileListRowForElement } from '../ui/file-list/row-lookup';
 import type { FileCommandItem, FileListFileRow, FolderListRow } from '../ui/file-list/types';
 
 const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
+const MAX_BULK_DOWNLOAD_ITEMS = 500;
 let selectionAnchorKey = '';
 
 type LogicalFileListRow = FolderListRow | FileListFileRow;
@@ -310,11 +312,33 @@ export function openSelectedItemsMove(): void {
 export function openSelectedItemsDownload(): void {
     const items = getSelectionPayload();
     if (items.length === 0) return;
-    for (const item of items) {
+    if (items.length > MAX_BULK_DOWNLOAD_ITEMS) {
+        notify({
+            level: 'warning',
+            title: 'Too many downloads',
+            body: `Select up to ${MAX_BULK_DOWNLOAD_ITEMS} items at a time.`,
+        });
+        return;
+    }
+    const downloads = items.map((item) => ({
+        item,
+        channelId: Number.isSafeInteger(item.channelId) && Number(item.channelId) > 0
+            ? Number(item.channelId)
+            : null,
+    }));
+    if (downloads.some(({ channelId }) => channelId === null)) {
+        notify({
+            level: 'error',
+            title: 'Download unavailable',
+            body: 'Refresh the drive and select the items again.',
+        });
+        return;
+    }
+    for (const { item, channelId } of downloads) {
         if (item.type === 'folder') {
-            enqueueFolderDownload(item.id, item.name, 0, item.channelId);
+            enqueueFolderDownload(item.id, item.name, 0, channelId);
         } else {
-            enqueueDownload(item.id, item.name, item.size ?? 0, item.channelId);
+            enqueueDownload(item.id, item.name, item.size ?? 0, channelId);
         }
     }
     clearSelection();

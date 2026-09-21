@@ -38,7 +38,8 @@ export function handleBackPress(): boolean {
     }
     // Selecting rows is a mode the tab bar disappears into, so leaving it is a
     // step back rather than a step out of the app.
-    if (get(selectionBarState).active || get(selectionBarState).count > 0) {
+    const selection = get(selectionBarState);
+    if (selection.active || selection.count > 0) {
         clearSelection();
         return true;
     }
