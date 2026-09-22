@@ -12,6 +12,11 @@ includes:
 # For automatically managed signing & provisioning, use `task ios:xcode` and
 # build from the generated Xcode project instead.
 vars:
+  APP_VERSION:
+    sh: /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/ios/Info.plist
+  # Override for every subsequent TestFlight upload, for example
+  # IOS_BUILD_NUMBER=2. Apple rejects duplicate bundle build numbers.
+  IOS_BUILD_NUMBER: '{{.IOS_BUILD_NUMBER | default .APP_VERSION}}'
   BUNDLE_ID: '{{.BUNDLE_ID | default "com.wails.app"}}'
   IOS_PLATFORM: '{{.IOS_PLATFORM | default "simulator"}}'
   MIN_IOS_VERSION: '{{.MIN_IOS_VERSION | default "15.0"}}'
@@ -293,16 +298,25 @@ tasks:
   generate:ios:xcode:
     internal: true
     summary: Generate iOS Xcode project structure and assets
+    env:
+      # Pass metadata as environment variables so unusual command-line values
+      # cannot escape the shell quoting before the Go patcher validates them.
+      TDRIVE_IOS_MIN_VERSION: '{{.MIN_IOS_VERSION}}'
+      TDRIVE_IOS_MARKETING_VERSION: '{{.APP_VERSION}}'
+      TDRIVE_IOS_BUILD_NUMBER: '{{.IOS_BUILD_NUMBER}}'
     sources:
       - build/config.yml
       - build/appicon.png
+      - build/ios/Info.plist
       - build/ios/main.m
       - build/ios/TDrivePhotoBridge.inc
+      - build/ios/scripts/build_xcode_archive.sh
+      - build/ios/scripts/patch_xcode_project.go
     generates:
       - build/ios/xcode/main/main.m
       - build/ios/xcode/main/TDrivePhotoBridge.inc
       - build/ios/xcode/main/Assets.xcassets/**/*
-      - build/ios/xcode/project.pbxproj
+      - build/ios/xcode/main.xcodeproj/project.pbxproj
     cmds:
       - wails3 ios xcode:gen -outdir build/ios/xcode -config build/config.yml
       # xcode:gen rewrites main.m from its own template, and Xcode compiles that
@@ -316,6 +330,15 @@ tasks:
       # generated configurations every time the project is regenerated.
       - |
         perl -0pi -e 's/"-ObjC",/"-ObjC", "-framework", "CoreGraphics", "-framework", "ImageIO", "-framework", "Photos", "-framework", "UniformTypeIdentifiers",/g' build/ios/xcode/main.xcodeproj/project.pbxproj
+      # Make the generated project archive-safe. The patcher validates every
+      # Wails template anchor before changing it, so upstream template drift
+      # fails here instead of producing a subtly broken TestFlight archive.
+      - |
+        go run build/ios/scripts/patch_xcode_project.go \
+          -project build/ios/xcode/main.xcodeproj/project.pbxproj \
+          -minimum-version "$TDRIVE_IOS_MIN_VERSION" \
+          -marketing-version "$TDRIVE_IOS_MARKETING_VERSION" \
+          -build-number "$TDRIVE_IOS_BUILD_NUMBER"
       # Same trap for Info.plist: the generated one carries none of the keys
       # this app declares, and UIFileSharingEnabled is the difference between
       # a download the Files app lists and one nobody can reach. Keep the
@@ -329,6 +352,13 @@ tasks:
         description=$(/usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" build/ios/Info.plist)
         /usr/libexec/PlistBuddy -c "Set :NSPhotoLibraryUsageDescription $description" build/ios/xcode/main/Info.plist 2>/dev/null ||
           /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string $description" build/ios/xcode/main/Info.plist
+        /usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable $(EXECUTABLE_NAME)' build/ios/xcode/main/Info.plist
+        /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString $(MARKETING_VERSION)' build/ios/xcode/main/Info.plist
+        /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)' build/ios/xcode/main/Info.plist
+        # Intentionally leave ITSAppUsesNonExemptEncryption unset. TDrive
+        # implements file encryption, so the account holder must answer App
+        # Store Connect's export questionnaire and attach any required
+        # declaration before committing a legal classification to the bundle.
 
   run:
     summary: Run the application in iOS Simulator

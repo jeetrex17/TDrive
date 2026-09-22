@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"regexp"
 	"testing"
@@ -31,6 +32,35 @@ func TestIOSPlistVersionsMatchBuildConfig(t *testing.T) {
 				t.Fatalf("CFBundleVersion = %q, want %q", got, version)
 			}
 		})
+	}
+}
+
+func TestIOSXcodeGenerationRunsArchivePatcher(t *testing.T) {
+	taskfile := readBuildMetadataFile(t, "build/ios/Taskfile.yml")
+
+	arguments := [][]byte{
+		[]byte("go run build/ios/scripts/patch_xcode_project.go"),
+		[]byte(`TDRIVE_IOS_MIN_VERSION: '{{.MIN_IOS_VERSION}}'`),
+		[]byte(`TDRIVE_IOS_MARKETING_VERSION: '{{.APP_VERSION}}'`),
+		[]byte(`TDRIVE_IOS_BUILD_NUMBER: '{{.IOS_BUILD_NUMBER}}'`),
+		[]byte(`-minimum-version "$TDRIVE_IOS_MIN_VERSION"`),
+		[]byte(`-marketing-version "$TDRIVE_IOS_MARKETING_VERSION"`),
+		[]byte(`-build-number "$TDRIVE_IOS_BUILD_NUMBER"`),
+		[]byte("build/ios/Info.plist"),
+		[]byte("build/ios/scripts/patch_xcode_project.go"),
+		[]byte("build/ios/scripts/build_xcode_archive.sh"),
+	}
+	for _, argument := range arguments {
+		if !bytes.Contains(taskfile, argument) {
+			t.Errorf("iOS Xcode generator does not invoke archive patcher with %q", argument)
+		}
+	}
+}
+
+func TestIOSXcodeArchiveScriptCreatesOutputDirectory(t *testing.T) {
+	script := readBuildMetadataFile(t, "build/ios/scripts/build_xcode_archive.sh")
+	if !bytes.Contains(script, []byte(`mkdir -p "${APP_ROOT}/bin"`)) {
+		t.Error("iOS Xcode archive script does not create its Go archive output directory")
 	}
 }
 

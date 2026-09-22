@@ -672,6 +672,25 @@ jobs:
       - name: Compile the device archive
         run: wails3 task ios:build IOS_PLATFORM=device
 
+      - name: Verify the generated Xcode release bundle
+        run: |
+          wails3 task -f ios:generate:ios:xcode
+          SETTINGS=$(xcodebuild -project build/ios/xcode/main.xcodeproj -target TDrive -configuration Release -sdk iphoneos -showBuildSettings)
+          grep -q 'CLANG_ENABLE_OBJC_ARC = YES' <<<"$SETTINGS"
+          grep -q 'CODE_SIGN_STYLE = Automatic' <<<"$SETTINGS"
+          grep -q 'IPHONEOS_DEPLOYMENT_TARGET = 16.0' <<<"$SETTINGS"
+          grep -q 'ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon' <<<"$SETTINGS"
+
+          xcodebuild -project build/ios/xcode/main.xcodeproj -target TDrive \
+            -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO clean build
+
+          APP=build/ios/xcode/build/Release-iphoneos/TDrive.app
+          EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          test -x "$APP/$EXECUTABLE"
+          test -f "$APP/Assets.car"
+          test -d "$APP/LaunchScreen.storyboardc" || test -d "$APP/Base.lproj/LaunchScreen.storyboardc"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")" = "16.0"
+
       - name: Upload the simulator bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
