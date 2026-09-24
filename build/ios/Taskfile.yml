@@ -13,7 +13,17 @@ includes:
 # build from the generated Xcode project instead.
 vars:
   APP_VERSION:
-    sh: /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/ios/Info.plist
+    # Includes are loaded for every platform, so even this iOS-only variable
+    # must be readable on Linux and Windows runners.
+    sh: |
+      awk '/<key>CFBundleShortVersionString<\/key>/ {
+        if (getline <= 0 || $0 !~ /<string>[^<]+<\/string>/) exit 1
+        gsub(/.*<string>|<\/string>.*/, "")
+        print
+        found = 1
+        exit
+      }
+      END { if (!found) exit 1 }' build/ios/Info.plist
   # Override for every subsequent TestFlight upload, for example
   # IOS_BUILD_NUMBER=2. Apple rejects duplicate bundle build numbers.
   IOS_BUILD_NUMBER: '{{.IOS_BUILD_NUMBER | default .APP_VERSION}}'

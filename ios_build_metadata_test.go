@@ -35,6 +35,14 @@ func TestIOSPlistVersionsMatchBuildConfig(t *testing.T) {
 	}
 }
 
+func TestIOSTaskfileVersionCanBeReadOnEveryBuildHost(t *testing.T) {
+	taskfile := readBuildMetadataFile(t, "build/ios/Taskfile.yml")
+	globalVars := bytes.SplitN(taskfile, []byte("\ntasks:\n"), 2)[0]
+	if bytes.Contains(globalVars, []byte("/usr/libexec/PlistBuddy")) {
+		t.Fatal("global iOS version variable invokes a macOS-only tool during non-iOS builds")
+	}
+}
+
 func TestIOSXcodeGenerationRunsArchivePatcher(t *testing.T) {
 	taskfile := readBuildMetadataFile(t, "build/ios/Taskfile.yml")
 
